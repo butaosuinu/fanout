@@ -24,21 +24,29 @@ dmux eventually publishes the HTTP API, this script can be rewritten around
 
 ## Installation
 
-fanout ships as a single Bash script. Put it on your `PATH` via the
+fanout ships as a single Bash script plus its Claude Code integration
+files (slash command + skill). All three are placed in one shot via the
 `Makefile`:
 
 ```bash
-make install        # copies fanout to ~/.local/bin/fanout (mode 0755)
-make link           # symlinks ~/.local/bin/fanout -> ./fanout (use while hacking on fanout)
-make uninstall      # removes ~/.local/bin/fanout
+make install        # copies CLI + command + skill into ~/.local and ~/.claude
+make link           # symlinks the same three paths at the checkout (use while hacking)
+make uninstall      # removes all three
 
-PREFIX=/usr/local sudo make install   # system-wide; overrides BINDIR to $PREFIX/bin
+PREFIX=/usr/local sudo make install     # system-wide CLI; overrides BINDIR to $PREFIX/bin
+CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 ```
 
-`make install` is stable — delete the repo and the copy still works.
+Installed paths:
+
+- `$(BINDIR)/fanout` (default `~/.local/bin/fanout`)
+- `$(CLAUDE_DIR)/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
+- `$(CLAUDE_DIR)/skills/fanout/SKILL.md` (default `~/.claude/skills/fanout/SKILL.md`)
+
+`make install` is stable — delete the repo and the copies still work.
 `make link` points at the checkout, so edits take effect immediately and
-`git pull` is enough to update. Either target creates `$(BINDIR)` if it
-doesn't exist.
+`git pull` is enough to update. Either target creates the parent
+directories if they don't exist.
 
 Confirm `~/.local/bin` is on your `PATH` (`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`).
 If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
@@ -93,6 +101,31 @@ fanout 123 --sleep 8
 # Hint an agent name when multiple are enabled (best-effort popup navigation)
 fanout 123 --agent claude
 ```
+
+## From inside an agent session
+
+fanout is safe to call from an agent session (Claude Code, Codex, etc.) that
+is itself running in a dmux pane. It discovers dmux via tmux session options,
+not via `$TMUX` or cwd, and it only creates NEW panes for children — the
+caller's pane is never touched.
+
+Recommended integration for Claude Code — both assets are bundled in this
+repo under `claude/` and get placed by `make install`:
+
+- **Slash command** → `claude/commands/fanout.md` is installed to
+  `~/.claude/commands/fanout.md` and invoked as `/fanout [parent-issue]
+  [--go] [extra fanout flags]`. Runs `fanout <N> --dry-run` first, shows
+  the target list, and only fires the real command after the user confirms
+  (or if `--go` was passed).
+- **Skill** → `claude/skills/fanout/SKILL.md` is installed to
+  `~/.claude/skills/fanout/SKILL.md` and lets the agent recognize when
+  fanout is applicable and suggest `/fanout` rather than invoking
+  unprompted.
+
+The CLI prerequisites above still apply: the dmux session must be alive,
+the TUI must be on the pane-list view, and only one agent should be
+enabled (or `--agent` passed). See **Prerequisites** and **Troubleshooting**
+for details.
 
 ## What fanout actually does
 

@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Single-file Bash script (`fanout`) plus its design doc (`fanout.README.md`). No build system, no test suite, no lint config. `claude` (the 200MB Mach-O binary at the repo root) is unrelated to this project — leave it alone.
 
+The Claude Code integration files (`claude/commands/fanout.md` slash command and `claude/skills/fanout/SKILL.md` skill) are bundled in the repo as the source-of-truth. `make install` places them under `~/.claude/`. Don't edit copies in `~/.claude/` directly — edit the repo versions and rerun `make install` (or use `make link` during development).
+
 The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `fanout.README.md`. Read it before changing behavior; this file covers only what's not obvious from the README.
 
 ## Working with the script
