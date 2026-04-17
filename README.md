@@ -6,7 +6,7 @@ Fans a GitHub parent issue's OPEN sub-issues out into one dmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.
 
-## Why this looks weird (dmux HTTP API investigation)
+## Why this looks weird (dmux HTTP API investigation, popup interception)
 
 `dmux`'s docs describe an HTTP API (`POST /api/panes`, etc.) as the obvious
 ingress for a tool like this. When I investigated, I found that **the current
@@ -19,10 +19,27 @@ npm-published dmux (v5.6.3) does not ship the HTTP server**:
   but there is nothing in `dist` that sets `DMUX_SERVER_PORT` — the feature is
   documented in `context/API.md` on the `main` branch but not yet shipped.
 
-So fanout drives dmux via `tmux send-keys` against the TUI's control pane
-(whose ID dmux stores in the tmux session option `@dmux_control_pane`). When
-dmux eventually publishes the HTTP API, this script can be rewritten around
-`POST /api/panes` in a page.
+`tmux send-keys` isn't enough either. dmux's new-pane prompt and agent-choice
+dialog are both rendered via `tmux display-popup -E 'node <script> <resultFile>'`
+(see `dist/utils/popup.js`). A display-popup runs its child command in a
+separate tmux client with its own pty; it is not a pane and cannot be
+addressed by `send-keys -t <pane>`. Typing into `%0` while a popup is open
+just fills `%0`'s buffer behind the popup — the user never sees the text,
+and dmux discards it when the popup closes. That's why earlier versions of
+this script appeared to "work" (the popup would eventually open) but never
+delivered the prompt.
+
+The shipped workaround is **popup result-file interception**. Each dmux
+popup is told a `/tmp/dmux-popup-<timestamp>.json` path where the popup
+writes its user-entered answer; dmux reads that file when the popup child
+exits. fanout triggers the popup by send-keys'ing `Escape n`, then uses
+`pgrep` + `ps` to locate the popup process and its resultFile, atomically
+writes the desired JSON payload (`{"success":true,"data":"<prompt>"}` for
+the prompt popup, `{"success":true,"data":["<agent>"]}` for the picker),
+and kills the popup process. `display-popup -E` closes the popup on child
+exit, dmux reads the file we wrote, and pane creation proceeds as if a
+human had answered. When dmux eventually ships the HTTP API, this script
+can collapse back to `POST /api/panes` in a page.
 
 ## Installation
 
@@ -55,7 +72,7 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 ## Prerequisites
 
-- `gh` CLI, `jq`, `tmux`, and the `gh-sub-issue` extension
+- `gh` CLI, `jq`, `tmux`, `pgrep`, and the `gh-sub-issue` extension
   (`gh extension install yahsan2/gh-sub-issue`). fanout checks these at
   startup and prints install hints on failure. Children can be declared via
   the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
@@ -63,12 +80,13 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 - A running dmux session on this machine: `cd <repo> && dmux`. fanout discovers
   it by scanning tmux sessions for the `@dmux_controller_pid` option and
   checking that the PID is alive.
-- **One enabled agent**, OR `--agent <name>`, OR the caller's pane is itself
-  a dmux-managed pane. With multiple enabled agents, dmux shows a popup that
-  fanout navigates by sending the agent name's first letter. When `--agent`
-  is not given, fanout auto-detects the calling pane's agent from
-  `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`), so
-  invoking `/fanout` from inside an agent session works out of the box.
+- **An agent name must be resolvable**: either `--agent <name>` is given, or
+  the caller's pane is itself a dmux-managed pane so fanout can auto-detect
+  from `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`).
+  dmux v5.6.3 always opens the agent-choice popup after the prompt popup,
+  even when only one agent is enabled, so fanout needs a name to inject
+  into it. Invoking `/fanout` from inside an agent session works out of the
+  box; calling `fanout` from a plain shell requires `--agent`.
 - **The dmux TUI must be on the pane-list view** (no modal / no prompt open)
   when fanout runs. fanout sends one `Escape` before each pane-creation
   sequence to recover from stray popups, but cannot unstick an interactive
@@ -155,11 +173,15 @@ for details.
 6. For each target issue:
    - Writes a briefing to `/tmp/fanout-<repo>-<NUM>.md` with the issue body
      and a short Requirements checklist.
-   - Sends `Escape`, `n`, the single-line prompt `[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin.`,
-     then `Enter`, to the control pane.
-   - If `--agent X` was passed — or auto-detected from the calling pane's
-     entry in `dmux.config.json` — sends the first letter of X and `Enter`
-     to navigate the agent popup.
+   - Sends `Escape` and `n` to the control pane, which triggers dmux's
+     new-pane popup (a `tmux display-popup` child, not an inline modal).
+   - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
+     reads its `/tmp/dmux-popup-*.json` resultFile path from `ps -o args=`,
+     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
+     and kills the popup process so dmux reads the injected answer.
+   - Repeats the intercept for the agent-choice popup that dmux launches
+     next (writes `{"success":true,"data":["<agent>"]}`), using the agent
+     resolved via `--agent` or auto-detected from the calling pane.
    - Polls `dmux.config.json` until `panes[].length` increases (timeout 60s).
    - Sleeps `--sleep` seconds (default 4) before the next one.
 7. Prints a summary of created / skipped / deferred / failed counts.
@@ -181,16 +203,23 @@ Pass `--session <name>`. List them with
 ### Pane creation times out ("timed out after 60s waiting for config.json to grow")
 
 The TUI probably wasn't on the pane-list view when fanout fired the key
-sequence. Check whether:
+sequence, or popup interception failed. Check whether:
 
 - A popup (confirm dialog, agent picker, etc.) is stuck — press `Esc` in the
   dmux pane until it returns to the list, then rerun.
 - dmux is genuinely slow (cold clone, huge repo, npm install hook). Increase
   `--sleep` and retry; the wait-for-new-pane timeout is 60s per issue.
-- The agent popup appeared but navigation landed on the wrong agent. Either
-  configure a single enabled agent (`useHooks` / `enabledAgents` in dmux
-  settings) or pass `--agent <name>` so the first-letter-then-Enter sequence
-  picks the intended one.
+- Rerun with `--debug` to see which intercept stage failed. Common cases:
+  - `newPanePopup did not appear within 5s` — dmux didn't react to `n`,
+    usually because another popup was already on screen. Send `Esc` manually
+    and rerun.
+  - `agentChoicePopup did not appear within 5s` — dmux closed the first
+    popup but the agent-choice popup didn't follow. Check that your dmux
+    settings actually enable at least one agent.
+- You upgraded dmux past v5.6.x and the popup script names or the result
+  JSON shape changed. Inspect `~/.../dmux/dist/utils/popup.js` and
+  `dist/components/popups/shared/PopupWrapper.js`; the intercept in fanout
+  assumes `{"success":true,"data":...}`. Raise an issue if dmux changed it.
 
 ### "gh sub-issue list failed"
 
@@ -201,11 +230,12 @@ sequence. Check whether:
 
 ### Prompts show junk in the dmux TUI
 
-`tmux send-keys -l` sends bytes literally; on some terminals with aggressive
-key remaps or when the control pane lives on a remote tmux server with a
-different locale, UTF-8 characters can garble. Keep issue titles ASCII where
-possible, or use `--dry-run` first to see the exact string that would be
-sent.
+The prompt text is now injected via the popup resultFile, not via
+`send-keys -l`, so UTF-8 titles round-trip cleanly through dmux. If you
+still see garbled characters, check that `jq` on the caller's side produces
+valid JSON (`echo "<title>" | jq -Rs` should return a quoted string with
+escapes) and that `dmux.config.json` stores it unchanged. Use `--dry-run`
+to print the exact JSON that would be written.
 
 ### `.gitignore` got a `.dmux/` line you didn't write
 
@@ -223,9 +253,13 @@ a repo directory). Not a fanout bug.
   persists the prompt verbatim into `dmux.config.json`, fanout can detect
   previously-created panes by grepping for this prefix. Delete the pane (and
   its worktree) via the dmux TUI if you want fanout to recreate it.
-- **No HTTP, no sockets, no named pipes.** All IPC is through tmux session
-  options and the TUI. This is intentionally ugly; it's what the current
-  dmux surface area allows.
+- **IPC paths in play.** Discovery uses tmux session options
+  (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
+  `@dmux_project_root`). Pane-creation is driven by writing to dmux's
+  popup resultFiles (`/tmp/dmux-popup-*.json`) after locating the popup
+  process via `pgrep` + `ps -o args=`. No HTTP, no sockets, no named
+  pipes — this is intentionally ugly; it's what the current dmux surface
+  area allows.
 - **Rate limiting via `--sleep`.** dmux's `usePaneCreation` uses a bounded
   parallel queue internally, but from the TUI side you can only open one
   "new pane" dialog at a time. The sleep gives dmux time to finish the

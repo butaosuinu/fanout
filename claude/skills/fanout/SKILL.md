@@ -22,10 +22,10 @@ Do not invoke unprompted just because an issue has sub-issues. Pane creation is 
 
 Before running the real command:
 
-1. **Prerequisites** — `gh`, `jq`, `tmux`, and the `gh-sub-issue` extension must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
+1. **Prerequisites** — `gh`, `jq`, `tmux`, `pgrep`, and the `gh-sub-issue` extension must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
 2. **Live dmux session** — `tmux list-sessions -F '#{session_name} #{session_id}'` and look for any session whose `@dmux_controller_pid` option is set and alive. If none, tell the user to `cd <target-repo> && dmux` first.
-3. **Agent picker popup** — if dmux has multiple agents enabled, a popup appears at pane creation. `fanout` auto-detects the calling pane's agent from `dmux.config.json` and navigates it by sending the agent name's first letter. No flag needed; pass `--agent <name>` only to override (e.g. spawn children under a different agent).
-4. **Dry-run** — run `fanout <N> --dry-run <forwarded-flags>` and show the user: how many children, their titles, the briefing paths. This is the confirmation step.
+3. **Agent name is required** — dmux v5.6.3 always opens its agent-choice popup after the prompt popup, even when only one agent is enabled, and `fanout` drives it by injecting the agent name into the popup's result file. If you're invoking `/fanout` from inside a dmux-managed agent pane (the usual case), `fanout` auto-detects the caller's agent from `dmux.config.json` and you don't need any flag. From a plain shell outside dmux, pass `--agent <name>` or `fanout` will fail fast before touching the TUI.
+4. **Dry-run** — run `fanout <N> --dry-run <forwarded-flags>` and show the user: how many children, their titles, the briefing paths. This is the confirmation step. `--debug` is available if the user wants to see the popup-intercept steps on the real run.
 
 cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`, `@dmux_project_root`). Do not `cd` before invoking.
 
@@ -47,7 +47,8 @@ When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README
 
 - `no active dmux session found` — user needs to `cd <repo> && dmux` first.
 - `multiple dmux sessions active` — rerun with `--session <name>` (list via `tmux list-sessions -F '#{session_name}'`).
-- `timed out after 60s waiting for config.json to grow` — the dmux TUI likely has a modal open. User should press `Esc` in the dmux pane until the list view is visible, then rerun. On slow machines, increase `--sleep`.
+- `timed out after 60s waiting for config.json to grow` — a popup-intercept stage failed or the dmux TUI has a stray modal open. Ask the user to rerun with `--debug` to see which popup didn't appear, press `Esc` in the dmux pane until the list view is visible, then retry. On slow machines, increase `--sleep`.
+- `no agent resolved` — the caller isn't in a dmux-managed pane and no `--agent` was passed. Ask the user which agent to launch and retry with `--agent <name>`.
 - `gh sub-issue list failed` — install `gh extension install yahsan2/gh-sub-issue` or run `gh auth status`.
 - `no sub-issues on #<N>` is not a failure; fanout exits 0.
 
