@@ -158,6 +158,10 @@ tmux_opt() {
   tmux show-options -v -t "$1" "$2" 2>/dev/null || true
 }
 
+gh_in_root() {
+  (cd "$project_root" && gh "$@")
+}
+
 pid_alive() {
   [[ -n "$1" ]] && [[ "$1" =~ ^[0-9]+$ ]] && kill -0 "$1" 2>/dev/null
 }
@@ -248,8 +252,51 @@ if ! (cd "$project_root" 2>/dev/null && git rev-parse --is-inside-work-tree >/de
 fi
 
 log_info "fetching sub-issues of #$parent"
-children_json=$(cd "$project_root" && gh sub-issue list "$parent" --json number,title,body,state 2>&1) \
-  || die "gh sub-issue list failed: $children_json"
+sub_issues_raw=$(gh_in_root sub-issue list "$parent" --json number,title,state 2>&1) \
+  || die "gh sub-issue list failed: $sub_issues_raw"
+
+# gh-sub-issue v0.5.x wraps as {"subIssues":[...]} with lowercase state and
+# no body field; flatten + upcase to match downstream filters.
+children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: ""}]' <<<"$sub_issues_raw")
+
+# Also union children declared as task-list items in the parent body; some
+# parents list them there without using the Sub-issues API.
+parent_body=$(gh_in_root issue view "$parent" --json body -q .body 2>/dev/null) || {
+  log_warn "could not read parent body (#$parent); skipping task-list scan"
+  parent_body=''
+}
+
+# `- [ ]` guard: skip prose mentions. `[^\w/]` guard: skip owner/repo#NUM.
+body_nums=$(printf '%s' "$parent_body" | jq -Rrs '
+  split("\n")
+  | map(select(test("^[[:space:]]*-[[:space:]]+\\[[ xX]\\]")))
+  | map([scan("(?:^|[^\\w/])#([0-9]+)") | .[0]])
+  | flatten | map(tonumber) | unique | .[]
+')
+
+# Same sentinel-wrapped set idiom as fanned_set below so " 42 " membership
+# doesn't false-match "142".
+existing_set=' '
+while IFS= read -r _n; do
+  [[ -n "$_n" ]] && existing_set+="$_n "
+done < <(jq -r '.[].number' <<<"$children_json")
+
+body_details=()
+for num in $body_nums; do
+  [[ "$num" == "$parent" ]] && continue
+  [[ "$existing_set" == *" $num "* ]] && continue
+  detail=$(gh_in_root issue view "$num" --json number,title,state,body 2>/dev/null) || {
+    log_warn "parent body references #$num but issue lookup failed; skipping"
+    continue
+  }
+  body_details+=("$detail")
+done
+
+if (( ${#body_details[@]} > 0 )); then
+  extra_json=$(printf '%s\n' "${body_details[@]}" | jq -s '.')
+  children_json=$(jq --argjson extra "$extra_json" '. + $extra' <<<"$children_json")
+  log_info "parent body added ${#body_details[@]} extra child reference(s) not in sub-issue API"
+fi
 
 # Count & filter.
 total_children=$(jq 'length' <<<"$children_json")
@@ -450,6 +497,9 @@ for row in "${targets[@]}"; do
   num=$(jq -r '.number' <<<"$row")
   title=$(jq -r '.title' <<<"$row")
   body=$(jq -r '.body // ""' <<<"$row")
+  if [[ -z "$body" ]]; then
+    body=$(gh_in_root issue view "$num" --json body -q .body 2>/dev/null || printf '')
+  fi
 
   if create_pane_for_issue "$num" "$title" "$body"; then
     created=$(( created + 1 ))

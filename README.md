@@ -57,7 +57,9 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 - `gh` CLI, `jq`, `tmux`, and the `gh-sub-issue` extension
   (`gh extension install yahsan2/gh-sub-issue`). fanout checks these at
-  startup and prints install hints on failure.
+  startup and prints install hints on failure. Children can be declared via
+  the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
+  both — fanout unions them.
 - A running dmux session on this machine: `cd <repo> && dmux`. fanout discovers
   it by scanning tmux sessions for the `@dmux_controller_pid` option and
   checking that the PID is alive.
@@ -142,8 +144,12 @@ for details.
 3. Reads the session's `@dmux_control_pane`, `@dmux_config_path`,
    `@dmux_project_root` options to locate the TUI's pane, the
    `.dmux/dmux.config.json` file, and the repo root.
-4. `gh sub-issue list <parent> --json number,title,body,state` (run from the
-   project root) to enumerate children. Only `state == "OPEN"` are processed.
+4. Enumerates children by taking the union of two sources (run from the project
+   root): (a) `gh sub-issue list <parent>` for issues formally linked via the
+   Sub-issues API, and (b) GitHub task-list references in the parent body —
+   any line matching `^\s*-\s+\[[ xX]\] ... #NUM` contributes `#NUM` (same-repo
+   only; `owner/repo#NUM` is skipped). Body-sourced numbers are hydrated via
+   `gh issue view`. Only `state == "OPEN"` children are processed.
 5. For idempotency, it scans `dmux.config.json`'s `panes[].prompt` for any
    existing prompt starting with `[fanout #<NUM>]` and skips those issues.
 6. For each target issue:
