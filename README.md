@@ -1,5 +1,7 @@
 # fanout
 
+[English](README.md) | [日本語](README.ja.md)
+
 Fans a GitHub parent issue's OPEN sub-issues out into one dmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.

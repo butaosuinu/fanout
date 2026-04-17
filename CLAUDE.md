@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-Single-file Bash script (`fanout`) plus its design doc (`fanout.README.md`). No build system, no test suite, no lint config. `claude` (the 200MB Mach-O binary at the repo root) is unrelated to this project — leave it alone.
+Single-file Bash script (`fanout`) plus its design doc (`README.md`). No build system, no test suite, no lint config. `claude` (the 200MB Mach-O binary at the repo root) is unrelated to this project — leave it alone.
 
 The Claude Code integration files (`claude/commands/fanout.md` slash command and `claude/skills/fanout/SKILL.md` skill) are bundled in the repo as the source-of-truth. `make install` places them under `~/.claude/`. Don't edit copies in `~/.claude/` directly — edit the repo versions and rerun `make install` (or use `make link` during development).
 
-The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `fanout.README.md`. Read it before changing behavior; this file covers only what's not obvious from the README.
+The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `README.md`. Read it before changing behavior; this file covers only what's not obvious from the README.
 
 ## Working with the script
 
@@ -19,7 +19,7 @@ The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `fanou
 
 ## Architecture notes that span the script
 
-- **No HTTP, no sockets.** All IPC with dmux goes through (a) tmux session options for discovery (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`, `@dmux_project_root`) and (b) `tmux send-keys` against the control pane. This is intentional — dmux v5.6.3 doesn't ship the HTTP API its docs describe. See `fanout.README.md` ("Why this looks weird") before proposing a refactor toward `POST /api/panes`.
+- **No HTTP, no sockets.** All IPC with dmux goes through (a) tmux session options for discovery (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`, `@dmux_project_root`) and (b) `tmux send-keys` against the control pane. This is intentional — dmux v5.6.3 doesn't ship the HTTP API its docs describe. See `README.md` ("Why this looks weird") before proposing a refactor toward `POST /api/panes`.
 - **Idempotency primitive: the `[fanout #<NUM>]` prompt prefix.** The script grep-detects already-fanned issues by reading `panes[].prompt` from `dmux.config.json` (jq `capture` against `^\[fanout #(?<n>[0-9]+)\]`). Anything that changes the prompt format must keep this prefix or migrate the detection logic in lockstep — otherwise a rerun creates duplicate panes. The membership test (`fanned_set`) is space-sentinel-wrapped on purpose so `42` doesn't match `142`.
 - **One-line prompt only.** ink-text-input in dmux treats Enter as submit, so the actual briefing lives in `/tmp/fanout-<repo>-<NUM>.md` and the prompt is just `[fanout #N] <title>: read <path> and begin.`. Don't try to send multi-line prompts via `tmux send-keys`.
 - **Pane-creation completion is detected by polling `dmux.config.json`'s `panes[].length`** (`wait_for_new_pane`, 60s timeout, 0.5s poll). There is no callback from dmux; if you change the create flow, keep some monotonic indicator to wait on.

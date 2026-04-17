@@ -5,7 +5,7 @@
 # that its context/API.md describes. We drive pane creation through the dmux
 # TUI via `tmux send-keys` against the control pane for the session.
 #
-# See ./fanout.README.md for the full design notes.
+# See ./README.md for the full design notes.
 
 set -euo pipefail
 
