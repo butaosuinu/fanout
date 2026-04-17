@@ -25,7 +25,8 @@ Arguments: `$ARGUMENTS`
 5. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
    - dmux not running → tell the user to `cd <target-repo> && dmux` in another shell.
    - Multiple dmux sessions alive → rerun with `--session <name>`.
-   - 60s timeout → the dmux TUI has a modal open; user presses `Esc` in the dmux pane and retries.
+   - 60s timeout → a popup-intercept stage failed; ask the user to rerun with `--debug`, press `Esc` in the dmux pane, and retry.
+   - `no agent resolved` → the caller isn't in a dmux-managed pane; rerun with `--agent <name>`.
    - Missing `gh-sub-issue` extension → `gh extension install yahsan2/gh-sub-issue`.
 
 ## Notes
@@ -33,7 +34,8 @@ Arguments: `$ARGUMENTS`
 - `fanout` never touches the caller's pane; the agent keeps working on the parent issue in the current session.
 - Rerun is safe; idempotency is handled by the `[fanout #<N>]` prompt prefix.
 - Default flags the CLI already applies: `--sleep 4`. Pass `--sleep 8` or higher on slow machines.
-- `fanout` auto-detects the calling pane's agent from `dmux.config.json` and navigates the agent-picker popup automatically. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane).
+- `fanout` auto-detects the calling pane's agent from `dmux.config.json` and injects it into dmux's agent-choice popup via popup-result-file interception. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane) or when the caller isn't in a dmux-managed pane.
+- If the user asks why this is complicated: dmux v5.6.3 renders both the prompt input and the agent picker via `tmux display-popup` (separate tmux clients that `send-keys` cannot reach), so fanout intercepts each popup's `/tmp/dmux-popup-*.json` result file. See `/Users/butaosuinu/fanout/README.md` ("Why this looks weird") for details. `--debug` exposes the intercept steps.
 
 ## Examples
 
