@@ -61,9 +61,12 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 - A running dmux session on this machine: `cd <repo> && dmux`. fanout discovers
   it by scanning tmux sessions for the `@dmux_controller_pid` option and
   checking that the PID is alive.
-- **Only one agent enabled** in the dmux project config, OR pass `--agent`.
-  With multiple enabled agents, dmux shows a popup that fanout can only
-  navigate as best-effort (by sending the agent name's first letter).
+- **One enabled agent**, OR `--agent <name>`, OR the caller's pane is itself
+  a dmux-managed pane. With multiple enabled agents, dmux shows a popup that
+  fanout navigates by sending the agent name's first letter. When `--agent`
+  is not given, fanout auto-detects the calling pane's agent from
+  `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`), so
+  invoking `/fanout` from inside an agent session works out of the box.
 - **The dmux TUI must be on the pane-list view** (no modal / no prompt open)
   when fanout runs. fanout sends one `Escape` before each pane-creation
   sequence to recover from stray popups, but cannot unstick an interactive
@@ -100,8 +103,10 @@ fanout 123 --session work-repo
 # Give dmux 8 seconds between creations (useful on slow machines)
 fanout 123 --sleep 8
 
-# Hint an agent name when multiple are enabled (best-effort popup navigation)
-fanout 123 --agent claude
+# Override the auto-detected agent (e.g. spawn children under a different
+# agent than the parent pane). Normally you don't need this — fanout reads
+# the caller's .panes[].agent from dmux.config.json.
+fanout 123 --agent codex
 ```
 
 ## From inside an agent session
@@ -146,8 +151,9 @@ for details.
      and a short Requirements checklist.
    - Sends `Escape`, `n`, the single-line prompt `[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin.`,
      then `Enter`, to the control pane.
-   - If `--agent X` was passed, sends the first letter of X and `Enter` to
-     try to navigate the agent popup.
+   - If `--agent X` was passed — or auto-detected from the calling pane's
+     entry in `dmux.config.json` — sends the first letter of X and `Enter`
+     to navigate the agent popup.
    - Polls `dmux.config.json` until `panes[].length` increases (timeout 60s).
    - Sleeps `--sleep` seconds (default 4) before the next one.
 7. Prints a summary of created / skipped / deferred / failed counts.

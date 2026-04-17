@@ -24,7 +24,7 @@ Before running the real command:
 
 1. **Prerequisites** — `gh`, `jq`, `tmux`, and the `gh-sub-issue` extension must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
 2. **Live dmux session** — `tmux list-sessions -F '#{session_name} #{session_id}'` and look for any session whose `@dmux_controller_pid` option is set and alive. If none, tell the user to `cd <target-repo> && dmux` first.
-3. **Single enabled agent** — if dmux has multiple agents enabled, a popup appears that `fanout` can only navigate by sending the first letter of the agent name. Pass `--agent <name>` (commonly `--agent claude`) when in doubt.
+3. **Agent picker popup** — if dmux has multiple agents enabled, a popup appears at pane creation. `fanout` auto-detects the calling pane's agent from `dmux.config.json` and navigates it by sending the agent name's first letter. No flag needed; pass `--agent <name>` only to override (e.g. spawn children under a different agent).
 4. **Dry-run** — run `fanout <N> --dry-run <forwarded-flags>` and show the user: how many children, their titles, the briefing paths. This is the confirmation step.
 
 cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`, `@dmux_project_root`). Do not `cd` before invoking.
