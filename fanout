@@ -26,6 +26,8 @@ Options:
   --agent <name>      Preferred agent (claude|codex|opencode|...). Used only
                       if dmux pops an agent picker; if you have a single
                       enabled agent, no popup appears and this is ignored.
+                      When omitted, fanout auto-detects the agent of the
+                      calling tmux pane from dmux.config.json.
   --limit <N>         Cap how many children to enqueue this run. Remainder is
                       printed with a rerun command.
   --session <name>    Target a specific tmux session (required when more than
@@ -41,8 +43,9 @@ Prerequisites:
   * `cd <repo> && dmux` has been run; tmux session is alive.
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
-  * Only ONE agent enabled in dmux, or --agent provided for best-effort
-    popup navigation.
+  * Only ONE agent enabled in dmux, OR --agent given, OR the caller's pane
+    is a dmux-managed pane (so fanout can auto-detect the agent). Popup
+    navigation is best-effort.
 
 Exit codes:
   0 success (including "no children, nothing to do")
@@ -218,6 +221,23 @@ log_info "dmux session: $session"
 log_info "control pane: $control_pane"
 log_info "project root: $project_root"
 log_info "config:       $config_path"
+
+# --- agent auto-detect -------------------------------------------------------
+# If --agent was not explicit, look up the caller's tmux pane in
+# dmux.config.json and inherit its .agent field. This makes the agent-picker
+# popup navigation work out of the box when /fanout is invoked from inside a
+# dmux-managed agent session.
+if [[ -z "$agent" ]] && [[ -n "${TMUX_PANE:-}" ]]; then
+  detected_agent=$(jq -r --arg pid "$TMUX_PANE" '
+    (.panes // [])
+    | map(select(.paneId == $pid))
+    | (.[0].agent // empty)
+  ' "$config_path" 2>/dev/null || true)
+  if [[ -n "$detected_agent" ]]; then
+    agent="$detected_agent"
+    log_info "auto-detected agent: $agent (from calling pane $TMUX_PANE)"
+  fi
+fi
 
 # --- fetch sub-issues --------------------------------------------------------
 

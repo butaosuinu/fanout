@@ -33,11 +33,11 @@ Arguments: `$ARGUMENTS`
 - `fanout` never touches the caller's pane; the agent keeps working on the parent issue in the current session.
 - Rerun is safe; idempotency is handled by the `[fanout #<N>]` prompt prefix.
 - Default flags the CLI already applies: `--sleep 4`. Pass `--sleep 8` or higher on slow machines.
-- Multiple agents enabled in dmux → pass `--agent <name>` (e.g. `--agent claude`). With a single enabled agent, no popup appears and `--agent` is ignored.
+- `fanout` auto-detects the calling pane's agent from `dmux.config.json` and navigates the agent-picker popup automatically. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane).
 
 ## Examples
 
 - `/fanout 123` — dry-run preview for parent issue #123, then real run after confirmation.
 - `/fanout 123 --go` — skip confirmation, run immediately.
-- `/fanout 123 --limit 3 --agent claude` — only the first 3 children, force agent picker to `claude`.
+- `/fanout 123 --limit 3 --agent codex` — only the first 3 children, override the auto-detected agent and force the picker to `codex`.
 - `/fanout` (no args in a session that started with "work on #456") — extract `456` from context and proceed.
