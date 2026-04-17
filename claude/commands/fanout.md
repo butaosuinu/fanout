@@ -22,7 +22,7 @@ Arguments: `$ARGUMENTS`
 4. **Execute**:
    - Run `fanout <N> <forwarded>` via Bash.
    - Relay the `created / skipped / deferred / failed` summary.
-5. **On failure**: consult `/Users/butaosuinu/fanout/fanout.README.md` Troubleshooting and surface the most likely fix. Common cases:
+5. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
    - dmux not running → tell the user to `cd <target-repo> && dmux` in another shell.
    - Multiple dmux sessions alive → rerun with `--session <name>`.
    - 60s timeout → the dmux TUI has a modal open; user presses `Esc` in the dmux pane and retries.

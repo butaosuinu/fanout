@@ -43,7 +43,7 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 ## Failure mapping
 
-When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/fanout.README.md` Troubleshooting. Common cases:
+When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README.md` Troubleshooting. Common cases:
 
 - `no active dmux session found` — user needs to `cd <repo> && dmux` first.
 - `multiple dmux sessions active` — rerun with `--session <name>` (list via `tmux list-sessions -F '#{session_name}'`).
