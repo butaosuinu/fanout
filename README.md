@@ -30,7 +30,8 @@ this script appeared to "work" (the popup would eventually open) but never
 delivered the prompt.
 
 The shipped workaround is **popup result-file interception**. Each dmux
-popup is told a `/tmp/dmux-popup-<timestamp>.json` path where the popup
+popup is told a `<tmpdir>/dmux-popup-<timestamp>.json` path (typically
+`/tmp/` on Linux, `/var/folders/.../T/` on macOS) where the popup
 writes its user-entered answer; dmux reads that file when the popup child
 exits. fanout triggers the popup by send-keys'ing `Escape n`, then uses
 `pgrep` + `ps` to locate the popup process and its resultFile, atomically
@@ -101,7 +102,7 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 ```
 fanout <parent-issue> [--agent <name>] [--limit <N>] [--session <tmux-session>]
-                     [--sleep <seconds>] [--dry-run]
+                     [--sleep <seconds>] [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
 
@@ -122,6 +123,10 @@ fanout 123 --session work-repo
 
 # Give dmux 8 seconds between creations (useful on slow machines)
 fanout 123 --sleep 8
+
+# Wait longer for each dmux popup to appear (useful when worktree creation
+# between popups is slow on large repos; default 20s)
+fanout 123 --popup-timeout 45
 
 # Override the auto-detected agent (e.g. spawn children under a different
 # agent than the parent pane). Normally you don't need this — fanout reads
@@ -176,7 +181,7 @@ for details.
    - Sends `Escape` and `n` to the control pane, which triggers dmux's
      new-pane popup (a `tmux display-popup` child, not an inline modal).
    - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
-     reads its `/tmp/dmux-popup-*.json` resultFile path from `ps -o args=`,
+     reads its `<tmpdir>/dmux-popup-*.json` resultFile path from `ps -o args=`,
      atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
      and kills the popup process so dmux reads the injected answer.
    - Repeats the intercept for the agent-choice popup that dmux launches
@@ -210,12 +215,15 @@ sequence, or popup interception failed. Check whether:
 - dmux is genuinely slow (cold clone, huge repo, npm install hook). Increase
   `--sleep` and retry; the wait-for-new-pane timeout is 60s per issue.
 - Rerun with `--debug` to see which intercept stage failed. Common cases:
-  - `newPanePopup did not appear within 5s` — dmux didn't react to `n`,
+  - `newPanePopup did not appear within 20s` — dmux didn't react to `n`,
     usually because another popup was already on screen. Send `Esc` manually
     and rerun.
-  - `agentChoicePopup did not appear within 5s` — dmux closed the first
-    popup but the agent-choice popup didn't follow. Check that your dmux
-    settings actually enable at least one agent.
+  - `agentChoicePopup did not appear within 20s` — dmux closed the first
+    popup but the agent-choice popup didn't follow within the window. On
+    slow machines or very large worktrees the gap can exceed the default
+    — retry with `--popup-timeout 45` (or higher). If it still never
+    appears, check that your dmux settings actually enable at least one
+    agent.
 - You upgraded dmux past v5.6.x and the popup script names or the result
   JSON shape changed. Inspect `~/.../dmux/dist/utils/popup.js` and
   `dist/components/popups/shared/PopupWrapper.js`; the intercept in fanout
@@ -256,7 +264,7 @@ a repo directory). Not a fanout bug.
 - **IPC paths in play.** Discovery uses tmux session options
   (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
   `@dmux_project_root`). Pane-creation is driven by writing to dmux's
-  popup resultFiles (`/tmp/dmux-popup-*.json`) after locating the popup
+  popup resultFiles (`<tmpdir>/dmux-popup-*.json`) after locating the popup
   process via `pgrep` + `ps -o args=`. No HTTP, no sockets, no named
   pipes — this is intentionally ugly; it's what the current dmux surface
   area allows.

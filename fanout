@@ -13,6 +13,7 @@ readonly FANOUT_TAG_PREFIX='[fanout #'
 
 default_sleep_between=4
 default_wait_timeout=60
+default_popup_timeout=20
 
 usage() {
   cat <<'EOF'
@@ -35,6 +36,11 @@ Options:
                       one dmux session is alive on this machine).
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
                       this if dmux reports "pane creation failed" under load.
+  --popup-timeout <s> Seconds to wait for each dmux popup (new-pane, agent-
+                      choice) to appear after the triggering keystroke.
+                      Default 20. Raise on slow machines or large worktrees
+                      where dmux takes longer than that between closing the
+                      prompt popup and opening the agent-choice popup.
   --dry-run           Print the send-keys commands, the popup JSON payloads
                       that would be injected, and the briefings, without
                       driving dmux.
@@ -93,6 +99,7 @@ agent=''
 limit=''
 session_arg=''
 sleep_between=$default_sleep_between
+popup_timeout=$default_popup_timeout
 dry_run=0
 debug=0
 
@@ -103,6 +110,7 @@ while (( $# > 0 )); do
     --limit)      limit="${2:-}";     shift 2 || die "--limit requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
+    --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
     --dry-run)    dry_run=1;          shift ;;
     --debug)      debug=1;            shift ;;
     --)           shift; break ;;
@@ -136,6 +144,9 @@ if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if ! [[ "$sleep_between" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   die "--sleep must be a number, got: $sleep_between"
+fi
+if ! [[ "$popup_timeout" =~ ^[1-9][0-9]*$ ]]; then
+  die "--popup-timeout must be a positive integer (seconds), got: $popup_timeout"
 fi
 
 # --- dependency check --------------------------------------------------------
@@ -476,14 +487,28 @@ find_new_popup() {
   # $2 baseline PID set
   # $3 timeout tenths of a second (default 50 = 5s)
   # Prints "<pid>\t<resultFile>" on success, returns 1 on timeout.
+  #
+  # `pgrep -f` matches the full argv, so for a single popup dmux spawns it
+  # typically hits FOUR processes that all carry the script path: the outer
+  # `sh -c` dmux spawns, the `tmux display-popup` it runs, the inner shell
+  # tmux creates, and finally the Node.js popup. Killing anything but the
+  # Node process leaves the real popup orphaned on the tmux client, which
+  # lets dmux advance (it sees its spawned child exit and reads the result
+  # file we wrote) while blocking the next `display-popup` from opening —
+  # exactly the "popup 1 succeeds, popup 2 never appears" failure mode we
+  # kept hitting. Filter on COMM so only the Node popup is returned.
   local pattern="$1" baseline="$2" max_iters="${3:-50}"
-  local i=0 pid args rf
+  local i=0 pid args rf comm
   while (( i < max_iters )); do
     while IFS= read -r pid; do
       [[ -z "$pid" ]] && continue
       [[ "$baseline" == *" $pid "* ]] && continue
+      comm=$(ps -o comm= -p "$pid" 2>/dev/null) || continue
+      # macOS BSD ps returns the full path; procps-ng returns the basename.
+      # Normalize so `/usr/local/bin/node`, `node`, `node24` all match.
+      [[ "$(basename "$comm")" == node* ]] || continue
       args=$(ps -o args= -p "$pid" 2>/dev/null) || continue
-      rf=$(grep -oE '/tmp/dmux-popup-[0-9]+\.json' <<<"$args" | head -1)
+      rf=$(grep -oE '[[:alnum:]/_.-]+/dmux-popup-[0-9]+\.json' <<<"$args" | head -1)
       if [[ -n "$rf" ]]; then
         printf '%s\t%s\n' "$pid" "$rf"
         return 0
@@ -525,6 +550,12 @@ intercept_popup() {
   pid="${line%%$'\t'*}"
   rf="${line#*$'\t'}"
   log_debug "$label popup pid=$pid resultFile=$rf"
+  # Give dmux's PopupWrapper time to mount and write its readyFile so the
+  # parent's readyPromise (utils/popup.js::waitForPopupReady) resolves via
+  # the ready-file path rather than via child.close after we kill. 150ms
+  # comfortably covers the React Ink useEffect tick; it is negligible next
+  # to --sleep's rate-limit gap.
+  sleep 0.15
   write_popup_result "$rf" "$payload"
   log_debug "$label wrote: $payload"
   kill "$pid" 2>/dev/null || true
@@ -579,14 +610,14 @@ create_pane_for_issue() {
   sleep 0.2
   tmux_send_keys n
 
-  intercept_popup 'newPanePopup\.js' "$pid_baseline" "$newpane_payload" '  newPanePopup' 50 \
+  intercept_popup 'newPanePopup\.js' "$pid_baseline" "$newpane_payload" '  newPanePopup' "$(( popup_timeout * 10 ))" \
     || return 1
 
   # The agent-choice popup is spawned after dmux reads the first resultFile.
   # Refresh baseline to exclude the just-killed PID and anything unrelated.
   pid_baseline=$(popup_pid_baseline)
 
-  intercept_popup 'agentChoicePopup\.js' "$pid_baseline" "$agent_payload" '  agentChoicePopup' 50 \
+  intercept_popup 'agentChoicePopup\.js' "$pid_baseline" "$agent_payload" '  agentChoicePopup' "$(( popup_timeout * 10 ))" \
     || return 1
 
   if wait_for_new_pane "$baseline"; then
