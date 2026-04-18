@@ -33,7 +33,7 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 - **Default**: `fanout <N> --dry-run` → summarize → ask user to confirm → `fanout <N>`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
-- **Forward extra flags** (`--agent`, `--limit`, `--session`, `--sleep`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
+- **Forward extra flags** (`--agent`, `--limit`, `--session`, `--sleep`, `--popup-timeout`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
 
 ## After running
 
@@ -48,6 +48,7 @@ When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README
 - `no active dmux session found` — user needs to `cd <repo> && dmux` first.
 - `multiple dmux sessions active` — rerun with `--session <name>` (list via `tmux list-sessions -F '#{session_name}'`).
 - `timed out after 60s waiting for config.json to grow` — a popup-intercept stage failed or the dmux TUI has a stray modal open. Ask the user to rerun with `--debug` to see which popup didn't appear, press `Esc` in the dmux pane until the list view is visible, then retry. On slow machines, increase `--sleep`.
+- `popup did not appear within <N>s` (e.g. `agentChoicePopup did not appear within 20s`) — dmux took longer than the popup-intercept window to open the popup. On large worktrees where dmux creates the worktree between popups, increase with `--popup-timeout 45` (or higher). The default is 20s.
 - `no agent resolved` — the caller isn't in a dmux-managed pane and no `--agent` was passed. Ask the user which agent to launch and retry with `--agent <name>`.
 - `gh sub-issue list failed` — install `gh extension install yahsan2/gh-sub-issue` or run `gh auth status`.
 - `no sub-issues on #<N>` is not a failure; fanout exits 0.
