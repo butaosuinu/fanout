@@ -33,7 +33,8 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 - **Default**: `fanout <N> --dry-run` → summarize → ask user to confirm → `fanout <N>`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
-- **Forward extra flags** (`--agent`, `--limit`, `--session`, `--sleep`, `--popup-timeout`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
+- **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--session`, `--sleep`, `--popup-timeout`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
+- `--only <list>` / `--skip <list>` take a comma-separated list of issue numbers (e.g. `--only 4,7,8,10`). They are mutually exclusive. `--only` numbers not in the parent's OPEN child set are warned and ignored by the CLI — if the user names issues that aren't children, relay that warning instead of silently retrying.
 
 ## After running
 

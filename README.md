@@ -101,8 +101,9 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 ## Usage
 
 ```
-fanout <parent-issue> [--agent <name>] [--limit <N>] [--session <tmux-session>]
-                     [--sleep <seconds>] [--popup-timeout <seconds>] [--dry-run]
+fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+                     [--session <tmux-session>] [--sleep <seconds>]
+                     [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
 
@@ -117,6 +118,13 @@ fanout 123 --dry-run
 
 # Cap this invocation to 3 issues; rerun command is printed for the rest
 fanout 123 --limit 3
+
+# Fan out only a non-contiguous subset of children (warns and ignores any
+# number that is not in the parent's OPEN child set)
+fanout 123 --only 4,7,8,10
+
+# Fan out everything except these children; compose with --limit
+fanout 123 --skip 6,9 --limit 3
 
 # Pick a specific session when you have multiple dmux instances alive
 fanout 123 --session work-repo

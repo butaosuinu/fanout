@@ -34,6 +34,7 @@ Arguments: `$ARGUMENTS`
 - `fanout` never touches the caller's pane; the agent keeps working on the parent issue in the current session.
 - Rerun is safe; idempotency is handled by the `[fanout #<N>]` prompt prefix.
 - Default flags the CLI already applies: `--sleep 4`, `--popup-timeout 20`. Pass `--sleep 8` or higher on slow machines. Pass `--popup-timeout 45` (or higher) when dmux is slow to open the agent-choice popup on large worktrees.
+- To target a non-contiguous subset of children, pass `--only N1,N2,...` (keep-list) or `--skip N1,N2,...` (deny-list). The two are mutually exclusive. `--only` entries that aren't in the parent's OPEN child set are warned and ignored — surface that warning rather than rerunning or hunting for the number elsewhere. Both flags are applied before `--limit`.
 - `fanout` auto-detects the calling pane's agent from `dmux.config.json` and injects it into dmux's agent-choice popup via popup-result-file interception. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane) or when the caller isn't in a dmux-managed pane.
 - If the user asks why this is complicated: dmux v5.6.3 renders both the prompt input and the agent picker via `tmux display-popup` (separate tmux clients that `send-keys` cannot reach), so fanout intercepts each popup's `<tmpdir>/dmux-popup-*.json` result file. See `/Users/butaosuinu/fanout/README.md` ("Why this looks weird") for details. `--debug` exposes the intercept steps.
 
@@ -42,4 +43,5 @@ Arguments: `$ARGUMENTS`
 - `/fanout 123` — dry-run preview for parent issue #123, then real run after confirmation.
 - `/fanout 123 --go` — skip confirmation, run immediately.
 - `/fanout 123 --limit 3 --agent codex` — only the first 3 children, override the auto-detected agent and force the picker to `codex`.
+- `/fanout 123 --only 4,7,8,10` — fan out only these four children. `--skip 6,9` is the opposite form (deny-list).
 - `/fanout` (no args in a session that started with "work on #456") — extract `456` from context and proceed.

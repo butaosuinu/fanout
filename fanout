@@ -32,6 +32,16 @@ Options:
                       know the agent name to inject into it.
   --limit <N>         Cap how many children to enqueue this run. Remainder is
                       printed with a rerun command.
+  --only <list>       Comma-separated list of issue numbers to fan out,
+                      e.g. --only 4,7,8,10. Numbers not present in the OPEN
+                      child set (Sub-issues API + parent body task-list
+                      union) are warned and ignored; fanout never widens the
+                      search to arbitrary issues. Cannot be combined with
+                      --skip. Applied before --limit.
+  --skip <list>       Comma-separated list of issue numbers to exclude,
+                      e.g. --skip 6,9. Everything else in the OPEN child
+                      set is fanned out. Cannot be combined with --only.
+                      Applied before --limit.
   --session <name>    Target a specific tmux session (required when more than
                       one dmux session is alive on this machine).
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
@@ -92,11 +102,29 @@ die() {
   exit 1
 }
 
+parse_num_csv() {
+  # $1 flag name (for error messages), $2 csv string.
+  # Echoes a space-sentinel-wrapped set (" 4 7 8 ") suitable for the
+  # `*" $n "*` membership idiom used elsewhere in this script. Empty
+  # entries (e.g. from "4,,7") and non-digit tokens are fatal.
+  local name="$1" csv="$2" set=' ' tok
+  local -a toks
+  local IFS=,
+  read -ra toks <<<"$csv"
+  for tok in "${toks[@]}"; do
+    [[ "$tok" =~ ^[0-9]+$ ]] || die "$name: invalid entry '$tok' (must be a positive integer)"
+    set+="$tok "
+  done
+  printf '%s' "$set"
+}
+
 # --- arg parsing -------------------------------------------------------------
 
 parent=''
 agent=''
 limit=''
+only_arg=''
+skip_arg=''
 session_arg=''
 sleep_between=$default_sleep_between
 popup_timeout=$default_popup_timeout
@@ -108,6 +136,8 @@ while (( $# > 0 )); do
     -h|--help)    usage; exit 0 ;;
     --agent)      agent="${2:-}";     shift 2 || die "--agent requires an argument" ;;
     --limit)      limit="${2:-}";     shift 2 || die "--limit requires an argument" ;;
+    --only)       only_arg="${2:-}";  shift 2 || die "--only requires an argument" ;;
+    --skip)       skip_arg="${2:-}";  shift 2 || die "--skip requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
@@ -148,6 +178,15 @@ fi
 if ! [[ "$popup_timeout" =~ ^[1-9][0-9]*$ ]]; then
   die "--popup-timeout must be a positive integer (seconds), got: $popup_timeout"
 fi
+
+if [[ -n "$only_arg" && -n "$skip_arg" ]]; then
+  die "--only and --skip are mutually exclusive"
+fi
+
+only_set=' '
+skip_set=' '
+[[ -n "$only_arg" ]] && only_set=$(parse_num_csv --only "$only_arg")
+[[ -n "$skip_arg" ]] && skip_set=$(parse_num_csv --skip "$skip_arg")
 
 # --- dependency check --------------------------------------------------------
 
@@ -339,6 +378,56 @@ if (( open_count == 0 )); then
   exit 0
 fi
 
+# --- apply --only / --skip filter -------------------------------------------
+
+filtered_only=()
+filtered_skip=()
+if [[ -n "$only_arg" || -n "$skip_arg" ]]; then
+  # Snapshot the OPEN child numbers as a space-sentinel-wrapped set so we can
+  # warn about `--only` entries that don't correspond to a child. Per issue
+  # #11, fanout must refuse to silently `gh issue view` arbitrary numbers.
+  open_set=' '
+  while IFS= read -r _n; do
+    [[ -n "$_n" ]] && open_set+="$_n "
+  done < <(jq -r '.[].number' <<<"$open_children_json")
+
+  if [[ -n "$only_arg" ]]; then
+    for _n in $only_set; do
+      [[ -n "$_n" ]] || continue
+      [[ "$open_set" == *" $_n "* ]] || log_warn "--only: #$_n not in OPEN child set (ignored)"
+    done
+  fi
+
+  filter_rows=()
+  while IFS= read -r _row; do
+    filter_rows+=("$_row")
+  done < <(jq -c '.[]' <<<"$open_children_json")
+
+  kept_rows=()
+  for row in "${filter_rows[@]}"; do
+    num=$(jq -r '.number' <<<"$row")
+    if [[ -n "$only_arg" ]] && [[ "$only_set" != *" $num "* ]]; then
+      filtered_only+=("$row")
+    elif [[ -n "$skip_arg" ]] && [[ "$skip_set" == *" $num "* ]]; then
+      filtered_skip+=("$row")
+    else
+      kept_rows+=("$row")
+    fi
+  done
+
+  if (( ${#kept_rows[@]} == 0 )); then
+    open_children_json='[]'
+  else
+    open_children_json=$(printf '%s\n' "${kept_rows[@]}" | jq -s -c '.')
+  fi
+  open_count=$(jq 'length' <<<"$open_children_json")
+
+  if (( open_count == 0 )); then
+    log_info "all OPEN sub-issues filtered out by --only/--skip. nothing to do."
+    exit 0
+  fi
+fi
+
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
 existing_nums=$(jq -r --arg prefix "$FANOUT_TAG_PREFIX" '
@@ -392,6 +481,23 @@ if (( ${#skipped[@]} > 0 )); then
   log_info "already fanned-out (skipping): #${skipped[*]}"
 fi
 log_info "will create ${#targets[@]} pane(s); deferred: ${#deferred[@]}"
+
+if (( dry_run )) && (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
+  printf '\n%sfiltered out:%s\n' "$C_INFO" "$C_RESET"
+  if (( ${#filtered_only[@]} > 0 )); then
+    for row in "${filtered_only[@]}"; do
+      printf '  #%s %s — not in --only\n' \
+        "$(jq -r '.number' <<<"$row")" "$(jq -r '.title' <<<"$row")"
+    done
+  fi
+  if (( ${#filtered_skip[@]} > 0 )); then
+    for row in "${filtered_skip[@]}"; do
+      printf '  #%s %s — in --skip\n' \
+        "$(jq -r '.number' <<<"$row")" "$(jq -r '.title' <<<"$row")"
+    done
+  fi
+  printf '\n'
+fi
 
 # --- briefing file builder ---------------------------------------------------
 
@@ -663,6 +769,9 @@ printf '\n'
 if (( created > 0 )); then log_ok   "created: $created"; fi
 if (( failed > 0 )); then log_err  "failed:  $failed"; fi
 if (( ${#skipped[@]} > 0 )); then log_info "skipped (already fanned-out): ${#skipped[@]}"; fi
+if (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
+  log_info "skipped (filtered): $(( ${#filtered_only[@]} + ${#filtered_skip[@]} ))"
+fi
 
 if (( ${#deferred[@]} > 0 )); then
   printf '\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n' "$C_INFO" "${#deferred[@]}" "$C_RESET"
@@ -675,7 +784,10 @@ if (( ${#deferred[@]} > 0 )); then
   [[ -n "$agent" ]] && agent_flag=" --agent $agent"
   session_flag=''
   [[ -n "$session_arg" ]] && session_flag=" --session $session_arg"
-  printf '  fanout %s --limit %d%s%s\n' "$parent" "${#deferred[@]}" "$agent_flag" "$session_flag"
+  filter_flag=''
+  [[ -n "$only_arg" ]] && filter_flag=" --only $only_arg"
+  [[ -n "$skip_arg" ]] && filter_flag=" --skip $skip_arg"
+  printf '  fanout %s --limit %d%s%s%s\n' "$parent" "${#deferred[@]}" "$filter_flag" "$agent_flag" "$session_flag"
 fi
 
 (( failed > 0 )) && exit 1
