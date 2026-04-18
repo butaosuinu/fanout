@@ -288,11 +288,13 @@ parent_body=$(gh_in_root issue view "$parent" --json body -q .body 2>/dev/null) 
   parent_body=''
 }
 
-# `- [ ]` guard: skip prose mentions. `[^\w/]` guard: skip owner/repo#NUM.
+# Only take the first `#N` immediately after the checkbox — ignore trailing
+# refs like "(blocked by #X, #Y)". Prose-only rows (no leading `#N`) skip
+# naturally because `capture` yields empty on non-match.
 body_nums=$(printf '%s' "$parent_body" | jq -Rrs '
   split("\n")
   | map(select(test("^[[:space:]]*-[[:space:]]+\\[[ xX]\\]")))
-  | map([scan("(?:^|[^\\w/])#([0-9]+)") | .[0]])
+  | map([capture("^[[:space:]]*-[[:space:]]+\\[[ xX]\\][[:space:]]*#(?<n>[0-9]+)").n])
   | flatten | map(tonumber) | unique | .[]
 ')
 
