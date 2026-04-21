@@ -595,7 +595,8 @@ fi
 
 # --- apply --unblocked-only filter ------------------------------------------
 
-blocked_deferred=()
+blocked_rows=()
+blocked_refs=()
 if (( unblocked_only )); then
   still_targets=()
   for row in "${targets[@]}"; do
@@ -626,7 +627,8 @@ if (( unblocked_only )); then
       done
       open_refs="${open_refs%, }"
       log_info "deferred: #$num (blocked by $open_refs)"
-      blocked_deferred+=("$row|$open_refs")
+      blocked_rows+=("$row")
+      blocked_refs+=("$open_refs")
     else
       still_targets+=("$row")
     fi
@@ -645,7 +647,7 @@ fi
 if (( ${#skipped[@]} > 0 )); then
   log_info "already fanned-out (skipping): #${skipped[*]}"
 fi
-log_info "will create ${#targets[@]} pane(s); deferred (blocked): ${#blocked_deferred[@]}; deferred (--limit): ${#limit_deferred[@]}"
+log_info "will create ${#targets[@]} pane(s); deferred (blocked): ${#blocked_rows[@]}; deferred (--limit): ${#limit_deferred[@]}"
 
 if (( dry_run )) && (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
   printf '\n%sfiltered out:%s\n' "$C_INFO" "$C_RESET"
@@ -664,11 +666,11 @@ if (( dry_run )) && (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
   printf '\n'
 fi
 
-if (( dry_run )) && (( ${#blocked_deferred[@]} > 0 )); then
+if (( dry_run )) && (( ${#blocked_rows[@]} > 0 )); then
   printf '\n%sdeferred (blocked):%s\n' "$C_INFO" "$C_RESET"
-  for entry in "${blocked_deferred[@]}"; do
-    row="${entry%%|*}"
-    refs="${entry#*|}"
+  for i in "${!blocked_rows[@]}"; do
+    row="${blocked_rows[$i]}"
+    refs="${blocked_refs[$i]}"
     printf '  #%s %s — blocked by %s\n' \
       "$(jq -r '.number' <<<"$row")" "$(jq -r '.title' <<<"$row")" "$refs"
   done
@@ -948,8 +950,8 @@ if (( ${#skipped[@]} > 0 )); then log_info "skipped (already fanned-out): ${#ski
 if (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
   log_info "skipped (filtered): $(( ${#filtered_only[@]} + ${#filtered_skip[@]} ))"
 fi
-if (( ${#blocked_deferred[@]} > 0 )); then
-  log_info "deferred (blocked): ${#blocked_deferred[@]}"
+if (( ${#blocked_rows[@]} > 0 )); then
+  log_info "deferred (blocked): ${#blocked_rows[@]}"
 fi
 
 if (( ${#limit_deferred[@]} > 0 )); then
