@@ -74,6 +74,14 @@ Options:
                         --name 17=fix-login-timeout|Fix login
                         --name 18=update-docs
                         --name 19=|Bug triage   (display-name only)
+  --unblocked-only    Only fan out children whose blockers are all CLOSED.
+                      Blockers are read from (1) the child body's
+                      "## Blocked by" section, (2) a "(blocked by #X, #Y)"
+                      trailer on the parent's task-list row, and (3) the
+                      child's "blocked" label (weak signal — logged but
+                      not deduced from). Children with any OPEN blocker
+                      are reported as deferred in the final summary.
+                      Safe to rerun as blocker PRs merge.
   --session <name>    Target a specific tmux session (required when more than
                       one dmux session is alive on this machine).
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
@@ -233,6 +241,69 @@ parse_name_arg() {
   fi
 }
 
+# --- blocker parsing (used by --unblocked-only) -----------------------------
+
+# Space-sentinel-wrapped cache string. Format: " <num>:<STATE> <num>:<STATE> ".
+# Avoids `declare -A`, which macOS's bash 3.2 rejects. Mutations via
+# command substitution would be lost in the subshell, so this function
+# returns its value in GET_ISSUE_STATE_RESULT instead of echoing.
+issue_state_cache=' '
+GET_ISSUE_STATE_RESULT=''
+
+get_issue_state() {
+  # $1 issue number. Sets GET_ISSUE_STATE_RESULT to "OPEN"/"CLOSED"/"UNKNOWN".
+  # Cached so repeated blocker references don't re-hit the API.
+  local num="$1"
+  if [[ "$issue_state_cache" == *" $num:"* ]]; then
+    local rest="${issue_state_cache#* "$num":}"
+    GET_ISSUE_STATE_RESULT="${rest%% *}"
+    return 0
+  fi
+  local s
+  s=$(gh_in_root issue view "$num" --json state -q .state 2>/dev/null | tr '[:lower:]' '[:upper:]')
+  [[ -z "$s" ]] && s='UNKNOWN'
+  issue_state_cache+="$num:$s "
+  GET_ISSUE_STATE_RESULT="$s"
+}
+
+parse_blockers_from_child_body() {
+  # $1 body text. Echoes space-separated blocker numbers taken from the first
+  # "## Blocked by" section, up to the next blank line or next heading.
+  # Uses tolower() for portability — BSD awk (macOS default) doesn't honor
+  # gawk's IGNORECASE.
+  awk '
+    BEGIN { in_section=0 }
+    { lower = tolower($0) }
+    lower ~ /^##[[:space:]]+blocked by/ { in_section=1; next }
+    in_section && /^[[:space:]]*$/ { in_section=0; next }
+    in_section && /^##/ { in_section=0; next }
+    in_section {
+      s=$0
+      while (match(s, /#[0-9]+/)) {
+        printf "%s ", substr(s, RSTART+1, RLENGTH-1)
+        s = substr(s, RSTART+RLENGTH)
+      }
+    }
+  ' <<<"$1"
+}
+
+parse_blockers_from_parent_row() {
+  # $1 parent body, $2 child number. Echoes space-separated blocker numbers
+  # extracted from a "(blocked by #X, #Y)" trailer on the task-list row that
+  # starts with "#<child>". Returns empty if no such trailer.
+  local parent_body="$1" child="$2"
+  printf '%s' "$parent_body" | jq -Rrs --arg c "$child" '
+    split("\n")
+    | map(select(test("^[[:space:]]*-[[:space:]]+\\[[ xX]\\][[:space:]]*#" + $c + "([^0-9]|$)")))
+    | map(capture("\\(blocked by (?<refs>[^)]+)\\)"; "i") // null)
+    | map(select(. != null))
+    | map(.refs)
+    | join(" ")
+    | [scan("#([0-9]+)") | .[0]]
+    | join(" ")
+  '
+}
+
 # --- arg parsing -------------------------------------------------------------
 
 parent=''
@@ -246,6 +317,7 @@ sleep_between=$default_sleep_between
 popup_timeout=$default_popup_timeout
 dry_run=0
 debug=0
+unblocked_only=0
 
 while (( $# > 0 )); do
   case "$1" in
@@ -261,6 +333,7 @@ while (( $# > 0 )); do
     --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
     --dry-run)    dry_run=1;          shift ;;
     --debug)      debug=1;            shift ;;
+    --unblocked-only) unblocked_only=1; shift ;;
     --)           shift; break ;;
     -*)
       log_err "unknown option: $1"
@@ -438,7 +511,7 @@ sub_issues_raw=$(gh_in_root sub-issue list "$parent" --json number,title,state 2
 
 # gh-sub-issue v0.5.x wraps as {"subIssues":[...]} with lowercase state and
 # no body field; flatten + upcase to match downstream filters.
-children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: ""}]' <<<"$sub_issues_raw")
+children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: "", labels: []}]' <<<"$sub_issues_raw")
 
 # Also union children declared as task-list items in the parent body; some
 # parents list them there without using the Sub-issues API.
@@ -478,7 +551,7 @@ body_details=()
 for num in $body_nums; do
   [[ "$num" == "$parent" ]] && continue
   [[ "$existing_set" == *" $num "* ]] && continue
-  detail=$(gh_in_root issue view "$num" --json number,title,state,body 2>/dev/null) || {
+  detail=$(gh_in_root issue view "$num" --json number,title,state,body,labels 2>/dev/null) || {
     log_warn "parent body / --include references #$num but issue lookup failed; skipping"
     continue
   }
@@ -559,6 +632,32 @@ if [[ -n "$only_arg" || -n "$skip_arg" ]]; then
   fi
 fi
 
+# --- eager hydrate body/labels for --unblocked-only --------------------------
+# The Sub-issues API row has body="" and labels=[] placeholders; the main loop
+# hydrates body lazily at use time. For --unblocked-only we need body+labels
+# BEFORE the main loop so we can decide which children to defer. Skip any row
+# whose body is already non-empty (came from parent-body scan hydration).
+if (( unblocked_only )); then
+  hydrated_rows=()
+  while IFS= read -r _row; do
+    # Rows from the parent-body scan already have body and labels populated
+    # (they were fetched with `--json number,title,state,body,labels`).
+    # Rows from the Sub-issues API path have body="" and labels=[] placeholders;
+    # fetch body+labels for them now so blocker detection can run upfront.
+    _body=$(jq -r '.body // ""' <<<"$_row")
+    if [[ -z "$_body" ]]; then
+      _num=$(jq -r '.number' <<<"$_row")
+      _detail=$(gh_in_root issue view "$_num" --json body,labels 2>/dev/null) \
+        || { log_warn "#$_num: could not fetch body/labels for blocker check; treating as unblocked"; _detail='{"body":"","labels":[]}'; }
+      _row=$(jq --argjson d "$_detail" '. + $d' <<<"$_row")
+    fi
+    hydrated_rows+=("$_row")
+  done < <(jq -c '.[]' <<<"$open_children_json")
+  if (( ${#hydrated_rows[@]} > 0 )); then
+    open_children_json=$(printf '%s\n' "${hydrated_rows[@]}" | jq -s -c '.')
+  fi
+fi
+
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
 existing_nums=$(jq -r --arg prefix "$FANOUT_TAG_PREFIX" '
@@ -600,18 +699,61 @@ if (( ${#targets[@]} == 0 )); then
   exit 0
 fi
 
+# --- apply --unblocked-only filter ------------------------------------------
+
+blocked_rows=()
+blocked_refs=()
+if (( unblocked_only )); then
+  still_targets=()
+  for row in "${targets[@]}"; do
+    num=$(jq -r '.number' <<<"$row")
+    child_body=$(jq -r '.body // ""' <<<"$row")
+    child_labels=$(jq -r '(.labels // []) | map(.name) | join(",")' <<<"$row")
+
+    b1=$(parse_blockers_from_child_body "$child_body")
+    b2=$(parse_blockers_from_parent_row "$parent_body" "$num")
+    # Dedupe into a space-separated list of unique blocker numbers.
+    blockers=$(printf '%s %s\n' "$b1" "$b2" | tr ' ' '\n' | awk 'NF' | sort -u | tr '\n' ' ')
+    blockers="${blockers% }"
+
+    open_blockers=()
+    for b in $blockers; do
+      get_issue_state "$b"
+      [[ "$GET_ISSUE_STATE_RESULT" == "OPEN" ]] && open_blockers+=("$b")
+    done
+
+    if [[ ",$child_labels," == *",blocked,"* ]] && [[ -z "$blockers" ]]; then
+      log_warn "#$num: has 'blocked' label but no parseable blocker numbers — treating as unblocked"
+    fi
+
+    if (( ${#open_blockers[@]} > 0 )); then
+      open_refs=''
+      for b in "${open_blockers[@]}"; do
+        open_refs+="OPEN #$b, "
+      done
+      open_refs="${open_refs%, }"
+      log_info "deferred: #$num (blocked by $open_refs)"
+      blocked_rows+=("$row")
+      blocked_refs+=("$open_refs")
+    else
+      still_targets+=("$row")
+    fi
+  done
+  targets=("${still_targets[@]}")
+fi
+
 # --- apply limit -------------------------------------------------------------
 
-deferred=()
+limit_deferred=()
 if [[ -n "$limit" ]] && (( ${#targets[@]} > limit )); then
-  deferred=("${targets[@]:limit}")
+  limit_deferred=("${targets[@]:limit}")
   targets=("${targets[@]:0:limit}")
 fi
 
 if (( ${#skipped[@]} > 0 )); then
   log_info "already fanned-out (skipping): #${skipped[*]}"
 fi
-log_info "will create ${#targets[@]} pane(s); deferred: ${#deferred[@]}"
+log_info "will create ${#targets[@]} pane(s); deferred (blocked): ${#blocked_rows[@]}; deferred (--limit): ${#limit_deferred[@]}"
 
 if (( dry_run )) && (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
   printf '\n%sfiltered out:%s\n' "$C_INFO" "$C_RESET"
@@ -627,6 +769,17 @@ if (( dry_run )) && (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
         "$(jq -r '.number' <<<"$row")" "$(jq -r '.title' <<<"$row")"
     done
   fi
+  printf '\n'
+fi
+
+if (( dry_run )) && (( ${#blocked_rows[@]} > 0 )); then
+  printf '\n%sdeferred (blocked):%s\n' "$C_INFO" "$C_RESET"
+  for i in "${!blocked_rows[@]}"; do
+    row="${blocked_rows[$i]}"
+    refs="${blocked_refs[$i]}"
+    printf '  #%s %s — blocked by %s\n' \
+      "$(jq -r '.number' <<<"$row")" "$(jq -r '.title' <<<"$row")" "$refs"
+  done
   printf '\n'
 fi
 
@@ -1020,14 +1173,17 @@ if (( ${#skipped[@]} > 0 )); then log_info "skipped (already fanned-out): ${#ski
 if (( ${#filtered_only[@]} + ${#filtered_skip[@]} > 0 )); then
   log_info "skipped (filtered): $(( ${#filtered_only[@]} + ${#filtered_skip[@]} ))"
 fi
+if (( ${#blocked_rows[@]} > 0 )); then
+  log_info "deferred (blocked): ${#blocked_rows[@]}"
+fi
 
-if (( ${#deferred[@]} > 0 )); then
-  printf '\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n' "$C_INFO" "${#deferred[@]}" "$C_RESET"
-  deferred_nums=()
-  for row in "${deferred[@]}"; do
-    deferred_nums+=("#$(jq -r '.number' <<<"$row")")
+if (( ${#limit_deferred[@]} > 0 )); then
+  printf '\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n' "$C_INFO" "${#limit_deferred[@]}" "$C_RESET"
+  limit_deferred_nums=()
+  for row in "${limit_deferred[@]}"; do
+    limit_deferred_nums+=("#$(jq -r '.number' <<<"$row")")
   done
-  printf '  %s\n' "${deferred_nums[*]}"
+  printf '  %s\n' "${limit_deferred_nums[*]}"
   agent_flag=''
   [[ -n "$agent" ]] && agent_flag=" --agent $agent"
   session_flag=''
@@ -1035,7 +1191,9 @@ if (( ${#deferred[@]} > 0 )); then
   filter_flag=''
   [[ -n "$only_arg" ]] && filter_flag=" --only $only_arg"
   [[ -n "$skip_arg" ]] && filter_flag=" --skip $skip_arg"
-  printf '  fanout %s --limit %d%s%s%s\n' "$parent" "${#deferred[@]}" "$filter_flag" "$agent_flag" "$session_flag"
+  unblocked_flag=''
+  (( unblocked_only )) && unblocked_flag=' --unblocked-only'
+  printf '  fanout %s --limit %d%s%s%s%s\n' "$parent" "${#limit_deferred[@]}" "$filter_flag" "$unblocked_flag" "$agent_flag" "$session_flag"
 fi
 
 (( failed > 0 )) && exit 1
