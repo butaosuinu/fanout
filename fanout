@@ -52,6 +52,28 @@ Options:
                       numbers here. Combines with --only/--skip (included
                       first, then filtered). Numbers that end up CLOSED or
                       don't exist are warned and skipped.
+  --name <NUM>=<slug-hint>[|<display-name>]
+                      Override the default naming for issue <NUM>. Repeatable
+                      (once per issue). <slug-hint> is 2-4 kebab-case words
+                      (lowercase alnum + hyphens) front-loaded into the one-
+                      line prompt so dmux's slug generator is very likely to
+                      echo it as the branch / worktree directory name — this
+                      is the only reliable way to name branches/worktrees
+                      because dmux computes them from the prompt at creation
+                      time and they become immutable git state afterward.
+                      <display-name> (optional; ≤80 chars after sanitization)
+                      is written post-creation into panes[].displayName in
+                      dmux.config.json and merged into the worktree's
+                      .dmux/worktree-metadata.json, so dmux's enforcePaneTitles
+                      loop (every 5-30s) surfaces it as the tmux pane border
+                      title and reopenWorktree restores it across restarts.
+                      Intended to be filled in by the /fanout Claude Code
+                      skill, which generates both hints from issue title/body
+                      using in-conversation reasoning (no extra LLM call).
+                      Examples:
+                        --name 17=fix-login-timeout|Fix login
+                        --name 18=update-docs
+                        --name 19=|Bug triage   (display-name only)
   --unblocked-only    Only fan out children whose blockers are all CLOSED.
                       Blockers are read from (1) the child body's
                       "## Blocked by" section, (2) a "(blocked by #X, #Y)"
@@ -134,6 +156,89 @@ parse_num_csv() {
     set+="$tok "
   done
   printf '%s' "$set"
+}
+
+# --name storage: parallel indexed arrays instead of `declare -A`, because
+# macOS ships bash 3.2 and associative arrays are 4+. Linear lookup is fine
+# — `name_nums` has one entry per target issue (typically a handful).
+name_nums=()
+name_slug_hints=()
+name_display_names=()
+
+name_find_index() {
+  # Echoes the index of $1 in name_nums, or empty if absent.
+  local needle="$1" i
+  for (( i=0; i<${#name_nums[@]}; i++ )); do
+    if [[ "${name_nums[i]}" == "$needle" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+name_get_slug_hint() {
+  local idx
+  idx=$(name_find_index "$1") || return 0
+  printf '%s' "${name_slug_hints[$idx]}"
+}
+
+name_get_display_name() {
+  local idx
+  idx=$(name_find_index "$1") || return 0
+  printf '%s' "${name_display_names[$idx]}"
+}
+
+name_has_any_display_name() {
+  # Returns 0 iff at least one entry has a non-empty display-name. The
+  # explicit length short-circuit is required on bash 3.2.57 (what macOS
+  # ships) where `set -u` plus `"${empty_array[@]}"` trips "unbound
+  # variable" — a quirk fixed in 4.4+ but we still have to live with.
+  (( ${#name_display_names[@]} == 0 )) && return 1
+  local v
+  for v in "${name_display_names[@]}"; do
+    [[ -n "$v" ]] && return 0
+  done
+  return 1
+}
+
+parse_name_arg() {
+  # $1 raw value of --name, shaped "<NUM>=<slug-hint>[|<display-name>]".
+  # Upserts into (name_nums, name_slug_hints, name_display_names). Either
+  # side of the `|` may be empty, but at least one must be non-empty.
+  local raw="$1"
+  [[ "$raw" == *"="* ]] || die "--name requires <NUM>=<slug-hint>[|<display-name>], got: '$raw'"
+  local num="${raw%%=*}"
+  local val="${raw#*=}"
+  [[ "$num" =~ ^[0-9]+$ ]] || die "--name: <NUM> must be a positive integer, got: '$num'"
+  local slug_h disp_n
+  if [[ "$val" == *"|"* ]]; then
+    slug_h="${val%%|*}"
+    disp_n="${val#*|}"
+  else
+    slug_h="$val"
+    disp_n=""
+  fi
+  if [[ -z "$slug_h" && -z "$disp_n" ]]; then
+    die "--name #$num: both slug-hint and display-name are empty"
+  fi
+  if [[ -n "$slug_h" ]]; then
+    # Kebab-case: must start with alnum, contain only lowercase alnum and
+    # hyphens. Matches what dmux's slug() sanitizes to, so echoing it into
+    # the prompt gives the LLM the cleanest possible target.
+    [[ "$slug_h" =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+      || die "--name #$num: slug-hint must be lowercase kebab-case (alnum+hyphens, starting with alnum), got: '$slug_h'"
+  fi
+  local idx
+  if idx=$(name_find_index "$num"); then
+    # Merge: allow two --name calls for the same issue to build up slug + disp.
+    [[ -n "$slug_h" ]] && name_slug_hints[idx]="$slug_h"
+    [[ -n "$disp_n" ]] && name_display_names[idx]="$disp_n"
+  else
+    name_nums+=("$num")
+    name_slug_hints+=("$slug_h")
+    name_display_names+=("$disp_n")
+  fi
 }
 
 # --- blocker parsing (used by --unblocked-only) -----------------------------
@@ -222,6 +327,7 @@ while (( $# > 0 )); do
     --only)       only_arg="${2:-}";  shift 2 || die "--only requires an argument" ;;
     --skip)       skip_arg="${2:-}";  shift 2 || die "--skip requires an argument" ;;
     --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
+    --name)       parse_name_arg "${2:-}"; shift 2 || die "--name requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
@@ -854,12 +960,26 @@ create_pane_for_issue() {
   briefing=$(write_briefing "$num" "$title" "$body")
 
   local short_title="${title:0:60}"
+  local slug_hint display_name
+  slug_hint=$(name_get_slug_hint "$num")
+  display_name=$(name_get_display_name "$num")
   local one_line_prompt
-  printf -v one_line_prompt '%s%s] %s: read %s and begin.' \
-    "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$briefing"
+  # When a slug-hint is supplied, front-load it into the one-line prompt so
+  # dmux's generateSlug() (which asks the LLM for "1-2 word kebab-case slug
+  # for this prompt") echoes our kebab-case hint back as the actual slug.
+  # The [fanout #N] idempotency prefix stays untouched either way.
+  if [[ -n "$slug_hint" ]]; then
+    printf -v one_line_prompt '%s%s] %s: %s. read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$slug_hint" "$short_title" "$briefing"
+  else
+    printf -v one_line_prompt '%s%s] %s: read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$briefing"
+  fi
 
   log_info "#$num: $short_title"
   log_dim "  briefing -> $briefing"
+  [[ -n "$slug_hint" ]] && log_dim "  slug-hint -> $slug_hint"
+  [[ -n "$display_name" ]] && log_dim "  display-name -> $display_name"
 
   local baseline
   baseline=$(panes_len)
@@ -915,10 +1035,104 @@ create_pane_for_issue() {
   fi
 }
 
+# --- displayName application -------------------------------------------------
+# Runs once at the very end of the main loop (not per-iteration) so it can't
+# race against dmux's in-memory state overwriting dmux.config.json on the next
+# pane creation. dmux's usePanes.loadPanes (5-30s poll) rereads the file and
+# enforcePaneTitles pushes displayName into tmux pane borders; the separate
+# worktree-metadata.json write is what survives dmux restarts (reopenWorktree
+# reads it). See plan file / CLAUDE.md for why a two-file write is needed.
+
+apply_display_names() {
+  local num disp pane_slug worktree_path lookup meta_path tmp
+  local applied=0
+
+  for num in "${created_nums[@]}"; do
+    disp=$(name_get_display_name "$num")
+    [[ -z "$disp" ]] && continue
+
+    if (( dry_run )); then
+      printf '    %s# would set panes[].displayName for #%s = %q%s\n' \
+        "$C_DIM" "$num" "$disp" "$C_RESET"
+      printf '    %s# would merge displayName into <worktree>/.dmux/worktree-metadata.json%s\n' \
+        "$C_DIM" "$C_RESET"
+      applied=$(( applied + 1 ))
+      continue
+    fi
+
+    # Locate the pane by [fanout #NUM] prompt prefix so matching survives
+    # even if dmux tweaked slug post-generation.
+    lookup=$(jq -r --arg num "$num" '
+      (.panes // [])
+      | map(select((.prompt // "") | startswith("[fanout #" + $num + "]")))
+      | (.[0] // {} | "\(.slug // "")\t\(.worktreePath // "")")
+    ' "$config_path" 2>/dev/null || printf '\t')
+
+    pane_slug="${lookup%%$'\t'*}"
+    worktree_path="${lookup#*$'\t'}"
+
+    if [[ -z "$pane_slug" ]]; then
+      log_warn "#$num: could not locate pane in dmux.config.json by [fanout #$num] prefix; displayName skipped"
+      continue
+    fi
+
+    # 1) dmux.config.json — atomic update. Matching by slug (not by .prompt)
+    # so we don't mis-target if the prompt string gets edited later.
+    tmp="${config_path}.fanout.tmp"
+    if jq --arg slug "$pane_slug" --arg disp "$disp" '
+      .panes = ((.panes // []) | map(
+        if .slug == $slug then .displayName = $disp else . end
+      ))
+    ' "$config_path" >"$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$config_path"
+    else
+      rm -f "$tmp"
+      log_warn "#$num: jq failed to update dmux.config.json; displayName partially applied"
+      continue
+    fi
+
+    # 2) worktree-metadata.json — merge preserving existing agent /
+    # permissionMode / branchName / mergeTargetChain fields. This is the
+    # durable store: reopenWorktree.js (22, 132) and paneCreation.js (341,
+    # 437) restore displayName from here across dmux restarts.
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
+      meta_path="$worktree_path/.dmux/worktree-metadata.json"
+      mkdir -p "$(dirname "$meta_path")"
+      tmp="${meta_path}.fanout.tmp"
+      local meta_ok=0
+      if [[ -f "$meta_path" ]]; then
+        if jq --arg disp "$disp" '. + {displayName: $disp}' "$meta_path" >"$tmp" 2>/dev/null; then
+          meta_ok=1
+        fi
+      else
+        if jq -n --arg disp "$disp" '{displayName: $disp}' >"$tmp" 2>/dev/null; then
+          meta_ok=1
+        fi
+      fi
+      if (( meta_ok )); then
+        mv -f "$tmp" "$meta_path"
+      else
+        rm -f "$tmp"
+        log_warn "#$num: jq failed to produce worktree-metadata.json; displayName will not survive dmux restart"
+      fi
+    else
+      log_warn "#$num: worktreePath not found ($worktree_path); displayName will not survive dmux restart"
+    fi
+
+    log_ok "#$num: displayName -> \"$disp\" (slug=$pane_slug)"
+    applied=$(( applied + 1 ))
+  done
+
+  if (( applied > 0 )) && ! (( dry_run )); then
+    log_info "displayName applied to $applied pane(s); dmux's enforcePaneTitles poll (5-30s) will push them to tmux pane borders"
+  fi
+}
+
 # --- main loop ---------------------------------------------------------------
 
 created=0
 failed=0
+created_nums=()
 for row in "${targets[@]}"; do
   num=$(jq -r '.number' <<<"$row")
   title=$(jq -r '.title' <<<"$row")
@@ -929,6 +1143,7 @@ for row in "${targets[@]}"; do
 
   if create_pane_for_issue "$num" "$title" "$body"; then
     created=$(( created + 1 ))
+    created_nums+=("$num")
   else
     failed=$(( failed + 1 ))
     log_warn "stopping early — manual inspection needed"
@@ -940,6 +1155,14 @@ for row in "${targets[@]}"; do
     sleep "$sleep_between"
   fi
 done
+
+# Apply displayNames once everything is created (or in dry-run, just print
+# the plan). Keyed on created_nums so a failed / skipped issue is not
+# targeted, and gated on name_has_any_display_name so a bare --name
+# (slug-hint only) short-circuits cleanly.
+if (( ${#created_nums[@]} > 0 )) && name_has_any_display_name; then
+  apply_display_names
+fi
 
 # --- summary -----------------------------------------------------------------
 

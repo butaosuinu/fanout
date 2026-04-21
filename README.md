@@ -102,8 +102,10 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 ```
 fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-                     [--include <list>] [--unblocked-only] [--session <tmux-session>]
-                     [--sleep <seconds>] [--popup-timeout <seconds>] [--dry-run]
+                     [--include <list>] [--unblocked-only]
+                     [--name <NUM>=<slug>[|<display>]]
+                     [--session <tmux-session>] [--sleep <seconds>]
+                     [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
 
@@ -143,6 +145,17 @@ fanout 123 --unblocked-only
 
 # Cap each wave while letting fanout pick the next unblocked batch
 fanout 123 --unblocked-only --limit 3
+
+# Name each child's branch/worktree and pane title directly, bypassing
+# dmux's default slug generation (which otherwise calls OpenRouter or the
+# local `claude --no-interactive` fallback per pane). The slug-hint is
+# front-loaded into the one-line prompt so dmux's slug LLM echoes it as the
+# actual slug/branch; the display-name is written post-creation into both
+# dmux.config.json (for the live tmux pane border) and the worktree's
+# .dmux/worktree-metadata.json (so it survives dmux restarts). Normally the
+# /fanout skill generates these from issue title/body without any extra
+# API call; pass --name yourself to override. Repeatable; one per target.
+fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
 
 # Pick a specific session when you have multiple dmux instances alive
 fanout 123 --session work-repo
@@ -271,6 +284,33 @@ sequence, or popup interception failed. Check whether:
 - Not authenticated: `gh auth status`.
 - Parent issue doesn't exist or has no sub-issues tagged via the extension:
   fanout exits 0 with `no sub-issues on #<parent>`.
+
+### Panes end up with ugly auto-generated slugs or OpenRouter burns tokens
+
+dmux's `dist/utils/slug.js` computes the branch/worktree slug by asking an LLM
+for "1-2 word kebab-case slug for this prompt" every time a pane is created.
+It tries OpenRouter first (requires `OPENROUTER_API_KEY`), then falls back to
+`claude --no-interactive --max-turns 1` (5s timeout, costs tokens), then to
+`dmux-<timestamp>` if both fail. Two ways to control this:
+
+- Pass `--name <NUM>=<slug-hint>` per issue. fanout front-loads the hint into
+  the one-line prompt so the slug LLM echoes it. The hint must be kebab-case
+  (`[a-z0-9-]`, starting with alnum) — that's the shape the slug sanitizer
+  expects. The `/fanout` Claude Code skill generates these automatically from
+  issue title/body using in-conversation reasoning (no extra API call).
+- If you want dmux to stop calling OpenRouter entirely, `unset
+  OPENROUTER_API_KEY` before `cd <repo> && dmux`. dmux will fall through to
+  the local Claude CLI fallback; combine with `--name` to keep it
+  deterministic. There's no dmux flag to disable slug-LLM entirely — the
+  only way to fully bypass LLM slug generation through the popup-intercept
+  path is to front-load the slug as a hint.
+
+The display-name (what shows in the dmux pane border) is a separate axis:
+fanout writes `panes[].displayName` in `dmux.config.json` and merges
+`displayName` into `<worktree>/.dmux/worktree-metadata.json` after each pane
+is created, and dmux's `enforcePaneTitles` (5-30s poll) pushes it into the
+tmux pane title within that window. Across dmux restarts the worktree-metadata
+copy is what survives (via `reopenWorktree`).
 
 ### Prompts show junk in the dmux TUI
 
