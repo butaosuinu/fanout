@@ -15,15 +15,16 @@ Arguments: `$ARGUMENTS`
    - Still nothing: ask the user which parent issue to fan out.
 2. **Detect `--go`** in the remaining arguments. Strip it out — it is this command's own bypass flag, not a `fanout` flag. The rest of the arguments are forwarded verbatim to `fanout`.
 3. **Scan the parent body for implicit children** before the dry-run. `fanout` only auto-detects children from the Sub-issues API and `- [ ] #N` task-list rows, so children that are only mentioned in prose (close keywords like `Closes #N`, `Depends on #N`, plain bullets `- #N`, Japanese idioms like `#N に関連` / `#N を対応`) won't appear unless you forward them via `--include`. See the skill doc (`~/.claude/skills/fanout/SKILL.md`, "Body scan for implicit children") for the full detection rules and the exclusion list (cross-repo refs, bare `#N`, code blocks, blockquotes, the parent itself). If you find candidates, list them to the user with one-line justifications and ask which to include; pass the accepted numbers as `--include A,B,C` to both the dry-run and the real run. Auto-accept when `--go` is set (still print the list for transparency).
-4. **Dry-run first** (unless `--go` was passed):
-   - Run `fanout <N> --dry-run <forwarded>` (include any `--include` from step 3) via Bash. cwd is irrelevant; do NOT `cd` first.
-   - Summarize the output: number of targets, child issue numbers and titles, briefing file paths under `/tmp/fanout-<repo>-<N>.md`.
+4. **Generate pane names for each target** — dmux's default slug generator would otherwise call OpenRouter / the local `claude --no-interactive` fallback just to name each pane. You already have every target issue's title and body in context, so produce a `<slug-hint>` (2–4 kebab-case words) and a `<display-name>` (≤40 readable chars, JP/EN OK) per target, with no extra tool call. Forward them as `--name <NUM>=<slug-hint>|<display-name>` (one flag per target, repeatable). See `~/.claude/skills/fanout/SKILL.md` "Generate pane names" for the naming policy. Do not ask the user to confirm the names individually — they'll see them in the dry-run summary and can course-correct then.
+5. **Dry-run first** (unless `--go` was passed):
+   - Run `fanout <N> --dry-run <forwarded>` (include any `--include` from step 3 and `--name` from step 4) via Bash. cwd is irrelevant; do NOT `cd` first.
+   - Summarize the output: number of targets, child issue numbers and titles, briefing file paths under `/tmp/fanout-<repo>-<N>.md`, and the generated slug-hint / display-name per issue.
    - Do not dump the raw `tmux send-keys` lines — they are long and noisy.
    - Ask the user to confirm.
-5. **Execute**:
+6. **Execute**:
    - Run `fanout <N> <forwarded>` via Bash.
    - Relay the `created / skipped / deferred / failed` summary.
-6. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
+7. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
    - dmux not running → tell the user to `cd <target-repo> && dmux` in another shell.
    - Multiple dmux sessions alive → rerun with `--session <name>`.
    - 60s wait-for-new-pane timeout or `popup did not appear within <N>s` → a popup-intercept stage failed; ask the user to rerun with `--debug`, press `Esc` in the dmux pane, and retry. If specifically `agentChoicePopup did not appear within 20s` on a large worktree, suggest bumping `--popup-timeout 45` (or higher).
@@ -37,6 +38,7 @@ Arguments: `$ARGUMENTS`
 - Default flags the CLI already applies: `--sleep 4`, `--popup-timeout 20`. Pass `--sleep 8` or higher on slow machines. Pass `--popup-timeout 45` (or higher) when dmux is slow to open the agent-choice popup on large worktrees.
 - To target a non-contiguous subset of children, pass `--only N1,N2,...` (keep-list) or `--skip N1,N2,...` (deny-list). The two are mutually exclusive. `--only` entries that aren't in the parent's OPEN child set are warned and ignored — surface that warning rather than rerunning or hunting for the number elsewhere. Both flags are applied before `--limit`.
 - To force-add children that the Sub-issues API and `- [ ] #N` task-list scan miss (e.g. surfaced by the body scan in step 3), pass `--include N1,N2,...`. These are appended to the children set before `--only`/`--skip` filter it, so combinations like `--include 100 --only 4,7,100` behave as you'd expect. CLOSED or non-existent numbers are warned and skipped.
+- To override per-pane naming (the slug-hint determines the branch/worktree directory; the display-name is the tmux pane border title), pass `--name <NUM>=<slug-hint>|<display-name>` once per target. This is normally filled in automatically by step 4 above. If the user supplies their own `--name` for a given issue, respect it and do not override.
 - `fanout` auto-detects the calling pane's agent from `dmux.config.json` and injects it into dmux's agent-choice popup via popup-result-file interception. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane) or when the caller isn't in a dmux-managed pane.
 - If the user asks why this is complicated: dmux v5.6.3 renders both the prompt input and the agent picker via `tmux display-popup` (separate tmux clients that `send-keys` cannot reach), so fanout intercepts each popup's `<tmpdir>/dmux-popup-*.json` result file. See `/Users/butaosuinu/fanout/README.md` ("Why this looks weird") for details. `--debug` exposes the intercept steps.
 
