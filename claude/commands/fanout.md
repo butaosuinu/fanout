@@ -37,6 +37,7 @@ Arguments: `$ARGUMENTS`
 - Default flags the CLI already applies: `--sleep 4`, `--popup-timeout 20`. Pass `--sleep 8` or higher on slow machines. Pass `--popup-timeout 45` (or higher) when dmux is slow to open the agent-choice popup on large worktrees.
 - To target a non-contiguous subset of children, pass `--only N1,N2,...` (keep-list) or `--skip N1,N2,...` (deny-list). The two are mutually exclusive. `--only` entries that aren't in the parent's OPEN child set are warned and ignored — surface that warning rather than rerunning or hunting for the number elsewhere. Both flags are applied before `--limit`.
 - To force-add children that the Sub-issues API and `- [ ] #N` task-list scan miss (e.g. surfaced by the body scan in step 3), pass `--include N1,N2,...`. These are appended to the children set before `--only`/`--skip` filter it, so combinations like `--include 100 --only 4,7,100` behave as you'd expect. CLOSED or non-existent numbers are warned and skipped.
+- `--unblocked-only` defers children whose blockers are still OPEN (blockers come from the child body's `## Blocked by` section, the parent task-list row's `(blocked by #X, #Y)` trailer, or the `blocked` label). Safe to rerun periodically as blocker PRs merge — the next run picks up newly-unblocked children automatically. Prefer this over hand-building `--only` wave lists when the parent has explicit blocker annotations.
 - `fanout` auto-detects the calling pane's agent from `dmux.config.json` and injects it into dmux's agent-choice popup via popup-result-file interception. Do not pass `--agent` yourself; only pass it when the user explicitly wants to override (e.g. spawn children under a different agent than the parent pane) or when the caller isn't in a dmux-managed pane.
 - If the user asks why this is complicated: dmux v5.6.3 renders both the prompt input and the agent picker via `tmux display-popup` (separate tmux clients that `send-keys` cannot reach), so fanout intercepts each popup's `<tmpdir>/dmux-popup-*.json` result file. See `/Users/butaosuinu/fanout/README.md` ("Why this looks weird") for details. `--debug` exposes the intercept steps.
 
@@ -46,4 +47,5 @@ Arguments: `$ARGUMENTS`
 - `/fanout 123 --go` — skip confirmation, run immediately.
 - `/fanout 123 --limit 3 --agent codex` — only the first 3 children, override the auto-detected agent and force the picker to `codex`.
 - `/fanout 123 --only 4,7,8,10` — fan out only these four children. `--skip 6,9` is the opposite form (deny-list).
+- `/fanout 123 --unblocked-only` — only children whose blockers are all CLOSED. Great for periodic reruns that walk Wave 1 → 2 → ... automatically.
 - `/fanout` (no args in a session that started with "work on #456") — extract `456` from context and proceed.

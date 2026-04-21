@@ -102,8 +102,8 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 ```
 fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-                     [--include <list>] [--session <tmux-session>] [--sleep <seconds>]
-                     [--popup-timeout <seconds>] [--dry-run]
+                     [--include <list>] [--unblocked-only] [--session <tmux-session>]
+                     [--sleep <seconds>] [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
 
@@ -133,6 +133,16 @@ fanout 123 --skip 6,9 --limit 3
 # the CLI outside a Claude Code session. CLOSED/nonexistent numbers are
 # warned and skipped. Composes with --only/--skip (include first, then filter).
 fanout 123 --include 4,7
+
+# Fan out only children whose blockers are all CLOSED. Blockers are read from
+# the child body's `## Blocked by` section, a trailing `(blocked by #X, #Y)`
+# on the parent's task-list row, or the child's `blocked` label (weak signal,
+# logged only). Safe to rerun as blocker PRs merge — drives Wave 1 → 2 → …
+# with no manual bookkeeping.
+fanout 123 --unblocked-only
+
+# Cap each wave while letting fanout pick the next unblocked batch
+fanout 123 --unblocked-only --limit 3
 
 # Pick a specific session when you have multiple dmux instances alive
 fanout 123 --session work-repo
@@ -195,6 +205,12 @@ for details.
    `gh issue view`. Only `state == "OPEN"` children are processed.
 5. For idempotency, it scans `dmux.config.json`'s `panes[].prompt` for any
    existing prompt starting with `[fanout #<NUM>]` and skips those issues.
+   If `--unblocked-only` is set, each remaining candidate is also inspected
+   for blockers: the child body's `## Blocked by` section (up to the next
+   blank line), a trailing `(blocked by #X, #Y)` on the parent's task-list
+   row, and the child's `blocked` label (weak signal — logged, not used to
+   infer specific blocker numbers). Children with any OPEN blocker are
+   reported as `deferred (blocked)` and skipped this run.
 6. For each target issue:
    - Writes a briefing to `/tmp/fanout-<repo>-<NUM>.md` with the issue body
      and a short Requirements checklist.
