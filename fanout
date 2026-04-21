@@ -42,6 +42,16 @@ Options:
                       e.g. --skip 6,9. Everything else in the OPEN child
                       set is fanned out. Cannot be combined with --only.
                       Applied before --limit.
+  --include <list>    Comma-separated list of issue numbers to force-add to
+                      the children set even if they aren't returned by the
+                      Sub-issues API or picked up from the parent body's
+                      task-list scan, e.g. --include 123,456. Intended for
+                      the /fanout Claude Code skill, which reads the parent
+                      body for implicit child references (close keywords,
+                      prose, Japanese idioms) and forwards the accepted
+                      numbers here. Combines with --only/--skip (included
+                      first, then filtered). Numbers that end up CLOSED or
+                      don't exist are warned and skipped.
   --session <name>    Target a specific tmux session (required when more than
                       one dmux session is alive on this machine).
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
@@ -125,6 +135,7 @@ agent=''
 limit=''
 only_arg=''
 skip_arg=''
+include_arg=''
 session_arg=''
 sleep_between=$default_sleep_between
 popup_timeout=$default_popup_timeout
@@ -138,6 +149,7 @@ while (( $# > 0 )); do
     --limit)      limit="${2:-}";     shift 2 || die "--limit requires an argument" ;;
     --only)       only_arg="${2:-}";  shift 2 || die "--only requires an argument" ;;
     --skip)       skip_arg="${2:-}";  shift 2 || die "--skip requires an argument" ;;
+    --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
@@ -185,8 +197,10 @@ fi
 
 only_set=' '
 skip_set=' '
+include_set=' '
 [[ -n "$only_arg" ]] && only_set=$(parse_num_csv --only "$only_arg")
 [[ -n "$skip_arg" ]] && skip_set=$(parse_num_csv --skip "$skip_arg")
+[[ -n "$include_arg" ]] && include_set=$(parse_num_csv --include "$include_arg")
 
 # --- dependency check --------------------------------------------------------
 
@@ -337,6 +351,16 @@ body_nums=$(printf '%s' "$parent_body" | jq -Rrs '
   | flatten | map(tonumber) | unique | .[]
 ')
 
+# --include numbers join the same hydrate path as body-scanned numbers.
+# parse_num_csv already validated each token is a positive integer, so we
+# just splat include_set (space-sentinel-wrapped set " 123 456 ") into the
+# newline-separated body_nums list.
+if [[ -n "$include_arg" ]]; then
+  for _tok in $include_set; do
+    body_nums+=$'\n'"$_tok"
+  done
+fi
+
 # Same sentinel-wrapped set idiom as fanned_set below so " 42 " membership
 # doesn't false-match "142".
 existing_set=' '
@@ -349,16 +373,17 @@ for num in $body_nums; do
   [[ "$num" == "$parent" ]] && continue
   [[ "$existing_set" == *" $num "* ]] && continue
   detail=$(gh_in_root issue view "$num" --json number,title,state,body 2>/dev/null) || {
-    log_warn "parent body references #$num but issue lookup failed; skipping"
+    log_warn "parent body / --include references #$num but issue lookup failed; skipping"
     continue
   }
   body_details+=("$detail")
+  existing_set+="$num "
 done
 
 if (( ${#body_details[@]} > 0 )); then
   extra_json=$(printf '%s\n' "${body_details[@]}" | jq -s '.')
   children_json=$(jq --argjson extra "$extra_json" '. + $extra' <<<"$children_json")
-  log_info "parent body added ${#body_details[@]} extra child reference(s) not in sub-issue API"
+  log_info "parent body / --include added ${#body_details[@]} extra child reference(s) not in sub-issue API"
 fi
 
 # Count & filter.

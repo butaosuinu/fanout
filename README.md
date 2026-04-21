@@ -102,7 +102,7 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
 ```
 fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-                     [--session <tmux-session>] [--sleep <seconds>]
+                     [--include <list>] [--session <tmux-session>] [--sleep <seconds>]
                      [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
@@ -125,6 +125,14 @@ fanout 123 --only 4,7,8,10
 
 # Fan out everything except these children; compose with --limit
 fanout 123 --skip 6,9 --limit 3
+
+# Force-add children that fanout's auto-detection (Sub-issues API + task-list)
+# misses — e.g. issues the parent body only references via `Closes #N`,
+# `Depends on #N`, plain bullets, or prose. The /fanout skill fills this in
+# automatically after reading the parent body; use it directly when running
+# the CLI outside a Claude Code session. CLOSED/nonexistent numbers are
+# warned and skipped. Composes with --only/--skip (include first, then filter).
+fanout 123 --include 4,7
 
 # Pick a specific session when you have multiple dmux instances alive
 fanout 123 --session work-repo
@@ -160,7 +168,11 @@ repo under `claude/` and get placed by `make install`:
 - **Skill** → `claude/skills/fanout/SKILL.md` is installed to
   `~/.claude/skills/fanout/SKILL.md` and lets the agent recognize when
   fanout is applicable and suggest `/fanout` rather than invoking
-  unprompted.
+  unprompted. In addition to gating invocation, the skill reads the parent
+  body for **implicit** child references that `fanout` itself doesn't parse
+  (close keywords like `Closes #N`, dependency/relation wording, plain
+  bullets, Japanese idioms), lists the candidates back to the user for
+  approval, and forwards the accepted numbers via `--include`.
 
 The CLI prerequisites above still apply: the dmux session must be alive,
 the TUI must be on the pane-list view, and only one agent should be
