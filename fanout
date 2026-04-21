@@ -182,7 +182,11 @@ name_get_display_name() {
 }
 
 name_has_any_display_name() {
-  # Returns 0 iff at least one entry has a non-empty display-name.
+  # Returns 0 iff at least one entry has a non-empty display-name. The
+  # explicit length short-circuit is required on bash 3.2.57 (what macOS
+  # ships) where `set -u` plus `"${empty_array[@]}"` trips "unbound
+  # variable" — a quirk fixed in 4.4+ but we still have to live with.
+  (( ${#name_display_names[@]} == 0 )) && return 1
   local v
   for v in "${name_display_names[@]}"; do
     [[ -n "$v" ]] && return 0
