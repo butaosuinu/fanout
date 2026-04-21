@@ -50,13 +50,14 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 - **Default**: `fanout <N> --dry-run` → summarize → ask user to confirm → `fanout <N>`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
-- **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--session`, `--sleep`, `--popup-timeout`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
+- **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--session`, `--sleep`, `--popup-timeout`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.
 - `--only <list>` / `--skip <list>` take a comma-separated list of issue numbers (e.g. `--only 4,7,8,10`). They are mutually exclusive. `--only` numbers not in the parent's OPEN child set are warned and ignored by the CLI — if the user names issues that aren't children, relay that warning instead of silently retrying.
 - `--include <list>` takes a comma-separated list of issue numbers to force-add to the children set when the Sub-issues API and parent-body task-list scan don't surface them (e.g. `--include 123,456`). This is the channel for numbers produced by the "Body scan for implicit children" step above. Numbers that end up CLOSED or don't exist are warned and skipped by the CLI. Combines cleanly with `--only`/`--skip` (included first, then filtered).
+- `--unblocked-only` defers children whose blockers are still OPEN (blockers are parsed from the child body's `## Blocked by` section, a `(blocked by #X, #Y)` trailer on the parent's task-list row, or the `blocked` label as a weak signal). Prefer this over hand-maintained `--only` wave lists when the parent has explicit blocker annotations — a periodic rerun of the same command walks Wave 1 → 2 → … as blocker PRs merge.
 
 ## After running
 
-- Relay the `created / skipped / deferred / failed` summary.
+- Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
 - The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
 - Re-invocation is idempotent: already-fanned issues are detected via the `[fanout #<N>]` prompt prefix in `dmux.config.json` and skipped.
 
