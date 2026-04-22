@@ -71,6 +71,18 @@ directories if they don't exist.
 Confirm `~/.local/bin` is on your `PATH` (`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`).
 If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 
+## Development
+
+```bash
+make test           # Tier 1 — flag/prereq black-box tests (bats-core required)
+make lint           # shellcheck fanout + test shims
+```
+
+bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
+Tier 1 covers the CLI surface (error messages + exit codes) that we commit to
+keeping stable across future rewrites. Tier 2 (`--dry-run` golden) is being
+added in a follow-up PR; Tier 3 (live dmux E2E) stays manual.
+
 ## Prerequisites
 
 - `gh` CLI, `jq`, `tmux`, `pgrep`, and the `gh-sub-issue` extension

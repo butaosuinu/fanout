@@ -1,0 +1,24 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tier1:
+    name: Tier 1 (flags & prereqs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats / jq / shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq shellcheck
+
+      - name: Tier 1 tests
+        run: make test-tier1
+
+      - name: Lint
+        run: make lint
