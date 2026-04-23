@@ -133,6 +133,22 @@ run_fanout_dry() {
   run_fanout --dry-run --agent claude --sleep 0 "$@"
 }
 
+# Assert that the previous `run` call ended with $status == 0. On failure,
+# dump status + captured output into bats' own TAP stream so CI logs have
+# enough context to diagnose without re-running with a local repro. Plain
+# `[ "$status" -eq 0 ]` in the @test body loses $output on failure in bats
+# 1.2.1 (Ubuntu 22.04 apt default).
+assert_success() {
+  # shellcheck disable=SC2154
+  if [[ "$status" -ne 0 ]]; then
+    {
+      printf 'fanout exited with status=%s\n' "$status"
+      printf -- '--- captured output ---\n%s\n--- end output ---\n' "$output"
+    } >&2
+    return 1
+  fi
+}
+
 # Scrub machine-local prefixes from captured output so goldens are portable
 # across workstations and CI runners. Rewrites:
 #   - $REPO_ROOT                       → <REPO>
