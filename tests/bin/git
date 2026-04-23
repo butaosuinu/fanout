@@ -27,6 +27,10 @@ for d in $PATH; do
   [[ -x "$cand" ]] || continue
   cand_resolved="$(cd "$(dirname "$cand")" 2>/dev/null && pwd)/$(basename "$cand")"
   [[ "$cand_resolved" == "$self" ]] && continue
+  # SC2093: exec inside a loop looks suspicious to shellcheck because code
+  # can follow, but that's the intent — the fallback `exit 127` below runs
+  # only when no candidate matched and we never exec'd.
+  # shellcheck disable=SC2093
   exec "$cand" "$@"
 done
 
