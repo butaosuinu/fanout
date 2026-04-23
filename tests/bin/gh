@@ -1,27 +1,81 @@
 #!/usr/bin/env bash
-# Phase 1 shim: a permissive stand-in for the `gh` CLI.
+# Tier 2 shim: fixture-driven `gh` dispatch.
 #
-# Tier 1 tests mostly fail fast in argv parsing (fanout:322-382) and never
-# reach this binary. The few prerequisite-checking tests that do exercise
-# prereqs want `gh` to appear healthy unless the test opts out via the
-# helpers.bash `force_missing` mechanism (which rebuilds PATH so this file
-# is unreachable).
+# Each Tier 2 test sets FIXTURE_DIR=tests/fixtures/<name> before invoking
+# fanout. The shim reads per-call fixtures from that directory:
 #
-# Tier 2 will replace this body with fixture-driven dispatch; the argv shape
-# documented in fanout:396 / fanout:509 / fanout:518 / fanout:554 / fanout:650
-# / fanout:263 will land here then.
+#   gh extension list
+#       — always returns a line advertising the gh-sub-issue extension.
+#         (fanout:396 only checks presence, never the version.)
+#
+#   gh sub-issue list <parent> --json number,title,state
+#       — echoes $FIXTURE_DIR/gh-sub-issue-list.json verbatim
+#         (shape: {"subIssues":[...]}).
+#
+#   gh issue view <N> --json ... [-q <filter>]
+#       — echoes $FIXTURE_DIR/gh-issue-view-<N>.json verbatim, or if a -q
+#         filter was passed, pipes the fixture through real jq first.
+#         fanout uses -q .state and -q .body against the same endpoint,
+#         so fixtures are full issue objects (number/title/state/body/labels).
+#
+# Tier 1 "force_missing gh" still wins because helpers.bash rebuilds PATH
+# to a sanitized directory that excludes this shim.
 
 set -euo pipefail
 
+fixture="${FIXTURE_DIR:-}"
+
 case "${1:-}" in
   extension)
-    # `gh extension list` — fanout:396 pipes this into `cut -f1 | grep -qx 'gh sub-issue'`.
     if [[ "${2:-}" == "list" ]]; then
       printf 'gh sub-issue\tyahsan2/gh-sub-issue\tv0.5.0\n'
       exit 0
     fi
     ;;
+  sub-issue)
+    if [[ "${2:-}" == "list" ]]; then
+      if [[ -z "$fixture" ]]; then
+        echo "gh shim: FIXTURE_DIR not set (gh sub-issue list $*)" >&2
+        exit 1
+      fi
+      if [[ ! -f "$fixture/gh-sub-issue-list.json" ]]; then
+        echo "gh shim: missing $fixture/gh-sub-issue-list.json" >&2
+        exit 1
+      fi
+      cat "$fixture/gh-sub-issue-list.json"
+      exit 0
+    fi
+    ;;
+  issue)
+    if [[ "${2:-}" == "view" ]]; then
+      num="${3:-}"
+      shift 3 2>/dev/null || true
+      jq_filter=""
+      while (( $# )); do
+        case "$1" in
+          --json) shift 2;;
+          -q|--jq) jq_filter="$2"; shift 2;;
+          *) shift;;
+        esac
+      done
+      if [[ -z "$fixture" ]]; then
+        echo "gh shim: FIXTURE_DIR not set (gh issue view $num)" >&2
+        exit 1
+      fi
+      fx="$fixture/gh-issue-view-$num.json"
+      if [[ ! -f "$fx" ]]; then
+        echo "gh shim: missing $fx" >&2
+        exit 1
+      fi
+      if [[ -n "$jq_filter" ]]; then
+        jq -r "$jq_filter" "$fx"
+      else
+        cat "$fx"
+      fi
+      exit 0
+    fi
+    ;;
 esac
 
-# Anything else: silent success. Phase 2 replaces this with real dispatch.
-exit 0
+echo "gh shim: unhandled argv: $*" >&2
+exit 1

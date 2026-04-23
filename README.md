@@ -74,14 +74,18 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 ## Development
 
 ```bash
-make test           # Tier 1 — flag/prereq black-box tests (bats-core required)
+make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
+make test-tier1     # flag/prereq tests only
+make test-tier2     # --dry-run golden tests against fixture scenarios
 make lint           # shellcheck fanout + test shims
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
-Tier 1 covers the CLI surface (error messages + exit codes) that we commit to
-keeping stable across future rewrites. Tier 2 (`--dry-run` golden) is being
-added in a follow-up PR; Tier 3 (live dmux E2E) stays manual.
+Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
+`--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
+Both tiers are parity-test material for the upcoming Go rewrite. Regenerate
+Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
+intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 
 ## Prerequisites
 
