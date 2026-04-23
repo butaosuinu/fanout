@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# dmux before_pane_create hook — refresh the local default branch from origin
+# so new worktrees are created from the freshest possible base.
+#
+# dmux's paneCreation.js does not call `git fetch` before `git worktree add`.
+# If the local default branch (usually `main`) is stale, every new worktree
+# is born on an old commit. This hook closes that gap.
+#
+# Execution note: dmux fires before_pane_create via `spawn` + `child.unref()`
+# (fire-and-forget), so it runs in parallel with dmux's slug generation and
+# worktree creation. In practice the LLM-backed generateSlug() call takes
+# 1-5 seconds, which comfortably exceeds a `git fetch --quiet` round-trip on
+# any reasonable network — so the hook usually finishes first. If the race
+# is lost (slow network + cached slug) the next pane creation recovers.
+#
+# Env vars provided by dmux: DMUX_ROOT, DMUX_PROMPT, DMUX_AGENT.
+
+# -e would abort on the first non-fatal `git` failure; we want best-effort.
+set -u
+
+: "${DMUX_ROOT:?DMUX_ROOT not set; dmux should provide this}"
+cd "$DMUX_ROOT" || exit 0
+
+# 1) Resolve default branch. gh is authoritative; fall back to the remote HEAD
+#    symref; last resort is literal "main".
+default_branch=''
+if command -v gh >/dev/null 2>&1; then
+  default_branch=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) || default_branch=''
+fi
+if [[ -z "$default_branch" ]]; then
+  default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##') || default_branch=''
+fi
+[[ -z "$default_branch" ]] && default_branch='main'
+
+# 2) Fetch remote-tracking ref. Safe: never touches the working tree.
+git fetch --quiet --no-tags origin "$default_branch" 2>/dev/null || exit 0
+
+origin_sha=$(git rev-parse --verify "refs/remotes/origin/$default_branch" 2>/dev/null) || exit 0
+
+# 3) Fast-forward local branch to origin, if safe.
+if git rev-parse --verify "refs/heads/$default_branch" >/dev/null 2>&1; then
+  local_sha=$(git rev-parse "refs/heads/$default_branch")
+  if [[ "$local_sha" != "$origin_sha" ]]; then
+    merge_base=$(git merge-base "$local_sha" "$origin_sha" 2>/dev/null || true)
+    if [[ "$merge_base" == "$local_sha" ]]; then
+      # FF is safe. First try `git branch -f`, which works when the branch
+      # is not checked out anywhere. If that fails (checked out in some
+      # worktree), locate the worktree and `git merge --ff-only` there —
+      # but only if its working tree is clean, so we never clobber the
+      # user's uncommitted work.
+      if ! git branch -f "$default_branch" "$origin_sha" 2>/dev/null; then
+        checked_out_path=$(git worktree list --porcelain 2>/dev/null | awk -v br="$default_branch" '
+          /^worktree / { w=$2 }
+          /^branch refs\/heads\// {
+            b=$2; sub(/^refs\/heads\//, "", b)
+            if (b == br) { print w; exit }
+          }
+        ')
+        if [[ -n "$checked_out_path" && -d "$checked_out_path" ]]; then
+          if [[ -z "$(git -C "$checked_out_path" status --porcelain 2>/dev/null)" ]]; then
+            git -C "$checked_out_path" merge --ff-only --quiet "$origin_sha" 2>/dev/null || true
+          fi
+          # If working tree is dirty, skip — the user may be mid-edit on main.
+        fi
+      fi
+    fi
+    # If local has diverged (merge_base != local_sha), leave it alone.
+  fi
+else
+  # No local ref yet — create from origin.
+  git branch "$default_branch" "$origin_sha" 2>/dev/null || true
+fi
+
+exit 0
