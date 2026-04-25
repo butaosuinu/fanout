@@ -47,8 +47,8 @@ resultFile パスを特定し、プロンプトポップアップ用には
 ## インストール
 
 fanout は 1 つの Bash スクリプトに、エージェント連携ファイルを加えた構成で
-配布されます。Claude Code にはスラッシュコマンド + スキル、Codex CLI には
-スキルを用意しています。すべて `Makefile` 経由で一括配置されます:
+配布されます。Claude Code にはスラッシュコマンド + スキル群、Codex CLI には
+スキル群を用意しています。すべて `Makefile` 経由で一括配置されます:
 
 ```bash
 make install        # CLI + Claude/Codex 連携を ~/.local, ~/.claude, ~/.codex にコピー
@@ -64,8 +64,10 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 
 - `$(BINDIR)/fanout`（既定は `~/.local/bin/fanout`）
 - `$(CLAUDE_DIR)/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
-- `$(CLAUDE_DIR)/skills/fanout/SKILL.md`（既定は `~/.claude/skills/fanout/SKILL.md`）
-- `$(CODEX_DIR)/skills/fanout/SKILL.md`（既定は `~/.codex/skills/fanout/SKILL.md`）
+- `$(CLAUDE_DIR)/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
+- `$(CLAUDE_DIR)/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
+- `$(CODEX_DIR)/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
+- `$(CODEX_DIR)/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
 
 `make install` は安定しています — リポジトリを消しても、コピー済みのファイルで
 動作し続けます。`make link` はチェックアウトを指すので、編集がすぐ反映され、
@@ -187,7 +189,7 @@ Codex など）から呼び出しても安全です。fanout は `$TMUX` や cwd
 セッションオプションから dmux を検出します。作るのは子用の新規ペインだけなので、
 呼び出し元のペインは一切触りません。
 
-Claude Code 向けの推奨連携 — どちらのアセットもこのリポジトリの `claude/` 配下に
+Claude Code 向けの推奨連携 — これらのアセットはこのリポジトリの `claude/` 配下に
 同梱されており、`make install` で配置されます:
 
 - **スラッシュコマンド** → `claude/commands/fanout.md` が
@@ -203,6 +205,12 @@ Claude Code 向けの推奨連携 — どちらのアセットもこのリポジ
   表現、チェックボックス無しの素の箇条書き (`- #N`)、`#N に関連` / `#N を対応`
   のような日本語の慣用句 — を親本文から読み取り、候補をユーザーに提示して
   承認された番号を `--include` で fanout に渡します。
+- **issue 作成スキル** → `claude/skills/fanout-issues/SKILL.md` が
+  `~/.claude/skills/fanout-issues/SKILL.md` にインストールされ、計画を
+  fanout 向けの GitHub 親 issue + 子 issue 群へ変換する場面で使われます。
+  同一リポジトリ内の子 issue を作成し、GitHub Sub-issues と親本文のタスクリストの
+  両方へ反映し、`fanout --unblocked-only` が読める `## Blocked by` /
+  `(blocked by #N)` 形式で依存関係の wave も記録します。
 
 Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/` 配下に同梱され、
 `make install` で配置されます:
@@ -214,6 +222,12 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
   このワークフローを使います。Claude のコマンドと同じく、まず dry-run で
   対象を確認し、ユーザー確認後に本実行します（確認不要と明示された場合を除く）。
   暗黙の子参照の scan と `--name` 生成もスキル側で行います。
+- **issue 作成スキル** → `codex/skills/fanout-issues/SKILL.md` が
+  `~/.codex/skills/fanout-issues/SKILL.md` にインストールされます。Codex に
+  fanout 向けの GitHub issue ツリー作成、計画の親子 issue 化、
+  `fanout --unblocked-only` 用の blocker wave 作成を依頼したときに使います。
+  Claude 版と同じく、同一リポジトリ内の子 issue、GitHub Sub-issues のリンク、
+  親本文のタスクリスト、`## Blocked by` 注記を揃えます。
 
 上記の CLI 前提条件はそのまま適用されます: dmux セッションが生きていること、
 TUI がペイン一覧画面にあること。エージェントは、呼び出し元ペイン自身が
