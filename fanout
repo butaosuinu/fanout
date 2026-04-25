@@ -46,12 +46,12 @@ Options:
                       the children set even if they aren't returned by the
                       Sub-issues API or picked up from the parent body's
                       task-list scan, e.g. --include 123,456. Intended for
-                      the /fanout Claude Code skill, which reads the parent
-                      body for implicit child references (close keywords,
-                      prose, Japanese idioms) and forwards the accepted
-                      numbers here. Combines with --only/--skip (included
-                      first, then filtered). Numbers that end up CLOSED or
-                      don't exist are warned and skipped.
+                      the bundled Claude/Codex agent integrations, which
+                      read the parent body for implicit child references
+                      (close keywords, prose, Japanese idioms) and forward
+                      the accepted numbers here. Combines with --only/--skip
+                      (included first, then filtered). Numbers that end up
+                      CLOSED or don't exist are warned and skipped.
   --name <NUM>=<slug-hint>[|<display-name>]
                       Override the default naming for issue <NUM>. Repeatable
                       (once per issue). <slug-hint> is 2-4 kebab-case words
@@ -67,9 +67,10 @@ Options:
                       .dmux/worktree-metadata.json, so dmux's enforcePaneTitles
                       loop (every 5-30s) surfaces it as the tmux pane border
                       title and reopenWorktree restores it across restarts.
-                      Intended to be filled in by the /fanout Claude Code
-                      skill, which generates both hints from issue title/body
-                      using in-conversation reasoning (no extra LLM call).
+                      Intended to be filled in by the bundled Claude/Codex
+                      agent integrations, which generate both hints from
+                      issue title/body using in-conversation reasoning (no
+                      extra LLM call).
                       Examples:
                         --name 17=fix-login-timeout|Fix login
                         --name 18=update-docs
@@ -483,7 +484,7 @@ log_info "config:       $config_path"
 # --- agent auto-detect -------------------------------------------------------
 # If --agent was not explicit, look up the caller's tmux pane in
 # dmux.config.json and inherit its .agent field. This makes the agent-picker
-# popup navigation work out of the box when /fanout is invoked from inside a
+# popup navigation work out of the box when fanout is invoked from inside a
 # dmux-managed agent session.
 if [[ -z "$agent" ]] && [[ -n "${TMUX_PANE:-}" ]]; then
   detected_agent=$(jq -r --arg pid "$TMUX_PANE" '
