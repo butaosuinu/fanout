@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fanout Issues"
+  short_description: "Create fanout-ready GitHub issue trees"
+  default_prompt: "Create a fanout-ready parent issue and linked child issues for this plan."

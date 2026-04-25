@@ -45,7 +45,7 @@ can collapse back to `POST /api/panes` in a page.
 ## Installation
 
 fanout ships as a single Bash script plus agent integration files:
-Claude Code gets a slash command + skill, and Codex CLI gets a skill.
+Claude Code gets a slash command + skills, and Codex CLI gets skills.
 All of them are placed in one shot via the `Makefile`:
 
 ```bash
@@ -62,8 +62,10 @@ Installed paths:
 
 - `$(BINDIR)/fanout` (default `~/.local/bin/fanout`)
 - `$(CLAUDE_DIR)/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
-- `$(CLAUDE_DIR)/skills/fanout/SKILL.md` (default `~/.claude/skills/fanout/SKILL.md`)
-- `$(CODEX_DIR)/skills/fanout/SKILL.md` (default `~/.codex/skills/fanout/SKILL.md`)
+- `$(CLAUDE_DIR)/skills/fanout/` (default `~/.claude/skills/fanout/`)
+- `$(CLAUDE_DIR)/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
+- `$(CODEX_DIR)/skills/fanout/` (default `~/.codex/skills/fanout/`)
+- `$(CODEX_DIR)/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
 
 `make install` is stable — delete the repo and the copies still work.
 `make link` points at the checkout, so edits take effect immediately and
@@ -198,7 +200,7 @@ is itself running in a dmux pane. It discovers dmux via tmux session options,
 not via `$TMUX` or cwd, and it only creates NEW panes for children — the
 caller's pane is never touched.
 
-Recommended integration for Claude Code — both assets are bundled in this
+Recommended integration for Claude Code — these assets are bundled in this
 repo under `claude/` and get placed by `make install`:
 
 - **Slash command** → `claude/commands/fanout.md` is installed to
@@ -214,6 +216,13 @@ repo under `claude/` and get placed by `make install`:
   (close keywords like `Closes #N`, dependency/relation wording, plain
   bullets, Japanese idioms), lists the candidates back to the user for
   approval, and forwards the accepted numbers via `--include`.
+- **Issue creation skill** → `claude/skills/fanout-issues/SKILL.md` is
+  installed to `~/.claude/skills/fanout-issues/SKILL.md` and guides the
+  agent when turning a plan into a fanout-ready GitHub parent issue plus
+  linked child issues. It creates same-repo children, links them through
+  GitHub Sub-issues, mirrors them in the parent task list, and records
+  blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that
+  `fanout --unblocked-only` understands.
 
 Recommended integration for Codex CLI — the skill is bundled under
 `codex/` and gets placed by `make install`:
@@ -225,6 +234,12 @@ Recommended integration for Codex CLI — the skill is bundled under
   same safety flow as the Claude command: dry-run first, confirm targets, then
   run the real `fanout` command unless the user asked to skip confirmation.
   It also performs the implicit-child scan and generates `--name` flags.
+- **Issue creation skill** → `codex/skills/fanout-issues/SKILL.md` is
+  installed to `~/.codex/skills/fanout-issues/SKILL.md`. Use it by asking
+  Codex to create a fanout-ready GitHub issue tree, decompose a plan into
+  parent/child issues, or prepare blocker waves for `fanout --unblocked-only`.
+  It mirrors the Claude issue-creation skill: same-repo children, GitHub
+  Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
 
 The CLI prerequisites above still apply: the dmux session must be alive,
 the TUI must be on the pane-list view, and only one agent should be

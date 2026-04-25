@@ -5,49 +5,66 @@ CODEX_DIR  ?= $(HOME)/.codex
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
+CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
+CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
+CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
 
 BATS       ?= bats
 
 .PHONY: install link uninstall test test-tier1 test-tier2 lint check-bats
 
 install:
-	@mkdir -p "$(BINDIR)" "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)/fanout" "$(CODEX_SKILL_DIR)/fanout/agents"
+	@mkdir -p "$(BINDIR)" "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	install -m 0755 fanout "$(BINDIR)/fanout"
-	install -m 0644 claude/commands/fanout.md "$(CLAUDE_CMD_DIR)/fanout.md"
-	install -m 0644 claude/skills/fanout/SKILL.md "$(CLAUDE_SKILL_DIR)/fanout/SKILL.md"
-	install -m 0644 codex/skills/fanout/SKILL.md "$(CODEX_SKILL_DIR)/fanout/SKILL.md"
-	install -m 0644 codex/skills/fanout/agents/openai.yaml "$(CODEX_SKILL_DIR)/fanout/agents/openai.yaml"
+	@for cmd in $(CLAUDE_COMMANDS); do \
+		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
+	done
+	@for skill in $(CLAUDE_SKILLS); do \
+		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
+		mkdir -p "$(CLAUDE_SKILL_DIR)/$$skill"; \
+		cp -R "claude/skills/$$skill/." "$(CLAUDE_SKILL_DIR)/$$skill/"; \
+	done
+	@for skill in $(CODEX_SKILLS); do \
+		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
+		mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
+		cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
+	done
 	@echo "Installed:"
 	@echo "  $(BINDIR)/fanout"
-	@echo "  $(CLAUDE_CMD_DIR)/fanout.md"
-	@echo "  $(CLAUDE_SKILL_DIR)/fanout/SKILL.md"
-	@echo "  $(CODEX_SKILL_DIR)/fanout/SKILL.md"
-	@echo "  $(CODEX_SKILL_DIR)/fanout/agents/openai.yaml"
+	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
+	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
 link:
 	@mkdir -p "$(BINDIR)" "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout"
-	ln -sf "$(CURDIR)/claude/commands/fanout.md" "$(CLAUDE_CMD_DIR)/fanout.md"
-	rm -rf "$(CLAUDE_SKILL_DIR)/fanout"
-	ln -sf "$(CURDIR)/claude/skills/fanout" "$(CLAUDE_SKILL_DIR)/fanout"
-	rm -rf "$(CODEX_SKILL_DIR)/fanout"
-	ln -sf "$(CURDIR)/codex/skills/fanout" "$(CODEX_SKILL_DIR)/fanout"
+	@for cmd in $(CLAUDE_COMMANDS); do \
+		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
+	done
+	@for skill in $(CLAUDE_SKILLS); do \
+		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
+		ln -sf "$(CURDIR)/claude/skills/$$skill" "$(CLAUDE_SKILL_DIR)/$$skill"; \
+	done
+	@for skill in $(CODEX_SKILLS); do \
+		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
+		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
+	done
 	@echo "Linked:"
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/fanout"
-	@echo "  $(CLAUDE_CMD_DIR)/fanout.md -> $(CURDIR)/claude/commands/fanout.md"
-	@echo "  $(CLAUDE_SKILL_DIR)/fanout -> $(CURDIR)/claude/skills/fanout"
-	@echo "  $(CODEX_SKILL_DIR)/fanout -> $(CURDIR)/codex/skills/fanout"
+	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
+	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
+	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
 
 uninstall:
 	rm -f "$(BINDIR)/fanout"
-	rm -f "$(CLAUDE_CMD_DIR)/fanout.md"
-	rm -rf "$(CLAUDE_SKILL_DIR)/fanout"
-	rm -rf "$(CODEX_SKILL_DIR)/fanout"
+	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
+	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 	@echo "Removed:"
 	@echo "  $(BINDIR)/fanout"
-	@echo "  $(CLAUDE_CMD_DIR)/fanout.md"
-	@echo "  $(CLAUDE_SKILL_DIR)/fanout"
-	@echo "  $(CODEX_SKILL_DIR)/fanout"
+	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
+	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
 # --- test / lint -------------------------------------------------------------
 # `make test`         — run every tier that's implemented (currently just Tier 1).
