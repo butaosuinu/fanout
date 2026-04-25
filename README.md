@@ -44,17 +44,18 @@ can collapse back to `POST /api/panes` in a page.
 
 ## Installation
 
-fanout ships as a single Bash script plus its Claude Code integration
-files (slash command + skill). All three are placed in one shot via the
-`Makefile`:
+fanout ships as a single Bash script plus agent integration files:
+Claude Code gets a slash command + skill, and Codex CLI gets a skill.
+All of them are placed in one shot via the `Makefile`:
 
 ```bash
-make install        # copies CLI + command + skill into ~/.local and ~/.claude
-make link           # symlinks the same three paths at the checkout (use while hacking)
-make uninstall      # removes all three
+make install        # copies CLI + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
+make link           # symlinks the same paths at the checkout (use while hacking)
+make uninstall      # removes the installed paths
 
 PREFIX=/usr/local sudo make install     # system-wide CLI; overrides BINDIR to $PREFIX/bin
 CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
+CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
 Installed paths:
@@ -62,11 +63,13 @@ Installed paths:
 - `$(BINDIR)/fanout` (default `~/.local/bin/fanout`)
 - `$(CLAUDE_DIR)/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
 - `$(CLAUDE_DIR)/skills/fanout/SKILL.md` (default `~/.claude/skills/fanout/SKILL.md`)
+- `$(CODEX_DIR)/skills/fanout/SKILL.md` (default `~/.codex/skills/fanout/SKILL.md`)
 
 `make install` is stable — delete the repo and the copies still work.
 `make link` points at the checkout, so edits take effect immediately and
 `git pull` is enough to update. Either target creates the parent
-directories if they don't exist.
+directories if they don't exist. Restart any running Codex CLI session after
+installing or linking so it picks up the new skill.
 
 Confirm `~/.local/bin` is on your `PATH` (`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`).
 If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
@@ -98,8 +101,9 @@ added in a follow-up PR; Tier 3 (live dmux E2E) stays manual.
   from `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`).
   dmux v5.6.3 always opens the agent-choice popup after the prompt popup,
   even when only one agent is enabled, so fanout needs a name to inject
-  into it. Invoking `/fanout` from inside an agent session works out of the
-  box; calling `fanout` from a plain shell requires `--agent`.
+  into it. Invoking through the bundled Claude/Codex integration from inside
+  an agent session works out of the box; calling `fanout` from a plain shell
+  requires `--agent`.
 - **The dmux TUI must be on the pane-list view** (no modal / no prompt open)
   when fanout runs. fanout sends one `Escape` before each pane-creation
   sequence to recover from stray popups, but cannot unstick an interactive
@@ -142,10 +146,11 @@ fanout 123 --skip 6,9 --limit 3
 
 # Force-add children that fanout's auto-detection (Sub-issues API + task-list)
 # misses — e.g. issues the parent body only references via `Closes #N`,
-# `Depends on #N`, plain bullets, or prose. The /fanout skill fills this in
-# automatically after reading the parent body; use it directly when running
-# the CLI outside a Claude Code session. CLOSED/nonexistent numbers are
-# warned and skipped. Composes with --only/--skip (include first, then filter).
+# `Depends on #N`, plain bullets, or prose. The bundled Claude/Codex
+# integrations fill this in automatically after reading the parent body; use
+# it directly when running the CLI outside an agent session. CLOSED/nonexistent
+# numbers are warned and skipped. Composes with --only/--skip (include first,
+# then filter).
 fanout 123 --include 4,7
 
 # Fan out only children whose blockers are all CLOSED. Blockers are read from
@@ -165,8 +170,9 @@ fanout 123 --unblocked-only --limit 3
 # actual slug/branch; the display-name is written post-creation into both
 # dmux.config.json (for the live tmux pane border) and the worktree's
 # .dmux/worktree-metadata.json (so it survives dmux restarts). Normally the
-# /fanout skill generates these from issue title/body without any extra
-# API call; pass --name yourself to override. Repeatable; one per target.
+# bundled Claude/Codex integrations generate these from issue title/body
+# without any extra API call; pass --name yourself to override. Repeatable;
+# one per target.
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
 
 # Pick a specific session when you have multiple dmux instances alive
@@ -208,6 +214,17 @@ repo under `claude/` and get placed by `make install`:
   (close keywords like `Closes #N`, dependency/relation wording, plain
   bullets, Japanese idioms), lists the candidates back to the user for
   approval, and forwards the accepted numbers via `--include`.
+
+Recommended integration for Codex CLI — the skill is bundled under
+`codex/` and gets placed by `make install`:
+
+- **Skill** → `codex/skills/fanout/SKILL.md` is installed to
+  `~/.codex/skills/fanout/SKILL.md`. Restart any running Codex session after
+  installing. Invoke it by asking Codex to fan out a parent issue (for
+  example, "fan out #123") or explicitly with `$fanout`. The skill follows the
+  same safety flow as the Claude command: dry-run first, confirm targets, then
+  run the real `fanout` command unless the user asked to skip confirmation.
+  It also performs the implicit-child scan and generates `--name` flags.
 
 The CLI prerequisites above still apply: the dmux session must be alive,
 the TUI must be on the pane-list view, and only one agent should be
@@ -308,8 +325,8 @@ It tries OpenRouter first (requires `OPENROUTER_API_KEY`), then falls back to
 - Pass `--name <NUM>=<slug-hint>` per issue. fanout front-loads the hint into
   the one-line prompt so the slug LLM echoes it. The hint must be kebab-case
   (`[a-z0-9-]`, starting with alnum) — that's the shape the slug sanitizer
-  expects. The `/fanout` Claude Code skill generates these automatically from
-  issue title/body using in-conversation reasoning (no extra API call).
+  expects. The bundled Claude/Codex integrations generate these automatically
+  from issue title/body using in-conversation reasoning (no extra API call).
 - If you want dmux to stop calling OpenRouter entirely, `unset
   OPENROUTER_API_KEY` before `cd <repo> && dmux`. dmux will fall through to
   the local Claude CLI fallback; combine with `--name` to keep it

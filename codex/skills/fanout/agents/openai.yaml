@@ -1,0 +1,7 @@
+interface:
+  display_name: "fanout"
+  short_description: "Spawn GitHub sub-issues into dmux panes"
+  default_prompt: "Use $fanout to fan out a GitHub parent issue into dmux panes."
+
+policy:
+  allow_implicit_invocation: true
