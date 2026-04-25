@@ -10,6 +10,10 @@ The Claude Code integration files (`claude/commands/fanout.md` slash command and
 
 The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `README.md`. Read it before changing behavior; this file covers only what's not obvious from the README.
 
+## dmux integration outside the script
+
+- **Worktrees branch off a fresh `main`.** `.dmux-hooks/before_pane_create` (version-controlled) runs just before dmux creates a worktree. It `git fetch`es the repo's default branch and fast-forwards the local ref (via `git branch -f` if the branch is unchecked-out, or `git merge --ff-only` in the worktree that has it checked out, only when that worktree is clean). Combined with `settings.baseBranch = "main"` in `.dmux/dmux.config.json`, dmux's `git worktree add -b <new> main` then starts every new worktree from the freshest local `main`. This works around dmux's `paneCreation.js` not calling `git fetch` before `git worktree add`. The hook is fire-and-forget (`spawn`+`unref` in `dist/utils/hooks.js`), so it races against dmux's `generateSlug` LLM call (typically 1-5s) — `git fetch --quiet` normally wins. If local `main` is ahead of `origin/main` (unpushed commits) or diverged, the hook deliberately does nothing, preserving the user's work. `.dmux/dmux.config.json` is gitignored so the `baseBranch` setting is per-machine; the hook file in `.dmux-hooks/` is the portable half.
+
 ## Working with the script
 
 - Run it: `./fanout <parent-issue>` (it's executable; no install step).
