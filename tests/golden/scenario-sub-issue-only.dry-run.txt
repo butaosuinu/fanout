@@ -1,0 +1,27 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-sub-issue-only/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-sub-issue-only/dmux.config.json
+[info] fetching sub-issues of #100
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #101: First child
+  briefing -> /tmp/fanout-project_root-101.md
+  briefing size: 600 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #101] First child: read /tmp/fanout-project_root-101.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #101: dry-run complete
+[info] #102: Second child
+  briefing -> /tmp/fanout-project_root-102.md
+  briefing size: 601 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #102] Second child: read /tmp/fanout-project_root-102.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #102: dry-run complete
+
+[ ok ] created: 2

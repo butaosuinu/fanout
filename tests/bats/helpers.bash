@@ -2,9 +2,12 @@
 #
 # Every `.bats` file should `load helpers` as its first non-comment line.
 # This file provides:
-#   * setup()     — PATH shim injection, deterministic env, FANOUT_BIN discovery
-#   * teardown()  — clean up /tmp/fanout-* briefings so tests can't pollute each other
-#   * run_fanout  — thin wrapper that always invokes the repo's ./fanout via bats `run`
+#   * setup()          — PATH shim injection, deterministic env, FANOUT_BIN discovery
+#   * teardown()       — clean up /tmp/fanout-* briefings so tests can't pollute each other
+#   * run_fanout       — thin wrapper that always invokes the repo's ./fanout via bats `run`
+#   * run_fanout_dry   — Tier 2 wrapper that adds --dry-run and --agent defaults
+#   * assert_golden    — compare captured $output to tests/golden/<name>.dry-run.txt
+#   * use_fixture      — point FIXTURE_DIR at tests/fixtures/<name> for shims
 
 # Repo root (one level above tests/bats/).
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,6 +35,18 @@ setup() {
   # want to simulate a missing dependency set this themselves, e.g.
   #   FANOUT_TEST_FORCE_MISSING=gh run_fanout 20
   unset FANOUT_TEST_FORCE_MISSING
+
+  # Tier 2 shims (tests/bin/gh, tests/bin/tmux) read FIXTURE_DIR to find
+  # per-scenario fixture files. Tier 1 tests must NOT have it leaked across
+  # tests — unset here and let each Tier 2 test opt in via use_fixture.
+  unset FIXTURE_DIR
+
+  # Supply the tmux shim with a PID that's alive for the full test run.
+  # $$ inside bats is the bats process PID; it stays live across setup /
+  # test body / teardown. The tmux shim substitutes @@PID@@ in fixture
+  # values with this PID so fanout's kill -0 @dmux_controller_pid check
+  # succeeds. See tests/bin/tmux for why shim-local $$ / $PPID don't work.
+  export FANOUT_TEST_ALIVE_PID=$$
 
   # Per-test scratch dir (auto-cleaned by bats via BATS_TEST_TMPDIR).
   export FANOUT_TEST_TMPDIR="$BATS_TEST_TMPDIR"
@@ -96,4 +111,81 @@ force_missing() {
   done
 
   export PATH="$tmpbin"
+}
+
+# --- Tier 2 helpers ---------------------------------------------------------
+
+# Point the shims at tests/fixtures/<name>. Call once near the top of each
+# Tier 2 @test, before run_fanout_dry.
+use_fixture() {
+  local name="$1"
+  local dir="$TESTS_DIR/fixtures/$name"
+  [[ -d "$dir" ]] || { echo "use_fixture: missing $dir" >&2; return 1; }
+  export FIXTURE_DIR="$dir"
+}
+
+# Run fanout in --dry-run mode with a default --agent so the "WOULD FAIL:
+# agent is empty" line (fanout:1001) never enters a golden file. Also pass
+# --sleep 0 so the inter-issue rate-limit pause (default 4s, fanout:1155)
+# doesn't slow multi-child scenarios. Individual tests can override any of
+# these via argv because fanout's parser honors the last occurrence.
+run_fanout_dry() {
+  run_fanout --dry-run --agent claude --sleep 0 "$@"
+}
+
+# Assert that the previous `run` call ended with $status == 0. On failure,
+# dump status + captured output into bats' own TAP stream so CI logs have
+# enough context to diagnose without re-running with a local repro. Plain
+# `[ "$status" -eq 0 ]` in the @test body loses $output on failure in bats
+# 1.2.1 (Ubuntu 22.04 apt default).
+assert_success() {
+  # shellcheck disable=SC2154
+  if [[ "$status" -ne 0 ]]; then
+    {
+      printf 'fanout exited with status=%s\n' "$status"
+      printf -- '--- captured output ---\n%s\n--- end output ---\n' "$output"
+    } >&2
+    return 1
+  fi
+}
+
+# Scrub machine-local prefixes from captured output so goldens are portable
+# across workstations and CI runners. Rewrites:
+#   - $REPO_ROOT                       → <REPO>
+# so "config: /Users/x/fanout/tests/fixtures/scenario-X/dmux.config.json"
+# collapses to "config: <REPO>/tests/fixtures/scenario-X/dmux.config.json".
+# The /tmp/fanout-<repo_slug>-<N>.md briefing path stays verbatim because
+# repo_slug is deterministic (always "project_root" per fixture layout).
+_scrub_output() {
+  printf '%s' "$1" | sed -e "s|$REPO_ROOT|<REPO>|g"
+}
+
+# Diff $output against tests/golden/<name>.dry-run.txt.
+#
+# The golden file holds the merged (and path-scrubbed) stdout+stderr that
+# run_fanout_dry saw. FANOUT_GOLDEN_UPDATE=1 rewrites the golden instead of
+# diffing — use this whenever fanout's on-screen format changes intentionally.
+# Without that env var, a mismatch surfaces as a unified diff in bats'
+# failure output, which is what CI reports on regression.
+assert_golden() {
+  local name="$1"
+  local golden="$TESTS_DIR/golden/$name.dry-run.txt"
+  local scrubbed
+  # $output is populated by bats' `run` (via run_fanout_dry) before this
+  # helper is called, so the "unassigned" warning from shellcheck is a
+  # false positive here.
+  # shellcheck disable=SC2154
+  scrubbed="$(_scrub_output "$output")"
+  if [[ "${FANOUT_GOLDEN_UPDATE:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden")"
+    printf '%s\n' "$scrubbed" > "$golden"
+    return 0
+  fi
+  if [[ ! -f "$golden" ]]; then
+    echo "assert_golden: $golden does not exist. Rerun with FANOUT_GOLDEN_UPDATE=1 to create it." >&2
+    return 1
+  fi
+  local actual="$BATS_TEST_TMPDIR/actual.txt"
+  printf '%s\n' "$scrubbed" > "$actual"
+  diff -u "$golden" "$actual"
 }

@@ -80,14 +80,18 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 ## 開発
 
 ```bash
-make test           # Tier 1 — フラグ/prereq の黒箱テスト (bats-core 必須)
+make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
+make test-tier1     # フラグ / prereq テストのみ
+make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
 make lint           # shellcheck fanout + テスト用 shim
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
-Tier 1 では、今後の書き換えを挟んでも維持する CLI サーフェス (エラーメッセージ +
-exit code) を凍結しています。Tier 2 (`--dry-run` ゴールデン出力) は後続 PR で
-追加中。Tier 3 (live dmux E2E) は手動運用のままです。
+Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
+の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
+いずれも Go 書き換え時の parity テスト資産。`--dry-run` 出力を意図的に変更
+した場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成して
+ください。Tier 3 (live dmux E2E) は手動運用のままです。
 
 ## 前提条件
 

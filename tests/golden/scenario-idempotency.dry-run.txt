@@ -1,0 +1,20 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-idempotency/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-idempotency/dmux.config.json
+[info] fetching sub-issues of #800
+[info] sub-issues: 2 total, 2 OPEN
+[info] already fanned-out (skipping): #801
+[info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #802: New target
+  briefing -> /tmp/fanout-project_root-802.md
+  briefing size: 596 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #802] New target: read /tmp/fanout-project_root-802.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #802: dry-run complete
+
+[ ok ] created: 1
+[info] skipped (already fanned-out): 1
