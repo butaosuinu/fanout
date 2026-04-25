@@ -77,6 +77,18 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 （`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`）。
 入っていない場合は、シェルの rc に `export PATH="$HOME/.local/bin:$PATH"` を追記してください。
 
+## 開発
+
+```bash
+make test           # Tier 1 — フラグ/prereq の黒箱テスト (bats-core 必須)
+make lint           # shellcheck fanout + テスト用 shim
+```
+
+bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
+Tier 1 では、今後の書き換えを挟んでも維持する CLI サーフェス (エラーメッセージ +
+exit code) を凍結しています。Tier 2 (`--dry-run` ゴールデン出力) は後続 PR で
+追加中。Tier 3 (live dmux E2E) は手動運用のままです。
+
 ## 前提条件
 
 - `gh` CLI、`jq`、`tmux`、`pgrep`、`gh-sub-issue` 拡張

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Phase 1 shim: a permissive stand-in for the `gh` CLI.
+#
+# Tier 1 tests mostly fail fast in argv parsing (fanout:322-382) and never
+# reach this binary. The few prerequisite-checking tests that do exercise
+# prereqs want `gh` to appear healthy unless the test opts out via the
+# helpers.bash `force_missing` mechanism (which rebuilds PATH so this file
+# is unreachable).
+#
+# Tier 2 will replace this body with fixture-driven dispatch; the argv shape
+# documented in fanout:396 / fanout:509 / fanout:518 / fanout:554 / fanout:650
+# / fanout:263 will land here then.
+
+set -euo pipefail
+
+case "${1:-}" in
+  extension)
+    # `gh extension list` — fanout:396 pipes this into `cut -f1 | grep -qx 'gh sub-issue'`.
+    if [[ "${2:-}" == "list" ]]; then
+      printf 'gh sub-issue\tyahsan2/gh-sub-issue\tv0.5.0\n'
+      exit 0
+    fi
+    ;;
+esac
+
+# Anything else: silent success. Phase 2 replaces this with real dispatch.
+exit 0

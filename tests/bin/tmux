@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Phase 1 shim: a permissive stand-in for `tmux`.
+#
+# Tier 1 tests fail fast in fanout's argv parser and don't reach tmux calls.
+# The prerequisite check (fanout:430) does call `tmux list-sessions` and
+# only inspects its exit status, so returning 0 with no output is enough to
+# pass the "tmux server is running" probe. Anything beyond that exits 1 to
+# steer fanout into its "no active dmux session" path — this keeps Tier 1
+# tests from accidentally relying on real dmux state if they do reach here.
+#
+# Tier 2 replaces this with fixture-driven dispatch (list-sessions,
+# show-options -v, send-keys — the last of which fanout short-circuits in
+# --dry-run mode anyway).
+
+set -euo pipefail
+
+case "${1:-}" in
+  list-sessions)
+    # fanout:430 just checks exit status; fanout:437 reads names. Empty
+    # output means zero sessions, which fanout treats as "no tmux server"
+    # only when list-sessions itself fails. Returning 0 with no stdout lets
+    # the server check pass, then the downstream dmux_sessions loop finds
+    # nothing and fanout dies with a clean "no active dmux session" error.
+    exit 0
+    ;;
+esac
+
+exit 0
