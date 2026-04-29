@@ -49,8 +49,11 @@ if git rev-parse --verify "refs/heads/$default_branch" >/dev/null 2>&1; then
       # but only if its working tree is clean, so we never clobber the
       # user's uncommitted work.
       if ! git branch -f "$default_branch" "$origin_sha" 2>/dev/null; then
+        # `worktree <path>` carries the full path verbatim — paths can
+        # contain spaces (e.g. `~/My Projects/...`), so awk field splitting
+        # would truncate. Strip the literal "worktree " (9 chars) instead.
         checked_out_path=$(git worktree list --porcelain 2>/dev/null | awk -v br="$default_branch" '
-          /^worktree / { w=$2 }
+          /^worktree / { w=substr($0, 10) }
           /^branch refs\/heads\// {
             b=$2; sub(/^refs\/heads\//, "", b)
             if (b == br) { print w; exit }
