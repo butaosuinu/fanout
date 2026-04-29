@@ -19,7 +19,7 @@ The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `READM
 - Run it: `./fanout <parent-issue>` (it's executable; no install step).
 - Verify changes without driving dmux: `./fanout <parent-issue> --dry-run`. The dry-run path prints every `tmux send-keys` invocation with `%q` quoting and the would-be briefing size, so use it as the primary way to validate logic changes that don't need a live dmux.
 - Lint: `shellcheck fanout` (no config file; treat `SC2086`-style warnings as real — the script intentionally quotes everything because prompts and titles can contain spaces and shell metacharacters). `make lint` runs the same check plus the test shims.
-- Black-box tests: `make test` (requires `bats-core`) runs Tier 1 flag/prerequisite tests under `tests/bats/`. These lock in the CLI surface (error messages + exit codes) that issue #20 invariants mark as frozen. Tier 2 (`--dry-run` golden output) is a separate PR still in progress. Tier 3 (live dmux E2E) is out of scope.
+- Black-box tests: `make test` (requires `bats-core`) runs Tier 1 (flag/prerequisite) + Tier 2 (`--dry-run` golden output against fixture scenarios under `tests/fixtures/`) tests. Tier 1 locks in the CLI surface (error messages + exit codes) and Tier 2 locks in the dry-run planning output — both are issue #20 invariants the future Go rewrite must match. Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2`. Tier 3 (live dmux E2E) is out of scope.
 - A live end-to-end test needs a running dmux session in tmux and a real GitHub parent issue with OPEN sub-issues; there is no mock layer.
 
 ## Architecture notes that span the script

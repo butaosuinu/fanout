@@ -1,0 +1,32 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-skip/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-skip/dmux.config.json
+[info] fetching sub-issues of #600
+[info] sub-issues: 3 total, 3 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+
+filtered out:
+  #602 Bravo — in --skip
+
+[info] #601: Alpha
+  briefing -> /tmp/fanout-project_root-601.md
+  briefing size: 590 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #601] Alpha: read /tmp/fanout-project_root-601.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #601: dry-run complete
+[info] #603: Charlie
+  briefing -> /tmp/fanout-project_root-603.md
+  briefing size: 594 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #603] Charlie: read /tmp/fanout-project_root-603.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #603: dry-run complete
+
+[ ok ] created: 2
+[info] skipped (filtered): 1

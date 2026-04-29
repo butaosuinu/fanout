@@ -1,0 +1,28 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-union/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-union/dmux.config.json
+[info] fetching sub-issues of #300
+[info] parent body / --include added 1 extra child reference(s) not in sub-issue API
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #301: API child
+  briefing -> /tmp/fanout-project_root-301.md
+  briefing size: 595 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #301] API child: read /tmp/fanout-project_root-301.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #301: dry-run complete
+[info] #302: Body-only
+  briefing -> /tmp/fanout-project_root-302.md
+  briefing size: 595 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #302] Body-only: read /tmp/fanout-project_root-302.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #302: dry-run complete
+
+[ ok ] created: 2

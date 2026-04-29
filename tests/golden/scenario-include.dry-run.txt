@@ -1,0 +1,28 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-include/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-include/dmux.config.json
+[info] fetching sub-issues of #400
+[info] parent body / --include added 2 extra child reference(s) not in sub-issue API
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #401: Included child A
+  briefing -> /tmp/fanout-project_root-401.md
+  briefing size: 602 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #401] Included child A: read /tmp/fanout-project_root-401.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #401: dry-run complete
+[info] #402: Included child B
+  briefing -> /tmp/fanout-project_root-402.md
+  briefing size: 602 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #402] Included child B: read /tmp/fanout-project_root-402.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #402: dry-run complete
+
+[ ok ] created: 2

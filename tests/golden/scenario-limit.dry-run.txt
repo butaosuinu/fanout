@@ -1,0 +1,31 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-limit/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-limit/dmux.config.json
+[info] fetching sub-issues of #700
+[info] sub-issues: 3 total, 3 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 1
+[info] #701: Alpha
+  briefing -> /tmp/fanout-project_root-701.md
+  briefing size: 590 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #701] Alpha: read /tmp/fanout-project_root-701.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #701: dry-run complete
+[info] #702: Bravo
+  briefing -> /tmp/fanout-project_root-702.md
+  briefing size: 590 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #702] Bravo: read /tmp/fanout-project_root-702.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #702: dry-run complete
+
+[ ok ] created: 2
+
+Deferred 1 issue(s) due to --limit. Rerun with:
+  #703
+  fanout 700 --limit 1 --agent claude
