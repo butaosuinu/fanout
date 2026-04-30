@@ -77,8 +77,13 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 }
 
 func shortIssueTitle(title string) string {
-	if len(title) > 60 {
-		return title[:60]
+	const maxRunes = 60
+	count := 0
+	for i := range title {
+		if count == maxRunes {
+			return title[:i]
+		}
+		count++
 	}
 	return title
 }
@@ -160,13 +165,13 @@ func drivePaneCreation(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.I
 	}
 
 	popupTimeout := time.Duration(cfg.PopupTimeoutSec) * time.Second
-	if err := popup.Intercept(popup.NewPanePattern, pidBaseline, newpanePayload, "  newPanePopup", popupTimeout); err != nil {
+	if err := popup.InterceptWithDebug(popup.NewPanePattern, pidBaseline, newpanePayload, "  newPanePopup", popupTimeout, lg.Debug); err != nil {
 		lg.Err("#%d: %v", issueNum, err)
 		return false
 	}
 
 	pidBaseline, _ = popup.BaselinePIDs()
-	if err := popup.Intercept(popup.AgentChoicePattern, pidBaseline, agentPayload, "  agentChoicePopup", popupTimeout); err != nil {
+	if err := popup.InterceptWithDebug(popup.AgentChoicePattern, pidBaseline, agentPayload, "  agentChoicePopup", popupTimeout, lg.Debug); err != nil {
 		lg.Err("#%d: %v", issueNum, err)
 		return false
 	}

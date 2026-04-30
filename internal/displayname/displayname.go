@@ -116,7 +116,12 @@ func mergeWorktreeMetadata(worktreePath, displayName string) error {
 	path := filepath.Join(dir, "worktree-metadata.json")
 	m := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &m)
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("parse existing metadata %s: %w", path, err)
+		}
+		if m == nil {
+			m = map[string]any{}
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}

@@ -137,20 +137,47 @@ func WriteResult(path string, payload []byte) error {
 
 // Intercept performs the full sequence for one popup.
 func Intercept(pattern string, baseline map[int]bool, payload []byte, label string, maxWait time.Duration) error {
+	return InterceptWithDebug(pattern, baseline, payload, label, maxWait, nil)
+}
+
+// InterceptWithDebug performs the full sequence for one popup and emits
+// detailed progress when debugf is non-nil.
+func InterceptWithDebug(pattern string, baseline map[int]bool, payload []byte, label string, maxWait time.Duration, debugf func(format string, a ...any)) error {
+	debugLabel := strings.TrimSpace(label)
+	if debugf != nil {
+		debugf("%s: waiting pattern=%s timeout=%s baseline_pids=%d payload=%s", debugLabel, pattern, maxWait, len(baseline), string(payload))
+	}
 	pid, rf, err := FindNew(pattern, baseline, maxWait)
 	if err != nil {
+		if debugf != nil {
+			debugf("%s: popup lookup failed: %v", debugLabel, err)
+		}
 		return fmt.Errorf("%s %w", label, err)
+	}
+	if debugf != nil {
+		debugf("%s: found pid=%d resultFile=%s", debugLabel, pid, rf)
 	}
 	// Give dmux's PopupWrapper time to mount and write its readyFile so the
 	// parent's readyPromise resolves via the ready-file path rather than via
 	// child.close after we kill. 150ms covers the React Ink useEffect tick.
 	time.Sleep(150 * time.Millisecond)
 	if err := WriteResult(rf, payload); err != nil {
+		if debugf != nil {
+			debugf("%s: write result failed: %v", debugLabel, err)
+		}
 		return fmt.Errorf("%s write result: %w", label, err)
+	}
+	if debugf != nil {
+		debugf("%s: wrote resultFile=%s payload=%s", debugLabel, rf, string(payload))
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		// Process may have already exited; not fatal.
+		if debugf != nil {
+			debugf("%s: SIGTERM pid=%d failed: %v", debugLabel, pid, err)
+		}
 		_ = err
+	} else if debugf != nil {
+		debugf("%s: sent SIGTERM pid=%d", debugLabel, pid)
 	}
 	return nil
 }
