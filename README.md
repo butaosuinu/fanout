@@ -44,18 +44,29 @@ can collapse back to `POST /api/panes` in a page.
 
 ## Installation
 
-fanout ships as a single Bash script plus agent integration files:
-Claude Code gets a slash command + skills, and Codex CLI gets skills.
-All of them are placed in one shot via the `Makefile`:
+fanout is a single Go binary plus agent integration files: Claude Code gets
+a slash command + skills, and Codex CLI gets skills. The simplest path is to
+download a pre-built binary from
+[GitHub Releases](https://github.com/butaosuinu/fanout/releases) (darwin /
+linux × amd64 / arm64) and drop it on your `PATH`, then run `make install`
+from a checkout to lay down the agent integrations.
+
+To build and install everything from source in one shot:
 
 ```bash
-make install        # copies CLI + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
+make install        # builds the Go binary, copies CLI + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
 make link           # symlinks the same paths at the checkout (use while hacking)
 make uninstall      # removes the installed paths
 
 PREFIX=/usr/local sudo make install     # system-wide CLI; overrides BINDIR to $PREFIX/bin
 CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
+```
+
+If you only want the binary on your PATH and have a Go toolchain installed:
+
+```bash
+go install github.com/butaosuinu/fanout/cmd/fanout@latest
 ```
 
 Installed paths:
@@ -79,22 +90,22 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 ## Development
 
 ```bash
-make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
+make build          # go build ./cmd/fanout -> ./fanout
+make test           # build + Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
-make lint           # shellcheck fanout + test shims
+make lint           # go vet + gofmt + shellcheck on test shims
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
-Both tiers are parity-test material for the upcoming Go rewrite. Regenerate
-Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
-intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
+Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when
+you intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 
 ## Prerequisites
 
-- `gh` CLI, `jq`, `tmux`, `pgrep`, and the `gh-sub-issue` extension
+- `gh` CLI, `tmux`, `pgrep`, and the `gh-sub-issue` extension
   (`gh extension install yahsan2/gh-sub-issue`). fanout checks these at
   startup and prints install hints on failure. Children can be declared via
   the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
@@ -252,7 +263,7 @@ for details.
 
 ## What fanout actually does
 
-1. Verifies `gh`, `jq`, `tmux`, `gh-sub-issue` are installed.
+1. Verifies `gh`, `tmux`, `pgrep`, `gh-sub-issue` are installed.
 2. Enumerates tmux sessions. A session is considered dmux-managed iff
    `@dmux_controller_pid` is set and the PID is alive.
 3. Reads the session's `@dmux_control_pane`, `@dmux_config_path`,
@@ -364,10 +375,9 @@ copy is what survives (via `reopenWorktree`).
 
 The prompt text is now injected via the popup resultFile, not via
 `send-keys -l`, so UTF-8 titles round-trip cleanly through dmux. If you
-still see garbled characters, check that `jq` on the caller's side produces
-valid JSON (`echo "<title>" | jq -Rs` should return a quoted string with
-escapes) and that `dmux.config.json` stores it unchanged. Use `--dry-run`
-to print the exact JSON that would be written.
+still see garbled characters, check that `dmux.config.json` stores the
+title unchanged. Use `--dry-run` to print the exact JSON that would be
+written.
 
 ### `.gitignore` got a `.dmux/` line you didn't write
 
