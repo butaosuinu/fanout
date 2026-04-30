@@ -12,10 +12,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
       - name: Install bats / jq / shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y bats jq shellcheck
+
+      - name: Build
+        run: make build
 
       - name: Tier 1 tests
         run: make test-tier1

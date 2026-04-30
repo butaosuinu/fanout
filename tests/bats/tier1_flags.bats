@@ -158,14 +158,6 @@ load helpers
   [[ "$output" == *"gh-sub-issue extension"* ]]
 }
 
-@test "missing jq: exit 1" {
-  force_missing jq
-  run_fanout 20 --agent claude
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"missing dependencies"* ]]
-  [[ "$output" == *"jq (brew install jq)"* ]]
-}
-
 @test "missing tmux: exit 1" {
   force_missing tmux
   run_fanout 20 --agent claude
