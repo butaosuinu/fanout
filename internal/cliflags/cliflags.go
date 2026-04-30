@@ -85,10 +85,49 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		PopupTimeoutSec: DefaultPopupTimeout,
 	}
 
-	parent := ""
-	limit := ""
-	sleepRaw := ""
-	popupRaw := ""
+	state := parseState{}
+	valueOptions := map[string]valueOption{
+		"--agent": func(cfg *Config, _ *parseState, v string) error {
+			cfg.Agent = v
+			return nil
+		},
+		"--limit": func(_ *Config, state *parseState, v string) error {
+			state.limit = v
+			return nil
+		},
+		"--only": func(cfg *Config, _ *parseState, v string) error {
+			cfg.OnlyArg = v
+			return nil
+		},
+		"--skip": func(cfg *Config, _ *parseState, v string) error {
+			cfg.SkipArg = v
+			return nil
+		},
+		"--include": func(cfg *Config, _ *parseState, v string) error {
+			cfg.IncludeArg = v
+			return nil
+		},
+		"--name": func(cfg *Config, _ *parseState, v string) error {
+			return parseNameArg(cfg, v)
+		},
+		"--session": func(cfg *Config, _ *parseState, v string) error {
+			cfg.Session = v
+			return nil
+		},
+		"--sleep": func(_ *Config, state *parseState, v string) error {
+			state.sleepRaw = v
+			return nil
+		},
+		"--popup-timeout": func(_ *Config, state *parseState, v string) error {
+			state.popupRaw = v
+			return nil
+		},
+	}
+	boolOptions := map[string]boolOption{
+		"--dry-run":        func(cfg *Config) { cfg.DryRun = true },
+		"--debug":          func(cfg *Config) { cfg.Debug = true },
+		"--unblocked-only": func(cfg *Config) { cfg.UnblockedOnly = true },
+	}
 
 	requireValue := func(flag string, i int) (string, bool) {
 		if i+1 >= len(args) {
@@ -101,107 +140,48 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 	i := 0
 	for i < len(args) {
 		a := args[i]
-		switch {
-		case a == "-h" || a == "--help":
+		if a == "-h" || a == "--help" {
 			Usage(stdout)
 			return ParseResult{Code: exitcode.OK}
-		case a == "--agent":
-			v, ok := requireValue("--agent", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			cfg.Agent = v
-			i += 2
-		case a == "--limit":
-			v, ok := requireValue("--limit", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			limit = v
-			i += 2
-		case a == "--only":
-			v, ok := requireValue("--only", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			cfg.OnlyArg = v
-			i += 2
-		case a == "--skip":
-			v, ok := requireValue("--skip", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			cfg.SkipArg = v
-			i += 2
-		case a == "--include":
-			v, ok := requireValue("--include", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			cfg.IncludeArg = v
-			i += 2
-		case a == "--name":
-			v, ok := requireValue("--name", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			if err := parseNameArg(cfg, v); err != nil {
-				lg.Err("%s", err.Error())
-				return ParseResult{Code: exitcode.Env}
-			}
-			i += 2
-		case a == "--session":
-			v, ok := requireValue("--session", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			cfg.Session = v
-			i += 2
-		case a == "--sleep":
-			v, ok := requireValue("--sleep", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			sleepRaw = v
-			i += 2
-		case a == "--popup-timeout":
-			v, ok := requireValue("--popup-timeout", i)
-			if !ok {
-				return ParseResult{Code: exitcode.Env}
-			}
-			popupRaw = v
-			i += 2
-		case a == "--dry-run":
-			cfg.DryRun = true
+		}
+
+		if a == "--" {
 			i++
-		case a == "--debug":
-			cfg.Debug = true
-			i++
-		case a == "--unblocked-only":
-			cfg.UnblockedOnly = true
-			i++
-		case a == "--":
-			i++
-			// remaining args treated as positionals
-			for j := i; j < len(args); j++ {
-				if parent == "" {
-					parent = args[j]
-				} else {
-					lg.Err("unexpected positional argument: %s", args[j])
+			for ; i < len(args); i++ {
+				if !setParent(&state.parent, args[i], lg) {
 					Usage(lg.Stderr())
 					return ParseResult{Code: exitcode.Invocation}
 				}
 			}
-			i = len(args)
+			break
+		}
+
+		if handle, ok := valueOptions[a]; ok {
+			v, ok := requireValue(a, i)
+			if !ok {
+				return ParseResult{Code: exitcode.Env}
+			}
+			if err := handle(cfg, &state, v); err != nil {
+				lg.Err("%s", err.Error())
+				return ParseResult{Code: exitcode.Env}
+			}
+			i += 2
+			continue
+		}
+
+		if handle, ok := boolOptions[a]; ok {
+			handle(cfg)
+			i++
+			continue
+		}
+
+		switch {
 		case strings.HasPrefix(a, "-"):
 			lg.Err("unknown option: %s", a)
 			Usage(lg.Stderr())
 			return ParseResult{Code: exitcode.Invocation}
 		default:
-			if parent == "" {
-				parent = a
-			} else {
-				lg.Err("unexpected positional argument: %s", a)
+			if !setParent(&state.parent, a, lg) {
 				Usage(lg.Stderr())
 				return ParseResult{Code: exitcode.Invocation}
 			}
@@ -209,39 +189,62 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		}
 	}
 
-	if parent == "" {
+	return validateParsed(cfg, state, lg)
+}
+
+type parseState struct {
+	parent   string
+	limit    string
+	sleepRaw string
+	popupRaw string
+}
+
+type valueOption func(*Config, *parseState, string) error
+type boolOption func(*Config)
+
+func setParent(parent *string, arg string, lg *log.Logger) bool {
+	if *parent == "" {
+		*parent = arg
+		return true
+	}
+	lg.Err("unexpected positional argument: %s", arg)
+	return false
+}
+
+func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
+	if state.parent == "" {
 		Usage(lg.Stderr())
 		return ParseResult{Code: exitcode.Invocation}
 	}
 
-	if !reAllDigits.MatchString(parent) {
-		lg.Err("parent issue must be an integer, got: %s", parent)
+	if !reAllDigits.MatchString(state.parent) {
+		lg.Err("parent issue must be an integer, got: %s", state.parent)
 		return ParseResult{Code: exitcode.Env}
 	}
-	cfg.Parent, _ = strconv.Atoi(parent)
+	cfg.Parent, _ = strconv.Atoi(state.parent)
 
-	if limit != "" {
-		if !rePositiveInt.MatchString(limit) {
-			lg.Err("--limit must be a positive integer, got: %s", limit)
+	if state.limit != "" {
+		if !rePositiveInt.MatchString(state.limit) {
+			lg.Err("--limit must be a positive integer, got: %s", state.limit)
 			return ParseResult{Code: exitcode.Env}
 		}
-		cfg.Limit, _ = strconv.Atoi(limit)
+		cfg.Limit, _ = strconv.Atoi(state.limit)
 	}
 
-	if sleepRaw != "" {
-		if !reNumber.MatchString(sleepRaw) {
-			lg.Err("--sleep must be a number, got: %s", sleepRaw)
+	if state.sleepRaw != "" {
+		if !reNumber.MatchString(state.sleepRaw) {
+			lg.Err("--sleep must be a number, got: %s", state.sleepRaw)
 			return ParseResult{Code: exitcode.Env}
 		}
-		cfg.SleepBetween, _ = strconv.ParseFloat(sleepRaw, 64)
+		cfg.SleepBetween, _ = strconv.ParseFloat(state.sleepRaw, 64)
 	}
 
-	if popupRaw != "" {
-		if !rePositiveInt.MatchString(popupRaw) {
-			lg.Err("--popup-timeout must be a positive integer (seconds), got: %s", popupRaw)
+	if state.popupRaw != "" {
+		if !rePositiveInt.MatchString(state.popupRaw) {
+			lg.Err("--popup-timeout must be a positive integer (seconds), got: %s", state.popupRaw)
 			return ParseResult{Code: exitcode.Env}
 		}
-		cfg.PopupTimeoutSec, _ = strconv.Atoi(popupRaw)
+		cfg.PopupTimeoutSec, _ = strconv.Atoi(state.popupRaw)
 	}
 
 	if cfg.OnlyArg != "" && cfg.SkipArg != "" {
