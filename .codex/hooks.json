@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node '/Users/butaosuinu/fanout/.dmux/worktrees/dmux-1777501580257/.codex/hooks/dmux-stop-hook.cjs'",
+            "timeout": 5,
+            "statusMessage": "Notifying dmux"
+          }
+        ]
+      }
+    ]
+  }
+}

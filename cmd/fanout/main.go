@@ -334,7 +334,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 				overrides = append(overrides, displayname.Override{Num: no.Num, DisplayName: no.DisplayName})
 			}
 		}
-		displayname.ApplyAll(info.ConfigPath, overrides, cfg.DryRun, lg.Stdout(), displayname.LogFns{
+		displayname.ApplyAll(info.ConfigPath, overrides, cfg.DryRun, lg.Stdout(), c, displayname.LogFns{
 			Info: lg.Info, Warn: lg.Warn, Dim: lg.Dim, Err: lg.Err,
 		})
 	}

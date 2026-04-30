@@ -20,11 +20,12 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/atomicfs"
 	"github.com/butaosuinu/fanout/internal/dmuxconfig"
+	"github.com/butaosuinu/fanout/internal/log"
 )
 
-// Apply iterates configured display-name overrides and writes both files.
-// Logs progress to lg via the supplied print callbacks (so this package
-// stays free of internal/log import cycles).
+// LogFns is the indirection between this package and internal/log; we route
+// status / warning / error messages through callbacks so the dry-run printer
+// can keep its own writer.
 type LogFns struct {
 	Info func(format string, a ...any)
 	Warn func(format string, a ...any)
@@ -41,10 +42,31 @@ type Override struct {
 // override whose DisplayName is non-empty. Already-tracked panes that have
 // not been (re)created in this run can still be updated, matching the bash
 // behavior — apply_display_names looks panes up by [fanout #N] prompt.
-func ApplyAll(configPath string, overrides []Override, dryRun bool, dryOut io.Writer, fns LogFns) {
+//
+// In dry-run mode the plan is printed unconditionally — no pane lookup is
+// done, because for fresh runs the panes don't exist yet and the dry-run
+// printer must reflect intent regardless.
+func ApplyAll(configPath string, overrides []Override, dryRun bool, dryOut io.Writer, palette log.Palette, fns LogFns) {
 	if len(overrides) == 0 {
 		return
 	}
+
+	if dryRun {
+		applied := 0
+		for _, o := range overrides {
+			if o.DisplayName == "" {
+				continue
+			}
+			fmt.Fprintf(dryOut, "    %s# would set panes[].displayName for #%d = %q%s\n", palette.Dim, o.Num, o.DisplayName, palette.Reset)
+			fmt.Fprintf(dryOut, "    %s# would merge displayName into <worktree>/.dmux/worktree-metadata.json%s\n", palette.Dim, palette.Reset)
+			applied++
+		}
+		if applied > 0 {
+			fns.Info("applied displayName for %d pane(s)", applied)
+		}
+		return
+	}
+
 	cfg, err := dmuxconfig.Load(configPath)
 	if err != nil {
 		fns.Warn("could not read dmux config for displayName: %v", err)
@@ -59,12 +81,6 @@ func ApplyAll(configPath string, overrides []Override, dryRun bool, dryOut io.Wr
 		slug, worktreePath := cfg.FindPaneByFanoutTag(o.Num)
 		if slug == "" {
 			fns.Warn("displayName for #%d: no pane with [fanout #%d] prompt found", o.Num, o.Num)
-			continue
-		}
-		if dryRun {
-			fmt.Fprintf(dryOut, "  would set panes[%s].displayName = %q\n", slug, o.DisplayName)
-			fmt.Fprintf(dryOut, "  would merge worktree-metadata.json at %s\n", worktreePath)
-			applied++
 			continue
 		}
 
