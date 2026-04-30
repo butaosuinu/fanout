@@ -311,7 +311,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 				t.Body = d.Body
 			}
 		}
-		ok := createPaneForIssue(cfg, lg, dcfg, info, t, c)
+		ok := createPaneForIssue(cfg, lg, info, t, c)
 		if ok {
 			created++
 			createdNums = append(createdNums, t.Number)
@@ -378,7 +378,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.Config, info *dmuxsession.Info, t ghissue.Issue, c log.Palette) bool {
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, t ghissue.Issue, c log.Palette) bool {
 	briefingPath := briefing.Path(info.ProjectRoot, t.Number)
 	rendered := briefing.Render(t.Number, t.Title, t.Body)
 	if !cfg.DryRun {
@@ -414,7 +414,16 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.C
 		lg.Dim("  display-name -> %s", displayNameOverride)
 	}
 
-	baseline := dcfg.PanesLen()
+	// Re-read dmux.config.json each iteration: a previous iteration in this
+	// run may have already grown panes[], so a cached baseline would let
+	// waitForNewPane() return immediately for subsequent issues even if the
+	// current pane creation actually failed.
+	freshCfg, err := dmuxconfig.Load(info.ConfigPath)
+	if err != nil {
+		lg.Err("#%d: reload dmux config: %v", t.Number, err)
+		return false
+	}
+	baseline := freshCfg.PanesLen()
 
 	newpanePayload, err := popup.MakeNewPanePayload(oneLinePrompt)
 	if err != nil {

@@ -72,7 +72,16 @@ func ApplyAll(configPath string, overrides []Override, dryRun bool, dryOut io.Wr
 			fns.Warn("displayName for #%d: %v", o.Num, err)
 			continue
 		}
-		if err := mergeWorktreeMetadata(worktreePath, o.DisplayName); err != nil {
+		// Worktree metadata is the persistence half (a) panes[].displayName is
+		// the volatile half. We've already written (a); skip (b) only when the
+		// worktreePath is missing, mirroring the bash `-n $path && -d $path`
+		// guard. Without this check, an empty/stale path causes a metadata
+		// file to be created somewhere unintended (cwd if path is "").
+		if worktreePath == "" {
+			fns.Warn("worktree-metadata.json for #%d: pane has no worktreePath; skipping persistence write", o.Num)
+		} else if st, err := os.Stat(worktreePath); err != nil || !st.IsDir() {
+			fns.Warn("worktree-metadata.json for #%d: worktreePath %s missing; skipping persistence write", o.Num, worktreePath)
+		} else if err := mergeWorktreeMetadata(worktreePath, o.DisplayName); err != nil {
 			fns.Warn("worktree-metadata.json for #%d: %v", o.Num, err)
 			continue
 		}
