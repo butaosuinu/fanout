@@ -278,11 +278,10 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	lg.Info("will create %d pane(s); deferred (blocked): %d; deferred (--limit): %d",
 		len(targets), len(blockedRows), len(limitDeferred))
 
-	_, _, _, _, dim, reset := lg.Colors()
-	cInfo, _, _, _, _, cReset := lg.Colors()
+	c := lg.Colors()
 
 	if cfg.DryRun && (len(filteredOnly) > 0 || len(filteredSkip) > 0) {
-		fmt.Fprintf(lg.Stdout(), "\n%sfiltered out:%s\n", cInfo, cReset)
+		fmt.Fprintf(lg.Stdout(), "\n%sfiltered out:%s\n", c.Info, c.Reset)
 		for _, r := range filteredOnly {
 			fmt.Fprintf(lg.Stdout(), "  #%d %s — not in --only\n", r.Number, r.Title)
 		}
@@ -293,7 +292,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	}
 
 	if cfg.DryRun && len(blockedRows) > 0 {
-		fmt.Fprintf(lg.Stdout(), "\n%sdeferred (blocked):%s\n", cInfo, cReset)
+		fmt.Fprintf(lg.Stdout(), "\n%sdeferred (blocked):%s\n", c.Info, c.Reset)
 		for _, br := range blockedRows {
 			fmt.Fprintf(lg.Stdout(), "  #%d %s — blocked by %s\n", br.Issue.Number, br.Issue.Title, br.Refs)
 		}
@@ -312,7 +311,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 				t.Body = d.Body
 			}
 		}
-		ok := createPaneForIssue(cfg, lg, dcfg, info, t, dim, reset)
+		ok := createPaneForIssue(cfg, lg, dcfg, info, t, c)
 		if ok {
 			created++
 			createdNums = append(createdNums, t.Number)
@@ -359,7 +358,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	}
 
 	if len(limitDeferred) > 0 {
-		fmt.Fprintf(lg.Stdout(), "\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n", cInfo, len(limitDeferred), cReset)
+		fmt.Fprintf(lg.Stdout(), "\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n", c.Info, len(limitDeferred), c.Reset)
 		nums := make([]string, len(limitDeferred))
 		for i, r := range limitDeferred {
 			nums[i] = fmt.Sprintf("#%d", r.Number)
@@ -379,13 +378,14 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-// createPaneForIssue mirrors fanout:958-1037. dry-run prints what it would do
-// and returns true; live mode performs the popup intercept dance.
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.Config, info *dmuxsession.Info, t ghissue.Issue, dim, reset string) bool {
-	briefingPath, err := briefing.Write(info.ProjectRoot, t.Number, t.Title, t.Body)
-	if err != nil {
-		lg.Err("#%d: write briefing: %v", t.Number, err)
-		return false
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.Config, info *dmuxsession.Info, t ghissue.Issue, c log.Palette) bool {
+	briefingPath := briefing.Path(info.ProjectRoot, t.Number)
+	rendered := briefing.Render(t.Number, t.Title, t.Body)
+	if !cfg.DryRun {
+		if err := os.WriteFile(briefingPath, []byte(rendered), 0o644); err != nil {
+			lg.Err("#%d: write briefing: %v", t.Number, err)
+			return false
+		}
 	}
 
 	shortTitle := t.Title
@@ -431,24 +431,15 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.C
 	}
 
 	if cfg.DryRun {
-		st, _ := os.Stat(briefingPath)
-		size := int64(0)
-		if st != nil {
-			size = st.Size()
-		}
-		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", dim, reset, size)
-		fmt.Fprintf(lg.Stdout(), "  %scurrent panes[] length%s: %d\n", dim, reset, baseline)
-		_ = tmuxctl.SendKeys(info.ControlPane, true, dim, reset, lg.Stdout(), "Escape")
-		_ = tmuxctl.SendKeys(info.ControlPane, true, dim, reset, lg.Stdout(), "n")
-		fmt.Fprintf(lg.Stdout(), "    %s# would intercept newPanePopup and write: %s%s\n", dim, string(newpanePayload), reset)
+		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(rendered))
+		fmt.Fprintf(lg.Stdout(), "  %scurrent panes[] length%s: %d\n", c.Dim, c.Reset, baseline)
+		tmuxctl.PrintSendKeys(lg.Stdout(), c.Dim, c.Reset, info.ControlPane, "Escape")
+		tmuxctl.PrintSendKeys(lg.Stdout(), c.Dim, c.Reset, info.ControlPane, "n")
+		fmt.Fprintf(lg.Stdout(), "    %s# would intercept newPanePopup and write: %s%s\n", c.Dim, string(newpanePayload), c.Reset)
 		if len(agentPayload) > 0 {
-			_, _, cWarn, _, _, cReset := lg.Colors()
-			_ = cWarn
-			_ = cReset
-			fmt.Fprintf(lg.Stdout(), "    %s# would intercept agentChoicePopup and write: %s%s\n", dim, string(agentPayload), reset)
+			fmt.Fprintf(lg.Stdout(), "    %s# would intercept agentChoicePopup and write: %s%s\n", c.Dim, string(agentPayload), c.Reset)
 		} else {
-			_, _, cWarn, _, _, cReset := lg.Colors()
-			fmt.Fprintf(lg.Stdout(), "    %s# WOULD FAIL: agent is empty (pass --agent or run from a dmux pane)%s\n", cWarn, cReset)
+			fmt.Fprintf(lg.Stdout(), "    %s# WOULD FAIL: agent is empty (pass --agent or run from a dmux pane)%s\n", c.Warn, c.Reset)
 		}
 		lg.Ok("#%d: dry-run complete", t.Number)
 		return true
@@ -465,24 +456,24 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, dcfg *dmuxconfig.C
 		return false
 	}
 
-	if err := tmuxctl.SendKeys(info.ControlPane, false, "", "", nil, "Escape"); err != nil {
+	if err := tmuxctl.SendKeys(info.ControlPane, "Escape"); err != nil {
 		lg.Err("#%d: tmux send-keys Escape: %v", t.Number, err)
 		return false
 	}
 	time.Sleep(200 * time.Millisecond)
-	if err := tmuxctl.SendKeys(info.ControlPane, false, "", "", nil, "n"); err != nil {
+	if err := tmuxctl.SendKeys(info.ControlPane, "n"); err != nil {
 		lg.Err("#%d: tmux send-keys n: %v", t.Number, err)
 		return false
 	}
 
 	popupTimeout := time.Duration(cfg.PopupTimeoutSec) * time.Second
-	if err := popup.Intercept(`newPanePopup\.js`, pidBaseline, newpanePayload, "  newPanePopup", popupTimeout); err != nil {
+	if err := popup.Intercept(popup.NewPanePattern, pidBaseline, newpanePayload, "  newPanePopup", popupTimeout); err != nil {
 		lg.Err("#%d: %v", t.Number, err)
 		return false
 	}
 
 	pidBaseline, _ = popup.BaselinePIDs()
-	if err := popup.Intercept(`agentChoicePopup\.js`, pidBaseline, agentPayload, "  agentChoicePopup", popupTimeout); err != nil {
+	if err := popup.Intercept(popup.AgentChoicePattern, pidBaseline, agentPayload, "  agentChoicePopup", popupTimeout); err != nil {
 		lg.Err("#%d: %v", t.Number, err)
 		return false
 	}

@@ -1,4 +1,4 @@
-// Package briefing writes the per-issue task brief that fanout drops at
+// Package briefing builds the per-issue task brief that fanout drops at
 // /tmp/fanout-<repo>-<N>.md and points the agent at via the one-line prompt.
 //
 // The body is locked in by Tier 2 goldens (briefing size: NNN bytes) — both
@@ -8,7 +8,6 @@ package briefing
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 )
 
@@ -18,19 +17,8 @@ func Path(projectRoot string, num int) string {
 	return fmt.Sprintf("/tmp/fanout-%s-%d.md", repo, num)
 }
 
-// Write builds the briefing file and returns its path. Caller is responsible
-// for cleanup; the bash version doesn't either, so parity is preserved.
-func Write(projectRoot string, num int, title, body string) (string, error) {
-	p := Path(projectRoot, num)
-	content := Render(num, title, body)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		return "", err
-	}
-	return p, nil
-}
-
-// Render is exposed separately so dry-run can compute the byte size without
-// hitting the filesystem twice.
+// Render produces the brief body. Live mode writes it to Path(); dry-run uses
+// len(Render()) to compute the goldened "briefing size" without touching disk.
 func Render(num int, title, body string) string {
 	return fmt.Sprintf(`You are assigned GitHub issue #%d in this repository.
 

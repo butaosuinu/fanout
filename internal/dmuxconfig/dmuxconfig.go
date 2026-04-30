@@ -13,10 +13,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/butaosuinu/fanout/internal/atomicfs"
 )
 
 type Config struct {
@@ -116,7 +118,7 @@ func (c *Config) FindPaneByFanoutTag(num int) (slug, worktreePath string) {
 			continue
 		}
 		p, _ := m["prompt"].(string)
-		if !startsWith(p, prefix) {
+		if !strings.HasPrefix(p, prefix) {
 			continue
 		}
 		slug, _ = m["slug"].(string)
@@ -145,13 +147,13 @@ func SetDisplayNameByFanoutTag(path string, num int, displayName string) error {
 		if pr, ok := m["prompt"]; ok {
 			_ = json.Unmarshal(pr, &prompt)
 		}
-		if !startsWith(prompt, prefix) {
+		if !strings.HasPrefix(prompt, prefix) {
 			continue
 		}
 		dn, _ := json.Marshal(displayName)
 		m["displayName"] = dn
 		// Re-marshal preserving deterministic field ordering.
-		out, err := marshalOrdered(m)
+		out, err := marshalSortedRaw(m)
 		if err != nil {
 			return err
 		}
@@ -171,14 +173,9 @@ func SetDisplayNameByFanoutTag(path string, num int, displayName string) error {
 	return atomicWriteJSON(path, cfg.root)
 }
 
-// startsWith avoids importing strings just for this micro-check.
-func startsWith(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-// marshalOrdered re-encodes a map keeping keys in alphabetical order so the
-// resulting bytes are deterministic between runs.
-func marshalOrdered(m map[string]json.RawMessage) ([]byte, error) {
+// marshalSortedRaw re-encodes a map keeping keys in alphabetical order so
+// downstream bytes are deterministic between runs.
+func marshalSortedRaw(m map[string]json.RawMessage) ([]byte, error) {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -202,52 +199,17 @@ func marshalOrdered(m map[string]json.RawMessage) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// atomicWriteJSON writes root to path atomically, indented to two spaces (dmux
-// itself round-trips with two-space indentation).
+// atomicWriteJSON writes root to path atomically, indented to two spaces
+// (dmux itself round-trips with two-space indentation).
 func atomicWriteJSON(path string, root rawRoot) error {
-	keys := make([]string, 0, len(root))
-	for k := range root {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	for i, k := range keys {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		kb, err := json.Marshal(k)
-		if err != nil {
-			return err
-		}
-		buf.Write(kb)
-		buf.WriteByte(':')
-		buf.Write(root[k])
-	}
-	buf.WriteByte('}')
-
-	// Pretty-print so humans can read it. encoding/json's Indent expects
-	// already-valid JSON, which we now have.
-	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, buf.Bytes(), "", "  "); err != nil {
-		return err
-	}
-	pretty.WriteByte('\n')
-
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".fanout-config-*.json")
+	raw, err := marshalSortedRaw(root)
 	if err != nil {
 		return err
 	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(pretty.Bytes()); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, raw, "", "  "); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	pretty.WriteByte('\n')
+	return atomicfs.WriteFile(path, pretty.Bytes(), 0o644)
 }

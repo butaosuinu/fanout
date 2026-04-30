@@ -28,8 +28,18 @@ import (
 	"time"
 )
 
-// Payload structures ensure the JSON output matches the bash jq pipelines:
-// `{"success":true,"data":<value>}` with success first, data second.
+// Patterns matched against `pgrep -f` argv. These are dmux-internal popup
+// script names, not public API — when bumping dmux, re-verify against
+// dist/components/popups/.
+const (
+	AnyPopupPattern    = `/popups/.*Popup\.js`
+	NewPanePattern     = `newPanePopup\.js`
+	AgentChoicePattern = `agentChoicePopup\.js`
+)
+
+// Field order matches dmux's PopupWrapper.writeSuccessAndExit (success first,
+// data second). encoding/json marshals struct fields in declaration order, so
+// don't reorder these without regenerating Tier 2 goldens.
 
 type stringPayload struct {
 	Success bool   `json:"success"`
@@ -56,7 +66,7 @@ func MakeAgentPayload(agent string) ([]byte, error) {
 // BaselinePIDs captures the PIDs of any dmux popup currently running so
 // FindNew() can tell new popups from leftovers.
 func BaselinePIDs() (map[int]bool, error) {
-	pids, err := pgrepF(`/popups/.*Popup\.js`)
+	pids, err := pgrepF(AnyPopupPattern)
 	if err != nil {
 		// pgrep returns 1 with empty output when nothing matches — treat
 		// that as "no baseline" rather than an error. exec.ExitError is the

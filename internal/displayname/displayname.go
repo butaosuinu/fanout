@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/butaosuinu/fanout/internal/atomicfs"
 	"github.com/butaosuinu/fanout/internal/dmuxconfig"
 )
 
@@ -99,21 +100,5 @@ func mergeWorktreeMetadata(worktreePath, displayName string) error {
 	if err != nil {
 		return err
 	}
-	out = append(out, '\n')
-
-	tmp, err := os.CreateTemp(dir, ".fanout-meta-*.json")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return atomicfs.WriteFile(path, append(out, '\n'), 0o644)
 }

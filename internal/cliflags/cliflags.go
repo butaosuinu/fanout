@@ -58,7 +58,6 @@ func (c *Config) FindName(num int) *NameOverride {
 	return nil
 }
 
-// HasAnyDisplayName mirrors the bash name_has_any_display_name helper.
 func (c *Config) HasAnyDisplayName() bool {
 	for _, n := range c.Names {
 		if n.DisplayName != "" {

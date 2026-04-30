@@ -10,19 +10,19 @@ import (
 	"github.com/butaosuinu/fanout/internal/tty"
 )
 
-// Logger captures the destinations and color state once at startup so we don't
-// reprobe TTY state on every call.
 type Logger struct {
-	out    io.Writer
-	err    io.Writer
-	color  bool
-	debug  bool
-	cInfo  string
-	cOk    string
-	cWarn  string
-	cErr   string
-	cDim   string
-	cReset string
+	out     io.Writer
+	err     io.Writer
+	color   bool
+	debug   bool
+	palette Palette
+}
+
+// Palette holds the active ANSI escape codes (or empty strings when color is
+// off). Returned by Logger.Colors so callers can render compound output (the
+// dry-run printer needs raw escapes around adjacent unstyled text).
+type Palette struct {
+	Info, Ok, Warn, Err, Dim, Reset string
 }
 
 // New constructs a Logger that writes to stdout/stderr and detects color.
@@ -35,42 +35,44 @@ func NewWith(out, err io.Writer, debug bool) *Logger {
 	l := &Logger{out: out, err: err, color: tty.IsColorCapable(out), debug: debug}
 	if l.color {
 		// Match bash tput colors: blue, green, yellow, red, dim.
-		l.cInfo = "\x1b[34m"
-		l.cOk = "\x1b[32m"
-		l.cWarn = "\x1b[33m"
-		l.cErr = "\x1b[31m"
-		l.cDim = "\x1b[2m"
-		l.cReset = "\x1b[0m"
+		l.palette = Palette{
+			Info:  "\x1b[34m",
+			Ok:    "\x1b[32m",
+			Warn:  "\x1b[33m",
+			Err:   "\x1b[31m",
+			Dim:   "\x1b[2m",
+			Reset: "\x1b[0m",
+		}
 	}
 	return l
 }
 
 func (l *Logger) Info(format string, a ...any) {
-	fmt.Fprintf(l.out, "%s[info]%s %s\n", l.cInfo, l.cReset, fmt.Sprintf(format, a...))
+	fmt.Fprintf(l.out, "%s[info]%s %s\n", l.palette.Info, l.palette.Reset, fmt.Sprintf(format, a...))
 }
 
 func (l *Logger) Ok(format string, a ...any) {
-	fmt.Fprintf(l.out, "%s[ ok ]%s %s\n", l.cOk, l.cReset, fmt.Sprintf(format, a...))
+	fmt.Fprintf(l.out, "%s[ ok ]%s %s\n", l.palette.Ok, l.palette.Reset, fmt.Sprintf(format, a...))
 }
 
 func (l *Logger) Warn(format string, a ...any) {
-	fmt.Fprintf(l.err, "%s[warn]%s %s\n", l.cWarn, l.cReset, fmt.Sprintf(format, a...))
+	fmt.Fprintf(l.err, "%s[warn]%s %s\n", l.palette.Warn, l.palette.Reset, fmt.Sprintf(format, a...))
 }
 
 func (l *Logger) Err(format string, a ...any) {
-	fmt.Fprintf(l.err, "%s[err ]%s %s\n", l.cErr, l.cReset, fmt.Sprintf(format, a...))
+	fmt.Fprintf(l.err, "%s[err ]%s %s\n", l.palette.Err, l.palette.Reset, fmt.Sprintf(format, a...))
 }
 
 // Dim writes a dim-styled line to stdout (no level prefix).
 func (l *Logger) Dim(format string, a ...any) {
-	fmt.Fprintf(l.out, "%s%s%s\n", l.cDim, fmt.Sprintf(format, a...), l.cReset)
+	fmt.Fprintf(l.out, "%s%s%s\n", l.palette.Dim, fmt.Sprintf(format, a...), l.palette.Reset)
 }
 
 func (l *Logger) Debug(format string, a ...any) {
 	if !l.debug {
 		return
 	}
-	fmt.Fprintf(l.err, "%s[dbg ]%s %s\n", l.cDim, l.cReset, fmt.Sprintf(format, a...))
+	fmt.Fprintf(l.err, "%s[dbg ]%s %s\n", l.palette.Dim, l.palette.Reset, fmt.Sprintf(format, a...))
 }
 
 // Die writes the message via Err and exits 1.
@@ -84,8 +86,5 @@ func (l *Logger) Die(format string, a ...any) {
 func (l *Logger) Stdout() io.Writer { return l.out }
 func (l *Logger) Stderr() io.Writer { return l.err }
 
-// Colors returns the active color escape codes plus reset, in the order:
-// info, ok, warn, err, dim, reset. Empty strings when color is off.
-func (l *Logger) Colors() (info, ok, warn, errc, dim, reset string) {
-	return l.cInfo, l.cOk, l.cWarn, l.cErr, l.cDim, l.cReset
-}
+// Colors returns the active palette. Empty strings when color is off.
+func (l *Logger) Colors() Palette { return l.palette }

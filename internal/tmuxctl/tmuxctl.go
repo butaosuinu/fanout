@@ -9,13 +9,13 @@ import (
 	"os/exec"
 )
 
-// SendKeys fires named keys at controlPane. In dryRun mode it prints the
-// equivalent shell invocation and returns without contacting tmux — matching
-// the format fanout:827 emits and that Tier 2 goldens lock in.
-func SendKeys(controlPane string, dryRun bool, dimColor, reset string, out io.Writer, key string) error {
-	if dryRun {
-		fmt.Fprintf(out, "    %s$ tmux send-keys -t %s %s%s\n", dimColor, controlPane, key, reset)
-		return nil
-	}
+// SendKeys fires a single named key at controlPane.
+func SendKeys(controlPane, key string) error {
 	return exec.Command("tmux", "send-keys", "-t", controlPane, key).Run()
+}
+
+// PrintSendKeys writes the dry-run-equivalent shell invocation to w. The exact
+// format is locked in by the Tier 2 goldens (`    $ tmux send-keys -t %P key`).
+func PrintSendKeys(w io.Writer, dim, reset, controlPane, key string) {
+	fmt.Fprintf(w, "    %s$ tmux send-keys -t %s %s%s\n", dim, controlPane, key, reset)
 }
