@@ -18,6 +18,8 @@ import (
 
 const fanoutTagPrefix = "[fanout #"
 
+var sleepBetweenIssues = time.Sleep
+
 func main() {
 	lg := log.New(false)
 
@@ -227,8 +229,8 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, g
 			break
 		}
 		if i < len(targets)-1 {
-			if cfg.SleepBetween > 0 && !cfg.DryRun {
-				time.Sleep(time.Duration(cfg.SleepBetween * float64(time.Second)))
+			if cfg.SleepBetween > 0 {
+				sleepBetweenIssues(time.Duration(cfg.SleepBetween * float64(time.Second)))
 			}
 		}
 	}
