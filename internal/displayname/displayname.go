@@ -84,7 +84,7 @@ func ApplyAll(configPath string, overrides []Override, dryRun bool, dryOut io.Wr
 			continue
 		}
 
-		if err := dmuxconfig.SetDisplayNameByFanoutTag(configPath, o.Num, o.DisplayName); err != nil {
+		if err := dmuxconfig.SetDisplayNameBySlug(configPath, slug, o.DisplayName); err != nil {
 			fns.Warn("displayName for #%d: %v", o.Num, err)
 			continue
 		}

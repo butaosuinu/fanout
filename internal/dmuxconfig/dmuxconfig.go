@@ -128,26 +128,29 @@ func (c *Config) FindPaneByFanoutTag(num int) (slug, worktreePath string) {
 	return
 }
 
-// SetDisplayNameByFanoutTag rereads the file (so we don't trample dmux's
-// concurrent saves), updates panes[].displayName for the pane whose prompt
-// matches `[fanout #<num>] `, and atomically writes it back.
-func SetDisplayNameByFanoutTag(path string, num int, displayName string) error {
+// SetDisplayNameBySlug rereads the file (so we don't trample dmux's concurrent
+// saves), updates panes[].displayName for the pane whose `slug` matches, and
+// atomically writes it back.
+//
+// Targeting by slug (not by `[fanout #N]` prompt) matches the bash predecessor
+// and stays correct when an external editor or dmux itself rewrites the prompt
+// after pane creation; the slug is immutable once dmux generates it.
+func SetDisplayNameBySlug(path, slug, displayName string) error {
 	cfg, err := Load(path)
 	if err != nil {
 		return err
 	}
-	prefix := fmt.Sprintf("[fanout #%d]", num)
 	updated := false
 	for i := range cfg.panes {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(cfg.panes[i], &m); err != nil {
 			continue
 		}
-		var prompt string
-		if pr, ok := m["prompt"]; ok {
-			_ = json.Unmarshal(pr, &prompt)
+		var paneSlug string
+		if s, ok := m["slug"]; ok {
+			_ = json.Unmarshal(s, &paneSlug)
 		}
-		if !strings.HasPrefix(prompt, prefix) {
+		if paneSlug != slug {
 			continue
 		}
 		dn, _ := json.Marshal(displayName)
@@ -161,7 +164,7 @@ func SetDisplayNameByFanoutTag(path string, num int, displayName string) error {
 		updated = true
 	}
 	if !updated {
-		return fmt.Errorf("no pane found for [fanout #%d]", num)
+		return fmt.Errorf("no pane found with slug %q", slug)
 	}
 
 	// Re-pack panes, then root.
