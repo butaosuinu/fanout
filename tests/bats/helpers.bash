@@ -6,7 +6,9 @@
 #   * teardown()       — clean up /tmp/fanout-* briefings so tests can't pollute each other
 #   * run_fanout       — thin wrapper that always invokes the repo's ./fanout via bats `run`
 #   * run_fanout_dry   — Tier 2 wrapper that adds --dry-run and --agent defaults
+#   * run_fanout_status — Tier 2 wrapper for fanout --status
 #   * assert_golden    — compare captured $output to tests/golden/<name>.dry-run.txt
+#   * assert_json_golden — compare captured JSON to tests/golden/<name>.status.json
 #   * use_fixture      — point FIXTURE_DIR at tests/fixtures/<name> for shims
 
 # Repo root (one level above tests/bats/).
@@ -133,6 +135,10 @@ run_fanout_dry() {
   run_fanout --dry-run --agent claude --sleep 0 "$@"
 }
 
+run_fanout_status() {
+  run_fanout --status "$@"
+}
+
 # Assert that the previous `run` call ended with $status == 0. On failure,
 # dump status + captured output into bats' own TAP stream so CI logs have
 # enough context to diagnose without re-running with a local repro. Plain
@@ -187,5 +193,26 @@ assert_golden() {
   fi
   local actual="$BATS_TEST_TMPDIR/actual.txt"
   printf '%s\n' "$scrubbed" > "$actual"
+  diff -u "$golden" "$actual"
+}
+
+assert_json_golden() {
+  local name="$1"
+  local golden="$TESTS_DIR/golden/$name.status.json"
+  local actual="$BATS_TEST_TMPDIR/actual.status.json"
+  # shellcheck disable=SC2154
+  if ! printf '%s\n' "$output" | jq -S . > "$actual"; then
+    printf 'captured output is not valid JSON:\n%s\n' "$output" >&2
+    return 1
+  fi
+  if [[ "${FANOUT_GOLDEN_UPDATE:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden")"
+    cp "$actual" "$golden"
+    return 0
+  fi
+  if [[ ! -f "$golden" ]]; then
+    echo "assert_json_golden: $golden does not exist. Rerun with FANOUT_GOLDEN_UPDATE=1 to create it." >&2
+    return 1
+  fi
   diff -u "$golden" "$actual"
 }

@@ -84,13 +84,13 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 ```bash
 make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
-make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
+make test-tier2     # fixture 駆動の --dry-run golden + --status JSON テスト
 make lint           # shellcheck fanout + テスト用 shim
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
-の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
+の計画出力と `--status` JSON を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
 いずれも Go 書き換え時の parity テスト資産。`--dry-run` 出力を意図的に変更
 した場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成して
 ください。Tier 3 (live dmux E2E) は手動運用のままです。
@@ -131,6 +131,7 @@ fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <li
                      [--name <NUM>=<slug>[|<display>]]
                      [--session <tmux-session>] [--sleep <seconds>]
                      [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout --status <parent-issue> [--session <tmux-session>]
 fanout --help
 ```
 
@@ -142,6 +143,9 @@ fanout 123
 
 # 実際に dmux を動かさず、何が起こるかをプレビュー
 fanout 123 --dry-run
+
+# 既に fanout 済みの子 issue の PR マージ状況を JSON で確認する
+fanout --status 123
 
 # 今回の呼び出しを 3 件までに制限; 残り分の再実行コマンドが表示される
 fanout 123 --limit 3
@@ -198,9 +202,12 @@ Claude Code 向けの推奨連携 — これらのアセットはこのリポジ
 
 - **スラッシュコマンド** → `claude/commands/fanout.md` が
   `~/.claude/commands/fanout.md` にインストールされ、`/fanout [parent-issue]
-  [--go] [extra fanout flags]` として呼び出せます。まず `fanout <N> --dry-run`
-  を走らせてターゲット一覧を表示し、ユーザーが確認した後（あるいは `--go`
-  が渡されたとき）にのみ本物のコマンドを実行します。
+  [--go] [--wait] [extra fanout flags]` として呼び出せます。まず
+  `fanout <N> --dry-run` を走らせてターゲット一覧を表示し、ユーザーが確認した後
+  （あるいは `--go` が渡されたとき）にのみ本物のコマンドを実行します。
+  `--wait` はスラッシュコマンド側だけの flag で、fanout 後に Claude が
+  `fanout --status <N>` を周期確認し、子 PR がすべて merge されたら親側の
+  統合作業を継続します。
 - **スキル** → `claude/skills/fanout/SKILL.md` が
   `~/.claude/skills/fanout/SKILL.md` にインストールされ、エージェントが fanout
   を使うべき場面を認識し、勝手に実行せず `/fanout` を提案するよう働きます。
@@ -269,6 +276,29 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
    - `dmux.config.json` をポーリングし、`panes[].length` が増えるまで待つ（60 秒でタイムアウト）。
    - 次の処理に入る前に `--sleep` 秒（既定 4）だけスリープする。
 7. 作成済み / スキップ / 保留 / 失敗の件数サマリを表示する。
+
+`fanout --status <parent>` は、これとは別の読み取り専用パスです。Sub-issues API
+は呼ばず、ペインも作りません。同じ `[fanout #<NUM>]` プロンプト prefix を
+`dmux.config.json` から拾い、各子について
+`gh issue view <NUM> --json state,closedByPullRequestsReferences` を実行して
+JSON を出力します:
+
+```json
+{
+  "parent": 123,
+  "children": [
+    {"num": 101, "state": "CLOSED", "prs": [{"number": 250, "state": "MERGED", "mergedAt": "2026-05-04T10:00:00Z"}]},
+    {"num": 102, "state": "OPEN", "prs": []}
+  ],
+  "summary": {"total": 2, "merged": 1, "pending": 1, "all_merged": false}
+}
+```
+
+`summary.all_merged` は、fanout 済みの子が 1 件以上あり、すべての子に少なくとも
+1 件の MERGED PR がある場合だけ true になります。PR なしで手動 close された
+子は pending のまま扱うため、統合完了と誤判定しません。`--status` の exit code
+は `0` が JSON 出力成功、`2` が dmux/config 列挙不能、`3` が `gh issue view`
+失敗です。
 
 ## トラブルシューティング
 

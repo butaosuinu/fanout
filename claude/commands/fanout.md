@@ -1,6 +1,6 @@
 ---
 description: Fan out a parent GitHub issue's OPEN sub-issues into parallel dmux panes with git worktrees via the fanout CLI.
-argument-hint: "[parent-issue] [--go] [extra fanout flags]"
+argument-hint: "[parent-issue] [--go] [--wait] [extra fanout flags]"
 ---
 
 Invoke the `fanout` CLI to spawn one dmux pane per OPEN sub-issue of a parent GitHub issue. See the `fanout` skill (`~/.claude/skills/fanout/SKILL.md`) for context on when and why to use this.
@@ -13,7 +13,10 @@ Arguments: `$ARGUMENTS`
    - First token matching `^#?\d+$` → that is `N`.
    - If none: scan the user's opening message / recent context for a `#\d+` reference and use the first match.
    - Still nothing: ask the user which parent issue to fan out.
-2. **Detect `--go`** in the remaining arguments. Strip it out — it is this command's own bypass flag, not a `fanout` flag. The rest of the arguments are forwarded verbatim to `fanout`.
+2. **Detect command-local flags** in the remaining arguments. Strip `--go`
+   (confirmation bypass) and `--wait` (post-fanout wait loop) before invoking
+   the CLI; neither is a `fanout` flag. The rest of the arguments are
+   forwarded verbatim to `fanout`.
 3. **Scan the parent body for implicit children** before the dry-run. `fanout` only auto-detects children from the Sub-issues API and `- [ ] #N` task-list rows, so children that are only mentioned in prose (close keywords like `Closes #N`, `Depends on #N`, plain bullets `- #N`, Japanese idioms like `#N に関連` / `#N を対応`) won't appear unless you forward them via `--include`. See the skill doc (`~/.claude/skills/fanout/SKILL.md`, "Body scan for implicit children") for the full detection rules and the exclusion list (cross-repo refs, bare `#N`, code blocks, blockquotes, the parent itself). If you find candidates, list them to the user with one-line justifications and ask which to include; pass the accepted numbers as `--include A,B,C` to both the dry-run and the real run. Auto-accept when `--go` is set (still print the list for transparency).
 4. **Generate pane names for each target** — dmux's default slug generator would otherwise call OpenRouter / the local `claude --no-interactive` fallback just to name each pane. You already have every target issue's title and body in context, so produce a `<slug-hint>` (2–4 kebab-case words) and a `<display-name>` (≤40 readable chars, JP/EN OK) per target, with no extra tool call. Forward them as `--name <NUM>=<slug-hint>|<display-name>` (one flag per target, repeatable). See `~/.claude/skills/fanout/SKILL.md` "Generate pane names" for the naming policy. Do not ask the user to confirm the names individually — they'll see them in the dry-run summary and can course-correct then.
 5. **Dry-run first** (unless `--go` was passed):
@@ -24,7 +27,16 @@ Arguments: `$ARGUMENTS`
 6. **Execute**:
    - Run `fanout <N> <forwarded>` via Bash.
    - Relay the `created / skipped / deferred / failed` summary.
-7. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
+7. **Optional wait loop**:
+   - Only when `--wait` was present, follow the skill doc's
+     "Optional Wait-And-Continue" section.
+   - Use `fanout --status <N>` as the read-only readiness check.
+   - If `summary.all_merged` is false, schedule the next check with
+     `ScheduleWakeup` / `/loop` instead of blocking the shell.
+   - If it becomes true, run `git fetch origin main && git merge --ff-only origin/main`
+     in the parent worktree, then run integration tests and continue parent
+     issue closure.
+8. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
    - dmux not running → tell the user to `cd <target-repo> && dmux` in another shell.
    - Multiple dmux sessions alive → rerun with `--session <name>`.
    - 60s wait-for-new-pane timeout or `popup did not appear within <N>s` → a popup-intercept stage failed; ask the user to rerun with `--debug`, press `Esc` in the dmux pane, and retry. If specifically `agentChoicePopup did not appear within 20s` on a large worktree, suggest bumping `--popup-timeout 45` (or higher).
@@ -47,6 +59,7 @@ Arguments: `$ARGUMENTS`
 
 - `/fanout 123` — dry-run preview for parent issue #123, then real run after confirmation.
 - `/fanout 123 --go` — skip confirmation, run immediately.
+- `/fanout 123 --wait` — after fanout, periodically check `fanout --status 123` and continue integration once all child PRs are merged.
 - `/fanout 123 --limit 3 --agent codex` — only the first 3 children, override the auto-detected agent and force the picker to `codex`.
 - `/fanout 123 --only 4,7,8,10` — fan out only these four children. `--skip 6,9` is the opposite form (deny-list).
 - `/fanout 123 --unblocked-only` — only children whose blockers are all CLOSED. Great for periodic reruns that walk Wave 1 → 2 → ... automatically.

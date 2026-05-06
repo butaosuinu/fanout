@@ -63,6 +63,30 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 - `--unblocked-only` defers children whose blockers are still OPEN (blockers are parsed from the child body's `## Blocked by` section, a `(blocked by #X, #Y)` trailer on the parent's task-list row, or the `blocked` label as a weak signal). Prefer this over hand-maintained `--only` wave lists when the parent has explicit blocker annotations — a periodic rerun of the same command walks Wave 1 → 2 → … as blocker PRs merge.
 - `--name <NUM>=<slug-hint>[|<display-name>]` is the channel for the names generated in the "Generate pane names" step. Repeatable, one per target. Slug-hint must be kebab-case (`[a-z0-9-]`, starting with alnum). Display-name is free-form (≤80 chars after dmux's sanitization). Pass slug-hint only when you just want to shape the branch/worktree name; use `|<display-name>` (leading pipe, empty slug-hint) to only override the pane title. See the skill section above for why slug-hint front-loading matters and how the display-name write is a two-file edit (dmux.config.json for in-session tmux-title, worktree-metadata.json for dmux-restart survival).
 
+## Optional Wait-And-Continue
+
+Only enter this phase when the user explicitly asks to wait for child PRs and
+continue integration, or when the Claude slash command received `--wait`.
+
+1. After fanout completes, keep working on parent-scope tasks that do not
+   conflict with child work.
+2. When parent work is blocked only on child PRs, run
+   `fanout --status <parent>` and parse the JSON summary.
+3. If `summary.all_merged` is false, schedule a wakeup instead of blocking the
+   shell:
+   - Use `ScheduleWakeup` / `/loop` with the next prompt set to rerun
+     `fanout --status <parent>` and branch on the JSON.
+   - When many children are still pending, use 1200-1800 seconds. When only a
+     few remain, use 270 seconds or less.
+   - Stop the loop if the user intervenes or the status command exits nonzero.
+4. Once `summary.all_merged` is true, run
+   `git fetch origin main && git merge --ff-only origin/main` in the parent
+   worktree, then run the repo's integration tests and continue with parent
+   issue closure.
+
+Do not review, merge, or direct child PRs from this loop. `fanout --status` is
+only a read-only readiness check.
+
 ## After running
 
 - Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.

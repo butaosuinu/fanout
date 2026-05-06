@@ -69,7 +69,7 @@ uninstall:
 # --- test / lint -------------------------------------------------------------
 # `make test`         — run Tier 1 + Tier 2 black-box tests.
 # `make test-tier1`   — flag / prerequisite tests, no live dmux.
-# `make test-tier2`   — --dry-run golden tests against fixture scenarios.
+# `make test-tier2`   — fixture-driven --dry-run and --status tests.
 # `make lint`         — shellcheck the fanout script and all test shims.
 #
 # bats-core is required: `brew install bats-core` (macOS) or `apt install bats`
@@ -93,7 +93,7 @@ test-tier1: check-bats
 	$(BATS) tests/bats/tier1_flags.bats
 
 test-tier2: check-bats
-	$(BATS) tests/bats/tier2_dry_run.bats
+	$(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
 
 lint:
 	shellcheck fanout tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash

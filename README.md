@@ -81,13 +81,14 @@ If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
 ```bash
 make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
-make test-tier2     # --dry-run golden tests against fixture scenarios
+make test-tier2     # fixture-driven --dry-run golden + --status JSON tests
 make lint           # shellcheck fanout + test shims
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
-`--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
+`--dry-run` planning output and `--status` JSON against fixture scenarios
+under `tests/fixtures/`.
 Both tiers are parity-test material for the upcoming Go rewrite. Regenerate
 Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
 intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
@@ -128,6 +129,7 @@ fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <li
                      [--name <NUM>=<slug>[|<display>]]
                      [--session <tmux-session>] [--sleep <seconds>]
                      [--popup-timeout <seconds>] [--dry-run]
+fanout --status <parent-issue> [--session <tmux-session>]
 fanout --help
 ```
 
@@ -139,6 +141,10 @@ fanout 123
 
 # Preview what would happen, don't actually drive dmux
 fanout 123 --dry-run
+
+# Print JSON status for already-fanned children. This is read-only: it scans
+# dmux.config.json for [fanout #N] prompts, then checks each child's linked PRs.
+fanout --status 123
 
 # Cap this invocation to 3 issues; rerun command is printed for the rest
 fanout 123 --limit 3
@@ -209,9 +215,11 @@ repo under `claude/` and get placed by `make install`:
 
 - **Slash command** → `claude/commands/fanout.md` is installed to
   `~/.claude/commands/fanout.md` and invoked as `/fanout [parent-issue]
-  [--go] [extra fanout flags]`. Runs `fanout <N> --dry-run` first, shows
-  the target list, and only fires the real command after the user confirms
-  (or if `--go` was passed).
+  [--go] [--wait] [extra fanout flags]`. Runs `fanout <N> --dry-run` first,
+  shows the target list, and only fires the real command after the user
+  confirms (or if `--go` was passed). `--wait` is command-local: after
+  fanout, Claude periodically checks `fanout --status <N>` and continues
+  parent integration once all child PRs are merged.
 - **Skill** → `claude/skills/fanout/SKILL.md` is installed to
   `~/.claude/skills/fanout/SKILL.md` and lets the agent recognize when
   fanout is applicable and suggest `/fanout` rather than invoking
@@ -287,6 +295,29 @@ for details.
    - Polls `dmux.config.json` until `panes[].length` increases (timeout 60s).
    - Sleeps `--sleep` seconds (default 4) before the next one.
 7. Prints a summary of created / skipped / deferred / failed counts.
+
+`fanout --status <parent>` is a separate read-only path. It does not call the
+Sub-issues API and does not create panes. It scans the same `[fanout #<NUM>]`
+prompt prefixes in `dmux.config.json`, runs
+`gh issue view <NUM> --json state,closedByPullRequestsReferences` for each
+child, and prints JSON:
+
+```json
+{
+  "parent": 123,
+  "children": [
+    {"num": 101, "state": "CLOSED", "prs": [{"number": 250, "state": "MERGED", "mergedAt": "2026-05-04T10:00:00Z"}]},
+    {"num": 102, "state": "OPEN", "prs": []}
+  ],
+  "summary": {"total": 2, "merged": 1, "pending": 1, "all_merged": false}
+}
+```
+
+`summary.all_merged` is true only when at least one fanned child exists and
+every child has at least one merged PR. A closed child with no linked PR stays
+pending so manual closures do not look like successful integration. Exit codes
+for `--status` are: `0` successful JSON output, `2` unable to enumerate dmux
+state/config, and `3` a `gh issue view` failure.
 
 ## Troubleshooting
 

@@ -62,6 +62,29 @@ asks for `$fanout`, "fan out #123", or similar, use this workflow directly.
 7. After confirmation, run `fanout <parent> <flags>` and relay the
    created/skipped/deferred/failed summary.
 
+## Optional Wait-And-Continue
+
+Only enter this phase when the user explicitly asks to wait for child PRs and
+continue integration after they merge. This is orchestration, not child-agent
+management.
+
+1. After fanout completes, continue parent-scope work that can proceed in
+   parallel with the children.
+2. When parent work is blocked only on child PRs, run
+   `fanout --status <parent>` and parse `summary`.
+3. If `summary.all_merged` is false, arrange a periodic re-check using the
+   wakeup/loop mechanism available in the current runtime. Use 1200-1800
+   seconds while many children are pending, and 270 seconds or less when only
+   a few remain. Stop if the user intervenes or `fanout --status` exits
+   nonzero.
+4. Once `summary.all_merged` is true, run
+   `git fetch origin main && git merge --ff-only origin/main` in the parent
+   worktree, run the repo's integration tests, and continue with parent issue
+   closure.
+
+Do not review, merge, or direct child PRs from this loop. `fanout --status` is
+only a read-only readiness check.
+
 ## Implicit Child Scan
 
 fanout itself only detects children from the Sub-issues API and parent-body

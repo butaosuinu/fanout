@@ -1,0 +1,27 @@
+{
+  "children": [
+    {
+      "num": 921,
+      "prs": [
+        {
+          "mergedAt": "2026-05-04T13:00:00Z",
+          "number": 1921,
+          "state": "MERGED"
+        }
+      ],
+      "state": "CLOSED"
+    },
+    {
+      "num": 922,
+      "prs": [],
+      "state": "CLOSED"
+    }
+  ],
+  "parent": 920,
+  "summary": {
+    "all_merged": false,
+    "merged": 1,
+    "pending": 1,
+    "total": 2
+  }
+}
