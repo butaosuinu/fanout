@@ -12,7 +12,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #201] First task: read /tmp/fanout-project_root-201.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #201] First task: parent #200. read /tmp/fanout-project_root-201.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #201: dry-run complete
 [info] #202: Second task
@@ -21,7 +21,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #202] Second task: read /tmp/fanout-project_root-202.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #202] Second task: parent #200. read /tmp/fanout-project_root-202.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #202: dry-run complete
 

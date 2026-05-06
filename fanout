@@ -28,7 +28,8 @@ Options:
   --status            Print read-only JSON status for children already fanned
                       out from <parent-issue>. Children are discovered from
                       dmux.config.json panes whose prompt starts with
-                      "[fanout #<NUM>]"; each child is checked with
+                      "[fanout #<NUM>]" and carries "parent #<parent-issue>";
+                      each child is checked with
                       `gh issue view --json state,closedByPullRequestsReferences`.
                       No panes are created. May only be combined with
                       --session.
@@ -301,6 +302,27 @@ enumerate_fanned_children() {
   ' "$path"
 }
 
+enumerate_fanned_children_for_parent() {
+  # $1 dmux.config.json path, $2 parent issue number. Echoes unique child
+  # issue numbers whose fanout prompt carries the matching "parent #<NUM>"
+  # marker. Unmarked legacy prompts are intentionally ignored here because
+  # they cannot be safely scoped when multiple parent fanouts share a session.
+  local path="$1" parent_num="$2"
+  jq -r --arg parent "$parent_num" '
+    [
+      (.panes // [])[]?
+      | (.prompt // "") as $prompt
+      | ($prompt | try capture("^\\[fanout #(?<n>[0-9]+)\\]") catch null) as $child
+      | ($prompt | try capture("parent #(?<p>[0-9]+)") catch null) as $parent_match
+      | select($child != null and $parent_match != null and $parent_match.p == $parent)
+      | $child.n
+      | tonumber
+    ]
+    | unique
+    | .[]
+  ' "$path"
+}
+
 run_status() {
   local nums=()
   local n detail child_json
@@ -312,7 +334,7 @@ run_status() {
     exit 2
   fi
 
-  if ! nums_text=$(enumerate_fanned_children "$config_path" 2>/dev/null); then
+  if ! nums_text=$(enumerate_fanned_children_for_parent "$config_path" "$parent" 2>/dev/null); then
     log_err "could not enumerate fanout panes from $config_path"
     exit 2
   fi
@@ -1101,11 +1123,11 @@ create_pane_for_issue() {
   # for this prompt") echoes our kebab-case hint back as the actual slug.
   # The [fanout #N] idempotency prefix stays untouched either way.
   if [[ -n "$slug_hint" ]]; then
-    printf -v one_line_prompt '%s%s] %s: %s. read %s and begin.' \
-      "$FANOUT_TAG_PREFIX" "$num" "$slug_hint" "$short_title" "$briefing"
+    printf -v one_line_prompt '%s%s] %s: %s. parent #%s. read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$slug_hint" "$short_title" "$parent" "$briefing"
   else
-    printf -v one_line_prompt '%s%s] %s: read %s and begin.' \
-      "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$briefing"
+    printf -v one_line_prompt '%s%s] %s: parent #%s. read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$parent" "$briefing"
   fi
 
   log_info "#$num: $short_title"

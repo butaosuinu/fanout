@@ -8,7 +8,7 @@
 
 load helpers
 
-@test "scenario-status-all-merged: every fanned child has a merged PR" {
+@test "scenario-status-all-merged: every fanned child for this parent has a merged PR" {
   use_fixture scenario-status-all-merged
   run_fanout_status 900
   assert_success

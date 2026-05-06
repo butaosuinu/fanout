@@ -144,7 +144,7 @@ fanout 123
 # 実際に dmux を動かさず、何が起こるかをプレビュー
 fanout 123 --dry-run
 
-# 既に fanout 済みの子 issue の PR マージ状況を JSON で確認する
+# この親で既に fanout 済みの子 issue の PR マージ状況を JSON で確認する
 fanout --status 123
 
 # 今回の呼び出しを 3 件までに制限; 残り分の再実行コマンドが表示される
@@ -268,7 +268,7 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
      （インラインモーダルではなく `tmux display-popup` の子プロセス）を起動させる。
    - `pgrep -f 'newPanePopup.js'` でポップアップ node プロセスを特定し、
      `ps -o args=` から `<tmpdir>/dmux-popup-*.json` の resultFile パスを抽出、
-     `{"success":true,"data":"[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin."}`
+     `{"success":true,"data":"[fanout #<NUM>] <TITLE>: parent #<PARENT>. read /tmp/fanout-<repo>-<NUM>.md and begin."}`
      を atomic に書き込み、dmux が横取りした答えを読むようにポップアップを kill する。
    - 続けて dmux が起動するエージェント選択ポップアップについても同様に横取りし、
      `{"success":true,"data":["<agent>"]}` を書き込む。`--agent` 指定、もしくは
@@ -278,10 +278,13 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
 7. 作成済み / スキップ / 保留 / 失敗の件数サマリを表示する。
 
 `fanout --status <parent>` は、これとは別の読み取り専用パスです。Sub-issues API
-は呼ばず、ペインも作りません。同じ `[fanout #<NUM>]` プロンプト prefix を
-`dmux.config.json` から拾い、各子について
+は呼ばず、ペインも作りません。`dmux.config.json` から `[fanout #<NUM>]`
+プロンプト prefix と `parent #<parent>` marker の両方が一致するペインを拾い、各子について
 `gh issue view <NUM> --json state,closedByPullRequestsReferences` を実行して
 JSON を出力します:
+
+marker のない古いプロンプトは、同じ dmux セッション内に複数親の fanout が混在する
+場合に安全にスコープできないため、`--status` では無視します。
 
 ```json
 {

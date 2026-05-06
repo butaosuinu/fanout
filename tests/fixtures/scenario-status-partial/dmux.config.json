@@ -1,1 +1,1 @@
-{"panes":[{"prompt":"[fanout #911] merged-child: read /tmp/fanout-project_root-911.md and begin."},{"prompt":"[fanout #912] open-child: read /tmp/fanout-project_root-912.md and begin."}]}
+{"panes":[{"prompt":"[fanout #911] merged-child: parent #910. read /tmp/fanout-project_root-911.md and begin."},{"prompt":"[fanout #912] open-child: parent #910. read /tmp/fanout-project_root-912.md and begin."},{"prompt":"[fanout #919] other-parent: parent #999. read /tmp/fanout-project_root-919.md and begin."}]}

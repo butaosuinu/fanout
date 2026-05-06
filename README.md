@@ -142,8 +142,9 @@ fanout 123
 # Preview what would happen, don't actually drive dmux
 fanout 123 --dry-run
 
-# Print JSON status for already-fanned children. This is read-only: it scans
-# dmux.config.json for [fanout #N] prompts, then checks each child's linked PRs.
+# Print JSON status for already-fanned children of this parent. This is
+# read-only: it scans dmux.config.json for matching parent-marked prompts,
+# then checks each child's linked PRs.
 fanout --status 123
 
 # Cap this invocation to 3 issues; rerun command is printed for the rest
@@ -287,7 +288,7 @@ for details.
      new-pane popup (a `tmux display-popup` child, not an inline modal).
    - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
      reads its `<tmpdir>/dmux-popup-*.json` resultFile path from `ps -o args=`,
-     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
+     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: parent #<PARENT>. read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
      and kills the popup process so dmux reads the injected answer.
    - Repeats the intercept for the agent-choice popup that dmux launches
      next (writes `{"success":true,"data":["<agent>"]}`), using the agent
@@ -297,10 +298,14 @@ for details.
 7. Prints a summary of created / skipped / deferred / failed counts.
 
 `fanout --status <parent>` is a separate read-only path. It does not call the
-Sub-issues API and does not create panes. It scans the same `[fanout #<NUM>]`
-prompt prefixes in `dmux.config.json`, runs
+Sub-issues API and does not create panes. It scans `dmux.config.json` for
+prompts that have both the `[fanout #<NUM>]` prefix and a matching
+`parent #<parent>` marker, runs
 `gh issue view <NUM> --json state,closedByPullRequestsReferences` for each
 child, and prints JSON:
+
+Unmarked legacy prompts are ignored by `--status` because they cannot be
+safely scoped when one dmux session contains fanouts from multiple parents.
 
 ```json
 {
