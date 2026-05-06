@@ -101,12 +101,16 @@ Options:
                       child issue's state and the merge status of its
                       closed-by PRs, then exit. Reads dmux.config.json to
                       enumerate already-fanned children (panes whose prompt
-                      starts with "[fanout #N]") and calls `gh issue view`
-                      for each. No side effects. Set DMUX_CONFIG_PATH to
-                      bypass live-dmux-session discovery (useful after the
-                      session has exited). Exclusive with all action-bearing
-                      flags. JSON shape and dedicated exit codes documented
-                      below.
+                      starts with "[fanout #N of #<parent>]") and calls
+                      `gh issue view` for each. Children of other parents in
+                      the same session are filtered out. Old-format panes
+                      ("[fanout #N]" without parent annotation, predating
+                      this feature) are excluded — re-fan them to surface
+                      them in `--status`. No side effects. Set
+                      DMUX_CONFIG_PATH to bypass live-dmux-session discovery
+                      (useful after the session has exited). Exclusive with
+                      all action-bearing flags. JSON shape and dedicated
+                      exit codes documented below.
   -h, --help          Show this message.
 
 Prerequisites:
@@ -350,22 +354,42 @@ parse_blockers_from_parent_row() {
 }
 
 enumerate_fanned_children() {
-  # $1 dmux config_path. Echoes a space-sentinel-wrapped set (e.g. " 42 43 ")
-  # of issue numbers already fanned out on this dmux session, parsed from
-  # panes[].prompt entries that start with "[fanout #N]". Used by both the
-  # main flow's idempotency check and `--status`.
+  # $1 dmux config_path. $2 (optional) parent issue number — if given, only
+  # children whose pane prompt has a matching " of #<parent>" annotation are
+  # included; old-format panes (no parent annotation) are excluded. With no
+  # $2, every fanned-out child is included regardless of parent — that's
+  # what the main flow's idempotency check wants ("skip any number already
+  # in panes, no matter which parent it came from").
+  #
+  # Echoes a space-sentinel-wrapped set (e.g. " 42 43 ") so " 42 " membership
+  # tests work without false positives on "142".
+  #
+  # Recognised prompt prefixes:
+  #   [fanout #N]            — pre-#35 format, parent unknown
+  #   [fanout #N of #P]      — current format, parent encoded
   local config_path="$1"
-  local nums set=' ' n
-  nums=$(jq -r '
+  local filter_parent="${2:-}"
+  local rows row n p set=' '
+  rows=$(jq -r '
     (.panes // [])
     | map(.prompt // "")
-    | map(capture("^\\[fanout #(?<n>[0-9]+)\\]"; "g") | .n // empty)
+    | map(capture("^\\[fanout #(?<n>[0-9]+)( of #(?<p>[0-9]+))?\\]") // null)
+    | map(select(. != null))
+    | map((.n // "") + "\t" + (.p // ""))
     | .[]
   ' "$config_path" 2>/dev/null || true)
-  if [[ -n "$nums" ]]; then
-    while IFS= read -r n; do
-      [[ -n "$n" ]] && set+="$n "
-    done <<<"$nums"
+  if [[ -n "$rows" ]]; then
+    while IFS= read -r row; do
+      [[ -z "$row" ]] && continue
+      n="${row%%$'\t'*}"
+      p="${row#*$'\t'}"
+      [[ -z "$n" ]] && continue
+      if [[ -n "$filter_parent" ]]; then
+        # Strict: the pane must announce its parent and it must match.
+        [[ "$p" == "$filter_parent" ]] || continue
+      fi
+      set+="$n "
+    done <<<"$rows"
   fi
   printf '%s' "$set"
 }
@@ -591,10 +615,12 @@ cmd_status() {
     fi
   fi
 
-  log_debug "--status: config=$config_path project_root=$project_root"
+  log_debug "--status: config=$config_path project_root=$project_root parent=$parent"
 
+  # Filter by parent — sessions that have fanned multiple parents would
+  # otherwise mix children, and `summary.all_merged` would lie.
   local fanned trimmed
-  fanned=$(enumerate_fanned_children "$config_path")
+  fanned=$(enumerate_fanned_children "$config_path" "$parent")
   trimmed="${fanned# }"
   trimmed="${trimmed% }"
 
@@ -1183,13 +1209,15 @@ create_pane_for_issue() {
   # When a slug-hint is supplied, front-load it into the one-line prompt so
   # dmux's generateSlug() (which asks the LLM for "1-2 word kebab-case slug
   # for this prompt") echoes our kebab-case hint back as the actual slug.
-  # The [fanout #N] idempotency prefix stays untouched either way.
+  # The "[fanout #N of #PARENT]" idempotency prefix stays at the very front
+  # — the parent annotation is what lets `--status` filter to one parent in
+  # sessions where multiple parents have been fanned.
   if [[ -n "$slug_hint" ]]; then
-    printf -v one_line_prompt '%s%s] %s: %s. read %s and begin.' \
-      "$FANOUT_TAG_PREFIX" "$num" "$slug_hint" "$short_title" "$briefing"
+    printf -v one_line_prompt '%s%s of #%s] %s: %s. read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$parent" "$slug_hint" "$short_title" "$briefing"
   else
-    printf -v one_line_prompt '%s%s] %s: read %s and begin.' \
-      "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$briefing"
+    printf -v one_line_prompt '%s%s of #%s] %s: read %s and begin.' \
+      "$FANOUT_TAG_PREFIX" "$num" "$parent" "$short_title" "$briefing"
   fi
 
   log_info "#$num: $short_title"
@@ -1277,10 +1305,13 @@ apply_display_names() {
     fi
 
     # Locate the pane by [fanout #NUM] prompt prefix so matching survives
-    # even if dmux tweaked slug post-generation.
+    # even if dmux tweaked slug post-generation. Accept both the legacy
+    # "[fanout #N]" form and the parent-aware "[fanout #N of #P]" form
+    # introduced for `--status`.
     lookup=$(jq -r --arg num "$num" '
       (.panes // [])
-      | map(select((.prompt // "") | startswith("[fanout #" + $num + "]")))
+      | map(select((.prompt // "")
+                   | test("^\\[fanout #" + $num + "( of #|\\])")))
       | (.[0] // {} | "\(.slug // "")\t\(.worktreePath // "")")
     ' "$config_path" 2>/dev/null || printf '\t')
 

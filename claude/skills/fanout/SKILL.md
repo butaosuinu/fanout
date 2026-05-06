@@ -67,7 +67,7 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 - Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
 - The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
-- Re-invocation is idempotent: already-fanned issues are detected via the `[fanout #<N>]` prompt prefix in `dmux.config.json` and skipped.
+- Re-invocation is idempotent: already-fanned issues are detected via the `[fanout #<N> of #<parent>]` prompt prefix in `dmux.config.json` and skipped. The parent annotation also lets `fanout --status <parent>` filter to a single parent's children when one dmux session has fanned multiple parents.
 
 ## Optional: wait-and-continue
 

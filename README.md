@@ -135,11 +135,16 @@ fanout --help
 ### `--status` output
 
 `fanout <parent> --status` is read-only: it reads `dmux.config.json` to
-enumerate children already fanned out under that parent (panes whose prompt
-starts with `[fanout #N]`), calls `gh issue view <N> --json
-state,closedByPullRequestsReferences` for each, and prints one JSON document
-on stdout. Set `DMUX_CONFIG_PATH` to point directly at a `dmux.config.json`
-when the dmux session has already exited.
+enumerate children already fanned out under that specific parent (panes
+whose prompt starts with `[fanout #N of #<parent>]`), calls
+`gh issue view <N> --json state,closedByPullRequestsReferences` for each,
+and prints one JSON document on stdout. In a session that has fanned
+multiple parents, children of other parents are filtered out so
+`summary.all_merged` reflects only the requested parent. Old-format panes
+that predate this feature (`[fanout #N]` without parent annotation) are
+excluded for the same reason — re-fan them to surface them in `--status`.
+Set `DMUX_CONFIG_PATH` to point directly at a `dmux.config.json` when the
+dmux session has already exited.
 
 ```json
 {
@@ -432,10 +437,15 @@ a repo directory). Not a fanout bug.
   full briefing in `/tmp/fanout-<repo>-<NUM>.md` and tells the agent to read
   it. This also keeps the prompt short enough that dmux's `slug()` — which
   keys the worktree directory name — stays reasonable.
-- **The `[fanout #NUM]` tag is the idempotency primitive.** Because dmux
-  persists the prompt verbatim into `dmux.config.json`, fanout can detect
-  previously-created panes by grepping for this prefix. Delete the pane (and
-  its worktree) via the dmux TUI if you want fanout to recreate it.
+- **The `[fanout #NUM of #PARENT]` tag is the idempotency primitive.**
+  Because dmux persists the prompt verbatim into `dmux.config.json`, fanout
+  can detect previously-created panes by grepping for this prefix. The
+  parent annotation also lets `fanout --status <parent>` filter to one
+  parent's children in a session that has fanned multiple parents. Older
+  panes carry the legacy `[fanout #NUM]` form (no parent annotation) and
+  still satisfy idempotency, but `--status` excludes them — re-fan to
+  surface them. Delete the pane (and its worktree) via the dmux TUI if you
+  want fanout to recreate it.
 - **IPC paths in play.** Discovery uses tmux session options
   (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
   `@dmux_project_root`). Pane-creation is driven by writing to dmux's

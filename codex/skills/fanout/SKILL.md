@@ -154,8 +154,10 @@ the likely next action:
 
 ## Notes
 
-- Reruns are idempotent: existing panes are detected by the `[fanout #N]`
-  prompt prefix in `dmux.config.json`.
+- Reruns are idempotent: existing panes are detected by the
+  `[fanout #N of #<parent>]` prompt prefix in `dmux.config.json` (older
+  panes may carry the legacy `[fanout #N]` form without parent annotation
+  — both satisfy idempotency).
 - `--unblocked-only` defers children whose blockers are still OPEN and is
   preferred over hand-built wave lists when blocker annotations exist.
 - The CLI intentionally drives dmux through tmux popup result-file

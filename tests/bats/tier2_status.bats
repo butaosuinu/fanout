@@ -36,3 +36,15 @@ load helpers
   assert_success
   assert_status_golden scenario-status-no-fanned-children
 }
+
+# Cross-parent filtering: a session that fanned both #300 and #400 must not
+# leak #400's children into `fanout --status 300` (and vice versa). Old-format
+# panes (`[fanout #N]` without parent annotation) are excluded because their
+# parent is unknown — we'd rather under-report than mix parents and lie about
+# `summary.all_merged`.
+@test "scenario-status-multi-parent: --status 300 returns only #300's children" {
+  use_fixture scenario-status-multi-parent
+  run_fanout_status 300
+  assert_success
+  assert_status_golden scenario-status-multi-parent-300
+}

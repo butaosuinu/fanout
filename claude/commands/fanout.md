@@ -36,7 +36,7 @@ Arguments: `$ARGUMENTS`
 ## Notes
 
 - `fanout` never touches the caller's pane; the agent keeps working on the parent issue in the current session.
-- Rerun is safe; idempotency is handled by the `[fanout #<N>]` prompt prefix.
+- Rerun is safe; idempotency is handled by the `[fanout #<N> of #<parent>]` prompt prefix. The parent annotation also enables `fanout --status <parent>` to filter to one parent's children in sessions that fanned multiple parents.
 - Default flags the CLI already applies: `--sleep 4`, `--popup-timeout 20`. Pass `--sleep 8` or higher on slow machines. Pass `--popup-timeout 45` (or higher) when dmux is slow to open the agent-choice popup on large worktrees.
 - To target a non-contiguous subset of children, pass `--only N1,N2,...` (keep-list) or `--skip N1,N2,...` (deny-list). The two are mutually exclusive. `--only` entries that aren't in the parent's OPEN child set are warned and ignored — surface that warning rather than rerunning or hunting for the number elsewhere. Both flags are applied before `--limit`.
 - To force-add children that the Sub-issues API and `- [ ] #N` task-list scan miss (e.g. surfaced by the body scan in step 4), pass `--include N1,N2,...`. These are appended to the children set before `--only`/`--skip` filter it, so combinations like `--include 100 --only 4,7,100` behave as you'd expect. CLOSED or non-existent numbers are warned and skipped.
