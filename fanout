@@ -97,6 +97,16 @@ Options:
                       driving dmux.
   --debug             Log intercept steps (popup PID, result file path, JSON
                       payload) to stderr as each pane is created.
+  --status            Read-only mode. Print JSON describing each fanned-out
+                      child issue's state and the merge status of its
+                      closed-by PRs, then exit. Reads dmux.config.json to
+                      enumerate already-fanned children (panes whose prompt
+                      starts with "[fanout #N]") and calls `gh issue view`
+                      for each. No side effects. Set DMUX_CONFIG_PATH to
+                      bypass live-dmux-session discovery (useful after the
+                      session has exited). Exclusive with all action-bearing
+                      flags. JSON shape and dedicated exit codes documented
+                      below.
   -h, --help          Show this message.
 
 Prerequisites:
@@ -111,10 +121,33 @@ Prerequisites:
     file. The agent name is required to satisfy the picker popup that
     dmux always shows next.
 
-Exit codes:
+Exit codes (default flow):
   0 success (including "no children, nothing to do")
   1 prerequisite / environment problem
   2 bad invocation
+
+Exit codes (--status):
+  0 success (JSON emitted; check `summary.all_merged` for state)
+  2 cannot enumerate children (bad invocation, missing/unreadable
+    dmux.config.json, no active dmux session)
+  3 gh API call failed (auth, network, non-existent issue, etc.)
+
+--status JSON schema (top-level):
+  {
+    "parent": <int>,
+    "children": [
+      { "num": <int>, "state": "OPEN"|"CLOSED",
+        "prs": [ { "number": <int>, "state": "OPEN"|"MERGED"|"CLOSED",
+                   "mergedAt": <ISO8601 | null> } ],
+        "has_merged_pr": <bool> }
+    ],
+    "summary": {
+      "total":      <int>,    # length of children
+      "merged":     <int>,    # children with at least one MERGED PR
+      "pending":    <int>,    # children with no MERGED PR
+      "all_merged": <bool>    # total > 0 AND every child has_merged_pr
+    }
+  }
 EOF
 }
 
@@ -267,6 +300,17 @@ get_issue_state() {
   GET_ISSUE_STATE_RESULT="$s"
 }
 
+get_issue_with_prs() {
+  # $1 issue number. Echoes raw JSON
+  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}, …}
+  # exactly as gh returns it. No cache: the JSON-array shape doesn't fit
+  # get_issue_state's string cache, and the single use site is one-shot.
+  # Returns gh's exit status so callers can distinguish API failures from
+  # empty results.
+  local num="$1"
+  gh_in_root issue view "$num" --json state,closedByPullRequestsReferences 2>/dev/null
+}
+
 parse_blockers_from_child_body() {
   # $1 body text. Echoes space-separated blocker numbers taken from the first
   # "## Blocked by" section, up to the next blank line or next heading.
@@ -305,6 +349,27 @@ parse_blockers_from_parent_row() {
   '
 }
 
+enumerate_fanned_children() {
+  # $1 dmux config_path. Echoes a space-sentinel-wrapped set (e.g. " 42 43 ")
+  # of issue numbers already fanned out on this dmux session, parsed from
+  # panes[].prompt entries that start with "[fanout #N]". Used by both the
+  # main flow's idempotency check and `--status`.
+  local config_path="$1"
+  local nums set=' ' n
+  nums=$(jq -r '
+    (.panes // [])
+    | map(.prompt // "")
+    | map(capture("^\\[fanout #(?<n>[0-9]+)\\]"; "g") | .n // empty)
+    | .[]
+  ' "$config_path" 2>/dev/null || true)
+  if [[ -n "$nums" ]]; then
+    while IFS= read -r n; do
+      [[ -n "$n" ]] && set+="$n "
+    done <<<"$nums"
+  fi
+  printf '%s' "$set"
+}
+
 # --- arg parsing -------------------------------------------------------------
 
 parent=''
@@ -319,6 +384,7 @@ popup_timeout=$default_popup_timeout
 dry_run=0
 debug=0
 unblocked_only=0
+status_mode=0
 
 while (( $# > 0 )); do
   case "$1" in
@@ -335,6 +401,7 @@ while (( $# > 0 )); do
     --dry-run)    dry_run=1;          shift ;;
     --debug)      debug=1;            shift ;;
     --unblocked-only) unblocked_only=1; shift ;;
+    --status)     status_mode=1;      shift ;;
     --)           shift; break ;;
     -*)
       log_err "unknown option: $1"
@@ -359,6 +426,10 @@ if [[ -z "$parent" ]]; then
   exit 2
 fi
 if ! [[ "$parent" =~ ^[0-9]+$ ]]; then
+  if (( status_mode )); then
+    log_err "--status: parent issue must be an integer, got: $parent"
+    exit 2
+  fi
   die "parent issue must be an integer, got: $parent"
 fi
 if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
@@ -373,6 +444,26 @@ fi
 
 if [[ -n "$only_arg" && -n "$skip_arg" ]]; then
   die "--only and --skip are mutually exclusive"
+fi
+
+# --status rejects every action-bearing flag (--debug is observability-only,
+# allowed; -h exits 0 before this guard).
+status_conflict() {
+  log_err "--status cannot be combined with $1"
+  exit 2
+}
+
+if (( status_mode )); then
+  [[ -n "$agent"        ]] && status_conflict "--agent"
+  [[ -n "$limit"        ]] && status_conflict "--limit"
+  [[ -n "$only_arg"     ]] && status_conflict "--only"
+  [[ -n "$skip_arg"     ]] && status_conflict "--skip"
+  [[ -n "$include_arg"  ]] && status_conflict "--include"
+  (( ${#name_nums[@]} )) && status_conflict "--name"
+  (( dry_run ))          && status_conflict "--dry-run"
+  (( unblocked_only ))   && status_conflict "--unblocked-only"
+  [[ "$sleep_between" != "$default_sleep_between" ]] && status_conflict "--sleep"
+  [[ "$popup_timeout" != "$default_popup_timeout" ]] && status_conflict "--popup-timeout"
 fi
 
 only_set=' '
@@ -392,10 +483,14 @@ missing_deps=()
 need_cmd gh    || missing_deps+=('gh (brew install gh)')
 need_cmd jq    || missing_deps+=('jq (brew install jq)')
 need_cmd tmux  || missing_deps+=('tmux (brew install tmux)')
-need_cmd pgrep || missing_deps+=('pgrep (procps-ng on Linux; preinstalled on macOS)')
+# --status doesn't drive the popup intercept and doesn't fetch sub-issues, so
+# pgrep + gh-sub-issue are not required for it.
+if (( !status_mode )); then
+  need_cmd pgrep || missing_deps+=('pgrep (procps-ng on Linux; preinstalled on macOS)')
 
-if ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
-  missing_deps+=('gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)')
+  if ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
+    missing_deps+=('gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)')
+  fi
 fi
 
 if (( ${#missing_deps[@]} > 0 )); then
@@ -427,6 +522,137 @@ session_is_dmux() {
   pid=$(tmux_opt "$s" '@dmux_controller_pid')
   pid_alive "$pid"
 }
+
+cmd_status() {
+  # Read-only status reporter for already-fanned children. Writes one JSON
+  # document to stdout. Exit codes documented in usage().
+
+  # gh_in_root and enumerate_fanned_children read these from the script-global
+  # namespace, matching how the main flow assigns them after session discovery.
+  if [[ -n "${DMUX_CONFIG_PATH:-}" ]]; then
+    # Escape hatch: read status from a checkpoint after the dmux session
+    # has already exited. Key naming for project_root varies by dmux version;
+    # fall back to two levels up, since dmux conventionally writes to
+    # <repo>/.dmux/dmux.config.json.
+    config_path="$DMUX_CONFIG_PATH"
+    if [[ ! -f "$config_path" ]]; then
+      log_err "--status: \$DMUX_CONFIG_PATH points to non-existent file: $config_path"
+      exit 2
+    fi
+    project_root=$(jq -r '.projectRoot // .project_root // empty' "$config_path" 2>/dev/null)
+    [[ -n "$project_root" ]] || project_root=$(dirname "$(dirname "$config_path")")
+  else
+    if ! tmux list-sessions -F '#{session_name}' >/dev/null 2>&1; then
+      log_err "--status: no tmux server is running (set DMUX_CONFIG_PATH to bypass live-session discovery)"
+      exit 2
+    fi
+    local -a _ds=()
+    local _s _pid
+    while IFS= read -r _s; do
+      _pid=$(tmux_opt "$_s" '@dmux_controller_pid')
+      pid_alive "$_pid" && _ds+=("$_s")
+    done < <(tmux list-sessions -F '#{session_name}')
+
+    if (( ${#_ds[@]} == 0 )); then
+      log_err "--status: no active dmux session found (set DMUX_CONFIG_PATH to bypass)"
+      exit 2
+    fi
+
+    if [[ -n "$session_arg" ]]; then
+      local _found=0
+      for _s in "${_ds[@]}"; do
+        if [[ "$_s" == "$session_arg" ]]; then
+          _found=1
+          session="$_s"
+          break
+        fi
+      done
+      if (( !_found )); then
+        log_err "--status: tmux session '$session_arg' is not running dmux. Active dmux sessions: ${_ds[*]}"
+        exit 2
+      fi
+    elif (( ${#_ds[@]} > 1 )); then
+      log_err "--status: multiple dmux sessions active (${_ds[*]}); pass --session <name> to pick one"
+      exit 2
+    else
+      session="${_ds[0]}"
+    fi
+
+    config_path=$(tmux_opt "$session" '@dmux_config_path')
+    project_root=$(tmux_opt "$session" '@dmux_project_root')
+
+    if [[ -z "$config_path" ]] || [[ ! -f "$config_path" ]]; then
+      log_err "--status: dmux config not found at ${config_path:-<unset>}"
+      exit 2
+    fi
+    if [[ -z "$project_root" ]]; then
+      log_err "--status: session '$session' has no @dmux_project_root option"
+      exit 2
+    fi
+  fi
+
+  log_debug "--status: config=$config_path project_root=$project_root"
+
+  local fanned trimmed
+  fanned=$(enumerate_fanned_children "$config_path")
+  trimmed="${fanned# }"
+  trimmed="${trimmed% }"
+
+  local -a nums_arr=()
+  if [[ -n "$trimmed" ]]; then
+    # shellcheck disable=SC2206
+    nums_arr=($trimmed)
+  fi
+
+  if (( ${#nums_arr[@]} == 0 )); then
+    jq -n --argjson parent "$parent" '{
+      parent: $parent,
+      children: [],
+      summary: { total: 0, merged: 0, pending: 0, all_merged: false }
+    }'
+    return 0
+  fi
+
+  local -a children_arr=()
+  local n raw projected
+  for n in "${nums_arr[@]}"; do
+    raw=$(get_issue_with_prs "$n") || raw=''
+    if [[ -z "$raw" ]]; then
+      log_err "--status: gh issue view #$n failed (auth / network / not found)"
+      exit 3
+    fi
+    projected=$(jq --argjson n "$n" '{
+      num: $n,
+      state: .state,
+      prs: [(.closedByPullRequestsReferences.nodes // [])[]
+            | { number, state, mergedAt }],
+      has_merged_pr: (any((.closedByPullRequestsReferences.nodes // [])[]; .state == "MERGED"))
+    }' <<<"$raw") || {
+      log_err "--status: failed to parse gh response for #$n"
+      exit 3
+    }
+    children_arr+=("$projected")
+  done
+
+  local children_json
+  children_json=$(printf '%s\n' "${children_arr[@]}" | jq -s '.')
+
+  jq -n --argjson parent "$parent" --argjson children "$children_json" '{
+    parent: $parent,
+    children: $children,
+    summary: {
+      total:   ($children | length),
+      merged:  ($children | map(select(.has_merged_pr)) | length),
+      pending: ($children | map(select(.has_merged_pr | not)) | length),
+      all_merged: (($children | length) > 0 and ($children | all(.has_merged_pr)))
+    }
+  }'
+}
+
+if (( status_mode )); then
+  cmd_status
+  exit 0
+fi
 
 if ! tmux list-sessions -F '#{session_name}' >/dev/null 2>&1; then
   die "no tmux server is running. Start dmux in your repo first: cd <repo> && dmux"
@@ -661,21 +887,10 @@ fi
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
-existing_nums=$(jq -r --arg prefix "$FANOUT_TAG_PREFIX" '
-  (.panes // [])
-  | map(.prompt // "")
-  | map(capture("^\\[fanout #(?<n>[0-9]+)\\]"; "g") | .n // empty)
-  | .[]
-' "$config_path" 2>/dev/null || true)
-
-# Build a flat "set" of already-fanned numbers, space-delimited and sentinel-
-# wrapped so " 42 " membership tests work without false positives on "142".
-fanned_set=' '
-if [[ -n "$existing_nums" ]]; then
-  while IFS= read -r n; do
-    [[ -n "$n" ]] && fanned_set+="$n "
-  done <<<"$existing_nums"
-fi
+# Space-delimited and sentinel-wrapped so " 42 " membership tests work without
+# false positives on "142". Extraction lives in enumerate_fanned_children() so
+# `--status` can reuse the exact same regex / shape.
+fanned_set=$(enumerate_fanned_children "$config_path")
 
 # --- split into targets / skipped -------------------------------------------
 

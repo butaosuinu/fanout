@@ -62,6 +62,38 @@ asks for `$fanout`, "fan out #123", or similar, use this workflow directly.
 7. After confirmation, run `fanout <parent> <flags>` and relay the
    created/skipped/deferred/failed summary.
 
+## Optional: Wait-and-Continue
+
+Use this workflow only when the user has explicitly asked to "wait until every
+child PR merges and then continue parent-scope work" (Japanese: `子 PR が全部
+マージされたら統合まで進めて` or similar). Do not start it unprompted.
+
+Codex CLI does not provide a built-in scheduler, so polling is driven by the
+user (or an external cron / shell loop). The pattern:
+
+1. After the real fanout run has succeeded, continue any parent-scope work that
+   doesn't depend on the children's merged output.
+2. Periodically rerun `fanout --status <PARENT>`. Inspect the JSON; the key
+   field is `summary.all_merged`.
+3. When `summary.all_merged == true`, run
+   `git fetch origin main && git merge --ff-only origin/main` in the parent
+   worktree and proceed with integration tests and parent-issue close-out.
+4. Treat `prs: []` on a child as pending (PR not yet open), never merged.
+
+`--status` exit codes:
+
+- `2` — cannot enumerate children (config / session missing, bad invocation).
+  Stop and report.
+- `3` — `gh` API call failed. Stop and report; the user may need to refresh
+  `gh auth`.
+- `0` with `summary.total == 0` — nothing has been fanned out under that parent
+  (or every fanned pane was torn down). Tell the user; don't keep polling.
+
+`--status` is read-only and exclusive with all action-bearing flags
+(`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--sleep`,
+`--popup-timeout`, `--dry-run`, `--unblocked-only`). Set `DMUX_CONFIG_PATH`
+to bypass live-dmux-session discovery (useful after the session has exited).
+
 ## Implicit Child Scan
 
 fanout itself only detects children from the Sub-issues API and parent-body

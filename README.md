@@ -128,8 +128,52 @@ fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <li
                      [--name <NUM>=<slug>[|<display>]]
                      [--session <tmux-session>] [--sleep <seconds>]
                      [--popup-timeout <seconds>] [--dry-run]
+fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout --help
 ```
+
+### `--status` output
+
+`fanout <parent> --status` is read-only: it reads `dmux.config.json` to
+enumerate children already fanned out under that parent (panes whose prompt
+starts with `[fanout #N]`), calls `gh issue view <N> --json
+state,closedByPullRequestsReferences` for each, and prints one JSON document
+on stdout. Set `DMUX_CONFIG_PATH` to point directly at a `dmux.config.json`
+when the dmux session has already exited.
+
+```json
+{
+  "parent": 123,
+  "children": [
+    { "num": 4, "state": "CLOSED",
+      "prs": [ { "number": 250, "state": "MERGED",
+                 "mergedAt": "2026-05-04T10:00:00Z" } ],
+      "has_merged_pr": true },
+    { "num": 7, "state": "OPEN",
+      "prs": [],
+      "has_merged_pr": false }
+  ],
+  "summary": {
+    "total":      2,
+    "merged":     1,
+    "pending":    1,
+    "all_merged": false
+  }
+}
+```
+
+`--status` exit codes are a separate lane from the default flow:
+
+- `0` — JSON emitted (check `summary.all_merged` for the actual state).
+- `2` — cannot enumerate (bad invocation, missing/unreadable
+  `dmux.config.json`, no active dmux session).
+- `3` — `gh` API call failed (auth, network, non-existent issue, etc.).
+
+`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`,
+`--only`, `--skip`, `--include`, `--name`, `--sleep`, `--popup-timeout`,
+`--dry-run`, `--unblocked-only`). The bundled Claude Code skill drives a
+`ScheduleWakeup`-based polling loop on top of this when the user opts in via
+`/fanout … --wait`.
 
 ### Examples
 
@@ -195,6 +239,13 @@ fanout 123 --popup-timeout 45
 # agent than the parent pane). Normally you don't need this — fanout reads
 # the caller's .panes[].agent from dmux.config.json.
 fanout 123 --agent codex
+
+# Read-only JSON status: who's fanned out, what state each child is in, and
+# whether their closed-by PRs have merged. No side effects. Pipe into jq for
+# scripting; the bundled /fanout --wait skill drives a wait-and-continue loop
+# on top of this.
+fanout 123 --status
+fanout 123 --status | jq '.summary.all_merged'
 ```
 
 ## From inside an agent session

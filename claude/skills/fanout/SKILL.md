@@ -69,6 +69,34 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 - The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
 - Re-invocation is idempotent: already-fanned issues are detected via the `[fanout #<N>]` prompt prefix in `dmux.config.json` and skipped.
 
+## Optional: wait-and-continue
+
+Use this **only** when the user has indicated "fanout the children, then wait until every child PR merges and continue parent-scope work" — typical triggers are `/fanout … --wait`, an explicit "child PR が全部マージされたら統合まで進めて" / "wait for all child PRs to merge, then resume" instruction, or equivalent intent. Do not start a wait loop unprompted.
+
+The wait loop runs **after** the real fanout run has succeeded (status=0, at least one pane created/skipped/deferred). Skip entirely if the run was a `--dry-run`.
+
+1. Continue any parent-scope work that doesn't depend on the children's merged output.
+2. When you reach a phase that requires the children's merged output, poll status via `ScheduleWakeup` with the autonomous-loop sentinel:
+
+   ```
+   ScheduleWakeup({
+     delaySeconds: <see cadence below>,
+     prompt: "<<autonomous-loop-dynamic>>",
+     reason: "polling fanout --status #<PARENT> for all_merged"
+   })
+   ```
+
+   On each wake-up, run `! fanout --status <PARENT>` and read `summary.all_merged` from the JSON.
+   - **Cadence:** `summary.pending` is many → 1200–1800s; near completion (≤2 pending) → drop to ≤270s to stay inside the 5-minute prompt-cache window. Avoid 300s (cache miss without amortization).
+   - `prs: []` on a child means the PR isn't open yet — treat as pending, never merged.
+3. When `summary.all_merged == true`: stop scheduling wake-ups, then in the parent worktree run `git fetch origin main && git merge --ff-only origin/main`, run integration tests as appropriate for the project, and proceed with parent-issue close-out per the user's intent.
+4. If the user intervenes mid-loop (any new prompt), drop the loop and follow the new instruction.
+
+`--status` exit codes:
+- `2` — cannot enumerate (config / session missing, bad invocation). Stop and report.
+- `3` — `gh` API failed. Stop and report; the user may need to refresh `gh auth`.
+- `0` with `summary.total == 0` — nothing has been fanned out under that parent (or every fanned pane was already torn down). Don't loop on this; tell the user.
+
 ## Failure mapping
 
 When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README.md` Troubleshooting. Common cases:

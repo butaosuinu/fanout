@@ -181,3 +181,69 @@ load helpers
   [[ "$output" == *"missing dependencies"* ]]
   [[ "$output" == *"pgrep"* ]]
 }
+
+# --- --status CLI surface ---------------------------------------------------
+# --status uses its own exit-code lane (0/2/3) per issue #35: 0=JSON emitted,
+# 2=cannot enumerate (bad invocation, missing config, no dmux session),
+# 3=gh API failure. The cases below cover the CLI surface only — the body /
+# JSON shape lives in tier2_status.bats against fixtures.
+
+@test "--status without parent: exit 2" {
+  run_fanout --status
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Usage: fanout"* ]]
+}
+
+@test "--status non-integer parent: exit 2" {
+  run_fanout --status abc
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: parent issue must be an integer"* ]]
+}
+
+@test "--status conflicts with --agent: exit 2" {
+  run_fanout --status 1 --agent claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "--status conflicts with --limit: exit 2" {
+  run_fanout --status 1 --limit 3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --limit"* ]]
+}
+
+@test "--status conflicts with --only: exit 2" {
+  run_fanout --status 1 --only 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --only"* ]]
+}
+
+@test "--status conflicts with --skip: exit 2" {
+  run_fanout --status 1 --skip 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --skip"* ]]
+}
+
+@test "--status conflicts with --include: exit 2" {
+  run_fanout --status 1 --include 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --include"* ]]
+}
+
+@test "--status conflicts with --dry-run: exit 2" {
+  run_fanout --status 1 --dry-run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --dry-run"* ]]
+}
+
+@test "--status conflicts with --unblocked-only: exit 2" {
+  run_fanout --status 1 --unblocked-only
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --unblocked-only"* ]]
+}
+
+@test "--status conflicts with --name: exit 2" {
+  run_fanout --status 1 --name 4=foo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
