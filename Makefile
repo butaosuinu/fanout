@@ -90,7 +90,7 @@ check-bats:
 test: test-tier1 test-tier2
 
 test-tier1: check-bats
-	$(BATS) tests/bats/tier1_flags.bats
+	$(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
 
 test-tier2: check-bats
 	$(BATS) tests/bats/tier2_dry_run.bats

@@ -812,6 +812,37 @@ Requirements:
 - Open a pull request with "Closes #$num" in the body.
 - If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.
 EOF
+  if [[ "${agent:-}" == "claude" ]]; then
+    cat >>"$path" <<'EOF'
+
+Optional: Agent Teams (Claude Code v2.1.32+, requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)
+
+Before starting, decide whether this issue benefits from spawning an Agent Team.
+This is a hint, not a rule — if Agent Teams aren't enabled in your environment,
+or the issue doesn't fit the criteria below, just proceed as a single session.
+
+Consider Agent Teams when the issue involves:
+- Open-ended research or investigation that benefits from multiple angles
+  (RFC drafting, library evaluation, root-cause hunts with competing hypotheses).
+- New feature work that splits cleanly across independent layers
+  (e.g. backend handler + frontend integration + tests, each ownable separately).
+- Refactors where files partition naturally so teammates won't collide.
+- Reviewing a large diff where security / performance / coverage are distinct lenses.
+
+Skip Agent Teams (single session is better) when:
+- The change is sequential or mostly in one file.
+- Subtasks share state and would race on the same files.
+- The fix is small and focused (typo, single bug, config bump).
+
+If you decide to use Agent Teams:
+1. Sketch 3-5 self-contained subtasks with clear deliverables before spawning.
+2. Spawn teammates with task-specific prompts that include the issue scope they own.
+3. Coordinate via the shared task list; let teammates self-claim where possible.
+4. Synthesize findings yourself before opening the PR.
+5. Ask the lead to "Clean up the team" before closing the issue.
+   Token cost scales linearly with teammate count — favor 3 focused teammates over 5 scattered ones.
+EOF
+  fi
   printf '%s' "$path"
 }
 
