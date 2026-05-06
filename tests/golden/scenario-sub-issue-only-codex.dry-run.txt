@@ -7,21 +7,21 @@
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #101: First child
   briefing -> /tmp/fanout-project_root-101.md
-  briefing size: 2171 bytes
+  briefing size: 600 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
     # would intercept newPanePopup and write: {"success":true,"data":"[fanout #101] First child: read /tmp/fanout-project_root-101.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["codex"]}
 [ ok ] #101: dry-run complete
 [info] #102: Second child
   briefing -> /tmp/fanout-project_root-102.md
-  briefing size: 2172 bytes
+  briefing size: 601 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
     # would intercept newPanePopup and write: {"success":true,"data":"[fanout #102] Second child: read /tmp/fanout-project_root-102.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["codex"]}
 [ ok ] #102: dry-run complete
 
 [ ok ] created: 2
