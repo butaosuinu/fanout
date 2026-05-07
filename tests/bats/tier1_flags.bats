@@ -248,6 +248,20 @@ load helpers
   [[ "$output" == *"--status cannot be combined with --name"* ]]
 }
 
+@test "--status conflicts with --sleep even at default value: exit 2" {
+  # Wrappers that always pass `--sleep 4` (the default) must still trigger
+  # the exclusivity error. Detection is by flag presence, not value diff.
+  run_fanout --status 1 --sleep 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --sleep"* ]]
+}
+
+@test "--status conflicts with --popup-timeout even at default value: exit 2" {
+  run_fanout --status 1 --popup-timeout 20
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --popup-timeout"* ]]
+}
+
 @test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
   # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
   # let `--status` complete without tmux installed (CI / post-session

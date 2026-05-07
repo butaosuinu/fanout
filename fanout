@@ -407,6 +407,11 @@ include_arg=''
 session_arg=''
 sleep_between=$default_sleep_between
 popup_timeout=$default_popup_timeout
+# Track whether the user actually passed --sleep / --popup-timeout (vs.
+# the script's default). Value-comparison would silently accept
+# `fanout --status N --sleep 4`, missing the documented exclusivity error.
+sleep_explicit=0
+popup_timeout_explicit=0
 dry_run=0
 debug=0
 unblocked_only=0
@@ -422,8 +427,8 @@ while (( $# > 0 )); do
     --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
     --name)       parse_name_arg "${2:-}"; shift 2 || die "--name requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
-    --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
-    --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
+    --sleep)      sleep_between="${2:-}"; sleep_explicit=1; shift 2 || die "--sleep requires an argument" ;;
+    --popup-timeout) popup_timeout="${2:-}"; popup_timeout_explicit=1; shift 2 || die "--popup-timeout requires an argument" ;;
     --dry-run)    dry_run=1;          shift ;;
     --debug)      debug=1;            shift ;;
     --unblocked-only) unblocked_only=1; shift ;;
@@ -488,8 +493,8 @@ if (( status_mode )); then
   (( ${#name_nums[@]} )) && status_conflict "--name"
   (( dry_run ))          && status_conflict "--dry-run"
   (( unblocked_only ))   && status_conflict "--unblocked-only"
-  [[ "$sleep_between" != "$default_sleep_between" ]] && status_conflict "--sleep"
-  [[ "$popup_timeout" != "$default_popup_timeout" ]] && status_conflict "--popup-timeout"
+  (( sleep_explicit ))         && status_conflict "--sleep"
+  (( popup_timeout_explicit )) && status_conflict "--popup-timeout"
 fi
 
 only_set=' '
