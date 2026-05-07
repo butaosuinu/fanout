@@ -48,3 +48,14 @@ load helpers
   assert_success
   assert_status_golden scenario-status-multi-parent-300
 }
+
+# Leading-zero normalization: a pane tagged "of #0300" must match
+# `--status 300` (and `--status 0300`, since the CLI canonicalizes on
+# entry). Ensures wait-and-continue automation doesn't stall when ID
+# formats drift between the fanout-time prompt and the polling caller.
+@test "scenario-status-leading-zero: --status 300 matches both #300 and #0300 panes" {
+  use_fixture scenario-status-leading-zero
+  run_fanout_status 300
+  assert_success
+  assert_status_golden scenario-status-leading-zero-300
+}

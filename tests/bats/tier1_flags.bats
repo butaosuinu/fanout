@@ -328,3 +328,17 @@ load helpers
   [[ "$output" == *'"total": 0'* ]]
   [[ "$output" == *'"all_merged": false'* ]]
 }
+
+@test "--status normalizes leading zeros in parent argument" {
+  # Wrappers that pass IDs from external systems may forward "0300" instead
+  # of "300". Without canonicalization, the parent field in the emitted JSON
+  # would carry the leading zero, and pane-prompt filtering would match
+  # against that string (missing legacy panes tagged plainly "of #300").
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[]}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 0300
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"parent": 300'* ]]
+}

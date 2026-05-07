@@ -387,8 +387,12 @@ enumerate_fanned_children() {
       p="${row#*$'\t'}"
       [[ -z "$n" ]] && continue
       if [[ -n "$filter_parent" ]]; then
-        # Strict: the pane must announce its parent and it must match.
-        [[ "$p" == "$filter_parent" ]] || continue
+        # Strict: the pane must announce its parent. Compare numerically so
+        # an old pane tagged " of #0300" still matches `--status 300`. The
+        # 10# prefix forces base-10 to dodge bash's octal interpretation of
+        # leading-zero forms.
+        [[ -n "$p" ]] || continue
+        (( 10#$p == 10#$filter_parent )) || continue
       fi
       set+="$n "
     done <<<"$rows"
@@ -463,6 +467,12 @@ if ! [[ "$parent" =~ ^[0-9]+$ ]]; then
   fi
   die "parent issue must be an integer, got: $parent"
 fi
+# Canonicalize: "0300" → "300". Without this, the prompt prefix
+# `[fanout #N of #$parent]` and `--status` pane filtering both treat
+# numerically equivalent inputs as distinct parents and silently miss
+# their fanned children. Also defends any future `(( ))` site from
+# octal interpretation of leading-zero forms.
+parent="$((10#$parent))"
 if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
   die "--limit must be a positive integer, got: $limit"
 fi
