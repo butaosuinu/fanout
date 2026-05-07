@@ -262,6 +262,27 @@ load helpers
   [[ "$output" == *"--status cannot be combined with --popup-timeout"* ]]
 }
 
+@test "--status with bogus --sleep value: exclusivity wins (exit 2), not numeric die (exit 1)" {
+  # Callers branch on --status's dedicated exit codes (0/2/3). The
+  # exclusivity check must run before the `--sleep must be a number` die,
+  # otherwise an invalid combination leaks through as a main-flow exit 1.
+  run_fanout --status 1 --sleep nope
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --sleep"* ]]
+}
+
+@test "--status with bogus --popup-timeout value: exclusivity wins (exit 2)" {
+  run_fanout --status 1 --popup-timeout zero
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --popup-timeout"* ]]
+}
+
+@test "--status with bogus --limit value: exclusivity wins (exit 2)" {
+  run_fanout --status 1 --limit abc
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --limit"* ]]
+}
+
 @test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
   # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
   # let `--status` complete without tmux installed (CI / post-session

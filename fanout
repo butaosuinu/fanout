@@ -523,22 +523,13 @@ fi
 # their fanned children. Also defends any future `(( ))` site from
 # octal interpretation of leading-zero forms.
 parent="$((10#$parent))"
-if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
-  die "--limit must be a positive integer, got: $limit"
-fi
-if ! [[ "$sleep_between" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  die "--sleep must be a number, got: $sleep_between"
-fi
-if ! [[ "$popup_timeout" =~ ^[1-9][0-9]*$ ]]; then
-  die "--popup-timeout must be a positive integer (seconds), got: $popup_timeout"
-fi
-
-if [[ -n "$only_arg" && -n "$skip_arg" ]]; then
-  die "--only and --skip are mutually exclusive"
-fi
 
 # --status rejects every action-bearing flag (--debug is observability-only,
-# allowed; -h exits 0 before this guard).
+# allowed; -h exits 0 before this guard). Run BEFORE the numeric value
+# validators below so `fanout --status N --sleep nope` reports the
+# combination error (exit 2) instead of falling through to die'ing on the
+# bad numeric (exit 1) — callers branch on the dedicated --status exit
+# codes and shouldn't need to catch the main-flow ones.
 status_conflict() {
   log_err "--status cannot be combined with $1"
   exit 2
@@ -555,6 +546,20 @@ if (( status_mode )); then
   (( unblocked_only ))   && status_conflict "--unblocked-only"
   (( sleep_explicit ))         && status_conflict "--sleep"
   (( popup_timeout_explicit )) && status_conflict "--popup-timeout"
+fi
+
+if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
+  die "--limit must be a positive integer, got: $limit"
+fi
+if ! [[ "$sleep_between" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  die "--sleep must be a number, got: $sleep_between"
+fi
+if ! [[ "$popup_timeout" =~ ^[1-9][0-9]*$ ]]; then
+  die "--popup-timeout must be a positive integer (seconds), got: $popup_timeout"
+fi
+
+if [[ -n "$only_arg" && -n "$skip_arg" ]]; then
+  die "--only and --skip are mutually exclusive"
 fi
 
 only_set=' '
