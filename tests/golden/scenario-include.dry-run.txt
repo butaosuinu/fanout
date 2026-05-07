@@ -12,7 +12,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #401] Included child A: parent #400. read /tmp/fanout-project_root-401.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #401] Included child A: [fanout-parent #400]. read /tmp/fanout-project_root-401.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #401: dry-run complete
 [info] #402: Included child B
@@ -21,7 +21,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #402] Included child B: parent #400. read /tmp/fanout-project_root-402.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #402] Included child B: [fanout-parent #400]. read /tmp/fanout-project_root-402.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #402: dry-run complete
 

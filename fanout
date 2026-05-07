@@ -28,7 +28,7 @@ Options:
   --status            Print read-only JSON status for children already fanned
                       out from <parent-issue>. Children are discovered from
                       dmux.config.json panes whose prompt starts with
-                      "[fanout #<NUM>]" and carries "parent #<parent-issue>";
+                      "[fanout #<NUM>]" and carries "[fanout-parent #<parent-issue>]";
                       each child is checked with
                       `gh issue view --json state,closedByPullRequestsReferences`.
                       No panes are created. May only be combined with
@@ -304,16 +304,17 @@ enumerate_fanned_children() {
 
 enumerate_fanned_children_for_parent() {
   # $1 dmux.config.json path, $2 parent issue number. Echoes unique child
-  # issue numbers whose fanout prompt carries the matching "parent #<NUM>"
-  # marker. Unmarked legacy prompts are intentionally ignored here because
-  # they cannot be safely scoped when multiple parent fanouts share a session.
+  # issue numbers whose fanout prompt carries the matching
+  # "[fanout-parent #<NUM>]" marker immediately before the briefing pointer.
+  # Unmarked legacy prompts are intentionally ignored here because they cannot
+  # be safely scoped when multiple parent fanouts share a session.
   local path="$1" parent_num="$2"
   jq -r --arg parent "$parent_num" '
     [
       (.panes // [])[]?
       | (.prompt // "") as $prompt
       | ($prompt | try capture("^\\[fanout #(?<n>[0-9]+)\\]") catch null) as $child
-      | ($prompt | try capture("parent #(?<p>[0-9]+)") catch null) as $parent_match
+      | ($prompt | try capture(".*\\[fanout-parent #(?<p>[0-9]+)\\]\\. read ") catch null) as $parent_match
       | select($child != null and $parent_match != null and $parent_match.p == $parent)
       | $child.n
       | tonumber
@@ -1123,10 +1124,10 @@ create_pane_for_issue() {
   # for this prompt") echoes our kebab-case hint back as the actual slug.
   # The [fanout #N] idempotency prefix stays untouched either way.
   if [[ -n "$slug_hint" ]]; then
-    printf -v one_line_prompt '%s%s] %s: %s. parent #%s. read %s and begin.' \
+    printf -v one_line_prompt '%s%s] %s: %s. [fanout-parent #%s]. read %s and begin.' \
       "$FANOUT_TAG_PREFIX" "$num" "$slug_hint" "$short_title" "$parent" "$briefing"
   else
-    printf -v one_line_prompt '%s%s] %s: parent #%s. read %s and begin.' \
+    printf -v one_line_prompt '%s%s] %s: [fanout-parent #%s]. read %s and begin.' \
       "$FANOUT_TAG_PREFIX" "$num" "$short_title" "$parent" "$briefing"
   fi
 

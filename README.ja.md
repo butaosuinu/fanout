@@ -268,7 +268,7 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
      （インラインモーダルではなく `tmux display-popup` の子プロセス）を起動させる。
    - `pgrep -f 'newPanePopup.js'` でポップアップ node プロセスを特定し、
      `ps -o args=` から `<tmpdir>/dmux-popup-*.json` の resultFile パスを抽出、
-     `{"success":true,"data":"[fanout #<NUM>] <TITLE>: parent #<PARENT>. read /tmp/fanout-<repo>-<NUM>.md and begin."}`
+     `{"success":true,"data":"[fanout #<NUM>] <TITLE>: [fanout-parent #<PARENT>]. read /tmp/fanout-<repo>-<NUM>.md and begin."}`
      を atomic に書き込み、dmux が横取りした答えを読むようにポップアップを kill する。
    - 続けて dmux が起動するエージェント選択ポップアップについても同様に横取りし、
      `{"success":true,"data":["<agent>"]}` を書き込む。`--agent` 指定、もしくは
@@ -279,7 +279,7 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
 
 `fanout --status <parent>` は、これとは別の読み取り専用パスです。Sub-issues API
 は呼ばず、ペインも作りません。`dmux.config.json` から `[fanout #<NUM>]`
-プロンプト prefix と `parent #<parent>` marker の両方が一致するペインを拾い、各子について
+プロンプト prefix と `[fanout-parent #<parent>]` marker の両方が一致するペインを拾い、各子について
 `gh issue view <NUM> --json state,closedByPullRequestsReferences` を実行して
 JSON を出力します:
 

@@ -15,6 +15,14 @@ load helpers
   assert_json_golden scenario-status-all-merged
 }
 
+@test "scenario-status-all-merged: title parent reference is not treated as marker" {
+  use_fixture scenario-status-all-merged
+  run_fanout_status 42
+  assert_success
+  [ "$(printf '%s\n' "$output" | jq -r '.summary.total')" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | jq -r '.summary.all_merged')" = "false" ]
+}
+
 @test "scenario-status-partial: open PR keeps all_merged false" {
   use_fixture scenario-status-partial
   run_fanout_status 910

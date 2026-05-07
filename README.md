@@ -288,7 +288,7 @@ for details.
      new-pane popup (a `tmux display-popup` child, not an inline modal).
    - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
      reads its `<tmpdir>/dmux-popup-*.json` resultFile path from `ps -o args=`,
-     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: parent #<PARENT>. read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
+     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: [fanout-parent #<PARENT>]. read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
      and kills the popup process so dmux reads the injected answer.
    - Repeats the intercept for the agent-choice popup that dmux launches
      next (writes `{"success":true,"data":["<agent>"]}`), using the agent
@@ -300,7 +300,7 @@ for details.
 `fanout --status <parent>` is a separate read-only path. It does not call the
 Sub-issues API and does not create panes. It scans `dmux.config.json` for
 prompts that have both the `[fanout #<NUM>]` prefix and a matching
-`parent #<parent>` marker, runs
+`[fanout-parent #<parent>]` marker, runs
 `gh issue view <NUM> --json state,closedByPullRequestsReferences` for each
 child, and prints JSON:
 

@@ -12,7 +12,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #301] API child: parent #300. read /tmp/fanout-project_root-301.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #301] API child: [fanout-parent #300]. read /tmp/fanout-project_root-301.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #301: dry-run complete
 [info] #302: Body-only
@@ -21,7 +21,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #302] Body-only: parent #300. read /tmp/fanout-project_root-302.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #302] Body-only: [fanout-parent #300]. read /tmp/fanout-project_root-302.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #302: dry-run complete
 

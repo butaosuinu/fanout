@@ -12,7 +12,7 @@
   current panes[] length: 1
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #802] New target: parent #800. read /tmp/fanout-project_root-802.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #802] New target: [fanout-parent #800]. read /tmp/fanout-project_root-802.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #802: dry-run complete
 
