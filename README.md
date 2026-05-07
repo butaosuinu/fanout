@@ -142,8 +142,10 @@ and prints one JSON document on stdout. In a session that has fanned
 multiple parents, children of other parents are filtered out so
 `summary.all_merged` reflects only the requested parent. Old-format panes
 that predate this feature (`[fanout #N]` without parent annotation) are
-excluded for the same reason — re-fan them to surface them in `--status`.
-Set `DMUX_CONFIG_PATH` to point directly at a `dmux.config.json` when the
+excluded; the next non-status `fanout <parent>` run rewrites those panes'
+prompts in place to add the parent annotation, so a subsequent `--status`
+picks them up automatically (no need to delete and re-fan). Set
+`DMUX_CONFIG_PATH` to point directly at a `dmux.config.json` when the
 dmux session has already exited.
 
 ```json
@@ -443,9 +445,10 @@ a repo directory). Not a fanout bug.
   parent annotation also lets `fanout --status <parent>` filter to one
   parent's children in a session that has fanned multiple parents. Older
   panes carry the legacy `[fanout #NUM]` form (no parent annotation) and
-  still satisfy idempotency, but `--status` excludes them — re-fan to
-  surface them. Delete the pane (and its worktree) via the dmux TUI if you
-  want fanout to recreate it.
+  still satisfy idempotency; the next non-status `fanout <parent>` run
+  auto-rewrites those prompts in place to add the parent annotation so
+  `--status` picks them up. Delete the pane (and its worktree) via the
+  dmux TUI if you want fanout to recreate it from scratch.
 - **IPC paths in play.** Discovery uses tmux session options
   (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
   `@dmux_project_root`). Pane-creation is driven by writing to dmux's

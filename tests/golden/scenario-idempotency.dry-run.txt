@@ -4,6 +4,7 @@
 [info] config:       <REPO>/tests/fixtures/scenario-idempotency/dmux.config.json
 [info] fetching sub-issues of #800
 [info] sub-issues: 2 total, 2 OPEN
+[info] would migrate 1 legacy [fanout #N] pane tag(s) to include parent #800
 [info] already fanned-out (skipping): #801
 [info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #802: New target

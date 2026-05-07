@@ -67,7 +67,11 @@ load helpers
   assert_golden scenario-limit
 }
 
-@test "scenario-idempotency: existing [fanout #N] pane causes N to be skipped" {
+@test "scenario-idempotency: existing [fanout #N] pane causes N to be skipped and migration is announced" {
+  # The fixture's pane uses the legacy `[fanout #N]` form (no parent
+  # annotation), which exercises both invariants in one run: idempotency
+  # still treats #801 as already-fanned, AND the new legacy-tag migration
+  # path emits its "would migrate ..." line under --dry-run.
   use_fixture scenario-idempotency
   run_fanout_dry 800
   assert_success

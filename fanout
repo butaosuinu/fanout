@@ -105,12 +105,14 @@ Options:
                       `gh issue view` for each. Children of other parents in
                       the same session are filtered out. Old-format panes
                       ("[fanout #N]" without parent annotation, predating
-                      this feature) are excluded — re-fan them to surface
-                      them in `--status`. No side effects. Set
-                      DMUX_CONFIG_PATH to bypass live-dmux-session discovery
-                      (useful after the session has exited). Exclusive with
-                      all action-bearing flags. JSON shape and dedicated
-                      exit codes documented below.
+                      this feature) are excluded; the next non-status
+                      `fanout <parent>` run rewrites their prompts in place
+                      to include the parent annotation, so a subsequent
+                      --status picks them up automatically. No side
+                      effects. Set DMUX_CONFIG_PATH to bypass
+                      live-dmux-session discovery (useful after the session
+                      has exited). Exclusive with all action-bearing flags.
+                      JSON shape and dedicated exit codes documented below.
   -h, --help          Show this message.
 
 Prerequisites:
@@ -353,6 +355,54 @@ parse_blockers_from_parent_row() {
     | [scan("#([0-9]+)") | .[0]]
     | join(" ")
   '
+}
+
+migrate_legacy_pane_tags() {
+  # Pre-#35 fanouts wrote `[fanout #N]` prompts without a parent annotation,
+  # which `--status <parent>` filters out (it can't tell which parent owns
+  # them). The doc tells users to re-fan to surface them, but idempotency
+  # would otherwise treat the legacy pane as already-fanned and skip it,
+  # leaving the legacy prefix in place forever. Rewrite legacy prompts to
+  # `[fanout #N of #PARENT]` for any N in this run's children set so a
+  # subsequent --status picks them up.
+  #
+  # $1 config_path  $2 parent (canonicalized)  $3 children_csv (",N1,N2,N3,")
+  # Honors $dry_run by logging the would-be count without writing.
+  local config_path="$1" parent="$2" children_csv="$3"
+  local migrated_count
+  migrated_count=$(jq -r --arg children "$children_csv" '
+    [(.panes // [])[]
+     | select((.prompt // "") | test("^\\[fanout #[0-9]+\\]"))
+     | ((.prompt // "") | capture("^\\[fanout #(?<n>[0-9]+)\\]")) as $m
+     | select(",\($m.n)," | inside($children))
+    ] | length
+  ' "$config_path" 2>/dev/null) || migrated_count=0
+  [[ "$migrated_count" =~ ^[0-9]+$ ]] || migrated_count=0
+  (( migrated_count == 0 )) && return 0
+
+  if (( dry_run )); then
+    log_info "would migrate $migrated_count legacy [fanout #N] pane tag(s) to include parent #$parent"
+    return 0
+  fi
+
+  local tmp="${config_path}.fanout-migrate.tmp"
+  if jq --arg parent "$parent" --arg children "$children_csv" '
+    .panes = ((.panes // []) | map(
+      if (.prompt // "") | test("^\\[fanout #[0-9]+\\]") then
+        ((.prompt // "") | capture("^\\[fanout #(?<n>[0-9]+)\\](?<rest>.*)")) as $m
+        | if ",\($m.n)," | inside($children)
+          then .prompt = "[fanout #\($m.n) of #\($parent)]\($m.rest)"
+          else .
+          end
+      else . end
+    ))
+  ' "$config_path" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$config_path"
+    log_info "migrated $migrated_count legacy [fanout #N] pane tag(s) to include parent #$parent"
+  else
+    rm -f "$tmp"
+    log_warn "could not migrate legacy pane tags in $config_path; --status may miss legacy panes"
+  fi
 }
 
 enumerate_fanned_children() {
@@ -951,6 +1001,14 @@ if (( unblocked_only )); then
     open_children_json=$(printf '%s\n' "${hydrated_rows[@]}" | jq -s -c '.')
   fi
 fi
+
+# --- migrate legacy pane tags ------------------------------------------------
+# Pre-#35 panes carry `[fanout #N]` (no parent annotation). Rewrite any whose
+# child number is in this parent's discovered set so a subsequent
+# `fanout --status <parent>` picks them up. Runs before idempotency so
+# fanned_set is built from the migrated content.
+children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
+migrate_legacy_pane_tags "$config_path" "$parent" "$children_csv"
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
