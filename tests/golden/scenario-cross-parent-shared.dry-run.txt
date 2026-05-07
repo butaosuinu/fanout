@@ -1,0 +1,27 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-cross-parent-shared/dmux.config.json
+[info] fetching sub-issues of #200
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #501: Shared child
+  briefing -> /tmp/fanout-project_root-501.md
+  briefing size: 2175 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #501 of #200] Shared child: read /tmp/fanout-project_root-501.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #501: dry-run complete
+[info] #502: B-only child
+  briefing -> /tmp/fanout-project_root-502.md
+  briefing size: 2169 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #502 of #200] B-only child: read /tmp/fanout-project_root-502.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #502: dry-run complete
+
+[ ok ] created: 2

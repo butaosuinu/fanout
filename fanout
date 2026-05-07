@@ -406,12 +406,21 @@ migrate_legacy_pane_tags() {
 }
 
 enumerate_fanned_children() {
-  # $1 dmux config_path. $2 (optional) parent issue number — if given, only
-  # children whose pane prompt has a matching " of #<parent>" annotation are
-  # included; old-format panes (no parent annotation) are excluded. With no
-  # $2, every fanned-out child is included regardless of parent — that's
-  # what the main flow's idempotency check wants ("skip any number already
-  # in panes, no matter which parent it came from").
+  # $1 dmux config_path.
+  # $2 (optional) parent issue number — when given, restricts results to
+  #    panes annotated for that parent. Numeric comparison via `10#` so a
+  #    legacy pane tagged " of #0300" still matches `--status 300`.
+  # $3 (optional) "strict"|"lenient" (default "strict"):
+  #    strict  — pane must announce a matching parent. Used by `--status`
+  #              where ambiguous legacy panes are unsafe to attribute.
+  #    lenient — also include panes with NO parent annotation (legacy
+  #              `[fanout #N]` form). Used by the main flow's idempotency
+  #              check: any legacy pane whose number is in the current
+  #              parent's children set will be migrated to that parent
+  #              before pane creation, so treating it as already-fanned
+  #              matches the post-migration state (and keeps `--dry-run`'s
+  #              skip set stable, since dry-run skips the migration write).
+  # With no $2, every fanned-out child is returned regardless of parent.
   #
   # Echoes a space-sentinel-wrapped set (e.g. " 42 43 ") so " 42 " membership
   # tests work without false positives on "142".
@@ -421,6 +430,7 @@ enumerate_fanned_children() {
   #   [fanout #N of #P]      — current format, parent encoded
   local config_path="$1"
   local filter_parent="${2:-}"
+  local mode="${3:-strict}"
   local rows row n p set=' '
   rows=$(jq -r '
     (.panes // [])
@@ -437,12 +447,12 @@ enumerate_fanned_children() {
       p="${row#*$'\t'}"
       [[ -z "$n" ]] && continue
       if [[ -n "$filter_parent" ]]; then
-        # Strict: the pane must announce its parent. Compare numerically so
-        # an old pane tagged " of #0300" still matches `--status 300`. The
-        # 10# prefix forces base-10 to dodge bash's octal interpretation of
-        # leading-zero forms.
-        [[ -n "$p" ]] || continue
-        (( 10#$p == 10#$filter_parent )) || continue
+        if [[ -z "$p" ]]; then
+          # Legacy pane (no parent annotation).
+          [[ "$mode" == "lenient" ]] || continue
+        else
+          (( 10#$p == 10#$filter_parent )) || continue
+        fi
       fi
       set+="$n "
     done <<<"$rows"
@@ -1017,10 +1027,15 @@ migrate_legacy_pane_tags "$config_path" "$parent" "$children_csv"
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
+# Scope idempotency to THIS parent's children: a pane tagged for a different
+# parent should not block fan-out under the current one (parents can share
+# child refs via task-list scan or --include). Lenient mode also catches
+# legacy `[fanout #N]` panes — they're guaranteed to be migrated to this
+# parent immediately above (or, in --dry-run, would be), so treating them
+# as already-fanned matches the post-migration state.
 # Space-delimited and sentinel-wrapped so " 42 " membership tests work without
-# false positives on "142". Extraction lives in enumerate_fanned_children() so
-# `--status` can reuse the exact same regex / shape.
-fanned_set=$(enumerate_fanned_children "$config_path")
+# false positives on "142".
+fanned_set=$(enumerate_fanned_children "$config_path" "$parent" lenient)
 
 # --- split into targets / skipped -------------------------------------------
 

@@ -67,6 +67,19 @@ load helpers
   assert_golden scenario-limit
 }
 
+@test "scenario-cross-parent-shared: pane fanned for #100 does not block fanout 200 for the shared child" {
+  # Parents #100 and #200 share child #501. The fixture's only pane is
+  # `[fanout #501 of #100]`. Idempotency must scope to the requested
+  # parent: when running `fanout 200`, both #501 (shared) and #502 (B-only)
+  # appear as targets and would each get their own `of #200` pane. Without
+  # parent-scoped idempotency, #501 would be silently skipped and a later
+  # `fanout --status 200` would lie about all_merged.
+  use_fixture scenario-cross-parent-shared
+  run_fanout_dry 200
+  assert_success
+  assert_golden scenario-cross-parent-shared
+}
+
 @test "scenario-idempotency: existing [fanout #N] pane causes N to be skipped and migration is announced" {
   # The fixture's pane uses the legacy `[fanout #N]` form (no parent
   # annotation), which exercises both invariants in one run: idempotency
