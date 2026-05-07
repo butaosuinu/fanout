@@ -302,7 +302,8 @@ Sub-issues API and does not create panes. It scans `dmux.config.json` for
 prompts that have both the `[fanout #<NUM>]` prefix and a matching
 `[fanout-parent #<parent>]` marker, runs
 `gh issue view <NUM> --json state,closedByPullRequestsReferences` for each
-child, and prints JSON:
+child, then hydrates each referenced PR with
+`gh pr view <PR> --json number,state,mergedAt`, and prints JSON:
 
 Unmarked legacy prompts are ignored by `--status` because they cannot be
 safely scoped when one dmux session contains fanouts from multiple parents.

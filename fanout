@@ -29,8 +29,8 @@ Options:
                       out from <parent-issue>. Children are discovered from
                       dmux.config.json panes whose prompt starts with
                       "[fanout #<NUM>]" and carries "[fanout-parent #<parent-issue>]";
-                      each child is checked with
-                      `gh issue view --json state,closedByPullRequestsReferences`.
+                      each child is checked with `gh issue view`; linked PR
+                      merge state is hydrated with `gh pr view`.
                       No panes are created. May only be combined with
                       --session.
   --agent <name>      Agent to launch (claude|codex|opencode|...). Required
@@ -336,9 +336,10 @@ enumerate_fanned_children_for_parent() {
 
 run_status() {
   local nums=()
-  local n detail child_json
+  local n detail child_json child_state refs_text ref pr_ref pr_detail pr_json prs_json
   local status_rows=()
   local nums_text
+  local -a pr_rows
 
   if ! (cd "$project_root" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
     log_err "project root $project_root is not a git work tree; cannot resolve GitHub repo"
@@ -364,21 +365,53 @@ run_status() {
       log_err "gh issue view failed for #$n"
       exit 3
     fi
-    if ! child_json=$(jq -c --argjson num "$n" '
-      {
-        num: $num,
-        state: ((.state // "UNKNOWN") | ascii_upcase),
-        prs: [
-          (.closedByPullRequestsReferences // [])[]?
-          | {
-              number,
-              state: ((.state // "UNKNOWN") | ascii_upcase),
-              mergedAt: (.mergedAt // null)
-            }
-        ]
-      }
-    ' <<<"$detail"); then
+    if ! child_state=$(jq -r '(.state // "UNKNOWN") | ascii_upcase' <<<"$detail"); then
       log_err "gh issue view returned invalid JSON for #$n"
+      exit 3
+    fi
+    if ! refs_text=$(jq -c '(.closedByPullRequestsReferences // [])[]? | {number, url}' <<<"$detail"); then
+      log_err "gh issue view returned invalid PR references for #$n"
+      exit 3
+    fi
+
+    pr_rows=()
+    while IFS= read -r ref; do
+      [[ -n "$ref" ]] || continue
+      if ! pr_ref=$(jq -r 'if (.url // "") != "" then .url elif (.number // null) != null then (.number | tostring) else empty end' <<<"$ref"); then
+        log_err "gh issue view returned invalid PR reference for #$n"
+        exit 3
+      fi
+      if [[ -z "$pr_ref" ]]; then
+        log_err "gh issue view returned PR reference without url/number for #$n"
+        exit 3
+      fi
+      if ! pr_detail=$(gh_in_root pr view "$pr_ref" --json number,state,mergedAt 2>/dev/null); then
+        log_err "gh pr view failed for #$n PR $pr_ref"
+        exit 3
+      fi
+      if ! pr_json=$(jq -c '
+        {
+          number,
+          state: ((.state // "UNKNOWN") | ascii_upcase),
+          mergedAt: (.mergedAt // null)
+        }
+      ' <<<"$pr_detail"); then
+        log_err "gh pr view returned invalid JSON for #$n PR $pr_ref"
+        exit 3
+      fi
+      pr_rows+=("$pr_json")
+    done <<<"$refs_text"
+
+    if (( ${#pr_rows[@]} == 0 )); then
+      prs_json='[]'
+    elif ! prs_json=$(printf '%s\n' "${pr_rows[@]}" | jq -s -c '.'); then
+      log_err "could not build PR status JSON for #$n"
+      exit 3
+    fi
+
+    if ! child_json=$(jq -cn --argjson num "$n" --arg state "$child_state" --argjson prs "$prs_json" \
+      '{num:$num, state:$state, prs:$prs}'); then
+      log_err "could not build status JSON for #$n"
       exit 3
     fi
     status_rows+=("$child_json")

@@ -280,7 +280,8 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
 `fanout --status <parent>` は、これとは別の読み取り専用パスです。Sub-issues API
 は呼ばず、ペインも作りません。`dmux.config.json` から `[fanout #<NUM>]`
 プロンプト prefix と `[fanout-parent #<parent>]` marker の両方が一致するペインを拾い、各子について
-`gh issue view <NUM> --json state,closedByPullRequestsReferences` を実行して
+`gh issue view <NUM> --json state,closedByPullRequestsReferences` を実行し、
+参照された各 PR を `gh pr view <PR> --json number,state,mergedAt` で hydrate して
 JSON を出力します:
 
 marker のない古いプロンプトは、同じ dmux セッション内に複数親の fanout が混在する

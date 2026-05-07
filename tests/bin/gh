@@ -18,6 +18,11 @@
 #         fanout uses -q .state and -q .body against the same endpoint,
 #         so fixtures are full issue objects (number/title/state/body/labels).
 #
+#   gh pr view <N-or-url> --json number,state,mergedAt
+#       — echoes $FIXTURE_DIR/gh-pr-view-<N>.json verbatim. URL arguments are
+#         reduced to the trailing PR number so fixtures can use realistic
+#         closedByPullRequestsReferences[].url values.
+#
 # Tier 1 "force_missing gh" still wins because helpers.bash rebuilds PATH
 # to a sanitized directory that excludes this shim.
 
@@ -63,6 +68,37 @@ case "${1:-}" in
         exit 1
       fi
       fx="$fixture/gh-issue-view-$num.json"
+      if [[ ! -f "$fx" ]]; then
+        echo "gh shim: missing $fx" >&2
+        exit 1
+      fi
+      if [[ -n "$jq_filter" ]]; then
+        jq -r "$jq_filter" "$fx"
+      else
+        cat "$fx"
+      fi
+      exit 0
+    fi
+    ;;
+  pr)
+    if [[ "${2:-}" == "view" ]]; then
+      ref="${3:-}"
+      pr_num="${ref%/}"
+      pr_num="${pr_num##*/}"
+      shift 3 2>/dev/null || true
+      jq_filter=""
+      while (( $# )); do
+        case "$1" in
+          --json) shift 2;;
+          -q|--jq) jq_filter="$2"; shift 2;;
+          *) shift;;
+        esac
+      done
+      if [[ -z "$fixture" ]]; then
+        echo "gh shim: FIXTURE_DIR not set (gh pr view $ref)" >&2
+        exit 1
+      fi
+      fx="$fixture/gh-pr-view-$pr_num.json"
       if [[ ! -f "$fx" ]]; then
         echo "gh shim: missing $fx" >&2
         exit 1
