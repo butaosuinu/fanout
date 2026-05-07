@@ -8,7 +8,7 @@
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #401: Included child A
   briefing -> /tmp/fanout-project_root-401.md
-  briefing size: 602 bytes
+  briefing size: 2173 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -17,7 +17,7 @@
 [ ok ] #401: dry-run complete
 [info] #402: Included child B
   briefing -> /tmp/fanout-project_root-402.md
-  briefing size: 602 bytes
+  briefing size: 2173 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
