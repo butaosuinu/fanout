@@ -161,6 +161,16 @@ dmux_die() {
   exit 1
 }
 
+normalize_issue_num() {
+  # Strip leading zeroes without invoking arithmetic expansion, which treats
+  # bare leading-zero values as octal on older Bash versions.
+  local n="$1"
+  while [[ "$n" == 0* && "$n" != "0" ]]; do
+    n="${n#0}"
+  done
+  printf '%s' "$n"
+}
+
 parse_num_csv() {
   # $1 flag name (for error messages), $2 csv string.
   # Echoes a space-sentinel-wrapped set (" 4 7 8 ") suitable for the
@@ -315,7 +325,7 @@ enumerate_fanned_children_for_parent() {
       | (.prompt // "") as $prompt
       | ($prompt | try capture("^\\[fanout #(?<n>[0-9]+)\\]") catch null) as $child
       | ($prompt | try capture(".*\\[fanout-parent #(?<p>[0-9]+)\\]\\. read ") catch null) as $parent_match
-      | select($child != null and $parent_match != null and $parent_match.p == $parent)
+      | select($child != null and $parent_match != null and ($parent_match.p | tonumber) == ($parent | tonumber))
       | $child.n
       | tonumber
     ]
@@ -493,6 +503,7 @@ fi
 if ! [[ "$parent" =~ ^[0-9]+$ ]]; then
   die "parent issue must be an integer, got: $parent"
 fi
+parent=$(normalize_issue_num "$parent")
 if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
   die "--limit must be a positive integer, got: $limit"
 fi

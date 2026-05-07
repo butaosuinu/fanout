@@ -1,0 +1,18 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-leading-zero-parent/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-leading-zero-parent/dmux.config.json
+[info] fetching sub-issues of #7
+[info] sub-issues: 1 total, 1 OPEN
+[info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #8: Normalize parent marker
+  briefing -> /tmp/fanout-project_root-8.md
+  briefing size: 603 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #8] Normalize parent marker: [fanout-parent #7]. read /tmp/fanout-project_root-8.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #8: dry-run complete
+
+[ ok ] created: 1

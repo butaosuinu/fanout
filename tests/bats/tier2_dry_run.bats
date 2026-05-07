@@ -73,3 +73,10 @@ load helpers
   assert_success
   assert_golden scenario-idempotency
 }
+
+@test "scenario-leading-zero-parent: prompt marker uses normalized parent number" {
+  use_fixture scenario-leading-zero-parent
+  run_fanout_dry 007
+  assert_success
+  assert_golden scenario-leading-zero-parent
+}

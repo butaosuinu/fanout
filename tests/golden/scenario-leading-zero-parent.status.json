@@ -1,0 +1,22 @@
+{
+  "children": [
+    {
+      "num": 71,
+      "prs": [
+        {
+          "mergedAt": "2026-05-06T09:00:00Z",
+          "number": 1071,
+          "state": "MERGED"
+        }
+      ],
+      "state": "CLOSED"
+    }
+  ],
+  "parent": 7,
+  "summary": {
+    "all_merged": true,
+    "merged": 1,
+    "pending": 0,
+    "total": 1
+  }
+}

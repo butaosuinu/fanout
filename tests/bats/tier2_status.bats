@@ -30,6 +30,13 @@ load helpers
   assert_json_golden scenario-status-partial
 }
 
+@test "scenario-leading-zero-parent: status matches leading-zero marker numerically" {
+  use_fixture scenario-leading-zero-parent
+  run_fanout_status 7
+  assert_success
+  assert_json_golden scenario-leading-zero-parent
+}
+
 @test "scenario-status-no-pr: child without PR is pending" {
   use_fixture scenario-status-no-pr
   run_fanout_status 920
