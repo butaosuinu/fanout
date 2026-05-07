@@ -272,3 +272,45 @@ load helpers
   [[ "$output" == *"missing dependencies"* ]]
   [[ "$output" == *"tmux"* ]]
 }
+
+@test "--status with malformed JSON config: exit 2" {
+  # Contract: an unparseable dmux.config.json must surface as exit 2 with a
+  # clear message. Without this, jq's raw exit code (5) or a silent
+  # "total: 0" misreport would slip through and break wait-and-continue
+  # automation that polls --status.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes": [bogus]\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: dmux config at"* ]]
+  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+}
+
+@test "--status with non-array .panes: exit 2" {
+  # JSON is valid but the schema is wrong (.panes is a string, not an array).
+  # Catch this up-front so enumerate_fanned_children's lenient mode can't turn
+  # it into a silent "no fanned children" report.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":"oops"}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: dmux config at"* ]]
+  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+}
+
+@test "--status with valid JSON missing .panes field: exit 0 with empty children" {
+  # `.panes` may be absent on a freshly-initialized config; that's a valid
+  # state, not an error. Treat as zero fanned children.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"total": 0'* ]]
+  [[ "$output" == *'"all_merged": false'* ]]
+}

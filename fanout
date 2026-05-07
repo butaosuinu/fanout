@@ -556,6 +556,21 @@ session_is_dmux() {
   pid_alive "$pid"
 }
 
+validate_status_config() {
+  # $1 path to a dmux config file. Exits 2 with a descriptive message if the
+  # file isn't valid JSON or `.panes` exists with a non-array type. Combines
+  # both checks into one jq invocation: a parse failure makes jq exit non-zero
+  # before the filter runs, and a non-array `.panes` makes the filter return
+  # false (jq -e exits 1). Either case maps to the documented `--status`
+  # exit-code 2 ("cannot enumerate"), instead of leaking jq's raw codes or
+  # silently misreporting `total: 0`.
+  local config_path="$1"
+  if ! jq -e '(.panes // []) | type == "array"' "$config_path" >/dev/null 2>&1; then
+    log_err "--status: dmux config at $config_path is not valid JSON or .panes is not an array"
+    exit 2
+  fi
+}
+
 cmd_status() {
   # Read-only status reporter for already-fanned children. Writes one JSON
   # document to stdout. Exit codes documented in usage().
@@ -572,7 +587,8 @@ cmd_status() {
       log_err "--status: \$DMUX_CONFIG_PATH points to non-existent file: $config_path"
       exit 2
     fi
-    project_root=$(jq -r '.projectRoot // .project_root // empty' "$config_path" 2>/dev/null)
+    validate_status_config "$config_path"
+    project_root=$(jq -r '.projectRoot // .project_root // empty' "$config_path")
     [[ -n "$project_root" ]] || project_root=$(dirname "$(dirname "$config_path")")
   else
     if ! tmux list-sessions -F '#{session_name}' >/dev/null 2>&1; then
@@ -618,6 +634,7 @@ cmd_status() {
       log_err "--status: dmux config not found at ${config_path:-<unset>}"
       exit 2
     fi
+    validate_status_config "$config_path"
     if [[ -z "$project_root" ]]; then
       log_err "--status: session '$session' has no @dmux_project_root option"
       exit 2
