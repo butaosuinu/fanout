@@ -115,6 +115,8 @@ Options:
 
 Prerequisites:
   * gh, gh-sub-issue extension, jq, tmux, pgrep installed.
+    For `--status` the live-dmux-session deps shrink to {gh, jq, tmux};
+    setting DMUX_CONFIG_PATH lets it run with just {gh, jq} (no tmux).
   * `cd <repo> && dmux` has been run; tmux session is alive.
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
@@ -506,7 +508,14 @@ need_cmd() {
 missing_deps=()
 need_cmd gh    || missing_deps+=('gh (brew install gh)')
 need_cmd jq    || missing_deps+=('jq (brew install jq)')
-need_cmd tmux  || missing_deps+=('tmux (brew install tmux)')
+
+# tmux is needed for every code path that talks to a live dmux session, but
+# `--status` with $DMUX_CONFIG_PATH reads the config file directly and never
+# invokes tmux — let CI / offline runs report status without tmux installed.
+if (( !status_mode )) || [[ -z "${DMUX_CONFIG_PATH:-}" ]]; then
+  need_cmd tmux || missing_deps+=('tmux (brew install tmux)')
+fi
+
 # --status doesn't drive the popup intercept and doesn't fetch sub-issues, so
 # pgrep + gh-sub-issue are not required for it.
 if (( !status_mode )); then

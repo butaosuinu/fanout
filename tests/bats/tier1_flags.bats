@@ -247,3 +247,28 @@ load helpers
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --name"* ]]
 }
+
+@test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
+  # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
+  # let `--status` complete without tmux installed (CI / post-session
+  # introspection). With no fanned children, cmd_status emits a zero summary
+  # before reaching any gh call.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[]}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"all_merged": false'* ]]
+  [[ "$output" == *'"total": 0'* ]]
+}
+
+@test "--status without DMUX_CONFIG_PATH still requires tmux: exit 1" {
+  # Regression guard: the offline-mode escape hatch above must not
+  # accidentally mask the missing-tmux error for the live-discovery path.
+  force_missing tmux
+  run_fanout --status 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing dependencies"* ]]
+  [[ "$output" == *"tmux"* ]]
+}

@@ -41,6 +41,11 @@ setup() {
   # tests — unset here and let each Tier 2 test opt in via use_fixture.
   unset FIXTURE_DIR
 
+  # `--status` honors DMUX_CONFIG_PATH as an offline-mode escape hatch.
+  # Unset between tests so a stale value doesn't accidentally bypass the
+  # live-dmux-discovery path that other tests are trying to exercise.
+  unset DMUX_CONFIG_PATH
+
   # Supply the tmux shim with a PID that's alive for the full test run.
   # $$ inside bats is the bats process PID; it stays live across setup /
   # test body / teardown. The tmux shim substitutes @@PID@@ in fixture
