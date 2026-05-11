@@ -79,6 +79,26 @@ load helpers
   [[ "$output" == *"--status requires an argument"* ]]
 }
 
+# Project URL parser must accept the canonical links users copy from GitHub
+# Projects: the bare /projects/<n>, /projects/<n>/views/<id>, and either
+# form with a ?query suffix. We only assert the parser does not reject
+# them — downstream stages (tmux/gh) fail in the test env but that's not
+# the parser's concern.
+@test "Projects URL bare form is accepted by parser" {
+  run_fanout 'https://github.com/users/foo/projects/3'
+  [[ "$output" != *"parent must be"* ]]
+}
+
+@test "Projects URL with /views/<id> is accepted by parser" {
+  run_fanout 'https://github.com/orgs/bar/projects/7/views/1'
+  [[ "$output" != *"parent must be"* ]]
+}
+
+@test "Projects URL with query string is accepted by parser" {
+  run_fanout 'https://github.com/users/foo/projects/3?filterQuery=is%3Aopen'
+  [[ "$output" != *"parent must be"* ]]
+}
+
 @test "--agent missing value: exit 1" {
   run_fanout 20 --agent
   [ "$status" -eq 1 ]

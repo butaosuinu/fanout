@@ -376,7 +376,7 @@ if [[ -z "$parent" ]]; then
 fi
 if [[ "$parent" =~ ^[0-9]+$ ]]; then
   parent_mode=issue
-elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)/?$ ]]; then
+elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)([/?].*)?$ ]]; then
   parent_mode=project
   project_owner_type="${BASH_REMATCH[1]}"
   project_owner="${BASH_REMATCH[2]}"
