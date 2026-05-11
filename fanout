@@ -578,6 +578,12 @@ elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)
   project_owner_type="${BASH_REMATCH[1]}"
   project_owner="${BASH_REMATCH[2]}"
   project_number="${BASH_REMATCH[3]}"
+  # Canonicalize: drop any /views/<id> suffix and ?query=... so reruns of
+  # semantically equivalent URLs ("/projects/3" vs "/projects/3/views/1"
+  # vs "/projects/3?pane=issue") hit the same `[fanout #N of #<url>]`
+  # idempotency tag. Project enumeration already keys off owner+number,
+  # so the trailing context doesn't affect which items get fanned out.
+  parent="https://github.com/$project_owner_type/$project_owner/projects/$project_number"
 else
   if (( status_mode )); then
     log_err "--status: parent must be an integer issue number or Projects v2 URL, got: $parent"
