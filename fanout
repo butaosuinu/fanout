@@ -17,11 +17,13 @@ default_popup_timeout=20
 
 usage() {
   cat <<'EOF'
-Usage: fanout <parent-issue> [options]
+Usage: fanout <parent-issue|project-url> [options]
 
-Creates one dmux pane per OPEN sub-issue of <parent-issue>. Each pane gets a
-dedicated git worktree (dmux handles that) and starts the configured agent
-with a briefing that points at /tmp/fanout-<repo>-<num>.md.
+Creates one dmux pane per OPEN sub-issue of the given parent issue, OR per
+OPEN item in the given Projects v2 URL (e.g. https://github.com/users/<u>/projects/<n>
+or https://github.com/orgs/<o>/projects/<n>). Each pane gets a dedicated git
+worktree (dmux handles that) and starts the configured agent with a briefing
+that points at /tmp/fanout-<repo>-<num>.md.
 
 Options:
   --agent <name>      Agent to launch (claude|codex|opencode|...). Required
@@ -85,6 +87,13 @@ Options:
                       Safe to rerun as blocker PRs merge.
   --session <name>    Target a specific tmux session (required when more than
                       one dmux session is alive on this machine).
+  --project-status <name>
+                      [project mode only] Restrict to Project items whose
+                      single-select "Status" field equals <name>. Default:
+                      "Todo". Pass `--project-status all` to disable the
+                      filter. If the Project has no Status field, fanout
+                      warns and falls back to all items. Ignored in issue
+                      mode.
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
                       this if dmux reports "pane creation failed" under load.
   --popup-timeout <s> Seconds to wait for each dmux popup (new-pane, agent-
@@ -116,9 +125,12 @@ Options:
   -h, --help          Show this message.
 
 Prerequisites:
-  * gh, gh-sub-issue extension, jq, tmux, pgrep installed.
-    For `--status` the live-dmux-session deps shrink to {gh, jq, tmux};
-    setting DMUX_CONFIG_PATH lets it run with just {gh, jq} (no tmux).
+  * gh, jq, tmux, pgrep installed. gh-sub-issue extension is required for
+    issue mode only (project mode uses `gh api graphql`); for project mode
+    the gh token must additionally carry the `read:project` scope.
+    For `--status` (read-only JSON status reporter) the live-dmux-session
+    deps shrink to {gh, jq, tmux}; setting DMUX_CONFIG_PATH lets it run
+    with just {gh, jq} (no tmux).
   * `cd <repo> && dmux` has been run; tmux session is alive.
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
@@ -496,6 +508,12 @@ dry_run=0
 debug=0
 unblocked_only=0
 status_mode=0
+status_filter='Todo'      # project mode only; 'all' disables the filter
+parent_mode=''            # 'issue' | 'project' — set after positional validation
+project_owner_type=''     # 'users' | 'orgs' (project mode)
+project_owner=''
+project_number=''
+project_repo=''           # resolved lazily from gh_in_root in project mode
 
 while (( $# > 0 )); do
   case "$1" in
@@ -507,6 +525,7 @@ while (( $# > 0 )); do
     --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
     --name)       raw_name_args+=("${2:-}"); shift 2 || die "--name requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
+    --project-status) status_filter="${2:-}"; shift 2 || die "--project-status requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; sleep_explicit=1; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; popup_timeout_explicit=1; shift 2 || die "--popup-timeout requires an argument" ;;
     --dry-run)    dry_run=1;          shift ;;
@@ -536,19 +555,27 @@ if [[ -z "$parent" ]]; then
   usage >&2
   exit 2
 fi
-if ! [[ "$parent" =~ ^[0-9]+$ ]]; then
+if [[ "$parent" =~ ^[0-9]+$ ]]; then
+  parent_mode=issue
+  # Canonicalize: "0300" → "300". Without this, the prompt prefix
+  # `[fanout #N of #$parent]` and `--status` pane filtering both treat
+  # numerically equivalent inputs as distinct parents and silently miss
+  # their fanned children. Also defends any future `(( ))` site from
+  # octal interpretation of leading-zero forms.
+  parent="$((10#$parent))"
+elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)([/?].*)?$ ]]; then
+  parent_mode=project
+  project_owner_type="${BASH_REMATCH[1]}"
+  project_owner="${BASH_REMATCH[2]}"
+  project_number="${BASH_REMATCH[3]}"
+else
   if (( status_mode )); then
-    log_err "--status: parent issue must be an integer, got: $parent"
+    log_err "--status: parent must be an integer issue number or Projects v2 URL, got: $parent"
     exit 2
   fi
-  die "parent issue must be an integer, got: $parent"
+  die "parent must be an integer issue number or Projects v2 URL, got: $parent"
 fi
-# Canonicalize: "0300" → "300". Without this, the prompt prefix
-# `[fanout #N of #$parent]` and `--status` pane filtering both treat
-# numerically equivalent inputs as distinct parents and silently miss
-# their fanned children. Also defends any future `(( ))` site from
-# octal interpretation of leading-zero forms.
-parent="$((10#$parent))"
+[[ -n "$status_filter" ]] || die "--project-status must not be empty"
 
 # --status rejects every action-bearing flag (--debug is observability-only,
 # allowed; -h exits 0 before this guard). Run BEFORE the numeric value
@@ -562,6 +589,10 @@ status_conflict() {
 }
 
 if (( status_mode )); then
+  # --status is the per-parent JSON reporter; the panes it reads carry
+  # `[fanout #N of #<issue-number>]` prompts. Projects v2 parents are
+  # not addressable through that prefix, so reject them up-front.
+  [[ "$parent_mode" == "project" ]] && status_conflict "Projects v2 URLs as parent"
   [[ -n "$agent"          ]] && status_conflict "--agent"
   [[ -n "$limit"          ]] && status_conflict "--limit"
   [[ -n "$only_arg"       ]] && status_conflict "--only"
@@ -621,11 +652,14 @@ if (( !status_mode )) || [[ -z "${DMUX_CONFIG_PATH:-}" ]]; then
 fi
 
 # --status doesn't drive the popup intercept and doesn't fetch sub-issues, so
-# pgrep + gh-sub-issue are not required for it.
+# pgrep + gh-sub-issue are not required for it. Project mode also goes
+# through `gh api graphql` instead of the gh-sub-issue extension, so the
+# extension is only required for the issue-mode main flow.
 if (( !status_mode )); then
   need_cmd pgrep || missing_deps+=('pgrep (procps-ng on Linux; preinstalled on macOS)')
 
-  if ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
+  if [[ "$parent_mode" == issue ]] \
+    && ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
     missing_deps+=('gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)')
   fi
 fi
@@ -647,6 +681,140 @@ tmux_opt() {
 
 gh_in_root() {
   (cd "$project_root" && gh "$@")
+}
+
+enumerate_project_items() {
+  # Fetch all items from a Projects v2 board and emit children_json on stdout.
+  #
+  # Globals consumed (read-only): project_owner_type, project_owner,
+  #   project_number, project_repo
+  # Globals mutated: status_filter (only when the Project has no Status field
+  #   AND the caller asked to filter; we warn once and fall back to 'all')
+  #
+  # Output shape (stdout): [{number, title, state, body, labels:[{name}]}, ...]
+  # matching the contract the issue-mode path produces via gh-sub-issue +
+  # gh issue view hydration.
+  #
+  # `gh project item-list --format json` doesn't return Status field values,
+  # so we hit GraphQL directly with the right entry (`user` vs `organization`)
+  # based on the URL form.
+  local entry_field
+  case "$project_owner_type" in
+    users) entry_field='user' ;;
+    orgs)  entry_field='organization' ;;
+    *) die "internal: unknown project owner type: $project_owner_type" ;;
+  esac
+
+  # GraphQL variable refs use \$ so bash doesn't expand them.
+  local gql
+  read -r -d '' gql <<EOF || true
+query(\$owner: String!, \$number: Int!, \$first: Int!, \$after: String) {
+  ${entry_field}(login: \$owner) {
+    projectV2(number: \$number) {
+      title
+      url
+      field(name: "Status") { __typename }
+      items(first: \$first, after: \$after) {
+        nodes {
+          content {
+            __typename
+            ... on Issue {
+              number
+              title
+              state
+              body
+              repository { nameWithOwner }
+              labels(first: 20) { nodes { name } }
+            }
+          }
+          status: fieldValueByName(name: "Status") {
+            ... on ProjectV2ItemFieldSingleSelectValue { name }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+EOF
+
+  # Accumulate raw page responses into an array; a single jq -s pass after
+  # the loop flattens them. Reparsing $all_nodes on every page would be
+  # O(n²) — this stays O(n) regardless of project size.
+  local cursor='' page project_title='' pages=()
+  while :; do
+    local args=( api graphql
+      -f "query=$gql"
+      -F "owner=$project_owner"
+      -F "number=$project_number"
+      -F first=100 )
+    [[ -n "$cursor" ]] && args+=( -F "after=$cursor" )
+
+    if ! page=$(gh_in_root "${args[@]}" 2>&1); then
+      die "gh api graphql (projectV2 items) failed: $page"
+    fi
+
+    # GraphQL returns projectV2: null for a syntactically valid URL when the
+    # project number is wrong or the token can't see it. Catch it here so the
+    # caller gets an actionable message instead of a jq null-arithmetic crash
+    # in the final flatten pass.
+    if [[ "$(jq -r ".data.${entry_field}.projectV2 // null | if . == null then 0 else 1 end" <<<"$page")" == "0" ]]; then
+      die "Project not found or not accessible: $parent (check the URL, token scopes, and project visibility)"
+    fi
+    pages+=("$page")
+
+    if [[ -z "$project_title" ]]; then
+      project_title=$(jq -r ".data.${entry_field}.projectV2.title // \"\"" <<<"$page")
+    fi
+
+    # Status-field probe runs per page but only warns once: once status_filter
+    # is set to 'all' (either by the user or by this fallback), the inner
+    # condition stays false on subsequent pages.
+    if [[ "$status_filter" != "all" ]]; then
+      local has_status
+      has_status=$(jq -r ".data.${entry_field}.projectV2.field // null | if . == null then 0 else 1 end" <<<"$page")
+      if [[ "$has_status" == "0" ]]; then
+        log_warn "Project '$project_title' has no Status field; ignoring --project-status $status_filter and falling back to all items"
+        status_filter='all'
+      fi
+    fi
+
+    local has_next end_cursor
+    has_next=$(jq -r ".data.${entry_field}.projectV2.items.pageInfo.hasNextPage" <<<"$page")
+    end_cursor=$(jq -r ".data.${entry_field}.projectV2.items.pageInfo.endCursor // empty" <<<"$page")
+    [[ "$has_next" != "true" ]] && break
+    cursor="$end_cursor"
+  done
+
+  local all_nodes
+  all_nodes=$(printf '%s\n' "${pages[@]}" | jq -s --arg ef "$entry_field" \
+    '[ .[] | .data[$ef].projectV2.items.nodes[] ]')
+
+  # Cross-repo warn to stderr (children_json goes to stdout). Drafts and PR
+  # items get silently dropped — only repo-matching Issues warrant a warn,
+  # since cross-repo Issues are the user-surprise case.
+  while IFS= read -r cross; do
+    [[ -n "$cross" ]] && log_warn "skipping cross-repo project item: $cross (project root repo: $project_repo)"
+  done < <(jq -r --arg repo "$project_repo" '
+    .[] | select(.content.__typename == "Issue")
+        | select(.content.repository.nameWithOwner != $repo)
+        | "\(.content.repository.nameWithOwner)#\(.content.number)"
+  ' <<<"$all_nodes")
+
+  jq --arg repo "$project_repo" --arg status "$status_filter" '
+    [ .[]
+      | select(.content.__typename == "Issue")
+      | select(.content.repository.nameWithOwner == $repo)
+      | select($status == "all" or (.status.name // "") == $status)
+      | {
+          number: .content.number,
+          title:  .content.title,
+          state:  (.content.state | ascii_upcase),
+          body:   (.content.body  // ""),
+          labels: [ .content.labels.nodes[]? | {name} ]
+        }
+    ]
+  ' <<<"$all_nodes"
 }
 
 pid_alive() {
@@ -880,54 +1048,72 @@ if [[ -z "$agent" ]] && [[ -n "${TMUX_PANE:-}" ]]; then
   fi
 fi
 
-# --- fetch sub-issues --------------------------------------------------------
+# --- fetch children (sub-issues or project items) ---------------------------
 
-# gh auto-detects the repo from cwd, so we'll chdir to project_root for the
-# sub-issue call. Sanity-check that cwd is actually a work tree.
+# gh auto-detects the repo from cwd, so we'll chdir to project_root for any
+# gh call. Sanity-check that cwd is actually a work tree.
 if ! (cd "$project_root" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
   die "project root $project_root is not a git work tree; cannot resolve GitHub repo"
 fi
 
-log_info "fetching sub-issues of #$parent"
-sub_issues_raw=$(gh_in_root sub-issue list "$parent" --json number,title,state 2>&1) \
-  || die "gh sub-issue list failed: $sub_issues_raw"
+# parent_body is only populated in issue mode; in project mode it stays empty,
+# and parse_blockers_from_parent_row's jq pipeline yields an empty result on
+# empty input so --unblocked-only still works without code branches.
+parent_body=''
+body_nums=''
 
-# gh-sub-issue v0.5.x wraps as {"subIssues":[...]} with lowercase state and
-# no body field; flatten + upcase to match downstream filters.
-children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: "", labels: []}]' <<<"$sub_issues_raw")
+# Strong-ownership snapshot for the legacy-pane migration: only the child
+# numbers GitHub explicitly links to this parent (Sub-issues API in issue
+# mode, project items in project mode). body-task-list and --include
+# numbers (added below) are weaker signals and must not be used to claim
+# ownership of pre-existing legacy panes.
+strong_children_csv=','
 
-# Snapshot of "strong-ownership" child numbers: only those that GitHub's
-# Sub-issues API explicitly links to this parent. body-task-list and
-# --include numbers (added below) are weaker signals — the same number may
-# appear under multiple parents' task lists. The legacy-pane migration
-# below uses ONLY this strong set so it cannot reassign a pane that may
-# have been created under a different parent.
-strong_children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
+if [[ "$parent_mode" == project ]]; then
+  # Cross-repo filter inside enumerate_project_items keys off project_repo.
+  project_repo=$(gh_in_root repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+    || die "could not resolve repo via 'gh repo view' in $project_root (required for project mode cross-repo filter)"
+  log_info "mode: project (status=$status_filter, repo=$project_repo)"
+  log_info "fetching items from Project $parent"
+  children_json=$(enumerate_project_items)
+  strong_children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
+else
+  log_info "fetching sub-issues of #$parent"
+  sub_issues_raw=$(gh_in_root sub-issue list "$parent" --json number,title,state 2>&1) \
+    || die "gh sub-issue list failed: $sub_issues_raw"
 
-# Also union children declared as task-list items in the parent body; some
-# parents list them there without using the Sub-issues API.
-parent_body=$(gh_in_root issue view "$parent" --json body -q .body 2>/dev/null) || {
-  log_warn "could not read parent body (#$parent); skipping task-list scan"
-  parent_body=''
-}
+  # gh-sub-issue v0.5.x wraps as {"subIssues":[...]} with lowercase state and
+  # no body field; flatten + upcase to match downstream filters.
+  children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: "", labels: []}]' <<<"$sub_issues_raw")
+  strong_children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
 
-# Only take the first `#N` immediately after the checkbox — ignore trailing
-# refs like "(blocked by #X, #Y)". Prose-only rows (no leading `#N`) skip
-# naturally because `capture` yields empty on non-match.
-body_nums=$(printf '%s' "$parent_body" | jq -Rrs '
-  split("\n")
-  | map(select(test("^[[:space:]]*-[[:space:]]+\\[[ xX]\\]")))
-  | map([capture("^[[:space:]]*-[[:space:]]+\\[[ xX]\\][[:space:]]*#(?<n>[0-9]+)").n])
-  | flatten | map(tonumber) | unique | .[]
-')
+  # Also union children declared as task-list items in the parent body; some
+  # parents list them there without using the Sub-issues API.
+  parent_body=$(gh_in_root issue view "$parent" --json body -q .body 2>/dev/null) || {
+    log_warn "could not read parent body (#$parent); skipping task-list scan"
+    parent_body=''
+  }
 
-# --include numbers join the same hydrate path as body-scanned numbers.
-# parse_num_csv already validated each token is a positive integer, so we
-# just splat include_set (space-sentinel-wrapped set " 123 456 ") into the
-# newline-separated body_nums list.
+  # Only take the first `#N` immediately after the checkbox — ignore trailing
+  # refs like "(blocked by #X, #Y)". Prose-only rows (no leading `#N`) skip
+  # naturally because `capture` yields empty on non-match.
+  body_nums=$(printf '%s' "$parent_body" | jq -Rrs '
+    split("\n")
+    | map(select(test("^[[:space:]]*-[[:space:]]+\\[[ xX]\\]")))
+    | map([capture("^[[:space:]]*-[[:space:]]+\\[[ xX]\\][[:space:]]*#(?<n>[0-9]+)").n])
+    | flatten | map(tonumber) | unique | .[]
+  ')
+fi
+
+# --include numbers join the same hydrate path as body-scanned numbers in
+# both modes (project mode contributes no body_nums of its own). parse_num_csv
+# already validated each token is a positive integer, so we just splat
+# include_set (space-sentinel-wrapped " 123 456 ") into a newline-separated
+# list of extras.
+extra_nums="$body_nums"
 if [[ -n "$include_arg" ]]; then
   for _tok in $include_set; do
-    body_nums+=$'\n'"$_tok"
+    extra_nums+=$'\n'"$_tok"
   done
 fi
 
@@ -939,8 +1125,9 @@ while IFS= read -r _n; do
 done < <(jq -r '.[].number' <<<"$children_json")
 
 body_details=()
-for num in $body_nums; do
-  [[ "$num" == "$parent" ]] && continue
+for num in $extra_nums; do
+  [[ -z "$num" ]] && continue
+  [[ "$parent_mode" == issue && "$num" == "$parent" ]] && continue
   [[ "$existing_set" == *" $num "* ]] && continue
   detail=$(gh_in_root issue view "$num" --json number,title,state,body,labels 2>/dev/null) || {
     log_warn "parent body / --include references #$num but issue lookup failed; skipping"
@@ -953,23 +1140,32 @@ done
 if (( ${#body_details[@]} > 0 )); then
   extra_json=$(printf '%s\n' "${body_details[@]}" | jq -s '.')
   children_json=$(jq --argjson extra "$extra_json" '. + $extra' <<<"$children_json")
-  log_info "parent body / --include added ${#body_details[@]} extra child reference(s) not in sub-issue API"
+  if [[ "$parent_mode" == project ]]; then
+    log_info "--include added ${#body_details[@]} extra child reference(s) not in project items"
+  else
+    log_info "parent body / --include added ${#body_details[@]} extra child reference(s) not in sub-issue API"
+  fi
 fi
 
 # Count & filter.
 total_children=$(jq 'length' <<<"$children_json")
 if (( total_children == 0 )); then
-  log_info "no sub-issues on #$parent. nothing to do."
+  if [[ "$parent_mode" == project ]]; then
+    log_info "no items in Project (after status/repo filter). nothing to do."
+  else
+    log_info "no sub-issues on #$parent. nothing to do."
+  fi
   exit 0
 fi
 
 open_children_json=$(jq -c '[.[] | select(.state == "OPEN")]' <<<"$children_json")
 open_count=$(jq 'length' <<<"$open_children_json")
 
-log_info "sub-issues: $total_children total, $open_count OPEN"
+if [[ "$parent_mode" == project ]]; then child_noun="project items"; else child_noun="sub-issues"; fi
+log_info "$child_noun: $total_children total, $open_count OPEN"
 
 if (( open_count == 0 )); then
-  log_info "no OPEN sub-issues. nothing to do."
+  log_info "no OPEN $child_noun. nothing to do."
   exit 0
 fi
 
@@ -1631,16 +1827,26 @@ if (( ${#limit_deferred[@]} > 0 )); then
     limit_deferred_nums+=("#$(jq -r '.number' <<<"$row")")
   done
   printf '  %s\n' "${limit_deferred_nums[*]}"
+  # Every substituted value is run through `printf %q` so the printed
+  # command is safe to copy-paste: Project URLs can contain `&` query
+  # parameters, Status / session / agent names can contain spaces.
   agent_flag=''
-  [[ -n "$agent" ]] && agent_flag=" --agent $agent"
+  [[ -n "$agent" ]] && agent_flag=" --agent $(printf '%q' "$agent")"
   session_flag=''
-  [[ -n "$session_arg" ]] && session_flag=" --session $session_arg"
+  [[ -n "$session_arg" ]] && session_flag=" --session $(printf '%q' "$session_arg")"
   filter_flag=''
-  [[ -n "$only_arg" ]] && filter_flag=" --only $only_arg"
-  [[ -n "$skip_arg" ]] && filter_flag=" --skip $skip_arg"
+  [[ -n "$only_arg" ]] && filter_flag=" --only $(printf '%q' "$only_arg")"
+  [[ -n "$skip_arg" ]] && filter_flag=" --skip $(printf '%q' "$skip_arg")"
   unblocked_flag=''
   (( unblocked_only )) && unblocked_flag=' --unblocked-only'
-  printf '  fanout %s --limit %d%s%s%s%s\n' "$parent" "${#limit_deferred[@]}" "$filter_flag" "$unblocked_flag" "$agent_flag" "$session_flag"
+  # --project-status defaults to "Todo" when omitted, so only re-emit it
+  # when the user passed something non-default (otherwise we'd silently
+  # narrow the rerun).
+  status_flag=''
+  if [[ "$parent_mode" == project && "$status_filter" != "Todo" ]]; then
+    status_flag=" --project-status $(printf '%q' "$status_filter")"
+  fi
+  printf '  fanout %q --limit %d%s%s%s%s%s\n' "$parent" "${#limit_deferred[@]}" "$status_flag" "$filter_flag" "$unblocked_flag" "$agent_flag" "$session_flag"
 fi
 
 (( failed > 0 )) && exit 1
