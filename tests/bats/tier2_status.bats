@@ -59,3 +59,15 @@ load helpers
   assert_success
   assert_status_golden scenario-status-leading-zero-300
 }
+
+# Duplicate pane handling: a child can legitimately have more than one pane
+# under the same parent (stale pane from a manual cleanup lag, a re-fan
+# after a failed dmux popup, etc.). `--status` must report one entry per
+# issue and count it once in the summary — duplicates would inflate
+# `summary.total/merged/pending` and break wait-and-continue arithmetic.
+@test "scenario-status-duplicate-panes: --status 500 dedupes #501 across two panes" {
+  use_fixture scenario-status-duplicate-panes
+  run_fanout_status 500
+  assert_success
+  assert_status_golden scenario-status-duplicate-panes-500
+}

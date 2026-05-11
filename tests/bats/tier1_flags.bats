@@ -414,6 +414,20 @@ load helpers
   [[ "$output" == *'"all_merged": false'* ]]
 }
 
+@test "--status with DMUX_CONFIG_PATH whose projectRoot is missing: exit 2 (not 3)" {
+  # Stale / wrong project_root in the config must be reported as an
+  # enumeration problem (exit 2), not deferred until each gh_in_root cd
+  # fails and reports exit 3 per child. The --status contract documents
+  # 2 = "cannot enumerate / unusable config".
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[],"projectRoot":"/does/not/exist/anywhere"}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: project_root is not a directory"* ]]
+}
+
 @test "--status normalizes leading zeros in parent argument" {
   # Wrappers that pass IDs from external systems may forward "0300" instead
   # of "300". Without canonicalization, the parent field in the emitted JSON
