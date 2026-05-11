@@ -42,6 +42,35 @@ exit, dmux reads the file we wrote, and pane creation proceeds as if a
 human had answered. When dmux eventually ships the HTTP API, this script
 can collapse back to `POST /api/panes` in a page.
 
+## Project mode
+
+In addition to a parent issue number, fanout's positional argument also
+accepts a Projects v2 URL — `https://github.com/users/<owner>/projects/<n>`
+or `https://github.com/orgs/<org>/projects/<n>`. The canonical
+`/views/<id>` suffix and trailing query strings are also accepted, so
+copy/paste from the browser address bar works. In this mode children come
+from the Project's items instead of a parent issue's Sub-issues +
+task-list union.
+
+- **Default filter is `Status == Todo`.** Pass `--project-status "<name>"`
+  to pick a different single-select value (e.g. `"In Progress"`), or
+  `--project-status all` to disable the filter and include every item
+  (Done, no status, etc.).
+- **No parent body means no implicit-children salvage.** Phrases like
+  `Closes #N`, `Depends on #N`, or Japanese idioms that the bundled
+  Claude/Codex skills normally surface from a parent body don't exist
+  here — the Project is the source of truth. Use `--include 4,7` to
+  force-add anything the Project happens to omit.
+- **Single-repo only.** Items whose `content.repository` differs from the
+  dmux `@dmux_project_root` repo are warned and skipped; fanout still
+  assumes one repo per run.
+- **Status field missing on the Project?** fanout warns and falls back to
+  every item regardless of `--project-status`.
+- **Idempotency, `[fanout #N]` detection, and `--unblocked-only` work
+  identically.** Blockers in this mode come only from the child body's
+  `## Blocked by` section and the `blocked` label; the
+  `(blocked by #X)` task-list trailer doesn't exist without a parent body.
+
 ## Installation
 
 fanout ships as a single Bash script plus agent integration files:
@@ -99,6 +128,10 @@ intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
   startup and prints install hints on failure. Children can be declared via
   the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
   both — fanout unions them.
+- **Project mode only**: the `gh` CLI must have the `read:project` scope so
+  the GraphQL query that lists Project items can succeed. Add it with
+  `gh auth refresh -s read:project`. Issue-mode (`fanout <N>`) does not
+  need this scope.
 - A running dmux session on this machine: `cd <repo> && dmux`. fanout discovers
   it by scanning tmux sessions for the `@dmux_controller_pid` option and
   checking that the PID is alive.
@@ -123,13 +156,18 @@ intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 ## Usage
 
 ```
-fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-                     [--include <list>] [--unblocked-only]
-                     [--name <NUM>=<slug>[|<display>]]
-                     [--session <tmux-session>] [--sleep <seconds>]
-                     [--popup-timeout <seconds>] [--dry-run]
+fanout <parent-issue|project-url>
+       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--include <list>] [--unblocked-only] [--project-status <name>]
+       [--name <NUM>=<slug>[|<display>]]
+       [--session <tmux-session>] [--sleep <seconds>]
+       [--popup-timeout <seconds>] [--dry-run]
 fanout --help
 ```
+
+The positional accepts either a GitHub issue number (Sub-issues +
+task-list mode) or a Projects v2 URL (Project mode; see above).
+`--project-status` only applies to Project mode and is ignored otherwise.
 
 ### Examples
 
@@ -195,6 +233,17 @@ fanout 123 --popup-timeout 45
 # agent than the parent pane). Normally you don't need this — fanout reads
 # the caller's .panes[].agent from dmux.config.json.
 fanout 123 --agent codex
+
+# Fan out OPEN issues from a Projects v2 board instead of a parent issue.
+# Default filter is Status=Todo; same-repo only. Requires `gh auth refresh
+# -s read:project`. See the "Project mode" section above for the full rules.
+fanout https://github.com/users/<owner>/projects/<n>
+
+# Pick a different Status column (any single-select value works)
+fanout https://github.com/orgs/<org>/projects/<n> --project-status "In Progress"
+
+# Disable the Status filter entirely (include Done / no-status items)
+fanout https://github.com/users/<owner>/projects/<n> --project-status all
 ```
 
 ## From inside an agent session
