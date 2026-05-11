@@ -1406,16 +1406,26 @@ if (( ${#limit_deferred[@]} > 0 )); then
     limit_deferred_nums+=("#$(jq -r '.number' <<<"$row")")
   done
   printf '  %s\n' "${limit_deferred_nums[*]}"
+  # Every substituted value is run through `printf %q` so the printed
+  # command is safe to copy-paste: Project URLs can contain `&` query
+  # parameters, Status / session / agent names can contain spaces.
   agent_flag=''
-  [[ -n "$agent" ]] && agent_flag=" --agent $agent"
+  [[ -n "$agent" ]] && agent_flag=" --agent $(printf '%q' "$agent")"
   session_flag=''
-  [[ -n "$session_arg" ]] && session_flag=" --session $session_arg"
+  [[ -n "$session_arg" ]] && session_flag=" --session $(printf '%q' "$session_arg")"
   filter_flag=''
-  [[ -n "$only_arg" ]] && filter_flag=" --only $only_arg"
-  [[ -n "$skip_arg" ]] && filter_flag=" --skip $skip_arg"
+  [[ -n "$only_arg" ]] && filter_flag=" --only $(printf '%q' "$only_arg")"
+  [[ -n "$skip_arg" ]] && filter_flag=" --skip $(printf '%q' "$skip_arg")"
   unblocked_flag=''
   (( unblocked_only )) && unblocked_flag=' --unblocked-only'
-  printf '  fanout %s --limit %d%s%s%s%s\n' "$parent" "${#limit_deferred[@]}" "$filter_flag" "$unblocked_flag" "$agent_flag" "$session_flag"
+  # --project-status defaults to "Todo" when omitted, so only re-emit it
+  # when the user passed something non-default (otherwise we'd silently
+  # narrow the rerun).
+  status_flag=''
+  if [[ "$parent_mode" == project && "$status_filter" != "Todo" ]]; then
+    status_flag=" --project-status $(printf '%q' "$status_filter")"
+  fi
+  printf '  fanout %q --limit %d%s%s%s%s%s\n' "$parent" "${#limit_deferred[@]}" "$status_flag" "$filter_flag" "$unblocked_flag" "$agent_flag" "$session_flag"
 fi
 
 (( failed > 0 )) && exit 1
