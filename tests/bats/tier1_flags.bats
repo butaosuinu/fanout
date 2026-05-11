@@ -55,10 +55,48 @@ load helpers
 
 # --- Positional / required-argument validation -----------------------------
 
-@test "parent must be an integer: exit 1" {
+@test "parent must be an integer or Projects v2 URL: exit 1" {
   run_fanout abc
   [ "$status" -eq 1 ]
-  [[ "$output" == *"parent issue must be an integer, got: abc"* ]]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL, got: abc"* ]]
+}
+
+@test "parent URL with wrong host rejected: exit 1" {
+  run_fanout https://example.com/users/foo/projects/3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL"* ]]
+}
+
+@test "parent URL missing project number rejected: exit 1" {
+  run_fanout https://github.com/users/foo/projects/
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL"* ]]
+}
+
+@test "--project-status missing value: exit 1" {
+  run_fanout 20 --project-status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--project-status requires an argument"* ]]
+}
+
+# Project URL parser must accept the canonical links users copy from GitHub
+# Projects: the bare /projects/<n>, /projects/<n>/views/<id>, and either
+# form with a ?query suffix. We only assert the parser does not reject
+# them — downstream stages (tmux/gh) fail in the test env but that's not
+# the parser's concern.
+@test "Projects URL bare form is accepted by parser" {
+  run_fanout 'https://github.com/users/foo/projects/3'
+  [[ "$output" != *"parent must be"* ]]
+}
+
+@test "Projects URL with /views/<id> is accepted by parser" {
+  run_fanout 'https://github.com/orgs/bar/projects/7/views/1'
+  [[ "$output" != *"parent must be"* ]]
+}
+
+@test "Projects URL with query string is accepted by parser" {
+  run_fanout 'https://github.com/users/foo/projects/3?filterQuery=is%3Aopen'
+  [[ "$output" != *"parent must be"* ]]
 }
 
 @test "--agent missing value: exit 1" {
