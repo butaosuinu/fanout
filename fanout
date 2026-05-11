@@ -401,13 +401,13 @@ migrate_legacy_pane_tags() {
           end
       else . end
     ))
-  ' "$config_path" > "$tmp" 2>/dev/null; then
-    mv -f "$tmp" "$config_path"
+  ' "$config_path" > "$tmp" 2>/dev/null && mv -f "$tmp" "$config_path"; then
     log_info "migrated $migrated_count legacy [fanout #N] pane tag(s) to include parent #$parent"
-  else
-    rm -f "$tmp"
-    log_warn "could not migrate legacy pane tags in $config_path; --status may miss legacy panes"
+    return 0
   fi
+  rm -f "$tmp"
+  log_warn "could not migrate legacy pane tags in $config_path; falling back to strict idempotency so legacy panes don't mask new --status entries"
+  return 1
 }
 
 enumerate_fanned_children() {
@@ -481,6 +481,11 @@ popup_timeout=$default_popup_timeout
 # `fanout --status N --sleep 4`, missing the documented exclusivity error.
 sleep_explicit=0
 popup_timeout_explicit=0
+# Deferred --name parsing: collect raw values in the arg loop, parse them
+# AFTER the --status exclusivity check so a malformed
+# `--status 1 --name bad` reports the cannot-be-combined error (exit 2)
+# instead of die'ing on the bad slug-hint (exit 1).
+raw_name_args=()
 dry_run=0
 debug=0
 unblocked_only=0
@@ -494,7 +499,7 @@ while (( $# > 0 )); do
     --only)       only_arg="${2:-}";  shift 2 || die "--only requires an argument" ;;
     --skip)       skip_arg="${2:-}";  shift 2 || die "--skip requires an argument" ;;
     --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
-    --name)       parse_name_arg "${2:-}"; shift 2 || die "--name requires an argument" ;;
+    --name)       raw_name_args+=("${2:-}"); shift 2 || die "--name requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; sleep_explicit=1; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; popup_timeout_explicit=1; shift 2 || die "--popup-timeout requires an argument" ;;
@@ -551,16 +556,24 @@ status_conflict() {
 }
 
 if (( status_mode )); then
-  [[ -n "$agent"        ]] && status_conflict "--agent"
-  [[ -n "$limit"        ]] && status_conflict "--limit"
-  [[ -n "$only_arg"     ]] && status_conflict "--only"
-  [[ -n "$skip_arg"     ]] && status_conflict "--skip"
-  [[ -n "$include_arg"  ]] && status_conflict "--include"
-  (( ${#name_nums[@]} )) && status_conflict "--name"
-  (( dry_run ))          && status_conflict "--dry-run"
-  (( unblocked_only ))   && status_conflict "--unblocked-only"
+  [[ -n "$agent"          ]] && status_conflict "--agent"
+  [[ -n "$limit"          ]] && status_conflict "--limit"
+  [[ -n "$only_arg"       ]] && status_conflict "--only"
+  [[ -n "$skip_arg"       ]] && status_conflict "--skip"
+  [[ -n "$include_arg"    ]] && status_conflict "--include"
+  (( ${#raw_name_args[@]} )) && status_conflict "--name"
+  (( dry_run ))              && status_conflict "--dry-run"
+  (( unblocked_only ))       && status_conflict "--unblocked-only"
   (( sleep_explicit ))         && status_conflict "--sleep"
   (( popup_timeout_explicit )) && status_conflict "--popup-timeout"
+fi
+
+# Safe to parse --name now: --status would have exited above on conflict.
+# Malformed values still die (exit 1), which is the correct main-flow error.
+if (( ${#raw_name_args[@]} > 0 )); then
+  for _raw_name in "${raw_name_args[@]}"; do
+    parse_name_arg "$_raw_name"
+  done
 fi
 
 if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
@@ -1037,7 +1050,16 @@ fi
 # signal: legacy panes whose number is referenced only via task-list / --include
 # (signals that any parent body can carry) are left alone — relabeling them
 # could silently transfer ownership from another parent.
-migrate_legacy_pane_tags "$config_path" "$parent" "$strong_children_csv"
+migration_mode=lenient
+if ! migrate_legacy_pane_tags "$config_path" "$parent" "$strong_children_csv"; then
+  # Write failed (jq error / read-only config). A subsequent `--status` would
+  # still miss the un-migrated legacy panes, but at least we shouldn't ALSO
+  # let lenient idempotency mask them — fall back to strict so the main flow
+  # creates fresh, parent-annotated panes for the legacy numbers. This can
+  # produce duplicate panes (stale `[fanout #N]` + new `[fanout #N of #P]`),
+  # which the user resolves by deleting the legacy one in the dmux TUI.
+  migration_mode=strict
+fi
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
@@ -1046,10 +1068,12 @@ migrate_legacy_pane_tags "$config_path" "$parent" "$strong_children_csv"
 # child refs via task-list scan or --include). Lenient mode also catches
 # legacy `[fanout #N]` panes — they're guaranteed to be migrated to this
 # parent immediately above (or, in --dry-run, would be), so treating them
-# as already-fanned matches the post-migration state.
+# as already-fanned matches the post-migration state. On migration failure
+# we switch to strict so legacy panes don't silently mask new --status
+# entries.
 # Space-delimited and sentinel-wrapped so " 42 " membership tests work without
 # false positives on "142".
-fanned_set=$(enumerate_fanned_children "$config_path" "$parent" lenient)
+fanned_set=$(enumerate_fanned_children "$config_path" "$parent" "$migration_mode")
 
 # --- split into targets / skipped -------------------------------------------
 

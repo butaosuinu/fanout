@@ -283,6 +283,23 @@ load helpers
   [[ "$output" == *"--status cannot be combined with --limit"* ]]
 }
 
+@test "--status with bogus --name value: exclusivity wins (exit 2), not parse_name_arg die (exit 1)" {
+  # --name normally die's inside parse_name_arg if the slug-hint/NUM is
+  # malformed. Combined with --status, the conflict must surface first so
+  # callers see the documented --status exit code 2.
+  run_fanout --status 1 --name bad
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
+@test "--status with bogus --name slug-hint: exclusivity wins (exit 2)" {
+  # Same as above but the malformed part is the slug-hint (would normally
+  # die with "slug-hint must be lowercase kebab-case").
+  run_fanout --status 1 --name 4=BAD
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
 @test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
   # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
   # let `--status` complete without tmux installed (CI / post-session
