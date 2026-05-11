@@ -61,8 +61,8 @@ use this workflow directly.
    or Project to fan out.
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
-   `--unblocked-only`, `--status` (project mode only), `--name`, `--session`,
-   `--sleep`, `--popup-timeout`, and `--debug`.
+   `--unblocked-only`, `--project-status` (project mode only), `--name`,
+   `--session`, `--sleep`, `--popup-timeout`, and `--debug`.
 3. If the user asked to skip confirmation (`--go`, "go ahead", "run it now"),
    strip `--go` before calling the CLI and run the real command after the
    pre-flight name/include preparation. Otherwise dry-run first and ask for
@@ -119,18 +119,25 @@ numbers as `--include A,B,C` to both dry-run and execution.
 
 When the positional argument is a Projects v2 URL, fanout enumerates the
 Project's items via GraphQL (`gh api graphql`) instead of the Sub-issues API
-+ parent body. Key points:
++ parent body. The `gh-sub-issue` extension dependency check is skipped in
+project mode, so a missing extension is not a blocker for project URLs.
+Key points:
 
-- **URL shape** — `https://github.com/users/<owner>/projects/<num>` and
-  `https://github.com/orgs/<owner>/projects/<num>` (optional trailing `/`)
-  are both accepted. Anything else is rejected at arg-parse time.
-- **`--status` filter** — Project items have a single-select `Status` field.
-  Default is `--status Todo` (so `fanout <url>` fans out only the Todo
-  column). Pass `--status all` to disable the filter and include every OPEN
-  item, or any single Status value (e.g. `--status "In Progress"`) for that
-  column. The match is case-sensitive against the Project's option labels.
-  If the Project has no `Status` field, fanout warns and falls back to all
-  OPEN items. `--status` is silently ignored in issue mode.
+- **URL shape** — the CLI matches
+  `^https://github\.com/(users|orgs)/<owner>/projects/<num>([/?].*)?$`.
+  User-owned and organization-owned boards are both accepted, and any
+  trailing `/views/<n>` segment or `?filterQuery=...` query string is
+  preserved verbatim (the CLI extracts only `users|orgs`, `<owner>`,
+  `<num>`). Anything else is rejected at arg-parse time.
+- **`--project-status` filter** — Project items have a single-select
+  `Status` field. Default is `--project-status Todo` (so `fanout <url>`
+  fans out only the Todo column). Pass `--project-status all` to disable
+  the filter and include every OPEN item, or any single Status value
+  (e.g. `--project-status "In Progress"`) for that column. The match is
+  case-sensitive against the Project's option labels. If the Project has
+  no `Status` field, fanout warns and falls back to all OPEN items.
+  Empty values are rejected (`--project-status ""` errors). Accepted but
+  unused in issue mode.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the
@@ -186,8 +193,8 @@ the likely next action:
 - Project mode `HTTP 401` / `Resource not accessible by integration`
   against `projectV2`: the user's `gh` token lacks the `read:project` scope.
   Tell them to run `gh auth refresh -s read:project` and rerun.
-- Project mode `no items on Project <url>` (or "no items matching --status
-  <name>") is not a failure; fanout exits 0.
+- Project mode `no items in Project (after status/repo filter). nothing to
+  do.` is not a failure; fanout exits 0.
 
 ## Notes
 
@@ -197,7 +204,7 @@ the likely next action:
   duplicate pane.
 - `--unblocked-only` defers children whose blockers are still OPEN and is
   preferred over hand-built wave lists when blocker annotations exist.
-- Default project-mode filter is `--status Todo`. Use `--status all` for a
-  full sweep of the board's OPEN items.
+- Default project-mode filter is `--project-status Todo`. Use
+  `--project-status all` for a full sweep of the board's OPEN items.
 - The CLI intentionally drives dmux through tmux popup result-file
   interception because dmux v5.6.3 does not ship the documented HTTP API.
