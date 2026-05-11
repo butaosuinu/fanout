@@ -55,10 +55,28 @@ load helpers
 
 # --- Positional / required-argument validation -----------------------------
 
-@test "parent must be an integer: exit 1" {
+@test "parent must be an integer or Projects v2 URL: exit 1" {
   run_fanout abc
   [ "$status" -eq 1 ]
-  [[ "$output" == *"parent issue must be an integer, got: abc"* ]]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL, got: abc"* ]]
+}
+
+@test "parent URL with wrong host rejected: exit 1" {
+  run_fanout https://example.com/users/foo/projects/3
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL"* ]]
+}
+
+@test "parent URL missing project number rejected: exit 1" {
+  run_fanout https://github.com/users/foo/projects/
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"parent must be an integer issue number or Projects v2 URL"* ]]
+}
+
+@test "--status missing value: exit 1" {
+  run_fanout 20 --status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--status requires an argument"* ]]
 }
 
 @test "--agent missing value: exit 1" {
