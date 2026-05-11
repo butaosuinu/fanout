@@ -10,7 +10,7 @@ Arguments: `$ARGUMENTS`
 ## Steps
 
 1. **Resolve the parent target** from `$ARGUMENTS`. Two input shapes are accepted; the first matching token wins:
-   - **Issue mode** — first token matching `^#?\d+$` → that integer is `N`. Pass it to the CLI as the positional arg.
+   - **Issue mode** — first token matching `^#?\d+$` → that integer is `N`. **Strip the leading `#` if present** before invoking `fanout`; the CLI only accepts bare digits in issue mode and rejects `#42`.
    - **Project mode** — first token matching `^https://github\.com/(users|orgs)/[^/]+/projects/\d+([/?].*)?$` → pass the URL to the CLI verbatim as the positional arg (no normalization, no trimming). Canonical board URLs with `/views/<n>` segments or `?filterQuery=...` query strings are accepted; the CLI parses `users` vs `orgs` and the project number itself.
    - If neither matches: scan the user's opening message / recent context for an issue ref (`#\d+`) or a Project URL of the form above, and use the first match.
    - Still nothing: ask the user which parent issue or Project URL to fan out.

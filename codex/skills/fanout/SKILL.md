@@ -51,11 +51,16 @@ use this workflow directly.
 ## Workflow
 
 1. Resolve the parent target from the user's request or recent context. Two
-   shapes are accepted; pass whichever matches to the CLI verbatim as the
-   positional argument:
-   - **Issue mode** — integer or `#N` (e.g. `#42`).
+   shapes are accepted; identify which one matches and pass the normalized
+   form to the CLI as the positional argument:
+   - **Issue mode** — the user may type a bare integer (`42`) or an
+     issue ref (`#42`). The CLI only accepts bare digits, so **strip the
+     leading `#`** before invoking `fanout`.
    - **Project mode** — Projects v2 URL matching
-     `^https://github\.com/(users|orgs)/[^/]+/projects/\d+/?$`.
+     `^https://github\.com/(users|orgs)/[^/]+/projects/\d+([/?].*)?$`.
+     Pass the URL verbatim, including any trailing `/views/<n>` segment
+     or `?filterQuery=...` query string — the CLI extracts what it needs
+     and ignores the rest.
 
    If there is no clear issue number or Project URL, ask which parent issue
    or Project to fan out.
