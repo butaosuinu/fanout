@@ -73,10 +73,10 @@ load helpers
   [[ "$output" == *"parent must be an integer issue number or Projects v2 URL"* ]]
 }
 
-@test "--status missing value: exit 1" {
-  run_fanout 20 --status
+@test "--project-status missing value: exit 1" {
+  run_fanout 20 --project-status
   [ "$status" -eq 1 ]
-  [[ "$output" == *"--status requires an argument"* ]]
+  [[ "$output" == *"--project-status requires an argument"* ]]
 }
 
 # Project URL parser must accept the canonical links users copy from GitHub

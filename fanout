@@ -87,11 +87,13 @@ Options:
                       Safe to rerun as blocker PRs merge.
   --session <name>    Target a specific tmux session (required when more than
                       one dmux session is alive on this machine).
-  --status <name>     [project mode only] Restrict to Project items whose
+  --project-status <name>
+                      [project mode only] Restrict to Project items whose
                       single-select "Status" field equals <name>. Default:
-                      "Todo". Pass `--status all` to disable the filter. If
-                      the Project has no Status field, fanout warns and falls
-                      back to all items. Ignored in issue mode.
+                      "Todo". Pass `--project-status all` to disable the
+                      filter. If the Project has no Status field, fanout
+                      warns and falls back to all items. Ignored in issue
+                      mode.
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
                       this if dmux reports "pane creation failed" under load.
   --popup-timeout <s> Seconds to wait for each dmux popup (new-pane, agent-
@@ -345,7 +347,7 @@ while (( $# > 0 )); do
     --include)    include_arg="${2:-}"; shift 2 || die "--include requires an argument" ;;
     --name)       parse_name_arg "${2:-}"; shift 2 || die "--name requires an argument" ;;
     --session)    session_arg="${2:-}"; shift 2 || die "--session requires an argument" ;;
-    --status)     status_filter="${2:-}"; shift 2 || die "--status requires an argument" ;;
+    --project-status) status_filter="${2:-}"; shift 2 || die "--project-status requires an argument" ;;
     --sleep)      sleep_between="${2:-}"; shift 2 || die "--sleep requires an argument" ;;
     --popup-timeout) popup_timeout="${2:-}"; shift 2 || die "--popup-timeout requires an argument" ;;
     --dry-run)    dry_run=1;          shift ;;
@@ -384,7 +386,7 @@ elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)
 else
   die "parent must be an integer issue number or Projects v2 URL, got: $parent"
 fi
-[[ -n "$status_filter" ]] || die "--status must not be empty"
+[[ -n "$status_filter" ]] || die "--project-status must not be empty"
 if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
   die "--limit must be a positive integer, got: $limit"
 fi
@@ -535,7 +537,7 @@ EOF
       local has_status
       has_status=$(jq -r ".data.${entry_field}.projectV2.field // null | if . == null then 0 else 1 end" <<<"$page")
       if [[ "$has_status" == "0" ]]; then
-        log_warn "Project '$project_title' has no Status field; ignoring --status $status_filter and falling back to all items"
+        log_warn "Project '$project_title' has no Status field; ignoring --project-status $status_filter and falling back to all items"
         status_filter='all'
       fi
     fi
