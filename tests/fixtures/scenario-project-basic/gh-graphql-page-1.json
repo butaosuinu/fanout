@@ -1,0 +1,40 @@
+{
+  "data": {
+    "user": {
+      "projectV2": {
+        "title": "Demo Board",
+        "url": "https://github.com/users/butaosuinu/projects/3",
+        "field": { "__typename": "ProjectV2SingleSelectField" },
+        "items": {
+          "nodes": [
+            {
+              "content": {
+                "__typename": "Issue",
+                "number": 901,
+                "title": "First todo item",
+                "state": "OPEN",
+                "body": "Body of issue 901.",
+                "repository": { "nameWithOwner": "butaosuinu/fanout" },
+                "labels": { "nodes": [] }
+              },
+              "status": { "name": "Todo" }
+            },
+            {
+              "content": {
+                "__typename": "Issue",
+                "number": 902,
+                "title": "Second todo item",
+                "state": "OPEN",
+                "body": "Body of issue 902.",
+                "repository": { "nameWithOwner": "butaosuinu/fanout" },
+                "labels": { "nodes": [] }
+              },
+              "status": { "name": "Todo" }
+            }
+          ],
+          "pageInfo": { "hasNextPage": false, "endCursor": null }
+        }
+      }
+    }
+  }
+}

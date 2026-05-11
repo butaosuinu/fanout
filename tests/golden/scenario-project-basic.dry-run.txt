@@ -1,0 +1,28 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-project-basic/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-project-basic/dmux.config.json
+[info] mode: project (status=Todo, repo=butaosuinu/fanout)
+[info] fetching items from Project https://github.com/users/butaosuinu/projects/3
+[info] project items: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #901: First todo item
+  briefing -> /tmp/fanout-project_root-901.md
+  briefing size: 2178 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #901] First todo item: read /tmp/fanout-project_root-901.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #901: dry-run complete
+[info] #902: Second todo item
+  briefing -> /tmp/fanout-project_root-902.md
+  briefing size: 2179 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #902] Second todo item: read /tmp/fanout-project_root-902.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #902: dry-run complete
+
+[ ok ] created: 2

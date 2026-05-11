@@ -84,3 +84,24 @@ load helpers
   assert_success
   assert_golden scenario-sub-issue-only-codex
 }
+
+@test "scenario-project-basic: Projects v2 URL with Todo column produces panes" {
+  use_fixture scenario-project-basic
+  run_fanout_dry 'https://github.com/users/butaosuinu/projects/3'
+  assert_success
+  assert_golden scenario-project-basic
+}
+
+@test "scenario-project-status-all: --project-status all bypasses Status filter" {
+  use_fixture scenario-project-status-all
+  run_fanout_dry 'https://github.com/users/butaosuinu/projects/3' --project-status all
+  assert_success
+  assert_golden scenario-project-status-all
+}
+
+@test "scenario-project-cross-repo: cross-repo items warn and are dropped" {
+  use_fixture scenario-project-cross-repo
+  run_fanout_dry 'https://github.com/users/butaosuinu/projects/3'
+  assert_success
+  assert_golden scenario-project-cross-repo
+}
