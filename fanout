@@ -331,8 +331,7 @@ parent_mode=''            # 'issue' | 'project' — set after positional validat
 project_owner_type=''     # 'users' | 'orgs' (project mode)
 project_owner=''
 project_number=''
-project_url=''
-project_repo=''           # resolved from gh_in_root once project_root is known
+project_repo=''           # resolved lazily from gh_in_root in project mode
 
 while (( $# > 0 )); do
   case "$1" in
@@ -380,7 +379,6 @@ elif [[ "$parent" =~ ^https://github\.com/(users|orgs)/([^/]+)/projects/([0-9]+)
   project_owner_type="${BASH_REMATCH[1]}"
   project_owner="${BASH_REMATCH[2]}"
   project_number="${BASH_REMATCH[3]}"
-  project_url="$parent"
 else
   die "parent must be an integer issue number or Projects v2 URL, got: $parent"
 fi
@@ -445,7 +443,7 @@ enumerate_project_items() {
   # Fetch all items from a Projects v2 board and emit children_json on stdout.
   #
   # Globals consumed (read-only): project_owner_type, project_owner,
-  #   project_number, project_url, project_repo
+  #   project_number, project_repo
   # Globals mutated: status_filter (only when the Project has no Status field
   #   AND the caller asked to filter; we warn once and fall back to 'all')
   #
@@ -496,7 +494,10 @@ query(\$owner: String!, \$number: Int!, \$first: Int!, \$after: String) {
 }
 EOF
 
-  local cursor='' all_nodes='[]' page status_field_seen=0 project_title=''
+  # Accumulate raw page responses into an array; a single jq -s pass after
+  # the loop flattens them. Reparsing $all_nodes on every page would be
+  # O(n²) — this stays O(n) regardless of project size.
+  local cursor='' page project_title='' pages=()
   while :; do
     local args=( api graphql
       -f "query=$gql"
@@ -508,25 +509,23 @@ EOF
     if ! page=$(gh_in_root "${args[@]}" 2>&1); then
       die "gh api graphql (projectV2 items) failed: $page"
     fi
+    pages+=("$page")
 
     if [[ -z "$project_title" ]]; then
       project_title=$(jq -r ".data.${entry_field}.projectV2.title // \"\"" <<<"$page")
     fi
 
-    # Status field detection only needs to run on the first page — its presence
-    # doesn't change mid-pagination. Falling back to 'all' is in-process only.
-    if (( ! status_field_seen )); then
+    # Status-field probe runs per page but only warns once: once status_filter
+    # is set to 'all' (either by the user or by this fallback), the inner
+    # condition stays false on subsequent pages.
+    if [[ "$status_filter" != "all" ]]; then
       local has_status
       has_status=$(jq -r ".data.${entry_field}.projectV2.field // null | if . == null then 0 else 1 end" <<<"$page")
-      if [[ "$has_status" == "0" && "$status_filter" != "all" ]]; then
+      if [[ "$has_status" == "0" ]]; then
         log_warn "Project '$project_title' has no Status field; ignoring --status $status_filter and falling back to all items"
         status_filter='all'
       fi
-      status_field_seen=1
     fi
-
-    all_nodes=$(jq --argjson acc "$all_nodes" \
-      ".data.${entry_field}.projectV2.items.nodes as \$n | \$acc + \$n" <<<"$page")
 
     local has_next end_cursor
     has_next=$(jq -r ".data.${entry_field}.projectV2.items.pageInfo.hasNextPage" <<<"$page")
@@ -534,6 +533,10 @@ EOF
     [[ "$has_next" != "true" ]] && break
     cursor="$end_cursor"
   done
+
+  local all_nodes
+  all_nodes=$(printf '%s\n' "${pages[@]}" | jq -s --arg ef "$entry_field" \
+    '[ .[] | .data[$ef].projectV2.items.nodes[] ]')
 
   # Cross-repo warn to stderr (children_json goes to stdout). Drafts and PR
   # items get silently dropped — only repo-matching Issues warrant a warn,
@@ -651,13 +654,6 @@ if ! (cd "$project_root" 2>/dev/null && git rev-parse --is-inside-work-tree >/de
   die "project root $project_root is not a git work tree; cannot resolve GitHub repo"
 fi
 
-# Resolve the repo slug once. Required in project mode (cross-repo filter
-# key inside enumerate_project_items); informational only in issue mode.
-project_repo=$(gh_in_root repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
-if [[ "$parent_mode" == project && -z "$project_repo" ]]; then
-  die "could not resolve repo via 'gh repo view' in $project_root (required for project mode cross-repo filter)"
-fi
-
 # parent_body is only populated in issue mode; in project mode it stays empty,
 # and parse_blockers_from_parent_row's jq pipeline yields an empty result on
 # empty input so --unblocked-only still works without code branches.
@@ -665,8 +661,11 @@ parent_body=''
 body_nums=''
 
 if [[ "$parent_mode" == project ]]; then
+  # Cross-repo filter inside enumerate_project_items keys off project_repo.
+  project_repo=$(gh_in_root repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+    || die "could not resolve repo via 'gh repo view' in $project_root (required for project mode cross-repo filter)"
   log_info "mode: project (status=$status_filter, repo=$project_repo)"
-  log_info "fetching items from Project $project_url"
+  log_info "fetching items from Project $parent"
   children_json=$(enumerate_project_items)
 else
   log_info "fetching sub-issues of #$parent"
@@ -751,18 +750,11 @@ fi
 open_children_json=$(jq -c '[.[] | select(.state == "OPEN")]' <<<"$children_json")
 open_count=$(jq 'length' <<<"$open_children_json")
 
-if [[ "$parent_mode" == project ]]; then
-  log_info "project items: $total_children total, $open_count OPEN"
-else
-  log_info "sub-issues: $total_children total, $open_count OPEN"
-fi
+if [[ "$parent_mode" == project ]]; then child_noun="project items"; else child_noun="sub-issues"; fi
+log_info "$child_noun: $total_children total, $open_count OPEN"
 
 if (( open_count == 0 )); then
-  if [[ "$parent_mode" == project ]]; then
-    log_info "no OPEN project items. nothing to do."
-  else
-    log_info "no OPEN sub-issues. nothing to do."
-  fi
+  log_info "no OPEN $child_noun. nothing to do."
   exit 0
 fi
 
