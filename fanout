@@ -1500,14 +1500,18 @@ apply_display_names() {
       continue
     fi
 
-    # Locate the pane by [fanout #NUM] prompt prefix so matching survives
-    # even if dmux tweaked slug post-generation. Accept both the legacy
-    # "[fanout #N]" form and the parent-aware "[fanout #N of #P]" form
-    # introduced for `--status`.
-    lookup=$(jq -r --arg num "$num" '
+    # Locate the pane by `[fanout #NUM of #PARENT]` prompt prefix so matching
+    # survives even if dmux tweaked slug post-generation. Parent-scoped
+    # idempotency lets the same child number live in multiple panes (one per
+    # parent), so matching on the child number alone could write the
+    # displayName into a sibling parent's pane / worktree. Match strict
+    # against THIS run's parent. The leading-zero variant (`of #0PARENT`)
+    # is matched via `0*` so any legacy non-canonical annotations also
+    # resolve to the run's pane.
+    lookup=$(jq -r --arg num "$num" --arg parent "$parent" '
       (.panes // [])
       | map(select((.prompt // "")
-                   | test("^\\[fanout #" + $num + "( of #|\\])")))
+                   | test("^\\[fanout #" + $num + " of #0*" + $parent + "\\]")))
       | (.[0] // {} | "\(.slug // "")\t\(.worktreePath // "")")
     ' "$config_path" 2>/dev/null || printf '\t')
 
@@ -1515,7 +1519,7 @@ apply_display_names() {
     worktree_path="${lookup#*$'\t'}"
 
     if [[ -z "$pane_slug" ]]; then
-      log_warn "#$num: could not locate pane in dmux.config.json by [fanout #$num] prefix; displayName skipped"
+      log_warn "#$num: could not locate pane in dmux.config.json by [fanout #$num of #$parent] prefix; displayName skipped"
       continue
     fi
 
