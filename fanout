@@ -415,16 +415,17 @@ enumerate_fanned_children() {
   # $2 (optional) parent issue number — when given, restricts results to
   #    panes annotated for that parent. Numeric comparison via `10#` so a
   #    legacy pane tagged " of #0300" still matches `--status 300`.
-  # $3 (optional) "strict"|"lenient" (default "strict"):
-  #    strict  — pane must announce a matching parent. Used by `--status`
-  #              where ambiguous legacy panes are unsafe to attribute.
-  #    lenient — also include panes with NO parent annotation (legacy
-  #              `[fanout #N]` form). Used by the main flow's idempotency
-  #              check: any legacy pane whose number is in the current
-  #              parent's children set will be migrated to that parent
-  #              before pane creation, so treating it as already-fanned
-  #              matches the post-migration state (and keeps `--dry-run`'s
-  #              skip set stable, since dry-run skips the migration write).
+  # $3 (optional) claim_csv (",N1,N2,") — when given, ALSO include legacy
+  #    panes (no parent annotation) whose child number is in this set.
+  #    The main flow passes the strong-ownership Sub-issues-API set here,
+  #    which is exactly the set `migrate_legacy_pane_tags` would rewrite to
+  #    `[fanout #N of #<parent>]`. Treating those legacy panes as
+  #    already-fanned matches the post-migration state. Legacy panes whose
+  #    numbers are only in weak signals (body-task-list / --include) are
+  #    excluded so the main flow creates a fresh parent-tagged pane that
+  #    `--status` (strict parent filter) can later see — instead of
+  #    silently masking the child indefinitely.
+  #    `--status` omits this arg, so every legacy pane is excluded for it.
   # With no $2, every fanned-out child is returned regardless of parent.
   #
   # Echoes a space-sentinel-wrapped set (e.g. " 42 43 ") so " 42 " membership
@@ -435,7 +436,7 @@ enumerate_fanned_children() {
   #   [fanout #N of #P]      — current format, parent encoded
   local config_path="$1"
   local filter_parent="${2:-}"
-  local mode="${3:-strict}"
+  local claim_csv="${3:-}"
   local rows row n p set=' '
   rows=$(jq -r '
     (.panes // [])
@@ -453,8 +454,13 @@ enumerate_fanned_children() {
       [[ -z "$n" ]] && continue
       if [[ -n "$filter_parent" ]]; then
         if [[ -z "$p" ]]; then
-          # Legacy pane (no parent annotation).
-          [[ "$mode" == "lenient" ]] || continue
+          # Legacy pane (no parent annotation). Only count if the caller
+          # has claimed this child number — i.e., it's known-owned (the
+          # strong-signal set the main flow passes) so migration would
+          # have rewritten the prompt. Otherwise the pane's true parent
+          # is ambiguous and must not block fan-out under this one.
+          [[ -n "$claim_csv" ]] || continue
+          [[ "$claim_csv" == *",$n,"* ]] || continue
         else
           (( 10#$p == 10#$filter_parent )) || continue
         fi
@@ -1050,30 +1056,32 @@ fi
 # signal: legacy panes whose number is referenced only via task-list / --include
 # (signals that any parent body can carry) are left alone — relabeling them
 # could silently transfer ownership from another parent.
-migration_mode=lenient
+idempotency_claim="$strong_children_csv"
 if ! migrate_legacy_pane_tags "$config_path" "$parent" "$strong_children_csv"; then
-  # Write failed (jq error / read-only config). A subsequent `--status` would
-  # still miss the un-migrated legacy panes, but at least we shouldn't ALSO
-  # let lenient idempotency mask them — fall back to strict so the main flow
-  # creates fresh, parent-annotated panes for the legacy numbers. This can
-  # produce duplicate panes (stale `[fanout #N]` + new `[fanout #N of #P]`),
-  # which the user resolves by deleting the legacy one in the dmux TUI.
-  migration_mode=strict
+  # Write failed (jq error / read-only config). The legacy panes the run
+  # would have migrated stayed legacy on disk, so the strong-signal claim
+  # is no longer accurate. Drop the claim entirely — the main flow then
+  # creates fresh parent-annotated panes for those numbers (resulting in
+  # duplicate panes that the user resolves in the dmux TUI), which is
+  # preferable to `--status <parent>` polling an entry that never reflects
+  # reality.
+  idempotency_claim=""
 fi
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 
-# Scope idempotency to THIS parent's children: a pane tagged for a different
-# parent should not block fan-out under the current one (parents can share
-# child refs via task-list scan or --include). Lenient mode also catches
-# legacy `[fanout #N]` panes — they're guaranteed to be migrated to this
-# parent immediately above (or, in --dry-run, would be), so treating them
-# as already-fanned matches the post-migration state. On migration failure
-# we switch to strict so legacy panes don't silently mask new --status
-# entries.
-# Space-delimited and sentinel-wrapped so " 42 " membership tests work without
-# false positives on "142".
-fanned_set=$(enumerate_fanned_children "$config_path" "$parent" "$migration_mode")
+# Scope idempotency to THIS parent's children: panes annotated for a
+# different parent should not block fan-out under the current one (parents
+# can share child refs via task-list scan or --include). The optional
+# claim CSV ALSO admits legacy `[fanout #N]` panes whose number is in the
+# Sub-issues API set — those are exactly the panes `migrate_legacy_pane_tags`
+# would rewrite, so treating them as already-fanned matches the post-
+# migration state. Legacy panes whose ownership can't be proven (weak
+# signals only) are excluded here on purpose so a fresh parent-annotated
+# pane is created, surfacing them in `--status`.
+# Space-delimited and sentinel-wrapped so " 42 " membership tests work
+# without false positives on "142".
+fanned_set=$(enumerate_fanned_children "$config_path" "$parent" "$idempotency_claim")
 
 # --- split into targets / skipped -------------------------------------------
 

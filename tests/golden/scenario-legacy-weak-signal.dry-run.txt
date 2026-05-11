@@ -5,8 +5,16 @@
 [info] fetching sub-issues of #600
 [info] parent body / --include added 2 extra child reference(s) not in sub-issue API
 [info] sub-issues: 2 total, 2 OPEN
-[info] already fanned-out (skipping): #601
-[info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #601: First task
+  briefing -> /tmp/fanout-project_root-601.md
+  briefing size: 2161 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #601 of #600] First task: read /tmp/fanout-project_root-601.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #601: dry-run complete
 [info] #602: Second task
   briefing -> /tmp/fanout-project_root-602.md
   briefing size: 2163 bytes
@@ -17,5 +25,4 @@
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #602: dry-run complete
 
-[ ok ] created: 1
-[info] skipped (already fanned-out): 1
+[ ok ] created: 2

@@ -80,14 +80,18 @@ load helpers
   assert_golden scenario-cross-parent-shared
 }
 
-@test "scenario-legacy-weak-signal: legacy pane is NOT migrated when child comes only from body task-list" {
+@test "scenario-legacy-weak-signal: weak-signal legacy pane is left alone AND a fresh parent-annotated pane is created" {
   # The pane carries the legacy `[fanout #601]` form (no parent annotation).
   # #601 is in parent #600's set only via body-task-list scan — the
-  # Sub-issues API returns []. The migration step must skip this pane:
-  # body-task-list refs aren't strong enough to claim ownership. The legacy
-  # pane stays untouched. Lenient idempotency still treats #601 as
-  # already-fanned (so the user isn't asked to recreate it), and the
-  # "would migrate" line must NOT appear in the dry-run output.
+  # Sub-issues API returns []. Two invariants must hold:
+  #   (a) The migration step doesn't relabel the legacy pane — body-task-list
+  #       refs aren't strong enough to claim ownership. No "would migrate"
+  #       line appears.
+  #   (b) The lenient-idempotency "claim" set is the strong-signal CSV
+  #       (empty here), so #601 is NOT considered already-fanned. A fresh
+  #       `[fanout #601 of #600]` pane is created, surfacing the child in
+  #       a later `fanout --status 600`. The legacy pane is left for the
+  #       user to delete in the dmux TUI.
   use_fixture scenario-legacy-weak-signal
   run_fanout_dry 600
   assert_success
