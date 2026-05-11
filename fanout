@@ -450,10 +450,15 @@ enumerate_fanned_children() {
   local filter_parent="${2:-}"
   local claim_csv="${3:-}"
   local rows row n p set=' '
+  # Parent annotation capture is `[^\]]+` rather than `[0-9]+` so it also
+  # matches Projects v2 URLs that the main flow writes into the prompt for
+  # `fanout <project-url>` (`[fanout #N of #https://github.com/...]`). The
+  # legacy `[fanout #N]` form (no annotation) still matches via the
+  # optional group.
   rows=$(jq -r '
     (.panes // [])
     | map(.prompt // "")
-    | map(capture("^\\[fanout #(?<n>[0-9]+)( of #(?<p>[0-9]+))?\\]") // null)
+    | map(capture("^\\[fanout #(?<n>[0-9]+)( of #(?<p>[^\\]]+))?\\]") // null)
     | map(select(. != null))
     | map((.n // "") + "\t" + (.p // ""))
     | .[]
@@ -473,8 +478,13 @@ enumerate_fanned_children() {
           # is ambiguous and must not block fan-out under this one.
           [[ -n "$claim_csv" ]] || continue
           [[ "$claim_csv" == *",$n,"* ]] || continue
-        else
+        elif [[ "$p" =~ ^[0-9]+$ ]] && [[ "$filter_parent" =~ ^[0-9]+$ ]]; then
+          # Issue mode: numeric compare with `10#` to normalize leading
+          # zeros so old `of #0300` panes match `--status 300`.
           (( 10#$p == 10#$filter_parent )) || continue
+        else
+          # Project mode (URL parent) or mismatched shapes: literal match.
+          [[ "$p" == "$filter_parent" ]] || continue
         fi
       fi
       set+="$n "
@@ -1698,16 +1708,20 @@ apply_display_names() {
 
     # Locate the pane by `[fanout #NUM of #PARENT]` prompt prefix so matching
     # survives even if dmux tweaked slug post-generation. Parent-scoped
-    # idempotency lets the same child number live in multiple panes (one per
-    # parent), so matching on the child number alone could write the
-    # displayName into a sibling parent's pane / worktree. Match strict
-    # against THIS run's parent. The leading-zero variant (`of #0PARENT`)
-    # is matched via `0*` so any legacy non-canonical annotations also
-    # resolve to the run's pane.
+    # idempotency lets the same child number live in multiple panes (one
+    # per parent), so matching on the child number alone could write the
+    # displayName into a sibling parent's pane / worktree.
+    #
+    # Use startswith (literal) instead of test() because in project mode
+    # `$parent` is a full Projects v2 URL containing regex metacharacters
+    # (`:`, `/`, `.`, and possibly `?` from query strings); a test()-based
+    # regex match would misinterpret those. The pane was created earlier
+    # in this same run with `$parent` already in its canonical form, so an
+    # exact-prefix match is sufficient — no normalization needed.
     lookup=$(jq -r --arg num "$num" --arg parent "$parent" '
       (.panes // [])
       | map(select((.prompt // "")
-                   | test("^\\[fanout #" + $num + " of #0*" + $parent + "\\]")))
+                   | startswith("[fanout #" + $num + " of #" + $parent + "]")))
       | (.[0] // {} | "\(.slug // "")\t\(.worktreePath // "")")
     ' "$config_path" 2>/dev/null || printf '\t')
 
