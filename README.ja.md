@@ -46,16 +46,18 @@ resultFile パスを特定し、プロンプトポップアップ用には
 
 ## Project モード
 
-第1引数には親 issue 番号だけでなく、Projects v2 の URL
-（`https://github.com/users/<owner>/projects/<n>` または
-`https://github.com/orgs/<org>/projects/<n>`）も渡せます。Project モードでは
+第1引数には親 issue 番号だけでなく、Projects v2 の URL —
+`https://github.com/users/<owner>/projects/<n>` または
+`https://github.com/orgs/<org>/projects/<n>` — も渡せます。正規形の
+`/views/<id>` サフィックスやトレイリングのクエリ文字列付き URL も受け付ける
+ので、ブラウザのアドレスバーからそのままコピペできます。Project モードでは
 親 issue の Sub-issues + タスクリスト和集合の代わりに、Project items から
 子 issue を取り出します。
 
-- **既定フィルタは `Status == Todo`**。`--status "<name>"` で別の
-  single-select 値（例: `"In Progress"`）に切り替え、`--status all` で
-  Status フィルタを無効化して全 item（Done、Status 未設定なども含む）を
-  対象にします。
+- **既定フィルタは `Status == Todo`**。`--project-status "<name>"` で別の
+  single-select 値（例: `"In Progress"`）に切り替え、`--project-status all`
+  でフィルタを無効化して全 item（Done、Status 未設定なども含む）を対象に
+  します。
 - **親 body が無いので暗黙の子参照サルベージは無い**。同梱の Claude/Codex
   スキルが通常拾う `Closes #N` / `Depends on #N` / 日本語の慣用句は
   Project モードでは検出対象になりません — Project が source of truth。
@@ -64,7 +66,7 @@ resultFile パスを特定し、プロンプトポップアップ用には
   `@dmux_project_root` の repo と一致しない item は warn ログを出してスキップ
   します（fanout は今でも 1 回 1 repo の前提）。
 - **Project に Status フィールドが無い場合** は warn を出して
-  `--status` を無視し、全 item を対象にフォールバックします。
+  `--project-status` を無視し、全 item を対象にフォールバックします。
 - **冪等性 (`[fanout #N]`) と `--unblocked-only` は issue モードと共通**。
   Project モードでの blocker 情報源は child body の `## Blocked by` セクションと
   `blocked` ラベルのみ（親 body の `(blocked by #X)` トレイラは存在しない）。
@@ -154,17 +156,18 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
 ## 使い方
 
 ```
-fanout <parent> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-               [--include <list>] [--unblocked-only] [--status <name>]
-               [--name <NUM>=<slug>[|<display>]]
-               [--session <tmux-session>] [--sleep <seconds>]
-               [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout <parent-issue|project-url>
+       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--include <list>] [--unblocked-only] [--project-status <name>]
+       [--name <NUM>=<slug>[|<display>]]
+       [--session <tmux-session>] [--sleep <seconds>]
+       [--popup-timeout <seconds>] [--dry-run] [--debug]
 fanout --help
 ```
 
-`<parent>` は GitHub issue 番号（Sub-issues + タスクリストモード）または
-Projects v2 URL（Project モード、上記参照）。`--status` は Project モード
-でのみ意味を持ち、issue モードでは無視されます。
+第1引数は GitHub issue 番号（Sub-issues + タスクリストモード）または
+Projects v2 URL（Project モード、上記参照）のいずれか。`--project-status`
+は Project モードでのみ意味を持ち、issue モードでは無視されます。
 
 ### 例
 
@@ -223,10 +226,10 @@ fanout 123 --agent codex
 fanout https://github.com/users/<owner>/projects/<n>
 
 # 別の Status 列を指定（任意の single-select 値が使える）
-fanout https://github.com/orgs/<org>/projects/<n> --status "In Progress"
+fanout https://github.com/orgs/<org>/projects/<n> --project-status "In Progress"
 
 # Status フィルタを無効化して全 item を対象に（Done / Status 未設定も含む）
-fanout https://github.com/users/<owner>/projects/<n> --status all
+fanout https://github.com/users/<owner>/projects/<n> --project-status all
 ```
 
 ## エージェントセッション内から呼び出す
