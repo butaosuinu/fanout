@@ -1,0 +1,4 @@
+dmux	@dmux_controller_pid	@@PID@@
+dmux	@dmux_control_pane	%1
+dmux	@dmux_config_path	@@FIXTURE@@/dmux.config.json
+dmux	@dmux_project_root	@@FIXTURE@@/project_root

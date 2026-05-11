@@ -80,6 +80,20 @@ load helpers
   assert_golden scenario-cross-parent-shared
 }
 
+@test "scenario-legacy-weak-signal: legacy pane is NOT migrated when child comes only from body task-list" {
+  # The pane carries the legacy `[fanout #601]` form (no parent annotation).
+  # #601 is in parent #600's set only via body-task-list scan — the
+  # Sub-issues API returns []. The migration step must skip this pane:
+  # body-task-list refs aren't strong enough to claim ownership. The legacy
+  # pane stays untouched. Lenient idempotency still treats #601 as
+  # already-fanned (so the user isn't asked to recreate it), and the
+  # "would migrate" line must NOT appear in the dry-run output.
+  use_fixture scenario-legacy-weak-signal
+  run_fanout_dry 600
+  assert_success
+  assert_golden scenario-legacy-weak-signal
+}
+
 @test "scenario-idempotency: existing [fanout #N] pane causes N to be skipped and migration is announced" {
   # The fixture's pane uses the legacy `[fanout #N]` form (no parent
   # annotation), which exercises both invariants in one run: idempotency

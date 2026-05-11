@@ -363,14 +363,19 @@ migrate_legacy_pane_tags() {
   # them). The doc tells users to re-fan to surface them, but idempotency
   # would otherwise treat the legacy pane as already-fanned and skip it,
   # leaving the legacy prefix in place forever. Rewrite legacy prompts to
-  # `[fanout #N of #PARENT]` for any N in this run's children set so a
-  # subsequent --status picks them up.
+  # `[fanout #N of #PARENT]` for any N in this run's *strong-ownership* set
+  # (GitHub Sub-issues API links — explicit parent→child references). Weak
+  # signals like body-task-list scans and --include must NOT trigger
+  # migration: those numbers can be referenced from any parent's body, so
+  # relabeling a legacy pane on that basis could silently transfer
+  # ownership away from its original parent.
   #
-  # $1 config_path  $2 parent (canonicalized)  $3 children_csv (",N1,N2,N3,")
+  # $1 config_path  $2 parent (canonicalized)
+  # $3 strong_children_csv (",N1,N2,N3,") — Sub-issues API set only
   # Honors $dry_run by logging the would-be count without writing.
-  local config_path="$1" parent="$2" children_csv="$3"
+  local config_path="$1" parent="$2" strong_children_csv="$3"
   local migrated_count
-  migrated_count=$(jq -r --arg children "$children_csv" '
+  migrated_count=$(jq -r --arg children "$strong_children_csv" '
     [(.panes // [])[]
      | select((.prompt // "") | test("^\\[fanout #[0-9]+\\]"))
      | ((.prompt // "") | capture("^\\[fanout #(?<n>[0-9]+)\\]")) as $m
@@ -386,7 +391,7 @@ migrate_legacy_pane_tags() {
   fi
 
   local tmp="${config_path}.fanout-migrate.tmp"
-  if jq --arg parent "$parent" --arg children "$children_csv" '
+  if jq --arg parent "$parent" --arg children "$strong_children_csv" '
     .panes = ((.panes // []) | map(
       if (.prompt // "") | test("^\\[fanout #[0-9]+\\]") then
         ((.prompt // "") | capture("^\\[fanout #(?<n>[0-9]+)\\](?<rest>.*)")) as $m
@@ -872,6 +877,14 @@ sub_issues_raw=$(gh_in_root sub-issue list "$parent" --json number,title,state 2
 # no body field; flatten + upcase to match downstream filters.
 children_json=$(jq '[.subIssues // [] | .[] | {number, title, state: (.state | ascii_upcase), body: "", labels: []}]' <<<"$sub_issues_raw")
 
+# Snapshot of "strong-ownership" child numbers: only those that GitHub's
+# Sub-issues API explicitly links to this parent. body-task-list and
+# --include numbers (added below) are weaker signals — the same number may
+# appear under multiple parents' task lists. The legacy-pane migration
+# below uses ONLY this strong set so it cannot reassign a pane that may
+# have been created under a different parent.
+strong_children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
+
 # Also union children declared as task-list items in the parent body; some
 # parents list them there without using the Sub-issues API.
 parent_body=$(gh_in_root issue view "$parent" --json body -q .body 2>/dev/null) || {
@@ -1019,11 +1032,12 @@ fi
 
 # --- migrate legacy pane tags ------------------------------------------------
 # Pre-#35 panes carry `[fanout #N]` (no parent annotation). Rewrite any whose
-# child number is in this parent's discovered set so a subsequent
-# `fanout --status <parent>` picks them up. Runs before idempotency so
-# fanned_set is built from the migrated content.
-children_csv=",$(jq -r '[.[].number] | join(",")' <<<"$children_json"),"
-migrate_legacy_pane_tags "$config_path" "$parent" "$children_csv"
+# child number is in this parent's *Sub-issues API* set so a subsequent
+# `fanout --status <parent>` picks them up. Restricted to the strong-ownership
+# signal: legacy panes whose number is referenced only via task-list / --include
+# (signals that any parent body can carry) are left alone — relabeling them
+# could silently transfer ownership from another parent.
+migrate_legacy_pane_tags "$config_path" "$parent" "$strong_children_csv"
 
 # --- idempotency: find existing fanout-tagged panes --------------------------
 

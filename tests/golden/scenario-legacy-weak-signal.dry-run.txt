@@ -1,0 +1,21 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-legacy-weak-signal/dmux.config.json
+[info] fetching sub-issues of #600
+[info] parent body / --include added 2 extra child reference(s) not in sub-issue API
+[info] sub-issues: 2 total, 2 OPEN
+[info] already fanned-out (skipping): #601
+[info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #602: Second task
+  briefing -> /tmp/fanout-project_root-602.md
+  briefing size: 2163 bytes
+  current panes[] length: 1
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #602 of #600] Second task: read /tmp/fanout-project_root-602.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #602: dry-run complete
+
+[ ok ] created: 1
+[info] skipped (already fanned-out): 1
