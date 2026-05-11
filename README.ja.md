@@ -44,6 +44,31 @@ resultFile パスを特定し、プロンプトポップアップ用には
 同じ経路でペイン作成を進めます。dmux が HTTP API を正式公開したら、この
 スクリプトは `POST /api/panes` 数行に戻せます。
 
+## Project モード
+
+第1引数には親 issue 番号だけでなく、Projects v2 の URL
+（`https://github.com/users/<owner>/projects/<n>` または
+`https://github.com/orgs/<org>/projects/<n>`）も渡せます。Project モードでは
+親 issue の Sub-issues + タスクリスト和集合の代わりに、Project items から
+子 issue を取り出します。
+
+- **既定フィルタは `Status == Todo`**。`--status "<name>"` で別の
+  single-select 値（例: `"In Progress"`）に切り替え、`--status all` で
+  Status フィルタを無効化して全 item（Done、Status 未設定なども含む）を
+  対象にします。
+- **親 body が無いので暗黙の子参照サルベージは無い**。同梱の Claude/Codex
+  スキルが通常拾う `Closes #N` / `Depends on #N` / 日本語の慣用句は
+  Project モードでは検出対象になりません — Project が source of truth。
+  Project が取りこぼしている子は `--include 4,7` で手動補完してください。
+- **同一リポジトリ前提は維持**。`content.repository` が dmux の
+  `@dmux_project_root` の repo と一致しない item は warn ログを出してスキップ
+  します（fanout は今でも 1 回 1 repo の前提）。
+- **Project に Status フィールドが無い場合** は warn を出して
+  `--status` を無視し、全 item を対象にフォールバックします。
+- **冪等性 (`[fanout #N]`) と `--unblocked-only` は issue モードと共通**。
+  Project モードでの blocker 情報源は child body の `## Blocked by` セクションと
+  `blocked` ラベルのみ（親 body の `(blocked by #X)` トレイラは存在しない）。
+
 ## インストール
 
 fanout は 1 つの Bash スクリプトに、エージェント連携ファイルを加えた構成で
@@ -102,6 +127,9 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
   チェックし、失敗時にはインストールのヒントを表示します。子 issue は
   Sub-issues API 経由でも、親本文のタスクリスト（`- [ ] #NUM ...`）経由でも、
   あるいは両方で宣言されていても構いません。fanout は両ソースの和集合を取ります。
+- **Project モード時のみ**: Project items を取得する GraphQL クエリのため、
+  `gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project`
+  で付与してください。issue モード（`fanout <N>`）では不要です。
 - このマシン上で動作中の dmux セッション: `cd <repo> && dmux`。fanout は
   tmux セッションを走査して `@dmux_controller_pid` オプションを探し、PID が
   生きているかを確認することで dmux を検出します。
@@ -126,13 +154,17 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
 ## 使い方
 
 ```
-fanout <parent-issue> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
-                     [--include <list>] [--unblocked-only]
-                     [--name <NUM>=<slug>[|<display>]]
-                     [--session <tmux-session>] [--sleep <seconds>]
-                     [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout <parent> [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+               [--include <list>] [--unblocked-only] [--status <name>]
+               [--name <NUM>=<slug>[|<display>]]
+               [--session <tmux-session>] [--sleep <seconds>]
+               [--popup-timeout <seconds>] [--dry-run] [--debug]
 fanout --help
 ```
+
+`<parent>` は GitHub issue 番号（Sub-issues + タスクリストモード）または
+Projects v2 URL（Project モード、上記参照）。`--status` は Project モード
+でのみ意味を持ち、issue モードでは無視されます。
 
 ### 例
 
@@ -184,6 +216,17 @@ fanout 123 --popup-timeout 45
 # 子ペインを立てたいときなど）。通常は不要 — fanout が dmux.config.json の
 # 呼び出し元ペイン `.panes[].agent` を自動で拾う。
 fanout 123 --agent codex
+
+# 親 issue ではなく Projects v2 ボードの OPEN issue をファンアウトする。
+# 既定は Status=Todo フィルタ、同一リポジトリのみ。`gh auth refresh -s
+# read:project` が必要。詳しいルールは上の「Project モード」節を参照。
+fanout https://github.com/users/<owner>/projects/<n>
+
+# 別の Status 列を指定（任意の single-select 値が使える）
+fanout https://github.com/orgs/<org>/projects/<n> --status "In Progress"
+
+# Status フィルタを無効化して全 item を対象に（Done / Status 未設定も含む）
+fanout https://github.com/users/<owner>/projects/<n> --status all
 ```
 
 ## エージェントセッション内から呼び出す
