@@ -107,7 +107,9 @@ Options:
   -h, --help          Show this message.
 
 Prerequisites:
-  * gh, gh-sub-issue extension, jq, tmux, pgrep installed.
+  * gh, jq, tmux, pgrep installed. gh-sub-issue extension is required for
+    issue mode only (project mode uses `gh api graphql`); for project mode
+    the gh token must additionally carry the `read:project` scope.
   * `cd <repo> && dmux` has been run; tmux session is alive.
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
@@ -416,7 +418,10 @@ need_cmd jq    || missing_deps+=('jq (brew install jq)')
 need_cmd tmux  || missing_deps+=('tmux (brew install tmux)')
 need_cmd pgrep || missing_deps+=('pgrep (procps-ng on Linux; preinstalled on macOS)')
 
-if ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
+# gh-sub-issue is only needed in issue mode (project mode goes through
+# `gh api graphql` instead).
+if [[ "$parent_mode" == issue ]] \
+  && ! gh extension list 2>/dev/null | cut -f1 | grep -qx 'gh sub-issue'; then
   missing_deps+=('gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)')
 fi
 
@@ -508,6 +513,14 @@ EOF
 
     if ! page=$(gh_in_root "${args[@]}" 2>&1); then
       die "gh api graphql (projectV2 items) failed: $page"
+    fi
+
+    # GraphQL returns projectV2: null for a syntactically valid URL when the
+    # project number is wrong or the token can't see it. Catch it here so the
+    # caller gets an actionable message instead of a jq null-arithmetic crash
+    # in the final flatten pass.
+    if [[ "$(jq -r ".data.${entry_field}.projectV2 // null | if . == null then 0 else 1 end" <<<"$page")" == "0" ]]; then
+      die "Project not found or not accessible: $parent (check the URL, token scopes, and project visibility)"
     fi
     pages+=("$page")
 
