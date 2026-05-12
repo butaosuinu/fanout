@@ -18,12 +18,60 @@
 #         fanout uses -q .state and -q .body against the same endpoint,
 #         so fixtures are full issue objects (number/title/state/body/labels).
 #
+#   gh repo view --json <fields> [-q <filter>]
+#       — echoes $FIXTURE_DIR/gh-repo-view.json (with optional jq filter).
+#         Project mode calls this to resolve the cross-repo filter target
+#         (typical fixture: {"nameWithOwner":"butaosuinu/fanout"}).
+#
+#   gh api graphql -f query=... -F owner=X -F number=Y -F first=Z [-F after=C]
+#       — Project mode pagination. Without `-F after=...`, echoes
+#         $FIXTURE_DIR/gh-graphql-page-1.json. With `-F after=<cursor>`,
+#         echoes $FIXTURE_DIR/gh-graphql-after-<cursor>.json. All current
+#         fixtures use a single page (hasNextPage:false) so only page-1.json
+#         is needed.
+#
 # Tier 1 "force_missing gh" still wins because helpers.bash rebuilds PATH
 # to a sanitized directory that excludes this shim.
 
 set -euo pipefail
 
 fixture="${FIXTURE_DIR:-}"
+
+# Emit a fixture file, optionally filtered through real jq. The $label is
+# used only in the "FIXTURE_DIR not set" error so the test reader can tell
+# which gh subcommand the missing fixture belonged to.
+emit_fixture() {
+  local fx="$1" jq_filter="${2:-}" label="${3:-}"
+  if [[ -z "$fixture" ]]; then
+    echo "gh shim: FIXTURE_DIR not set ($label)" >&2
+    exit 1
+  fi
+  if [[ ! -f "$fx" ]]; then
+    echo "gh shim: missing $fx" >&2
+    exit 1
+  fi
+  if [[ -n "$jq_filter" ]]; then
+    jq -r "$jq_filter" "$fx"
+  else
+    cat "$fx"
+  fi
+}
+
+# Extract the -q/--jq filter (if any) from a `gh ... --json X -q F` style
+# argv tail. Echoes the filter or empty. --json's value is consumed and
+# ignored — we always emit full fixture JSON and let the caller's filter
+# (or its absence) shape the output.
+extract_jq_filter() {
+  local filter=""
+  while (( $# )); do
+    case "$1" in
+      --json) shift 2;;
+      -q|--jq) filter="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  printf '%s' "$filter"
+}
 
 case "${1:-}" in
   extension)
@@ -34,15 +82,7 @@ case "${1:-}" in
     ;;
   sub-issue)
     if [[ "${2:-}" == "list" ]]; then
-      if [[ -z "$fixture" ]]; then
-        echo "gh shim: FIXTURE_DIR not set (gh sub-issue list $*)" >&2
-        exit 1
-      fi
-      if [[ ! -f "$fixture/gh-sub-issue-list.json" ]]; then
-        echo "gh shim: missing $fixture/gh-sub-issue-list.json" >&2
-        exit 1
-      fi
-      cat "$fixture/gh-sub-issue-list.json"
+      emit_fixture "$fixture/gh-sub-issue-list.json" "" "gh sub-issue list $*"
       exit 0
     fi
     ;;
@@ -50,28 +90,40 @@ case "${1:-}" in
     if [[ "${2:-}" == "view" ]]; then
       num="${3:-}"
       shift 3 2>/dev/null || true
-      jq_filter=""
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-issue-view-$num.json" "$jq_filter" "gh issue view $num"
+      exit 0
+    fi
+    ;;
+  repo)
+    if [[ "${2:-}" == "view" ]]; then
+      shift 2
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-repo-view.json" "$jq_filter" "gh repo view"
+      exit 0
+    fi
+    ;;
+  api)
+    if [[ "${2:-}" == "graphql" ]]; then
+      shift 2
+      # Project mode pagination: peek at -F after=<cursor> to pick the
+      # fixture file. All other -f/-F flags are consumed and ignored.
+      cursor=""
       while (( $# )); do
         case "$1" in
-          --json) shift 2;;
-          -q|--jq) jq_filter="$2"; shift 2;;
+          -f|-F)
+            kv="${2:-}"
+            [[ "$kv" == after=* ]] && cursor="${kv#after=}"
+            shift 2;;
           *) shift;;
         esac
       done
-      if [[ -z "$fixture" ]]; then
-        echo "gh shim: FIXTURE_DIR not set (gh issue view $num)" >&2
-        exit 1
-      fi
-      fx="$fixture/gh-issue-view-$num.json"
-      if [[ ! -f "$fx" ]]; then
-        echo "gh shim: missing $fx" >&2
-        exit 1
-      fi
-      if [[ -n "$jq_filter" ]]; then
-        jq -r "$jq_filter" "$fx"
+      if [[ -n "$cursor" ]]; then
+        fx="$fixture/gh-graphql-after-$cursor.json"
       else
-        cat "$fx"
+        fx="$fixture/gh-graphql-page-1.json"
       fi
+      emit_fixture "$fx" "" "gh api graphql"
       exit 0
     fi
     ;;

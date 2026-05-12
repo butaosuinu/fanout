@@ -1,0 +1,40 @@
+{
+  "data": {
+    "user": {
+      "projectV2": {
+        "title": "Demo Board",
+        "url": "https://github.com/users/butaosuinu/projects/3",
+        "field": { "__typename": "ProjectV2SingleSelectField" },
+        "items": {
+          "nodes": [
+            {
+              "content": {
+                "__typename": "Issue",
+                "number": 921,
+                "title": "Self-repo todo",
+                "state": "OPEN",
+                "body": "Body of issue 921.",
+                "repository": { "nameWithOwner": "butaosuinu/fanout" },
+                "labels": { "nodes": [] }
+              },
+              "status": { "name": "Todo" }
+            },
+            {
+              "content": {
+                "__typename": "Issue",
+                "number": 50,
+                "title": "Cross-repo todo",
+                "state": "OPEN",
+                "body": "Body of cross-repo issue.",
+                "repository": { "nameWithOwner": "someorg/other-repo" },
+                "labels": { "nodes": [] }
+              },
+              "status": { "name": "Todo" }
+            }
+          ],
+          "pageInfo": { "hasNextPage": false, "endCursor": null }
+        }
+      }
+    }
+  }
+}

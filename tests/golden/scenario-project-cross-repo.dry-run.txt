@@ -1,0 +1,20 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-project-cross-repo/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-project-cross-repo/dmux.config.json
+[info] mode: project (status=Todo, repo=butaosuinu/fanout)
+[info] fetching items from Project https://github.com/users/butaosuinu/projects/3
+[warn] skipping cross-repo project item: someorg/other-repo#50 (project root repo: butaosuinu/fanout)
+[info] project items: 1 total, 1 OPEN
+[info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #921: Self-repo todo
+  briefing -> /tmp/fanout-project_root-921.md
+  briefing size: 2177 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #921] Self-repo todo: read /tmp/fanout-project_root-921.md and begin."}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #921: dry-run complete
+
+[ ok ] created: 1
