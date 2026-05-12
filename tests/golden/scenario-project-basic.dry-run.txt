@@ -12,7 +12,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #901] First todo item: read /tmp/fanout-project_root-901.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #901 of #https://github.com/users/butaosuinu/projects/3] First todo item: read /tmp/fanout-project_root-901.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #901: dry-run complete
 [info] #902: Second todo item
@@ -21,7 +21,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #902] Second todo item: read /tmp/fanout-project_root-902.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #902 of #https://github.com/users/butaosuinu/projects/3] Second todo item: read /tmp/fanout-project_root-902.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #902: dry-run complete
 
