@@ -13,7 +13,7 @@
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #921] Self-repo todo: read /tmp/fanout-project_root-921.md and begin."}
+    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #921 of #https://github.com/users/butaosuinu/projects/3] Self-repo todo: read /tmp/fanout-project_root-921.md and begin."}
     # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
 [ ok ] #921: dry-run complete
 
