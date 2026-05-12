@@ -41,6 +41,11 @@ setup() {
   # tests — unset here and let each Tier 2 test opt in via use_fixture.
   unset FIXTURE_DIR
 
+  # `--status` honors DMUX_CONFIG_PATH as an offline-mode escape hatch.
+  # Unset between tests so a stale value doesn't accidentally bypass the
+  # live-dmux-discovery path that other tests are trying to exercise.
+  unset DMUX_CONFIG_PATH
+
   # Supply the tmux shim with a PID that's alive for the full test run.
   # $$ inside bats is the bats process PID; it stays live across setup /
   # test body / teardown. The tmux shim substitutes @@PID@@ in fixture
@@ -133,6 +138,14 @@ run_fanout_dry() {
   run_fanout --dry-run --agent claude --sleep 0 "$@"
 }
 
+# Run fanout in --status mode. Unlike run_fanout_dry, --status is exclusive
+# with --agent / --sleep / --dry-run, so this wrapper passes only --status
+# and the parent issue number plus any extra args the test wants (typically
+# none).
+run_fanout_status() {
+  run_fanout --status "$@"
+}
+
 # Assert that the previous `run` call ended with $status == 0. On failure,
 # dump status + captured output into bats' own TAP stream so CI logs have
 # enough context to diagnose without re-running with a local repro. Plain
@@ -160,20 +173,22 @@ _scrub_output() {
   printf '%s' "$1" | sed -e "s|$REPO_ROOT|<REPO>|g"
 }
 
-# Diff $output against tests/golden/<name>.dry-run.txt.
+# Diff $output against tests/golden/<name>.<suffix>.txt. Default suffix is
+# "dry-run" so existing callers (assert_golden <name>) keep working; pass
+# "status" for --status JSON goldens or any other suffix for future modes.
 #
-# The golden file holds the merged (and path-scrubbed) stdout+stderr that
-# run_fanout_dry saw. FANOUT_GOLDEN_UPDATE=1 rewrites the golden instead of
-# diffing — use this whenever fanout's on-screen format changes intentionally.
-# Without that env var, a mismatch surfaces as a unified diff in bats'
-# failure output, which is what CI reports on regression.
+# The golden file holds the merged (and path-scrubbed) stdout+stderr that the
+# run_fanout_* wrapper saw. FANOUT_GOLDEN_UPDATE=1 rewrites the golden instead
+# of diffing — use this whenever fanout's on-screen format changes
+# intentionally. Without that env var, a mismatch surfaces as a unified diff
+# in bats' failure output, which is what CI reports on regression.
 assert_golden() {
   local name="$1"
-  local golden="$TESTS_DIR/golden/$name.dry-run.txt"
+  local suffix="${2:-dry-run}"
+  local golden="$TESTS_DIR/golden/$name.$suffix.txt"
   local scrubbed
-  # $output is populated by bats' `run` (via run_fanout_dry) before this
-  # helper is called, so the "unassigned" warning from shellcheck is a
-  # false positive here.
+  # $output is populated by bats' `run` (via run_fanout_*) before this helper
+  # is called, so the "unassigned" warning from shellcheck is a false positive.
   # shellcheck disable=SC2154
   scrubbed="$(_scrub_output "$output")"
   if [[ "${FANOUT_GOLDEN_UPDATE:-0}" == "1" ]]; then
@@ -182,10 +197,14 @@ assert_golden() {
     return 0
   fi
   if [[ ! -f "$golden" ]]; then
-    echo "assert_golden: $golden does not exist. Rerun with FANOUT_GOLDEN_UPDATE=1 to create it." >&2
+    echo "assert_golden ($suffix): $golden does not exist. Rerun with FANOUT_GOLDEN_UPDATE=1 to create it." >&2
     return 1
   fi
   local actual="$BATS_TEST_TMPDIR/actual.txt"
   printf '%s\n' "$scrubbed" > "$actual"
   diff -u "$golden" "$actual"
+}
+
+assert_status_golden() {
+  assert_golden "$1" status
 }

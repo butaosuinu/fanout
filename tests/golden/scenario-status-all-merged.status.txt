@@ -1,0 +1,35 @@
+{
+  "parent": 100,
+  "children": [
+    {
+      "num": 101,
+      "state": "CLOSED",
+      "prs": [
+        {
+          "number": 501,
+          "state": "MERGED",
+          "mergedAt": "2026-05-04T09:00:00Z"
+        }
+      ],
+      "has_merged_pr": true
+    },
+    {
+      "num": 102,
+      "state": "CLOSED",
+      "prs": [
+        {
+          "number": 502,
+          "state": "MERGED",
+          "mergedAt": "2026-05-05T10:30:00Z"
+        }
+      ],
+      "has_merged_pr": true
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "merged": 2,
+    "pending": 0,
+    "all_merged": true
+  }
+}

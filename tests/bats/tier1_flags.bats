@@ -219,3 +219,225 @@ load helpers
   [[ "$output" == *"missing dependencies"* ]]
   [[ "$output" == *"pgrep"* ]]
 }
+
+# --- --status CLI surface ---------------------------------------------------
+# --status uses its own exit-code lane (0/2/3) per issue #35: 0=JSON emitted,
+# 2=cannot enumerate (bad invocation, missing config, no dmux session),
+# 3=gh API failure. The cases below cover the CLI surface only — the body /
+# JSON shape lives in tier2_status.bats against fixtures.
+
+@test "--status without parent: exit 2" {
+  run_fanout --status
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Usage: fanout"* ]]
+}
+
+@test "--status non-integer parent: exit 2" {
+  run_fanout --status abc
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: parent must be an integer issue number or Projects v2 URL"* ]]
+}
+
+@test "--status with Projects v2 URL parent: exit 2" {
+  # --status only makes sense for integer-issue parents (panes carry
+  # `[fanout #N of #<issue-number>]`). Projects URLs are not addressable
+  # via that prefix, so the combination is rejected up-front.
+  run_fanout --status 'https://github.com/users/foo/projects/3'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with Projects v2 URLs as parent"* ]]
+}
+
+@test "--status conflicts with --agent: exit 2" {
+  run_fanout --status 1 --agent claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "--status conflicts with --limit: exit 2" {
+  run_fanout --status 1 --limit 3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --limit"* ]]
+}
+
+@test "--status conflicts with --only: exit 2" {
+  run_fanout --status 1 --only 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --only"* ]]
+}
+
+@test "--status conflicts with --skip: exit 2" {
+  run_fanout --status 1 --skip 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --skip"* ]]
+}
+
+@test "--status conflicts with --include: exit 2" {
+  run_fanout --status 1 --include 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --include"* ]]
+}
+
+@test "--status conflicts with --dry-run: exit 2" {
+  run_fanout --status 1 --dry-run
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --dry-run"* ]]
+}
+
+@test "--status conflicts with --unblocked-only: exit 2" {
+  run_fanout --status 1 --unblocked-only
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --unblocked-only"* ]]
+}
+
+@test "--status conflicts with --name: exit 2" {
+  run_fanout --status 1 --name 4=foo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
+@test "--status conflicts with --sleep even at default value: exit 2" {
+  # Wrappers that always pass `--sleep 4` (the default) must still trigger
+  # the exclusivity error. Detection is by flag presence, not value diff.
+  run_fanout --status 1 --sleep 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --sleep"* ]]
+}
+
+@test "--status conflicts with --popup-timeout even at default value: exit 2" {
+  run_fanout --status 1 --popup-timeout 20
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --popup-timeout"* ]]
+}
+
+@test "--status with bogus --sleep value: exclusivity wins (exit 2), not numeric die (exit 1)" {
+  # Callers branch on --status's dedicated exit codes (0/2/3). The
+  # exclusivity check must run before the `--sleep must be a number` die,
+  # otherwise an invalid combination leaks through as a main-flow exit 1.
+  run_fanout --status 1 --sleep nope
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --sleep"* ]]
+}
+
+@test "--status with bogus --popup-timeout value: exclusivity wins (exit 2)" {
+  run_fanout --status 1 --popup-timeout zero
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --popup-timeout"* ]]
+}
+
+@test "--status with bogus --limit value: exclusivity wins (exit 2)" {
+  run_fanout --status 1 --limit abc
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --limit"* ]]
+}
+
+@test "--status with bogus --name value: exclusivity wins (exit 2), not parse_name_arg die (exit 1)" {
+  # --name normally die's inside parse_name_arg if the slug-hint/NUM is
+  # malformed. Combined with --status, the conflict must surface first so
+  # callers see the documented --status exit code 2.
+  run_fanout --status 1 --name bad
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
+@test "--status with bogus --name slug-hint: exclusivity wins (exit 2)" {
+  # Same as above but the malformed part is the slug-hint (would normally
+  # die with "slug-hint must be lowercase kebab-case").
+  run_fanout --status 1 --name 4=BAD
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
+@test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
+  # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
+  # let `--status` complete without tmux installed (CI / post-session
+  # introspection). With no fanned children, cmd_status emits a zero summary
+  # before reaching any gh call.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[]}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"all_merged": false'* ]]
+  [[ "$output" == *'"total": 0'* ]]
+}
+
+@test "--status without DMUX_CONFIG_PATH still requires tmux: exit 1" {
+  # Regression guard: the offline-mode escape hatch above must not
+  # accidentally mask the missing-tmux error for the live-discovery path.
+  force_missing tmux
+  run_fanout --status 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing dependencies"* ]]
+  [[ "$output" == *"tmux"* ]]
+}
+
+@test "--status with malformed JSON config: exit 2" {
+  # Contract: an unparseable dmux.config.json must surface as exit 2 with a
+  # clear message. Without this, jq's raw exit code (5) or a silent
+  # "total: 0" misreport would slip through and break wait-and-continue
+  # automation that polls --status.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes": [bogus]\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: dmux config at"* ]]
+  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+}
+
+@test "--status with non-array .panes: exit 2" {
+  # JSON is valid but the schema is wrong (.panes is a string, not an array).
+  # Catch this up-front so enumerate_fanned_children's lenient mode can't turn
+  # it into a silent "no fanned children" report.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":"oops"}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: dmux config at"* ]]
+  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+}
+
+@test "--status with valid JSON missing .panes field: exit 0 with empty children" {
+  # `.panes` may be absent on a freshly-initialized config; that's a valid
+  # state, not an error. Treat as zero fanned children.
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"total": 0'* ]]
+  [[ "$output" == *'"all_merged": false'* ]]
+}
+
+@test "--status with DMUX_CONFIG_PATH whose projectRoot is missing: exit 2 (not 3)" {
+  # Stale / wrong project_root in the config must be reported as an
+  # enumeration problem (exit 2), not deferred until each gh_in_root cd
+  # fails and reports exit 3 per child. The --status contract documents
+  # 2 = "cannot enumerate / unusable config".
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[],"projectRoot":"/does/not/exist/anywhere"}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status: project_root is not a directory"* ]]
+}
+
+@test "--status normalizes leading zeros in parent argument" {
+  # Wrappers that pass IDs from external systems may forward "0300" instead
+  # of "300". Without canonicalization, the parent field in the emitted JSON
+  # would carry the leading zero, and pane-prompt filtering would match
+  # against that string (missing legacy panes tagged plainly "of #300").
+  force_missing tmux
+  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
+  printf '{"panes":[]}\n' > "$cfg"
+  export DMUX_CONFIG_PATH="$cfg"
+  run_fanout --status 0300
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"parent": 300'* ]]
+}

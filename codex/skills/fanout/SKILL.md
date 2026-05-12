@@ -91,6 +91,38 @@ use this workflow directly.
 7. After confirmation, run `fanout <target> <flags>` and relay the
    created/skipped/deferred/failed summary.
 
+## Optional: Wait-and-Continue
+
+Use this workflow only when the user has explicitly asked to "wait until every
+child PR merges and then continue parent-scope work" (Japanese: `子 PR が全部
+マージされたら統合まで進めて` or similar). Do not start it unprompted.
+
+Codex CLI does not provide a built-in scheduler, so polling is driven by the
+user (or an external cron / shell loop). The pattern:
+
+1. After the real fanout run has succeeded, continue any parent-scope work that
+   doesn't depend on the children's merged output.
+2. Periodically rerun `fanout --status <PARENT>`. Inspect the JSON; the key
+   field is `summary.all_merged`.
+3. When `summary.all_merged == true`, run
+   `git fetch origin main && git merge --ff-only origin/main` in the parent
+   worktree and proceed with integration tests and parent-issue close-out.
+4. Treat `prs: []` on a child as pending (PR not yet open), never merged.
+
+`--status` exit codes:
+
+- `2` — cannot enumerate children (config / session missing, bad invocation).
+  Stop and report.
+- `3` — `gh` API call failed. Stop and report; the user may need to refresh
+  `gh auth`.
+- `0` with `summary.total == 0` — nothing has been fanned out under that parent
+  (or every fanned pane was torn down). Tell the user; don't keep polling.
+
+`--status` is read-only and exclusive with all action-bearing flags
+(`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--sleep`,
+`--popup-timeout`, `--dry-run`, `--unblocked-only`). Set `DMUX_CONFIG_PATH`
+to bypass live-dmux-session discovery (useful after the session has exited).
+
 ## Implicit Child Scan
 
 **Issue mode only — skip this section entirely when the positional argument
@@ -203,10 +235,14 @@ the likely next action:
 
 ## Notes
 
-- Reruns are idempotent: existing panes are detected by the `[fanout #N]`
-  prompt prefix in `dmux.config.json`. This holds across modes — fanning out
-  the same child via both an issue parent and a Project URL never creates a
-  duplicate pane.
+- Reruns are idempotent: existing panes are detected by the
+  `[fanout #N of #<parent>]` prompt prefix in `dmux.config.json` — `<parent>`
+  is the issue number in issue mode and the Projects v2 URL in project mode.
+  Older panes from pre-#35 fanouts may carry the legacy `[fanout #N]` form
+  without parent annotation; both shapes satisfy idempotency. Idempotency
+  scopes to the requested parent, so fanning out the same child via both an
+  issue parent and a Project URL creates one pane per parent (not a single
+  shared pane).
 - `--unblocked-only` defers children whose blockers are still OPEN and is
   preferred over hand-built wave lists when blocker annotations exist.
 - Default project-mode filter is `--project-status Todo`. Use

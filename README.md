@@ -162,12 +162,66 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run]
+fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout --help
 ```
 
 The positional accepts either a GitHub issue number (Sub-issues +
 task-list mode) or a Projects v2 URL (Project mode; see above).
 `--project-status` only applies to Project mode and is ignored otherwise.
+
+### `--status` output
+
+`fanout <parent> --status` is read-only: it reads `dmux.config.json` to
+enumerate children already fanned out under that specific parent (panes
+whose prompt starts with `[fanout #N of #<parent>]`), calls
+`gh issue view <N> --json state,closedByPullRequestsReferences` for each,
+and prints one JSON document on stdout. Issue-mode parents only —
+Projects v2 URLs as parent are rejected up-front (panes for project items
+carry the URL in their prefix, which `--status`'s strict filter doesn't
+address). In a session that has fanned multiple parents, children of
+other parents are filtered out so `summary.all_merged` reflects only the
+requested parent. Old-format panes that predate this feature
+(`[fanout #N]` without parent annotation) are excluded; the next
+non-status `fanout <parent>` run rewrites those panes' prompts in place
+to add the parent annotation, so a subsequent `--status` picks them up
+automatically (no need to delete and re-fan). Set `DMUX_CONFIG_PATH` to
+point directly at a `dmux.config.json` when the dmux session has already
+exited.
+
+```json
+{
+  "parent": 123,
+  "children": [
+    { "num": 4, "state": "CLOSED",
+      "prs": [ { "number": 250, "state": "MERGED",
+                 "mergedAt": "2026-05-04T10:00:00Z" } ],
+      "has_merged_pr": true },
+    { "num": 7, "state": "OPEN",
+      "prs": [],
+      "has_merged_pr": false }
+  ],
+  "summary": {
+    "total":      2,
+    "merged":     1,
+    "pending":    1,
+    "all_merged": false
+  }
+}
+```
+
+`--status` exit codes are a separate lane from the default flow:
+
+- `0` — JSON emitted (check `summary.all_merged` for the actual state).
+- `2` — cannot enumerate (bad invocation, missing/unreadable
+  `dmux.config.json`, no active dmux session, Projects v2 URL as parent).
+- `3` — `gh` API call failed (auth, network, non-existent issue, etc.).
+
+`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`,
+`--only`, `--skip`, `--include`, `--name`, `--sleep`, `--popup-timeout`,
+`--dry-run`, `--unblocked-only`). The bundled Claude Code skill drives a
+`ScheduleWakeup`-based polling loop on top of this when the user opts in via
+`/fanout … --wait`.
 
 ### Examples
 
@@ -233,6 +287,13 @@ fanout 123 --popup-timeout 45
 # agent than the parent pane). Normally you don't need this — fanout reads
 # the caller's .panes[].agent from dmux.config.json.
 fanout 123 --agent codex
+
+# Read-only JSON status: who's fanned out, what state each child is in, and
+# whether their closed-by PRs have merged. No side effects. Pipe into jq for
+# scripting; the bundled /fanout --wait skill drives a wait-and-continue loop
+# on top of this.
+fanout 123 --status
+fanout 123 --status | jq '.summary.all_merged'
 
 # Fan out OPEN issues from a Projects v2 board instead of a parent issue.
 # Default filter is Status=Todo; same-repo only. Requires `gh auth refresh
@@ -430,10 +491,16 @@ a repo directory). Not a fanout bug.
   full briefing in `/tmp/fanout-<repo>-<NUM>.md` and tells the agent to read
   it. This also keeps the prompt short enough that dmux's `slug()` — which
   keys the worktree directory name — stays reasonable.
-- **The `[fanout #NUM]` tag is the idempotency primitive.** Because dmux
-  persists the prompt verbatim into `dmux.config.json`, fanout can detect
-  previously-created panes by grepping for this prefix. Delete the pane (and
-  its worktree) via the dmux TUI if you want fanout to recreate it.
+- **The `[fanout #NUM of #PARENT]` tag is the idempotency primitive.**
+  Because dmux persists the prompt verbatim into `dmux.config.json`, fanout
+  can detect previously-created panes by grepping for this prefix. The
+  parent annotation also lets `fanout --status <parent>` filter to one
+  parent's children in a session that has fanned multiple parents. Older
+  panes carry the legacy `[fanout #NUM]` form (no parent annotation) and
+  still satisfy idempotency; the next non-status `fanout <parent>` run
+  auto-rewrites those prompts in place to add the parent annotation so
+  `--status` picks them up. Delete the pane (and its worktree) via the
+  dmux TUI if you want fanout to recreate it from scratch.
 - **IPC paths in play.** Discovery uses tmux session options
   (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
   `@dmux_project_root`). Pane-creation is driven by writing to dmux's

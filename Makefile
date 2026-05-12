@@ -93,7 +93,7 @@ test-tier1: check-bats
 	$(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
 
 test-tier2: check-bats
-	$(BATS) tests/bats/tier2_dry_run.bats
+	$(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
 
 lint:
 	shellcheck fanout tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash
