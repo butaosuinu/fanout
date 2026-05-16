@@ -321,14 +321,65 @@ get_issue_state() {
 }
 
 get_issue_with_prs() {
-  # $1 issue number. Echoes raw JSON
-  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}, …}
-  # exactly as gh returns it. No cache: the JSON-array shape doesn't fit
-  # get_issue_state's string cache, and the single use site is one-shot.
-  # Returns gh's exit status so callers can distinguish API failures from
-  # empty results.
+  # $1 issue number. Echoes JSON
+  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}}
+  # merged across all pages. We can't use `gh issue view --json
+  # closedByPullRequestsReferences` for this: that endpoint returns a flat
+  # array of {id,number,repository,url} refs with no `state`/`mergedAt`, and
+  # even on an empty array (the common pre-PR case) the legacy jq path
+  # `.closedByPullRequestsReferences.nodes // []` raises "Cannot index array
+  # with string \"nodes\"" before `//` can default it — `--status` would die
+  # on the first child until any PR was opened. GraphQL's PullRequestConnection
+  # exposes state+mergedAt directly. Caller passes status_owner/status_repo
+  # (resolved once in cmd_status). No cache: single use site, one-shot.
+  #
+  # Paginates with first:100 (GitHub's per-page max) + pageInfo.hasNextPage
+  # so an issue closed by >100 PRs can't silently under-count merged refs and
+  # produce a false `summary.all_merged=false` that stalls wait-and-continue.
   local num="$1"
-  gh_in_root issue view "$num" --json state,closedByPullRequestsReferences 2>/dev/null
+  local cursor='' page issue_state next_cursor
+  local merged_nodes='[]'
+
+  # shellcheck disable=SC2016
+  # $owner/$repo/$num/$after inside the GraphQL string are GraphQL variables,
+  # not shell expansions — bound by -F flags below.
+  local query='
+    query($owner: String!, $repo: String!, $num: Int!, $after: String) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $num) {
+          state
+          closedByPullRequestsReferences(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes { number state mergedAt }
+          }
+        }
+      }
+    }
+  '
+
+  while :; do
+    local -a args=(
+      api graphql
+      -F owner="$status_owner"
+      -F repo="$status_repo"
+      -F num="$num"
+      -f query="$query"
+      --jq '.data.repository.issue // empty'
+    )
+    [[ -n "$cursor" ]] && args+=(-F after="$cursor")
+    page=$(gh_in_root "${args[@]}" 2>/dev/null) || return 1
+    [[ -z "$page" ]] && return 1
+    issue_state=$(jq -r '.state' <<<"$page")
+    merged_nodes=$(jq --argjson acc "$merged_nodes" \
+      '$acc + (.closedByPullRequestsReferences.nodes // [])' <<<"$page")
+    [[ "$(jq -r '.closedByPullRequestsReferences.pageInfo.hasNextPage // false' <<<"$page")" == "true" ]] || break
+    next_cursor=$(jq -r '.closedByPullRequestsReferences.pageInfo.endCursor // ""' <<<"$page")
+    [[ -n "$next_cursor" && "$next_cursor" != "$cursor" ]] || break
+    cursor="$next_cursor"
+  done
+
+  jq -n --arg s "$issue_state" --argjson nodes "$merged_nodes" \
+    '{state: $s, closedByPullRequestsReferences: {nodes: $nodes}}'
 }
 
 parse_blockers_from_child_body() {
@@ -977,12 +1028,28 @@ cmd_status() {
     return 0
   fi
 
+  # Resolve owner/repo once for get_issue_with_prs' GraphQL query. Placed
+  # after the empty-children early-return so a session with no fanned
+  # children doesn't need network/fixture access at all. local vars are
+  # visible to get_issue_with_prs via bash's dynamic scoping.
+  local status_owner status_repo nwo
+  nwo=$(gh_in_root repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || {
+    log_err "--status: failed to resolve repo (gh repo view) in $project_root"
+    exit 3
+  }
+  status_owner="${nwo%%/*}"
+  status_repo="${nwo#*/}"
+  if [[ "$nwo" != */* || -z "$status_owner" || -z "$status_repo" ]]; then
+    log_err "--status: unexpected nameWithOwner from gh: $nwo"
+    exit 3
+  fi
+
   local -a children_arr=()
   local n raw projected
   for n in "${nums_arr[@]}"; do
     raw=$(get_issue_with_prs "$n") || raw=''
     if [[ -z "$raw" ]]; then
-      log_err "--status: gh issue view #$n failed (auth / network / not found)"
+      log_err "--status: gh api graphql for #$n failed or returned no issue (auth / network / not found)"
       exit 3
     fi
     projected=$(jq --argjson n "$n" '{

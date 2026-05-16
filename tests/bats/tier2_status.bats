@@ -37,6 +37,31 @@ load helpers
   assert_status_golden scenario-status-no-fanned-children
 }
 
+# Regression: before the gh-issue-view → gh-api-graphql rewrite, every
+# `--status` call died with `jq: Cannot index array with string "nodes"` on
+# the first child whose `closedByPullRequestsReferences` was empty — i.e.
+# any session in the gap between fan-out and the first PR landing. This
+# fixture pins that exact shape (two OPEN children, no PR refs) so the
+# fix can't silently regress.
+@test "scenario-status-no-prs-yet: empty closedByPullRequestsReferences must not crash" {
+  use_fixture scenario-status-no-prs-yet
+  run_fanout_status 700
+  assert_success
+  assert_status_golden scenario-status-no-prs-yet
+}
+
+# Pagination: child #901 is closed by two PRs. Page 1 carries an unmerged
+# CLOSED ref (#1001) with hasNextPage:true; the MERGED ref (#1002) only
+# appears on page 2. If get_issue_with_prs ever stops paginating,
+# has_merged_pr collapses to false and summary.all_merged stalls
+# wait-and-continue loops forever. Covers the Codex review on PR #51.
+@test "scenario-status-paginated: merged PR on page 2 is counted via cursor follow" {
+  use_fixture scenario-status-paginated
+  run_fanout_status 900
+  assert_success
+  assert_status_golden scenario-status-paginated
+}
+
 # Cross-parent filtering: a session that fanned both #300 and #400 must not
 # leak #400's children into `fanout --status 300` (and vice versa). Old-format
 # panes (`[fanout #N]` without parent annotation) are excluded because their
