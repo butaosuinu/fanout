@@ -321,14 +321,39 @@ get_issue_state() {
 }
 
 get_issue_with_prs() {
-  # $1 issue number. Echoes raw JSON
-  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}, …}
-  # exactly as gh returns it. No cache: the JSON-array shape doesn't fit
-  # get_issue_state's string cache, and the single use site is one-shot.
-  # Returns gh's exit status so callers can distinguish API failures from
-  # empty results.
+  # $1 issue number. Echoes JSON
+  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}}
+  # extracted from a GraphQL query. We can't use `gh issue view --json
+  # closedByPullRequestsReferences` for this: that endpoint returns a flat
+  # array of {id,number,repository,url} refs with no `state`/`mergedAt`, and
+  # even on an empty array (the common pre-PR case) the legacy jq path
+  # `.closedByPullRequestsReferences.nodes // []` raises "Cannot index array
+  # with string \"nodes\"" before `//` can default it — `--status` would die
+  # on the first child until any PR was opened. GraphQL's PullRequestConnection
+  # exposes state+mergedAt directly. Caller passes status_owner/status_repo
+  # (resolved once in cmd_status). No cache: single use site, one-shot.
   local num="$1"
-  gh_in_root issue view "$num" --json state,closedByPullRequestsReferences 2>/dev/null
+  # shellcheck disable=SC2016
+  # The $owner/$repo/$num inside the GraphQL string are GraphQL variables,
+  # not shell expansions — bound by the `-F owner=`/`-F repo=`/`-F num=`
+  # flags above.
+  gh_in_root api graphql \
+    -F owner="$status_owner" \
+    -F repo="$status_repo" \
+    -F num="$num" \
+    -f query='
+      query($owner: String!, $repo: String!, $num: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issue(number: $num) {
+            state
+            closedByPullRequestsReferences(first: 50) {
+              nodes { number state mergedAt }
+            }
+          }
+        }
+      }
+    ' \
+    --jq '.data.repository.issue // empty' 2>/dev/null
 }
 
 parse_blockers_from_child_body() {
@@ -977,12 +1002,28 @@ cmd_status() {
     return 0
   fi
 
+  # Resolve owner/repo once for get_issue_with_prs' GraphQL query. Placed
+  # after the empty-children early-return so a session with no fanned
+  # children doesn't need network/fixture access at all. local vars are
+  # visible to get_issue_with_prs via bash's dynamic scoping.
+  local status_owner status_repo nwo
+  nwo=$(gh_in_root repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || {
+    log_err "--status: failed to resolve repo (gh repo view) in $project_root"
+    exit 3
+  }
+  status_owner="${nwo%%/*}"
+  status_repo="${nwo#*/}"
+  if [[ "$nwo" != */* || -z "$status_owner" || -z "$status_repo" ]]; then
+    log_err "--status: unexpected nameWithOwner from gh: $nwo"
+    exit 3
+  fi
+
   local -a children_arr=()
   local n raw projected
   for n in "${nums_arr[@]}"; do
     raw=$(get_issue_with_prs "$n") || raw=''
     if [[ -z "$raw" ]]; then
-      log_err "--status: gh issue view #$n failed (auth / network / not found)"
+      log_err "--status: gh api graphql for #$n failed or returned no issue (auth / network / not found)"
       exit 3
     fi
     projected=$(jq --argjson n "$n" '{

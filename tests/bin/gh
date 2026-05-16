@@ -30,6 +30,13 @@
 #         fixtures use a single page (hasNextPage:false) so only page-1.json
 #         is needed.
 #
+#   gh api graphql -F num=<N> ... (no -F after=)
+#       — --status per-issue PR lookup. Echoes $FIXTURE_DIR/gh-issue-view-<N>.json
+#         (same per-issue fixture as the legacy `gh issue view <N>` path; the
+#         real script uses --jq .data.repository.issue server-side so the
+#         on-the-wire shape matches the fixture). Takes precedence over the
+#         cursor branch when both are present.
+#
 # Tier 1 "force_missing gh" still wins because helpers.bash rebuilds PATH
 # to a sanitized directory that excludes this shim.
 
@@ -106,18 +113,30 @@ case "${1:-}" in
   api)
     if [[ "${2:-}" == "graphql" ]]; then
       shift 2
-      # Project mode pagination: peek at -F after=<cursor> to pick the
-      # fixture file. All other -f/-F flags are consumed and ignored.
+      # Two dispatch paths share this branch:
+      #  (a) Project mode: -F after=<cursor> picks the page fixture.
+      #  (b) --status per-issue PR lookup: -F num=<N> picks
+      #      gh-issue-view-<N>.json (already in the inner
+      #      {state, closedByPullRequestsReferences:{nodes:[...]}} shape
+      #      because the real script uses --jq .data.repository.issue to
+      #      extract that subtree).
+      # All other -f/-F flags are consumed and ignored.
       cursor=""
+      issue_num=""
       while (( $# )); do
         case "$1" in
           -f|-F)
             kv="${2:-}"
             [[ "$kv" == after=* ]] && cursor="${kv#after=}"
+            [[ "$kv" == num=*   ]] && issue_num="${kv#num=}"
             shift 2;;
           *) shift;;
         esac
       done
+      if [[ -n "$issue_num" ]]; then
+        emit_fixture "$fixture/gh-issue-view-$issue_num.json" "" "gh api graphql num=$issue_num"
+        exit 0
+      fi
       if [[ -n "$cursor" ]]; then
         fx="$fixture/gh-graphql-after-$cursor.json"
       else

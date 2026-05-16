@@ -1,0 +1,23 @@
+{
+  "parent": 700,
+  "children": [
+    {
+      "num": 701,
+      "state": "OPEN",
+      "prs": [],
+      "has_merged_pr": false
+    },
+    {
+      "num": 702,
+      "state": "OPEN",
+      "prs": [],
+      "has_merged_pr": false
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "merged": 0,
+    "pending": 2,
+    "all_merged": false
+  }
+}
