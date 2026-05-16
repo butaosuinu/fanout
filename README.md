@@ -174,9 +174,12 @@ task-list mode) or a Projects v2 URL (Project mode; see above).
 
 `fanout <parent> --status` is read-only: it reads `dmux.config.json` to
 enumerate children already fanned out under that specific parent (panes
-whose prompt starts with `[fanout #N of #<parent>]`), calls
-`gh issue view <N> --json state,closedByPullRequestsReferences` for each,
-and prints one JSON document on stdout. Issue-mode parents only —
+whose prompt starts with `[fanout #N of #<parent>]`), queries each child
+through a single `gh api graphql` call against
+`repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
+paginated when a child is closed by more than 100 PRs) so the response
+carries `state`/`mergedAt` directly, and prints one JSON document on
+stdout. Issue-mode parents only —
 Projects v2 URLs as parent are rejected up-front (panes for project items
 carry the URL in their prefix, which `--status`'s strict filter doesn't
 address). In a session that has fanned multiple parents, children of

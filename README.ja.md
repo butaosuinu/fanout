@@ -162,6 +162,7 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout <parent-issue> --status      # ファンアウト済み子 issue の JSON 状態を読む
 fanout --help
 ```
 
@@ -219,6 +220,13 @@ fanout 123 --popup-timeout 45
 # 子ペインを立てたいときなど）。通常は不要 — fanout が dmux.config.json の
 # 呼び出し元ペイン `.panes[].agent` を自動で拾う。
 fanout 123 --agent codex
+
+# ファンアウト済み子 issue と closed-by PR の merge 状態を JSON で読む。
+# 副作用は無いので jq と組み合わせて待機ループに使える。内部的には子ごとに
+# `gh api graphql` を 1 回呼び、`closedByPullRequestsReferences(first: 100)`
+# をカーソル追従して PR の `state` / `mergedAt` をまとめて取得する。
+fanout 123 --status
+fanout 123 --status | jq '.summary.all_merged'
 
 # 親 issue ではなく Projects v2 ボードの OPEN issue をファンアウトする。
 # 既定は Status=Todo フィルタ、同一リポジトリのみ。`gh auth refresh -s
