@@ -176,7 +176,9 @@ task-list mode) or a Projects v2 URL (Project mode; see above).
 enumerate children already fanned out under that specific parent (panes
 whose prompt starts with `[fanout #N of #<parent>]`), calls
 `gh issue view <N> --json state,closedByPullRequestsReferences` for each,
-and prints one JSON document on stdout. Issue-mode parents only —
+then hydrates any returned PR refs with
+`gh pr view <PR> --json number,state,mergedAt`, and prints one JSON
+document on stdout. Issue-mode parents only —
 Projects v2 URLs as parent are rejected up-front (panes for project items
 carry the URL in their prefix, which `--status`'s strict filter doesn't
 address). In a session that has fanned multiple parents, children of

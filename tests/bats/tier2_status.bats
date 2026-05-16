@@ -9,7 +9,9 @@
 # The fixture contract for --status is the same dmux.config.json /
 # tmux-sessions.txt / tmux-show-options.tsv / project_root layout used by
 # the dry-run tests, plus per-issue gh-issue-view-<N>.json files that include
-# the `closedByPullRequestsReferences` field at the top level.
+# the `closedByPullRequestsReferences` field at the top level. Fixtures that
+# use real gh's PR-ref array shape also provide gh-pr-view-<N>.json files for
+# merge-state hydration.
 #
 # Regenerate goldens after an intentional schema change with:
 #   FANOUT_GOLDEN_UPDATE=1 bats tests/bats/tier2_status.bats

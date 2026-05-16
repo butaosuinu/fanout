@@ -322,13 +322,19 @@ get_issue_state() {
 
 get_issue_with_prs() {
   # $1 issue number. Echoes raw JSON
-  #   {state, closedByPullRequestsReferences:{nodes:[{number,state,mergedAt}]}, …}
+  #   {state, closedByPullRequestsReferences:[{number,url,repository}, …]}
   # exactly as gh returns it. No cache: the JSON-array shape doesn't fit
   # get_issue_state's string cache, and the single use site is one-shot.
   # Returns gh's exit status so callers can distinguish API failures from
   # empty results.
   local num="$1"
   gh_in_root issue view "$num" --json state,closedByPullRequestsReferences 2>/dev/null
+}
+
+get_pr_with_status() {
+  # $1 PR selector (URL or number). Echoes raw JSON with merge status fields.
+  local pr="$1"
+  gh_in_root pr view "$pr" --json number,state,mergedAt 2>/dev/null
 }
 
 parse_blockers_from_child_body() {
@@ -978,20 +984,72 @@ cmd_status() {
   fi
 
   local -a children_arr=()
-  local n raw projected
+  local n raw projected issue_state refs_json prs_json
   for n in "${nums_arr[@]}"; do
     raw=$(get_issue_with_prs "$n") || raw=''
     if [[ -z "$raw" ]]; then
       log_err "--status: gh issue view #$n failed (auth / network / not found)"
       exit 3
     fi
-    projected=$(jq --argjson n "$n" '{
+    issue_state=$(jq -r '.state // "UNKNOWN"' <<<"$raw") || {
+      log_err "--status: failed to parse gh response for #$n"
+      exit 3
+    }
+    refs_json=$(jq -c '
+      (.closedByPullRequestsReferences // [])
+      | if type == "array" then .
+        elif type == "object" then (.nodes // [])
+        else [] end
+    ' <<<"$raw") || {
+      log_err "--status: failed to parse gh response for #$n"
+      exit 3
+    }
+
+    local -a prs_arr=()
+    local ref selector pr_raw pr_projected
+    while IFS= read -r ref; do
+      [[ -z "$ref" ]] && continue
+      if jq -e 'has("state") and (.state != null)' >/dev/null <<<"$ref"; then
+        # Backward-compatible path for older fixtures / GraphQL-shaped refs
+        # that already carry the hydrated PR state.
+        pr_projected=$(jq -c '{ number, state, mergedAt: (.mergedAt // null) }' <<<"$ref") || {
+          log_err "--status: failed to parse gh response for #$n"
+          exit 3
+        }
+      else
+        selector=$(jq -r '.url // .number // empty' <<<"$ref") || {
+          log_err "--status: failed to parse gh response for #$n"
+          exit 3
+        }
+        if [[ -z "$selector" ]]; then
+          log_err "--status: gh response for #$n contains a PR ref without url or number"
+          exit 3
+        fi
+        pr_raw=$(get_pr_with_status "$selector") || pr_raw=''
+        if [[ -z "$pr_raw" ]]; then
+          log_err "--status: gh pr view $selector failed for issue #$n"
+          exit 3
+        fi
+        pr_projected=$(jq -c '{ number, state, mergedAt: (.mergedAt // null) }' <<<"$pr_raw") || {
+          log_err "--status: failed to parse gh pr response for $selector"
+          exit 3
+        }
+      fi
+      prs_arr+=("$pr_projected")
+    done < <(jq -c '.[]' <<<"$refs_json")
+
+    if (( ${#prs_arr[@]} )); then
+      prs_json=$(printf '%s\n' "${prs_arr[@]}" | jq -s '.')
+    else
+      prs_json='[]'
+    fi
+
+    projected=$(jq -n --argjson n "$n" --arg state "$issue_state" --argjson prs "$prs_json" '{
       num: $n,
-      state: .state,
-      prs: [(.closedByPullRequestsReferences.nodes // [])[]
-            | { number, state, mergedAt }],
-      has_merged_pr: (any((.closedByPullRequestsReferences.nodes // [])[]; .state == "MERGED"))
-    }' <<<"$raw") || {
+      state: $state,
+      prs: $prs,
+      has_merged_pr: (any($prs[]; .state == "MERGED"))
+    }') || {
       log_err "--status: failed to parse gh response for #$n"
       exit 3
     }

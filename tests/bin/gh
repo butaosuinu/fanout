@@ -18,6 +18,10 @@
 #         fanout uses -q .state and -q .body against the same endpoint,
 #         so fixtures are full issue objects (number/title/state/body/labels).
 #
+#   gh pr view <PR-or-URL> --json number,state,mergedAt [-q <filter>]
+#       — echoes $FIXTURE_DIR/gh-pr-view-<N>.json verbatim. URL selectors are
+#         reduced to their trailing PR number.
+#
 #   gh repo view --json <fields> [-q <filter>]
 #       — echoes $FIXTURE_DIR/gh-repo-view.json (with optional jq filter).
 #         Project mode calls this to resolve the cross-repo filter target
@@ -92,6 +96,16 @@ case "${1:-}" in
       shift 3 2>/dev/null || true
       jq_filter="$(extract_jq_filter "$@")"
       emit_fixture "$fixture/gh-issue-view-$num.json" "$jq_filter" "gh issue view $num"
+      exit 0
+    fi
+    ;;
+  pr)
+    if [[ "${2:-}" == "view" ]]; then
+      pr="${3:-}"
+      pr="${pr##*/}"
+      shift 3 2>/dev/null || true
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-pr-view-$pr.json" "$jq_filter" "gh pr view $pr"
       exit 0
     fi
     ;;
