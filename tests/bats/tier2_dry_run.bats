@@ -109,6 +109,24 @@ load helpers
   assert_golden scenario-idempotency
 }
 
+@test "scenario-sub-issue-only with --name branch override: dry-run payload becomes structured object" {
+  # Reuses the scenario-sub-issue-only fixture. Issue #101 gets a 3-segment
+  # --name with slug + display + branch; #102 gets a branch-only --name
+  # (||branch). The dry-run output must show:
+  #   - issue #101: newPanePopup payload as object {prompt, branchName} and
+  #     "branch-name -> feat/sub-issue-101-x" trace line
+  #   - issue #102: same object shape with branchName only (no slug-hint or
+  #     display-name lines)
+  # If dmux ever changes how PopupManager.normalizeNewPaneInput interprets
+  # the object, this golden will catch the divergence before live use.
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 \
+    --name "101=feat-x|Feature X|feat/sub-issue-101-x" \
+    --name "102=||release/v2.0"
+  assert_success
+  assert_golden scenario-sub-issue-only-branch-override
+}
+
 @test "agent-codex variant of scenario-sub-issue-only: briefing omits Agent Teams hint" {
   # Reuses the scenario-sub-issue-only fixture; the only thing under test is
   # that --agent codex (last-wins over the helper's default --agent claude)

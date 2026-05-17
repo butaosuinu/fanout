@@ -10,14 +10,18 @@ that points at a per-issue briefing file.
 
 `dmux`'s docs describe an HTTP API (`POST /api/panes`, etc.) as the obvious
 ingress for a tool like this. When I investigated, I found that **the current
-npm-published dmux (v5.6.3) does not ship the HTTP server**:
+npm-published dmux (v5.8.1, re-verified) still does not ship the HTTP server**:
 
 - `dist/**/*.js` has no HTTP routes, no `express`/`fastify`/`http.createServer`,
   no `.listen(` outside a port-probe utility.
 - `dist/server/` contains only `embedded-assets.js` (a frontend bundle).
+- `dist/adapters/apiActionHandler.js` exists alongside `tuiActionHandler.js`
+  (v5.8.1 added the split) and exposes `actionResultToAPIResponse()` plus a
+  callback registry, but there is no transport layer wired up — it's a
+  skeleton, not a server.
 - `utils/generated-agents-doc.js` references `curl http://localhost:$DMUX_SERVER_PORT/api/panes/...`
-  but there is nothing in `dist` that sets `DMUX_SERVER_PORT` — the feature is
-  documented in `context/API.md` on the `main` branch but not yet shipped.
+  but nothing in `dist` sets `DMUX_SERVER_PORT`. The feature is documented in
+  `context/API.md` on the `main` branch but not yet shipped.
 
 `tmux send-keys` isn't enough either. dmux's new-pane prompt and agent-choice
 dialog are both rendered via `tmux display-popup -E 'node <script> <resultFile>'`
@@ -138,9 +142,10 @@ intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 - **An agent name must be resolvable**: either `--agent <name>` is given, or
   the caller's pane is itself a dmux-managed pane so fanout can auto-detect
   from `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`).
-  dmux v5.6.3 always opens the agent-choice popup after the prompt popup,
-  even when only one agent is enabled, so fanout needs a name to inject
-  into it. Invoking through the bundled Claude/Codex integration from inside
+  dmux v5.8.1 still always opens the agent-choice popup after the prompt
+  popup, even when only one agent is enabled (the new `singleAgentChoicePopup`
+  exists only for other code paths), so fanout needs a name to inject into
+  it. Invoking through the bundled Claude/Codex integration from inside
   an agent session works out of the box; calling `fanout` from a plain shell
   requires `--agent`.
 - **The dmux TUI must be on the pane-list view** (no modal / no prompt open)
@@ -159,7 +164,7 @@ intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
-       [--name <NUM>=<slug>[|<display>]]
+       [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
@@ -264,17 +269,23 @@ fanout 123 --unblocked-only
 # Cap each wave while letting fanout pick the next unblocked batch
 fanout 123 --unblocked-only --limit 3
 
-# Name each child's branch/worktree and pane title directly, bypassing
-# dmux's default slug generation (which otherwise calls OpenRouter or the
-# local `claude --no-interactive` fallback per pane). The slug-hint is
-# front-loaded into the one-line prompt so dmux's slug LLM echoes it as the
-# actual slug/branch; the display-name is written post-creation into both
-# dmux.config.json (for the live tmux pane border) and the worktree's
-# .dmux/worktree-metadata.json (so it survives dmux restarts). Normally the
-# bundled Claude/Codex integrations generate these from issue title/body
-# without any extra API call; pass --name yourself to override. Repeatable;
-# one per target.
+# Name each child's worktree slug, pane title, and branch directly. The
+# slug-hint is front-loaded into the one-line prompt so dmux's slug LLM
+# echoes it as the worktree directory name (dmux's slug LLM otherwise calls
+# OpenRouter or the local `claude --no-interactive` fallback per pane). The
+# display-name is written post-creation into both dmux.config.json (for the
+# live tmux pane border) and the worktree's .dmux/worktree-metadata.json (so
+# it survives dmux restarts). The optional 3rd segment is a branch-name
+# override (dmux v5.8.1+): when present, fanout puts it into the newPanePopup
+# payload as `branchName` and dmux's createPane() uses it as
+# `branchNameOverride`, bypassing the default `branchPrefix + slug`. Any of
+# the three pipe-separated segments may be empty, but at least one must be
+# non-empty. Normally the bundled Claude/Codex integrations generate these
+# from issue title/body without any extra API call; pass --name yourself to
+# override. Repeatable; one per target.
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
+fanout 123 --name 8='feat-x|Feature X|feat/issue-8-x'   # all three segments
+fanout 123 --name 9='||release/v2.0'                    # branch override only
 
 # Pick a specific session when you have multiple dmux instances alive
 fanout 123 --session work-repo
@@ -459,10 +470,18 @@ It tries OpenRouter first (requires `OPENROUTER_API_KEY`), then falls back to
   (`[a-z0-9-]`, starting with alnum) — that's the shape the slug sanitizer
   expects. The bundled Claude/Codex integrations generate these automatically
   from issue title/body using in-conversation reasoning (no extra API call).
+- For the **branch name** (separate from the worktree slug since dmux v5.8.1),
+  use the optional 3rd `--name` segment: `--name <NUM>=<slug>|<display>|<branch>`.
+  fanout writes the branch into the newPanePopup payload as `branchName` and
+  dmux's `createPane()` consumes it as `branchNameOverride`, completely
+  bypassing the `branchPrefix + slug` default. The worktree directory still
+  follows the slug, so the slug-hint trick above is still useful for that
+  axis. Branch override is the right knob when team naming conventions
+  matter (`feat/issue-N-foo`, `release/v2.0`, etc.).
 - If you want dmux to stop calling OpenRouter entirely, `unset
   OPENROUTER_API_KEY` before `cd <repo> && dmux`. dmux will fall through to
   the local Claude CLI fallback; combine with `--name` to keep it
-  deterministic. There's no dmux flag to disable slug-LLM entirely — the
+  deterministic. There's no dmux flag to disable the slug LLM entirely — the
   only way to fully bypass LLM slug generation through the popup-intercept
   path is to front-load the slug as a hint.
 

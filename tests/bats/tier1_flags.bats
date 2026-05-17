@@ -169,7 +169,7 @@ load helpers
   [[ "$output" == *"--include: invalid entry 'bar'"* ]]
 }
 
-# --- --name NUM=<slug-hint>[|<display-name>] --------------------------------
+# --- --name NUM=<slug-hint>[|<display-name>[|<branch-name>]] ---------------
 
 @test "--name: NUM must be a positive integer: exit 1" {
   run_fanout 20 --name foo=bar
@@ -181,6 +181,24 @@ load helpers
   run_fanout 20 --name 4=aBc
   [ "$status" -eq 1 ]
   [[ "$output" == *"--name #4: slug-hint must be lowercase kebab-case"* ]]
+}
+
+@test "--name: all three segments empty (NUM=||) rejected: exit 1" {
+  run_fanout 20 --name 4=||
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--name #4: slug-hint, display-name, and branch-name are all empty"* ]]
+}
+
+@test "--name: more than 3 '|'-separated segments rejected: exit 1" {
+  run_fanout 20 --name 4=slug\|disp\|branch\|extra
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"too many '|'-separated segments"* ]]
+}
+
+@test "--name: branch-name containing whitespace rejected: exit 1" {
+  run_fanout 20 --name "4=slug|disp|bad branch"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--name #4: branch-name must not contain whitespace"* ]]
 }
 
 # --- Prerequisite detection (missing_deps[]) --------------------------------
