@@ -8,7 +8,7 @@
 [info] will create 3 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #911: Todo one
   briefing -> /tmp/fanout-project_root-911.md
-  briefing size: 2171 bytes
+  briefing size: 2470 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -17,7 +17,7 @@
 [ ok ] #911: dry-run complete
 [info] #912: Todo two
   briefing -> /tmp/fanout-project_root-912.md
-  briefing size: 2171 bytes
+  briefing size: 2470 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -26,7 +26,7 @@
 [ ok ] #912: dry-run complete
 [info] #913: Done item
   briefing -> /tmp/fanout-project_root-913.md
-  briefing size: 2172 bytes
+  briefing size: 2471 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
