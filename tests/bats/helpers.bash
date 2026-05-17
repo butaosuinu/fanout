@@ -12,7 +12,7 @@
 # Repo root (one level above tests/bats/).
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$TESTS_DIR/.." && pwd)"
-FANOUT_BIN="$REPO_ROOT/fanout"
+FANOUT_BIN="${FANOUT_BIN:-$REPO_ROOT/fanout}"
 TEST_BIN_DIR="$TESTS_DIR/bin"
 
 setup() {

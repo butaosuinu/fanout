@@ -119,14 +119,19 @@ make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
 make lint           # shellcheck fanout + テスト用 shim
+make build-go       # 実験中の Go 版を ./fanout-go としてビルド
+make test-go        # 同じ黒箱テストを ./fanout-go に対して実行
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
 の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
-いずれも Go 書き換え時の parity テスト資産。`--dry-run` 出力を意図的に変更
-した場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成して
-ください。Tier 3 (live dmux E2E) は手動運用のままです。
+いずれも Go 書き換え時の parity テスト資産です。Bash 製の `./fanout` は
+既定の CLI として残し、Go 版は動作比較用に `./fanout-go` として並行配置
+します。`$(BINDIR)` に `fanout-go` コマンドを入れたい場合は `make install-go`
+または `make link-go` を使ってください。`--dry-run` 出力を意図的に変更した
+場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
+Tier 3 (live dmux E2E) は手動運用のままです。
 
 ## 前提条件
 
