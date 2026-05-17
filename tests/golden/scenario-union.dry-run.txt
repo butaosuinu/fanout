@@ -8,7 +8,7 @@
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #301: API child
   briefing -> /tmp/fanout-project_root-301.md
-  briefing size: 2166 bytes
+  briefing size: 2465 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -17,7 +17,7 @@
 [ ok ] #301: dry-run complete
 [info] #302: Body-only
   briefing -> /tmp/fanout-project_root-302.md
-  briefing size: 2166 bytes
+  briefing size: 2465 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n

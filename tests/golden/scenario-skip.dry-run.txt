@@ -11,7 +11,7 @@ filtered out:
 
 [info] #601: Alpha
   briefing -> /tmp/fanout-project_root-601.md
-  briefing size: 2161 bytes
+  briefing size: 2460 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -20,7 +20,7 @@ filtered out:
 [ ok ] #601: dry-run complete
 [info] #603: Charlie
   briefing -> /tmp/fanout-project_root-603.md
-  briefing size: 2165 bytes
+  briefing size: 2464 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n

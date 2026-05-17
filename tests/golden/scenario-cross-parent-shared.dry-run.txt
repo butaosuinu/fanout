@@ -7,7 +7,7 @@
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #501: Shared child
   briefing -> /tmp/fanout-project_root-501.md
-  briefing size: 2175 bytes
+  briefing size: 2474 bytes
   current panes[] length: 1
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -16,7 +16,7 @@
 [ ok ] #501: dry-run complete
 [info] #502: B-only child
   briefing -> /tmp/fanout-project_root-502.md
-  briefing size: 2169 bytes
+  briefing size: 2468 bytes
   current panes[] length: 1
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n

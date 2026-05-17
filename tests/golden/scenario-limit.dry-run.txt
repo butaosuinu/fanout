@@ -7,7 +7,7 @@
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 1
 [info] #701: Alpha
   briefing -> /tmp/fanout-project_root-701.md
-  briefing size: 2161 bytes
+  briefing size: 2460 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -16,7 +16,7 @@
 [ ok ] #701: dry-run complete
 [info] #702: Bravo
   briefing -> /tmp/fanout-project_root-702.md
-  briefing size: 2161 bytes
+  briefing size: 2460 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
