@@ -1792,6 +1792,8 @@ create_pane_for_issue() {
 
   if (( dry_run )); then
     printf '  %sbriefing size%s: %d bytes\n' "$C_DIM" "$C_RESET" "$(wc -c <"$briefing")"
+    # CI-DEBUG: dump briefing bytes per-issue to stderr to diagnose size diff
+    { printf '=== CI-DEBUG briefing #%s (%d bytes) ===\n' "$num" "$(wc -c <"$briefing")"; cat "$briefing"; printf '=== /CI-DEBUG #%s ===\n' "$num"; } >&2
     printf '  %scurrent panes[] length%s: %s\n' "$C_DIM" "$C_RESET" "$baseline"
     tmux_send_keys Escape
     tmux_send_keys n
