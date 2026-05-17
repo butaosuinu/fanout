@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つの dmux ペインへ
 ファンアウトします。各ペインは独立した git worktree を持ち、issue ごとの
 ブリーフィングファイルを参照するプロンプトでエージェント CLI が起動します。
@@ -417,3 +419,7 @@ JSON を事前に確認するには `--dry-run` を使います。
   上限付きの並列キューを使いますが、TUI 側からは「新規ペイン」ダイアログは
   同時に 1 つしか開けません。sleep は、次の `n` を送る前に dmux が worktree
   作成フェーズを終えるための時間的余裕を与えます。
+
+## ライセンス
+
+本プロジェクトは MIT License で配布されています。詳細は [LICENSE](LICENSE) を参照してください。

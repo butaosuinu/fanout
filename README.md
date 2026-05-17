@@ -2,6 +2,8 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Fans a GitHub parent issue's OPEN sub-issues out into one dmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.
@@ -534,3 +536,7 @@ a repo directory). Not a fanout bug.
   parallel queue internally, but from the TUI side you can only open one
   "new pane" dialog at a time. The sleep gives dmux time to finish the
   worktree-creation phase before the next `n` is sent.
+
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
