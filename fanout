@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # fanout — fan a GitHub parent issue's OPEN children out into dmux panes.
 #
-# Background: dmux v5.6.3 (the current npm latest) does NOT ship the HTTP API
-# that its context/API.md describes. We drive pane creation through the dmux
-# TUI via `tmux send-keys` against the control pane for the session.
+# Background: dmux v5.8.1 (verified) still does NOT ship the HTTP API that its
+# context/API.md describes — dist/adapters/apiActionHandler.js exists as a
+# skeleton but has no transport layer, and dist/server/embedded-assets.js only
+# bundles the dashboard's static assets. So we still drive pane creation
+# through the dmux TUI via `tmux send-keys` against the control pane for the
+# session.
 #
 # See ./README.md for the full design notes.
 
@@ -26,12 +29,16 @@ worktree (dmux handles that) and starts the configured agent with a briefing
 that points at /tmp/fanout-<repo>-<num>.md.
 
 Options:
-  --agent <name>      Agent to launch (claude|codex|opencode|...). Required
-                      unless the caller's tmux pane is itself a dmux-managed
-                      pane — in that case fanout auto-detects the agent from
-                      dmux.config.json. dmux v5.6.3 always opens an agent-
-                      choice popup after the prompt popup, so fanout must
-                      know the agent name to inject into it.
+  --agent <name>      Agent to launch (claude|codex|opencode|gemini|qwen|amp|
+                      pi|cursor|copilot|crush|...). Required unless the
+                      caller's tmux pane is itself a dmux-managed pane — in
+                      that case fanout auto-detects the agent from
+                      dmux.config.json. dmux v5.8.1 still opens an agent-
+                      choice popup after the prompt popup (selectAgents-
+                      ForPaneCreation in DmuxApp.js always calls
+                      launchAgentChoicePopup, even when a single-agent popup
+                      exists for other code paths), so fanout must know the
+                      agent name to inject into it.
   --limit <N>         Cap how many children to enqueue this run. Remainder is
                       printed with a rerun command.
   --only <list>       Comma-separated list of issue numbers to fan out,
@@ -54,29 +61,39 @@ Options:
                       the accepted numbers here. Combines with --only/--skip
                       (included first, then filtered). Numbers that end up
                       CLOSED or don't exist are warned and skipped.
-  --name <NUM>=<slug-hint>[|<display-name>]
+  --name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]
                       Override the default naming for issue <NUM>. Repeatable
                       (once per issue). <slug-hint> is 2-4 kebab-case words
                       (lowercase alnum + hyphens) front-loaded into the one-
                       line prompt so dmux's slug generator is very likely to
-                      echo it as the branch / worktree directory name — this
-                      is the only reliable way to name branches/worktrees
-                      because dmux computes them from the prompt at creation
-                      time and they become immutable git state afterward.
+                      echo it as the worktree directory name — this is the
+                      only reliable way to name worktree directories because
+                      dmux derives them from the prompt at creation time and
+                      they become immutable filesystem state afterward.
                       <display-name> (optional; ≤80 chars after sanitization)
                       is written post-creation into panes[].displayName in
                       dmux.config.json and merged into the worktree's
                       .dmux/worktree-metadata.json, so dmux's enforcePaneTitles
                       loop (every 5-30s) surfaces it as the tmux pane border
                       title and reopenWorktree restores it across restarts.
+                      <branch-name> (optional; dmux v5.8.1+) is passed through
+                      the newPanePopup payload as `branchName`, which dmux
+                      then uses as `branchNameOverride` in createPane(),
+                      bypassing the LLM-derived `branchPrefix + slug` default.
+                      Use this when team naming conventions require a specific
+                      git branch shape (e.g. feat/issue-42-foo). The fanout
+                      CLI itself does not validate the branch name; dmux
+                      rejects invalid refs at createPane time.
                       Intended to be filled in by the bundled Claude/Codex
-                      agent integrations, which generate both hints from
-                      issue title/body using in-conversation reasoning (no
-                      extra LLM call).
+                      agent integrations, which generate all three hints
+                      from issue title/body using in-conversation reasoning
+                      (no extra LLM call).
                       Examples:
                         --name 17=fix-login-timeout|Fix login
                         --name 18=update-docs
                         --name 19=|Bug triage   (display-name only)
+                        --name 20=feat-x|Feature X|feat/issue-20-x
+                        --name 21=||release/v2.0   (branch override only)
   --unblocked-only    Only fan out children whose blockers are all CLOSED.
                       Blockers are read from (1) the child body's
                       "## Blocked by" section, (2) a "(blocked by #X, #Y)"
@@ -135,7 +152,7 @@ Prerequisites:
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
   * --agent given, OR the caller's pane is a dmux-managed pane so fanout
-    can auto-detect it. dmux v5.6.3 routes new-pane prompts through
+    can auto-detect it. dmux v5.8.1 still routes new-pane prompts through
     tmux display-popup (a separate tmux client that send-keys cannot
     reach), so fanout drives the flow by intercepting the popup's result
     file. The agent name is required to satisfy the picker popup that
@@ -218,6 +235,7 @@ parse_num_csv() {
 name_nums=()
 name_slug_hints=()
 name_display_names=()
+name_branch_names=()
 
 name_find_index() {
   # Echoes the index of $1 in name_nums, or empty if absent.
@@ -229,12 +247,6 @@ name_find_index() {
     fi
   done
   return 1
-}
-
-name_get_slug_hint() {
-  local idx
-  idx=$(name_find_index "$1") || return 0
-  printf '%s' "${name_slug_hints[$idx]}"
 }
 
 name_get_display_name() {
@@ -257,24 +269,30 @@ name_has_any_display_name() {
 }
 
 parse_name_arg() {
-  # $1 raw value of --name, shaped "<NUM>=<slug-hint>[|<display-name>]".
-  # Upserts into (name_nums, name_slug_hints, name_display_names). Either
-  # side of the `|` may be empty, but at least one must be non-empty.
+  # $1 raw value of --name, shaped "<NUM>=<slug-hint>[|<display-name>[|<branch-name>]]".
+  # Upserts into (name_nums, name_slug_hints, name_display_names,
+  # name_branch_names). Any of the three pipe-separated segments may be
+  # empty, but at least one must be non-empty.
   local raw="$1"
-  [[ "$raw" == *"="* ]] || die "--name requires <NUM>=<slug-hint>[|<display-name>], got: '$raw'"
+  [[ "$raw" == *"="* ]] || die "--name requires <NUM>=<slug-hint>[|<display-name>[|<branch-name>]], got: '$raw'"
   local num="${raw%%=*}"
   local val="${raw#*=}"
   [[ "$num" =~ ^[0-9]+$ ]] || die "--name: <NUM> must be a positive integer, got: '$num'"
-  local slug_h disp_n
-  if [[ "$val" == *"|"* ]]; then
-    slug_h="${val%%|*}"
-    disp_n="${val#*|}"
-  else
-    slug_h="$val"
-    disp_n=""
+  # Read into an indexed array (not three scalars) so a 4th `|`-separated
+  # field becomes a hard error rather than silently appending to branch_n.
+  # `local IFS` keeps the split scoped to this function.
+  local slug_h disp_n branch_n
+  local -a segs
+  local IFS='|'
+  read -ra segs <<<"$val"
+  if (( ${#segs[@]} > 3 )); then
+    die "--name #$num: too many '|'-separated segments (max 3: slug|display|branch), got: '$val'"
   fi
-  if [[ -z "$slug_h" && -z "$disp_n" ]]; then
-    die "--name #$num: both slug-hint and display-name are empty"
+  slug_h="${segs[0]:-}"
+  disp_n="${segs[1]:-}"
+  branch_n="${segs[2]:-}"
+  if [[ -z "$slug_h" && -z "$disp_n" && -z "$branch_n" ]]; then
+    die "--name #$num: slug-hint, display-name, and branch-name are all empty"
   fi
   if [[ -n "$slug_h" ]]; then
     # Kebab-case: must start with alnum, contain only lowercase alnum and
@@ -283,15 +301,25 @@ parse_name_arg() {
     [[ "$slug_h" =~ ^[a-z0-9][a-z0-9-]*$ ]] \
       || die "--name #$num: slug-hint must be lowercase kebab-case (alnum+hyphens, starting with alnum), got: '$slug_h'"
   fi
+  if [[ -n "$branch_n" ]]; then
+    # Light sanity check only: reject whitespace and obviously bad chars.
+    # Full git ref validation lives in dmux's isValidFullBranchName
+    # (paneCreation.js); we trust dmux to reject malformed refs at create
+    # time rather than replicating its rules here.
+    [[ "$branch_n" =~ [[:space:]] ]] \
+      && die "--name #$num: branch-name must not contain whitespace, got: '$branch_n'"
+  fi
   local idx
   if idx=$(name_find_index "$num"); then
-    # Merge: allow two --name calls for the same issue to build up slug + disp.
-    [[ -n "$slug_h" ]] && name_slug_hints[idx]="$slug_h"
-    [[ -n "$disp_n" ]] && name_display_names[idx]="$disp_n"
+    # Merge: allow two --name calls for the same issue to build up segments.
+    [[ -n "$slug_h" ]]   && name_slug_hints[idx]="$slug_h"
+    [[ -n "$disp_n" ]]   && name_display_names[idx]="$disp_n"
+    [[ -n "$branch_n" ]] && name_branch_names[idx]="$branch_n"
   else
     name_nums+=("$num")
     name_slug_hints+=("$slug_h")
     name_display_names+=("$disp_n")
+    name_branch_names+=("$branch_n")
   fi
 }
 
@@ -1565,9 +1593,9 @@ EOF
 tmux_send_keys() {
   # Fire named keys at the dmux control pane. Only used to trigger the
   # new-pane popup (Escape + n) — the actual prompt delivery happens via
-  # popup result-file injection, not send-keys, because dmux v5.6.3 renders
-  # its new-pane prompt inside `tmux display-popup` which is a separate
-  # tmux client that send-keys cannot address.
+  # popup result-file injection, not send-keys, because dmux v5.8.1 (still)
+  # renders its new-pane prompt inside `tmux display-popup` which is a
+  # separate tmux client that send-keys cannot address.
   if (( dry_run )); then
     printf '    %s$ tmux send-keys -t %s %s%s\n' "$C_DIM" "$control_pane" "$*" "$C_RESET"
     return 0
@@ -1594,7 +1622,7 @@ wait_for_new_pane() {
 }
 
 # --- dmux popup intercept ----------------------------------------------------
-# dmux v5.6.3 drives input via `tmux display-popup -E 'node <popup>.js
+# dmux v5.8.1 drives input via `tmux display-popup -E 'node <popup>.js
 # <resultFile> [args]'`. The popup writes its user-entered answer to
 # <resultFile> as JSON; the dmux parent reads that file when the popup child
 # exits. We piggyback on that contract: trigger the popup, find its PID and
@@ -1602,12 +1630,23 @@ wait_for_new_pane() {
 # and kill the popup process. dmux sees a "successful submission" and
 # proceeds as if a human had typed the answer.
 #
-# newPanePopup payload:     {"success":true,"data":"<prompt>"}
+# newPanePopup payload (two accepted shapes, normalized by PopupManager's
+# normalizeNewPaneInput in v5.8.1):
+#   {"success":true,"data":"<prompt>"}                              — string
+#   {"success":true,"data":{"prompt":"<prompt>","branchName":"…"}} — object
+# We use the string shape unless --name supplied a <branch-name> segment,
+# in which case we promote to the object shape and forward branchName so
+# dmux's createPane() picks it up as branchNameOverride (no LLM-derived
+# branchPrefix + slug fallback). baseBranch and goalMode are also accepted
+# by normalizeNewPaneInput but fanout doesn't expose them yet.
+#
 # agentChoicePopup payload: {"success":true,"data":["<agent>"]}
 #
-# dmux always launches agentChoicePopup after newPanePopup closes with a
-# non-empty prompt (see selectAgentsForPaneCreation in DmuxApp.js), even
-# when only one agent is enabled — so both must be intercepted per issue.
+# v5.8.1 ships a new singleAgentChoicePopup.js but selectAgentsForPane-
+# Creation (DmuxApp.js:593) still always calls launchAgentChoicePopup —
+# the single-agent popup is reachable only through other code paths
+# (kebab menu attach-agent etc.). So both popups still get intercepted
+# per issue.
 
 popup_pid_baseline() {
   # Space-sentinel-wrapped set of PIDs matching any dmux popup script, so
@@ -1669,7 +1708,20 @@ write_popup_result() {
 }
 
 make_newpane_result() {
-  jq -cn --arg p "$1" '{success:true, data:$p}'
+  # $1 prompt, $2 (optional) branch-name override.
+  # When branch-name is empty we keep the legacy string `data` shape so
+  # behavior is byte-identical to pre-v5.8.1 fanout (and so older dmux
+  # builds without normalizeNewPaneInput's object branch still accept it).
+  # When branch-name is non-empty we use the structured object shape that
+  # v5.8.1's PopupManager.normalizeNewPaneInput knows to unpack into
+  # createPane()'s branchNameOverride.
+  local prompt="$1" branch="${2:-}"
+  if [[ -z "$branch" ]]; then
+    jq -cn --arg p "$prompt" '{success:true, data:$p}'
+  else
+    jq -cn --arg p "$prompt" --arg b "$branch" \
+      '{success:true, data:{prompt:$p, branchName:$b}}'
+  fi
 }
 
 make_agent_result() {
@@ -1706,9 +1758,14 @@ create_pane_for_issue() {
   briefing=$(write_briefing "$num" "$title" "$body")
 
   local short_title="${title:0:60}"
-  local slug_hint display_name
-  slug_hint=$(name_get_slug_hint "$num")
-  display_name=$(name_get_display_name "$num")
+  # Single index lookup feeds all three naming axes; calling the per-axis
+  # getters would re-scan name_nums three times.
+  local slug_hint='' display_name='' branch_name='' name_idx
+  if name_idx=$(name_find_index "$num"); then
+    slug_hint="${name_slug_hints[$name_idx]}"
+    display_name="${name_display_names[$name_idx]}"
+    branch_name="${name_branch_names[$name_idx]:-}"
+  fi
   local one_line_prompt
   # When a slug-hint is supplied, front-load it into the one-line prompt so
   # dmux's generateSlug() (which asks the LLM for "1-2 word kebab-case slug
@@ -1728,12 +1785,13 @@ create_pane_for_issue() {
   log_dim "  briefing -> $briefing"
   [[ -n "$slug_hint" ]] && log_dim "  slug-hint -> $slug_hint"
   [[ -n "$display_name" ]] && log_dim "  display-name -> $display_name"
+  [[ -n "$branch_name" ]] && log_dim "  branch-name -> $branch_name"
 
   local baseline
   baseline=$(panes_len)
 
   local newpane_payload agent_payload
-  newpane_payload=$(make_newpane_result "$one_line_prompt")
+  newpane_payload=$(make_newpane_result "$one_line_prompt" "$branch_name")
   agent_payload=''
   [[ -n "$agent" ]] && agent_payload=$(make_agent_result "$agent")
 

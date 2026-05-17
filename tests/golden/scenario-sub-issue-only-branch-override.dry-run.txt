@@ -1,0 +1,33 @@
+[info] dmux session: dmux
+[info] control pane: %1
+[info] project root: <REPO>/tests/fixtures/scenario-sub-issue-only/project_root
+[info] config:       <REPO>/tests/fixtures/scenario-sub-issue-only/dmux.config.json
+[info] fetching sub-issues of #100
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #101: First child
+  briefing -> /tmp/fanout-project_root-101.md
+  slug-hint -> feat-x
+  display-name -> Feature X
+  branch-name -> feat/sub-issue-101-x
+  briefing size: 2470 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":{"prompt":"[fanout #101 of #100] feat-x: First child. read /tmp/fanout-project_root-101.md and begin.","branchName":"feat/sub-issue-101-x"}}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #101: dry-run complete
+[info] #102: Second child
+  briefing -> /tmp/fanout-project_root-102.md
+  branch-name -> release/v2.0
+  briefing size: 2471 bytes
+  current panes[] length: 0
+    $ tmux send-keys -t %1 Escape
+    $ tmux send-keys -t %1 n
+    # would intercept newPanePopup and write: {"success":true,"data":{"prompt":"[fanout #102 of #100] Second child: read /tmp/fanout-project_root-102.md and begin.","branchName":"release/v2.0"}}
+    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+[ ok ] #102: dry-run complete
+    # would set panes[].displayName for #101 = Feature\ X
+    # would merge displayName into <worktree>/.dmux/worktree-metadata.json
+
+[ ok ] created: 2

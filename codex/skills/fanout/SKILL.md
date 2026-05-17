@@ -79,10 +79,14 @@ use this workflow directly.
    Project items are the source-of-truth and there is no parent body to scan.
 5. For each final target issue, generate a pane name unless the user already
    supplied `--name` for that number. Forward one repeatable
-   `--name <NUM>=<slug-hint>|<display-name>` flag per target. In project mode
-   pull each target's number and title from the dry-run output; fetch
-   per-issue body via `gh issue view <num> --json body -q .body` only if the
-   title alone is not enough to name the pane.
+   `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]` flag per
+   target. The 3rd segment (branch-name, dmux v5.8.1+) is optional and
+   should be filled in only when the team has a branch-naming convention
+   worth enforcing (e.g. `feat/issue-<N>-foo`, `release/v2.0`); otherwise
+   leave it empty so dmux's default `branchPrefix + slug` applies. In
+   project mode pull each target's number and title from the dry-run
+   output; fetch per-issue body via `gh issue view <num> --json body
+   -q .body` only if the title alone is not enough to name the pane.
 6. Dry-run with `fanout <target> --dry-run <flags>`, summarize the mode
    banner (issue / project), targets, briefing paths, generated names,
    skipped/deferred rows, and warnings (including "cross-repo item skipped"
@@ -204,12 +208,22 @@ pass them to fanout.
 For each target issue:
 
 - `slug-hint`: 2-4 lowercase kebab-case words, starting with an alnum and
-  containing only `[a-z0-9-]`, such as `fix-login-timeout`.
+  containing only `[a-z0-9-]`, such as `fix-login-timeout`. Controls the
+  worktree directory name (dmux's slug LLM echoes it).
 - `display-name`: readable pane title, Japanese or English OK, ideally
   40 characters or fewer.
+- `branch-name` *(optional, dmux v5.8.1+)*: exact git branch name to
+  create. Use this only when the team has a branch-naming convention worth
+  enforcing (e.g. `feat/issue-<N>-foo`, `release/v2.0`); otherwise leave
+  it empty and dmux will use `branchPrefix + slug`. When supplied, fanout
+  writes it as `branchName` in the newPanePopup payload, which dmux's
+  `createPane()` consumes as `branchNameOverride`.
 
-Forward as `--name <NUM>=<slug-hint>|<display-name>`. If the user supplied a
-name for a number, respect it and fill only missing numbers.
+Forward as `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]`.
+Any segment may be empty as long as at least one is non-empty
+(`--name 17=fix-x` slug only, `--name 17=|Disp` display only,
+`--name 17=||feat/x` branch only). If the user supplied a name for a
+number, respect it and fill only missing segments.
 
 ## Failure Mapping
 
@@ -248,4 +262,7 @@ the likely next action:
 - Default project-mode filter is `--project-status Todo`. Use
   `--project-status all` for a full sweep of the board's OPEN items.
 - The CLI intentionally drives dmux through tmux popup result-file
-  interception because dmux v5.6.3 does not ship the documented HTTP API.
+  interception because dmux v5.8.1 still does not ship the documented HTTP
+  API (an `apiActionHandler` skeleton exists in `dist/adapters/` but no
+  transport is wired up). When dmux ships the real API, fanout will be able
+  to collapse the intercept down to a single `POST /api/panes`.

@@ -12,11 +12,15 @@ GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つ�
 
 `dmux` のドキュメントでは HTTP API（`POST /api/panes` など）が、こうしたツールに
 とって自然な入口として紹介されています。しかし調査したところ、**現行の
-npm 公開版 dmux (v5.6.3) には HTTP サーバが同梱されていません**:
+npm 公開版 dmux (v5.8.1, 再確認済) にも HTTP サーバは同梱されていません**:
 
 - `dist/**/*.js` に HTTP ルートも、`express`/`fastify`/`http.createServer` も、
   ポート検出ユーティリティ以外の `.listen(` も存在しません。
 - `dist/server/` には `embedded-assets.js`（フロントエンドバンドル）しかありません。
+- `dist/adapters/apiActionHandler.js` は v5.8.1 で追加されましたが、
+  `actionResultToAPIResponse()` とコールバック登録の骨格のみで、トランス
+  ポート層が結線されていない skeleton です（同階層に `tuiActionHandler.js`
+  もあり、UI 経路と API 経路を将来分離する設計の足場と読めます）。
 - `utils/generated-agents-doc.js` は `curl http://localhost:$DMUX_SERVER_PORT/api/panes/...`
   を参照していますが、`dist` 内で `DMUX_SERVER_PORT` を設定する処理はありません。
   この機能は `main` ブランチの `context/API.md` に記載されていますが、まだ
@@ -140,11 +144,13 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
 - **エージェント名が解決できること**: `--agent <name>` を渡すか、呼び出し元
   ペイン自身が dmux 管理下のペインで fanout が `dmux.config.json`
   （`.panes[].paneId` と `$TMUX_PANE` の突き合わせ）から自動判定できること。
-  dmux v5.6.3 は、プロンプトポップアップの後に**有効エージェントが 1 つでも**
-  必ずエージェント選択ポップアップを開くため、fanout は横取り用の agent 名を
-  必要とします。エージェントセッション内から同梱の Claude/Codex 連携経由で
-  呼び出す場合は追加の flag なしで動きます。素のシェルから叩く場合は
-  `--agent` 必須です。
+  dmux v5.8.1 でも、プロンプトポップアップの後に**有効エージェントが 1 つでも**
+  必ずエージェント選択ポップアップを開きます（v5.8.1 で
+  `singleAgentChoicePopup.js` が追加されましたが、`selectAgentsForPaneCreation`
+  からは引き続き `launchAgentChoicePopup` を呼ぶため、new-pane フローでは
+  使われません）。そのため fanout は横取り用の agent 名を必要とします。
+  エージェントセッション内から同梱の Claude/Codex 連携経由で呼び出す場合は
+  追加の flag なしで動きます。素のシェルから叩く場合は `--agent` 必須です。
 - fanout 実行時、**dmux TUI がペイン一覧画面に居ること**（モーダルも、開いたプロンプトも
   無いこと）。fanout は各ペイン作成シーケンスの前に `Escape` を 1 回送って
   迷子のポップアップから復帰させますが、対話的な $EDITOR や確認ダイアログからは
@@ -161,7 +167,7 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
-       [--name <NUM>=<slug>[|<display>]]
+       [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run] [--debug]
 fanout <parent-issue> --status      # ファンアウト済み子 issue の JSON 状態を読む
@@ -205,8 +211,16 @@ fanout 123 --unblocked-only
 # ブロッカー解除済みの次バッチを 3 件までに制限
 fanout 123 --unblocked-only --limit 3
 
-# 子ごとの branch/worktree slug とペインタイトルを指定
+# 子ごとの worktree slug、ペインタイトル、git branch 名を指定する。
+# `--name NUM=<slug>[|<display>[|<branch>]]` の 3 セグメント。最低 1 つ非空であれば
+# 残りは空でよい。3 つ目の <branch>（dmux v5.8.1+）は newPanePopup payload に
+# `branchName` として乗り、dmux 内部で `branchNameOverride` として扱われる
+# ため、`branchPrefix + slug` の既定生成を完全にバイパスできる。worktree
+# ディレクトリ名は引き続き <slug> 由来。同梱の Claude/Codex 連携経由なら
+# issue タイトル/本文から各 hint を会話内で生成して自動で渡す。
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
+fanout 123 --name 8='feat-x|Feature X|feat/issue-8-x'   # 3 セグメント全部
+fanout 123 --name 9='||release/v2.0'                    # branch のみ上書き
 
 # dmux インスタンスが複数動いているときに特定のセッションを指定
 fanout 123 --session work-repo
