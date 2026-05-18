@@ -60,7 +60,7 @@ func printDryRunPlan(plan Plan, lg *log.Logger, c log.Palette) {
 	}
 }
 
-func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *log.Logger, c log.Palette) {
+func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *log.Logger, c log.Palette, commandName string) {
 	fmt.Fprintln(lg.Stdout())
 	if result.Created > 0 {
 		lg.Ok("created: %d", result.Created)
@@ -89,8 +89,8 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 		if cfg.ParentMode == cliflags.ModeProject && cfg.ProjectStatus != cliflags.DefaultProjectStatus {
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
-		fmt.Fprintf(lg.Stdout(), "  fanout %s --limit %d%s%s%s%s%s\n",
-			shellQuote(cfg.ParentRef), len(plan.LimitDeferred),
+		fmt.Fprintf(lg.Stdout(), "  %s %s --limit %d%s%s%s%s%s\n",
+			shellQuote(commandName), shellQuote(cfg.ParentRef), len(plan.LimitDeferred),
 			statusFlag,
 			optFlag("--only", cfg.OnlyArg)+optFlag("--skip", cfg.SkipArg),
 			boolFlag(" --unblocked-only", cfg.UnblockedOnly),

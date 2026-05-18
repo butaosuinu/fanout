@@ -186,6 +186,12 @@ assert_golden() {
   local name="$1"
   local suffix="${2:-dry-run}"
   local golden="$TESTS_DIR/golden/$name.$suffix.txt"
+  local bin_name variant
+  bin_name="$(basename "$FANOUT_BIN")"
+  variant="$TESTS_DIR/golden/$name.$suffix.$bin_name.txt"
+  if [[ "$bin_name" != fanout && ( -f "$variant" || "${FANOUT_GOLDEN_UPDATE:-0}" == "1" ) ]]; then
+    golden="$variant"
+  fi
   local scrubbed
   # $output is populated by bats' `run` (via run_fanout_*) before this helper
   # is called, so the "unassigned" warning from shellcheck is a false positive.

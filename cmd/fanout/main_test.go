@@ -55,3 +55,22 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		t.Fatalf("sleep duration = %s, want %s", sleeps[0], want)
 	}
 }
+
+func TestInvokedCommandNameUsesBinaryName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "path binary", args: []string{"/tmp/build/fanout-go"}, want: "fanout-go"},
+		{name: "relative binary", args: []string{"./fanout-go"}, want: "fanout-go"},
+		{name: "empty args", args: nil, want: "fanout"},
+		{name: "empty argv0", args: []string{""}, want: "fanout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := invokedCommandName(tc.args); got != tc.want {
+				t.Fatalf("invokedCommandName(%#v) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}

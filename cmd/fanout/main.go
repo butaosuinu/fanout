@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ var sleepBetweenIssues = time.Sleep
 
 func main() {
 	lg := log.New(false)
+	commandName := invokedCommandName(os.Args)
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
@@ -44,10 +46,21 @@ func main() {
 		os.Exit(int(cmdStatus(cfg, lg)))
 	}
 
-	os.Exit(int(run(cfg, lg)))
+	os.Exit(int(run(cfg, lg, commandName)))
 }
 
-func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
+func invokedCommandName(args []string) string {
+	if len(args) == 0 || args[0] == "" {
+		return "fanout"
+	}
+	name := filepath.Base(args[0])
+	if name == "." || name == string(os.PathSeparator) {
+		return "fanout"
+	}
+	return name
+}
+
+func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code {
 	rt, code := resolveRuntime(cfg, lg)
 	if code != exitcode.OK {
 		return code
@@ -124,7 +137,7 @@ func run(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 
 	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, c)
 	applyDisplayNameOverrides(cfg, rt.info.ConfigPath, result.CreatedNums, lg, c)
-	printSummary(plan, result, cfg, lg, c)
+	printSummary(plan, result, cfg, lg, c, commandName)
 
 	if result.Failed > 0 {
 		return exitcode.Env
