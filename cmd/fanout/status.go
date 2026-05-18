@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
@@ -217,11 +218,7 @@ func sortedKeys(set map[int]bool) []int {
 	for n := range set {
 		nums = append(nums, n)
 	}
-	for i := 1; i < len(nums); i++ {
-		for j := i; j > 0 && nums[j-1] > nums[j]; j-- {
-			nums[j-1], nums[j] = nums[j], nums[j-1]
-		}
-	}
+	sort.Ints(nums)
 	return nums
 }
 

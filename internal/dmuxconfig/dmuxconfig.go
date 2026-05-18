@@ -22,7 +22,6 @@ import (
 )
 
 type Config struct {
-	path  string
 	root  rawRoot
 	panes []json.RawMessage
 }
@@ -40,7 +39,7 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, fmt.Errorf("parse dmux config %s: %w", path, err)
 	}
-	cfg := &Config{path: path, root: root}
+	cfg := &Config{root: root}
 	if pr, ok := root["panes"]; ok {
 		var panes []json.RawMessage
 		if err := json.Unmarshal(pr, &panes); err != nil {
@@ -53,21 +52,6 @@ func Load(path string) (*Config, error) {
 
 // PanesLen returns the number of pane objects currently in the config.
 func (c *Config) PanesLen() int { return len(c.panes) }
-
-// PaneField extracts a single string field from pane index i, or "" if absent.
-func (c *Config) PaneField(i int, field string) string {
-	if i < 0 || i >= len(c.panes) {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(c.panes[i], &m); err != nil {
-		return ""
-	}
-	if v, ok := m[field].(string); ok {
-		return v
-	}
-	return ""
-}
 
 // AgentForPane returns the .agent of the pane whose paneId == tmuxPaneID, or
 // "" if no such pane.
@@ -87,12 +71,6 @@ func (c *Config) AgentForPane(tmuxPaneID string) string {
 }
 
 var fanoutPrefixRE = regexp.MustCompile(`^\[fanout #([0-9]+)( of #([^\]]+))?\]`)
-
-// FannedNumbers returns the set of issue numbers prefixed `[fanout #N]` in
-// any pane's prompt.
-func (c *Config) FannedNumbers() map[int]bool {
-	return c.FannedNumbersForParent("", nil)
-}
 
 // ProjectRoot returns dmux's project root when present. dmux versions have
 // used both projectRoot and project_root.

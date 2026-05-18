@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -393,9 +392,4 @@ func ghSubIssueAvailable() bool {
 		}
 	}
 	return false
-}
-
-func atoiOrZero(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
 }
