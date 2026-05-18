@@ -368,6 +368,7 @@ var (
 )
 
 func parseNumCSV(flag, csv string) ([]int, error) {
+	csv = strings.TrimSuffix(csv, ",")
 	parts := strings.Split(csv, ",")
 	out := make([]int, 0, len(parts))
 	for _, tok := range parts {
