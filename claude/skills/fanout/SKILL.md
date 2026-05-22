@@ -5,6 +5,20 @@ description: Spawn one dmux pane per OPEN sub-issue of a GitHub parent issue, or
 
 # fanout
 
+## Synopsis
+
+```
+fanout <parent-issue|project-url>
+       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--include <list>] [--unblocked-only] [--project-status <name>]
+       [--name <NUM>=<slug>[|<display>[|<branch>]]]
+       [--session <tmux-session>] [--sleep <seconds>]
+       [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+```
+
+**Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
+
 `fanout <parent-issue-or-project-url>` enumerates either a GitHub parent issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and for each child asks dmux to create a new pane with its own git worktree and an agent CLI started with a briefing that points at `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified, so this is safe to invoke from inside an agent session that is itself running in a dmux pane.
 
 The positional argument selects the mode: an integer (or `#N`) means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. The two modes share everything downstream of child enumeration — briefing generation, `[fanout #N]` idempotency, `--include` / `--only` / `--skip` / `--unblocked-only` / `--name` / `--limit`, dmux popup interception — only the children come from a different source.

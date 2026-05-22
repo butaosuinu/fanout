@@ -7,6 +7,24 @@ metadata:
 
 # fanout
 
+## Synopsis
+
+```
+fanout <parent-issue|project-url>
+       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--include <list>] [--unblocked-only] [--project-status <name>]
+       [--name <NUM>=<slug>[|<display>[|<branch>]]]
+       [--session <tmux-session>] [--sleep <seconds>]
+       [--popup-timeout <seconds>] [--dry-run] [--debug]
+fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+```
+
+**Do not probe the CLI** with `fanout --help`, `fanout -h`, or
+`which fanout`. This SKILL.md is the source-of-truth for the CLI surface —
+every flag above is documented in the sections below, and the binary path
+is normally `~/.local/bin/fanout` (see the next paragraph). Calling `--help`
+or `which` just to "verify" the surface wastes a tool call and adds nothing.
+
 `fanout <parent-issue-or-project-url>` enumerates either a GitHub parent
 issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and
 asks dmux to create one new pane per child. Each pane gets its own git
