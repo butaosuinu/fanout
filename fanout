@@ -1552,8 +1552,8 @@ EOF
   if [[ "${agent:-}" == "claude" ]]; then
     cat >>"$path" <<'EOF'
 
-Before committing your final changes, run the `/simplify` slash command on the
-files you've changed. /simplify is a Claude Code skill that reviews changed code
+Before committing your final changes, run the `/code-review` slash command on the
+files you've changed. /code-review is a Claude Code skill that reviews changed code
 for reuse, quality, and efficiency and fixes issues it finds. Apply its fixes,
 re-run lint/test, then commit and push as described above.
 
