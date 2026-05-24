@@ -10,7 +10,7 @@
   slug-hint -> feat-x
   display-name -> Feature X
   branch-name -> feat/sub-issue-101-x
-  briefing size: 2470 bytes
+  briefing size: 2476 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
@@ -20,7 +20,7 @@
 [info] #102: Second child
   briefing -> /tmp/fanout-project_root-102.md
   branch-name -> release/v2.0
-  briefing size: 2471 bytes
+  briefing size: 2477 bytes
   current panes[] length: 0
     $ tmux send-keys -t %1 Escape
     $ tmux send-keys -t %1 n
