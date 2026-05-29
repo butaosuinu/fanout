@@ -174,27 +174,50 @@ func InterceptWithDebug(pattern string, baseline map[int]bool, payload []byte, l
 	// parent's readyPromise resolves via the ready-file path rather than via
 	// child.close after we kill. 150ms covers the React Ink useEffect tick.
 	time.Sleep(150 * time.Millisecond)
-	if err := WriteResult(rf, payload); err != nil {
-		if debugf != nil {
-			debugf("%s: write result failed: %v", debugLabel, err)
-		}
-		return fmt.Errorf("%s write result: %w", label, err)
-	}
+	writeErr := WriteResult(rf, payload)
 	if debugf != nil {
-		debugf("%s: wrote resultFile=%s payload=%s", debugLabel, rf, string(payload))
+		if writeErr != nil {
+			debugf("%s: write result failed: %v", debugLabel, writeErr)
+		} else {
+			debugf("%s: wrote resultFile=%s payload=%s", debugLabel, rf, string(payload))
+		}
 	}
+	// Kill the popup even when the write failed: a doomed attempt must not
+	// orphan the Node popup inside `tmux display-popup`, or the stale popup
+	// blocks the next display-popup and freezes the dmux TUI. The shell's
+	// intercept_popup is invoked as `intercept_popup ... || return 1`, which
+	// suspends `set -euo pipefail` inside it, so it likewise always reaches
+	// `kill "$pid"` (fanout:1754) after the write, regardless of write success.
+	//
+	// Kill right after the write so the pid is still this popup. There is an
+	// inherent pgrep/ps/kill race (the pid could be reused between FindNew's ps
+	// check and this Kill), but the window is microseconds: dmux's
+	// PopupWrapper.writeSuccessAndExit exits promptly once it detects the result
+	// file, so the pid is almost always still that short-lived Node popup. A
+	// missed/reused pid is treated as non-fatal.
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		// Process may have already exited; not fatal.
 		if debugf != nil {
 			debugf("%s: SIGTERM pid=%d failed: %v", debugLabel, pid, err)
 		}
-		_ = err
 	} else if debugf != nil {
 		debugf("%s: sent SIGTERM pid=%d", debugLabel, pid)
+	}
+	if writeErr != nil {
+		return fmt.Errorf("%s write result: %w", label, writeErr)
 	}
 	return nil
 }
 
+// resultFileRE extracts the popup's resultFile path from its argv. The
+// character class permits '.' and '-', so a path containing ".." (e.g.
+// /tmp/../etc/dmux-popup-1.json) would match and be written unvalidated. This
+// is intentionally byte-identical to the shell's grep -oE pattern
+// (fanout:1688): the path originates from dmux's own popup process argv, not
+// from user input, and dmux builds it with path.join under its tmpdir, so no
+// traversal sequence is ever produced. Tightening the regex (rejecting "..")
+// only in Go would diverge from the shell source-of-truth without closing a
+// real attack surface; keep the patterns in lockstep.
 var resultFileRE = regexp.MustCompile(`[[:alnum:]/_.\-]+/dmux-popup-[0-9]+\.json`)
 
 func pgrepF(pattern string) ([]int, error) {

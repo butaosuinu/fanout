@@ -53,7 +53,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.
 	}
 
 	if len(agentPayload) == 0 {
-		lg.Err("#%d: no agent resolved. dmux v5.6.3 always shows the agent-choice popup after the prompt popup, so fanout needs an agent name. Pass --agent <name> or invoke fanout from a dmux-managed pane.", req.Issue.Number)
+		lg.Err("#%d: no agent resolved. dmux v5.8.1 always shows the agent-choice popup after the prompt popup, so fanout needs an agent name. Pass --agent <name> or invoke fanout from a dmux-managed pane.", req.Issue.Number)
 		return false
 	}
 

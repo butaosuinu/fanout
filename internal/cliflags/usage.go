@@ -16,7 +16,7 @@ Options:
   --agent <name>      Agent to launch (claude|codex|opencode|...). Required
                       unless the caller's tmux pane is itself a dmux-managed
                       pane — in that case fanout auto-detects the agent from
-                      dmux.config.json. dmux v5.6.3 always opens an agent-
+                      dmux.config.json. dmux v5.8.1 always opens an agent-
                       choice popup after the prompt popup, so fanout must
                       know the agent name to inject into it.
   --limit <N>         Cap how many children to enqueue this run. Remainder is
@@ -99,7 +99,7 @@ Prerequisites:
   * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
     at startup as a best-effort.
   * --agent given, OR the caller's pane is a dmux-managed pane so fanout
-    can auto-detect it. dmux v5.6.3 routes new-pane prompts through
+    can auto-detect it. dmux v5.8.1 routes new-pane prompts through
     tmux display-popup (a separate tmux client that send-keys cannot
     reach), so fanout drives the flow by intercepting the popup's result
     file. The agent name is required to satisfy the picker popup that

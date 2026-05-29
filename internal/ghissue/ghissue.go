@@ -5,6 +5,7 @@ package ghissue
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -285,6 +286,12 @@ query($owner: String!, $number: Int!, $first: Int!, $after: String) {
 		}
 		page, err := parseProjectPage(out, entryField)
 		if err != nil {
+			if errors.Is(err, errProjectNotFound) {
+				// Mirror the shell's actionable message, including the
+				// canonical project URL so the user can check it.
+				projectURL := fmt.Sprintf("https://github.com/%s/%s/projects/%d", ownerType, owner, number)
+				return result, fmt.Errorf("%s: %s (check the URL, token scopes, and project visibility)", err, projectURL)
+			}
 			return result, err
 		}
 		if result.ProjectTitle == "" {
@@ -362,6 +369,12 @@ type projectItem struct {
 	} `json:"status"`
 }
 
+// errProjectNotFound is returned when GraphQL yields projectV2: null for a
+// syntactically valid URL whose project number is wrong or whose token can't
+// see it. ProjectItems wraps it with the project URL + actionable guidance to
+// match the shell's `die "Project not found or not accessible: $parent (...)"`.
+var errProjectNotFound = errors.New("Project not found or not accessible")
+
 func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 	var root struct {
 		Data map[string]struct {
@@ -380,7 +393,7 @@ func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 	}
 	entry, ok := root.Data[entryField]
 	if !ok || entry.ProjectV2 == nil {
-		return projectPage{}, fmt.Errorf("Project not found or not accessible")
+		return projectPage{}, errProjectNotFound
 	}
 	return projectPage{
 		Title:          entry.ProjectV2.Title,
