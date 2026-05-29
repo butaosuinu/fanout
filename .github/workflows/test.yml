@@ -7,21 +7,29 @@ on:
 
 jobs:
   test:
-    name: Tier 1 + Tier 2
+    name: Tier 1 + Tier 2 (shell + Go)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Install bats / jq / shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y bats jq shellcheck
 
-      - name: Tier 1 tests
+      - name: Tier 1 tests (shell)
         run: make test-tier1
 
-      - name: Tier 2 tests
+      - name: Tier 2 tests (shell)
         run: make test-tier2
+
+      - name: Go tests (unit + Tier 1 + Tier 2 against fanout-go)
+        run: make test-go
 
       - name: Lint
         run: make lint
