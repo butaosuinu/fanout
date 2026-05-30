@@ -6,8 +6,36 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Tier 1 + Tier 2 (shell + Go)
+  shell-tier1:
+    name: Shell Tier 1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats / jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq
+
+      - name: Run shell Tier 1 tests
+        run: make test-tier1
+
+  shell-tier2:
+    name: Shell Tier 2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats / jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq
+
+      - name: Run shell Tier 2 tests
+        run: make test-tier2
+
+  go-unit:
+    name: Go unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,19 +45,62 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install bats / jq / shellcheck
+      - name: Run Go unit tests
+        run: make go-test
+
+  go-tier1:
+    name: Go Tier 1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install bats / jq
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats jq shellcheck
+          sudo apt-get install -y bats jq
 
-      - name: Tier 1 tests (shell)
-        run: make test-tier1
+      - name: Run Go Tier 1 tests
+        run: make test-go-tier1
 
-      - name: Tier 2 tests (shell)
-        run: make test-tier2
+  go-tier2:
+    name: Go Tier 2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Go tests (unit + Tier 1 + Tier 2 against fanout-go)
-        run: make test-go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
-      - name: Lint
+      - name: Install bats / jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats jq
+
+      - name: Run Go Tier 2 tests
+        run: make test-go-tier2
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run lint
         run: make lint
