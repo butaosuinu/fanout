@@ -10,8 +10,17 @@ CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
 
 BATS       ?= bats
+GO         ?= go
+GO_BIN     ?= fanout-go
+GOCACHE    ?= $(CURDIR)/.cache/go-build
 
-.PHONY: install link uninstall test test-tier1 test-tier2 lint check-bats
+.PHONY: install link uninstall install-go link-go uninstall-go build-go clean-go go-test go-vet go-fmt-check test test-tier1 test-tier2 test-go test-go-tier1 test-go-tier2 lint check-bats
+
+build-go:
+	GOCACHE="$(GOCACHE)" $(GO) build -o "$(GO_BIN)" ./cmd/fanout
+
+clean-go:
+	rm -f "$(GO_BIN)"
 
 install:
 	@mkdir -p "$(BINDIR)" "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
@@ -35,6 +44,12 @@ install:
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
+install-go: build-go
+	@mkdir -p "$(BINDIR)"
+	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout-go"
+	@echo "Installed:"
+	@echo "  $(BINDIR)/fanout-go"
+
 link:
 	@mkdir -p "$(BINDIR)" "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout"
@@ -55,6 +70,12 @@ link:
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
 
+link-go: build-go
+	@mkdir -p "$(BINDIR)"
+	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout-go"
+	@echo "Linked:"
+	@echo "  $(BINDIR)/fanout-go -> $(CURDIR)/$(GO_BIN)"
+
 uninstall:
 	rm -f "$(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
@@ -66,11 +87,17 @@ uninstall:
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
+uninstall-go:
+	rm -f "$(BINDIR)/fanout-go"
+	@echo "Removed:"
+	@echo "  $(BINDIR)/fanout-go"
+
 # --- test / lint -------------------------------------------------------------
-# `make test`         — run Tier 1 + Tier 2 black-box tests.
+# `make test`         — run Tier 1 + Tier 2 black-box tests against ./fanout.
+# `make test-go`      — build ./fanout-go and run the same tests via FANOUT_BIN.
 # `make test-tier1`   — flag / prerequisite tests, no live dmux.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
-# `make lint`         — shellcheck the fanout script and all test shims.
+# `make lint`         — shellcheck Bash files plus Go vet/gofmt checks.
 #
 # bats-core is required: `brew install bats-core` (macOS) or `apt install bats`
 # (Debian/Ubuntu). check-bats prints the install hint before failing.
@@ -95,5 +122,23 @@ test-tier1: check-bats
 test-tier2: check-bats
 	$(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
 
-lint:
+test-go: go-test test-go-tier1 test-go-tier2
+
+test-go-tier1: build-go check-bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
+
+test-go-tier2: build-go check-bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
+
+go-test:
+	GOCACHE="$(GOCACHE)" $(GO) test ./...
+
+go-vet:
+	GOCACHE="$(GOCACHE)" $(GO) vet ./...
+
+go-fmt-check:
+	@out="$$(gofmt -l cmd internal 2>/dev/null)"; \
+	if [ -n "$$out" ]; then echo "gofmt diff in:"; echo "$$out"; exit 1; fi
+
+lint: go-vet go-fmt-check
 	shellcheck fanout tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash

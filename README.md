@@ -118,12 +118,17 @@ make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
 make lint           # shellcheck fanout + test shims
+make build-go       # build the experimental Go port as ./fanout-go
+make test-go        # run the same black-box tests against ./fanout-go
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
-Both tiers are parity-test material for the upcoming Go rewrite. Regenerate
+Both tiers are parity-test material for the Go rewrite. The Bash `./fanout`
+remains the default installed CLI while `./fanout-go` exists in parallel for
+behavior comparison; use `make install-go` or `make link-go` if you want a
+`fanout-go` command in `$(BINDIR)`. Regenerate
 Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
 intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 
