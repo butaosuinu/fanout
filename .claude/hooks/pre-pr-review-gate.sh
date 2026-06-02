@@ -35,10 +35,14 @@ deny()  {
 }
 
 # Only Bash tool calls that actually run `gh pr create` are in scope.
+# `gh pr new` is gh's built-in alias for `gh pr create` (gh resolves it to the
+# same command), so gate it too.
 [[ "$tool_name" == "Bash" ]] || allow
-grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$cmd" || allow
-# `gh pr create --help` / `-h` is harmless; never gate it.
-grep -Eq -- '--help|-h([[:space:]]|$)' <<<"$cmd" && allow
+grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+(create|new)([[:space:]]|$)' <<<"$cmd" || allow
+# `gh pr create --help` / `-h` is harmless; never gate it. Match only the
+# tokenized flag — a branch/value ending in `-h` (e.g. `--head fix-h`) or a
+# word merely containing `--help` must NOT slip the gate.
+grep -Eq -- '(^|[[:space:]])(--help|-h)([[:space:]]|$)' <<<"$cmd" && allow
 # Explicit operator override. The hook runs as its own process *before* the
 # command, so an inline `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` (the
 # documented escape hatch) sets that var only for `gh`, never for us — we must
@@ -59,5 +63,6 @@ marker="$(git rev-parse --git-dir)/post-work-review-passed"
 deny "post-work-review が未実施です。先に /post-work-review を実行してください。
 完了時に skill が現在の HEAD($head)を $marker に記録します。
 (codex companion 未検出の場合は Pass 2 はスキップされ、Pass 1 通過で marker が書かれます)
+/post-work-review が使えない場合は repo で make install (または make link) を実行してください。
 完了後に gh pr create を再実行してください。
 緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
