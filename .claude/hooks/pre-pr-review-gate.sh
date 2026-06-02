@@ -1,28 +1,38 @@
 #!/usr/bin/env bash
 # fanout PR-review gate — PreToolUse(Bash) hook.
 #
-# Blocks `gh pr create` unless the current HEAD has been signed off by
-# /post-work-review. The skill writes the reviewed commit SHA to a
-# worktree-local marker; this hook allows the PR only when that marker
-# matches HEAD. HEAD moving forward auto-stales the marker, forcing a
-# re-review. The marker lives at $(git rev-parse --git-dir)/post-work-review-passed
-# which is per-worktree (.git/worktrees/<name>/...), so fanout's parallel
-# panes never cross-contaminate each other's review state.
+# Blocks `gh pr create` unless the commit the PR will be built from has been
+# signed off by /post-work-review. The skill writes the reviewed commit SHA to
+# a worktree-local marker; this hook allows the PR only when that marker matches
+# the target commit. HEAD (or the --head branch tip) moving forward auto-stales
+# the marker, forcing a re-review. The marker lives at
+# $(git rev-parse --git-dir)/post-work-review-passed — per-worktree
+# (.git/worktrees/<name>/...), so fanout's parallel panes never cross-contaminate.
 #
-# Contract (Claude Code PreToolUse hook):
-#   - stdin is the tool-call JSON ({tool_name, tool_input.command, cwd, ...}).
-#   - To allow: exit 0 with no stdout.
-#   - To deny: print {"hookSpecificOutput":{...,"permissionDecision":"deny",...}}
-#     to stdout and exit 0.
+# Contract (Claude Code PreToolUse hook): stdin is the tool-call JSON; allow =
+# exit 0 with no stdout; deny = print {"hookSpecificOutput":{…,"permissionDecision":
+# "deny",…}} to stdout and exit 0.
 #
-# Go port note: the fanout CLI (cmd/fanout + internal/*) is dependency-free,
-# but this hook stays bash + jq like the other repo hooks — jq is assumed
-# present (gh CLI already needs it), so no new dependency is introduced.
-#
-# Escape hatch: FANOUT_SKIP_PR_REVIEW=1 gh pr create ...
+# This is a best-effort regex gate, not a shell parser. It deliberately does NOT
+# try to follow indirect execution (eval, xargs, sh -c "<string>"); those, and
+# any command whose text merely contains the trigger near a shell operator, are
+# documented limitations handled by the FANOUT_SKIP_PR_REVIEW=1 escape hatch.
 set -euo pipefail
 
 payload="$(cat)"
+
+# jq dependency: FAIL CLOSED if missing. `gh` ships its own jq (gojq) so the
+# system `jq` can genuinely be absent; without it we cannot parse the payload.
+# Since PreToolUse non-2 exits are non-blocking (would silently allow), deny
+# anything that looks like a PR creation and tell the user how to proceed.
+if ! command -v jq >/dev/null 2>&1; then
+  grep -Eq 'FANOUT_SKIP_PR_REVIEW=1' <<<"$payload" && exit 0
+  if grep -Eq 'gh[[:space:]]+([^[:space:]]+[[:space:]]+)*pr[[:space:]]+([^[:space:]]+[[:space:]]+)*(create|new)([^[:alnum:]_-]|$)' <<<"$payload"; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"jq が見つからないため PR レビューゲートが状態を判定できません。jq をインストールするか、FANOUT_SKIP_PR_REVIEW=1 gh pr create ... で回避してください。"}}'
+  fi
+  exit 0
+fi
+
 tool_name=$(jq -r '.tool_name // ""' <<<"$payload")
 cmd=$(jq -r '.tool_input.command // ""' <<<"$payload")
 cwd=$(jq -r '.cwd // ""' <<<"$payload")
@@ -34,43 +44,51 @@ deny()  {
   exit 0
 }
 
-# Only Bash tool calls are in scope.
 [[ "$tool_name" == "Bash" ]] || allow
 
+# Normalize newlines to ';' so the line-based grep sees the whole command as one
+# unit and command boundaries work across line breaks (e.g. a `cd` on one line
+# and `gh pr create` on the next).
+cmdn=$(printf '%s' "$cmd" | tr '\n\r' ';;')
+
 # --- regex building blocks (POSIX ERE) ---------------------------------------
-# A leading env assignment token:  VAR=val<space>
+# VAR=val<space>
 _assign='[_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+'
-# A flag token, optionally followed by one non-flag value:  -x [value]<space>
+# -x [value]<space>  (a flag, optionally followed by one non-flag value)
 _flag='-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?'
-# Command boundary + optional `env` wrapper. `gh` must sit at a boundary — start
-# of line, or after one of ; | & ( { (which also covers `$( … )` substitution)
-# — so a create phrase buried inside a quoted value or another command (e.g.
-# `git commit -m "feat: gh pr create gate"`) is NOT gated. A bare backtick is
-# intentionally NOT a boundary: gating every markdown inline-code mention would
-# be worse than missing rare legacy `` `…` `` substitution. The optional
-# `env ` covers `env GH_TOKEN=… gh pr create`.
-_boundary='(^|[;&|({])[[:space:]]*(env[[:space:]]+)?'
+# Direct command wrappers / shell keywords that can precede `gh` on the same
+# simple command: env/command/time/nice/…, and then/do/else for compound forms
+# (`if …; then gh pr create`). NOT eval/xargs — indirect execution is out of scope.
+_wrap='(env|command|builtin|exec|time|nice|nohup|setsid|stdbuf|then|do|else)[[:space:]]+'
+# A run of prefix tokens before `gh`: assignments, wrappers, or wrapper flags.
+_pre="(${_assign}|${_wrap}|${_flag})*"
+# Command boundary. `gh` must sit at start of (a normalized) line, or after one
+# of ; | & ( { (which also covers `$( … )` substitution). A bare backtick is
+# intentionally NOT a boundary, so markdown inline-code mentions in commit
+# messages / PR comments are not gated.
+_bound='(^|[;&|({])[[:space:]]*'
 # `gh [gh-flags] pr [pr-flags] create|new`, ending at a non-word char. Flags may
-# appear BOTH between gh and pr (`gh -R o/r pr create`) and between pr and the
+# appear both between gh and pr (`gh -R o/r pr create`) and between pr and the
 # subcommand (`gh pr -R o/r create`). gh resolves `new` to create.
 _ghpr="gh[[:space:]]+(${_flag})*pr[[:space:]]+(${_flag})*(create|new)([^[:alnum:]_-]|\$)"
 
 # In scope only if the command actually invokes gh pr create / gh pr new.
-grep -Eq "${_boundary}(${_assign})*${_ghpr}" <<<"$cmd" || allow
+grep -Eq "${_bound}${_pre}${_ghpr}" <<<"$cmdn" || allow
 
 # Explicit operator override, TIED to the matched gh pr create: the bypass
 # assignment must prefix THAT command. So `--body FANOUT_SKIP_PR_REVIEW=1` (a
 # value) and `FANOUT_SKIP_PR_REVIEW=1 echo ok; gh pr create` (assignment on a
 # different simple command) do NOT bypass. A session-level export is honored.
-# (No `--help` exemption: a help invocation merely prints help, so gating it is
-# harmless, and any "help anywhere" exemption is itself a bypass vector.)
+# (No --help exemption: a help invocation merely prints help, so gating it is
+# harmless, while any "help anywhere" exemption is itself a bypass vector.)
 [[ "${FANOUT_SKIP_PR_REVIEW:-}" == "1" ]] && allow
-grep -Eq "${_boundary}(${_assign})*FANOUT_SKIP_PR_REVIEW=1[[:space:]]+(env[[:space:]]+)?(${_assign})*${_ghpr}" <<<"$cmd" && allow
+grep -Eq "${_bound}${_pre}FANOUT_SKIP_PR_REVIEW=1[[:space:]]+${_pre}${_ghpr}" <<<"$cmdn" && allow
 
-# A directory change BEFORE the matched creation (`cd ../other && gh pr create`)
-# means gh runs somewhere other than the payload cwd, so the marker check would
-# consult the wrong worktree. Refuse rather than trust the wrong repo's marker.
-grep -Eq "(^|[;&|({])[[:space:]]*(cd|pushd)[[:space:]][^;&|]*[;&|].*${_ghpr}" <<<"$cmd" \
+# A directory change BEFORE the matched creation (`cd ../other && gh pr create`,
+# including across normalized newlines) means gh runs somewhere other than the
+# payload cwd, so the marker check would consult the wrong worktree. Refuse
+# rather than trust the wrong repo's marker.
+grep -Eq "${_bound}(${_wrap})*(cd|pushd)[[:space:]][^;&|]*[;&|].*${_ghpr}" <<<"$cmdn" \
   && deny "cd/pushd を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。
 対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。
 緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
@@ -85,16 +103,16 @@ head=$(git rev-parse HEAD 2>/dev/null) || allow
 marker="$(git rev-parse --git-dir)/post-work-review-passed"
 
 # `gh pr create --head <branch>` (or -H) builds the PR from THAT branch, not
-# necessarily the current HEAD — and the marker only proves one reviewed commit.
-# Strip quoted values so a --head inside a --title/--body string is ignored,
-# then resolve the named branch and verify ITS tip against the marker. If the
-# branch can't be resolved locally (e.g. a cross-fork `owner:branch`), we can't
-# prove it was reviewed, so deny.
-scrubbed=$(printf '%s' "$cmd" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
-# `|| true`: under `set -e`+`pipefail`, grep finding no --head would exit the hook.
-headref=$(grep -oE -- '(^|[[:space:]])(--head|-H)([[:space:]]+|=)[^[:space:]]+' <<<"$scrubbed" \
-  | tail -1 | sed -E 's/.*(--head|-H)([[:space:]]+|=)//') || true
-if [[ -n "$headref" ]]; then
+# necessarily the current HEAD — so verify the branch's tip against the marker.
+# Detect a *real* --head flag from the quote-stripped command (a --head buried
+# inside a --title/--body value disappears with its quotes and is correctly
+# ignored); but read the VALUE from the raw command, where it may itself be
+# quoted (`--head "other-branch"`). Unresolvable / cross-fork heads -> deny.
+scrubbed=$(printf '%s' "$cmdn" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+if grep -Eq -- '(^|[[:space:]])(--head|-H)([[:space:]]|=)' <<<"$scrubbed"; then
+  # shellcheck disable=SC1003
+  headref=$(grep -oE -- '(--head|-H)([[:space:]]+|=)("[^"]*"|'\''[^'\'']*'\''|[^[:space:]]+)' <<<"$cmdn" \
+    | tail -1 | sed -E 's/^(--head|-H)([[:space:]]+|=)//; s/^"//; s/"$//; s/^'\''//; s/'\''$//') || true
   target=$(git rev-parse --verify "${headref}^{commit}" 2>/dev/null) || target=""
   [[ -n "$target" && -f "$marker" && "$(cat "$marker")" == "$target" ]] && allow
   deny "gh pr create --head ($headref) は現在の HEAD ではなく対象ブランチから PR を作成しますが、
