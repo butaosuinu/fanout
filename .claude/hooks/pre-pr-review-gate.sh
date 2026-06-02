@@ -36,9 +36,14 @@ deny()  {
 
 # Only Bash tool calls that actually run `gh pr create` are in scope.
 # `gh pr new` is gh's built-in alias for `gh pr create` (gh resolves it to the
-# same command), so gate it too.
+# same command), so gate it too. Parent/inherited flags may appear between
+# `pr` and the subcommand (e.g. `gh pr -R owner/repo create`), so allow a run
+# of flag tokens (each optionally followed by one non-flag value) before
+# `create`/`new`. Restricting the gap to flag-shaped tokens keeps the match on
+# the subcommand position, so `gh pr comment --body "...create..."` and
+# `gh pr edit 5 --title create` are NOT gated.
 [[ "$tool_name" == "Bash" ]] || allow
-grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+(create|new)([[:space:]]|$)' <<<"$cmd" || allow
+grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([[:space:]]|$)' <<<"$cmd" || allow
 # `gh pr create --help` / `-h` is harmless; never gate it. Match only the
 # tokenized flag — a branch/value ending in `-h` (e.g. `--head fix-h`) or a
 # word merely containing `--help` must NOT slip the gate.
