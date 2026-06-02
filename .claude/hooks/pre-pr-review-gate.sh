@@ -37,49 +37,40 @@ deny()  {
 # Only Bash tool calls are in scope.
 [[ "$tool_name" == "Bash" ]] || allow
 
-# Strip the contents of quoted substrings before help inspection so a
-# `--help`/`-h` that is merely part of a quoted argument *value* (e.g.
-# `--title "fix --help"`) is not seen as a flag. Command words like
-# `gh pr create` are never quoted, so the matcher below still finds them in
-# $cmd. (Imperfect for nested/escaped quotes; covers the common case.)
-scrubbed=$(printf '%s' "$cmd" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+# --- regex building blocks (POSIX ERE) ---------------------------------------
+# A leading env assignment token:  VAR=val<space>
+_assign='[_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+'
+# A flag token, optionally followed by one non-flag value:  -x [value]<space>
+_flag='-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?'
+# Command boundary + optional `env` wrapper. `gh` must sit at a boundary — start
+# of line, or after one of ; | & ( { (which also covers `$( … )` substitution)
+# — so a create phrase buried inside a quoted value or another command (e.g.
+# `git commit -m "feat: gh pr create gate"`) is NOT gated. A bare backtick is
+# intentionally NOT a boundary: gating every markdown inline-code mention would
+# be worse than missing rare legacy `` `…` `` substitution. The optional
+# `env ` covers `env GH_TOKEN=… gh pr create`.
+_boundary='(^|[;&|({])[[:space:]]*(env[[:space:]]+)?'
+# `gh [gh-flags] pr [pr-flags] create|new`, ending at a non-word char. Flags may
+# appear BOTH between gh and pr (`gh -R o/r pr create`) and between pr and the
+# subcommand (`gh pr -R o/r create`). gh resolves `new` to create.
+_ghpr="gh[[:space:]]+(${_flag})*pr[[:space:]]+(${_flag})*(create|new)([^[:alnum:]_-]|\$)"
 
-# Detect `gh pr create` / its `new` alias (gh resolves `gh pr new` to create).
-# `gh` must sit at a command boundary — start of line, or after one of ; | & ( {
-# (which also covers `$( ... )` command substitution), optionally preceded by
-# VAR=val assignments — so a `gh pr create` phrase buried inside a quoted
-# argument or another command's value (e.g. `git commit -m "feat: gh pr create
-# gate"`, or `gh api -f body="...gh pr create..."`) is NOT gated. A bare
-# backtick is intentionally NOT a boundary: legacy `` `gh pr create` ``
-# command substitution is rare, and treating it as one would gate every
-# markdown inline-code mention in a commit message or PR comment. Parent flags
-# may appear between `pr` and the subcommand (`gh pr -R owner/repo create`), so
-# allow a run of flag tokens (each optionally followed by one non-flag value).
-# An optional `env ` wrapper (`env GH_TOKEN=… gh pr create`) is also in scope.
-gh_re='(^|[;&|({])[[:space:]]*(env[[:space:]]+)?([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([^[:alnum:]_-]|$)'
-grep -Eq "$gh_re" <<<"$cmd" || allow
+# In scope only if the command actually invokes gh pr create / gh pr new.
+grep -Eq "${_boundary}(${_assign})*${_ghpr}" <<<"$cmd" || allow
 
-# `gh pr create --help` / `-h` only prints help; never gate it. Checked against
-# the quote-stripped command so a `--help`/`-h` inside a --title/--body value
-# (a real PR creation) does NOT exempt it. Match only the tokenized flag — a
-# value ending in `-h` (e.g. `--head fix-h`) must not slip the gate either.
-grep -Eq -- '(^|[[:space:]])(--help|-h)([^[:alnum:]_-]|$)' <<<"$scrubbed" && allow
-# Explicit operator override. The hook runs as its own process *before* the
-# command, so an inline `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` (the
-# documented escape hatch) sets that var only for `gh`, never for us — we must
-# also scan the command string. A session-level `export` is honored too. The
-# command-string form is recognized ONLY as a command-prefix env assignment
-# (start of line / after a separator, optional `env` + other VAR=val), so the
-# token appearing as a `--body FANOUT_SKIP_PR_REVIEW=1` *value* does NOT bypass.
+# Explicit operator override, TIED to the matched gh pr create: the bypass
+# assignment must prefix THAT command. So `--body FANOUT_SKIP_PR_REVIEW=1` (a
+# value) and `FANOUT_SKIP_PR_REVIEW=1 echo ok; gh pr create` (assignment on a
+# different simple command) do NOT bypass. A session-level export is honored.
+# (No `--help` exemption: a help invocation merely prints help, so gating it is
+# harmless, and any "help anywhere" exemption is itself a bypass vector.)
 [[ "${FANOUT_SKIP_PR_REVIEW:-}" == "1" ]] && allow
-grep -Eq '(^|[;&|({])[[:space:]]*(env[[:space:]]+)?([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*FANOUT_SKIP_PR_REVIEW=1[[:space:]]' <<<"$cmd" && allow
+grep -Eq "${_boundary}(${_assign})*FANOUT_SKIP_PR_REVIEW=1[[:space:]]+(env[[:space:]]+)?(${_assign})*${_ghpr}" <<<"$cmd" && allow
 
-# A directory change *before* the matched PR creation (e.g.
-# `cd ../other-repo && gh pr create`) means gh runs somewhere other than the
-# payload cwd, so the marker check below would consult the wrong worktree.
-# Rather than trust the wrong repo's marker (which could either allow an
-# unreviewed target or block a reviewed one), refuse and point at the fix.
-grep -Eq '(^|[;&|({])[[:space:]]*(cd|pushd)[[:space:]][^;&|]*[;&|].*gh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*?(create|new)([^[:alnum:]_-]|$)' <<<"$cmd" \
+# A directory change BEFORE the matched creation (`cd ../other && gh pr create`)
+# means gh runs somewhere other than the payload cwd, so the marker check would
+# consult the wrong worktree. Refuse rather than trust the wrong repo's marker.
+grep -Eq "(^|[;&|({])[[:space:]]*(cd|pushd)[[:space:]][^;&|]*[;&|].*${_ghpr}" <<<"$cmd" \
   && deny "cd/pushd を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。
 対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。
 緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
@@ -92,6 +83,26 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || allow
 
 head=$(git rev-parse HEAD 2>/dev/null) || allow
 marker="$(git rev-parse --git-dir)/post-work-review-passed"
+
+# `gh pr create --head <branch>` (or -H) builds the PR from THAT branch, not
+# necessarily the current HEAD — and the marker only proves one reviewed commit.
+# Strip quoted values so a --head inside a --title/--body string is ignored,
+# then resolve the named branch and verify ITS tip against the marker. If the
+# branch can't be resolved locally (e.g. a cross-fork `owner:branch`), we can't
+# prove it was reviewed, so deny.
+scrubbed=$(printf '%s' "$cmd" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+# `|| true`: under `set -e`+`pipefail`, grep finding no --head would exit the hook.
+headref=$(grep -oE -- '(^|[[:space:]])(--head|-H)([[:space:]]+|=)[^[:space:]]+' <<<"$scrubbed" \
+  | tail -1 | sed -E 's/.*(--head|-H)([[:space:]]+|=)//') || true
+if [[ -n "$headref" ]]; then
+  target=$(git rev-parse --verify "${headref}^{commit}" 2>/dev/null) || target=""
+  [[ -n "$target" && -f "$marker" && "$(cat "$marker")" == "$target" ]] && allow
+  deny "gh pr create --head ($headref) は現在の HEAD ではなく対象ブランチから PR を作成しますが、
+そのブランチ先端がレビュー済み (marker 一致) であることを確認できません。
+対象ブランチを checkout して /post-work-review → gh pr create を実行してください。
+緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
+fi
+
 [[ -f "$marker" && "$(cat "$marker")" == "$head" ]] && allow
 
 deny "post-work-review が未実施です。先に /post-work-review を実行してください。
