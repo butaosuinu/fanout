@@ -60,28 +60,30 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 
 `codex:review` は skill ツール一覧に出てこない (slash command のみ) ので、**Bash で companion スクリプトを直接叩く**。バージョン番号はパスに含まれるため glob で吸収する。
 
-### 前提チェック: codex companion の有無
+### 前提チェック: codex companion の解決
 
-Pass 1 のあと、まず companion スクリプトの実体があるか確認する:
+Pass 1 のあと、まず companion スクリプトの実体を確認し、**glob を1回だけ展開して単一パスに解決**してから後段で使い回す(以降の `node` 呼び出しで glob を再展開しない — 複数バージョンが cache に残っていると `node <script1> <script2> review …` のように展開されて `review` がサブコマンド位置からずれ、Pass 2 が壊れるため):
 
 ```bash
-ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | head -1
+mapfile -t companions < <(ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null)
+companion="${companions[0]:-}"
 ```
 
-- **見つかった場合**: 従来どおり下記「1 反復の手順」を回す (approve まで、oscillation セーフティ維持)。
-- **見つからない場合**: Pass 2 を **skip** し、次の 1 行を Claude の応答に明記してから Step 4 へ進む:
+- **0 件 (`${#companions[@]}` == 0)**: Pass 2 を **skip** し、次の 1 行を Claude の応答に明記してから Step 4 へ進む:
 
   > ⚠️ codex companion 未検出のため second-pass review は skip。Pass 1 単独でのレビュー結果として扱う。
 
   この設計により codex 未導入環境でも skill は機能し、Pass 1 完了で Step 4 の marker が書かれる。
+- **2 件以上 (`${#companions[@]}` >= 2)**: 複数バージョンが残っている。`head -1` で暗黙に1つを選ばず、トラブルシューティングに従い `ls ~/.claude/plugins/cache/openai-codex/codex/` の結果を提示してユーザーにどれを使うか確認する。確定後にそのパスを `$companion` として使う。
+- **1 件**: 解決済みの `$companion` を使って下記「1 反復の手順」を回す (approve まで、oscillation セーフティ維持)。
 
 ### 1 反復の手順
 
 1. ユーザーに「Pass 2 反復 N: codex review を実行します」と 1 文宣言。
-2. Bash を実行:
+2. Bash を実行(前提チェックで解決した単一パス `$companion` を使う。glob を再展開しないこと):
 
    ```bash
-   node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs review --wait
+   node "$companion" review --wait
    ```
 
    `--wait` を付けるのは、ループ制御のために stdout を同期的に受け取る必要があるため。`--background` だと `/codex:status` を別途ポーリングする羽目になり、ループの単純性が失われる。

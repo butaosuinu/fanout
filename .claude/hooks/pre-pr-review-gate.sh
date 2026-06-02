@@ -34,20 +34,35 @@ deny()  {
   exit 0
 }
 
-# Only Bash tool calls that actually run `gh pr create` are in scope.
-# `gh pr new` is gh's built-in alias for `gh pr create` (gh resolves it to the
-# same command), so gate it too. Parent/inherited flags may appear between
-# `pr` and the subcommand (e.g. `gh pr -R owner/repo create`), so allow a run
-# of flag tokens (each optionally followed by one non-flag value) before
-# `create`/`new`. Restricting the gap to flag-shaped tokens keeps the match on
-# the subcommand position, so `gh pr comment --body "...create..."` and
-# `gh pr edit 5 --title create` are NOT gated.
+# Only Bash tool calls are in scope.
 [[ "$tool_name" == "Bash" ]] || allow
-grep -Eq '(^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([[:space:]]|$)' <<<"$cmd" || allow
-# `gh pr create --help` / `-h` is harmless; never gate it. Match only the
-# tokenized flag — a branch/value ending in `-h` (e.g. `--head fix-h`) or a
-# word merely containing `--help` must NOT slip the gate.
-grep -Eq -- '(^|[[:space:]])(--help|-h)([[:space:]]|$)' <<<"$cmd" && allow
+
+# Strip the contents of quoted substrings before help inspection so a
+# `--help`/`-h` that is merely part of a quoted argument *value* (e.g.
+# `--title "fix --help"`) is not seen as a flag. Command words like
+# `gh pr create` are never quoted, so the matcher below still finds them in
+# $cmd. (Imperfect for nested/escaped quotes; covers the common case.)
+scrubbed=$(printf '%s' "$cmd" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+
+# Detect `gh pr create` / its `new` alias (gh resolves `gh pr new` to create).
+# `gh` must sit at a command boundary — start of line, or after one of ; | & ( {
+# (which also covers `$( ... )` command substitution), optionally preceded by
+# VAR=val assignments — so a `gh pr create` phrase buried inside a quoted
+# argument or another command's value (e.g. `git commit -m "feat: gh pr create
+# gate"`, or `gh api -f body="...gh pr create..."`) is NOT gated. A bare
+# backtick is intentionally NOT a boundary: legacy `` `gh pr create` ``
+# command substitution is rare, and treating it as one would gate every
+# markdown inline-code mention in a commit message or PR comment. Parent flags
+# may appear between `pr` and the subcommand (`gh pr -R owner/repo create`), so
+# allow a run of flag tokens (each optionally followed by one non-flag value).
+gh_re='(^|[;&|({])[[:space:]]*([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([^[:alnum:]_-]|$)'
+grep -Eq "$gh_re" <<<"$cmd" || allow
+
+# `gh pr create --help` / `-h` only prints help; never gate it. Checked against
+# the quote-stripped command so a `--help`/`-h` inside a --title/--body value
+# (a real PR creation) does NOT exempt it. Match only the tokenized flag — a
+# value ending in `-h` (e.g. `--head fix-h`) must not slip the gate either.
+grep -Eq -- '(^|[[:space:]])(--help|-h)([^[:alnum:]_-]|$)' <<<"$scrubbed" && allow
 # Explicit operator override. The hook runs as its own process *before* the
 # command, so an inline `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` (the
 # documented escape hatch) sets that var only for `gh`, never for us — we must
