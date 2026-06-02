@@ -57,11 +57,13 @@ uninstall-integrations:
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 
-install: install-integrations
+install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
-	install -m 0755 fanout "$(BINDIR)/fanout"
+	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout"
+	install -m 0755 fanout "$(BINDIR)/fanout-bash"
 	@echo "Installed:"
-	@echo "  $(BINDIR)/fanout"
+	@echo "  $(BINDIR)/fanout (Go)"
+	@echo "  $(BINDIR)/fanout-bash (Bash)"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
@@ -72,22 +74,18 @@ install-go: build-go
 	@echo "Installed:"
 	@echo "  $(BINDIR)/fanout-go"
 
-install-go-default: build-go install-integrations
-	@mkdir -p "$(BINDIR)"
-	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout"
-	install -m 0755 fanout "$(BINDIR)/fanout-bash"
-	@echo "Installed Go implementation as default:"
-	@echo "  $(BINDIR)/fanout"
-	@echo "  $(BINDIR)/fanout-bash"
-	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
-	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
+# install-go-default / link-go-default are now aliases: the default install / link
+# targets already place the Go binary at $(BINDIR)/fanout and demote Bash to
+# $(BINDIR)/fanout-bash. Kept for call-site compatibility (CI, docs, agent skills).
+install-go-default: install
 
-link: link-integrations
+link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
-	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout"
+	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout"
+	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout-bash"
 	@echo "Linked:"
-	@echo "  $(BINDIR)/fanout -> $(CURDIR)/fanout"
+	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
+	@echo "  $(BINDIR)/fanout-bash -> $(CURDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
@@ -98,16 +96,7 @@ link-go: build-go
 	@echo "Linked:"
 	@echo "  $(BINDIR)/fanout-go -> $(CURDIR)/$(GO_BIN)"
 
-link-go-default: build-go link-integrations
-	@mkdir -p "$(BINDIR)"
-	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout"
-	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout-bash"
-	@echo "Linked Go implementation as default:"
-	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
-	@echo "  $(BINDIR)/fanout-bash -> $(CURDIR)/fanout"
-	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
-	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
+link-go-default: link
 
 uninstall: uninstall-integrations
 	rm -f "$(BINDIR)/fanout" "$(BINDIR)/fanout-bash"
