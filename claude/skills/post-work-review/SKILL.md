@@ -65,7 +65,10 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 Pass 1 のあと、まず companion スクリプトの実体を確認し、**glob を1回だけ展開して単一パスに解決**してから後段で使い回す(以降の `node` 呼び出しで glob を再展開しない — 複数バージョンが cache に残っていると `node <script1> <script2> review …` のように展開されて `review` がサブコマンド位置からずれ、Pass 2 が壊れるため):
 
 ```bash
-mapfile -t companions < <(ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null)
+# read ループ (mapfile は bash 4+。macOS の bash 3.2 では未対応なので使わない)
+companions=()
+while IFS= read -r c; do companions+=("$c"); done \
+  < <(ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null)
 companion="${companions[0]:-}"
 ```
 
