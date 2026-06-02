@@ -22,6 +22,10 @@ usage() {
   cat <<'EOF'
 Usage: fanout <parent-issue|project-url> [options]
 
+DEPRECATED: the Bash fanout is being phased out in favor of the Go port and
+will be removed in a future release. Install the Go build as the default
+`fanout` command with `make install-go-default` (or `make link-go-default`).
+
 Creates one dmux pane per OPEN sub-issue of the given parent issue, OR per
 OPEN item in the given Projects v2 URL (e.g. https://github.com/users/<u>/projects/<n>
 or https://github.com/orgs/<o>/projects/<n>). Each pane gets a dedicated git
@@ -211,6 +215,15 @@ log_debug() { (( ${debug:-0} )) || return 0; printf '%s[dbg ]%s %s\n' "$C_DIM" "
 die() {
   log_err "$*"
   exit 1
+}
+
+deprecation_notice() {
+  # Wave 1 of the bash->Go migration. Human-facing only: emit when stderr is a
+  # terminal, so pipelines, machine-readable callers, and the bats harness
+  # (which folds stderr into captured stdout via `2>&1`) stay clean and the
+  # Tier2 goldens don't shift. stdout / exit code are untouched.
+  [[ -t 2 ]] || return 0
+  log_warn 'bash fanout is deprecated and will be removed in a future release; install the Go port as the default with: make install-go-default'
 }
 
 parse_num_csv() {
@@ -1107,6 +1120,8 @@ cmd_status() {
     }
   }'
 }
+
+deprecation_notice
 
 if (( status_mode )); then
   cmd_status
