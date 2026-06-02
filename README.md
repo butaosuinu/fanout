@@ -525,6 +525,25 @@ to print the exact JSON that would be written.
 That's dmux itself doing it on startup (seen as soon as `dmux --help` runs in
 a repo directory). Not a fanout bug.
 
+### `gh pr create` is denied ("post-work-review が未実施です")
+
+A `PreToolUse(Bash)` hook (`.claude/hooks/pre-pr-review-gate.sh`, registered in
+the committed `.claude/settings.json`) blocks `gh pr create` until the current
+HEAD has passed `/post-work-review`. Run `/post-work-review` — its final step
+records the reviewed commit — then rerun `gh pr create`. To bypass once (e.g.
+the PR that first introduces this gate, which would otherwise deny its own
+creation), prefix the command: `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`.
+
+Notes:
+- The gate is HEAD-pinned: any new commit re-arms it, so review again before
+  the PR. The marker is worktree-local, so fanout's parallel panes don't
+  interfere with each other.
+- Detection is a simple regex on the command string. Contorted forms (`... &&
+  gh pr create`, `xargs gh pr create`) can slip through — acceptable for
+  fanout's normal flow.
+- `make install` overwrites a same-named global `post-work-review` skill; back
+  it up first if you maintain your own copy.
+
 ## Design notes
 
 - **One-line prompt only.** ink-text-input in the dmux TUI treats Enter as
