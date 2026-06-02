@@ -23,7 +23,7 @@ fanout <parent-issue> --status      # JSON status of fanned children, no side ef
 
 The positional argument selects the mode: an integer (or `#N`) means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. The two modes share everything downstream of child enumeration — briefing generation, `[fanout #N]` idempotency, `--include` / `--only` / `--skip` / `--unblocked-only` / `--name` / `--limit`, dmux popup interception — only the children come from a different source.
 
-The CLI lives at `/Users/butaosuinu/.local/bin/fanout`; source and docs are in `/Users/butaosuinu/fanout/`.
+The CLI lives at `/Users/butaosuinu/.local/bin/fanout`; source and docs are in `/Users/butaosuinu/fanout/`. Always invoke the stable `fanout` command name. If this installation should prefer the Go implementation, the repository's `make install-go-default` or `make link-go-default` target places the Go binary at that same path; do not probe for or call `fanout-go` directly from this workflow.
 
 ## When to invoke
 

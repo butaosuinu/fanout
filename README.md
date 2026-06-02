@@ -79,13 +79,15 @@ task-list union.
 
 ## Installation
 
-fanout ships as a single Bash script plus agent integration files:
-Claude Code gets a slash command + skills, and Codex CLI gets skills.
+fanout ships as a Bash CLI with an optional Go port plus agent integration
+files: Claude Code gets a slash command + skills, and Codex CLI gets skills.
 All of them are placed in one shot via the `Makefile`:
 
 ```bash
 make install        # copies CLI + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
 make link           # symlinks the same paths at the checkout (use while hacking)
+make install-go-default # builds the Go port and installs it as the default fanout command
+make link-go-default    # symlinks the Go port as the default fanout command
 make uninstall      # removes the installed paths
 
 PREFIX=/usr/local sudo make install     # system-wide CLI; overrides BINDIR to $PREFIX/bin
@@ -101,6 +103,13 @@ Installed paths:
 - `$(CLAUDE_DIR)/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
 - `$(CODEX_DIR)/skills/fanout/` (default `~/.codex/skills/fanout/`)
 - `$(CODEX_DIR)/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
+
+Agent integrations always invoke the stable `fanout` command name. If you want
+agents to prefer the Go implementation, run `make install-go-default` or
+`make link-go-default`; those targets place the Go binary at `$(BINDIR)/fanout`
+and keep the Bash implementation available as `$(BINDIR)/fanout-bash`.
+Do not teach agents to call `fanout-go` directly — `fanout-go` is only a
+side-by-side comparison command installed by `make install-go` / `make link-go`.
 
 `make install` is stable — delete the repo and the copies still work.
 `make link` points at the checkout, so edits take effect immediately and
@@ -120,15 +129,18 @@ make test-tier2     # --dry-run golden tests against fixture scenarios
 make lint           # shellcheck fanout + test shims
 make build-go       # build the experimental Go port as ./fanout-go
 make test-go        # run the same black-box tests against ./fanout-go
+make install-go     # install the Go port side-by-side as $(BINDIR)/fanout-go
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
 Both tiers are parity-test material for the Go rewrite. The Bash `./fanout`
-remains the default installed CLI while `./fanout-go` exists in parallel for
-behavior comparison; use `make install-go` or `make link-go` if you want a
-`fanout-go` command in `$(BINDIR)`. Regenerate
+remains the default for `make install` / `make link`, while
+`make install-go-default` / `make link-go-default` promote the Go port under
+the stable `fanout` command name that agents already invoke. `./fanout-go`
+still exists in parallel for behavior comparison; use `make install-go` or
+`make link-go` if you want a `fanout-go` command in `$(BINDIR)`. Regenerate
 Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
 intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 
