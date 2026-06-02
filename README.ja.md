@@ -79,47 +79,91 @@ resultFile パスを特定し、プロンプトポップアップ用には
 
 ## インストール
 
-fanout は Bash CLI と任意の Go 版に、エージェント連携ファイルを加えた構成で
-配布されます。Claude Code にはスラッシュコマンド + スキル群、Codex CLI には
-スキル群を用意しています。すべて `Makefile` 経由で一括配置されます:
+推奨インストール経路は Release 済みの Go バイナリです。安定コマンド名
+`fanout` と、同梱の Claude/Codex 連携ファイルをまとめて配置します:
 
 ```bash
-make install        # CLI + Claude/Codex 連携を ~/.local, ~/.claude, ~/.codex にコピー
-make link           # チェックアウト先を指す symlink を作成（開発用）
-make install-go-default # Go 版をビルドし、既定の fanout コマンドとして配置
-make link-go-default    # Go 版を既定の fanout コマンドとして symlink
-make uninstall      # インストール済みのパスを削除
+# fanout + Claude/Codex 連携を ~/.local, ~/.claude, ~/.codex に配置
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh
 
-PREFIX=/usr/local sudo make install     # システム全体に CLI を配置; BINDIR を $PREFIX/bin に上書き
-CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
-CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
+# バイナリのみ
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --no-skills
+
+# 配置先や Release tag を指定
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.1.0 sh
 ```
 
 配置パス:
 
-- `$(BINDIR)/fanout`（既定は `~/.local/bin/fanout`）
-- `$(CLAUDE_DIR)/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
-- `$(CLAUDE_DIR)/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
-- `$(CLAUDE_DIR)/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
-- `$(CODEX_DIR)/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
-- `$(CODEX_DIR)/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+- `$BIN_DIR/fanout`（既定は `~/.local/bin/fanout`）
+- `$CLAUDE_DIR/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
+- `$CLAUDE_DIR/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
+- `$CLAUDE_DIR/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
+- `$CODEX_DIR/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
+- `$CODEX_DIR/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
 
-エージェント連携は常に安定した `fanout` コマンド名を呼びます。エージェントに
-Go 実装を優先させたい場合は `make install-go-default` または
-`make link-go-default` を実行してください。これらのターゲットは Go バイナリを
-`$(BINDIR)/fanout` に置き、Bash 実装を `$(BINDIR)/fanout-bash` として残します。
-エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
-`make install-go` / `make link-go` で配置する比較用コマンドです。
+`install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release
+（または `FANOUT_VERSION` で指定した tag）から
+`fanout_<os>_<arch>.tar.gz` を取得します。`sha256sum` または `shasum` が
+あれば `SHA256SUMS` で検証し、再実行時は同じパスへ上書きします。シェル rc は
+自動編集しません。削除は次で行えます:
 
-`make install` は安定しています — リポジトリを消しても、コピー済みのファイルで
-動作し続けます。`make link` はチェックアウトを指すので、編集がすぐ反映され、
-`git pull` だけで更新が終わります。どちらのターゲットも、親ディレクトリが
-存在しなければ作成します。インストールまたはリンク後、実行中の Codex CLI
-セッションがある場合は再起動すると新しいスキルを認識します。
+```bash
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --uninstall
+```
 
 `~/.local/bin` が `PATH` に入っていることを確認してください
 （`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`）。
 入っていない場合は、シェルの rc に `export PATH="$HOME/.local/bin:$PATH"` を追記してください。
+スキルをインストールまたは更新した後、実行中の Codex CLI セッションがある場合は
+再起動すると新しいファイルを認識します。
+
+### macOS セキュリティメモ
+
+curl/wget 経由のインストールでは通常 `com.apple.quarantine` 拡張属性が付かない
+ため、Gatekeeper の「開発元を検証できません」GUI ブロックは基本的に発生しません。
+ブラウザ経由でアーカイブを取得して quarantine が付いた場合は、展開後に次で
+属性を削除してください:
+
+```bash
+xattr -d com.apple.quarantine /path/to/fanout
+```
+
+Apple Silicon では、すべての実行ファイルに最低限 ad-hoc 署名が必要です。Release
+workflow は macOS 上で Go 1.23 の darwin バイナリをビルドするため、Go linker
+がビルド時に署名します。Release package 作成後に外部 `strip` をかけると署名が
+壊れることがあるので避けてください。ローカルコピーが壊れた場合は次で
+ad-hoc 再署名できます:
+
+```bash
+codesign -s - /path/to/fanout
+```
+
+Apple Developer ID 署名や notarization は curl 配布経路では当面スコープ外です。
+ブラウザ、dmg/pkg、管理対象 Mac 向け配布が必要になった段階で追加できます。
+
+### チェックアウトから使う場合
+
+Go port が Release artifact になったため、リポジトリ root の Bash 実装は
+deprecated です。移行期間と parity testing のために、チェックアウト内には
+残しています。開発中は従来の Makefile ターゲットも使えます:
+
+```bash
+make install        # Bash CLI + Claude/Codex 連携をコピー
+make link           # Bash CLI + 連携をこのチェックアウトへ symlink
+make install-go-default # Go 版をビルドし、$(BINDIR)/fanout として配置
+make link-go-default    # Go 版を $(BINDIR)/fanout として symlink
+make uninstall      # インストール済みのパスを削除
+
+PREFIX=/usr/local sudo make install     # システム全体に Bash CLI を配置
+CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
+CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
+```
+
+エージェント連携は常に安定した `fanout` コマンド名を呼びます。エージェントに
+`fanout-go` を直接呼ばせないでください。`fanout-go` は `make install-go` /
+`make link-go` で配置する比較用コマンドです。
 
 ## 開発
 
@@ -128,7 +172,7 @@ make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
 make lint           # shellcheck fanout + テスト用 shim
-make build-go       # 実験中の Go 版を ./fanout-go としてビルド
+make build-go       # ローカル比較用に Go CLI を ./fanout-go としてビルド
 make test-go        # 同じ黒箱テストを ./fanout-go に対して実行
 make install-go     # Go 版を比較用の $(BINDIR)/fanout-go として配置
 ```
@@ -136,14 +180,13 @@ make install-go     # Go 版を比較用の $(BINDIR)/fanout-go として配置
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
 の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
-いずれも Go 書き換え時の parity テスト資産です。`make install` /
-`make link` では Bash 製の `./fanout` が既定のままです。一方、
-`make install-go-default` / `make link-go-default` は、エージェントが既に
-呼んでいる安定コマンド名 `fanout` の中身を Go 版に差し替えます。
+Bash 実装がチェックアウトに残っている間は、これらを parity テスト資産として
+使います。`make install-go-default` / `make link-go-default` は、エージェントが
+既に呼んでいる安定コマンド名 `fanout` の中身を Go 版に差し替えます。
 `./fanout-go` は動作比較用として並行配置できます。`$(BINDIR)` に
-`fanout-go` コマンドを入れたい場合は `make install-go` または
-`make link-go` を使ってください。`--dry-run` 出力を意図的に変更した
-場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
+`fanout-go` コマンドを入れたい場合は `make install-go` または `make link-go`
+を使ってください。`--dry-run` 出力を意図的に変更した場合は
+`FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
 Tier 3 (live dmux E2E) は手動運用のままです。
 
 ## 前提条件

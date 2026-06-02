@@ -79,46 +79,91 @@ task-list union.
 
 ## Installation
 
-fanout ships as a Bash CLI with an optional Go port plus agent integration
-files: Claude Code gets a slash command + skills, and Codex CLI gets skills.
-All of them are placed in one shot via the `Makefile`:
+The recommended install path is the released Go binary. It installs the stable
+`fanout` command plus the bundled Claude/Codex integration files:
 
 ```bash
-make install        # copies CLI + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
-make link           # symlinks the same paths at the checkout (use while hacking)
-make install-go-default # builds the Go port and installs it as the default fanout command
-make link-go-default    # symlinks the Go port as the default fanout command
-make uninstall      # removes the installed paths
+# fanout + Claude/Codex integrations into ~/.local, ~/.claude, ~/.codex
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh
 
-PREFIX=/usr/local sudo make install     # system-wide CLI; overrides BINDIR to $PREFIX/bin
-CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
-CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
+# Binary only
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --no-skills
+
+# Custom destination or pinned release tag
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.1.0 sh
 ```
 
 Installed paths:
 
-- `$(BINDIR)/fanout` (default `~/.local/bin/fanout`)
-- `$(CLAUDE_DIR)/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
-- `$(CLAUDE_DIR)/skills/fanout/` (default `~/.claude/skills/fanout/`)
-- `$(CLAUDE_DIR)/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
-- `$(CODEX_DIR)/skills/fanout/` (default `~/.codex/skills/fanout/`)
-- `$(CODEX_DIR)/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
+- `$BIN_DIR/fanout` (default `~/.local/bin/fanout`)
+- `$CLAUDE_DIR/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
+- `$CLAUDE_DIR/skills/fanout/` (default `~/.claude/skills/fanout/`)
+- `$CLAUDE_DIR/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
+- `$CODEX_DIR/skills/fanout/` (default `~/.codex/skills/fanout/`)
+- `$CODEX_DIR/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
 
-Agent integrations always invoke the stable `fanout` command name. If you want
-agents to prefer the Go implementation, run `make install-go-default` or
-`make link-go-default`; those targets place the Go binary at `$(BINDIR)/fanout`
-and keep the Bash implementation available as `$(BINDIR)/fanout-bash`.
-Do not teach agents to call `fanout-go` directly — `fanout-go` is only a
-side-by-side comparison command installed by `make install-go` / `make link-go`.
+`install.sh` detects macOS/Linux and amd64/arm64, downloads
+`fanout_<os>_<arch>.tar.gz` from the latest GitHub Release (or
+`FANOUT_VERSION`), verifies `SHA256SUMS` when `sha256sum` or `shasum` exists,
+and overwrites the same paths on rerun. It never edits shell rc files. Remove
+the installed files with:
 
-`make install` is stable — delete the repo and the copies still work.
-`make link` points at the checkout, so edits take effect immediately and
-`git pull` is enough to update. Either target creates the parent
-directories if they don't exist. Restart any running Codex CLI session after
-installing or linking so it picks up the new skill.
+```bash
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --uninstall
+```
 
 Confirm `~/.local/bin` is on your `PATH` (`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`).
 If not, add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
+Restart any running Codex CLI session after installing or updating skills so it
+picks up the new skill files.
+
+### macOS security notes
+
+The curl/wget install path normally does not attach the `com.apple.quarantine`
+extended attribute, so the Gatekeeper "cannot verify developer" GUI block
+should not appear for the installed binary. If you download the archive through
+a browser and macOS quarantines it, remove the attribute after extracting:
+
+```bash
+xattr -d com.apple.quarantine /path/to/fanout
+```
+
+Apple Silicon requires every executable to carry at least an ad-hoc signature.
+The release workflow builds darwin binaries on macOS with Go 1.23, so the Go
+linker signs the binary as part of the build. Do not run an external `strip`
+after release packaging; it can invalidate the signature. If a local copy is
+damaged, ad-hoc re-sign it with:
+
+```bash
+codesign -s - /path/to/fanout
+```
+
+Developer ID signing and notarization are intentionally out of scope for the
+curl distribution path; they can be added later if browser, dmg/pkg, or
+managed-Mac distribution becomes a requirement.
+
+### From a checkout
+
+The repository-root Bash implementation is deprecated now that the Go port is
+the release artifact. It remains in the checkout for the deprecation period and
+for parity testing. Local Makefile targets are still available while hacking:
+
+```bash
+make install            # copies Bash CLI + Claude/Codex integrations
+make link               # symlinks Bash CLI + integrations at this checkout
+make install-go-default # builds Go and installs it as $(BINDIR)/fanout
+make link-go-default    # symlinks Go as $(BINDIR)/fanout
+make uninstall          # removes installed paths
+
+PREFIX=/usr/local sudo make install     # system-wide Bash CLI; overrides BINDIR
+CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
+CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
+```
+
+Agent integrations always invoke the stable `fanout` command name. Do not teach
+agents to call `fanout-go` directly — `fanout-go` is only a side-by-side
+comparison command installed by `make install-go` / `make link-go`.
 
 ## Development
 
@@ -127,22 +172,22 @@ make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
 make lint           # shellcheck fanout + test shims
-make build-go       # build the experimental Go port as ./fanout-go
+make build-go       # build the Go CLI as ./fanout-go for local comparison
 make test-go        # run the same black-box tests against ./fanout-go
-make install-go     # install the Go port side-by-side as $(BINDIR)/fanout-go
+make install-go     # install Go side-by-side as $(BINDIR)/fanout-go
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
-Both tiers are parity-test material for the Go rewrite. The Bash `./fanout`
-remains the default for `make install` / `make link`, while
-`make install-go-default` / `make link-go-default` promote the Go port under
-the stable `fanout` command name that agents already invoke. `./fanout-go`
-still exists in parallel for behavior comparison; use `make install-go` or
-`make link-go` if you want a `fanout-go` command in `$(BINDIR)`. Regenerate
-Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
-intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
+Both tiers are parity-test material while the Bash implementation remains in
+the checkout. `make install-go-default` / `make link-go-default` promote the Go
+port under the stable `fanout` command name that agents already invoke.
+`./fanout-go` still exists in parallel for behavior comparison; use
+`make install-go` or `make link-go` if you want a `fanout-go` command in
+`$(BINDIR)`. Regenerate Tier 2 goldens with
+`FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you intentionally change dry-run
+output. Tier 3 (live dmux E2E) stays manual.
 
 ## Prerequisites
 
