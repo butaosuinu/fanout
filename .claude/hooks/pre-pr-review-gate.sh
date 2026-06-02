@@ -55,7 +55,8 @@ scrubbed=$(printf '%s' "$cmd" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
 # markdown inline-code mention in a commit message or PR comment. Parent flags
 # may appear between `pr` and the subcommand (`gh pr -R owner/repo create`), so
 # allow a run of flag tokens (each optionally followed by one non-flag value).
-gh_re='(^|[;&|({])[[:space:]]*([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([^[:alnum:]_-]|$)'
+# An optional `env ` wrapper (`env GH_TOKEN=… gh pr create`) is also in scope.
+gh_re='(^|[;&|({])[[:space:]]*(env[[:space:]]+)?([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*(create|new)([^[:alnum:]_-]|$)'
 grep -Eq "$gh_re" <<<"$cmd" || allow
 
 # `gh pr create --help` / `-h` only prints help; never gate it. Checked against
@@ -66,9 +67,22 @@ grep -Eq -- '(^|[[:space:]])(--help|-h)([^[:alnum:]_-]|$)' <<<"$scrubbed" && all
 # Explicit operator override. The hook runs as its own process *before* the
 # command, so an inline `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` (the
 # documented escape hatch) sets that var only for `gh`, never for us — we must
-# also scan the command string. A session-level `export` is honored too.
+# also scan the command string. A session-level `export` is honored too. The
+# command-string form is recognized ONLY as a command-prefix env assignment
+# (start of line / after a separator, optional `env` + other VAR=val), so the
+# token appearing as a `--body FANOUT_SKIP_PR_REVIEW=1` *value* does NOT bypass.
 [[ "${FANOUT_SKIP_PR_REVIEW:-}" == "1" ]] && allow
-grep -Eq '(^|[[:space:]])FANOUT_SKIP_PR_REVIEW=1([[:space:]]|;|$)' <<<"$cmd" && allow
+grep -Eq '(^|[;&|({])[[:space:]]*(env[[:space:]]+)?([_[:alpha:]][_[:alnum:]]*=[^[:space:]]*[[:space:]]+)*FANOUT_SKIP_PR_REVIEW=1[[:space:]]' <<<"$cmd" && allow
+
+# A directory change *before* the matched PR creation (e.g.
+# `cd ../other-repo && gh pr create`) means gh runs somewhere other than the
+# payload cwd, so the marker check below would consult the wrong worktree.
+# Rather than trust the wrong repo's marker (which could either allow an
+# unreviewed target or block a reviewed one), refuse and point at the fix.
+grep -Eq '(^|[;&|({])[[:space:]]*(cd|pushd)[[:space:]][^;&|]*[;&|].*gh[[:space:]]+pr[[:space:]]+([^[:space:]]+[[:space:]]+)*?(create|new)([^[:alnum:]_-]|$)' <<<"$cmd" \
+  && deny "cd/pushd を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。
+対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。
+緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
 
 # Outside a git work tree (or unreadable cwd / detached-but-no-HEAD) we
 # deliberately fall back to allow — better to under-lock than to wrongly

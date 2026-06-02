@@ -91,13 +91,12 @@ companion="${companions[0]:-}"
 
 ### 終了判定
 
-native review の markdown には機械可読な「0 findings」マーカーが (現状) 無い。文面から **以下のいずれかに合致したら clean と見なす**:
+native review の markdown には機械可読な「0 findings」マーカーが (現状) 無い。文面から判定するが、**approve という語が含まれているだけで clean と即断してはいけない**。次の両方を満たしたときのみ clean と見なす:
 
-- "approve" / "approved" / "looks good" / "no issues" / "no findings" / "0 findings" 相当の英語表現
-- 「指摘なし」「問題なし」「特になし」「修正不要」等の日本語表現
-- findings セクションが空、または "(none)" / "なし" のみ
+1. **肯定的な verdict がある**: "approved" / "looks good" / "no issues" / "no findings" / "0 findings"、または「指摘なし」「問題なし」「特になし」「修正不要」等。
+2. **否定・拒否の表現が無い**: "not approved" / "cannot approve" / "can't approve" / "do not approve" / "request changes"、または「承認しない」「approve できない」「却下」「要修正」等が含まれていたら **clean ではない**(これらは "approve" という語を含むが拒否なので、単純な部分一致で clean 判定すると取りこぼす)。かつ findings セクションが空 / "(none)" / 「なし」であること。
 
-判断に迷うグレーゾーンが出たら **ユーザーに「これは clean と判断していい?」と一度だけ確認する**。勝手に clean 判定してループを早期終了すると、本来直すべき指摘を取りこぼす。
+「approve できない理由は…」のように肯定語と否定語が同居する文面、findings が残っているのに approve 風の語がある、等の **グレーゾーンが出たら勝手に clean 判定せず、ユーザーに「これは clean と判断していい?」と一度だけ確認する**。早期にループを終了すると、本来直すべき指摘を取りこぼす。
 
 ### Oscillation セーフティ (上限なしの暴走防止)
 
@@ -122,17 +121,25 @@ native review の markdown には機械可読な「0 findings」マーカーが 
 
 ## Step 4 (final): record reviewed commit
 
-Pass 1 (と、利用可能だった場合は Pass 2) が通り、修正コミットが全て commit 済みの状態で、現在のリポジトリのレビュー済みマーカーを書き出す。これは PR 作成ゲート (`.claude/hooks/pre-pr-review-gate.sh`) が「このコミットはレビュー済み」と認識する signal。
+レビュー済みマーカーを書き出す。これは PR 作成ゲート (`.claude/hooks/pre-pr-review-gate.sh`) が「このコミットはレビュー済み」と認識する signal なので、**レビューが実質的に行われ、かつ修正が全て commit 済みのときだけ**書く。次の前提を**いずれか欠いたら marker を書かない**:
+
+1. **最低 1 つのレビューパスが成功している**: Pass 1 (code-review) が正常完了したか、Pass 2 (codex) が少なくとも 1 反復回って結果を返している。Pass 1 がエラーで、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューが 0 件なので **marker を書かず**、レビュー未完了である旨をユーザーに伝えて終了する(ゲートは閉じたまま)。
+2. **working tree が clean**: Pass 1/Pass 2 の修正が全て commit 済みであること。dirty なまま marker を書くと、未コミットの修正は PR (= push 済みコミット) に乗らないのに HEAD が「レビュー済み」とマークされ、ゲートが unreviewed なコードの PR 作成を通してしまう。
 
 ```bash
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  && git rev-parse HEAD > "$(git rev-parse --git-dir)/post-work-review-passed" \
-  || true
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "git リポジトリ外: marker は書きません"
+elif [ -n "$(git status --porcelain)" ]; then
+  echo "⚠️ 未コミットの変更があります。修正を commit してから再度この手順を実行してください (dirty tree では marker を記録しません)。"
+else
+  git rev-parse HEAD > "$(git rev-parse --git-dir)/post-work-review-passed"
+  echo "marker 記録: $(git rev-parse HEAD)"
+fi
 ```
 
 - git リポジトリ外で `/post-work-review` を呼ばれた場合は no-op。
 - マーカーは worktree-local (`.git/worktrees/<name>/post-work-review-passed`) なので fanout の並列ペインで干渉しない。
-- 修正コミットがまだ working tree に残っている (uncommitted) 状態で marker を書くと、その後コミットして HEAD が進んだ瞬間に marker は stale になりゲートが再び閉じる。**marker を書くのは「これ以上コミットしない」という最終状態に到達してから**にする。push やコミット自体は本 skill の責任外なので、ユーザーが別途コミット → このステップ、の順序を守る。
+- HEAD が進めば marker は自動的に stale になりゲートが再び閉じる。だから marker を書くのは「修正を全て commit し、これ以上コミットしない」最終状態に到達してから。push やコミット自体は本 skill の責任外なので、ユーザーが別途コミット → このステップ、の順序を守る。
 
 ## 完了報告
 
@@ -158,4 +165,4 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 
 - **`codex-companion.mjs` の glob が複数マッチ**: 通常 1 バージョンしか入っていない。複数あるならユーザーに通知し、`ls ~/.claude/plugins/cache/openai-codex/codex/` の結果を見せて指示を仰ぐ。
 - **codex CLI 未認証 / レートリミット**: companion スクリプトがエラーを出す。`codex:setup` skill を案内する。
-- **code-review が失敗した場合**: Pass 1 を諦めて Pass 2 から始めるか、ユーザーに継続判断を仰ぐ。Pass 1 失敗だけで全体を中止しないこと (Pass 2 単独でも価値はある)。
+- **code-review が失敗した場合**: Pass 1 を諦めて Pass 2 から始めるか、ユーザーに継続判断を仰ぐ。Pass 1 失敗だけで全体を中止しないこと (Pass 2 単独でも価値はある)。ただし **Pass 1 が失敗し、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューパスが 0 件なので Step 4 の marker を書かない** (ゲートは閉じたまま)。レビュー未完了をユーザーに伝えて終了する。
