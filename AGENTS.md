@@ -5,8 +5,13 @@ repository.
 
 ## Project Shape
 
-This is a single-file Bash CLI (`fanout`) plus docs and agent integration
-files. There is no build system, test suite, or lint config.
+The Go implementation (`cmd/fanout` + `internal/`) is the primary, default
+`fanout`; `make install` builds it and installs it at `$(BINDIR)/fanout`. The
+original single-file Bash `fanout` is **deprecated** and kept side-by-side as
+`$(BINDIR)/fanout-bash` during the migration window (Wave 1 of #80; removed in
+Wave 2). A Go build (`make build-go`), a bats parity suite that covers both
+implementations (`make test` / `make test-go`), and lint (`make lint` =
+go vet + gofmt + shellcheck) all exist.
 
 Source-of-truth integration files:
 
@@ -23,10 +28,19 @@ the README before changing CLI behavior.
 
 ## Working With The Script
 
-- Run it directly with `./fanout <parent-issue>`.
-- Validate logic without driving dmux with
-  `./fanout <parent-issue> --dry-run`.
-- Lint with `shellcheck fanout` when available. Treat quoting warnings as real.
+The default `fanout` is the Go binary (`make build-go` → `./fanout-go`); the
+Bash `./fanout` is the deprecated lane. Both are kept at parity by the bats
+suite, so validate the lane you change and keep the two in sync.
+
+- Run it: build the Go binary with `make build-go`, then
+  `./fanout-go <parent-issue>` (Go default); the tracked, deprecated Bash
+  `./fanout <parent-issue>` runs directly with no build step.
+- Validate logic without driving dmux by appending `--dry-run` to either
+  binary, e.g. `./fanout-go <parent-issue> --dry-run`.
+- Lint with `make lint` (go vet + gofmt + shellcheck). Treat shellcheck
+  quoting warnings on the Bash script as real.
+- Run the parity suite with `make test` (Bash `./fanout`) and `make test-go`
+  (Go `./fanout-go`) before relying on a change.
 - A live end-to-end test requires tmux, a running dmux session, and a real
   GitHub parent issue with OPEN sub-issues. There is no mock layer.
 

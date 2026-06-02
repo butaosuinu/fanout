@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-Single-file Bash script (`fanout`) plus docs and agent integration files. No build system, no test suite, no lint config.
+The Go implementation (`cmd/fanout` + `internal/`) is the primary, default `fanout` — `make install` builds it and places it at `$(BINDIR)/fanout`. The original single-file Bash `fanout` script is **deprecated** and kept side-by-side as `$(BINDIR)/fanout-bash` during the migration window (Wave 1 of #80; removed in Wave 2). There is now a Go build (`make build-go`), a bats parity suite that runs against both implementations (`make test` exercises the Bash `./fanout`, `make test-go` the Go `./fanout-go` via `FANOUT_BIN`), and lint (`make lint` = go vet + gofmt + shellcheck). The popup-intercept and dmux-specific architecture notes below still describe the shared behavior both implementations must match.
 
 The Claude Code integration files (`claude/commands/fanout.md` slash command and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file (`codex/skills/fanout/SKILL.md`) are bundled in the repo as the source-of-truth. `make install` places them under `~/.claude/` and `~/.codex/`. Don't edit installed copies directly — edit the repo versions and rerun `make install` (or use `make link` during development).
 
@@ -16,10 +16,12 @@ The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `READM
 
 ## Working with the script
 
-- Run it: `./fanout <parent-issue>` (it's executable; no install step).
-- Verify changes without driving dmux: `./fanout <parent-issue> --dry-run`. The dry-run path prints every `tmux send-keys` invocation with `%q` quoting and the would-be briefing size, so use it as the primary way to validate logic changes that don't need a live dmux.
-- Lint: `shellcheck fanout` (no config file; treat `SC2086`-style warnings as real — the script intentionally quotes everything because prompts and titles can contain spaces and shell metacharacters). `make lint` runs the same check plus the test shims.
-- Black-box tests: `make test` (requires `bats-core`) runs Tier 1 (flag/prerequisite) + Tier 2 (`--dry-run` golden output against fixture scenarios under `tests/fixtures/`) tests. Tier 1 locks in the CLI surface (error messages + exit codes) and Tier 2 locks in the dry-run planning output — both are issue #20 invariants the future Go rewrite must match. Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2`. Tier 3 (live dmux E2E) is out of scope.
+The default `fanout` is the Go binary (`make build-go` → `./fanout-go`); the Bash `./fanout` is the deprecated lane. Both are kept at parity by the bats suite, so validate the lane you change and run both `make test` (Bash) and `make test-go` (Go).
+
+- Run it: build the Go binary first with `make build-go`, then `./fanout-go <parent-issue>` (Go default); the tracked, deprecated Bash `./fanout <parent-issue>` runs directly with no build step.
+- Verify changes without driving dmux: append `--dry-run` to either binary, e.g. `./fanout-go <parent-issue> --dry-run`. The dry-run path prints every `tmux send-keys` invocation with `%q` quoting and the would-be briefing size, so use it as the primary way to validate logic changes that don't need a live dmux.
+- Lint: `shellcheck fanout` (no config file; treat `SC2086`-style warnings as real — the script intentionally quotes everything because prompts and titles can contain spaces and shell metacharacters). `make lint` runs that shellcheck plus the test shims, alongside `go vet` and `gofmt` on the Go sources.
+- Black-box tests: `make test` (requires `bats-core`) runs Tier 1 (flag/prerequisite) + Tier 2 (`--dry-run` golden output against fixture scenarios under `tests/fixtures/`) tests. Tier 1 locks in the CLI surface (error messages + exit codes) and Tier 2 locks in the dry-run planning output — both are issue #20 parity invariants both implementations must match. Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2`. Tier 3 (live dmux E2E) is out of scope.
 - A live end-to-end test needs a running dmux session in tmux and a real GitHub parent issue with OPEN sub-issues; there is no mock layer.
 
 ## Architecture notes that span the script

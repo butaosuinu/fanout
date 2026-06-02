@@ -79,6 +79,18 @@ resultFile パスを特定し、プロンプトポップアップ用には
 
 ## インストール
 
+> **⚠️ Bash 版の廃止予定。** Go 実装（`cmd/fanout`）が既定です — 下記で
+> インストールされる Release バイナリがそれで、`make install` がビルドするのも
+> Go です。従来の単一ファイル Bash 版 `fanout` は **deprecated（廃止予定）** で、
+> 移行期間中はチェックアウト内に残ります。ユーザー側の対応は不要 — curl でも
+> `make install` でも Go の `fanout` が入ります。チェックアウトからの
+> `make install` / `make link` は加えて Bash スクリプトを `fanout-bash` として
+> 残しますが、curl 経路は Go バイナリのみ（`fanout-bash` は入りません）なので、
+> 旧 Bash が必要な場合はチェックアウトから実行してください。撤去は「Wave 1 の
+> 変更が出揃うこと」と「bash 起動時 deprecation 警告を載せたリリースが出ること」
+> が条件です（prebuilt バイナリ配布は curl 経路で完了済み、#67）。全体ロード
+> マップは #80 を参照してください。
+
 推奨インストール経路は Release 済みの Go バイナリです。安定コマンド名
 `fanout` と、同梱の Claude/Codex 連携ファイルをまとめて配置します:
 
@@ -165,6 +177,11 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 残します。エージェント連携は常に安定した `fanout` コマンド名を呼びます。
 エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
 `make install-go` / `make link-go` で配置する比較用コマンドです。
+
+チェックアウトからのビルドには **Go ツールチェイン**（Go 1.23+）が必要です。
+`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout`
+を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は
+不要です。
 
 ## 開発
 
