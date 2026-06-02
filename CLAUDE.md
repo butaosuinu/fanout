@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project shape
 
-Single-file Bash script (`fanout`) plus docs and agent integration files. No build system, no test suite, no lint config.
+The Go implementation (`cmd/fanout` + `internal/`) is the primary, default `fanout` — `make install` builds it and places it at `$(BINDIR)/fanout`. The original single-file Bash `fanout` script is **deprecated** and kept side-by-side as `$(BINDIR)/fanout-bash` during the migration window (Wave 1 of #80; removed in Wave 2). There is now a Go build (`make build-go`), a bats parity suite that runs against both implementations (`make test` exercises the Bash `./fanout`, `make test-go` the Go `./fanout-go` via `FANOUT_BIN`), and lint (`make lint` = go vet + gofmt + shellcheck). The popup-intercept and dmux-specific architecture notes below still describe the shared behavior both implementations must match.
 
 The Claude Code integration files (`claude/commands/fanout.md` slash command and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file (`codex/skills/fanout/SKILL.md`) are bundled in the repo as the source-of-truth. `make install` places them under `~/.claude/` and `~/.codex/`. Don't edit installed copies directly — edit the repo versions and rerun `make install` (or use `make link` during development).
 

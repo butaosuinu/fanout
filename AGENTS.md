@@ -5,8 +5,13 @@ repository.
 
 ## Project Shape
 
-This is a single-file Bash CLI (`fanout`) plus docs and agent integration
-files. There is no build system, test suite, or lint config.
+The Go implementation (`cmd/fanout` + `internal/`) is the primary, default
+`fanout`; `make install` builds it and installs it at `$(BINDIR)/fanout`. The
+original single-file Bash `fanout` is **deprecated** and kept side-by-side as
+`$(BINDIR)/fanout-bash` during the migration window (Wave 1 of #80; removed in
+Wave 2). A Go build (`make build-go`), a bats parity suite that covers both
+implementations (`make test` / `make test-go`), and lint (`make lint` =
+go vet + gofmt + shellcheck) all exist.
 
 Source-of-truth integration files:
 
