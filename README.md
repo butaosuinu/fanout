@@ -150,20 +150,22 @@ the release artifact. It remains in the checkout for the deprecation period and
 for parity testing. Local Makefile targets are still available while hacking:
 
 ```bash
-make install            # copies Bash CLI + Claude/Codex integrations
-make link               # symlinks Bash CLI + integrations at this checkout
-make install-go-default # builds Go and installs it as $(BINDIR)/fanout
-make link-go-default    # symlinks Go as $(BINDIR)/fanout
+make install            # builds Go as $(BINDIR)/fanout + installs integrations
+make link               # symlinks Go as $(BINDIR)/fanout + links integrations
+make install-go-default # alias for make install
+make link-go-default    # alias for make link
 make uninstall          # removes installed paths
 
-PREFIX=/usr/local sudo make install     # system-wide Bash CLI; overrides BINDIR
+PREFIX=/usr/local sudo make install     # system-wide Go CLI; overrides BINDIR
 CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
-Agent integrations always invoke the stable `fanout` command name. Do not teach
-agents to call `fanout-go` directly — `fanout-go` is only a side-by-side
-comparison command installed by `make install-go` / `make link-go`.
+`make install` / `make link` also keep the Bash implementation available as
+`fanout-bash` for the deprecation period. Agent integrations always invoke the
+stable `fanout` command name. Do not teach agents to call `fanout-go` directly
+— `fanout-go` is only a side-by-side comparison command installed by
+`make install-go` / `make link-go`.
 
 ## Development
 

@@ -150,20 +150,21 @@ deprecated です。移行期間と parity testing のために、チェック�
 残しています。開発中は従来の Makefile ターゲットも使えます:
 
 ```bash
-make install        # Bash CLI + Claude/Codex 連携をコピー
-make link           # Bash CLI + 連携をこのチェックアウトへ symlink
-make install-go-default # Go 版をビルドし、$(BINDIR)/fanout として配置
-make link-go-default    # Go 版を $(BINDIR)/fanout として symlink
+make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
+make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を symlink
+make install-go-default # make install の互換 alias
+make link-go-default    # make link の互換 alias
 make uninstall      # インストール済みのパスを削除
 
-PREFIX=/usr/local sudo make install     # システム全体に Bash CLI を配置
+PREFIX=/usr/local sudo make install     # システム全体に Go CLI を配置
 CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
-エージェント連携は常に安定した `fanout` コマンド名を呼びます。エージェントに
-`fanout-go` を直接呼ばせないでください。`fanout-go` は `make install-go` /
-`make link-go` で配置する比較用コマンドです。
+`make install` / `make link` は、移行期間用に Bash 実装も `fanout-bash` として
+残します。エージェント連携は常に安定した `fanout` コマンド名を呼びます。
+エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
+`make install-go` / `make link-go` で配置する比較用コマンドです。
 
 ## 開発
 
