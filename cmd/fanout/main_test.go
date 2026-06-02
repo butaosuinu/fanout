@@ -74,3 +74,38 @@ func TestInvokedCommandNameUsesBinaryName(t *testing.T) {
 		})
 	}
 }
+
+func TestIsVersionRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "long", args: []string{"--version"}, want: true},
+		{name: "short", args: []string{"-V"}, want: true},
+		{name: "mixed with parent", args: []string{"123", "--version"}, want: false},
+		{name: "unknown capital", args: []string{"-v"}, want: false},
+		{name: "empty", args: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isVersionRequest(tc.args); got != tc.want {
+				t.Fatalf("isVersionRequest(%#v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVersionLineUsesInjectedValues(t *testing.T) {
+	oldVersion := version
+	oldCommit := commit
+	version = "v1.2.3"
+	commit = "abc1234"
+	t.Cleanup(func() {
+		version = oldVersion
+		commit = oldCommit
+	})
+
+	if got, want := versionLine(), "fanout v1.2.3 (abc1234)"; got != want {
+		t.Fatalf("versionLine() = %q, want %q", got, want)
+	}
+}

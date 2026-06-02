@@ -90,6 +90,7 @@ Options:
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue's state and closed-by PR merge status, then
                       exit. Exclusive with action-bearing flags.
+  -V, --version       Print version and commit, then exit.
   -h, --help          Show this message.
 
 Prerequisites:
