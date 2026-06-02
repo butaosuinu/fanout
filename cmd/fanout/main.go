@@ -19,11 +19,20 @@ import (
 
 const fanoutTagPrefix = "[fanout #"
 
-var sleepBetweenIssues = time.Sleep
+var (
+	version            = "dev"
+	commit             = "none"
+	sleepBetweenIssues = time.Sleep
+)
 
 func main() {
 	lg := log.New(false)
 	commandName := invokedCommandName(os.Args)
+
+	if isVersionRequest(os.Args[1:]) {
+		fmt.Fprintln(os.Stdout, versionLine())
+		os.Exit(int(exitcode.OK))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
@@ -47,6 +56,14 @@ func main() {
 	}
 
 	os.Exit(int(run(cfg, lg, commandName)))
+}
+
+func isVersionRequest(args []string) bool {
+	return len(args) == 1 && (args[0] == "--version" || args[0] == "-V")
+}
+
+func versionLine() string {
+	return fmt.Sprintf("fanout %s (%s)", version, commit)
 }
 
 func invokedCommandName(args []string) string {

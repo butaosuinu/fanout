@@ -79,67 +79,107 @@ resultFile パスを特定し、プロンプトポップアップ用には
 
 ## インストール
 
-> **⚠️ Bash 版の廃止予定。** Go 実装（`cmd/fanout`）が既定実装になり、
-> `make install` が `$(BINDIR)/fanout` に配置するのも Go バイナリです。
-> 従来の単一ファイル Bash 版 `fanout` は **deprecated（廃止予定）** です:
-> 引き続き動作し、移行期間中は `$(BINDIR)/fanout-bash` として併存しますが、
-> (1) prebuilt バイナリ配布（#67）が完了してソースからビルドしない利用者も
-> Go バイナリを入手できるようになり、(2) Wave 1 の変更が出揃い、(3) Bash
-> 起動時の deprecation 警告を載せたリリースが最低 1 タグ出た時点で撤去されます。
-> それまでユーザー側の対応は不要です — `make install` で自動的に Go に
-> 切り替わり、`fanout-bash` がフォールバックとして残ります。全体ロードマップは
-> #80 を参照してください。
+> **⚠️ Bash 版の廃止予定。** Go 実装（`cmd/fanout`）が既定です — 下記で
+> インストールされる Release バイナリがそれで、`make install` がビルドするのも
+> Go です。従来の単一ファイル Bash 版 `fanout` は **deprecated（廃止予定）** で、
+> 移行期間中は `fanout-bash`（およびチェックアウト内）として併存します。prebuilt
+> バイナリ配布は完了済み（下記 curl 経路、#67）なので、Bash スクリプト撤去までに
+> 残る条件は「Wave 1 の変更が出揃うこと」と「bash 起動時 deprecation 警告を載せた
+> リリースが最低 1 タグ出ること」です。ユーザー側の対応は不要 — curl でも
+> `make install` でも Go が入り、`fanout-bash` がフォールバックとして残ります。
+> 全体ロードマップは #80 を参照してください。
 
-fanout は Go バイナリ（既定実装）に、エージェント連携ファイルを加えた構成で
-配布されます。Claude Code にはスラッシュコマンド + スキル群、Codex CLI には
-スキル群を用意しています。`make install` は Go バイナリをビルドして
-`$(BINDIR)/fanout` に配置し、deprecated な Bash 実装を `$(BINDIR)/fanout-bash`
-として残します。すべて `Makefile` 経由で一括配置されます:
+推奨インストール経路は Release 済みの Go バイナリです。安定コマンド名
+`fanout` と、同梱の Claude/Codex 連携ファイルをまとめて配置します:
 
 ```bash
-make install        # Go バイナリを $(BINDIR)/fanout（+ deprecated な fanout-bash）に配置し Claude/Codex 連携をコピー
-make link           # Go ビルドを $(BINDIR)/fanout（+ fanout-bash）としてチェックアウト先に symlink（開発用）
-make uninstall      # インストール済みのパスを削除
+# fanout + Claude/Codex 連携を ~/.local, ~/.claude, ~/.codex に配置
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh
 
-PREFIX=/usr/local sudo make install     # システム全体に CLI を配置; BINDIR を $PREFIX/bin に上書き
-CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
-CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
+# バイナリのみ
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --no-skills
+
+# 配置先や Release tag を指定
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.1.0 sh
 ```
-
-ソースからのビルドには **Go ツールチェイン**（Go 1.23+）が必要です。`make install`・
-`make link`・`make build-go` はいずれも `go build ./cmd/fanout` を実行するため、
-Go の無いマシンはビルド段階で失敗します。prebuilt バイナリ配布（#67）が出るまでは
-先に Go を導入してください（macOS は `brew install go`、Linux はディストリの
-`golang`/`go` パッケージ）。Go が必要なのは `fanout` バイナリだけで、エージェント
-連携ファイルの配置には不要です。
 
 配置パス:
 
-- `$(BINDIR)/fanout` — Go バイナリ（既定は `~/.local/bin/fanout`）
-- `$(BINDIR)/fanout-bash` — deprecated な Bash 実装、移行期間中の残置
-- `$(CLAUDE_DIR)/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
-- `$(CLAUDE_DIR)/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
-- `$(CLAUDE_DIR)/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
-- `$(CODEX_DIR)/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
-- `$(CODEX_DIR)/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+- `$BIN_DIR/fanout`（既定は `~/.local/bin/fanout`）
+- `$CLAUDE_DIR/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
+- `$CLAUDE_DIR/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
+- `$CLAUDE_DIR/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
+- `$CODEX_DIR/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
+- `$CODEX_DIR/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
 
-エージェント連携は常に安定した `fanout` コマンド名を呼びます。この名前は
-既定で Go バイナリに解決されます。deprecated な Bash 実装は移行期間中
-`$(BINDIR)/fanout-bash` として残ります。エージェントに `fanout-go` を直接
-呼ばせないでください。`fanout-go` は `make install-go` / `make link-go` で
-配置する並行比較用コマンドです。
+`install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release
+（または `FANOUT_VERSION` で指定した tag）から
+`fanout_<os>_<arch>.tar.gz` を取得します。`sha256sum` または `shasum` が
+あれば `SHA256SUMS` で検証し、再実行時は同じパスへ上書きします。シェル rc は
+自動編集しません。削除は次で行えます:
 
-`make install` は安定しています — リポジトリを消しても、コピー済みのファイルで
-動作し続けます。`make link` はチェックアウトを symlink します。連携ファイルへの
-編集はすぐ反映され（`git pull` だけで更新が終わります）、一方 Go 製の `fanout`
-バイナリはビルド成果物なので、Go ソースを変更したら `make link` を再実行して
-ビルドし直してください。どちらのターゲットも、親ディレクトリが存在しなければ
-作成します。インストールまたはリンク後、実行中の Codex CLI セッションがある
-場合は再起動すると新しいスキルを認識します。
+```bash
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh -s -- --uninstall
+```
 
 `~/.local/bin` が `PATH` に入っていることを確認してください
 （`echo $PATH | tr ':' '\n' | grep -F "$HOME/.local/bin"`）。
 入っていない場合は、シェルの rc に `export PATH="$HOME/.local/bin:$PATH"` を追記してください。
+スキルをインストールまたは更新した後、実行中の Codex CLI セッションがある場合は
+再起動すると新しいファイルを認識します。
+
+### macOS セキュリティメモ
+
+curl/wget 経由のインストールでは通常 `com.apple.quarantine` 拡張属性が付かない
+ため、Gatekeeper の「開発元を検証できません」GUI ブロックは基本的に発生しません。
+ブラウザ経由でアーカイブを取得して quarantine が付いた場合は、展開後に次で
+属性を削除してください:
+
+```bash
+xattr -d com.apple.quarantine /path/to/fanout
+```
+
+Apple Silicon では、すべての実行ファイルに最低限 ad-hoc 署名が必要です。Release
+workflow は macOS 上で Go 1.23 の darwin バイナリをビルドするため、Go linker
+がビルド時に署名します。Release package 作成後に外部 `strip` をかけると署名が
+壊れることがあるので避けてください。ローカルコピーが壊れた場合は次で
+ad-hoc 再署名できます:
+
+```bash
+codesign -s - /path/to/fanout
+```
+
+Apple Developer ID 署名や notarization は curl 配布経路では当面スコープ外です。
+ブラウザ、dmg/pkg、管理対象 Mac 向け配布が必要になった段階で追加できます。
+
+### チェックアウトから使う場合
+
+Go port が Release artifact になったため、リポジトリ root の Bash 実装は
+deprecated です。移行期間と parity testing のために、チェックアウト内には
+残しています。開発中は従来の Makefile ターゲットも使えます:
+
+```bash
+make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
+make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を symlink
+make install-go-default # make install の互換 alias
+make link-go-default    # make link の互換 alias
+make uninstall      # インストール済みのパスを削除
+
+PREFIX=/usr/local sudo make install     # システム全体に Go CLI を配置
+CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
+CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
+```
+
+`make install` / `make link` は、移行期間用に Bash 実装も `fanout-bash` として
+残します。エージェント連携は常に安定した `fanout` コマンド名を呼びます。
+エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
+`make install-go` / `make link-go` で配置する比較用コマンドです。
+
+チェックアウトからのビルドには **Go ツールチェイン**（Go 1.23+）が必要です。
+`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout`
+を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は
+不要です。
 
 ## 開発
 
@@ -147,23 +187,21 @@ Go の無いマシンはビルド段階で失敗します。prebuilt バイナ�
 make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
-make lint           # go vet + gofmt チェック + shellcheck（Go・Bash 両方を lint）
-make build-go       # Go 実装を ./fanout-go としてビルド
+make lint           # shellcheck fanout + テスト用 shim
+make build-go       # ローカル比較用に Go CLI を ./fanout-go としてビルド
 make test-go        # 同じ黒箱テストを ./fanout-go に対して実行
 make install-go     # Go 版を比較用の $(BINDIR)/fanout-go として配置
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
-Go 実装が既定になりました — `make install` はこれを `fanout` として配置します。
-両実装は廃止猶予期間中も併存し、単一の parity スイートで担保されます:
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
 の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
-`make test` は両 Tier を Bash 製 `./fanout` に対して、`make test-go` は同一
-fixture を Go 製 `./fanout-go`（`FANOUT_BIN` で切替）に対して実行するので、
-二実装は挙動レベルで一致し続けます。Wave 2 で既定の `make test` を Go へ
-向け、Bash lane を畳みます。`$(BINDIR)` に動作比較用の `fanout-go` コマンドを
-入れたい場合は `make install-go` または `make link-go` を使ってください。
-`--dry-run` 出力を意図的に変更した場合は
+Bash 実装がチェックアウトに残っている間は、これらを parity テスト資産として
+使います。`make install-go-default` / `make link-go-default` は、エージェントが
+既に呼んでいる安定コマンド名 `fanout` の中身を Go 版に差し替えます。
+`./fanout-go` は動作比較用として並行配置できます。`$(BINDIR)` に
+`fanout-go` コマンドを入れたい場合は `make install-go` または `make link-go`
+を使ってください。`--dry-run` 出力を意図的に変更した場合は
 `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
 Tier 3 (live dmux E2E) は手動運用のままです。
 

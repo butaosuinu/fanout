@@ -1,0 +1,106 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            runner: macos-latest
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          commit="${GITHUB_SHA::7}"
+          asset="fanout_${GOOS}_${GOARCH}.tar.gz"
+
+          rm -rf dist artifacts
+          mkdir -p dist artifacts
+
+          CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+            go build -trimpath \
+              -ldflags "-s -w -X main.version=${version} -X main.commit=${commit}" \
+              -o dist/fanout ./cmd/fanout
+
+          host_goos="$(go env GOHOSTOS)"
+          host_goarch="$(go env GOHOSTARCH)"
+          if [ "$host_goos" = "$GOOS" ] && [ "$host_goarch" = "$GOARCH" ]; then
+            ./dist/fanout --version
+          else
+            echo "Skipping smoke test for ${GOOS}/${GOARCH} on ${host_goos}/${host_goarch}"
+          fi
+
+          cp -R claude codex LICENSE dist/
+          tar -C dist -czf "artifacts/${asset}" fanout claude codex LICENSE
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: fanout-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: artifacts/fanout_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum fanout_*.tar.gz > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            fanout_*.tar.gz SHA256SUMS
