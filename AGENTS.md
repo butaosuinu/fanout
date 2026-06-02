@@ -32,8 +32,9 @@ The default `fanout` is the Go binary (`make build-go` → `./fanout-go`); the
 Bash `./fanout` is the deprecated lane. Both are kept at parity by the bats
 suite, so validate the lane you change and keep the two in sync.
 
-- Run it directly with `./fanout-go <parent-issue>` (Go default) or
-  `./fanout <parent-issue>` (deprecated Bash).
+- Run it: build the Go binary with `make build-go`, then
+  `./fanout-go <parent-issue>` (Go default); the tracked, deprecated Bash
+  `./fanout <parent-issue>` runs directly with no build step.
 - Validate logic without driving dmux by appending `--dry-run` to either
   binary, e.g. `./fanout-go <parent-issue> --dry-run`.
 - Lint with `make lint` (go vet + gofmt + shellcheck). Treat shellcheck

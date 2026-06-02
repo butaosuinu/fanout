@@ -80,14 +80,16 @@ task-list union.
 ## Installation
 
 > **⚠️ Bash deprecation.** The Go implementation (`cmd/fanout`) is the default —
-> it's the released binary installed below and what `make install` builds. The
-> original single-file Bash `fanout` is **deprecated**; it still works and stays
-> available as `fanout-bash` (and in the checkout) during the migration window.
-> Prebuilt binaries now ship (the curl path below, #67), so the remaining gates
-> before the Bash script is removed are the Wave 1 changes landing and at least
-> one release carrying the Bash entrypoint's startup deprecation warning. No
-> action is required — the curl install or `make install` gives you Go, with
-> `fanout-bash` as a fallback. See #80 for the full roadmap.
+> the released binary installed below and what `make install` builds. The
+> original single-file Bash `fanout` is **deprecated**; it still works and
+> remains in the checkout during the migration window. No action is required:
+> both the curl install and `make install` give you the Go `fanout`. From a
+> checkout, `make install` / `make link` also keep the Bash script as
+> `fanout-bash`; the curl path ships the Go binary only (no `fanout-bash`), so
+> curl users who still need the old Bash should run it from a checkout. The
+> script is removed once the Wave 1 changes land and a release carries the Bash
+> startup deprecation warning (prebuilt binaries already ship via the curl path,
+> #67). See #80 for the full roadmap.
 
 The recommended install path is the released Go binary. It installs the stable
 `fanout` command plus the bundled Claude/Codex integration files:

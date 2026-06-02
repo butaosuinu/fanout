@@ -82,12 +82,14 @@ resultFile パスを特定し、プロンプトポップアップ用には
 > **⚠️ Bash 版の廃止予定。** Go 実装（`cmd/fanout`）が既定です — 下記で
 > インストールされる Release バイナリがそれで、`make install` がビルドするのも
 > Go です。従来の単一ファイル Bash 版 `fanout` は **deprecated（廃止予定）** で、
-> 移行期間中は `fanout-bash`（およびチェックアウト内）として併存します。prebuilt
-> バイナリ配布は完了済み（下記 curl 経路、#67）なので、Bash スクリプト撤去までに
-> 残る条件は「Wave 1 の変更が出揃うこと」と「bash 起動時 deprecation 警告を載せた
-> リリースが最低 1 タグ出ること」です。ユーザー側の対応は不要 — curl でも
-> `make install` でも Go が入り、`fanout-bash` がフォールバックとして残ります。
-> 全体ロードマップは #80 を参照してください。
+> 移行期間中はチェックアウト内に残ります。ユーザー側の対応は不要 — curl でも
+> `make install` でも Go の `fanout` が入ります。チェックアウトからの
+> `make install` / `make link` は加えて Bash スクリプトを `fanout-bash` として
+> 残しますが、curl 経路は Go バイナリのみ（`fanout-bash` は入りません）なので、
+> 旧 Bash が必要な場合はチェックアウトから実行してください。撤去は「Wave 1 の
+> 変更が出揃うこと」と「bash 起動時 deprecation 警告を載せたリリースが出ること」
+> が条件です（prebuilt バイナリ配布は curl 経路で完了済み、#67）。全体ロード
+> マップは #80 を参照してください。
 
 推奨インストール経路は Release 済みの Go バイナリです。安定コマンド名
 `fanout` と、同梱の Claude/Codex 連携ファイルをまとめて配置します:
