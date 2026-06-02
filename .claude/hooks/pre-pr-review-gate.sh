@@ -104,12 +104,21 @@ ci=-1; i=0
 while [ $i -lt "$ntok" ]; do
   case "${toks[i]}" in
     gh|*/gh)
-      j=$((i+1))
-      while [ $j -lt "$ntok" ]; do case "${toks[j]}" in -*) j=$((j+1));; *) break;; esac; done
-      if [ $j -lt "$ntok" ] && [ "${toks[j]}" = pr ]; then
-        k=$((j+1))
-        while [ $k -lt "$ntok" ]; do case "${toks[k]}" in -*) k=$((k+1));; *) break;; esac; done
-        if [ $k -lt "$ntok" ]; then case "${toks[k]}" in create|new) ci=$k; break;; esac; fi
+      # Find the `pr` token after gh, then `create`/`new` after that — skipping
+      # any intervening global-flag tokens AND their values (e.g. -R owner/repo),
+      # bounded by a command separator so we don't run into a later command.
+      j=$((i+1)); fp=-1
+      while [ $j -lt "$ntok" ]; do
+        case "${toks[j]}" in pr) fp=$j; break;; ';'|'&'|'&&'|'|'|'||') break;; esac
+        j=$((j+1))
+      done
+      if [ $fp -ge 0 ]; then
+        k=$((fp+1))
+        while [ $k -lt "$ntok" ]; do
+          case "${toks[k]}" in create|new) ci=$k; break;; ';'|'&'|'&&'|'|'|'||') break;; esac
+          k=$((k+1))
+        done
+        [ $ci -ge 0 ] && break
       fi ;;
   esac
   i=$((i+1))
