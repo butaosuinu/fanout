@@ -106,6 +106,13 @@ CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
+Building from source needs a **Go toolchain** (Go 1.23+): `make install`,
+`make link`, and `make build-go` all run `go build ./cmd/fanout`, so a machine
+without Go fails at the build step. Install Go first (`brew install go` on
+macOS, your distro's `golang`/`go` package on Linux) until prebuilt binaries
+land (#67). Only the `fanout` binary needs Go; the agent integration files do
+not.
+
 Installed paths:
 
 - `$(BINDIR)/fanout` — the Go binary (default `~/.local/bin/fanout`)

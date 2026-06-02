@@ -28,10 +28,18 @@ the README before changing CLI behavior.
 
 ## Working With The Script
 
-- Run it directly with `./fanout <parent-issue>`.
-- Validate logic without driving dmux with
-  `./fanout <parent-issue> --dry-run`.
-- Lint with `shellcheck fanout` when available. Treat quoting warnings as real.
+The default `fanout` is the Go binary (`make build-go` → `./fanout-go`); the
+Bash `./fanout` is the deprecated lane. Both are kept at parity by the bats
+suite, so validate the lane you change and keep the two in sync.
+
+- Run it directly with `./fanout-go <parent-issue>` (Go default) or
+  `./fanout <parent-issue>` (deprecated Bash).
+- Validate logic without driving dmux by appending `--dry-run` to either
+  binary, e.g. `./fanout-go <parent-issue> --dry-run`.
+- Lint with `make lint` (go vet + gofmt + shellcheck). Treat shellcheck
+  quoting warnings on the Bash script as real.
+- Run the parity suite with `make test` (Bash `./fanout`) and `make test-go`
+  (Go `./fanout-go`) before relying on a change.
 - A live end-to-end test requires tmux, a running dmux session, and a real
   GitHub parent issue with OPEN sub-issues. There is no mock layer.
 

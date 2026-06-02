@@ -106,6 +106,13 @@ CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データデ�
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
+ソースからのビルドには **Go ツールチェイン**（Go 1.23+）が必要です。`make install`・
+`make link`・`make build-go` はいずれも `go build ./cmd/fanout` を実行するため、
+Go の無いマシンはビルド段階で失敗します。prebuilt バイナリ配布（#67）が出るまでは
+先に Go を導入してください（macOS は `brew install go`、Linux はディストリの
+`golang`/`go` パッケージ）。Go が必要なのは `fanout` バイナリだけで、エージェント
+連携ファイルの配置には不要です。
+
 配置パス:
 
 - `$(BINDIR)/fanout` — Go バイナリ（既定は `~/.local/bin/fanout`）
