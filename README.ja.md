@@ -79,13 +79,15 @@ resultFile パスを特定し、プロンプトポップアップ用には
 
 ## インストール
 
-fanout は 1 つの Bash スクリプトに、エージェント連携ファイルを加えた構成で
+fanout は Bash CLI と任意の Go 版に、エージェント連携ファイルを加えた構成で
 配布されます。Claude Code にはスラッシュコマンド + スキル群、Codex CLI には
 スキル群を用意しています。すべて `Makefile` 経由で一括配置されます:
 
 ```bash
 make install        # CLI + Claude/Codex 連携を ~/.local, ~/.claude, ~/.codex にコピー
 make link           # チェックアウト先を指す symlink を作成（開発用）
+make install-go-default # Go 版をビルドし、既定の fanout コマンドとして配置
+make link-go-default    # Go 版を既定の fanout コマンドとして symlink
 make uninstall      # インストール済みのパスを削除
 
 PREFIX=/usr/local sudo make install     # システム全体に CLI を配置; BINDIR を $PREFIX/bin に上書き
@@ -101,6 +103,13 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 - `$(CLAUDE_DIR)/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
 - `$(CODEX_DIR)/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
 - `$(CODEX_DIR)/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+
+エージェント連携は常に安定した `fanout` コマンド名を呼びます。エージェントに
+Go 実装を優先させたい場合は `make install-go-default` または
+`make link-go-default` を実行してください。これらのターゲットは Go バイナリを
+`$(BINDIR)/fanout` に置き、Bash 実装を `$(BINDIR)/fanout-bash` として残します。
+エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
+`make install-go` / `make link-go` で配置する比較用コマンドです。
 
 `make install` は安定しています — リポジトリを消しても、コピー済みのファイルで
 動作し続けます。`make link` はチェックアウトを指すので、編集がすぐ反映され、
@@ -121,15 +130,19 @@ make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
 make lint           # shellcheck fanout + テスト用 shim
 make build-go       # 実験中の Go 版を ./fanout-go としてビルド
 make test-go        # 同じ黒箱テストを ./fanout-go に対して実行
+make install-go     # Go 版を比較用の $(BINDIR)/fanout-go として配置
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
 の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
-いずれも Go 書き換え時の parity テスト資産です。Bash 製の `./fanout` は
-既定の CLI として残し、Go 版は動作比較用に `./fanout-go` として並行配置
-します。`$(BINDIR)` に `fanout-go` コマンドを入れたい場合は `make install-go`
-または `make link-go` を使ってください。`--dry-run` 出力を意図的に変更した
+いずれも Go 書き換え時の parity テスト資産です。`make install` /
+`make link` では Bash 製の `./fanout` が既定のままです。一方、
+`make install-go-default` / `make link-go-default` は、エージェントが既に
+呼んでいる安定コマンド名 `fanout` の中身を Go 版に差し替えます。
+`./fanout-go` は動作比較用として並行配置できます。`$(BINDIR)` に
+`fanout-go` コマンドを入れたい場合は `make install-go` または
+`make link-go` を使ってください。`--dry-run` 出力を意図的に変更した
 場合は `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
 Tier 3 (live dmux E2E) は手動運用のままです。
 

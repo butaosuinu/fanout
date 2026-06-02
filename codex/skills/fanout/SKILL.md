@@ -40,6 +40,10 @@ the source of children differs.
 
 The CLI is normally installed at `~/.local/bin/fanout`; source and docs are in
 this repository. Codex discovers this skill from `~/.codex/skills/fanout`.
+Always invoke the stable `fanout` command name. If this installation should
+prefer the Go implementation, the repository's `make install-go-default` or
+`make link-go-default` target places the Go binary at that same path; do not
+probe for or call `fanout-go` directly from this workflow.
 
 ## When To Use
 
@@ -88,7 +92,8 @@ use this workflow directly.
    `--session`, `--sleep`, `--popup-timeout`, and `--debug`.
 3. If the user asked to skip confirmation (`--go`, "go ahead", "run it now"),
    strip `--go` before calling the CLI and run the real command after the
-   pre-flight name/include preparation. Otherwise dry-run first and ask for
+   pre-flight name/include preparation. Here `--go` means "go ahead now"; it
+   does not select the Go implementation. Otherwise dry-run first and ask for
    confirmation before the real run.
 4. **Issue mode only — skip in project mode.** Scan the parent body for
    implicit children that the CLI does not parse: fetch it with
