@@ -31,12 +31,13 @@ asks dmux to create one new pane per child. Each pane gets its own git
 worktree and an agent CLI prompt that points at
 `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-The positional argument selects the mode: an integer (or `#N`) means
-**issue mode**; a URL of the form
+The positional argument selects the mode: a bare integer means **issue mode**;
+a URL of the form
 `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project
 mode**. Both modes share everything downstream of child enumeration
 (briefing generation, idempotency, filters, dmux popup interception); only
-the source of children differs.
+the source of children differs. User-facing issue refs like `#N` are accepted
+by this skill, but strip the leading `#` before invoking the CLI.
 
 The CLI is normally installed at `~/.local/bin/fanout`; source and docs are in
 this repository. Codex discovers this skill from `~/.codex/skills/fanout`.
@@ -84,8 +85,25 @@ use this workflow directly.
      or `?filterQuery=...` query string — the CLI extracts what it needs
      and ignores the rest.
 
-   If there is no clear issue number or Project URL, ask which parent issue
-   or Project to fan out.
+   If neither is clear, actively list candidates from the current repo/worktree
+   instead of asking for a pasted number/URL:
+   1. Run `gh issue list --state open --json number,title --limit 100`.
+   2. Run `gh project list --format json` for the current user's Projects.
+   3. If the current repo is org-owned, get the org with
+      `gh repo view --json owner -q .owner.login` and also run
+      `gh project list --owner <org> --format json`.
+   4. Present one combined list: issues as `#<num> <title>`, Projects as
+      `<title> (<url>)`. Dedupe Projects by URL if current-user and org
+      results overlap, then ask the user to choose one.
+   5. If both lists are empty, tell the user there is no OPEN issue or Project
+      target to fan out and stop.
+   6. Resolve the selection to the CLI positional arg: issues become bare
+      digits with any leading `#` removed; Projects become the Project URL
+      from `gh project list`.
+
+   This is skill-side target resolution for non-TTY agent entrypoints. Do not
+   change the Go `fanout` CLI for it; the CLI already accepts the resolved
+   positional arg via `internal/cliflags.Parse()`.
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--name`,
