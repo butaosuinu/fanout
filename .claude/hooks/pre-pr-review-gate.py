@@ -151,6 +151,23 @@ def basename(word):
     return word.rsplit("/", 1)[-1]
 
 
+def find_repo_flag(toks, start, end):
+    """Return the -R/--repo value among toks[start:end], or None."""
+    m = start
+    while m < end:
+        tk = toks[m]
+        if tk in REPO_FLAGS:
+            return toks[m + 1] if m + 1 < end else ""
+        if tk.startswith("--repo="):
+            return tk[len("--repo="):]
+        if tk.startswith("-R=") :
+            return tk[len("-R="):]
+        if tk.startswith("-R") and len(tk) > 2:
+            return tk[2:]
+        m += 1
+    return None
+
+
 def collect_create_flags(toks, start, n):
     """From just after the create/new token, read the create's flags until a
     separator, skipping value-taking flags' values so they are not mis-read."""
@@ -214,13 +231,19 @@ def scan_commands(toks):
             continue
         bypass_here = False
         chdir_here = False
+        ghrepo_here = ""
         while i < n:
             t = toks[i]
             if t == BYPASS:
                 bypass_here = True
                 i += 1
                 continue
-            if is_assignment(t) or t in LEAD:
+            if is_assignment(t):
+                if t.startswith("GH_REPO="):
+                    ghrepo_here = t[len("GH_REPO="):]
+                i += 1
+                continue
+            if t in LEAD:
                 i += 1
                 continue
             if t in WRAP:
@@ -254,6 +277,8 @@ def scan_commands(toks):
                             i += 1
                             continue
                         if is_assignment(e):
+                            if e.startswith("GH_REPO="):
+                                ghrepo_here = e[len("GH_REPO="):]
                             i += 1
                             continue
                         break
@@ -276,6 +301,7 @@ def scan_commands(toks):
         if chdir_here:
             dir_pending = True
         if base == "gh":
+            gi = i
             # locate the `pr` token, skipping gh global flags + their values.
             j = i + 1
             while j < n and toks[j] not in SEP and toks[j] != "pr":
@@ -293,6 +319,12 @@ def scan_commands(toks):
                     k += 1
                 if k < n and toks[k] in ("create", "new"):
                     head, base_, repo_, is_help, m = collect_create_flags(toks, k + 1, n)
+                    # -R/--repo before the subcommand, or a GH_REPO assignment,
+                    # also retargets the repo.
+                    if not repo_:
+                        repo_ = find_repo_flag(toks, gi, k)
+                    if not repo_:
+                        repo_ = ghrepo_here or None
                     creates.append({"head": head, "base": base_, "repo": repo_,
                                     "help": is_help, "dir": dir_pending,
                                     "bypass": bypass_here})
@@ -331,9 +363,13 @@ def main():
     if not real:
         emit_allow()
 
+    # A session-level export is a global operator override.
     if os.environ.get("FANOUT_SKIP_PR_REVIEW") == "1":
         emit_allow()
-    if any(c["bypass"] for c in real):
+    # An inline bypass is scoped to its own create command (below), so a mix of
+    # bypassed and unbypassed creates in one call does not allow the unbypassed
+    # one. If every real create carries its own bypass, allow.
+    if all(c["bypass"] for c in real):
         emit_allow()
 
     if not cwd or not os.path.isdir(cwd):
@@ -376,6 +412,8 @@ def main():
               "対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。\n" + HATCH)
 
     for c in real:
+        if c["bypass"]:
+            continue  # this specific create is bypassed; others still checked
         if c["dir"]:
             emit_deny(dirmsg)
         if c.get("repo"):
