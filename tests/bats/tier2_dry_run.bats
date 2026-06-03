@@ -127,11 +127,11 @@ load helpers
   assert_golden scenario-sub-issue-only-branch-override
 }
 
-@test "agent-codex variant of scenario-sub-issue-only: briefing omits Agent Teams hint" {
+@test "agent-codex variant of scenario-sub-issue-only: briefing has Codex review gate" {
   # Reuses the scenario-sub-issue-only fixture; the only thing under test is
   # that --agent codex (last-wins over the helper's default --agent claude)
-  # produces a briefing without the Agent Teams section, so the size lines
-  # diverge from scenario-sub-issue-only.dry-run.txt.
+  # produces a Codex-specific briefing without the Claude-only Agent Teams
+  # section, so the size lines diverge from scenario-sub-issue-only.dry-run.txt.
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 --agent codex
   assert_success

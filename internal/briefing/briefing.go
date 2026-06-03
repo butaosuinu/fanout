@@ -35,6 +35,20 @@ Requirements:
 - Open a pull request with "Closes #%d" in the body.
 - If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.
 `, num, title, body, num)
+	if agent == "codex" {
+		return base + `
+Before committing your final changes or opening a PR, run
+` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
+1. Run ` + "`codex review --uncommitted`" + `.
+2. If review reports any findings, fix them, rerun relevant lint/tests, then
+   run review again.
+3. Repeat until review reports no findings / no issues / clean.
+
+Only after the review loop is clean should you commit, push, and open the PR.
+If the review command is unavailable or fails for tooling/auth reasons, stop
+and report that instead of bypassing the gate.
+`
+	}
 	if agent != "claude" {
 		return base
 	}
