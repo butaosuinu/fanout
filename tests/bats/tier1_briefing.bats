@@ -20,7 +20,7 @@ load helpers
   grep -q "Closes #101" "$briefing"
 }
 
-@test "briefing for --agent codex omits Agent Teams hint and /code-review directive but keeps Requirements" {
+@test "briefing for --agent codex contains review gate and omits Claude-only directives" {
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 --agent codex
   assert_success
@@ -28,6 +28,9 @@ load helpers
   ! grep -q "Agent Teams" "$briefing"
   ! grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "$briefing"
   ! grep -q "/code-review" "$briefing"
+  grep -q "codex review --uncommitted" "$briefing"
+  grep -q "Repeat until review reports no findings / no issues / clean" "$briefing"
+  grep -q "Only after the review loop is clean should you commit, push, and open the PR" "$briefing"
   grep -q "Make focused, minimal changes scoped to this single issue" "$briefing"
   grep -q "Closes #101" "$briefing"
 }
