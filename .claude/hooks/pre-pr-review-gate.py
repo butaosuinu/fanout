@@ -19,8 +19,10 @@ import re
 import shlex
 import subprocess
 
-# `<<WORD` / `<<-WORD` / `<<'WORD'` heredoc start (not `<<<` here-strings).
-_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# `<<WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` heredoc start (not `<<<`
+# here-strings). The delimiter may be quoted and contain non-identifier chars
+# (e.g. `<<'PR-BODY'`).
+_HEREDOC_RE = re.compile(r"""<<-?[ \t]*(?:'([^']*)'|"([^"]*)"|([^\s;&|<>()'"`]+))""")
 
 HATCH = "緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
 BYPASS = "FANOUT_SKIP_PR_REVIEW=1"
@@ -78,7 +80,8 @@ def strip_heredocs(cmd):
         m = _HEREDOC_RE.search(line)
         i += 1
         if m:
-            delim = m.group(2)
+            delim = m.group(1) if m.group(1) is not None else (
+                m.group(2) if m.group(2) is not None else m.group(3))
             while i < len(lines) and lines[i].strip() != delim:
                 i += 1
             i += 1  # also drop the delimiter line
@@ -218,6 +221,7 @@ def scan_commands(toks):
     n = len(toks)
     creates = []
     dir_pending = False
+    export_bypass = False
     i = 0
     expect = True
     while i < n:
@@ -298,6 +302,16 @@ def scan_commands(toks):
             expect = False
             i += 1
             continue
+        if base == "export":
+            # `export FANOUT_SKIP_PR_REVIEW=1` bypasses the rest of the line.
+            p = i + 1
+            while p < n and toks[p] not in SEP:
+                if toks[p] == BYPASS:
+                    export_bypass = True
+                p += 1
+            expect = False
+            i = p
+            continue
         if chdir_here:
             dir_pending = True
         if base == "gh":
@@ -327,7 +341,7 @@ def scan_commands(toks):
                         repo_ = ghrepo_here or None
                     creates.append({"head": head, "base": base_, "repo": repo_,
                                     "help": is_help, "dir": dir_pending,
-                                    "bypass": bypass_here})
+                                    "bypass": bypass_here or export_bypass})
                     i = m
                     expect = False
                     continue
@@ -366,12 +380,30 @@ def main():
     # A session-level export is a global operator override.
     if os.environ.get("FANOUT_SKIP_PR_REVIEW") == "1":
         emit_allow()
-    # An inline bypass is scoped to its own create command (below), so a mix of
-    # bypassed and unbypassed creates in one call does not allow the unbypassed
-    # one. If every real create carries its own bypass, allow.
+    # An inline/export bypass is scoped to its own create command (below). If
+    # every real create carries its own bypass, allow.
     if all(c["bypass"] for c in real):
         emit_allow()
 
+    dirmsg = ("ディレクトリ変更を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。\n"
+              "対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。\n" + HATCH)
+
+    # Structural denials that do NOT depend on local git state, checked BEFORE
+    # the non-git-cwd fallback so a create that cd's into a repo, or targets a
+    # different repository, can't slip through when the payload cwd isn't a repo.
+    gh_repo_env = os.environ.get("GH_REPO")
+    for c in real:
+        if c["bypass"]:
+            continue
+        if c["dir"]:
+            emit_deny(dirmsg)
+        rt = c["repo"] or gh_repo_env
+        if rt:
+            emit_deny("gh pr create が別リポジトリ (%s) を対象にしています (-R/--repo / GH_REPO)。\n"
+                      "ローカルの marker は現在のリポジトリのものなので照合できません。\n"
+                      "対象リポジトリで /post-work-review してから実行してください。\n%s" % (rt, HATCH))
+
+    # Local git context (only needed for marker / head / base verification).
     if not cwd or not os.path.isdir(cwd):
         emit_allow()
 
@@ -406,27 +438,24 @@ def main():
     defbr = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).stdout.strip()
     if defbr.startswith("origin/"):
         defbr = defbr[len("origin/"):]
+    if not defbr:
+        defbr = git(["config", "--get", "init.defaultBranch"]).stdout.strip()
     cur = git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-
-    dirmsg = ("ディレクトリ変更を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。\n"
-              "対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。\n" + HATCH)
 
     for c in real:
         if c["bypass"]:
             continue  # this specific create is bypassed; others still checked
-        if c["dir"]:
-            emit_deny(dirmsg)
-        if c.get("repo"):
-            emit_deny("gh pr create -R/--repo (%s) は別リポジトリに PR を作成しますが、ローカルの marker は現在のリポジトリのものです。\n"
-                      "対象リポジトリで /post-work-review してから実行してください。\n%s" % (c["repo"], HATCH))
         base = c["base"]
         if not base and cur:
             mb = git(["config", "--get", "branch.%s.gh-merge-base" % cur]).stdout.strip()
             if mb:
                 base = mb
-        if base and defbr and base != defbr:
-            emit_deny("gh pr create の base (%s) が既定ブランチ (%s) と異なり、レビューした diff 範囲と PR の diff 範囲がずれます。\n"
-                      "既定ブランチを base にするか、対象 base に対して /post-work-review し直してください。\n%s" % (base, defbr, HATCH))
+        # Fail closed: allow an explicit base only when it resolvably equals the
+        # default branch (the diff range /post-work-review verified).
+        if base and not (defbr and base == defbr):
+            shown = ("既定ブランチ (%s)" % defbr) if defbr else "既定ブランチ(ローカルで解決不可)"
+            emit_deny("gh pr create の base (%s) が%sと異なる/確認できないため、レビューした diff 範囲と PR の diff 範囲がずれる可能性があります。\n"
+                      "既定ブランチを base にするか、対象 base に対して /post-work-review し直してください。\n%s" % (base, shown, HATCH))
         hr = c["head"]
         if hr:
             if ":" in hr:
