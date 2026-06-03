@@ -14,7 +14,7 @@ GO         ?= go
 GO_BIN     ?= fanout-go
 GOCACHE    ?= $(CURDIR)/.cache/go-build
 
-.PHONY: install link uninstall install-go link-go install-go-default link-go-default uninstall-go build-go clean-go install-integrations link-integrations uninstall-integrations go-test go-vet go-fmt-check test test-tier1 test-tier2 test-go test-go-tier1 test-go-tier2 lint check-bats
+.PHONY: install link uninstall build-go clean-go install-integrations link-integrations uninstall-integrations go-test go-vet go-fmt-check test test-tier1 test-tier2 lint check-bats
 
 build-go:
 	GOCACHE="$(GOCACHE)" $(GO) build -o "$(GO_BIN)" ./cmd/fanout
@@ -60,64 +60,35 @@ uninstall-integrations:
 install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
 	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout"
-	install -m 0755 fanout "$(BINDIR)/fanout-bash"
 	@echo "Installed:"
-	@echo "  $(BINDIR)/fanout (Go)"
-	@echo "  $(BINDIR)/fanout-bash (Bash)"
+	@echo "  $(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
-
-install-go: build-go
-	@mkdir -p "$(BINDIR)"
-	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout-go"
-	@echo "Installed:"
-	@echo "  $(BINDIR)/fanout-go"
-
-# install-go-default / link-go-default are now aliases: the default install / link
-# targets already place the Go binary at $(BINDIR)/fanout and demote Bash to
-# $(BINDIR)/fanout-bash. Kept for call-site compatibility (CI, docs, agent skills).
-install-go-default: install
 
 link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
 	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout"
-	ln -sf "$(CURDIR)/fanout" "$(BINDIR)/fanout-bash"
 	@echo "Linked:"
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
-	@echo "  $(BINDIR)/fanout-bash -> $(CURDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
 
-link-go: build-go
-	@mkdir -p "$(BINDIR)"
-	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout-go"
-	@echo "Linked:"
-	@echo "  $(BINDIR)/fanout-go -> $(CURDIR)/$(GO_BIN)"
-
-link-go-default: link
-
 uninstall: uninstall-integrations
-	rm -f "$(BINDIR)/fanout" "$(BINDIR)/fanout-bash"
+	rm -f "$(BINDIR)/fanout"
 	@echo "Removed:"
 	@echo "  $(BINDIR)/fanout"
-	@echo "  $(BINDIR)/fanout-bash"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
-uninstall-go:
-	rm -f "$(BINDIR)/fanout-go"
-	@echo "Removed:"
-	@echo "  $(BINDIR)/fanout-go"
-
 # --- test / lint -------------------------------------------------------------
-# `make test`         — run Tier 1 + Tier 2 black-box tests against ./fanout.
-# `make test-go`      — build ./fanout-go and run the same tests via FANOUT_BIN.
+# `make test`         — build the Go binary, run Go unit tests + Tier 1 + Tier 2
+#                       black-box tests against it via FANOUT_BIN.
 # `make test-tier1`   — flag / prerequisite tests, no live dmux.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
-# `make lint`         — shellcheck Bash files plus Go vet/gofmt checks.
+# `make lint`         — Go vet/gofmt checks plus shellcheck of the test shims.
 #
 # bats-core is required: `brew install bats-core` (macOS) or `apt install bats`
 # (Debian/Ubuntu). check-bats prints the install hint before failing.
@@ -134,20 +105,12 @@ check-bats:
 	  exit 1; \
 	}
 
-test: test-tier1 test-tier2
+test: go-test test-tier1 test-tier2
 
-test-tier1: check-bats
-	$(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
-
-test-tier2: check-bats
-	$(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
-
-test-go: go-test test-go-tier1 test-go-tier2
-
-test-go-tier1: build-go check-bats
+test-tier1: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
 
-test-go-tier2: build-go check-bats
+test-tier2: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
 
 go-test:
@@ -161,4 +124,4 @@ go-fmt-check:
 	if [ -n "$$out" ]; then echo "gofmt diff in:"; echo "$$out"; exit 1; fi
 
 lint: go-vet go-fmt-check
-	shellcheck fanout tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash
