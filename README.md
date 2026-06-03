@@ -31,9 +31,9 @@ dialog are both rendered via `tmux display-popup -E 'node <script> <resultFile>'
 separate tmux client with its own pty; it is not a pane and cannot be
 addressed by `send-keys -t <pane>`. Typing into `%0` while a popup is open
 just fills `%0`'s buffer behind the popup — the user never sees the text,
-and dmux discards it when the popup closes. That's why earlier versions of
-this script appeared to "work" (the popup would eventually open) but never
-delivered the prompt.
+and dmux discards it when the popup closes. That's why earlier approaches
+appeared to "work" (the popup would eventually open) but never delivered the
+prompt.
 
 The shipped workaround is **popup result-file interception**. Each dmux
 popup is told a `<tmpdir>/dmux-popup-<timestamp>.json` path (typically
@@ -45,7 +45,7 @@ writes the desired JSON payload (`{"success":true,"data":"<prompt>"}` for
 the prompt popup, `{"success":true,"data":["<agent>"]}` for the picker),
 and kills the popup process. `display-popup -E` closes the popup on child
 exit, dmux reads the file we wrote, and pane creation proceeds as if a
-human had answered. When dmux eventually ships the HTTP API, this script
+human had answered. When dmux eventually ships the HTTP API, fanout
 can collapse back to `POST /api/panes` in a page.
 
 ## Project mode
@@ -78,18 +78,6 @@ task-list union.
   `(blocked by #X)` task-list trailer doesn't exist without a parent body.
 
 ## Installation
-
-> **⚠️ Bash deprecation.** The Go implementation (`cmd/fanout`) is the default —
-> the released binary installed below and what `make install` builds. The
-> original single-file Bash `fanout` is **deprecated**; it still works and
-> remains in the checkout during the migration window. No action is required:
-> both the curl install and `make install` give you the Go `fanout`. From a
-> checkout, `make install` / `make link` also keep the Bash script as
-> `fanout-bash`; the curl path ships the Go binary only (no `fanout-bash`), so
-> curl users who still need the old Bash should run it from a checkout. The
-> script is removed once the Wave 1 changes land and a release carries the Bash
-> startup deprecation warning (prebuilt binaries already ship via the curl path,
-> #67). See #80 for the full roadmap.
 
 The recommended install path is the released Go binary. It installs the stable
 `fanout` command plus the bundled Claude/Codex integration files:
@@ -157,27 +145,18 @@ managed-Mac distribution becomes a requirement.
 
 ### From a checkout
 
-The repository-root Bash implementation is deprecated now that the Go port is
-the release artifact. It remains in the checkout for the deprecation period and
-for parity testing. Local Makefile targets are still available while hacking:
+Local Makefile targets install or symlink the Go binary as the stable `fanout`
+command plus the bundled integrations:
 
 ```bash
 make install            # builds Go as $(BINDIR)/fanout + installs integrations
 make link               # symlinks Go as $(BINDIR)/fanout + links integrations
-make install-go-default # alias for make install
-make link-go-default    # alias for make link
 make uninstall          # removes installed paths
 
 PREFIX=/usr/local sudo make install     # system-wide Go CLI; overrides BINDIR
 CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
-
-`make install` / `make link` also keep the Bash implementation available as
-`fanout-bash` for the deprecation period. Agent integrations always invoke the
-stable `fanout` command name. Do not teach agents to call `fanout-go` directly
-— `fanout-go` is only a side-by-side comparison command installed by
-`make install-go` / `make link-go`.
 
 Building from a checkout needs a **Go toolchain** (Go 1.23+): `make install`,
 `make link`, and `make build-go` all run `go build ./cmd/fanout`. The curl
@@ -186,26 +165,19 @@ install above ships a prebuilt binary and needs no Go.
 ## Development
 
 ```bash
-make test           # Tier 1 + Tier 2 black-box tests (bats-core required)
+make test           # Go unit tests + Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
-make lint           # shellcheck fanout + test shims
-make build-go       # build the Go CLI as ./fanout-go for local comparison
-make test-go        # run the same black-box tests against ./fanout-go
-make install-go     # install Go side-by-side as $(BINDIR)/fanout-go
+make lint           # go vet + gofmt + shellcheck of the test shims
+make build-go       # build the Go CLI as ./fanout-go
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
+The black-box tiers build `./fanout-go` and exercise it via `FANOUT_BIN`.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
-Both tiers are parity-test material while the Bash implementation remains in
-the checkout. `make install-go-default` / `make link-go-default` promote the Go
-port under the stable `fanout` command name that agents already invoke.
-`./fanout-go` still exists in parallel for behavior comparison; use
-`make install-go` or `make link-go` if you want a `fanout-go` command in
-`$(BINDIR)`. Regenerate Tier 2 goldens with
-`FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you intentionally change dry-run
-output. Tier 3 (live dmux E2E) stays manual.
+Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
+intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
 
 ## Prerequisites
 
