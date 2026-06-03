@@ -26,6 +26,12 @@ setup() {
   # for future readers even though fanout doesn't consult it today.
   export TERM=dumb
   export NO_COLOR=1
+  export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/xdg"
+  mkdir -p "$XDG_CONFIG_HOME"
+  unset FANOUT_AUTO_PR
+  unset FANOUT_PR_REVIEW_GATE
+  unset FANOUT_BRIEFING_CODE_REVIEW
+  unset FANOUT_AGENT_TEAMS_HINT
 
   # Tier 1 tests don't touch dmux discovery, but we still want fanout's
   # agent auto-detect path to be dormant unless a test opts in.
@@ -159,6 +165,12 @@ assert_success() {
       printf -- '--- captured output ---\n%s\n--- end output ---\n' "$output"
     } >&2
     return 1
+  fi
+}
+
+skip_unless_fanout_go() {
+  if [[ "$(basename "$FANOUT_BIN")" != "fanout-go" ]]; then
+    skip "Go-only fanout settings"
   fi
 }
 

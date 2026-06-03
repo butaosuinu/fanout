@@ -26,29 +26,33 @@ const (
 // Config holds the parsed CLI invocation. Validation has already run when a
 // non-nil Config is returned.
 type Config struct {
-	Parent           int
-	ParentRef        string
-	ParentMode       string
-	ProjectOwnerType string
-	ProjectOwner     string
-	ProjectNumber    int
-	ProjectStatus    string
-	Agent            string
-	Limit            int // 0 = unset
-	OnlyArg          string
-	SkipArg          string
-	IncludeArg       string
-	Only             []int
-	Skip             []int
-	Include          []int
-	Names            []NameOverride
-	Session          string
-	SleepBetween     float64
-	PopupTimeoutSec  int
-	DryRun           bool
-	Debug            bool
-	UnblockedOnly    bool
-	StatusMode       bool
+	Parent             int
+	ParentRef          string
+	ParentMode         string
+	ProjectOwnerType   string
+	ProjectOwner       string
+	ProjectNumber      int
+	ProjectStatus      string
+	Agent              string
+	Limit              int // 0 = unset
+	OnlyArg            string
+	SkipArg            string
+	IncludeArg         string
+	Only               []int
+	Skip               []int
+	Include            []int
+	Names              []NameOverride
+	Session            string
+	SleepBetween       float64
+	PopupTimeoutSec    int
+	DryRun             bool
+	Debug              bool
+	UnblockedOnly      bool
+	StatusMode         bool
+	AutoPullRequest    *bool
+	PRReviewGate       *bool
+	BriefingCodeReview *bool
+	AgentTeamsHint     *bool
 }
 
 // NameOverride represents a parsed `--name NUM=slug-hint|display-name|branch`
@@ -141,10 +145,18 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		},
 	}
 	boolOptions := map[string]boolOption{
-		"--dry-run":        func(cfg *Config) { cfg.DryRun = true },
-		"--debug":          func(cfg *Config) { cfg.Debug = true },
-		"--unblocked-only": func(cfg *Config) { cfg.UnblockedOnly = true },
-		"--status":         func(cfg *Config) { cfg.StatusMode = true },
+		"--dry-run":                 func(cfg *Config) { cfg.DryRun = true },
+		"--debug":                   func(cfg *Config) { cfg.Debug = true },
+		"--unblocked-only":          func(cfg *Config) { cfg.UnblockedOnly = true },
+		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
+		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = boolPtr(true) },
+		"--no-auto-pr":              func(cfg *Config) { cfg.AutoPullRequest = boolPtr(false) },
+		"--pr-review-gate":          func(cfg *Config) { cfg.PRReviewGate = boolPtr(true) },
+		"--no-pr-review-gate":       func(cfg *Config) { cfg.PRReviewGate = boolPtr(false) },
+		"--briefing-code-review":    func(cfg *Config) { cfg.BriefingCodeReview = boolPtr(true) },
+		"--no-briefing-code-review": func(cfg *Config) { cfg.BriefingCodeReview = boolPtr(false) },
+		"--agent-teams-hint":        func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(true) },
+		"--no-agent-teams-hint":     func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(false) },
 	}
 
 	requireValue := func(flag string, i int) (string, bool) {
@@ -222,6 +234,10 @@ type parseState struct {
 type valueOption func(*Config, *parseState, string) error
 type boolOption func(*Config)
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func setParent(parent *string, arg string, lg *log.Logger) bool {
 	if *parent == "" {
 		*parent = arg
@@ -283,6 +299,14 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--dry-run")
 		case cfg.UnblockedOnly:
 			return statusConflict(lg, "--unblocked-only")
+		case cfg.AutoPullRequest != nil:
+			return statusConflict(lg, boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
+		case cfg.PRReviewGate != nil:
+			return statusConflict(lg, boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate))
+		case cfg.BriefingCodeReview != nil:
+			return statusConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
+		case cfg.AgentTeamsHint != nil:
+			return statusConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
 		case state.sleepExplicit:
 			return statusConflict(lg, "--sleep")
 		case state.popupExplicit:
@@ -357,6 +381,13 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 func statusConflict(lg *log.Logger, flag string) ParseResult {
 	lg.Err("--status cannot be combined with %s", flag)
 	return ParseResult{Code: exitcode.Invocation}
+}
+
+func boolSettingFlag(onFlag, offFlag string, v *bool) string {
+	if v != nil && *v {
+		return onFlag
+	}
+	return offFlag
 }
 
 var (

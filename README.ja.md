@@ -249,6 +249,9 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run] [--debug]
+       [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
+       [--briefing-code-review|--no-briefing-code-review]
+       [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # ファンアウト済み子 issue の JSON 状態を読む
 fanout --help
 ```
@@ -256,6 +259,46 @@ fanout --help
 第1引数は GitHub issue 番号（Sub-issues + タスクリストモード）または
 Projects v2 URL（Project モード、上記参照）のいずれか。`--project-status`
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
+
+### Settings
+
+Go 実装では、fanout が briefing に入れる opinionated な 4 つの挙動をオン/オフ
+できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
+env には未対応です。後方互換のため、既定値はすべて `true` です。
+
+優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
+ビルトイン既定値** です。fanout は dmux の project root を発見した後、
+逆順に 1 回だけ重ねて解決します。リポジトリ設定は
+`<project_root>/.fanout/config.json` です。この `project_root` は dmux
+セッションの親リポジトリルートで、子 worktree ではありません。ユーザー設定は
+`$XDG_CONFIG_HOME/fanout/config.json`、`XDG_CONFIG_HOME` が無い場合は
+`~/.config/fanout/config.json` です。
+
+```json
+{
+  "autoPullRequest": false,
+  "prReviewGate": true,
+  "briefingCodeReview": true,
+  "agentTeamsHint": false
+}
+```
+
+| 挙動 | ファイルキー | env | CLI flag | 既定値 |
+|---|---|---|---|---|
+| PR 自動作成指示 | `autoPullRequest` | `FANOUT_AUTO_PR` | `--auto-pr` / `--no-auto-pr` | `true` |
+| PR レビューゲート通知 | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
+| Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
+| Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+
+環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
+不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
+将来の設定追加で古い fanout が壊れないようにするためです。
+
+`prReviewGate=false` だけは、子 Claude Code の hook を強制的に無効化する設定では
+ありません。fanout は dmux のポップアップ経由でペインを作るだけで、子プロセスの
+環境変数を直接注入できないためです。代わりに Claude briefing へ、
+`/post-work-review` 前に `PreToolUse` hook が PR 作成を止めた場合は
+`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` を使ってよい、という通知を入れます。
 
 ### 例
 
@@ -315,6 +358,12 @@ fanout 123 --popup-timeout 45
 # 子ペインを立てたいときなど）。通常は不要 — fanout が dmux.config.json の
 # 呼び出し元ペイン `.panes[].agent` を自動で拾う。
 fanout 123 --agent codex
+
+# この run だけ、子 briefing から PR 自動作成指示を外す
+fanout 123 --no-auto-pr
+
+# この shell では Agent Teams ヒントを無効化
+export FANOUT_AGENT_TEAMS_HINT=0
 
 # ファンアウト済み子 issue と closed-by PR の merge 状態を JSON で読む。
 # 副作用は無いので jq と組み合わせて待機ループに使える。内部的には子ごとに
@@ -405,7 +454,7 @@ dmux 管理下なら自動判定されるので明示不要。詳しくは **前
    `[fanout #<NUM>]` で始まるプロンプトを持つ issue はスキップする。
 6. 各対象 issue について:
    - `/tmp/fanout-<repo>-<NUM>.md` に、issue の本文と短い Requirements チェックリスト
-     からなるブリーフィングを書き出す。
+     からなるブリーフィングを書き出す。内容は解決済み settings で出し分ける。
    - コントロールペインに `Escape` と `n` を送り、dmux の new-pane ポップアップ
      （インラインモーダルではなく `tmux display-popup` の子プロセス）を起動させる。
    - `pgrep -f 'newPanePopup.js'` でポップアップ node プロセスを特定し、
@@ -485,6 +534,8 @@ JSON を事前に確認するには `--dry-run` を使います。
 でレビュー済みコミットが記録されるので、その後 `gh pr create` を再実行してください。
 一度だけバイパスしたいとき（例: このゲート自体を導入する PR は、放置すると自分自身の
 作成を deny してしまう）は、コマンドの先頭に付けます: `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`。
+fanout settings で `prReviewGate=false` になっている場合、子 Claude briefing にも
+この bypass 許可が入ります。ただし、コミット済み hook 自体は変更されません。
 
 メモ:
 - ゲートは HEAD に固定されます。新しいコミットを積むと再武装されるので、PR の前に

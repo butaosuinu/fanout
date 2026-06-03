@@ -75,6 +75,21 @@ Options:
                       [project mode only] Restrict to Project items whose
                       single-select "Status" field equals <name>. Default:
                       "Todo". Pass "all" to disable the filter.
+  --auto-pr / --no-auto-pr
+                      Include or omit the child briefing requirement to open
+                      a PR with "Closes #N" after tests pass. Default: on.
+  --pr-review-gate / --no-pr-review-gate
+                      Keep the default PR review-gate expectation, or add a
+                      Claude briefing note allowing
+                      FANOUT_SKIP_PR_REVIEW=1 gh pr create ... if the
+                      PreToolUse hook blocks before /post-work-review.
+                      Default: on.
+  --briefing-code-review / --no-briefing-code-review
+                      Include or omit the Claude-only /code-review briefing
+                      instruction. Default: on.
+  --agent-teams-hint / --no-agent-teams-hint
+                      Include or omit the Claude-only Agent Teams hint in
+                      child briefings. Default: on.
   --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
                       this if dmux reports "pane creation failed" under load.
   --popup-timeout <s> Seconds to wait for each dmux popup (new-pane, agent-

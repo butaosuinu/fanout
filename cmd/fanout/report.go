@@ -89,11 +89,12 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 		if cfg.ParentMode == cliflags.ModeProject && cfg.ProjectStatus != cliflags.DefaultProjectStatus {
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
-		fmt.Fprintf(lg.Stdout(), "  %s %s --limit %d%s%s%s%s%s\n",
+		fmt.Fprintf(lg.Stdout(), "  %s %s --limit %d%s%s%s%s%s%s\n",
 			shellQuote(commandName), shellQuote(cfg.ParentRef), len(plan.LimitDeferred),
 			statusFlag,
 			optFlag("--only", cfg.OnlyArg)+optFlag("--skip", cfg.SkipArg),
 			boolFlag(" --unblocked-only", cfg.UnblockedOnly),
+			settingsFlags(cfg),
 			optFlag("--agent", cfg.Agent),
 			optFlag("--session", cfg.Session))
 	}
@@ -111,6 +112,23 @@ func boolFlag(flagWithLeadSpace string, on bool) string {
 		return flagWithLeadSpace
 	}
 	return ""
+}
+
+func settingsFlags(cfg *cliflags.Config) string {
+	return boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest) +
+		boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate) +
+		boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview) +
+		boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint)
+}
+
+func boolSettingFlag(onFlag, offFlag string, v *bool) string {
+	if v == nil {
+		return ""
+	}
+	if *v {
+		return " " + onFlag
+	}
+	return " " + offFlag
 }
 
 func shellQuote(s string) string {

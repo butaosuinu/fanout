@@ -33,6 +33,30 @@ func TestPrintSummaryUsesInvokedCommandNameInLimitRerunHint(t *testing.T) {
 	}
 }
 
+func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
+	var out, err bytes.Buffer
+	lg := log.NewWith(&out, &err, false)
+	plan := Plan{
+		LimitDeferred: []ghissue.Issue{{Number: 702}, {Number: 703}},
+	}
+	cfg := &cliflags.Config{
+		ParentRef:          "700",
+		Agent:              "claude",
+		AutoPullRequest:    boolPtr(false),
+		PRReviewGate:       boolPtr(true),
+		BriefingCodeReview: boolPtr(false),
+		AgentTeamsHint:     boolPtr(false),
+	}
+
+	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
+
+	got := out.String()
+	want := "  fanout-go 700 --limit 2 --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --agent claude\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("summary output did not preserve settings flags:\nwant %q\noutput:\n%s", want, got)
+	}
+}
+
 // TestShellQuoteIsCopyPasteSafe pins shellQuote and, more importantly, proves
 // the property that actually matters for the --limit rerun hint: the quoted
 // token must evaluate back to the original argument under a POSIX shell, so the
@@ -85,4 +109,8 @@ func TestShellQuoteIsCopyPasteSafe(t *testing.T) {
 			}
 		})
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
