@@ -15,11 +15,12 @@ Arguments: `$ARGUMENTS`
    - If neither matches: scan the user's opening message / recent context for an issue ref (`#\d+`) or a Project URL of the form above, and use the first match.
    - Still nothing: actively list candidates from the current repo/worktree instead of asking for a pasted number/URL:
      1. Run `gh issue list --state open --json number,title --limit 100`.
-     2. Run `gh project list --format json` for the current user's Projects.
-     3. If the current repo is org-owned, get the org with `gh repo view --json owner -q .owner.login` and also run `gh project list --owner <org> --format json`.
-     4. Present one combined list: issues as `#<num> <title>`, Projects as `<title> (<url>)`. Dedupe Projects by URL if current-user and org results overlap, then ask the user to choose one.
-     5. If both lists are empty, tell the user there is no OPEN issue or Project target to fan out and stop.
-     6. Resolve the selection to the CLI positional arg: issues become bare digits with any leading `#` removed; Projects become the Project URL from `gh project list`.
+     2. Get the repo owner login with `gh repo view --json owner -q .owner.login`.
+     3. Run Project listing commands with `--limit 100`: `gh project list --format json --limit 100` for the current user's Projects, and `gh project list --owner <repo-owner> --format json --limit 100` for the repo owner's Projects. Run the repo-owner command even when the owner is a user, not only for orgs. Dedupe Projects by URL if the two lists overlap.
+     4. If a Project listing command fails due auth/scope/network, warn that Project candidates could not be fully listed, keep any issue candidates, and continue. If the user needs a Project candidate, tell them to refresh `gh` Project access or paste the Project URL.
+     5. Present one combined list: issues as `#<num> <title>`, Projects as `<title> (<url>)`, then ask the user to choose one.
+     6. If no issue candidates and no Project candidates are available, tell the user there is no OPEN issue or Project target to fan out and stop; if Project listing failed, mention that Project candidates were unavailable rather than claiming none exist.
+     7. Resolve the selection to the CLI positional arg: issues become bare digits with any leading `#` removed; Projects become the Project URL from `gh project list`.
    - This fallback is slash-command/skill-side target resolution for non-TTY agent entrypoints. Do not change the Go `fanout` CLI for it; the CLI already accepts the resolved positional arg via `internal/cliflags.Parse()`.
 2. **Detect `--go`** in the remaining arguments. Strip it out — it is this command's own bypass flag, not a `fanout` flag and not a selector for the Go implementation. The rest of the arguments are forwarded verbatim to `fanout`.
 3. **Detect `--wait`** in the remaining arguments. Strip it out — it is template-side only and is **never** forwarded to the `fanout` CLI. Remember it is set so step 7 can launch the wait-and-continue loop after a successful real run. `--wait` is a no-op when combined with `--dry-run` (no real run = nothing to wait for) and only meaningful in issue mode (project URLs are rejected by `fanout --status`).
