@@ -154,6 +154,20 @@ def basename(word):
     return word.rsplit("/", 1)[-1]
 
 
+def normalize_repo(spec):
+    """Reduce a repo spec (owner/repo, host/owner/repo, URL, git@host:owner/repo)
+    to a lowercase `owner/repo`, or None."""
+    if not spec:
+        return None
+    s = spec.strip().rstrip("/")
+    if s.endswith(".git"):
+        s = s[:-4]
+    parts = [p for p in re.split(r"[/:]", s) if p]
+    if len(parts) < 2:
+        return None
+    return (parts[-2] + "/" + parts[-1]).lower()
+
+
 def find_repo_flag(toks, start, end):
     """Return the -R/--repo value among toks[start:end], or None."""
     m = start
@@ -222,6 +236,7 @@ def scan_commands(toks):
     creates = []
     dir_pending = False
     export_bypass = False
+    export_gh_repo = ""
     i = 0
     expect = True
     while i < n:
@@ -303,11 +318,14 @@ def scan_commands(toks):
             i += 1
             continue
         if base == "export":
-            # `export FANOUT_SKIP_PR_REVIEW=1` bypasses the rest of the line.
+            # `export FANOUT_SKIP_PR_REVIEW=1` bypasses, and `export GH_REPO=...`
+            # retargets, the rest of the line.
             p = i + 1
             while p < n and toks[p] not in SEP:
                 if toks[p] == BYPASS:
                     export_bypass = True
+                elif toks[p].startswith("GH_REPO="):
+                    export_gh_repo = toks[p][len("GH_REPO="):]
                 p += 1
             expect = False
             i = p
@@ -338,7 +356,7 @@ def scan_commands(toks):
                     if not repo_:
                         repo_ = find_repo_flag(toks, gi, k)
                     if not repo_:
-                        repo_ = ghrepo_here or None
+                        repo_ = ghrepo_here or export_gh_repo or None
                     creates.append({"head": head, "base": base_, "repo": repo_,
                                     "help": is_help, "dir": dir_pending,
                                     "bypass": bypass_here or export_bypass})
@@ -388,26 +406,12 @@ def main():
     dirmsg = ("ディレクトリ変更を伴う gh pr create はゲートが対象リポジトリのレビュー状態を判定できません。\n"
               "対象リポジトリに移動してから /post-work-review → gh pr create を実行してください。\n" + HATCH)
 
-    # Structural denials that do NOT depend on local git state, checked BEFORE
-    # the non-git-cwd fallback so a create that cd's into a repo, or targets a
-    # different repository, can't slip through when the payload cwd isn't a repo.
-    gh_repo_env = os.environ.get("GH_REPO")
-    for c in real:
-        if c["bypass"]:
-            continue
-        if c["dir"]:
-            emit_deny(dirmsg)
-        rt = c["repo"] or gh_repo_env
-        if rt:
-            emit_deny("gh pr create が別リポジトリ (%s) を対象にしています (-R/--repo / GH_REPO)。\n"
-                      "ローカルの marker は現在のリポジトリのものなので照合できません。\n"
-                      "対象リポジトリで /post-work-review してから実行してください。\n%s" % (rt, HATCH))
-
-    # Local git context (only needed for marker / head / base verification).
-    if not cwd or not os.path.isdir(cwd):
-        emit_allow()
-
     def git(args):
+        if not cwd or not os.path.isdir(cwd):
+            class R:
+                returncode = 1
+                stdout = ""
+            return R()
         try:
             return subprocess.run(["git"] + args, cwd=cwd, stdout=subprocess.PIPE,
                                   stderr=subprocess.DEVNULL, text=True)
@@ -416,6 +420,30 @@ def main():
                 returncode = 1
                 stdout = ""
             return R()
+
+    # Structural denials, checked BEFORE the non-git-cwd fallback so a create
+    # that cd's into a repo, or targets a *different* repository, can't slip
+    # through when the payload cwd isn't a repo.
+    cur_repo = normalize_repo(git(["config", "--get", "remote.origin.url"]).stdout.strip())
+    gh_repo_env = os.environ.get("GH_REPO")
+    for c in real:
+        if c["bypass"]:
+            continue
+        if c["dir"]:
+            emit_deny(dirmsg)
+        rt = c["repo"] or gh_repo_env
+        if rt:
+            # Allow only when the explicit target resolvably IS this repo.
+            tn = normalize_repo(rt)
+            if not (cur_repo and tn and tn == cur_repo):
+                emit_deny("gh pr create が別リポジトリ (%s) を対象にしています (-R/--repo / GH_REPO)。\n"
+                          "ローカルの marker は現在のリポジトリのものなので照合できません%s。\n"
+                          "対象リポジトリで /post-work-review してから実行してください。\n%s"
+                          % (rt, ("" if cur_repo else " (現在のリポジトリを解決できませんでした)"), HATCH))
+
+    # Local git context (only needed for marker / head / base verification).
+    if not cwd or not os.path.isdir(cwd):
+        emit_allow()
 
     if git(["rev-parse", "--is-inside-work-tree"]).stdout.strip() != "true":
         emit_allow()
