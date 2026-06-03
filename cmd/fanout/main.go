@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/settings"
 )
 
 const fanoutTagPrefix = "[fanout #"
@@ -82,6 +83,12 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 	if code != exitcode.OK {
 		return code
 	}
+	resolvedSettings := settings.Resolve(rt.info.ProjectRoot, settings.CLIOverrides{
+		AutoPullRequest:    cfg.AutoPullRequest,
+		PRReviewGate:       cfg.PRReviewGate,
+		BriefingCodeReview: cfg.BriefingCodeReview,
+		AgentTeamsHint:     cfg.AgentTeamsHint,
+	}, lg.Warn)
 
 	loaded, code := loadChildren(cfg, rt.gh, lg)
 	if code != exitcode.OK {
@@ -152,7 +159,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		printDryRunPlan(plan, lg, c)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, c)
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, c)
 	applyDisplayNameOverrides(cfg, rt.info.ConfigPath, result.CreatedNums, lg, c)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
@@ -341,7 +348,7 @@ func migrateLegacyPaneTags(cfg *cliflags.Config, configPath string, strong map[i
 	return 0, false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, gh ghissue.Runner, targets []ghissue.Issue, c log.Palette) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -351,7 +358,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, g
 				issue.Body = detail.Body
 			}
 		}
-		if createPaneForIssue(cfg, lg, info, issue, c) {
+		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, c) {
 			result.Created++
 			result.CreatedNums = append(result.CreatedNums, issue.Number)
 		} else {

@@ -221,6 +221,9 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run]
+       [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
+       [--briefing-code-review|--no-briefing-code-review]
+       [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout --help
 ```
@@ -281,9 +284,52 @@ exited.
 
 `--status` is exclusive with all action-bearing flags (`--agent`, `--limit`,
 `--only`, `--skip`, `--include`, `--name`, `--sleep`, `--popup-timeout`,
-`--dry-run`, `--unblocked-only`). The bundled Claude Code skill drives a
-`ScheduleWakeup`-based polling loop on top of this when the user opts in via
-`/fanout … --wait`.
+`--dry-run`, `--unblocked-only`, `--auto-pr`, `--no-auto-pr`,
+`--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`,
+`--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
+The bundled Claude Code skill drives a `ScheduleWakeup`-based polling loop on
+top of this when the user opts in via `/fanout … --wait`.
+
+### Settings
+
+The Go implementation can turn four opinionated briefing behaviors on or off.
+The deprecated Bash `./fanout` does not support these new flags, files, or env
+vars. Defaults are all `true` to preserve existing behavior.
+
+Resolution order is: **CLI flag > environment variable > repo config file >
+user config file > built-in default**. fanout applies layers in the reverse
+order once per run after it discovers dmux's project root. The repo config path
+is `<project_root>/.fanout/config.json`, where `project_root` is the dmux
+session's parent repository root, not the child worktree. The user config path
+is `$XDG_CONFIG_HOME/fanout/config.json`, or `~/.config/fanout/config.json`
+when `XDG_CONFIG_HOME` is unset.
+
+```json
+{
+  "autoPullRequest": false,
+  "prReviewGate": true,
+  "briefingCodeReview": true,
+  "agentTeamsHint": false
+}
+```
+
+| Behavior | File key | Env | CLI flags | Default |
+|---|---|---|---|---|
+| PR auto-creation instruction | `autoPullRequest` | `FANOUT_AUTO_PR` | `--auto-pr` / `--no-auto-pr` | `true` |
+| PR review gate note | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
+| Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
+| Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+
+Environment values accept `1/true/yes/on` and `0/false/no/off`
+(case-insensitive). Invalid env values, unknown file keys, and non-boolean
+file values are warned and ignored so future settings do not break older
+fanout binaries.
+
+`prReviewGate=false` is the one setting that cannot forcibly disable the child
+Claude Code hook, because fanout only creates the pane through dmux's popup
+path and cannot inject child environment variables. Instead, Claude briefings
+include a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the
+`PreToolUse` hook blocks PR creation before `/post-work-review`.
 
 ### Examples
 
@@ -355,6 +401,12 @@ fanout 123 --popup-timeout 45
 # agent than the parent pane). Normally you don't need this — fanout reads
 # the caller's .panes[].agent from dmux.config.json.
 fanout 123 --agent codex
+
+# Remove the automatic PR-opening requirement from child briefings for one run
+fanout 123 --no-auto-pr
+
+# Disable the Agent Teams hint globally for this shell
+export FANOUT_AGENT_TEAMS_HINT=0
 
 # Read-only JSON status: who's fanned out, what state each child is in, and
 # whether their closed-by PRs have merged. No side effects. Pipe into jq for
@@ -452,7 +504,8 @@ for details.
    reported as `deferred (blocked)` and skipped this run.
 6. For each target issue:
    - Writes a briefing to `/tmp/fanout-<repo>-<NUM>.md` with the issue body
-     and a short Requirements checklist.
+     and a short Requirements checklist, filtered through the resolved
+     settings above.
    - Sends `Escape` and `n` to the control pane, which triggers dmux's
      new-pane popup (a `tmux display-popup` child, not an inline modal).
    - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
@@ -568,6 +621,8 @@ HEAD has passed `/post-work-review`. Run `/post-work-review` — its final step
 records the reviewed commit — then rerun `gh pr create`. To bypass once (e.g.
 the PR that first introduces this gate, which would otherwise deny its own
 creation), prefix the command: `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`.
+If fanout settings resolve `prReviewGate=false`, child Claude briefings also
+carry this bypass permission, but the committed hook itself remains unchanged.
 
 Notes:
 - The gate is HEAD-pinned: any new commit re-arms it, so review again before

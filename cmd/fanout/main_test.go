@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/dmuxsession"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/settings"
 )
 
 func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
@@ -43,7 +44,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
 	}
 
-	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, log.Palette{})
+	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), log.Palette{})
 
 	if result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)

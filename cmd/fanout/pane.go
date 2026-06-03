@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/popup"
+	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/tmuxctl"
 )
 
@@ -26,8 +27,8 @@ type paneRequest struct {
 	OneLinePrompt       string
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, issue ghissue.Issue, c log.Palette) bool {
-	req := newPaneRequest(cfg, info.ProjectRoot, issue)
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, issue ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) bool {
+	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings)
 	if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 		lg.Err("#%d: write briefing: %v", req.Issue.Number, err)
 		return false
@@ -60,11 +61,11 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.
 	return drivePaneCreation(cfg, lg, info, req.Issue.Number, baseline, newpanePayload, agentPayload)
 }
 
-func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue) paneRequest {
+func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings) paneRequest {
 	req := paneRequest{
 		Issue:        issue,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		BriefingBody: briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent),
+		BriefingBody: briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, resolvedSettings),
 		ShortTitle:   shortIssueTitle(issue.Title),
 	}
 	if name := cfg.FindName(issue.Number); name != nil {

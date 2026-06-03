@@ -9,6 +9,9 @@ package briefing
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+
+	"github.com/butaosuinu/fanout/internal/settings"
 )
 
 // Path returns /tmp/fanout-<repo_slug>-<num>.md.
@@ -19,24 +22,59 @@ func Path(projectRoot string, num int) string {
 
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
-func Render(num int, title, body, agent string) string {
-	base := fmt.Sprintf(`You are assigned GitHub issue #%d in this repository.
+func Render(num int, title, body, agent string, s settings.Settings) string {
+	lines := []string{
+		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
+		"",
+		fmt.Sprintf("Title: %s", title),
+		"",
+		"Body:",
+		body,
+		"",
+		"Requirements:",
+		"- You are working inside a git worktree that was prepared for this task. Do not create additional worktrees.",
+		"- Make focused, minimal changes scoped to this single issue.",
+		"- Run the project's lint/test commands if they exist (inspect package.json / Makefile / pyproject.toml first).",
+		"- When implementation passes tests, commit and push the branch.",
+	}
+	if s.AutoPullRequest {
+		lines = append(lines, fmt.Sprintf("- Open a pull request with \"Closes #%d\" in the body.", num))
+	}
+	lines = append(lines, "- If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.")
 
-Title: %s
-
-Body:
-%s
-
-Requirements:
-- You are working inside a git worktree that was prepared for this task. Do not create additional worktrees.
-- Make focused, minimal changes scoped to this single issue.
-- Run the project's lint/test commands if they exist (inspect package.json / Makefile / pyproject.toml first).
-- When implementation passes tests, commit and push the branch.
-- Open a pull request with "Closes #%d" in the body.
-- If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.
-`, num, title, body, num)
+	base := strings.Join(lines, "\n") + "\n"
 	if agent == "codex" {
-		return base + `
+		return base + codexReviewSection(s.AutoPullRequest)
+	}
+	if agent != "claude" {
+		return base
+	}
+
+	if !s.PRReviewGate {
+		base += reviewGateBypassSection
+	}
+	if s.BriefingCodeReview {
+		base += codeReviewSection
+	}
+	if s.AgentTeamsHint {
+		base += agentTeamsSection
+	}
+	return base
+}
+
+const reviewGateBypassSection = `
+The PR review gate is disabled for this fanout run. If ` + "`gh pr create`" + ` is denied
+before ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
+`
+
+func codexReviewSection(autoPullRequest bool) string {
+	if autoPullRequest {
+		return codexReviewWithPRSection
+	}
+	return codexReviewWithoutPRSection
+}
+
+const codexReviewWithPRSection = `
 Before committing your final changes or opening a PR, run
 ` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
 1. Run ` + "`codex review --uncommitted`" + `.
@@ -48,16 +86,28 @@ Only after the review loop is clean should you commit, push, and open the PR.
 If the review command is unavailable or fails for tooling/auth reasons, stop
 and report that instead of bypassing the gate.
 `
-	}
-	if agent != "claude" {
-		return base
-	}
-	return base + `
+
+const codexReviewWithoutPRSection = `
+Before committing your final changes, run
+` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
+1. Run ` + "`codex review --uncommitted`" + `.
+2. If review reports any findings, fix them, rerun relevant lint/tests, then
+   run review again.
+3. Repeat until review reports no findings / no issues / clean.
+
+Only after the review loop is clean should you commit and push the branch.
+If the review command is unavailable or fails for tooling/auth reasons, stop
+and report that instead of bypassing the gate.
+`
+
+const codeReviewSection = `
 Before committing your final changes, run the ` + "`/code-review`" + ` slash command on the
 files you've changed. /code-review is a Claude Code skill that reviews changed code
 for reuse, quality, and efficiency and fixes issues it finds. Apply its fixes,
 re-run lint/test, then commit and push as described above.
+`
 
+const agentTeamsSection = `
 Optional: Agent Teams (Claude Code v2.1.32+, requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1)
 
 Before starting, decide whether this issue benefits from spawning an Agent Team.
@@ -85,4 +135,3 @@ If you decide to use Agent Teams:
 5. Ask the lead to "Clean up the team" before closing the issue.
    Token cost scales linearly with teammate count — favor 3 focused teammates over 5 scattered ones.
 `
-}

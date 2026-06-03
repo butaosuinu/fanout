@@ -16,6 +16,9 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run] [--debug]
+       [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
+       [--briefing-code-review|--no-briefing-code-review]
+       [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 ```
 
@@ -114,7 +117,10 @@ use this workflow directly.
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--name`,
-   `--session`, `--sleep`, `--popup-timeout`, and `--debug`.
+   `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
+   `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
+   `--briefing-code-review`, `--no-briefing-code-review`,
+   `--agent-teams-hint`, and `--no-agent-teams-hint`.
 3. If the user asked to skip confirmation (`--go`, "go ahead", "run it now"),
    strip `--go` before calling the CLI and run the real command after the
    pre-flight name/include preparation. Here `--go` means "go ahead now"; it
@@ -172,8 +178,11 @@ user (or an external cron / shell loop). The pattern:
 
 `--status` is read-only and exclusive with all action-bearing flags
 (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--sleep`,
-`--popup-timeout`, `--dry-run`, `--unblocked-only`). Set `DMUX_CONFIG_PATH`
-to bypass live-dmux-session discovery (useful after the session has exited).
+`--popup-timeout`, `--dry-run`, `--unblocked-only`, `--auto-pr`,
+`--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
+`--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`,
+`--no-agent-teams-hint`). Set `DMUX_CONFIG_PATH` to bypass
+live-dmux-session discovery (useful after the session has exited).
 
 ## Implicit Child Scan
 
@@ -227,6 +236,15 @@ Key points:
   no `Status` field, fanout warns and falls back to all OPEN items.
   Empty values are rejected (`--project-status ""` errors). Accepted but
   unused in issue mode.
+- **Briefing settings flags** — `--auto-pr` / `--no-auto-pr` include or
+  omit the child briefing requirement to open a PR with `Closes #N`;
+  `--pr-review-gate` / `--no-pr-review-gate` keep the default PR review-gate
+  expectation or add a Claude-only escape-hatch note when the hook blocks
+  before `/post-work-review`; `--briefing-code-review` /
+  `--no-briefing-code-review` include or omit the Claude-only `/code-review`
+  directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
+  the Claude-only Agent Teams hint. Defaults are all on, and these settings
+  are Go-implementation only.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

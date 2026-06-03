@@ -48,6 +48,7 @@ Arguments: `$ARGUMENTS`
 - The command always invokes the stable `fanout` command name (the Go binary installed at `$(BINDIR)/fanout`).
 - Rerun is safe; idempotency is handled by the `[fanout #<N> of #<parent>]` prompt prefix. The parent annotation also enables `fanout --status <parent>` to filter to one parent's children in sessions that fanned multiple parents.
 - Default flags the CLI already applies: `--sleep 4`, `--popup-timeout 20`. Pass `--sleep 8` or higher on slow machines. Pass `--popup-timeout 45` (or higher) when dmux is slow to open the agent-choice popup on large worktrees.
+- Briefing settings flags are forwarded like other fanout flags: `--auto-pr` / `--no-auto-pr`, `--pr-review-gate` / `--no-pr-review-gate`, `--briefing-code-review` / `--no-briefing-code-review`, and `--agent-teams-hint` / `--no-agent-teams-hint`. Defaults are all on.
 - To target a non-contiguous subset of children, pass `--only N1,N2,...` (keep-list) or `--skip N1,N2,...` (deny-list). The two are mutually exclusive. `--only` entries that aren't in the parent's OPEN child set are warned and ignored — surface that warning rather than rerunning or hunting for the number elsewhere. Both flags are applied before `--limit`.
 - To force-add children that the Sub-issues API and `- [ ] #N` task-list scan miss (e.g. surfaced by the body scan in step 4), pass `--include N1,N2,...`. These are appended to the children set before `--only`/`--skip` filter it, so combinations like `--include 100 --only 4,7,100` behave as you'd expect. CLOSED or non-existent numbers are warned and skipped.
 - `--unblocked-only` defers children whose blockers are still OPEN (blockers come from the child body's `## Blocked by` section, the parent task-list row's `(blocked by #X, #Y)` trailer, or the `blocked` label). Safe to rerun periodically as blocker PRs merge — the next run picks up newly-unblocked children automatically. Prefer this over hand-building `--only` wave lists when the parent has explicit blocker annotations. In project mode the parent-row trailer is unavailable (no parent body), so blockers come only from the child body section and the `blocked` label.
@@ -64,6 +65,7 @@ Arguments: `$ARGUMENTS`
 - `/fanout 123` — dry-run preview for parent issue #123, then real run after confirmation.
 - `/fanout 123 --go` — skip confirmation, run immediately.
 - `/fanout 123 --limit 3 --agent codex` — only the first 3 children, override the auto-detected agent and force the picker to `codex`.
+- `/fanout 123 --no-auto-pr --no-agent-teams-hint` — omit the PR-opening requirement and Agent Teams hint from child briefings.
 - `/fanout 123 --only 4,7,8,10` — fan out only these four children. `--skip 6,9` is the opposite form (deny-list).
 - `/fanout 123 --unblocked-only` — only children whose blockers are all CLOSED. Great for periodic reruns that walk Wave 1 → 2 → ... automatically.
 - `/fanout 123 --wait` — fanout, then poll `fanout --status 123` until every child PR is MERGED, then `git merge --ff-only origin/main` and resume parent-scope work. `--wait` is parsed by this slash command, not by the CLI; issue mode only (Project URLs are rejected by `fanout --status`).
