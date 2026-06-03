@@ -477,6 +477,28 @@ JSON を事前に確認するには `--dry-run` を使います。
 それは dmux 自身が起動時に追加しています（リポジトリディレクトリで `dmux --help`
 を実行した直後から観測できます）。fanout のバグではありません。
 
+### `gh pr create` が deny される（"post-work-review が未実施です"）
+
+`PreToolUse(Bash)` hook（`.claude/hooks/pre-pr-review-gate.sh`、コミット済みの
+`.claude/settings.json` に登録）が、現在の HEAD が `/post-work-review` を通過する
+まで `gh pr create` をブロックします。`/post-work-review` を実行すると最終ステップ
+でレビュー済みコミットが記録されるので、その後 `gh pr create` を再実行してください。
+一度だけバイパスしたいとき（例: このゲート自体を導入する PR は、放置すると自分自身の
+作成を deny してしまう）は、コマンドの先頭に付けます: `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`。
+
+メモ:
+- ゲートは HEAD に固定されます。新しいコミットを積むと再武装されるので、PR の前に
+  もう一度レビューしてください。marker は worktree ローカルなので、fanout の並列ペイン
+  同士が干渉することはありません。
+- 検出はコマンド文字列に対する正規表現ベースのベストエフォートです。`eval` / `xargs` /
+  `sh -c "<文字列>"` のような間接実行や、コミットメッセージ・PR コメントの本文に
+  シェル演算子と一緒に `gh pr create` という文字列を書いた場合などは取りこぼし／過検知
+  し得ます。その場合は `FANOUT_SKIP_PR_REVIEW=1` で回避してください。
+- jq が無い環境では fail-closed（PR 作成らしきコマンドを deny）になります。`jq` を
+  インストールするか `export FANOUT_SKIP_PR_REVIEW=1` してください。
+- `make install` は同名のグローバル `post-work-review` skill を上書きします。独自に
+  管理しているコピーがある場合は事前にバックアップしてください。
+
 ## 設計メモ
 
 - **プロンプトは 1 行のみ**。dmux TUI の ink-text-input は Enter を送信として
