@@ -302,6 +302,10 @@ the likely next action:
   preferred over hand-built wave lists when blocker annotations exist.
 - Default project-mode filter is `--project-status Todo`. Use
   `--project-status all` for a full sweep of the board's OPEN items.
+- When a created pane runs `codex`, the per-issue briefing requires the agent
+  to run `codex review --uncommitted` after implementation/tests and repeat
+  review -> fix -> retest -> review until no findings remain before it commits,
+  pushes, or opens the PR.
 - The CLI intentionally drives dmux through tmux popup result-file
   interception because dmux v5.8.1 still does not ship the documented HTTP
   API (an `apiActionHandler` skeleton exists in `dist/adapters/` but no
