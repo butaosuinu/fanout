@@ -57,6 +57,19 @@ load helpers
   grep -q "When implementation passes tests, commit and push the branch" "$briefing"
 }
 
+@test "Go settings: --no-auto-pr removes PR wording from Codex briefing" {
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --agent codex --no-auto-pr
+  assert_success
+  local briefing="/tmp/fanout-project_root-101.md"
+  grep -q "codex review --uncommitted" "$briefing"
+  grep -q "Only after the review loop is clean should you commit and push the branch" "$briefing"
+  ! grep -q "Open a pull request with \"Closes #101\"" "$briefing"
+  ! grep -q "opening a PR" "$briefing"
+  ! grep -q "open the PR" "$briefing"
+}
+
 @test "Go settings: briefing toggles are last-wins on the CLI" {
   skip_unless_fanout_go
   use_fixture scenario-sub-issue-only

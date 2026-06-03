@@ -44,7 +44,7 @@ func Render(num int, title, body, agent string, s settings.Settings) string {
 
 	base := strings.Join(lines, "\n") + "\n"
 	if agent == "codex" {
-		return base + codexReviewSection
+		return base + codexReviewSection(s.AutoPullRequest)
 	}
 	if agent != "claude" {
 		return base
@@ -67,7 +67,14 @@ The PR review gate is disabled for this fanout run. If ` + "`gh pr create`" + ` 
 before ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
 `
 
-const codexReviewSection = `
+func codexReviewSection(autoPullRequest bool) string {
+	if autoPullRequest {
+		return codexReviewWithPRSection
+	}
+	return codexReviewWithoutPRSection
+}
+
+const codexReviewWithPRSection = `
 Before committing your final changes or opening a PR, run
 ` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
 1. Run ` + "`codex review --uncommitted`" + `.
@@ -76,6 +83,19 @@ Before committing your final changes or opening a PR, run
 3. Repeat until review reports no findings / no issues / clean.
 
 Only after the review loop is clean should you commit, push, and open the PR.
+If the review command is unavailable or fails for tooling/auth reasons, stop
+and report that instead of bypassing the gate.
+`
+
+const codexReviewWithoutPRSection = `
+Before committing your final changes, run
+` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
+1. Run ` + "`codex review --uncommitted`" + `.
+2. If review reports any findings, fix them, rerun relevant lint/tests, then
+   run review again.
+3. Repeat until review reports no findings / no issues / clean.
+
+Only after the review loop is clean should you commit and push the branch.
 If the review command is unavailable or fails for tooling/auth reasons, stop
 and report that instead of bypassing the gate.
 `
