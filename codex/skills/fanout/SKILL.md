@@ -34,19 +34,17 @@ asks dmux to create one new pane per child. Each pane gets its own git
 worktree and an agent CLI prompt that points at
 `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-The positional argument selects the mode: an integer (or `#N`) means
-**issue mode**; a URL of the form
+The positional argument selects the mode: a bare integer means **issue mode**;
+a URL of the form
 `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project
 mode**. Both modes share everything downstream of child enumeration
 (briefing generation, idempotency, filters, dmux popup interception); only
-the source of children differs.
+the source of children differs. User-facing issue refs like `#N` are accepted
+by this skill, but strip the leading `#` before invoking the CLI.
 
 The CLI is normally installed at `~/.local/bin/fanout`; source and docs are in
 this repository. Codex discovers this skill from `~/.codex/skills/fanout`.
-Always invoke the stable `fanout` command name. If this installation should
-prefer the Go implementation, the repository's `make install-go-default` or
-`make link-go-default` target places the Go binary at that same path; do not
-probe for or call `fanout-go` directly from this workflow.
+Always invoke the stable `fanout` command name.
 
 ## When To Use
 
@@ -87,8 +85,35 @@ use this workflow directly.
      or `?filterQuery=...` query string — the CLI extracts what it needs
      and ignores the rest.
 
-   If there is no clear issue number or Project URL, ask which parent issue
-   or Project to fan out.
+   If neither is clear, actively list candidates from the current repo/worktree
+   instead of asking for a pasted number/URL:
+   1. Run `gh issue list --state open --json number,title --limit 100`.
+   2. Get the repo owner login with
+      `gh repo view --json owner -q .owner.login`.
+   3. Run Project listing commands with `--limit 100`:
+      `gh project list --format json --limit 100` for the current user's
+      Projects, and
+      `gh project list --owner <repo-owner> --format json --limit 100` for
+      the repo owner's Projects. Run the repo-owner command even when the
+      owner is a user, not only for orgs. Dedupe Projects by URL if the two
+      lists overlap.
+   4. If a Project listing command fails due auth/scope/network, warn that
+      Project candidates could not be fully listed, keep any issue candidates,
+      and continue. If the user needs a Project candidate, tell them to refresh
+      `gh` Project access or paste the Project URL.
+   5. Present one combined list: issues as `#<num> <title>`, Projects as
+      `<title> (<url>)`, then ask the user to choose one.
+   6. If no issue candidates and no Project candidates are available, tell the
+      user there is no OPEN issue or Project target to fan out and stop; if
+      Project listing failed, mention that Project candidates were unavailable
+      rather than claiming none exist.
+   7. Resolve the selection to the CLI positional arg: issues become bare
+      digits with any leading `#` removed; Projects become the Project URL
+      from `gh project list`.
+
+   This is skill-side target resolution for non-TTY agent entrypoints. Do not
+   change the Go `fanout` CLI for it; the CLI already accepts the resolved
+   positional arg via `internal/cliflags.Parse()`.
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--name`,

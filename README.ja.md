@@ -32,7 +32,7 @@ npm 公開版 dmux (v5.8.1, 再確認済) にも HTTP サーバは同梱され�
 独立した tmux client と pty で動かすので、pane ではなく、`send-keys -t <pane>`
 の届かない別物です。ポップアップが開いている最中に `%0` へ文字を送っても、
 ユーザーにはポップアップの裏で `%0` のバッファに溜まるだけで、ポップアップが
-閉じると dmux はそれを破棄します。以前この script が「うまく動いているように
+閉じると dmux はそれを破棄します。以前のアプローチが「うまく動いているように
 見えた」のは、ポップアップの表示だけは成功していたからです（プロンプトは
 一切届いていませんでした）。
 
@@ -47,8 +47,8 @@ resultFile パスを特定し、プロンプトポップアップ用には
 `{"success":true,"data":["<agent>"]}` を atomic に書き込み、ポップアップ
 プロセスを kill します。`display-popup -E` の仕組みで子コマンド終了時に
 ポップアップが閉じ、dmux はこちらが書いた resultFile を読んで、人間が答えたのと
-同じ経路でペイン作成を進めます。dmux が HTTP API を正式公開したら、この
-スクリプトは `POST /api/panes` 数行に戻せます。
+同じ経路でペイン作成を進めます。dmux が HTTP API を正式公開したら、fanout は
+`POST /api/panes` 数行に戻せます。
 
 ## Project モード
 
@@ -78,18 +78,6 @@ resultFile パスを特定し、プロンプトポップアップ用には
   `blocked` ラベルのみ（親 body の `(blocked by #X)` トレイラは存在しない）。
 
 ## インストール
-
-> **⚠️ Bash 版の廃止予定。** Go 実装（`cmd/fanout`）が既定です — 下記で
-> インストールされる Release バイナリがそれで、`make install` がビルドするのも
-> Go です。従来の単一ファイル Bash 版 `fanout` は **deprecated（廃止予定）** で、
-> 移行期間中はチェックアウト内に残ります。ユーザー側の対応は不要 — curl でも
-> `make install` でも Go の `fanout` が入ります。チェックアウトからの
-> `make install` / `make link` は加えて Bash スクリプトを `fanout-bash` として
-> 残しますが、curl 経路は Go バイナリのみ（`fanout-bash` は入りません）なので、
-> 旧 Bash が必要な場合はチェックアウトから実行してください。撤去は「Wave 1 の
-> 変更が出揃うこと」と「bash 起動時 deprecation 警告を載せたリリースが出ること」
-> が条件です（prebuilt バイナリ配布は curl 経路で完了済み、#67）。全体ロード
-> マップは #80 を参照してください。
 
 推奨インストール経路は Release 済みの Go バイナリです。安定コマンド名
 `fanout` と、同梱の Claude/Codex 連携ファイルをまとめて配置します:
@@ -157,26 +145,18 @@ Apple Developer ID 署名や notarization は curl 配布経路では当面ス�
 
 ### チェックアウトから使う場合
 
-Go port が Release artifact になったため、リポジトリ root の Bash 実装は
-deprecated です。移行期間と parity testing のために、チェックアウト内には
-残しています。開発中は従来の Makefile ターゲットも使えます:
+ローカルの Makefile ターゲットは Go バイナリを安定コマンド名 `fanout` として
+インストール / symlink し、同梱の連携ファイルも配置します:
 
 ```bash
 make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
 make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を symlink
-make install-go-default # make install の互換 alias
-make link-go-default    # make link の互換 alias
 make uninstall      # インストール済みのパスを削除
 
 PREFIX=/usr/local sudo make install     # システム全体に Go CLI を配置
 CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データディレクトリを指定
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
-
-`make install` / `make link` は、移行期間用に Bash 実装も `fanout-bash` として
-残します。エージェント連携は常に安定した `fanout` コマンド名を呼びます。
-エージェントに `fanout-go` を直接呼ばせないでください。`fanout-go` は
-`make install-go` / `make link-go` で配置する比較用コマンドです。
 
 チェックアウトからのビルドには **Go ツールチェイン**（Go 1.23+）が必要です。
 `make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout`
@@ -186,24 +166,18 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 ## 開発
 
 ```bash
-make test           # Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
+make test           # Go ユニットテスト + Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
-make lint           # shellcheck fanout + テスト用 shim
-make build-go       # ローカル比較用に Go CLI を ./fanout-go としてビルド
-make test-go        # 同じ黒箱テストを ./fanout-go に対して実行
-make install-go     # Go 版を比較用の $(BINDIR)/fanout-go として配置
+make lint           # go vet + gofmt + テスト用 shim の shellcheck
+make build-go       # Go CLI を ./fanout-go としてビルド
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
+黒箱テストの各 Tier は `./fanout-go` をビルドし `FANOUT_BIN` 経由で実行します。
 Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 は `--dry-run`
 の計画出力を `tests/fixtures/` 配下のシナリオ fixture に対して凍結します。
-Bash 実装がチェックアウトに残っている間は、これらを parity テスト資産として
-使います。`make install-go-default` / `make link-go-default` は、エージェントが
-既に呼んでいる安定コマンド名 `fanout` の中身を Go 版に差し替えます。
-`./fanout-go` は動作比較用として並行配置できます。`$(BINDIR)` に
-`fanout-go` コマンドを入れたい場合は `make install-go` または `make link-go`
-を使ってください。`--dry-run` 出力を意図的に変更した場合は
+`--dry-run` 出力を意図的に変更した場合は
 `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
 Tier 3 (live dmux E2E) は手動運用のままです。
 

@@ -28,4 +28,4 @@
 
 Deferred 1 issue(s) due to --limit. Rerun with:
   #703
-  fanout 700 --limit 1 --agent claude
+  fanout-go 700 --limit 1 --agent claude
