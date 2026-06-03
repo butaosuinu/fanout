@@ -2,37 +2,43 @@
 """fanout PR-review gate — parser for the PreToolUse(Bash) hook.
 
 Reads the tool-call JSON on stdin and decides whether to allow or deny a
-`gh pr create` (or its `new` alias). Unlike a regex, this uses a real shell
-tokenizer (shlex) so a command word (`'gh'`) is distinguished from an argument
-*value* (a `gh pr create` mention inside a commit message / --title / --body),
-and shell structure (operators, `if/while/until/case`, `!`, wrappers, command
-substitution) is understood rather than pattern-matched.
+`gh pr create` (or its `new` alias). Uses a real shell tokenizer (shlex) so a
+command word (`'gh'`) is distinguished from an argument *value* (a `gh pr
+create` mention inside a commit message / --title / --body), and shell
+structure (operators, if/while/until/case, `!`, wrappers, command substitution)
+is understood rather than pattern-matched.
 
 Contract: allow = exit 0 with no stdout; deny = print the hookSpecificOutput
-JSON to stdout and exit 0.
-
-The gate verifies LOCAL git refs only (no network). It is invoked by the bash
-wrapper, which fail-closes when python3 is unavailable.
+JSON to stdout and exit 0. Verifies LOCAL git refs only (no network). Invoked by
+the bash wrapper, which fail-closes when python3 is unavailable.
 """
 import sys
 import os
 import json
+import re
 import shlex
 import subprocess
 
-BYPASS = "FANOUT_SKIP_PR_REVIEW=1"
-HATCH = "緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
+# `<<WORD` / `<<-WORD` / `<<'WORD'` heredoc start (not `<<<` here-strings).
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
-# Operator tokens that terminate a simple command / start a new one.
+HATCH = "緊急回避: FANOUT_SKIP_PR_REVIEW=1 gh pr create ..."
+BYPASS = "FANOUT_SKIP_PR_REVIEW=1"
+
 SEP = {";", ";;", "&&", "||", "|", "|&", "&", "(", ")", "{", "}", "\n"}
-# Redirection operators — part of a command, not a separator. We drop the
-# operator and its target token so they don't break command/flag scanning.
 REDIR = {"<", ">", ">>", "<<", "<<<", "2>", "2>>", "1>", "1>>", "&>", "&>>",
          ">|", "<&", ">&"}
-# Reserved words / negation that precede a command word without being one.
 LEAD = {"!", "if", "then", "elif", "else", "while", "until", "do", "time"}
-# Command wrappers whose own command word is what follows them.
 WRAP = {"env", "command", "builtin", "exec", "nice", "nohup", "setsid", "stdbuf"}
+
+HEAD_FLAGS = ("--head", "-H")
+BASE_FLAGS = ("--base", "-B")
+REPO_FLAGS = ("--repo", "-R")
+# Value-taking flags of `gh pr create` (so a value isn't mis-read as a flag).
+VALUE_FLAGS = {"--head", "-H", "--base", "-B", "--repo", "-R", "--title", "-t",
+               "--body", "-b", "--body-file", "-F", "--reviewer", "-r",
+               "--assignee", "-a", "--label", "-l", "--milestone", "-m",
+               "--project", "-p", "--template", "-T"}
 
 
 def emit_allow():
@@ -56,10 +62,31 @@ def is_assignment(tok):
         c.isalnum() or c == "_" for c in name)
 
 
+def strip_heredocs(cmd):
+    """Drop heredoc bodies (data fed to a command, not executed) so a
+    `gh pr create` mention inside e.g. `git commit -F- <<EOF ... EOF` is not
+    parsed as a command. (Feeding a heredoc to a shell is indirect execution,
+    already out of scope.)"""
+    if "<<" not in cmd:
+        return cmd
+    lines = cmd.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = _HEREDOC_RE.search(line)
+        i += 1
+        if m:
+            delim = m.group(2)
+            while i < len(lines) and lines[i].strip() != delim:
+                i += 1
+            i += 1  # also drop the delimiter line
+    return "\n".join(out)
+
+
 def tokenize(cmd):
-    # A newline is a command separator in the shell, but shlex lumps it into
-    # whitespace; normalize so command boundaries survive (after removing
-    # backslash-newline line continuations, which the shell joins).
+    cmd = strip_heredocs(cmd)
     cmd = cmd.replace("\\\n", "")
     cmd = cmd.replace("\r\n", "\n").replace("\r", "\n").replace("\n", ";")
     lx = shlex.shlex(cmd, posix=True, punctuation_chars=True)
@@ -69,11 +96,7 @@ def tokenize(cmd):
         for t in lx:
             toks.append(t)
     except ValueError:
-        # Unbalanced quotes etc. — best effort with whatever parsed. A command
-        # with a real syntax error won't run anyway.
         pass
-    # Drop redirection operators and their targets; they are part of a command,
-    # not separators, and must not interrupt flag scanning (e.g. create<in).
     out = []
     i = 0
     while i < len(toks):
@@ -85,45 +108,96 @@ def tokenize(cmd):
     return out
 
 
+def extract_cmdsubs(s):
+    """Return the bodies of $( ... ) and `...` command substitutions, honoring
+    single quotes (where substitution is literal) and double quotes (where it
+    still runs)."""
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "'":
+            j = s.find("'", i + 1)
+            i = (j + 1) if j != -1 else n
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "$" and i + 1 < n and s[i + 1] == "(":
+            depth = 1
+            j = i + 2
+            while j < n and depth > 0:
+                if s[j] == "(":
+                    depth += 1
+                elif s[j] == ")":
+                    depth -= 1
+                j += 1
+            out.append(s[i + 2:j - 1])
+            i = j
+            continue
+        if c == "`":
+            j = s.find("`", i + 1)
+            if j == -1:
+                break
+            out.append(s[i + 1:j])
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
 def basename(word):
     return word.rsplit("/", 1)[-1]
 
 
 def collect_create_flags(toks, start, n):
-    """From just after a create/new token, read its flags until a separator."""
-    head = None
-    base = None
+    """From just after the create/new token, read the create's flags until a
+    separator, skipping value-taking flags' values so they are not mis-read."""
+    head = base = repo = None
     is_help = False
     m = start
     while m < n and toks[m] not in SEP:
         tk = toks[m]
-        nxt = toks[m + 1] if (m + 1 < n and toks[m + 1] not in SEP) else None
+        if tk.startswith("-") and "=" in tk:
+            key, val = tk.split("=", 1)
+            if key in HEAD_FLAGS:
+                head = val
+            elif key in BASE_FLAGS:
+                base = val
+            elif key in REPO_FLAGS:
+                repo = val
+            m += 1
+            continue
+        if len(tk) > 2 and tk[0] == "-" and tk[1] != "-":
+            short, val = tk[:2], tk[2:]
+            if short in HEAD_FLAGS:
+                head = val
+            elif short in BASE_FLAGS:
+                base = val
+            elif short in REPO_FLAGS:
+                repo = val
+            m += 1
+            continue
         if tk in ("--help", "-h"):
             is_help = True
-        elif tk in ("--head", "-H"):
-            head = nxt if nxt is not None else ""
-        elif tk.startswith("--head="):
-            head = tk[len("--head="):]
-        elif tk.startswith("-H=") :
-            head = tk[len("-H="):]
-        elif tk.startswith("-H") and len(tk) > 2:
-            head = tk[2:]
-        elif tk in ("--base", "-B"):
-            base = nxt if nxt is not None else ""
-        elif tk.startswith("--base="):
-            base = tk[len("--base="):]
-        elif tk.startswith("-B="):
-            base = tk[len("-B="):]
-        elif tk.startswith("-B") and len(tk) > 2:
-            base = tk[2:]
+            m += 1
+            continue
+        if tk in VALUE_FLAGS:
+            val = toks[m + 1] if (m + 1 < n and toks[m + 1] not in SEP) else None
+            if tk in HEAD_FLAGS:
+                head = val if val is not None else ""
+            elif tk in BASE_FLAGS:
+                base = val if val is not None else ""
+            elif tk in REPO_FLAGS:
+                repo = val if val is not None else ""
+            m += 2 if val is not None else 1
+            continue
         m += 1
-    return head, base, is_help, m
+    return head, base, repo, is_help, m
 
 
 def scan_commands(toks):
-    """Walk the token stream; return (creates, ) where each create is a dict
-    {head, base, help, dir_changed, bypass}. dir_changed reflects a cd/pushd or
-    env -C/--chdir seen earlier in the command line."""
     n = len(toks)
     creates = []
     dir_pending = False
@@ -138,8 +212,6 @@ def scan_commands(toks):
         if not expect:
             i += 1
             continue
-        # Command-word position: consume prefixes (assignments / negation /
-        # reserved words / wrappers), tracking a bypass assignment and env -C.
         bypass_here = False
         chdir_here = False
         while i < n:
@@ -164,13 +236,13 @@ def scan_commands(toks):
                             chdir_here = True
                             i += 1
                             if i < n and toks[i] not in SEP:
-                                i += 1  # its value
+                                i += 1
                             continue
                         if e.startswith("--chdir="):
                             chdir_here = True
                             i += 1
                             continue
-                        if e in ("-u", "-S"):  # value-taking env opts
+                        if e in ("-u", "-S"):
                             i += 1
                             if i < n and toks[i] not in SEP:
                                 i += 1
@@ -184,9 +256,9 @@ def scan_commands(toks):
                         if is_assignment(e):
                             i += 1
                             continue
-                        break  # env's command word
+                        break
                     continue
-                i += 1  # skip other wrapper word
+                i += 1
                 continue
             break
         if i >= n:
@@ -204,22 +276,39 @@ def scan_commands(toks):
         if chdir_here:
             dir_pending = True
         if base == "gh":
+            # locate the `pr` token, skipping gh global flags + their values.
             j = i + 1
             while j < n and toks[j] not in SEP and toks[j] != "pr":
+                if toks[j] in REPO_FLAGS:
+                    j += 2
+                    continue
                 j += 1
             if j < n and toks[j] == "pr":
+                # the subcommand is the first non-flag token after `pr`.
                 k = j + 1
-                while k < n and toks[k] not in SEP and toks[k] not in ("create", "new"):
+                while k < n and toks[k] not in SEP and toks[k].startswith("-"):
+                    if toks[k] in REPO_FLAGS:
+                        k += 2
+                        continue
                     k += 1
                 if k < n and toks[k] in ("create", "new"):
-                    head, base_, is_help, m = collect_create_flags(toks, k + 1, n)
-                    creates.append({"head": head, "base": base_, "help": is_help,
-                                    "dir": dir_pending, "bypass": bypass_here})
+                    head, base_, repo_, is_help, m = collect_create_flags(toks, k + 1, n)
+                    creates.append({"head": head, "base": base_, "repo": repo_,
+                                    "help": is_help, "dir": dir_pending,
+                                    "bypass": bypass_here})
                     i = m
                     expect = False
                     continue
         expect = False
         i += 1
+    return creates
+
+
+def gather_creates(cmd, depth=0):
+    creates = scan_commands(tokenize(cmd))
+    if depth < 6:
+        for sub in extract_cmdsubs(cmd):
+            creates += gather_creates(sub, depth + 1)
     return creates
 
 
@@ -235,15 +324,13 @@ def main():
     cmd = ti.get("command") or ""
     cwd = data.get("cwd") or ""
 
-    creates = scan_commands(tokenize(cmd))
+    creates = gather_creates(cmd)
     if not creates:
         emit_allow()
     real = [c for c in creates if not c["help"]]
     if not real:
-        emit_allow()  # help-only invocation(s)
+        emit_allow()
 
-    # Explicit operator override: exported, or a bypass assignment prefixing a
-    # real create command.
     if os.environ.get("FANOUT_SKIP_PR_REVIEW") == "1":
         emit_allow()
     if any(c["bypass"] for c in real):
@@ -291,6 +378,9 @@ def main():
     for c in real:
         if c["dir"]:
             emit_deny(dirmsg)
+        if c.get("repo"):
+            emit_deny("gh pr create -R/--repo (%s) は別リポジトリに PR を作成しますが、ローカルの marker は現在のリポジトリのものです。\n"
+                      "対象リポジトリで /post-work-review してから実行してください。\n%s" % (c["repo"], HATCH))
         base = c["base"]
         if not base and cur:
             mb = git(["config", "--get", "branch.%s.gh-merge-base" % cur]).stdout.strip()
@@ -330,6 +420,4 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:
-        # A parser bug must not block normal work; fall back to allow (the gate
-        # is best-effort and other safeguards remain).
         emit_allow()
