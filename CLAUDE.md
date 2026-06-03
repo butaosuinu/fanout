@@ -24,6 +24,7 @@ Build the binary with `make build-go` (output `./fanout-go`) and validate with `
 - Lint: `make lint` = `go vet` + `gofmt` on the Go sources plus a `shellcheck` of the bats test shims (`tests/bin/{gh,tmux,git}`, `tests/bats/helpers.bash`). Treat `SC2086`-style warnings on the shims as real.
 - Black-box tests: `make test` (requires `bats-core`) builds `./fanout-go` and runs the Go unit tests plus Tier 1 (flag/prerequisite) + Tier 2 (`--dry-run` golden output against fixture scenarios under `tests/fixtures/`) bats tests against it via `FANOUT_BIN`. Tier 1 locks in the CLI surface (error messages + exit codes) and Tier 2 locks in the dry-run planning output — the issue #20 invariants. Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2`. Tier 3 (live dmux E2E) is out of scope.
 - A live end-to-end test needs a running dmux session in tmux and a real GitHub parent issue with OPEN sub-issues; there is no mock layer.
+- Cutting a release: see `RELEASE.md`. It is CI-driven — push an annotated `vX.Y.Z` tag and `.github/workflows/release.yml` builds the four platform archives, generates `SHA256SUMS`, and publishes the GitHub Release. The version string is injected from the tag name via ldflags (`-X main.version`), so no source edit bumps the version, and a tag push is not subject to the `gh pr create` review gate.
 
 ## Architecture notes that span fanout
 
