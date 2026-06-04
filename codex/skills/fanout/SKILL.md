@@ -330,7 +330,10 @@ the likely next action:
 - When a created pane runs `codex`, the per-issue briefing requires the agent
   to run `codex review --uncommitted` after implementation/tests and repeat
   review -> fix -> retest -> review until no findings remain before it commits,
-  pushes, or opens the PR.
+  pushes, or opens the PR. The review command should be treated as one
+  blocking shell command: while it is running, do not open, resume, or inspect
+  any Review Session and do not run `/codex:status` or other polling commands;
+  wait for the command to exit, then read the final output once.
 - The CLI intentionally drives dmux through tmux popup result-file
   interception because dmux v5.8.1 still does not ship the documented HTTP
   API (an `apiActionHandler` skeleton exists in `dist/adapters/` but no

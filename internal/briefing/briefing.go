@@ -78,6 +78,9 @@ const codexReviewWithPRSection = `
 Before committing your final changes or opening a PR, run
 ` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
 1. Run ` + "`codex review --uncommitted`" + `.
+   Use one blocking shell command. While it is running, do not open, resume,
+   or inspect any Review Session and do not run ` + "`/codex:status`" + ` or other polling
+   commands; wait for the command to exit, then read the final output once.
 2. If review reports any findings, fix them, rerun relevant lint/tests, then
    run review again.
 3. Repeat until review reports no findings / no issues / clean.
@@ -91,6 +94,9 @@ const codexReviewWithoutPRSection = `
 Before committing your final changes, run
 ` + "`codex review --uncommitted`" + ` on your current diff. Treat it as a required gate:
 1. Run ` + "`codex review --uncommitted`" + `.
+   Use one blocking shell command. While it is running, do not open, resume,
+   or inspect any Review Session and do not run ` + "`/codex:status`" + ` or other polling
+   commands; wait for the command to exit, then read the final output once.
 2. If review reports any findings, fix them, rerun relevant lint/tests, then
    run review again.
 3. Repeat until review reports no findings / no issues / clean.
