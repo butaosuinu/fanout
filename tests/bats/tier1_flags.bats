@@ -139,6 +139,25 @@ load helpers
   [[ "$output" == *"action:          would run installer"* ]]
 }
 
+@test "self-update --check pinned current version still plans installer" {
+  local release_dir="$BATS_TEST_TMPDIR/release-pinned-current"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  force_missing gh
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --check --version 0.1.0
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target version:  v0.1.0 (pinned)"* ]]
+  [[ "$output" == *"action:          would run installer"* ]]
+}
+
 @test "self-update dev build rejects replacement before gh/downloader" {
   force_missing gh curl wget
   run_fanout self-update --yes

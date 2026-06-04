@@ -174,6 +174,53 @@ func TestRunPinnedVersionPassesFANOUTVersionAndNoSkillsToInstaller(t *testing.T)
 	}
 }
 
+func TestRunPinnedCurrentVersionStillRunsInstaller(t *testing.T) {
+	var got CommandSpec
+	var out bytes.Buffer
+	opts := testOptions(Request{Yes: true, Version: "0.1.0"}, &out, CommandRunnerFunc(func(spec CommandSpec) error {
+		got = spec
+		return nil
+	}))
+	opts.LatestTag = func() (string, error) {
+		t.Fatal("latest release lookup should not be called for pinned version")
+		return "", nil
+	}
+
+	plan, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if plan.Outcome != UpToDate || !plan.NeedsInstaller() {
+		t.Fatalf("plan = %+v, want up-to-date explicit target that needs installer", plan)
+	}
+	env := envMap(got.Env)
+	if got, want := env["FANOUT_VERSION"], "v0.1.0"; got != want {
+		t.Fatalf("FANOUT_VERSION = %q, want %q", got, want)
+	}
+	if got.Name != "sh" {
+		t.Fatalf("command name = %q, want sh", got.Name)
+	}
+}
+
+func TestCheckPlanPinnedCurrentVersionWouldRunInstaller(t *testing.T) {
+	var out bytes.Buffer
+	opts := testOptions(Request{Check: true, Version: "0.1.0"}, &out, CommandRunnerFunc(func(CommandSpec) error {
+		t.Fatal("installer runner should not be called")
+		return nil
+	}))
+
+	plan, err := Run(opts)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if plan.Outcome != UpToDate || !plan.NeedsInstaller() {
+		t.Fatalf("plan = %+v, want up-to-date explicit target that needs installer", plan)
+	}
+	if got := out.String(); !strings.Contains(got, "action:          would run installer") {
+		t.Fatalf("output = %q, want installer action", got)
+	}
+}
+
 func TestRunDevBuildRejectsReplacementBeforeLookupOrInstaller(t *testing.T) {
 	var out bytes.Buffer
 	latestCalled := false

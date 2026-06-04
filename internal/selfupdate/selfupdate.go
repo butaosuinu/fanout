@@ -178,6 +178,8 @@ type Plan struct {
 
 func (p Plan) NeedsInstaller() bool {
 	switch p.Outcome {
+	case UpToDate:
+		return p.ExplicitTarget
 	case UpdateAvailable:
 		return true
 	case CurrentAhead:
@@ -353,6 +355,12 @@ func actionLine(plan Plan) string {
 	case DevBuild:
 		return "none (dev build cannot be self-updated)"
 	case UpToDate:
+		if plan.ExplicitTarget && plan.UnsupportedExecutableName() {
+			return "none (current executable is not named fanout)"
+		}
+		if plan.ExplicitTarget {
+			return "would run installer"
+		}
 		return "none (already up to date)"
 	case CurrentAhead:
 		if plan.ExplicitTarget && plan.UnsupportedExecutableName() {
