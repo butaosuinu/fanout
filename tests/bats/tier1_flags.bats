@@ -4,7 +4,7 @@
 #
 # Locks in the CLI surface identified as Invariant #5 in issue #20: every
 # flag's error message and exit code is frozen here so the future Go
-# rewrite can target the same contract. No live dmux, no GitHub network —
+# rewrite can target the same contract. No live tmux panes, no GitHub network —
 # every case fails before fanout reaches its external collaborators.
 #
 # Exit code convention (matches fanout:140-143, 338-342, 356-359):
@@ -319,7 +319,7 @@ load helpers
 
 # --- --status CLI surface ---------------------------------------------------
 # --status uses its own exit-code lane (0/2/3) per issue #35: 0=JSON emitted,
-# 2=cannot enumerate (bad invocation, missing config, no dmux session),
+# 2=cannot enumerate (bad invocation, missing/malformed state),
 # 3=gh API failure. The cases below cover the CLI surface only — the body /
 # JSON shape lives in tier2_status.bats against fixtures.
 

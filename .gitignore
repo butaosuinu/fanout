@@ -1,11 +1,10 @@
 .claude/settings.local.json
 .codex/
 .dmux/
-.fanout/.fanout-*.tmp
-.fanout/state.json
-.fanout/state.json.lock
-.fanout/worktree-metadata.json
-.fanout/worktrees/
+.fanout/
+!.fanout/
+.fanout/*
+!.fanout/config.json
 .cache/
 tests/tmp/
 /fanout-go

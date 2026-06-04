@@ -1,4 +1,4 @@
-[info] tmux session: dmux
+[info] tmux session: fanout
 [info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-sub-issue-only/project_root
 [info] fetching sub-issues of #100

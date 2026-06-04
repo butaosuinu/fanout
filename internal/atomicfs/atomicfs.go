@@ -1,6 +1,6 @@
 // Package atomicfs writes a file atomically: tempfile in the destination
-// directory, then rename. Multiple packages need this exact dance for
-// dmux.config.json and worktree-metadata.json updates, so it lives here once.
+// directory, then rename. Multiple packages need this exact dance for state
+// and worktree-metadata updates, so it lives here once.
 package atomicfs
 
 import (

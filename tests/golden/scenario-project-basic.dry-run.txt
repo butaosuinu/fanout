@@ -1,4 +1,4 @@
-[info] tmux session: dmux
+[info] tmux session: fanout
 [info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-project-basic/project_root
 [info] mode: project (status=Todo, repo=butaosuinu/fanout)
