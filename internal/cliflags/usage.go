@@ -96,8 +96,17 @@ Options:
                       send-keys commands without executing them.
   --debug             Enable extra diagnostic logging.
   --status            Read-only mode. Print JSON describing each fanned-out
-                      child issue's state and closed-by PR merge status, then
-                      exit. Exclusive with action-bearing flags.
+                      child issue recorded in .fanout/state.json, including
+                      issue state and closed-by PR merge status, then exit.
+                      Exclusive with action-bearing flags.
+  --close <NUM>       Remove the recorded child worktree for issue <NUM>,
+                      kill its tmux pane when still present, update state,
+                      and run git worktree prune.
+  --merge <NUM>       Run git merge --ff-only against the recorded child
+                      branch for issue <NUM>. Non-fast-forward failures are
+                      reported without starting conflict resolution.
+  --cleanup           Close recorded child worktrees whose issue is CLOSED or
+                      has a MERGED closed-by PR.
   -V, --version       Print version and commit, then exit.
   -h, --help          Show this message.
 
@@ -114,7 +123,7 @@ Exit codes (default flow):
 
 Exit codes (--status):
   0 success (JSON emitted; check summary.all_merged for state)
-  2 cannot enumerate children
+  2 cannot enumerate children or state
   3 gh API call failed
 `
 

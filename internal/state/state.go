@@ -67,7 +67,10 @@ func Load(path string) (Store, error) {
 }
 
 func LockProject(projectRoot string) (*LockedStore, error) {
-	path := Path(projectRoot)
+	return Lock(Path(projectRoot))
+}
+
+func Lock(path string) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)
 	}
@@ -143,6 +146,16 @@ func (s Store) Find(parent string, issueNum int) (Pane, bool) {
 	return Pane{}, false
 }
 
+func (s Store) PanesForParent(parent string) []Pane {
+	var out []Pane
+	for _, pane := range s.Panes {
+		if parentMatches(pane.Parent, parent) {
+			out = append(out, pane)
+		}
+	}
+	return out
+}
+
 func (s *Store) Upsert(p Pane) {
 	s.normalize()
 	for i := range s.Panes {
@@ -155,13 +168,17 @@ func (s *Store) Upsert(p Pane) {
 }
 
 func (s *Store) Remove(parent string, issueNum int) bool {
-	for i := range s.Panes {
-		if s.Panes[i].IssueNum == issueNum && parentMatches(s.Panes[i].Parent, parent) {
-			s.Panes = append(s.Panes[:i], s.Panes[i+1:]...)
-			return true
+	kept := s.Panes[:0]
+	removed := false
+	for _, pane := range s.Panes {
+		if pane.IssueNum == issueNum && parentMatches(pane.Parent, parent) {
+			removed = true
+			continue
 		}
+		kept = append(kept, pane)
 	}
-	return false
+	s.Panes = kept
+	return removed
 }
 
 func save(path string, store Store) error {

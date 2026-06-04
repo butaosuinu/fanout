@@ -91,6 +91,18 @@ load helpers
   [[ "$output" == *"--branch-prefix requires an argument"* ]]
 }
 
+@test "--close missing value: exit 1" {
+  run_fanout 20 --close
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--close requires an argument"* ]]
+}
+
+@test "--merge missing value: exit 1" {
+  run_fanout 20 --merge
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--merge requires an argument"* ]]
+}
+
 # Project URL parser must accept the canonical links users copy from GitHub
 # Projects: the bare /projects/<n>, /projects/<n>/views/<id>, and either
 # form with a ?query suffix. We only assert the parser does not reject
@@ -161,12 +173,36 @@ load helpers
   [[ "$output" == *"--branch-prefix must not contain whitespace"* ]]
 }
 
+@test "--close non-integer: exit 1" {
+  run_fanout 20 --close abc
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--close must be a positive integer, got: abc"* ]]
+}
+
+@test "--merge zero rejected: exit 1" {
+  run_fanout 20 --merge 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--merge must be a positive integer, got: 0"* ]]
+}
+
 # --- --only / --skip / --include CSV parsing -------------------------------
 
 @test "--only and --skip are mutually exclusive: exit 1" {
   run_fanout 20 --only 4 --skip 5
   [ "$status" -eq 1 ]
   [[ "$output" == *"--only and --skip are mutually exclusive"* ]]
+}
+
+@test "--close and --merge are mutually exclusive: exit 2" {
+  run_fanout 20 --close 4 --merge 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--close, --merge, and --cleanup are mutually exclusive"* ]]
+}
+
+@test "--cleanup conflicts with action flags: exit 2" {
+  run_fanout 20 --cleanup --agent claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --agent"* ]]
 }
 
 @test "--only with non-integer entry: exit 1" {
@@ -326,6 +362,24 @@ load helpers
   [[ "$output" == *"--status cannot be combined with --branch-prefix"* ]]
 }
 
+@test "--status conflicts with --close: exit 2" {
+  run_fanout --status 1 --close 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --close"* ]]
+}
+
+@test "--status conflicts with --merge: exit 2" {
+  run_fanout --status 1 --merge 4
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --merge"* ]]
+}
+
+@test "--status conflicts with --cleanup: exit 2" {
+  run_fanout --status 1 --cleanup
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --cleanup"* ]]
+}
+
 @test "--status conflicts with --limit: exit 2" {
   run_fanout --status 1 --limit 3
   [ "$status" -eq 2 ]
@@ -372,6 +426,12 @@ load helpers
   run_fanout --status 1 --name 4=foo
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --name"* ]]
+}
+
+@test "--status conflicts with --session: exit 2" {
+  run_fanout --status 1 --session work-repo
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --session"* ]]
 }
 
 @test "--status conflicts with --sleep even at default value: exit 2" {
@@ -426,82 +486,94 @@ load helpers
   [[ "$output" == *"--status cannot be combined with --name"* ]]
 }
 
-@test "--status with DMUX_CONFIG_PATH does not require tmux: exit 0" {
-  # Offline-mode contract: an empty panes config plus DMUX_CONFIG_PATH must
-  # let `--status` complete without tmux installed (CI / post-session
-  # introspection). With no fanned children, cmd_status emits a zero summary
-  # before reaching any gh call.
+@test "--status with FANOUT_STATE_PATH does not require tmux: exit 0" {
+  # Offline contract: an empty state file plus FANOUT_STATE_PATH lets
+  # `--status` complete without tmux installed. With no fanned children,
+  # cmdStatus emits a zero summary before reaching any gh call.
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{"panes":[]}\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  local root="$BATS_TEST_TMPDIR/project"
+  mkdir -p "$root/.fanout"
+  printf '{"schemaVersion":1,"panes":[]}\n' > "$root/.fanout/state.json"
+  export FANOUT_STATE_PATH="$root/.fanout/state.json"
   run_fanout --status 1
   [ "$status" -eq 0 ]
   [[ "$output" == *'"all_merged": false'* ]]
   [[ "$output" == *'"total": 0'* ]]
 }
 
-@test "--status without DMUX_CONFIG_PATH still requires tmux: exit 1" {
-  # Regression guard: the offline-mode escape hatch above must not
-  # accidentally mask the missing-tmux error for the live-discovery path.
-  force_missing tmux
-  run_fanout --status 1
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"missing dependencies"* ]]
-  [[ "$output" == *"tmux"* ]]
+@test "--status without FANOUT_STATE_PATH still does not require tmux: exit 0" {
+  local root="$BATS_TEST_TMPDIR/gitroot"
+  mkdir -p "$root"
+  git -C "$root" init --quiet
+  (
+    cd "$root"
+    run_fanout --status 1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"total": 0'* ]]
+  )
 }
 
-@test "--status with malformed JSON config: exit 2" {
-  # Contract: an unparseable dmux.config.json must surface as exit 2 with a
+@test "--status outside git without FANOUT_STATE_PATH: exit 2" {
+  local root="$BATS_TEST_TMPDIR/notgit"
+  mkdir -p "$root"
+  (
+    cd "$root"
+    run_fanout --status 1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--status: current directory is not inside a git work tree"* ]]
+  )
+}
+
+@test "--status with malformed JSON state: exit 2" {
+  # Contract: an unparseable state.json must surface as exit 2 with a
   # clear message. Without this, jq's raw exit code (5) or a silent
   # "total: 0" misreport would slip through and break wait-and-continue
   # automation that polls --status.
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{"panes": [bogus]\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  local root="$BATS_TEST_TMPDIR/project"
+  mkdir -p "$root/.fanout"
+  printf '{"panes": [bogus]\n' > "$root/.fanout/state.json"
+  export FANOUT_STATE_PATH="$root/.fanout/state.json"
   run_fanout --status 1
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--status: dmux config at"* ]]
-  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+  [[ "$output" == *"--status: fanout state at"* ]]
+  [[ "$output" == *"is not valid JSON or has an invalid schema"* ]]
 }
 
-@test "--status with non-array .panes: exit 2" {
-  # JSON is valid but the schema is wrong (.panes is a string, not an array).
-  # Catch this up-front so enumerate_fanned_children's lenient mode can't turn
-  # it into a silent "no fanned children" report.
+@test "--status with non-array state .panes: exit 2" {
+  # JSON is valid but the state schema is wrong (.panes is a string).
+  # Catch this up-front so status cannot turn it into a silent zero report.
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{"panes":"oops"}\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  local root="$BATS_TEST_TMPDIR/project"
+  mkdir -p "$root/.fanout"
+  printf '{"panes":"oops"}\n' > "$root/.fanout/state.json"
+  export FANOUT_STATE_PATH="$root/.fanout/state.json"
   run_fanout --status 1
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--status: dmux config at"* ]]
-  [[ "$output" == *"not valid JSON or .panes is not an array"* ]]
+  [[ "$output" == *"--status: fanout state at"* ]]
+  [[ "$output" == *"is not valid JSON or has an invalid schema"* ]]
 }
 
-@test "--status with valid JSON missing .panes field: exit 0 with empty children" {
-  # `.panes` may be absent on a freshly-initialized config; that's a valid
-  # state, not an error. Treat as zero fanned children.
+@test "--status with valid state JSON missing .panes field: exit 0 with empty children" {
+  # `.panes` may be absent on a freshly-initialized state file; that's valid.
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{}\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  local root="$BATS_TEST_TMPDIR/project"
+  mkdir -p "$root/.fanout"
+  printf '{}\n' > "$root/.fanout/state.json"
+  export FANOUT_STATE_PATH="$root/.fanout/state.json"
   run_fanout --status 1
   [ "$status" -eq 0 ]
   [[ "$output" == *'"total": 0'* ]]
   [[ "$output" == *'"all_merged": false'* ]]
 }
 
-@test "--status with DMUX_CONFIG_PATH whose projectRoot is missing: exit 2 (not 3)" {
-  # Stale / wrong project_root in the config must be reported as an
+@test "--status with FANOUT_STATE_PATH whose project root is missing: exit 2 (not 3)" {
+  # Stale / wrong state path root must be reported as an
   # enumeration problem (exit 2), not deferred until each gh_in_root cd
   # fails and reports exit 3 per child. The --status contract documents
   # 2 = "cannot enumerate / unusable config".
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{"panes":[],"projectRoot":"/does/not/exist/anywhere"}\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  export FANOUT_STATE_PATH="/does/not/exist/anywhere/.fanout/state.json"
   run_fanout --status 1
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status: project_root is not a directory"* ]]
@@ -510,12 +582,13 @@ load helpers
 @test "--status normalizes leading zeros in parent argument" {
   # Wrappers that pass IDs from external systems may forward "0300" instead
   # of "300". Without canonicalization, the parent field in the emitted JSON
-  # would carry the leading zero, and pane-prompt filtering would match
-  # against that string (missing legacy panes tagged plainly "of #300").
+  # would carry the leading zero and state filtering would miss entries
+  # recorded under the canonical parent id.
   force_missing tmux
-  local cfg="$BATS_TEST_TMPDIR/dmux.config.json"
-  printf '{"panes":[]}\n' > "$cfg"
-  export DMUX_CONFIG_PATH="$cfg"
+  local root="$BATS_TEST_TMPDIR/project"
+  mkdir -p "$root/.fanout"
+  printf '{"schemaVersion":1,"panes":[]}\n' > "$root/.fanout/state.json"
+  export FANOUT_STATE_PATH="$root/.fanout/state.json"
   run_fanout --status 0300
   [ "$status" -eq 0 ]
   [[ "$output" == *'"parent": 300'* ]]

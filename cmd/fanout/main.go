@@ -57,6 +57,15 @@ func main() {
 	if cfg.StatusMode {
 		os.Exit(int(cmdStatus(cfg, lg)))
 	}
+	if cfg.CloseNum > 0 {
+		os.Exit(int(cmdClose(cfg, lg)))
+	}
+	if cfg.MergeNum > 0 {
+		os.Exit(int(cmdMerge(cfg, lg)))
+	}
+	if cfg.CleanupMode {
+		os.Exit(int(cmdCleanup(cfg, lg)))
+	}
 
 	os.Exit(int(run(cfg, lg, commandName)))
 }
@@ -459,15 +468,16 @@ func checkDeps(cfg *cliflags.Config) []string {
 			missing = append(missing, hint)
 		}
 	}
-	check("gh", "gh (brew install gh)")
-	check("jq", "jq (brew install jq)")
 	check("git", "git")
 
-	if !cfg.StatusMode || os.Getenv("DMUX_CONFIG_PATH") == "" {
-		check("tmux", "tmux (brew install tmux)")
+	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
+	if cfg.StatusMode || cfg.CleanupMode || !lifecycle {
+		check("gh", "gh (brew install gh)")
+		check("jq", "jq (brew install jq)")
 	}
 
-	if !cfg.StatusMode {
+	if !cfg.StatusMode && !lifecycle {
+		check("tmux", "tmux (brew install tmux)")
 		if cfg.ParentMode == cliflags.ModeIssue && !ghSubIssueAvailable() {
 			missing = append(missing, "gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)")
 		}
