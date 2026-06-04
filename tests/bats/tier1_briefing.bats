@@ -29,6 +29,9 @@ load helpers
   ! grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "$briefing"
   ! grep -q "/code-review" "$briefing"
   grep -q "codex review --uncommitted" "$briefing"
+  grep -q "do not open, resume," "$briefing"
+  grep -q "or inspect any Review Session" "$briefing"
+  grep -q "do not run \`/codex:status\` or other polling" "$briefing"
   grep -q "Repeat until review reports no findings / no issues / clean" "$briefing"
   grep -q "Only after the review loop is clean should you commit, push, and open the PR" "$briefing"
   grep -q "Make focused, minimal changes scoped to this single issue" "$briefing"
@@ -64,6 +67,7 @@ load helpers
   assert_success
   local briefing="/tmp/fanout-project_root-101.md"
   grep -q "codex review --uncommitted" "$briefing"
+  grep -q "do not run \`/codex:status\` or other polling" "$briefing"
   grep -q "Only after the review loop is clean should you commit and push the branch" "$briefing"
   ! grep -q "Open a pull request with \"Closes #101\"" "$briefing"
   ! grep -q "opening a PR" "$briefing"
