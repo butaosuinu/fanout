@@ -34,6 +34,8 @@ type Config struct {
 	ProjectNumber      int
 	ProjectStatus      string
 	Agent              string
+	BaseBranch         string
+	BranchPrefix       string
 	Limit              int // 0 = unset
 	OnlyArg            string
 	SkipArg            string
@@ -45,6 +47,7 @@ type Config struct {
 	Session            string
 	SleepBetween       float64
 	PopupTimeoutSec    int
+	NoRefresh          bool
 	DryRun             bool
 	Debug              bool
 	UnblockedOnly      bool
@@ -105,6 +108,14 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 			cfg.Agent = v
 			return nil
 		},
+		"--base-branch": func(cfg *Config, _ *parseState, v string) error {
+			cfg.BaseBranch = v
+			return nil
+		},
+		"--branch-prefix": func(cfg *Config, _ *parseState, v string) error {
+			cfg.BranchPrefix = v
+			return nil
+		},
 		"--limit": func(_ *Config, state *parseState, v string) error {
 			state.limit = v
 			return nil
@@ -147,6 +158,7 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 	boolOptions := map[string]boolOption{
 		"--dry-run":                 func(cfg *Config) { cfg.DryRun = true },
 		"--debug":                   func(cfg *Config) { cfg.Debug = true },
+		"--no-refresh":              func(cfg *Config) { cfg.NoRefresh = true },
 		"--unblocked-only":          func(cfg *Config) { cfg.UnblockedOnly = true },
 		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
 		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = boolPtr(true) },
@@ -285,6 +297,10 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 		switch {
 		case cfg.Agent != "":
 			return statusConflict(lg, "--agent")
+		case cfg.BaseBranch != "":
+			return statusConflict(lg, "--base-branch")
+		case cfg.BranchPrefix != "":
+			return statusConflict(lg, "--branch-prefix")
 		case state.limit != "":
 			return statusConflict(lg, "--limit")
 		case cfg.OnlyArg != "":
@@ -299,6 +315,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--dry-run")
 		case cfg.UnblockedOnly:
 			return statusConflict(lg, "--unblocked-only")
+		case cfg.NoRefresh:
+			return statusConflict(lg, "--no-refresh")
 		case cfg.AutoPullRequest != nil:
 			return statusConflict(lg, boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
 		case cfg.PRReviewGate != nil:
@@ -327,6 +345,15 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return ParseResult{Code: exitcode.Env}
 		}
 		cfg.Limit, _ = strconv.Atoi(state.limit)
+	}
+
+	if cfg.BaseBranch != "" && strings.ContainsAny(cfg.BaseBranch, " \t\r\n") {
+		lg.Err("--base-branch must not contain whitespace, got: %s", cfg.BaseBranch)
+		return ParseResult{Code: exitcode.Env}
+	}
+	if cfg.BranchPrefix != "" && strings.ContainsAny(cfg.BranchPrefix, " \t\r\n") {
+		lg.Err("--branch-prefix must not contain whitespace, got: %s", cfg.BranchPrefix)
+		return ParseResult{Code: exitcode.Env}
 	}
 
 	if state.sleepRaw != "" {

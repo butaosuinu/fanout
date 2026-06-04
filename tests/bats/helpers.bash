@@ -41,10 +41,12 @@ setup() {
   unset FANOUT_PR_REVIEW_GATE
   unset FANOUT_BRIEFING_CODE_REVIEW
   unset FANOUT_AGENT_TEAMS_HINT
+  unset FANOUT_AGENT
 
-  # Tier 1 tests don't touch dmux discovery, but we still want fanout's
-  # agent auto-detect path to be dormant unless a test opts in.
-  unset TMUX_PANE
+  # Most tests exercise the direct tmux runtime. Provide fake TMUX markers so
+  # fanout targets the invoking pane instead of the session's active pane.
+  export TMUX="/tmp/fanout-test-tmux,1,0"
+  export TMUX_PANE="%1"
 
   # Default-off force-missing switch for dummy shims (Phase 1). Tests that
   # want to simulate a missing dependency set this themselves, e.g.

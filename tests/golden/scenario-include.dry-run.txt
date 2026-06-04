@@ -1,28 +1,43 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: dmux
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-include/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-include/dmux.config.json
 [info] fetching sub-issues of #400
 [info] parent body / --include added 2 extra child reference(s) not in sub-issue API
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #401: Included child A
   briefing -> /tmp/fanout-project_root-401.md
+  slug -> included-child-a-401
+  worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401
+  branch -> fanout/included-child-a-401
+  base -> main
   briefing size: 2478 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #401 of #400] Included child A: read /tmp/fanout-project_root-401.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root worktree add -b fanout/included-child-a-401 <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401
+    $ tmux select-pane -t <pane_id> -T included-child-a-401
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #401 of #400] included-child-a-401: Included child A. read /tmp/fanout-project_root-401.md and begin.'\''' Enter
 [ ok ] #401: dry-run complete
 [info] #402: Included child B
   briefing -> /tmp/fanout-project_root-402.md
+  slug -> included-child-b-402
+  worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402
+  branch -> fanout/included-child-b-402
+  base -> main
   briefing size: 2478 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #402 of #400] Included child B: read /tmp/fanout-project_root-402.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-include/project_root worktree add -b fanout/included-child-b-402 <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402
+    $ tmux select-pane -t <pane_id> -T included-child-b-402
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #402 of #400] included-child-b-402: Included child B. read /tmp/fanout-project_root-402.md and begin.'\''' Enter
 [ ok ] #402: dry-run complete
 
 [ ok ] created: 2

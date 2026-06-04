@@ -1,37 +1,60 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: dmux
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-project-status-all/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-project-status-all/dmux.config.json
 [info] mode: project (status=all, repo=butaosuinu/fanout)
 [info] fetching items from Project https://github.com/users/butaosuinu/projects/3
 [info] project items: 3 total, 3 OPEN
 [info] will create 3 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #911: Todo one
   briefing -> /tmp/fanout-project_root-911.md
+  slug -> todo-one-911
+  worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-one-911
+  branch -> fanout/todo-one-911
+  base -> main
   briefing size: 2476 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #911 of #https://github.com/users/butaosuinu/projects/3] Todo one: read /tmp/fanout-project_root-911.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root worktree add -b fanout/todo-one-911 <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-one-911 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-one-911
+    $ tmux select-pane -t <pane_id> -T todo-one-911
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #911 of #https://github.com/users/butaosuinu/projects/3] todo-one-911: Todo one. read /tmp/fanout-project_root-911.md and begin.'\''' Enter
 [ ok ] #911: dry-run complete
 [info] #912: Todo two
   briefing -> /tmp/fanout-project_root-912.md
+  slug -> todo-two-912
+  worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-two-912
+  branch -> fanout/todo-two-912
+  base -> main
   briefing size: 2476 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #912 of #https://github.com/users/butaosuinu/projects/3] Todo two: read /tmp/fanout-project_root-912.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root worktree add -b fanout/todo-two-912 <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-two-912 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-two-912
+    $ tmux select-pane -t <pane_id> -T todo-two-912
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #912 of #https://github.com/users/butaosuinu/projects/3] todo-two-912: Todo two. read /tmp/fanout-project_root-912.md and begin.'\''' Enter
 [ ok ] #912: dry-run complete
 [info] #913: Done item
   briefing -> /tmp/fanout-project_root-913.md
+  slug -> done-item-913
+  worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/done-item-913
+  branch -> fanout/done-item-913
+  base -> main
   briefing size: 2477 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #913 of #https://github.com/users/butaosuinu/projects/3] Done item: read /tmp/fanout-project_root-913.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root worktree add -b fanout/done-item-913 <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/done-item-913 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/done-item-913
+    $ tmux select-pane -t <pane_id> -T done-item-913
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #913 of #https://github.com/users/butaosuinu/projects/3] done-item-913: Done item. read /tmp/fanout-project_root-913.md and begin.'\''' Enter
 [ ok ] #913: dry-run complete
 
 [ ok ] created: 3

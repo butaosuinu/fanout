@@ -7,18 +7,22 @@ import (
 
 const usageText = `Usage: fanout <parent-issue|project-url> [options]
 
-Creates one dmux pane per OPEN sub-issue of a parent issue, OR per OPEN item in
-a GitHub Projects v2 URL. Each pane gets a dedicated git worktree (dmux handles
-that) and starts the configured agent with a briefing that points at
-/tmp/fanout-<repo>-<num>.md.
+Creates one tmux pane per OPEN sub-issue of a parent issue, OR per OPEN item in
+a GitHub Projects v2 URL. Each pane gets a dedicated git worktree under
+.fanout/worktrees/ and starts the configured agent with a briefing that points
+at /tmp/fanout-<repo>-<num>.md.
 
 Options:
-  --agent <name>      Agent to launch (claude|codex|opencode|...). Required
-                      unless the caller's tmux pane is itself a dmux-managed
-                      pane — in that case fanout auto-detects the agent from
-                      dmux.config.json. dmux v5.8.1 always opens an agent-
-                      choice popup after the prompt popup, so fanout must
-                      know the agent name to inject into it.
+  --agent <name>      Agent to launch (claude|codex). Required unless
+                      FANOUT_AGENT is set. Unknown agents fail before pane
+                      creation; missing agent CLIs fail in live mode.
+  --base-branch <branch>
+                      Branch to refresh and branch child worktrees from.
+                      Default: GitHub default branch, then origin/HEAD, then
+                      main.
+  --branch-prefix <p> Prefix for generated branch names. Default: fanout/.
+  --no-refresh        Skip git fetch + fast-forward of the base branch before
+                      creating child worktrees.
   --limit <N>         Cap how many children to enqueue this run. Remainder is
                       printed with a rerun command.
   --only <list>       Comma-separated list of issue numbers to fan out,
@@ -44,17 +48,12 @@ Options:
   --name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]
                       Override the default naming for issue <NUM>. Repeatable
                       (once per issue). <slug-hint> is 2-4 kebab-case words
-                      (lowercase alnum + hyphens) front-loaded into the one-
-                      line prompt so dmux's slug generator is very likely to
-                      echo it as the worktree directory name.
-                      <display-name> (optional; ≤80 chars after sanitization)
-                      is written post-creation into panes[].displayName in
-                      dmux.config.json and merged into the worktree's
-                      .dmux/worktree-metadata.json, so dmux's enforcePaneTitles
-                      loop (every 5-30s) surfaces it as the tmux pane border
-                      title and reopenWorktree restores it across restarts.
-                      <branch-name> (optional; dmux v5.8.1+) is passed through
-                      the newPanePopup payload as branchName.
+                      (lowercase alnum + hyphens) used as the worktree slug
+                      stem; fanout appends -<NUM> when it is missing.
+                      <display-name> (optional) is used as the tmux pane title
+                      for the newly-created pane.
+                      <branch-name> (optional) overrides the generated
+                      branch name for that issue.
                       Examples:
                         --name 17=fix-login-timeout|Fix login
                         --name 18=update-docs
@@ -69,8 +68,8 @@ Options:
                       not deduced from). Children with any OPEN blocker
                       are reported as deferred in the final summary.
                       Safe to rerun as blocker PRs merge.
-  --session <name>    Target a specific tmux session (required when more than
-                      one dmux session is alive on this machine).
+  --session <name>    Target a named tmux session instead of the invoking pane.
+                      fanout itself still must be invoked from inside tmux.
   --project-status <name>
                       [project mode only] Restrict to Project items whose
                       single-select "Status" field equals <name>. Default:
@@ -90,18 +89,12 @@ Options:
   --agent-teams-hint / --no-agent-teams-hint
                       Include or omit the Claude-only Agent Teams hint in
                       child briefings. Default: on.
-  --sleep <seconds>   Pause between pane-creation requests. Default 4. Raise
-                      this if dmux reports "pane creation failed" under load.
-  --popup-timeout <s> Seconds to wait for each dmux popup (new-pane, agent-
-                      choice) to appear after the triggering keystroke.
-                      Default 20. Raise on slow machines or large worktrees
-                      where dmux takes longer than that between closing the
-                      prompt popup and opening the agent-choice popup.
-  --dry-run           Print the send-keys commands, the popup JSON payloads
-                      that would be injected, and the briefings, without
-                      driving dmux.
-  --debug             Log intercept steps (popup PID, result file path, JSON
-                      payload) to stderr as each pane is created.
+  --sleep <seconds>   Pause between pane-creation requests. Default 4.
+  --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
+                      the direct tmux path.
+  --dry-run           Print the git worktree, tmux split-window, and agent
+                      send-keys commands without executing them.
+  --debug             Enable extra diagnostic logging.
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue's state and closed-by PR merge status, then
                       exit. Exclusive with action-bearing flags.
@@ -109,17 +102,10 @@ Options:
   -h, --help          Show this message.
 
 Prerequisites:
-  * gh, jq, tmux, pgrep installed. gh-sub-issue extension is required for
+  * gh, jq, git, tmux installed. gh-sub-issue extension is required for
     issue mode only; project mode uses gh api graphql.
-  * ` + "`" + `cd <repo> && dmux` + "`" + ` has been run; tmux session is alive.
-  * dmux TUI is on the pane-list view (no modal open). fanout sends one Esc
-    at startup as a best-effort.
-  * --agent given, OR the caller's pane is a dmux-managed pane so fanout
-    can auto-detect it. dmux v5.8.1 routes new-pane prompts through
-    tmux display-popup (a separate tmux client that send-keys cannot
-    reach), so fanout drives the flow by intercepting the popup's result
-    file. The agent name is required to satisfy the picker popup that
-    dmux always shows next.
+  * fanout is invoked from inside a tmux session.
+  * --agent is given, or FANOUT_AGENT is set.
 
 Exit codes (default flow):
   0 success (including "no children, nothing to do")

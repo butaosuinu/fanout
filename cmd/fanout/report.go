@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 )
 
@@ -79,25 +80,42 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 	}
 
 	if len(plan.LimitDeferred) > 0 {
+		if result.Failed > 0 {
+			lg.Info("deferred (--limit): %d", len(plan.LimitDeferred))
+			lg.Warn("not printing --limit rerun hint because this run failed before all selected targets completed")
+			return
+		}
 		fmt.Fprintf(lg.Stdout(), "\n%sDeferred %d issue(s) due to --limit. Rerun with:%s\n", c.Info, len(plan.LimitDeferred), c.Reset)
 		nums := make([]string, len(plan.LimitDeferred))
 		for i, row := range plan.LimitDeferred {
 			nums[i] = fmt.Sprintf("#%d", row.Number)
 		}
 		fmt.Fprintf(lg.Stdout(), "  %s\n", strings.Join(nums, " "))
+		deferredCSV := issueCSV(plan.LimitDeferred)
 		statusFlag := ""
 		if cfg.ParentMode == cliflags.ModeProject && cfg.ProjectStatus != cliflags.DefaultProjectStatus {
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
-		fmt.Fprintf(lg.Stdout(), "  %s %s --limit %d%s%s%s%s%s%s\n",
-			shellQuote(commandName), shellQuote(cfg.ParentRef), len(plan.LimitDeferred),
+		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s\n",
+			shellQuote(commandName), shellQuote(cfg.ParentRef),
 			statusFlag,
-			optFlag("--only", cfg.OnlyArg)+optFlag("--skip", cfg.SkipArg),
+			shellQuote(deferredCSV),
+			shellQuote(deferredCSV),
 			boolFlag(" --unblocked-only", cfg.UnblockedOnly),
 			settingsFlags(cfg),
+			worktreeFlags(cfg),
+			nameFlagsFor(cfg, plan.LimitDeferred),
 			optFlag("--agent", cfg.Agent),
 			optFlag("--session", cfg.Session))
 	}
+}
+
+func issueCSV(issues []ghissue.Issue) string {
+	nums := make([]string, len(issues))
+	for i, issue := range issues {
+		nums[i] = fmt.Sprintf("%d", issue.Number)
+	}
+	return strings.Join(nums, ",")
 }
 
 func optFlag(flag, value string) string {
@@ -119,6 +137,37 @@ func settingsFlags(cfg *cliflags.Config) string {
 		boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate) +
 		boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview) +
 		boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint)
+}
+
+func worktreeFlags(cfg *cliflags.Config) string {
+	return optFlag("--base-branch", cfg.BaseBranch) +
+		optFlag("--branch-prefix", cfg.BranchPrefix) +
+		boolFlag(" --no-refresh", cfg.NoRefresh)
+}
+
+func nameFlagsFor(cfg *cliflags.Config, issues []ghissue.Issue) string {
+	wanted := map[int]bool{}
+	for _, issue := range issues {
+		wanted[issue.Number] = true
+	}
+	var flags []string
+	for _, name := range cfg.Names {
+		if wanted[name.Num] {
+			flags = append(flags, optFlag("--name", renderNameOverride(name)))
+		}
+	}
+	return strings.Join(flags, "")
+}
+
+func renderNameOverride(name cliflags.NameOverride) string {
+	switch {
+	case name.BranchName != "":
+		return fmt.Sprintf("%d=%s|%s|%s", name.Num, name.SlugHint, name.DisplayName, name.BranchName)
+	case name.DisplayName != "":
+		return fmt.Sprintf("%d=%s|%s", name.Num, name.SlugHint, name.DisplayName)
+	default:
+		return fmt.Sprintf("%d=%s", name.Num, name.SlugHint)
+	}
 }
 
 func boolSettingFlag(onFlag, offFlag string, v *bool) string {

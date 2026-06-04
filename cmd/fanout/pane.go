@@ -3,17 +3,17 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
+	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/dmuxconfig"
-	"github.com/butaosuinu/fanout/internal/dmuxsession"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/popup"
+	"github.com/butaosuinu/fanout/internal/naming"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/tmuxctl"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 type paneRequest struct {
@@ -21,14 +21,34 @@ type paneRequest struct {
 	BriefingPath        string
 	BriefingBody        string
 	ShortTitle          string
-	SlugHint            string
+	Slug                string
 	DisplayNameOverride string
 	BranchName          string
 	OneLinePrompt       string
+	AgentCommand        string
+	Worktree            worktree.Plan
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, issue ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) bool {
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) bool {
 	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings)
+	agentCmd, err := buildAgentCommand(cfg, req.OneLinePrompt)
+	if err != nil {
+		lg.Err("#%d: %v", req.Issue.Number, err)
+		return false
+	}
+	req.AgentCommand = agentCmd
+	req.Worktree = worktree.BuildPlan(worktree.Options{
+		ProjectRoot: info.ProjectRoot,
+		Slug:        req.Slug,
+		BranchName:  req.BranchName,
+		BaseBranch:  cfg.BaseBranch,
+		NoRefresh:   cfg.NoRefresh,
+	})
+	if req.Worktree.Refresh && req.Worktree.RefreshError != nil {
+		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, req.Worktree.RefreshError)
+		return false
+	}
+
 	if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 		lg.Err("#%d: write briefing: %v", req.Issue.Number, err)
 		return false
@@ -36,42 +56,72 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.
 
 	logPaneRequest(req, lg)
 
-	baseline, err := currentPanesLen(info.ConfigPath)
-	if err != nil {
-		lg.Err("#%d: reload dmux config: %v", req.Issue.Number, err)
-		return false
-	}
-
-	newpanePayload, agentPayload, err := panePayloads(cfg, req.OneLinePrompt, req.BranchName)
-	if err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
-		return false
-	}
-
 	if cfg.DryRun {
-		printPaneDryRun(req, baseline, newpanePayload, agentPayload, info.ControlPane, lg, c)
+		printPaneDryRun(req, info.Target, lg, c)
 		return true
 	}
 
-	if len(agentPayload) == 0 {
-		lg.Err("#%d: no agent resolved. dmux v5.8.1 always shows the agent-choice popup after the prompt popup, so fanout needs an agent name. Pass --agent <name> or invoke fanout from a dmux-managed pane.", req.Issue.Number)
+	prepared, err := worktree.Prepare(worktree.Options{
+		ProjectRoot: info.ProjectRoot,
+		Slug:        req.Slug,
+		BranchName:  req.BranchName,
+		BaseBranch:  cfg.BaseBranch,
+		NoRefresh:   cfg.NoRefresh,
+	})
+	if err != nil {
+		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, err)
+		return false
+	}
+	if prepared.AlreadyExists {
+		lg.Err("#%d: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", req.Issue.Number, prepared.WorktreePath)
 		return false
 	}
 
-	return drivePaneCreation(cfg, lg, info, req.Issue.Number, baseline, newpanePayload, agentPayload)
+	paneID, err := tmuxrun.SplitPane(info.Target, prepared.WorktreePath)
+	if err != nil {
+		lg.Err("#%d: %v", req.Issue.Number, err)
+		cleanupFailedLaunch(req.Issue.Number, "", prepared.Plan, lg)
+		return false
+	}
+	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
+		lg.Warn("#%d: %v", req.Issue.Number, err)
+	}
+	if err := tmuxrun.SelectTiled(info.Target); err != nil {
+		lg.Warn("#%d: %v", req.Issue.Number, err)
+	}
+	if err := tmuxrun.SendShellCommand(paneID, req.AgentCommand); err != nil {
+		lg.Err("#%d: %v", req.Issue.Number, err)
+		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
+		return false
+	}
+	lg.Ok("#%d: pane %s created in %s", req.Issue.Number, paneID, prepared.WorktreePath)
+	return true
+}
+
+func buildAgentCommand(cfg *cliflags.Config, prompt string) (string, error) {
+	if cfg.DryRun {
+		return agent.BuildCommand(cfg.Agent, prompt)
+	}
+	return agent.BuildResolvedCommand(cfg.Agent, prompt)
 }
 
 func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings) paneRequest {
+	slug := naming.Slug(issue.Title, issue.Number)
 	req := paneRequest{
 		Issue:        issue,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
 		BriefingBody: briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, resolvedSettings),
 		ShortTitle:   shortIssueTitle(issue.Title),
+		Slug:         slug,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
-		req.SlugHint = name.SlugHint
+		if name.SlugHint != "" {
+			req.Slug = naming.EnsureIssueSuffix(name.SlugHint, issue.Number)
+		}
 		req.DisplayNameOverride = name.DisplayName
-		req.BranchName = name.BranchName
+		req.BranchName = naming.BranchName(name.BranchName, cfg.BranchPrefix, req.Slug)
+	} else {
+		req.BranchName = naming.BranchName("", cfg.BranchPrefix, req.Slug)
 	}
 	req.OneLinePrompt = oneLinePrompt(cfg.ParentRef, req)
 	return req
@@ -90,117 +140,70 @@ func shortIssueTitle(title string) string {
 }
 
 func oneLinePrompt(parentRef string, req paneRequest) string {
-	if req.SlugHint != "" {
-		return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and begin.", fanoutTagPrefix, req.Issue.Number, parentRef, req.SlugHint, req.ShortTitle, req.BriefingPath)
-	}
-	return fmt.Sprintf("%s%d of #%s] %s: read %s and begin.", fanoutTagPrefix, req.Issue.Number, parentRef, req.ShortTitle, req.BriefingPath)
+	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and begin.", fanoutTagPrefix, req.Issue.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath)
 }
 
 func logPaneRequest(req paneRequest, lg *log.Logger) {
 	lg.Info("#%d: %s", req.Issue.Number, req.ShortTitle)
 	lg.Dim("  briefing -> %s", req.BriefingPath)
-	if req.SlugHint != "" {
-		lg.Dim("  slug-hint -> %s", req.SlugHint)
-	}
+	lg.Dim("  slug -> %s", req.Slug)
+	lg.Dim("  worktree -> %s", req.Worktree.WorktreePath)
+	lg.Dim("  branch -> %s", req.BranchName)
+	lg.Dim("  base -> %s", req.Worktree.BaseBranch)
 	if req.DisplayNameOverride != "" {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
-	if req.BranchName != "" {
-		lg.Dim("  branch-name -> %s", req.BranchName)
-	}
 }
 
-func currentPanesLen(configPath string) (int, error) {
-	// Re-read dmux.config.json each iteration: a previous iteration in this
-	// run may have already grown panes[], so a cached baseline would let
-	// waitForNewPane() return immediately for subsequent issues even if the
-	// current pane creation actually failed.
-	cfg, err := dmuxconfig.Load(configPath)
-	if err != nil {
-		return 0, err
-	}
-	return cfg.PanesLen(), nil
-}
-
-func panePayloads(cfg *cliflags.Config, prompt, branchName string) (newpanePayload, agentPayload []byte, err error) {
-	newpanePayload, err = popup.MakeNewPanePayload(prompt, branchName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build newPane payload: %w", err)
-	}
-	if cfg.Agent == "" {
-		return newpanePayload, nil, nil
-	}
-	agentPayload, err = popup.MakeAgentPayload(cfg.Agent)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build agent payload: %w", err)
-	}
-	return newpanePayload, agentPayload, nil
-}
-
-func printPaneDryRun(req paneRequest, baseline int, newpanePayload, agentPayload []byte, controlPane string, lg *log.Logger, c log.Palette) {
+func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palette) {
 	fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
-	fmt.Fprintf(lg.Stdout(), "  %scurrent panes[] length%s: %d\n", c.Dim, c.Reset, baseline)
-	tmuxctl.PrintSendKeys(lg.Stdout(), c.Dim, c.Reset, controlPane, "Escape")
-	tmuxctl.PrintSendKeys(lg.Stdout(), c.Dim, c.Reset, controlPane, "n")
-	fmt.Fprintf(lg.Stdout(), "    %s# would intercept newPanePopup and write: %s%s\n", c.Dim, string(newpanePayload), c.Reset)
-	if len(agentPayload) > 0 {
-		fmt.Fprintf(lg.Stdout(), "    %s# would intercept agentChoicePopup and write: %s%s\n", c.Dim, string(agentPayload), c.Reset)
-	} else {
-		fmt.Fprintf(lg.Stdout(), "    %s# WOULD FAIL: agent is empty (pass --agent or run from a dmux pane)%s\n", c.Warn, c.Reset)
+	if req.Worktree.Refresh {
+		details := req.Worktree.RefreshDetails
+		fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s fetch --quiet --no-tags origin %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.FetchBranch), c.Reset)
+		if details.LocalBranch != "" {
+			fmt.Fprintf(lg.Stdout(), "    %s# may fast-forward the local base before worktree creation%s\n", c.Dim, c.Reset)
+			fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s branch -f %s %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.LocalBranch), shellQuote(details.OriginRef), c.Reset)
+			fmt.Fprintf(lg.Stdout(), "    %s# if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree%s\n", c.Dim, c.Reset)
+		}
 	}
+	fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s worktree add -b %s %s %s%s\n",
+		c.Dim,
+		shellQuote(req.Worktree.ProjectRoot),
+		shellQuote(req.Worktree.BranchName),
+		shellQuote(req.Worktree.WorktreePath),
+		shellQuote(req.Worktree.BaseBranch),
+		c.Reset)
+	if target != "" {
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -t %s -d -h -P -F '#{pane_id}' -c %s%s\n", c.Dim, shellQuote(target), shellQuote(req.Worktree.WorktreePath), c.Reset)
+	} else {
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -d -h -P -F '#{pane_id}' -c %s%s\n", c.Dim, shellQuote(req.Worktree.WorktreePath), c.Reset)
+	}
+	if title := paneTitle(req); title != "" {
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-pane -t <pane_id> -T %s%s\n", c.Dim, shellQuote(title), c.Reset)
+	}
+	if target != "" {
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout -t %s tiled%s\n", c.Dim, shellQuote(target), c.Reset)
+	} else {
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout tiled%s\n", c.Dim, c.Reset)
+	}
+	fmt.Fprintf(lg.Stdout(), "    %s$ tmux send-keys -t <pane_id> %s Enter%s\n", c.Dim, shellQuote(req.AgentCommand), c.Reset)
 	lg.Ok("#%d: dry-run complete", req.Issue.Number)
 }
 
-func drivePaneCreation(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, issueNum, baseline int, newpanePayload, agentPayload []byte) bool {
-	pidBaseline, err := popup.BaselinePIDs()
-	if err != nil {
-		lg.Err("#%d: pgrep baseline: %v", issueNum, err)
-		return false
+func paneTitle(req paneRequest) string {
+	if req.DisplayNameOverride != "" {
+		return req.DisplayNameOverride
 	}
-
-	if err := tmuxctl.SendKeys(info.ControlPane, "Escape"); err != nil {
-		lg.Err("#%d: tmux send-keys Escape: %v", issueNum, err)
-		return false
-	}
-	time.Sleep(200 * time.Millisecond)
-	if err := tmuxctl.SendKeys(info.ControlPane, "n"); err != nil {
-		lg.Err("#%d: tmux send-keys n: %v", issueNum, err)
-		return false
-	}
-
-	popupTimeout := time.Duration(cfg.PopupTimeoutSec) * time.Second
-	if err := popup.InterceptWithDebug(popup.NewPanePattern, pidBaseline, newpanePayload, "  newPanePopup", popupTimeout, lg.Debug); err != nil {
-		lg.Err("#%d: %v", issueNum, err)
-		return false
-	}
-
-	pidBaseline, _ = popup.BaselinePIDs()
-	if err := popup.InterceptWithDebug(popup.AgentChoicePattern, pidBaseline, agentPayload, "  agentChoicePopup", popupTimeout, lg.Debug); err != nil {
-		lg.Err("#%d: %v", issueNum, err)
-		return false
-	}
-
-	if !waitForNewPane(info.ConfigPath, baseline, 60*time.Second) {
-		lg.Err("#%d: timed out after 60s waiting for config.json to grow", issueNum)
-		return false
-	}
-	current, _ := dmuxconfig.Load(info.ConfigPath)
-	cur := 0
-	if current != nil {
-		cur = current.PanesLen()
-	}
-	lg.Ok("#%d: pane created (panes[] now %d)", issueNum, cur)
-	return true
+	return req.Slug
 }
 
-func waitForNewPane(configPath string, baseline int, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		cfg, err := dmuxconfig.Load(configPath)
-		if err == nil && cfg.PanesLen() > baseline {
-			return true
+func cleanupFailedLaunch(issueNum int, paneID string, plan worktree.Plan, lg *log.Logger) {
+	if paneID != "" {
+		if err := tmuxrun.KillPane(paneID); err != nil {
+			lg.Warn("#%d: cleanup incomplete pane %s: %v", issueNum, paneID, err)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
-	return false
+	if err := worktree.CleanupCreated(plan); err != nil {
+		lg.Warn("#%d: cleanup incomplete worktree %s: %v", issueNum, plan.WorktreePath, err)
+	}
 }

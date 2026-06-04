@@ -1,7 +1,6 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: dmux
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-only/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-only/dmux.config.json
 [info] fetching sub-issues of #500
 [info] sub-issues: 3 total, 3 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
@@ -11,21 +10,37 @@ filtered out:
 
 [info] #501: Alpha
   briefing -> /tmp/fanout-project_root-501.md
+  slug -> alpha-501
+  worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501
+  branch -> fanout/alpha-501
+  base -> main
   briefing size: 2466 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #501 of #500] Alpha: read /tmp/fanout-project_root-501.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root worktree add -b fanout/alpha-501 <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501
+    $ tmux select-pane -t <pane_id> -T alpha-501
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #501 of #500] alpha-501: Alpha. read /tmp/fanout-project_root-501.md and begin.'\''' Enter
 [ ok ] #501: dry-run complete
 [info] #503: Charlie
   briefing -> /tmp/fanout-project_root-503.md
+  slug -> charlie-503
+  worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503
+  branch -> fanout/charlie-503
+  base -> main
   briefing size: 2470 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #503 of #500] Charlie: read /tmp/fanout-project_root-503.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-only/project_root worktree add -b fanout/charlie-503 <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503
+    $ tmux select-pane -t <pane_id> -T charlie-503
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #503 of #500] charlie-503: Charlie. read /tmp/fanout-project_root-503.md and begin.'\''' Enter
 [ ok ] #503: dry-run complete
 
 [ ok ] created: 2

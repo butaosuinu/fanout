@@ -1,6 +1,7 @@
 .claude/settings.local.json
 .codex/
 .dmux/
+.fanout/worktrees/
 .cache/
 tests/tmp/
 /fanout-go
