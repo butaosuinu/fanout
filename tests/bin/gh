@@ -23,6 +23,16 @@
 #         Project mode calls this to resolve the cross-repo filter target
 #         (typical fixture: {"nameWithOwner":"butaosuinu/fanout"}).
 #
+#   gh release view -R butaosuinu/fanout --json tagName -q .tagName
+#       — echoes $FIXTURE_DIR/gh-release-view.json (with optional jq filter).
+#         --check-update calls this to resolve the latest release tag without
+#         touching the network.
+#
+#   gh release list -R butaosuinu/fanout --json tagName -q '.[0].tagName'
+#       — echoes $FIXTURE_DIR/gh-release-list.json (with optional jq filter).
+#         Not used by fanout today, but kept next to release view so tests
+#         can cover either gh release lookup style.
+#
 #   gh api graphql -f query=... -F owner=X -F number=Y -F first=Z [-F after=C]
 #       — Project mode pagination. Without `-F after=...`, echoes
 #         $FIXTURE_DIR/gh-graphql-page-1.json. With `-F after=<cursor>`,
@@ -111,6 +121,20 @@ case "${1:-}" in
       shift 2
       jq_filter="$(extract_jq_filter "$@")"
       emit_fixture "$fixture/gh-repo-view.json" "$jq_filter" "gh repo view"
+      exit 0
+    fi
+    ;;
+  release)
+    if [[ "${2:-}" == "view" ]]; then
+      shift 2
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-release-view.json" "$jq_filter" "gh release view"
+      exit 0
+    fi
+    if [[ "${2:-}" == "list" ]]; then
+      shift 2
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-release-list.json" "$jq_filter" "gh release list"
       exit 0
     fi
     ;;

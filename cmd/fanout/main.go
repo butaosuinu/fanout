@@ -34,6 +34,9 @@ func main() {
 		fmt.Fprintln(os.Stdout, versionLine())
 		os.Exit(int(exitcode.OK))
 	}
+	if isCheckUpdateRequest(os.Args[1:]) {
+		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
@@ -61,6 +64,10 @@ func main() {
 
 func isVersionRequest(args []string) bool {
 	return len(args) == 1 && (args[0] == "--version" || args[0] == "-V")
+}
+
+func isCheckUpdateRequest(args []string) bool {
+	return len(args) == 1 && (args[0] == "--check-update" || args[0] == "check-update")
 }
 
 func versionLine() string {

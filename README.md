@@ -225,6 +225,7 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout --check-update               # Compare this binary with the latest release
 fanout --help
 ```
 
@@ -289,6 +290,21 @@ exited.
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
 The bundled Claude Code skill drives a `ScheduleWakeup`-based polling loop on
 top of this when the user opts in via `/fanout … --wait`.
+
+### `--check-update`
+
+`fanout --check-update` is read-only. It fetches the latest release tag from
+`butaosuinu/fanout`, compares it with the binary's embedded version, and prints
+whether an update is available. `fanout check-update` is accepted as the
+subcommand form. Local dev builds (`version == "dev"`, including plain
+`make build-go`) do not call `gh`; they print a dev-build message and exit 0.
+
+Exit codes:
+
+- `0` — comparison completed, or this is a dev build.
+- `2` — the current version or latest tag is not `MAJOR.MINOR.PATCH`
+  (optionally prefixed with `v`).
+- `3` — `gh release view -R butaosuinu/fanout` failed.
 
 ### Settings
 
@@ -414,6 +430,10 @@ export FANOUT_AGENT_TEAMS_HINT=0
 # on top of this.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+
+# Check whether a released fanout binary is behind the latest GitHub Release.
+# Dev builds report that update checks only apply to released versions.
+fanout --check-update
 
 # Fan out OPEN issues from a Projects v2 board instead of a parent issue.
 # Default filter is Status=Todo; same-repo only. Requires `gh auth refresh

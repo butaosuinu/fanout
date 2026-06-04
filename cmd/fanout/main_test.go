@@ -96,6 +96,26 @@ func TestIsVersionRequest(t *testing.T) {
 	}
 }
 
+func TestIsCheckUpdateRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "flag", args: []string{"--check-update"}, want: true},
+		{name: "subcommand", args: []string{"check-update"}, want: true},
+		{name: "mixed with parent", args: []string{"123", "--check-update"}, want: false},
+		{name: "short not supported", args: []string{"-U"}, want: false},
+		{name: "empty", args: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCheckUpdateRequest(tc.args); got != tc.want {
+				t.Fatalf("isCheckUpdateRequest(%#v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVersionLineUsesInjectedValues(t *testing.T) {
 	oldVersion := version
 	oldCommit := commit

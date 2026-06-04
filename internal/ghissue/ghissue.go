@@ -67,6 +67,15 @@ func (r Runner) RepoNameWithOwner() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// LatestReleaseTag returns the latest fanout release tag.
+func (r Runner) LatestReleaseTag() (string, error) {
+	out, err := r.gh("release", "view", "-R", "butaosuinu/fanout", "--json", "tagName", "-q", ".tagName")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // SubIssueList runs `gh sub-issue list <parent> --json number,title,state` and
 // returns the flattened, state-uppercased issue rows.
 func (r Runner) SubIssueList(parent int) ([]Issue, error) {

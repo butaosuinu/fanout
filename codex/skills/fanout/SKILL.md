@@ -20,6 +20,7 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout --check-update               # Compare this binary with the latest release
 ```
 
 **Do not probe the CLI** with `fanout --help`, `fanout -h`, or
@@ -51,6 +52,9 @@ Always invoke the stable `fanout` command name.
 Use this skill when the user explicitly asks to fan out, parallelize, or split
 work for a GitHub parent issue or a GitHub Projects v2 board, including
 Japanese phrasing like `並列展開` or "プロジェクトの Todo 列を一気に着手".
+Also use it when the user asks whether the installed `fanout` binary is up to
+date; that path uses the read-only self-update check below instead of pane
+creation.
 Do not invoke fanout just because an issue has sub-issues; pane creation is
 visible and the user has to close unwanted panes manually.
 
@@ -72,6 +76,17 @@ use this workflow directly.
    confirmation prompts.
 
 ## Workflow
+
+If the user's intent is only to check whether `fanout` is up to date, run
+`fanout --check-update` directly and skip the rest of this workflow. It is
+read-only, creates no panes, and does not require dmux pre-flight, parent
+resolution, dry-run, pane naming, or confirmation. `fanout check-update` is
+the equivalent subcommand form. Dev builds (`version == "dev"`, including
+plain `make build-go`) print a dev-build message and exit 0 without calling
+`gh`. Released builds call `gh release view -R butaosuinu/fanout --json
+tagName -q .tagName` and compare MAJOR.MINOR.PATCH tags, with an optional
+`v` prefix. Exit codes: `0` comparison completed or dev build, `2` cannot
+compare version strings, `3` release lookup failed.
 
 1. Resolve the parent target from the user's request or recent context. Two
    shapes are accepted; identify which one matches and pass the normalized
