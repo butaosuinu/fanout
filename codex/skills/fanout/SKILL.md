@@ -163,15 +163,26 @@ use this workflow directly.
 
 ## Optional: Wait-and-Continue
 
-Temporarily disabled for new direct tmux action runs. Action mode writes
-`.fanout/state.json`, but `fanout --status` still reads legacy dmux state, so
-polling it cannot observe panes launched through the direct runtime. If the
-user asks for wait-and-continue, explain this limitation and do not start a
-polling loop until `--status` reads the fanout state store.
+Use this only when the user explicitly asks to wait until child PRs merge and
+then continue parent-scope work. After the real fanout run succeeds, poll
+`fanout --status <PARENT>` from the parent worktree. The command reads
+`.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
+`summary.all_merged` for the recorded children.
+
+1. Continue any parent-scope work that does not depend on the children's merged output.
+2. Periodically rerun `fanout --status <PARENT>`. Inspect `summary.all_merged`.
+3. When `summary.all_merged == true`, refresh and merge the same base branch
+   used for the fanout run in the parent worktree. Use the forwarded
+   `--base-branch` when present; otherwise resolve fanout's default branch
+   (`gh repo view defaultBranchRef`, then `origin/HEAD`, then `main`). Fetch the
+   normalized remote branch and run `git merge --ff-only origin/<branch>` (or the
+   equivalent `refs/remotes/origin/<branch>`), then proceed with integration
+   tests and parent-issue close-out.
+4. Treat `prs: []` on a child as pending (PR not yet open), never merged.
 
 `--status` exit codes:
 
-- `2` — cannot enumerate children (config / session missing, bad invocation).
+- `2` — cannot enumerate children or state (bad invocation, unreadable or malformed state, unusable project root). A missing state file is treated as empty.
   Stop and report.
 - `3` — `gh` API call failed. Stop and report; the user may need to refresh
   `gh auth`.
@@ -180,12 +191,12 @@ polling loop until `--status` reads the fanout state store.
 
 `--status` is read-only and exclusive with all action-bearing flags
 (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`,
-`--base-branch`, `--branch-prefix`, `--no-refresh`, `--sleep`,
-`--popup-timeout`, `--dry-run`, `--unblocked-only`, `--auto-pr`,
-`--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
-`--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`,
-`--no-agent-teams-hint`). Set `DMUX_CONFIG_PATH` to bypass legacy
-dmux-session discovery for `--status` (useful after the session has exited).
+`--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`,
+`--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
+`--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
+`--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
+`--agent-teams-hint`, `--no-agent-teams-hint`). Set `FANOUT_STATE_PATH` to
+read a specific state file outside the repository checkout.
 
 ## Implicit Child Scan
 
@@ -321,8 +332,7 @@ the likely next action:
 ## Notes
 
 - Action-mode reruns skip children already recorded in `.fanout/state.json`
-  for the same `(parent, issueNum)`. `--status` still reads legacy dmux state
-  until its own migration lands.
+  for the same `(parent, issueNum)`. `--status` reads the same state store.
 - `--unblocked-only` defers children whose blockers are still OPEN and is
   preferred over hand-built wave lists when blocker annotations exist.
 - Default project-mode filter is `--project-status Todo`. Use

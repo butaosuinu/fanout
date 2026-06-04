@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "900",
+      "issueNum": 901,
+      "slug": "paginated-child",
+      "branchName": "fanout/paginated-child-901",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "paginated-child",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #901 of #900] paginated-child: read /tmp/fanout-project_root-901.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

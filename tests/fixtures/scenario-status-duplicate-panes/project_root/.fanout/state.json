@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "500",
+      "issueNum": 501,
+      "slug": "first",
+      "branchName": "fanout/first-501",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "first",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #501 of #500] first: read /tmp/fanout-project_root-501.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "500",
+      "issueNum": 501,
+      "slug": "first-retry",
+      "branchName": "fanout/first-retry-501",
+      "paneId": "%10",
+      "agent": "claude",
+      "displayName": "first-retry",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #501 of #500] first-retry: read /tmp/fanout-project_root-501.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "500",
+      "issueNum": 502,
+      "slug": "second",
+      "branchName": "fanout/second-502",
+      "paneId": "%11",
+      "agent": "claude",
+      "displayName": "second",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #502 of #500] second: read /tmp/fanout-project_root-502.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

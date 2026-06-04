@@ -155,9 +155,12 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 
 ## 前提条件
 
-- `gh` CLI、`jq`、`git`、`tmux`、`gh-sub-issue` 拡張
-  （`gh extension install yahsan2/gh-sub-issue`）。fanout は起動時にこれらを
-  チェックし、失敗時にはインストールのヒントを表示します。子 issue は
+- 既定の fanout 作成フローでは `gh` CLI、`jq`、`git`、`tmux`、`gh-sub-issue`
+  拡張（`gh extension install yahsan2/gh-sub-issue`）が必要です。`--status` と
+  `--cleanup` は `gh`/`jq`/`git`、`--merge` と `--close` は `git` を使います
+  （`--close`/`--cleanup` の tmux pane kill は pane が既に無い場合 stale として
+  扱います）。fanout は必要な依存を起動時にチェックし、失敗時には
+  インストールのヒントを表示します。子 issue は
   Sub-issues API 経由でも、親本文のタスクリスト（`- [ ] #NUM ...`）経由でも、
   あるいは両方で宣言されていても構いません。fanout は両ソースの和集合を取ります。
 - **Project モード時のみ**: Project items を取得する GraphQL クエリのため、
@@ -189,13 +192,38 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
-fanout <parent-issue> --status      # legacy dmux state の JSON 状態を読む
+fanout <parent-issue> --status      # .fanout/state.json 由来の JSON 状態を読む
+fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
+fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
+fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
 fanout --help
 ```
 
 第1引数は GitHub issue 番号（Sub-issues + タスクリストモード）または
 Projects v2 URL（Project モード、上記参照）のいずれか。`--project-status`
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
+
+### `--status` / lifecycle
+
+`fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
+（または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
+子 issue を列挙し、各子について `gh api graphql` で issue state と
+`closedByPullRequestsReferences` を取得して、既存の JSON schema
+（`children[].prs` / `summary.all_merged` など）で出力します。dmux や live tmux
+session は不要です。現在の JSON schema は issue parent 用なので、Projects v2 URL
+を parent にした `--status` は拒否します。
+
+Lifecycle コマンドも `.fanout/state.json` の記録を対象にします。任意の worktree を
+filesystem scan で探すことはしません。
+
+- `fanout <parent> --merge <NUM>` は、記録済み branch を
+  `git -C <project-root> merge --ff-only <branch>` で取り込みます。fast-forward
+  できない場合は報告だけ行い、vim 等の conflict 解決 UI は起動しません。
+- `fanout <parent> --close <NUM>` は、記録済み worktree を
+  `git worktree remove <path> --force` で削除し、記録済み tmux pane が残っていれば
+  kill し、state entry を削除して `git worktree prune` を実行します。
+- `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に
+  `MERGED` がある記録済み子をまとめて `--close` 相当で後始末します。
 
 ### Settings
 
@@ -303,13 +331,19 @@ fanout 123 --no-auto-pr
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# legacy dmux state に記録された子 issue と closed-by PR の merge 状態を
-# JSON で読む。副作用は無いが、direct tmux の .fanout/state.json 行はまだ
-# ここには表示されない。内部的には子ごとに `gh api graphql` を 1 回呼び、
-# `closedByPullRequestsReferences(first: 100)` をカーソル追従して
-# PR の `state` / `mergedAt` をまとめて取得する。
+# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を
+# JSON で読む。副作用は無い。内部的には子ごとに `gh api graphql` を呼び、
+# `closedByPullRequestsReferences(first: 100)` をカーソル追従して取得する。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+
+# 記録済み子 branch を parent worktree に fast-forward merge し、不要になった
+# child worktree/pane を後始末する
+fanout 123 --merge 4
+fanout 123 --close 4
+
+# issue が CLOSED または closed-by PR が MERGED の記録済み子をまとめて後始末
+fanout 123 --cleanup
 
 # 親 issue ではなく Projects v2 ボードの OPEN issue をファンアウトする。
 # 既定は Status=Todo フィルタ、同一リポジトリのみ。`gh auth refresh -s

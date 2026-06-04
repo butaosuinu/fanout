@@ -68,8 +68,8 @@ load helpers
 }
 
 @test "scenario-cross-parent-shared: state rows do not leak across parents" {
-  # Parents #100 and #200 share child #501. The fixture has legacy dmux state
-  # plus a .fanout/state.json row for #100/#501, but (parent, issueNum)
+  # Parents #100 and #200 share child #501. The fixture has a
+  # .fanout/state.json row for #100/#501, but (parent, issueNum)
   # idempotency must not alter the command plan for parent #200.
   use_fixture scenario-cross-parent-shared
   run_fanout_dry 200

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "100",
+      "issueNum": 101,
+      "slug": "first-child",
+      "branchName": "fanout/first-child-101",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "first-child",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #101 of #100] first-child: read /tmp/fanout-project_root-101.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "100",
+      "issueNum": 102,
+      "slug": "second-child",
+      "branchName": "fanout/second-child-102",
+      "paneId": "%10",
+      "agent": "claude",
+      "displayName": "second-child",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #102 of #100] second-child: read /tmp/fanout-project_root-102.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

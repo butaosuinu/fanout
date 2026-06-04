@@ -128,3 +128,25 @@ func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
 		t.Fatalf("paneId = %q, want %%2", got)
 	}
 }
+
+func TestRemoveDeletesAllSameParentIssueRows(t *testing.T) {
+	store := Store{Panes: []Pane{
+		{Parent: "84", IssueNum: 101, PaneID: "%1"},
+		{Parent: "084", IssueNum: 101, PaneID: "%2"},
+		{Parent: "84", IssueNum: 102, PaneID: "%3"},
+		{Parent: "85", IssueNum: 101, PaneID: "%4"},
+	}}
+
+	if !store.Remove("84", 101) {
+		t.Fatal("Remove returned false, want true")
+	}
+	if _, ok := store.Find("84", 101); ok {
+		t.Fatalf("parent #84 issue #101 still present: %+v", store.Panes)
+	}
+	if _, ok := store.Find("84", 102); !ok {
+		t.Fatalf("same parent different issue was removed: %+v", store.Panes)
+	}
+	if _, ok := store.Find("85", 101); !ok {
+		t.Fatalf("different parent same issue was removed: %+v", store.Panes)
+	}
+}

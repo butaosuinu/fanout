@@ -156,9 +156,12 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 
 ## Prerequisites
 
-- `gh` CLI, `jq`, `git`, `tmux`, and the `gh-sub-issue` extension
-  (`gh extension install yahsan2/gh-sub-issue`). fanout checks these at
-  startup and prints install hints on failure. Children can be declared via
+- The default pane-creation flow needs `gh` CLI, `jq`, `git`, `tmux`, and the
+  `gh-sub-issue` extension (`gh extension install yahsan2/gh-sub-issue`).
+  `--status` and `--cleanup` use `gh`/`jq`/`git`; `--merge` and `--close` use
+  `git` (`--close`/`--cleanup` treat an already-missing tmux pane as stale).
+  fanout checks the dependencies needed for the selected mode at startup and
+  prints install hints on failure. Children can be declared via
   the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
   both — fanout unions them.
 - **Project mode only**: the `gh` CLI must have the `read:project` scope so
@@ -193,6 +196,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
+fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout --help
 ```
 
@@ -202,22 +208,19 @@ task-list mode) or a Projects v2 URL (Project mode; see above).
 
 ### `--status` output
 
-`fanout <parent> --status` is read-only: it reads `dmux.config.json` to
-enumerate children already fanned out under that specific parent (panes
-whose prompt starts with `[fanout #N of #<parent>]`), queries each child
-through a single `gh api graphql` call against
+`fanout <parent> --status` is read-only: it reads `.fanout/state.json` to
+enumerate children already fanned out under that specific parent, queries
+each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
 carries `state`/`mergedAt` directly, and prints one JSON document on
-stdout. Issue-mode parents only —
-Projects v2 URLs as parent are rejected up-front (panes for project items
-carry the URL in their prefix, which `--status`'s strict filter doesn't
-address). In a session that has fanned multiple parents, children of
-other parents are filtered out so `summary.all_merged` reflects only the
-requested parent. Old-format panes that predate this feature
-(`[fanout #N]` without parent annotation) are excluded. Set `DMUX_CONFIG_PATH` to
-point directly at a `dmux.config.json` when the dmux session has already
-exited.
+stdout. It does not require dmux or a live tmux session. Issue-mode parents
+only — Projects v2 URLs as parent are rejected up-front for the current JSON
+schema. In a state file that has fanned multiple parents, children of other
+parents are filtered out so `summary.all_merged` reflects only the requested
+parent. Set `FANOUT_STATE_PATH` to point directly at a state file when reading
+from outside the repository checkout; otherwise fanout reads
+`<git-root>/.fanout/state.json`.
 
 ```json
 {
@@ -243,18 +246,37 @@ exited.
 `--status` exit codes are a separate lane from the default flow:
 
 - `0` — JSON emitted (check `summary.all_merged` for the actual state).
-- `2` — cannot enumerate (bad invocation, missing/unreadable
-  `dmux.config.json`, no active dmux session, Projects v2 URL as parent).
+- `2` — cannot enumerate (bad invocation, unreadable or malformed state file,
+  unusable project root, Projects v2 URL as parent). A missing state file is
+  treated as an empty state.
 - `3` — `gh` API call failed (auth, network, non-existent issue, etc.).
 
 `--status` is exclusive with all action-bearing flags (`--agent`, `--limit`,
 `--only`, `--skip`, `--include`, `--name`, `--base-branch`,
-`--branch-prefix`, `--no-refresh`, `--sleep`, `--popup-timeout`, `--dry-run`,
-`--unblocked-only`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
+`--branch-prefix`, `--no-refresh`, `--session`, `--sleep`,
+`--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
+`--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`,
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
-It still reads legacy dmux state; `.fanout/state.json` is currently used by
-action-mode idempotency and launch persistence, not by `--status`.
+
+### Lifecycle commands
+
+The lifecycle commands operate on entries recorded in `.fanout/state.json`.
+They do not discover arbitrary worktrees by scanning the filesystem.
+
+- `fanout <parent> --merge <NUM>` runs
+  `git -C <project-root> merge --ff-only <recorded-branch>`. If the merge is
+  not a fast-forward, fanout reports the git error and does not start an
+  editor or conflict-resolution flow.
+- `fanout <parent> --close <NUM>` removes the recorded worktree with
+  `git worktree remove <path> --force`, kills the recorded tmux pane when it is
+  still present, removes the state entry, and runs `git worktree prune`.
+- `fanout <parent> --cleanup` queries the recorded children and closes any
+  child whose issue is `CLOSED` or whose closed-by PR list contains a `MERGED`
+  PR. Pending children remain recorded.
+
+Like `--status`, these commands honor `FANOUT_STATE_PATH`; otherwise they use
+`<git-root>/.fanout/state.json`.
 
 ### Settings
 
@@ -368,11 +390,19 @@ fanout 123 --no-auto-pr
 # Disable the Agent Teams hint globally for this shell
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# Read-only legacy JSON status: who's fanned out through legacy dmux state,
-# what state each child is in, and whether their closed-by PRs have merged.
-# No side effects. Direct tmux state-store rows are not visible here yet.
+# Read-only JSON status from .fanout/state.json: who's fanned out, what state
+# each child is in, and whether their closed-by PRs have merged. No side effects.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+
+# Fast-forward a recorded child branch into the parent worktree, then remove
+# the child worktree/pane after it is no longer needed.
+fanout 123 --merge 4
+fanout 123 --close 4
+
+# Remove all recorded children whose issue is CLOSED or whose closed-by PR
+# list contains a MERGED PR.
+fanout 123 --cleanup
 
 # Fan out OPEN issues from a Projects v2 board instead of a parent issue.
 # Default filter is Status=Todo; same-repo only. Requires `gh auth refresh

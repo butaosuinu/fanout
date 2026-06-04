@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "700",
+      "issueNum": 701,
+      "slug": "first-no-prs",
+      "branchName": "fanout/first-no-prs-701",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "first-no-prs",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #701 of #700] first-no-prs: read /tmp/fanout-project_root-701.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "700",
+      "issueNum": 702,
+      "slug": "second-no-prs",
+      "branchName": "fanout/second-no-prs-702",
+      "paneId": "%10",
+      "agent": "claude",
+      "displayName": "second-no-prs",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #702 of #700] second-no-prs: read /tmp/fanout-project_root-702.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

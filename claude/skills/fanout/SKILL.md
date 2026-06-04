@@ -113,18 +113,38 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
 
 - Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
 - The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
-- Re-invocation skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)`. `fanout --status` still reads legacy dmux state until its own migration lands.
+- Re-invocation skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)`. `fanout --status` reads the same state store.
 
 ## Optional: wait-and-continue
 
-Temporarily disabled for new direct tmux action runs. Action mode writes
-`.fanout/state.json`, but `fanout --status` still reads legacy dmux state, so
-polling it cannot observe panes launched through the direct runtime. If the
-user asks for wait-and-continue, explain this limitation and do not start a
-polling loop until `--status` reads the fanout state store.
+Use this only when the user explicitly asks to wait until child PRs merge and
+then continue parent-scope work. After the real fanout run succeeds, poll
+`fanout --status <PARENT>` from the parent worktree. The command reads
+`.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
+`summary.all_merged` for the recorded children.
+
+1. Continue any parent-scope work that does not depend on the children's merged output.
+2. When you reach a phase that requires the children's merged output, poll status via `ScheduleWakeup` with the autonomous-loop sentinel:
+   ```
+   ScheduleWakeup(
+     prompt: "<<autonomous-loop-dynamic>>",
+     delay_seconds: 300,
+     reason: "polling fanout --status #<PARENT> for all_merged"
+   )
+   ```
+3. On each wake-up, run `fanout --status <PARENT>` and inspect `summary.all_merged`.
+4. When `summary.all_merged == true`, stop scheduling wake-ups, then refresh
+   and merge the same base branch used for the fanout run in the parent
+   worktree. Use the forwarded `--base-branch` when present; otherwise resolve
+   fanout's default branch (`gh repo view defaultBranchRef`, then `origin/HEAD`,
+   then `main`). Fetch the normalized remote branch and run
+   `git merge --ff-only origin/<branch>` (or the equivalent
+   `refs/remotes/origin/<branch>`), then proceed with integration tests and
+   parent-issue close-out.
+5. Treat `prs: []` on a child as pending (PR not yet open), never merged.
 
 `--status` exit codes:
-- `2` — cannot enumerate legacy status state (config / session missing, bad invocation). Stop and report.
+- `2` — cannot enumerate children or state (bad invocation, unreadable or malformed state, unusable project root). A missing state file is treated as empty. Stop and report.
 - `3` — `gh` API failed. Stop and report; the user may need to refresh `gh auth`.
 - `0` with `summary.total == 0` — nothing has been fanned out under that parent (or every fanned pane was already torn down). Don't loop on this; tell the user.
 
