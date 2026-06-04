@@ -507,10 +507,11 @@ should branch from the selected base.
    - Creates `.fanout/worktrees/<slug>/` with
      `git worktree add -b <branch> <path> <base>`.
    - Creates a tmux child pane without selecting it with
-     `tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree>`
-     (`--session` uses the supplied session name as the target).
-   - Sets the pane title, applies `tmux select-layout tiled`, and sends the
-     selected agent launch command plus Enter.
+     `tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree> <launch-command>`
+     (`--session` uses the supplied session name as the target). The launch
+     command runs through the user's shell startup path and returns to an
+     interactive shell after the agent exits.
+   - Sets the pane title and applies `tmux select-layout tiled`.
    - Sleeps `--sleep` seconds (default 4) before the next one.
 7. Prints a summary of created / skipped / deferred / failed counts.
 

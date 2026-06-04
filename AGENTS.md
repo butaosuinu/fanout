@@ -51,9 +51,10 @@ The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux, and
   targets the invoking pane (`$TMUX_PANE`) unless `--session` is supplied.
 - Pane creation is direct: `worktree.Prepare` creates
-  `.fanout/worktrees/<slug>/`, `tmuxrun.SplitPane` runs
-  `tmux split-window -d -h -P -F '#{pane_id}'`, and `tmuxrun.SendShellCommand`
-  launches the selected agent in the child worktree.
+  `.fanout/worktrees/<slug>/`, `tmuxrun.SplitPaneWithAgentCommand` runs
+  `tmux split-window -d -h -P -F '#{pane_id}'`, and
+  `tmuxrun.BuildPaneLaunchCommand` launches the selected agent through the
+  user's shell startup path while leaving an interactive shell after exit.
 - `--agent` or `FANOUT_AGENT` is required. `internal/agent` validates supported
   agent names and, in live mode, verifies the corresponding CLI is installed.
 - Idempotency is stored in `.fanout/state.json` under `(parent, issueNum)`.

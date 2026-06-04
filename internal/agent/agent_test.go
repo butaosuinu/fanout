@@ -23,7 +23,7 @@ func TestBuildCommandRejectsUnknownAgent(t *testing.T) {
 	}
 }
 
-func TestBuildResolvedCommandUsesAbsoluteExecutablePath(t *testing.T) {
+func TestBuildResolvedCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.T) {
 	tmp := t.TempDir()
 	binDir := filepath.Join(tmp, "bin with space")
 	if err := os.Mkdir(binDir, 0o755); err != nil {

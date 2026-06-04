@@ -93,7 +93,7 @@ Options:
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.
   --dry-run           Print the git worktree, tmux split-window, and agent
-                      send-keys commands without executing them.
+                      launch commands without executing them.
   --debug             Enable extra diagnostic logging.
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue recorded in .fanout/state.json, including
