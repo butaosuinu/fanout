@@ -105,6 +105,9 @@ Options:
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue's state and closed-by PR merge status, then
                       exit. Exclusive with action-bearing flags.
+  self-update         Subcommand. Replace this binary and bundled Claude/Codex
+                      integrations through install.sh. Supports
+                      --check, --yes, --version <tag>, and --no-skills.
   --check-update      Read-only mode. Fetch the latest fanout release tag,
                       compare it with this binary's version, print whether an
                       update is available, then exit. Also accepted as

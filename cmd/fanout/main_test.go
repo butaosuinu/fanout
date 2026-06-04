@@ -116,6 +116,26 @@ func TestIsCheckUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestIsSelfUpdateRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "subcommand", args: []string{"self-update"}, want: true},
+		{name: "subcommand with flags", args: []string{"self-update", "--version", "v1.2.3"}, want: true},
+		{name: "check-update", args: []string{"check-update"}, want: false},
+		{name: "top-level version", args: []string{"--version"}, want: false},
+		{name: "empty", args: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSelfUpdateRequest(tc.args); got != tc.want {
+				t.Fatalf("isSelfUpdateRequest(%#v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVersionLineUsesInjectedValues(t *testing.T) {
 	oldVersion := version
 	oldCommit := commit
