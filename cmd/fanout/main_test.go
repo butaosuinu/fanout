@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
@@ -110,6 +111,33 @@ func TestCreatePaneForIssueRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, `base branch "refs/heads/main" is not refreshable`) {
 		t.Fatalf("stderr = %q, want unsupported base message", got)
+	}
+}
+
+func TestLoadRunStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+
+	cfg := &cliflags.Config{}
+	lg := log.NewWith(io.Discard, io.Discard, false)
+	_, recorder, code := loadRunState(cfg, repo, lg)
+	if code != exitcode.OK {
+		t.Fatalf("loadRunState code = %d, want %d", code, exitcode.OK)
+	}
+	if recorder == nil {
+		t.Fatal("loadRunState returned nil recorder for live run")
+	}
+	t.Cleanup(func() { _ = recorder.Unlock() })
+
+	if _, err := os.Stat(filepath.Join(repo, ".fanout", "state.json.lock")); err != nil {
+		t.Fatalf("state lock was not created: %v", err)
+	}
+	exclude, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exclude), ".fanout/state.json.lock\n") {
+		t.Fatalf("exclude = %q, want state lock pattern", exclude)
 	}
 }
 

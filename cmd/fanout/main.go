@@ -212,13 +212,6 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
-	if !cfg.DryRun {
-		if err := worktree.EnsureLocalExclude(info.ProjectRoot); err != nil {
-			lg.Err("prepare local git exclude: %v", err)
-			return nil, exitcode.Env
-		}
-	}
-
 	return &runtimeInfo{
 		info: info,
 		gh:   ghissue.Runner{Cwd: info.ProjectRoot},
@@ -355,6 +348,10 @@ func loadRunState(cfg *cliflags.Config, projectRoot string, lg *log.Logger) (sta
 			return state.Store{}, nil, exitcode.Env
 		}
 		return store, nil, exitcode.OK
+	}
+	if err := worktree.EnsureLocalExclude(projectRoot); err != nil {
+		lg.Err("prepare local git exclude: %v", err)
+		return state.Store{}, nil, exitcode.Env
 	}
 	locked, err := state.LockProject(projectRoot)
 	if err != nil {
