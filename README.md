@@ -14,9 +14,9 @@ fanout now creates child sessions without dmux: it resolves the repository
 root with `git rev-parse --show-toplevel`, refreshes the selected base branch,
 creates `.fanout/worktrees/<slug>/`, splits the invoking tmux pane with
 `tmux split-window`, and starts the selected agent CLI with the one-line
-briefing prompt. The older dmux popup-interception path is retained only in
-legacy status/documentation surfaces until the state-store migration is
-complete.
+briefing prompt. It records launched panes in `.fanout/state.json`, keyed by
+`(parent, issueNum)`, so reruns of the same parent skip children that already
+have a recorded fanout pane.
 
 ## Project mode
 
@@ -42,9 +42,12 @@ task-list union.
   one repo per run.
 - **Status field missing on the Project?** fanout warns and falls back to
   every item regardless of `--project-status`.
-- **Idempotency and `--unblocked-only` work the same way.** Phase 1 action
-  mode skips children when the exact `.fanout/worktrees/<slug>/` directory
-  exists or another generated worktree directory ends in `-<issue-number>`.
+- **Idempotency and `--unblocked-only` work the same way.** Action mode
+  skips children recorded in `.fanout/state.json` for the same
+  `(parent, issueNum)` pair. As a migration fallback, unrecorded existing
+  `.fanout/worktrees/<slug>` directories are also skipped. If the same issue
+  is recorded for another parent, only an existing worktree matching the slug
+  this current run would create is treated as that migration fallback.
   Blockers in Project mode come only from the child body's `## Blocked by`
   section and the `blocked` label; the `(blocked by #X)` task-list trailer
   doesn't exist without a parent body.
@@ -250,9 +253,8 @@ exited.
 `--unblocked-only`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`,
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
-It still reads legacy dmux state. Phase 1 direct tmux action runs do not write
-that state, so the bundled `/fanout --wait` polling loop is temporarily
-disabled until the state-store migration lands.
+It still reads legacy dmux state; `.fanout/state.json` is currently used by
+action-mode idempotency and launch persistence, not by `--status`.
 
 ### Settings
 
@@ -335,8 +337,8 @@ fanout 123 --unblocked-only
 fanout 123 --unblocked-only --limit 3
 
 # Name each child's worktree slug stem, pane title, and branch directly. fanout
-# appends -<issue-number> to slug stems that do not already have it, so reruns
-# remain idempotent even if later names change. The optional 3rd segment
+# appends -<issue-number> to slug stems that do not already have it, while
+# rerun idempotency comes from `.fanout/state.json`. The optional 3rd segment
 # overrides the generated branch name. Any of the three pipe-separated segments
 # may be empty, but at least one must be non-empty. Normally the bundled
 # Claude/Codex integrations generate these from issue title/body without any
@@ -368,7 +370,7 @@ export FANOUT_AGENT_TEAMS_HINT=0
 
 # Read-only legacy JSON status: who's fanned out through legacy dmux state,
 # what state each child is in, and whether their closed-by PRs have merged.
-# No side effects. Phase 1 direct tmux runs are not visible here yet.
+# No side effects. Direct tmux state-store rows are not visible here yet.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
 
@@ -450,10 +452,13 @@ should branch from the selected base.
    any line matching `^\s*-\s+\[[ xX]\] ... #NUM` contributes `#NUM` (same-repo
    only; `owner/repo#NUM` is skipped). Body-sourced numbers are hydrated via
    `gh issue view`. Only `state == "OPEN"` children are processed.
-5. For Phase 1 action-mode idempotency, it skips children when the exact
-   `.fanout/worktrees/<slug>` directory exists or another generated worktree
-   directory ends in `-<issue-number>`. If `--unblocked-only` is set, each
-   remaining candidate is also inspected
+5. For action-mode idempotency, it reads `.fanout/state.json` and skips
+   children whose `(parent, issueNum)` pair is already recorded. It also skips
+   unrecorded existing `.fanout/worktrees/<slug>` directories as a migration
+   fallback for pre-state runs or interrupted launches. If the same issue is
+   recorded for another parent, fanout ignores the other parent's default
+   worktree but still skips an existing worktree matching the slug this current
+   run would create. If `--unblocked-only` is set, each remaining candidate is also inspected
    for blockers: the child body's `## Blocked by` section (up to the next
    blank line), a trailing `(blocked by #X, #Y)` on the parent's task-list
    row, and the child's `blocked` label (weak signal — logged, not used to
@@ -539,10 +544,18 @@ Notes:
 - **One-line prompt only.** The full issue body lives in
   `/tmp/fanout-<repo>-<NUM>.md`; the pane launch prompt stays short and points
   the agent at that briefing.
-- **Phase 1 idempotency is worktree-directory based.** It matches the exact
-  generated slug and issue-number-suffixed generated worktree directories. A
-  later state-store phase will replace legacy `dmux.config.json`
-  status/idempotency behavior.
+- **State-store idempotency.** `.fanout/state.json` stores `schemaVersion` plus
+  pane rows containing `parent`, `issueNum`, `slug`, `branchName`, `paneId`,
+  `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Writes use
+  a sibling temp file plus rename, and live runs hold `.fanout/state.json.lock`
+  while planning and launching so parallel invocations cannot both create the
+  same `(parent, issueNum)` pane. Existing worktree directories without a state
+  row are still treated as already fanned as a migration fallback. If the same
+  child issue is already recorded for another parent or Project, default
+  slug/branch generation adds a parent token before the issue suffix so the
+  second run gets its own worktree instead of colliding with the first one; an
+  existing worktree matching the slug this current run would create is still
+  skipped for interrupted-launch recovery.
 - **Direct tmux IPC.** Pane creation is synchronous because
   `tmux split-window -t <invoking-pane> -d -P -F '#{pane_id}'` returns the new
   pane id directly without selecting the child pane; no popup interception or

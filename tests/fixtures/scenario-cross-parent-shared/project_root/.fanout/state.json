@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "100",
+      "issueNum": 501,
+      "slug": "shared-child-501",
+      "branchName": "fanout/shared-child-501",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "shared-child-501",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #501 of #100] shared-child-501: Shared child. read /tmp/fanout-project_root-501.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

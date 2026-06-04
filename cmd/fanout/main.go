@@ -16,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/naming"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
@@ -113,10 +114,26 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		return exitcode.OK
 	}
 
+	store, recorder, code := loadRunState(cfg, rt.info.ProjectRoot, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	if recorder != nil {
+		defer func() {
+			if err := recorder.Unlock(); err != nil {
+				lg.Warn("unlock fanout state: %v", err)
+			}
+		}()
+	}
+
+	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
+	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
+	worktreeFallbackFanned := existingWorktreeFanned(cfg, rt.info.ProjectRoot, loaded.Children, otherParentFanned)
+
 	plan := buildPlan(
 		cfg,
 		loaded.Children,
-		existingWorktreeFanned(cfg, rt.info.ProjectRoot, loaded.Children),
+		mergeFanned(sameParentFanned, worktreeFallbackFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			if err := rt.gh.HydrateBodyLabels(issue); err != nil {
@@ -148,7 +165,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		printDryRunPlan(plan, lg, c)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, c)
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	if result.Failed > 0 {
@@ -319,13 +336,52 @@ func issueSet(issues []ghissue.Issue) map[int]bool {
 	return out
 }
 
-func existingWorktreeFanned(cfg *cliflags.Config, projectRoot string, issues []ghissue.Issue) map[int]bool {
+func mergeFanned(primary, fallback map[int]bool) map[int]bool {
+	out := map[int]bool{}
+	for num := range primary {
+		out[num] = true
+	}
+	for num := range fallback {
+		out[num] = true
+	}
+	return out
+}
+
+func loadRunState(cfg *cliflags.Config, projectRoot string, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {
+	if cfg.DryRun {
+		store, err := state.LoadProject(projectRoot)
+		if err != nil {
+			lg.Err("%v", err)
+			return state.Store{}, nil, exitcode.Env
+		}
+		return store, nil, exitcode.OK
+	}
+	locked, err := state.LockProject(projectRoot)
+	if err != nil {
+		lg.Err("%v", err)
+		return state.Store{}, nil, exitcode.Env
+	}
+	return locked.Store, locked, exitcode.OK
+}
+
+func existingWorktreeFanned(cfg *cliflags.Config, projectRoot string, issues []ghissue.Issue, sharedAcrossParents map[int]bool) map[int]bool {
 	out := map[int]bool{}
 	worktreeNames := existingWorktreeNames(filepath.Join(projectRoot, ".fanout", "worktrees"))
 	for _, issue := range issues {
 		slug := naming.Slug(issue.Title, issue.Number)
+		slugOverridden := false
 		if name := cfg.FindName(issue.Number); name != nil && name.SlugHint != "" {
 			slug = naming.EnsureIssueSuffix(name.SlugHint, issue.Number)
+			slugOverridden = true
+		}
+		if sharedAcrossParents[issue.Number] {
+			if !slugOverridden {
+				slug = naming.QualifySlugForParent(slug, cfg.ParentRef, issue.Number)
+			}
+			if worktreeNameMatchesExact(worktreeNames, slug) {
+				out[issue.Number] = true
+			}
+			continue
 		}
 		if worktreeNameMatchesIssue(worktreeNames, slug, issue.Number) {
 			out[issue.Number] = true
@@ -348,6 +404,15 @@ func existingWorktreeNames(root string) []string {
 	return names
 }
 
+func worktreeNameMatchesExact(names []string, slug string) bool {
+	for _, name := range names {
+		if name == slug {
+			return true
+		}
+	}
+	return false
+}
+
 func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bool {
 	issueSuffix := fmt.Sprintf("-%d", issueNum)
 	for _, name := range names {
@@ -358,7 +423,7 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -368,7 +433,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 				issue.Body = detail.Body
 			}
 		}
-		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, c) {
+		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c) {
 			result.Created++
 			result.CreatedNums = append(result.CreatedNums, issue.Number)
 		} else {

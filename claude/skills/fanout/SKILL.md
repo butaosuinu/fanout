@@ -76,7 +76,7 @@ Before running the real command:
 6. **Project mode only: discover final targets before naming.** Run `fanout <project-url> --dry-run <forwarded-flags>` from the target repository worktree with all selection flags and any user-supplied `--name` flags, but without newly generated `--name` flags. Use that output to learn which Project items survived Status / repo / blocker / limit filtering. This discovery dry-run still runs when `--go` was passed; it is not the confirmation step.
 7. **Generate pane names** — fanout has a deterministic default slug (`slugify(title)-<issueNum>`), but issue context usually allows clearer names, so generate names here when useful and forward them via `--name`:
    1. For each target issue (post-`--only`/`--skip`/`--include`/dedup-against-already-fanned, i.e. the final target set the dry-run reports), produce:
-      - `slug-hint` — 2–4 kebab-case words summarizing the intent, e.g. `fix-login-timeout`, `update-docs-ja`, `cleanup-worktree`. Start with a letter or digit; only `[a-z0-9-]`. This controls the worktree slug stem; fanout appends `-<issue-number>` when missing so reruns stay idempotent even if later names change.
+      - `slug-hint` — 2–4 kebab-case words summarizing the intent, e.g. `fix-login-timeout`, `update-docs-ja`, `cleanup-worktree`. Start with a letter or digit; only `[a-z0-9-]`. This controls the worktree slug stem; fanout appends `-<issue-number>` when missing, while rerun idempotency comes from `.fanout/state.json`.
       - `display-name` — ≤40 characters, human-readable (Japanese or English OK, mixed is fine). Used for the tmux pane title. This is what the user *sees* when switching panes, so favor clarity over brevity.
       - `branch-name` *(optional)* — exact git branch name to create. Generate this only if the user's team has a branch-naming convention worth enforcing (`feat/issue-<N>-foo`, `bugfix/<slug>`, `release/v2.0`, etc.), or if `branchPrefix + slug-hint` would collide with something. Skip this segment when the default is fine — over-specifying it is noise.
    2. Forward as `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]` — one flag per target, repeatable. Any of the three pipe-separated segments may be empty as long as at least one is non-empty. Examples: `--name 17=fix-login-timeout` (slug only), `--name 17=|Fix login timeout` (display only), `--name 17=fix-x|Fix X|feat/issue-17-x` (all three), `--name 17=||release/v2.0` (branch only).
@@ -107,21 +107,21 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
 - **`gh` scope** — Projects v2 GraphQL requires the `read:project` scope. If `fanout` exits with an authorization failure on the `projectV2` query (`HTTP 401` / `Resource not accessible by integration`), tell the user to run `gh auth refresh -s read:project` and retry. The default `repo` scope alone is not sufficient.
 - **Cross-repo items are skipped** — items whose `content.repository.nameWithOwner` does not match the current git repository are warned and skipped. fanout's briefing / worktree paths assume a single repo (`/tmp/fanout-<repo>-<N>.md`, worktrees under the project root), so cross-repo items would create panes pointing at the wrong checkout. Surface the warning rather than retrying.
 - **`--include` in project mode** is allowed but rarely needed — the Project itself already defines the set. Reach for it only when the user explicitly wants to force-add an issue not currently on the board.
-- **Idempotency** — Phase 1 action mode skips children when the exact `.fanout/worktrees/<slug>` directory exists or another generated worktree directory ends in `-<issue-number>`. Full state-store idempotency is handled by a later phase.
+- **Idempotency** — action mode skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)` pair, and also skips unrecorded existing `.fanout/worktrees/<slug>` directories as a migration fallback. If the same issue is recorded for another parent, only an existing worktree matching the slug this current run would create is treated as fallback. The state file is written with an atomic temp+rename update while a `.fanout/state.json.lock` file is held for the run. If the same child issue is already recorded for another parent or Project, fanout parent-qualifies the default slug/branch so the new run gets a separate worktree.
 
 ## After running
 
 - Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
 - The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
-- Re-invocation skips children when the exact `.fanout/worktrees/<slug>` directory exists or another generated worktree directory ends in `-<issue-number>`. `fanout --status` still reads legacy dmux state until the state-store phase lands.
+- Re-invocation skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)`. `fanout --status` still reads legacy dmux state until its own migration lands.
 
 ## Optional: wait-and-continue
 
-Temporarily disabled for new direct tmux action runs. Phase 1 does not write
-fanout state, and `fanout --status` still reads legacy dmux state, so polling
-it cannot observe panes launched through the direct runtime. If the user asks
-for wait-and-continue, explain this limitation and do not start a polling loop
-until the state-store phase lands.
+Temporarily disabled for new direct tmux action runs. Action mode writes
+`.fanout/state.json`, but `fanout --status` still reads legacy dmux state, so
+polling it cannot observe panes launched through the direct runtime. If the
+user asks for wait-and-continue, explain this limitation and do not start a
+polling loop until `--status` reads the fanout state store.
 
 `--status` exit codes:
 - `2` — cannot enumerate legacy status state (config / session missing, bad invocation). Stop and report.

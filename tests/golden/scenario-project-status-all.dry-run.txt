@@ -20,6 +20,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-one-911
     $ tmux select-pane -t <pane_id> -T todo-one-911
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #911 of #https://github.com/users/butaosuinu/projects/3] todo-one-911: Todo one. read /tmp/fanout-project_root-911.md and begin.'\''' Enter
 [ ok ] #911: dry-run complete
 [info] #912: Todo two
@@ -37,6 +39,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-two-912
     $ tmux select-pane -t <pane_id> -T todo-two-912
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #912 of #https://github.com/users/butaosuinu/projects/3] todo-two-912: Todo two. read /tmp/fanout-project_root-912.md and begin.'\''' Enter
 [ ok ] #912: dry-run complete
 [info] #913: Done item
@@ -54,6 +58,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/done-item-913
     $ tmux select-pane -t <pane_id> -T done-item-913
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #913 of #https://github.com/users/butaosuinu/projects/3] done-item-913: Done item. read /tmp/fanout-project_root-913.md and begin.'\''' Enter
 [ ok ] #913: dry-run complete
 

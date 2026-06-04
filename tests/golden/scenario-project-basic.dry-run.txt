@@ -20,6 +20,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-basic/project_root/.fanout/worktrees/first-todo-item-901
     $ tmux select-pane -t <pane_id> -T first-todo-item-901
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #901 of #https://github.com/users/butaosuinu/projects/3] first-todo-item-901: First todo item. read /tmp/fanout-project_root-901.md and begin.'\''' Enter
 [ ok ] #901: dry-run complete
 [info] #902: Second todo item
@@ -37,6 +39,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-basic/project_root/.fanout/worktrees/second-todo-item-902
     $ tmux select-pane -t <pane_id> -T second-todo-item-902
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #902 of #https://github.com/users/butaosuinu/projects/3] second-todo-item-902: Second todo item. read /tmp/fanout-project_root-902.md and begin.'\''' Enter
 [ ok ] #902: dry-run complete
 

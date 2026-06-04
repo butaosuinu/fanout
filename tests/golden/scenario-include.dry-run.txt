@@ -20,6 +20,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401
     $ tmux select-pane -t <pane_id> -T included-child-a-401
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #401 of #400] included-child-a-401: Included child A. read /tmp/fanout-project_root-401.md and begin.'\''' Enter
 [ ok ] #401: dry-run complete
 [info] #402: Included child B
@@ -37,6 +39,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402
     $ tmux select-pane -t <pane_id> -T included-child-b-402
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #402 of #400] included-child-b-402: Included child B. read /tmp/fanout-project_root-402.md and begin.'\''' Enter
 [ ok ] #402: dry-run complete
 
