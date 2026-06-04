@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -30,6 +32,38 @@ func TestBuildPlanOnlyIdempotencyAndLimit(t *testing.T) {
 	assertInts(t, "targets", issueNums(plan.Targets), []int{101})
 	assertInts(t, "limit deferred", issueNums(plan.LimitDeferred), []int{102})
 	assertInts(t, "already fanned", plan.AlreadyFanned, []int{104})
+}
+
+func TestExistingWorktreeFannedUsesDeterministicSlugAndOverride(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "first-child-101"))
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "custom-102"))
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "custom-no-number-103"))
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "old-title-105"))
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "not-this-1104"))
+
+	cfg := &cliflags.Config{
+		Names: []cliflags.NameOverride{
+			{Num: 102, SlugHint: "custom-102"},
+			{Num: 103, SlugHint: "custom-no-number"},
+		},
+	}
+	issues := []ghissue.Issue{
+		{Number: 101, Title: "First child", State: "OPEN"},
+		{Number: 102, Title: "Second child", State: "OPEN"},
+		{Number: 103, Title: "Third child", State: "OPEN"},
+		{Number: 104, Title: "Fourth child", State: "OPEN"},
+		{Number: 105, Title: "Retitled child", State: "OPEN"},
+	}
+
+	got := existingWorktreeFanned(cfg, root, issues)
+
+	if !got[101] || !got[102] || !got[103] || !got[105] {
+		t.Fatalf("expected #101, #102, #103, and #105 to be fanned, got %#v", got)
+	}
+	if got[104] {
+		t.Fatalf("did not expect #104 to be fanned, got %#v", got)
+	}
 }
 
 func TestBuildPlanSkipFilter(t *testing.T) {
@@ -127,5 +161,12 @@ func assertEqual[T comparable](t *testing.T, name string, got, want T) {
 	t.Helper()
 	if got != want {
 		t.Fatalf("%s = %#v, want %#v", name, got, want)
+	}
+}
+
+func mkdirAll(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }

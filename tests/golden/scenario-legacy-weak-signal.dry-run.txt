@@ -1,28 +1,43 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: dmux
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-legacy-weak-signal/dmux.config.json
 [info] fetching sub-issues of #600
 [info] parent body / --include added 2 extra child reference(s) not in sub-issue API
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #601: First task
   briefing -> /tmp/fanout-project_root-601.md
+  slug -> first-task-601
+  worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/first-task-601
+  branch -> fanout/first-task-601
+  base -> main
   briefing size: 2466 bytes
-  current panes[] length: 1
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #601 of #600] First task: read /tmp/fanout-project_root-601.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root worktree add -b fanout/first-task-601 <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/first-task-601 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/first-task-601
+    $ tmux select-pane -t <pane_id> -T first-task-601
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #601 of #600] first-task-601: First task. read /tmp/fanout-project_root-601.md and begin.'\''' Enter
 [ ok ] #601: dry-run complete
 [info] #602: Second task
   briefing -> /tmp/fanout-project_root-602.md
+  slug -> second-task-602
+  worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/second-task-602
+  branch -> fanout/second-task-602
+  base -> main
   briefing size: 2468 bytes
-  current panes[] length: 1
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #602 of #600] Second task: read /tmp/fanout-project_root-602.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root worktree add -b fanout/second-task-602 <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/second-task-602 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/second-task-602
+    $ tmux select-pane -t <pane_id> -T second-task-602
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #602 of #600] second-task-602: Second task. read /tmp/fanout-project_root-602.md and begin.'\''' Enter
 [ ok ] #602: dry-run complete
 
 [ ok ] created: 2

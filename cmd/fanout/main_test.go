@@ -1,25 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/dmuxsession"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 )
 
 func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, "dmux.config.json")
-	if err := os.WriteFile(configPath, []byte(`{"panes":[]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	oldSleep := sleepBetweenIssues
 	var sleeps []time.Duration
@@ -34,9 +33,9 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		SleepBetween: 0.25,
 	}
 	lg := log.NewWith(io.Discard, io.Discard, false)
-	info := &dmuxsession.Info{
-		ControlPane: "%1",
-		ConfigPath:  configPath,
+	info := &fanoutruntime.Info{
+		Session:     "test",
+		Target:      "%caller",
 		ProjectRoot: dir,
 	}
 	targets := []ghissue.Issue{
@@ -57,6 +56,73 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 	}
 }
 
+func TestCreatePaneForIssueFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+	installFakeExecutable(t, "claude")
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "duplicate-title-77")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &cliflags.Config{
+		Agent:      "claude",
+		ParentRef:  "81",
+		BaseBranch: "main",
+		NoRefresh:  true,
+	}
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+	info := &fanoutruntime.Info{
+		Session:     "test",
+		Target:      "%caller",
+		ProjectRoot: repo,
+	}
+	issue := ghissue.Issue{Number: 77, Title: "Duplicate Title", State: "OPEN", Body: "body"}
+
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), log.Palette{}) {
+		t.Fatal("createPaneForIssue() = true, want false for launch-time worktree collision")
+	}
+	if got := stderr.String(); !strings.Contains(got, "worktree path already exists during launch") {
+		t.Fatalf("stderr = %q, want launch collision message", got)
+	}
+}
+
+func TestCreatePaneForIssueRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &cliflags.Config{
+		Agent:      "claude",
+		ParentRef:  "81",
+		BaseBranch: "refs/heads/main",
+		DryRun:     true,
+	}
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+	info := &fanoutruntime.Info{
+		Session:     "test",
+		Target:      "%caller",
+		ProjectRoot: repo,
+	}
+	issue := ghissue.Issue{Number: 77, Title: "Bad Base", State: "OPEN", Body: "body"}
+
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), log.Palette{}) {
+		t.Fatal("createPaneForIssue() = true, want false for unsupported refresh base")
+	}
+	if got := stderr.String(); !strings.Contains(got, `base branch "refs/heads/main" is not refreshable`) {
+		t.Fatalf("stderr = %q, want unsupported base message", got)
+	}
+}
+
+func installFakeExecutable(t *testing.T, name string) {
+	t.Helper()
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestInvokedCommandNameUsesBinaryName(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -73,6 +139,15 @@ func TestInvokedCommandNameUsesBinaryName(t *testing.T) {
 				t.Fatalf("invokedCommandName(%#v) = %q, want %q", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func gitCmdTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
 

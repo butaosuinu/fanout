@@ -19,6 +19,16 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--is-inside-work-tree" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" && -n "${FIXTURE_DIR:-}" ]]; then
+  printf '%s\n' "$FIXTURE_DIR/project_root"
+  exit 0
+fi
+
+if [[ "${1:-}" == "symbolic-ref" && "${2:-}" == "--short" && "${3:-}" == "refs/remotes/origin/HEAD" && -n "${FIXTURE_DIR:-}" ]]; then
+  printf 'origin/main\n'
+  exit 0
+fi
+
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 IFS=:

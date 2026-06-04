@@ -1,31 +1,46 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: dmux
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-limit/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-limit/dmux.config.json
 [info] fetching sub-issues of #700
 [info] sub-issues: 3 total, 3 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 1
 [info] #701: Alpha
   briefing -> /tmp/fanout-project_root-701.md
+  slug -> alpha-701
+  worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701
+  branch -> fanout/alpha-701
+  base -> main
   briefing size: 2466 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #701 of #700] Alpha: read /tmp/fanout-project_root-701.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root worktree add -b fanout/alpha-701 <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701
+    $ tmux select-pane -t <pane_id> -T alpha-701
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #701 of #700] alpha-701: Alpha. read /tmp/fanout-project_root-701.md and begin.'\''' Enter
 [ ok ] #701: dry-run complete
 [info] #702: Bravo
   briefing -> /tmp/fanout-project_root-702.md
+  slug -> bravo-702
+  worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702
+  branch -> fanout/bravo-702
+  base -> main
   briefing size: 2466 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #702 of #700] Bravo: read /tmp/fanout-project_root-702.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-limit/project_root worktree add -b fanout/bravo-702 <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702
+    $ tmux select-pane -t <pane_id> -T bravo-702
+    $ tmux select-layout -t '%1' tiled
+    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #702 of #700] bravo-702: Bravo. read /tmp/fanout-project_root-702.md and begin.'\''' Enter
 [ ok ] #702: dry-run complete
 
 [ ok ] created: 2
 
 Deferred 1 issue(s) due to --limit. Rerun with:
   #703
-  fanout-go 700 --limit 1 --agent claude
+  fanout-go 700 --include 703 --only 703 --agent claude

@@ -79,6 +79,18 @@ load helpers
   [[ "$output" == *"--project-status requires an argument"* ]]
 }
 
+@test "--base-branch missing value: exit 1" {
+  run_fanout 20 --base-branch
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--base-branch requires an argument"* ]]
+}
+
+@test "--branch-prefix missing value: exit 1" {
+  run_fanout 20 --branch-prefix
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--branch-prefix requires an argument"* ]]
+}
+
 # Project URL parser must accept the canonical links users copy from GitHub
 # Projects: the bare /projects/<n>, /projects/<n>/views/<id>, and either
 # form with a ?query suffix. We only assert the parser does not reject
@@ -135,6 +147,18 @@ load helpers
   run_fanout 20 --popup-timeout 0
   [ "$status" -eq 1 ]
   [[ "$output" == *"--popup-timeout must be a positive integer (seconds), got: 0"* ]]
+}
+
+@test "--base-branch containing whitespace rejected: exit 1" {
+  run_fanout 20 --base-branch "bad branch"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--base-branch must not contain whitespace"* ]]
+}
+
+@test "--branch-prefix containing whitespace rejected: exit 1" {
+  run_fanout 20 --branch-prefix "bad prefix/"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--branch-prefix must not contain whitespace"* ]]
 }
 
 # --- --only / --skip / --include CSV parsing -------------------------------
@@ -230,12 +254,31 @@ load helpers
   [[ "$output" == *"tmux (brew install tmux)"* ]]
 }
 
-@test "missing pgrep: exit 1" {
-  force_missing pgrep
+@test "missing git: exit 1" {
+  force_missing git
   run_fanout 20 --agent claude
   [ "$status" -eq 1 ]
   [[ "$output" == *"missing dependencies"* ]]
-  [[ "$output" == *"pgrep"* ]]
+  [[ "$output" == *"git"* ]]
+}
+
+@test "--agent missing in action mode: explicit error" {
+  run_fanout 20
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"agent is required; pass --agent <name> or set FANOUT_AGENT"* ]]
+}
+
+@test "FANOUT_AGENT supplies default agent" {
+  export FANOUT_AGENT=claude
+  run_fanout 20 --dry-run --limit 1
+  [[ "$output" != *"agent is required"* ]]
+}
+
+@test "outside tmux: explicit error" {
+  unset TMUX
+  run_fanout 20 --agent claude
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"fanout must be run inside tmux"* ]]
 }
 
 # --- --status CLI surface ---------------------------------------------------
@@ -269,6 +312,18 @@ load helpers
   run_fanout --status 1 --agent claude
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "--status conflicts with --base-branch: exit 2" {
+  run_fanout --status 1 --base-branch main
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --base-branch"* ]]
+}
+
+@test "--status conflicts with --branch-prefix: exit 2" {
+  run_fanout --status 1 --branch-prefix fanout/
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --branch-prefix"* ]]
 }
 
 @test "--status conflicts with --limit: exit 2" {
@@ -305,6 +360,12 @@ load helpers
   run_fanout --status 1 --unblocked-only
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --unblocked-only"* ]]
+}
+
+@test "--status conflicts with --no-refresh: exit 2" {
+  run_fanout --status 1 --no-refresh
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --no-refresh"* ]]
 }
 
 @test "--status conflicts with --name: exit 2" {

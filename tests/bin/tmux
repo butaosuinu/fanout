@@ -29,8 +29,8 @@
 #                          hardcoding test-runner-specific absolute paths.
 #
 #   tmux send-keys ...
-#       — no-op. fanout:825 short-circuits send-keys in --dry-run, so the
-#         shim is never reached on the Tier 2 happy path. Exit 0 defensively.
+#       — no-op. fanout short-circuits send-keys in --dry-run, so the shim is
+#         never reached on the Tier 2 happy path. Exit 0 defensively.
 #
 # Tier 1 "force_missing tmux" still wins because helpers.bash rebuilds
 # PATH to a sanitized directory that excludes this shim.
@@ -40,6 +40,18 @@ set -euo pipefail
 fixture="${FIXTURE_DIR:-}"
 
 case "${1:-}" in
+  display-message)
+    if [[ "${2:-}" == "-p" ]]; then
+      if [[ "${3:-}" == "#{pane_id}" ]]; then
+        printf '%%1\n'
+      elif [[ -n "$fixture" && -f "$fixture/tmux-sessions.txt" ]]; then
+        head -n 1 "$fixture/tmux-sessions.txt"
+      else
+        printf 'dmux\n'
+      fi
+      exit 0
+    fi
+    ;;
   list-sessions)
     if [[ -n "$fixture" && -f "$fixture/tmux-sessions.txt" ]]; then
       cat "$fixture/tmux-sessions.txt"
@@ -67,6 +79,13 @@ case "${1:-}" in
     exit 0
     ;;
   send-keys)
+    exit 0
+    ;;
+  split-window)
+    printf '%%99\n'
+    exit 0
+    ;;
+  select-layout|select-pane)
     exit 0
     ;;
 esac
