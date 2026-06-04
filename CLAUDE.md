@@ -1,51 +1,110 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with
+code in this repository.
 
-## Project shape
+## Project Shape
 
-`fanout` is a Go CLI (`cmd/fanout` + `internal/`). `make install` builds it (`go build ./cmd/fanout`) and places it at `$(BINDIR)/fanout`. `make build-go` produces the local `./fanout-go` binary the tests exercise; `make test` runs the Go unit tests plus the bats black-box suite against that binary (via `FANOUT_BIN`), and `make lint` is go vet + gofmt + a shellcheck of the test shims. The popup-intercept and dmux-specific architecture notes below describe fanout's runtime behavior against dmux.
+`fanout` is a Go CLI (`cmd/fanout` + `internal/`). `make install` builds it
+(`go build ./cmd/fanout`) and places it at `$(BINDIR)/fanout`. `make build-go`
+produces the local `./fanout-go` binary the tests exercise; `make test` runs
+the Go unit tests plus the bats black-box suite against that binary via
+`FANOUT_BIN`; `make lint` is go vet + gofmt + shellcheck of the test shims.
 
-The Claude Code integration files (`claude/commands/fanout.md` slash command and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file (`codex/skills/fanout/SKILL.md`) are bundled in the repo as the source-of-truth. `make install` places them under `~/.claude/` and `~/.codex/`. Don't edit installed copies directly — edit the repo versions and rerun `make install` (or use `make link` during development).
+The Claude Code integration files (`claude/commands/fanout.md` slash command
+and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file
+(`codex/skills/fanout/SKILL.md`) are bundled in the repo as the source of
+truth. `make install` places them under `~/.claude/` and `~/.codex/`. Do not
+edit installed copies directly.
 
-The user-facing surface (CLI flags, prerequisites, troubleshooting) is in `README.md`. Read it before changing behavior; this file covers only what's not obvious from the README.
+The user-facing surface is in `README.md` and `README.ja.md`. Read those before
+changing behavior; this file covers repo-local architecture and maintenance
+notes.
 
-## dmux integration outside fanout
+## Working With fanout
 
-- **Worktrees branch off a fresh `main`.** `.dmux-hooks/before_pane_create` (version-controlled) runs just before dmux creates a worktree. It `git fetch`es the repo's default branch and fast-forwards the local ref (via `git branch -f` if the branch is unchecked-out, or `git merge --ff-only` in the worktree that has it checked out, only when that worktree is clean). Combined with `settings.baseBranch = "main"` in `.dmux/dmux.config.json`, dmux's `git worktree add -b <new> main` then starts every new worktree from the freshest local `main`. As of dmux v5.8.1 `before_pane_create` is an officially supported hook (listed in `dist/utils/hooks.js::listAvailableHooks`, fired from `dist/utils/paneCreation.js:146-150` with `DMUX_PROMPT` / `DMUX_AGENT` env vars), but dmux still spawns hooks `detached`+`stdio:'ignore'` (`hooks.js:96-103`) and does not block pane creation on them, so the race against `git worktree add` remains — our hook closes it by completing the fetch fast enough that the worktree branches off the freshened ref. The hook is fire-and-forget on dmux's side, so it races against dmux's `generateSlug` LLM call (typically 1-5s) — `git fetch --quiet` normally wins. If local `main` is ahead of `origin/main` (unpushed commits) or diverged, the hook deliberately does nothing, preserving the user's work. `.dmux/dmux.config.json` is gitignored so the `baseBranch` setting is per-machine; the hook file in `.dmux-hooks/` is the portable half.
+Build the binary with `make build-go` and validate with `make test`.
 
-## Working with fanout
+- Run it: `make build-go`, then `./fanout-go <parent-issue> --agent claude`.
+- Verify changes without creating worktrees or panes:
+  `./fanout-go <parent-issue> --agent claude --dry-run`.
+- Settings (`--auto-pr` / `--no-auto-pr`, `--pr-review-gate` /
+  `--no-pr-review-gate`, `--briefing-code-review` /
+  `--no-briefing-code-review`, `--agent-teams-hint` /
+  `--no-agent-teams-hint`, plus `.fanout/config.json`, user config, and
+  `FANOUT_*` env vars) control generated child briefings.
+- Black-box tests: `make test` builds `./fanout-go` and runs Go tests plus
+  Tier 1 flags/prereqs and Tier 2 dry-run/status goldens. Regenerate Tier 2
+  goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` after intentional
+  output changes.
+- A live end-to-end test needs tmux, an installed agent CLI, and a real GitHub
+  parent issue or Project with OPEN child issues.
+- Cutting a release: see `RELEASE.md`. Version strings are injected from tags
+  via ldflags; no source edit is needed for version bumps.
 
-Build the binary with `make build-go` (output `./fanout-go`) and validate with `make test`. `cmd/fanout` holds the command flow (`main.go`, `pane.go`, `plan.go`, `status.go`, `report.go`); the reusable pieces live in `internal/` (see the package map in the architecture notes below).
+## Architecture Notes
 
-- Run it: `make build-go`, then `./fanout-go <parent-issue>`.
-- Verify changes without driving dmux: append `--dry-run`, e.g. `./fanout-go <parent-issue> --dry-run`. The dry-run path prints every `tmux send-keys` invocation with `%q` quoting and the would-be briefing size, so use it as the primary way to validate logic changes that don't need a live dmux.
-- Settings (`--auto-pr` / `--no-auto-pr`, `--pr-review-gate` / `--no-pr-review-gate`, `--briefing-code-review` / `--no-briefing-code-review`, `--agent-teams-hint` / `--no-agent-teams-hint`, plus `.fanout/config.json`, user config, and `FANOUT_*` env vars) control the generated child briefings.
-- Lint: `make lint` = `go vet` + `gofmt` on the Go sources plus a `shellcheck` of the bats test shims (`tests/bin/{gh,tmux,git}`, `tests/bats/helpers.bash`). Treat `SC2086`-style warnings on the shims as real.
-- Black-box tests: `make test` (requires `bats-core`) builds `./fanout-go` and runs the Go unit tests plus Tier 1 (flag/prerequisite) + Tier 2 (`--dry-run` golden output against fixture scenarios under `tests/fixtures/`) bats tests against it via `FANOUT_BIN`. Tier 1 locks in the CLI surface (error messages + exit codes) and Tier 2 locks in the dry-run planning output — the issue #20 invariants. Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2`. Tier 3 (live dmux E2E) is out of scope.
-- A live end-to-end test needs a running dmux session in tmux and a real GitHub parent issue with OPEN sub-issues; there is no mock layer.
-- Cutting a release: see `RELEASE.md`. It is CI-driven — push an annotated `vX.Y.Z` tag and `.github/workflows/release.yml` builds the four platform archives, generates `SHA256SUMS`, and publishes the GitHub Release. The version string is injected from the tag name via ldflags (`-X main.version`), so no source edit bumps the version, and a tag push is not subject to the `gh pr create` review gate.
+- `cmd/fanout/main.go` handles parse dispatch, dependency checks, runtime
+  resolution, child loading, state loading/locking, and the fail-fast
+  `executePlan` loop.
+- `cmd/fanout/pane.go` is the creation orchestration: briefing render, naming,
+  worktree planning/preparation, tmux split/title/layout, state recording,
+  metadata write, and agent launch.
+- `cmd/fanout/status.go` reads `.fanout/state.json` and queries GitHub PR state.
+  `cmd/fanout/lifecycle.go` implements `--close`, `--merge`, and `--cleanup`
+  against recorded state rows.
+- `internal/runtime` resolves the git repository root and the tmux target.
+  Action mode must be invoked from inside tmux. By default fanout targets the
+  invoking pane; `--session` targets a named tmux session.
+- `internal/worktree` owns base branch resolution, refresh, local exclude
+  setup, and `git worktree add` under `.fanout/worktrees/<slug>/`.
+- `internal/tmuxrun` owns direct tmux operations:
+  `split-window -d -h -P -F '#{pane_id}'`, pane titles, tiled layout, agent
+  command send, and best-effort pane kill during cleanup.
+- `internal/agent` maps supported agents (`claude`, `codex`) to launch
+  commands and validates installed CLIs for live mode.
+- `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
+  The coarse lock covers planning and launching so two fanout invocations do
+  not race on the same `(parent, issueNum)` idempotency key.
+- `internal/naming` deterministically generates slugs and branch names.
+  `--name` may override slug, display name, and branch. The skills generate
+  these flags from issue context; the CLI does not call an LLM.
+- `internal/ghissue`, `internal/blockers`, `internal/briefing`,
+  `internal/settings`, `internal/displayname`, `internal/atomicfs`,
+  `internal/log`, `internal/tty`, and `internal/exitcode` hold the remaining
+  reusable pieces.
 
-## Architecture notes that span fanout
+## Behavior Boundaries
 
-- **Package map.** `cmd/fanout` is the command flow: `main.go` (arg dispatch + `executePlan` main loop), `pane.go` (`createPaneForIssue`, `oneLinePrompt`, `waitForNewPane`), `plan.go` (target filtering, `splitBlocked`, `applyLimit`), `status.go` (`--status`), `report.go` (`printDryRunPlan`/`printSummary`). `internal/` holds the reusable pieces: `cliflags` (flag parser + `Config`), `ghissue` (all `gh` calls + the `Issue` type), `dmuxconfig` (read/write `dmux.config.json`), `dmuxsession` (resolve session info from tmux options), `popup` (the popup-intercept: `FindNew`, payload builders, `WriteResult`), `blockers` (`--unblocked-only` blocker parsing), `displayname` (`ApplyAll` two-file write), `briefing` (the `/tmp/fanout-<repo>-<NUM>.md` renderer), `tmuxctl` (`tmux send-keys`), plus `atomicfs`, `log`, `tty`, `exitcode`.
-- **No HTTP, no sockets.** Discovery (`internal/dmuxsession`) uses tmux session options (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`, `@dmux_project_root`). Pane creation is driven by (a) `internal/tmuxctl`'s `tmux send-keys` to fire `Escape` + `n` at the control pane, which causes dmux to launch its popup, and (b) **popup resultFile interception** (`internal/popup`) — `popup.FindNew` locates the popup process via `pgrep -f '/popups/.*Popup\.js'`, reads its `<tmpdir>/dmux-popup-<ts>.json` path from `ps -o args=`, then `popup.WriteResult` atomically writes `{"success":true,"data":...}` and the process is killed. This is intentional — dmux v5.8.1 ships an `apiActionHandler` skeleton (`dist/adapters/apiActionHandler.js`) and a `dist/server/embedded-assets.js` bundle for the dashboard, but no HTTP transport layer is wired up, so the popup intercept is still the only inbound path. The new-pane prompt is rendered inside `tmux display-popup`, which is a separate tmux client that `send-keys -t <pane>` cannot reach. See `README.md` ("Why this looks weird") before proposing a refactor toward `POST /api/panes`.
-- **Two popups per issue.** dmux v5.8.1 added a `singleAgentChoicePopup.js`, but `selectAgentsForPaneCreation` (`dist/DmuxApp.js:593`) still always calls `launchAgentChoicePopup` after `launchNewPanePopup` closes with a non-empty prompt; the single-agent popup is reachable only through other code paths (e.g. the kebab menu's attach-agent flow). fanout therefore intercepts both: `popup.MakeNewPanePayload` builds the prompt-popup payload as either `{"success":true,"data":"<one-line-prompt>"}` (string) or `{"success":true,"data":{"prompt":"…","branchName":"…"}}` (object — only when `--name` supplied a `<branch-name>` segment; `PopupManager.normalizeNewPaneInput` accepts both), and `popup.MakeAgentPayload` builds the picker payload `{"success":true,"data":["<agent-name>"]}`. The two interceptions are sequenced by `popup.InterceptWithDebug` inside `createPaneForIssue`. Because the picker is unavoidable, **fanout requires an agent name** (either `--agent` or auto-detected from the caller's pane in `dmux.config.json`); there is no single-agent shortcut path in dmux's new-pane flow that skips the picker.
-- **Idempotency primitive: the `[fanout #<NUM>]` prompt prefix.** `dmuxconfig.Config.FannedNumbersForParent` detects already-fanned issues by reading `panes[].prompt` from `dmux.config.json` and matching the prefix with the `fanoutPrefixRE` regex (`^\[fanout #([0-9]+)( of #([^\]]+))?\]`). The `[fanout #N]` prefix is constructed from the `fanoutTagPrefix` const in `oneLinePrompt` (`cmd/fanout/pane.go`); anything that changes the prompt format must keep this prefix or migrate the detection regex in lockstep — otherwise a rerun creates duplicate panes. Membership is a `map[int]bool` keyed by issue number, so there's no substring-collision risk (`42` can't match `142`).
-- **One-line prompt only.** dmux's `slug()` keys the worktree directory name off the prompt, so a multi-line prompt would produce an ugly slug. The actual briefing is rendered by `internal/briefing` to `/tmp/fanout-<repo>-<NUM>.md` and the one-liner built by `oneLinePrompt` is just `[fanout #N] <title>: read <path> and begin.`. Don't embed newlines in the JSON payload — dmux will persist them into `dmux.config.json` verbatim.
-- **Pane-creation completion is detected by polling `dmux.config.json`'s `panes[].length`** — `waitForNewPane` (`cmd/fanout/pane.go`) reloads via `dmuxconfig.Load` and compares `PanesLen()` to the captured baseline, 60s timeout, 500ms poll. There is no callback from dmux; if you change the create flow, keep some monotonic indicator to wait on.
-- **`--sleep` is rate-limit, not retry.** `cfg.SleepBetween` (default `DefaultSleepBetween`, applied via `sleepBetweenIssues` in the main loop) is the gap between successful creations to let dmux finish the worktree-creation phase before the next `n` is sent. It is not a retry/backoff knob.
-- **Failure mode is fail-fast.** `executePlan`'s loop `break`s on the first `createPaneForIssue` failure (return `false`) rather than continuing — assumption is that one failure usually means a popup went missing (`popup.FindNew` timeout) and continuing would race against stale dmux state. Preserve this unless you also add per-issue recovery.
-- **Child enumeration unions two sources** (`mergeExtraChildren` in `main.go`, backed by `internal/ghissue`). (1) `ghissue.Runner.SubIssueList` runs `gh sub-issue list <parent>` — yahsan2/gh-sub-issue v0.5.x wraps its payload as `{"subIssues":[...]}`, emits lowercase `state`, and does not expose `body`, so fanout flattens and upper-cases `State` at ingest and leaves `body` empty. (2) `ghissue.TaskListNumbers` scans the parent body — lines matching `taskListRE` (`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`) contribute every `#NUM` (cross-repo `owner/repo#NUM` excluded). Numbers only present in (2) are hydrated via `ghissue.Runner.IssueDetail` (`gh issue view --json number,title,state,body,labels`) so their body rides along. Targets whose `body` is still empty (i.e. came from source 1) fall back to `ghissue.Runner.HydrateBodyLabels` (`gh issue view --json body,labels`). When editing this block, treat body-only children as first-class: some parents list children purely via markdown checklists and never touch the Sub-issues API.
-- **`--include` widens the set; `--only` / `--skip` narrow it** (`cfg.Include` / `cfg.Only` / `cfg.Skip`, all `[]int`; `--only`/`--skip` applied by `filterOnlySkip` in `plan.go`). The CLI intentionally does not try to parse prose (`Closes #N`, `Depends on #N`, Japanese idioms) — that lives in the Claude/Codex skills' body-scan pre-flight step, where the agent reads the parent body, surfaces implicit children to the user, and forwards the accepted numbers as `--include`. Inside fanout, `mergeExtraChildren` folds the `--include` numbers into the same union as the body-scanned numbers and hydrates them through `ghissue.Runner.IssueDetail`, so they automatically pass the OPEN filter, the `[fanout #N]` idempotency check, and any `--only` / `--skip` filter. Adding another prose-scanning code path inside fanout would duplicate what the skills already do with better context; keep the split.
-- **`--unblocked-only` adds an eager hydration pass and a blocker filter** (`splitBlocked` in `plan.go`, backed by `internal/blockers`). When the flag is set, after the `--only/--skip` filter runs, `hydrateIssues` fetches every still-empty `body` row once with `ghissue.Runner.HydrateBodyLabels` (`gh issue view --json body,labels`) so blocker parsing has what it needs upfront. Blockers come from three sources in priority order: the child body's `## Blocked by` section (`blockers.FromChildBody`, up to the next blank line or heading), the parent task-list row's trailing `(blocked by #X, #Y)` (`blockers.FromParentRow`), and the `blocked` label (`hasLabel`; logged as a warn if present without any parseable blocker numbers — not used to infer blocker numbers). The two parsed lists are merged with `blockers.Dedupe`; each blocker number is resolved through `openBlockerRefs` → `ghissue.Runner.IssueState`, cached in a `map[int]string` (`stateCache`) local to `splitBlocked` so repeated references don't re-hit the API. Rows with any OPEN blocker become `blockedRow{Issue, Refs}` values in `Plan.BlockedRows` (a struct slice — no parallel-array/delimiter splitting, which would break when a title contains the delimiter) and are removed from `targets` before `--limit` is applied. `--limit` overflow lands separately in `Plan.LimitDeferred` (`applyLimit`).
-- **Naming is split across three axes with different reliability.** dmux's `dist/utils/slug.js::generateSlug` is the only entry point for the worktree-directory slug and always runs an LLM call (OpenRouter → local `claude --no-interactive` → `dmux-<timestamp>`). The popup-intercept flow cannot pass dmux's `slugBase` option (it lives only in `createPane()`'s internal options, not in the popup payload), so the worktree directory slug stays LLM-generated. fanout steers it by front-loading a kebab-case `slug-hint` into the one-line prompt (`oneLinePrompt`, fed from `NameOverride.SlugHint`): since the LLM is asked for "1-2 word kebab-case slug for this prompt," a kebab-case phrase at the front is almost always echoed. As of v5.8.1 the newPanePopup payload accepts an object shape `{prompt, branchName?, baseBranch?, goalMode?}` in addition to the legacy bare string (see `dist/services/PopupManager.js::normalizeNewPaneInput`), so the **branch name** axis IS controllable from fanout: when `--name NUM=…|…|<branch-name>` supplies a branch override, `popup.MakeNewPanePayload` writes the object form and dmux's `createPane()` uses it as `branchNameOverride`, bypassing the `branchPrefix + slug` default. `displayName` is a separate, mutable axis — `displayname.ApplyAll` (invoked via `applyDisplayNameOverrides` once at end-of-loop) writes to two places: (a) `panes[].displayName` in `dmux.config.json` atomically via `dmuxconfig.SetDisplayNameBySlug`, so `enforcePaneTitles` (5-30s `usePanes.loadPanes` poll) pushes it into the tmux pane border within that window; (b) `<worktree>/.dmux/worktree-metadata.json` merged with existing fields (`mergeWorktreeMetadata`), so `reopenWorktree.js` restores the displayName across dmux restarts. The two-file write is intentional: (a) alone is volatile (dmux's `savePanesToFile` overwrites from its in-memory state when any other pane event fires) and (b) alone doesn't take effect until the worktree is reopened. Keep the `displayname.ApplyAll` invocation at the very end of the main loop — running it per-iteration would race against dmux's saves triggered by the next pane creation. Generating slug-hint / display-name / branch-name is the skills' job, not the CLI's, for the same reason as `--include`: the skills have full issue context already. The CLI just parses `--name NUM=slug-hint|display-name|branch-name` (`cliflags.parseNameArg` → `NameOverride{Num, SlugHint, DisplayName, BranchName}`) and threads it through unchanged (any of the three pipe-separated segments may be empty, but at least one must be non-empty).
+- Child enumeration unions GitHub Sub-issues and same-repo parent task-list
+  rows. Project mode uses Project items instead. Prose scanning (`Closes #N`,
+  `Depends on #N`, Japanese child-reference idioms) belongs in the Claude/Codex
+  skills, which forward accepted candidates through `--include`.
+- `--unblocked-only` parses blockers from the child body's `## Blocked by`
+  section, the parent task-list row trailer `(blocked by #X, #Y)`, and the
+  `blocked` label as a weak signal.
+- `--status`, `--close`, `--merge`, and `--cleanup` do not inspect old pane
+  prompts or external config. They operate on `.fanout/state.json` or
+  `FANOUT_STATE_PATH`.
+- `.fanout/worktrees/<slug>/` directories without a state row are treated as an
+  action-mode migration fallback and skipped when their slug matches the child
+  this run would create.
+- `--sleep` is a rate-limit between successful child launches. It is not a
+  retry/backoff knob.
 
-## Things to be careful with
+## Things To Be Careful With
 
-- fanout assumes the dmux TUI is on the pane-list view. It sends one `Escape` per attempt as best-effort recovery, but cannot unstick `$EDITOR` or confirm dialogs. Don't add features that assume you can navigate arbitrary modals.
-- The popup intercept depends on three shape assumptions in dmux that aren't public API: (1) popup scripts live under `dist/components/popups/*Popup.js` and each takes its resultFile path as `process.argv[2]` (re-verified for v5.8.1 at `newPanePopup.js:524`); (2) `PopupWrapper.writeSuccessAndExit` writes `{"success":true,"data":<value>}` (re-verified for v5.8.1 at `dist/components/popups/shared/PopupWrapper.js:54-60`); (3) resultFile paths match `<tmpdir>/dmux-popup-<digits>.json` — `popup.resultFileRE` is `[[:alnum:]/_.-]+/dmux-popup-[0-9]+\.json` to cover both Linux (`/tmp/`) and macOS (`/var/folders/.../T/`) tmpdirs. When bumping dmux, re-read `dist/utils/popup.js` and `dist/components/popups/shared/PopupWrapper.js` to confirm, and check whether `dist/services/PopupManager.js::normalizeNewPaneInput` still accepts both the string-shaped and the object-shaped (`{prompt, branchName?, ...}`) `data` payloads. If dmux ever wires a transport onto `dist/adapters/apiActionHandler.js` (its API skeleton today), rip this intercept out and post to `/api/panes` — the `apiActionHandler` skeleton plus the `paneActions` registry under `dist/actions/` is what would change first.
-- `pgrep -f` pattern matching is OS-dependent. The patterns (`popup.AnyPopupPattern` = `/popups/.*Popup\.js`, `popup.NewPanePattern` = `newPanePopup\.js`, `popup.AgentChoicePattern` = `agentChoicePopup\.js`) work on macOS BSD pgrep and Linux procps-ng pgrep. Keep them as regex fragments that match substrings of the full argv, not as anchored patterns.
-- **`pgrep -f` on a popup script matches the entire popup process tree** — outer `sh -c`, `tmux display-popup`, inner shell, and the Node popup — because dmux builds a single long command string that all four processes carry in their argv. `popup.FindNew` must keep its `ps -o comm=` filter on `node*` (the `psField`/`strings.HasPrefix(base, "node")` check); otherwise the first PID pgrep returns is usually the outer sh or tmux, and killing it leaves the real Node popup orphaned inside `tmux display-popup`. dmux's spawned child dies, so it reads the injected result and advances, but the stale popup blocks the next `display-popup` from opening and the whole TUI appears frozen.
-- **Agent name must match dmux's available agents exactly.** fanout doesn't navigate the agent picker with a first-letter shortcut; `popup.MakeAgentPayload` injects `["<agent>"]` into the resultFile. If the name is misspelled or not enabled in dmux settings, dmux's `resolveAgentsToLaunchOnEnter` will reject it and pane creation will fail silently (new pane never appears, `waitForNewPane` times out).
-- **`gh pr create` is gated by a PreToolUse hook.** `.claude/settings.json` (committed, separate from the gitignored `.claude/settings.local.json`) registers `.claude/hooks/pre-pr-review-gate.sh` as a `PreToolUse(Bash)` hook. It denies any `gh pr create` whose current HEAD has not been signed off by `/post-work-review`. The skill's final step writes the reviewed SHA to `$(git rev-parse --git-dir)/post-work-review-passed` (worktree-local, so fanout's parallel panes don't cross-contaminate); the hook allows only when that marker equals HEAD, so any new commit re-arms the gate. In a codex-less environment Pass 2 is skipped and the marker is written after Pass 1. The hook and skill are repo-bundled (bash + jq + the Makefile's `claude/skills/*` wildcard) and independent of the Go CLI. Escape hatch: `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` — also the bootstrap for the PR that introduces the gate itself (it would otherwise deny its own creation). fanout's `prReviewGate=false` setting does not edit `.claude/settings*.json` or inject child env through dmux; it only adds a child briefing note that permits this escape hatch when the hook blocks before `/post-work-review`.
+- Worktree refresh must preserve user work. If a local base branch is dirty,
+  ahead, or diverged, fail rather than forcing it.
+- Keep the state lock close to live launch behavior. Moving exclude setup or
+  lock acquisition can leave dirty `.fanout/state.json.lock` artifacts or
+  reintroduce launch races.
+- `tmux split-window -P` returns the new pane id synchronously; do not add
+  polling around pane creation unless a future tmux path stops returning an id.
+- Preserve fail-fast behavior in `executePlan`: stop after the first failed
+  child launch.
+- When changing dry-run output, update and inspect Tier 2 goldens before
+  committing.
+- `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
+  `.claude/settings.json`. Run `/post-work-review` before creating a PR, or use
+  `FANOUT_SKIP_PR_REVIEW=1` only when the documented escape hatch is intended.

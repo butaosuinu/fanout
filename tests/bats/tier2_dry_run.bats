@@ -3,14 +3,13 @@
 # Tier 2 — `./fanout --dry-run` golden-output tests.
 #
 # Each @test picks a scenario fixture under tests/fixtures/<name>, runs
-# fanout against it with --dry-run (so no tmux I/O and no popup intercept
+# fanout against it with --dry-run (so no tmux or git worktree side effects
 # happen), and diffs the captured output against the matching golden file
 # under tests/golden/<name>.dry-run.txt.
 #
 # The fixture directory contract is documented in tests/bin/gh and
 # tests/bin/tmux: the shims read gh-sub-issue-list.json, gh-issue-view-<N>.json,
-# tmux-sessions.txt, tmux-show-options.tsv, and dmux.config.json from
-# $FIXTURE_DIR.
+# tmux-sessions.txt, state files, and GitHub fixtures from $FIXTURE_DIR.
 #
 # Regenerating goldens after an intentional output change:
 #   FANOUT_GOLDEN_UPDATE=1 bats tests/bats/tier2_dry_run.bats
@@ -78,8 +77,8 @@ load helpers
 }
 
 @test "scenario-legacy-weak-signal: body-task-list child gets direct worktree commands" {
-  # The fixture still carries a legacy `[fanout #601]` dmux pane, but action
-  # mode no longer migrates or consults dmux panes. The body-task-list child
+  # The fixture still carries a legacy pre-state child, but action mode no
+  # longer migrates or consults old pane prompts. The body-task-list child
   # should still produce a fresh direct-runtime command plan.
   use_fixture scenario-legacy-weak-signal
   run_fanout_dry 600
@@ -89,7 +88,7 @@ load helpers
 
 @test "scenario-idempotency: state entry causes same-parent child to be skipped" {
   # Phase 2 idempotency comes from .fanout/state.json keyed by
-  # (parent, issueNum), not from legacy dmux panes or worktree directory names.
+  # (parent, issueNum), not from legacy pane prompts or worktree directory names.
   use_fixture scenario-idempotency
   run_fanout_dry 800
   assert_success

@@ -18,8 +18,8 @@ type FanoutMetadata struct {
 }
 
 // WriteFanoutMetadata persists the pane name fields beside the generated
-// worktree. The JSON keys match dmux's worktree-metadata shape, but the file
-// lives under .fanout so direct-runtime launches no longer depend on dmux.
+// worktree. The JSON keys mirror the legacy worktree-metadata shape, but the
+// file lives under .fanout for the direct runtime.
 func WriteFanoutMetadata(worktreePath string, meta FanoutMetadata) error {
 	if worktreePath == "" {
 		return fmt.Errorf("worktreePath is empty")

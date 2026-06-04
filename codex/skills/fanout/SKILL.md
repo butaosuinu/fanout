@@ -21,6 +21,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
+fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 ```
 
 **Do not probe the CLI** with `fanout --help`, `fanout -h`, or

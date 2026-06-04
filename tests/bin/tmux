@@ -1,36 +1,21 @@
 #!/usr/bin/env bash
-# Tier 2 shim: fixture-driven `tmux` dispatch.
+# Tier 2 shim: fixture-driven `tmux` dispatch for fanout's direct runtime.
 #
 # Each Tier 2 test sets FIXTURE_DIR=tests/fixtures/<name>. The shim
 # reads per-call fixtures from that directory:
 #
-#   tmux list-sessions -F '#{session_name}'
-#       — echoes $FIXTURE_DIR/tmux-sessions.txt (one session name per line).
-#         Default falls back to a single "dmux" session if the file is absent
-#         so Tier 1 tests that reach here (none today) don't trip.
+#   tmux display-message -p '#{session_name}'
+#       - echoes the first line of $FIXTURE_DIR/tmux-sessions.txt.
 #
-#   tmux show-options -v -t <session> <@option>
-#       — looks up a key in $FIXTURE_DIR/tmux-show-options.tsv:
-#           <session>\t<option>\t<value>
-#         Unknown keys yield empty output (fanout's default).
-#         Two sentinels in the value column are substituted at lookup:
-#           @@PID@@      — replaced with $FANOUT_TEST_ALIVE_PID, which
-#                          helpers.bash exports as the bats test bash's
-#                          $$ so it's guaranteed live for the whole test.
-#                          Used for @dmux_controller_pid so fanout:419's
-#                          `kill -0` liveness check passes. We can't use
-#                          the shim's own $$ (dies on shim exit) or $PPID
-#                          (captures the $(...) subshell that dies when
-#                          fanout reads the value back).
-#           @@FIXTURE@@  — replaced with the absolute $FIXTURE_DIR path.
-#                          Used for @dmux_config_path and
-#                          @dmux_project_root so fixtures can reference
-#                          files under their own directory without
-#                          hardcoding test-runner-specific absolute paths.
+#   tmux display-message -p '#{pane_id}'
+#       - echoes %1, matching helpers.bash's TMUX_PANE default.
 #
-#   tmux send-keys ...
-#       — no-op. fanout short-circuits send-keys in --dry-run, so the shim is
-#         never reached on the Tier 2 happy path. Exit 0 defensively.
+#   tmux split-window -P -F '#{pane_id}' ...
+#       - echoes %99 for tests that reach the live launch path.
+#
+#   tmux send-keys / select-layout / select-pane
+#       - no-op. Dry-run tests do not execute these, but the shims keep
+#         targeted launch tests hermetic.
 #
 # Tier 1 "force_missing tmux" still wins because helpers.bash rebuilds
 # PATH to a sanitized directory that excludes this shim.
@@ -47,7 +32,7 @@ case "${1:-}" in
       elif [[ -n "$fixture" && -f "$fixture/tmux-sessions.txt" ]]; then
         head -n 1 "$fixture/tmux-sessions.txt"
       else
-        printf 'dmux\n'
+        printf 'fanout\n'
       fi
       exit 0
     fi
@@ -56,26 +41,6 @@ case "${1:-}" in
     if [[ -n "$fixture" && -f "$fixture/tmux-sessions.txt" ]]; then
       cat "$fixture/tmux-sessions.txt"
     fi
-    exit 0
-    ;;
-  show-options)
-    shift
-    session="" option=""
-    while (( $# )); do
-      case "$1" in
-        -v) shift;;
-        -t) session="${2:-}"; shift 2;;
-        *) option="$1"; shift;;
-      esac
-    done
-    opts="$fixture/tmux-show-options.tsv"
-    if [[ -z "$fixture" || ! -f "$opts" ]]; then
-      exit 0
-    fi
-    val="$(awk -F'\t' -v s="$session" -v o="$option" '$1==s && $2==o {print $3; exit}' "$opts")"
-    val="${val//@@PID@@/${FANOUT_TEST_ALIVE_PID:-$PPID}}"
-    val="${val//@@FIXTURE@@/$fixture}"
-    printf '%s\n' "$val"
     exit 0
     ;;
   send-keys)

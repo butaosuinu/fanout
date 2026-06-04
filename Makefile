@@ -86,7 +86,7 @@ uninstall: uninstall-integrations
 # --- test / lint -------------------------------------------------------------
 # `make test`         — build the Go binary, run Go unit tests + Tier 1 + Tier 2
 #                       black-box tests against it via FANOUT_BIN.
-# `make test-tier1`   — flag / prerequisite tests, no live dmux.
+# `make test-tier1`   — flag / prerequisite tests, no live tmux panes.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
 # `make lint`         — Go vet/gofmt checks plus shellcheck of the test shims.
 #

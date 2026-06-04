@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Tier 2 shim: short-circuit fanout:504's
-# `(cd "$project_root" && git rev-parse --is-inside-work-tree)` probe.
+# Tier 2 shim for fixture-backed git calls.
 #
-# Tier 2 fixtures advertise a project_root via the tmux shim's
-# @dmux_project_root option, but that directory is synthetic — there's no
-# `.git` inside it. Rather than seed every fixture with a real git
-# worktree, we answer "yes, it's a work tree" here.
+# Tier 2 fixtures use synthetic project_root directories without `.git`
+# metadata. Rather than seed every fixture with a real git worktree, answer
+# the probes fanout needs and delegate everything else to the real git.
 #
 # Any other `git <...>` invocation is delegated to the real `git` so that
 # helpers.bash's own git calls (e.g. in CI) keep working. The passthrough

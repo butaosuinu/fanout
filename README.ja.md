@@ -202,6 +202,8 @@ fanout --help
 第1引数は GitHub issue 番号（Sub-issues + タスクリストモード）または
 Projects v2 URL（Project モード、上記参照）のいずれか。`--project-status`
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
+`--popup-timeout` は旧ランタイム互換の deprecated flag で、direct tmux path
+では受け付けるだけで無視されます。
 
 ### `--status` / lifecycle
 

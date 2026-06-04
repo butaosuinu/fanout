@@ -205,6 +205,8 @@ fanout --help
 The positional accepts either a GitHub issue number (Sub-issues +
 task-list mode) or a Projects v2 URL (Project mode; see above).
 `--project-status` only applies to Project mode and is ignored otherwise.
+`--popup-timeout` is a deprecated compatibility flag from the old runtime and
+is accepted but ignored by the direct tmux path.
 
 ### `--status` output
 

@@ -1,6 +1,6 @@
 ---
 name: fanout-issues
-description: "Create fanout-ready GitHub issue trees: a parent issue plus OPEN child issues linked with GitHub Sub-issues and mirrored in the parent task list. Use when the user asks to decompose work into parent/child GitHub issues, prepare issues for the fanout CLI or /fanout command, create sub-issues for parallel dmux panes, or encode blocker waves for fanout --unblocked-only."
+description: "Create fanout-ready GitHub issue trees: a parent issue plus OPEN child issues linked with GitHub Sub-issues and mirrored in the parent task list. Use when the user asks to decompose work into parent/child GitHub issues, prepare issues for the fanout CLI or /fanout command, create sub-issues for parallel tmux panes, or encode blocker waves for fanout --unblocked-only."
 ---
 
 # fanout-issues
@@ -18,7 +18,7 @@ Sub-issues relationship and same-repo task-list rows in the parent body.
 
 ## Decompose
 
-Create children that can run in parallel dmux panes:
+Create children that can run in parallel fanout panes:
 
 - Give every child a clear, bounded deliverable and an acceptance checklist.
 - Avoid children that all need to edit the same files unless the dependency is explicit.
@@ -145,6 +145,6 @@ Confirm:
 - Blocked children have both child-body `## Blocked by` references and parent-row `(blocked by #N)` trailers.
 - No cross-repo `owner/repo#N` row is required for fanout discovery.
 
-If a dmux session is already running and the user wants an end-to-end check,
-run `fanout <parent> --dry-run` from any cwd. Otherwise do not require dmux
-just to validate issue creation.
+If a tmux session is already running and the user wants an end-to-end check,
+run `fanout <parent> --agent claude --dry-run` from the target repo worktree.
+Otherwise do not require tmux just to validate issue creation.

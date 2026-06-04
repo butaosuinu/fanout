@@ -62,13 +62,10 @@ setup() {
   # Unset between tests so a stale value doesn't accidentally point status or
   # lifecycle operations at another test's state file.
   unset FANOUT_STATE_PATH
-  unset DMUX_CONFIG_PATH
 
   # Supply the tmux shim with a PID that's alive for the full test run.
-  # $$ inside bats is the bats process PID; it stays live across setup /
-  # test body / teardown. The tmux shim substitutes @@PID@@ in fixture
-  # values with this PID so fanout's kill -0 @dmux_controller_pid check
-  # succeeds. See tests/bin/tmux for why shim-local $$ / $PPID don't work.
+  # Kept for compatibility with older fixture helpers; current direct-runtime
+  # shims do not need tmux option liveness checks.
   export FANOUT_TEST_ALIVE_PID=$$
 
   # Per-test scratch dir (auto-cleaned by bats via BATS_TEST_TMPDIR).
@@ -188,9 +185,7 @@ skip_unless_fanout_go() {
 
 # Scrub machine-local prefixes from captured output so goldens are portable
 # across workstations and CI runners. Rewrites:
-#   - $REPO_ROOT                       → <REPO>
-# so "config: /Users/x/fanout/tests/fixtures/scenario-X/dmux.config.json"
-# collapses to "config: <REPO>/tests/fixtures/scenario-X/dmux.config.json".
+#   - $REPO_ROOT                       -> <REPO>
 # The /tmp/fanout-<repo_slug>-<N>.md briefing path stays verbatim because
 # repo_slug is deterministic (always "project_root" per fixture layout).
 _scrub_output() {
