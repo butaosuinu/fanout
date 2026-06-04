@@ -44,3 +44,21 @@ func TestEnsureIssueSuffix(t *testing.T) {
 		t.Fatalf("EnsureIssueSuffix() existing suffix = %q, want %q", got, want)
 	}
 }
+
+func TestQualifySlugForParentKeepsIssueSuffix(t *testing.T) {
+	got := QualifySlugForParent("shared-child-501", "200", 501)
+	if want := "shared-child-parent-200-501"; got != want {
+		t.Fatalf("QualifySlugForParent() = %q, want %q", got, want)
+	}
+}
+
+func TestQualifySlugForProjectParentStaysBounded(t *testing.T) {
+	parent := "https://github.com/users/butaosuinu/projects/12345"
+	got := QualifySlugForParent(strings.Repeat("a", 100)+"-77", parent, 77)
+	if len(got) > MaxSlugLength {
+		t.Fatalf("qualified slug length = %d, want <= %d: %q", len(got), MaxSlugLength, got)
+	}
+	if !strings.HasSuffix(got, "-77") {
+		t.Fatalf("qualified slug = %q, want issue suffix", got)
+	}
+}

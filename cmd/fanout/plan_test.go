@@ -56,13 +56,79 @@ func TestExistingWorktreeFannedUsesDeterministicSlugAndOverride(t *testing.T) {
 		{Number: 105, Title: "Retitled child", State: "OPEN"},
 	}
 
-	got := existingWorktreeFanned(cfg, root, issues)
+	got := existingWorktreeFanned(cfg, root, issues, nil)
 
 	if !got[101] || !got[102] || !got[103] || !got[105] {
 		t.Fatalf("expected #101, #102, #103, and #105 to be fanned, got %#v", got)
 	}
 	if got[104] {
 		t.Fatalf("did not expect #104 to be fanned, got %#v", got)
+	}
+}
+
+func TestMergeFannedIncludesMigrationFallback(t *testing.T) {
+	got := mergeFanned(map[int]bool{101: true}, map[int]bool{102: true})
+
+	if !got[101] || !got[102] {
+		t.Fatalf("merged fanned = %#v, want #101 and #102", got)
+	}
+}
+
+func TestExistingWorktreeFannedIgnoresOtherParentDefaultSlug(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "shared-child-501"))
+	cfg := &cliflags.Config{ParentRef: "200"}
+	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
+
+	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+
+	if got[501] {
+		t.Fatalf("fanned = %#v, did not want other-parent default slug to skip current parent", got)
+	}
+}
+
+func TestExistingWorktreeFannedIgnoresOtherParentDefaultSlugWhenCurrentSlugOverridden(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "shared-child-501"))
+	cfg := &cliflags.Config{
+		ParentRef: "200",
+		Names:     []cliflags.NameOverride{{Num: 501, SlugHint: "custom-501"}},
+	}
+	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
+
+	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+
+	if got[501] {
+		t.Fatalf("fanned = %#v, did not want other-parent default slug to skip current explicit slug", got)
+	}
+}
+
+func TestExistingWorktreeFannedPreservesSharedExplicitSlugFallback(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "custom-501"))
+	cfg := &cliflags.Config{
+		ParentRef: "200",
+		Names:     []cliflags.NameOverride{{Num: 501, SlugHint: "custom-501"}},
+	}
+	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
+
+	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+
+	if !got[501] {
+		t.Fatalf("fanned = %#v, want current explicit slug fallback", got)
+	}
+}
+
+func TestExistingWorktreeFannedPreservesCurrentParentQualifiedFallback(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "shared-child-parent-200-501"))
+	cfg := &cliflags.Config{ParentRef: "200"}
+	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
+
+	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+
+	if !got[501] {
+		t.Fatalf("fanned = %#v, want current-parent qualified fallback", got)
 	}
 }
 

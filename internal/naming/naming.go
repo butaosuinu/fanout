@@ -2,6 +2,8 @@
 package naming
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"unicode"
@@ -72,4 +74,63 @@ func EnsureIssueSuffix(slug string, issueNum int) string {
 		return base
 	}
 	return base + suffix
+}
+
+// QualifySlugForParent keeps shared child issues from colliding when the same
+// issue is fanned from multiple parents or Projects.
+func QualifySlugForParent(slug, parentRef string, issueNum int) string {
+	base := strings.Trim(slug, "-")
+	suffix := fmt.Sprintf("-%d", issueNum)
+	base = strings.TrimSuffix(base, suffix)
+	if base == "" {
+		base = "issue"
+	}
+	parentToken := parentToken(parentRef)
+	extra := "-" + parentToken + suffix
+	maxBase := MaxSlugLength - len(extra)
+	if maxBase < 1 {
+		maxBase = 1
+	}
+	if len(base) > maxBase {
+		base = strings.Trim(base[:maxBase], "-")
+		if base == "" {
+			base = "issue"
+		}
+	}
+	return base + extra
+}
+
+func parentToken(parentRef string) string {
+	if allDigits(parentRef) {
+		return "parent-" + parentRef
+	}
+	token := Slugify(parentRef)
+	if token == "" {
+		return "parent-" + shortHash(parentRef)
+	}
+	if len(token) <= 32 {
+		return token
+	}
+	token = strings.Trim(token[:23], "-")
+	if token == "" {
+		token = "parent"
+	}
+	return token + "-" + shortHash(parentRef)
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func shortHash(s string) string {
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
 }

@@ -147,8 +147,8 @@ use this workflow directly.
    should be filled in only when the team has a branch-naming convention
    worth enforcing (e.g. `feat/issue-<N>-foo`, `release/v2.0`); otherwise
    leave it empty so fanout's default `branchPrefix + slug` applies. fanout
-   appends `-<NUM>` to slug hints that do not already have that suffix, so
-   reruns remain idempotent even if names later change. In issue mode use the
+   appends `-<NUM>` to slug hints that do not already have that suffix; rerun
+   idempotency comes from `.fanout/state.json`. In issue mode use the
    parent issue context and issue dry-run target set. In project mode use the
    discovery dry-run output from step 5; fetch per-issue body via
    `gh issue view <num> --json body -q .body` only if the title alone is not
@@ -163,11 +163,11 @@ use this workflow directly.
 
 ## Optional: Wait-and-Continue
 
-Temporarily disabled for new direct tmux action runs. Phase 1 does not write
-fanout state, and `fanout --status` still reads legacy dmux state, so polling
-it cannot observe panes launched through the direct runtime. If the user asks
-for wait-and-continue, explain this limitation and do not start a polling loop
-until the state-store phase lands.
+Temporarily disabled for new direct tmux action runs. Action mode writes
+`.fanout/state.json`, but `fanout --status` still reads legacy dmux state, so
+polling it cannot observe panes launched through the direct runtime. If the
+user asks for wait-and-continue, explain this limitation and do not start a
+polling loop until `--status` reads the fanout state store.
 
 `--status` exit codes:
 
@@ -263,10 +263,15 @@ Key points:
 - **`--unblocked-only`** still applies. In project mode the parent-row
   trailer source is unavailable, so blockers come only from the child body's
   `## Blocked by` section and the `blocked` label.
-- **Idempotency** — Phase 1 action mode skips children when the exact
-  `.fanout/worktrees/<slug>` directory exists or another generated worktree
-  directory ends in `-<issue-number>`. Full state-store idempotency is handled
-  by a later phase.
+- **Idempotency** — action mode skips children already recorded in
+  `.fanout/state.json` for the same `(parent, issueNum)` pair, and also skips
+  unrecorded existing `.fanout/worktrees/<slug>` directories as a migration
+  fallback. If the same issue is recorded for another parent, only an existing
+  worktree matching the slug this current run would create is treated as
+  fallback. The state file is written with an atomic temp+rename update while a
+  `.fanout/state.json.lock` file is held for the run. If the same child issue
+  is already recorded for another parent or Project, fanout parent-qualifies
+  the default slug/branch so the new run gets a separate worktree.
 
 ## Pane Names
 
@@ -315,10 +320,9 @@ the likely next action:
 
 ## Notes
 
-- Action-mode reruns skip children when the exact `.fanout/worktrees/<slug>`
-  directory exists or another generated worktree directory ends in
-  `-<issue-number>`. `--status` still reads legacy dmux state until the
-  state-store phase lands.
+- Action-mode reruns skip children already recorded in `.fanout/state.json`
+  for the same `(parent, issueNum)`. `--status` still reads legacy dmux state
+  until its own migration lands.
 - `--unblocked-only` defers children whose blockers are still OPEN and is
   preferred over hand-built wave lists when blocker annotations exist.
 - Default project-mode filter is `--project-status Todo`. Use

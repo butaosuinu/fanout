@@ -67,10 +67,10 @@ load helpers
   assert_golden scenario-limit
 }
 
-@test "scenario-cross-parent-shared: direct runtime ignores legacy dmux panes" {
-  # Phase 1 no longer reads dmux.config.json for action-mode idempotency.
-  # Parents #100 and #200 share child #501, but the legacy pane fixture must
-  # not alter the direct git-worktree + tmux command plan for parent #200.
+@test "scenario-cross-parent-shared: state rows do not leak across parents" {
+  # Parents #100 and #200 share child #501. The fixture has legacy dmux state
+  # plus a .fanout/state.json row for #100/#501, but (parent, issueNum)
+  # idempotency must not alter the command plan for parent #200.
   use_fixture scenario-cross-parent-shared
   run_fanout_dry 200
   assert_success
@@ -87,9 +87,9 @@ load helpers
   assert_golden scenario-legacy-weak-signal
 }
 
-@test "scenario-idempotency: legacy dmux pane no longer causes action-mode skip" {
-  # State-store idempotency is Phase 2. In Phase 1, action mode plans direct
-  # worktree creation unless .fanout/worktrees/<slug> already exists.
+@test "scenario-idempotency: state entry causes same-parent child to be skipped" {
+  # Phase 2 idempotency comes from .fanout/state.json keyed by
+  # (parent, issueNum), not from legacy dmux panes or worktree directory names.
   use_fixture scenario-idempotency
   run_fanout_dry 800
   assert_success

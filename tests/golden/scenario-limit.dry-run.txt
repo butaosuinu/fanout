@@ -19,6 +19,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701
     $ tmux select-pane -t <pane_id> -T alpha-701
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #701 of #700] alpha-701: Alpha. read /tmp/fanout-project_root-701.md and begin.'\''' Enter
 [ ok ] #701: dry-run complete
 [info] #702: Bravo
@@ -36,6 +38,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702
     $ tmux select-pane -t <pane_id> -T bravo-702
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #702 of #700] bravo-702: Bravo. read /tmp/fanout-project_root-702.md and begin.'\''' Enter
 [ ok ] #702: dry-run complete
 

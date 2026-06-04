@@ -1,0 +1,130 @@
+package state
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadMissingReturnsEmptyStore(t *testing.T) {
+	got, err := Load(filepath.Join(t.TempDir(), ".fanout", "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != SchemaVersion {
+		t.Fatalf("schemaVersion = %d, want %d", got.SchemaVersion, SchemaVersion)
+	}
+	if len(got.Panes) != 0 {
+		t.Fatalf("panes = %d, want 0", len(got.Panes))
+	}
+}
+
+func TestFannedNumbersForParentDedupesByParentAndIssue(t *testing.T) {
+	store := Store{Panes: []Pane{
+		{Parent: "300", IssueNum: 501},
+		{Parent: "0300", IssueNum: 502},
+		{Parent: "400", IssueNum: 601},
+		{Parent: "300", IssueNum: 501},
+	}}
+
+	got := store.FannedNumbersForParent("300")
+
+	if !got[501] || !got[502] {
+		t.Fatalf("fanned = %#v, want #501 and #502", got)
+	}
+	if got[601] {
+		t.Fatalf("fanned = %#v, did not want #601 from another parent", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(fanned) = %d, want 2", len(got))
+	}
+}
+
+func TestFannedNumbersForOtherParents(t *testing.T) {
+	store := Store{Panes: []Pane{
+		{Parent: "300", IssueNum: 501},
+		{Parent: "0300", IssueNum: 502},
+		{Parent: "400", IssueNum: 501},
+		{Parent: "500", IssueNum: 601},
+	}}
+
+	got := store.FannedNumbersForOtherParents("300")
+
+	if !got[501] || !got[601] {
+		t.Fatalf("other-parent fanned = %#v, want #501 and #601", got)
+	}
+	if got[502] {
+		t.Fatalf("other-parent fanned = %#v, did not want #502 from same normalized parent", got)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(other-parent fanned) = %d, want 2", len(got))
+	}
+}
+
+func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	err = locked.RecordPane(Pane{
+		Parent:       "81",
+		IssueNum:     83,
+		Slug:         "state-idempotency-83",
+		BranchName:   "fanout/state-idempotency-83",
+		PaneID:       "%42",
+		Agent:        "codex",
+		DisplayName:  "State Idempotency",
+		WorktreePath: filepath.Join(root, ".fanout", "worktrees", "state-idempotency-83"),
+		Prompt:       "[fanout #83 of #81] state-idempotency-83: read /tmp/fanout-fanout-83.md and begin.",
+		CreatedAt:    "2026-06-04T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Store
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("state is invalid JSON: %v\n%s", err, data)
+	}
+	if decoded.SchemaVersion != SchemaVersion || len(decoded.Panes) != 1 {
+		t.Fatalf("decoded state = %+v", decoded)
+	}
+	if got := decoded.Panes[0].PaneID; got != "%42" {
+		t.Fatalf("paneId = %q, want %%42", got)
+	}
+}
+
+func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err := locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 1 {
+		t.Fatalf("pane count = %d, want 1", len(loaded.Panes))
+	}
+	if got := loaded.Panes[0].PaneID; got != "%2" {
+		t.Fatalf("paneId = %q, want %%2", got)
+	}
+}

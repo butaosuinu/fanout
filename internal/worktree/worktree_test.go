@@ -209,9 +209,21 @@ func TestEnsureLocalExcludeIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(body), localExcludePattern); got != 1 {
-		t.Fatalf("exclude pattern count = %d, want 1\n%s", got, body)
+	for _, pattern := range localExcludePatterns {
+		if got := countLines(string(body), pattern); got != 1 {
+			t.Fatalf("exclude pattern %s count = %d, want 1\n%s", pattern, got, body)
+		}
 	}
+}
+
+func countLines(body, want string) int {
+	var count int
+	for _, line := range strings.Split(body, "\n") {
+		if line == want {
+			count++
+		}
+	}
+	return count
 }
 
 func TestCleanupCreatedRemovesWorktreeAndBranch(t *testing.T) {

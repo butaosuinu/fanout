@@ -3,15 +3,18 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/displayname"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
@@ -29,8 +32,13 @@ type paneRequest struct {
 	Worktree            worktree.Plan
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) bool {
-	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings)
+type paneStateRecorder interface {
+	RecordPane(state.Pane) error
+	RemovePane(parent string, issueNum int) error
+}
+
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette) bool {
+	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents)
 	agentCmd, err := buildAgentCommand(cfg, req.OneLinePrompt)
 	if err != nil {
 		lg.Err("#%d: %v", req.Issue.Number, err)
@@ -89,13 +97,49 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SelectTiled(info.Target); err != nil {
 		lg.Warn("#%d: %v", req.Issue.Number, err)
 	}
+	if recorder != nil {
+		entry := statePane(cfg, req, paneID, prepared.WorktreePath, time.Now().UTC())
+		if err := recorder.RecordPane(entry); err != nil {
+			lg.Err("#%d: write fanout state: %v", req.Issue.Number, err)
+			cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
+			return false
+		}
+	}
+	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
+		Agent:        cfg.Agent,
+		DisplayName:  paneTitle(req),
+		BranchName:   req.BranchName,
+		Slug:         req.Slug,
+		WorktreePath: prepared.WorktreePath,
+	}); err != nil {
+		lg.Err("#%d: write worktree metadata: %v", req.Issue.Number, err)
+		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
+		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
+		return false
+	}
 	if err := tmuxrun.SendShellCommand(paneID, req.AgentCommand); err != nil {
 		lg.Err("#%d: %v", req.Issue.Number, err)
+		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
 		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
 		return false
 	}
 	lg.Ok("#%d: pane %s created in %s", req.Issue.Number, paneID, prepared.WorktreePath)
 	return true
+}
+
+func statePane(cfg *cliflags.Config, req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
+	return state.Pane{
+		Parent:       cfg.ParentRef,
+		IssueNum:     req.Issue.Number,
+		Slug:         req.Slug,
+		BranchName:   req.BranchName,
+		PaneID:       paneID,
+		Agent:        cfg.Agent,
+		DisplayName:  paneTitle(req),
+		WorktreePath: worktreePath,
+		Prompt:       req.OneLinePrompt,
+		CreatedAt:    now.Format(time.RFC3339),
+	}
 }
 
 func buildAgentCommand(cfg *cliflags.Config, prompt string) (string, error) {
@@ -105,8 +149,10 @@ func buildAgentCommand(cfg *cliflags.Config, prompt string) (string, error) {
 	return agent.BuildResolvedCommand(cfg.Agent, prompt)
 }
 
-func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings) paneRequest {
+func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, sharedAcrossParents bool) paneRequest {
 	slug := naming.Slug(issue.Title, issue.Number)
+	slugOverridden := false
+	branchOverride := ""
 	req := paneRequest{
 		Issue:        issue,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
@@ -117,12 +163,15 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
 			req.Slug = naming.EnsureIssueSuffix(name.SlugHint, issue.Number)
+			slugOverridden = true
 		}
 		req.DisplayNameOverride = name.DisplayName
-		req.BranchName = naming.BranchName(name.BranchName, cfg.BranchPrefix, req.Slug)
-	} else {
-		req.BranchName = naming.BranchName("", cfg.BranchPrefix, req.Slug)
+		branchOverride = name.BranchName
 	}
+	if sharedAcrossParents && !slugOverridden {
+		req.Slug = naming.QualifySlugForParent(req.Slug, cfg.ParentRef, issue.Number)
+	}
+	req.BranchName = naming.BranchName(branchOverride, cfg.BranchPrefix, req.Slug)
 	req.OneLinePrompt = oneLinePrompt(cfg.ParentRef, req)
 	return req
 }
@@ -186,6 +235,8 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	} else {
 		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout tiled%s\n", c.Dim, c.Reset)
 	}
+	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
+	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux send-keys -t <pane_id> %s Enter%s\n", c.Dim, shellQuote(req.AgentCommand), c.Reset)
 	lg.Ok("#%d: dry-run complete", req.Issue.Number)
 }
@@ -195,6 +246,15 @@ func paneTitle(req paneRequest) string {
 		return req.DisplayNameOverride
 	}
 	return req.Slug
+}
+
+func rollbackState(recorder paneStateRecorder, parent string, issueNum int, lg *log.Logger) {
+	if recorder == nil {
+		return
+	}
+	if err := recorder.RemovePane(parent, issueNum); err != nil {
+		lg.Warn("#%d: could not roll back fanout state: %v", issueNum, err)
+	}
 }
 
 func cleanupFailedLaunch(issueNum int, paneID string, plan worktree.Plan, lg *log.Logger) {

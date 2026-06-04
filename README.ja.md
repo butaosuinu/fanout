@@ -13,9 +13,9 @@ GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つ�
 fanout は dmux を経由せずに子セッションを作ります。`git rev-parse --show-toplevel`
 でリポジトリルートを解決し、選択された base branch を fresh 化し、
 `.fanout/worktrees/<slug>/` を作成し、起動元 tmux pane を `tmux split-window`
-で分割し、選択された agent CLI を 1 行 briefing prompt 付きで起動します。古い
-dmux ポップアップ横取り経路は、state store 移行が完了するまで legacy の
-status/documentation surface にだけ残っています。
+で分割し、選択された agent CLI を 1 行 briefing prompt 付きで起動します。
+作成した pane は `.fanout/state.json` に `(parent, issueNum)` キーで記録するため、
+同じ親での再実行では記録済みの子を重複作成しません。
 
 ## Project モード
 
@@ -40,9 +40,12 @@ status/documentation surface にだけ残っています。
   1 回 1 repo の前提）。
 - **Project に Status フィールドが無い場合** は warn を出して
   `--project-status` を無視し、全 item を対象にフォールバックします。
-- **冪等性と `--unblocked-only` は issue モードと共通**。Phase 1 の action mode
-  は exact な `.fanout/worktrees/<slug>/`、または `-<issue-number>` で終わる
-  生成済み worktree ディレクトリをスキップします。Project モードでの blocker
+- **冪等性と `--unblocked-only` は issue モードと共通**。action mode は
+  `.fanout/state.json` に記録済みの同じ `(parent, issueNum)` の子をスキップします。
+  移行用 fallback として、state に未記録でも既存の `.fanout/worktrees/<slug>`
+  directory がある子もスキップします。同じ issue が別の親に記録済みの場合は、
+  別親の default worktree は無視し、今回の run が作る slug と一致する worktree が
+  既にある場合だけ中断復旧用にスキップします。Project モードでの blocker
   情報源は child body の `## Blocked by` セクションと
   `blocked` ラベルのみ（親 body の `(blocked by #X)` トレイラは存在しない）。
 
@@ -271,7 +274,8 @@ fanout 123 --unblocked-only --limit 3
 # 子ごとの worktree slug stem、ペインタイトル、git branch 名を指定する。
 # `--name NUM=<slug>[|<display>[|<branch>]]` の 3 セグメント。最低 1 つ非空であれば
 # 残りは空でよい。<slug> に issue 番号 suffix が無い場合、fanout は -<NUM> を
-# 付けて rerun の冪等性を保つ。3 つ目の <branch> は生成 branch 名を上書きする。
+# 付ける。rerun の冪等性は `.fanout/state.json` が担う。3 つ目の <branch> は
+# 生成 branch 名を上書きする。
 # 同梱の Claude/Codex 連携経由なら issue タイトル/本文から各 hint を会話内で
 # 生成して自動で渡す。
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
@@ -300,8 +304,8 @@ fanout 123 --no-auto-pr
 export FANOUT_AGENT_TEAMS_HINT=0
 
 # legacy dmux state に記録された子 issue と closed-by PR の merge 状態を
-# JSON で読む。副作用は無いが、Phase 1 の direct tmux run はまだここには
-# 表示されない。内部的には子ごとに `gh api graphql` を 1 回呼び、
+# JSON で読む。副作用は無いが、direct tmux の .fanout/state.json 行はまだ
+# ここには表示されない。内部的には子ごとに `gh api graphql` を 1 回呼び、
 # `closedByPullRequestsReferences(first: 100)` をカーソル追従して
 # PR の `state` / `mergedAt` をまとめて取得する。
 fanout 123 --status
@@ -383,9 +387,12 @@ worktree から実行すること、agent 名を明示すること。詳しく�
    にマッチする行の `#NUM` を拾う（同一リポジトリ内のみ。`owner/repo#NUM`
    形式はスキップ）。本文由来の番号は `gh issue view` で本体情報を引く。
    `state == "OPEN"` の子のみを処理する。
-5. Phase 1 の action-mode 冪等性として、exact な `.fanout/worktrees/<slug>`、
-   または `-<issue-number>` で終わる生成済み worktree ディレクトリがある child は
-   スキップする。
+5. action-mode 冪等性として `.fanout/state.json` を読み、同じ
+   `(parent, issueNum)` が記録済みの child はスキップする。pre-state run や
+   中断された launch から残った未記録の `.fanout/worktrees/<slug>` directory も、
+   移行用 fallback としてスキップする。同じ issue が別の親に記録済みの場合は
+   別親の default worktree を無視し、今回の run が作る slug と一致する worktree が
+   既にあるときだけ中断復旧用にスキップする。
 6. 各対象 issue について:
    - `/tmp/fanout-<repo>-<NUM>.md` に、issue の本文と短い Requirements チェックリスト
      からなるブリーフィングを書き出す。内容は解決済み settings で出し分ける。
@@ -466,10 +473,17 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 
 - **プロンプトは 1 行のみ**。完全な issue 本文は `/tmp/fanout-<repo>-<NUM>.md`
   に保存し、pane 起動 prompt は agent にその briefing を読むよう短く伝えます。
-- **Phase 1 の冪等性は worktree directory ベース**。exact な生成 slug と
-  issue 番号 suffix 付きの生成済み worktree directory を見ます。後続の
-  state-store phase で legacy `dmux.config.json` の status/idempotency 挙動を
-  置き換えます。
+- **状態ストア冪等性**。`.fanout/state.json` には `schemaVersion` と、
+  `parent` / `issueNum` / `slug` / `branchName` / `paneId` / `agent` /
+  `displayName` / `worktreePath` / `prompt` / `createdAt` を持つ pane 行を
+  保存します。書き込みは sibling temp file + rename で atomic に行い、live run
+  中は `.fanout/state.json.lock` を保持して plan と起動を直列化するため、並列実行
+  でも同じ `(parent, issueNum)` を二重作成しません。state row の無い既存 worktree
+  directory は、移行用 fallback として引き続き fanned 済み扱いにします。同じ child
+  issue が別の親や Project ですでに記録されている場合は、デフォルトの slug/branch
+  生成で issue suffix の前に parent token を足し、2 回目の run が 1 回目の
+  worktree と衝突しないようにします。今回の run が作る slug と一致する worktree が
+  既にある場合は、中断復旧用にその run を skip します。
 - **直接 tmux IPC**。`tmux split-window -t <invoking-pane> -d -P -F '#{pane_id}'`
   が子ペインを選択せずに pane id を同期的に返すため、popup 横取りや
   完了ポーリングは不要です。

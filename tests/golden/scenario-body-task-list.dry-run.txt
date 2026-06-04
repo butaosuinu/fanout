@@ -20,6 +20,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/worktrees/first-task-201
     $ tmux select-pane -t <pane_id> -T first-task-201
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #201 of #200] first-task-201: First task. read /tmp/fanout-project_root-201.md and begin.'\''' Enter
 [ ok ] #201: dry-run complete
 [info] #202: Second task
@@ -37,6 +39,8 @@
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-body-task-list/project_root/.fanout/worktrees/second-task-202
     $ tmux select-pane -t <pane_id> -T second-task-202
     $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
     $ tmux send-keys -t <pane_id> 'claude '\''[fanout #202 of #200] second-task-202: Second task. read /tmp/fanout-project_root-202.md and begin.'\''' Enter
 [ ok ] #202: dry-run complete
 

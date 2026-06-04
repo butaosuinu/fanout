@@ -13,6 +13,14 @@ import (
 
 const localExcludePattern = ".fanout/worktrees/"
 
+var localExcludePatterns = []string{
+	".fanout/.fanout-*.tmp",
+	".fanout/state.json",
+	".fanout/state.json.lock",
+	".fanout/worktree-metadata.json",
+	localExcludePattern,
+}
+
 type Options struct {
 	ProjectRoot string
 	Slug        string
@@ -87,7 +95,7 @@ func Prepare(opts Options) (Result, error) {
 	return Result{Plan: plan}, nil
 }
 
-// EnsureLocalExclude keeps generated fanout worktrees out of the user's git status.
+// EnsureLocalExclude keeps generated fanout runtime files out of the user's git status.
 func EnsureLocalExclude(root string) error {
 	excludePath, err := gitTrim(root, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
@@ -99,11 +107,12 @@ func EnsureLocalExclude(root string) error {
 
 	body, err := os.ReadFile(excludePath)
 	switch {
-	case err == nil && hasExcludePattern(body):
+	case err == nil && len(missingExcludePatterns(body)) == 0:
 		return nil
 	case err != nil && !os.IsNotExist(err):
 		return fmt.Errorf("read git exclude: %w", err)
 	}
+	missing := missingExcludePatterns(body)
 
 	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
 		return fmt.Errorf("create git exclude directory: %w", err)
@@ -119,8 +128,10 @@ func EnsureLocalExclude(root string) error {
 			return fmt.Errorf("append git exclude newline: %w", err)
 		}
 	}
-	if _, err := f.WriteString(localExcludePattern + "\n"); err != nil {
-		return fmt.Errorf("append git exclude pattern: %w", err)
+	for _, pattern := range missing {
+		if _, err := f.WriteString(pattern + "\n"); err != nil {
+			return fmt.Errorf("append git exclude pattern: %w", err)
+		}
 	}
 	return nil
 }
@@ -142,14 +153,19 @@ func CleanupCreated(plan Plan) error {
 	return errors.Join(errs...)
 }
 
-func hasExcludePattern(body []byte) bool {
+func missingExcludePatterns(body []byte) []string {
+	seen := map[string]bool{}
 	sc := bufio.NewScanner(strings.NewReader(string(body)))
 	for sc.Scan() {
-		if strings.TrimSpace(sc.Text()) == localExcludePattern {
-			return true
+		seen[strings.TrimSpace(sc.Text())] = true
+	}
+	var missing []string
+	for _, pattern := range localExcludePatterns {
+		if !seen[pattern] {
+			missing = append(missing, pattern)
 		}
 	}
-	return false
+	return missing
 }
 
 // ResolveDefaultBranch follows fanout's default branch fallback order.

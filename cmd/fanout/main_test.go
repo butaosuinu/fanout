@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
@@ -43,7 +44,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
 	}
 
-	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), log.Palette{})
+	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), nil, nil, log.Palette{})
 
 	if result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)
@@ -80,7 +81,7 @@ func TestCreatePaneForIssueFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Duplicate Title", State: "OPEN", Body: "body"}
 
-	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), log.Palette{}) {
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), nil, false, log.Palette{}) {
 		t.Fatal("createPaneForIssue() = true, want false for launch-time worktree collision")
 	}
 	if got := stderr.String(); !strings.Contains(got, "worktree path already exists during launch") {
@@ -105,11 +106,38 @@ func TestCreatePaneForIssueRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Bad Base", State: "OPEN", Body: "body"}
 
-	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), log.Palette{}) {
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), nil, false, log.Palette{}) {
 		t.Fatal("createPaneForIssue() = true, want false for unsupported refresh base")
 	}
 	if got := stderr.String(); !strings.Contains(got, `base branch "refs/heads/main" is not refreshable`) {
 		t.Fatalf("stderr = %q, want unsupported base message", got)
+	}
+}
+
+func TestLoadRunStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+
+	cfg := &cliflags.Config{}
+	lg := log.NewWith(io.Discard, io.Discard, false)
+	_, recorder, code := loadRunState(cfg, repo, lg)
+	if code != exitcode.OK {
+		t.Fatalf("loadRunState code = %d, want %d", code, exitcode.OK)
+	}
+	if recorder == nil {
+		t.Fatal("loadRunState returned nil recorder for live run")
+	}
+	t.Cleanup(func() { _ = recorder.Unlock() })
+
+	if _, err := os.Stat(filepath.Join(repo, ".fanout", "state.json.lock")); err != nil {
+		t.Fatalf("state lock was not created: %v", err)
+	}
+	exclude, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exclude), ".fanout/state.json.lock\n") {
+		t.Fatalf("exclude = %q, want state lock pattern", exclude)
 	}
 }
 
