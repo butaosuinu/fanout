@@ -105,6 +105,10 @@ Options:
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue's state and closed-by PR merge status, then
                       exit. Exclusive with action-bearing flags.
+  --check-update      Read-only mode. Fetch the latest fanout release tag,
+                      compare it with this binary's version, print whether an
+                      update is available, then exit. Also accepted as
+                      ` + "`" + `fanout check-update` + "`" + `.
   -V, --version       Print version and commit, then exit.
   -h, --help          Show this message.
 
@@ -130,6 +134,11 @@ Exit codes (--status):
   0 success (JSON emitted; check summary.all_merged for state)
   2 cannot enumerate children
   3 gh API call failed
+
+Exit codes (--check-update):
+  0 success (including update available, up-to-date, dev build)
+  2 cannot compare version strings (MAJOR.MINOR.PATCH, optional v prefix)
+  3 gh release lookup failed
 `
 
 // Usage writes the help text to w.

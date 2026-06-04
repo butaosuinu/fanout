@@ -34,6 +34,37 @@ load helpers
   [[ "$output" == *"Usage: fanout"* ]]
 }
 
+@test "--check-update on dev build exits 0 without gh" {
+  force_missing gh
+  run_fanout --check-update
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fanout dev build"* ]]
+  [[ "$output" == *"--check-update only works for released versions"* ]]
+}
+
+@test "check-update subcommand on dev build exits 0 without gh" {
+  force_missing gh
+  run_fanout check-update
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fanout dev build"* ]]
+}
+
+@test "--check-update release build reports update available from fixture" {
+  local release_bin="$BATS_TEST_TMPDIR/fanout-release"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  use_fixture scenario-check-update
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout --check-update
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fanout update available: v0.1.0 -> v0.2.0"* ]]
+}
+
 @test "no positional argument: usage + exit 2" {
   run_fanout
   [ "$status" -eq 2 ]

@@ -227,12 +227,28 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # ファンアウト済み子 issue の JSON 状態を読む
+fanout --check-update               # この binary と最新 release を比較
 fanout --help
 ```
 
 第1引数は GitHub issue 番号（Sub-issues + タスクリストモード）または
 Projects v2 URL（Project モード、上記参照）のいずれか。`--project-status`
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
+
+### `--check-update`
+
+`fanout --check-update` は読み取り専用です。`butaosuinu/fanout` の最新 release
+tag を取得し、この binary に埋め込まれた version と比較して、更新の有無を表示します。
+`fanout check-update` という subcommand 形式でも呼べます。ローカル dev build
+（`version == "dev"`、通常の `make build-go` を含む）は `gh` を呼ばず、dev build
+向けメッセージを出して exit 0 で終了します。
+
+exit code:
+
+- `0` — 比較完了、または dev build。
+- `2` — 現行 version または最新 tag が `MAJOR.MINOR.PATCH`
+  （任意の `v` prefix 可）ではなく比較不能。
+- `3` — `gh release view -R butaosuinu/fanout` が失敗。
 
 ### Settings
 
@@ -345,6 +361,10 @@ export FANOUT_AGENT_TEAMS_HINT=0
 # をカーソル追従して PR の `state` / `mergedAt` をまとめて取得する。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+
+# release 済み fanout binary が最新 GitHub Release より古いか確認する。
+# dev build は、更新確認が release version 向けであることを表示する。
+fanout --check-update
 
 # 親 issue ではなく Projects v2 ボードの OPEN issue をファンアウトする。
 # 既定は Status=Todo フィルタ、同一リポジトリのみ。`gh auth refresh -s
