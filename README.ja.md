@@ -228,8 +228,7 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # ファンアウト済み子 issue の JSON 状態を読む
 fanout --check-update               # この binary と最新 release を比較
-fanout self-update --check          # release 更新 plan だけ表示（副作用なし）
-fanout self-update --yes            # install.sh 経由で binary + integrations を置換
+fanout update                       # install.sh 経由で binary + integrations を置換
 fanout --help
 ```
 
@@ -252,30 +251,27 @@ exit code:
   （任意の `v` prefix 可）ではなく比較不能。
 - `3` — `gh release view -R butaosuinu/fanout` が失敗。
 
-### `self-update`
+### `update`
 
-`fanout self-update` は Installation で説明している同じ `install.sh` 経路を呼び、
+`fanout update` は Installation で説明している同じ `install.sh` 経路を呼び、
 実行中の release binary を置換します。OS/arch 検出、release download、checksum
 検証、tar 展開、Claude/Codex skill 配置は `install.sh` に集約したままにします。
 
 既定では最新 release を解決し、埋め込み version と比較し、`EvalSymlinks` 後の
-現在の binary path を表示してから確認プロンプトを出します。非対話 automation では
-`--yes` を指定してください。`--yes` が無い場合、stdin が tty でなければ拒否します。
-ローカル dev build（`version == "dev"`、通常の `make build-go` を含む）は置換を
-拒否します。
+現在の binary path を表示してから installer を即時実行します。ローカル dev build
+（`version == "dev"`、通常の `make build-go` を含む）は置換を拒否します。
 
 Options:
 
-- `--check` — 解決した plan だけ表示します。`install.sh` の取得や file 置換はしません。
 - `--version <tag>` — `FANOUT_VERSION=<tag>` を `install.sh` に渡し、pin した release
   tag を install します。
 - `--no-skills` — `install.sh` に `--no-skills` を渡し、binary だけ更新します。
 
 exit code:
 
-- `0` — plan 表示、更新完了、ユーザー中断、または既に最新。
-- `1` — dev build、`curl`/`wget` 不在、`--yes` なしの非 tty stdin、書込不可
-  binary directory、option 値不足などの環境/preflight 失敗。
+- `0` — 更新完了、または既に最新。
+- `1` — dev build、`curl`/`wget` 不在、書込不可 binary directory、option 値不足などの
+  環境/preflight 失敗。
 - `2` — unknown option、想定外の argument、または version string 比較不能。
 - `3` — 最新 release lookup 失敗。
 
