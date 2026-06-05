@@ -275,8 +275,8 @@ exit code:
 
 - `0` — plan 表示、更新完了、ユーザー中断、または既に最新。
 - `1` — dev build、`curl`/`wget` 不在、`--yes` なしの非 tty stdin、書込不可
-  binary directory などの環境/preflight 失敗。
-- `2` — self-update の呼び出し不正、または version string 比較不能。
+  binary directory、option 値不足などの環境/preflight 失敗。
+- `2` — unknown option、想定外の argument、または version string 比較不能。
 - `3` — 最新 release lookup 失敗。
 
 ### Settings

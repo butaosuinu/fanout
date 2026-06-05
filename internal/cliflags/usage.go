@@ -142,6 +142,12 @@ Exit codes (--check-update):
   0 success (including update available, up-to-date, dev build)
   2 cannot compare version strings (MAJOR.MINOR.PATCH, optional v prefix)
   3 gh release lookup failed
+
+Exit codes (self-update):
+  0 success (plan printed, update completed, aborted, or already up to date)
+  1 prerequisite / environment problem, or missing option value
+  2 unknown option, unexpected argument, or cannot compare version strings
+  3 gh release lookup failed
 `
 
 // Usage writes the help text to w.

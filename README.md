@@ -334,8 +334,9 @@ Exit codes:
 
 - `0` — plan printed, update completed, user aborted, or already up to date.
 - `1` — environment/preflight failure such as dev build, no `curl`/`wget`,
-  non-tty stdin without `--yes`, or an unwritable binary directory.
-- `2` — bad self-update invocation or incomparable version strings.
+  non-tty stdin without `--yes`, an unwritable binary directory, or a missing
+  option value.
+- `2` — unknown option, unexpected argument, or incomparable version strings.
 - `3` — latest release lookup failed.
 
 ### Settings
