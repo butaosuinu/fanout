@@ -2,14 +2,13 @@
 #
 # Tier 2 — `./fanout --status <PARENT>` JSON golden tests.
 #
-# Each @test points the gh / tmux shims at a fixture under
+# Each @test points the gh / git shims at a fixture under
 # tests/fixtures/scenario-status-*, runs fanout in --status mode, and diffs
 # the captured JSON against tests/golden/scenario-status-*.status.txt.
 #
-# The fixture contract for --status is the same dmux.config.json /
-# tmux-sessions.txt / tmux-show-options.tsv / project_root layout used by
-# the dry-run tests, plus per-issue gh-issue-view-<N>.json files that include
-# the `closedByPullRequestsReferences` field at the top level.
+# The fixture contract for --status is project_root/.fanout/state.json plus
+# per-issue gh-issue-view-<N>.json files that include the
+# `closedByPullRequestsReferences` field at the top level.
 #
 # Regenerate goldens after an intentional schema change with:
 #   FANOUT_GOLDEN_UPDATE=1 bats tests/bats/tier2_status.bats
@@ -62,11 +61,10 @@ load helpers
   assert_status_golden scenario-status-paginated
 }
 
-# Cross-parent filtering: a session that fanned both #300 and #400 must not
+# Cross-parent filtering: a state file that fanned both #300 and #400 must not
 # leak #400's children into `fanout --status 300` (and vice versa). Old-format
-# panes (`[fanout #N]` without parent annotation) are excluded because their
-# parent is unknown — we'd rather under-report than mix parents and lie about
-# `summary.all_merged`.
+# entries without a parent are excluded because their parent is unknown — we'd
+# rather under-report than mix parents and lie about `summary.all_merged`.
 @test "scenario-status-multi-parent: --status 300 returns only #300's children" {
   use_fixture scenario-status-multi-parent
   run_fanout_status 300
@@ -85,11 +83,9 @@ load helpers
   assert_status_golden scenario-status-leading-zero-300
 }
 
-# Duplicate pane handling: a child can legitimately have more than one pane
-# under the same parent (stale pane from a manual cleanup lag, a re-fan
-# after a failed dmux popup, etc.). `--status` must report one entry per
-# issue and count it once in the summary — duplicates would inflate
-# `summary.total/merged/pending` and break wait-and-continue arithmetic.
+# Duplicate handling: a stale state file can contain repeated child entries
+# under the same parent. `--status` must report one entry per issue and count
+# it once in the summary — duplicates would inflate summary arithmetic.
 @test "scenario-status-duplicate-panes: --status 500 dedupes #501 across two panes" {
   use_fixture scenario-status-duplicate-panes
   run_fanout_status 500

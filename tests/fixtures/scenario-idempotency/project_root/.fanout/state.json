@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "800",
+      "issueNum": 801,
+      "slug": "already-fanned-801",
+      "branchName": "fanout/already-fanned-801",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "already-fanned-801",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #801 of #800] already-fanned-801: Already fanned. read /tmp/fanout-project_root-801.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

@@ -3,14 +3,13 @@
 # Tier 2 — `./fanout --dry-run` golden-output tests.
 #
 # Each @test picks a scenario fixture under tests/fixtures/<name>, runs
-# fanout against it with --dry-run (so no tmux I/O and no popup intercept
+# fanout against it with --dry-run (so no tmux or git worktree side effects
 # happen), and diffs the captured output against the matching golden file
 # under tests/golden/<name>.dry-run.txt.
 #
 # The fixture directory contract is documented in tests/bin/gh and
 # tests/bin/tmux: the shims read gh-sub-issue-list.json, gh-issue-view-<N>.json,
-# tmux-sessions.txt, tmux-show-options.tsv, and dmux.config.json from
-# $FIXTURE_DIR.
+# tmux-sessions.txt, state files, and GitHub fixtures from $FIXTURE_DIR.
 #
 # Regenerating goldens after an intentional output change:
 #   FANOUT_GOLDEN_UPDATE=1 bats tests/bats/tier2_dry_run.bats
@@ -67,58 +66,42 @@ load helpers
   assert_golden scenario-limit
 }
 
-@test "scenario-cross-parent-shared: pane fanned for #100 does not block fanout 200 for the shared child" {
-  # Parents #100 and #200 share child #501. The fixture's only pane is
-  # `[fanout #501 of #100]`. Idempotency must scope to the requested
-  # parent: when running `fanout 200`, both #501 (shared) and #502 (B-only)
-  # appear as targets and would each get their own `of #200` pane. Without
-  # parent-scoped idempotency, #501 would be silently skipped and a later
-  # `fanout --status 200` would lie about all_merged.
+@test "scenario-cross-parent-shared: state rows do not leak across parents" {
+  # Parents #100 and #200 share child #501. The fixture has a
+  # .fanout/state.json row for #100/#501, but (parent, issueNum)
+  # idempotency must not alter the command plan for parent #200.
   use_fixture scenario-cross-parent-shared
   run_fanout_dry 200
   assert_success
   assert_golden scenario-cross-parent-shared
 }
 
-@test "scenario-legacy-weak-signal: weak-signal legacy pane is left alone AND a fresh parent-annotated pane is created" {
-  # The pane carries the legacy `[fanout #601]` form (no parent annotation).
-  # #601 is in parent #600's set only via body-task-list scan — the
-  # Sub-issues API returns []. Two invariants must hold:
-  #   (a) The migration step doesn't relabel the legacy pane — body-task-list
-  #       refs aren't strong enough to claim ownership. No "would migrate"
-  #       line appears.
-  #   (b) The lenient-idempotency "claim" set is the strong-signal CSV
-  #       (empty here), so #601 is NOT considered already-fanned. A fresh
-  #       `[fanout #601 of #600]` pane is created, surfacing the child in
-  #       a later `fanout --status 600`. The legacy pane is left for the
-  #       user to delete in the dmux TUI.
+@test "scenario-legacy-weak-signal: body-task-list child gets direct worktree commands" {
+  # The fixture still carries a legacy pre-state child, but action mode no
+  # longer migrates or consults old pane prompts. The body-task-list child
+  # should still produce a fresh direct-runtime command plan.
   use_fixture scenario-legacy-weak-signal
   run_fanout_dry 600
   assert_success
   assert_golden scenario-legacy-weak-signal
 }
 
-@test "scenario-idempotency: existing [fanout #N] pane causes N to be skipped and migration is announced" {
-  # The fixture's pane uses the legacy `[fanout #N]` form (no parent
-  # annotation), which exercises both invariants in one run: idempotency
-  # still treats #801 as already-fanned, AND the new legacy-tag migration
-  # path emits its "would migrate ..." line under --dry-run.
+@test "scenario-idempotency: state entry causes same-parent child to be skipped" {
+  # Phase 2 idempotency comes from .fanout/state.json keyed by
+  # (parent, issueNum), not from legacy pane prompts or worktree directory names.
   use_fixture scenario-idempotency
   run_fanout_dry 800
   assert_success
   assert_golden scenario-idempotency
 }
 
-@test "scenario-sub-issue-only with --name branch override: dry-run payload becomes structured object" {
+@test "scenario-sub-issue-only with --name branch override: dry-run uses deterministic slug and branch" {
   # Reuses the scenario-sub-issue-only fixture. Issue #101 gets a 3-segment
   # --name with slug + display + branch; #102 gets a branch-only --name
   # (||branch). The dry-run output must show:
-  #   - issue #101: newPanePopup payload as object {prompt, branchName} and
-  #     "branch-name -> feat/sub-issue-101-x" trace line
-  #   - issue #102: same object shape with branchName only (no slug-hint or
-  #     display-name lines)
-  # If dmux ever changes how PopupManager.normalizeNewPaneInput interprets
-  # the object, this golden will catch the divergence before live use.
+  #   - issue #101: slug/worktree from the slug segment, pane title from
+  #     display-name, and branch from the branch segment.
+  #   - issue #102: deterministic title slug plus branch override.
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 \
     --name "101=feat-x|Feature X|feat/sub-issue-101-x" \

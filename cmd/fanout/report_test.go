@@ -25,7 +25,7 @@ func TestPrintSummaryUsesInvokedCommandNameInLimitRerunHint(t *testing.T) {
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
-	if !strings.Contains(got, "  fanout-go 700 --limit 1 --agent claude\n") {
+	if !strings.Contains(got, "  fanout-go 700 --include 702 --only 702 --agent claude\n") {
 		t.Fatalf("summary output did not include fanout-go rerun hint:\n%s", got)
 	}
 	if strings.Contains(got, "  fanout 700 --limit") {
@@ -51,9 +51,58 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
-	want := "  fanout-go 700 --limit 2 --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --agent claude\n"
+	want := "  fanout-go 700 --include '702,703' --only '702,703' --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --agent claude\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("summary output did not preserve settings flags:\nwant %q\noutput:\n%s", want, got)
+	}
+}
+
+func TestPrintSummaryPreservesDeferredNameFlagsInLimitRerunHint(t *testing.T) {
+	var out, err bytes.Buffer
+	lg := log.NewWith(&out, &err, false)
+	plan := Plan{
+		LimitDeferred: []ghissue.Issue{{Number: 703}},
+	}
+	cfg := &cliflags.Config{
+		ParentRef: "700",
+		Agent:     "claude",
+		Names: []cliflags.NameOverride{
+			{Num: 701, SlugHint: "already-created"},
+			{Num: 703, SlugHint: "custom-703", DisplayName: "Custom 703", BranchName: "feat/703"},
+		},
+	}
+
+	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
+
+	got := out.String()
+	want := "  fanout-go 700 --include 703 --only 703 --name '703=custom-703|Custom 703|feat/703' --agent claude\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("summary output did not preserve deferred --name flag:\nwant %q\noutput:\n%s", want, got)
+	}
+	if strings.Contains(got, "already-created") {
+		t.Fatalf("summary output included non-deferred name override:\n%s", got)
+	}
+}
+
+func TestPrintSummarySuppressesLimitRerunHintAfterFailure(t *testing.T) {
+	var out, err bytes.Buffer
+	lg := log.NewWith(&out, &err, false)
+	plan := Plan{
+		LimitDeferred: []ghissue.Issue{{Number: 703}},
+	}
+	cfg := &cliflags.Config{
+		ParentRef: "700",
+		Agent:     "claude",
+	}
+
+	printSummary(plan, executionResult{Failed: 1}, cfg, lg, log.Palette{}, "fanout-go")
+
+	got := out.String()
+	if strings.Contains(got, "Rerun with:") || strings.Contains(got, "--only 703") {
+		t.Fatalf("summary output printed unsafe deferred-only rerun hint after failure:\n%s", got)
+	}
+	if !strings.Contains(got, "deferred (--limit): 1") {
+		t.Fatalf("summary output did not report deferred limit count after failure:\n%s", got)
 	}
 }
 

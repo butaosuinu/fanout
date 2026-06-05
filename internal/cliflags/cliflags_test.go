@@ -44,6 +44,25 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
 }
 
+func TestParseWorktreeFlags(t *testing.T) {
+	cfg := parseOK(t,
+		"100",
+		"--base-branch", "release/v2",
+		"--branch-prefix", "fanout/custom/",
+		"--no-refresh",
+	)
+
+	if cfg.BaseBranch != "release/v2" {
+		t.Fatalf("BaseBranch = %q, want release/v2", cfg.BaseBranch)
+	}
+	if cfg.BranchPrefix != "fanout/custom/" {
+		t.Fatalf("BranchPrefix = %q, want fanout/custom/", cfg.BranchPrefix)
+	}
+	if !cfg.NoRefresh {
+		t.Fatal("NoRefresh = false, want true")
+	}
+}
+
 func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 	for _, tc := range []struct {
 		flag string

@@ -1,27 +1,44 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: fanout
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-sub-issue-only/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-sub-issue-only/dmux.config.json
 [info] fetching sub-issues of #100
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #101: First child
   briefing -> /tmp/fanout-project_root-101.md
+  slug -> first-child-101
+  worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101
+  branch -> fanout/first-child-101
+  base -> main
   briefing size: 2476 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #101 of #100] First child: read /tmp/fanout-project_root-101.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/first-child-101 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #101 of #100] first-child-101: First child. read /tmp/fanout-project_root-101.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux select-pane -t <pane_id> -T first-child-101
+    $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #101: dry-run complete
 [info] #102: Second child
   briefing -> /tmp/fanout-project_root-102.md
+  slug -> second-child-102
+  worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102
+  branch -> fanout/second-child-102
+  base -> main
   briefing size: 2477 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #102 of #100] Second child: read /tmp/fanout-project_root-102.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/second-child-102 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #102 of #100] second-child-102: Second child. read /tmp/fanout-project_root-102.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux select-pane -t <pane_id> -T second-child-102
+    $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #102: dry-run complete
 
 [ ok ] created: 2

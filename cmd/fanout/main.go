@@ -8,14 +8,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/displayname"
-	"github.com/butaosuinu/fanout/internal/dmuxconfig"
-	"github.com/butaosuinu/fanout/internal/dmuxsession"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/naming"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 const fanoutTagPrefix = "[fanout #"
@@ -60,6 +62,15 @@ func main() {
 
 	if cfg.StatusMode {
 		os.Exit(int(cmdStatus(cfg, lg)))
+	}
+	if cfg.CloseNum > 0 {
+		os.Exit(int(cmdClose(cfg, lg)))
+	}
+	if cfg.MergeNum > 0 {
+		os.Exit(int(cmdMerge(cfg, lg)))
+	}
+	if cfg.CleanupMode {
+		os.Exit(int(cmdCleanup(cfg, lg)))
 	}
 
 	os.Exit(int(run(cfg, lg, commandName)))
@@ -126,22 +137,26 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		return exitcode.OK
 	}
 
-	claim := loaded.StrongChildren
-	if migrated, ok := migrateLegacyPaneTags(cfg, rt.info.ConfigPath, loaded.StrongChildren, rt.config, lg); ok {
-		if migrated > 0 && !cfg.DryRun {
-			reloaded, err := dmuxconfig.Load(rt.info.ConfigPath)
-			if err == nil {
-				rt.config = reloaded
-			}
-		}
-	} else {
-		claim = nil
+	store, recorder, code := loadRunState(cfg, rt.info.ProjectRoot, lg)
+	if code != exitcode.OK {
+		return code
 	}
+	if recorder != nil {
+		defer func() {
+			if err := recorder.Unlock(); err != nil {
+				lg.Warn("unlock fanout state: %v", err)
+			}
+		}()
+	}
+
+	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
+	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
+	worktreeFallbackFanned := existingWorktreeFanned(cfg, rt.info.ProjectRoot, loaded.Children, otherParentFanned)
 
 	plan := buildPlan(
 		cfg,
 		loaded.Children,
-		rt.config.FannedNumbersForParent(cfg.ParentRef, claim),
+		mergeFanned(sameParentFanned, worktreeFallbackFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			if err := rt.gh.HydrateBodyLabels(issue); err != nil {
@@ -173,8 +188,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		printDryRunPlan(plan, lg, c)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, c)
-	applyDisplayNameOverrides(cfg, rt.info.ConfigPath, result.CreatedNums, lg, c)
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	if result.Failed > 0 {
@@ -184,52 +198,46 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 }
 
 type runtimeInfo struct {
-	info   *dmuxsession.Info
-	config *dmuxconfig.Config
-	gh     ghissue.Runner
+	info *fanoutruntime.Info
+	gh   ghissue.Runner
 }
 
 func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcode.Code) {
-	info, err := dmuxsession.Resolve(cfg.Session)
-	if err != nil {
-		lg.Err("%s", err.Error())
-		return nil, exitcode.Env
-	}
-
-	if _, err := os.Stat(info.ConfigPath); err != nil {
-		lg.Err("dmux config not found at %s (session reports it but file is missing)", info.ConfigPath)
-		return nil, exitcode.Env
-	}
-
-	lg.Info("dmux session: %s", info.Session)
-	lg.Info("control pane: %s", info.ControlPane)
-	lg.Info("project root: %s", info.ProjectRoot)
-	lg.Info("config:       %s", info.ConfigPath)
-
-	dcfg, err := dmuxconfig.Load(info.ConfigPath)
+	info, err := fanoutruntime.Resolve(cfg.Session)
 	if err != nil {
 		lg.Err("%s", err.Error())
 		return nil, exitcode.Env
 	}
 
 	if cfg.Agent == "" {
-		if pid := os.Getenv("TMUX_PANE"); pid != "" {
-			if a := dcfg.AgentForPane(pid); a != "" {
-				cfg.Agent = a
-				lg.Info("auto-detected agent: %s (from calling pane %s)", cfg.Agent, pid)
-			}
+		cfg.Agent = os.Getenv("FANOUT_AGENT")
+	}
+	if cfg.Agent == "" {
+		lg.Err("agent is required; pass --agent <name> or set FANOUT_AGENT")
+		return nil, exitcode.Env
+	}
+	if err := agent.ValidateKnown(cfg.Agent); err != nil {
+		lg.Err("%s", err.Error())
+		return nil, exitcode.Env
+	}
+	if !cfg.DryRun {
+		if err := agent.ValidateInstalled(cfg.Agent); err != nil {
+			lg.Err("%s", err.Error())
+			return nil, exitcode.Env
 		}
 	}
+
+	lg.Info("tmux session: %s", info.Session)
+	lg.Info("tmux target:  %s", info.Target)
+	lg.Info("project root: %s", info.ProjectRoot)
 
 	if !isGitWorkTree(info.ProjectRoot) {
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
-
 	return &runtimeInfo{
-		info:   info,
-		config: dcfg,
-		gh:     ghissue.Runner{Cwd: info.ProjectRoot},
+		info: info,
+		gh:   ghissue.Runner{Cwd: info.ProjectRoot},
 	}, exitcode.OK
 }
 
@@ -344,25 +352,98 @@ func issueSet(issues []ghissue.Issue) map[int]bool {
 	return out
 }
 
-func migrateLegacyPaneTags(cfg *cliflags.Config, configPath string, strong map[int]bool, loaded *dmuxconfig.Config, lg *log.Logger) (int, bool) {
-	count := loaded.LegacyMigrationCount(strong)
-	if count == 0 {
-		return 0, true
+func mergeFanned(primary, fallback map[int]bool) map[int]bool {
+	out := map[int]bool{}
+	for num := range primary {
+		out[num] = true
 	}
-	if cfg.DryRun {
-		lg.Info("would migrate %d legacy [fanout #N] pane tag(s) to include parent #%s", count, cfg.ParentRef)
-		return count, true
+	for num := range fallback {
+		out[num] = true
 	}
-	migrated, err := dmuxconfig.MigrateLegacyPaneTags(configPath, cfg.ParentRef, strong)
-	if err == nil {
-		lg.Info("migrated %d legacy [fanout #N] pane tag(s) to include parent #%s", migrated, cfg.ParentRef)
-		return migrated, true
-	}
-	lg.Warn("could not migrate legacy pane tags in %s; falling back to strict idempotency so legacy panes don't mask new --status entries", configPath)
-	return 0, false
+	return out
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, c log.Palette) executionResult {
+func loadRunState(cfg *cliflags.Config, projectRoot string, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {
+	if cfg.DryRun {
+		store, err := state.LoadProject(projectRoot)
+		if err != nil {
+			lg.Err("%v", err)
+			return state.Store{}, nil, exitcode.Env
+		}
+		return store, nil, exitcode.OK
+	}
+	if err := worktree.EnsureLocalExclude(projectRoot); err != nil {
+		lg.Err("prepare local git exclude: %v", err)
+		return state.Store{}, nil, exitcode.Env
+	}
+	locked, err := state.LockProject(projectRoot)
+	if err != nil {
+		lg.Err("%v", err)
+		return state.Store{}, nil, exitcode.Env
+	}
+	return locked.Store, locked, exitcode.OK
+}
+
+func existingWorktreeFanned(cfg *cliflags.Config, projectRoot string, issues []ghissue.Issue, sharedAcrossParents map[int]bool) map[int]bool {
+	out := map[int]bool{}
+	worktreeNames := existingWorktreeNames(filepath.Join(projectRoot, ".fanout", "worktrees"))
+	for _, issue := range issues {
+		slug := naming.Slug(issue.Title, issue.Number)
+		slugOverridden := false
+		if name := cfg.FindName(issue.Number); name != nil && name.SlugHint != "" {
+			slug = naming.EnsureIssueSuffix(name.SlugHint, issue.Number)
+			slugOverridden = true
+		}
+		if sharedAcrossParents[issue.Number] {
+			if !slugOverridden {
+				slug = naming.QualifySlugForParent(slug, cfg.ParentRef, issue.Number)
+			}
+			if worktreeNameMatchesExact(worktreeNames, slug) {
+				out[issue.Number] = true
+			}
+			continue
+		}
+		if worktreeNameMatchesIssue(worktreeNames, slug, issue.Number) {
+			out[issue.Number] = true
+		}
+	}
+	return out
+}
+
+func existingWorktreeNames(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names
+}
+
+func worktreeNameMatchesExact(names []string, slug string) bool {
+	for _, name := range names {
+		if name == slug {
+			return true
+		}
+	}
+	return false
+}
+
+func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bool {
+	issueSuffix := fmt.Sprintf("-%d", issueNum)
+	for _, name := range names {
+		if name == exactSlug || strings.HasSuffix(name, issueSuffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -372,7 +453,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, g
 				issue.Body = detail.Body
 			}
 		}
-		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, c) {
+		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c) {
 			result.Created++
 			result.CreatedNums = append(result.CreatedNums, issue.Number)
 		} else {
@@ -388,21 +469,6 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *dmuxsession.Info, g
 	return result
 }
 
-func applyDisplayNameOverrides(cfg *cliflags.Config, configPath string, createdNums []int, lg *log.Logger, c log.Palette) {
-	if len(createdNums) == 0 || !cfg.HasAnyDisplayName() {
-		return
-	}
-	var overrides []displayname.Override
-	for _, num := range createdNums {
-		if name := cfg.FindName(num); name != nil && name.DisplayName != "" {
-			overrides = append(overrides, displayname.Override{Num: name.Num, ParentRef: cfg.ParentRef, DisplayName: name.DisplayName})
-		}
-	}
-	displayname.ApplyAll(configPath, overrides, cfg.DryRun, lg.Stdout(), c, displayname.LogFns{
-		Info: lg.Info, Warn: lg.Warn, Dim: lg.Dim, Err: lg.Err,
-	})
-}
-
 func isGitWorkTree(path string) bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 	cmd.Dir = path
@@ -416,15 +482,16 @@ func checkDeps(cfg *cliflags.Config) []string {
 			missing = append(missing, hint)
 		}
 	}
-	check("gh", "gh (brew install gh)")
-	check("jq", "jq (brew install jq)")
+	check("git", "git")
 
-	if !cfg.StatusMode || os.Getenv("DMUX_CONFIG_PATH") == "" {
-		check("tmux", "tmux (brew install tmux)")
+	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
+	if cfg.StatusMode || cfg.CleanupMode || !lifecycle {
+		check("gh", "gh (brew install gh)")
+		check("jq", "jq (brew install jq)")
 	}
 
-	if !cfg.StatusMode {
-		check("pgrep", "pgrep (procps-ng on Linux; preinstalled on macOS)")
+	if !cfg.StatusMode && !lifecycle {
+		check("tmux", "tmux (brew install tmux)")
 		if cfg.ParentMode == cliflags.ModeIssue && !ghSubIssueAvailable() {
 			missing = append(missing, "gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)")
 		}

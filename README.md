@@ -4,49 +4,19 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Fans a GitHub parent issue's OPEN sub-issues out into one dmux pane per child.
+Fans a GitHub parent issue's OPEN sub-issues out into one tmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.
 
-## Why this looks weird (dmux HTTP API investigation, popup interception)
+## Direct tmux runtime
 
-`dmux`'s docs describe an HTTP API (`POST /api/panes`, etc.) as the obvious
-ingress for a tool like this. When I investigated, I found that **the current
-npm-published dmux (v5.8.1, re-verified) still does not ship the HTTP server**:
-
-- `dist/**/*.js` has no HTTP routes, no `express`/`fastify`/`http.createServer`,
-  no `.listen(` outside a port-probe utility.
-- `dist/server/` contains only `embedded-assets.js` (a frontend bundle).
-- `dist/adapters/apiActionHandler.js` exists alongside `tuiActionHandler.js`
-  (v5.8.1 added the split) and exposes `actionResultToAPIResponse()` plus a
-  callback registry, but there is no transport layer wired up — it's a
-  skeleton, not a server.
-- `utils/generated-agents-doc.js` references `curl http://localhost:$DMUX_SERVER_PORT/api/panes/...`
-  but nothing in `dist` sets `DMUX_SERVER_PORT`. The feature is documented in
-  `context/API.md` on the `main` branch but not yet shipped.
-
-`tmux send-keys` isn't enough either. dmux's new-pane prompt and agent-choice
-dialog are both rendered via `tmux display-popup -E 'node <script> <resultFile>'`
-(see `dist/utils/popup.js`). A display-popup runs its child command in a
-separate tmux client with its own pty; it is not a pane and cannot be
-addressed by `send-keys -t <pane>`. Typing into `%0` while a popup is open
-just fills `%0`'s buffer behind the popup — the user never sees the text,
-and dmux discards it when the popup closes. That's why earlier approaches
-appeared to "work" (the popup would eventually open) but never delivered the
-prompt.
-
-The shipped workaround is **popup result-file interception**. Each dmux
-popup is told a `<tmpdir>/dmux-popup-<timestamp>.json` path (typically
-`/tmp/` on Linux, `/var/folders/.../T/` on macOS) where the popup
-writes its user-entered answer; dmux reads that file when the popup child
-exits. fanout triggers the popup by send-keys'ing `Escape n`, then uses
-`pgrep` + `ps` to locate the popup process and its resultFile, atomically
-writes the desired JSON payload (`{"success":true,"data":"<prompt>"}` for
-the prompt popup, `{"success":true,"data":["<agent>"]}` for the picker),
-and kills the popup process. `display-popup -E` closes the popup on child
-exit, dmux reads the file we wrote, and pane creation proceeds as if a
-human had answered. When dmux eventually ships the HTTP API, fanout
-can collapse back to `POST /api/panes` in a page.
+fanout now creates child sessions without dmux: it resolves the repository
+root with `git rev-parse --show-toplevel`, refreshes the selected base branch,
+creates `.fanout/worktrees/<slug>/`, splits the invoking tmux pane with
+`tmux split-window`, and starts the selected agent CLI with the one-line
+briefing prompt. It records launched panes in `.fanout/state.json`, keyed by
+`(parent, issueNum)`, so reruns of the same parent skip children that already
+have a recorded fanout pane.
 
 ## Project mode
 
@@ -68,14 +38,19 @@ task-list union.
   here — the Project is the source of truth. Use `--include 4,7` to
   force-add anything the Project happens to omit.
 - **Single-repo only.** Items whose `content.repository` differs from the
-  dmux `@dmux_project_root` repo are warned and skipped; fanout still
-  assumes one repo per run.
+  current git repository root are warned and skipped; fanout still assumes
+  one repo per run.
 - **Status field missing on the Project?** fanout warns and falls back to
   every item regardless of `--project-status`.
-- **Idempotency, `[fanout #N]` detection, and `--unblocked-only` work
-  identically.** Blockers in this mode come only from the child body's
-  `## Blocked by` section and the `blocked` label; the
-  `(blocked by #X)` task-list trailer doesn't exist without a parent body.
+- **Idempotency and `--unblocked-only` work the same way.** Action mode
+  skips children recorded in `.fanout/state.json` for the same
+  `(parent, issueNum)` pair. As a migration fallback, unrecorded existing
+  `.fanout/worktrees/<slug>` directories are also skipped. If the same issue
+  is recorded for another parent, only an existing worktree matching the slug
+  this current run would create is treated as that migration fallback.
+  Blockers in Project mode come only from the child body's `## Blocked by`
+  section and the `blocked` label; the `(blocked by #X)` task-list trailer
+  doesn't exist without a parent body.
 
 ## Installation
 
@@ -177,40 +152,35 @@ The black-box tiers build `./fanout-go` and exercise it via `FANOUT_BIN`.
 Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
 Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
-intentionally change dry-run output. Tier 3 (live dmux E2E) stays manual.
+intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 
 ## Prerequisites
 
-- `gh` CLI, `jq`, `tmux`, `pgrep`, and the `gh-sub-issue` extension
-  (`gh extension install yahsan2/gh-sub-issue`). fanout checks these at
-  startup and prints install hints on failure. Children can be declared via
+- The default pane-creation flow needs `gh` CLI, `jq`, `git`, `tmux`, and the
+  `gh-sub-issue` extension (`gh extension install yahsan2/gh-sub-issue`).
+  `--status` and `--cleanup` use `gh`/`jq`/`git`; `--merge` and `--close` use
+  `git` (`--close`/`--cleanup` treat an already-missing tmux pane as stale).
+  fanout checks the dependencies needed for the selected mode at startup and
+  prints install hints on failure. Children can be declared via
   the Sub-issues API, the parent body's task-list (`- [ ] #NUM ...`), or
   both — fanout unions them.
 - **Project mode only**: the `gh` CLI must have the `read:project` scope so
   the GraphQL query that lists Project items can succeed. Add it with
   `gh auth refresh -s read:project`. Issue-mode (`fanout <N>`) does not
   need this scope.
-- A running dmux session on this machine: `cd <repo> && dmux`. fanout discovers
-  it by scanning tmux sessions for the `@dmux_controller_pid` option and
-  checking that the PID is alive.
-- **An agent name must be resolvable**: either `--agent <name>` is given, or
-  the caller's pane is itself a dmux-managed pane so fanout can auto-detect
-  from `dmux.config.json` (`.panes[].paneId` matched against `$TMUX_PANE`).
-  dmux v5.8.1 still always opens the agent-choice popup after the prompt
-  popup, even when only one agent is enabled (the new `singleAgentChoicePopup`
-  exists only for other code paths), so fanout needs a name to inject into
-  it. Invoking through the bundled Claude/Codex integration from inside
-  an agent session works out of the box; calling `fanout` from a plain shell
-  requires `--agent`.
-- **The dmux TUI must be on the pane-list view** (no modal / no prompt open)
-  when fanout runs. fanout sends one `Escape` before each pane-creation
-  sequence to recover from stray popups, but cannot unstick an interactive
-  $EDITOR or a confirm dialog.
-- **HEAD of the repo should be the base you want children built on**. dmux's
-  TUI does not let external callers specify a base ref per pane; the worktree
-  branches off whatever HEAD resolves to when dmux creates it. Do
-  `git checkout <target>` before calling fanout if the parent issue expects
-  something other than the default branch.
+- fanout must be invoked from inside a tmux session. It creates child panes
+  directly with `tmux split-window`, targeting the invoking pane unless
+  `--session` is supplied.
+- **An agent name must be resolvable**: pass `--agent claude`, `--agent codex`,
+  or set `FANOUT_AGENT`. Unknown agents fail before pane creation; in live
+  mode, fanout also checks that the agent CLI is installed.
+- fanout creates child worktrees under `.fanout/worktrees/<slug>/`. Before
+  branching, it refreshes the base branch with `git fetch --quiet --no-tags`
+  and a fast-forward update. Use `--base-branch <branch>` to override the base
+  (bare local branch names and `origin/<branch>` are supported) or
+  `--no-refresh` to skip that refresh. Live runs add `.fanout/worktrees/` to the
+  target repo's local `.git/info/exclude` so generated worktrees do not dirty
+  `git status`.
 
 ## Usage
 
@@ -219,12 +189,16 @@ fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
+       [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
        [--session <tmux-session>] [--sleep <seconds>]
        [--popup-timeout <seconds>] [--dry-run]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
+fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -233,28 +207,24 @@ fanout --help
 The positional accepts either a GitHub issue number (Sub-issues +
 task-list mode) or a Projects v2 URL (Project mode; see above).
 `--project-status` only applies to Project mode and is ignored otherwise.
+`--popup-timeout` is a deprecated compatibility flag from the old runtime and
+is accepted but ignored by the direct tmux path.
 
 ### `--status` output
 
-`fanout <parent> --status` is read-only: it reads `dmux.config.json` to
-enumerate children already fanned out under that specific parent (panes
-whose prompt starts with `[fanout #N of #<parent>]`), queries each child
-through a single `gh api graphql` call against
+`fanout <parent> --status` is read-only: it reads `.fanout/state.json` to
+enumerate children already fanned out under that specific parent, queries
+each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
 carries `state`/`mergedAt` directly, and prints one JSON document on
-stdout. Issue-mode parents only —
-Projects v2 URLs as parent are rejected up-front (panes for project items
-carry the URL in their prefix, which `--status`'s strict filter doesn't
-address). In a session that has fanned multiple parents, children of
-other parents are filtered out so `summary.all_merged` reflects only the
-requested parent. Old-format panes that predate this feature
-(`[fanout #N]` without parent annotation) are excluded; the next
-non-status `fanout <parent>` run rewrites those panes' prompts in place
-to add the parent annotation, so a subsequent `--status` picks them up
-automatically (no need to delete and re-fan). Set `DMUX_CONFIG_PATH` to
-point directly at a `dmux.config.json` when the dmux session has already
-exited.
+stdout. It does not require dmux or a live tmux session. Issue-mode parents
+only — Projects v2 URLs as parent are rejected up-front for the current JSON
+schema. In a state file that has fanned multiple parents, children of other
+parents are filtered out so `summary.all_merged` reflects only the requested
+parent. Set `FANOUT_STATE_PATH` to point directly at a state file when reading
+from outside the repository checkout; otherwise fanout reads
+`<git-root>/.fanout/state.json`.
 
 ```json
 {
@@ -280,17 +250,37 @@ exited.
 `--status` exit codes are a separate lane from the default flow:
 
 - `0` — JSON emitted (check `summary.all_merged` for the actual state).
-- `2` — cannot enumerate (bad invocation, missing/unreadable
-  `dmux.config.json`, no active dmux session, Projects v2 URL as parent).
+- `2` — cannot enumerate (bad invocation, unreadable or malformed state file,
+  unusable project root, Projects v2 URL as parent). A missing state file is
+  treated as an empty state.
 - `3` — `gh` API call failed (auth, network, non-existent issue, etc.).
 
 `--status` is exclusive with all action-bearing flags (`--agent`, `--limit`,
-`--only`, `--skip`, `--include`, `--name`, `--sleep`, `--popup-timeout`,
-`--dry-run`, `--unblocked-only`, `--auto-pr`, `--no-auto-pr`,
-`--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`,
+`--only`, `--skip`, `--include`, `--name`, `--base-branch`,
+`--branch-prefix`, `--no-refresh`, `--session`, `--sleep`,
+`--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
+`--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
+`--no-pr-review-gate`, `--briefing-code-review`,
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
-The bundled Claude Code skill drives a `ScheduleWakeup`-based polling loop on
-top of this when the user opts in via `/fanout … --wait`.
+
+### Lifecycle commands
+
+The lifecycle commands operate on entries recorded in `.fanout/state.json`.
+They do not discover arbitrary worktrees by scanning the filesystem.
+
+- `fanout <parent> --merge <NUM>` runs
+  `git -C <project-root> merge --ff-only <recorded-branch>`. If the merge is
+  not a fast-forward, fanout reports the git error and does not start an
+  editor or conflict-resolution flow.
+- `fanout <parent> --close <NUM>` removes the recorded worktree with
+  `git worktree remove <path> --force`, kills the recorded tmux pane when it is
+  still present, removes the state entry, and runs `git worktree prune`.
+- `fanout <parent> --cleanup` queries the recorded children and closes any
+  child whose issue is `CLOSED` or whose closed-by PR list contains a `MERGED`
+  PR. Pending children remain recorded.
+
+Like `--status`, these commands honor `FANOUT_STATE_PATH`; otherwise they use
+`<git-root>/.fanout/state.json`.
 
 ### `--check-update`
 
@@ -342,11 +332,11 @@ vars. Defaults are all `true` to preserve existing behavior.
 
 Resolution order is: **CLI flag > environment variable > repo config file >
 user config file > built-in default**. fanout applies layers in the reverse
-order once per run after it discovers dmux's project root. The repo config path
-is `<project_root>/.fanout/config.json`, where `project_root` is the dmux
-session's parent repository root, not the child worktree. The user config path
-is `$XDG_CONFIG_HOME/fanout/config.json`, or `~/.config/fanout/config.json`
-when `XDG_CONFIG_HOME` is unset.
+order once per run after it resolves the git repository root. The repo config
+path is `<project_root>/.fanout/config.json`, where `project_root` is the
+parent repository root, not the child worktree. The user config path is
+`$XDG_CONFIG_HOME/fanout/config.json`, or `~/.config/fanout/config.json` when
+`XDG_CONFIG_HOME` is unset.
 
 ```json
 {
@@ -369,19 +359,20 @@ Environment values accept `1/true/yes/on` and `0/false/no/off`
 file values are warned and ignored so future settings do not break older
 fanout binaries.
 
-`prReviewGate=false` is the one setting that cannot forcibly disable the child
-Claude Code hook, because fanout only creates the pane through dmux's popup
-path and cannot inject child environment variables. Instead, Claude briefings
-include a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the
-`PreToolUse` hook blocks PR creation before `/post-work-review`.
+`prReviewGate=false` does not forcibly disable child Claude Code hooks. It adds
+a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the `PreToolUse`
+hook blocks PR creation before `/post-work-review`.
 
 ### Examples
 
 ```bash
+# Use Claude for child panes in these examples.
+export FANOUT_AGENT=claude
+
 # Fan out all OPEN sub-issues of #123
 fanout 123
 
-# Preview what would happen, don't actually drive dmux
+# Preview the git worktree + tmux commands without executing them
 fanout 123 --dry-run
 
 # Cap this invocation to 3 issues; rerun command is printed for the rest
@@ -413,37 +404,30 @@ fanout 123 --unblocked-only
 # Cap each wave while letting fanout pick the next unblocked batch
 fanout 123 --unblocked-only --limit 3
 
-# Name each child's worktree slug, pane title, and branch directly. The
-# slug-hint is front-loaded into the one-line prompt so dmux's slug LLM
-# echoes it as the worktree directory name (dmux's slug LLM otherwise calls
-# OpenRouter or the local `claude --no-interactive` fallback per pane). The
-# display-name is written post-creation into both dmux.config.json (for the
-# live tmux pane border) and the worktree's .dmux/worktree-metadata.json (so
-# it survives dmux restarts). The optional 3rd segment is a branch-name
-# override (dmux v5.8.1+): when present, fanout puts it into the newPanePopup
-# payload as `branchName` and dmux's createPane() uses it as
-# `branchNameOverride`, bypassing the default `branchPrefix + slug`. Any of
-# the three pipe-separated segments may be empty, but at least one must be
-# non-empty. Normally the bundled Claude/Codex integrations generate these
-# from issue title/body without any extra API call; pass --name yourself to
-# override. Repeatable; one per target.
+# Name each child's worktree slug stem, pane title, and branch directly. fanout
+# appends -<issue-number> to slug stems that do not already have it, while
+# rerun idempotency comes from `.fanout/state.json`. The optional 3rd segment
+# overrides the generated branch name. Any of the three pipe-separated segments
+# may be empty, but at least one must be non-empty. Normally the bundled
+# Claude/Codex integrations generate these from issue title/body without any
+# extra API call; pass --name yourself to override. Repeatable; one per target.
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
 fanout 123 --name 8='feat-x|Feature X|feat/issue-8-x'   # all three segments
 fanout 123 --name 9='||release/v2.0'                    # branch override only
 
-# Pick a specific session when you have multiple dmux instances alive
+# Override the branch base and generated branch prefix
+fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
+
+# Skip base branch refresh before creating worktrees
+fanout 123 --no-refresh
+
+# Target a named tmux session instead of the invoking pane
 fanout 123 --session work-repo
 
-# Give dmux 8 seconds between creations (useful on slow machines)
+# Give fanout 8 seconds between creations
 fanout 123 --sleep 8
 
-# Wait longer for each dmux popup to appear (useful when worktree creation
-# between popups is slow on large repos; default 20s)
-fanout 123 --popup-timeout 45
-
-# Override the auto-detected agent (e.g. spawn children under a different
-# agent than the parent pane). Normally you don't need this — fanout reads
-# the caller's .panes[].agent from dmux.config.json.
+# Choose the agent CLI for child panes
 fanout 123 --agent codex
 
 # Remove the automatic PR-opening requirement from child briefings for one run
@@ -452,12 +436,19 @@ fanout 123 --no-auto-pr
 # Disable the Agent Teams hint globally for this shell
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# Read-only JSON status: who's fanned out, what state each child is in, and
-# whether their closed-by PRs have merged. No side effects. Pipe into jq for
-# scripting; the bundled /fanout --wait skill drives a wait-and-continue loop
-# on top of this.
+# Read-only JSON status from .fanout/state.json: who's fanned out, what state
+# each child is in, and whether their closed-by PRs have merged. No side effects.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+
+# Fast-forward a recorded child branch into the parent worktree, then remove
+# the child worktree/pane after it is no longer needed.
+fanout 123 --merge 4
+fanout 123 --close 4
+
+# Remove all recorded children whose issue is CLOSED or whose closed-by PR
+# list contains a MERGED PR.
+fanout 123 --cleanup
 
 # Check whether a released fanout binary is behind the latest GitHub Release.
 # Dev builds report that update checks only apply to released versions.
@@ -478,9 +469,9 @@ fanout https://github.com/users/<owner>/projects/<n> --project-status all
 ## From inside an agent session
 
 fanout is safe to call from an agent session (Claude Code, Codex, etc.) that
-is itself running in a dmux pane. It discovers dmux via tmux session options,
-not via `$TMUX` or cwd, and it only creates NEW panes for children — the
-caller's pane is never touched.
+is itself running inside tmux. It only creates NEW panes for children; the
+caller's pane is never touched. Pass `--agent` or set `FANOUT_AGENT` so child
+panes know which agent CLI to launch.
 
 Recommended integration for Claude Code — these assets are bundled in this
 repo under `claude/` and get placed by `make install`:
@@ -523,28 +514,31 @@ Recommended integration for Codex CLI — the skill is bundled under
   It mirrors the Claude issue-creation skill: same-repo children, GitHub
   Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
 
-The CLI prerequisites above still apply: the dmux session must be alive,
-the TUI must be on the pane-list view, and only one agent should be
-enabled (or `--agent` passed). See **Prerequisites** and **Troubleshooting**
-for details.
+The CLI prerequisites above still apply: run from inside tmux, pass
+`--agent` or set `FANOUT_AGENT`, and run from the repository whose children
+should branch from the selected base.
 
 ## What fanout actually does
 
-1. Verifies `gh`, `jq`, `tmux`, `gh-sub-issue` are installed.
-2. Enumerates tmux sessions. A session is considered dmux-managed iff
-   `@dmux_controller_pid` is set and the PID is alive.
-3. Reads the session's `@dmux_control_pane`, `@dmux_config_path`,
-   `@dmux_project_root` options to locate the TUI's pane, the
-   `.dmux/dmux.config.json` file, and the repo root.
+1. Verifies `gh`, `jq`, `git`, `tmux`, and `gh-sub-issue` are installed.
+2. Resolves the repository root with `git rev-parse --show-toplevel`, the
+   current tmux session with `tmux display-message -p '#{session_name}'`, and
+   the invoking pane from `$TMUX_PANE` (or `#{pane_id}` as a fallback).
+3. Resolves the agent from `--agent` or `FANOUT_AGENT`; live mode verifies the
+   selected agent CLI is installed.
 4. Enumerates children by taking the union of two sources (run from the project
    root): (a) `gh sub-issue list <parent>` for issues formally linked via the
    Sub-issues API, and (b) GitHub task-list references in the parent body —
    any line matching `^\s*-\s+\[[ xX]\] ... #NUM` contributes `#NUM` (same-repo
    only; `owner/repo#NUM` is skipped). Body-sourced numbers are hydrated via
    `gh issue view`. Only `state == "OPEN"` children are processed.
-5. For idempotency, it scans `dmux.config.json`'s `panes[].prompt` for any
-   existing prompt starting with `[fanout #<NUM>]` and skips those issues.
-   If `--unblocked-only` is set, each remaining candidate is also inspected
+5. For action-mode idempotency, it reads `.fanout/state.json` and skips
+   children whose `(parent, issueNum)` pair is already recorded. It also skips
+   unrecorded existing `.fanout/worktrees/<slug>` directories as a migration
+   fallback for pre-state runs or interrupted launches. If the same issue is
+   recorded for another parent, fanout ignores the other parent's default
+   worktree but still skips an existing worktree matching the slug this current
+   run would create. If `--unblocked-only` is set, each remaining candidate is also inspected
    for blockers: the child body's `## Blocked by` section (up to the next
    blank line), a trailing `(blocked by #X, #Y)` on the parent's task-list
    row, and the child's `blocked` label (weak signal — logged, not used to
@@ -554,56 +548,42 @@ for details.
    - Writes a briefing to `/tmp/fanout-<repo>-<NUM>.md` with the issue body
      and a short Requirements checklist, filtered through the resolved
      settings above.
-   - Sends `Escape` and `n` to the control pane, which triggers dmux's
-     new-pane popup (a `tmux display-popup` child, not an inline modal).
-   - Finds the popup's node process with `pgrep -f 'newPanePopup.js'`,
-     reads its `<tmpdir>/dmux-popup-*.json` resultFile path from `ps -o args=`,
-     atomically writes `{"success":true,"data":"[fanout #<NUM>] <TITLE>: read /tmp/fanout-<repo>-<NUM>.md and begin."}`,
-     and kills the popup process so dmux reads the injected answer.
-   - Repeats the intercept for the agent-choice popup that dmux launches
-     next (writes `{"success":true,"data":["<agent>"]}`), using the agent
-     resolved via `--agent` or auto-detected from the calling pane.
-   - Polls `dmux.config.json` until `panes[].length` increases (timeout 60s).
+   - Resolves the base branch (`gh repo view defaultBranchRef`, then
+     `origin/HEAD`, then `main`) unless `--base-branch` is supplied.
+   - Refreshes the base branch with `git fetch --quiet --no-tags` and a
+     fast-forward update unless `--no-refresh` is supplied.
+   - Creates `.fanout/worktrees/<slug>/` with
+     `git worktree add -b <branch> <path> <base>`.
+   - Creates a tmux child pane without selecting it with
+     `tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree> <launch-command>`
+     (`--session` uses the supplied session name as the target). The launch
+     command runs through a POSIX wrapper and returns to the user's shell after
+     the agent exits.
+   - Sets the pane title and applies `tmux select-layout tiled`.
    - Sleeps `--sleep` seconds (default 4) before the next one.
 7. Prints a summary of created / skipped / deferred / failed counts.
 
 ## Troubleshooting
 
-### "no active dmux session found"
+### "fanout must be run inside tmux"
 
-You haven't run `dmux` yet in a tmux session, or the controller process died.
-Check: `tmux show-options -v -t <session> @dmux_controller_pid`. If empty,
-the session never hosted dmux. If non-empty but `kill -0 <pid>` fails, dmux
-crashed — restart it.
+Start or attach a tmux session in the repository worktree, then rerun fanout.
 
-### "multiple dmux sessions active"
+### "agent is required"
 
-Pass `--session <name>`. List them with
-`tmux list-sessions -F '#{session_name}'`.
+Pass `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`. Unknown agents
+fail before pane creation; live mode also fails if the selected CLI is not on
+`PATH`.
 
-### Pane creation times out ("timed out after 60s waiting for config.json to grow")
+### "prepare worktree"
 
-The TUI probably wasn't on the pane-list view when fanout fired the key
-sequence, or popup interception failed. Check whether:
-
-- A popup (confirm dialog, agent picker, etc.) is stuck — press `Esc` in the
-  dmux pane until it returns to the list, then rerun.
-- dmux is genuinely slow (cold clone, huge repo, npm install hook). Increase
-  `--sleep` and retry; the wait-for-new-pane timeout is 60s per issue.
-- Rerun with `--debug` to see which intercept stage failed. Common cases:
-  - `newPanePopup did not appear within 20s` — dmux didn't react to `n`,
-    usually because another popup was already on screen. Send `Esc` manually
-    and rerun.
-  - `agentChoicePopup did not appear within 20s` — dmux closed the first
-    popup but the agent-choice popup didn't follow within the window. On
-    slow machines or very large worktrees the gap can exceed the default
-    — retry with `--popup-timeout 45` (or higher). If it still never
-    appears, check that your dmux settings actually enable at least one
-    agent.
-- You upgraded dmux past v5.6.x and the popup script names or the result
-  JSON shape changed. Inspect `~/.../dmux/dist/utils/popup.js` and
-  `dist/components/popups/shared/PopupWrapper.js`; the intercept in fanout
-  assumes `{"success":true,"data":...}`. Raise an issue if dmux changed it.
+The git worktree setup failed. Check the nested git error. Common causes are a
+dirty checked-out base branch that cannot be fast-forwarded, a diverged local
+base branch, an existing branch name, or a stale/missing remote branch. Use
+`--base-branch <branch>` to choose another base branch, including
+`origin/<branch>` when you want to branch directly from the remote-tracking ref.
+Use `--no-refresh` only when you intentionally want to branch from the current
+local base/ref.
 
 ### "gh sub-issue list failed"
 
@@ -612,54 +592,12 @@ sequence, or popup interception failed. Check whether:
 - Parent issue doesn't exist or has no sub-issues tagged via the extension:
   fanout exits 0 with `no sub-issues on #<parent>`.
 
-### Panes end up with ugly auto-generated slugs or OpenRouter burns tokens
+### Slug or branch names are not what you want
 
-dmux's `dist/utils/slug.js` computes the branch/worktree slug by asking an LLM
-for "1-2 word kebab-case slug for this prompt" every time a pane is created.
-It tries OpenRouter first (requires `OPENROUTER_API_KEY`), then falls back to
-`claude --no-interactive --max-turns 1` (5s timeout, costs tokens), then to
-`dmux-<timestamp>` if both fail. Two ways to control this:
-
-- Pass `--name <NUM>=<slug-hint>` per issue. fanout front-loads the hint into
-  the one-line prompt so the slug LLM echoes it. The hint must be kebab-case
-  (`[a-z0-9-]`, starting with alnum) — that's the shape the slug sanitizer
-  expects. The bundled Claude/Codex integrations generate these automatically
-  from issue title/body using in-conversation reasoning (no extra API call).
-- For the **branch name** (separate from the worktree slug since dmux v5.8.1),
-  use the optional 3rd `--name` segment: `--name <NUM>=<slug>|<display>|<branch>`.
-  fanout writes the branch into the newPanePopup payload as `branchName` and
-  dmux's `createPane()` consumes it as `branchNameOverride`, completely
-  bypassing the `branchPrefix + slug` default. The worktree directory still
-  follows the slug, so the slug-hint trick above is still useful for that
-  axis. Branch override is the right knob when team naming conventions
-  matter (`feat/issue-N-foo`, `release/v2.0`, etc.).
-- If you want dmux to stop calling OpenRouter entirely, `unset
-  OPENROUTER_API_KEY` before `cd <repo> && dmux`. dmux will fall through to
-  the local Claude CLI fallback; combine with `--name` to keep it
-  deterministic. There's no dmux flag to disable the slug LLM entirely — the
-  only way to fully bypass LLM slug generation through the popup-intercept
-  path is to front-load the slug as a hint.
-
-The display-name (what shows in the dmux pane border) is a separate axis:
-fanout writes `panes[].displayName` in `dmux.config.json` and merges
-`displayName` into `<worktree>/.dmux/worktree-metadata.json` after each pane
-is created, and dmux's `enforcePaneTitles` (5-30s poll) pushes it into the
-tmux pane title within that window. Across dmux restarts the worktree-metadata
-copy is what survives (via `reopenWorktree`).
-
-### Prompts show junk in the dmux TUI
-
-The prompt text is now injected via the popup resultFile, not via
-`send-keys -l`, so UTF-8 titles round-trip cleanly through dmux. If you
-still see garbled characters, check that `jq` on the caller's side produces
-valid JSON (`echo "<title>" | jq -Rs` should return a quoted string with
-escapes) and that `dmux.config.json` stores it unchanged. Use `--dry-run`
-to print the exact JSON that would be written.
-
-### `.gitignore` got a `.dmux/` line you didn't write
-
-That's dmux itself doing it on startup (seen as soon as `dmux --help` runs in
-a repo directory). Not a fanout bug.
+By default, fanout uses `slugify(title)-<issueNum>` and
+`fanout/<slug>`. Use `--name <NUM>=<slug>|<display>|<branch>` to override a
+specific issue, or `--branch-prefix <prefix>` to change generated branch
+names for the whole run.
 
 ### `gh pr create` is denied ("post-work-review が未実施です")
 
@@ -684,32 +622,25 @@ Notes:
 
 ## Design notes
 
-- **One-line prompt only.** ink-text-input in the dmux TUI treats Enter as
-  submit, so multi-line prompts would submit too early. fanout stores the
-  full briefing in `/tmp/fanout-<repo>-<NUM>.md` and tells the agent to read
-  it. This also keeps the prompt short enough that dmux's `slug()` — which
-  keys the worktree directory name — stays reasonable.
-- **The `[fanout #NUM of #PARENT]` tag is the idempotency primitive.**
-  Because dmux persists the prompt verbatim into `dmux.config.json`, fanout
-  can detect previously-created panes by grepping for this prefix. The
-  parent annotation also lets `fanout --status <parent>` filter to one
-  parent's children in a session that has fanned multiple parents. Older
-  panes carry the legacy `[fanout #NUM]` form (no parent annotation) and
-  still satisfy idempotency; the next non-status `fanout <parent>` run
-  auto-rewrites those prompts in place to add the parent annotation so
-  `--status` picks them up. Delete the pane (and its worktree) via the
-  dmux TUI if you want fanout to recreate it from scratch.
-- **IPC paths in play.** Discovery uses tmux session options
-  (`@dmux_controller_pid`, `@dmux_control_pane`, `@dmux_config_path`,
-  `@dmux_project_root`). Pane-creation is driven by writing to dmux's
-  popup resultFiles (`<tmpdir>/dmux-popup-*.json`) after locating the popup
-  process via `pgrep` + `ps -o args=`. No HTTP, no sockets, no named
-  pipes — this is intentionally ugly; it's what the current dmux surface
-  area allows.
-- **Rate limiting via `--sleep`.** dmux's `usePaneCreation` uses a bounded
-  parallel queue internally, but from the TUI side you can only open one
-  "new pane" dialog at a time. The sleep gives dmux time to finish the
-  worktree-creation phase before the next `n` is sent.
+- **One-line prompt only.** The full issue body lives in
+  `/tmp/fanout-<repo>-<NUM>.md`; the pane launch prompt stays short and points
+  the agent at that briefing.
+- **State-store idempotency.** `.fanout/state.json` stores `schemaVersion` plus
+  pane rows containing `parent`, `issueNum`, `slug`, `branchName`, `paneId`,
+  `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Writes use
+  a sibling temp file plus rename, and live runs hold `.fanout/state.json.lock`
+  while planning and launching so parallel invocations cannot both create the
+  same `(parent, issueNum)` pane. Existing worktree directories without a state
+  row are still treated as already fanned as a migration fallback. If the same
+  child issue is already recorded for another parent or Project, default
+  slug/branch generation adds a parent token before the issue suffix so the
+  second run gets its own worktree instead of colliding with the first one; an
+  existing worktree matching the slug this current run would create is still
+  skipped for interrupted-launch recovery.
+- **Direct tmux IPC.** Pane creation is synchronous because
+  `tmux split-window -t <invoking-pane> -d -P -F '#{pane_id}'` returns the new
+  pane id directly without selecting the child pane; no popup interception or
+  completion polling is needed.
 
 ## License
 

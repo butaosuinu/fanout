@@ -34,6 +34,8 @@ type Config struct {
 	ProjectNumber      int
 	ProjectStatus      string
 	Agent              string
+	BaseBranch         string
+	BranchPrefix       string
 	Limit              int // 0 = unset
 	OnlyArg            string
 	SkipArg            string
@@ -45,10 +47,14 @@ type Config struct {
 	Session            string
 	SleepBetween       float64
 	PopupTimeoutSec    int
+	NoRefresh          bool
 	DryRun             bool
 	Debug              bool
 	UnblockedOnly      bool
 	StatusMode         bool
+	CloseNum           int
+	MergeNum           int
+	CleanupMode        bool
 	AutoPullRequest    *bool
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
@@ -105,8 +111,24 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 			cfg.Agent = v
 			return nil
 		},
+		"--base-branch": func(cfg *Config, _ *parseState, v string) error {
+			cfg.BaseBranch = v
+			return nil
+		},
+		"--branch-prefix": func(cfg *Config, _ *parseState, v string) error {
+			cfg.BranchPrefix = v
+			return nil
+		},
 		"--limit": func(_ *Config, state *parseState, v string) error {
 			state.limit = v
+			return nil
+		},
+		"--close": func(_ *Config, state *parseState, v string) error {
+			state.closeRaw = v
+			return nil
+		},
+		"--merge": func(_ *Config, state *parseState, v string) error {
+			state.mergeRaw = v
 			return nil
 		},
 		"--only": func(cfg *Config, _ *parseState, v string) error {
@@ -147,8 +169,10 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 	boolOptions := map[string]boolOption{
 		"--dry-run":                 func(cfg *Config) { cfg.DryRun = true },
 		"--debug":                   func(cfg *Config) { cfg.Debug = true },
+		"--no-refresh":              func(cfg *Config) { cfg.NoRefresh = true },
 		"--unblocked-only":          func(cfg *Config) { cfg.UnblockedOnly = true },
 		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
+		"--cleanup":                 func(cfg *Config) { cfg.CleanupMode = true },
 		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = boolPtr(true) },
 		"--no-auto-pr":              func(cfg *Config) { cfg.AutoPullRequest = boolPtr(false) },
 		"--pr-review-gate":          func(cfg *Config) { cfg.PRReviewGate = boolPtr(true) },
@@ -224,6 +248,8 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 type parseState struct {
 	parent        string
 	limit         string
+	closeRaw      string
+	mergeRaw      string
 	sleepRaw      string
 	popupRaw      string
 	rawNames      []string
@@ -283,8 +309,18 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return ParseResult{Code: exitcode.Invocation}
 		}
 		switch {
+		case state.closeRaw != "":
+			return statusConflict(lg, "--close")
+		case state.mergeRaw != "":
+			return statusConflict(lg, "--merge")
+		case cfg.CleanupMode:
+			return statusConflict(lg, "--cleanup")
 		case cfg.Agent != "":
 			return statusConflict(lg, "--agent")
+		case cfg.BaseBranch != "":
+			return statusConflict(lg, "--base-branch")
+		case cfg.BranchPrefix != "":
+			return statusConflict(lg, "--branch-prefix")
 		case state.limit != "":
 			return statusConflict(lg, "--limit")
 		case cfg.OnlyArg != "":
@@ -295,10 +331,14 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--include")
 		case len(state.rawNames) > 0:
 			return statusConflict(lg, "--name")
+		case cfg.Session != "":
+			return statusConflict(lg, "--session")
 		case cfg.DryRun:
 			return statusConflict(lg, "--dry-run")
 		case cfg.UnblockedOnly:
 			return statusConflict(lg, "--unblocked-only")
+		case cfg.NoRefresh:
+			return statusConflict(lg, "--no-refresh")
 		case cfg.AutoPullRequest != nil:
 			return statusConflict(lg, boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
 		case cfg.PRReviewGate != nil:
@@ -311,6 +351,61 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--sleep")
 		case state.popupExplicit:
 			return statusConflict(lg, "--popup-timeout")
+		}
+	}
+
+	lifecycleFlags := 0
+	if state.closeRaw != "" {
+		lifecycleFlags++
+	}
+	if state.mergeRaw != "" {
+		lifecycleFlags++
+	}
+	if cfg.CleanupMode {
+		lifecycleFlags++
+	}
+	if lifecycleFlags > 1 {
+		lg.Err("--close, --merge, and --cleanup are mutually exclusive")
+		return ParseResult{Code: exitcode.Invocation}
+	}
+	if lifecycleFlags > 0 {
+		switch {
+		case cfg.Agent != "":
+			return lifecycleConflict(lg, "--agent")
+		case cfg.BaseBranch != "":
+			return lifecycleConflict(lg, "--base-branch")
+		case cfg.BranchPrefix != "":
+			return lifecycleConflict(lg, "--branch-prefix")
+		case state.limit != "":
+			return lifecycleConflict(lg, "--limit")
+		case cfg.OnlyArg != "":
+			return lifecycleConflict(lg, "--only")
+		case cfg.SkipArg != "":
+			return lifecycleConflict(lg, "--skip")
+		case cfg.IncludeArg != "":
+			return lifecycleConflict(lg, "--include")
+		case len(state.rawNames) > 0:
+			return lifecycleConflict(lg, "--name")
+		case cfg.Session != "":
+			return lifecycleConflict(lg, "--session")
+		case cfg.DryRun:
+			return lifecycleConflict(lg, "--dry-run")
+		case cfg.UnblockedOnly:
+			return lifecycleConflict(lg, "--unblocked-only")
+		case cfg.NoRefresh:
+			return lifecycleConflict(lg, "--no-refresh")
+		case cfg.AutoPullRequest != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
+		case cfg.PRReviewGate != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate))
+		case cfg.BriefingCodeReview != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
+		case cfg.AgentTeamsHint != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
+		case state.sleepExplicit:
+			return lifecycleConflict(lg, "--sleep")
+		case state.popupExplicit:
+			return lifecycleConflict(lg, "--popup-timeout")
 		}
 	}
 
@@ -327,6 +422,30 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return ParseResult{Code: exitcode.Env}
 		}
 		cfg.Limit, _ = strconv.Atoi(state.limit)
+	}
+
+	if state.closeRaw != "" {
+		if !rePositiveInt.MatchString(state.closeRaw) {
+			lg.Err("--close must be a positive integer, got: %s", state.closeRaw)
+			return ParseResult{Code: exitcode.Env}
+		}
+		cfg.CloseNum, _ = strconv.Atoi(state.closeRaw)
+	}
+	if state.mergeRaw != "" {
+		if !rePositiveInt.MatchString(state.mergeRaw) {
+			lg.Err("--merge must be a positive integer, got: %s", state.mergeRaw)
+			return ParseResult{Code: exitcode.Env}
+		}
+		cfg.MergeNum, _ = strconv.Atoi(state.mergeRaw)
+	}
+
+	if cfg.BaseBranch != "" && strings.ContainsAny(cfg.BaseBranch, " \t\r\n") {
+		lg.Err("--base-branch must not contain whitespace, got: %s", cfg.BaseBranch)
+		return ParseResult{Code: exitcode.Env}
+	}
+	if cfg.BranchPrefix != "" && strings.ContainsAny(cfg.BranchPrefix, " \t\r\n") {
+		lg.Err("--branch-prefix must not contain whitespace, got: %s", cfg.BranchPrefix)
+		return ParseResult{Code: exitcode.Env}
 	}
 
 	if state.sleepRaw != "" {
@@ -380,6 +499,11 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 
 func statusConflict(lg *log.Logger, flag string) ParseResult {
 	lg.Err("--status cannot be combined with %s", flag)
+	return ParseResult{Code: exitcode.Invocation}
+}
+
+func lifecycleConflict(lg *log.Logger, flag string) ParseResult {
+	lg.Err("--close/--merge/--cleanup cannot be combined with %s", flag)
 	return ParseResult{Code: exitcode.Invocation}
 }
 

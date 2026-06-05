@@ -41,10 +41,12 @@ setup() {
   unset FANOUT_PR_REVIEW_GATE
   unset FANOUT_BRIEFING_CODE_REVIEW
   unset FANOUT_AGENT_TEAMS_HINT
+  unset FANOUT_AGENT
 
-  # Tier 1 tests don't touch dmux discovery, but we still want fanout's
-  # agent auto-detect path to be dormant unless a test opts in.
-  unset TMUX_PANE
+  # Most tests exercise the direct tmux runtime. Provide fake TMUX markers so
+  # fanout targets the invoking pane instead of the session's active pane.
+  export TMUX="/tmp/fanout-test-tmux,1,0"
+  export TMUX_PANE="%1"
 
   # Default-off force-missing switch for dummy shims (Phase 1). Tests that
   # want to simulate a missing dependency set this themselves, e.g.
@@ -56,16 +58,14 @@ setup() {
   # tests — unset here and let each Tier 2 test opt in via use_fixture.
   unset FIXTURE_DIR
 
-  # `--status` honors DMUX_CONFIG_PATH as an offline-mode escape hatch.
-  # Unset between tests so a stale value doesn't accidentally bypass the
-  # live-dmux-discovery path that other tests are trying to exercise.
-  unset DMUX_CONFIG_PATH
+  # `--status` honors FANOUT_STATE_PATH as an offline state-file override.
+  # Unset between tests so a stale value doesn't accidentally point status or
+  # lifecycle operations at another test's state file.
+  unset FANOUT_STATE_PATH
 
   # Supply the tmux shim with a PID that's alive for the full test run.
-  # $$ inside bats is the bats process PID; it stays live across setup /
-  # test body / teardown. The tmux shim substitutes @@PID@@ in fixture
-  # values with this PID so fanout's kill -0 @dmux_controller_pid check
-  # succeeds. See tests/bin/tmux for why shim-local $$ / $PPID don't work.
+  # Kept for compatibility with older fixture helpers; current direct-runtime
+  # shims do not need tmux option liveness checks.
   export FANOUT_TEST_ALIVE_PID=$$
 
   # Per-test scratch dir (auto-cleaned by bats via BATS_TEST_TMPDIR).
@@ -185,9 +185,7 @@ skip_unless_fanout_go() {
 
 # Scrub machine-local prefixes from captured output so goldens are portable
 # across workstations and CI runners. Rewrites:
-#   - $REPO_ROOT                       → <REPO>
-# so "config: /Users/x/fanout/tests/fixtures/scenario-X/dmux.config.json"
-# collapses to "config: <REPO>/tests/fixtures/scenario-X/dmux.config.json".
+#   - $REPO_ROOT                       -> <REPO>
 # The /tmp/fanout-<repo_slug>-<N>.md briefing path stays verbatim because
 # repo_slug is deterministic (always "project_root" per fixture layout).
 _scrub_output() {

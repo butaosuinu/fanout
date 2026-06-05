@@ -1,7 +1,6 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: fanout
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-project-cross-repo/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-project-cross-repo/dmux.config.json
 [info] mode: project (status=Todo, repo=butaosuinu/fanout)
 [info] fetching items from Project https://github.com/users/butaosuinu/projects/3
 [warn] skipping cross-repo project item: someorg/other-repo#50 (project root repo: butaosuinu/fanout)
@@ -9,12 +8,21 @@
 [info] will create 1 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #921: Self-repo todo
   briefing -> /tmp/fanout-project_root-921.md
+  slug -> self-repo-todo-921
+  worktree -> <REPO>/tests/fixtures/scenario-project-cross-repo/project_root/.fanout/worktrees/self-repo-todo-921
+  branch -> fanout/self-repo-todo-921
+  base -> main
   briefing size: 2482 bytes
-  current panes[] length: 0
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #921 of #https://github.com/users/butaosuinu/projects/3] Self-repo todo: read /tmp/fanout-project_root-921.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-project-cross-repo/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-project-cross-repo/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-project-cross-repo/project_root worktree add -b fanout/self-repo-todo-921 <REPO>/tests/fixtures/scenario-project-cross-repo/project_root/.fanout/worktrees/self-repo-todo-921 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-project-cross-repo/project_root/.fanout/worktrees/self-repo-todo-921 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #921 of #https://github.com/users/butaosuinu/projects/3] self-repo-todo-921: Self-repo todo. read /tmp/fanout-project_root-921.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux select-pane -t <pane_id> -T self-repo-todo-921
+    $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #921: dry-run complete
 
 [ ok ] created: 1

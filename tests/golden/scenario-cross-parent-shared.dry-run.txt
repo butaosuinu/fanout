@@ -1,27 +1,44 @@
-[info] dmux session: dmux
-[info] control pane: %1
+[info] tmux session: fanout
+[info] tmux target:  %1
 [info] project root: <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root
-[info] config:       <REPO>/tests/fixtures/scenario-cross-parent-shared/dmux.config.json
 [info] fetching sub-issues of #200
 [info] sub-issues: 2 total, 2 OPEN
 [info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
 [info] #501: Shared child
   briefing -> /tmp/fanout-project_root-501.md
+  slug -> shared-child-parent-200-501
+  worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/shared-child-parent-200-501
+  branch -> fanout/shared-child-parent-200-501
+  base -> main
   briefing size: 2480 bytes
-  current panes[] length: 1
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #501 of #200] Shared child: read /tmp/fanout-project_root-501.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root worktree add -b fanout/shared-child-parent-200-501 <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/shared-child-parent-200-501 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/shared-child-parent-200-501 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #501 of #200] shared-child-parent-200-501: Shared child. read /tmp/fanout-project_root-501.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux select-pane -t <pane_id> -T shared-child-parent-200-501
+    $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #501: dry-run complete
 [info] #502: B-only child
   briefing -> /tmp/fanout-project_root-502.md
+  slug -> b-only-child-502
+  worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/b-only-child-502
+  branch -> fanout/b-only-child-502
+  base -> main
   briefing size: 2474 bytes
-  current panes[] length: 1
-    $ tmux send-keys -t %1 Escape
-    $ tmux send-keys -t %1 n
-    # would intercept newPanePopup and write: {"success":true,"data":"[fanout #502 of #200] B-only child: read /tmp/fanout-project_root-502.md and begin."}
-    # would intercept agentChoicePopup and write: {"success":true,"data":["claude"]}
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root fetch --quiet --no-tags origin main
+    # may fast-forward the local base before worktree creation
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root branch -f main refs/remotes/origin/main
+    # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
+    $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root worktree add -b fanout/b-only-child-502 <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/b-only-child-502 main
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/b-only-child-502 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #502 of #200] b-only-child-502: B-only child. read /tmp/fanout-project_root-502.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux select-pane -t <pane_id> -T b-only-child-502
+    $ tmux select-layout -t '%1' tiled
+    # would write .fanout/state.json with paneId <pane_id>
+    # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #502: dry-run complete
 
 [ ok ] created: 2

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "300",
+      "issueNum": 501,
+      "slug": "a",
+      "branchName": "fanout/a-501",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "a",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #501 of #300] a: read /tmp/fanout-project_root-501.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "0300",
+      "issueNum": 502,
+      "slug": "b",
+      "branchName": "fanout/b-502",
+      "paneId": "%10",
+      "agent": "claude",
+      "displayName": "b",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #502 of #0300] b: read /tmp/fanout-project_root-502.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}
