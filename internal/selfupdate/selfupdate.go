@@ -1,9 +1,8 @@
 // Package selfupdate compares the running fanout version with release tags and
-// drives release self-updates through install.sh.
+// drives release updates through install.sh.
 package selfupdate
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -70,15 +69,12 @@ func Compare(current, latest string) Outcome {
 	return UpToDate
 }
 
-const UsageText = `Usage: fanout self-update [--check] [--yes] [--version <tag>] [--no-skills]
+const UsageText = `Usage: fanout update [--version <tag>] [--no-skills]
 
 Updates this fanout binary and bundled Claude/Codex integrations by reusing
-the release install.sh script. Use --check to print the resolved plan without
-running the installer.
+the release install.sh script.
 
 Options:
-  --check          Resolve target release and print the install plan only.
-  --yes            Skip the interactive confirmation prompt.
   --version <tag>  Install a pinned release tag, e.g. v0.2.0.
   --no-skills      Update only the fanout binary.
   -h, --help       Show this help.
@@ -124,8 +120,6 @@ func Kind(err error) (FailureKind, bool) {
 }
 
 type Request struct {
-	Check    bool
-	Yes      bool
 	NoSkills bool
 	Version  string
 	Help     bool
@@ -135,12 +129,6 @@ func ParseArgs(args []string) (Request, error) {
 	var req Request
 	for i := 0; i < len(args); {
 		switch arg := args[i]; arg {
-		case "--check":
-			req.Check = true
-			i++
-		case "--yes":
-			req.Yes = true
-			i++
 		case "--no-skills":
 			req.NoSkills = true
 			i++
@@ -155,9 +143,9 @@ func ParseArgs(args []string) (Request, error) {
 			i++
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return req, fail(FailureInvocation, "unknown self-update option: %s", arg)
+				return req, fail(FailureInvocation, "unknown update option: %s", arg)
 			}
-			return req, fail(FailureInvocation, "unexpected self-update argument: %s", arg)
+			return req, fail(FailureInvocation, "unexpected update argument: %s", arg)
 		}
 	}
 	return req, nil
@@ -202,11 +190,10 @@ type Options struct {
 	Stderr         io.Writer
 	Stdin          io.Reader
 
-	Executable    func() (string, error)
-	EvalSymlinks  func(string) (string, error)
-	LookPath      func(string) (string, error)
-	WritableDir   func(string) error
-	StdinTerminal func(io.Reader) bool
+	Executable   func() (string, error)
+	EvalSymlinks func(string) (string, error)
+	LookPath     func(string) (string, error)
+	WritableDir  func(string) error
 }
 
 func Run(opts Options) (Plan, error) {
@@ -216,16 +203,8 @@ func Run(opts Options) (Plan, error) {
 		return plan, err
 	}
 
-	if opts.Request.Check {
-		if plan.Outcome == CannotCompare {
-			return plan, fail(FailureInvocation, "cannot compare current version %q with target release %q", plan.CurrentVersion, plan.TargetVersion)
-		}
-		PrintCheckPlan(opts.Stdout, plan)
-		return plan, nil
-	}
-
 	if plan.Outcome == DevBuild {
-		return plan, fail(FailureEnv, "fanout dev build: self-update only replaces released versions")
+		return plan, fail(FailureEnv, "fanout dev build: update only replaces released versions")
 	}
 	if plan.Outcome == CannotCompare {
 		return plan, fail(FailureInvocation, "cannot compare current version %q with target release %q", plan.CurrentVersion, plan.TargetVersion)
@@ -235,7 +214,7 @@ func Run(opts Options) (Plan, error) {
 		return plan, nil
 	}
 	if plan.UnsupportedExecutableName() {
-		return plan, fail(FailureEnv, "self-update can only replace an executable named fanout; current executable is %s", plan.ResolvedPath)
+		return plan, fail(FailureEnv, "update can only replace an executable named fanout; current executable is %s", plan.ResolvedPath)
 	}
 
 	if err := requireDownloader(opts.LookPath); err != nil {
@@ -246,16 +225,6 @@ func Run(opts Options) (Plan, error) {
 	}
 
 	PrintUpdatePlan(opts.Stdout, plan)
-	if !opts.Request.Yes {
-		ok, err := confirm(opts.Stdin, opts.Stdout, opts.StdinTerminal)
-		if err != nil {
-			return plan, err
-		}
-		if !ok {
-			fmt.Fprintln(opts.Stdout, "self-update aborted")
-			return plan, nil
-		}
-	}
 
 	if err := opts.Runner.Run(BuildInstallerCommand(plan)); err != nil {
 		return plan, fail(FailureEnv, "install.sh failed: %w", err)
@@ -316,13 +285,8 @@ func ResolvePlan(opts Options) (Plan, error) {
 	return plan, nil
 }
 
-func PrintCheckPlan(w io.Writer, plan Plan) {
-	printPlan(w, "fanout self-update check", plan)
-	fmt.Fprintf(w, "  action:          %s\n", actionLine(plan))
-}
-
 func PrintUpdatePlan(w io.Writer, plan Plan) {
-	printPlan(w, "fanout self-update", plan)
+	printPlan(w, "fanout update", plan)
 	fmt.Fprintf(w, "  action:          run install.sh\n")
 }
 
@@ -333,7 +297,7 @@ func PrintNoop(w io.Writer, plan Plan) {
 	case CurrentAhead:
 		fmt.Fprintf(w, "fanout %s is newer than latest release %s\n", plan.CurrentVersion, plan.TargetVersion)
 	default:
-		fmt.Fprintf(w, "fanout self-update: nothing to do (%s)\n", plan.Outcome)
+		fmt.Fprintf(w, "fanout update: nothing to do (%s)\n", plan.Outcome)
 	}
 }
 
@@ -348,36 +312,6 @@ func printPlan(w io.Writer, title string, plan Plan) {
 	fmt.Fprintf(w, "  binary dir:      %s\n", plan.BinDir)
 	fmt.Fprintf(w, "  install script:  %s\n", plan.InstallerURL)
 	fmt.Fprintf(w, "  skills:          %s\n", yesNo(!plan.NoSkills))
-}
-
-func actionLine(plan Plan) string {
-	switch plan.Outcome {
-	case DevBuild:
-		return "none (dev build cannot be self-updated)"
-	case UpToDate:
-		if plan.ExplicitTarget && plan.UnsupportedExecutableName() {
-			return "none (current executable is not named fanout)"
-		}
-		if plan.ExplicitTarget {
-			return "would run installer"
-		}
-		return "none (already up to date)"
-	case CurrentAhead:
-		if plan.ExplicitTarget && plan.UnsupportedExecutableName() {
-			return "none (current executable is not named fanout)"
-		}
-		if plan.ExplicitTarget {
-			return "would run installer"
-		}
-		return "none (current version is newer than latest release)"
-	case UpdateAvailable:
-		if plan.UnsupportedExecutableName() {
-			return "none (current executable is not named fanout)"
-		}
-		return "would run installer"
-	default:
-		return "none (cannot compare versions)"
-	}
 }
 
 func yesNo(v bool) string {
@@ -441,7 +375,7 @@ func BuildInstallerCommand(plan Plan) CommandSpec {
 	args := []string{
 		"-c",
 		installerShellScript,
-		"fanout-self-update",
+		"fanout-update",
 		plan.InstallerURL,
 	}
 	if plan.NoSkills {
@@ -467,7 +401,7 @@ if command -v curl >/dev/null 2>&1; then
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "$script" "$url"
 else
-  echo "fanout self-update: curl or wget is required to fetch install.sh" >&2
+  echo "fanout update: curl or wget is required to fetch install.sh" >&2
   exit 1
 fi
 sh "$script" "$@"`
@@ -502,9 +436,6 @@ func withDefaults(opts Options) Options {
 	if opts.WritableDir == nil {
 		opts.WritableDir = checkWritableDir
 	}
-	if opts.StdinTerminal == nil {
-		opts.StdinTerminal = isTerminalReader
-	}
 	if opts.Runner == nil {
 		opts.Runner = ExecRunner{Stdin: opts.Stdin, Stdout: opts.Stdout, Stderr: opts.Stderr}
 	}
@@ -522,7 +453,7 @@ func requireDownloader(lookPath func(string) (string, error)) error {
 }
 
 func checkWritableDir(dir string) error {
-	f, err := os.CreateTemp(dir, ".fanout-self-update-*")
+	f, err := os.CreateTemp(dir, ".fanout-update-*")
 	if err != nil {
 		return err
 	}
@@ -533,34 +464,6 @@ func checkWritableDir(dir string) error {
 		return closeErr
 	}
 	return removeErr
-}
-
-func confirm(stdin io.Reader, stdout io.Writer, isTerminal func(io.Reader) bool) (bool, error) {
-	if !isTerminal(stdin) {
-		return false, fail(FailureEnv, "self-update requires --yes when stdin is not a terminal")
-	}
-	fmt.Fprint(stdout, "Proceed with self-update? [y/N] ")
-	line, err := bufio.NewReader(stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fail(FailureEnv, "failed to read confirmation: %w", err)
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
-}
-
-func isTerminalReader(r io.Reader) bool {
-	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	if info.Mode()&os.ModeCharDevice == 0 {
-		return false
-	}
-	return isTerminalFile(f)
 }
 
 func parseVersion(s string) ([3]int, bool) {

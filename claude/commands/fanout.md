@@ -8,9 +8,8 @@ Invoke the `fanout` CLI to spawn one tmux pane per OPEN sub-issue of a parent Gi
 Arguments: `$ARGUMENTS`
 
 If the user is only asking to check or update the `fanout` binary itself, stop
-this pane-creation workflow and use the skill's self-update path:
-`fanout self-update --check`, then `fanout self-update --yes` after
-confirmation.
+this pane-creation workflow. Use `fanout --check-update` for read-only version
+checks, or `fanout update` for immediate replacement via install.sh.
 
 ## Steps
 

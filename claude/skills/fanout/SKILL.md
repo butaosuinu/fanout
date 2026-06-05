@@ -22,9 +22,8 @@ fanout <parent-issue> --status      # JSON status of fanned children, no side ef
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
-fanout self-update --check          # Print the release update plan, no side effects
-fanout self-update --yes            # Replace fanout via install.sh
-fanout --check-update               # Legacy read-only version comparison
+fanout --check-update               # Read-only version comparison
+fanout update                       # Replace fanout via install.sh
 ```
 
 **Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
@@ -41,8 +40,8 @@ Good fits:
 
 - The user is in tmux on a parent issue that has OPEN sub-issues, and asks (explicitly or implicitly) to parallelize the children.
 - The user is in tmux and asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
-- The user asks whether the installed `fanout` binary is up to date; in that case use `fanout self-update --check`, not the pane-creation workflow.
-- The user asks to update fanout itself; in that case run `fanout self-update --check`, present the plan, then run `fanout self-update --yes` after they confirm.
+- The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
+- The user asks to update fanout itself; in that case run `fanout update` immediately.
 - The user types `/fanout` or mentions "fan out" / "並列展開".
 
 Do not invoke unprompted just because an issue has sub-issues. Pane creation is visible and the user has to close each pane manually if they change their mind — suggest first, wait for a "yes", and prefer routing through the `/fanout` slash command so there is one consistent entry point.
@@ -97,27 +96,19 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
 
 ## Running
 
-- **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
-- **Self-update**: if the user's intent is only to check or update the
-  `fanout` binary itself, run `fanout self-update --check` and skip parent
-  resolution, dmux pre-flight, dry-run, pane naming, and confirmation. It is
-  read-only, creates no panes, and prints the current binary path, target
-  version, installer URL, and whether skills will be installed. Released builds
-  resolve the latest GitHub release and compare MAJOR.MINOR.PATCH tags with an
-  optional `v` prefix. Dev builds (`version == "dev"`, including plain
-  `make build-go`) print a plan but cannot replace themselves.
-- **Self-update execution**: after user confirmation, run
-  `fanout self-update --yes` to download and run the repository `install.sh`.
-  The command passes `BIN_DIR=<current binary dir>` and
+- **Update check**: if the user's intent is only to check the installed
+  `fanout` binary version, run `fanout --check-update` and skip parent
+  resolution, tmux pre-flight, dry-run, pane naming, and confirmation. It is
+  read-only and creates no panes.
+- **Update execution**: if the user's intent is to update the `fanout` binary
+  itself, run `fanout update` immediately. The command downloads and runs the
+  repository `install.sh`, passing `BIN_DIR=<current binary dir>` and
   `FANOUT_VERSION=<target>` so the installer replaces the same `fanout`
   command and refreshes bundled integrations. Use `--version <tag>` to pin a
-  release and `--no-skills` to skip Claude/Codex skill installation. Non-TTY
-  updates require `--yes`, and actual replacement is only supported when the
-  resolved executable basename is `fanout`. Exit codes: `0` plan/no-op/update
-  or user abort, `1` environment or preflight failure, `2` bad invocation or
-  incomparable version, `3` latest-release lookup failed. `fanout
-  --check-update` and `fanout check-update` remain legacy read-only comparison
-  forms.
+  release and `--no-skills` to skip Claude/Codex skill installation. Actual
+  replacement is only supported when the resolved executable basename is
+  `fanout`. Exit codes: `0` no-op/update, `1` environment or preflight failure,
+  `2` bad invocation or incomparable version, `3` latest-release lookup failed.
 - **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
 - **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag. If neither the user nor the environment supplies an agent, add `--agent claude`.

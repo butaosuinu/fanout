@@ -3,8 +3,6 @@ package selfupdate
 import (
 	"bytes"
 	"errors"
-	"io"
-	"os"
 	"strings"
 	"testing"
 )
@@ -54,8 +52,8 @@ func TestBuildInstallerCommandMapsVersionEnvAndNoSkills(t *testing.T) {
 	if spec.Args[0] != "-c" {
 		t.Fatalf("args[0] = %q, want -c", spec.Args[0])
 	}
-	if spec.Args[2] != "fanout-self-update" {
-		t.Fatalf("args[2] = %q, want fanout-self-update", spec.Args[2])
+	if spec.Args[2] != "fanout-update" {
+		t.Fatalf("args[2] = %q, want fanout-update", spec.Args[2])
 	}
 	if spec.Args[3] != InstallScriptURL {
 		t.Fatalf("installer URL = %q, want %q", spec.Args[3], InstallScriptURL)
@@ -85,39 +83,39 @@ func TestBuildInstallerCommandMapsVersionEnvAndNoSkills(t *testing.T) {
 	}
 }
 
-func TestRunCheckPrintsPlanWithoutRunningInstaller(t *testing.T) {
+func TestRunUpdatePrintsPlanAndRunsInstaller(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	plan, err := Run(testOptions(Request{Check: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	plan, err := Run(testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		called = true
 		return nil
 	})))
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if called {
-		t.Fatal("installer runner was called in --check mode")
+	if !called {
+		t.Fatal("installer runner was not called")
 	}
 	if plan.TargetVersion != "v0.2.0" || plan.Outcome != UpdateAvailable {
 		t.Fatalf("plan = %+v, want target v0.2.0 update available", plan)
 	}
 	got := out.String()
 	for _, want := range []string{
-		"fanout self-update check",
+		"fanout update",
 		"current version: v0.1.0",
 		"target version:  v0.2.0 (latest)",
 		"current binary:  /tmp/fanout-real/fanout",
-		"action:          would run installer",
+		"action:          run install.sh",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("check output missing %q:\n%s", want, got)
+			t.Fatalf("update output missing %q:\n%s", want, got)
 		}
 	}
 }
 
-func TestRunCheckRejectsIncomparablePinnedVersion(t *testing.T) {
+func TestRunRejectsIncomparablePinnedVersion(t *testing.T) {
 	var out bytes.Buffer
-	_, err := Run(testOptions(Request{Check: true, Version: "not-semver"}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	_, err := Run(testOptions(Request{Version: "not-semver"}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		t.Fatal("installer runner should not be called")
 		return nil
 	})))
@@ -130,25 +128,10 @@ func TestRunCheckRejectsIncomparablePinnedVersion(t *testing.T) {
 	}
 }
 
-func TestRunCheckRejectsIncomparablePinnedVersionOnDevBuild(t *testing.T) {
-	var out bytes.Buffer
-	opts := testOptions(Request{Check: true, Version: "not-semver"}, &out, CommandRunnerFunc(func(CommandSpec) error {
-		t.Fatal("installer runner should not be called")
-		return nil
-	}))
-	opts.CurrentVersion = "dev"
-
-	_, err := Run(opts)
-	if err == nil {
-		t.Fatal("Run returned nil error, want incomparable-version failure")
-	}
-	assertFailureKind(t, err, FailureInvocation)
-}
-
 func TestRunPinnedVersionPassesFANOUTVersionAndNoSkillsToInstaller(t *testing.T) {
 	var got CommandSpec
 	var out bytes.Buffer
-	plan, err := Run(testOptions(Request{Yes: true, Version: "9.9.9", NoSkills: true}, &out, CommandRunnerFunc(func(spec CommandSpec) error {
+	plan, err := Run(testOptions(Request{Version: "9.9.9", NoSkills: true}, &out, CommandRunnerFunc(func(spec CommandSpec) error {
 		got = spec
 		return nil
 	})))
@@ -177,7 +160,7 @@ func TestRunPinnedVersionPassesFANOUTVersionAndNoSkillsToInstaller(t *testing.T)
 func TestRunPinnedCurrentVersionStillRunsInstaller(t *testing.T) {
 	var got CommandSpec
 	var out bytes.Buffer
-	opts := testOptions(Request{Yes: true, Version: "0.1.0"}, &out, CommandRunnerFunc(func(spec CommandSpec) error {
+	opts := testOptions(Request{Version: "0.1.0"}, &out, CommandRunnerFunc(func(spec CommandSpec) error {
 		got = spec
 		return nil
 	}))
@@ -202,30 +185,11 @@ func TestRunPinnedCurrentVersionStillRunsInstaller(t *testing.T) {
 	}
 }
 
-func TestCheckPlanPinnedCurrentVersionWouldRunInstaller(t *testing.T) {
-	var out bytes.Buffer
-	opts := testOptions(Request{Check: true, Version: "0.1.0"}, &out, CommandRunnerFunc(func(CommandSpec) error {
-		t.Fatal("installer runner should not be called")
-		return nil
-	}))
-
-	plan, err := Run(opts)
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if plan.Outcome != UpToDate || !plan.NeedsInstaller() {
-		t.Fatalf("plan = %+v, want up-to-date explicit target that needs installer", plan)
-	}
-	if got := out.String(); !strings.Contains(got, "action:          would run installer") {
-		t.Fatalf("output = %q, want installer action", got)
-	}
-}
-
 func TestRunDevBuildRejectsReplacementBeforeLookupOrInstaller(t *testing.T) {
 	var out bytes.Buffer
 	latestCalled := false
 	runnerCalled := false
-	opts := testOptions(Request{Yes: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		runnerCalled = true
 		return nil
 	}))
@@ -251,7 +215,7 @@ func TestRunDevBuildRejectsReplacementBeforeLookupOrInstaller(t *testing.T) {
 func TestRunUpToDateSkipsInstaller(t *testing.T) {
 	var out bytes.Buffer
 	called := false
-	opts := testOptions(Request{Yes: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		called = true
 		return nil
 	}))
@@ -271,7 +235,7 @@ func TestRunUpToDateSkipsInstaller(t *testing.T) {
 
 func TestRunRejectsNonFanoutExecutableName(t *testing.T) {
 	var out bytes.Buffer
-	opts := testOptions(Request{Yes: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		t.Fatal("installer runner should not be called")
 		return nil
 	}))
@@ -289,28 +253,9 @@ func TestRunRejectsNonFanoutExecutableName(t *testing.T) {
 	}
 }
 
-func TestCheckPlanMarksNonFanoutExecutableAsNotRunnable(t *testing.T) {
-	var out bytes.Buffer
-	opts := testOptions(Request{Check: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
-		t.Fatal("installer runner should not be called")
-		return nil
-	}))
-	opts.EvalSymlinks = func(string) (string, error) {
-		return "/tmp/fanout-real/fanout-v0.1.0", nil
-	}
-
-	_, err := Run(opts)
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if got := out.String(); !strings.Contains(got, "action:          none (current executable is not named fanout)") {
-		t.Fatalf("output = %q, want non-runnable action", got)
-	}
-}
-
 func TestRunRequiresDownloader(t *testing.T) {
 	var out bytes.Buffer
-	opts := testOptions(Request{Yes: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		t.Fatal("installer runner should not be called")
 		return nil
 	}))
@@ -330,7 +275,7 @@ func TestRunRequiresDownloader(t *testing.T) {
 
 func TestRunRejectsUnwritableBinDir(t *testing.T) {
 	var out bytes.Buffer
-	opts := testOptions(Request{Yes: true}, &out, CommandRunnerFunc(func(CommandSpec) error {
+	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
 		t.Fatal("installer runner should not be called")
 		return nil
 	}))
@@ -345,36 +290,6 @@ func TestRunRejectsUnwritableBinDir(t *testing.T) {
 	assertFailureKind(t, err, FailureEnv)
 	if !strings.Contains(err.Error(), "cannot write to binary directory /tmp/fanout-real") {
 		t.Fatalf("error = %v, want binary directory message", err)
-	}
-}
-
-func TestRunRequiresYesForNonTTY(t *testing.T) {
-	var out bytes.Buffer
-	opts := testOptions(Request{}, &out, CommandRunnerFunc(func(CommandSpec) error {
-		t.Fatal("installer runner should not be called")
-		return nil
-	}))
-	opts.StdinTerminal = func(io.Reader) bool { return false }
-
-	_, err := Run(opts)
-	if err == nil {
-		t.Fatal("Run returned nil error, want non-tty confirmation failure")
-	}
-	assertFailureKind(t, err, FailureEnv)
-	if !strings.Contains(err.Error(), "requires --yes") {
-		t.Fatalf("error = %v, want --yes message", err)
-	}
-}
-
-func TestIsTerminalReaderRejectsDevNull(t *testing.T) {
-	f, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	if isTerminalReader(f) {
-		t.Fatal("isTerminalReader(os.DevNull) = true, want false")
 	}
 }
 
@@ -400,9 +315,6 @@ func testOptions(req Request, out *bytes.Buffer, runner CommandRunner) Options {
 		},
 		WritableDir: func(string) error {
 			return nil
-		},
-		StdinTerminal: func(io.Reader) bool {
-			return true
 		},
 	}
 }
