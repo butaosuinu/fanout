@@ -105,9 +105,9 @@ Options:
   --status            Read-only mode. Print JSON describing each fanned-out
                       child issue's state and closed-by PR merge status, then
                       exit. Exclusive with action-bearing flags.
-  self-update         Subcommand. Replace this binary and bundled Claude/Codex
-                      integrations through install.sh. Supports
-                      --check, --yes, --version <tag>, and --no-skills.
+  update              Subcommand. Replace this binary and bundled Claude/Codex
+                      integrations through install.sh immediately. Supports
+                      --version <tag> and --no-skills.
   --check-update      Read-only mode. Fetch the latest fanout release tag,
                       compare it with this binary's version, print whether an
                       update is available, then exit. Also accepted as
@@ -143,8 +143,8 @@ Exit codes (--check-update):
   2 cannot compare version strings (MAJOR.MINOR.PATCH, optional v prefix)
   3 gh release lookup failed
 
-Exit codes (self-update):
-  0 success (plan printed, update completed, aborted, or already up to date)
+Exit codes (update):
+  0 success (update completed, or already up to date)
   1 prerequisite / environment problem, or missing option value
   2 unknown option, unexpected argument, or cannot compare version strings
   3 gh release lookup failed

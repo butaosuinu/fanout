@@ -10,10 +10,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/selfupdate"
 )
 
-func cmdSelfUpdate(args []string, current string, gh ghissue.Runner, lg *log.Logger) exitcode.Code {
+func cmdUpdate(args []string, current string, gh ghissue.Runner, lg *log.Logger) exitcode.Code {
 	req, err := selfupdate.ParseArgs(args)
 	if err != nil {
-		lg.Err("self-update: %s", err.Error())
+		lg.Err("update: %s", err.Error())
 		if kind, ok := selfupdate.Kind(err); ok && kind == selfupdate.FailureInvocation {
 			fmt.Fprint(lg.Stderr(), selfupdate.UsageText)
 			return exitcode.Invocation
@@ -42,7 +42,7 @@ func cmdSelfUpdate(args []string, current string, gh ghissue.Runner, lg *log.Log
 		return exitcode.OK
 	}
 
-	lg.Err("self-update: %s", err.Error())
+	lg.Err("update: %s", err.Error())
 	if kind, ok := selfupdate.Kind(err); ok {
 		switch kind {
 		case selfupdate.FailureInvocation:
