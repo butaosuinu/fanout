@@ -78,7 +78,7 @@ printf '%%43\n'
 func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {
 	got := BuildPaneLaunchCommand("PATH='/very/long/path:/usr/bin' /tmp/bin/codex '[fanout #1] prompt'")
 	for _, want := range []string{
-		`exec "${SHELL:-/bin/sh}" -lic `,
+		`exec /bin/sh -lc `,
 		`/tmp/bin/codex`,
 		`[fanout #1] prompt`,
 		`__fanout_status=$?`,

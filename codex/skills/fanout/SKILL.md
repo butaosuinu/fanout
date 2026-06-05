@@ -370,6 +370,6 @@ the likely next action:
 - The action path creates git worktrees itself, then uses detached
   `tmux split-window -t <invoking-pane> -d` with a shell launch command to start
   the selected agent CLI without moving focus away from the caller pane. The
-  command runs through the user's shell startup path and returns to an
-  interactive shell after the agent exits. `--session` is the explicit escape
-  hatch for targeting a different session.
+  command runs through a POSIX wrapper and returns to the user's shell after the
+  agent exits. `--session` is the explicit escape hatch for targeting a
+  different session.

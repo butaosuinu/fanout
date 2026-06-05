@@ -16,7 +16,7 @@
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/first-child-101 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 'exec "${SHELL:-/bin/sh}" -lic '\''codex '\''\'\'''\''[fanout #101 of #100] first-child-101: First child. read /tmp/fanout-project_root-101.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 'exec /bin/sh -lc '\''codex '\''\'\'''\''[fanout #101 of #100] first-child-101: First child. read /tmp/fanout-project_root-101.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T first-child-101
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
@@ -34,7 +34,7 @@
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/second-child-102 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 'exec "${SHELL:-/bin/sh}" -lic '\''codex '\''\'\'''\''[fanout #102 of #100] second-child-102: Second child. read /tmp/fanout-project_root-102.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 'exec /bin/sh -lc '\''codex '\''\'\'''\''[fanout #102 of #100] second-child-102: Second child. read /tmp/fanout-project_root-102.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T second-child-102
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>

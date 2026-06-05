@@ -41,15 +41,14 @@ func splitPane(target, worktreePath, launchCommand string) (string, error) {
 }
 
 // BuildPaneLaunchCommand returns a tmux shell-command that starts the agent via
-// the user's shell startup path and leaves an interactive shell behind after the
-// agent exits.
+// a POSIX wrapper and leaves the user's shell behind after the agent exits.
 func BuildPaneLaunchCommand(agentCommand string) string {
 	agentCommand = strings.TrimSpace(agentCommand)
 	if agentCommand == "" {
 		return ""
 	}
 	body := agentCommand + `; __fanout_status=$?; printf '\n[fanout] agent exited with status %d; returning to shell.\n' "$__fanout_status"; exec ` + userShellExpr + ` -l`
-	return "exec " + userShellExpr + " -lic " + shellQuote(body)
+	return "exec /bin/sh -lc " + shellQuote(body)
 }
 
 // SelectTiled applies tmux's tiled layout to the target pane/session.

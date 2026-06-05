@@ -85,7 +85,13 @@ func Prepare(opts Options) (Result, error) {
 	}
 	_, _ = git(plan.ProjectRoot, "worktree", "prune")
 	branchWasPresent := branchExists(plan.ProjectRoot, plan.BranchName)
-	if _, err := git(plan.ProjectRoot, "worktree", "add", "-b", plan.BranchName, plan.WorktreePath, plan.BaseBranch); err != nil {
+	args := []string{"worktree", "add"}
+	if branchWasPresent {
+		args = append(args, plan.WorktreePath, plan.BranchName)
+	} else {
+		args = append(args, "-b", plan.BranchName, plan.WorktreePath, plan.BaseBranch)
+	}
+	if _, err := git(plan.ProjectRoot, args...); err != nil {
 		_, _ = git(plan.ProjectRoot, "worktree", "prune")
 		if !branchWasPresent {
 			_, _ = git(plan.ProjectRoot, "branch", "-D", plan.BranchName)

@@ -485,8 +485,8 @@ worktree から実行すること、agent 名を明示すること。詳しく�
      を作成する。
    - `tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree> <launch-command>`
      で子ペインを選択せずに作る（`--session` 指定時は指定 session 名を target
-     にする）。起動コマンドはユーザーの shell startup path 経由で実行し、agent
-     終了後は interactive shell に戻る。
+     にする）。起動コマンドは POSIX wrapper 経由で実行し、agent 終了後は
+     ユーザーの shell に戻る。
    - ペインタイトルを設定し、`tmux select-layout tiled` を適用する。
    - 次の処理に入る前に `--sleep` 秒（既定 4）だけスリープする。
 7. 作成済み / スキップ / 保留 / 失敗の件数サマリを表示する。
