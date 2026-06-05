@@ -88,7 +88,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
 		lg.Err("#%d: %v", req.Issue.Number, err)
-		cleanupFailedLaunch(req.Issue.Number, "", prepared.Plan, lg)
+		cleanupFailedLaunch(req.Issue.Number, "", prepared, lg)
 		return false
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
@@ -101,7 +101,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		entry := statePane(cfg, req, paneID, prepared.WorktreePath, time.Now().UTC())
 		if err := recorder.RecordPane(entry); err != nil {
 			lg.Err("#%d: write fanout state: %v", req.Issue.Number, err)
-			cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
+			cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
 			return false
 		}
 	}
@@ -114,7 +114,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	}); err != nil {
 		lg.Err("#%d: write worktree metadata: %v", req.Issue.Number, err)
 		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
-		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
+		cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
 		return false
 	}
 	lg.Ok("#%d: pane %s created in %s", req.Issue.Number, paneID, prepared.WorktreePath)
@@ -250,13 +250,13 @@ func rollbackState(recorder paneStateRecorder, parent string, issueNum int, lg *
 	}
 }
 
-func cleanupFailedLaunch(issueNum int, paneID string, plan worktree.Plan, lg *log.Logger) {
+func cleanupFailedLaunch(issueNum int, paneID string, prepared worktree.Result, lg *log.Logger) {
 	if paneID != "" {
 		if err := tmuxrun.KillPane(paneID); err != nil {
 			lg.Warn("#%d: cleanup incomplete pane %s: %v", issueNum, paneID, err)
 		}
 	}
-	if err := worktree.CleanupCreated(plan); err != nil {
-		lg.Warn("#%d: cleanup incomplete worktree %s: %v", issueNum, plan.WorktreePath, err)
+	if err := worktree.CleanupCreated(prepared); err != nil {
+		lg.Warn("#%d: cleanup incomplete worktree %s: %v", issueNum, prepared.WorktreePath, err)
 	}
 }

@@ -42,6 +42,7 @@ type Plan struct {
 type Result struct {
 	Plan
 	AlreadyExists bool
+	BranchCreated bool
 }
 
 // BuildPlan resolves deterministic worktree paths and the base branch.
@@ -98,7 +99,7 @@ func Prepare(opts Options) (Result, error) {
 		}
 		return Result{Plan: plan}, fmt.Errorf("git worktree add: %w", err)
 	}
-	return Result{Plan: plan}, nil
+	return Result{Plan: plan, BranchCreated: !branchWasPresent}, nil
 }
 
 // EnsureLocalExclude keeps generated fanout runtime files out of the user's git status.
@@ -142,15 +143,16 @@ func EnsureLocalExclude(root string) error {
 	return nil
 }
 
-// CleanupCreated removes a worktree and branch created by Prepare after a later launch failure.
-func CleanupCreated(plan Plan) error {
+// CleanupCreated removes resources created by Prepare after a later launch failure.
+func CleanupCreated(res Result) error {
 	var errs []error
+	plan := res.Plan
 	if dirExists(plan.WorktreePath) {
 		if _, err := git(plan.ProjectRoot, "worktree", "remove", "--force", plan.WorktreePath); err != nil {
 			errs = append(errs, fmt.Errorf("git worktree remove: %w", err))
 		}
 	}
-	if plan.BranchName != "" {
+	if res.BranchCreated && plan.BranchName != "" {
 		if _, err := git(plan.ProjectRoot, "branch", "-D", plan.BranchName); err != nil {
 			errs = append(errs, fmt.Errorf("git branch -D %s: %w", plan.BranchName, err))
 		}

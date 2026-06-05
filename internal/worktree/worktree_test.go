@@ -182,6 +182,9 @@ func TestPreparePrunesStaleWorktreeRegistrationBeforeAdd(t *testing.T) {
 	if res.AlreadyExists {
 		t.Fatal("Prepare() unexpectedly reported existing worktree")
 	}
+	if !res.BranchCreated {
+		t.Fatal("Prepare() did not report BranchCreated for a fresh branch")
+	}
 	if got := gitOutput(t, res.WorktreePath, "rev-parse", "--abbrev-ref", "HEAD"); got != "fanout/child-1" {
 		t.Fatalf("new worktree branch = %q, want fanout/child-1", got)
 	}
@@ -217,6 +220,9 @@ func TestPrepareReusesExistingChildBranch(t *testing.T) {
 	}
 	if res.AlreadyExists {
 		t.Fatal("Prepare() unexpectedly reported existing worktree")
+	}
+	if res.BranchCreated {
+		t.Fatal("Prepare() reported BranchCreated for an existing branch")
 	}
 	if got := gitOutput(t, res.WorktreePath, "rev-parse", "HEAD"); got != childHead {
 		t.Fatalf("worktree HEAD = %s, want existing child branch %s", got, childHead)
@@ -291,7 +297,7 @@ func TestCleanupCreatedRemovesWorktreeAndBranch(t *testing.T) {
 		t.Fatalf("Prepare() failed: %v", err)
 	}
 
-	if err := CleanupCreated(res.Plan); err != nil {
+	if err := CleanupCreated(res); err != nil {
 		t.Fatalf("CleanupCreated() failed: %v", err)
 	}
 	if _, err := os.Stat(res.WorktreePath); !os.IsNotExist(err) {
@@ -299,6 +305,49 @@ func TestCleanupCreatedRemovesWorktreeAndBranch(t *testing.T) {
 	}
 	if out := gitOutputAllowError(t, dir, "rev-parse", "--verify", "fanout/child-1"); out.ok {
 		t.Fatalf("branch still exists at %s", out.value)
+	}
+	if got := gitOutput(t, dir, "status", "--short"); got != "" {
+		t.Fatalf("parent repo status after cleanup = %q, want clean", got)
+	}
+}
+
+func TestCleanupCreatedPreservesReusedBranch(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	writeFile(t, filepath.Join(dir, "file.txt"), "base\n")
+	gitTest(t, dir, "add", "file.txt")
+	gitTest(t, dir, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "base")
+	baseBranch := gitOutput(t, dir, "branch", "--show-current")
+
+	gitTest(t, dir, "switch", "-c", "fanout/child-1")
+	writeFile(t, filepath.Join(dir, "file.txt"), "child branch\n")
+	gitTest(t, dir, "add", "file.txt")
+	gitTest(t, dir, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "child")
+	childHead := gitOutput(t, dir, "rev-parse", "HEAD")
+	gitTest(t, dir, "switch", baseBranch)
+
+	res, err := Prepare(Options{
+		ProjectRoot: dir,
+		Slug:        "child-1",
+		BranchName:  "fanout/child-1",
+		BaseBranch:  baseBranch,
+		NoRefresh:   true,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() with existing branch failed: %v", err)
+	}
+	if res.BranchCreated {
+		t.Fatal("Prepare() reported BranchCreated for an existing branch")
+	}
+
+	if err := CleanupCreated(res); err != nil {
+		t.Fatalf("CleanupCreated() failed: %v", err)
+	}
+	if _, err := os.Stat(res.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree path still exists or stat failed unexpectedly: %v", err)
+	}
+	if got := gitOutput(t, dir, "rev-parse", "--verify", "fanout/child-1"); got != childHead {
+		t.Fatalf("branch HEAD after cleanup = %s, want preserved %s", got, childHead)
 	}
 	if got := gitOutput(t, dir, "status", "--short"); got != "" {
 		t.Fatalf("parent repo status after cleanup = %q, want clean", got)
