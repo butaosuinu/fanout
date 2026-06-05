@@ -7,6 +7,11 @@ Invoke the `fanout` CLI to spawn one tmux pane per OPEN sub-issue of a parent Gi
 
 Arguments: `$ARGUMENTS`
 
+If the user is only asking to check or update the `fanout` binary itself, stop
+this pane-creation workflow and use the skill's self-update path:
+`fanout self-update --check`, then `fanout self-update --yes` after
+confirmation.
+
 ## Steps
 
 1. **Resolve the parent target** from `$ARGUMENTS`. Two input shapes are accepted; the first matching token wins:

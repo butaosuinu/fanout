@@ -199,6 +199,9 @@ fanout <parent-issue> --status      # JSON status of fanned children, no side ef
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout --check-update               # Compare this binary with the latest release
+fanout self-update --check          # Print the release update plan, no side effects
+fanout self-update --yes            # Replace this binary + integrations via install.sh
 fanout --help
 ```
 
@@ -279,6 +282,52 @@ They do not discover arbitrary worktrees by scanning the filesystem.
 
 Like `--status`, these commands honor `FANOUT_STATE_PATH`; otherwise they use
 `<git-root>/.fanout/state.json`.
+
+### `--check-update`
+
+`fanout --check-update` is read-only. It fetches the latest release tag from
+`butaosuinu/fanout`, compares it with the binary's embedded version, and prints
+whether an update is available. `fanout check-update` is accepted as the
+subcommand form. Local dev builds (`version == "dev"`, including plain
+`make build-go`) do not call `gh`; they print a dev-build message and exit 0.
+
+Exit codes:
+
+- `0` — comparison completed, or this is a dev build.
+- `2` — the current version or latest tag is not `MAJOR.MINOR.PATCH`
+  (optionally prefixed with `v`).
+- `3` — `gh release view -R butaosuinu/fanout` failed.
+
+### `self-update`
+
+`fanout self-update` replaces the running release binary by invoking the same
+`install.sh` path documented under Installation, so OS/arch detection, release
+downloads, checksum verification, archive extraction, and Claude/Codex skill
+installation stay centralized in one script.
+
+By default it resolves the latest release, compares it with the embedded
+version, reports the current binary path (after `EvalSymlinks`), then asks for
+confirmation before running the installer. Use `--yes` for non-interactive
+automation. Without `--yes`, non-tty stdin is rejected. Local dev builds
+(`version == "dev"`, including plain `make build-go`) refuse replacement.
+
+Options:
+
+- `--check` — print the resolved plan only; does not fetch `install.sh` or
+  replace files.
+- `--version <tag>` — install a pinned release tag by passing
+  `FANOUT_VERSION=<tag>` to `install.sh`.
+- `--no-skills` — pass `--no-skills` through to `install.sh`, updating only the
+  binary.
+
+Exit codes:
+
+- `0` — plan printed, update completed, user aborted, or already up to date.
+- `1` — environment/preflight failure such as dev build, no `curl`/`wget`,
+  non-tty stdin without `--yes`, an unwritable binary directory, or a missing
+  option value.
+- `2` — unknown option, unexpected argument, or incomparable version strings.
+- `3` — latest release lookup failed.
 
 ### Settings
 
@@ -405,6 +454,10 @@ fanout 123 --close 4
 # Remove all recorded children whose issue is CLOSED or whose closed-by PR
 # list contains a MERGED PR.
 fanout 123 --cleanup
+
+# Check whether a released fanout binary is behind the latest GitHub Release.
+# Dev builds report that update checks only apply to released versions.
+fanout --check-update
 
 # Fan out OPEN issues from a Projects v2 board instead of a parent issue.
 # Default filter is Status=Todo; same-repo only. Requires `gh auth refresh

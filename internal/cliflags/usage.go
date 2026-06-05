@@ -107,6 +107,13 @@ Options:
                       reported without starting conflict resolution.
   --cleanup           Close recorded child worktrees whose issue is CLOSED or
                       has a MERGED closed-by PR.
+  self-update         Subcommand. Replace this binary and bundled Claude/Codex
+                      integrations through install.sh. Supports
+                      --check, --yes, --version <tag>, and --no-skills.
+  --check-update      Read-only mode. Fetch the latest fanout release tag,
+                      compare it with this binary's version, print whether an
+                      update is available, then exit. Also accepted as
+                      ` + "`" + `fanout check-update` + "`" + `.
   -V, --version       Print version and commit, then exit.
   -h, --help          Show this message.
 
@@ -125,6 +132,17 @@ Exit codes (--status):
   0 success (JSON emitted; check summary.all_merged for state)
   2 cannot enumerate children or state
   3 gh API call failed
+
+Exit codes (--check-update):
+  0 success (including update available, up-to-date, dev build)
+  2 cannot compare version strings (MAJOR.MINOR.PATCH, optional v prefix)
+  3 gh release lookup failed
+
+Exit codes (self-update):
+  0 success (plan printed, update completed, aborted, or already up to date)
+  1 prerequisite / environment problem, or missing option value
+  2 unknown option, unexpected argument, or cannot compare version strings
+  3 gh release lookup failed
 `
 
 // Usage writes the help text to w.

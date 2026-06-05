@@ -24,6 +24,9 @@ fanout <parent-issue> --status      # JSON status of fanned children, no side ef
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout self-update --check          # Print the release update plan, no side effects
+fanout self-update --yes            # Replace fanout via install.sh
+fanout --check-update               # Legacy read-only version comparison
 ```
 
 **Do not probe the CLI** with `fanout --help`, `fanout -h`, or
@@ -56,6 +59,10 @@ Always invoke the stable `fanout` command name.
 Use this skill when the user explicitly asks to fan out, parallelize, or split
 work for a GitHub parent issue or a GitHub Projects v2 board, including
 Japanese phrasing like `並列展開` or "プロジェクトの Todo 列を一気に着手".
+Also use it when the user asks whether the installed `fanout` binary is up to
+date; that path uses `fanout self-update --check` instead of pane creation. If
+the user asks to update fanout itself, run `fanout self-update --check` first,
+present the plan, then run `fanout self-update --yes` after they confirm.
 Do not invoke fanout just because an issue has sub-issues; pane creation is
 visible and the user has to close unwanted panes manually.
 
@@ -73,6 +80,26 @@ use this workflow directly.
    MVP supported agents are `claude` and `codex`.
 
 ## Workflow
+
+If the user's intent is only to check or update the `fanout` binary itself, run
+`fanout self-update --check` and skip the rest of this workflow. It is
+read-only, creates no panes, and does not require dmux pre-flight, parent
+resolution, dry-run, pane naming, or confirmation. Released builds resolve the
+latest GitHub release, compare MAJOR.MINOR.PATCH tags with an optional `v`
+prefix, print the current binary path, target version, installer URL, and
+whether skills will be installed. Dev builds (`version == "dev"`, including
+plain `make build-go`) print a plan but cannot replace themselves.
+
+For actual replacement, use `fanout self-update --yes` after user confirmation.
+It downloads and runs the repository `install.sh`, passing `BIN_DIR=<current
+binary dir>` and `FANOUT_VERSION=<target>` so the installer replaces the same
+`fanout` command and refreshes bundled integrations. Use `--version <tag>` to
+pin a release and `--no-skills` to skip Claude/Codex skill installation.
+Non-TTY updates require `--yes`, and actual replacement is only supported when
+the resolved executable basename is `fanout`. Exit codes: `0` plan/no-op/update
+or user abort, `1` environment or preflight failure, `2` bad invocation or
+incomparable version, `3` latest-release lookup failed. `fanout --check-update`
+and `fanout check-update` remain legacy read-only comparison forms.
 
 1. Resolve the parent target from the user's request or recent context. Two
    shapes are accepted; identify which one matches and pass the normalized
@@ -343,7 +370,10 @@ the likely next action:
 - When a created pane runs `codex`, the per-issue briefing requires the agent
   to run `codex review --uncommitted` after implementation/tests and repeat
   review -> fix -> retest -> review until no findings remain before it commits,
-  pushes, or opens the PR.
+  pushes, or opens the PR. The review command should be treated as one
+  blocking shell command: while it is running, do not open, resume, or inspect
+  any Review Session and do not run `/codex:status` or other polling commands;
+  wait for the command to exit, then read the final output once.
 - The action path creates git worktrees itself, then uses detached
   `tmux split-window -t <invoking-pane> -d` with a shell launch command to start
   the selected agent CLI without moving focus away from the caller pane. The
