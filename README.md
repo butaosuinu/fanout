@@ -226,6 +226,8 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout --check-update               # Compare this binary with the latest release
+fanout self-update --check          # Print the release update plan, no side effects
+fanout self-update --yes            # Replace this binary + integrations via install.sh
 fanout --help
 ```
 
@@ -305,6 +307,36 @@ Exit codes:
 - `2` — the current version or latest tag is not `MAJOR.MINOR.PATCH`
   (optionally prefixed with `v`).
 - `3` — `gh release view -R butaosuinu/fanout` failed.
+
+### `self-update`
+
+`fanout self-update` replaces the running release binary by invoking the same
+`install.sh` path documented under Installation, so OS/arch detection, release
+downloads, checksum verification, archive extraction, and Claude/Codex skill
+installation stay centralized in one script.
+
+By default it resolves the latest release, compares it with the embedded
+version, reports the current binary path (after `EvalSymlinks`), then asks for
+confirmation before running the installer. Use `--yes` for non-interactive
+automation. Without `--yes`, non-tty stdin is rejected. Local dev builds
+(`version == "dev"`, including plain `make build-go`) refuse replacement.
+
+Options:
+
+- `--check` — print the resolved plan only; does not fetch `install.sh` or
+  replace files.
+- `--version <tag>` — install a pinned release tag by passing
+  `FANOUT_VERSION=<tag>` to `install.sh`.
+- `--no-skills` — pass `--no-skills` through to `install.sh`, updating only the
+  binary.
+
+Exit codes:
+
+- `0` — plan printed, update completed, user aborted, or already up to date.
+- `1` — environment/preflight failure such as dev build, no `curl`/`wget`,
+  non-tty stdin without `--yes`, or an unwritable binary directory.
+- `2` — bad self-update invocation or incomparable version strings.
+- `3` — latest release lookup failed.
 
 ### Settings
 

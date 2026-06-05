@@ -18,7 +18,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
-fanout --check-update               # Compare this binary with the latest release
+fanout self-update --check          # Print the release update plan, no side effects
+fanout self-update --yes            # Replace fanout via install.sh
+fanout --check-update               # Legacy read-only version comparison
 ```
 
 **Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
@@ -35,7 +37,8 @@ Good fits:
 
 - The user is in a dmux-managed pane on a parent issue that has OPEN sub-issues, and asks (explicitly or implicitly) to parallelize the children.
 - The user is in a dmux-managed pane and asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
-- The user asks whether the installed `fanout` binary is up to date; in that case use the self-update check below, not the pane-creation workflow.
+- The user asks whether the installed `fanout` binary is up to date; in that case use `fanout self-update --check`, not the pane-creation workflow.
+- The user asks to update fanout itself; in that case run `fanout self-update --check`, present the plan, then run `fanout self-update --yes` after they confirm.
 - The user types `/fanout` or mentions "fan out" / "並列展開".
 
 Do not invoke unprompted just because an issue has sub-issues. Pane creation is visible and the user has to close each pane manually if they change their mind — suggest first, wait for a "yes", and prefer routing through the `/fanout` slash command so there is one consistent entry point.
@@ -88,16 +91,26 @@ cwd does not matter. `fanout` discovers dmux via tmux session options (`@dmux_co
 
 ## Running
 
-- **Self-update check**: if the user's intent is only to check whether `fanout`
-  is up to date, run `fanout --check-update` directly. This is read-only and
-  does not create panes, so skip parent resolution, dmux pre-flight, dry-run,
-  pane naming, and confirmation. `fanout check-update` is the equivalent
-  subcommand form. Dev builds (`version == "dev"`, including plain
-  `make build-go`) print a dev-build message and exit 0 without calling `gh`.
-  Released builds call `gh release view -R butaosuinu/fanout --json tagName
-  -q .tagName` and compare MAJOR.MINOR.PATCH tags, with an optional `v`
-  prefix. Exit codes: `0` comparison completed or dev build, `2` cannot
-  compare version strings, `3` release lookup failed.
+- **Self-update**: if the user's intent is only to check or update the
+  `fanout` binary itself, run `fanout self-update --check` and skip parent
+  resolution, dmux pre-flight, dry-run, pane naming, and confirmation. It is
+  read-only, creates no panes, and prints the current binary path, target
+  version, installer URL, and whether skills will be installed. Released builds
+  resolve the latest GitHub release and compare MAJOR.MINOR.PATCH tags with an
+  optional `v` prefix. Dev builds (`version == "dev"`, including plain
+  `make build-go`) print a plan but cannot replace themselves.
+- **Self-update execution**: after user confirmation, run
+  `fanout self-update --yes` to download and run the repository `install.sh`.
+  The command passes `BIN_DIR=<current binary dir>` and
+  `FANOUT_VERSION=<target>` so the installer replaces the same `fanout`
+  command and refreshes bundled integrations. Use `--version <tag>` to pin a
+  release and `--no-skills` to skip Claude/Codex skill installation. Non-TTY
+  updates require `--yes`, and actual replacement is only supported when the
+  resolved executable basename is `fanout`. Exit codes: `0` plan/no-op/update
+  or user abort, `1` environment or preflight failure, `2` bad invocation or
+  incomparable version, `3` latest-release lookup failed. `fanout
+  --check-update` and `fanout check-update` remain legacy read-only comparison
+  forms.
 - **Default**: `fanout <N-or-URL> --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL>`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
 - **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--name`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag.

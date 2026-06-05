@@ -65,6 +65,145 @@ load helpers
   [[ "$output" == *"fanout update available: v0.1.0 -> v0.2.0"* ]]
 }
 
+@test "self-update --help prints usage and exits 0" {
+  run_fanout self-update --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: fanout self-update"* ]]
+}
+
+@test "self-update unknown flag: error + usage + exit 2" {
+  run_fanout self-update --bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown self-update option: --bogus"* ]]
+  [[ "$output" == *"Usage: fanout self-update"* ]]
+}
+
+@test "self-update --version missing value: exit 1" {
+  run_fanout self-update --version
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--version requires an argument"* ]]
+}
+
+@test "self-update --check release build reports plan without installer" {
+  local release_dir="$BATS_TEST_TMPDIR/release-check"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  use_fixture scenario-check-update
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --check
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fanout self-update check"* ]]
+  [[ "$output" == *"target version:  v0.2.0 (latest)"* ]]
+  [[ "$output" == *"action:          would run installer"* ]]
+}
+
+@test "self-update --check with invalid pinned version exits 2" {
+  local release_dir="$BATS_TEST_TMPDIR/release-invalid"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --check --version not-semver
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot compare current version"* ]]
+}
+
+@test "self-update --check normalizes pinned version without v prefix" {
+  local release_dir="$BATS_TEST_TMPDIR/release-pinned-normalized"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --check --version 0.2.0
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target version:  v0.2.0 (pinned)"* ]]
+  [[ "$output" == *"action:          would run installer"* ]]
+}
+
+@test "self-update --check pinned current version still plans installer" {
+  local release_dir="$BATS_TEST_TMPDIR/release-pinned-current"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  force_missing gh
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --check --version 0.1.0
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"target version:  v0.1.0 (pinned)"* ]]
+  [[ "$output" == *"action:          would run installer"* ]]
+}
+
+@test "self-update dev build rejects replacement before gh/downloader" {
+  force_missing gh curl wget
+  run_fanout self-update --yes
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"fanout dev build"* ]]
+  [[ "$output" == *"self-update only replaces released versions"* ]]
+}
+
+@test "self-update release build requires curl or wget before installer" {
+  local release_dir="$BATS_TEST_TMPDIR/release-missing-downloader"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.1.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  use_fixture scenario-check-update
+  force_missing curl wget
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --yes
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"curl or wget is required"* ]]
+}
+
+@test "self-update already latest skips installer" {
+  local release_dir="$BATS_TEST_TMPDIR/release-current"
+  mkdir -p "$release_dir"
+  local release_bin="$release_dir/fanout"
+  GOCACHE="$REPO_ROOT/.cache/go-build" go build \
+    -ldflags "-X main.version=v0.2.0 -X main.commit=test" \
+    -o "$release_bin" ./cmd/fanout
+  use_fixture scenario-check-update
+  force_missing curl wget
+
+  local old_bin="$FANOUT_BIN"
+  FANOUT_BIN="$release_bin"
+  run_fanout self-update --yes
+  FANOUT_BIN="$old_bin"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fanout is already up to date: v0.2.0"* ]]
+}
+
 @test "no positional argument: usage + exit 2" {
   run_fanout
   [ "$status" -eq 2 ]
