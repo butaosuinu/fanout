@@ -597,6 +597,20 @@ local base/ref.
 - Parent issue doesn't exist or has no sub-issues tagged via the extension:
   fanout exits 0 with `no sub-issues on #<parent>`.
 
+### Codex child pane cannot `git push` over SSH
+
+If a Codex child pane reports `No user exists for uid 501` from `git push`,
+`git ls-remote`, or even `ssh -V`, OpenSSH is failing before it reaches
+GitHub. This is not a missing deploy key or repo permission issue. It means
+the Codex execution environment cannot resolve the local macOS user record.
+If `ssh-add -l` also reports `Error connecting to agent: Operation not
+permitted`, the same environment cannot reach the inherited ssh-agent.
+
+Do not keep retrying the same SSH command or escalation. Publish through the
+GitHub connector/API if available, or ask the user to run the push from a
+normal Terminal or Claude Code session where `id -un` resolves to the real
+username and `ssh-add -l` can reach the agent.
+
 ### Slug or branch names are not what you want
 
 By default, fanout uses `slugify(title)-<issueNum>` and

@@ -34,6 +34,9 @@ load helpers
   grep -q "do not run \`/codex:status\` or other polling" "$briefing"
   grep -q "Repeat until review reports no findings / no issues / clean" "$briefing"
   grep -q "Only after the review loop is clean should you commit, push, and open the PR" "$briefing"
+  grep -q "No user exists for uid 501" "$briefing"
+  grep -q "Error connecting to agent: Operation not permitted" "$briefing"
+  grep -q "do not keep retrying" "$briefing"
   grep -q "Make focused, minimal changes scoped to this single issue" "$briefing"
   grep -q "Closes #101" "$briefing"
 }
@@ -69,6 +72,7 @@ load helpers
   grep -q "codex review --uncommitted" "$briefing"
   grep -q "do not run \`/codex:status\` or other polling" "$briefing"
   grep -q "Only after the review loop is clean should you commit and push the branch" "$briefing"
+  grep -q "No user exists for uid 501" "$briefing"
   ! grep -q "Open a pull request with \"Closes #101\"" "$briefing"
   ! grep -q "opening a PR" "$briefing"
   ! grep -q "open the PR" "$briefing"

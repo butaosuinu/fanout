@@ -524,6 +524,20 @@ branch 名、stale/missing remote branch です。base を変えるには
 - 親 issue が存在しない、または拡張経由で紐づけられたサブ issue が無い:
   fanout は `no sub-issues on #<parent>` と出して exit 0 する。
 
+### Codex 子ペインで SSH の `git push` ができない
+
+Codex 子ペインで `git push`、`git ls-remote`、または `ssh -V` が
+`No user exists for uid 501` を返す場合、OpenSSH は GitHub へ到達する前に
+失敗しています。これは deploy key 不足やリポジトリ権限の問題ではなく、Codex 実行環境が
+ローカル macOS ユーザー情報を解決できていない状態です。`ssh-add -l` も
+`Error connecting to agent: Operation not permitted` を返すなら、同じ環境から
+継承された ssh-agent にも接続できていません。
+
+同じ SSH コマンドや escalation を繰り返さないでください。利用できる場合は GitHub
+connector/API 経由で publish するか、`id -un` が実ユーザー名を返し
+`ssh-add -l` が agent に接続できる通常の Terminal / Claude Code セッションから
+push してもらってください。
+
 ### slug や branch 名が意図と違う
 
 既定では `slugify(title)-<issueNum>` と `fanout/<slug>` を使います。特定 issue は

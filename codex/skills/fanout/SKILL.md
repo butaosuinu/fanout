@@ -353,6 +353,14 @@ the likely next action:
   Tell them to run `gh auth refresh -s read:project` and rerun.
 - Project mode `no items in Project (after status/repo filter). nothing to
   do.` is not a failure; fanout exits 0.
+- Codex child pane `git push` fails with `No user exists for uid 501`, or
+  `ssh -V` fails with the same message: this is a Codex execution-environment
+  failure before GitHub authentication. Do not keep retrying SSH or escalation.
+  Publish through the GitHub connector/API if available, or ask the user to
+  push from a normal Terminal or Claude Code session.
+- Codex child pane `ssh-add -l` fails with
+  `Error connecting to agent: Operation not permitted`: the sandbox cannot
+  reach the inherited ssh-agent. Treat it the same as the `uid 501` failure.
 
 ## Notes
 
@@ -368,7 +376,10 @@ the likely next action:
   pushes, or opens the PR. The review command should be treated as one
   blocking shell command: while it is running, do not open, resume, or inspect
   any Review Session and do not run `/codex:status` or other polling commands;
-  wait for the command to exit, then read the final output once.
+  wait for the command to exit, then read the final output once. If SSH publish
+  fails with `No user exists for uid 501` or ssh-agent `Operation not
+  permitted`, the child should stop retrying SSH and use the GitHub
+  connector/API path or ask for an external push.
 - The action path creates git worktrees itself, then uses detached
   `tmux split-window -t <invoking-pane> -d` with a shell launch command to start
   the selected agent CLI without moving focus away from the caller pane. The

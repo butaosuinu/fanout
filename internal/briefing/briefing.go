@@ -88,6 +88,13 @@ Before committing your final changes or opening a PR, run
 Only after the review loop is clean should you commit, push, and open the PR.
 If the review command is unavailable or fails for tooling/auth reasons, stop
 and report that instead of bypassing the gate.
+
+Codex SSH publish note: if ` + "`git push`" + ` or ` + "`ssh -V`" + ` fails with
+` + "`No user exists for uid 501`" + `, or ` + "`ssh-add -l`" + ` fails with
+` + "`Error connecting to agent: Operation not permitted`" + `, do not keep retrying
+SSH or escalation. Treat it as a Codex execution-environment problem: publish
+the branch via the GitHub connector/API if available, or stop and ask the user
+to push from a normal Terminal or Claude Code session.
 `
 
 const codexReviewWithoutPRSection = `
@@ -104,6 +111,13 @@ Before committing your final changes, run
 Only after the review loop is clean should you commit and push the branch.
 If the review command is unavailable or fails for tooling/auth reasons, stop
 and report that instead of bypassing the gate.
+
+Codex SSH publish note: if ` + "`git push`" + ` or ` + "`ssh -V`" + ` fails with
+` + "`No user exists for uid 501`" + `, or ` + "`ssh-add -l`" + ` fails with
+` + "`Error connecting to agent: Operation not permitted`" + `, do not keep retrying
+SSH or escalation. Treat it as a Codex execution-environment problem: publish
+the branch via the GitHub connector/API if available, or stop and ask the user
+to push from a normal Terminal or Claude Code session.
 `
 
 const codeReviewSection = `
