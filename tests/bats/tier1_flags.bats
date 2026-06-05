@@ -32,6 +32,10 @@ load helpers
   run_fanout --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: fanout"* ]]
+  [[ "$output" == *"self-update         Subcommand."* ]]
+  [[ "$output" == *"Exit codes (self-update):"* ]]
+  [[ "$output" == *"1 prerequisite / environment problem, or missing option value"* ]]
+  [[ "$output" == *"2 unknown option, unexpected argument, or cannot compare version strings"* ]]
 }
 
 @test "--check-update on dev build exits 0 without gh" {
