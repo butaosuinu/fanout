@@ -20,12 +20,11 @@ filtered out:
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root worktree add -b fanout/alpha-501 <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501 'exec "${SHELL:-/bin/sh}" -lic '\''claude '\''\'\'''\''[fanout #501 of #500] alpha-501: Alpha. read /tmp/fanout-project_root-501.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T alpha-501
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
-    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #501 of #500] alpha-501: Alpha. read /tmp/fanout-project_root-501.md and begin.'\''' Enter
 [ ok ] #501: dry-run complete
 [info] #503: Charlie
   briefing -> /tmp/fanout-project_root-503.md
@@ -39,12 +38,11 @@ filtered out:
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root worktree add -b fanout/charlie-503 <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503 'exec "${SHELL:-/bin/sh}" -lic '\''claude '\''\'\'''\''[fanout #503 of #500] charlie-503: Charlie. read /tmp/fanout-project_root-503.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T charlie-503
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
-    $ tmux send-keys -t <pane_id> 'claude '\''[fanout #503 of #500] charlie-503: Charlie. read /tmp/fanout-project_root-503.md and begin.'\''' Enter
 [ ok ] #503: dry-run complete
 
 [ ok ] created: 2

@@ -345,6 +345,8 @@ the likely next action:
   review -> fix -> retest -> review until no findings remain before it commits,
   pushes, or opens the PR.
 - The action path creates git worktrees itself, then uses detached
-  `tmux split-window -t <invoking-pane> -d` and `tmux send-keys` to launch the
-  selected agent CLI without moving focus away from the caller pane. `--session`
-  is the explicit escape hatch for targeting a different session.
+  `tmux split-window -t <invoking-pane> -d` with a shell launch command to start
+  the selected agent CLI without moving focus away from the caller pane. The
+  command runs through the user's shell startup path and returns to an
+  interactive shell after the agent exits. `--session` is the explicit escape
+  hatch for targeting a different session.

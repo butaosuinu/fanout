@@ -85,7 +85,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		return false
 	}
 
-	paneID, err := tmuxrun.SplitPane(info.Target, prepared.WorktreePath)
+	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
 		lg.Err("#%d: %v", req.Issue.Number, err)
 		cleanupFailedLaunch(req.Issue.Number, "", prepared.Plan, lg)
@@ -113,12 +113,6 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		WorktreePath: prepared.WorktreePath,
 	}); err != nil {
 		lg.Err("#%d: write worktree metadata: %v", req.Issue.Number, err)
-		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
-		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
-		return false
-	}
-	if err := tmuxrun.SendShellCommand(paneID, req.AgentCommand); err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
 		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
 		cleanupFailedLaunch(req.Issue.Number, paneID, prepared.Plan, lg)
 		return false
@@ -223,9 +217,9 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 		shellQuote(req.Worktree.BaseBranch),
 		c.Reset)
 	if target != "" {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -t %s -d -h -P -F '#{pane_id}' -c %s%s\n", c.Dim, shellQuote(target), shellQuote(req.Worktree.WorktreePath), c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -t %s -d -h -P -F '#{pane_id}' -c %s %s%s\n", c.Dim, shellQuote(target), shellQuote(req.Worktree.WorktreePath), shellQuote(tmuxrun.BuildPaneLaunchCommand(req.AgentCommand)), c.Reset)
 	} else {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -d -h -P -F '#{pane_id}' -c %s%s\n", c.Dim, shellQuote(req.Worktree.WorktreePath), c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -d -h -P -F '#{pane_id}' -c %s %s%s\n", c.Dim, shellQuote(req.Worktree.WorktreePath), shellQuote(tmuxrun.BuildPaneLaunchCommand(req.AgentCommand)), c.Reset)
 	}
 	if title := paneTitle(req); title != "" {
 		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-pane -t <pane_id> -T %s%s\n", c.Dim, shellQuote(title), c.Reset)
@@ -237,7 +231,6 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux send-keys -t <pane_id> %s Enter%s\n", c.Dim, shellQuote(req.AgentCommand), c.Reset)
 	lg.Ok("#%d: dry-run complete", req.Issue.Number)
 }
 
