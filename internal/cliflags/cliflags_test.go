@@ -77,6 +77,13 @@ func TestParseStatusFormat(t *testing.T) {
 	}
 }
 
+func TestParseStatusPostDashboard(t *testing.T) {
+	cfg := parseOK(t, "--status", "100", "--post-dashboard")
+	if !cfg.PostDashboard {
+		t.Fatal("PostDashboard = false, want true")
+	}
+}
+
 func TestParseFormatRequiresStatus(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	res := Parse([]string{"100", "--format", "table"}, log.NewWith(&stdout, &stderr, false), io.Discard)
@@ -85,6 +92,17 @@ func TestParseFormatRequiresStatus(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.Contains(got, "--format can only be used with --status") {
 		t.Fatalf("stderr = %q, want --format requires --status message", got)
+	}
+}
+
+func TestParsePostDashboardRequiresStatus(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"100", "--post-dashboard"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Invocation {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--post-dashboard can only be used with --status") {
+		t.Fatalf("stderr = %q, want --post-dashboard requires --status message", got)
 	}
 }
 

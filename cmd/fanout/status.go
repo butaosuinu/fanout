@@ -17,7 +17,11 @@ import (
 
 const statusDiffBarWidth = 12
 
-var conventionalTypeRE = regexp.MustCompile(`^(feat|fix|docs|chore|refactor|test|perf|build|ci|style|revert)(\(.+\))?!?:`)
+var (
+	conventionalTypeRE      = regexp.MustCompile(`^(feat|fix|docs|chore|refactor|test|perf|build|ci|style|revert)(\(.+\))?!?:`)
+	dashboardReviewEffortRE = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?(?:\*\*)?Review effort(?:\*\*)?\s*:\s*([0-5])\b.*$`)
+	dashboardTLDRLineRE     = regexp.MustCompile(`(?i)^\s*(?:#{1,6}\s*)?(?:[-*]\s*)?(?:[0-9]+\.\s*)?(?:\*\*)?TL;DR(?:\*\*)?\s*(?::|\x{2014}|-)?\s*(.*)$`)
+)
 
 type statusReport struct {
 	Parent   int           `json:"parent"`
@@ -52,6 +56,15 @@ type statusTableRow struct {
 	HasDiff    bool
 }
 
+type dashboardRow struct {
+	Issue string
+	PR    string
+	Diff  string
+	Type  string
+	TLDR  string
+	Score string
+}
+
 func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	rt, code := resolveStateRuntimeForMode("--status", lg)
 	if code != exitcode.OK {
@@ -75,9 +88,16 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 			Summary:  statusSummary{AllMerged: false},
 		}
 		if cfg.Format == "table" {
-			return writeStatusTable(report, rt.projectRoot, lg)
+			if code := writeStatusTable(report, rt.projectRoot, lg); code != exitcode.OK {
+				return code
+			}
+		} else if code := writeStatusReport(report, lg); code != exitcode.OK {
+			return code
 		}
-		return writeStatusReport(report, lg)
+		if cfg.PostDashboard {
+			return postStatusDashboard(report, rt.projectRoot, lg)
+		}
+		return exitcode.OK
 	}
 
 	children, code := statusChildren(rt.projectRoot, nums, "--status", lg)
@@ -86,9 +106,16 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	}
 	report := newStatusReport(cfg.Parent, children)
 	if cfg.Format == "table" {
-		return writeStatusTable(report, rt.projectRoot, lg)
+		if code := writeStatusTable(report, rt.projectRoot, lg); code != exitcode.OK {
+			return code
+		}
+	} else if code := writeStatusReport(report, lg); code != exitcode.OK {
+		return code
 	}
-	return writeStatusReport(report, lg)
+	if cfg.PostDashboard {
+		return postStatusDashboard(report, rt.projectRoot, lg)
+	}
+	return exitcode.OK
 }
 
 func statusChildren(projectRoot string, nums []int, mode string, lg *log.Logger) ([]statusChild, exitcode.Code) {
@@ -150,6 +177,176 @@ func writeStatusReport(report statusReport, lg *log.Logger) exitcode.Code {
 	}
 	fmt.Fprintln(lg.Stdout(), string(out))
 	return exitcode.OK
+}
+
+func postStatusDashboard(report statusReport, projectRoot string, lg *log.Logger) exitcode.Code {
+	gh := ghissue.Runner{Cwd: projectRoot}
+	nwo, err := gh.RepoNameWithOwner()
+	if err != nil {
+		lg.Err("--status --post-dashboard: failed to resolve repo (gh repo view) in %s", projectRoot)
+		return exitcode.GitHub
+	}
+	owner, repo, ok := strings.Cut(nwo, "/")
+	if !ok || owner == "" || repo == "" {
+		lg.Err("--status --post-dashboard: unexpected nameWithOwner from gh: %s", nwo)
+		return exitcode.GitHub
+	}
+
+	rows, code := dashboardRows(report, projectRoot, nwo, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	body := buildDashboardBody(report.Parent, report.Summary, rows)
+	marker := dashboardMarker(report.Parent)
+	comment, found, err := gh.FindDashboardComment(report.Parent, marker)
+	if err != nil {
+		lg.Err("--status --post-dashboard: gh api issue comments for #%d failed: %v", report.Parent, err)
+		return exitcode.GitHub
+	}
+	if found {
+		if err := gh.EditIssueComment(owner, repo, comment.ID, body); err != nil {
+			lg.Err("--status --post-dashboard: failed to update dashboard comment %s on #%d: %v", comment.ID, report.Parent, err)
+			return exitcode.GitHub
+		}
+		fmt.Fprintf(lg.Stderr(), "[ ok ] updated dashboard comment %s on issue #%d\n", comment.ID, report.Parent)
+		return exitcode.OK
+	}
+	if err := gh.PostIssueComment(report.Parent, body); err != nil {
+		lg.Err("--status --post-dashboard: failed to post dashboard comment on #%d: %v", report.Parent, err)
+		return exitcode.GitHub
+	}
+	fmt.Fprintf(lg.Stderr(), "[ ok ] posted dashboard comment on issue #%d\n", report.Parent)
+	return exitcode.OK
+}
+
+func dashboardRows(report statusReport, projectRoot, nwo string, lg *log.Logger) ([]dashboardRow, exitcode.Code) {
+	if len(report.Children) == 0 {
+		return nil, exitcode.OK
+	}
+	gh := ghissue.Runner{Cwd: projectRoot}
+	rows := make([]dashboardRow, 0, len(report.Children))
+	for _, child := range report.Children {
+		if len(child.PRs) == 0 {
+			rows = append(rows, dashboardRow{
+				Issue: "#" + strconv.Itoa(child.Num),
+				PR:    "-",
+				Diff:  "-",
+				Type:  "-",
+				TLDR:  "No PR yet",
+				Score: "-",
+			})
+			continue
+		}
+		for _, pr := range child.PRs {
+			stat, err := gh.PRDiffStat(pr.Number)
+			if err != nil {
+				lg.Err("--status --post-dashboard: gh pr view #%d failed: %v", pr.Number, err)
+				return nil, exitcode.GitHub
+			}
+			tldr, score := extractDashboardPRBody(stat.Body)
+			rows = append(rows, dashboardRow{
+				Issue: "#" + strconv.Itoa(child.Num),
+				PR:    fmt.Sprintf("[#%d](https://github.com/%s/pull/%d)", pr.Number, nwo, pr.Number),
+				Diff:  dashboardDiff(stat),
+				Type:  conventionalType(stat.Title),
+				TLDR:  tldr,
+				Score: score,
+			})
+		}
+	}
+	return rows, exitcode.OK
+}
+
+func buildDashboardBody(parent int, summary statusSummary, rows []dashboardRow) string {
+	var b strings.Builder
+	b.WriteString(dashboardMarker(parent))
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "## fanout dashboard #%d\n\n", parent)
+	fmt.Fprintf(&b, "Total: %d | Merged: %d | Pending: %d | All merged: %t\n\n",
+		summary.Total, summary.Merged, summary.Pending, summary.AllMerged)
+	b.WriteString("| Sub-issue # | PR | +/- | Type | TL;DR | Score |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	if len(rows) == 0 {
+		b.WriteString("| - | - | - | - | No recorded children | - |\n")
+		return b.String()
+	}
+	for _, row := range rows {
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+			markdownCell(row.Issue),
+			markdownCell(row.PR),
+			markdownCell(row.Diff),
+			markdownCell(row.Type),
+			markdownCell(row.TLDR),
+			markdownCell(row.Score),
+		)
+	}
+	return b.String()
+}
+
+func dashboardMarker(parent int) string {
+	return fmt.Sprintf("<!-- fanout:dashboard parent=%d -->", parent)
+}
+
+func dashboardDiff(stat ghissue.PRDiffStat) string {
+	files := "files"
+	if stat.ChangedFiles == 1 {
+		files = "file"
+	}
+	return fmt.Sprintf("+%d / -%d (%d %s)", stat.Additions, stat.Deletions, stat.ChangedFiles, files)
+}
+
+func extractDashboardPRBody(body string) (string, string) {
+	lines := strings.Split(body, "\n")
+	tldr := explicitDashboardTLDR(lines)
+	if tldr == "" {
+		tldr = fallbackDashboardTLDR(lines)
+	}
+	score := "-"
+	if m := dashboardReviewEffortRE.FindStringSubmatch(body); len(m) == 2 {
+		score = m[1]
+	}
+	return tldr, score
+}
+
+func explicitDashboardTLDR(lines []string) string {
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if m := dashboardTLDRLineRE.FindStringSubmatch(line); len(m) == 2 {
+			if rest := strings.TrimSpace(m[1]); rest != "" {
+				return rest
+			}
+			for _, next := range lines[i+1:] {
+				next = strings.TrimSpace(next)
+				if next == "" || dashboardReviewEffortRE.MatchString(next) {
+					continue
+				}
+				return next
+			}
+		}
+	}
+	return ""
+}
+
+func fallbackDashboardTLDR(lines []string) string {
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || dashboardReviewEffortRE.MatchString(line) || dashboardTLDRLineRE.MatchString(line) {
+			continue
+		}
+		return line
+	}
+	return "-"
+}
+
+func markdownCell(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
+	}
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
 }
 
 func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) exitcode.Code {

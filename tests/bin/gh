@@ -18,15 +18,25 @@
 #         fanout uses -q .state and -q .body against the same endpoint,
 #         so fixtures are full issue objects (number/title/state/body/labels).
 #
+#   gh api --paginate --slurp repos/{owner}/{repo}/issues/<N>/comments?per_page=100
+#       — echoes $FIXTURE_DIR/gh-issue-comments-<N>.json verbatim.
+#         The dashboard edit path uses this to find an existing marker comment
+#         across every comments page before creating a new comment.
+#
+#   gh issue comment <N> --body-file -
+#       — consumes stdin and exits 0. The dashboard posting path uses this
+#         for first-time parent dashboard comments. --edit-last is rejected
+#         so tests pin marker-based idempotency instead of last-comment edits.
+#
 #   gh repo view --json <fields> [-q <filter>]
 #       — echoes $FIXTURE_DIR/gh-repo-view.json (with optional jq filter).
 #         Project mode calls this to resolve the cross-repo filter target
 #         (typical fixture: {"nameWithOwner":"butaosuinu/fanout"}).
 #
-#   gh pr view <N> --json number,additions,deletions,changedFiles,title
+#   gh pr view <N> --json number,additions,deletions,changedFiles,title,body
 #       — echoes $FIXTURE_DIR/gh-pr-view-<N>.json verbatim.
-#         --status --format table uses this to render human-readable PR
-#         diff rows without changing the default JSON status schema.
+#         --status --format table and --status --post-dashboard use this to
+#         render PR diff rows and extract dashboard TL;DR / review score.
 #
 #   gh release view -R butaosuinu/fanout --json tagName -q .tagName
 #       — echoes $FIXTURE_DIR/gh-release-view.json (with optional jq filter).
@@ -55,6 +65,10 @@
 #         closedByPullRequestsReferences pagination tests. The `num=`
 #         dispatch takes precedence over the project-mode cursor branch
 #         when only `num=` is present without `after=`.
+#
+#   gh api -X PATCH /repos/<owner>/<repo>/issues/comments/<id> -F body=@-
+#       — consumes stdin and exits 0. The dashboard edit path uses this when
+#         the parent issue already has a marker comment.
 #
 # Tier 1 "force_missing gh" still wins because helpers.bash rebuilds PATH
 # to a sanitized directory that excludes this shim.
@@ -120,6 +134,29 @@ case "${1:-}" in
       emit_fixture "$fixture/gh-issue-view-$num.json" "$jq_filter" "gh issue view $num"
       exit 0
     fi
+    if [[ "${2:-}" == "comment" ]]; then
+      num="${3:-}"
+      shift 3
+      body_file=""
+      while (( $# )); do
+        case "$1" in
+          --edit-last)
+            echo "gh shim: --edit-last must not be used for dashboard comments" >&2
+            exit 1;;
+          --body-file)
+            body_file="${2:-}"
+            shift 2;;
+          *)
+            shift;;
+        esac
+      done
+      if [[ "$body_file" != "-" ]]; then
+        echo "gh shim: issue comment $num requires --body-file -" >&2
+        exit 1
+      fi
+      cat >/dev/null
+      exit 0
+    fi
     ;;
   repo)
     if [[ "${2:-}" == "view" ]]; then
@@ -153,6 +190,39 @@ case "${1:-}" in
     fi
     ;;
   api)
+    if [[ "${2:-}" == "--paginate" && "${3:-}" == "--slurp" ]]; then
+      path="${4:-}"
+      if [[ "$path" == repos/\{owner\}/\{repo\}/issues/*/comments\?per_page=100 ]]; then
+        num="${path#repos/\{owner\}/\{repo\}/issues/}"
+        num="${num%%/comments?per_page=100}"
+        emit_fixture "$fixture/gh-issue-comments-$num.json" "" "gh api paginated issue comments $num"
+        exit 0
+      fi
+    fi
+    if [[ "${2:-}" == "-X" && "${3:-}" == "PATCH" ]]; then
+      path="${4:-}"
+      shift 4
+      body_field=""
+      while (( $# )); do
+        case "$1" in
+          -f|-F)
+            kv="${2:-}"
+            [[ "$kv" == body=* ]] && body_field="${kv#body=}"
+            shift 2;;
+          *) shift;;
+        esac
+      done
+      if [[ "$path" != /repos/*/issues/comments/* ]]; then
+        echo "gh shim: unexpected PATCH path: $path" >&2
+        exit 1
+      fi
+      if [[ "$body_field" != "@-" ]]; then
+        echo "gh shim: PATCH dashboard comment requires -F body=@-" >&2
+        exit 1
+      fi
+      cat >/dev/null
+      exit 0
+    fi
     if [[ "${2:-}" == "graphql" ]]; then
       shift 2
       # Two dispatch paths share this branch:

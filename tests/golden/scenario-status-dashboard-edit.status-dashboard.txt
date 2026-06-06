@@ -1,0 +1,42 @@
+{
+  "parent": 200,
+  "children": [
+    {
+      "num": 201,
+      "state": "CLOSED",
+      "prs": [
+        {
+          "number": 601,
+          "state": "MERGED",
+          "mergedAt": "2026-05-03T12:00:00Z"
+        }
+      ],
+      "has_merged_pr": true
+    },
+    {
+      "num": 202,
+      "state": "OPEN",
+      "prs": [
+        {
+          "number": 602,
+          "state": "OPEN",
+          "mergedAt": null
+        }
+      ],
+      "has_merged_pr": false
+    },
+    {
+      "num": 203,
+      "state": "OPEN",
+      "prs": [],
+      "has_merged_pr": false
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "merged": 1,
+    "pending": 2,
+    "all_merged": false
+  }
+}
+[ ok ] updated dashboard comment 987654321 on issue #200
