@@ -21,7 +21,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
-fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+       [--pr-visualization|--no-pr-visualization]
+fanout <parent-issue> --status [--format json|table]
+                                      # status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
@@ -141,13 +143,14 @@ environment or preflight failure, `2` bad invocation or incomparable version,
    positional arg via `internal/cliflags.Parse()`.
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
-   `--unblocked-only`, `--project-status` (project mode only), `--name`,
-   `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`,
+   `--unblocked-only`, `--project-status` (project mode only), `--format`,
+   `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`,
    `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
-   `--codex-plan-mode`, and `--no-codex-plan-mode`.
+   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, and
+   `--no-pr-visualization`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -195,7 +198,8 @@ Use this only when the user explicitly asks to wait until child PRs merge and
 then continue parent-scope work. After the real fanout run succeeds, poll
 `fanout --status <PARENT>` from the parent worktree. The command reads
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
-`summary.all_merged` for the recorded children.
+`summary.all_merged` for the recorded children. Use the default JSON format for
+automation; `--format table` is for human review of PR diff stats and links.
 
 1. Continue any parent-scope work that does not depend on the children's merged output.
 2. Periodically rerun `fanout --status <PARENT>`. Inspect `summary.all_merged`.
@@ -224,8 +228,9 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
 `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`,
-`--no-codex-plan-mode`). Set `FANOUT_STATE_PATH` to read a specific state file
-outside the repository checkout.
+`--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`). Set
+`FANOUT_STATE_PATH` to
+read a specific state file outside the repository checkout.
 
 ## Implicit Child Scan
 
@@ -286,8 +291,10 @@ Key points:
   before `/post-work-review`; `--briefing-code-review` /
   `--no-briefing-code-review` include or omit the Claude-only `/code-review`
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
-  the Claude-only Agent Teams hint. Defaults are all on, and these settings
-  are Go-implementation only.
+  the Claude-only Agent Teams hint; `--pr-visualization` /
+  `--no-pr-visualization` set the PR visualization switch reserved for
+  structured PR-body plus gated Mermaid briefing injection. Defaults are all on,
+  and these settings are Go-implementation only.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
   When enabled, the child pane runs fanout's hidden Codex app-server shim with
   `collaborationMode.mode=plan`; the first response should be a plan, and the

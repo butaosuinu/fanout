@@ -93,16 +93,23 @@ Options:
                       For --agent codex, start the child through fanout's
                       Codex app-server shim with collaborationMode.mode=plan
                       instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
+  --pr-visualization / --no-pr-visualization
+                      Set the PR visualization switch reserved for structured
+                      PR-body plus gated Mermaid briefing injection. Default: on.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.
   --dry-run           Print the git worktree, tmux split-window, and agent
                       launch commands without executing them.
   --debug             Enable extra diagnostic logging.
-  --status            Read-only mode. Print JSON describing each fanned-out
+  --status            Read-only mode. Print status describing each fanned-out
                       child issue recorded in .fanout/state.json, including
                       issue state and closed-by PR merge status, then exit.
                       Exclusive with action-bearing flags.
+  --format <json|table>
+                      Output format for --status. Default: json. The table
+                      format adds PR diff bars, changed-file counts,
+                      Conventional-Commit type, and PR links for human scans.
   --close <NUM>       Remove the recorded child worktree for issue <NUM>,
                       kill its tmux pane when still present, update state,
                       and run git worktree prune.
@@ -133,7 +140,7 @@ Exit codes (default flow):
   2 bad invocation
 
 Exit codes (--status):
-  0 success (JSON emitted; check summary.all_merged for state)
+  0 success (status emitted; check summary.all_merged in JSON mode for state)
   2 cannot enumerate children or state
   3 gh API call failed
 

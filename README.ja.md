@@ -193,7 +193,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
-fanout <parent-issue> --status      # .fanout/state.json 由来の JSON 状態を読む
+       [--pr-visualization|--no-pr-visualization]
+fanout <parent-issue> --status [--format json|table]
+                                      # .fanout/state.json 由来の状態を読む
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
 fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
@@ -229,10 +231,13 @@ shim は interactive Codex TUI ではなく headless な Plan turn です。plan
 `fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
 （または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
 子 issue を列挙し、各子について `gh api graphql` で issue state と
-`closedByPullRequestsReferences` を取得して、既存の JSON schema
-（`children[].prs` / `summary.all_merged` など）で出力します。dmux や live tmux
-session は不要です。現在の JSON schema は issue parent 用なので、Projects v2 URL
-を parent にした `--status` は拒否します。
+`closedByPullRequestsReferences` を取得して、既定では既存の JSON schema
+（`children[].prs` / `summary.all_merged` など）で出力します。`--format table`
+を渡すと、PR の差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを
+含む人間向けの一覧を出力します。JSON mode では PR 差分統計を取得しないため、
+既定の schema と API call 数は変わりません。dmux や live tmux session は不要です。
+現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
+`--status` は拒否します。
 
 Lifecycle コマンドも `.fanout/state.json` の記録を対象にします。任意の worktree を
 filesystem scan で探すことはしません。
@@ -287,8 +292,8 @@ exit code:
 
 ### Settings
 
-Go 実装では、fanout が briefing に入れる opinionated な 4 つの挙動をオン/オフ
-できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
+Go 実装では、fanout が briefing に入れる opinionated な 5 つの挙動スイッチを
+解決できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
 env には未対応です。後方互換のため、既定値はすべて `true` です。
 
 優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
@@ -303,7 +308,8 @@ env には未対応です。後方互換のため、既定値はすべて `true`
   "autoPullRequest": false,
   "prReviewGate": true,
   "briefingCodeReview": true,
-  "agentTeamsHint": false
+  "agentTeamsHint": false,
+  "prVisualization": true
 }
 ```
 
@@ -313,10 +319,14 @@ env には未対応です。後方互換のため、既定値はすべて `true`
 | PR レビューゲート通知 | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+| 構造化 PR/Mermaid briefing 注入用に予約された PR 可視化スイッチ | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
 不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
 将来の設定追加で古い fanout が壊れないようにするためです。
+
+`prVisualization` は他の設定と同じく解決・転送されますが、構造化 PR 可視化の
+briefing 注入が追加されるまでは現在の briefing 本文を変えません。
 
 `prReviewGate=false` だけは、子 Claude Code の hook を強制的に無効化する設定では
 ありません。代わりに Claude briefing へ、`/post-work-review` 前に `PreToolUse`
@@ -395,11 +405,11 @@ fanout 123 --no-auto-pr
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を
-# JSON で読む。副作用は無い。内部的には子ごとに `gh api graphql` を呼び、
-# `closedByPullRequestsReferences(first: 100)` をカーソル追従して取得する。
+# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を読む。
+# 既定は automation 向け JSON、table は PR 差分統計の人間向け表示。副作用は無い。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+fanout 123 --status --format table
 
 # 記録済み子 branch を parent worktree に fast-forward merge し、不要になった
 # child worktree/pane を後始末する

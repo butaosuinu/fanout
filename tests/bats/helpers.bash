@@ -41,6 +41,7 @@ setup() {
   unset FANOUT_PR_REVIEW_GATE
   unset FANOUT_BRIEFING_CODE_REVIEW
   unset FANOUT_AGENT_TEAMS_HINT
+  unset FANOUT_PR_VISUALIZATION
   unset FANOUT_AGENT
 
   # Most tests exercise the direct tmux runtime. Provide fake TMUX markers so

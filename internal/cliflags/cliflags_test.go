@@ -37,6 +37,7 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 		"--no-briefing-code-review", "--briefing-code-review",
 		"--agent-teams-hint", "--no-agent-teams-hint",
 		"--codex-plan-mode", "--no-codex-plan-mode",
+		"--no-pr-visualization", "--pr-visualization",
 	)
 
 	assertBoolPtr(t, "AutoPullRequest", cfg.AutoPullRequest, true)
@@ -44,6 +45,7 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "BriefingCodeReview", cfg.BriefingCodeReview, true)
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
 	assertBoolPtr(t, "CodexPlanMode", cfg.CodexPlanMode, false)
+	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
 }
 
 func TestParseCodexPlanModeFlag(t *testing.T) {
@@ -73,6 +75,40 @@ func TestParseWorktreeFlags(t *testing.T) {
 	}
 }
 
+func TestParseStatusFormat(t *testing.T) {
+	cfg := parseOK(t, "--status", "100", "--format", "table")
+	if cfg.Format != "table" {
+		t.Fatalf("Format = %q, want table", cfg.Format)
+	}
+
+	cfg = parseOK(t, "--status", "100")
+	if cfg.Format != DefaultFormat {
+		t.Fatalf("default Format = %q, want %q", cfg.Format, DefaultFormat)
+	}
+}
+
+func TestParseFormatRequiresStatus(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"100", "--format", "table"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Invocation {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--format can only be used with --status") {
+		t.Fatalf("stderr = %q, want --format requires --status message", got)
+	}
+}
+
+func TestParseFormatRejectsUnknownValue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"--status", "100", "--format", "yaml"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Env {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Env)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--format must be one of json,table") {
+		t.Fatalf("stderr = %q, want invalid --format message", got)
+	}
+}
+
 func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 	for _, tc := range []struct {
 		flag string
@@ -88,6 +124,8 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 		{"--no-agent-teams-hint", "--status cannot be combined with --no-agent-teams-hint"},
 		{"--codex-plan-mode", "--status cannot be combined with --codex-plan-mode"},
 		{"--no-codex-plan-mode", "--status cannot be combined with --no-codex-plan-mode"},
+		{"--pr-visualization", "--status cannot be combined with --pr-visualization"},
+		{"--no-pr-visualization", "--status cannot be combined with --no-pr-visualization"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

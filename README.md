@@ -196,7 +196,9 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
-fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+       [--pr-visualization|--no-pr-visualization]
+fanout <parent-issue> --status [--format json|table]
+                                      # status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
@@ -236,14 +238,16 @@ enumerate children already fanned out under that specific parent, queries
 each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
-carries `state`/`mergedAt` directly, and prints one JSON document on
-stdout. It does not require dmux or a live tmux session. Issue-mode parents
-only — Projects v2 URLs as parent are rejected up-front for the current JSON
-schema. In a state file that has fanned multiple parents, children of other
-parents are filtered out so `summary.all_merged` reflects only the requested
-parent. Set `FANOUT_STATE_PATH` to point directly at a state file when reading
-from outside the repository checkout; otherwise fanout reads
-`<git-root>/.fanout/state.json`.
+carries `state`/`mergedAt` directly, and prints one JSON document on stdout by
+default. Pass `--format table` for a human-readable overview that adds PR diff
+bars, changed-file counts, Conventional-Commit type, and PR links. JSON mode
+does not fetch PR diff stats, so the default API surface and schema stay stable.
+It does not require dmux or a live tmux session. Issue-mode parents only —
+Projects v2 URLs as parent are rejected up-front for the current JSON schema.
+In a state file that has fanned multiple parents, children of other parents are
+filtered out so `summary.all_merged` reflects only the requested parent. Set
+`FANOUT_STATE_PATH` to point directly at a state file when reading from outside
+the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
 
 ```json
 {
@@ -268,7 +272,8 @@ from outside the repository checkout; otherwise fanout reads
 
 `--status` exit codes are a separate lane from the default flow:
 
-- `0` — JSON emitted (check `summary.all_merged` for the actual state).
+- `0` — status emitted (check `summary.all_merged` in JSON mode for the
+  actual state).
 - `2` — cannot enumerate (bad invocation, unreadable or malformed state file,
   unusable project root, Projects v2 URL as parent). A missing state file is
   treated as an empty state.
@@ -281,7 +286,8 @@ from outside the repository checkout; otherwise fanout reads
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`,
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`,
-`--codex-plan-mode`, `--no-codex-plan-mode`).
+`--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`,
+`--no-pr-visualization`).
 
 ### Lifecycle commands
 
@@ -346,7 +352,7 @@ Exit codes:
 
 ### Settings
 
-The Go implementation can turn four opinionated briefing behaviors on or off.
+The Go implementation can resolve five opinionated briefing behavior switches.
 The deprecated Bash `./fanout` does not support these new flags, files, or env
 vars. Defaults are all `true` to preserve existing behavior.
 
@@ -363,7 +369,8 @@ parent repository root, not the child worktree. The user config path is
   "autoPullRequest": false,
   "prReviewGate": true,
   "briefingCodeReview": true,
-  "agentTeamsHint": false
+  "agentTeamsHint": false,
+  "prVisualization": true
 }
 ```
 
@@ -373,11 +380,16 @@ parent repository root, not the child worktree. The user config path is
 | PR review gate note | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+| PR visualization switch reserved for structured PR/Mermaid briefing injection | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 Environment values accept `1/true/yes/on` and `0/false/no/off`
 (case-insensitive). Invalid env values, unknown file keys, and non-boolean
 file values are warned and ignored so future settings do not break older
 fanout binaries.
+
+`prVisualization` is resolved and forwarded like the other settings, but the
+current briefing text is unchanged until the structured PR visualization
+briefing injection is added.
 
 `prReviewGate=false` does not forcibly disable child Claude Code hooks. It adds
 a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the `PreToolUse`
@@ -460,10 +472,11 @@ fanout 123 --no-auto-pr
 # Disable the Agent Teams hint globally for this shell
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# Read-only JSON status from .fanout/state.json: who's fanned out, what state
-# each child is in, and whether their closed-by PRs have merged. No side effects.
+# Read-only status from .fanout/state.json: default JSON for automation,
+# optional table for PR diff stats. No side effects.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+fanout 123 --status --format table
 
 # Fast-forward a recorded child branch into the parent worktree, then remove
 # the child worktree/pane after it is no longer needed.

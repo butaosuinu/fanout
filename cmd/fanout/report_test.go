@@ -46,12 +46,13 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 		PRReviewGate:       boolPtr(true),
 		BriefingCodeReview: boolPtr(false),
 		AgentTeamsHint:     boolPtr(false),
+		PRVisualization:    boolPtr(true),
 	}
 
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
-	want := "  fanout-go 700 --include '702,703' --only '702,703' --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --agent claude\n"
+	want := "  fanout-go 700 --include '702,703' --only '702,703' --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --pr-visualization --agent claude\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("summary output did not preserve settings flags:\nwant %q\noutput:\n%s", want, got)
 	}
