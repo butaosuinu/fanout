@@ -20,6 +20,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--codex-plan-mode|--no-codex-plan-mode]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
@@ -76,6 +77,9 @@ use this workflow directly.
    tmux`, tell the user to start or attach a tmux session first.
 3. An agent name is required. Pass `--agent <name>` or set `FANOUT_AGENT`.
    MVP supported agents are `claude` and `codex`.
+4. `--codex-plan-mode` is valid only with `--agent codex`. It starts a
+   headless Codex app-server Plan Mode turn, not the interactive Codex TUI;
+   when the plan completes, the child pane returns to a shell.
 
 ## Workflow
 
@@ -142,7 +146,8 @@ environment or preflight failure, `2` bad invocation or incomparable version,
    `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
-   `--agent-teams-hint`, and `--no-agent-teams-hint`.
+   `--agent-teams-hint`, `--no-agent-teams-hint`,
+   `--codex-plan-mode`, and `--no-codex-plan-mode`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -218,8 +223,9 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
-`--agent-teams-hint`, `--no-agent-teams-hint`). Set `FANOUT_STATE_PATH` to
-read a specific state file outside the repository checkout.
+`--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`,
+`--no-codex-plan-mode`). Set `FANOUT_STATE_PATH` to read a specific state file
+outside the repository checkout.
 
 ## Implicit Child Scan
 
@@ -282,6 +288,10 @@ Key points:
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
   the Claude-only Agent Teams hint. Defaults are all on, and these settings
   are Go-implementation only.
+- `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
+  When enabled, the child pane runs fanout's hidden Codex app-server shim with
+  `collaborationMode.mode=plan`; the first response should be a plan, and the
+  pane returns to a shell after that headless turn completes.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

@@ -89,6 +89,10 @@ Options:
   --agent-teams-hint / --no-agent-teams-hint
                       Include or omit the Claude-only Agent Teams hint in
                       child briefings. Default: on.
+  --codex-plan-mode / --no-codex-plan-mode
+                      For --agent codex, start the child through fanout's
+                      Codex app-server shim with collaborationMode.mode=plan
+                      instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.

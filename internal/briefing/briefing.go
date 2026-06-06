@@ -22,7 +22,10 @@ func Path(projectRoot string, num int) string {
 
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
-func Render(num int, title, body, agent string, s settings.Settings) string {
+func Render(num int, title, body, agent string, s settings.Settings, codexPlanMode bool) string {
+	if codexPlanMode {
+		return renderCodexPlanBriefing(num, title, body)
+	}
 	lines := []string{
 		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
 		"",
@@ -60,6 +63,26 @@ func Render(num int, title, body, agent string, s settings.Settings) string {
 		base += agentTeamsSection
 	}
 	return base
+}
+
+func renderCodexPlanBriefing(num int, title, body string) string {
+	lines := []string{
+		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
+		"",
+		fmt.Sprintf("Title: %s", title),
+		"",
+		"Body:",
+		body,
+		"",
+		"Requirements:",
+		"- You are starting in Codex Plan Mode through fanout's app-server shim.",
+		"- Inspect the issue and repository only as needed to produce an implementation plan.",
+		"- Do not modify files, create commits, push branches, or open pull requests in this turn.",
+		"- Your first response must be an implementation plan wrapped in <proposed_plan>...</proposed_plan>.",
+		"- Wait for the user to leave Plan Mode or explicitly ask you to implement before making changes.",
+		"- If the scope is ambiguous, call out the ambiguity in the plan instead of guessing.",
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 const reviewGateBypassSection = `

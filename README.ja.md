@@ -192,6 +192,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--codex-plan-mode|--no-codex-plan-mode]
 fanout <parent-issue> --status      # .fanout/state.json 由来の JSON 状態を読む
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
@@ -206,6 +207,22 @@ Projects v2 URL（Project モード、上記参照）のいずれか。`--projec
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
 `--popup-timeout` は旧ランタイム互換の deprecated flag で、direct tmux path
 では受け付けるだけで無視されます。
+
+### Codex Plan Mode
+
+`--codex-plan-mode` は `--agent codex` 専用の opt-in 起動モードです。通常の
+positional `codex "<prompt>"` ではなく、子ペインで fanout の隠し shim を起動し、
+その shim が `codex app-server --stdio` を駆動して、最初の turn を
+`collaborationMode.mode = "plan"` で開始します。子 briefing も Plan Mode 向けに
+差し替わり、`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn では
+ファイル編集・commit・push・PR 作成をしないことを明示します。
+
+この経路は Codex の experimental app-server protocol を使うため、通常の Codex
+起動へ黙って fallback しません。インストール済み Codex app-server が Plan
+collaboration mode を広告しない場合、子コマンドは明示エラーで終了します。この
+shim は interactive Codex TUI ではなく headless な Plan turn です。plan turn が
+完了すると pane はユーザーの shell に戻ります。実装へ進む場合は、その shell から
+通常の Codex CLI を起動してください。
 
 ### `--status` / lifecycle
 
@@ -367,6 +384,10 @@ fanout 123 --sleep 8
 
 # 子ペインで起動する agent CLI を選ぶ
 fanout 123 --agent codex
+
+# Codex 子ペインを通常の positional prompt ではなく app-server Plan Mode turn
+# として開始する。pane は plan を出力した後 shell に戻る。
+fanout 123 --agent codex --codex-plan-mode
 
 # この run だけ、子 briefing から PR 自動作成指示を外す
 fanout 123 --no-auto-pr

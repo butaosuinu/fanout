@@ -29,6 +29,7 @@ type paneRequest struct {
 	BranchName          string
 	OneLinePrompt       string
 	AgentCommand        string
+	CodexPlanMode       bool
 	Worktree            worktree.Plan
 }
 
@@ -137,6 +138,23 @@ func statePane(cfg *cliflags.Config, req paneRequest, paneID, worktreePath strin
 }
 
 func buildAgentCommand(cfg *cliflags.Config, prompt string) (string, error) {
+	if cfg.CodexPlanModeEnabled() {
+		if cfg.Agent != "codex" {
+			return "", fmt.Errorf("--codex-plan-mode requires --agent codex")
+		}
+		if cfg.DryRun {
+			return agent.BuildCodexPlanCommand("fanout", "codex", prompt), nil
+		}
+		fanoutPath, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("resolve fanout executable path for Codex Plan Mode shim: %w", err)
+		}
+		codexPath, err := agent.ResolveExecutable("codex")
+		if err != nil {
+			return "", err
+		}
+		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + agent.BuildCodexPlanCommand(fanoutPath, codexPath, prompt), nil
+	}
 	if cfg.DryRun {
 		return agent.BuildCommand(cfg.Agent, prompt)
 	}
@@ -148,11 +166,12 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	slugOverridden := false
 	branchOverride := ""
 	req := paneRequest{
-		Issue:        issue,
-		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		BriefingBody: briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, resolvedSettings),
-		ShortTitle:   shortIssueTitle(issue.Title),
-		Slug:         slug,
+		Issue:         issue,
+		BriefingPath:  briefing.Path(projectRoot, issue.Number),
+		BriefingBody:  briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, resolvedSettings, cfg.CodexPlanModeEnabled()),
+		ShortTitle:    shortIssueTitle(issue.Title),
+		Slug:          slug,
+		CodexPlanMode: cfg.CodexPlanModeEnabled(),
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -183,7 +202,11 @@ func shortIssueTitle(title string) string {
 }
 
 func oneLinePrompt(parentRef string, req paneRequest) string {
-	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and begin.", fanoutTagPrefix, req.Issue.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath)
+	action := "begin"
+	if req.CodexPlanMode {
+		action = "propose a plan"
+	}
+	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Issue.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
 }
 
 func logPaneRequest(req paneRequest, lg *log.Logger) {
@@ -196,10 +219,16 @@ func logPaneRequest(req paneRequest, lg *log.Logger) {
 	if req.DisplayNameOverride != "" {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
+	if req.CodexPlanMode {
+		lg.Dim("  codex-plan-mode -> app-server collaborationMode.mode=plan")
+	}
 }
 
 func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palette) {
 	fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
+	if req.CodexPlanMode {
+		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server collaborationMode.mode=plan\n", c.Dim, c.Reset)
+	}
 	if req.Worktree.Refresh {
 		details := req.Worktree.RefreshDetails
 		fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s fetch --quiet --no-tags origin %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.FetchBranch), c.Reset)

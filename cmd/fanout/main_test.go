@@ -239,6 +239,25 @@ func TestIsUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestIsCodexPlanShimRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "subcommand", args: []string{"__codex-plan-mode"}, want: true},
+		{name: "subcommand with flags", args: []string{"__codex-plan-mode", "--prompt", "p"}, want: true},
+		{name: "ordinary update", args: []string{"update"}, want: false},
+		{name: "empty", args: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCodexPlanShimRequest(tc.args); got != tc.want {
+				t.Fatalf("isCodexPlanShimRequest(%#v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVersionLineUsesInjectedValues(t *testing.T) {
 	oldVersion := version
 	oldCommit := commit

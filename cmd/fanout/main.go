@@ -39,6 +39,9 @@ func main() {
 	if isUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdUpdate(os.Args[2:], version, ghissue.Runner{}, lg)))
 	}
+	if isCodexPlanShimRequest(os.Args[1:]) {
+		os.Exit(int(cmdCodexPlanShim(os.Args[2:], lg)))
+	}
 	if isCheckUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
 	}
@@ -86,6 +89,10 @@ func isCheckUpdateRequest(args []string) bool {
 
 func isUpdateRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "update"
+}
+
+func isCodexPlanShimRequest(args []string) bool {
+	return len(args) > 0 && args[0] == agent.CodexPlanShimSubcommand
 }
 
 func versionLine() string {
@@ -218,6 +225,10 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 	}
 	if err := agent.ValidateKnown(cfg.Agent); err != nil {
 		lg.Err("%s", err.Error())
+		return nil, exitcode.Env
+	}
+	if cfg.CodexPlanModeEnabled() && cfg.Agent != "codex" {
+		lg.Err("--codex-plan-mode requires --agent codex")
 		return nil, exitcode.Env
 	}
 	if !cfg.DryRun {

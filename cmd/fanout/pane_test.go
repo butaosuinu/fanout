@@ -75,3 +75,36 @@ func TestNewPaneRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 		t.Fatalf("prompt = %q, want parent-qualified slug", got.OneLinePrompt)
 	}
 }
+
+func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: boolPtr(true)}
+	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
+
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+
+	if !got.CodexPlanMode {
+		t.Fatal("CodexPlanMode = false, want true")
+	}
+	if !strings.Contains(got.OneLinePrompt, "read /tmp/fanout-repo-501.md and propose a plan.") {
+		t.Fatalf("prompt = %q, want plan action", got.OneLinePrompt)
+	}
+	if !strings.Contains(got.BriefingBody, "<proposed_plan>...</proposed_plan>") {
+		t.Fatalf("briefing missing proposed_plan requirement:\n%s", got.BriefingBody)
+	}
+	if strings.Contains(got.BriefingBody, "commit and push") || strings.Contains(got.BriefingBody, "Open a pull request") {
+		t.Fatalf("plan briefing should not ask for implementation workflow:\n%s", got.BriefingBody)
+	}
+}
+
+func TestBuildAgentCommandUsesCodexPlanShimInDryRun(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: boolPtr(true)}
+
+	got, err := buildAgentCommand(cfg, "[fanout #1] plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fanout __codex-plan-mode --codex codex --prompt '[fanout #1] plan'"
+	if got != want {
+		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
