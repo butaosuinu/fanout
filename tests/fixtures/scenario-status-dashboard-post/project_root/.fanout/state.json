@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "200",
+      "issueNum": 201,
+      "slug": "first-mixed",
+      "branchName": "fanout/first-mixed-201",
+      "paneId": "%9",
+      "agent": "claude",
+      "displayName": "first-mixed",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #201 of #200] first-mixed: read /tmp/fanout-project_root-201.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "200",
+      "issueNum": 202,
+      "slug": "second-mixed",
+      "branchName": "fanout/second-mixed-202",
+      "paneId": "%10",
+      "agent": "claude",
+      "displayName": "second-mixed",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #202 of #200] second-mixed: read /tmp/fanout-project_root-202.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "200",
+      "issueNum": 203,
+      "slug": "third-mixed",
+      "branchName": "fanout/third-mixed-203",
+      "paneId": "%11",
+      "agent": "claude",
+      "displayName": "third-mixed",
+      "worktreePath": "/tmp/ignored",
+      "prompt": "[fanout #203 of #200] third-mixed: read /tmp/fanout-project_root-203.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}

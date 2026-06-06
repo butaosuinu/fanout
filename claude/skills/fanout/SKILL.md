@@ -19,8 +19,8 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--pr-visualization|--no-pr-visualization]
-fanout <parent-issue> --status [--format json|table]
-                                      # status of fanned children, no side effects
+fanout <parent-issue> --status [--format json|table] [--post-dashboard]
+                                      # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
@@ -113,7 +113,7 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
   `2` bad invocation or incomparable version, `3` latest-release lookup failed.
 - **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
-- **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--format`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`, `--no-pr-visualization`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag. If neither the user nor the environment supplies an agent, add `--agent claude`.
+- **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--format`, `--post-dashboard`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`, `--no-pr-visualization`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag. If neither the user nor the environment supplies an agent, add `--agent claude`.
 - `--only <list>` / `--skip <list>` take a comma-separated list of issue numbers (e.g. `--only 4,7,8,10`). They are mutually exclusive. `--only` numbers not in the parent's OPEN child set are warned and ignored by the CLI — if the user names issues that aren't children, relay that warning instead of silently retrying.
 - `--include <list>` takes a comma-separated list of issue numbers to force-add to the children set when the Sub-issues API and parent-body task-list scan don't surface them (e.g. `--include 123,456`). This is the channel for numbers produced by the "Body scan for implicit children" step above. Numbers that end up CLOSED or don't exist are warned and skipped by the CLI. Combines cleanly with `--only`/`--skip` (included first, then filtered).
 - `--unblocked-only` defers children whose blockers are still OPEN (blockers are parsed from the child body's `## Blocked by` section, a `(blocked by #X, #Y)` trailer on the parent's task-list row, or the `blocked` label as a weak signal). Prefer this over hand-maintained `--only` wave lists when the parent has explicit blocker annotations — a periodic rerun of the same command walks Wave 1 → 2 → … as blocker PRs merge. In project mode the parent-row trailer source is unavailable (no parent body), so blockers come only from the child body section and the `blocked` label.
@@ -145,6 +145,8 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
 `summary.all_merged` for the recorded children. Use the default JSON format for
 automation; `--format table` is for human review of PR diff stats and links.
+Use `--post-dashboard` only when the user explicitly wants a parent issue
+rollup comment; it writes to GitHub even though it is attached to `--status`.
 
 1. Continue any parent-scope work that does not depend on the children's merged output.
 2. When you reach a phase that requires the children's merged output, poll status via `ScheduleWakeup` with the autonomous-loop sentinel:
