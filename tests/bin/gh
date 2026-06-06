@@ -23,6 +23,11 @@
 #         Project mode calls this to resolve the cross-repo filter target
 #         (typical fixture: {"nameWithOwner":"butaosuinu/fanout"}).
 #
+#   gh pr view <N> --json number,additions,deletions,changedFiles,title
+#       — echoes $FIXTURE_DIR/gh-pr-view-<N>.json verbatim.
+#         --status --format table uses this to render human-readable PR
+#         diff rows without changing the default JSON status schema.
+#
 #   gh release view -R butaosuinu/fanout --json tagName -q .tagName
 #       — echoes $FIXTURE_DIR/gh-release-view.json (with optional jq filter).
 #         --check-update calls this to resolve the latest release tag without
@@ -121,6 +126,15 @@ case "${1:-}" in
       shift 2
       jq_filter="$(extract_jq_filter "$@")"
       emit_fixture "$fixture/gh-repo-view.json" "$jq_filter" "gh repo view"
+      exit 0
+    fi
+    ;;
+  pr)
+    if [[ "${2:-}" == "view" ]]; then
+      num="${3:-}"
+      shift 3
+      jq_filter="$(extract_jq_filter "$@")"
+      emit_fixture "$fixture/gh-pr-view-$num.json" "$jq_filter" "gh pr view $num"
       exit 0
     fi
     ;;

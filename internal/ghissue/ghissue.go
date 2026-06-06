@@ -36,6 +36,14 @@ type PRRef struct {
 	MergedAt *string `json:"mergedAt"`
 }
 
+type PRDiffStat struct {
+	Number       int    `json:"number"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	Title        string `json:"title"`
+}
+
 // Runner abstracts `gh` invocation so tests can swap in a fake. The Tier 2
 // shim runs the real `gh` binary path through PATH, so the default execRunner
 // is sufficient and tests don't actually need to swap.
@@ -207,6 +215,18 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 		cursor = next
 	}
 	return state, prs, nil
+}
+
+func (r Runner) PRDiffStat(num int) (PRDiffStat, error) {
+	out, err := r.gh("pr", "view", strconv.Itoa(num), "--json", "number,additions,deletions,changedFiles,title")
+	if err != nil {
+		return PRDiffStat{}, err
+	}
+	var stat PRDiffStat
+	if err := json.Unmarshal(out, &stat); err != nil {
+		return PRDiffStat{}, fmt.Errorf("parse gh pr view %d: %w", num, err)
+	}
+	return stat, nil
 }
 
 // HydrateBodyLabels fetches body and labels for an issue and merges them into
