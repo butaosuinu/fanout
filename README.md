@@ -195,6 +195,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--pr-visualization|--no-pr-visualization]
 fanout <parent-issue> --status [--format json|table]
                                       # status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
@@ -265,7 +266,8 @@ the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
 `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`,
-`--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`).
+`--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`,
+`--pr-visualization`, `--no-pr-visualization`).
 
 ### Lifecycle commands
 
@@ -330,7 +332,7 @@ Exit codes:
 
 ### Settings
 
-The Go implementation can turn four opinionated briefing behaviors on or off.
+The Go implementation can resolve five opinionated briefing behavior switches.
 The deprecated Bash `./fanout` does not support these new flags, files, or env
 vars. Defaults are all `true` to preserve existing behavior.
 
@@ -347,7 +349,8 @@ parent repository root, not the child worktree. The user config path is
   "autoPullRequest": false,
   "prReviewGate": true,
   "briefingCodeReview": true,
-  "agentTeamsHint": false
+  "agentTeamsHint": false,
+  "prVisualization": true
 }
 ```
 
@@ -357,11 +360,16 @@ parent repository root, not the child worktree. The user config path is
 | PR review gate note | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+| PR visualization switch reserved for structured PR/Mermaid briefing injection | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 Environment values accept `1/true/yes/on` and `0/false/no/off`
 (case-insensitive). Invalid env values, unknown file keys, and non-boolean
 file values are warned and ignored so future settings do not break older
 fanout binaries.
+
+`prVisualization` is resolved and forwarded like the other settings, but the
+current briefing text is unchanged until the structured PR visualization
+briefing injection is added.
 
 `prReviewGate=false` does not forcibly disable child Claude Code hooks. It adds
 a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the `PreToolUse`

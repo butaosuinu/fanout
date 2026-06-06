@@ -192,6 +192,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--pr-visualization|--no-pr-visualization]
 fanout <parent-issue> --status [--format json|table]
                                       # .fanout/state.json 由来の状態を読む
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
@@ -274,8 +275,8 @@ exit code:
 
 ### Settings
 
-Go 実装では、fanout が briefing に入れる opinionated な 4 つの挙動をオン/オフ
-できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
+Go 実装では、fanout が briefing に入れる opinionated な 5 つの挙動スイッチを
+解決できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
 env には未対応です。後方互換のため、既定値はすべて `true` です。
 
 優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
@@ -290,7 +291,8 @@ env には未対応です。後方互換のため、既定値はすべて `true`
   "autoPullRequest": false,
   "prReviewGate": true,
   "briefingCodeReview": true,
-  "agentTeamsHint": false
+  "agentTeamsHint": false,
+  "prVisualization": true
 }
 ```
 
@@ -300,10 +302,14 @@ env には未対応です。後方互換のため、既定値はすべて `true`
 | PR レビューゲート通知 | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
+| 構造化 PR/Mermaid briefing 注入用に予約された PR 可視化スイッチ | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
 不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
 将来の設定追加で古い fanout が壊れないようにするためです。
+
+`prVisualization` は他の設定と同じく解決・転送されますが、構造化 PR 可視化の
+briefing 注入が追加されるまでは現在の briefing 本文を変えません。
 
 `prReviewGate=false` だけは、子 Claude Code の hook を強制的に無効化する設定では
 ありません。代わりに Claude briefing へ、`/post-work-review` 前に `PreToolUse`

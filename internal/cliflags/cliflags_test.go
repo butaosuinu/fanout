@@ -36,12 +36,14 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 		"--pr-review-gate", "--no-pr-review-gate",
 		"--no-briefing-code-review", "--briefing-code-review",
 		"--agent-teams-hint", "--no-agent-teams-hint",
+		"--no-pr-visualization", "--pr-visualization",
 	)
 
 	assertBoolPtr(t, "AutoPullRequest", cfg.AutoPullRequest, true)
 	assertBoolPtr(t, "PRReviewGate", cfg.PRReviewGate, false)
 	assertBoolPtr(t, "BriefingCodeReview", cfg.BriefingCodeReview, true)
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
+	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
 }
 
 func TestParseWorktreeFlags(t *testing.T) {
@@ -110,6 +112,8 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 		{"--no-briefing-code-review", "--status cannot be combined with --no-briefing-code-review"},
 		{"--agent-teams-hint", "--status cannot be combined with --agent-teams-hint"},
 		{"--no-agent-teams-hint", "--status cannot be combined with --no-agent-teams-hint"},
+		{"--pr-visualization", "--status cannot be combined with --pr-visualization"},
+		{"--no-pr-visualization", "--status cannot be combined with --no-pr-visualization"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
