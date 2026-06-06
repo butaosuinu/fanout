@@ -11,7 +11,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-a-401
   branch -> fanout/included-child-a-401
   base -> main
-  briefing size: 4123 bytes
+  briefing size: 4205 bytes
     $ git -C <REPO>/tests/fixtures/scenario-include/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-include/project_root branch -f main refs/remotes/origin/main
@@ -29,7 +29,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-include/project_root/.fanout/worktrees/included-child-b-402
   branch -> fanout/included-child-b-402
   base -> main
-  briefing size: 4123 bytes
+  briefing size: 4205 bytes
     $ git -C <REPO>/tests/fixtures/scenario-include/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-include/project_root branch -f main refs/remotes/origin/main

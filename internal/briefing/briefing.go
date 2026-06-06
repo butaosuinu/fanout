@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/settings"
 )
 
@@ -22,7 +23,7 @@ func Path(projectRoot string, num int) string {
 
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
-func Render(num int, title, body, agent string, s settings.Settings) string {
+func Render(num int, title, body, agent, baseBranch string, s settings.Settings) string {
 	lines := []string{
 		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
 		"",
@@ -44,7 +45,7 @@ func Render(num int, title, body, agent string, s settings.Settings) string {
 
 	base := strings.Join(lines, "\n") + "\n"
 	if s.AutoPullRequest && s.PRVisualization {
-		base += prVisualizationSection
+		base += prVisualizationSection(num, baseBranch)
 	}
 	if agent == "codex" {
 		return base + codexReviewSection(s.AutoPullRequest)
@@ -70,20 +71,22 @@ The PR review gate is disabled for this fanout run. If ` + "`gh pr create`" + ` 
 before ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
 `
 
-const prVisualizationSection = `
+const prVisualizationSectionTemplate = `
 When opening the PR, structure the PR body in this order:
 1. **TL;DR** — 1-2 sentences plus ` + "`Review effort: <0-5>`" + `, where 0 is mechanical and 5 needs careful review.
 2. **Why** — restate the actual issue/sub-issue intent in your own words. Do not invent motivation; if the issue is terse, say that it is terse.
 3. **Changes by file** — inside ` + "`<details><summary>Changed files</summary>`" + `, add a ` + "`File | What changed | Why`" + ` table that lists only files you actually touched.
 4. **Risk** — add a ` + "`> [!WARNING]`" + ` block only for real risks. Do not add filler such as "no risk".
 5. **Test plan** — list the lint/test commands you ran and their results.
+6. **Footer** — end with ` + "`Closes #%d`" + ` on its own line so GitHub closes the child issue on merge.
 
 Ground every substantive claim in the branch diff and current worktree. Before
-opening the PR, compare the PR body with ` + "`git diff --name-only <base>...HEAD`" + `
-(use this run's base branch, usually ` + "`origin/main`" + `) and ` + "`git status --short`" + `, then
+opening the PR, compare the PR body with ` + "`git diff --name-only %s...HEAD`" + `
+and ` + "`git status --short`" + `, then
 retry the edit until they match. If you are still pre-commit, also check
-` + "`git diff --name-only`" + `. When claiming behavior changed, cite file:line. Keep the child
-PR atomic; do not mix in unrelated base-branch changes.
+` + "`git diff --cached --name-only`" + ` and ` + "`git diff --name-only`" + `. When claiming behavior
+changed, cite file:line. Keep the child PR atomic; do not mix in unrelated
+base-branch changes.
 
 **Diagram gate**: add exactly one ` + "```mermaid" + ` block only when behavior, call
 flow, or schema changed. Do not add a diagram for refactor/rename/docs/format/
@@ -93,6 +96,13 @@ final diff after test/golden retries, and (c) any untraceable or too-thin edge
 is dropped; omit the whole diagram if it does not carry review value. GitHub
 renders ` + "```mermaid" + ` directly, so do not use image-generation tools.
 `
+
+func prVisualizationSection(num int, baseBranch string) string {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	return fmt.Sprintf(prVisualizationSectionTemplate, num, agent.ShellQuote(baseBranch))
+}
 
 func codexReviewSection(autoPullRequest bool) string {
 	if autoPullRequest {

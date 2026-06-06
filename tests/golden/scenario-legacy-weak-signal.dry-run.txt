@@ -11,7 +11,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/first-task-601
   branch -> fanout/first-task-601
   base -> main
-  briefing size: 4111 bytes
+  briefing size: 4193 bytes
     $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root branch -f main refs/remotes/origin/main
@@ -29,7 +29,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root/.fanout/worktrees/second-task-602
   branch -> fanout/second-task-602
   base -> main
-  briefing size: 4113 bytes
+  briefing size: 4195 bytes
     $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-legacy-weak-signal/project_root branch -f main refs/remotes/origin/main

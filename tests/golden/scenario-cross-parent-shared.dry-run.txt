@@ -10,7 +10,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/shared-child-parent-200-501
   branch -> fanout/shared-child-parent-200-501
   base -> main
-  briefing size: 4125 bytes
+  briefing size: 4207 bytes
     $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root branch -f main refs/remotes/origin/main
@@ -28,7 +28,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root/.fanout/worktrees/b-only-child-502
   branch -> fanout/b-only-child-502
   base -> main
-  briefing size: 4119 bytes
+  briefing size: 4201 bytes
     $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-cross-parent-shared/project_root branch -f main refs/remotes/origin/main

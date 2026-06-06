@@ -45,13 +45,6 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		return false
 	}
 	req.AgentCommand = agentCmd
-	req.Worktree = worktree.BuildPlan(worktree.Options{
-		ProjectRoot: info.ProjectRoot,
-		Slug:        req.Slug,
-		BranchName:  req.BranchName,
-		BaseBranch:  cfg.BaseBranch,
-		NoRefresh:   cfg.NoRefresh,
-	})
 	if req.Worktree.Refresh && req.Worktree.RefreshError != nil {
 		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, req.Worktree.RefreshError)
 		return false
@@ -73,7 +66,7 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		ProjectRoot: info.ProjectRoot,
 		Slug:        req.Slug,
 		BranchName:  req.BranchName,
-		BaseBranch:  cfg.BaseBranch,
+		BaseBranch:  req.Worktree.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
 	if err != nil {
@@ -150,7 +143,6 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	req := paneRequest{
 		Issue:        issue,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		BriefingBody: briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, resolvedSettings),
 		ShortTitle:   shortIssueTitle(issue.Title),
 		Slug:         slug,
 	}
@@ -166,6 +158,14 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		req.Slug = naming.QualifySlugForParent(req.Slug, cfg.ParentRef, issue.Number)
 	}
 	req.BranchName = naming.BranchName(branchOverride, cfg.BranchPrefix, req.Slug)
+	req.Worktree = worktree.BuildPlan(worktree.Options{
+		ProjectRoot: projectRoot,
+		Slug:        req.Slug,
+		BranchName:  req.BranchName,
+		BaseBranch:  cfg.BaseBranch,
+		NoRefresh:   cfg.NoRefresh,
+	})
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings)
 	req.OneLinePrompt = oneLinePrompt(cfg.ParentRef, req)
 	return req
 }
