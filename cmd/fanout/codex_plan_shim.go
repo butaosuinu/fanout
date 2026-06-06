@@ -364,6 +364,8 @@ func handleServerRequest(enc *json.Encoder, msg appServerMessage) error {
 			"permissions": map[string]any{},
 			"scope":       "turn",
 		})
+	case "mcpServer/elicitation/request":
+		return sendAppResponse(enc, msg.ID, map[string]any{"action": "decline"})
 	case "execCommandApproval", "applyPatchApproval":
 		return sendAppResponse(enc, msg.ID, map[string]any{"decision": "denied"})
 	}

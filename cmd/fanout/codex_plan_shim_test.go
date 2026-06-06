@@ -74,6 +74,12 @@ case "$input_response" in
   *'"id":"input-1"'*'"answers":{"scope":{"answers":["fanout Codex Plan Mode is running non-interactively;'*) ;;
   *) echo "missing user input fallback answer" >&2; exit 52 ;;
 esac
+printf '%s\n' '{"id":"elicitation-1","method":"mcpServer/elicitation/request","params":{"server":"test-mcp","message":"Need input"}}'
+read elicitation_response
+case "$elicitation_response" in
+  *'"id":"elicitation-1"'*'"action":"decline"'*) ;;
+  *) echo "missing MCP elicitation decline" >&2; exit 53 ;;
+esac
 printf '%s\n' '{"method":"item/plan/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"plan-1","delta":"draft plan"}}'
 printf '%s\n' '{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":true,"error":{"message":"temporary disconnect","additionalDetails":"retrying"}}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[{"type":"plan","id":"plan-1","text":"final plan"}],"itemsView":"complete","status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
