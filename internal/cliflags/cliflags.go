@@ -59,6 +59,7 @@ type Config struct {
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
+	PRVisualization    *bool
 }
 
 // NameOverride represents a parsed `--name NUM=slug-hint|display-name|branch`
@@ -181,6 +182,8 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--no-briefing-code-review": func(cfg *Config) { cfg.BriefingCodeReview = boolPtr(false) },
 		"--agent-teams-hint":        func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(true) },
 		"--no-agent-teams-hint":     func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(false) },
+		"--pr-visualization":        func(cfg *Config) { cfg.PRVisualization = boolPtr(true) },
+		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = boolPtr(false) },
 	}
 
 	requireValue := func(flag string, i int) (string, bool) {
@@ -347,6 +350,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
 		case cfg.AgentTeamsHint != nil:
 			return statusConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
+		case cfg.PRVisualization != nil:
+			return statusConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case state.sleepExplicit:
 			return statusConflict(lg, "--sleep")
 		case state.popupExplicit:
@@ -402,6 +407,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return lifecycleConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
 		case cfg.AgentTeamsHint != nil:
 			return lifecycleConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
+		case cfg.PRVisualization != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case state.sleepExplicit:
 			return lifecycleConflict(lg, "--sleep")
 		case state.popupExplicit:

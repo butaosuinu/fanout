@@ -20,6 +20,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--pr-visualization|--no-pr-visualization]
 fanout <parent-issue> --status      # JSON status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
@@ -142,7 +143,8 @@ environment or preflight failure, `2` bad invocation or incomparable version,
    `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
-   `--agent-teams-hint`, and `--no-agent-teams-hint`.
+   `--agent-teams-hint`, `--no-agent-teams-hint`,
+   `--pr-visualization`, and `--no-pr-visualization`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -218,7 +220,8 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
-`--agent-teams-hint`, `--no-agent-teams-hint`). Set `FANOUT_STATE_PATH` to
+`--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`,
+`--no-pr-visualization`). Set `FANOUT_STATE_PATH` to
 read a specific state file outside the repository checkout.
 
 ## Implicit Child Scan
@@ -280,8 +283,10 @@ Key points:
   before `/post-work-review`; `--briefing-code-review` /
   `--no-briefing-code-review` include or omit the Claude-only `/code-review`
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
-  the Claude-only Agent Teams hint. Defaults are all on, and these settings
-  are Go-implementation only.
+  the Claude-only Agent Teams hint; `--pr-visualization` /
+  `--no-pr-visualization` set the PR visualization switch reserved for
+  structured PR-body plus gated Mermaid briefing injection. Defaults are all on,
+  and these settings are Go-implementation only.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

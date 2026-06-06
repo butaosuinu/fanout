@@ -89,6 +89,9 @@ Options:
   --agent-teams-hint / --no-agent-teams-hint
                       Include or omit the Claude-only Agent Teams hint in
                       child briefings. Default: on.
+  --pr-visualization / --no-pr-visualization
+                      Set the PR visualization switch reserved for structured
+                      PR-body plus gated Mermaid briefing injection. Default: on.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.

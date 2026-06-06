@@ -136,7 +136,8 @@ func settingsFlags(cfg *cliflags.Config) string {
 	return boolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest) +
 		boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate) +
 		boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview) +
-		boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint)
+		boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint) +
+		boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization)
 }
 
 func worktreeFlags(cfg *cliflags.Config) string {

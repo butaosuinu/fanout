@@ -31,8 +31,9 @@ Build the binary with `make build-go` and validate with `make test`.
 - Settings (`--auto-pr` / `--no-auto-pr`, `--pr-review-gate` /
   `--no-pr-review-gate`, `--briefing-code-review` /
   `--no-briefing-code-review`, `--agent-teams-hint` /
-  `--no-agent-teams-hint`, plus `.fanout/config.json`, user config, and
-  `FANOUT_*` env vars) control generated child briefings.
+  `--no-agent-teams-hint`, `--pr-visualization` /
+  `--no-pr-visualization`, plus `.fanout/config.json`, user config, and
+  `FANOUT_*` env vars) control or reserve generated child briefing switches.
 - Black-box tests: `make test` builds `./fanout-go` and runs Go tests plus
   Tier 1 flags/prereqs and Tier 2 dry-run/status goldens. Regenerate Tier 2
   goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` after intentional

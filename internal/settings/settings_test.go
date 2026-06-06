@@ -27,26 +27,46 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{
   "autoPullRequest": false,
   "briefingCodeReview": false,
-  "agentTeamsHint": false
+  "agentTeamsHint": false,
+  "prVisualization": true
 }`)
 	writeConfig(t, RepoConfigPath(repo), `{
   "autoPullRequest": true,
   "prReviewGate": true,
-  "agentTeamsHint": true
+  "agentTeamsHint": true,
+  "prVisualization": false
 }`)
 	t.Setenv("FANOUT_AUTO_PR", "off")
 	t.Setenv("FANOUT_PR_REVIEW_GATE", "0")
+	t.Setenv("FANOUT_PR_VISUALIZATION", "yes")
 
-	got := Resolve(repo, CLIOverrides{AutoPullRequest: boolp(true)}, t.Fatalf)
+	got := Resolve(repo, CLIOverrides{
+		AutoPullRequest: boolp(true),
+		PRVisualization: boolp(false),
+	}, t.Fatalf)
 
 	want := Settings{
 		AutoPullRequest:    true,
 		PRReviewGate:       false,
 		BriefingCodeReview: false,
 		AgentTeamsHint:     true,
+		PRVisualization:    false,
 	}
 	if got != want {
 		t.Fatalf("Resolve() = %#v, want %#v", got, want)
+	}
+
+	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if !got.PRVisualization {
+		t.Fatalf("PRVisualization = false, want true from CLI-free env override")
+	}
+
+	if err := os.Unsetenv("FANOUT_PR_VISUALIZATION"); err != nil {
+		t.Fatalf("Unsetenv(FANOUT_PR_VISUALIZATION): %v", err)
+	}
+	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if got.PRVisualization {
+		t.Fatalf("PRVisualization = true, want false from repo override")
 	}
 }
 
@@ -57,6 +77,7 @@ func TestResolveWarnsAndIgnoresInvalidInputs(t *testing.T) {
 	writeConfig(t, RepoConfigPath(repo), `{
   "autoPullRequest": "nope",
   "prReviewGate": null,
+  "prVisualization": 42,
   "unknownKey": true
 }`)
 	t.Setenv("FANOUT_AGENT_TEAMS_HINT", "sometimes")
@@ -71,6 +92,7 @@ func TestResolveWarnsAndIgnoresInvalidInputs(t *testing.T) {
 	}
 	assertWarningContains(t, warnings, "autoPullRequest must be a boolean")
 	assertWarningContains(t, warnings, "prReviewGate must be a boolean")
+	assertWarningContains(t, warnings, "prVisualization must be a boolean")
 	assertWarningContains(t, warnings, "unknown key \"unknownKey\"")
 	assertWarningContains(t, warnings, "settings env FANOUT_AGENT_TEAMS_HINT: invalid boolean \"sometimes\"")
 }
@@ -99,6 +121,7 @@ func clearEnv(t *testing.T) {
 		"FANOUT_PR_REVIEW_GATE",
 		"FANOUT_BRIEFING_CODE_REVIEW",
 		"FANOUT_AGENT_TEAMS_HINT",
+		"FANOUT_PR_VISUALIZATION",
 	} {
 		old, hadOld := os.LookupEnv(name)
 		os.Unsetenv(name)
