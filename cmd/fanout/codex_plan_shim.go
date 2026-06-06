@@ -80,7 +80,7 @@ func parseCodexPlanShimArgs(args []string, lg *log.Logger) (codexPlanShimConfig,
 }
 
 func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
-	cmd := exec.Command(cfg.CodexPath, "app-server", "--stdio")
+	cmd := exec.Command(cfg.CodexPath, "app-server")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open app-server stdin: %w", err)
@@ -94,7 +94,7 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 		return fmt.Errorf("open app-server stderr: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s app-server --stdio: %w", cfg.CodexPath, err)
+		return fmt.Errorf("start %s app-server: %w", cfg.CodexPath, err)
 	}
 
 	waited := false
@@ -134,7 +134,7 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	if _, err := readUntilResponse(scanner, "fanout-init", stream); err != nil {
+	if _, err := readUntilResponse(scanner, enc, "fanout-init", stream); err != nil {
 		return err
 	}
 	if err := sendAppNotification(enc, "initialized"); err != nil {
@@ -144,7 +144,7 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 	if err := sendAppRequest(enc, "fanout-modes", "collaborationMode/list", map[string]any{}); err != nil {
 		return err
 	}
-	modeResult, err := readUntilResponse(scanner, "fanout-modes", stream)
+	modeResult, err := readUntilResponse(scanner, enc, "fanout-modes", stream)
 	if err != nil {
 		return err
 	}
@@ -157,16 +157,24 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve current directory: %w", err)
 	}
-	if err := sendAppRequest(enc, "fanout-thread", "thread/start", map[string]any{
-		"cwd": cwd,
-	}); err != nil {
-		return err
-	}
-	threadResultRaw, err := readUntilResponse(scanner, "fanout-thread", stream)
+	model, err := resolveCodexModel(enc, scanner, stream, cwd)
 	if err != nil {
 		return err
 	}
-	threadID, model, err := parseThreadStart(threadResultRaw)
+
+	if err := sendAppRequest(enc, "fanout-thread", "thread/start", map[string]any{
+		"cwd":            cwd,
+		"model":          model,
+		"approvalPolicy": "never",
+		"sandbox":        "read-only",
+	}); err != nil {
+		return err
+	}
+	threadResultRaw, err := readUntilResponse(scanner, enc, "fanout-thread", stream)
+	if err != nil {
+		return err
+	}
+	threadID, err := parseThreadStart(threadResultRaw)
 	if err != nil {
 		return err
 	}
@@ -178,7 +186,12 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 			"text":          cfg.Prompt,
 			"text_elements": []any{},
 		}},
-		"cwd": cwd,
+		"cwd":            cwd,
+		"approvalPolicy": "never",
+		"sandboxPolicy": map[string]any{
+			"type":          "readOnly",
+			"networkAccess": false,
+		},
 		"collaborationMode": map[string]any{
 			"mode": "plan",
 			"settings": map[string]any{
@@ -190,10 +203,10 @@ func runCodexPlanShim(cfg codexPlanShimConfig, stdout, stderr io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	if _, err := readUntilResponse(scanner, "fanout-turn", stream); err != nil {
+	if _, err := readUntilResponse(scanner, enc, "fanout-turn", stream); err != nil {
 		return err
 	}
-	if err := readUntilTurnCompleted(scanner, stream); err != nil {
+	if err := readUntilTurnCompleted(scanner, enc, stream); err != nil {
 		return err
 	}
 
@@ -225,14 +238,30 @@ func sendAppNotification(enc *json.Encoder, method string) error {
 	return nil
 }
 
-func readUntilResponse(scanner *bufio.Scanner, id string, stream *codexPlanStream) (json.RawMessage, error) {
+func sendAppResponse(enc *json.Encoder, id json.RawMessage, result any) error {
+	if len(id) == 0 {
+		return fmt.Errorf("cannot respond to app-server request without id")
+	}
+	if err := enc.Encode(map[string]any{
+		"id":     id,
+		"result": result,
+	}); err != nil {
+		return fmt.Errorf("send app-server response: %w", err)
+	}
+	return nil
+}
+
+func readUntilResponse(scanner *bufio.Scanner, enc *json.Encoder, id string, stream *codexPlanStream) (json.RawMessage, error) {
 	for scanner.Scan() {
 		msg, err := parseAppServerLine(scanner.Bytes())
 		if err != nil {
 			return nil, err
 		}
 		if isServerRequest(msg) {
-			return nil, unsupportedServerRequest(msg)
+			if err := handleServerRequest(enc, msg); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if err := stream.Handle(msg); err != nil {
 			return nil, err
@@ -251,14 +280,17 @@ func readUntilResponse(scanner *bufio.Scanner, id string, stream *codexPlanStrea
 	return nil, io.ErrUnexpectedEOF
 }
 
-func readUntilTurnCompleted(scanner *bufio.Scanner, stream *codexPlanStream) error {
+func readUntilTurnCompleted(scanner *bufio.Scanner, enc *json.Encoder, stream *codexPlanStream) error {
 	for scanner.Scan() {
 		msg, err := parseAppServerLine(scanner.Bytes())
 		if err != nil {
 			return err
 		}
 		if isServerRequest(msg) {
-			return unsupportedServerRequest(msg)
+			if err := handleServerRequest(enc, msg); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := stream.Handle(msg); err != nil {
 			return err
@@ -283,6 +315,57 @@ func readUntilTurnCompleted(scanner *bufio.Scanner, stream *codexPlanStream) err
 		return fmt.Errorf("read app-server output: %w", err)
 	}
 	return io.ErrUnexpectedEOF
+}
+
+func resolveCodexModel(enc *json.Encoder, scanner *bufio.Scanner, stream *codexPlanStream, cwd string) (string, error) {
+	if err := sendAppRequest(enc, "fanout-config", "config/read", map[string]any{
+		"includeLayers": false,
+		"cwd":           cwd,
+	}); err != nil {
+		return "", err
+	}
+	configResult, configErr := readUntilResponse(scanner, enc, "fanout-config", stream)
+	if configErr == nil {
+		if model := configModel(configResult); model != "" {
+			return model, nil
+		}
+	}
+
+	if err := sendAppRequest(enc, "fanout-models", "model/list", map[string]any{
+		"includeHidden": false,
+	}); err != nil {
+		return "", err
+	}
+	modelResult, modelErr := readUntilResponse(scanner, enc, "fanout-models", stream)
+	if modelErr != nil {
+		if configErr != nil {
+			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, modelErr)
+		}
+		return "", fmt.Errorf("resolve codex model from model/list: %w", modelErr)
+	}
+	model, err := modelListDefault(modelResult)
+	if err != nil {
+		if configErr != nil {
+			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, err)
+		}
+		return "", err
+	}
+	return model, nil
+}
+
+func handleServerRequest(enc *json.Encoder, msg appServerMessage) error {
+	switch msg.Method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		return sendAppResponse(enc, msg.ID, map[string]any{"decision": "decline"})
+	case "item/permissions/requestApproval":
+		return sendAppResponse(enc, msg.ID, map[string]any{
+			"permissions": map[string]any{},
+			"scope":       "turn",
+		})
+	case "execCommandApproval", "applyPatchApproval":
+		return sendAppResponse(enc, msg.ID, map[string]any{"decision": "denied"})
+	}
+	return unsupportedServerRequest(msg)
 }
 
 func parseAppServerLine(line []byte) (appServerMessage, error) {
@@ -330,12 +413,65 @@ func appServerErrorSummary(raw json.RawMessage) string {
 	return string(raw)
 }
 
+func configModel(raw json.RawMessage) string {
+	var res struct {
+		Config struct {
+			Model string `json:"model"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(res.Config.Model)
+}
+
+func modelListDefault(raw json.RawMessage) (string, error) {
+	var res struct {
+		Data []struct {
+			ID        string `json:"id"`
+			Model     string `json:"model"`
+			Hidden    bool   `json:"hidden"`
+			IsDefault bool   `json:"isDefault"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return "", fmt.Errorf("parse model/list response: %w", err)
+	}
+	for _, model := range res.Data {
+		if model.Hidden || !model.IsDefault {
+			continue
+		}
+		if name := modelName(model.Model, model.ID); name != "" {
+			return name, nil
+		}
+	}
+	for _, model := range res.Data {
+		if model.Hidden {
+			continue
+		}
+		if name := modelName(model.Model, model.ID); name != "" {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("model/list response did not include an available model")
+}
+
+func modelName(model, id string) string {
+	if strings.TrimSpace(model) != "" {
+		return strings.TrimSpace(model)
+	}
+	return strings.TrimSpace(id)
+}
+
 func codexPlanEffort(raw json.RawMessage) (string, error) {
 	var res struct {
 		Data []struct {
 			Name            string  `json:"name"`
 			Mode            string  `json:"mode"`
 			ReasoningEffort *string `json:"reasoning_effort"`
+			Settings        *struct {
+				ReasoningEffort *string `json:"reasoning_effort"`
+			} `json:"settings"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -348,28 +484,27 @@ func codexPlanEffort(raw json.RawMessage) (string, error) {
 		if mode.ReasoningEffort != nil && *mode.ReasoningEffort != "" {
 			return *mode.ReasoningEffort, nil
 		}
+		if mode.Settings != nil && mode.Settings.ReasoningEffort != nil && *mode.Settings.ReasoningEffort != "" {
+			return *mode.Settings.ReasoningEffort, nil
+		}
 		return "medium", nil
 	}
 	return "", fmt.Errorf("codex app-server does not advertise collaborationMode.mode=plan")
 }
 
-func parseThreadStart(raw json.RawMessage) (threadID, model string, err error) {
+func parseThreadStart(raw json.RawMessage) (threadID string, err error) {
 	var res struct {
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
-		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return "", "", fmt.Errorf("parse thread/start response: %w", err)
+		return "", fmt.Errorf("parse thread/start response: %w", err)
 	}
 	if res.Thread.ID == "" {
-		return "", "", fmt.Errorf("thread/start response did not include thread.id")
+		return "", fmt.Errorf("thread/start response did not include thread.id")
 	}
-	if res.Model == "" {
-		return "", "", fmt.Errorf("thread/start response did not include resolved model")
-	}
-	return res.Thread.ID, res.Model, nil
+	return res.Thread.ID, nil
 }
 
 func turnCompletion(raw json.RawMessage) (status, message string) {

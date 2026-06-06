@@ -214,8 +214,8 @@ Projects v2 URL（Project モード、上記参照）のいずれか。`--projec
 
 `--codex-plan-mode` は `--agent codex` 専用の opt-in 起動モードです。通常の
 positional `codex "<prompt>"` ではなく、子ペインで fanout の隠し shim を起動し、
-その shim が `codex app-server --stdio` を駆動して、最初の turn を
-`collaborationMode.mode = "plan"` で開始します。子 briefing も Plan Mode 向けに
+その shim が default stdio transport の `codex app-server` を駆動して、最初の
+turn を `collaborationMode.mode = "plan"` で開始します。子 briefing も Plan Mode 向けに
 差し替わり、`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn では
 ファイル編集・commit・push・PR 作成をしないことを明示します。
 

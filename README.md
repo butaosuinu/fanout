@@ -217,11 +217,11 @@ is accepted but ignored by the direct tmux path.
 
 `--codex-plan-mode` is an opt-in launch mode for `--agent codex`. Instead of
 running positional `codex "<prompt>"`, fanout starts a hidden fanout shim in the
-child pane; the shim drives `codex app-server --stdio` and starts the first turn
-with `collaborationMode.mode = "plan"`. The child briefing is also rewritten
-for Plan Mode: it asks for a `<proposed_plan>` implementation plan and
-explicitly forbids file edits, commits, pushes, and PR creation in that first
-turn.
+child pane; the shim drives `codex app-server` over the default stdio transport
+and starts the first turn with `collaborationMode.mode = "plan"`. The child
+briefing is also rewritten for Plan Mode: it asks for a `<proposed_plan>`
+implementation plan and explicitly forbids file edits, commits, pushes, and PR
+creation in that first turn.
 
 Because this path uses Codex's experimental app-server protocol, fanout does
 not silently fall back to normal Codex startup. If the installed Codex app
