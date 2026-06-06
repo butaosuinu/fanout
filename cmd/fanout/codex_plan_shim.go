@@ -357,6 +357,8 @@ func handleServerRequest(enc *json.Encoder, msg appServerMessage) error {
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		return sendAppResponse(enc, msg.ID, map[string]any{"decision": "decline"})
+	case "item/tool/requestUserInput", "tool/requestUserInput":
+		return sendAppResponse(enc, msg.ID, requestUserInputResponse(msg.Params))
 	case "item/permissions/requestApproval":
 		return sendAppResponse(enc, msg.ID, map[string]any{
 			"permissions": map[string]any{},
@@ -366,6 +368,29 @@ func handleServerRequest(enc *json.Encoder, msg appServerMessage) error {
 		return sendAppResponse(enc, msg.ID, map[string]any{"decision": "denied"})
 	}
 	return unsupportedServerRequest(msg)
+}
+
+const codexPlanUserInputFallbackAnswer = "fanout Codex Plan Mode is running non-interactively; proceed with the implementation plan using stated assumptions, and call out any ambiguity instead of asking for input."
+
+func requestUserInputResponse(raw json.RawMessage) map[string]any {
+	var params struct {
+		Questions []struct {
+			ID string `json:"id"`
+		} `json:"questions"`
+	}
+	answers := map[string]map[string][]string{}
+	if err := json.Unmarshal(raw, &params); err == nil {
+		for _, question := range params.Questions {
+			id := strings.TrimSpace(question.ID)
+			if id == "" {
+				continue
+			}
+			answers[id] = map[string][]string{
+				"answers": []string{codexPlanUserInputFallbackAnswer},
+			}
+		}
+	}
+	return map[string]any{"answers": answers}
 }
 
 func parseAppServerLine(line []byte) (appServerMessage, error) {

@@ -68,6 +68,12 @@ case "$approval_response" in
   *'"id":"approval-1"'*'"decision":"decline"'*) ;;
   *) echo "missing command approval decline" >&2; exit 51 ;;
 esac
+printf '%s\n' '{"id":"input-1","method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"input-1","questions":[{"id":"scope","header":"Scope","question":"Clarify scope?"}]}}'
+read input_response
+case "$input_response" in
+  *'"id":"input-1"'*'"answers":{"scope":{"answers":["fanout Codex Plan Mode is running non-interactively;'*) ;;
+  *) echo "missing user input fallback answer" >&2; exit 52 ;;
+esac
 printf '%s\n' '{"method":"item/plan/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"plan-1","delta":"draft plan"}}'
 printf '%s\n' '{"method":"error","params":{"threadId":"thread-1","turnId":"turn-1","willRetry":true,"error":{"message":"temporary disconnect","additionalDetails":"retrying"}}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[{"type":"plan","id":"plan-1","text":"final plan"}],"itemsView":"complete","status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1}}}'
