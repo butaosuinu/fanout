@@ -29,6 +29,13 @@ load helpers
   assert_status_golden scenario-status-mixed
 }
 
+@test "scenario-status-mixed table: PR diff stats render in a human-readable table" {
+  use_fixture scenario-status-mixed
+  run_fanout_status 200 --format table
+  assert_success
+  assert_golden scenario-status-mixed status-table
+}
+
 @test "scenario-status-no-fanned-children: total=0, all_merged=false" {
   use_fixture scenario-status-no-fanned-children
   run_fanout_status 999

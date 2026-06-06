@@ -196,7 +196,8 @@ fanout <parent-issue|project-url>
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--pr-visualization|--no-pr-visualization]
-fanout <parent-issue> --status      # JSON status of fanned children, no side effects
+fanout <parent-issue> --status [--format json|table]
+                                      # status of fanned children, no side effects
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
@@ -218,14 +219,16 @@ enumerate children already fanned out under that specific parent, queries
 each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
-carries `state`/`mergedAt` directly, and prints one JSON document on
-stdout. It does not require dmux or a live tmux session. Issue-mode parents
-only — Projects v2 URLs as parent are rejected up-front for the current JSON
-schema. In a state file that has fanned multiple parents, children of other
-parents are filtered out so `summary.all_merged` reflects only the requested
-parent. Set `FANOUT_STATE_PATH` to point directly at a state file when reading
-from outside the repository checkout; otherwise fanout reads
-`<git-root>/.fanout/state.json`.
+carries `state`/`mergedAt` directly, and prints one JSON document on stdout by
+default. Pass `--format table` for a human-readable overview that adds PR diff
+bars, changed-file counts, Conventional-Commit type, and PR links. JSON mode
+does not fetch PR diff stats, so the default API surface and schema stay stable.
+It does not require dmux or a live tmux session. Issue-mode parents only —
+Projects v2 URLs as parent are rejected up-front for the current JSON schema.
+In a state file that has fanned multiple parents, children of other parents are
+filtered out so `summary.all_merged` reflects only the requested parent. Set
+`FANOUT_STATE_PATH` to point directly at a state file when reading from outside
+the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
 
 ```json
 {
@@ -250,7 +253,8 @@ from outside the repository checkout; otherwise fanout reads
 
 `--status` exit codes are a separate lane from the default flow:
 
-- `0` — JSON emitted (check `summary.all_merged` for the actual state).
+- `0` — status emitted (check `summary.all_merged` in JSON mode for the
+  actual state).
 - `2` — cannot enumerate (bad invocation, unreadable or malformed state file,
   unusable project root, Projects v2 URL as parent). A missing state file is
   treated as an empty state.
@@ -444,10 +448,11 @@ fanout 123 --no-auto-pr
 # Disable the Agent Teams hint globally for this shell
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# Read-only JSON status from .fanout/state.json: who's fanned out, what state
-# each child is in, and whether their closed-by PRs have merged. No side effects.
+# Read-only status from .fanout/state.json: default JSON for automation,
+# optional table for PR diff stats. No side effects.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+fanout 123 --status --format table
 
 # Fast-forward a recorded child branch into the parent worktree, then remove
 # the child worktree/pane after it is no longer needed.

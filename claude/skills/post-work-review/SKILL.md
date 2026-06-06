@@ -40,7 +40,10 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
    └──────┘
         │
         ▼
-[Step 4] レビュー済みコミットを marker に記録 (PR ゲートの signal)
+[Step 4] 変更サマリ + ゲート付き図をチャットに出す (最終確認)
+        │
+        ▼
+[Step 5] レビュー済みコミットを marker に記録 (PR ゲートの signal)
 ```
 
 ## Pass 1 — code-review プラグインで掃除
@@ -76,7 +79,7 @@ companion="${companions[0]:-}"
 
   > ⚠️ codex companion 未検出のため second-pass review は skip。Pass 1 単独でのレビュー結果として扱う。
 
-  この設計により codex 未導入環境でも skill は機能し、Pass 1 完了で Step 4 の marker が書かれる。
+  この設計により codex 未導入環境でも skill は機能し、Pass 1 完了で Step 4 の確認サマリを出し、Step 5 の marker が書かれる。
 - **2 件以上 (`${#companions[@]}` >= 2)**: 複数バージョンが残っている。`head -1` で暗黙に1つを選ばず、トラブルシューティングに従い `ls ~/.claude/plugins/cache/openai-codex/codex/` の結果を提示してユーザーにどれを使うか確認する。確定後にそのパスを `$companion` として使う。
 - **1 件**: 解決済みの `$companion` を使って下記「1 反復の手順」を回す (approve まで、oscillation セーフティ維持)。
 
@@ -122,7 +125,22 @@ native review の markdown には機械可読な「0 findings」マーカーが 
 
 指摘を直す手順は通常の Edit ベース実装と同じ。Pass 1 と同じく、修正に入る前に「これとこれを直します」と 1〜2 文で宣言する。修正後は次の反復に進む。
 
-## Step 4 (final): record reviewed commit
+## Step 4: show final change summary in chat
+
+Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知のいずれかで終了したら、または codex companion 未検出で Pass 2 を skip したら、marker 記録の前に、レビュー対象 diff の最終確認として **チャットに** 変更サマリを出す。これは PR body 生成ではなく、ローカル作業者に「何を変えたか」を最後に確認させるための応答である。ファイルを書いたり、`gh pr create` の本文を作ったりしない。
+
+出力の骨格は親 issue の「設計の正典」と揃えるが、ここではチャットで読める軽量版にする:
+
+1. **TL;DR**: 1〜2 文で、今回の diff の意図と実装結果を要約する。直後に単独行で `Review effort: <0-5>` を書く (0=機械的、5=要熟読)。
+2. **変更ファイル表**: `File | What changed | Why` の表を出す。実際に触れたファイルだけを載せ、base から来た無関係変更や未確認の推測は混ぜない。
+3. **リスク**: 残る注意点がある場合だけ `> [!WARNING]` ブロックで書く。低リスクなら省略し、「リスクなし」の埋め草は書かない。
+4. **ゲート付き Mermaid**: 挙動 / 呼び出しフロー / スキーマが変わった場合だけ ```mermaid を最大 1 つ出す。refactor / rename / docs / format / config / test-only では出さない。図に含める関数名、ファイル名、設定名、コマンド名などは、diff または現在の worktree に実在することを `rg` 等で自己検証する。辿れないシンボルは図から落とし、薄い図しか作れないなら図ごと省く。
+
+挙動を断定するときは、可能な範囲で `file:line` を添える。根拠が diff から辿れない主張は書かない。
+
+このステップは確認サマリであり、レビュー verdict ではない。サマリや図の生成に失敗しても **marker をブロックしない** し、Pass 1 / Pass 2 の clean 判定を変更しない。失敗時は「変更サマリは生成できなかった」と短く伝え、Step 5 の marker 前提条件を満たすなら Step 5 へ進む。
+
+## Step 5 (final): record reviewed commit
 
 レビュー済みマーカーを書き出す。これは PR 作成ゲート (`.claude/hooks/pre-pr-review-gate.sh`) が「このコミットはレビュー済み」と認識する signal なので、**レビューが実質的に行われ、かつ修正が全て commit 済みのときだけ**書く。次の前提を**いずれか欠いたら marker を書かない**:
 
@@ -151,7 +169,8 @@ fi
 - Pass 1 で何件直したか
 - Pass 2 が何反復回って終わったか (codex 未検出で skip した場合はその旨)
 - 最終的に codex が approve したか、それともユーザー判断で停止したか
-- Step 4 で marker を書いたか (現 HEAD)
+- Step 4 で変更サマリを提示したか (提示できなかった場合はその理由)
+- Step 5 で marker を書いたか (現 HEAD)
 - 残課題があれば箇条書きで列挙 (oscillation で残った指摘など)
 
 長い総括は不要。ユーザーは diff を読めば中身は分かる。
@@ -160,7 +179,7 @@ fi
 
 - **`code-review-strict` の呼び出し**: 別物。本 skill では使わない。
 - **`--comment` フラグ付き code-review**: PR コメントを直接付けに行く動作は本 skill の責任範囲外 (専用に `/code-review --comment` を別途叩けばよい)。
-- **コミットや push の自動実行**: 本 skill は仕上げレビューまで。コミットメッセージ作成や push はユーザー指示で別途行う (Step 4 の marker 書込はレビュー済み signal の記録であって、コミットや push ではない)。
+- **コミットや push の自動実行**: 本 skill は仕上げレビューまで。コミットメッセージ作成や push はユーザー指示で別途行う (Step 5 の marker 書込はレビュー済み signal の記録であって、コミットや push ではない)。
 - **`/codex:status` の自動ポーリング**: `--wait` で同期実行するため不要。
 - **メモリ ([[feedback_reviewer_role]] 等) への新規エントリ追加**: 本 skill 自体がルールの保管庫。
 
@@ -168,4 +187,4 @@ fi
 
 - **`codex-companion.mjs` の glob が複数マッチ**: 通常 1 バージョンしか入っていない。複数あるならユーザーに通知し、`ls ~/.claude/plugins/cache/openai-codex/codex/` の結果を見せて指示を仰ぐ。
 - **codex CLI 未認証 / レートリミット**: companion スクリプトがエラーを出す。`codex:setup` skill を案内する。
-- **code-review が失敗した場合**: Pass 1 を諦めて Pass 2 から始めるか、ユーザーに継続判断を仰ぐ。Pass 1 失敗だけで全体を中止しないこと (Pass 2 単独でも価値はある)。ただし **Pass 1 が失敗し、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューパスが 0 件なので Step 4 の marker を書かない** (ゲートは閉じたまま)。レビュー未完了をユーザーに伝えて終了する。
+- **code-review が失敗した場合**: Pass 1 を諦めて Pass 2 から始めるか、ユーザーに継続判断を仰ぐ。Pass 1 失敗だけで全体を中止しないこと (Pass 2 単独でも価値はある)。ただし **Pass 1 が失敗し、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューパスが 0 件なので Step 5 の marker を書かない** (ゲートは閉じたまま)。レビュー未完了をユーザーに伝えて終了する。

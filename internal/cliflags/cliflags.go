@@ -18,6 +18,7 @@ const (
 	DefaultSleepBetween  = 4.0
 	DefaultPopupTimeout  = 20
 	DefaultProjectStatus = "Todo"
+	DefaultFormat        = "json"
 
 	ModeIssue   = "issue"
 	ModeProject = "project"
@@ -60,6 +61,7 @@ type Config struct {
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
+	Format             string
 }
 
 // NameOverride represents a parsed `--name NUM=slug-hint|display-name|branch`
@@ -104,6 +106,7 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		SleepBetween:    DefaultSleepBetween,
 		PopupTimeoutSec: DefaultPopupTimeout,
 		ProjectStatus:   DefaultProjectStatus,
+		Format:          DefaultFormat,
 	}
 
 	state := parseState{}
@@ -155,6 +158,16 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--project-status": func(cfg *Config, _ *parseState, v string) error {
 			cfg.ProjectStatus = v
 			return nil
+		},
+		"--format": func(cfg *Config, state *parseState, v string) error {
+			switch v {
+			case "json", "table":
+				cfg.Format = v
+				state.formatExplicit = true
+				return nil
+			default:
+				return fmt.Errorf("--format must be one of json,table, got: %s", v)
+			}
 		},
 		"--sleep": func(_ *Config, state *parseState, v string) error {
 			state.sleepRaw = v
@@ -249,15 +262,16 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 }
 
 type parseState struct {
-	parent        string
-	limit         string
-	closeRaw      string
-	mergeRaw      string
-	sleepRaw      string
-	popupRaw      string
-	rawNames      []string
-	sleepExplicit bool
-	popupExplicit bool
+	parent         string
+	limit          string
+	closeRaw       string
+	mergeRaw       string
+	sleepRaw       string
+	popupRaw       string
+	rawNames       []string
+	sleepExplicit  bool
+	popupExplicit  bool
+	formatExplicit bool
 }
 
 type valueOption func(*Config, *parseState, string) error
@@ -304,6 +318,10 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 	if cfg.ProjectStatus == "" {
 		lg.Err("--project-status must not be empty")
 		return ParseResult{Code: exitcode.Env}
+	}
+	if state.formatExplicit && !cfg.StatusMode {
+		lg.Err("--format can only be used with --status")
+		return ParseResult{Code: exitcode.Invocation}
 	}
 
 	if cfg.StatusMode {
