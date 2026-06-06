@@ -286,9 +286,9 @@ Key points:
   `--no-briefing-code-review` include or omit the Claude-only `/code-review`
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
   the Claude-only Agent Teams hint; `--pr-visualization` /
-  `--no-pr-visualization` set the PR visualization switch reserved for
-  structured PR-body plus gated Mermaid briefing injection. Defaults are all on,
-  and these settings are Go-implementation only.
+  `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
+  guidance in auto-PR child briefings. Defaults are all on, and these settings
+  are Go-implementation only.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the
