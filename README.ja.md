@@ -192,7 +192,8 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
-fanout <parent-issue> --status      # .fanout/state.json 由来の JSON 状態を読む
+fanout <parent-issue> --status [--format json|table]
+                                      # .fanout/state.json 由来の状態を読む
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
 fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
@@ -212,10 +213,13 @@ Projects v2 URL（Project モード、上記参照）のいずれか。`--projec
 `fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
 （または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
 子 issue を列挙し、各子について `gh api graphql` で issue state と
-`closedByPullRequestsReferences` を取得して、既存の JSON schema
-（`children[].prs` / `summary.all_merged` など）で出力します。dmux や live tmux
-session は不要です。現在の JSON schema は issue parent 用なので、Projects v2 URL
-を parent にした `--status` は拒否します。
+`closedByPullRequestsReferences` を取得して、既定では既存の JSON schema
+（`children[].prs` / `summary.all_merged` など）で出力します。`--format table`
+を渡すと、PR の差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを
+含む人間向けの一覧を出力します。JSON mode では PR 差分統計を取得しないため、
+既定の schema と API call 数は変わりません。dmux や live tmux session は不要です。
+現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
+`--status` は拒否します。
 
 Lifecycle コマンドも `.fanout/state.json` の記録を対象にします。任意の worktree を
 filesystem scan で探すことはしません。
@@ -374,11 +378,11 @@ fanout 123 --no-auto-pr
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を
-# JSON で読む。副作用は無い。内部的には子ごとに `gh api graphql` を呼び、
-# `closedByPullRequestsReferences(first: 100)` をカーソル追従して取得する。
+# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を読む。
+# 既定は automation 向け JSON、table は PR 差分統計の人間向け表示。副作用は無い。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
+fanout 123 --status --format table
 
 # 記録済み子 branch を parent worktree に fast-forward merge し、不要になった
 # child worktree/pane を後始末する
