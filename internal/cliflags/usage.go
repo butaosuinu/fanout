@@ -94,8 +94,8 @@ Options:
                       Codex app-server shim with collaborationMode.mode=plan
                       instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
   --pr-visualization / --no-pr-visualization
-                      Set the PR visualization switch reserved for structured
-                      PR-body plus gated Mermaid briefing injection. Default: on.
+                      Include or omit structured PR-body plus gated Mermaid
+                      guidance in auto-PR child briefings. Default: on.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.

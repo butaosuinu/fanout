@@ -319,14 +319,15 @@ env には未対応です。後方互換のため、既定値はすべて `true`
 | PR レビューゲート通知 | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
-| 構造化 PR/Mermaid briefing 注入用に予約された PR 可視化スイッチ | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
+| 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
 不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
 将来の設定追加で古い fanout が壊れないようにするためです。
 
-`prVisualization` は他の設定と同じく解決・転送されますが、構造化 PR 可視化の
-briefing 注入が追加されるまでは現在の briefing 本文を変えません。
+`prVisualization=false` は、子 briefing から構造化 PR 本文とゲート付き Mermaid の
+指示を外します。この指示は子が PR 本文を書く場合のものなので、`autoPullRequest`
+も true のときだけ注入されます。
 
 `prReviewGate=false` だけは、子 Claude Code の hook を強制的に無効化する設定では
 ありません。代わりに Claude briefing へ、`/post-work-review` 前に `PreToolUse`

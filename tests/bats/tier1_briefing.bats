@@ -18,6 +18,8 @@ load helpers
   grep -q "run the \`/code-review\` slash command" "$briefing"
   grep -q "Make focused, minimal changes scoped to this single issue" "$briefing"
   grep -q "Closes #101" "$briefing"
+  grep -q "structure the PR body" "$briefing"
+  grep -q "Diagram gate" "$briefing"
 }
 
 @test "briefing for --agent codex contains review gate and omits Claude-only directives" {
@@ -36,6 +38,8 @@ load helpers
   grep -q "Only after the review loop is clean should you commit, push, and open the PR" "$briefing"
   grep -q "Make focused, minimal changes scoped to this single issue" "$briefing"
   grep -q "Closes #101" "$briefing"
+  grep -q "structure the PR body" "$briefing"
+  grep -q "Diagram gate" "$briefing"
 }
 
 @test "Go settings: missing config files keep default briefing behavior" {
@@ -57,6 +61,8 @@ load helpers
   assert_success
   local briefing="/tmp/fanout-project_root-101.md"
   ! grep -q "Open a pull request with \"Closes #101\"" "$briefing"
+  ! grep -q "structure the PR body" "$briefing"
+  ! grep -q "Diagram gate" "$briefing"
   grep -q "When implementation passes tests, commit and push the branch" "$briefing"
 }
 
@@ -70,8 +76,21 @@ load helpers
   grep -q "do not run \`/codex:status\` or other polling" "$briefing"
   grep -q "Only after the review loop is clean should you commit and push the branch" "$briefing"
   ! grep -q "Open a pull request with \"Closes #101\"" "$briefing"
+  ! grep -q "structure the PR body" "$briefing"
+  ! grep -q "Diagram gate" "$briefing"
   ! grep -q "opening a PR" "$briefing"
   ! grep -q "open the PR" "$briefing"
+}
+
+@test "Go settings: --no-pr-visualization removes structured PR body guidance" {
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --no-pr-visualization
+  assert_success
+  local briefing="/tmp/fanout-project_root-101.md"
+  grep -q "Open a pull request with \"Closes #101\"" "$briefing"
+  ! grep -q "structure the PR body" "$briefing"
+  ! grep -q "Diagram gate" "$briefing"
 }
 
 @test "Go settings: briefing toggles are last-wins on the CLI" {

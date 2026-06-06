@@ -10,7 +10,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/alpha-701
   branch -> fanout/alpha-701
   base -> main
-  briefing size: 2466 bytes
+  briefing size: 4193 bytes
     $ git -C <REPO>/tests/fixtures/scenario-limit/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-limit/project_root branch -f main refs/remotes/origin/main
@@ -28,7 +28,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-limit/project_root/.fanout/worktrees/bravo-702
   branch -> fanout/bravo-702
   base -> main
-  briefing size: 2466 bytes
+  briefing size: 4193 bytes
     $ git -C <REPO>/tests/fixtures/scenario-limit/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-limit/project_root branch -f main refs/remotes/origin/main

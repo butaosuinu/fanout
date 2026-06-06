@@ -136,6 +136,14 @@ load helpers
   assert_golden scenario-settings-disabled
 }
 
+@test "scenario-prviz-disabled: --no-pr-visualization removes structured PR guidance" {
+  skip_unless_fanout_go
+  use_fixture scenario-prviz-disabled
+  run_fanout_dry 100 --no-pr-visualization
+  assert_success
+  assert_golden scenario-prviz-disabled
+}
+
 @test "scenario-project-basic: Projects v2 URL with Todo column produces panes" {
   use_fixture scenario-project-basic
   run_fanout_dry 'https://github.com/users/butaosuinu/projects/3'

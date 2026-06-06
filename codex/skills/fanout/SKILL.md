@@ -292,9 +292,9 @@ Key points:
   `--no-briefing-code-review` include or omit the Claude-only `/code-review`
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
   the Claude-only Agent Teams hint; `--pr-visualization` /
-  `--no-pr-visualization` set the PR visualization switch reserved for
-  structured PR-body plus gated Mermaid briefing injection. Defaults are all on,
-  and these settings are Go-implementation only.
+  `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
+  guidance in auto-PR child briefings. Defaults are all on, and these settings
+  are Go-implementation only.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
   When enabled, the child pane runs fanout's hidden Codex app-server shim with
   `collaborationMode.mode=plan`; the first response should be a plan, and the

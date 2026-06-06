@@ -380,16 +380,16 @@ parent repository root, not the child worktree. The user config path is
 | PR review gate note | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
-| PR visualization switch reserved for structured PR/Mermaid briefing injection | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
+| Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 
 Environment values accept `1/true/yes/on` and `0/false/no/off`
 (case-insensitive). Invalid env values, unknown file keys, and non-boolean
 file values are warned and ignored so future settings do not break older
 fanout binaries.
 
-`prVisualization` is resolved and forwarded like the other settings, but the
-current briefing text is unchanged until the structured PR visualization
-briefing injection is added.
+`prVisualization=false` omits the structured PR-body and gated Mermaid guidance
+from child briefings. The guidance is only injected when `autoPullRequest` is
+also true, because it applies to the PR body the child will open.
 
 `prReviewGate=false` does not forcibly disable child Claude Code hooks. It adds
 a note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the `PreToolUse`

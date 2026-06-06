@@ -108,3 +108,14 @@ func TestBuildAgentCommandUsesCodexPlanShimInDryRun(t *testing.T) {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
 	}
 }
+
+func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
+	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
+
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+
+	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
+		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
+	}
+}
