@@ -36,6 +36,20 @@ load helpers
   assert_golden scenario-status-mixed status-table
 }
 
+@test "scenario-status-dashboard-post: --post-dashboard creates marker comment" {
+  use_fixture scenario-status-dashboard-post
+  run_fanout_status 200 --post-dashboard
+  assert_success
+  assert_golden scenario-status-dashboard-post status-dashboard
+}
+
+@test "scenario-status-dashboard-edit: --post-dashboard updates existing marker comment" {
+  use_fixture scenario-status-dashboard-edit
+  run_fanout_status 200 --post-dashboard
+  assert_success
+  assert_golden scenario-status-dashboard-edit status-dashboard
+}
+
 @test "scenario-status-no-fanned-children: total=0, all_merged=false" {
   use_fixture scenario-status-no-fanned-children
   run_fanout_status 999

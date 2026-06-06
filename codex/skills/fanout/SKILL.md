@@ -22,8 +22,8 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
-fanout <parent-issue> --status [--format json|table]
-                                      # status of fanned children, no side effects
+fanout <parent-issue> --status [--format json|table] [--post-dashboard]
+                                      # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
@@ -144,8 +144,8 @@ environment or preflight failure, `2` bad invocation or incomparable version,
 2. Forward user-supplied fanout flags verbatim:
    `--agent`, `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--format`,
-   `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`,
-   `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
+   `--post-dashboard`, `--name`, `--base-branch`, `--branch-prefix`,
+   `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
@@ -200,6 +200,8 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
 `summary.all_merged` for the recorded children. Use the default JSON format for
 automation; `--format table` is for human review of PR diff stats and links.
+Use `--post-dashboard` only when the user explicitly wants a parent issue
+rollup comment; it writes to GitHub even though it is attached to `--status`.
 
 1. Continue any parent-scope work that does not depend on the children's merged output.
 2. Periodically rerun `fanout --status <PARENT>`. Inspect `summary.all_merged`.
@@ -221,7 +223,8 @@ automation; `--format table` is for human review of PR diff stats and links.
 - `0` with `summary.total == 0` — nothing has been fanned out under that parent
   (or every fanned pane was torn down). Tell the user; don't keep polling.
 
-`--status` is read-only and exclusive with all action-bearing flags
+`--status` is read-only unless `--post-dashboard` is explicitly set, and is
+exclusive with all action-bearing flags
 (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`,
 `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`,
 `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,

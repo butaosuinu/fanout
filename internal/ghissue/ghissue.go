@@ -42,6 +42,12 @@ type PRDiffStat struct {
 	Deletions    int    `json:"deletions"`
 	ChangedFiles int    `json:"changedFiles"`
 	Title        string `json:"title"`
+	Body         string `json:"body"`
+}
+
+type IssueComment struct {
+	ID   string
+	Body string
 }
 
 // Runner abstracts `gh` invocation so tests can swap in a fake. The Tier 2
@@ -56,6 +62,22 @@ func (r Runner) gh(args ...string) ([]byte, error) {
 	if r.Cwd != "" {
 		cmd.Dir = r.Cwd
 	}
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return out, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+		}
+		return out, err
+	}
+	return out, nil
+}
+
+func (r Runner) ghWithInput(input string, args ...string) ([]byte, error) {
+	cmd := exec.Command("gh", args...)
+	if r.Cwd != "" {
+		cmd.Dir = r.Cwd
+	}
+	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -218,7 +240,7 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 }
 
 func (r Runner) PRDiffStat(num int) (PRDiffStat, error) {
-	out, err := r.gh("pr", "view", strconv.Itoa(num), "--json", "number,additions,deletions,changedFiles,title")
+	out, err := r.gh("pr", "view", strconv.Itoa(num), "--json", "number,additions,deletions,changedFiles,title,body")
 	if err != nil {
 		return PRDiffStat{}, err
 	}
@@ -227,6 +249,86 @@ func (r Runner) PRDiffStat(num int) (PRDiffStat, error) {
 		return PRDiffStat{}, fmt.Errorf("parse gh pr view %d: %w", num, err)
 	}
 	return stat, nil
+}
+
+func (r Runner) FindDashboardComment(parent int, marker string) (IssueComment, bool, error) {
+	endpoint := fmt.Sprintf("repos/{owner}/{repo}/issues/%d/comments?per_page=100", parent)
+	out, err := r.gh("api", "--paginate", "--slurp", endpoint)
+	if err != nil {
+		return IssueComment{}, false, err
+	}
+
+	pages, err := parseIssueCommentPages(out)
+	if err != nil {
+		return IssueComment{}, false, fmt.Errorf("parse gh issue %d comments: %w", parent, err)
+	}
+	for _, page := range pages {
+		for _, comment := range page {
+			if !strings.HasPrefix(comment.Body, marker) {
+				continue
+			}
+			id := commentID(comment.ID, comment.DatabaseID, comment.URL)
+			if id == "" {
+				return IssueComment{}, false, fmt.Errorf("dashboard comment for #%d has no REST comment id", parent)
+			}
+			return IssueComment{ID: id, Body: comment.Body}, true, nil
+		}
+	}
+	return IssueComment{}, false, nil
+}
+
+type issueCommentPageItem struct {
+	ID         json.RawMessage `json:"id"`
+	DatabaseID int             `json:"databaseId"`
+	URL        string          `json:"url"`
+	Body       string          `json:"body"`
+}
+
+func parseIssueCommentPages(out []byte) ([][]issueCommentPageItem, error) {
+	var pages [][]issueCommentPageItem
+	if err := json.Unmarshal(out, &pages); err == nil {
+		return pages, nil
+	}
+
+	var single []issueCommentPageItem
+	if err := json.Unmarshal(out, &single); err != nil {
+		return nil, err
+	}
+	return [][]issueCommentPageItem{single}, nil
+}
+
+func (r Runner) PostIssueComment(parent int, body string) error {
+	_, err := r.ghWithInput(body, "issue", "comment", strconv.Itoa(parent), "--body-file", "-")
+	return err
+}
+
+func (r Runner) EditIssueComment(owner, repo, id, body string) error {
+	path := fmt.Sprintf("/repos/%s/%s/issues/comments/%s", owner, repo, id)
+	_, err := r.ghWithInput(body, "api", "-X", "PATCH", path, "-F", "body=@-")
+	return err
+}
+
+func commentID(raw json.RawMessage, databaseID int, url string) string {
+	if databaseID > 0 {
+		return strconv.Itoa(databaseID)
+	}
+	var numeric int64
+	if err := json.Unmarshal(raw, &numeric); err == nil && numeric > 0 {
+		return strconv.FormatInt(numeric, 10)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if rePositiveCommentID.MatchString(s) {
+			return s
+		}
+	}
+	if i := strings.LastIndex(url, "issuecomment-"); i >= 0 {
+		candidate := url[i+len("issuecomment-"):]
+		if rePositiveCommentID.MatchString(candidate) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // HydrateBodyLabels fetches body and labels for an issue and merges them into
@@ -432,7 +534,10 @@ func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 	}, nil
 }
 
-var taskListRE = regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`)
+var (
+	rePositiveCommentID = regexp.MustCompile(`^[1-9][0-9]*$`)
+	taskListRE          = regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`)
+)
 
 // TaskListNumbers extracts issue numbers from each `- [ ] #N ...` row in the
 // parent body. Cross-repo refs (`owner/repo#N`) are silently ignored: the

@@ -53,6 +53,7 @@ type Config struct {
 	Debug              bool
 	UnblockedOnly      bool
 	StatusMode         bool
+	PostDashboard      bool
 	CloseNum           int
 	MergeNum           int
 	CleanupMode        bool
@@ -191,6 +192,7 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--no-refresh":              func(cfg *Config) { cfg.NoRefresh = true },
 		"--unblocked-only":          func(cfg *Config) { cfg.UnblockedOnly = true },
 		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
+		"--post-dashboard":          func(cfg *Config) { cfg.PostDashboard = true },
 		"--cleanup":                 func(cfg *Config) { cfg.CleanupMode = true },
 		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = boolPtr(true) },
 		"--no-auto-pr":              func(cfg *Config) { cfg.AutoPullRequest = boolPtr(false) },
@@ -328,6 +330,10 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 	}
 	if state.formatExplicit && !cfg.StatusMode {
 		lg.Err("--format can only be used with --status")
+		return ParseResult{Code: exitcode.Invocation}
+	}
+	if cfg.PostDashboard && !cfg.StatusMode {
+		lg.Err("--post-dashboard can only be used with --status")
 		return ParseResult{Code: exitcode.Invocation}
 	}
 
