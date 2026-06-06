@@ -14,7 +14,7 @@ filtered out:
   worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/alpha-501
   branch -> fanout/alpha-501
   base -> main
-  briefing size: 2466 bytes
+  briefing size: 4111 bytes
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main
@@ -32,7 +32,7 @@ filtered out:
   worktree -> <REPO>/tests/fixtures/scenario-only/project_root/.fanout/worktrees/charlie-503
   branch -> fanout/charlie-503
   base -> main
-  briefing size: 2470 bytes
+  briefing size: 4115 bytes
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-only/project_root branch -f main refs/remotes/origin/main

@@ -11,7 +11,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-one-911
   branch -> fanout/todo-one-911
   base -> main
-  briefing size: 2476 bytes
+  briefing size: 4121 bytes
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main
@@ -29,7 +29,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/todo-two-912
   branch -> fanout/todo-two-912
   base -> main
-  briefing size: 2476 bytes
+  briefing size: 4121 bytes
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main
@@ -47,7 +47,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-project-status-all/project_root/.fanout/worktrees/done-item-913
   branch -> fanout/done-item-913
   base -> main
-  briefing size: 2477 bytes
+  briefing size: 4122 bytes
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-project-status-all/project_root branch -f main refs/remotes/origin/main

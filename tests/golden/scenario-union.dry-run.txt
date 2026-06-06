@@ -11,7 +11,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/api-child-301
   branch -> fanout/api-child-301
   base -> main
-  briefing size: 2471 bytes
+  briefing size: 4116 bytes
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root branch -f main refs/remotes/origin/main
@@ -29,7 +29,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/body-only-302
   branch -> fanout/body-only-302
   base -> main
-  briefing size: 2471 bytes
+  briefing size: 4116 bytes
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root branch -f main refs/remotes/origin/main
