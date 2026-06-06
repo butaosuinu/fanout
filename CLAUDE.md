@@ -54,6 +54,11 @@ Build the binary with `make build-go` and validate with `make test`.
 - `cmd/fanout/status.go` reads `.fanout/state.json` and queries GitHub PR state.
   `cmd/fanout/lifecycle.go` implements `--close`, `--merge`, and `--cleanup`
   against recorded state rows.
+- `cmd/fanout/dashboard.go` implements the `dashboard` subcommand (dispatched
+  before `cliflags.Parse`, like `update`): it starts the read-only web
+  dashboard, handles reuse-if-running, token generation, browser open, and
+  registers the `prefix + D` tmux keybinding (`bindDashboardKey`, also called
+  after a live `executePlan`).
 - `internal/runtime` resolves the git repository root and the tmux target.
   Action mode must be invoked from inside tmux. By default fanout targets the
   invoking pane; `--session` targets a named tmux session.
@@ -61,7 +66,17 @@ Build the binary with `make build-go` and validate with `make test`.
   setup, and `git worktree add` under `.fanout/worktrees/<slug>/`.
 - `internal/tmuxrun` owns direct tmux operations:
   `split-window -d -h -P -F '#{pane_id}'`, pane titles, tiled layout, agent
-  command send, and best-effort pane kill during cleanup.
+  command send, best-effort pane kill during cleanup, `ListPaneIDs` (liveness
+  for the dashboard), and `BindDashboardKey`.
+- `internal/sessionview` is the shared read-only data layer: it aggregates
+  `.fanout/state.json` + tmux liveness + GitHub PR state into a `Snapshot`
+  grouped by parent ("Session"). IO is injected via `Collectors` so it is pure
+  and unit-testable; both the web dashboard (now) and a future TUI consume the
+  same `Build`.
+- `internal/dashboard` is the localhost web server: `server.go` (GET-only mux,
+  token middleware, SSE), `poller.go` (two-tier state/tmux + throttled gh
+  refresh, broadcast on change), `sse.go` (channel hub), `runfile.go`
+  (`.fanout/dashboard.json` reuse-if-running), and an embedded `static/` SPA.
 - `internal/agent` maps supported agents (`claude`, `codex`) to launch
   commands and validates installed CLIs for live mode.
 - `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
@@ -87,6 +102,14 @@ Build the binary with `make build-go` and validate with `make test`.
 - `--status`, `--close`, `--merge`, and `--cleanup` do not inspect old pane
   prompts or external config. They operate on `.fanout/state.json` or
   `FANOUT_STATE_PATH`.
+- `fanout dashboard --web` is the one HTTP surface, and it is deliberately
+  carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
+  server that only ever reads state/tmux/gh and never mutates repo or GitHub
+  state. The "no HTTP/sockets" guidance elsewhere is about the old dmux
+  notification path (outbound only); #137/#142 explicitly delegated the Web UI
+  decision to dashboard #117, which this implements standalone (no TUI
+  dependency — the future TUI just reuses `internal/sessionview`). Keep it
+  read-only: do not add mutation endpoints.
 - `.fanout/worktrees/<slug>/` directories without a state row are treated as an
   action-mode migration fallback and skipped when their slug matches the child
   this run would create.

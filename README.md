@@ -202,6 +202,7 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -318,6 +319,44 @@ They do not discover arbitrary worktrees by scanning the filesystem.
 Like `--status`, these commands honor `FANOUT_STATE_PATH`; otherwise they use
 `<git-root>/.fanout/state.json`.
 
+### Dashboard (web UI)
+
+`fanout dashboard --web` starts a **read-only** web dashboard that visualizes
+fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by
+parent issue — and keeps them live in the browser: pane liveness (from
+`tmux list-panes`), issue state, and PR merge status (the same data source as
+`--status`, reused across every parent in the repo at once). It never mutates
+repo or GitHub state, and only ever *reads* tmux. The one intentional tmux side
+effect is the convenience `prefix + D` keybinding it registers in your running
+tmux server (opt out below).
+
+```
+fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
+```
+
+- **Always available, on demand.** Launch it from a terminal, or press
+  **`prefix + D`** inside tmux: after a live fan-out (and whenever the dashboard
+  itself starts) fanout registers that tmux keybinding for you, so any pane can
+  pop the dashboard. The key launches the server in a detached
+  `fanout-dashboard` window, so it outlives the keypress; a second press just
+  reopens the existing URL. Disable the auto-binding with `--no-dashboard-keybind`
+  (fan-out) / `--no-keybind` (dashboard), the `dashboardKeybind` config key, or
+  `FANOUT_DASHBOARD_KEYBIND=0`.
+- **localhost only.** The server binds `127.0.0.1` and exposes GET-only
+  endpoints (`/api/snapshot`, an SSE `/api/stream`, and the embedded UI). `--port`
+  defaults to `0` (an OS-assigned ephemeral port); the chosen URL is printed.
+- **Token by default.** A random token is generated each start and embedded in
+  the printed/opened URL, gating `/api/*` so other local users or processes
+  cannot read your issue/PR data off the loopback port. Pass `--no-token` on a
+  single-user machine to drop it.
+- **`--open`** opens the URL in your default browser. The dashboard reuses a
+  server that is already running (recorded in `.fanout/dashboard.json`) instead
+  of starting a second one.
+- **Degrades gracefully.** With `gh` logged out it shows a banner and a
+  state-only view; outside tmux it still serves, marking liveness unknown.
+
+Run `fanout dashboard --help` for the full flag list.
+
 ### `--check-update`
 
 `fanout --check-update` is read-only. It fetches the latest release tag from
@@ -362,9 +401,10 @@ Exit codes:
 
 ### Settings
 
-The Go implementation can resolve five opinionated briefing behavior switches.
-The deprecated Bash `./fanout` does not support these new flags, files, or env
-vars. Defaults are all `true` to preserve existing behavior.
+The Go implementation can turn six opinionated behaviors on or off (five
+briefing toggles plus the dashboard keybinding). The deprecated Bash `./fanout`
+does not support these new flags, files, or env vars. Defaults are all `true`
+to preserve existing behavior.
 
 Resolution order is: **CLI flag > environment variable > repo config file >
 user config file > built-in default**. fanout applies layers in the reverse
@@ -380,7 +420,8 @@ parent repository root, not the child worktree. The user config path is
   "prReviewGate": true,
   "briefingCodeReview": true,
   "agentTeamsHint": false,
-  "prVisualization": true
+  "prVisualization": true,
+  "dashboardKeybind": true
 }
 ```
 
@@ -391,6 +432,7 @@ parent repository root, not the child worktree. The user config path is
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
+| Dashboard `prefix + D` tmux keybinding | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 
 Environment values accept `1/true/yes/on` and `0/false/no/off`
 (case-insensitive). Invalid env values, unknown file keys, and non-boolean

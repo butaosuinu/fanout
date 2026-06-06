@@ -63,6 +63,7 @@ type Config struct {
 	AgentTeamsHint     *bool
 	CodexPlanMode      *bool
 	PRVisualization    *bool
+	DashboardKeybind   *bool
 	Format             string
 }
 
@@ -206,6 +207,8 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--no-codex-plan-mode":      func(cfg *Config) { cfg.CodexPlanMode = boolPtr(false) },
 		"--pr-visualization":        func(cfg *Config) { cfg.PRVisualization = boolPtr(true) },
 		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = boolPtr(false) },
+		"--dashboard-keybind":       func(cfg *Config) { cfg.DashboardKeybind = boolPtr(true) },
+		"--no-dashboard-keybind":    func(cfg *Config) { cfg.DashboardKeybind = boolPtr(false) },
 	}
 
 	requireValue := func(flag string, i int) (string, bool) {
@@ -385,6 +388,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.CodexPlanMode))
 		case cfg.PRVisualization != nil:
 			return statusConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
+		case cfg.DashboardKeybind != nil:
+			return statusConflict(lg, boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
 		case state.sleepExplicit:
 			return statusConflict(lg, "--sleep")
 		case state.popupExplicit:
@@ -444,6 +449,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return lifecycleConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.CodexPlanMode))
 		case cfg.PRVisualization != nil:
 			return lifecycleConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
+		case cfg.DashboardKeybind != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
 		case state.sleepExplicit:
 			return lifecycleConflict(lg, "--sleep")
 		case state.popupExplicit:

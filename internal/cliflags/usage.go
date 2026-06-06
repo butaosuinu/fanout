@@ -96,6 +96,10 @@ Options:
   --pr-visualization / --no-pr-visualization
                       Include or omit structured PR-body plus gated Mermaid
                       guidance in auto-PR child briefings. Default: on.
+  --dashboard-keybind / --no-dashboard-keybind
+                      Register (or skip) a tmux 'prefix + D' keybinding after a
+                      live fan-out so the read-only web dashboard can be opened
+                      from any pane. Default: on.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.
@@ -123,6 +127,11 @@ Options:
                       reported without starting conflict resolution.
   --cleanup           Close recorded child worktrees whose issue is CLOSED or
                       has a MERGED closed-by PR.
+  dashboard           Subcommand. Start a read-only localhost web dashboard
+                      that visualizes fanout Sessions (panes grouped by parent)
+                      live — pane liveness, issue state, PR merge status.
+                      127.0.0.1-bound, GET-only, token-gated. See
+                      'fanout dashboard --help'.
   update              Subcommand. Replace this binary and bundled Claude/Codex
                       integrations through install.sh immediately. Supports
                       --version <tag> and --no-skills.
