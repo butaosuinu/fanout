@@ -90,3 +90,66 @@ func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestCapturePanePrefersAlternateScreen(t *testing.T) {
+	dir := t.TempDir()
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+has_alt=0
+for arg in "$@"; do
+	if [ "$arg" = "-a" ]; then
+		has_alt=1
+	fi
+done
+if [ "$1" = "capture-pane" ]; then
+	if [ "$has_alt" = "1" ]; then
+		printf 'ALTSCREEN Ready\n'
+	else
+		printf 'NORMALSCREEN\n'
+	fi
+	exit 0
+fi
+exit 2
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := CapturePane("%1")
+	if err != nil {
+		t.Fatalf("CapturePane() failed: %v", err)
+	}
+	if got != "ALTSCREEN Ready\n" {
+		t.Fatalf("CapturePane() = %q, want alternate screen", got)
+	}
+}
+
+func TestCapturePaneFallsBackToNormalScreen(t *testing.T) {
+	dir := t.TempDir()
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+for arg in "$@"; do
+	if [ "$arg" = "-a" ]; then
+		exit 1
+	fi
+done
+if [ "$1" = "capture-pane" ]; then
+	printf 'NORMALSCREEN Ready\n'
+	exit 0
+fi
+exit 2
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := CapturePane("%1")
+	if err != nil {
+		t.Fatalf("CapturePane() failed: %v", err)
+	}
+	if got != "NORMALSCREEN Ready\n" {
+		t.Fatalf("CapturePane() = %q, want normal screen fallback", got)
+	}
+}

@@ -10,17 +10,22 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101
   branch -> fanout/first-child-101
   base -> main
-  codex-plan-mode -> app-server collaborationMode.mode=plan
-  briefing size: 642 bytes
-  codex plan mode: app-server collaborationMode.mode=plan
+  codex-plan-mode -> interactive Codex TUI, then /plan
+  briefing size: 636 bytes
+  codex plan mode: interactive Codex TUI, then /plan
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/first-child-101 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 'exec /bin/sh -lc '\''fanout __codex-plan-mode --codex codex --prompt '\''\'\'''\''[fanout #101 of #100] first-child-101: First child. read /tmp/fanout-project_root-101.md and propose a plan.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101 'exec /bin/sh -lc '\''codex; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T first-child-101
     $ tmux select-layout -t '%1' tiled
+    # after the Codex TUI reaches Ready, fanout switches it to Plan Mode and submits the prompt
+    $ tmux send-keys -t <pane_id> -l /plan
+    $ tmux send-keys -t <pane_id> Enter
+    $ tmux send-keys -t <pane_id> -l '[fanout #101 of #100] first-child-101: First child. read /tmp/fanout-project_root-101.md and propose a plan.'
+    $ tmux send-keys -t <pane_id> Enter
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #101: dry-run complete
@@ -30,17 +35,22 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102
   branch -> fanout/second-child-102
   base -> main
-  codex-plan-mode -> app-server collaborationMode.mode=plan
-  briefing size: 643 bytes
-  codex plan mode: app-server collaborationMode.mode=plan
+  codex-plan-mode -> interactive Codex TUI, then /plan
+  briefing size: 637 bytes
+  codex plan mode: interactive Codex TUI, then /plan
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root worktree add -b fanout/second-child-102 <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 'exec /bin/sh -lc '\''fanout __codex-plan-mode --codex codex --prompt '\''\'\'''\''[fanout #102 of #100] second-child-102: Second child. read /tmp/fanout-project_root-102.md and propose a plan.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102 'exec /bin/sh -lc '\''codex; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T second-child-102
     $ tmux select-layout -t '%1' tiled
+    # after the Codex TUI reaches Ready, fanout switches it to Plan Mode and submits the prompt
+    $ tmux send-keys -t <pane_id> -l /plan
+    $ tmux send-keys -t <pane_id> Enter
+    $ tmux send-keys -t <pane_id> -l '[fanout #102 of #100] second-child-102: Second child. read /tmp/fanout-project_root-102.md and propose a plan.'
+    $ tmux send-keys -t <pane_id> Enter
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #102: dry-run complete

@@ -39,9 +39,6 @@ func main() {
 	if isUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdUpdate(os.Args[2:], version, ghissue.Runner{}, lg)))
 	}
-	if isCodexPlanShimRequest(os.Args[1:]) {
-		os.Exit(int(cmdCodexPlanShim(os.Args[2:], lg)))
-	}
 	if isCheckUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
 	}
@@ -89,10 +86,6 @@ func isCheckUpdateRequest(args []string) bool {
 
 func isUpdateRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "update"
-}
-
-func isCodexPlanShimRequest(args []string) bool {
-	return len(args) > 0 && args[0] == agent.CodexPlanShimSubcommand
 }
 
 func versionLine() string {

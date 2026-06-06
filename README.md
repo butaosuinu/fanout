@@ -216,20 +216,18 @@ is accepted but ignored by the direct tmux path.
 ### Codex Plan Mode
 
 `--codex-plan-mode` is an opt-in launch mode for `--agent codex`. Instead of
-running positional `codex "<prompt>"`, fanout starts a hidden fanout shim in the
-child pane; the shim drives `codex app-server` over the default stdio transport
-and starts the first turn with `collaborationMode.mode = "plan"`. The child
-briefing is also rewritten for Plan Mode: it asks for a `<proposed_plan>`
-implementation plan and explicitly forbids file edits, commits, pushes, and PR
-creation in that first turn.
+running positional `codex "<prompt>"`, fanout opens the normal interactive
+Codex TUI in the child pane, switches it with `/plan`, and then submits the
+same one-line fanout prompt. The child briefing is also rewritten for Plan Mode:
+it asks for a `<proposed_plan>` implementation plan and explicitly forbids file
+edits, commits, pushes, and PR creation in that first turn.
 
-Because this path uses Codex's experimental app-server protocol, fanout does
-not silently fall back to normal Codex startup. If the installed Codex app
-server does not advertise the Plan collaboration mode, the child command exits
-with an error. The shim is a headless Plan turn rather than the interactive
-Codex TUI; when the plan turn completes, the pane returns to the user's shell.
-Use the normal Codex CLI from that shell when you want to proceed with
-implementation.
+This path depends on Codex CLI's interactive `/plan` command. The pane remains
+an interactive Codex TUI session so the user can continue from the Plan Mode
+conversation. If fanout cannot observe Codex reaching `Ready` or visibly
+entering `Plan mode` (for example because Codex is waiting on onboarding or
+trust prompts), the launch fails before state is recorded and fanout cleans up
+the pane/worktree so the child can be retried after Codex is ready.
 
 ### `--status` output
 
@@ -473,8 +471,8 @@ fanout 123 --sleep 8
 # Choose the agent CLI for child panes
 fanout 123 --agent codex
 
-# Start Codex children as app-server Plan Mode turns instead of normal
-# positional Codex prompts. The pane prints a plan, then returns to a shell.
+# Start Codex children as interactive Codex TUI sessions, switch to /plan,
+# and submit the fanout prompt.
 fanout 123 --agent codex --codex-plan-mode
 
 # Remove the automatic PR-opening requirement from child briefings for one run

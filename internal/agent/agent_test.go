@@ -44,11 +44,3 @@ func TestBuildResolvedCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.
 		t.Fatalf("BuildResolvedCommand() = %q, want %q", got, want)
 	}
 }
-
-func TestBuildCodexPlanCommandQuotesShimArguments(t *testing.T) {
-	got := BuildCodexPlanCommand("/tmp/fanout binary", "/tmp/codex", "[fanout #1] it's ready")
-	want := "'/tmp/fanout binary' __codex-plan-mode --codex /tmp/codex --prompt '[fanout #1] it'\\''s ready'"
-	if got != want {
-		t.Fatalf("BuildCodexPlanCommand() = %q, want %q", got, want)
-	}
-}

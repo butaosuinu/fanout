@@ -64,6 +64,59 @@ func SelectTiled(session string) error {
 	return nil
 }
 
+// CapturePane returns the currently visible text for a pane.
+func CapturePane(paneID string) (string, error) {
+	if strings.TrimSpace(paneID) == "" {
+		return "", fmt.Errorf("tmux capture-pane: empty pane id")
+	}
+
+	out, altErr := capturePane(paneID, "-a")
+	if altErr == nil {
+		return out, nil
+	}
+
+	out, err := capturePane(paneID)
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: alternate screen: %v; normal screen: %w", altErr, err)
+	}
+	return out, nil
+}
+
+func capturePane(paneID string, extraArgs ...string) (string, error) {
+	args := []string{"capture-pane", "-t", paneID, "-p"}
+	args = append(args, extraArgs...)
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// SendLiteral sends text to a pane without tmux interpreting it as key names.
+func SendLiteral(paneID, text string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("tmux send-keys: empty pane id")
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", text).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys -l: %w", err)
+	}
+	return nil
+}
+
+// SendKey sends a named tmux key, such as C-m, to a pane.
+func SendKey(paneID, key string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("tmux send-keys: empty pane id")
+	}
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("tmux send-keys: empty key")
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", paneID, key).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys %s: %w", key, err)
+	}
+	return nil
+}
+
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

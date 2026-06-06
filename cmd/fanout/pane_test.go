@@ -96,16 +96,67 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	}
 }
 
-func TestBuildAgentCommandUsesCodexPlanShimInDryRun(t *testing.T) {
+func TestBuildAgentCommandStartsCodexTUIWithoutPromptInPlanModeDryRun(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: boolPtr(true)}
 
 	got, err := buildAgentCommand(cfg, "[fanout #1] plan")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "fanout __codex-plan-mode --codex codex --prompt '[fanout #1] plan'"
+	want := "codex"
 	if got != want {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestCodexTUIReadyWaitsForReadyInput(t *testing.T) {
+	loading := "OpenAI Codex\nmodel:     loading\nStarting MCP servers\nStarting"
+	if codexTUIReady(loading) {
+		t.Fatal("codexTUIReady() = true during loading startup, want false")
+	}
+
+	preReady := "OpenAI Codex\nmodel:     gpt-5.5 xhigh   /model to change\ndirectory: ~/repo"
+	if codexTUIReady(preReady) {
+		t.Fatal("codexTUIReady() = true before Ready status, want false")
+	}
+
+	ready := "OpenAI Codex\n\ngpt-5.5 xhigh · /repo · Ready · Context 0% used"
+	if !codexTUIReady(ready) {
+		t.Fatal("codexTUIReady() = false on ready TUI screen, want true")
+	}
+
+	inputReady := "directory: ~/repo\n\n› Run /review on my current changes\n\n  gpt-5.5 xhigh · ~/repo"
+	if !codexTUIReady(inputReady) {
+		t.Fatal("codexTUIReady() = false on input-ready TUI screen, want true")
+	}
+
+	blocked := "OpenAI Codex\n\nRepair Codex local data now? [y/N]:\n\n› "
+	if codexTUIReady(blocked) {
+		t.Fatal("codexTUIReady() = true while Codex is blocked on repair prompt, want false")
+	}
+}
+
+func TestCodexPlanModeActiveRecognizesPlanModeStatus(t *testing.T) {
+	if codexPlanModeActive("OpenAI Codex\nReady") {
+		t.Fatal("codexPlanModeActive() = true without Plan mode, want false")
+	}
+	if !codexPlanModeActive("OpenAI Codex\nReady · Context 0% used   Plan mode") {
+		t.Fatal("codexPlanModeActive() = false with Plan mode status, want true")
+	}
+	if !codexPlanModeActive("model: gpt-5.5\ndirectory: ~/repo\nReady · Plan mode") {
+		t.Fatal("codexPlanModeActive() = false on narrow Plan mode status, want true")
+	}
+	if !codexPlanModeActive("› Write tests for @filename\n\n  gpt-5.5 xhigh · ~/repo... Plan mode") {
+		t.Fatal("codexPlanModeActive() = false when only the status line shows Plan mode, want true")
+	}
+}
+
+func TestCodexPlanModeDisabledRecognizesRejectedSlashCommand(t *testing.T) {
+	if !codexPlanModeDisabled("■ '/plan' is disabled while a task is in progress.") {
+		t.Fatal("codexPlanModeDisabled() = false for disabled /plan message, want true")
+	}
+	if codexPlanModeDisabled("OpenAI Codex\nReady · Plan mode") {
+		t.Fatal("codexPlanModeDisabled() = true for active Plan mode, want false")
 	}
 }
 

@@ -90,8 +90,8 @@ Options:
                       Include or omit the Claude-only Agent Teams hint in
                       child briefings. Default: on.
   --codex-plan-mode / --no-codex-plan-mode
-                      For --agent codex, start the child through fanout's
-                      Codex app-server shim with collaborationMode.mode=plan
+                      For --agent codex, open the interactive Codex TUI,
+                      switch it with /plan, and submit the fanout prompt
                       instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
   --pr-visualization / --no-pr-visualization
                       Include or omit structured PR-body plus gated Mermaid

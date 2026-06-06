@@ -79,7 +79,7 @@ func renderCodexPlanBriefing(num int, title, body string) string {
 		body,
 		"",
 		"Requirements:",
-		"- You are starting in Codex Plan Mode through fanout's app-server shim.",
+		"- You are starting in interactive Codex Plan Mode through fanout.",
 		"- Inspect the issue and repository only as needed to produce an implementation plan.",
 		"- Do not modify files, create commits, push branches, or open pull requests in this turn.",
 		"- Your first response must be an implementation plan wrapped in <proposed_plan>...</proposed_plan>.",

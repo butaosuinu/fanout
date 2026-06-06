@@ -79,9 +79,9 @@ use this workflow directly.
    tmux`, tell the user to start or attach a tmux session first.
 3. An agent name is required. Pass `--agent <name>` or set `FANOUT_AGENT`.
    MVP supported agents are `claude` and `codex`.
-4. `--codex-plan-mode` is valid only with `--agent codex`. It starts a
-   headless Codex app-server Plan Mode turn, not the interactive Codex TUI;
-   when the plan completes, the child pane returns to a shell.
+4. `--codex-plan-mode` is valid only with `--agent codex`. It opens the
+   interactive Codex TUI, switches it with `/plan`, and submits the fanout
+   prompt.
 
 ## Workflow
 
@@ -299,9 +299,12 @@ Key points:
   guidance in auto-PR child briefings. Defaults are all on, and these settings
   are Go-implementation only.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
-  When enabled, the child pane runs fanout's hidden Codex app-server shim with
-  `collaborationMode.mode=plan`; the first response should be a plan, and the
-  pane returns to a shell after that headless turn completes.
+  When enabled, the child pane starts the interactive Codex TUI, fanout sends
+  `/plan`, and then fanout submits the initial child prompt; the first response
+  should be a plan and the pane remains in the Codex TUI. If Codex is not
+  visibly ready or Plan Mode is not visibly confirmed, fanout fails that launch
+  before recording state and cleans up the pane/worktree so the child can be
+  retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

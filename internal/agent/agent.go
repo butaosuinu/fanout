@@ -15,8 +15,6 @@ type Definition struct {
 	Command string
 }
 
-const CodexPlanShimSubcommand = "__codex-plan-mode"
-
 var registry = map[string]Definition{
 	"claude": {Name: "claude", Command: "claude"},
 	"codex":  {Name: "codex", Command: "codex"},
@@ -74,15 +72,6 @@ func BuildResolvedCommand(name, prompt string) (string, error) {
 		return "", err
 	}
 	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + BuildCommandWithExecutable(path, prompt), nil
-}
-
-// BuildCodexPlanCommand builds the hidden fanout shim command that starts a
-// Codex app-server turn with collaborationMode.mode=plan.
-func BuildCodexPlanCommand(fanoutExecutable, codexExecutable, prompt string) string {
-	return ShellQuote(fanoutExecutable) +
-		" " + CodexPlanShimSubcommand +
-		" --codex " + ShellQuote(codexExecutable) +
-		" --prompt " + ShellQuote(prompt)
 }
 
 // BuildCommandWithExecutable builds a shell command for a known executable path.

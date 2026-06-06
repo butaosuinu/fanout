@@ -121,7 +121,7 @@ load helpers
   assert_golden scenario-sub-issue-only-codex
 }
 
-@test "agent-codex plan mode variant of scenario-sub-issue-only: app-server shim launch" {
+@test "agent-codex plan mode variant of scenario-sub-issue-only: interactive TUI launch" {
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 --agent codex --codex-plan-mode
   assert_success
