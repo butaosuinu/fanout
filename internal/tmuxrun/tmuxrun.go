@@ -11,6 +11,7 @@ import (
 
 const userShellExpr = `"${SHELL:-/bin/sh}"`
 const paneListFormat = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+const paneAlternateFormat = "#{alternate_on}"
 
 // PaneInfo describes a pane currently known to tmux.
 type PaneInfo struct {
@@ -100,7 +101,16 @@ func shouldListSessionPanes(target string) bool {
 }
 
 func exactSessionTarget(name string) string {
+	if isQualifiedSessionTarget(name) {
+		return name
+	}
 	return "=" + name
+}
+
+func isQualifiedSessionTarget(name string) bool {
+	return strings.HasPrefix(name, "=") ||
+		strings.HasPrefix(name, "$") ||
+		strings.ContainsAny(name, "*?[")
 }
 
 func parseListPanesOutput(out string) ([]PaneInfo, error) {
@@ -152,10 +162,17 @@ func CapturePaneOutput(paneID string, lines int) (string, error) {
 	if lines < 0 {
 		return "", fmt.Errorf("lines must be non-negative")
 	}
-	if out, err := capturePaneOutput(paneID, 0, true); err == nil {
-		return out, nil
+	if paneAlternateOn(paneID) {
+		if out, err := capturePaneOutput(paneID, 0, true); err == nil {
+			return out, nil
+		}
 	}
 	return capturePaneOutput(paneID, lines, false)
+}
+
+func paneAlternateOn(paneID string) bool {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, paneAlternateFormat).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "1"
 }
 
 func capturePaneOutput(paneID string, lines int, alternateScreen bool) (string, error) {
@@ -173,14 +190,14 @@ func capturePaneOutput(paneID string, lines int, alternateScreen bool) (string, 
 	return string(out), nil
 }
 
-// SelectPane selects paneID within its containing tmux window.
+// SelectPane selects paneID and brings its containing tmux window on screen.
 func SelectPane(paneID string) error {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
 		return fmt.Errorf("pane id is required")
 	}
-	if err := exec.Command("tmux", "select-pane", "-t", paneID).Run(); err != nil {
-		return fmt.Errorf("tmux select-pane: %w", err)
+	if err := exec.Command("tmux", "switch-client", "-t", paneID).Run(); err != nil {
+		return fmt.Errorf("tmux switch-client: %w", err)
 	}
 	return nil
 }

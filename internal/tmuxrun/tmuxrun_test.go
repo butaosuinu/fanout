@@ -207,8 +207,38 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	assertTmuxArgs(t, argsPath, []string{"list-panes", "-s", "-t", "=project.dev", "-F", paneListFormat})
 }
 
+func TestListPanesPreservesQualifiedSessionTargetArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `if [ "$1" = "has-session" ]; then
+	exit 0
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if _, err := ListPanes("=fanout"); err != nil {
+		t.Fatalf("ListPanes() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"list-panes", "-s", "-t", "=fanout", "-F", paneListFormat})
+}
+
+func TestListPanesPreservesSessionIDTargetArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `if [ "$1" = "has-session" ]; then
+	exit 0
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if _, err := ListPanes("$1"); err != nil {
+		t.Fatalf("ListPanes() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"list-panes", "-s", "-t", "$1", "-F", paneListFormat})
+}
+
 func TestCapturePaneOutputUsesAlternateScreenWhenAvailable(t *testing.T) {
-	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '1\n'
+	exit 0
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 printf 'alternate\n'
 `)
 
@@ -223,7 +253,11 @@ printf 'alternate\n'
 }
 
 func TestCapturePaneOutputFallsBackToNormalCaptureArgs(t *testing.T) {
-	argsPath := installTmuxShim(t, `if [ "$2" = "-a" ]; then
+	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '1\n'
+	exit 0
+fi
+if [ "$2" = "-a" ]; then
 	exit 1
 fi
 printf '%s\n' "$@" > "$TMUXRUN_ARGS"
@@ -240,8 +274,34 @@ printf 'line 1\nline 2\n'
 	assertTmuxArgs(t, argsPath, []string{"capture-pane", "-p", "-t", "%7", "-S", "-25"})
 }
 
+func TestCapturePaneOutputUsesNormalScreenWhenAlternateOff(t *testing.T) {
+	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '0\n'
+	exit 0
+fi
+if [ "$2" = "-a" ]; then
+	exit 2
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf 'normal\n'
+`)
+
+	got, err := CapturePaneOutput("%7", 25)
+	if err != nil {
+		t.Fatalf("CapturePaneOutput() failed: %v", err)
+	}
+	if got != "normal\n" {
+		t.Fatalf("CapturePaneOutput() = %q, want normal output", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"capture-pane", "-p", "-t", "%7", "-S", "-25"})
+}
+
 func TestCapturePaneOutputOmitsStartWhenLinesZero(t *testing.T) {
-	argsPath := installTmuxShim(t, `if [ "$2" = "-a" ]; then
+	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '0\n'
+	exit 0
+fi
+if [ "$2" = "-a" ]; then
 	exit 1
 fi
 printf '%s\n' "$@" > "$TMUXRUN_ARGS"
@@ -253,14 +313,14 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	assertTmuxArgs(t, argsPath, []string{"capture-pane", "-p", "-t", "%8"})
 }
 
-func TestSelectPaneBuildsArgs(t *testing.T) {
+func TestSelectPaneSwitchesClientToPaneTarget(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
 
 	if err := SelectPane("%9"); err != nil {
 		t.Fatalf("SelectPane() failed: %v", err)
 	}
-	assertTmuxArgs(t, argsPath, []string{"select-pane", "-t", "%9"})
+	assertTmuxArgs(t, argsPath, []string{"switch-client", "-t", "%9"})
 }
 
 func TestIsPaneAliveBuildsArgs(t *testing.T) {
@@ -304,6 +364,26 @@ func TestHasSessionBuildsArgs(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{"has-session", "-t", "=fanout"})
 }
 
+func TestHasSessionPreservesQualifiedTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "=fanout", want: "=fanout"},
+		{name: "$1", want: "$1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+			if !HasSession(tc.name) {
+				t.Fatalf("HasSession() = false, want true")
+			}
+			assertTmuxArgs(t, argsPath, []string{"has-session", "-t", tc.want})
+		})
+	}
+}
+
 func TestHasSessionReturnsFalseWhenMissing(t *testing.T) {
 	installTmuxShim(t, `exit 1
 `)
@@ -329,6 +409,17 @@ func TestAttachOrSwitchAttachesOutsideTmux(t *testing.T) {
 `)
 
 	if err := AttachOrSwitch("fanout"); err != nil {
+		t.Fatalf("AttachOrSwitch() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"attach-session", "-t", "=fanout"})
+}
+
+func TestAttachOrSwitchPreservesQualifiedTarget(t *testing.T) {
+	t.Setenv("TMUX", "")
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := AttachOrSwitch("=fanout"); err != nil {
 		t.Fatalf("AttachOrSwitch() failed: %v", err)
 	}
 	assertTmuxArgs(t, argsPath, []string{"attach-session", "-t", "=fanout"})
