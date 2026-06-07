@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	store := state.Store{Panes: []state.Pane{{Parent: manualPaneParentRef, IssueNum: -1}}}
 	req := newManualPaneRequest(cfg, "/repo", store, manualPaneOptions{
 		Title:  "Manual Diagnostics",
+		Body:   "extra context",
 		Slug:   "manual-diagnostics",
 		Agent:  "codex",
 		Prompt: "inspect the workspace",
@@ -79,9 +81,17 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	if req.ParentRef != manualPaneParentRef || req.Number != -2 {
 		t.Fatalf("manual identity = parent %q number %d, want %q -2", req.ParentRef, req.Number, manualPaneParentRef)
 	}
-	if req.Prompt != "inspect the workspace" || req.Agent != "codex" {
+	if req.Agent != "codex" || !strings.Contains(req.Prompt, "inspect the workspace") {
 		t.Fatalf("manual launch = prompt %q agent %q", req.Prompt, req.Agent)
 	}
+	if req.BriefingPath != "/tmp/fanout-repo--2.md" || req.BriefingBody != "extra context" {
+		t.Fatalf("manual briefing = path %q body %q", req.BriefingPath, req.BriefingBody)
+	}
+	if !strings.Contains(req.Prompt, "read /tmp/fanout-repo--2.md for additional context and begin") {
+		t.Fatalf("manual prompt does not reference briefing path: %q", req.Prompt)
+	}
+	_ = os.Remove(req.BriefingPath)
+	t.Cleanup(func() { _ = os.Remove(req.BriefingPath) })
 
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
@@ -97,6 +107,9 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
+	}
+	if _, err := os.Stat(req.BriefingPath); !os.IsNotExist(err) {
+		t.Fatalf("manual dry-run wrote briefing file %s: %v", req.BriefingPath, err)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
@@ -28,6 +29,7 @@ type paneRequest struct {
 	Body                string
 	BriefingPath        string
 	BriefingBody        string
+	WriteBriefingDryRun bool
 	ShortTitle          string
 	Slug                string
 	DisplayNameOverride string
@@ -69,7 +71,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		return false
 	}
 
-	if req.BriefingPath != "" {
+	if req.BriefingPath != "" && (!cfg.DryRun || req.WriteBriefingDryRun) {
 		if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 			lg.Err("#%d: write briefing: %v", req.Number, err)
 			return false
@@ -167,9 +169,11 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		Title:        issue.Title,
 		Body:         issue.Body,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		ShortTitle:   shortIssueTitle(issue.Title),
-		Slug:         slug,
-		Agent:        cfg.Agent,
+		// Existing issue dry-runs write briefings; Tier 1 tests depend on that.
+		WriteBriefingDryRun: true,
+		ShortTitle:          shortIssueTitle(issue.Title),
+		Slug:                slug,
+		Agent:               cfg.Agent,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -213,6 +217,13 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 	if prompt == "" {
 		prompt = title
 	}
+	briefingPath := ""
+	briefingBody := ""
+	if opts.Body != "" {
+		briefingPath = briefing.Path(projectRoot, number)
+		briefingBody = opts.Body
+		prompt = manualPromptWithBriefing(prompt, briefingPath)
+	}
 	branchName := naming.BranchName(opts.BranchName, cfg.BranchPrefix, slug)
 	return paneRequest{
 		ParentRef:    manualPaneParentRef,
@@ -224,9 +235,22 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		BranchName:   branchName,
 		Prompt:       prompt,
 		Agent:        agentName,
-		BriefingBody: opts.Body,
+		BriefingPath: briefingPath,
+		BriefingBody: briefingBody,
 		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh}),
 	}
+}
+
+func manualPromptWithBriefing(prompt, briefingPath string) string {
+	prompt = strings.TrimSpace(prompt)
+	if strings.Contains(prompt, briefingPath) {
+		return prompt
+	}
+	prompt = strings.TrimRight(prompt, ".")
+	if prompt == "" {
+		return fmt.Sprintf("read %s and begin.", briefingPath)
+	}
+	return fmt.Sprintf("%s. read %s for additional context and begin.", prompt, briefingPath)
 }
 
 func nextSyntheticPaneNumber(store state.Store, parentRef string) int {
