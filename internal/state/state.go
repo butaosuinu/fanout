@@ -19,6 +19,10 @@ type Store struct {
 	Panes         []Pane `json:"panes"`
 }
 
+// Pane records one launched agent pane. Parent and IssueNum form the
+// idempotency key: issue fanout uses the parent issue or Project ref plus the
+// GitHub issue number, while synthetic launches use a reserved parent such as
+// @manual with non-GitHub numbers that only need to be unique under that parent.
 type Pane struct {
 	Parent       string `json:"parent"`
 	IssueNum     int    `json:"issueNum"`

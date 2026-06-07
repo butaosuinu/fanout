@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
@@ -19,17 +20,33 @@ import (
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
+const manualPaneParentRef = "@manual"
+
 type paneRequest struct {
-	Issue               ghissue.Issue
+	ParentRef           string
+	Number              int
+	Title               string
+	Body                string
 	BriefingPath        string
 	BriefingBody        string
+	WriteBriefingDryRun bool
 	ShortTitle          string
 	Slug                string
 	DisplayNameOverride string
 	BranchName          string
-	OneLinePrompt       string
+	Prompt              string
+	Agent               string
 	AgentCommand        string
 	Worktree            worktree.Plan
+}
+
+type manualPaneOptions struct {
+	Title      string
+	Body       string
+	Slug       string
+	BranchName string
+	Agent      string
+	Prompt     string
 }
 
 type paneStateRecorder interface {
@@ -39,20 +56,26 @@ type paneStateRecorder interface {
 
 func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette) bool {
 	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents)
-	agentCmd, err := buildAgentCommand(cfg, req.OneLinePrompt)
+	return createPane(cfg, lg, info, req, recorder, c)
+}
+
+func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, recorder paneStateRecorder, c log.Palette) bool {
+	agentCmd, err := buildAgentCommand(cfg, req.Agent, req.Prompt)
 	if err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
+		lg.Err("#%d: %v", req.Number, err)
 		return false
 	}
 	req.AgentCommand = agentCmd
 	if req.Worktree.Refresh && req.Worktree.RefreshError != nil {
-		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, req.Worktree.RefreshError)
+		lg.Err("#%d: prepare worktree: %v", req.Number, req.Worktree.RefreshError)
 		return false
 	}
 
-	if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
-		lg.Err("#%d: write briefing: %v", req.Issue.Number, err)
-		return false
+	if req.BriefingPath != "" && (!cfg.DryRun || req.WriteBriefingDryRun) {
+		if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
+			lg.Err("#%d: write briefing: %v", req.Number, err)
+			return false
+		}
 	}
 
 	logPaneRequest(req, lg)
@@ -70,70 +93,70 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		NoRefresh:   cfg.NoRefresh,
 	})
 	if err != nil {
-		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, err)
+		lg.Err("#%d: prepare worktree: %v", req.Number, err)
 		return false
 	}
 	if prepared.AlreadyExists {
-		lg.Err("#%d: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", req.Issue.Number, prepared.WorktreePath)
+		lg.Err("#%d: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", req.Number, prepared.WorktreePath)
 		return false
 	}
 
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
-		cleanupFailedLaunch(req.Issue.Number, "", prepared, lg)
+		lg.Err("#%d: %v", req.Number, err)
+		cleanupFailedLaunch(req.Number, "", prepared, lg)
 		return false
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
-		lg.Warn("#%d: %v", req.Issue.Number, err)
+		lg.Warn("#%d: %v", req.Number, err)
 	}
 	if err := tmuxrun.SelectTiled(info.Target); err != nil {
-		lg.Warn("#%d: %v", req.Issue.Number, err)
+		lg.Warn("#%d: %v", req.Number, err)
 	}
 	if recorder != nil {
-		entry := statePane(cfg, req, paneID, prepared.WorktreePath, time.Now().UTC())
+		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC())
 		if err := recorder.RecordPane(entry); err != nil {
-			lg.Err("#%d: write fanout state: %v", req.Issue.Number, err)
-			cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
+			lg.Err("#%d: write fanout state: %v", req.Number, err)
+			cleanupFailedLaunch(req.Number, paneID, prepared, lg)
 			return false
 		}
 	}
 	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
-		Agent:        cfg.Agent,
+		Agent:        req.Agent,
 		DisplayName:  paneTitle(req),
 		BranchName:   req.BranchName,
 		Slug:         req.Slug,
 		WorktreePath: prepared.WorktreePath,
 	}); err != nil {
-		lg.Err("#%d: write worktree metadata: %v", req.Issue.Number, err)
-		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
-		cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
+		lg.Err("#%d: write worktree metadata: %v", req.Number, err)
+		rollbackState(recorder, req.ParentRef, req.Number, lg)
+		cleanupFailedLaunch(req.Number, paneID, prepared, lg)
 		return false
 	}
-	lg.Ok("#%d: pane %s created in %s", req.Issue.Number, paneID, prepared.WorktreePath)
+	lg.Ok("#%d: pane %s created in %s", req.Number, paneID, prepared.WorktreePath)
 	return true
 }
 
-func statePane(cfg *cliflags.Config, req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
+func statePane(req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
 	return state.Pane{
-		Parent:       cfg.ParentRef,
-		IssueNum:     req.Issue.Number,
+		Parent:       req.ParentRef,
+		IssueNum:     req.Number,
 		Slug:         req.Slug,
 		BranchName:   req.BranchName,
 		PaneID:       paneID,
-		Agent:        cfg.Agent,
+		Agent:        req.Agent,
 		DisplayName:  paneTitle(req),
 		WorktreePath: worktreePath,
-		Prompt:       req.OneLinePrompt,
+		Prompt:       req.Prompt,
 		CreatedAt:    now.Format(time.RFC3339),
 	}
 }
 
-func buildAgentCommand(cfg *cliflags.Config, prompt string) (string, error) {
+func buildAgentCommand(cfg *cliflags.Config, agentName, prompt string) (string, error) {
 	if cfg.DryRun {
-		return agent.BuildCommand(cfg.Agent, prompt)
+		return agent.BuildCommand(agentName, prompt)
 	}
-	return agent.BuildResolvedCommand(cfg.Agent, prompt)
+	return agent.BuildResolvedCommand(agentName, prompt)
 }
 
 func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, sharedAcrossParents bool) paneRequest {
@@ -141,10 +164,16 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	slugOverridden := false
 	branchOverride := ""
 	req := paneRequest{
-		Issue:        issue,
+		ParentRef:    cfg.ParentRef,
+		Number:       issue.Number,
+		Title:        issue.Title,
+		Body:         issue.Body,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		ShortTitle:   shortIssueTitle(issue.Title),
-		Slug:         slug,
+		// Existing issue dry-runs write briefings; Tier 1 tests depend on that.
+		WriteBriefingDryRun: true,
+		ShortTitle:          shortIssueTitle(issue.Title),
+		Slug:                slug,
+		Agent:               cfg.Agent,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -166,8 +195,83 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		NoRefresh:   cfg.NoRefresh,
 	})
 	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings)
-	req.OneLinePrompt = oneLinePrompt(cfg.ParentRef, req)
+	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	return req
+}
+
+func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.Store, opts manualPaneOptions) paneRequest {
+	number := nextSyntheticPaneNumber(store, manualPaneParentRef)
+	title := opts.Title
+	if title == "" {
+		title = "Manual agent"
+	}
+	slug := opts.Slug
+	if slug == "" {
+		slug = manualPaneSlug(title, number)
+	}
+	agentName := opts.Agent
+	if agentName == "" {
+		agentName = cfg.Agent
+	}
+	prompt := opts.Prompt
+	if prompt == "" {
+		prompt = title
+	}
+	briefingPath := ""
+	briefingBody := ""
+	if opts.Body != "" {
+		briefingPath = briefing.Path(projectRoot, number)
+		briefingBody = opts.Body
+		prompt = manualPromptWithBriefing(prompt, briefingPath)
+	}
+	branchName := naming.BranchName(opts.BranchName, cfg.BranchPrefix, slug)
+	return paneRequest{
+		ParentRef:    manualPaneParentRef,
+		Number:       number,
+		Title:        title,
+		Body:         opts.Body,
+		ShortTitle:   shortIssueTitle(title),
+		Slug:         slug,
+		BranchName:   branchName,
+		Prompt:       prompt,
+		Agent:        agentName,
+		BriefingPath: briefingPath,
+		BriefingBody: briefingBody,
+		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh}),
+	}
+}
+
+func manualPromptWithBriefing(prompt, briefingPath string) string {
+	prompt = strings.TrimSpace(prompt)
+	if strings.Contains(prompt, briefingPath) {
+		return prompt
+	}
+	prompt = strings.TrimRight(prompt, ".")
+	if prompt == "" {
+		return fmt.Sprintf("read %s and begin.", briefingPath)
+	}
+	return fmt.Sprintf("%s. read %s for additional context and begin.", prompt, briefingPath)
+}
+
+func nextSyntheticPaneNumber(store state.Store, parentRef string) int {
+	next := -1
+	for _, pane := range store.PanesForParent(parentRef) {
+		if pane.IssueNum <= next {
+			next = pane.IssueNum - 1
+		}
+	}
+	return next
+}
+
+func manualPaneSlug(title string, number int) string {
+	base := naming.Slugify(title)
+	if base == "" {
+		base = "manual"
+	}
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("%s-%d", base, number)
 }
 
 func shortIssueTitle(title string) string {
@@ -183,12 +287,14 @@ func shortIssueTitle(title string) string {
 }
 
 func oneLinePrompt(parentRef string, req paneRequest) string {
-	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and begin.", fanoutTagPrefix, req.Issue.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath)
+	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and begin.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath)
 }
 
 func logPaneRequest(req paneRequest, lg *log.Logger) {
-	lg.Info("#%d: %s", req.Issue.Number, req.ShortTitle)
-	lg.Dim("  briefing -> %s", req.BriefingPath)
+	lg.Info("#%d: %s", req.Number, req.ShortTitle)
+	if req.BriefingPath != "" {
+		lg.Dim("  briefing -> %s", req.BriefingPath)
+	}
 	lg.Dim("  slug -> %s", req.Slug)
 	lg.Dim("  worktree -> %s", req.Worktree.WorktreePath)
 	lg.Dim("  branch -> %s", req.BranchName)
@@ -199,7 +305,9 @@ func logPaneRequest(req paneRequest, lg *log.Logger) {
 }
 
 func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palette) {
-	fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
+	if req.BriefingPath != "" || req.BriefingBody != "" {
+		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
+	}
 	if req.Worktree.Refresh {
 		details := req.Worktree.RefreshDetails
 		fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s fetch --quiet --no-tags origin %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.FetchBranch), c.Reset)
@@ -231,7 +339,7 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
-	lg.Ok("#%d: dry-run complete", req.Issue.Number)
+	lg.Ok("#%d: dry-run complete", req.Number)
 }
 
 func paneTitle(req paneRequest) string {
