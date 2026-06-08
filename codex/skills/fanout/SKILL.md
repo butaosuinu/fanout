@@ -20,6 +20,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
@@ -78,6 +79,10 @@ use this workflow directly.
    tmux`, tell the user to start or attach a tmux session first.
 3. An agent name is required. Pass `--agent <name>` or set `FANOUT_AGENT`.
    MVP supported agents are `claude` and `codex`.
+4. `--codex-plan-mode` is valid only with `--agent codex`. It uses Codex
+   app-server to create the child Plan Mode thread, start the initial Plan turn
+   with the fanout prompt, then attach the interactive Codex TUI to that remote
+   session.
 
 ## Workflow
 
@@ -145,7 +150,8 @@ environment or preflight failure, `2` bad invocation or incomparable version,
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
-   `--pr-visualization`, and `--no-pr-visualization`.
+   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, and
+   `--no-pr-visualization`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -225,8 +231,9 @@ exclusive with all action-bearing flags
 `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`,
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
-`--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`,
-`--no-pr-visualization`). Set `FANOUT_STATE_PATH` to
+`--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`,
+`--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`). Set
+`FANOUT_STATE_PATH` to
 read a specific state file outside the repository checkout.
 
 ## Implicit Child Scan
@@ -292,6 +299,13 @@ Key points:
   `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
   guidance in auto-PR child briefings. Defaults are all on, and these settings
   are Go-implementation only.
+- `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
+  When enabled, fanout starts a Codex app-server, creates the child Plan Mode
+  thread, starts the initial Plan turn with the child prompt through app-server,
+  and attaches the interactive Codex TUI to that remote session. fanout does not
+  send `/plan` or prompt text through tmux. If Plan turn setup or TUI attach
+  fails, fanout fails that launch before recording state and cleans up the
+  pane/worktree so the child can be retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

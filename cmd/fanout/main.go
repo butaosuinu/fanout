@@ -42,6 +42,9 @@ func main() {
 	if isCheckUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
 	}
+	if isCodexPlanTUIRequest(os.Args[1:]) {
+		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
@@ -189,7 +192,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		printDryRunPlan(plan, lg, c)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c)
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c, commandName)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	if result.Failed > 0 {
@@ -219,6 +222,10 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 	}
 	if err := agent.ValidateKnown(cfg.Agent); err != nil {
 		lg.Err("%s", err.Error())
+		return nil, exitcode.Env
+	}
+	if cfg.CodexPlanModeEnabled() && cfg.Agent != "codex" {
+		lg.Err("--codex-plan-mode requires --agent codex")
 		return nil, exitcode.Env
 	}
 	if !cfg.DryRun {
@@ -444,7 +451,7 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -454,7 +461,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 				issue.Body = detail.Body
 			}
 		}
-		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c) {
+		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName) {
 			result.Created++
 			result.CreatedNums = append(result.CreatedNums, issue.Number)
 		} else {

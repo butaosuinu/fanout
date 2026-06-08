@@ -33,6 +33,7 @@ load helpers
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: fanout"* ]]
   [[ "$output" == *"update              Subcommand."* ]]
+  [[ "$output" == *"--codex-plan-mode / --no-codex-plan-mode"* ]]
   [[ "$output" == *"Exit codes (update):"* ]]
   [[ "$output" == *"1 prerequisite / environment problem, or missing option value"* ]]
   [[ "$output" == *"2 unknown option, unexpected argument, or cannot compare version strings"* ]]
@@ -410,6 +411,12 @@ load helpers
   [[ "$output" != *"agent is required"* ]]
 }
 
+@test "--codex-plan-mode requires --agent codex: exit 1" {
+  run_fanout 20 --agent claude --codex-plan-mode --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--codex-plan-mode requires --agent codex"* ]]
+}
+
 @test "outside tmux: explicit error" {
   unset TMUX
   run_fanout 20 --agent claude
@@ -508,6 +515,12 @@ load helpers
   run_fanout --status 1 --dry-run
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --dry-run"* ]]
+}
+
+@test "--status conflicts with --codex-plan-mode: exit 2" {
+  run_fanout --status 1 --codex-plan-mode
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --codex-plan-mode"* ]]
 }
 
 @test "--status conflicts with --unblocked-only: exit 2" {
