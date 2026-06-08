@@ -213,18 +213,17 @@ Projects v2 URL（Project モード、上記参照）のいずれか。`--projec
 ### Codex Plan Mode
 
 `--codex-plan-mode` は `--agent codex` 専用の opt-in 起動モードです。通常の
-positional `codex "<prompt>"` ではなく、子ペインで通常の interactive Codex TUI を
-開き、`/plan` で Plan Mode に切り替えてから同じ 1 行 fanout prompt を送信します。
-子 briefing も Plan Mode 向けに差し替わり、`<proposed_plan>` に包んだ実装計画を
-出すこと、最初の turn ではファイル編集・commit・push・PR 作成をしないことを
-明示します。
+positional `codex "<prompt>"` ではなく、子ごとに Codex app-server を起動し、その
+thread を collaboration mode `plan` で作成し、fanout prompt を app-server 経由で
+initial turn として開始してから、その remote session に interactive Codex TUI を
+attach します。子 briefing も Plan Mode
+向けに差し替わり、`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn では
+ファイル編集・commit・push・PR 作成をしないことを明示します。
 
-この経路は Codex CLI の interactive `/plan` command に依存します。pane は
-interactive Codex TUI session のまま残るため、ユーザーはその Plan Mode 会話から
-続行できます。Codex が `Ready` になったこと、または `Plan mode` に入ったことを
-fanout が画面上で確認できない場合（onboarding/trust prompt 待ちなど）は、state
-記録前に launch を失敗扱いにし、pane/worktree を cleanup するため、Codex の準備後
-に同じ child を再実行できます。
+この経路では tmux 経由で `/plan` や prompt text を送信しません。pane は interactive
+Codex TUI session のまま残るため、ユーザーはその Plan Mode 会話から続行できます。
+app-server Plan turn setup または TUI attach に失敗した場合は、state 記録前に
+launch を失敗扱いにし、pane/worktree を cleanup するため、同じ child を再実行できます。
 
 ### `--status` / lifecycle
 
@@ -406,8 +405,7 @@ fanout 123 --sleep 8
 # 子ペインで起動する agent CLI を選ぶ
 fanout 123 --agent codex
 
-# Codex 子ペインを interactive Codex TUI として開始し、/plan に切り替えて
-# fanout prompt を送信する。
+# Codex 子ペインを app-server Plan Mode + interactive TUI で開始する
 fanout 123 --agent codex --codex-plan-mode
 
 # この run だけ、子 briefing から PR 自動作成指示を外す

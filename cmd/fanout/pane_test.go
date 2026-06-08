@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -96,67 +98,55 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	}
 }
 
-func TestBuildAgentCommandStartsCodexTUIWithoutPromptInPlanModeDryRun(t *testing.T) {
+func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: boolPtr(true)}
+	req := paneRequest{
+		OneLinePrompt:       "[fanout #1] plan",
+		CodexPlanStatusPath: "/tmp/fanout-codex-plan-repo-1.json",
+	}
 
-	got, err := buildAgentCommand(cfg, "[fanout #1] plan")
+	got, err := buildAgentCommand(cfg, req, "fanout-go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "codex"
+	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
 	if got != want {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
 	}
 }
 
-func TestCodexTUIReadyWaitsForReadyInput(t *testing.T) {
-	loading := "OpenAI Codex\nmodel:     loading\nStarting MCP servers\nStarting"
-	if codexTUIReady(loading) {
-		t.Fatal("codexTUIReady() = true during loading startup, want false")
+func TestWaitForCodexPlanTUIReadyReadsReadyStatus(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := writeCodexPlanTUIStatus(statusPath, codexPlanTUIStatus{Status: codexPlanTUIStatusReady}); err != nil {
+		t.Fatal(err)
 	}
 
-	preReady := "OpenAI Codex\nmodel:     gpt-5.5 xhigh   /model to change\ndirectory: ~/repo"
-	if codexTUIReady(preReady) {
-		t.Fatal("codexTUIReady() = true before Ready status, want false")
-	}
-
-	ready := "OpenAI Codex\n\ngpt-5.5 xhigh · /repo · Ready · Context 0% used"
-	if !codexTUIReady(ready) {
-		t.Fatal("codexTUIReady() = false on ready TUI screen, want true")
-	}
-
-	inputReady := "directory: ~/repo\n\n› Run /review on my current changes\n\n  gpt-5.5 xhigh · ~/repo"
-	if !codexTUIReady(inputReady) {
-		t.Fatal("codexTUIReady() = false on input-ready TUI screen, want true")
-	}
-
-	blocked := "OpenAI Codex\n\nRepair Codex local data now? [y/N]:\n\n› "
-	if codexTUIReady(blocked) {
-		t.Fatal("codexTUIReady() = true while Codex is blocked on repair prompt, want false")
+	if err := waitForCodexPlanTUIReady(statusPath, 10*time.Millisecond); err != nil {
+		t.Fatalf("waitForCodexPlanTUIReady() failed: %v", err)
 	}
 }
 
-func TestCodexPlanModeActiveRecognizesPlanModeStatus(t *testing.T) {
-	if codexPlanModeActive("OpenAI Codex\nReady") {
-		t.Fatal("codexPlanModeActive() = true without Plan mode, want false")
+func TestWaitForCodexPlanTUIReadyReturnsFailedStatus(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := writeCodexPlanTUIStatus(statusPath, codexPlanTUIStatus{Status: codexPlanTUIStatusFailed, Error: "setup failed"}); err != nil {
+		t.Fatal(err)
 	}
-	if !codexPlanModeActive("OpenAI Codex\nReady · Context 0% used   Plan mode") {
-		t.Fatal("codexPlanModeActive() = false with Plan mode status, want true")
-	}
-	if !codexPlanModeActive("model: gpt-5.5\ndirectory: ~/repo\nReady · Plan mode") {
-		t.Fatal("codexPlanModeActive() = false on narrow Plan mode status, want true")
-	}
-	if !codexPlanModeActive("› Write tests for @filename\n\n  gpt-5.5 xhigh · ~/repo... Plan mode") {
-		t.Fatal("codexPlanModeActive() = false when only the status line shows Plan mode, want true")
+
+	err := waitForCodexPlanTUIReady(statusPath, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "setup failed") {
+		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want setup failed", err)
 	}
 }
 
-func TestCodexPlanModeDisabledRecognizesRejectedSlashCommand(t *testing.T) {
-	if !codexPlanModeDisabled("■ '/plan' is disabled while a task is in progress.") {
-		t.Fatal("codexPlanModeDisabled() = false for disabled /plan message, want true")
+func TestWaitForCodexPlanTUIReadyTimesOutWithoutStatus(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "missing.json")
+
+	err := waitForCodexPlanTUIReady(statusPath, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), errCodexPlanStartupTimeout.Error()) {
+		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want timeout", err)
 	}
-	if codexPlanModeDisabled("OpenAI Codex\nReady · Plan mode") {
-		t.Fatal("codexPlanModeDisabled() = true for active Plan mode, want false")
+	if _, statErr := os.Stat(statusPath); !os.IsNotExist(statErr) {
+		t.Fatalf("status file exists after timeout: %v", statErr)
 	}
 }
 
