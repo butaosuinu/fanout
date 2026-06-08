@@ -67,7 +67,7 @@ func TestCodexThreadStartParamsCreatesPersistentStartupThread(t *testing.T) {
 }
 
 func TestCodexTurnStartParamsSubmitsPromptThroughAppServer(t *testing.T) {
-	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan")
+	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", nil)
 
 	if got["threadId"] != "thread-1" {
 		t.Fatalf("threadId = %q, want thread-1", got["threadId"])
@@ -84,6 +84,39 @@ func TestCodexTurnStartParamsSubmitsPromptThroughAppServer(t *testing.T) {
 	}
 	if len(input) != 1 || input[0]["type"] != "text" || input[0]["text"] != "hello plan" {
 		t.Fatalf("input = %#v, want one text prompt", input)
+	}
+	if _, ok := got["collaborationMode"]; ok {
+		t.Fatalf("collaborationMode was included without fallback: %#v", got["collaborationMode"])
+	}
+}
+
+func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
+	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", codexPlanCollaborationMode("gpt-test", "medium"))
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shaped struct {
+		CollaborationMode struct {
+			Mode     string `json:"mode"`
+			Settings struct {
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			} `json:"settings"`
+		} `json:"collaborationMode"`
+	}
+	if err := json.Unmarshal(body, &shaped); err != nil {
+		t.Fatal(err)
+	}
+	if shaped.CollaborationMode.Mode != "plan" {
+		t.Fatalf("mode = %q, want plan", shaped.CollaborationMode.Mode)
+	}
+	if shaped.CollaborationMode.Settings.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", shaped.CollaborationMode.Settings.Model)
+	}
+	if shaped.CollaborationMode.Settings.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning_effort = %q, want medium", shaped.CollaborationMode.Settings.ReasoningEffort)
 	}
 }
 
@@ -131,9 +164,13 @@ func TestSignalExitCodeUsesConventionalShellSignalStatus(t *testing.T) {
 	}
 }
 
-func TestParseThreadStartRequiresSessionID(t *testing.T) {
-	if _, err := parseThreadStart([]byte(`{"thread":{"id":"thread-1"}}`)); err == nil {
-		t.Fatal("parseThreadStart() error = nil, want missing sessionId error")
+func TestParseThreadStartFallsBackToThreadIDAsSessionID(t *testing.T) {
+	got, err := parseThreadStart([]byte(`{"thread":{"id":"thread-1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "thread-1" || got.SessionID != "thread-1" {
+		t.Fatalf("parseThreadStart() = %+v, want thread id reused as session id", got)
 	}
 }
 
@@ -144,5 +181,12 @@ func TestParseThreadStartReturnsThreadAndSessionID(t *testing.T) {
 	}
 	if got.ID != "thread-1" || got.SessionID != "session-1" {
 		t.Fatalf("parseThreadStart() = %+v, want thread/session ids", got)
+	}
+}
+
+func TestUnsupportedCodexAppServerMethodDetection(t *testing.T) {
+	err := errors.New(`app-server request fanout-plan-mode failed: unknown variant "thread/settings/update"`)
+	if !isUnsupportedCodexAppServerMethod(err) {
+		t.Fatalf("isUnsupportedCodexAppServerMethod() = false, want true")
 	}
 }

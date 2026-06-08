@@ -54,9 +54,11 @@ type codexPlanTUIStatus struct {
 }
 
 type codexThreadInfo struct {
-	ID        string
-	SessionID string
-	Model     string
+	ID                       string
+	SessionID                string
+	Model                    string
+	PlanEffort               string
+	UseTurnCollaborationMode bool
 }
 
 type appServerMessage struct {
@@ -279,9 +281,13 @@ func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, 
 		return codexThreadInfo{}, err
 	}
 	thread.Model = model
+	thread.PlanEffort = planEffort
 
 	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, model, planEffort)); err != nil {
-		return codexThreadInfo{}, err
+		if !isUnsupportedCodexAppServerMethod(err) {
+			return codexThreadInfo{}, err
+		}
+		thread.UseTurnCollaborationMode = true
 	}
 	return thread, nil
 }
@@ -297,14 +303,18 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 }
 
 func startCodexPlanTurn(client *codexAppClient, thread codexThreadInfo, cwd, prompt string) error {
-	if _, err := client.Request("fanout-turn", "turn/start", codexTurnStartParams(thread.ID, cwd, thread.Model, prompt)); err != nil {
+	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, nil)
+	if thread.UseTurnCollaborationMode {
+		params["collaborationMode"] = codexPlanCollaborationMode(thread.Model, thread.PlanEffort)
+	}
+	if _, err := client.Request("fanout-turn", "turn/start", params); err != nil {
 		return err
 	}
 	return nil
 }
 
-func codexTurnStartParams(threadID, cwd, model, prompt string) map[string]any {
-	return map[string]any{
+func codexTurnStartParams(threadID, cwd, model, prompt string, collaborationMode map[string]any) map[string]any {
+	params := map[string]any{
 		"threadId": threadID,
 		"cwd":      cwd,
 		"model":    model,
@@ -315,18 +325,26 @@ func codexTurnStartParams(threadID, cwd, model, prompt string) map[string]any {
 			},
 		},
 	}
+	if collaborationMode != nil {
+		params["collaborationMode"] = collaborationMode
+	}
+	return params
 }
 
 func codexPlanSettingsUpdateParams(threadID, model, effort string) map[string]any {
 	return map[string]any{
-		"threadId": threadID,
-		"collaborationMode": map[string]any{
-			"mode": "plan",
-			"settings": map[string]any{
-				"model":                  model,
-				"reasoning_effort":       effort,
-				"developer_instructions": nil,
-			},
+		"threadId":          threadID,
+		"collaborationMode": codexPlanCollaborationMode(model, effort),
+	}
+}
+
+func codexPlanCollaborationMode(model, effort string) map[string]any {
+	return map[string]any{
+		"mode": "plan",
+		"settings": map[string]any{
+			"model":                  model,
+			"reasoning_effort":       effort,
+			"developer_instructions": nil,
 		},
 	}
 }
@@ -1092,9 +1110,20 @@ func parseThreadStart(raw json.RawMessage) (codexThreadInfo, error) {
 		return codexThreadInfo{}, fmt.Errorf("thread/start response did not include thread.id")
 	}
 	if res.Thread.SessionID == "" {
-		return codexThreadInfo{}, fmt.Errorf("thread/start response did not include thread.sessionId")
+		res.Thread.SessionID = res.Thread.ID
 	}
 	return codexThreadInfo{ID: res.Thread.ID, SessionID: res.Thread.SessionID}, nil
+}
+
+func isUnsupportedCodexAppServerMethod(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown variant") ||
+		strings.Contains(msg, "unknown method") ||
+		strings.Contains(msg, "method not found") ||
+		strings.Contains(msg, "unsupported method")
 }
 
 func errorNotification(raw json.RawMessage) (message string, willRetry bool) {
