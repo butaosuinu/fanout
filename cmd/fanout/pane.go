@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	manualPaneParentRef        = "@manual"
 	codexPlanTUIStartupTimeout = 30 * time.Second
 	codexPlanTUIStartupPoll    = 200 * time.Millisecond
 )
@@ -33,18 +34,32 @@ var (
 )
 
 type paneRequest struct {
-	Issue               ghissue.Issue
+	ParentRef           string
+	Number              int
+	Title               string
+	Body                string
 	BriefingPath        string
 	BriefingBody        string
+	WriteBriefingDryRun bool
 	ShortTitle          string
 	Slug                string
 	DisplayNameOverride string
 	BranchName          string
-	OneLinePrompt       string
+	Prompt              string
+	Agent               string
 	AgentCommand        string
 	CodexPlanMode       bool
 	CodexPlanStatusPath string
 	Worktree            worktree.Plan
+}
+
+type manualPaneOptions struct {
+	Title      string
+	Body       string
+	Slug       string
+	BranchName string
+	Agent      string
+	Prompt     string
 }
 
 type paneStateRecorder interface {
@@ -54,20 +69,26 @@ type paneStateRecorder interface {
 
 func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette, commandName string) bool {
 	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents)
+	return createPane(cfg, lg, info, req, recorder, c, commandName)
+}
+
+func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, recorder paneStateRecorder, c log.Palette, commandName string) bool {
 	agentCmd, err := buildAgentCommand(cfg, req, commandName)
 	if err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
+		lg.Err("#%d: %v", req.Number, err)
 		return false
 	}
 	req.AgentCommand = agentCmd
 	if req.Worktree.Refresh && req.Worktree.RefreshError != nil {
-		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, req.Worktree.RefreshError)
+		lg.Err("#%d: prepare worktree: %v", req.Number, req.Worktree.RefreshError)
 		return false
 	}
 
-	if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
-		lg.Err("#%d: write briefing: %v", req.Issue.Number, err)
-		return false
+	if req.BriefingPath != "" && (!cfg.DryRun || req.WriteBriefingDryRun) {
+		if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
+			lg.Err("#%d: write briefing: %v", req.Number, err)
+			return false
+		}
 	}
 
 	logPaneRequest(req, lg)
@@ -85,80 +106,80 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		NoRefresh:   cfg.NoRefresh,
 	})
 	if err != nil {
-		lg.Err("#%d: prepare worktree: %v", req.Issue.Number, err)
+		lg.Err("#%d: prepare worktree: %v", req.Number, err)
 		return false
 	}
 	if prepared.AlreadyExists {
-		lg.Err("#%d: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", req.Issue.Number, prepared.WorktreePath)
+		lg.Err("#%d: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", req.Number, prepared.WorktreePath)
 		return false
 	}
 
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
-		lg.Err("#%d: %v", req.Issue.Number, err)
-		cleanupFailedLaunch(req.Issue.Number, "", prepared, lg)
+		lg.Err("#%d: %v", req.Number, err)
+		cleanupFailedLaunch(req.Number, "", prepared, lg)
 		return false
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
-		lg.Warn("#%d: %v", req.Issue.Number, err)
+		lg.Warn("#%d: %v", req.Number, err)
 	}
 	if err := tmuxrun.SelectTiled(info.Target); err != nil {
-		lg.Warn("#%d: %v", req.Issue.Number, err)
+		lg.Warn("#%d: %v", req.Number, err)
 	}
 	if req.CodexPlanMode {
 		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
-			lg.Err("#%d: start Codex Plan Mode TUI in pane %s: %v", req.Issue.Number, paneID, err)
-			cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
+			lg.Err("#%d: start Codex Plan Mode TUI in pane %s: %v", req.Number, paneID, err)
+			cleanupFailedLaunch(req.Number, paneID, prepared, lg)
 			return false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
 	if recorder != nil {
-		entry := statePane(cfg, req, paneID, prepared.WorktreePath, time.Now().UTC())
+		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC())
 		if err := recorder.RecordPane(entry); err != nil {
-			lg.Err("#%d: write fanout state: %v", req.Issue.Number, err)
-			cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
+			lg.Err("#%d: write fanout state: %v", req.Number, err)
+			cleanupFailedLaunch(req.Number, paneID, prepared, lg)
 			return false
 		}
 	}
 	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
-		Agent:        cfg.Agent,
+		Agent:        req.Agent,
 		DisplayName:  paneTitle(req),
 		BranchName:   req.BranchName,
 		Slug:         req.Slug,
 		WorktreePath: prepared.WorktreePath,
 	}); err != nil {
-		lg.Err("#%d: write worktree metadata: %v", req.Issue.Number, err)
-		rollbackState(recorder, cfg.ParentRef, req.Issue.Number, lg)
-		cleanupFailedLaunch(req.Issue.Number, paneID, prepared, lg)
+		lg.Err("#%d: write worktree metadata: %v", req.Number, err)
+		rollbackState(recorder, req.ParentRef, req.Number, lg)
+		cleanupFailedLaunch(req.Number, paneID, prepared, lg)
 		return false
 	}
-	lg.Ok("#%d: pane %s created in %s", req.Issue.Number, paneID, prepared.WorktreePath)
+	lg.Ok("#%d: pane %s created in %s", req.Number, paneID, prepared.WorktreePath)
 	return true
 }
 
-func statePane(cfg *cliflags.Config, req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
+func statePane(req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
 	return state.Pane{
-		Parent:       cfg.ParentRef,
-		IssueNum:     req.Issue.Number,
+		Parent:       req.ParentRef,
+		IssueNum:     req.Number,
 		Slug:         req.Slug,
 		BranchName:   req.BranchName,
 		PaneID:       paneID,
-		Agent:        cfg.Agent,
+		Agent:        req.Agent,
 		DisplayName:  paneTitle(req),
 		WorktreePath: worktreePath,
-		Prompt:       req.OneLinePrompt,
+		Prompt:       req.Prompt,
 		CreatedAt:    now.Format(time.RFC3339),
 	}
 }
 
 func buildAgentCommand(cfg *cliflags.Config, req paneRequest, commandName string) (string, error) {
-	if cfg.CodexPlanModeEnabled() {
-		if cfg.Agent != "codex" {
+	if req.CodexPlanMode {
+		if req.Agent != "codex" {
 			return "", fmt.Errorf("--codex-plan-mode requires --agent codex")
 		}
 		if cfg.DryRun {
-			return buildCodexPlanTUILaunchCommand(commandName, "codex", req.OneLinePrompt, req.CodexPlanStatusPath), nil
+			return buildCodexPlanTUILaunchCommand(commandName, "codex", req.Prompt, req.CodexPlanStatusPath), nil
 		}
 		codexPath, err := agent.ResolveExecutable("codex")
 		if err != nil {
@@ -168,12 +189,12 @@ func buildAgentCommand(cfg *cliflags.Config, req paneRequest, commandName string
 		if err != nil {
 			return "", fmt.Errorf("resolve fanout executable: %w", err)
 		}
-		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, req.OneLinePrompt, req.CodexPlanStatusPath), nil
+		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath), nil
 	}
 	if cfg.DryRun {
-		return agent.BuildCommand(cfg.Agent, req.OneLinePrompt)
+		return agent.BuildCommand(req.Agent, req.Prompt)
 	}
-	return agent.BuildResolvedCommand(cfg.Agent, req.OneLinePrompt)
+	return agent.BuildResolvedCommand(req.Agent, req.Prompt)
 }
 
 func buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
@@ -199,11 +220,17 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	slugOverridden := false
 	branchOverride := ""
 	req := paneRequest{
-		Issue:         issue,
-		BriefingPath:  briefing.Path(projectRoot, issue.Number),
-		ShortTitle:    shortIssueTitle(issue.Title),
-		Slug:          slug,
-		CodexPlanMode: cfg.CodexPlanModeEnabled(),
+		ParentRef:    cfg.ParentRef,
+		Number:       issue.Number,
+		Title:        issue.Title,
+		Body:         issue.Body,
+		BriefingPath: briefing.Path(projectRoot, issue.Number),
+		// Existing issue dry-runs write briefings; Tier 1 tests depend on that.
+		WriteBriefingDryRun: true,
+		ShortTitle:          shortIssueTitle(issue.Title),
+		Slug:                slug,
+		Agent:               cfg.Agent,
+		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -224,12 +251,87 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings, cfg.CodexPlanModeEnabled())
-	req.OneLinePrompt = oneLinePrompt(cfg.ParentRef, req)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode)
+	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode {
 		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, issue.Number, cfg.DryRun)
 	}
 	return req
+}
+
+func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.Store, opts manualPaneOptions) paneRequest {
+	number := nextSyntheticPaneNumber(store, manualPaneParentRef)
+	title := opts.Title
+	if title == "" {
+		title = "Manual agent"
+	}
+	slug := opts.Slug
+	if slug == "" {
+		slug = manualPaneSlug(title, number)
+	}
+	agentName := opts.Agent
+	if agentName == "" {
+		agentName = cfg.Agent
+	}
+	prompt := opts.Prompt
+	if prompt == "" {
+		prompt = title
+	}
+	briefingPath := ""
+	briefingBody := ""
+	if opts.Body != "" {
+		briefingPath = briefing.Path(projectRoot, number)
+		briefingBody = opts.Body
+		prompt = manualPromptWithBriefing(prompt, briefingPath)
+	}
+	branchName := naming.BranchName(opts.BranchName, cfg.BranchPrefix, slug)
+	return paneRequest{
+		ParentRef:    manualPaneParentRef,
+		Number:       number,
+		Title:        title,
+		Body:         opts.Body,
+		ShortTitle:   shortIssueTitle(title),
+		Slug:         slug,
+		BranchName:   branchName,
+		Prompt:       prompt,
+		Agent:        agentName,
+		BriefingPath: briefingPath,
+		BriefingBody: briefingBody,
+		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh}),
+	}
+}
+
+func manualPromptWithBriefing(prompt, briefingPath string) string {
+	prompt = strings.TrimSpace(prompt)
+	if strings.Contains(prompt, briefingPath) {
+		return prompt
+	}
+	prompt = strings.TrimRight(prompt, ".")
+	if prompt == "" {
+		return fmt.Sprintf("read %s and begin.", briefingPath)
+	}
+	return fmt.Sprintf("%s. read %s for additional context and begin.", prompt, briefingPath)
+}
+
+func nextSyntheticPaneNumber(store state.Store, parentRef string) int {
+	next := -1
+	for _, pane := range store.PanesForParent(parentRef) {
+		if pane.IssueNum <= next {
+			next = pane.IssueNum - 1
+		}
+	}
+	return next
+}
+
+func manualPaneSlug(title string, number int) string {
+	base := naming.Slugify(title)
+	if base == "" {
+		base = "manual"
+	}
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("%s-%d", base, number)
 }
 
 func codexPlanStatusPath(projectRoot string, issueNum int, dryRun bool) string {
@@ -281,7 +383,7 @@ func oneLinePrompt(parentRef string, req paneRequest) string {
 	if req.CodexPlanMode {
 		action = "propose a plan"
 	}
-	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Issue.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
+	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
 }
 
 func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
@@ -330,8 +432,10 @@ func readCodexPlanTUIStatus(path string) (codexPlanTUIStatus, error) {
 }
 
 func logPaneRequest(req paneRequest, lg *log.Logger) {
-	lg.Info("#%d: %s", req.Issue.Number, req.ShortTitle)
-	lg.Dim("  briefing -> %s", req.BriefingPath)
+	lg.Info("#%d: %s", req.Number, req.ShortTitle)
+	if req.BriefingPath != "" {
+		lg.Dim("  briefing -> %s", req.BriefingPath)
+	}
 	lg.Dim("  slug -> %s", req.Slug)
 	lg.Dim("  worktree -> %s", req.Worktree.WorktreePath)
 	lg.Dim("  branch -> %s", req.BranchName)
@@ -345,7 +449,9 @@ func logPaneRequest(req paneRequest, lg *log.Logger) {
 }
 
 func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palette) {
-	fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
+	if req.BriefingPath != "" || req.BriefingBody != "" {
+		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
+	}
 	if req.CodexPlanMode {
 		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan turn + interactive Codex TUI\n", c.Dim, c.Reset)
 	}
@@ -384,7 +490,7 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
-	lg.Ok("#%d: dry-run complete", req.Issue.Number)
+	lg.Ok("#%d: dry-run complete", req.Number)
 }
 
 func paneTitle(req paneRequest) string {
