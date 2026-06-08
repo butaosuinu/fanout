@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
 	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: "/repo"}
-	if !createPane(cfg, lg, info, req, nil, log.Palette{}) {
+	if !createPane(cfg, lg, info, req, nil, log.Palette{}, "fanout") {
 		t.Fatalf("createPane() = false, stderr:\n%s", stderr.String())
 	}
 	if stderr.Len() != 0 {
@@ -138,5 +139,82 @@ func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
+	}
+}
+
+func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: boolPtr(true)}
+	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
+
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+
+	if !got.CodexPlanMode {
+		t.Fatal("CodexPlanMode = false, want true")
+	}
+	if !strings.Contains(got.Prompt, "read /tmp/fanout-repo-501.md and propose a plan.") {
+		t.Fatalf("prompt = %q, want plan action", got.Prompt)
+	}
+	if !strings.Contains(got.BriefingBody, "<proposed_plan>...</proposed_plan>") {
+		t.Fatalf("briefing did not require proposed_plan wrapper:\n%s", got.BriefingBody)
+	}
+	for _, unexpected := range []string{"commit and push", "Open a pull request"} {
+		if strings.Contains(got.BriefingBody, unexpected) {
+			t.Fatalf("plan briefing contains implementation instruction %q:\n%s", unexpected, got.BriefingBody)
+		}
+	}
+}
+
+func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: boolPtr(true)}
+	req := paneRequest{
+		Number:              1,
+		Prompt:              "[fanout #1] plan",
+		Agent:               "codex",
+		CodexPlanMode:       true,
+		CodexPlanStatusPath: "/tmp/fanout-codex-plan-repo-1.json",
+	}
+
+	got, err := buildAgentCommand(cfg, req, "fanout-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
+	if got != want {
+		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestWaitForCodexPlanTUIReadyReadsReadyStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := writeCodexPlanTUIStatus(path, codexPlanTUIStatus{Status: codexPlanTUIStatusReady}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := waitForCodexPlanTUIReady(path, time.Second); err != nil {
+		t.Fatalf("waitForCodexPlanTUIReady() failed: %v", err)
+	}
+}
+
+func TestWaitForCodexPlanTUIReadyReturnsFailedStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := writeCodexPlanTUIStatus(path, codexPlanTUIStatus{Status: codexPlanTUIStatusFailed, Error: "boom"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := waitForCodexPlanTUIReady(path, time.Second)
+
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want boom", err)
+	}
+}
+
+func TestWaitForCodexPlanTUIReadyTimesOutWithoutStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.json")
+
+	err := waitForCodexPlanTUIReady(path, time.Millisecond)
+
+	if err == nil || !strings.Contains(err.Error(), errCodexPlanStartupTimeout.Error()) {
+		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want timeout", err)
 	}
 }

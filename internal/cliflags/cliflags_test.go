@@ -36,6 +36,7 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 		"--pr-review-gate", "--no-pr-review-gate",
 		"--no-briefing-code-review", "--briefing-code-review",
 		"--agent-teams-hint", "--no-agent-teams-hint",
+		"--codex-plan-mode", "--no-codex-plan-mode",
 		"--no-pr-visualization", "--pr-visualization",
 	)
 
@@ -43,7 +44,16 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "PRReviewGate", cfg.PRReviewGate, false)
 	assertBoolPtr(t, "BriefingCodeReview", cfg.BriefingCodeReview, true)
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
+	assertBoolPtr(t, "CodexPlanMode", cfg.CodexPlanMode, false)
 	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
+}
+
+func TestParseCodexPlanModeFlag(t *testing.T) {
+	cfg := parseOK(t, "100", "--agent", "codex", "--codex-plan-mode")
+
+	if !cfg.CodexPlanModeEnabled() {
+		t.Fatal("CodexPlanModeEnabled() = false, want true")
+	}
 }
 
 func TestParseWorktreeFlags(t *testing.T) {
@@ -130,6 +140,8 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 		{"--no-briefing-code-review", "--status cannot be combined with --no-briefing-code-review"},
 		{"--agent-teams-hint", "--status cannot be combined with --agent-teams-hint"},
 		{"--no-agent-teams-hint", "--status cannot be combined with --no-agent-teams-hint"},
+		{"--codex-plan-mode", "--status cannot be combined with --codex-plan-mode"},
+		{"--no-codex-plan-mode", "--status cannot be combined with --no-codex-plan-mode"},
 		{"--pr-visualization", "--status cannot be combined with --pr-visualization"},
 		{"--no-pr-visualization", "--status cannot be combined with --no-pr-visualization"},
 	} {

@@ -212,6 +212,7 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
+       [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
@@ -228,6 +229,23 @@ task-list mode) or a Projects v2 URL (Project mode; see above).
 `--project-status` only applies to Project mode and is ignored otherwise.
 `--popup-timeout` is a deprecated compatibility flag from the old runtime and
 is accepted but ignored by the direct tmux path.
+
+### Codex Plan Mode
+
+`--codex-plan-mode` is an opt-in launch mode for `--agent codex`. Instead of
+running positional `codex "<prompt>"`, fanout starts a Codex app-server for the
+child, creates a `plan` collaboration-mode thread, starts the initial turn with
+the fanout prompt through that app-server, and attaches an interactive Codex TUI
+to the remote session.
+The child briefing is also rewritten for Plan Mode: it asks for a
+`<proposed_plan>` implementation plan and explicitly forbids file edits,
+commits, pushes, and PR creation in that first turn.
+
+This path does not send `/plan` or prompt text through tmux. The pane remains an
+interactive Codex TUI session so the user can continue from the Plan Mode
+conversation. If the app-server Plan turn setup or TUI attach fails, the launch
+fails before state is recorded and fanout cleans up the pane/worktree so the
+child can be retried.
 
 ### `--status` output
 
@@ -295,7 +313,8 @@ updates that exact comment. If no marker comment exists, it creates one with
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`,
 `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`,
-`--pr-visualization`, `--no-pr-visualization`).
+`--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`,
+`--no-pr-visualization`).
 
 ### Lifecycle commands
 
@@ -469,6 +488,9 @@ fanout 123 --sleep 8
 
 # Choose the agent CLI for child panes
 fanout 123 --agent codex
+
+# Start Codex children as app-server Plan Mode sessions with interactive TUI.
+fanout 123 --agent codex --codex-plan-mode
 
 # Remove the automatic PR-opening requirement from child briefings for one run
 fanout 123 --no-auto-pr
