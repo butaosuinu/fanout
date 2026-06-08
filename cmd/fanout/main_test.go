@@ -219,6 +219,26 @@ func TestIsCheckUpdateRequest(t *testing.T) {
 	}
 }
 
+func TestIsTUIRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "empty args default to tui", args: nil, want: true},
+		{name: "subcommand", args: []string{"tui"}, want: true},
+		{name: "parent issue", args: []string{"123"}, want: false},
+		{name: "tui with extra arg", args: []string{"tui", "--debug"}, want: false},
+		{name: "help", args: []string{"--help"}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTUIRequest(tc.args); got != tc.want {
+				t.Fatalf("isTUIRequest(%#v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsUpdateRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -251,5 +271,28 @@ func TestVersionLineUsesInjectedValues(t *testing.T) {
 
 	if got, want := versionLine(), "fanout v1.2.3 (abc1234)"; got != want {
 		t.Fatalf("versionLine() = %q, want %q", got, want)
+	}
+}
+
+func TestFanoutTUISessionNameIsStableAndSanitized(t *testing.T) {
+	got := fanoutTUISessionName("/tmp/My Repo")
+	if !strings.HasPrefix(got, "fanout-my-repo-") {
+		t.Fatalf("fanoutTUISessionName() = %q, want sanitized prefix", got)
+	}
+	if len(got) != len("fanout-my-repo-")+8 {
+		t.Fatalf("fanoutTUISessionName() = %q, want 8 hex suffix", got)
+	}
+	if got != fanoutTUISessionName("/tmp/My Repo") {
+		t.Fatalf("fanoutTUISessionName() is not stable")
+	}
+}
+
+func TestTUILaunchCommandChangesToProjectRoot(t *testing.T) {
+	got := tuiLaunchCommand("fanout", "/tmp/My Repo")
+	if !strings.HasPrefix(got, "cd '/tmp/My Repo' && ") {
+		t.Fatalf("tuiLaunchCommand() = %q, want cd into quoted project root", got)
+	}
+	if !strings.HasSuffix(got, " tui") {
+		t.Fatalf("tuiLaunchCommand() = %q, want tui subcommand suffix", got)
 	}
 }

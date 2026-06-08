@@ -233,6 +233,40 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	assertTmuxArgs(t, argsPath, []string{"list-panes", "-s", "-t", "$1", "-F", paneListFormat})
 }
 
+func TestListAllPanesBuildsArgsAndParsesOutput(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '%%4:@3:2:0:other session pane\n'
+`)
+
+	got, err := ListAllPanes()
+	if err != nil {
+		t.Fatalf("ListAllPanes() failed: %v", err)
+	}
+
+	wantPanes := []PaneInfo{{ID: "%4", WindowID: "@3", Index: 2, Active: false, Title: "other session pane"}}
+	if !reflect.DeepEqual(got, wantPanes) {
+		t.Fatalf("ListAllPanes() = %#v, want %#v", got, wantPanes)
+	}
+	assertTmuxArgs(t, argsPath, []string{"list-panes", "-a", "-F", paneListFormat})
+}
+
+func TestNewWindowBuildsArgsAndParsesOutput(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '%%9:@7:0:1:fanout tui\n'
+`)
+
+	got, err := NewWindow("fanout", "fanout tui", "/tmp/work tree")
+	if err != nil {
+		t.Fatalf("NewWindow() failed: %v", err)
+	}
+
+	wantPane := PaneInfo{ID: "%9", WindowID: "@7", Index: 0, Active: true, Title: "fanout tui"}
+	if !reflect.DeepEqual(got, wantPane) {
+		t.Fatalf("NewWindow() = %#v, want %#v", got, wantPane)
+	}
+	assertTmuxArgs(t, argsPath, []string{"new-window", "-d", "-P", "-F", paneListFormat, "-t", "=fanout", "-n", "fanout tui", "-c", "/tmp/work tree"})
+}
+
 func TestCapturePaneOutputUsesAlternateScreenWhenAvailable(t *testing.T) {
 	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
 	printf '1\n'
@@ -354,6 +388,21 @@ func TestInsideTmux(t *testing.T) {
 	}
 }
 
+func TestCurrentSessionBuildsArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf 'fanout-dev\n'
+`)
+
+	got, err := CurrentSession()
+	if err != nil {
+		t.Fatalf("CurrentSession() failed: %v", err)
+	}
+	if got != "fanout-dev" {
+		t.Fatalf("CurrentSession() = %q, want fanout-dev", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "#{session_name}"})
+}
+
 func TestHasSessionBuildsArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
@@ -403,6 +452,48 @@ func TestNewSessionBuildsArgs(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{"new-session", "-d", "-s", "fanout", "-c", "/tmp/work tree"})
 }
 
+func TestSendKeysBuildsArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SendKeys("fanout", "/tmp/bin/fanout tui", "Enter"); err != nil {
+		t.Fatalf("SendKeys() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "=fanout", "/tmp/bin/fanout tui", "Enter"})
+}
+
+func TestSendKeysPreservesQualifiedTarget(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SendKeys("=fanout", "q"); err != nil {
+		t.Fatalf("SendKeys() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "=fanout", "q"})
+}
+
+func TestSendKeysPreservesPaneTarget(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SendKeys("%1", "q"); err != nil {
+		t.Fatalf("SendKeys() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "%1", "q"})
+}
+
+func TestFocusPaneSelectsWindowAndPane(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+`)
+
+	if err := FocusPane(PaneInfo{ID: "%9", WindowID: "@7"}); err != nil {
+		t.Fatalf("FocusPane() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{"select-window", "-t", "@7", "---", "select-pane", "-t", "%9", "---"})
+}
+
 func TestAttachOrSwitchAttachesOutsideTmux(t *testing.T) {
 	t.Setenv("TMUX", "")
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
@@ -434,4 +525,35 @@ func TestAttachOrSwitchSwitchesInsideTmux(t *testing.T) {
 		t.Fatalf("AttachOrSwitch() failed: %v", err)
 	}
 	assertTmuxArgs(t, argsPath, []string{"switch-client", "-t", "=fanout"})
+}
+
+func TestPaneTitleBuildsArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf 'old title with spaces\n'
+`)
+
+	got, err := PaneTitle("%1")
+	if err != nil {
+		t.Fatalf("PaneTitle() failed: %v", err)
+	}
+	if got != "old title with spaces" {
+		t.Fatalf("PaneTitle() = %q, want old title with spaces", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "-t", "%1", "#{pane_title}"})
+}
+
+func TestSetPaneTitleAllowsEmptyTitle(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneTitle("%1", ""); err != nil {
+		t.Fatalf("SetPaneTitle() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "select-pane\n-t\n%1\n-T\n\n"; string(body) != want {
+		t.Fatalf("tmux args body = %q, want %q", string(body), want)
+	}
 }

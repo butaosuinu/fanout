@@ -8,6 +8,18 @@ Fans a GitHub parent issue's OPEN sub-issues out into one tmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.
 
+## Persistent TUI console
+
+Run `fanout` with no arguments, or run `fanout tui`, to start the persistent
+console. From a plain shell it creates a deterministic fanout-managed tmux
+session for the current repository, starts the console in that session, and
+attaches to it. From inside tmux it turns the current pane into the console.
+
+The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
+IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
+through the same GitHub CLI source used by `fanout <parent> --status`. Press
+`q` to leave the console; the tmux session and child panes are left running.
+
 ## Direct tmux runtime
 
 fanout now creates child sessions without dmux: it resolves the repository
@@ -171,6 +183,10 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 - fanout must be invoked from inside a tmux session. It creates child panes
   directly with `tmux split-window`, targeting the invoking pane unless
   `--session` is supplied.
+- TUI mode (`fanout` or `fanout tui`) can be invoked from a plain shell. It
+  creates or attaches a fanout-managed tmux session for the current repository
+  before starting the console. When invoked from inside tmux, it uses the
+  current session and pane.
 - **An agent name must be resolvable**: pass `--agent claude`, `--agent codex`,
   or set `FANOUT_AGENT`. Unknown agents fail before pane creation; in live
   mode, fanout also checks that the agent CLI is installed.
@@ -185,6 +201,7 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 ## Usage
 
 ```
+fanout [tui] # start the persistent tmux console
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]

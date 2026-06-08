@@ -42,6 +42,9 @@ func main() {
 	if isCheckUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
 	}
+	if isTUIRequest(os.Args[1:]) {
+		os.Exit(int(cmdTUI(commandName, lg)))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
