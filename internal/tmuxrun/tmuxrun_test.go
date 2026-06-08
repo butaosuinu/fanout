@@ -456,10 +456,10 @@ func TestSendKeysBuildsArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
 
-	if err := SendKeys("fanout", "/tmp/bin/fanout tui", "Enter"); err != nil {
+	if err := SendKeys("fanout", "/tmp/bin/fanout", "Enter"); err != nil {
 		t.Fatalf("SendKeys() failed: %v", err)
 	}
-	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "=fanout", "/tmp/bin/fanout tui", "Enter"})
+	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "=fanout", "/tmp/bin/fanout", "Enter"})
 }
 
 func TestSendKeysPreservesQualifiedTarget(t *testing.T) {

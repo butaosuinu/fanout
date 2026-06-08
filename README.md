@@ -10,10 +10,10 @@ that points at a per-issue briefing file.
 
 ## Persistent TUI console
 
-Run `fanout` with no arguments, or run `fanout tui`, to start the persistent
-console. From a plain shell it creates a deterministic fanout-managed tmux
-session for the current repository, starts the console in that session, and
-attaches to it. From inside tmux it turns the current pane into the console.
+Run `fanout` with no arguments to start the persistent console. From a plain
+shell it creates a deterministic fanout-managed tmux session for the current
+repository, starts the console in that session, and attaches to it. From inside
+tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
@@ -183,7 +183,7 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 - fanout must be invoked from inside a tmux session. It creates child panes
   directly with `tmux split-window`, targeting the invoking pane unless
   `--session` is supplied.
-- TUI mode (`fanout` or `fanout tui`) can be invoked from a plain shell. It
+- TUI mode (`fanout` with no arguments) can be invoked from a plain shell. It
   creates or attaches a fanout-managed tmux session for the current repository
   before starting the console. When invoked from inside tmux, it uses the
   current session and pane.
@@ -201,7 +201,7 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 ## Usage
 
 ```
-fanout [tui] # start the persistent tmux console
+fanout # start the persistent tmux console
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]

@@ -226,9 +226,7 @@ func TestIsTUIRequest(t *testing.T) {
 		want bool
 	}{
 		{name: "empty args default to tui", args: nil, want: true},
-		{name: "subcommand", args: []string{"tui"}, want: true},
 		{name: "parent issue", args: []string{"123"}, want: false},
-		{name: "tui with extra arg", args: []string{"tui", "--debug"}, want: false},
 		{name: "help", args: []string{"--help"}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -292,7 +290,7 @@ func TestTUILaunchCommandChangesToProjectRoot(t *testing.T) {
 	if !strings.HasPrefix(got, "cd '/tmp/My Repo' && ") {
 		t.Fatalf("tuiLaunchCommand() = %q, want cd into quoted project root", got)
 	}
-	if !strings.HasSuffix(got, " tui") {
-		t.Fatalf("tuiLaunchCommand() = %q, want tui subcommand suffix", got)
+	if strings.HasSuffix(got, " tui") {
+		t.Fatalf("tuiLaunchCommand() = %q, did not expect tui subcommand suffix", got)
 	}
 }

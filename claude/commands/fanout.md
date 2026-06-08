@@ -12,7 +12,7 @@ this pane-creation workflow. Use `fanout --check-update` for read-only version
 checks, or `fanout update` for immediate replacement via install.sh.
 
 If the user is explicitly asking to start the persistent fanout TUI / console,
-stop this pane-creation workflow and run `fanout` or `fanout tui` from the
+stop this pane-creation workflow and run `fanout` with no arguments from the
 target repository worktree. TUI mode does not need a parent issue, Project URL,
 `--agent`, dry-run, generated pane names, or confirmation.
 

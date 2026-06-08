@@ -5,13 +5,12 @@ import (
 	"io"
 )
 
-const usageText = `Usage: fanout [tui]
+const usageText = `Usage: fanout
        fanout <parent-issue|project-url> [options]
 
-With no arguments, or with the ` + "`" + `tui` + "`" + ` subcommand, starts fanout's persistent
-tmux console. The console creates or attaches a fanout-managed tmux session
-when launched from a plain shell, and shows recorded panes from
-.fanout/state.json with live tmux and issue/PR status.
+With no arguments, starts fanout's persistent tmux console. The console creates
+or attaches a fanout-managed tmux session when launched from a plain shell, and
+shows recorded panes from .fanout/state.json with live tmux and issue/PR status.
 
 With a parent issue or GitHub Projects v2 URL, creates one tmux pane per OPEN
 sub-issue of a parent issue, OR per OPEN item in that Project. Each pane gets a
@@ -136,8 +135,6 @@ Options:
                       compare it with this binary's version, print whether an
                       update is available, then exit. Also accepted as
                       ` + "`" + `fanout check-update` + "`" + `.
-  tui                 Subcommand. Start the persistent tmux console. The same
-                      mode is used when fanout is launched with no arguments.
   -V, --version       Print version and commit, then exit.
   -h, --help          Show this message.
 

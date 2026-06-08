@@ -10,7 +10,7 @@ metadata:
 ## Synopsis
 
 ```
-fanout [tui]                      # start the persistent tmux console
+fanout                            # start the persistent tmux console
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
@@ -44,12 +44,12 @@ creates one new tmux pane per child. Each pane gets its own git worktree under
 `.fanout/worktrees/` and an agent CLI prompt that points at
 `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-`fanout` with no arguments, or `fanout tui`, starts the persistent fanout TUI
-console. From a plain shell it creates or attaches a deterministic
-fanout-managed tmux session for the current repository, then runs the console
-there. From inside tmux it turns the current pane into the console. The console
-shows `.fanout/state.json` panes with live tmux plus issue/PR status and exits
-on `q` without killing the session or child panes.
+`fanout` with no arguments starts the persistent fanout TUI console. From a
+plain shell it creates or attaches a deterministic fanout-managed tmux session
+for the current repository, then runs the console there. From inside tmux it
+turns the current pane into the console. The console shows `.fanout/state.json`
+panes with live tmux plus issue/PR status and exits on `q` without killing the
+session or child panes.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form
@@ -72,9 +72,9 @@ Japanese phrasing like `並列展開` or "プロジェクトの Todo 列を一�
 Also use it when the user asks whether the installed `fanout` binary is up to
 date; that path uses `fanout --check-update` instead of pane creation. If the
 user asks to update fanout itself, run `fanout update` immediately.
-If the user asks to start the fanout console / TUI, run `fanout` or
-`fanout tui` directly from the target repository worktree; skip parent
-resolution, dry-run, pane naming, and agent selection.
+If the user asks to start the fanout console / TUI, run `fanout` with no
+arguments directly from the target repository worktree; skip parent resolution,
+dry-run, pane naming, and agent selection.
 Do not invoke fanout just because an issue has sub-issues; pane creation is
 visible and the user has to close unwanted panes manually.
 
@@ -113,10 +113,10 @@ resolved executable basename is `fanout`. Exit codes: `0` no-op/update, `1`
 environment or preflight failure, `2` bad invocation or incomparable version,
 `3` latest-release lookup failed.
 
-If the user's intent is to start the persistent TUI console, run `fanout` (or
-`fanout tui` if you want the mode to be explicit) from the target repository
-worktree and skip the rest of this workflow. TUI mode does not need a parent
-issue, Project URL, `--agent`, dry-run, generated pane names, or confirmation.
+If the user's intent is to start the persistent TUI console, run `fanout` with
+no arguments from the target repository worktree and skip the rest of this
+workflow. TUI mode does not need a parent issue, Project URL, `--agent`,
+dry-run, generated pane names, or confirmation.
 
 1. Resolve the parent target from the user's request or recent context. Two
    shapes are accepted; identify which one matches and pass the normalized

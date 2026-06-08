@@ -8,7 +8,7 @@ description: Spawn one tmux pane per OPEN sub-issue of a GitHub parent issue, or
 ## Synopsis
 
 ```
-fanout [tui]                      # start the persistent tmux console
+fanout                            # start the persistent tmux console
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
@@ -34,7 +34,7 @@ fanout update                       # Replace fanout via install.sh
 
 `fanout <parent-issue-or-project-url>` enumerates either a GitHub parent issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and for each child creates a new tmux pane with its own git worktree under `.fanout/worktrees/` and an agent CLI started with a briefing that points at `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-`fanout` with no arguments, or `fanout tui`, starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status and exits on `q` without killing the session or child panes.
+`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status and exits on `q` without killing the session or child panes.
 
 The positional argument selects the mode: a bare integer means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. User-facing issue refs like `#N` are accepted by this skill, but strip the leading `#` before invoking the CLI. The two modes share everything downstream of child enumeration — briefing generation, filters, deterministic naming, direct git worktree creation, and tmux pane launch — only the children come from a different source.
 
@@ -48,7 +48,7 @@ Good fits:
 - The user is in tmux and asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
 - The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
 - The user asks to update fanout itself; in that case run `fanout update` immediately.
-- The user asks to start the fanout console / TUI; in that case run `fanout` or `fanout tui` directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
+- The user asks to start the fanout console / TUI; in that case run `fanout` with no arguments directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
 - The user types `/fanout` or mentions "fan out" / "並列展開".
 
 Do not invoke unprompted just because an issue has sub-issues. Pane creation is visible and the user has to close each pane manually if they change their mind — suggest first, wait for a "yes", and prefer routing through the `/fanout` slash command so there is one consistent entry point.
@@ -117,9 +117,9 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
   `fanout`. Exit codes: `0` no-op/update, `1` environment or preflight failure,
   `2` bad invocation or incomparable version, `3` latest-release lookup failed.
 - **Persistent TUI**: if the user's intent is to start the fanout console, run
-  `fanout` or `fanout tui` from the target repository worktree and skip parent
-  resolution, tmux pre-flight, dry-run, pane naming, and confirmation. TUI mode
-  does not need a parent issue, Project URL, or `--agent`.
+  `fanout` with no arguments from the target repository worktree and skip
+  parent resolution, tmux pre-flight, dry-run, pane naming, and confirmation.
+  TUI mode does not need a parent issue, Project URL, or `--agent`.
 - **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
 - **Forward extra flags** (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--format`, `--post-dashboard`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag. If neither the user nor the environment supplies an agent, add `--agent codex` when `--codex-plan-mode` is present; otherwise add `--agent claude`.

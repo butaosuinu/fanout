@@ -16,13 +16,10 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
-const (
-	tuiSubcommand = "tui"
-	tuiPaneTitle  = "fanout tui"
-)
+const tuiPaneTitle = "fanout tui"
 
 func isTUIRequest(args []string) bool {
-	return len(args) == 0 || (len(args) == 1 && args[0] == tuiSubcommand)
+	return len(args) == 0
 }
 
 func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
@@ -182,5 +179,5 @@ func tuiLaunchCommand(commandName, projectRoot string) string {
 	if err != nil || strings.TrimSpace(exe) == "" {
 		exe = commandName
 	}
-	return "cd " + shellQuote(projectRoot) + " && " + shellQuote(exe) + " " + tuiSubcommand
+	return "cd " + shellQuote(projectRoot) + " && " + shellQuote(exe)
 }
