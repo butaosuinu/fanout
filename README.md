@@ -258,17 +258,20 @@ enumerate children already fanned out under that specific parent, queries
 each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
-carries `state`/`mergedAt` directly, and prints one JSON document on stdout by
-default. Pass `--format table` for a human-readable overview that adds PR diff
-bars, changed-file counts, Conventional-Commit type, and PR links. Pass
-`--post-dashboard` to upsert one marker-based comment on the parent issue with
-sub-issue number, PR link, diff size, Conventional-Commit type, TL;DR, and
-`Review effort` score for each child PR. The dashboard is built from
-machine-readable GitHub data and PR bodies; it does not call an LLM. JSON mode
-does not fetch PR diff stats unless `--post-dashboard` is also set, so the
-default API surface and schema stay stable. It does not require dmux or a live
-tmux session. Issue-mode parents only — Projects v2 URLs as parent are rejected
-up-front for the current JSON schema.
+carries `state`, `mergedAt`, `reviewDecision`, and the latest commit's CI
+rollup when present, and prints one JSON document on stdout by default. Pass
+`--format table` for a human-readable overview that adds normalized PR state
+(`open`, `draft`, `review-required`, `approved`, `changes-requested`,
+`merged`, or `closed`), CI, PR diff bars, changed-file counts,
+Conventional-Commit type, and PR links.
+Pass `--post-dashboard` to upsert one marker-based comment on the parent issue
+with sub-issue number, PR link, PR state, CI, diff size, Conventional-Commit
+type, TL;DR, and `Review effort` score for each child PR. The dashboard is built
+from machine-readable GitHub data and PR bodies; it does not call an LLM. JSON
+mode does not fetch PR diff stats unless `--post-dashboard` is also set, so the
+additional review/CI fields come from the same per-issue GraphQL lookup. It does
+not require dmux or a live tmux session. Issue-mode parents only — Projects v2
+URLs as parent are rejected up-front for the current JSON schema.
 In a state file that has fanned multiple parents, children of other parents are
 filtered out so `summary.all_merged` reflects only the requested parent. Set
 `FANOUT_STATE_PATH` to point directly at a state file when reading from outside
@@ -280,7 +283,8 @@ the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
   "children": [
     { "num": 4, "state": "CLOSED",
       "prs": [ { "number": 250, "state": "MERGED",
-                 "mergedAt": "2026-05-04T10:00:00Z" } ],
+                 "mergedAt": "2026-05-04T10:00:00Z",
+                 "reviewDecision": "APPROVED", "ci": "pass" } ],
       "has_merged_pr": true },
     { "num": 7, "state": "OPEN",
       "prs": [],
@@ -503,7 +507,7 @@ fanout 123 --no-auto-pr
 export FANOUT_AGENT_TEAMS_HINT=0
 
 # Status from .fanout/state.json: default JSON for automation, optional table
-# for PR diff stats, optional parent dashboard comment.
+# for PR state / CI / diff scans, optional parent dashboard comment.
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
 fanout 123 --status --format table

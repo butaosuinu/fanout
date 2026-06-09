@@ -10,20 +10,24 @@ func TestBuildDashboardBody(t *testing.T) {
 		AllMerged: false,
 	}, []dashboardRow{
 		{
-			Issue: "#201",
-			PR:    "[#601](https://github.com/butaosuinu/fanout/pull/601)",
-			Diff:  "+120 / -8 (5 files)",
-			Type:  "feat",
-			TLDR:  "Adds the dashboard | status rollup.",
-			Score: "2",
+			Issue:   "#201",
+			PR:      "[#601](https://github.com/butaosuinu/fanout/pull/601)",
+			PRState: "merged",
+			CI:      "pass",
+			Diff:    "+120 / -8 (5 files)",
+			Type:    "feat",
+			TLDR:    "Adds the dashboard | status rollup.",
+			Score:   "2",
 		},
 		{
-			Issue: "#202",
-			PR:    "-",
-			Diff:  "-",
-			Type:  "-",
-			TLDR:  "No PR yet",
-			Score: "-",
+			Issue:   "#202",
+			PR:      "-",
+			PRState: "-",
+			CI:      "-",
+			Diff:    "-",
+			Type:    "-",
+			TLDR:    "No PR yet",
+			Score:   "-",
 		},
 	})
 	want := `<!-- fanout:dashboard parent=200 -->
@@ -31,10 +35,10 @@ func TestBuildDashboardBody(t *testing.T) {
 
 Total: 2 | Merged: 1 | Pending: 1 | All merged: false
 
-| Sub-issue # | PR | +/- | Type | TL;DR | Score |
-| --- | --- | --- | --- | --- | --- |
-| #201 | [#601](https://github.com/butaosuinu/fanout/pull/601) | +120 / -8 (5 files) | feat | Adds the dashboard \| status rollup. | 2 |
-| #202 | - | - | - | No PR yet | - |
+| Sub-issue # | PR | PR state | CI | +/- | Type | TL;DR | Score |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| #201 | [#601](https://github.com/butaosuinu/fanout/pull/601) | merged | pass | +120 / -8 (5 files) | feat | Adds the dashboard \| status rollup. | 2 |
+| #202 | - | - | - | - | - | No PR yet | - |
 `
 	if got != want {
 		t.Fatalf("buildDashboardBody() =\n%s\nwant\n%s", got, want)

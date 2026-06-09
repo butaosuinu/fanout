@@ -154,7 +154,8 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `fanout --status <PARENT>` from the parent worktree. The command reads
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
 `summary.all_merged` for the recorded children. Use the default JSON format for
-automation; `--format table` is for human review of PR diff stats and links.
+automation; `--format table` is for human review of PR state, CI, diff stats,
+and links.
 Use `--post-dashboard` only when the user explicitly wants a parent issue
 rollup comment; it writes to GitHub even though it is attached to `--status`.
 

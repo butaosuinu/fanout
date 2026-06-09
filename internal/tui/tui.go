@@ -51,6 +51,7 @@ type paneView struct {
 	TmuxTitle    string
 	IssueState   string
 	PRSummary    string
+	CIStatus     string
 	BranchName   string
 	WorktreePath string
 	Agent        string
@@ -328,7 +329,7 @@ func (m model) detailContent() string {
 	lines := []string{
 		fmt.Sprintf("%s #%d  %s", pane.Parent, pane.IssueNum, pane.Name),
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
-		fmt.Sprintf("issue=%s pr=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.BranchName)),
+		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("worktree=%s", dash(pane.WorktreePath)),
 		fmt.Sprintf("created=%s", dash(pane.CreatedAt)),
 	}
@@ -510,6 +511,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			TmuxState:    tmuxState(pane.PaneID, tmuxByID, tmuxKnown),
 			IssueState:   "-",
 			PRSummary:    "-",
+			CIStatus:     "-",
 			BranchName:   pane.BranchName,
 			WorktreePath: relativePath(projectRoot, pane.WorktreePath),
 			Agent:        pane.Agent,
@@ -522,6 +524,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 		if status, ok := issues[pane.IssueNum]; ok {
 			view.IssueState = dash(status.State)
 			view.PRSummary = summarizePRs(status.PRs)
+			view.CIStatus = summarizePRCI(status.PRs)
 		}
 		out = append(out, view)
 	}
@@ -541,6 +544,7 @@ func applyIssueStatuses(panes []paneView, issues map[int]issueStatus) []paneView
 		if status, ok := issues[out[i].IssueNum]; ok {
 			out[i].IssueState = dash(status.State)
 			out[i].PRSummary = summarizePRs(status.PRs)
+			out[i].CIStatus = summarizePRCI(status.PRs)
 		}
 	}
 	return out
@@ -557,8 +561,9 @@ func (p paneView) tableRow() table.Row {
 		truncate(p.Name, 28),
 		tmuxState,
 		dash(p.IssueState),
-		truncate(dash(p.PRSummary), 14),
-		truncate(dash(p.BranchName), 22),
+		truncate(dash(p.PRSummary), 12),
+		truncate(dash(p.CIStatus), 7),
+		truncate(dash(p.BranchName), 18),
 		dash(p.PaneID),
 	}
 }
@@ -572,15 +577,16 @@ func (p paneView) canPeek() bool {
 }
 
 func columnsForWidth(width int) []table.Column {
-	nameWidth := clampInt(width/4, 14, 28)
-	branchWidth := clampInt(width/5, 10, 22)
+	nameWidth := clampInt(width/4, 14, 24)
+	branchWidth := clampInt(width/6, 10, 18)
 	return []table.Column{
 		{Title: "PARENT", Width: 10},
 		{Title: "ISSUE", Width: 7},
 		{Title: "NAME", Width: nameWidth},
 		{Title: "TMUX", Width: 8},
 		{Title: "STATE", Width: 8},
-		{Title: "PR", Width: 14},
+		{Title: "PR", Width: 12},
+		{Title: "CI", Width: 7},
 		{Title: "BRANCH", Width: branchWidth},
 		{Title: "PANE", Width: 8},
 	}
@@ -602,16 +608,31 @@ func issueNumbers(panes []state.Pane) []int {
 }
 
 func summarizePRs(prs []ghissue.PRRef) string {
-	if len(prs) == 0 {
+	pr, ok := selectedPR(prs)
+	if !ok {
 		return "-"
+	}
+	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState())
+}
+
+func summarizePRCI(prs []ghissue.PRRef) string {
+	pr, ok := selectedPR(prs)
+	if !ok {
+		return "-"
+	}
+	return dash(pr.CIStatus)
+}
+
+func selectedPR(prs []ghissue.PRRef) (ghissue.PRRef, bool) {
+	if len(prs) == 0 {
+		return ghissue.PRRef{}, false
 	}
 	for _, pr := range prs {
 		if pr.State == "MERGED" {
-			return "#" + strconv.Itoa(pr.Number) + " MERGED"
+			return pr, true
 		}
 	}
-	pr := prs[0]
-	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.State)
+	return prs[0], true
 }
 
 func paneName(pane state.Pane) string {
