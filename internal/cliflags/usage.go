@@ -109,17 +109,19 @@ Options:
   --debug             Enable extra diagnostic logging.
   --status            Status mode. Print status describing each fanned-out
                       child issue recorded in .fanout/state.json, including
-                      issue state and closed-by PR merge status, then exit.
+                      issue state plus closed-by PR merge/review/CI status,
+                      then exit.
                       Read-only unless --post-dashboard is also set.
                       Exclusive with action-bearing flags.
   --format <json|table>
                       Output format for --status. Default: json. The table
-                      format adds PR diff bars, changed-file counts,
-                      Conventional-Commit type, and PR links for human scans.
+                      format adds PR state, CI, diff bars, changed-file
+                      counts, Conventional-Commit type, and PR links.
   --post-dashboard    With --status, upsert one marker-based rollup comment
                       on the parent issue. The comment aggregates child PR
-                      links, diff size, Conventional-Commit type, TL;DR, and
-                      Review effort score from machine-readable PR data.
+                      links, PR state, CI, diff size, Conventional-Commit
+                      type, TL;DR, and Review effort score from
+                      machine-readable PR data.
   --close <NUM>       Remove the recorded child worktree for issue <NUM>,
                       kill its tmux pane when still present, update state,
                       and run git worktree prune.

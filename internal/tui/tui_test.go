@@ -38,7 +38,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 			State: "CLOSED",
 			PRs: []ghissue.PRRef{
 				{Number: 11, State: "OPEN"},
-				{Number: 12, State: "MERGED"},
+				{Number: 12, State: "MERGED", CIStatus: "pass"},
 			},
 		},
 	}
@@ -58,8 +58,8 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	if second.TmuxState != "live" || second.TmuxTitle != "running title" {
 		t.Fatalf("tmux = %q/%q, want live/running title", second.TmuxState, second.TmuxTitle)
 	}
-	if second.IssueState != "CLOSED" || second.PRSummary != "#12 MERGED" {
-		t.Fatalf("issue/pr = %q/%q, want CLOSED/#12 MERGED", second.IssueState, second.PRSummary)
+	if second.IssueState != "CLOSED" || second.PRSummary != "#12 merged" || second.CIStatus != "pass" {
+		t.Fatalf("issue/pr/ci = %q/%q/%q, want CLOSED/#12 merged/pass", second.IssueState, second.PRSummary, second.CIStatus)
 	}
 	if second.WorktreePath != ".fanout/worktrees/second" {
 		t.Fatalf("WorktreePath = %q, want relative path", second.WorktreePath)

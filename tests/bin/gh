@@ -62,7 +62,9 @@
 #         --jq .data.repository.issue server-side so the on-the-wire shape
 #         matches the fixture). With `-F after=<cursor>`, echoes
 #         $FIXTURE_DIR/gh-issue-view-<N>-after-<cursor>.json for
-#         closedByPullRequestsReferences pagination tests. The `num=`
+#         closedByPullRequestsReferences pagination tests. PR fixtures may
+#         include reviewDecision/isDraft plus the latest commit's nested
+#         commits.nodes[].commit.statusCheckRollup.state CI rollup. The `num=`
 #         dispatch takes precedence over the project-mode cursor branch
 #         when only `num=` is present without `after=`.
 #
