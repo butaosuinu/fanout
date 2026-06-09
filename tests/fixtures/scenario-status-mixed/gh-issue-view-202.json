@@ -1,1 +1,1 @@
-{"state":"OPEN","closedByPullRequestsReferences":{"nodes":[{"number":602,"state":"OPEN","mergedAt":null}]}}
+{"state":"OPEN","closedByPullRequestsReferences":{"nodes":[{"number":602,"state":"OPEN","mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}]}}

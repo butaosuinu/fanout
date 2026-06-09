@@ -1,1 +1,1 @@
-{"state":"CLOSED","closedByPullRequestsReferences":{"nodes":[{"number":601,"state":"MERGED","mergedAt":"2026-05-03T12:00:00Z"}]}}
+{"state":"CLOSED","closedByPullRequestsReferences":{"nodes":[{"number":601,"state":"MERGED","mergedAt":"2026-05-03T12:00:00Z","reviewDecision":"APPROVED","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}]}}
