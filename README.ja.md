@@ -24,6 +24,9 @@ live 行で `Enter` または `o` を押すとその pane にフォーカスし�
 panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
 存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
 コンソールを離脱できますが、tmux session と子 pane は残ります。
+記録済み pane を選択して `c` で close、`m` で branch の fast-forward merge、
+`x` で同じ親の merged/closed 子を cleanup できます。各 lifecycle 操作は確認を挟み、
+対応する `--close` / `--merge` / `--cleanup` CLI コマンドと同じコア処理を使います。
 
 ## 直接 tmux ランタイム
 
