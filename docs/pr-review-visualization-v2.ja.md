@@ -212,7 +212,7 @@ fanout 適合性 25 + 実現可能性 20 + リスク管理可能性 20 = 100 点
 
 ### 案 1: 機械式リスクレーン 〔near-term / 86 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: 親 #175(子 #176, #177, #178, #179)— fanout-ready ツリー起票済み
 
 **コンセプト** — CLI が各子 PR を純機械シグナルのみで判定する: (a) 変更行数・
 ファイル数、(b) riskPaths glob(migrations/auth/CI 設定/依存ファイル等)への
@@ -260,7 +260,7 @@ CodeScene Delta Analysis
 
 ### 案 2: 読み順ナレーション + アンカー検証ガイドツアー 〔near-term / 82 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: 親 #180(子 #181, #182)— fanout-ready ツリー起票済み(第 1 段のみ)
 
 **コンセプト** — 第 1 形態(Markdown): PR 本文の TL;DR 直下に **Reading
 order** セクションを置き、変更ファイルを「1. エントリポイント → 2. コア変更 →
@@ -312,7 +312,7 @@ tldraw pr-walkthrough skill、SemanticDiff
 
 ### 案 3: ウェーブ結合検証ゲート + 収束レビュアー 〔ambitious / 86 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: #183(提案)
 
 **コンセプト** — レビューの単位を「1 PR」から「**同一親 issue の子 PR 群
 (ウェーブ)**」に変える。機械層: `fanout --verify-integration` が state.json
@@ -369,7 +369,7 @@ CodeScene temporal coupling、Anthropic ポストモーテム
 
 ### 案 4: Findings 裁可コンソール 〔ambitious / 84 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: #184(提案)
 
 **コンセプト** — 常駐 TUI を「監視画面」から「**裁可装置**」に進化させる。CLI
 が全子 PR の未解決レビュースレッド・CI 失敗・子エージェントが書き出す
@@ -423,7 +423,7 @@ gh-pr-review、claude-squad、dlvhdr 流「TUI は配線、描画は委譲」
 
 ### 案 5: 受け入れ基準エビデンス・ゲート 〔ambitious / 83 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: #185(提案)
 
 **コンセプト** — fanout-issues skill が子 issue 作成時に **Acceptance
 criteria**(検証可能な箇条書き 3-7 個、AC-1.. の機械可読 ID 付き)を必須
@@ -482,7 +482,7 @@ bool 専用制約の拡張が前提。(2) `--verify` の実行先は live worktr
 
 ### 案 6: 挙動差分証明書 〔moonshot / 80 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: #186(提案)
 
 **コンセプト** — レビューの一次成果物をコード diff から「**観測可能な挙動の
 diff**」に置換する。CLI が base と head の両方に対して同一のプローブ群(既存
@@ -534,7 +534,7 @@ SemanticDiff、Agentic PBT、Anthropic ポストモーテム
 
 ### 案 7: クロスモデル相互レビュー法廷 〔moonshot / 75 点〕
 
-関連 issue: (起票後に追記)
+関連 issue: #187(提案)
 
 **コンセプト** — 各子 PR に対し、実装エージェントとは**異種モデルの「検察
 ペイン」**を fanout が自動で隣に split する(claude 実装なら codex 検察、逆も
