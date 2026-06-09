@@ -48,6 +48,9 @@ func main() {
 	if isCodexPlanTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
 	}
+	if isDashboardRequest(os.Args[1:]) {
+		os.Exit(int(cmdDashboard(os.Args[2:], lg)))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
@@ -120,6 +123,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		BriefingCodeReview: cfg.BriefingCodeReview,
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
+		DashboardKeybind:   cfg.DashboardKeybind,
 	}, lg.Warn)
 
 	loaded, code := loadChildren(cfg, rt.gh, lg)
@@ -197,6 +201,14 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 
 	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c, commandName)
 	printSummary(plan, result, cfg, lg, c, commandName)
+
+	// Register the tmux keybinding so the user can pop the read-only dashboard
+	// (prefix + D) from any fanout pane. The binding resolves the repo from the
+	// pressing pane at keypress, so it works from child worktree panes and across
+	// repos. Best-effort, live runs only.
+	if !cfg.DryRun && result.Created > 0 {
+		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
+	}
 
 	if result.Failed > 0 {
 		return exitcode.Env

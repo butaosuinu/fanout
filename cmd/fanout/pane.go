@@ -326,12 +326,24 @@ func nextSyntheticPaneNumber(store state.Store, parentRef string) int {
 func manualPaneSlug(title string, number int) string {
 	base := naming.Slugify(title)
 	if base == "" {
-		base = "manual"
+		base = "agent"
 	}
 	if number < 0 {
 		number = -number
 	}
-	return fmt.Sprintf("%s-%d", base, number)
+	prefix := fmt.Sprintf("manual-%d-", number)
+	suffix := "-pane"
+	maxBase := naming.MaxSlugLength - len(prefix) - len(suffix)
+	if maxBase < 1 {
+		maxBase = 1
+	}
+	if len(base) > maxBase {
+		base = strings.Trim(base[:maxBase], "-")
+		if base == "" {
+			base = "agent"
+		}
+	}
+	return prefix + base + suffix
 }
 
 func codexPlanStatusPath(projectRoot string, issueNum int, dryRun bool) string {
