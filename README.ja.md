@@ -17,8 +17,11 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。記録済みの issue 親については親の子一覧も
+再読込し、`--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から
+wave / blocker 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で
+表示され、CLOSED blocker は resolved として区別されます。`q` でコンソールを離脱
+できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 

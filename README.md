@@ -17,8 +17,12 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. Press
-`q` to leave the console; the tmux session and child panes are left running.
+through the same GitHub CLI source used by `fanout <parent> --status`. For
+recorded issue parents it also reloads the parent child set and shows wave /
+blocker columns using the same `## Blocked by` and `(blocked by #N)` sources as
+`--unblocked-only`; blocked children that have not been fanned yet appear as
+`deferred` rows, and CLOSED blockers are shown as resolved. Press `q` to leave
+the console; the tmux session and child panes are left running.
 
 ## Direct tmux runtime
 
