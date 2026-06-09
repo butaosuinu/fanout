@@ -8,6 +8,18 @@ GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つ�
 ファンアウトします。各ペインは独立した git worktree を持ち、issue ごとの
 ブリーフィングファイルを参照するプロンプトでエージェント CLI が起動します。
 
+## 常駐 TUI コンソール
+
+引数なしの `fanout` で常駐コンソールを起動します。素のシェルから起動した場合は、
+現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または
+attach し、その session 内でコンソールを開始します。tmux 内から起動した場合は、
+現在の pane をそのままコンソール画面にします。
+
+コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
+まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
+issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
+tmux session と子 pane は残ります。
+
 ## 直接 tmux ランタイム
 
 fanout は dmux を経由せずに子セッションを作ります。`git rev-parse --show-toplevel`
@@ -169,6 +181,9 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 - fanout は tmux セッション内から実行してください。子ペインは dmux 経由ではなく
   `tmux split-window` で直接作成し、`--session` 未指定時は起動元 pane を target
   にします。
+- TUI モード（引数なしの `fanout`）は素のシェルから起動できます。
+  現在のリポジトリ用の fanout 管理 tmux session を作成または attach してから
+  コンソールを開始します。tmux 内から起動した場合は現在の session / pane を使います。
 - **エージェント名が解決できること**: `--agent claude` / `--agent codex` を渡すか、
   `FANOUT_AGENT` を設定してください。未知の agent はペイン作成前に失敗し、実行時
   には agent CLI がインストール済みかも確認します。
@@ -182,6 +197,7 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 ## 使い方
 
 ```
+fanout # 常駐 tmux コンソールを起動
 fanout <parent-issue|project-url>
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]

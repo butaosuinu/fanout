@@ -135,10 +135,15 @@ load helpers
   [[ "$output" == *"fanout is already up to date: v0.2.0"* ]]
 }
 
-@test "no positional argument: usage + exit 2" {
-  run_fanout
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"Usage: fanout"* ]]
+@test "no positional argument enters TUI mode: outside git exits 1" {
+  local outside="$BATS_TEST_TMPDIR/outside-git"
+  mkdir -p "$outside"
+
+  run bash -c "cd '$outside' && '$FANOUT_BIN' 2>&1"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"current directory is not inside a git work tree"* ]]
+  [[ "$output" != *"Usage: fanout"* ]]
 }
 
 @test "unknown long option: error + usage + exit 2" {

@@ -42,6 +42,9 @@ func main() {
 	if isCheckUpdateRequest(os.Args[1:]) {
 		os.Exit(int(cmdCheckUpdate(version, ghissue.Runner{}, lg)))
 	}
+	if isTUIRequest(os.Args[1:]) {
+		os.Exit(int(cmdTUI(commandName, lg)))
+	}
 	if isCodexPlanTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
 	}

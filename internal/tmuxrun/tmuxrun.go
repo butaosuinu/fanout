@@ -96,6 +96,42 @@ func ListPanes(target string) ([]PaneInfo, error) {
 	return parseListPanesOutput(string(out))
 }
 
+// ListAllPanes returns pane metadata across every tmux session.
+func ListAllPanes() ([]PaneInfo, error) {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", paneListFormat).Output()
+	if err != nil {
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	return parseListPanesOutput(string(out))
+}
+
+// NewWindow creates a detached window in session and returns its initial pane.
+func NewWindow(session, name, startDir string) (PaneInfo, error) {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return PaneInfo{}, fmt.Errorf("session name is required")
+	}
+	args := []string{"new-window", "-d", "-P", "-F", paneListFormat, "-t", exactSessionTarget(session)}
+	if strings.TrimSpace(name) != "" {
+		args = append(args, "-n", name)
+	}
+	if strings.TrimSpace(startDir) != "" {
+		args = append(args, "-c", startDir)
+	}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return PaneInfo{}, fmt.Errorf("tmux new-window: %w", err)
+	}
+	panes, err := parseListPanesOutput(string(out))
+	if err != nil {
+		return PaneInfo{}, err
+	}
+	if len(panes) != 1 {
+		return PaneInfo{}, fmt.Errorf("tmux new-window returned %d panes, want 1", len(panes))
+	}
+	return panes[0], nil
+}
+
 func shouldListSessionPanes(target string) bool {
 	return HasSession(target)
 }
@@ -110,6 +146,7 @@ func exactSessionTarget(name string) string {
 func isQualifiedSessionTarget(name string) bool {
 	return strings.HasPrefix(name, "=") ||
 		strings.HasPrefix(name, "$") ||
+		strings.HasPrefix(name, "%") ||
 		strings.ContainsAny(name, "*?[")
 }
 
@@ -202,6 +239,22 @@ func SelectPane(paneID string) error {
 	return nil
 }
 
+// FocusPane makes pane active in its window and selects that window in the session.
+func FocusPane(pane PaneInfo) error {
+	if strings.TrimSpace(pane.ID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if strings.TrimSpace(pane.WindowID) != "" {
+		if err := exec.Command("tmux", "select-window", "-t", pane.WindowID).Run(); err != nil {
+			return fmt.Errorf("tmux select-window: %w", err)
+		}
+	}
+	if err := exec.Command("tmux", "select-pane", "-t", pane.ID).Run(); err != nil {
+		return fmt.Errorf("tmux select-pane: %w", err)
+	}
+	return nil
+}
+
 // IsPaneAlive reports whether tmux can resolve the pane id.
 func IsPaneAlive(paneID string) bool {
 	paneID = strings.TrimSpace(paneID)
@@ -214,6 +267,19 @@ func IsPaneAlive(paneID string) bool {
 // InsideTmux reports whether the current process is running under tmux.
 func InsideTmux() bool {
 	return strings.TrimSpace(os.Getenv("TMUX")) != ""
+}
+
+// CurrentSession returns tmux's current session name.
+func CurrentSession() (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message session_name: %w", err)
+	}
+	session := strings.TrimSpace(string(out))
+	if session == "" {
+		return "", fmt.Errorf("tmux did not report a current session name")
+	}
+	return session, nil
 }
 
 // HasSession reports whether a tmux session exists.
@@ -237,6 +303,23 @@ func NewSession(name, startDir string) error {
 	}
 	if err := exec.Command("tmux", args...).Run(); err != nil {
 		return fmt.Errorf("tmux new-session: %w", err)
+	}
+	return nil
+}
+
+// SendKeys sends keys to a tmux target.
+func SendKeys(target string, keys ...string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("target is required")
+	}
+	if len(keys) == 0 {
+		return fmt.Errorf("keys are required")
+	}
+	args := []string{"send-keys", "-t", exactSessionTarget(target)}
+	args = append(args, keys...)
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys: %w", err)
 	}
 	return nil
 }
@@ -277,10 +360,23 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-// SetPaneTitle sets the tmux pane title when a display name is supplied.
+// PaneTitle returns tmux's current title for a pane.
+func PaneTitle(paneID string) (string, error) {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return "", fmt.Errorf("pane id is required")
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_title}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message pane_title: %w", err)
+	}
+	return strings.TrimRight(string(out), "\r\n"), nil
+}
+
+// SetPaneTitle sets the tmux pane title.
 func SetPaneTitle(paneID, title string) error {
-	if strings.TrimSpace(title) == "" {
-		return nil
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
 	}
 	if err := exec.Command("tmux", "select-pane", "-t", paneID, "-T", title).Run(); err != nil {
 		return fmt.Errorf("tmux select-pane -T: %w", err)

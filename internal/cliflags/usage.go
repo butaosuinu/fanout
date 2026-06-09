@@ -5,12 +5,17 @@ import (
 	"io"
 )
 
-const usageText = `Usage: fanout <parent-issue|project-url> [options]
+const usageText = `Usage: fanout
+       fanout <parent-issue|project-url> [options]
 
-Creates one tmux pane per OPEN sub-issue of a parent issue, OR per OPEN item in
-a GitHub Projects v2 URL. Each pane gets a dedicated git worktree under
-.fanout/worktrees/ and starts the configured agent with a briefing that points
-at /tmp/fanout-<repo>-<num>.md.
+With no arguments, starts fanout's persistent tmux console. The console creates
+or attaches a fanout-managed tmux session when launched from a plain shell, and
+shows recorded panes from .fanout/state.json with live tmux and issue/PR status.
+
+With a parent issue or GitHub Projects v2 URL, creates one tmux pane per OPEN
+sub-issue of a parent issue, OR per OPEN item in that Project. Each pane gets a
+dedicated git worktree under .fanout/worktrees/ and starts the configured agent
+with a briefing that points at /tmp/fanout-<repo>-<num>.md.
 
 Options:
   --agent <name>      Agent to launch (claude|codex). Required unless
@@ -136,8 +141,9 @@ Options:
 Prerequisites:
   * gh, jq, git, tmux installed. gh-sub-issue extension is required for
     issue mode only; project mode uses gh api graphql.
-  * fanout is invoked from inside a tmux session.
-  * --agent is given, or FANOUT_AGENT is set.
+  * fanout pane-creation mode is invoked from inside a tmux session. TUI mode
+    can be started from a plain shell; it creates or attaches its tmux session.
+  * --agent is given, or FANOUT_AGENT is set for pane-creation mode.
 
 Exit codes (default flow):
   0 success (including "no children, nothing to do")
