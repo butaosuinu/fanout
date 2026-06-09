@@ -55,6 +55,9 @@ panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` /
 `blocked` header rollup, lets the user press `n` to launch a manual
 prompt-based `claude` / `codex` pane, and exits on `q` without killing the
 session or child panes.
+On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
+branch, and `x` cleans up merged/closed siblings for the same parent after
+confirmation.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form
