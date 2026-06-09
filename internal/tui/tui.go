@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -24,6 +25,7 @@ const (
 	defaultGHInterval    = 20 * time.Second
 	detailHeight         = 13
 	peekLines            = 80
+	defaultLaunchAgent   = "claude"
 )
 
 // Options configures the TUI monitor.
@@ -32,10 +34,22 @@ type Options struct {
 	Session           string
 	StateInterval     time.Duration
 	GHInterval        time.Duration
+	DefaultAgent      string
+	LaunchPane        LaunchFunc
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
 	CapturePaneOutput func(string, int) (string, error)
 }
+
+// LaunchRequest describes one manual pane launch requested from the TUI.
+type LaunchRequest struct {
+	Prompt string
+	Agent  string
+	Slug   string
+}
+
+// LaunchFunc creates a manual fanout pane for a TUI request.
+type LaunchFunc func(LaunchRequest) error
 
 type issueStatus struct {
 	State string
@@ -59,8 +73,34 @@ type paneView struct {
 	Prompt       string
 }
 
+type viewMode int
+
+const (
+	modeMonitor viewMode = iota
+	modeNewPane
+)
+
+type newPaneField int
+
+const (
+	newPaneFieldPrompt newPaneField = iota
+	newPaneFieldAgent
+	newPaneFieldSlug
+	newPaneFieldCount
+)
+
+type newPaneForm struct {
+	prompt    textinput.Model
+	slug      textinput.Model
+	agent     string
+	focus     newPaneField
+	launching bool
+	err       string
+}
+
 type model struct {
 	opts      Options
+	mode      viewMode
 	table     table.Model
 	detail    viewport.Model
 	width     int
@@ -72,6 +112,7 @@ type model struct {
 	stateErr  string
 	ghErr     string
 	notice    string
+	newPane   newPaneForm
 	peek      panePeek
 }
 
@@ -109,6 +150,9 @@ type panePeek struct {
 
 type stateTickMsg time.Time
 type ghTickMsg time.Time
+type launchPaneMsg struct {
+	err error
+}
 
 var errPaneNotAlive = errors.New("pane is no longer live")
 
@@ -118,6 +162,7 @@ var (
 	warnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("31"))
 	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(lipgloss.Color("240"))
+	formStyle  = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(lipgloss.Color("240"))
 )
 
 // Run starts the Bubble Tea TUI.
@@ -134,6 +179,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.GHInterval <= 0 {
 		opts.GHInterval = defaultGHInterval
+	}
+	if opts.DefaultAgent != "codex" {
+		opts.DefaultAgent = defaultLaunchAgent
 	}
 	if opts.FocusPane == nil {
 		opts.FocusPane = tmuxrun.SelectPane
@@ -165,6 +213,7 @@ func newModel(opts Options) model {
 		table:  t,
 		detail: viewport.New(120, detailHeight),
 		issues: map[int]issueStatus{},
+		mode:   modeMonitor,
 	}
 }
 
@@ -180,9 +229,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case tea.KeyMsg:
+		if m.mode == modeNewPane {
+			return m.updateNewPane(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "n":
+			m.openNewPaneForm()
+			return m, nil
 		case "enter", "o":
 			cmd := m.focusSelectedCmd()
 			return m, cmd
@@ -227,6 +282,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadStateCmd()
 	case ghTickMsg:
 		return m, m.loadGHCmd()
+	case launchPaneMsg:
+		m.newPane.launching = false
+		if msg.err != nil {
+			m.newPane.err = msg.err.Error()
+			return m, nil
+		}
+		m.mode = modeMonitor
+		m.notice = "created new agent pane"
+		return m, m.loadStateCmd()
 	case paneFocusedMsg:
 		if msg.err != nil {
 			m.notice = fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
@@ -265,7 +329,7 @@ func (m model) View() string {
 		header += " " + dimStyle.Render(m.opts.ProjectRoot)
 	}
 
-	footer := dimStyle.Render("q quit  j/k move  enter/o focus  p peek  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	footer := dimStyle.Render("q quit  n new  j/k move  enter/o focus  p peek  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
 	if m.notice != "" {
 		footer += "\n" + warnStyle.Render(m.notice)
 	}
@@ -274,6 +338,16 @@ func (m model) View() string {
 	}
 	if m.ghErr != "" {
 		footer += "\n" + warnStyle.Render("gh: "+m.ghErr)
+	}
+
+	if m.mode == modeNewPane {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			m.newPaneView(),
+			dimStyle.Render("enter create  tab field  arrows/space agent  esc cancel"),
+			footer,
+		)
 	}
 
 	detail := m.detail
@@ -291,6 +365,11 @@ func (m *model) resize() {
 	if m.width <= 0 {
 		return
 	}
+	if m.mode == modeNewPane {
+		inputWidth := m.formInputWidth()
+		m.newPane.prompt.Width = inputWidth
+		m.newPane.slug.Width = inputWidth
+	}
 	tableHeight := m.height - detailHeight - 5
 	if tableHeight < 4 {
 		tableHeight = 4
@@ -301,6 +380,169 @@ func (m *model) resize() {
 	m.detail.Width = m.width
 	m.detail.Height = detailHeight
 	m.refreshRows()
+}
+
+func (m *model) openNewPaneForm() {
+	m.mode = modeNewPane
+	m.notice = ""
+	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.formInputWidth())
+}
+
+func newNewPaneForm(defaultAgent string, width int) newPaneForm {
+	prompt := textinput.New()
+	prompt.Placeholder = "Prompt"
+	prompt.Prompt = "> "
+	prompt.CharLimit = 1000
+	prompt.Width = width
+	prompt.Focus()
+
+	slug := textinput.New()
+	slug.Placeholder = "optional-slug"
+	slug.Prompt = "> "
+	slug.CharLimit = 80
+	slug.Width = width
+	slug.Blur()
+
+	if defaultAgent != "codex" {
+		defaultAgent = defaultLaunchAgent
+	}
+	return newPaneForm{
+		prompt: prompt,
+		slug:   slug,
+		agent:  defaultAgent,
+		focus:  newPaneFieldPrompt,
+	}
+}
+
+func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.newPane.launching {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.mode = modeMonitor
+		m.newPane = newPaneForm{}
+		return m, nil
+	case "tab", "shift+tab", "up", "down":
+		m.moveNewPaneFocus(msg.String())
+		return m, nil
+	case "left", "right", " ":
+		if m.newPane.focus == newPaneFieldAgent {
+			m.toggleNewPaneAgent()
+			return m, nil
+		}
+	case "enter":
+		return m, m.submitNewPane()
+	}
+
+	var cmd tea.Cmd
+	switch m.newPane.focus {
+	case newPaneFieldPrompt:
+		m.newPane.prompt, cmd = m.newPane.prompt.Update(msg)
+	case newPaneFieldSlug:
+		m.newPane.slug, cmd = m.newPane.slug.Update(msg)
+	}
+	return m, cmd
+}
+
+func (m *model) moveNewPaneFocus(key string) {
+	switch key {
+	case "shift+tab", "up":
+		m.newPane.focus = (m.newPane.focus + newPaneFieldCount - 1) % newPaneFieldCount
+	default:
+		m.newPane.focus = (m.newPane.focus + 1) % newPaneFieldCount
+	}
+	if m.newPane.focus == newPaneFieldPrompt {
+		m.newPane.prompt.Focus()
+	} else {
+		m.newPane.prompt.Blur()
+	}
+	if m.newPane.focus == newPaneFieldSlug {
+		m.newPane.slug.Focus()
+	} else {
+		m.newPane.slug.Blur()
+	}
+}
+
+func (m *model) toggleNewPaneAgent() {
+	if m.newPane.agent == "claude" {
+		m.newPane.agent = "codex"
+		return
+	}
+	m.newPane.agent = "claude"
+}
+
+func (m *model) submitNewPane() tea.Cmd {
+	prompt := strings.TrimSpace(m.newPane.prompt.Value())
+	if prompt == "" {
+		m.newPane.err = "prompt is required"
+		return nil
+	}
+	if m.opts.LaunchPane == nil {
+		m.newPane.err = "new pane launcher is not configured"
+		return nil
+	}
+	m.newPane.err = ""
+	m.newPane.launching = true
+	req := LaunchRequest{
+		Prompt: prompt,
+		Agent:  m.newPane.agent,
+		Slug:   strings.TrimSpace(m.newPane.slug.Value()),
+	}
+	launch := m.opts.LaunchPane
+	return func() tea.Msg {
+		return launchPaneMsg{err: launch(req)}
+	}
+}
+
+func (m model) newPaneView() string {
+	lines := []string{
+		titleStyle.Render("New agent pane"),
+		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View()),
+		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView()),
+		m.newPaneFieldView(newPaneFieldSlug, "Slug", m.newPane.slug.View()),
+	}
+	if m.newPane.launching {
+		lines = append(lines, dimStyle.Render("creating pane..."))
+	}
+	if m.newPane.err != "" {
+		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
+	}
+	return formStyle.Width(maxInt(0, m.width-4)).Render(strings.Join(lines, "\n"))
+}
+
+func (m model) newPaneFieldView(field newPaneField, label, value string) string {
+	marker := "  "
+	if m.newPane.focus == field {
+		marker = "> "
+	}
+	return marker + label + "\n" + value
+}
+
+func (m model) agentSelectorView() string {
+	claude := "claude"
+	codex := "codex"
+	if m.newPane.agent == "claude" {
+		claude = titleStyle.Render("[claude]")
+		codex = dimStyle.Render(" codex ")
+	} else {
+		claude = dimStyle.Render(" claude ")
+		codex = titleStyle.Render("[codex]")
+	}
+	return claude + "  " + codex
+}
+
+func (m model) formInputWidth() int {
+	if m.width <= 0 {
+		return 72
+	}
+	return clampInt(m.width-12, 24, 100)
 }
 
 func (m *model) refreshRows() {

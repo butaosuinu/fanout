@@ -51,8 +51,9 @@ creates one new tmux pane per child. Each pane gets its own git worktree under
 plain shell it creates or attaches a deterministic fanout-managed tmux session
 for the current repository, then runs the console there. From inside tmux it
 turns the current pane into the console. The console shows `.fanout/state.json`
-panes with live tmux plus issue/PR status and exits on `q` without killing the
-session or child panes.
+panes with live tmux plus issue/PR status, lets the user press `n` to launch a
+manual prompt-based `claude` / `codex` pane, and exits on `q` without killing
+the session or child panes.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form
