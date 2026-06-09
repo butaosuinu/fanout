@@ -18,7 +18,11 @@ tmux it turns the current pane into the console.
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
 through the same GitHub CLI source used by `fanout <parent> --status`. Press
-`q` to leave the console; the tmux session and child panes are left running.
+`/` to filter the loaded rows in memory with free-text terms or predicates such
+as `state:open`, `agent:codex`, and `wave:wave5`. Filtering does not trigger
+extra data fetches, and the automatic state / GitHub refresh continues while a
+filter is active. Press `q` to leave the console; the tmux session and child
+panes are left running.
 
 ## Direct tmux runtime
 

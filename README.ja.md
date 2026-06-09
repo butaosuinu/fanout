@@ -17,8 +17,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。`/` でロード済み行をメモリ内検索し、
+`state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
+フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
+継続します。`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
