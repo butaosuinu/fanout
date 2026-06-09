@@ -28,9 +28,12 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
 fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
+
+`fanout dashboard --web` is a standalone subcommand (no parent argument): a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it when the user wants to watch/monitor parallel panes, not as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; `--no-dashboard-keybind` suppresses that.
 
 **Do not probe the CLI** with `fanout --help`, `fanout -h`, or
 `which fanout`. This SKILL.md is the source-of-truth for the CLI surface —
@@ -48,8 +51,9 @@ creates one new tmux pane per child. Each pane gets its own git worktree under
 plain shell it creates or attaches a deterministic fanout-managed tmux session
 for the current repository, then runs the console there. From inside tmux it
 turns the current pane into the console. The console shows `.fanout/state.json`
-panes with live tmux plus issue/PR status and exits on `q` without killing the
-session or child panes.
+panes with live tmux plus issue/PR status, lets the user press `n` to launch a
+manual prompt-based `claude` / `codex` pane, and exits on `q` without killing
+the session or child panes.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form

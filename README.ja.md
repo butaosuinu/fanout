@@ -20,11 +20,13 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 issue / closed-by PR 状態を定期更新します。記録済みの issue 親については親の子一覧も
 再読込し、`--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から
 wave / blocker 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で
-表示され、CLOSED blocker は resolved として区別されます。live 行で `Enter` または
-`o` を押すとその pane にフォーカスし、`p` で detail panel の read-only 出力
-スナップショットを更新します。記録はあるものの tmux 上に存在しない pane は
-`stale!` と表示し、focus / peek の対象から除外します。`q` でコンソールを離脱
-できますが、tmux session と子 pane は残ります。
+表示され、CLOSED blocker は resolved として区別されます。`n` で必須 prompt、`claude` / `codex`
+の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
+は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
+live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
+panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
+存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
+コンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
@@ -221,6 +223,7 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
 fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
+fanout dashboard --web              # 読み取り専用の localhost Web ダッシュボード（Session 表示）
 fanout --check-update               # この binary と最新 release を比較
 fanout update                       # install.sh 経由で binary + integrations を置換
 fanout --help
@@ -284,6 +287,40 @@ filesystem scan で探すことはしません。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に
   `MERGED` がある記録済み子をまとめて `--close` 相当で後始末します。
 
+### ダッシュボード（Web UI）
+
+`fanout dashboard --web` は **読み取り専用**の Web ダッシュボードを起動し、
+fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位で
+まとめたもの）をブラウザで常時可視化します。ペインの生存（`tmux list-panes`）・
+issue 状態・PR マージ状態（`--status` と同じデータ源を、リポジトリ内の全親について
+一度に再利用）をライブ表示します。リポジトリと GitHub の状態は一切変更せず、tmux は
+*読み取る*だけです。唯一の意図的な tmux への副作用は、利便性のために起動中の tmux
+サーバへ登録する `prefix + D` キーバインドです（下記で無効化可）。
+
+```
+fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
+```
+
+- **いつでも任意に表示。** ターミナルから起動できるほか、tmux 内で **`prefix + D`**
+  を押すだけで開けます。ライブ fan-out 後（およびダッシュボード起動時）に fanout が
+  この tmux キーバインドを自動登録するため、どのペインからでも呼び出せます。キーは
+  detached な `fanout-dashboard` ウィンドウでサーバを起動するのでキー押下後も生き続け、
+  2 回目以降は既存 URL を開き直すだけです。自動登録は
+  `--no-dashboard-keybind`（fan-out）/ `--no-keybind`（dashboard）・設定キー
+  `dashboardKeybind`・`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます。
+- **localhost 限定。** `127.0.0.1` にのみバインドし、GET 専用の endpoint
+  （`/api/snapshot`、SSE の `/api/stream`、埋め込み UI）を公開します。`--port` は
+  既定 `0`（OS 割り当ての ephemeral port）で、確定した URL を表示します。
+- **トークン既定 ON。** 起動毎にランダムトークンを生成して URL に埋め込み、`/api/*`
+  をゲートします。同一ホストの他ユーザ/プロセスからループバックポート経由で
+  issue/PR データを読まれるのを防ぎます。単一ユーザ端末では `--no-token` で外せます。
+- **`--open`** は既定ブラウザで URL を開きます。既に起動中のサーバ
+  （`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しません。
+- **グレースフルに縮退。** `gh` 未ログインならバナーを出して state のみ表示し、
+  tmux 外でも生存不明として配信を継続します。
+
+全フラグは `fanout dashboard --help` を参照してください。
+
 ### `--check-update`
 
 `fanout --check-update` は読み取り専用です。`butaosuinu/fanout` の最新 release
@@ -325,9 +362,9 @@ exit code:
 
 ### Settings
 
-Go 実装では、fanout が briefing に入れる opinionated な 5 つの挙動スイッチを
-解決できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
-env には未対応です。後方互換のため、既定値はすべて `true` です。
+Go 実装では opinionated な 6 つの挙動（briefing の 5 トグル＋ダッシュボードの
+キーバインド）をオン/オフできます。deprecated な Bash 版 `./fanout` はこの新しい
+flag / ファイル / env には未対応です。後方互換のため、既定値はすべて `true` です。
 
 優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
 ビルトイン既定値** です。fanout は git リポジトリルートを解決した後、逆順に
@@ -342,7 +379,8 @@ env には未対応です。後方互換のため、既定値はすべて `true`
   "prReviewGate": true,
   "briefingCodeReview": true,
   "agentTeamsHint": false,
-  "prVisualization": true
+  "prVisualization": true,
+  "dashboardKeybind": true
 }
 ```
 
@@ -353,6 +391,7 @@ env には未対応です。後方互換のため、既定値はすべて `true`
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
+| ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 
 環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
 不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
