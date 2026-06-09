@@ -18,7 +18,11 @@ tmux it turns the current pane into the console.
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
 through the same GitHub CLI source used by `fanout <parent> --status`. Press
-`q` to leave the console; the tmux session and child panes are left running.
+`Enter` or `o` on a live row to focus that pane, and press `p` to refresh the
+read-only output snapshot shown in the detail panel. Rows whose recorded pane no
+longer exists in tmux are marked `stale!` and are skipped by focus/peek actions.
+Press `q` to leave the console; the tmux session and child panes are left
+running.
 
 ## Direct tmux runtime
 
