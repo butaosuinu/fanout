@@ -64,6 +64,78 @@ func BuildPaneLaunchCommand(agentCommand string) string {
 	return "exec /bin/sh -lc " + shellQuote(body)
 }
 
+// LivePane is one live tmux pane: its server-scoped id and the cwd of its
+// foreground process.
+type LivePane struct {
+	ID          string
+	CurrentPath string
+}
+
+// ListLivePanes returns every live tmux pane across all sessions with its
+// current path (`tmux list-panes -a -F '#{pane_id}\t#{pane_current_path}'`). The
+// dashboard matches a recorded pane on BOTH its id and a current path under its
+// worktree: pane ids are server-scoped and reused after a tmux server restart,
+// so id-only matching would falsely mark a stale row live when an unrelated new
+// pane reuses the same %N. An error (e.g. tmux absent) lets callers degrade.
+//
+// Distinct from ListPanes(target), which returns richer PaneInfo for a single
+// target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
+func ListLivePanes() ([]LivePane, error) {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}").Output()
+	if err != nil {
+		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
+	}
+	var panes []LivePane
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		id, path, _ := strings.Cut(line, "\t")
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		panes = append(panes, LivePane{ID: id, CurrentPath: path})
+	}
+	return panes, nil
+}
+
+// BindDashboardKey registers a tmux key binding (under the prefix table) that
+// opens the read-only web dashboard. It binds the key directly to `new-window`
+// (not run-shell), so:
+//
+//   - tmux expands `#{pane_current_path}` to the *active pane's* cwd at keypress
+//     time, making a single global key open the dashboard for whichever repo the
+//     pressing pane belongs to (multi-repo / multi-session safe). cmdDashboard
+//     then resolves that cwd to the main working tree, so pressing from a child
+//     worktree pane still reads the parent `.fanout/state.json`.
+//   - The command runs through exactly one shell (new-window's), so the binary
+//     path needs a single level of quoting — handling install paths with spaces
+//     without the fragile double-quoting a run-shell wrapper would require.
+//
+// The detached `fanout-dashboard` window keeps the server alive past the
+// keypress; reuse-if-running makes repeated presses just reopen the existing
+// URL. The binding lives in the running tmux server (it never edits
+// ~/.tmux.conf) and re-registering is idempotent.
+//
+// fanoutBin should be an absolute path (os.Executable) so the binding does not
+// depend on PATH.
+func BindDashboardKey(key, fanoutBin string) error {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(fanoutBin) == "" {
+		return fmt.Errorf("tmux bind-key: key and fanout binary path are required")
+	}
+	launch := shellQuote(fanoutBin) + " dashboard --web --open"
+	args := []string{
+		"bind-key", key, "new-window", "-d", "-n", "fanout-dashboard",
+		"-c", "#{pane_current_path}", launch,
+	}
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key %s: %w", key, err)
+	}
+	return nil
+}
+
 // SelectTiled applies tmux's tiled layout to the target pane/session.
 func SelectTiled(session string) error {
 	args := []string{"select-layout"}

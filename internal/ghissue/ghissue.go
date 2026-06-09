@@ -31,9 +31,37 @@ type Issue struct {
 }
 
 type PRRef struct {
-	Number   int     `json:"number"`
-	State    string  `json:"state"`
-	MergedAt *string `json:"mergedAt"`
+	Number         int     `json:"number"`
+	State          string  `json:"state"`
+	MergedAt       *string `json:"mergedAt"`
+	IsDraft        bool    `json:"isDraft,omitempty"`
+	ReviewDecision string  `json:"reviewDecision,omitempty"`
+	CIStatus       string  `json:"ci,omitempty"`
+}
+
+func (pr PRRef) DisplayState() string {
+	state := strings.ToUpper(strings.TrimSpace(pr.State))
+	if state == "MERGED" || pr.MergedAt != nil {
+		return "merged"
+	}
+	if state == "CLOSED" {
+		return "closed"
+	}
+	if pr.IsDraft {
+		return "draft"
+	}
+	switch strings.ToUpper(strings.TrimSpace(pr.ReviewDecision)) {
+	case "APPROVED":
+		return "approved"
+	case "CHANGES_REQUESTED":
+		return "changes-requested"
+	case "REVIEW_REQUIRED":
+		return "review-required"
+	}
+	if state == "" {
+		return ""
+	}
+	return strings.ToLower(state)
 }
 
 type PRDiffStat struct {
@@ -192,7 +220,22 @@ func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot
           body
           closedByPullRequestsReferences(first: 100, after: $after) {
             pageInfo { hasNextPage endCursor }
-            nodes { number state mergedAt }
+            nodes {
+              number
+              state
+              mergedAt
+              isDraft
+              reviewDecision
+              commits(last: 1) {
+                nodes {
+                  commit {
+                    statusCheckRollup {
+                      state
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -227,7 +270,7 @@ func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot
 					HasNextPage bool   `json:"hasNextPage"`
 					EndCursor   string `json:"endCursor"`
 				} `json:"pageInfo"`
-				Nodes []PRRef `json:"nodes"`
+				Nodes []prRefGraphQL `json:"nodes"`
 			} `json:"closedByPullRequestsReferences"`
 		}
 		if err := json.Unmarshal(out, &page); err != nil {
@@ -235,7 +278,9 @@ func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot
 		}
 		snapshot.State = page.State
 		snapshot.Body = page.Body
-		snapshot.PRs = append(snapshot.PRs, page.Refs.Nodes...)
+		for _, pr := range page.Refs.Nodes {
+			snapshot.PRs = append(snapshot.PRs, pr.ref())
+		}
 		if !page.Refs.PageInfo.HasNextPage {
 			break
 		}
@@ -256,6 +301,56 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 		return "", nil, err
 	}
 	return snapshot.State, snapshot.PRs, nil
+}
+
+type prRefGraphQL struct {
+	Number         int     `json:"number"`
+	State          string  `json:"state"`
+	MergedAt       *string `json:"mergedAt"`
+	IsDraft        bool    `json:"isDraft"`
+	ReviewDecision string  `json:"reviewDecision"`
+	Commits        struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					State string `json:"state"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+func (pr prRefGraphQL) ref() PRRef {
+	return PRRef{
+		Number:         pr.Number,
+		State:          pr.State,
+		MergedAt:       pr.MergedAt,
+		IsDraft:        pr.IsDraft,
+		ReviewDecision: pr.ReviewDecision,
+		CIStatus:       normalizeCIStatus(pr.statusCheckRollupState()),
+	}
+}
+
+func (pr prRefGraphQL) statusCheckRollupState() string {
+	if len(pr.Commits.Nodes) == 0 || pr.Commits.Nodes[0].Commit.StatusCheckRollup == nil {
+		return ""
+	}
+	return pr.Commits.Nodes[0].Commit.StatusCheckRollup.State
+}
+
+func normalizeCIStatus(state string) string {
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "":
+		return ""
+	case "SUCCESS":
+		return "pass"
+	case "ERROR", "FAILURE":
+		return "fail"
+	case "EXPECTED", "PENDING":
+		return "pending"
+	default:
+		return strings.ToLower(strings.TrimSpace(state))
+	}
 }
 
 func (r Runner) PRDiffStat(num int) (PRDiffStat, error) {

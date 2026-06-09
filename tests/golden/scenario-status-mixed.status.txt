@@ -8,7 +8,9 @@
         {
           "number": 601,
           "state": "MERGED",
-          "mergedAt": "2026-05-03T12:00:00Z"
+          "mergedAt": "2026-05-03T12:00:00Z",
+          "reviewDecision": "APPROVED",
+          "ci": "pass"
         }
       ],
       "has_merged_pr": true
@@ -20,7 +22,9 @@
         {
           "number": 602,
           "state": "OPEN",
-          "mergedAt": null
+          "mergedAt": null,
+          "reviewDecision": "CHANGES_REQUESTED",
+          "ci": "fail"
         }
       ],
       "has_merged_pr": false

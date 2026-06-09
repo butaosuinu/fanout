@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/naming"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
@@ -111,6 +112,17 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 	if _, err := os.Stat(req.BriefingPath); !os.IsNotExist(err) {
 		t.Fatalf("manual dry-run wrote briefing file %s: %v", req.BriefingPath, err)
+	}
+}
+
+func TestManualPaneSlugBoundsPromptDerivedSlug(t *testing.T) {
+	got := manualPaneSlug(strings.Repeat("a", naming.MaxSlugLength+50), -12)
+
+	if len(got) > naming.MaxSlugLength {
+		t.Fatalf("manualPaneSlug len = %d, want <= %d: %q", len(got), naming.MaxSlugLength, got)
+	}
+	if !strings.HasSuffix(got, "-12") {
+		t.Fatalf("manualPaneSlug = %q, want -12 suffix", got)
 	}
 }
 
