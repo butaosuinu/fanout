@@ -148,7 +148,8 @@ func settingsFlags(cfg *cliflags.Config) string {
 		boolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate) +
 		boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview) +
 		boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint) +
-		boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization)
+		boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization) +
+		boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind)
 }
 
 func worktreeFlags(cfg *cliflags.Config) string {

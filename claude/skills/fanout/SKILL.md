@@ -26,15 +26,18 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
 fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
+
+`fanout dashboard --web` is a standalone subcommand (no parent argument): it starts a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it to the user when they ask to "watch"/"monitor" parallel panes, but do not run it as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; pass `--no-dashboard-keybind` to suppress that.
 
 **Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
 
 `fanout <parent-issue-or-project-url>` enumerates either a GitHub parent issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and for each child creates a new tmux pane with its own git worktree under `.fanout/worktrees/` and an agent CLI started with a briefing that points at `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status and exits on `q` without killing the session or child panes. On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded branch, and `x` cleans up merged/closed siblings for the same parent after confirmation.
+`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status, lets the user press `n` to launch a manual prompt-based `claude` / `codex` pane, and exits on `q` without killing the session or child panes. On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded branch, and `x` cleans up merged/closed siblings for the same parent after confirmation.
 
 The positional argument selects the mode: a bare integer means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. User-facing issue refs like `#N` are accepted by this skill, but strip the leading `#` before invoking the CLI. The two modes share everything downstream of child enumeration — briefing generation, filters, deterministic naming, direct git worktree creation, and tmux pane launch — only the children come from a different source.
 
@@ -154,7 +157,8 @@ then continue parent-scope work. After the real fanout run succeeds, poll
 `fanout --status <PARENT>` from the parent worktree. The command reads
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
 `summary.all_merged` for the recorded children. Use the default JSON format for
-automation; `--format table` is for human review of PR diff stats and links.
+automation; `--format table` is for human review of PR state, CI, diff stats,
+and links.
 Use `--post-dashboard` only when the user explicitly wants a parent issue
 rollup comment; it writes to GitHub even though it is attached to `--status`.
 
