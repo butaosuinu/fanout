@@ -20,7 +20,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 issue / closed-by PR 状態を定期更新します。各行には pane worktree の
 `git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による
 `dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を
-確認できます。`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
+確認できます。live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で
+detail panel の read-only 出力スナップショットを更新します。記録はあるものの tmux
+上に存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q`
+でコンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
@@ -248,15 +251,17 @@ launch を失敗扱いにし、pane/worktree を cleanup するため、同じ c
 `fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
 （または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
 子 issue を列挙し、各子について `gh api graphql` で issue state と
-`closedByPullRequestsReferences` を取得して、既定では既存の JSON schema
-（`children[].prs` / `summary.all_merged` など）で出力します。`--format table`
-を渡すと、PR の差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを
-含む人間向けの一覧を出力します。`--post-dashboard` を渡すと、親 issue に
-marker 付きコメントを 1 つ upsert し、各子 PR の sub-issue 番号、PR リンク、
-差分規模、Conventional-Commit 種別、TL;DR、`Review effort` score を集約します。
-dashboard は GitHub の機械可読データと PR 本文だけから作り、LLM は呼びません。
-JSON mode では `--post-dashboard` を併用しない限り PR 差分統計を取得しないため、
-既定の schema と API call 数は変わりません。dmux や live tmux session は不要です。
+`closedByPullRequestsReferences` を取得して、PR の `reviewDecision` と最新 commit
+の CI rollup も含む JSON（`children[].prs` / `summary.all_merged` など）で
+出力します。`--format table` を渡すと、正規化した PR 状態（`open`、`draft`、
+`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、
+差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを含む人間向けの一覧を出力します。
+`--post-dashboard` を渡すと、親 issue に marker 付きコメントを 1 つ upsert し、
+各子 PR の sub-issue 番号、PR リンク、PR 状態、CI、差分規模、
+Conventional-Commit 種別、TL;DR、`Review effort` score を集約します。dashboard は
+GitHub の機械可読データと PR 本文だけから作り、LLM は呼びません。JSON mode では
+`--post-dashboard` を併用しない限り PR 差分統計を取得しないため、review/CI 追加
+field は同じ per-issue GraphQL lookup から取得します。dmux や live tmux session は不要です。
 現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
 `--status` は拒否します。
 
@@ -432,8 +437,8 @@ fanout 123 --no-auto-pr
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を読む。
-# 既定は automation 向け JSON、table は PR 差分統計、任意で親 dashboard コメント。
+# .fanout/state.json に記録された子 issue と closed-by PR/review/CI 状態を読む。
+# 既定は automation 向け JSON、table は PR/CI/差分確認、任意で親 dashboard コメント。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
 fanout 123 --status --format table
