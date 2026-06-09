@@ -294,6 +294,7 @@ func loadIssueChildren(cfg *cliflags.Config, gh ghissue.Runner, lg *log.Logger) 
 
 	bodyNums := ghissue.TaskListNumbers(parentBody)
 	loaded, added := mergeExtraChildren(cfg, gh, subIssues, bodyNums, true, lg)
+	assignTaskListWaves(loaded, ghissue.TaskListWaves(parentBody))
 	if added > 0 {
 		lg.Info("parent body / --include added %d extra child reference(s) not in sub-issue API", added)
 	}
@@ -365,6 +366,14 @@ func mergeExtraChildren(cfg *cliflags.Config, gh ghissue.Runner, base []ghissue.
 		existing[num] = true
 	}
 	return ghissue.MergeExtra(base, extra), len(extra)
+}
+
+func assignTaskListWaves(issues []ghissue.Issue, waves map[int]string) {
+	for i := range issues {
+		if wave := waves[issues[i].Number]; wave != "" {
+			issues[i].Wave = wave
+		}
+	}
 }
 
 func issueSet(issues []ghissue.Issue) map[int]bool {
