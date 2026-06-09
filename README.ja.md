@@ -19,6 +19,9 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
 issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
 tmux session と子 pane は残ります。
+記録済み pane を選択して `c` で close、`m` で branch の fast-forward merge、
+`x` で同じ親の merged/closed 子を cleanup できます。各 lifecycle 操作は確認を挟み、
+対応する `--close` / `--merge` / `--cleanup` CLI コマンドと同じコア処理を使います。
 
 ## 直接 tmux ランタイム
 

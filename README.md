@@ -19,6 +19,10 @@ The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
 through the same GitHub CLI source used by `fanout <parent> --status`. Press
 `q` to leave the console; the tmux session and child panes are left running.
+Select a recorded pane and press `c` to close it, `m` to fast-forward merge its
+branch, or `x` to clean up merged/closed siblings for the same parent. Each
+lifecycle action asks for confirmation and uses the same core path as the
+corresponding `--close`, `--merge`, or `--cleanup` CLI command.
 
 ## Direct tmux runtime
 

@@ -49,7 +49,9 @@ plain shell it creates or attaches a deterministic fanout-managed tmux session
 for the current repository, then runs the console there. From inside tmux it
 turns the current pane into the console. The console shows `.fanout/state.json`
 panes with live tmux plus issue/PR status and exits on `q` without killing the
-session or child panes.
+session or child panes. On a selected recorded pane, `c` closes it, `m`
+fast-forward merges its recorded branch, and `x` cleans up merged/closed
+siblings for the same parent after confirmation.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form

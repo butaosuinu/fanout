@@ -2,14 +2,18 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/charmbracelet/bubbles/table"
@@ -30,6 +34,7 @@ type Options struct {
 	Session       string
 	StateInterval time.Duration
 	GHInterval    time.Duration
+	lifecycle     lifecycleRunner
 }
 
 type issueStatus struct {
@@ -54,33 +59,103 @@ type paneView struct {
 }
 
 type model struct {
-	opts      Options
-	table     table.Model
-	detail    viewport.Model
-	width     int
-	height    int
-	panes     []paneView
-	issues    map[int]issueStatus
-	lastState time.Time
-	lastGH    time.Time
-	stateErr  string
-	ghErr     string
+	opts            Options
+	table           table.Model
+	detail          viewport.Model
+	width           int
+	height          int
+	panes           []paneView
+	issues          map[int]issueStatus
+	lastState       time.Time
+	lastGH          time.Time
+	stateErr        string
+	ghErr           string
+	pendingAction   *pendingLifecycleAction
+	actionRunning   bool
+	quitAfterAction bool
+	actionMessage   string
 }
 
 type stateLoadedMsg struct {
-	panes []paneView
-	at    time.Time
-	err   error
+	panes        []paneView
+	at           time.Time
+	err          error
+	scheduleNext bool
 }
 
 type ghLoadedMsg struct {
-	issues map[int]issueStatus
-	at     time.Time
-	err    error
+	issues       map[int]issueStatus
+	at           time.Time
+	err          error
+	scheduleNext bool
+}
+
+type lifecycleAction string
+
+const (
+	actionClose   lifecycleAction = "close"
+	actionMerge   lifecycleAction = "merge"
+	actionCleanup lifecycleAction = "cleanup"
+)
+
+type pendingLifecycleAction struct {
+	action lifecycleAction
+	pane   paneView
+}
+
+type lifecycleDoneMsg struct {
+	action lifecycleAction
+	pane   paneView
+	code   exitcode.Code
+	output string
 }
 
 type stateTickMsg time.Time
 type ghTickMsg time.Time
+
+type lifecycleRunner interface {
+	Close(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
+	Merge(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
+	Cleanup(lifecycle.Options, string, lifecycle.Logger) exitcode.Code
+}
+
+type defaultLifecycleRunner struct{}
+
+func (defaultLifecycleRunner) Close(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.Close(opts, parent, issueNum, lg)
+}
+
+func (defaultLifecycleRunner) Merge(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.Merge(opts, parent, issueNum, lg)
+}
+
+func (defaultLifecycleRunner) Cleanup(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.Cleanup(opts, parent, lg)
+}
+
+type actionLogger struct {
+	w io.Writer
+}
+
+func (l actionLogger) Info(format string, a ...any) {
+	fmt.Fprintf(l.w, "[info] %s\n", fmt.Sprintf(format, a...))
+}
+
+func (l actionLogger) Ok(format string, a ...any) {
+	fmt.Fprintf(l.w, "[ ok ] %s\n", fmt.Sprintf(format, a...))
+}
+
+func (l actionLogger) Warn(format string, a ...any) {
+	fmt.Fprintf(l.w, "[warn] %s\n", fmt.Sprintf(format, a...))
+}
+
+func (l actionLogger) Err(format string, a ...any) {
+	fmt.Fprintf(l.w, "[err ] %s\n", fmt.Sprintf(format, a...))
+}
+
+func (l actionLogger) Stderr() io.Writer {
+	return l.w
+}
 
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("34"))
@@ -104,6 +179,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.GHInterval <= 0 {
 		opts.GHInterval = defaultGHInterval
+	}
+	if opts.lifecycle == nil {
+		opts.lifecycle = defaultLifecycleRunner{}
 	}
 	return opts
 }
@@ -130,7 +208,7 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadStateCmd(), m.loadGHCmd())
+	return tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -141,9 +219,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case tea.KeyMsg:
+		if m.pendingAction != nil {
+			return m.updatePendingAction(msg)
+		}
+		if m.actionRunning {
+			switch msg.String() {
+			case "q", "ctrl+c":
+				m.quitAfterAction = true
+				m.actionMessage = "will quit after lifecycle action finishes"
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "c":
+			return m.startPendingAction(actionClose)
+		case "m":
+			return m.startPendingAction(actionMerge)
+		case "x":
+			return m.startPendingAction(actionCleanup)
 		}
 		next, cmd := m.table.Update(msg)
 		m.table = next
@@ -158,7 +253,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.panes = msg.panes
 		m.lastState = msg.at
 		m.refreshRows()
-		return m, tea.Tick(m.opts.StateInterval, func(t time.Time) tea.Msg { return stateTickMsg(t) })
+		if msg.scheduleNext {
+			return m, tea.Tick(m.opts.StateInterval, func(t time.Time) tea.Msg { return stateTickMsg(t) })
+		}
+		return m, nil
 	case ghLoadedMsg:
 		if msg.err != nil {
 			m.ghErr = msg.err.Error()
@@ -168,11 +266,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.lastGH = msg.at
 		m.refreshRows()
-		return m, tea.Tick(m.opts.GHInterval, func(t time.Time) tea.Msg { return ghTickMsg(t) })
+		if msg.scheduleNext {
+			return m, tea.Tick(m.opts.GHInterval, func(t time.Time) tea.Msg { return ghTickMsg(t) })
+		}
+		return m, nil
+	case lifecycleDoneMsg:
+		m.actionRunning = false
+		m.actionMessage = lifecycleResultMessage(msg)
+		if m.quitAfterAction {
+			m.quitAfterAction = false
+			return m, tea.Quit
+		}
+		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case stateTickMsg:
-		return m, m.loadStateCmd()
+		return m, m.loadStateCmd(true)
 	case ghTickMsg:
-		return m, m.loadGHCmd()
+		return m, m.loadGHCmd(true)
 	}
 	return m, nil
 }
@@ -189,7 +298,10 @@ func (m model) View() string {
 		header += " " + dimStyle.Render(m.opts.ProjectRoot)
 	}
 
-	footer := dimStyle.Render("q quit  j/k move  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	footer := dimStyle.Render("q quit  j/k move  c close  m merge  x cleanup  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	if m.actionMessage != "" {
+		footer += "\n" + m.renderActionMessage()
+	}
 	if m.stateErr != "" {
 		footer += "\n" + errStyle.Render("state/tmux: "+m.stateErr)
 	}
@@ -222,6 +334,112 @@ func (m *model) resize() {
 	m.detail.Width = m.width
 	m.detail.Height = detailHeight
 	m.refreshRows()
+}
+
+func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "enter":
+		pending := *m.pendingAction
+		m.pendingAction = nil
+		m.actionRunning = true
+		m.actionMessage = lifecycleRunningMessage(pending)
+		return m, m.lifecycleCmd(pending)
+	case "n", "esc", "q", "ctrl+c":
+		m.actionMessage = fmt.Sprintf("%s cancelled", m.pendingAction.action)
+		m.pendingAction = nil
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
+	pane, ok := m.selectedPane()
+	if !ok {
+		m.actionMessage = "no pane selected"
+		return m, nil
+	}
+	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
+	m.actionMessage = confirmMessage(action, pane)
+	return m, nil
+}
+
+func (m model) selectedPane() (paneView, bool) {
+	if len(m.panes) == 0 {
+		return paneView{}, false
+	}
+	idx := m.table.Cursor()
+	if idx < 0 || idx >= len(m.panes) {
+		idx = 0
+	}
+	return m.panes[idx], true
+}
+
+func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
+	opts := lifecycle.Options{
+		ProjectRoot: m.opts.ProjectRoot,
+		StatePath:   state.Path(m.opts.ProjectRoot),
+	}
+	runner := m.opts.lifecycle
+	return func() tea.Msg {
+		var buf bytes.Buffer
+		lg := actionLogger{w: &buf}
+		var code exitcode.Code
+		switch pending.action {
+		case actionClose:
+			code = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+		case actionMerge:
+			code = runner.Merge(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+		case actionCleanup:
+			code = runner.Cleanup(opts, pending.pane.Parent, lg)
+		default:
+			code = exitcode.Invocation
+			fmt.Fprintf(&buf, "[err ] unknown lifecycle action: %s\n", pending.action)
+		}
+		return lifecycleDoneMsg{
+			action: pending.action,
+			pane:   pending.pane,
+			code:   code,
+			output: strings.TrimSpace(buf.String()),
+		}
+	}
+}
+
+func confirmMessage(action lifecycleAction, pane paneView) string {
+	switch action {
+	case actionCleanup:
+		return fmt.Sprintf("confirm cleanup for parent %s? y/n", dash(pane.Parent))
+	default:
+		return fmt.Sprintf("confirm %s #%d? y/n", action, pane.IssueNum)
+	}
+}
+
+func lifecycleResultMessage(msg lifecycleDoneMsg) string {
+	prefix := fmt.Sprintf("%s #%d", msg.action, msg.pane.IssueNum)
+	if msg.action == actionCleanup {
+		prefix = fmt.Sprintf("%s parent %s", msg.action, dash(msg.pane.Parent))
+	}
+	result := "ok"
+	if msg.code != exitcode.OK {
+		result = fmt.Sprintf("failed code=%d", msg.code)
+	}
+	if msg.output == "" {
+		return prefix + ": " + result
+	}
+	return prefix + ": " + result + ": " + compactMessage(msg.output)
+}
+
+func lifecycleRunningMessage(pending pendingLifecycleAction) string {
+	if pending.action == actionCleanup {
+		return fmt.Sprintf("%s parent %s...", pending.action, dash(pending.pane.Parent))
+	}
+	return fmt.Sprintf("%s #%d...", pending.action, pending.pane.IssueNum)
+}
+
+func (m model) renderActionMessage() string {
+	if m.pendingAction != nil || m.actionRunning {
+		return warnStyle.Render(m.actionMessage)
+	}
+	return dimStyle.Render(m.actionMessage)
 }
 
 func (m *model) refreshRows() {
@@ -261,20 +479,20 @@ func (m model) detailContent() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m model) loadStateCmd() tea.Cmd {
+func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	issues := cloneIssueStatuses(m.issues)
 	return func() tea.Msg {
 		panes, err := loadPaneViews(projectRoot, issues)
-		return stateLoadedMsg{panes: panes, at: time.Now(), err: err}
+		return stateLoadedMsg{panes: panes, at: time.Now(), err: err, scheduleNext: scheduleNext}
 	}
 }
 
-func (m model) loadGHCmd() tea.Cmd {
+func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	return func() tea.Msg {
 		issues, err := loadIssueStatuses(projectRoot)
-		return ghLoadedMsg{issues: issues, at: time.Now(), err: err}
+		return ghLoadedMsg{issues: issues, at: time.Now(), err: err, scheduleNext: scheduleNext}
 	}
 }
 
@@ -501,6 +719,14 @@ func truncate(s string, max int) string {
 		return string(runes[:max])
 	}
 	return string(runes[:max-3]) + "..."
+}
+
+func compactMessage(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return truncate(strings.Join(fields, " "), 160)
 }
 
 func dash(s string) string {
