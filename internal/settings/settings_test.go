@@ -51,6 +51,7 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 		BriefingCodeReview: false,
 		AgentTeamsHint:     true,
 		PRVisualization:    false,
+		DashboardKeybind:   true,
 	}
 	if got != want {
 		t.Fatalf("Resolve() = %#v, want %#v", got, want)
@@ -122,6 +123,7 @@ func clearEnv(t *testing.T) {
 		"FANOUT_BRIEFING_CODE_REVIEW",
 		"FANOUT_AGENT_TEAMS_HINT",
 		"FANOUT_PR_VISUALIZATION",
+		"FANOUT_DASHBOARD_KEYBIND",
 	} {
 		old, hadOld := os.LookupEnv(name)
 		os.Unsetenv(name)

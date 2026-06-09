@@ -21,6 +21,7 @@ type Settings struct {
 	BriefingCodeReview bool
 	AgentTeamsHint     bool
 	PRVisualization    bool
+	DashboardKeybind   bool
 }
 
 // CLIOverrides holds tri-state command-line overrides. nil means the flag was
@@ -31,6 +32,7 @@ type CLIOverrides struct {
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
+	DashboardKeybind   *bool
 }
 
 type overrides struct {
@@ -39,6 +41,7 @@ type overrides struct {
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
+	DashboardKeybind   *bool
 }
 
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
@@ -53,6 +56,7 @@ func Defaults() Settings {
 		BriefingCodeReview: true,
 		AgentTeamsHint:     true,
 		PRVisualization:    true,
+		DashboardKeybind:   true,
 	}
 }
 
@@ -103,6 +107,9 @@ func apply(s *Settings, o overrides) {
 	if o.PRVisualization != nil {
 		s.PRVisualization = *o.PRVisualization
 	}
+	if o.DashboardKeybind != nil {
+		s.DashboardKeybind = *o.DashboardKeybind
+	}
 }
 
 func loadFile(path string, warnf WarnFunc) overrides {
@@ -131,6 +138,7 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"briefingCodeReview": func(v *bool) { out.BriefingCodeReview = v },
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
+		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
 	}
 	for key, raw := range root {
 		set, ok := known[key]
@@ -171,6 +179,7 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_BRIEFING_CODE_REVIEW", func(v *bool) { out.BriefingCodeReview = v })
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
+	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
 	return out
 }
 
