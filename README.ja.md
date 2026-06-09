@@ -17,8 +17,11 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。live 行で `Enter` または `o` を押すと
+その pane にフォーカスし、`p` で detail panel の read-only 出力スナップショットを
+更新します。記録はあるものの tmux 上に存在しない pane は `stale!` と表示し、
+focus / peek の対象から除外します。`q` でコンソールを離脱できますが、tmux session
+と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
