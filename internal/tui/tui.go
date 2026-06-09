@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
@@ -34,7 +35,13 @@ type Options struct {
 
 type issueStatus struct {
 	State string
+	Body  string
 	PRs   []ghissue.PRRef
+}
+
+type paneKey struct {
+	Parent   string
+	IssueNum int
 }
 
 type paneView struct {
@@ -46,11 +53,20 @@ type paneView struct {
 	TmuxTitle    string
 	IssueState   string
 	PRSummary    string
+	HasMergedPR  bool
+	Blocked      bool
 	BranchName   string
 	WorktreePath string
 	Agent        string
 	CreatedAt    string
 	Prompt       string
+}
+
+type hudSummary struct {
+	Total   int
+	Merged  int
+	Pending int
+	Blocked int
 }
 
 type model struct {
@@ -61,6 +77,7 @@ type model struct {
 	height    int
 	panes     []paneView
 	issues    map[int]issueStatus
+	blocked   map[paneKey]bool
 	lastState time.Time
 	lastGH    time.Time
 	stateErr  string
@@ -74,9 +91,10 @@ type stateLoadedMsg struct {
 }
 
 type ghLoadedMsg struct {
-	issues map[int]issueStatus
-	at     time.Time
-	err    error
+	issues  map[int]issueStatus
+	blocked map[paneKey]bool
+	at      time.Time
+	err     error
 }
 
 type stateTickMsg time.Time
@@ -122,10 +140,11 @@ func newModel(opts Options) model {
 	t.SetStyles(styles)
 
 	return model{
-		opts:   opts,
-		table:  t,
-		detail: viewport.New(120, detailHeight),
-		issues: map[int]issueStatus{},
+		opts:    opts,
+		table:   t,
+		detail:  viewport.New(120, detailHeight),
+		issues:  map[int]issueStatus{},
+		blocked: map[paneKey]bool{},
 	}
 }
 
@@ -165,6 +184,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ghErr = ""
 			m.issues = msg.issues
+			m.blocked = msg.blocked
 		}
 		m.lastGH = msg.at
 		m.refreshRows()
@@ -188,6 +208,7 @@ func (m model) View() string {
 	if m.opts.ProjectRoot != "" {
 		header += " " + dimStyle.Render(m.opts.ProjectRoot)
 	}
+	header += " " + dimStyle.Render(formatHUD(summarizeHUD(m.panes)))
 
 	footer := dimStyle.Render("q quit  j/k move  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
 	if m.stateErr != "" {
@@ -225,7 +246,7 @@ func (m *model) resize() {
 }
 
 func (m *model) refreshRows() {
-	m.panes = applyIssueStatuses(m.panes, m.issues)
+	m.panes = applyIssueStatuses(m.panes, m.issues, m.blocked)
 	rows := make([]table.Row, 0, len(m.panes))
 	for _, pane := range m.panes {
 		rows = append(rows, pane.tableRow())
@@ -264,8 +285,9 @@ func (m model) detailContent() string {
 func (m model) loadStateCmd() tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	issues := cloneIssueStatuses(m.issues)
+	blocked := cloneBlockedPanes(m.blocked)
 	return func() tea.Msg {
-		panes, err := loadPaneViews(projectRoot, issues)
+		panes, err := loadPaneViews(projectRoot, issues, blocked)
 		return stateLoadedMsg{panes: panes, at: time.Now(), err: err}
 	}
 }
@@ -273,52 +295,55 @@ func (m model) loadStateCmd() tea.Cmd {
 func (m model) loadGHCmd() tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	return func() tea.Msg {
-		issues, err := loadIssueStatuses(projectRoot)
-		return ghLoadedMsg{issues: issues, at: time.Now(), err: err}
+		issues, blocked, err := loadIssueStatuses(projectRoot)
+		return ghLoadedMsg{issues: issues, blocked: blocked, at: time.Now(), err: err}
 	}
 }
 
-func loadPaneViews(projectRoot string, issues map[int]issueStatus) ([]paneView, error) {
+func loadPaneViews(projectRoot string, issues map[int]issueStatus, blocked map[paneKey]bool) ([]paneView, error) {
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
 		return nil, err
 	}
 	tmuxPanes, err := tmuxrun.ListAllPanes()
 	tmuxKnown := err == nil
-	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues), err
+	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues, blocked), err
 }
 
-func loadIssueStatuses(projectRoot string) (map[int]issueStatus, error) {
+func loadIssueStatuses(projectRoot string) (map[int]issueStatus, map[paneKey]bool, error) {
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nums := issueNumbers(store.Panes)
 	statuses := make(map[int]issueStatus, len(nums))
+	blocked := map[paneKey]bool{}
 	if len(nums) == 0 {
-		return statuses, nil
+		return statuses, blocked, nil
 	}
 
 	gh := ghissue.Runner{Cwd: projectRoot}
 	nwo, err := gh.RepoNameWithOwner()
 	if err != nil {
-		return nil, fmt.Errorf("resolve repo: %w", err)
+		return nil, nil, fmt.Errorf("resolve repo: %w", err)
 	}
 	owner, repo, ok := strings.Cut(nwo, "/")
 	if !ok || owner == "" || repo == "" {
-		return nil, fmt.Errorf("unexpected repo nameWithOwner: %s", nwo)
+		return nil, nil, fmt.Errorf("unexpected repo nameWithOwner: %s", nwo)
 	}
 	for _, num := range nums {
-		stateName, prs, err := gh.IssueWithPRs(owner, repo, num)
+		snapshot, err := gh.IssueSnapshotWithPRs(owner, repo, num)
 		if err != nil {
-			return nil, fmt.Errorf("#%d: %w", num, err)
+			return nil, nil, fmt.Errorf("#%d: %w", num, err)
 		}
-		statuses[num] = issueStatus{State: stateName, PRs: prs}
+		statuses[num] = issueStatus{State: snapshot.State, Body: snapshot.Body, PRs: snapshot.PRs}
 	}
-	return statuses, nil
+	parentBodies := loadParentBodies(gh, store.Panes)
+	blocked = blockedPanes(gh, store.Panes, statuses, parentBodies)
+	return statuses, blocked, nil
 }
 
-func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[int]issueStatus) []paneView {
+func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[int]issueStatus, blocked map[paneKey]bool) []paneView {
 	tmuxByID := map[string]tmuxrun.PaneInfo{}
 	for _, pane := range tmuxPanes {
 		tmuxByID[pane.ID] = pane
@@ -342,9 +367,9 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 		if tmuxPane, ok := tmuxByID[pane.PaneID]; ok {
 			view.TmuxTitle = tmuxPane.Title
 		}
+		view.Blocked = blocked[paneKey{Parent: pane.Parent, IssueNum: pane.IssueNum}]
 		if status, ok := issues[pane.IssueNum]; ok {
-			view.IssueState = dash(status.State)
-			view.PRSummary = summarizePRs(status.PRs)
+			applyIssueStatus(&view, status)
 		}
 		out = append(out, view)
 	}
@@ -357,16 +382,22 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 	return out
 }
 
-func applyIssueStatuses(panes []paneView, issues map[int]issueStatus) []paneView {
+func applyIssueStatuses(panes []paneView, issues map[int]issueStatus, blocked map[paneKey]bool) []paneView {
 	out := make([]paneView, len(panes))
 	copy(out, panes)
 	for i := range out {
+		out[i].Blocked = blocked[paneKey{Parent: out[i].Parent, IssueNum: out[i].IssueNum}]
 		if status, ok := issues[out[i].IssueNum]; ok {
-			out[i].IssueState = dash(status.State)
-			out[i].PRSummary = summarizePRs(status.PRs)
+			applyIssueStatus(&out[i], status)
 		}
 	}
 	return out
+}
+
+func applyIssueStatus(view *paneView, status issueStatus) {
+	view.IssueState = dash(status.State)
+	view.PRSummary = summarizePRs(status.PRs)
+	view.HasMergedPR = hasMergedPR(status.PRs)
 }
 
 func (p paneView) tableRow() table.Row {
@@ -425,6 +456,85 @@ func summarizePRs(prs []ghissue.PRRef) string {
 	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.State)
 }
 
+func hasMergedPR(prs []ghissue.PRRef) bool {
+	for _, pr := range prs {
+		if pr.State == "MERGED" {
+			return true
+		}
+	}
+	return false
+}
+
+func loadParentBodies(gh ghissue.Runner, panes []state.Pane) map[string]string {
+	out := map[string]string{}
+	seen := map[string]bool{}
+	for _, pane := range panes {
+		if seen[pane.Parent] {
+			continue
+		}
+		seen[pane.Parent] = true
+		num, ok := parentIssueNumber(pane.Parent)
+		if !ok {
+			continue
+		}
+		body, err := gh.ParentBody(num)
+		if err != nil {
+			continue
+		}
+		out[pane.Parent] = body
+	}
+	return out
+}
+
+func parentIssueNumber(parent string) (int, bool) {
+	num, err := strconv.Atoi(strings.TrimSpace(parent))
+	return num, err == nil && num > 0
+}
+
+func blockedPanes(gh ghissue.Runner, panes []state.Pane, issues map[int]issueStatus, parentBodies map[string]string) map[paneKey]bool {
+	out := map[paneKey]bool{}
+	stateCache := map[int]string{}
+	issueState := func(num int) string {
+		if status, ok := issues[num]; ok && strings.TrimSpace(status.State) != "" {
+			return status.State
+		}
+		if stateName, ok := stateCache[num]; ok {
+			return stateName
+		}
+		stateName, err := gh.IssueState(num)
+		if err != nil {
+			stateName = "UNKNOWN"
+		}
+		stateCache[num] = stateName
+		return stateName
+	}
+
+	for _, pane := range panes {
+		status, ok := issues[pane.IssueNum]
+		if !ok {
+			continue
+		}
+		parentBody := parentBodies[pane.Parent]
+		refs := blockers.Dedupe(
+			blockers.FromChildBody(status.Body),
+			blockers.FromParentRow(parentBody, pane.IssueNum),
+		)
+		if hasOpenBlocker(refs, issueState) {
+			out[paneKey{Parent: pane.Parent, IssueNum: pane.IssueNum}] = true
+		}
+	}
+	return out
+}
+
+func hasOpenBlocker(refs []int, issueState func(int) string) bool {
+	for _, num := range refs {
+		if issueState(num) == "OPEN" {
+			return true
+		}
+	}
+	return false
+}
+
 func paneName(pane state.Pane) string {
 	if strings.TrimSpace(pane.DisplayName) != "" {
 		return pane.DisplayName
@@ -479,6 +589,32 @@ func cloneIssueStatuses(in map[int]issueStatus) map[int]issueStatus {
 		out[k] = v
 	}
 	return out
+}
+
+func cloneBlockedPanes(in map[paneKey]bool) map[paneKey]bool {
+	out := make(map[paneKey]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func summarizeHUD(panes []paneView) hudSummary {
+	summary := hudSummary{Total: len(panes)}
+	for _, pane := range panes {
+		if pane.HasMergedPR {
+			summary.Merged++
+		}
+		if pane.Blocked {
+			summary.Blocked++
+		}
+	}
+	summary.Pending = summary.Total - summary.Merged
+	return summary
+}
+
+func formatHUD(summary hudSummary) string {
+	return fmt.Sprintf("total=%d merged=%d pending=%d blocked=%d", summary.Total, summary.Merged, summary.Pending, summary.Blocked)
 }
 
 func formatClock(t time.Time) string {

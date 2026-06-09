@@ -17,8 +17,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。ヘッダーには `total` / `merged` /
+`pending` / `blocked` の集約 count を表示し、`blocked` は子 issue の
+`## Blocked by` セクションまたは親 task-list 行にある OPEN blocker から算出します。
+`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
@@ -245,7 +247,7 @@ launch を失敗扱いにし、pane/worktree を cleanup するため、同じ c
 
 `fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
 （または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
-子 issue を列挙し、各子について `gh api graphql` で issue state と
+子 issue を列挙し、各子について `gh api graphql` で issue state/body と
 `closedByPullRequestsReferences` を取得して、既定では既存の JSON schema
 （`children[].prs` / `summary.all_merged` など）で出力します。`--format table`
 を渡すと、PR の差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを
@@ -254,9 +256,11 @@ marker 付きコメントを 1 つ upsert し、各子 PR の sub-issue 番号�
 差分規模、Conventional-Commit 種別、TL;DR、`Review effort` score を集約します。
 dashboard は GitHub の機械可読データと PR 本文だけから作り、LLM は呼びません。
 JSON mode では `--post-dashboard` を併用しない限り PR 差分統計を取得しないため、
-既定の schema と API call 数は変わりません。dmux や live tmux session は不要です。
+既定の読み取り専用 path では PR 差分 lookup を避けます。dmux や live tmux session は不要です。
 現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
 `--status` は拒否します。
+`summary.blocked` は、子 issue の `## Blocked by` セクションまたは親 task-list 行にある
+OPEN blocker を持つ記録済み子 issue 数です。
 
 `--post-dashboard` は `--status` 系で唯一 GitHub に書き込む option です。コメント
 本文の先頭に `<!-- fanout:dashboard parent=N -->` を置き、

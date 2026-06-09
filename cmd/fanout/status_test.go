@@ -29,7 +29,7 @@ func TestBuildDashboardBody(t *testing.T) {
 	want := `<!-- fanout:dashboard parent=200 -->
 ## fanout dashboard #200
 
-Total: 2 | Merged: 1 | Pending: 1 | All merged: false
+Total: 2 | Merged: 1 | Pending: 1 | Blocked: 0 | All merged: false
 
 | Sub-issue # | PR | +/- | Type | TL;DR | Score |
 | --- | --- | --- | --- | --- | --- |
@@ -38,6 +38,18 @@ Total: 2 | Merged: 1 | Pending: 1 | All merged: false
 `
 	if got != want {
 		t.Fatalf("buildDashboardBody() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestNewStatusReportCountsBlockedChildren(t *testing.T) {
+	report := newStatusReport(200, []statusChild{
+		{Num: 201, HasMergedPR: true},
+		{Num: 202, Blocked: true},
+		{Num: 203},
+	})
+
+	if report.Summary.Total != 3 || report.Summary.Merged != 1 || report.Summary.Pending != 2 || report.Summary.Blocked != 1 {
+		t.Fatalf("summary = %#v, want total=3 merged=1 pending=2 blocked=1", report.Summary)
 	}
 }
 

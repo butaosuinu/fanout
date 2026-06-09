@@ -36,6 +36,7 @@
     "total": 3,
     "merged": 1,
     "pending": 2,
+    "blocked": 0,
     "all_merged": false
   }
 }

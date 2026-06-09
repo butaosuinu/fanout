@@ -17,8 +17,11 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. Press
-`q` to leave the console; the tmux session and child panes are left running.
+through the same GitHub CLI source used by `fanout <parent> --status`. Its
+header shows `total` / `merged` / `pending` / `blocked` rollup counts, with
+`blocked` based on OPEN blockers from child `## Blocked by` sections or parent
+task-list rows. Press `q` to leave the console; the tmux session and child
+panes are left running.
 
 ## Direct tmux runtime
 
@@ -251,7 +254,7 @@ child can be retried.
 
 `fanout <parent> --status` is read-only: it reads `.fanout/state.json` to
 enumerate children already fanned out under that specific parent, queries
-each child through `gh api graphql` against
+each child through `gh api graphql` for issue state/body and
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
 carries `state`/`mergedAt` directly, and prints one JSON document on stdout by
@@ -262,9 +265,11 @@ sub-issue number, PR link, diff size, Conventional-Commit type, TL;DR, and
 `Review effort` score for each child PR. The dashboard is built from
 machine-readable GitHub data and PR bodies; it does not call an LLM. JSON mode
 does not fetch PR diff stats unless `--post-dashboard` is also set, so the
-default API surface and schema stay stable. It does not require dmux or a live
-tmux session. Issue-mode parents only — Projects v2 URLs as parent are rejected
-up-front for the current JSON schema.
+default read-only path avoids PR diff lookups. It does not require dmux or a
+live tmux session. Issue-mode parents only — Projects v2 URLs as parent are
+rejected up-front for the current JSON schema.
+`summary.blocked` counts recorded children with OPEN blockers from child
+`## Blocked by` sections or parent task-list rows.
 In a state file that has fanned multiple parents, children of other parents are
 filtered out so `summary.all_merged` reflects only the requested parent. Set
 `FANOUT_STATE_PATH` to point directly at a state file when reading from outside
@@ -286,6 +291,7 @@ the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
     "total":      2,
     "merged":     1,
     "pending":    1,
+    "blocked":    0,
     "all_merged": false
   }
 }

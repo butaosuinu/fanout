@@ -30,6 +30,7 @@
     "total": 2,
     "merged": 2,
     "pending": 0,
+    "blocked": 0,
     "all_merged": true
   }
 }
