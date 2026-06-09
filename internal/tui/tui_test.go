@@ -98,6 +98,157 @@ func TestRefreshRowsClampsCursorWhenRowsShrink(t *testing.T) {
 	}
 }
 
+func TestFocusSelectedPaneUsesInjectedFocus(t *testing.T) {
+	var focused string
+	m := newModel(Options{
+		FocusPane: func(paneID string) error {
+			focused = paneID
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	cmd := m.focusSelectedCmd()
+	if cmd == nil {
+		t.Fatalf("focusSelectedCmd() returned nil, want focus command")
+	}
+	msg, ok := cmd().(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("focusSelectedCmd() msg = %T, want paneFocusedMsg", msg)
+	}
+	next, _ := m.Update(msg)
+	m = next.(model)
+
+	if focused != "%1" {
+		t.Fatalf("focused pane = %q, want %%1", focused)
+	}
+	if !strings.Contains(m.notice, "focused %1") {
+		t.Fatalf("notice = %q, want focused message", m.notice)
+	}
+}
+
+func TestFocusSelectedPaneSkipsStaleRows(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			called = true
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "stale"}}
+	m.refreshRows()
+
+	if cmd := m.focusSelectedCmd(); cmd != nil {
+		t.Fatalf("focusSelectedCmd() returned a command for stale pane")
+	}
+	if called {
+		t.Fatalf("FocusPane was called for stale pane")
+	}
+	if !strings.Contains(m.notice, "focus skipped") {
+		t.Fatalf("notice = %q, want skipped message", m.notice)
+	}
+}
+
+func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			called = true
+			return nil
+		},
+		PaneAlive: func(string) bool { return false },
+	})
+	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	cmd := m.focusSelectedCmd()
+	if cmd == nil {
+		t.Fatalf("focusSelectedCmd() returned nil, want alive-check command")
+	}
+	msg := cmd()
+	next, _ := m.Update(msg)
+	m = next.(model)
+
+	if called {
+		t.Fatalf("FocusPane was called after PaneAlive returned false")
+	}
+	if m.panes[0].TmuxState != "stale" {
+		t.Fatalf("TmuxState = %q, want stale", m.panes[0].TmuxState)
+	}
+	if got := m.table.Rows()[0][3]; got != "stale!" {
+		t.Fatalf("table tmux cell = %q, want stale!", got)
+	}
+}
+
+func TestPeekSelectedPaneLoadsOutputIntoDetail(t *testing.T) {
+	var capturedPane string
+	var capturedLines int
+	m := newModel(Options{
+		CapturePaneOutput: func(paneID string, lines int) (string, error) {
+			capturedPane = paneID
+			capturedLines = lines
+			return "line 1\n  line 2\n\tline 3\n", nil
+		},
+	})
+	m.detail.Width = 80
+	m.detail.Height = 9
+	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	cmd := m.peekSelectedCmd(true)
+	if cmd == nil {
+		t.Fatalf("peekSelectedCmd() returned nil, want capture command")
+	}
+	if !m.peek.Loading {
+		t.Fatalf("peek.Loading = false, want true before command returns")
+	}
+	msg := cmd()
+	next, _ := m.Update(msg)
+	m = next.(model)
+
+	if capturedPane != "%1" {
+		t.Fatalf("captured pane = %q, want %%1", capturedPane)
+	}
+	if capturedLines != peekLines {
+		t.Fatalf("captured lines = %d, want %d", capturedLines, peekLines)
+	}
+	got := m.detailContent()
+	if !strings.Contains(got, "peek") || !strings.Contains(got, "\tline 3") || !strings.Contains(got, "  line 2") {
+		t.Fatalf("detailContent() = %q, want peek output", got)
+	}
+}
+
+func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
+	var capturedPane string
+	m := newModel(Options{
+		CapturePaneOutput: func(paneID string, lines int) (string, error) {
+			capturedPane = paneID
+			return "selected\n", nil
+		},
+	})
+	m.panes = []paneView{
+		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatalf("Update(down) returned nil command, want peek command")
+	}
+	msg := cmd()
+	if _, ok := msg.(panePeekLoadedMsg); !ok {
+		t.Fatalf("Update(down) cmd msg = %T, want panePeekLoadedMsg", msg)
+	}
+	if capturedPane != "%2" {
+		t.Fatalf("captured pane = %q, want %%2", capturedPane)
+	}
+}
+
 func TestIssueNumbersDedupesAndSorts(t *testing.T) {
 	got := issueNumbers([]state.Pane{
 		{IssueNum: 5},

@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -22,18 +23,22 @@ import (
 const (
 	defaultStateInterval = 2 * time.Second
 	defaultGHInterval    = 20 * time.Second
-	detailHeight         = 7
+	detailHeight         = 13
+	peekLines            = 80
 	defaultLaunchAgent   = "claude"
 )
 
 // Options configures the TUI monitor.
 type Options struct {
-	ProjectRoot   string
-	Session       string
-	StateInterval time.Duration
-	GHInterval    time.Duration
-	DefaultAgent  string
-	LaunchPane    LaunchFunc
+	ProjectRoot       string
+	Session           string
+	StateInterval     time.Duration
+	GHInterval        time.Duration
+	DefaultAgent      string
+	LaunchPane        LaunchFunc
+	FocusPane         func(string) error
+	PaneAlive         func(string) bool
+	CapturePaneOutput func(string, int) (string, error)
 }
 
 // LaunchRequest describes one manual pane launch requested from the TUI.
@@ -107,6 +112,7 @@ type model struct {
 	ghErr     string
 	notice    string
 	newPane   newPaneForm
+	peek      panePeek
 }
 
 type stateLoadedMsg struct {
@@ -121,11 +127,33 @@ type ghLoadedMsg struct {
 	err    error
 }
 
+type paneFocusedMsg struct {
+	paneID string
+	err    error
+}
+
+type panePeekLoadedMsg struct {
+	paneID string
+	output string
+	at     time.Time
+	err    error
+}
+
+type panePeek struct {
+	PaneID  string
+	Output  string
+	At      time.Time
+	Err     string
+	Loading bool
+}
+
 type stateTickMsg time.Time
 type ghTickMsg time.Time
 type launchPaneMsg struct {
 	err error
 }
+
+var errPaneNotAlive = errors.New("pane is no longer live")
 
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("34"))
@@ -153,6 +181,15 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.DefaultAgent != "codex" {
 		opts.DefaultAgent = defaultLaunchAgent
+	}
+	if opts.FocusPane == nil {
+		opts.FocusPane = tmuxrun.SelectPane
+	}
+	if opts.PaneAlive == nil {
+		opts.PaneAlive = tmuxrun.IsPaneAlive
+	}
+	if opts.CapturePaneOutput == nil {
+		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
 	}
 	return opts
 }
@@ -200,10 +237,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "n":
 			m.openNewPaneForm()
 			return m, nil
+		case "enter", "o":
+			cmd := m.focusSelectedCmd()
+			return m, cmd
+		case "p":
+			cmd := m.peekSelectedCmd(true)
+			return m, cmd
 		}
+		oldCursor := m.table.Cursor()
 		next, cmd := m.table.Update(msg)
 		m.table = next
 		m.refreshDetail()
+		if m.table.Cursor() != oldCursor {
+			peekCmd := m.peekSelectedCmd(false)
+			return m, tea.Batch(cmd, peekCmd)
+		}
 		return m, cmd
 	case stateLoadedMsg:
 		if msg.err != nil {
@@ -214,7 +262,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.panes = msg.panes
 		m.lastState = msg.at
 		m.refreshRows()
-		return m, tea.Tick(m.opts.StateInterval, func(t time.Time) tea.Msg { return stateTickMsg(t) })
+		peekCmd := m.peekSelectedCmd(false)
+		return m, tea.Batch(
+			tea.Tick(m.opts.StateInterval, func(t time.Time) tea.Msg { return stateTickMsg(t) }),
+			peekCmd,
+		)
 	case ghLoadedMsg:
 		if msg.err != nil {
 			m.ghErr = msg.err.Error()
@@ -238,6 +290,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeMonitor
 		m.notice = "created new agent pane"
 		return m, m.loadStateCmd()
+	case paneFocusedMsg:
+		if msg.err != nil {
+			m.notice = fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
+			if errors.Is(msg.err, errPaneNotAlive) {
+				m.markPaneStale(msg.paneID)
+				m.refreshRows()
+			}
+		} else {
+			m.notice = fmt.Sprintf("focused %s; return to the fanout tui pane to continue", msg.paneID)
+		}
+		return m, nil
+	case panePeekLoadedMsg:
+		if pane, ok := m.selectedPane(); ok && pane.PaneID != msg.paneID {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.peek = panePeek{PaneID: msg.paneID, At: msg.at, Err: msg.err.Error()}
+		} else {
+			m.peek = panePeek{PaneID: msg.paneID, Output: msg.output, At: msg.at}
+		}
+		m.refreshDetail()
+		return m, nil
 	}
 	return m, nil
 }
@@ -254,15 +328,15 @@ func (m model) View() string {
 		header += " " + dimStyle.Render(m.opts.ProjectRoot)
 	}
 
-	footer := dimStyle.Render("q quit  n new  j/k move  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	footer := dimStyle.Render("q quit  n new  j/k move  enter/o focus  p peek  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	if m.notice != "" {
+		footer += "\n" + warnStyle.Render(m.notice)
+	}
 	if m.stateErr != "" {
 		footer += "\n" + errStyle.Render("state/tmux: "+m.stateErr)
 	}
 	if m.ghErr != "" {
 		footer += "\n" + warnStyle.Render("gh: "+m.ghErr)
-	}
-	if m.notice != "" {
-		footer += "\n" + titleStyle.Render(m.notice)
 	}
 
 	if m.mode == modeNewPane {
@@ -489,11 +563,10 @@ func (m model) detailContent() string {
 	if len(m.panes) == 0 {
 		return "No recorded fanout panes in .fanout/state.json."
 	}
-	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(m.panes) {
-		idx = 0
+	pane, ok := m.selectedPane()
+	if !ok {
+		return "No recorded fanout panes in .fanout/state.json."
 	}
-	pane := m.panes[idx]
 	lines := []string{
 		fmt.Sprintf("%s #%d  %s", pane.Parent, pane.IssueNum, pane.Name),
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
@@ -501,10 +574,110 @@ func (m model) detailContent() string {
 		fmt.Sprintf("worktree=%s", dash(pane.WorktreePath)),
 		fmt.Sprintf("created=%s", dash(pane.CreatedAt)),
 	}
-	if pane.Prompt != "" {
+	peekBudget := maxInt(2, m.detail.Height-len(lines)-1)
+	lines = append(lines, m.peekContent(pane, peekBudget)...)
+	if pane.Prompt != "" && len(lines) < m.detail.Height {
 		lines = append(lines, "prompt="+pane.Prompt)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) selectedPane() (paneView, bool) {
+	if len(m.panes) == 0 {
+		return paneView{}, false
+	}
+	idx := m.table.Cursor()
+	if idx < 0 || idx >= len(m.panes) {
+		idx = 0
+	}
+	return m.panes[idx], true
+}
+
+func (m *model) focusSelectedCmd() tea.Cmd {
+	pane, ok := m.selectedPane()
+	if !ok {
+		m.notice = "no pane selected"
+		return nil
+	}
+	if !pane.canFocus() {
+		m.notice = fmt.Sprintf("focus skipped for %s: tmux state is %s", dash(pane.PaneID), pane.TmuxState)
+		return nil
+	}
+
+	paneID := pane.PaneID
+	alive := m.opts.PaneAlive
+	focus := m.opts.FocusPane
+	m.notice = fmt.Sprintf("focusing %s...", paneID)
+	return func() tea.Msg {
+		if !alive(paneID) {
+			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive}
+		}
+		return paneFocusedMsg{paneID: paneID, err: focus(paneID)}
+	}
+}
+
+func (m *model) peekSelectedCmd(force bool) tea.Cmd {
+	pane, ok := m.selectedPane()
+	if !ok {
+		m.peek = panePeek{}
+		return nil
+	}
+	if !pane.canPeek() {
+		m.peek = panePeek{PaneID: pane.PaneID, At: time.Now(), Err: fmt.Sprintf("tmux state is %s", pane.TmuxState)}
+		return nil
+	}
+	if !force && m.peek.PaneID == pane.PaneID && (m.peek.Loading || m.peek.Output != "" || m.peek.Err != "") {
+		return nil
+	}
+
+	paneID := pane.PaneID
+	capture := m.opts.CapturePaneOutput
+	m.peek = panePeek{PaneID: paneID, Loading: true}
+	return func() tea.Msg {
+		out, err := capture(paneID, peekLines)
+		return panePeekLoadedMsg{paneID: paneID, output: out, at: time.Now(), err: err}
+	}
+}
+
+func (m model) peekContent(pane paneView, maxLines int) []string {
+	header := "peek"
+	if !m.peek.At.IsZero() {
+		header += " " + formatClock(m.peek.At)
+	}
+	if pane.PaneID == "" {
+		return []string{header + ": no pane id recorded"}
+	}
+	if !pane.canPeek() {
+		return []string{header + ": unavailable (" + pane.TmuxState + ")"}
+	}
+	if m.peek.PaneID != pane.PaneID {
+		return []string{header + ": waiting for capture"}
+	}
+	if m.peek.Loading {
+		return []string{header + ": loading..."}
+	}
+	if m.peek.Err != "" {
+		return []string{header + ": " + m.peek.Err}
+	}
+
+	out := strings.TrimRight(m.peek.Output, "\r\n")
+	if out == "" {
+		return []string{header + ": no output"}
+	}
+	lines := []string{header + ":"}
+	for _, line := range tailLines(out, maxLines) {
+		lines = append(lines, truncatePreserveSpace(line, maxInt(20, m.detail.Width-2)))
+	}
+	return lines
+}
+
+func (m *model) markPaneStale(paneID string) {
+	for i := range m.panes {
+		if m.panes[i].PaneID == paneID {
+			m.panes[i].TmuxState = "stale"
+			return
+		}
+	}
 }
 
 func (m model) loadStateCmd() tea.Cmd {
@@ -616,16 +789,28 @@ func applyIssueStatuses(panes []paneView, issues map[int]issueStatus) []paneView
 }
 
 func (p paneView) tableRow() table.Row {
+	tmuxState := p.TmuxState
+	if tmuxState == "stale" {
+		tmuxState = "stale!"
+	}
 	return table.Row{
 		compactParent(p.Parent),
 		"#" + strconv.Itoa(p.IssueNum),
 		truncate(p.Name, 28),
-		p.TmuxState,
+		tmuxState,
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 14),
 		truncate(dash(p.BranchName), 22),
 		dash(p.PaneID),
 	}
+}
+
+func (p paneView) canFocus() bool {
+	return strings.TrimSpace(p.PaneID) != "" && p.TmuxState != "stale" && p.TmuxState != "-"
+}
+
+func (p paneView) canPeek() bool {
+	return p.canFocus()
 }
 
 func columnsForWidth(width int) []table.Column {
@@ -736,6 +921,14 @@ func formatClock(t time.Time) string {
 
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
+	return truncateRunes(s, max)
+}
+
+func truncatePreserveSpace(s string, max int) string {
+	return truncateRunes(s, max)
+}
+
+func truncateRunes(s string, max int) string {
 	runes := []rune(s)
 	if max <= 0 || len(runes) <= max {
 		return s
@@ -747,6 +940,21 @@ func truncate(s string, max int) string {
 		return string(runes[:max])
 	}
 	return string(runes[:max-3]) + "..."
+}
+
+func tailLines(s string, max int) []string {
+	if max <= 0 {
+		return nil
+	}
+	raw := strings.Split(s, "\n")
+	if len(raw) > max {
+		raw = raw[len(raw)-max:]
+	}
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		out = append(out, strings.TrimRight(line, "\r"))
+	}
+	return out
 }
 
 func dash(s string) string {

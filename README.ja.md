@@ -20,7 +20,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 issue / closed-by PR 状態を定期更新します。`n` で必須 prompt、`claude` / `codex`
 の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
 は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
-`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
+live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
+panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
+存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
+コンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
