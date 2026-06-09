@@ -17,8 +17,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。各行には pane worktree の
+`git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による
+`dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を
+確認できます。`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 

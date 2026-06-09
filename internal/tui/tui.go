@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/charmbracelet/bubbles/table"
@@ -46,6 +47,9 @@ type paneView struct {
 	TmuxTitle    string
 	IssueState   string
 	PRSummary    string
+	DiffSummary  string
+	DirtyState   string
+	WorktreeErr  string
 	BranchName   string
 	WorktreePath string
 	Agent        string
@@ -77,6 +81,12 @@ type ghLoadedMsg struct {
 	issues map[int]issueStatus
 	at     time.Time
 	err    error
+}
+
+type worktreeStatView struct {
+	Diff  string
+	Dirty string
+	Err   string
 }
 
 type stateTickMsg time.Time
@@ -252,8 +262,11 @@ func (m model) detailContent() string {
 		fmt.Sprintf("%s #%d  %s", pane.Parent, pane.IssueNum, pane.Name),
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
 		fmt.Sprintf("issue=%s pr=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.BranchName)),
-		fmt.Sprintf("worktree=%s", dash(pane.WorktreePath)),
+		fmt.Sprintf("worktree=%s diff=%s dirty=%s", dash(pane.WorktreePath), dash(pane.DiffSummary), dash(pane.DirtyState)),
 		fmt.Sprintf("created=%s", dash(pane.CreatedAt)),
+	}
+	if pane.WorktreeErr != "" {
+		lines = append(lines, "worktree_error="+pane.WorktreeErr)
 	}
 	if pane.Prompt != "" {
 		lines = append(lines, "prompt="+pane.Prompt)
@@ -285,7 +298,8 @@ func loadPaneViews(projectRoot string, issues map[int]issueStatus) ([]paneView, 
 	}
 	tmuxPanes, err := tmuxrun.ListAllPanes()
 	tmuxKnown := err == nil
-	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues), err
+	worktrees := loadWorktreeStats(store.Panes)
+	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues, worktrees), err
 }
 
 func loadIssueStatuses(projectRoot string) (map[int]issueStatus, error) {
@@ -318,7 +332,7 @@ func loadIssueStatuses(projectRoot string) (map[int]issueStatus, error) {
 	return statuses, nil
 }
 
-func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[int]issueStatus) []paneView {
+func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[int]issueStatus, worktrees map[string]worktreeStatView) []paneView {
 	tmuxByID := map[string]tmuxrun.PaneInfo{}
 	for _, pane := range tmuxPanes {
 		tmuxByID[pane.ID] = pane
@@ -333,6 +347,8 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			TmuxState:    tmuxState(pane.PaneID, tmuxByID, tmuxKnown),
 			IssueState:   "-",
 			PRSummary:    "-",
+			DiffSummary:  "-",
+			DirtyState:   "-",
 			BranchName:   pane.BranchName,
 			WorktreePath: relativePath(projectRoot, pane.WorktreePath),
 			Agent:        pane.Agent,
@@ -345,6 +361,11 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 		if status, ok := issues[pane.IssueNum]; ok {
 			view.IssueState = dash(status.State)
 			view.PRSummary = summarizePRs(status.PRs)
+		}
+		if stat, ok := worktrees[pane.WorktreePath]; ok {
+			view.DiffSummary = stat.Diff
+			view.DirtyState = stat.Dirty
+			view.WorktreeErr = stat.Err
 		}
 		out = append(out, view)
 	}
@@ -377,23 +398,58 @@ func (p paneView) tableRow() table.Row {
 		p.TmuxState,
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 14),
+		dash(p.DiffSummary),
+		dash(p.DirtyState),
 		truncate(dash(p.BranchName), 22),
 		dash(p.PaneID),
 	}
 }
 
 func columnsForWidth(width int) []table.Column {
-	nameWidth := clampInt(width/4, 14, 28)
-	branchWidth := clampInt(width/5, 10, 22)
+	nameWidth := clampInt(width/6, 12, 20)
+	branchWidth := clampInt(width/8, 8, 14)
 	return []table.Column{
-		{Title: "PARENT", Width: 10},
-		{Title: "ISSUE", Width: 7},
+		{Title: "PARENT", Width: 7},
+		{Title: "ISSUE", Width: 6},
 		{Title: "NAME", Width: nameWidth},
-		{Title: "TMUX", Width: 8},
-		{Title: "STATE", Width: 8},
-		{Title: "PR", Width: 14},
+		{Title: "TMUX", Width: 6},
+		{Title: "STATE", Width: 7},
+		{Title: "PR", Width: 12},
+		{Title: "DIFF", Width: 8},
+		{Title: "DIRTY", Width: 7},
 		{Title: "BRANCH", Width: branchWidth},
-		{Title: "PANE", Width: 8},
+		{Title: "PANE", Width: 7},
+	}
+}
+
+func loadWorktreeStats(panes []state.Pane) map[string]worktreeStatView {
+	runner := gitstat.Runner{}
+	stats := map[string]worktreeStatView{}
+	for _, pane := range panes {
+		path := strings.TrimSpace(pane.WorktreePath)
+		if path == "" {
+			continue
+		}
+		if _, ok := stats[path]; ok {
+			continue
+		}
+		stats[path] = worktreeStatForPath(runner, path)
+	}
+	return stats
+}
+
+func worktreeStatForPath(runner gitstat.Runner, path string) worktreeStatView {
+	stat, err := runner.Worktree(path)
+	if err != nil {
+		return worktreeStatView{Diff: "-", Dirty: "unknown", Err: err.Error()}
+	}
+	dirty := "clean"
+	if stat.Dirty {
+		dirty = "dirty"
+	}
+	return worktreeStatView{
+		Diff:  fmt.Sprintf("+%d/-%d", stat.Additions, stat.Deletions),
+		Dirty: dirty,
 	}
 }
 

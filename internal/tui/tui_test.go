@@ -42,8 +42,11 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 			},
 		},
 	}
+	worktrees := map[string]worktreeStatView{
+		"/repo/.fanout/worktrees/second": {Diff: "+12/-3", Dirty: "dirty"},
+	}
 
-	got := buildPaneViews(projectRoot, panes, tmuxPanes, true, issues)
+	got := buildPaneViews(projectRoot, panes, tmuxPanes, true, issues, worktrees)
 
 	if len(got) != 2 {
 		t.Fatalf("buildPaneViews len = %d, want 2", len(got))
@@ -61,6 +64,9 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	if second.IssueState != "CLOSED" || second.PRSummary != "#12 MERGED" {
 		t.Fatalf("issue/pr = %q/%q, want CLOSED/#12 MERGED", second.IssueState, second.PRSummary)
 	}
+	if second.DiffSummary != "+12/-3" || second.DirtyState != "dirty" {
+		t.Fatalf("worktree stat = %q/%q, want +12/-3/dirty", second.DiffSummary, second.DirtyState)
+	}
 	if second.WorktreePath != ".fanout/worktrees/second" {
 		t.Fatalf("WorktreePath = %q, want relative path", second.WorktreePath)
 	}
@@ -70,7 +76,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 }
 
 func TestBuildPaneViewsMarksTmuxUnknownWhenListFails(t *testing.T) {
-	got := buildPaneViews("/repo", []state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil)
+	got := buildPaneViews("/repo", []state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("buildPaneViews len = %d, want 1", len(got))
 	}

@@ -17,8 +17,11 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. Press
-`q` to leave the console; the tmux session and child panes are left running.
+through the same GitHub CLI source used by `fanout <parent> --status`. Each row
+also shows the pane worktree's `git diff --shortstat HEAD` summary as `+X/-Y`
+and `dirty`/`clean` from `git status --porcelain`, so uncommitted work is
+visible without agent instrumentation. Press `q` to leave the console; the tmux
+session and child panes are left running.
 
 ## Direct tmux runtime
 
