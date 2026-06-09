@@ -17,8 +17,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`q` でコンソールを離脱できますが、
-tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。`n` で必須 prompt、`claude` / `codex`
+の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
+は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
+`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
