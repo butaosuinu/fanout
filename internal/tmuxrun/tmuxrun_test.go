@@ -106,6 +106,109 @@ printf '%%43\n'
 	}
 }
 
+func TestListLivePanesParsesIDAndPath(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	// Each line is "#{pane_id}\t#{pane_current_path}"; include a blank line and
+	// surrounding whitespace to exercise trimming.
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "$@" > "$TMUXRUN_ARGS"` + "\n" +
+		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\n\n'` + "\n"
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	if len(panes) != 2 ||
+		panes[0] != (LivePane{ID: "%9", CurrentPath: "/wt/nine"}) ||
+		panes[1] != (LivePane{ID: "%10", CurrentPath: "/wt/ten"}) {
+		t.Fatalf("ListLivePanes() = %#v", panes)
+	}
+
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotArgs := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	wantArgs := []string{"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}"}
+	if strings.Join(gotArgs, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("tmux args = %#v, want %#v", gotArgs, wantArgs)
+	}
+}
+
+func TestBindDashboardKeyRegistersDetachedWindow(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindDashboardKey("D", "/abs/path/fanout"); err != nil {
+		t.Fatalf("BindDashboardKey() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	// Each tmux argv on its own line: bind-key D new-window -d -n
+	// fanout-dashboard -c #{pane_current_path} <launch>.
+	want := []string{"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard", "-c", "#{pane_current_path}", "/abs/path/fanout dashboard --web --open"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("tmux args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBindDashboardKeyQuotesBinaryPathWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindDashboardKey("D", "/opt/My Tools/fanout"); err != nil {
+		t.Fatalf("BindDashboardKey() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	// new-window runs the launch arg through one shell, so the binary path is
+	// single-quoted to survive word-splitting on "My Tools".
+	launch := got[len(got)-1]
+	if launch != "'/opt/My Tools/fanout' dashboard --web --open" {
+		t.Fatalf("launch arg = %q, want the binary path single-quoted", launch)
+	}
+}
+
+func TestBindDashboardKeyRejectsEmptyArgs(t *testing.T) {
+	if err := BindDashboardKey("", "/abs/fanout"); err == nil {
+		t.Fatal("BindDashboardKey(empty key) should error")
+	}
+	if err := BindDashboardKey("D", ""); err == nil {
+		t.Fatal("BindDashboardKey(empty bin) should error")
+	}
+}
+
 func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {
 	got := BuildPaneLaunchCommand("PATH='/very/long/path:/usr/bin' /tmp/bin/codex '[fanout #1] prompt'")
 	for _, want := range []string{

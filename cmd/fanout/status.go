@@ -48,6 +48,7 @@ type statusTableRow struct {
 	IssueState string
 	PR         string
 	PRState    string
+	CI         string
 	Type       string
 	Files      string
 	Link       string
@@ -57,12 +58,14 @@ type statusTableRow struct {
 }
 
 type dashboardRow struct {
-	Issue string
-	PR    string
-	Diff  string
-	Type  string
-	TLDR  string
-	Score string
+	Issue   string
+	PR      string
+	PRState string
+	CI      string
+	Diff    string
+	Type    string
+	TLDR    string
+	Score   string
 }
 
 func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
@@ -228,12 +231,14 @@ func dashboardRows(report statusReport, projectRoot, nwo string, lg *log.Logger)
 	for _, child := range report.Children {
 		if len(child.PRs) == 0 {
 			rows = append(rows, dashboardRow{
-				Issue: "#" + strconv.Itoa(child.Num),
-				PR:    "-",
-				Diff:  "-",
-				Type:  "-",
-				TLDR:  "No PR yet",
-				Score: "-",
+				Issue:   "#" + strconv.Itoa(child.Num),
+				PR:      "-",
+				PRState: "-",
+				CI:      "-",
+				Diff:    "-",
+				Type:    "-",
+				TLDR:    "No PR yet",
+				Score:   "-",
 			})
 			continue
 		}
@@ -245,12 +250,14 @@ func dashboardRows(report statusReport, projectRoot, nwo string, lg *log.Logger)
 			}
 			tldr, score := extractDashboardPRBody(stat.Body)
 			rows = append(rows, dashboardRow{
-				Issue: "#" + strconv.Itoa(child.Num),
-				PR:    fmt.Sprintf("[#%d](https://github.com/%s/pull/%d)", pr.Number, nwo, pr.Number),
-				Diff:  dashboardDiff(stat),
-				Type:  conventionalType(stat.Title),
-				TLDR:  tldr,
-				Score: score,
+				Issue:   "#" + strconv.Itoa(child.Num),
+				PR:      fmt.Sprintf("[#%d](https://github.com/%s/pull/%d)", pr.Number, nwo, pr.Number),
+				PRState: dashIfEmpty(pr.DisplayState()),
+				CI:      dashIfEmpty(pr.CIStatus),
+				Diff:    dashboardDiff(stat),
+				Type:    conventionalType(stat.Title),
+				TLDR:    tldr,
+				Score:   score,
 			})
 		}
 	}
@@ -264,16 +271,18 @@ func buildDashboardBody(parent int, summary statusSummary, rows []dashboardRow) 
 	fmt.Fprintf(&b, "## fanout dashboard #%d\n\n", parent)
 	fmt.Fprintf(&b, "Total: %d | Merged: %d | Pending: %d | All merged: %t\n\n",
 		summary.Total, summary.Merged, summary.Pending, summary.AllMerged)
-	b.WriteString("| Sub-issue # | PR | +/- | Type | TL;DR | Score |\n")
-	b.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	b.WriteString("| Sub-issue # | PR | PR state | CI | +/- | Type | TL;DR | Score |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	if len(rows) == 0 {
-		b.WriteString("| - | - | - | - | No recorded children | - |\n")
+		b.WriteString("| - | - | - | - | - | - | No recorded children | - |\n")
 		return b.String()
 	}
 	for _, row := range rows {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			markdownCell(row.Issue),
 			markdownCell(row.PR),
+			markdownCell(row.PRState),
+			markdownCell(row.CI),
 			markdownCell(row.Diff),
 			markdownCell(row.Type),
 			markdownCell(row.TLDR),
@@ -369,6 +378,7 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 		len("STATE"),
 		len("PR"),
 		len("PR_STATE"),
+		len("CI"),
 		len("TYPE"),
 		len("FILES"),
 		diffWidth,
@@ -379,11 +389,12 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 		widths[1] = maxInt(widths[1], len(row.IssueState))
 		widths[2] = maxInt(widths[2], len(row.PR))
 		widths[3] = maxInt(widths[3], len(row.PRState))
-		widths[4] = maxInt(widths[4], len(row.Type))
-		widths[5] = maxInt(widths[5], len(row.Files))
+		widths[4] = maxInt(widths[4], len(row.CI))
+		widths[5] = maxInt(widths[5], len(row.Type))
+		widths[6] = maxInt(widths[6], len(row.Files))
 	}
 
-	headers := []string{"ISSUE", "STATE", "PR", "PR_STATE", "TYPE", "FILES", "DIFF", "LINK"}
+	headers := []string{"ISSUE", "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
 	fmt.Fprintln(out, statusTableLine(headers, widths))
 	separators := []string{
 		strings.Repeat("-", widths[0]),
@@ -392,8 +403,9 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 		strings.Repeat("-", widths[3]),
 		strings.Repeat("-", widths[4]),
 		strings.Repeat("-", widths[5]),
+		strings.Repeat("-", widths[6]),
 		strings.Repeat("-", diffWidth),
-		strings.Repeat("-", widths[7]),
+		strings.Repeat("-", widths[8]),
 	}
 	fmt.Fprintln(out, statusTableLine(separators, widths))
 
@@ -404,6 +416,7 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 			row.IssueState,
 			row.PR,
 			row.PRState,
+			row.CI,
 			row.Type,
 			row.Files,
 			renderStatusDiff(row, maxLines, addWidth, delWidth, diffWidth, colors),
@@ -437,6 +450,7 @@ func statusTableRows(report statusReport, projectRoot string, lg *log.Logger) ([
 				IssueState: dashIfEmpty(child.State),
 				PR:         "-",
 				PRState:    "-",
+				CI:         "-",
 				Type:       "-",
 				Files:      "-",
 				Link:       "-",
@@ -457,7 +471,8 @@ func statusTableRows(report statusReport, projectRoot string, lg *log.Logger) ([
 				Issue:      "#" + strconv.Itoa(child.Num),
 				IssueState: dashIfEmpty(child.State),
 				PR:         "#" + strconv.Itoa(pr.Number),
-				PRState:    dashIfEmpty(pr.State),
+				PRState:    dashIfEmpty(pr.DisplayState()),
+				CI:         dashIfEmpty(pr.CIStatus),
 				Type:       conventionalType(stat.Title),
 				Files:      strconv.Itoa(stat.ChangedFiles),
 				Link:       fmt.Sprintf("https://github.com/%s/pull/%d", nwo, pr.Number),

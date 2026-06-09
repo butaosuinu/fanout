@@ -331,7 +331,18 @@ func manualPaneSlug(title string, number int) string {
 	if number < 0 {
 		number = -number
 	}
-	return fmt.Sprintf("%s-%d", base, number)
+	suffix := fmt.Sprintf("-%d", number)
+	maxBase := naming.MaxSlugLength - len(suffix)
+	if maxBase < 1 {
+		maxBase = 1
+	}
+	if len(base) > maxBase {
+		base = strings.Trim(base[:maxBase], "-")
+		if base == "" {
+			base = "manual"
+		}
+	}
+	return base + suffix
 }
 
 func codexPlanStatusPath(projectRoot string, issueNum int, dryRun bool) string {

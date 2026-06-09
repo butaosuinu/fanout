@@ -20,7 +20,13 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 issue / closed-by PR 状態を定期更新します。`/` でロード済み行をメモリ内検索し、
 `state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
 フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
-継続します。`q` でコンソールを離脱できますが、tmux session と子 pane は残ります。
+継続します。`n` で必須 prompt、`claude` / `codex` の agent 選択、
+任意 slug を指定して manual agent pane を作成できます。manual pane
+は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
+live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
+panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
+存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
+コンソールを離脱できますが、tmux session と子 pane は残ります。
 
 ## 直接 tmux ランタイム
 
@@ -217,6 +223,7 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
 fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
+fanout dashboard --web              # 読み取り専用の localhost Web ダッシュボード（Session 表示）
 fanout --check-update               # この binary と最新 release を比較
 fanout update                       # install.sh 経由で binary + integrations を置換
 fanout --help
@@ -248,15 +255,17 @@ launch を失敗扱いにし、pane/worktree を cleanup するため、同じ c
 `fanout <parent> --status` は読み取り専用です。`<git-root>/.fanout/state.json`
 （または `FANOUT_STATE_PATH` で指定した state file）から指定 parent の記録済み
 子 issue を列挙し、各子について `gh api graphql` で issue state と
-`closedByPullRequestsReferences` を取得して、既定では既存の JSON schema
-（`children[].prs` / `summary.all_merged` など）で出力します。`--format table`
-を渡すと、PR の差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを
-含む人間向けの一覧を出力します。`--post-dashboard` を渡すと、親 issue に
-marker 付きコメントを 1 つ upsert し、各子 PR の sub-issue 番号、PR リンク、
-差分規模、Conventional-Commit 種別、TL;DR、`Review effort` score を集約します。
-dashboard は GitHub の機械可読データと PR 本文だけから作り、LLM は呼びません。
-JSON mode では `--post-dashboard` を併用しない限り PR 差分統計を取得しないため、
-既定の schema と API call 数は変わりません。dmux や live tmux session は不要です。
+`closedByPullRequestsReferences` を取得して、PR の `reviewDecision` と最新 commit
+の CI rollup も含む JSON（`children[].prs` / `summary.all_merged` など）で
+出力します。`--format table` を渡すと、正規化した PR 状態（`open`、`draft`、
+`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、
+差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを含む人間向けの一覧を出力します。
+`--post-dashboard` を渡すと、親 issue に marker 付きコメントを 1 つ upsert し、
+各子 PR の sub-issue 番号、PR リンク、PR 状態、CI、差分規模、
+Conventional-Commit 種別、TL;DR、`Review effort` score を集約します。dashboard は
+GitHub の機械可読データと PR 本文だけから作り、LLM は呼びません。JSON mode では
+`--post-dashboard` を併用しない限り PR 差分統計を取得しないため、review/CI 追加
+field は同じ per-issue GraphQL lookup から取得します。dmux や live tmux session は不要です。
 現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
 `--status` は拒否します。
 
@@ -277,6 +286,40 @@ filesystem scan で探すことはしません。
   kill し、state entry を削除して `git worktree prune` を実行します。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に
   `MERGED` がある記録済み子をまとめて `--close` 相当で後始末します。
+
+### ダッシュボード（Web UI）
+
+`fanout dashboard --web` は **読み取り専用**の Web ダッシュボードを起動し、
+fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位で
+まとめたもの）をブラウザで常時可視化します。ペインの生存（`tmux list-panes`）・
+issue 状態・PR マージ状態（`--status` と同じデータ源を、リポジトリ内の全親について
+一度に再利用）をライブ表示します。リポジトリと GitHub の状態は一切変更せず、tmux は
+*読み取る*だけです。唯一の意図的な tmux への副作用は、利便性のために起動中の tmux
+サーバへ登録する `prefix + D` キーバインドです（下記で無効化可）。
+
+```
+fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
+```
+
+- **いつでも任意に表示。** ターミナルから起動できるほか、tmux 内で **`prefix + D`**
+  を押すだけで開けます。ライブ fan-out 後（およびダッシュボード起動時）に fanout が
+  この tmux キーバインドを自動登録するため、どのペインからでも呼び出せます。キーは
+  detached な `fanout-dashboard` ウィンドウでサーバを起動するのでキー押下後も生き続け、
+  2 回目以降は既存 URL を開き直すだけです。自動登録は
+  `--no-dashboard-keybind`（fan-out）/ `--no-keybind`（dashboard）・設定キー
+  `dashboardKeybind`・`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます。
+- **localhost 限定。** `127.0.0.1` にのみバインドし、GET 専用の endpoint
+  （`/api/snapshot`、SSE の `/api/stream`、埋め込み UI）を公開します。`--port` は
+  既定 `0`（OS 割り当ての ephemeral port）で、確定した URL を表示します。
+- **トークン既定 ON。** 起動毎にランダムトークンを生成して URL に埋め込み、`/api/*`
+  をゲートします。同一ホストの他ユーザ/プロセスからループバックポート経由で
+  issue/PR データを読まれるのを防ぎます。単一ユーザ端末では `--no-token` で外せます。
+- **`--open`** は既定ブラウザで URL を開きます。既に起動中のサーバ
+  （`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しません。
+- **グレースフルに縮退。** `gh` 未ログインならバナーを出して state のみ表示し、
+  tmux 外でも生存不明として配信を継続します。
+
+全フラグは `fanout dashboard --help` を参照してください。
 
 ### `--check-update`
 
@@ -319,9 +362,9 @@ exit code:
 
 ### Settings
 
-Go 実装では、fanout が briefing に入れる opinionated な 5 つの挙動スイッチを
-解決できます。deprecated な Bash 版 `./fanout` はこの新しい flag / ファイル /
-env には未対応です。後方互換のため、既定値はすべて `true` です。
+Go 実装では opinionated な 6 つの挙動（briefing の 5 トグル＋ダッシュボードの
+キーバインド）をオン/オフできます。deprecated な Bash 版 `./fanout` はこの新しい
+flag / ファイル / env には未対応です。後方互換のため、既定値はすべて `true` です。
 
 優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
 ビルトイン既定値** です。fanout は git リポジトリルートを解決した後、逆順に
@@ -336,7 +379,8 @@ env には未対応です。後方互換のため、既定値はすべて `true`
   "prReviewGate": true,
   "briefingCodeReview": true,
   "agentTeamsHint": false,
-  "prVisualization": true
+  "prVisualization": true,
+  "dashboardKeybind": true
 }
 ```
 
@@ -347,6 +391,7 @@ env には未対応です。後方互換のため、既定値はすべて `true`
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
+| ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 
 環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
 不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
@@ -432,8 +477,8 @@ fanout 123 --no-auto-pr
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
 
-# .fanout/state.json に記録された子 issue と closed-by PR の merge 状態を読む。
-# 既定は automation 向け JSON、table は PR 差分統計、任意で親 dashboard コメント。
+# .fanout/state.json に記録された子 issue と closed-by PR/review/CI 状態を読む。
+# 既定は automation 向け JSON、table は PR/CI/差分確認、任意で親 dashboard コメント。
 fanout 123 --status
 fanout 123 --status | jq '.summary.all_merged'
 fanout 123 --status --format table

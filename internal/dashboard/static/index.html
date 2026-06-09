@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- No external requests: a read-only localhost dashboard must not phone home,
+     and the page URL carries the API token (?token=) — a remote font fetch could
+     leak it via Referer. Fonts resolve to a local system stack (see style.css). -->
+<meta name="referrer" content="no-referrer" />
+<title>fanout dashboard</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="scanlines" aria-hidden="true"></div>
+
+<header class="deck">
+  <div class="brand">
+    <span class="glyph" aria-hidden="true">⊟</span>
+    <div class="wordmark">
+      <span class="title">FANOUT</span>
+      <span class="subtitle">session&nbsp;control</span>
+    </div>
+  </div>
+  <div class="deck-meta">
+    <div class="repo" id="repo" title="">—</div>
+    <div class="link" id="link" aria-live="polite">
+      <span class="pulse" id="conn-dot"></span>
+      <span id="conn-text">linking…</span>
+    </div>
+  </div>
+</header>
+
+<section class="hud" id="hud" aria-label="rollup">
+  <div class="stat" data-k="total"><span class="num" id="s-total">0</span><span class="lbl">panes</span></div>
+  <div class="stat alive" data-k="live"><span class="num" id="s-live">0</span><span class="lbl">live</span></div>
+  <div class="stat merged" data-k="merged"><span class="num" id="s-merged">0</span><span class="lbl">merged</span></div>
+  <div class="stat pending" data-k="pending"><span class="num" id="s-pending">0</span><span class="lbl">pending</span></div>
+  <div class="hud-bar"><div class="hud-fill" id="hud-fill"></div></div>
+</section>
+
+<div class="banner" id="banner" role="status" hidden></div>
+
+<div class="toolbar">
+  <input type="search" id="filter" placeholder="filter panes — issue, name, agent, branch…" autocomplete="off" spellcheck="false" />
+  <span class="count" id="filter-count"></span>
+</div>
+
+<main id="sessions" aria-live="polite"></main>
+
+<footer class="status-line">
+  <span id="status">awaiting telemetry</span>
+  <span class="grow"></span>
+  <span class="ro">read-only · localhost</span>
+</footer>
+
+<template id="tpl-session">
+  <section class="session">
+    <div class="session-head">
+      <h2>parent <span class="parent"></span></h2>
+      <div class="progress"><div class="progress-fill"></div><span class="progress-label"></span></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th data-sort="issueNum" class="col-num">issue</th>
+          <th data-sort="name">name</th>
+          <th data-sort="agent">agent</th>
+          <th data-sort="branch">branch</th>
+          <th data-sort="alive" class="col-c">live</th>
+          <th data-sort="issueState" class="col-c">state</th>
+          <th data-sort="pr" class="col-c">pr</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
