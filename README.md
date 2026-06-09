@@ -29,6 +29,10 @@ blocker columns using the same `## Blocked by` and `(blocked by #N)` sources as
 output snapshot shown in the detail panel. Rows whose recorded pane no longer
 exists in tmux are marked `stale!` and are skipped by focus/peek actions. Press
 `q` to leave the console; the tmux session and child panes are left running.
+Select a recorded pane and press `c` to close it, `m` to fast-forward merge its
+branch, or `x` to clean up merged/closed siblings for the same parent. Each
+lifecycle action asks for confirmation and uses the same core path as the
+corresponding `--close`, `--merge`, or `--cleanup` CLI command.
 
 ## Direct tmux runtime
 
