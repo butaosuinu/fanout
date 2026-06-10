@@ -24,6 +24,7 @@
     "total": 2,
     "merged": 1,
     "pending": 1,
+    "blocked": 0,
     "all_merged": false
   }
 }

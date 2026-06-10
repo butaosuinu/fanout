@@ -73,6 +73,12 @@ type PRDiffStat struct {
 	Body         string `json:"body"`
 }
 
+type IssueSnapshot struct {
+	State string
+	Body  string
+	PRs   []PRRef
+}
+
 type IssueComment struct {
 	ID   string
 	Body string
@@ -203,14 +209,15 @@ func (r Runner) IssueState(num int) (string, error) {
 	return s, nil
 }
 
-// IssueWithPRs returns an issue's state plus all closed-by PR refs, following
-// closedByPullRequestsReferences pagination.
-func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []PRRef, err error) {
+// IssueSnapshotWithPRs returns an issue's state/body plus all closed-by
+// PR refs, following closedByPullRequestsReferences pagination.
+func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot, error) {
 	const query = `
     query($owner: String!, $repo: String!, $num: Int!, $after: String) {
       repository(owner: $owner, name: $repo) {
         issue(number: $num) {
           state
+          body
           closedByPullRequestsReferences(first: 100, after: $after) {
             pageInfo { hasNextPage endCursor }
             nodes {
@@ -234,7 +241,7 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
       }
     }
   `
-	prs = []PRRef{}
+	snapshot := IssueSnapshot{PRs: []PRRef{}}
 	cursor := ""
 	for {
 		args := []string{
@@ -250,13 +257,14 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 		}
 		out, err := r.gh(args...)
 		if err != nil {
-			return "", nil, err
+			return IssueSnapshot{}, err
 		}
 		if len(strings.TrimSpace(string(out))) == 0 {
-			return "", nil, fmt.Errorf("empty issue response")
+			return IssueSnapshot{}, fmt.Errorf("empty issue response")
 		}
 		var page struct {
 			State string `json:"state"`
+			Body  string `json:"body"`
 			Refs  struct {
 				PageInfo struct {
 					HasNextPage bool   `json:"hasNextPage"`
@@ -266,11 +274,12 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 			} `json:"closedByPullRequestsReferences"`
 		}
 		if err := json.Unmarshal(out, &page); err != nil {
-			return "", nil, fmt.Errorf("parse gh api graphql issue %d: %w", num, err)
+			return IssueSnapshot{}, fmt.Errorf("parse gh api graphql issue %d: %w", num, err)
 		}
-		state = page.State
+		snapshot.State = page.State
+		snapshot.Body = page.Body
 		for _, pr := range page.Refs.Nodes {
-			prs = append(prs, pr.ref())
+			snapshot.PRs = append(snapshot.PRs, pr.ref())
 		}
 		if !page.Refs.PageInfo.HasNextPage {
 			break
@@ -281,7 +290,17 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 		}
 		cursor = next
 	}
-	return state, prs, nil
+	return snapshot, nil
+}
+
+// IssueWithPRs returns an issue's state plus all closed-by PR refs, following
+// closedByPullRequestsReferences pagination.
+func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []PRRef, err error) {
+	snapshot, err := r.IssueSnapshotWithPRs(owner, repo, num)
+	if err != nil {
+		return "", nil, err
+	}
+	return snapshot.State, snapshot.PRs, nil
 }
 
 type prRefGraphQL struct {

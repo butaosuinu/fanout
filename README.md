@@ -21,7 +21,8 @@ through the same GitHub CLI source used by `fanout <parent> --status`. For
 recorded issue parents it also reloads the parent child set and shows wave /
 blocker columns using the same `## Blocked by` and `(blocked by #N)` sources as
 `--unblocked-only`; blocked children that have not been fanned yet appear as
-`deferred` rows, and CLOSED blockers are shown as resolved. Press
+`deferred` rows, and CLOSED blockers are shown as resolved. Its header shows
+`total` / `merged` / `pending` / `blocked` rollup counts. Press
 `n` to create a manual agent pane from a required prompt, selectable
 `claude` / `codex` agent, and optional slug. Manual panes use synthetic
 `@manual` state entries and appear in the list after launch. Press `Enter` or

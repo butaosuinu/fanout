@@ -5,6 +5,7 @@
     "total": 0,
     "merged": 0,
     "pending": 0,
+    "blocked": 0,
     "all_merged": false
   }
 }

@@ -250,6 +250,9 @@ func distinctIssueNums(store state.Store) []int {
 	seen := map[int]bool{}
 	var nums []int
 	for _, p := range store.Panes {
+		if p.IssueNum <= 0 {
+			continue
+		}
 		if !seen[p.IssueNum] {
 			seen[p.IssueNum] = true
 			nums = append(nums, p.IssueNum)
