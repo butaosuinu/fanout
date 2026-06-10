@@ -17,7 +17,7 @@ func TestDisplayMessageUsesTmuxStatusLine(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := DisplayMessage("fanout", "hello"); err != nil {
+	if err := DisplayMessage("fanout", "fanout: #(touch /tmp/pwned)"); err != nil {
 		t.Fatalf("DisplayMessage: %v", err)
 	}
 	data, err := os.ReadFile(argsPath)
@@ -25,7 +25,7 @@ func TestDisplayMessageUsesTmuxStatusLine(t *testing.T) {
 		t.Fatalf("read args: %v", err)
 	}
 	got := strings.Split(strings.TrimSpace(string(data)), "\n")
-	want := []string{"display-message", "-t", "=fanout", "hello"}
+	want := []string{"display-message", "-t", "=fanout", "fanout: ##(touch /tmp/pwned)"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("tmux args = %#v, want %#v", got, want)
 	}

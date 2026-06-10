@@ -19,11 +19,15 @@ func DisplayMessage(target, msg string) error {
 	if strings.TrimSpace(target) != "" {
 		args = append(args, "-t", exactTarget(target))
 	}
-	args = append(args, msg)
+	args = append(args, tmuxLiteral(msg))
 	if err := exec.Command("tmux", args...).Run(); err != nil {
 		return fmt.Errorf("tmux display-message: %w", err)
 	}
 	return nil
+}
+
+func tmuxLiteral(msg string) string {
+	return strings.ReplaceAll(msg, "#", "##")
 }
 
 func exactTarget(target string) string {
