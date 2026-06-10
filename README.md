@@ -17,13 +17,16 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. For
-recorded issue parents it also reloads the parent child set and shows wave /
-blocker columns using the same `## Blocked by` and `(blocked by #N)` sources as
-`--unblocked-only`; blocked children that have not been fanned yet appear as
-`deferred` rows, and CLOSED blockers are shown as resolved. Its header shows
-`total` / `merged` / `pending` / `blocked` rollup counts. Press
-`n` to create a manual agent pane from a required prompt, selectable
+through the same GitHub CLI source used by `fanout <parent> --status`. Press
+`/` to filter the loaded rows in memory with free-text terms or predicates such
+as `state:open`, `agent:codex`, and `wave:wave5`. Filtering does not trigger
+extra data fetches, and the automatic state / GitHub refresh continues while a
+filter is active. For recorded issue parents it also reloads the parent child
+set and shows wave / blocker columns using the same `## Blocked by` and
+`(blocked by #N)` sources as `--unblocked-only`; blocked children that have not
+been fanned yet appear as `deferred` rows, and CLOSED blockers are shown as
+resolved. Its header shows `total` / `merged` / `pending` / `blocked` rollup
+counts. Press `n` to create a manual agent pane from a required prompt, selectable
 `claude` / `codex` agent, and optional slug. Manual panes use synthetic
 `@manual` state entries and appear in the list after launch. Press `Enter` or
 `o` on a live row to focus that pane, and press `p` to refresh the read-only

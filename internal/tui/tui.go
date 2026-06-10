@@ -67,6 +67,7 @@ type issueStatus struct {
 	State           string
 	PRs             []ghissue.PRRef
 	Wave            int
+	WaveLabel       string
 	Blockers        string
 	HasOpenBlockers bool
 }
@@ -82,6 +83,7 @@ type paneView struct {
 	PRSummary    string
 	HasMergedPR  bool
 	Wave         int
+	WaveLabel    string
 	WaveBadge    string
 	Blockers     string
 	Blocked      bool
@@ -132,7 +134,10 @@ type model struct {
 	detail          viewport.Model
 	width           int
 	height          int
+	allPanes        []paneView
 	panes           []paneView
+	filterQuery     string
+	filterEditing   bool
 	issues          map[issueKey]issueStatus
 	lastState       time.Time
 	lastGH          time.Time
@@ -145,6 +150,13 @@ type model struct {
 	actionRunning   bool
 	quitAfterAction bool
 	actionMessage   string
+}
+
+type paneFilter struct {
+	terms  []string
+	states []string
+	agents []string
+	waves  []string
 }
 
 type stateLoadedMsg struct {
@@ -343,9 +355,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeNewPane {
 			return m.updateNewPane(msg)
 		}
+		if m.filterEditing {
+			next, cmd := m.updateFilterInput(msg)
+			return next, cmd
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "/":
+			m.filterEditing = true
+			m.refreshRows()
+			return m, nil
+		case "esc":
+			if m.filterQuery != "" {
+				m.filterQuery = ""
+				m.refreshRows()
+			}
+			return m, nil
 		case "n":
 			m.openNewPaneForm()
 			return m, nil
@@ -377,7 +403,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.stateErr = ""
 		}
-		m.panes = msg.panes
+		m.allPanes = msg.panes
 		m.lastState = msg.at
 		m.refreshRows()
 		peekCmd := m.peekSelectedCmd(false)
@@ -450,6 +476,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "enter", "esc":
+		m.filterEditing = false
+		return m, nil
+	case "backspace", "ctrl+h":
+		m.filterQuery = trimLastRune(m.filterQuery)
+	case "ctrl+u":
+		m.filterQuery = ""
+	default:
+		if len(msg.Runes) == 0 {
+			return m, nil
+		}
+		m.filterQuery += string(msg.Runes)
+	}
+	m.refreshRows()
+	return m, nil
+}
+
 func (m model) View() string {
 	if m.width == 0 {
 		return "fanout TUI"
@@ -463,7 +510,7 @@ func (m model) View() string {
 	}
 	header += " " + dimStyle.Render(formatHUD(summarizeHUD(m.panes)))
 
-	footer := dimStyle.Render("q quit  n new  j/k move  enter/o focus  p peek  c close  m merge  x cleanup  state " + formatClock(m.lastState) + "  gh " + formatClock(m.lastGH))
+	footer := dimStyle.Render(m.footerText())
 	if m.notice != "" {
 		footer += "\n" + warnStyle.Render(m.notice)
 	}
@@ -778,7 +825,8 @@ func (m model) formInputWidth() int {
 }
 
 func (m *model) refreshRows() {
-	m.panes = applyIssueStatuses(m.panes, m.issues)
+	m.allPanes = applyIssueStatuses(m.allPanes, m.issues)
+	m.panes = filterPaneViews(m.allPanes, m.filterQuery)
 	rows := make([]table.Row, 0, len(m.panes))
 	for _, pane := range m.panes {
 		rows = append(rows, pane.tableRow())
@@ -793,18 +841,21 @@ func (m *model) refreshDetail() {
 }
 
 func (m model) detailContent() string {
-	if len(m.panes) == 0 {
+	if len(m.allPanes) == 0 {
 		return "No recorded fanout panes in .fanout/state.json."
+	}
+	if len(m.panes) == 0 {
+		return "No panes match the current filter."
 	}
 	pane, ok := m.selectedPane()
 	if !ok {
-		return "No recorded fanout panes in .fanout/state.json."
+		return "No panes match the current filter."
 	}
 	lines := []string{
 		fmt.Sprintf("%s #%d  %s", pane.Parent, pane.IssueNum, pane.Name),
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
-		fmt.Sprintf("wave=%s blockers=%s", dash(pane.WaveBadge), dash(pane.Blockers)),
+		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
 		fmt.Sprintf("worktree=%s", dash(pane.WorktreePath)),
 		fmt.Sprintf("created=%s", dash(pane.CreatedAt)),
 	}
@@ -906,6 +957,12 @@ func (m model) peekContent(pane paneView, maxLines int) []string {
 }
 
 func (m *model) markPaneStale(paneID string) {
+	for i := range m.allPanes {
+		if m.allPanes[i].PaneID == paneID {
+			m.allPanes[i].TmuxState = "stale"
+			break
+		}
+	}
 	for i := range m.panes {
 		if m.panes[i].PaneID == paneID {
 			m.panes[i].TmuxState = "stale"
@@ -1004,6 +1061,7 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			}
 			cached.Title = issue.Title
 			cached.Wave = waves[issue.Number]
+			cached.WaveLabel = issue.Wave
 			cached.Blockers = formatBlockers(deps[issue.Number])
 			cached.HasOpenBlockers = hasOpenBlocker(deps[issue.Number])
 			statuses[key] = cached
@@ -1033,6 +1091,7 @@ func loadParentIssues(gh ghissue.Runner, parent string, panes []state.Pane) ([]g
 	if err != nil {
 		return nil, parentBody, errors.Join(loadErr, err)
 	}
+	assignIssueWaveLabels(children, ghissue.TaskListWaves(parentBody))
 	return children, parentBody, loadErr
 }
 
@@ -1052,6 +1111,14 @@ func mergeParentIssueChildren(parentNum int, subIssues []ghissue.Issue, parentBo
 		existing[pane.IssueNum] = true
 	}
 	return ghissue.MergeExtra(subIssues, extra), nil
+}
+
+func assignIssueWaveLabels(issues []ghissue.Issue, labels map[int]string) {
+	for i := range issues {
+		if label := labels[issues[i].Number]; label != "" {
+			issues[i].Wave = label
+		}
+	}
 }
 
 func parentChildNumbers(parentNum int, subIssues []ghissue.Issue) map[int]bool {
@@ -1265,6 +1332,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			IssueState:   "-",
 			PRSummary:    "-",
 			Wave:         status.Wave,
+			WaveLabel:    firstNonEmpty(pane.Wave, status.WaveLabel),
 			WaveBadge:    waveBadge(status.Wave, status.HasOpenBlockers),
 			Blockers:     dash(status.Blockers),
 			Blocked:      status.HasOpenBlockers,
@@ -1300,6 +1368,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			HasMergedPR: hasMergedPR(status.PRs),
 			CIStatus:    summarizePRCI(status.PRs),
 			Wave:        status.Wave,
+			WaveLabel:   status.WaveLabel,
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
 			Blockers:    dash(status.Blockers),
 			Blocked:     status.HasOpenBlockers,
@@ -1321,6 +1390,9 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			out[i].PRSummary = summarizePRs(status.PRs)
 			out[i].HasMergedPR = hasMergedPR(status.PRs)
 			out[i].Wave = status.Wave
+			if status.WaveLabel != "" {
+				out[i].WaveLabel = status.WaveLabel
+			}
 			out[i].WaveBadge = waveBadge(status.Wave, status.HasOpenBlockers)
 			out[i].Blockers = dash(status.Blockers)
 			out[i].Blocked = status.HasOpenBlockers
@@ -1341,6 +1413,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			HasMergedPR: hasMergedPR(status.PRs),
 			CIStatus:    summarizePRCI(status.PRs),
 			Wave:        status.Wave,
+			WaveLabel:   status.WaveLabel,
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
 			Blockers:    dash(status.Blockers),
 			Blocked:     status.HasOpenBlockers,
@@ -1383,9 +1456,10 @@ func (p paneView) tableRow() table.Row {
 	return table.Row{
 		compactParent(p.Parent),
 		"#" + strconv.Itoa(p.IssueNum),
-		dash(p.WaveBadge),
+		truncate(dash(p.waveCell()), 12),
 		truncate(dash(p.Blockers), 22),
 		truncate(p.Name, 28),
+		dash(p.Agent),
 		tmuxState,
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 12),
@@ -1410,16 +1484,140 @@ func columnsForWidth(width int) []table.Column {
 	return []table.Column{
 		{Title: "PARENT", Width: 10},
 		{Title: "ISSUE", Width: 7},
-		{Title: "WAVE", Width: 10},
+		{Title: "WAVE", Width: 12},
 		{Title: "BLOCKERS", Width: blockerWidth},
 		{Title: "NAME", Width: nameWidth},
-		{Title: "TMUX", Width: 8},
+		{Title: "AGENT", Width: 7},
+		{Title: "TMUX", Width: 7},
 		{Title: "STATE", Width: 8},
 		{Title: "PR", Width: 12},
 		{Title: "CI", Width: 7},
 		{Title: "BRANCH", Width: branchWidth},
-		{Title: "PANE", Width: 8},
+		{Title: "PANE", Width: 7},
 	}
+}
+
+func (m model) footerText() string {
+	parts := []string{"q quit", "n new", "j/k move", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
+	if m.filterEditing {
+		parts = append(parts, "typing")
+	}
+	if m.filterEditing || strings.TrimSpace(m.filterQuery) != "" {
+		parts = append(parts, fmt.Sprintf("filter=%q %d/%d", m.filterQuery, len(m.panes), len(m.allPanes)))
+	}
+	parts = append(parts, "state "+formatClock(m.lastState), "gh "+formatClock(m.lastGH))
+	return strings.Join(parts, "  ")
+}
+
+func filterPaneViews(panes []paneView, query string) []paneView {
+	filter := parsePaneFilter(query)
+	if filter.empty() {
+		return panes
+	}
+	out := make([]paneView, 0, len(panes))
+	for _, pane := range panes {
+		if pane.matchesFilter(filter) {
+			out = append(out, pane)
+		}
+	}
+	return out
+}
+
+func parsePaneFilter(query string) paneFilter {
+	var filter paneFilter
+	for _, token := range strings.Fields(strings.ToLower(strings.TrimSpace(query))) {
+		key, value, ok := splitFilterToken(token)
+		if !ok {
+			filter.terms = append(filter.terms, token)
+			continue
+		}
+		switch key {
+		case "state", "status", "s":
+			filter.states = append(filter.states, value)
+		case "agent", "a":
+			filter.agents = append(filter.agents, value)
+		case "wave", "w":
+			filter.waves = append(filter.waves, value)
+		default:
+			filter.terms = append(filter.terms, token)
+		}
+	}
+	return filter
+}
+
+func splitFilterToken(token string) (string, string, bool) {
+	idx := strings.IndexAny(token, ":=")
+	if idx <= 0 || idx == len(token)-1 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(token[:idx])
+	value := strings.TrimSpace(token[idx+1:])
+	if key == "" || value == "" {
+		return "", "", false
+	}
+	return key, value, true
+}
+
+func (f paneFilter) empty() bool {
+	return len(f.terms) == 0 && len(f.states) == 0 && len(f.agents) == 0 && len(f.waves) == 0
+}
+
+func (p paneView) matchesFilter(filter paneFilter) bool {
+	for _, state := range filter.states {
+		if !containsFold(state, p.IssueState, p.TmuxState, p.PRSummary) {
+			return false
+		}
+	}
+	for _, agent := range filter.agents {
+		if !containsFold(agent, p.Agent) {
+			return false
+		}
+	}
+	for _, wave := range filter.waves {
+		if !containsFold(wave, p.WaveLabel, p.WaveBadge, p.waveCell(), p.dependencyWaveText()) {
+			return false
+		}
+	}
+	searchText := strings.ToLower(strings.Join([]string{
+		p.Parent,
+		"#" + strconv.Itoa(p.IssueNum),
+		strconv.Itoa(p.IssueNum),
+		p.Name,
+		p.PaneID,
+		p.TmuxState,
+		p.TmuxTitle,
+		p.IssueState,
+		p.PRSummary,
+		p.CIStatus,
+		p.BranchName,
+		p.WorktreePath,
+		p.Agent,
+		p.WaveLabel,
+		p.WaveBadge,
+		p.Blockers,
+		p.dependencyWaveText(),
+		p.CreatedAt,
+		p.Prompt,
+	}, "\n"))
+	for _, term := range filter.terms {
+		if !strings.Contains(searchText, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsFold(needle string, values ...string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	if needle == "" {
+		return true
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func waveBadge(wave int, blocked bool) string {
@@ -1431,6 +1629,51 @@ func waveBadge(wave int, blocked bool) string {
 		state = "blocked"
 	}
 	return fmt.Sprintf("W%d %s", wave, state)
+}
+
+func (p paneView) waveCell() string {
+	if strings.TrimSpace(p.WaveLabel) != "" {
+		return p.WaveLabel
+	}
+	return p.WaveBadge
+}
+
+func (p paneView) waveText() string {
+	parts := nonDashStrings(p.WaveLabel, p.WaveBadge)
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, " ")
+}
+
+func (p paneView) dependencyWaveText() string {
+	if p.Wave <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("wave%d", p.Wave)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func nonDashStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "-" || seen[value] {
+			continue
+		}
+		out = append(out, value)
+		seen[value] = true
+	}
+	return out
 }
 
 func issueTitle(status issueStatus, num int) string {
@@ -1579,6 +1822,14 @@ func truncateRunes(s string, max int) string {
 		return string(runes[:max])
 	}
 	return string(runes[:max-3]) + "..."
+}
+
+func trimLastRune(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[:len(runes)-1])
 }
 
 func compactMessage(s string) string {

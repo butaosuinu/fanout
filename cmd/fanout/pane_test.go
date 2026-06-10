@@ -52,6 +52,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		BranchName:          "fanout/state-idempotency-83",
 		Prompt:              "[fanout #83 of #81] state-idempotency-83: read /tmp/fanout-fanout-83.md and begin.",
 		Agent:               "codex",
+		Wave:                "wave5",
 	}
 
 	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now)
@@ -64,6 +65,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 	if got.CreatedAt != "2026-06-04T01:02:03Z" {
 		t.Fatalf("createdAt = %q", got.CreatedAt)
+	}
+	if got.Wave != "wave5" {
+		t.Fatalf("wave = %q, want wave5", got.Wave)
 	}
 }
 
@@ -151,6 +155,17 @@ func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
+	}
+}
+
+func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
+	issue := ghissue.Issue{Number: 501, Title: "Wave child", Body: "body", Wave: "wave5"}
+
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+
+	if got.Wave != "wave5" {
+		t.Fatalf("Wave = %q, want wave5", got.Wave)
 	}
 }
 

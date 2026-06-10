@@ -17,11 +17,14 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。記録済みの issue 親については親の子一覧も
-再読込し、`--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から
-wave / blocker 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で
-表示され、CLOSED blocker は resolved として区別されます。ヘッダーには `total` /
-`merged` / `pending` / `blocked` の集約 count を表示します。`n` で必須 prompt、`claude` / `codex`
+issue / closed-by PR 状態を定期更新します。`/` でロード済み行をメモリ内検索し、
+`state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
+フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
+継続します。記録済みの issue 親については親の子一覧も再読込し、
+`--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から wave / blocker
+列を表示します。まだ fanout されていない blocked 子は `deferred` 行で表示され、
+CLOSED blocker は resolved として区別されます。ヘッダーには `total` / `merged` /
+`pending` / `blocked` の集約 count を表示します。`n` で必須 prompt、`claude` / `codex`
 の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
 は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
 live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail

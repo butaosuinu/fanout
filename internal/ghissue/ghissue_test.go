@@ -43,3 +43,34 @@ func TestNormalizeCIStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskListWavesAssignsWaveHeadingsToIssueRows(t *testing.T) {
+	body := `
+overview
+
+**wave5（監視レイヤ）**
+- [ ] #115 dashboard filter
+- [x] #116 another dashboard item
+
+Some notes about the same wave.
+- [ ] owner/repo#999 ignored cross repo
+
+## Wave 6
+- [ ] #120 next work
+`
+
+	got := TaskListWaves(body)
+
+	for issue, want := range map[int]string{
+		115: "wave5",
+		116: "wave5",
+		120: "wave6",
+	} {
+		if got[issue] != want {
+			t.Fatalf("TaskListWaves()[%d] = %q, want %q (all: %#v)", issue, got[issue], want, got)
+		}
+	}
+	if _, ok := got[999]; ok {
+		t.Fatalf("TaskListWaves assigned cross-repo issue 999: %#v", got)
+	}
+}
