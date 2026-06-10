@@ -30,6 +30,7 @@ type Pane struct {
 	BranchName   string `json:"branchName"`
 	PaneID       string `json:"paneId"`
 	Agent        string `json:"agent"`
+	Wave         string `json:"wave,omitempty"`
 	DisplayName  string `json:"displayName"`
 	WorktreePath string `json:"worktreePath"`
 	Prompt       string `json:"prompt"`

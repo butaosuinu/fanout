@@ -30,6 +30,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 			DisplayName:  "Second pane",
 			WorktreePath: "/repo/.fanout/worktrees/second",
 			Agent:        "codex",
+			Wave:         "wave5",
 		},
 		{
 			Parent:       "100",
@@ -88,6 +89,9 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	if second.WorktreePath != ".fanout/worktrees/second" {
 		t.Fatalf("WorktreePath = %q, want relative path", second.WorktreePath)
 	}
+	if second.WaveLabel != "wave5" {
+		t.Fatalf("WaveLabel = %q, want wave5", second.WaveLabel)
+	}
 	if got[0].TmuxState != "stale" {
 		t.Fatalf("first tmux state = %q, want stale", got[0].TmuxState)
 	}
@@ -145,11 +149,11 @@ func TestBuildPaneViewsMatchesNormalizedNumericParents(t *testing.T) {
 
 func TestRefreshRowsClampsCursorWhenRowsShrink(t *testing.T) {
 	m := newModel(Options{})
-	m.panes = []paneView{{IssueNum: 1, Name: "one"}, {IssueNum: 2, Name: "two"}, {IssueNum: 3, Name: "three"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one"}, {IssueNum: 2, Name: "two"}, {IssueNum: 3, Name: "three"}}
 	m.refreshRows()
 	m.table.SetCursor(2)
 
-	m.panes = []paneView{{IssueNum: 1, Name: "one"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one"}}
 	m.refreshRows()
 
 	if got := m.table.Cursor(); got != 0 {
@@ -209,7 +213,7 @@ func TestFocusSelectedPaneUsesInjectedFocus(t *testing.T) {
 		},
 		PaneAlive: func(string) bool { return true },
 	})
-	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
 	m.refreshRows()
 
 	cmd := m.focusSelectedCmd()
@@ -240,7 +244,7 @@ func TestFocusSelectedPaneSkipsStaleRows(t *testing.T) {
 		},
 		PaneAlive: func(string) bool { return true },
 	})
-	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "stale"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "stale"}}
 	m.refreshRows()
 
 	if cmd := m.focusSelectedCmd(); cmd != nil {
@@ -263,7 +267,7 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 		},
 		PaneAlive: func(string) bool { return false },
 	})
-	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
 	m.refreshRows()
 
 	cmd := m.focusSelectedCmd()
@@ -280,7 +284,7 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 	if m.panes[0].TmuxState != "stale" {
 		t.Fatalf("TmuxState = %q, want stale", m.panes[0].TmuxState)
 	}
-	if got := m.table.Rows()[0][5]; got != "stale!" {
+	if got := m.table.Rows()[0][6]; got != "stale!" {
 		t.Fatalf("table tmux cell = %q, want stale!", got)
 	}
 }
@@ -297,7 +301,7 @@ func TestPeekSelectedPaneLoadsOutputIntoDetail(t *testing.T) {
 	})
 	m.detail.Width = 80
 	m.detail.Height = 9
-	m.panes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
 	m.refreshRows()
 
 	cmd := m.peekSelectedCmd(true)
@@ -331,7 +335,7 @@ func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 			return "selected\n", nil
 		},
 	})
-	m.panes = []paneView{
+	m.allPanes = []paneView{
 		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
 		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
 	}
@@ -348,6 +352,142 @@ func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 	}
 	if capturedPane != "%2" {
 		t.Fatalf("captured pane = %q, want %%2", capturedPane)
+	}
+}
+
+func TestFilterPaneViewsSearchesTextAndPredicates(t *testing.T) {
+	panes := []paneView{
+		{
+			Parent:      "142",
+			IssueNum:    115,
+			Name:        "state agent wave filters",
+			TmuxState:   "live",
+			IssueState:  "OPEN",
+			PRSummary:   "#201 open",
+			CIStatus:    "pass",
+			BranchName:  "feat/dashboard-filter",
+			DiffSummary: "+12/-3",
+			DirtyState:  "dirty",
+			Agent:       "codex",
+			Wave:        2,
+			WaveLabel:   "wave5",
+			WaveBadge:   "W2 blocked",
+		},
+		{
+			Parent:     "142",
+			IssueNum:   109,
+			Name:       "pr ci merge columns",
+			TmuxState:  "stale",
+			IssueState: "CLOSED",
+			PRSummary:  "#199 merged",
+			CIStatus:   "fail",
+			Agent:      "claude",
+			WaveLabel:  "wave4",
+		},
+	}
+
+	got := filterPaneViews(panes, "state:open agent:codex wave:wave5 dashboard")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews predicate match = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "status:merged")
+	if len(got) != 1 || got[0].IssueNum != 109 {
+		t.Fatalf("filterPaneViews state alias over PR state = %#v, want only #109", got)
+	}
+	got = filterPaneViews(panes, "wave:wave2")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews dependency wave match = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "#115")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews issue search = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "dirty")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews dirty search = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "+12/-3")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews diff search = %#v, want only #115", got)
+	}
+}
+
+func TestRefreshRowsKeepsFilterDuringStateAndGHUpdates(t *testing.T) {
+	m := newModel(Options{})
+	m.filterQuery = "agent:codex state:open"
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 1, Name: "one", Agent: "codex", IssueState: "OPEN"},
+		{Parent: "100", IssueNum: 2, Name: "two", Agent: "claude", IssueState: "OPEN"},
+	}
+	m.refreshRows()
+
+	if got := len(m.table.Rows()); got != 1 {
+		t.Fatalf("initial filtered rows = %d, want 1", got)
+	}
+
+	updated, _ := m.Update(stateLoadedMsg{
+		panes: []paneView{
+			{Parent: "100", IssueNum: 1, Name: "one", Agent: "codex", IssueState: "-"},
+			{Parent: "100", IssueNum: 2, Name: "two", Agent: "claude", IssueState: "-"},
+			{Parent: "100", IssueNum: 3, Name: "three", Agent: "codex", IssueState: "-"},
+		},
+		at: time.Unix(10, 0),
+	})
+	m = updated.(model)
+
+	updated, _ = m.Update(ghLoadedMsg{
+		issues: map[issueKey]issueStatus{
+			{Parent: "100", Num: 1}: {State: "CLOSED"},
+			{Parent: "100", Num: 2}: {State: "OPEN"},
+			{Parent: "100", Num: 3}: {State: "OPEN"},
+		},
+		at: time.Unix(20, 0),
+	})
+	m = updated.(model)
+
+	if got := len(m.table.Rows()); got != 1 {
+		t.Fatalf("filtered rows after refresh = %d, want 1", got)
+	}
+	if got := m.panes[0].IssueNum; got != 3 {
+		t.Fatalf("filtered issue after refresh = #%d, want #3", got)
+	}
+	if m.lastState.IsZero() || m.lastGH.IsZero() {
+		t.Fatalf("refresh timestamps were not updated: state=%v gh=%v", m.lastState, m.lastGH)
+	}
+}
+
+func TestFilterInputEditsQueryAndEscapeClearsWhenInactive(t *testing.T) {
+	m := newModel(Options{})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "one", Agent: "codex"},
+		{IssueNum: 2, Name: "two", Agent: "claude"},
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m = updated.(model)
+	if !m.filterEditing {
+		t.Fatal("filterEditing = false, want true")
+	}
+
+	for _, r := range "agent:codex" {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(model)
+	}
+	if got := len(m.table.Rows()); got != 1 {
+		t.Fatalf("rows while editing = %d, want 1", got)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.filterEditing {
+		t.Fatal("filterEditing = true after enter, want false")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.filterQuery != "" {
+		t.Fatalf("filterQuery after inactive esc = %q, want empty", m.filterQuery)
+	}
+	if got := len(m.table.Rows()); got != 2 {
+		t.Fatalf("rows after clearing filter = %d, want 2", got)
 	}
 }
 
@@ -444,7 +584,7 @@ func TestLoadMissingIssueDetailsSkipsLookupFailures(t *testing.T) {
 }
 
 func TestMergeParentIssueChildrenReturnsPartialRowsWithLookupError(t *testing.T) {
-	parentBody := "- [ ] #101 missing child\n- [ ] #102 loaded child\n"
+	parentBody := "**wave5**\n- [ ] #101 missing child\n- [ ] #102 loaded child\n"
 
 	got, err := mergeParentIssueChildren(100, []ghissue.Issue{{Number: 103, Title: "sub", State: "OPEN"}}, parentBody, nil, func(num int) (ghissue.Issue, error) {
 		if num == 101 {
@@ -463,6 +603,9 @@ func TestMergeParentIssueChildrenReturnsPartialRowsWithLookupError(t *testing.T)
 	wantNums := []int{103, 102}
 	if !reflect.DeepEqual(gotNums, wantNums) {
 		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, wantNums)
+	}
+	if got[1].Wave != "wave5" {
+		t.Fatalf("partial row wave = %q, want wave5", got[1].Wave)
 	}
 }
 
@@ -497,7 +640,7 @@ func paneByIssue(t *testing.T, panes []paneView, issueNum int) paneView {
 func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
 	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
-	m.panes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
+	m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
 	m.refreshRows()
 
 	updated, cmd := m.Update(keyRunes("c"))
@@ -549,7 +692,7 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 func TestLifecycleCleanupUsesSelectedParent(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
 	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
-	m.panes = []paneView{
+	m.allPanes = []paneView{
 		{Parent: "100", IssueNum: 1, Name: "one"},
 		{Parent: "200", IssueNum: 2, Name: "two"},
 	}

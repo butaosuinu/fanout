@@ -38,6 +38,7 @@ type paneRequest struct {
 	Number              int
 	Title               string
 	Body                string
+	Wave                string
 	BriefingPath        string
 	BriefingBody        string
 	WriteBriefingDryRun bool
@@ -169,6 +170,7 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time) stat
 		DisplayName:  paneTitle(req),
 		WorktreePath: worktreePath,
 		Prompt:       req.Prompt,
+		Wave:         req.Wave,
 		CreatedAt:    now.Format(time.RFC3339),
 	}
 }
@@ -224,6 +226,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		Number:       issue.Number,
 		Title:        issue.Title,
 		Body:         issue.Body,
+		Wave:         issue.Wave,
 		BriefingPath: briefing.Path(projectRoot, issue.Number),
 		// Existing issue dry-runs write briefings; Tier 1 tests depend on that.
 		WriteBriefingDryRun: true,

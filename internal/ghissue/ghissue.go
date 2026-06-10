@@ -27,6 +27,7 @@ type Issue struct {
 	Title  string  `json:"title"`
 	State  string  `json:"state"`
 	Body   string  `json:"body"`
+	Wave   string  `json:"wave,omitempty"`
 	Labels []Label `json:"labels"`
 }
 
@@ -651,6 +652,7 @@ func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 var (
 	rePositiveCommentID = regexp.MustCompile(`^[1-9][0-9]*$`)
 	taskListRE          = regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#([0-9]+)`)
+	waveHeadingRE       = regexp.MustCompile(`(?i)^wave\s*([0-9]+)`)
 )
 
 // TaskListNumbers extracts issue numbers from each `- [ ] #N ...` row in the
@@ -676,6 +678,47 @@ func TaskListNumbers(parentBody string) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+// TaskListWaves extracts wave labels from parent-body sections such as
+// `**wave5（...）**` and assigns them to following `- [ ] #N ...` rows.
+func TaskListWaves(parentBody string) map[int]string {
+	out := map[int]string{}
+	currentWave := ""
+	for _, line := range strings.Split(parentBody, "\n") {
+		if m := taskListRE.FindStringSubmatch(line); len(m) == 2 {
+			if currentWave == "" {
+				continue
+			}
+			n, err := strconv.Atoi(m[1])
+			if err != nil {
+				continue
+			}
+			if _, exists := out[n]; !exists {
+				out[n] = currentWave
+			}
+			continue
+		}
+		if wave := parseWaveHeading(line); wave != "" {
+			currentWave = wave
+		}
+	}
+	return out
+}
+
+func parseWaveHeading(line string) string {
+	cleaned := strings.TrimSpace(line)
+	cleaned = strings.TrimLeft(cleaned, "#* _")
+	cleaned = strings.TrimSpace(cleaned)
+	m := waveHeadingRE.FindStringSubmatch(cleaned)
+	if len(m) != 2 {
+		return ""
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("wave%d", n)
 }
 
 // MergeExtra adds rows from extra to base, deduplicating by .number.

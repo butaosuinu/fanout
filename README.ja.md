@@ -20,7 +20,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 issue / closed-by PR 状態を定期更新します。各行には pane worktree の
 `git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による
 `dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を
-確認できます。記録済みの issue 親については親の子一覧も再読込し、
+確認できます。`/` でロード済み行をメモリ内検索し、
+`state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
+フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
+継続します。記録済みの issue 親については親の子一覧も再読込し、
 `--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から wave / blocker
 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で表示され、
 CLOSED blocker は resolved として区別されます。ヘッダーには `total` / `merged` /
