@@ -103,7 +103,7 @@ fanout 123 --status --post-dashboard
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-`fanout dashboard --web` は**読み取り専用**の Web ダッシュボードを起動し、fanout の **Session**（`.fanout/state.json` に記録された pane を親 issue 単位でまとめたもの）をブラウザで SSE によりライブ表示します。pane の生存（`tmux list-panes`）、issue 状態、PR マージ状態（`--status` と同じデータ源を、リポジトリ内の全親について一度に再利用）を更新し続けます。リポジトリと GitHub の状態は一切変更せず、tmux は*読み取る*だけです。
+`fanout dashboard --web` は**読み取り専用**の Web ダッシュボードを起動し、fanout の **Session**（`.fanout/state.json` に記録された pane を親 issue 単位でまとめたもの）をブラウザで SSE によりライブ表示します。pane の生存（`tmux list-panes`）、issue 状態、PR マージ状態（`--status` と同じデータ源を、リポジトリ内の全親について一度に再利用）を更新し続けます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。意図的な便宜が 2 つだけあります: 起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `prefix + D` tmux キーバインドを登録すること(`--no-keybind` でオプトアウト可)です。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]

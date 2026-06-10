@@ -103,7 +103,7 @@ It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, f
 
 ## Web dashboard (fanout dashboard --web)
 
-`fanout dashboard --web` starts a **read-only** web dashboard that visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE: pane liveness (from `tmux list-panes`), issue state, and PR merge status (the same data source as `--status`, reused across every parent in the repo at once). It never mutates repo or GitHub state, and only ever *reads* tmux.
+`fanout dashboard --web` starts a **read-only** web dashboard that visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE: pane liveness (from `tmux list-panes`), issue state, and PR merge status (the same data source as `--status`, reused across every parent in the repo at once). It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]

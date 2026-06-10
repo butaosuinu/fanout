@@ -113,7 +113,7 @@ fanout https://github.com/users/<owner>/projects/<n> --project-status all
 - **No parent body means no implicit-children salvage.** The `Closes #N` / dependency phrases the skills normally surface don't exist here — the Project is the source of truth. Use `--include` to force-add anything the Project happens to omit.
 - **Single-repo only.** Items whose repository differs from the current git repository are warned and skipped.
 - **No Status field on the Project?** fanout warns and falls back to every item regardless of `--project-status`.
-- **Blockers** come only from the child body's `## Blocked by` section and the `blocked` label; the `(blocked by #X)` task-list trailer doesn't exist without a parent body.
+- **Blockers** come only from the child body's `## Blocked by` section; the `(blocked by #X)` task-list trailer doesn't exist without a parent body. The `blocked` label stays a weak signal here too — a child carrying only the label is warned and treated as unblocked.
 
 > Project mode requires the `gh` CLI to carry the `read:project` scope — see [Installation]({{< relref "/docs/installation" >}}).
 

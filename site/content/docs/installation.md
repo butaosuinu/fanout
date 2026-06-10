@@ -47,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CLAUDE_DIR/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
 - `$CLAUDE_DIR/skills/fanout/` (default `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
+- `$CLAUDE_DIR/skills/post-work-review/` (default `~/.claude/skills/post-work-review/` — backs the PR review gate; overwrites a same-named skill, so back yours up)
 - `$CODEX_DIR/skills/fanout/` (default `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
 

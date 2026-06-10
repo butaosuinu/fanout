@@ -47,6 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CLAUDE_DIR/commands/fanout.md`(既定は `~/.claude/commands/fanout.md`)
 - `$CLAUDE_DIR/skills/fanout/`(既定は `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/`(既定は `~/.claude/skills/fanout-issues/`)
+- `$CLAUDE_DIR/skills/post-work-review/`(既定は `~/.claude/skills/post-work-review/` — PR レビューゲートを支える skill。同名 skill を上書きするので、自前のものがあればバックアップを)
 - `$CODEX_DIR/skills/fanout/`(既定は `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/`(既定は `~/.codex/skills/fanout-issues/`)
 

@@ -113,7 +113,7 @@ fanout https://github.com/users/<owner>/projects/<n> --project-status all
 - **親 body が無いので暗黙の子参照サルベージは無い。** skill が通常拾う `Closes #N` / 依存表現はここには存在しない — Project が source of truth。Project が取りこぼしている子は `--include` で強制追加する。
 - **単一 repo のみ。** 現在の git リポジトリと異なる repository の item は警告してスキップする。
 - **Project に Status フィールドが無い場合**は、警告を出して `--project-status` に関わらず全 item にフォールバックする。
-- **blocker** の情報源は子本文の `## Blocked by` セクションと `blocked` ラベルのみ。親 body が無いため `(blocked by #X)` のタスクリストトレイラは存在しない。
+- **blocker** の情報源は子本文の `## Blocked by` セクションのみ。親 body が無いため `(blocked by #X)` のタスクリストトレイラは存在しない。`blocked` ラベルはここでも弱いシグナルのままで、ラベルしか無い子は警告の上 unblocked として扱われる。
 
 > Project モードでは `gh` CLI に `read:project` スコープが必要です — [インストール]({{< relref "/docs/installation" >}})を参照。
 
