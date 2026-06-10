@@ -1,8 +1,8 @@
 ---
 name: fanout
-description: Use the fanout CLI from Codex CLI to spawn one tmux pane per OPEN sub-issue of a GitHub parent issue, or per OPEN item of a GitHub Projects v2 board (Project URL). Use when the user is working in tmux and asks to fan out, parallelize, or split child issues / project items across independent git worktrees/agent sessions.
+description: Use the fanout CLI from Codex CLI to start the persistent TUI console, or spawn one tmux pane per OPEN sub-issue of a GitHub parent issue / GitHub Projects v2 board item. Use when the user wants fanout to manage parallel child work from its TUI console, or asks to fan out, parallelize, or split child issues / project items across independent git worktrees and agent sessions.
 metadata:
-  short-description: Fan out GitHub sub-issues or Projects v2 items into tmux panes
+  short-description: Open the fanout TUI or fan out GitHub child work
 ---
 
 # fanout
@@ -74,9 +74,10 @@ Always invoke the stable `fanout` command name.
 
 ## When To Use
 
-Use this skill when the user explicitly asks to fan out, parallelize, or split
-work for a GitHub parent issue or a GitHub Projects v2 board, including
-Japanese phrasing like `並列展開` or "プロジェクトの Todo 列を一気に着手".
+Use this skill when the user asks to start the fanout console / TUI, or when
+the user explicitly asks to fan out, parallelize, or split work for a GitHub
+parent issue or a GitHub Projects v2 board, including Japanese phrasing like
+`並列展開` or "プロジェクトの Todo 列を一気に着手".
 Also use it when the user asks whether the installed `fanout` binary is up to
 date; that path uses `fanout --check-update` instead of pane creation. If the
 user asks to update fanout itself, run `fanout update` immediately.
@@ -94,9 +95,12 @@ use this workflow directly.
 
 1. Prerequisites are `gh`, `jq`, `git`, `tmux`, and the `gh-sub-issue`
    extension. The CLI validates these on startup, so rely on its error output.
-2. Pane-creation mode must run inside tmux. If it reports `fanout must be run
-   inside tmux`, tell the user to start or attach a tmux session first. TUI mode
-   can be started from a plain shell; it creates or attaches its tmux session.
+2. Choose the launch lane. TUI mode is `fanout` with no arguments; it can start
+   from a plain shell because it creates or attaches the repository's
+   fanout-managed tmux session, and from inside tmux it uses the current pane.
+   Batch pane-creation mode is `fanout <parent-issue|project-url>` and must run
+   inside tmux. If batch mode reports `fanout must be run inside tmux`, tell
+   the user to start or attach a tmux session first.
 3. An agent name is required for pane creation. Pass `--agent <name>` or set
    `FANOUT_AGENT`. MVP supported agents are `claude` and `codex`.
 4. `--codex-plan-mode` is valid only with `--agent codex`. It uses Codex
@@ -108,8 +112,8 @@ use this workflow directly.
 
 If the user's intent is only to check the installed `fanout` binary version, run
 `fanout --check-update` and skip the rest of this workflow. It is read-only,
-creates no panes, and does not require dmux pre-flight, parent resolution,
-dry-run, pane naming, or confirmation.
+creates no panes, and does not require pane-creation pre-flight, parent
+resolution, dry-run, pane naming, or confirmation.
 
 If the user's intent is to update the `fanout` binary itself, run
 `fanout update` immediately. It downloads and runs the repository `install.sh`,
@@ -386,7 +390,9 @@ number, respect it and fill only missing segments.
 When fanout exits non-zero, use the README troubleshooting section and surface
 the likely next action:
 
-- `fanout must be run inside tmux`: start or attach a tmux session and rerun.
+- `fanout must be run inside tmux`: batch pane creation needs a tmux session;
+  start or attach one and rerun, or start the persistent console with
+  no-argument `fanout` from a plain shell.
 - `agent is required`: pass `--agent claude`, `--agent codex`, or set
   `FANOUT_AGENT`.
 - `unknown agent`: use one of the supported MVP agents (`claude`, `codex`).

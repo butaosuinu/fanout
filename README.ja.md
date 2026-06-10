@@ -4,9 +4,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つの tmux ペインへ
-ファンアウトします。各ペインは独立した git worktree を持ち、issue ごとの
-ブリーフィングファイルを参照するプロンプトでエージェント CLI が起動します。
+`fanout` は、並列 issue 作業のための standalone な tmux ベースのコンソール兼
+ランチャーです。引数なしの `fanout` で現在のリポジトリ用の常駐 TUI コンソールを
+開き、manual agent pane の作成、既存 child pane への focus、close / merge /
+cleanup を行えます。既存の `fanout <parent-issue|project-url>` レーンでは、
+既知の親 issue / Project を子ごとに 1 つの tmux ペインへファンアウトし、各ペインに
+独立した git worktree と issue ごとの briefing file を渡した agent CLI を起動します。
 
 ## 常駐 TUI コンソール
 
@@ -14,6 +17,15 @@ GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つ�
 現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または
 attach し、その session 内でコンソールを開始します。tmux 内から起動した場合は、
 現在の pane をそのままコンソール画面にします。
+
+典型的な単体運用フロー:
+
+1. 対象リポジトリで `fanout` を実行する。
+2. `n` で manual agent pane を作成する。親 issue / Project を既存フラグ付きで
+   まとめて展開したい場合は、tmux 内から `fanout <parent>` を使う。
+3. `Enter` / `o` で live pane に focus し、`c` で close、`m` で branch を
+   fast-forward merge、`x` で merged/closed sibling を cleanup する。
+4. `q` でコンソールを離脱する。tmux session と子 pane は残る。
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
@@ -38,14 +50,15 @@ panel の read-only 出力スナップショットを更新します。記録は
 `x` で同じ親の merged/closed 子を cleanup できます。各 lifecycle 操作は確認を挟み、
 対応する `--close` / `--merge` / `--cleanup` CLI コマンドと同じコア処理を使います。
 
-## 直接 tmux ランタイム
+## 既存フラグでの一括 fan-out
 
-fanout は dmux を経由せずに子セッションを作ります。`git rev-parse --show-toplevel`
-でリポジトリルートを解決し、選択された base branch を fresh 化し、
-`.fanout/worktrees/<slug>/` を作成し、起動元 tmux pane を `tmux split-window`
-で分割し、選択された agent CLI を 1 行 briefing prompt 付きで起動します。
-作成した pane は `.fanout/state.json` に `(parent, issueNum)` キーで記録するため、
-同じ親での再実行では記録済みの子を重複作成しません。
+親 issue や Project URL が分かっている場合は、`fanout <target>` が一括作成レーンです。
+`git rev-parse --show-toplevel` でリポジトリルートを解決し、選択された base branch
+を fresh 化し、`.fanout/worktrees/<slug>/` を作成し、起動元 tmux pane を
+`tmux split-window` で分割し、選択された agent CLI を 1 行 briefing prompt 付きで
+起動します。作成した pane は `.fanout/state.json` に `(parent, issueNum)` キーで
+記録するため、同じ親での再実行では記録済みの子を重複作成しません。この経路は
+tmux を直接使い、dmux は不要です。
 
 ## Project モード
 
@@ -196,12 +209,14 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 - **Project モード時のみ**: Project items を取得する GraphQL クエリのため、
   `gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project`
   で付与してください。issue モード（`fanout <N>`）では不要です。
-- fanout は tmux セッション内から実行してください。子ペインは dmux 経由ではなく
-  `tmux split-window` で直接作成し、`--session` 未指定時は起動元 pane を target
-  にします。
-- TUI モード（引数なしの `fanout`）は素のシェルから起動できます。
-  現在のリポジトリ用の fanout 管理 tmux session を作成または attach してから
-  コンソールを開始します。tmux 内から起動した場合は現在の session / pane を使います。
+- 起動レーンを選んでください:
+  - TUI モード（引数なしの `fanout`）は素のシェルから起動できます。現在の
+    リポジトリ用の fanout 管理 tmux session を作成または attach してから
+    コンソールを開始します。tmux 内から起動した場合は現在の session / pane を
+    使います。
+  - 一括 pane 作成モード（`fanout <parent-issue|project-url> ...`）は tmux
+    セッション内から実行してください。子ペインは `tmux split-window` で直接作成し、
+    `--session` 未指定時は起動元 pane を target にします。
 - **エージェント名が解決できること**: `--agent claude` / `--agent codex` を渡すか、
   `FANOUT_AGENT` を設定してください。未知の agent はペイン作成前に失敗し、実行時
   には agent CLI がインストール済みかも確認します。
@@ -216,7 +231,7 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 
 ```
 fanout # 常駐 tmux コンソールを起動
-fanout <parent-issue|project-url>
+fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
@@ -564,9 +579,9 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
   Claude 版と同じく、同一リポジトリ内の子 issue、GitHub Sub-issues のリンク、
   親本文のタスクリスト、`## Blocked by` 注記を揃えます。
 
-上記の CLI 前提条件はそのまま適用されます: tmux 内で実行すること、対象リポジトリの
-worktree から実行すること、agent 名を明示すること。詳しくは **前提条件** と
-**トラブルシューティング** を参照してください。
+上記の CLI 前提条件はそのまま適用されます: TUI は対象リポジトリの worktree から
+起動し、一括 pane 作成では tmux 内で実行し、agent 名を明示してください。詳しくは
+**前提条件** と **トラブルシューティング** を参照してください。
 
 ## fanout が実際にやること
 
@@ -609,8 +624,10 @@ worktree から実行すること、agent 名を明示すること。詳しく�
 
 ### "fanout must be run inside tmux"
 
-対象リポジトリの worktree で tmux セッションを開始または attach してから再実行して
-ください。
+これは一括 pane 作成モード（`fanout <parent-issue|project-url>`）だけの制約です。
+対象リポジトリの worktree で tmux セッションを開始または attach してから、一括作成
+コマンドを再実行してください。素のシェルから常駐コンソールを開く場合は、引数なしの
+`fanout` を実行します。
 
 ### "agent is required"
 

@@ -29,7 +29,11 @@ the README before changing CLI behavior.
 `fanout` is a standalone git worktree + tmux pane + agent launcher. Build with
 `make build-go` (output `./fanout-go`) and validate with `make test`.
 
-- Run it: `make build-go`, then `./fanout-go <parent-issue> --agent claude`.
+- Open the TUI console: `make build-go`, then `./fanout-go`. From a plain
+  shell it creates or attaches the repository's fanout-managed tmux session;
+  from inside tmux it uses the current pane.
+- Batch-create child panes: `./fanout-go <parent-issue> --agent claude` from
+  inside tmux.
 - Validate logic without creating worktrees or panes by appending `--dry-run`,
   e.g. `./fanout-go <parent-issue> --agent claude --dry-run`.
 - Lint with `make lint` (go vet + gofmt + a shellcheck of the bats test shims).
@@ -42,14 +46,17 @@ the README before changing CLI behavior.
 ## Architecture Notes
 
 The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
-`executePlan`, `pane.go` creation orchestration, `plan.go` filtering,
-`status.go`, `lifecycle.go`, `report.go`). `internal/` holds `agent`,
+`executePlan`, `tui.go` no-argument console launch, `pane.go` creation
+orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
+`internal/` holds `agent`,
 `cliflags`, `ghissue`, `runtime`, `worktree`, `tmuxrun`, `state`, `naming`,
 `blockers`, `displayname`, `briefing`, plus `atomicfs`/`log`/`tty`/`exitcode`.
 
 - Runtime discovery (`internal/runtime`) resolves the git repo root with
-  `git rev-parse --show-toplevel`, requires the caller to be inside tmux, and
-  targets the invoking pane (`$TMUX_PANE`) unless `--session` is supplied.
+  `git rev-parse --show-toplevel`, requires the caller to be inside tmux for
+  batch pane creation, and targets the invoking pane (`$TMUX_PANE`) unless
+  `--session` is supplied. No-argument TUI mode can start from a plain shell by
+  creating or attaching a fanout-managed tmux session for the repository.
 - Pane creation is direct: `worktree.Prepare` creates
   `.fanout/worktrees/<slug>/`, `tmuxrun.SplitPaneWithAgentCommand` runs
   `tmux split-window -d -h -P -F '#{pane_id}'`, and
@@ -79,9 +86,10 @@ The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
 
 ## Be Careful
 
-- fanout must run inside tmux for pane-creation mode. `--status` and lifecycle
-  commands do not require a live tmux pane unless they need to kill a recorded
-  pane during cleanup.
+- fanout must run inside tmux for batch pane-creation mode. No-argument TUI
+  mode may start from a plain shell. `--status` and lifecycle commands do not
+  require a live tmux pane unless they need to kill a recorded pane during
+  cleanup.
 - Worktree creation refreshes the base branch by default. If a checked-out base
   branch is dirty or diverged, `worktree.Prepare` should fail rather than
   clobbering local work.
