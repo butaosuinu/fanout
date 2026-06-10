@@ -1,9 +1,12 @@
 ---
-description: Fan out a parent GitHub issue's OPEN sub-issues — or a GitHub Projects v2 board's OPEN items — into parallel tmux panes with git worktrees via the fanout CLI.
-argument-hint: "[parent-issue | project-url] [--go] [extra fanout flags]"
+description: Start the fanout TUI console, or fan out a parent GitHub issue's OPEN sub-issues / GitHub Projects v2 board items into parallel tmux panes via the fanout CLI.
+argument-hint: "[parent-issue | project-url | dashboard] [--go] [extra fanout flags]"
 ---
 
-Invoke the `fanout` CLI to spawn one tmux pane per OPEN sub-issue of a parent GitHub issue, or per OPEN item of a GitHub Projects v2 board. See the `fanout` skill (`~/.claude/skills/fanout/SKILL.md`) for context on when and why to use this.
+Invoke the `fanout` CLI to start the persistent TUI console, or to spawn one
+tmux pane per OPEN sub-issue of a parent GitHub issue / OPEN item of a GitHub
+Projects v2 board. See the `fanout` skill
+(`~/.claude/skills/fanout/SKILL.md`) for context on when and why to use this.
 
 Arguments: `$ARGUMENTS`
 
@@ -11,15 +14,28 @@ If the user is only asking to check or update the `fanout` binary itself, stop
 this pane-creation workflow. Use `fanout --check-update` for read-only version
 checks, or `fanout update` for immediate replacement via install.sh.
 
-If the user is explicitly asking to start the persistent fanout TUI / console,
-stop this pane-creation workflow and run `fanout` with no arguments from the
-target repository worktree. TUI mode does not need a parent issue, Project URL,
-`--agent`, dry-run, generated pane names, or confirmation; after it opens the
-user can press `n` to create a manual prompt-based agent pane from the console.
+If `$ARGUMENTS` is empty, or the user is explicitly asking to start the
+persistent fanout TUI / console, stop this pane-creation workflow and run
+`fanout` with no arguments from the target repository worktree. TUI mode does
+not need a parent issue, Project URL, `--agent`, dry-run, generated pane names,
+or confirmation; after it opens the user can press `n` to create a manual
+prompt-based agent pane from the console.
 
 ## Steps
 
-0. **Dashboard subcommand short-circuit (before any target resolution).** For detection only, look at `$ARGUMENTS` with the wrapper-only flags `--go`/`--wait` ignored — but do NOT mutate `$ARGUMENTS` itself; Steps 2/3 still need to see `--go`/`--wait` for non-dashboard calls. If, ignoring those wrapper flags, the first token is `dashboard` (`/fanout dashboard ...`, `/fanout --go dashboard`, etc.): do NOT resolve a parent target, add an agent, or run the dry-run/name-generation path. Forward the dashboard arguments with `--go`/`--wait` stripped (e.g. `fanout dashboard --web --open`) — the `dashboard` parser rejects unknown flags like `--go`/`--wait` — and stop here; it starts the standalone read-only localhost web dashboard, which takes no parent argument. Otherwise, leave `$ARGUMENTS` untouched and continue to Step 1.
+0. **TUI / dashboard short-circuit (before any target resolution).** If
+   `$ARGUMENTS` is empty, run `fanout` with no arguments from the target
+   repository worktree and stop. For dashboard detection only, look at
+   `$ARGUMENTS` with the wrapper-only flags `--go`/`--wait` ignored — but do NOT
+   mutate `$ARGUMENTS` itself; Steps 2/3 still need to see `--go`/`--wait` for
+   non-dashboard calls. If, ignoring those wrapper flags, the first token is
+   `dashboard` (`/fanout dashboard ...`, `/fanout --go dashboard`, etc.): do
+   NOT resolve a parent target, add an agent, or run the dry-run/name-generation
+   path. Forward the dashboard arguments with `--go`/`--wait` stripped (e.g.
+   `fanout dashboard --web --open`) — the `dashboard` parser rejects unknown
+   flags like `--go`/`--wait` — and stop here; it starts the standalone
+   read-only localhost web dashboard, which takes no parent argument. Otherwise,
+   leave `$ARGUMENTS` untouched and continue to Step 1.
 
 1. **Resolve the parent target** from `$ARGUMENTS`. Two input shapes are accepted; the first matching token wins:
    - **Issue mode** — first token matching `^#?\d+$` → that integer is `N`. **Strip the leading `#` if present** before invoking `fanout`; the CLI only accepts bare digits in issue mode and rejects `#42`.
@@ -50,7 +66,9 @@ user can press `n` to create a manual prompt-based agent pane from the console.
    - Relay the `created / skipped / deferred / failed` summary.
    - If `--wait` was passed, the run exited 0, the target is an issue number, and this was not `--dry-run` or a lifecycle/read-only command, enter the wait-and-continue loop documented in `~/.claude/skills/fanout/SKILL.md`: use `ScheduleWakeup` with `prompt: "<<autonomous-loop-dynamic>>"` and poll `fanout --status <N>` until `summary.all_merged == true`, then refresh and merge the same base branch used for the fanout run before resuming parent-scope integration. Use the forwarded `--base-branch` when present; otherwise resolve fanout's default branch (`gh repo view defaultBranchRef`, then `origin/HEAD`, then `main`). Fetch the normalized remote branch and run `git merge --ff-only origin/<branch>` (or the equivalent `refs/remotes/origin/<branch>`). If the user intervenes, drop the loop.
 10. **On failure**: consult `/Users/butaosuinu/fanout/README.md` Troubleshooting and surface the most likely fix. Common cases:
-   - `fanout must be run inside tmux` → start or attach a tmux session first.
+   - `fanout must be run inside tmux` → batch pane creation needs a tmux
+     session; start or attach one first, or open the persistent console with
+     no-argument `fanout` from a plain shell.
    - `agent is required` → rerun with `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`.
    - `unknown agent` / `agent ... is not installed` → choose or install a supported agent CLI.
    - `prepare worktree` → inspect the git error; use `--no-refresh` only when skipping base refresh is intentional.
@@ -58,7 +76,10 @@ user can press `n` to create a manual prompt-based agent pane from the console.
 
 ## Notes
 
-- `fanout` targets the invoking pane by default and uses detached splits, so it does not move focus away from the caller's pane; the agent keeps working on the parent issue in the current session. `--session` intentionally targets a named session instead.
+- Batch pane creation targets the invoking pane by default and uses detached
+  splits, so it does not move focus away from the caller's pane; the agent keeps
+  working on the parent issue in the current session. `--session` intentionally
+  targets a named session instead.
 - The command always invokes the stable `fanout` command name (the Go binary installed at `$(BINDIR)/fanout`).
 - Rerun is safe for recorded panes; action mode skips children already present in `.fanout/state.json` for the same `(parent, issueNum)`, and also skips unrecorded existing `.fanout/worktrees/<slug>` directories as a migration fallback. If the same issue is recorded for another parent, only an existing worktree matching the slug this current run would create is treated as fallback. `fanout --status` reads the same state store.
 - If the same child issue is already recorded for another parent or Project, fanout parent-qualifies the default slug/branch so the new run gets a separate worktree.
@@ -88,4 +109,4 @@ user can press `n` to create a manual prompt-based agent pane from the console.
 - `/fanout https://github.com/users/butaosuinu/projects/3/views/1` — canonical board-URL form (works the same as the bare project URL; `/views/N` is preserved verbatim and the CLI ignores it).
 - `/fanout https://github.com/users/butaosuinu/projects/3 --project-status all` — project mode, disable the Status filter, fan out every OPEN item.
 - `/fanout https://github.com/orgs/acme/projects/12 --project-status "In Progress" --limit 5` — organization Project, In Progress column, first 5 items only.
-- `/fanout` (no args in a session that started with "work on #456" or `https://github.com/.../projects/3`) — extract the issue ref or Project URL from context and proceed.
+- `/fanout` — start the persistent fanout TUI console for the current repository.

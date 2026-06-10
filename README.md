@@ -4,9 +4,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Fans a GitHub parent issue's OPEN sub-issues out into one tmux pane per child.
-Each pane gets its own git worktree and an agent CLI launched with a prompt
-that points at a per-issue briefing file.
+`fanout` is a standalone tmux-based console and launcher for parallel issue
+work. Run `fanout` with no arguments to open the persistent TUI console for the
+current repository; from there you can create manual agent panes, focus existing
+child panes, and run close / merge / cleanup actions. The existing
+`fanout <parent-issue|project-url>` lane still fans a known target out into one
+tmux pane per child, with each pane getting its own git worktree and an agent
+CLI launched from a per-issue briefing file.
 
 ## Persistent TUI console
 
@@ -14,6 +18,17 @@ Run `fanout` with no arguments to start the persistent console. From a plain
 shell it creates a deterministic fanout-managed tmux session for the current
 repository, starts the console in that session, and attaches to it. From inside
 tmux it turns the current pane into the console.
+
+Typical single-tool flow:
+
+1. Start in the target repository and run `fanout`.
+2. Press `n` to create a manual agent pane, or use `fanout <parent>` from tmux
+   when you want to seed a whole parent issue / Project batch with existing
+   flags.
+3. Use `Enter` / `o` to focus a live pane, `c` to close it, `m` to
+   fast-forward merge its branch, and `x` to clean up merged or closed siblings.
+4. Press `q` to leave the console while keeping the tmux session and child
+   panes alive.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
@@ -41,15 +56,17 @@ branch, or `x` to clean up merged/closed siblings for the same parent. Each
 lifecycle action asks for confirmation and uses the same core path as the
 corresponding `--close`, `--merge`, or `--cleanup` CLI command.
 
-## Direct tmux runtime
+## Existing flag-driven fan-out
 
-fanout now creates child sessions without dmux: it resolves the repository
-root with `git rev-parse --show-toplevel`, refreshes the selected base branch,
-creates `.fanout/worktrees/<slug>/`, splits the invoking tmux pane with
+When you already know the parent issue or Project URL, `fanout <target>` is the
+batch creation lane. It resolves the repository root with
+`git rev-parse --show-toplevel`, refreshes the selected base branch, creates
+`.fanout/worktrees/<slug>/`, splits the invoking tmux pane with
 `tmux split-window`, and starts the selected agent CLI with the one-line
 briefing prompt. It records launched panes in `.fanout/state.json`, keyed by
 `(parent, issueNum)`, so reruns of the same parent skip children that already
-have a recorded fanout pane.
+have a recorded fanout pane. This path uses tmux directly and does not require
+dmux.
 
 ## Project mode
 
@@ -201,13 +218,15 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
   the GraphQL query that lists Project items can succeed. Add it with
   `gh auth refresh -s read:project`. Issue-mode (`fanout <N>`) does not
   need this scope.
-- fanout must be invoked from inside a tmux session. It creates child panes
-  directly with `tmux split-window`, targeting the invoking pane unless
-  `--session` is supplied.
-- TUI mode (`fanout` with no arguments) can be invoked from a plain shell. It
-  creates or attaches a fanout-managed tmux session for the current repository
-  before starting the console. When invoked from inside tmux, it uses the
-  current session and pane.
+- Choose the launch lane:
+  - TUI mode (`fanout` with no arguments) can be invoked from a plain shell. It
+    creates or attaches a fanout-managed tmux session for the current
+    repository before starting the console. When invoked from inside tmux, it
+    uses the current session and pane.
+  - Batch pane-creation mode (`fanout <parent-issue|project-url> ...`) must be
+    invoked from inside a tmux session. It creates child panes directly with
+    `tmux split-window`, targeting the invoking pane unless `--session` is
+    supplied.
 - **An agent name must be resolvable**: pass `--agent claude`, `--agent codex`,
   or set `FANOUT_AGENT`. Unknown agents fail before pane creation; in live
   mode, fanout also checks that the agent CLI is installed.
@@ -223,7 +242,7 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 
 ```
 fanout # start the persistent tmux console
-fanout <parent-issue|project-url>
+fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
        [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
@@ -645,7 +664,8 @@ Recommended integration for Codex CLI — the skill is bundled under
   It mirrors the Claude issue-creation skill: same-repo children, GitHub
   Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
 
-The CLI prerequisites above still apply: run from inside tmux, pass
+The CLI prerequisites above still apply: start the TUI from the target
+repository worktree, and for batch pane creation run from inside tmux, pass
 `--agent` or set `FANOUT_AGENT`, and run from the repository whose children
 should branch from the selected base.
 
@@ -698,7 +718,10 @@ should branch from the selected base.
 
 ### "fanout must be run inside tmux"
 
-Start or attach a tmux session in the repository worktree, then rerun fanout.
+This only applies to batch pane-creation mode (`fanout <parent-issue|project-url>`).
+Start or attach a tmux session in the repository worktree, then rerun the batch
+command. To open the persistent console from a plain shell, run `fanout` with no
+arguments instead.
 
 ### "agent is required"
 
