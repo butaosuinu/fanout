@@ -37,6 +37,10 @@ panel の read-only 出力スナップショットを更新します。記録は
 記録済み pane を選択して `c` で close、`m` で branch の fast-forward merge、
 `x` で同じ親の merged/closed 子を cleanup できます。各 lifecycle 操作は確認を挟み、
 対応する `--close` / `--merge` / `--cleanup` CLI コマンドと同じコア処理を使います。
+コンソールは連続する GitHub refresh snapshot を比較し、子が merged になったとき、
+PR の最新 CI が failing になったとき、または子が OPEN blocker 待ちになったときに
+遷移ごとに 1 回通知します。既定は端末ベルです。設定で tmux status-line、ntfy、
+Slack webhook POST を opt-in できます。
 
 ## 直接 tmux ランタイム
 
@@ -373,8 +377,9 @@ exit code:
 ### Settings
 
 Go 実装では opinionated な 6 つの挙動（briefing の 5 トグル＋ダッシュボードの
-キーバインド）をオン/オフできます。deprecated な Bash 版 `./fanout` はこの新しい
-flag / ファイル / env には未対応です。後方互換のため、既定値はすべて `true` です。
+キーバインド）をオン/オフでき、TUI 通知 channel も選択できます。deprecated な
+Bash 版 `./fanout` はこの新しい flag / ファイル / env には未対応です。後方互換の
+ため、bool の既定値はすべて `true`、通知の既定値は `bell` です。
 
 優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル >
 ビルトイン既定値** です。fanout は git リポジトリルートを解決した後、逆順に
@@ -390,7 +395,10 @@ flag / ファイル / env には未対応です。後方互換のため、既定
   "briefingCodeReview": true,
   "agentTeamsHint": false,
   "prVisualization": true,
-  "dashboardKeybind": true
+  "dashboardKeybind": true,
+  "notifications": "bell",
+  "ntfyURL": "https://ntfy.sh/my-topic",
+  "slackWebhookURL": "https://hooks.slack.com/services/..."
 }
 ```
 
@@ -402,10 +410,20 @@ flag / ファイル / env には未対応です。後方互換のため、既定
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| TUI 状態遷移通知 | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
+| ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | 未設定 |
+| Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
 
-環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
-不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。
-将来の設定追加で古い fanout が壊れないようにするためです。
+bool の環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。
+不正な bool env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して
+無視します。将来の設定追加で古い fanout が壊れないようにするためです。
+
+`notifications` は comma または空白区切りの selector です。指定できる値は
+`bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は
+`slackWebhookURL` が必要です。どちらの HTTP channel も outbound POST のみで、
+inbound socket は開きません。repository-controlled な外部送信を避けるため、repo
+config で選択できるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、
+`ntfyURL`、`slackWebhookURL` は user config または環境変数からだけ有効になります。
 
 `prVisualization=false` は、子 briefing から構造化 PR 本文とゲート付き Mermaid の
 指示を外します。この指示は子が PR 本文を書く場合のものなので、`autoPullRequest`

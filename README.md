@@ -40,6 +40,10 @@ Select a recorded pane and press `c` to close it, `m` to fast-forward merge its
 branch, or `x` to clean up merged/closed siblings for the same parent. Each
 lifecycle action asks for confirmation and uses the same core path as the
 corresponding `--close`, `--merge`, or `--cleanup` CLI command.
+The console compares consecutive GitHub refresh snapshots and notifies once
+when a child becomes merged, a PR's latest CI turns failing, or a child becomes
+waiting on an open blocker. Notifications default to a terminal bell; settings
+can opt into tmux status-line messages, ntfy, or Slack webhook POSTs.
 
 ## Direct tmux runtime
 
@@ -444,9 +448,10 @@ Exit codes:
 ### Settings
 
 The Go implementation can turn six opinionated behaviors on or off (five
-briefing toggles plus the dashboard keybinding). The deprecated Bash `./fanout`
-does not support these new flags, files, or env vars. Defaults are all `true`
-to preserve existing behavior.
+briefing toggles plus the dashboard keybinding) and select TUI notification
+channels. The deprecated Bash `./fanout` does not support these new flags,
+files, or env vars. Boolean defaults are all `true` to preserve existing
+behavior; notifications default to `bell`.
 
 Resolution order is: **CLI flag > environment variable > repo config file >
 user config file > built-in default**. fanout applies layers in the reverse
@@ -463,7 +468,10 @@ parent repository root, not the child worktree. The user config path is
   "briefingCodeReview": true,
   "agentTeamsHint": false,
   "prVisualization": true,
-  "dashboardKeybind": true
+  "dashboardKeybind": true,
+  "notifications": "bell",
+  "ntfyURL": "https://ntfy.sh/my-topic",
+  "slackWebhookURL": "https://hooks.slack.com/services/..."
 }
 ```
 
@@ -475,11 +483,22 @@ parent repository root, not the child worktree. The user config path is
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard `prefix + D` tmux keybinding | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| TUI transition notifications | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
+| ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | unset |
+| Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | unset |
 
-Environment values accept `1/true/yes/on` and `0/false/no/off`
-(case-insensitive). Invalid env values, unknown file keys, and non-boolean
-file values are warned and ignored so future settings do not break older
-fanout binaries.
+Boolean environment values accept `1/true/yes/on` and `0/false/no/off`
+(case-insensitive). Invalid boolean env values, unknown file keys, and values
+with the wrong JSON type are warned and ignored so future settings do not break
+older fanout binaries.
+
+`notifications` is a comma- or space-separated selector. Supported values are
+`bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`;
+`slack` requires `slackWebhookURL`. Both HTTP channels only send outbound POST
+requests and never open inbound sockets. To avoid repository-controlled
+exfiltration, repo config may only select `bell`, `tmux`, or `none`; `ntfy`,
+`slack`, `ntfyURL`, and `slackWebhookURL` are honored only from user config or
+environment variables.
 
 `prVisualization=false` omits the structured PR-body and gated Mermaid guidance
 from child briefings. The guidance is only injected when `autoPullRequest` is

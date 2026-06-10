@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	tea "github.com/charmbracelet/bubbletea"
@@ -178,6 +179,109 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.issues, issues) {
 		t.Fatalf("issues = %#v, want partial results %#v", got.issues, issues)
+	}
+}
+
+func TestGHUpdateNotifiesTransitionsOnceAfterInitialSnapshot(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	initial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "merge me", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "break me", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "pass"}}},
+		{Parent: "100", Num: 103}: {Title: "wait me", State: "OPEN", Blockers: "-"},
+	}
+
+	updated, cmd := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	if cmd != nil {
+		t.Fatal("initial GH snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	nextIssues := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "merge me", State: "CLOSED", PRs: []ghissue.PRRef{{Number: 901, State: "MERGED", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "break me", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "fail"}}},
+		{Parent: "100", Num: 103}: {Title: "wait me", State: "OPEN", Blockers: "OPEN #99", HasOpenBlockers: true},
+	}
+	updated, cmd = m.Update(ghLoadedMsg{issues: nextIssues, at: time.Unix(2, 0)})
+	if cmd == nil {
+		t.Fatal("transition GH snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	gotKinds := []fanoutnotify.EventKind{}
+	gotNums := []int{}
+	for _, event := range notifier.events {
+		gotKinds = append(gotKinds, event.Kind)
+		gotNums = append(gotNums, event.IssueNum)
+	}
+	wantKinds := []fanoutnotify.EventKind{fanoutnotify.EventMerged, fanoutnotify.EventCIFailed, fanoutnotify.EventWaiting}
+	wantNums := []int{101, 102, 103}
+	if !reflect.DeepEqual(gotKinds, wantKinds) || !reflect.DeepEqual(gotNums, wantNums) {
+		t.Fatalf("events kinds=%#v nums=%#v, want %#v/%#v", gotKinds, gotNums, wantKinds, wantNums)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+	if !strings.Contains(m.notice, "3 state changes") {
+		t.Fatalf("notice = %q, want transition summary", m.notice)
+	}
+
+	updated, cmd = m.Update(ghLoadedMsg{issues: nextIssues, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("unchanged GH snapshot returned notification command, want nil")
+	}
+	if len(notifier.events) != 3 {
+		t.Fatalf("notifier events after unchanged snapshot = %d, want 3", len(notifier.events))
+	}
+}
+
+func TestGHUpdatePreservesNotificationBaselineOnPartialError(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	initial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "omitted", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "pass"}}},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	partial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+	}
+	updated, cmd := m.Update(ghLoadedMsg{issues: partial, at: time.Unix(2, 0), err: errBoom})
+	if cmd != nil {
+		t.Fatal("partial unchanged GH snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	recovered := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "omitted", State: "CLOSED", PRs: []ghissue.PRRef{{Number: 902, State: "MERGED", CIStatus: "pass"}}},
+	}
+	updated, cmd = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
+	if cmd == nil {
+		t.Fatal("recovered GH snapshot returned nil command, want notification command")
+	}
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = updated.(model).Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventMerged, Parent: "100", IssueNum: 102, Title: "omitted", PRNumber: 902, CIStatus: "pass"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
 	}
 }
 
@@ -783,6 +887,16 @@ type fakeLifecycleRunner struct {
 	closeParent   string
 	closeIssue    int
 	cleanupParent string
+}
+
+type fakeTransitionNotifier struct {
+	events []fanoutnotify.Event
+	err    error
+}
+
+func (f *fakeTransitionNotifier) Notify(events []fanoutnotify.Event) error {
+	f.events = append(f.events, events...)
+	return f.err
 }
 
 func (f *fakeLifecycleRunner) Close(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
