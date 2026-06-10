@@ -1,6 +1,6 @@
 ---
 name: fanout
-description: Spawn one tmux pane per OPEN sub-issue of a GitHub parent issue, or per OPEN item of a GitHub Projects v2 board (Project URL), via the fanout CLI. Use when the user is working in tmux and wants to parallelize a parent issue's children or a Project's Todo column across independent git worktrees/agent sessions.
+description: Start the fanout persistent TUI console, or spawn one tmux pane per OPEN sub-issue of a GitHub parent issue / GitHub Projects v2 board item via the fanout CLI. Use when the user wants fanout to manage parallel child work from its TUI console, or explicitly asks to fan out, parallelize, or split issue / Project work across independent git worktrees and agent sessions.
 ---
 
 # fanout
@@ -47,8 +47,9 @@ The CLI lives at `/Users/butaosuinu/.local/bin/fanout`; source and docs are in `
 
 Good fits:
 
-- The user is in tmux on a parent issue that has OPEN sub-issues, and asks (explicitly or implicitly) to parallelize the children.
-- The user is in tmux and asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
+- The user asks to start, open, or return to the fanout console / TUI for the current repository.
+- The user asks (explicitly or implicitly) to parallelize a parent issue that has OPEN sub-issues.
+- The user asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
 - The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
 - The user asks to update fanout itself; in that case run `fanout update` immediately.
 - The user asks to start the fanout console / TUI; in that case run `fanout` with no arguments directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
@@ -61,7 +62,7 @@ Do not invoke unprompted just because an issue has sub-issues. Pane creation is 
 Before running the real command:
 
 1. **Prerequisites** — `gh`, `jq`, `git`, `tmux`, and the `gh-sub-issue` extension must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
-2. **Resolve the parent target** — first use any issue ref (`#N` or `N`) or Projects v2 URL in the user's request / recent context. If neither is clear, actively list candidates from the current repo/worktree instead of asking for a pasted number/URL:
+2. **Resolve the parent target for batch pane creation** — if the user's intent is the TUI console, skip target resolution and run `fanout` with no arguments. Otherwise, first use any issue ref (`#N` or `N`) or Projects v2 URL in the user's request / recent context. If neither is clear, actively list candidates from the current repo/worktree instead of asking for a pasted number/URL:
    1. Run `gh issue list --state open --json number,title --limit 100`.
    2. Get the repo owner login with `gh repo view --json owner -q .owner.login`.
    3. Run Project listing commands with `--limit 100`: `gh project list --format json --limit 100` for the current user's Projects, and `gh project list --owner <repo-owner> --format json --limit 100` for the repo owner's Projects. Run the repo-owner command even when the owner is a user, not only for orgs. Dedupe Projects by URL if the two lists overlap.
@@ -71,7 +72,7 @@ Before running the real command:
    7. Resolve the selection to the CLI positional arg: issues become bare digits with any leading `#` removed; Projects become the Project URL from `gh project list`.
 
    This is skill-side target resolution for non-TTY agent entrypoints. Do not change the Go `fanout` CLI for it; the CLI already accepts the resolved positional arg via `internal/cliflags.Parse()`.
-3. **Live tmux session** — pane-creation mode must be invoked from inside tmux. By default it targets the invoking pane, not the session's currently active pane; `--session` intentionally targets a named session instead. If it reports `fanout must be run inside tmux`, tell the user to start or attach a tmux session first. TUI mode can start from a plain shell because it creates or attaches its own tmux session.
+3. **Choose the launch lane** — TUI mode is `fanout` with no arguments; it can start from a plain shell because it creates or attaches the repository's fanout-managed tmux session, and from inside tmux it uses the current pane. Batch pane-creation mode is `fanout <parent-issue|project-url>`; it must be invoked from inside tmux. By default it targets the invoking pane, not the session's currently active pane; `--session` intentionally targets a named session instead. If batch mode reports `fanout must be run inside tmux`, tell the user to start or attach a tmux session first.
 4. **Agent name is required for pane creation** — pass `--agent claude` / `--agent codex`, or set `FANOUT_AGENT`. When this skill runs fanout and the user did not provide an agent, add `--agent codex` if the forwarded flags include `--codex-plan-mode`; otherwise add `--agent claude`. `--codex-plan-mode` is valid only with `--agent codex`; it uses Codex app-server to create the child Plan Mode thread, start the initial Plan turn with the fanout prompt, then attach the interactive Codex TUI to that remote session.
 5. **Body scan for implicit children** — **Issue mode only — skip this step entirely when the positional argument is a Project URL.** Project items are the source-of-truth in project mode; the Project has no parent body, and Project descriptions often reference epic / context issues that are *not* intended as children — running this scan there would push noise into `--include`. In issue mode, `fanout` itself only treats two things as children: issues returned by the Sub-issues API, and parent-body rows that match `^\s*-\s+\[[ xX]\] ... #N`. Parent issues in the wild often *describe* their children via prose instead, and those references must be surfaced to the user and forwarded as `--include`.
    1. Run `gh issue view <parent> --json body -q .body` to fetch the body.
@@ -102,7 +103,7 @@ Before running the real command:
    5. If the user runs `/fanout` with explicit `--name` flags of their own, respect those and don't override — merge so skill-generated names fill the gaps.
 8. **Dry-run** — run `fanout <N-or-URL> --dry-run <forwarded-flags>` (including any `--include` from step 5 and `--name` from step 7) and show the user: the mode banner (issue / project) the CLI prints, how many children, their titles, the briefing paths, generated names, worktree paths, and warnings. In project mode also surface any "cross-repo item skipped" warnings — those items are intentionally excluded from fan-out. This is the confirmation step for the targets themselves (not the names).
 
-Run fanout from the target repository worktree inside tmux so `git rev-parse --show-toplevel` resolves the intended project root.
+Run fanout from the target repository worktree so `git rev-parse --show-toplevel` resolves the intended project root. For batch pane creation, run it from inside tmux; for the no-argument TUI, a plain shell is fine.
 
 ## Running
 
@@ -121,7 +122,8 @@ Run fanout from the target repository worktree inside tmux so `git rev-parse --s
   `2` bad invocation or incomparable version, `3` latest-release lookup failed.
 - **Persistent TUI**: if the user's intent is to start the fanout console, run
   `fanout` with no arguments from the target repository worktree and skip
-  parent resolution, tmux pre-flight, dry-run, pane naming, and confirmation.
+  parent resolution, batch tmux pre-flight, dry-run, pane naming, and
+  confirmation.
   TUI mode does not need a parent issue, Project URL, or `--agent`.
 - **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
 - **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
@@ -191,7 +193,7 @@ rollup comment; it writes to GitHub even though it is attached to `--status`.
 
 When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README.md` Troubleshooting. Common cases:
 
-- `fanout must be run inside tmux` — start or attach a tmux session and rerun.
+- `fanout must be run inside tmux` — batch pane creation needs a tmux session; start or attach one and rerun, or start the persistent console with no-argument `fanout` from a plain shell.
 - `agent is required` — pass `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`.
 - `unknown agent` — use one of the supported MVP agents (`claude`, `codex`).
 - `agent "<name>" is not installed` — install that CLI or choose another agent.

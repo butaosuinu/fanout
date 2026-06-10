@@ -25,7 +25,11 @@ notes.
 
 Build the binary with `make build-go` and validate with `make test`.
 
-- Run it: `make build-go`, then `./fanout-go <parent-issue> --agent claude`.
+- Open the console: `make build-go`, then `./fanout-go`. From a plain shell it
+  creates or attaches the repository's fanout-managed tmux session; from inside
+  tmux it uses the current pane.
+- Batch-create child panes: `./fanout-go <parent-issue> --agent claude` from
+  inside tmux.
 - Verify changes without creating worktrees or panes:
   `./fanout-go <parent-issue> --agent claude --dry-run`.
 - Settings (`--auto-pr` / `--no-auto-pr`, `--pr-review-gate` /
@@ -59,9 +63,12 @@ Build the binary with `make build-go` and validate with `make test`.
   dashboard, handles reuse-if-running, token generation, browser open, and
   registers the `prefix + D` tmux keybinding (`bindDashboardKey`, also called
   after a live `executePlan`).
+- `cmd/fanout/tui.go` implements the no-argument persistent TUI console. Plain
+  shells are relaunched into a deterministic fanout-managed tmux session;
+  invocations already inside tmux use the current pane.
 - `internal/runtime` resolves the git repository root and the tmux target.
-  Action mode must be invoked from inside tmux. By default fanout targets the
-  invoking pane; `--session` targets a named tmux session.
+  Batch pane-creation mode must be invoked from inside tmux. By default fanout
+  targets the invoking pane; `--session` targets a named tmux session.
 - `internal/worktree` owns base branch resolution, refresh, local exclude
   setup, and `git worktree add` under `.fanout/worktrees/<slug>/`.
 - `internal/tmuxrun` owns direct tmux operations:
@@ -105,7 +112,7 @@ Build the binary with `make build-go` and validate with `make test`.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
   carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
-  state. The "no HTTP/sockets" guidance elsewhere is about the old dmux
+  state. The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI
   decision to dashboard #117, which this implements standalone (no TUI
   dependency — the future TUI just reuses `internal/sessionview`). Keep it
@@ -120,6 +127,8 @@ Build the binary with `make build-go` and validate with `make test`.
 
 - Worktree refresh must preserve user work. If a local base branch is dirty,
   ahead, or diverged, fail rather than forcing it.
+- Keep the public TUI entrypoint as no-argument `fanout`; do not reintroduce a
+  user-facing `fanout tui` compatibility path.
 - Keep the state lock close to live launch behavior. Moving exclude setup or
   lock acquisition can leave dirty `.fanout/state.json.lock` artifacts or
   reintroduce launch races.
