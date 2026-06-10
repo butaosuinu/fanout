@@ -23,7 +23,8 @@ issue / closed-by PR 状態を定期更新します。各行には pane worktree
 確認できます。記録済みの issue 親については親の子一覧も再読込し、
 `--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から wave / blocker
 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で表示され、
-CLOSED blocker は resolved として区別されます。`n` で必須 prompt、`claude` / `codex`
+CLOSED blocker は resolved として区別されます。ヘッダーには `total` / `merged` /
+`pending` / `blocked` の集約 count を表示します。`n` で必須 prompt、`claude` / `codex`
 の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
 は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
 live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail

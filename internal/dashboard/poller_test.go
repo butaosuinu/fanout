@@ -67,12 +67,20 @@ func TestDistinctIssueNumsSkipsSyntheticManualPanes(t *testing.T) {
 		{Parent: "@manual", IssueNum: -1},
 		{Parent: "@manual", IssueNum: -2},
 		{IssueNum: 0},
+		{IssueNum: 102},
 		{IssueNum: 101},
+		{IssueNum: 102},
 		{IssueNum: 101},
 	}})
 
-	if len(got) != 1 || got[0] != 101 {
-		t.Fatalf("distinctIssueNums() = %#v, want [101]", got)
+	want := []int{101, 102}
+	if len(got) != len(want) {
+		t.Fatalf("distinctIssueNums() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("distinctIssueNums() = %#v, want %#v", got, want)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -34,12 +35,15 @@ type statusChild struct {
 	State       string          `json:"state"`
 	PRs         []ghissue.PRRef `json:"prs"`
 	HasMergedPR bool            `json:"has_merged_pr"`
+	Body        string          `json:"-"`
+	Blocked     bool            `json:"-"`
 }
 
 type statusSummary struct {
 	Total     int  `json:"total"`
 	Merged    int  `json:"merged"`
 	Pending   int  `json:"pending"`
+	Blocked   int  `json:"blocked"`
 	AllMerged bool `json:"all_merged"`
 }
 
@@ -107,6 +111,7 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	if code != exitcode.OK {
 		return code
 	}
+	markStatusBlockers(rt.projectRoot, cfg.Parent, children)
 	report := newStatusReport(cfg.Parent, children)
 	if cfg.Format == "table" {
 		if code := writeStatusTable(report, rt.projectRoot, lg); code != exitcode.OK {
@@ -136,13 +141,13 @@ func statusChildren(projectRoot string, nums []int, mode string, lg *log.Logger)
 
 	children := make([]statusChild, 0, len(nums))
 	for _, num := range nums {
-		state, prs, err := gh.IssueWithPRs(owner, repo, num)
+		snapshot, err := gh.IssueSnapshotWithPRs(owner, repo, num)
 		if err != nil {
 			lg.Err("%s: gh api graphql for #%d failed or returned no issue (auth / network / not found)", mode, num)
 			return nil, exitcode.GitHub
 		}
-		child := statusChild{Num: num, State: state, PRs: prs}
-		for _, pr := range prs {
+		child := statusChild{Num: num, State: snapshot.State, Body: snapshot.Body, PRs: snapshot.PRs}
+		for _, pr := range snapshot.PRs {
 			if pr.State == "MERGED" {
 				child.HasMergedPR = true
 				break
@@ -155,9 +160,13 @@ func statusChildren(projectRoot string, nums []int, mode string, lg *log.Logger)
 
 func newStatusReport(parent int, children []statusChild) statusReport {
 	merged := 0
+	blocked := 0
 	for _, child := range children {
 		if child.HasMergedPR {
 			merged++
+		}
+		if child.Blocked {
+			blocked++
 		}
 	}
 	return statusReport{
@@ -167,9 +176,54 @@ func newStatusReport(parent int, children []statusChild) statusReport {
 			Total:     len(children),
 			Merged:    merged,
 			Pending:   len(children) - merged,
+			Blocked:   blocked,
 			AllMerged: len(children) > 0 && merged == len(children),
 		},
 	}
+}
+
+func markStatusBlockers(projectRoot string, parent int, children []statusChild) {
+	gh := ghissue.Runner{Cwd: projectRoot}
+	parentBody, err := gh.ParentBody(parent)
+	if err != nil {
+		parentBody = ""
+	}
+	childStates := make(map[int]string, len(children))
+	for _, child := range children {
+		childStates[child.Num] = child.State
+	}
+	stateCache := map[int]string{}
+	issueState := func(num int) string {
+		if state, ok := childStates[num]; ok && strings.TrimSpace(state) != "" {
+			return state
+		}
+		if state, ok := stateCache[num]; ok {
+			return state
+		}
+		state, err := gh.IssueState(num)
+		if err != nil {
+			state = "UNKNOWN"
+		}
+		stateCache[num] = state
+		return state
+	}
+
+	for i := range children {
+		refs := blockers.Dedupe(
+			blockers.FromChildBody(children[i].Body),
+			blockers.FromParentRow(parentBody, children[i].Num),
+		)
+		children[i].Blocked = hasOpenStatusBlocker(refs, issueState)
+	}
+}
+
+func hasOpenStatusBlocker(refs []int, issueState func(int) string) bool {
+	for _, num := range refs {
+		if issueState(num) == "OPEN" {
+			return true
+		}
+	}
+	return false
 }
 
 func writeStatusReport(report statusReport, lg *log.Logger) exitcode.Code {
@@ -269,8 +323,8 @@ func buildDashboardBody(parent int, summary statusSummary, rows []dashboardRow) 
 	b.WriteString(dashboardMarker(parent))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## fanout dashboard #%d\n\n", parent)
-	fmt.Fprintf(&b, "Total: %d | Merged: %d | Pending: %d | All merged: %t\n\n",
-		summary.Total, summary.Merged, summary.Pending, summary.AllMerged)
+	fmt.Fprintf(&b, "Total: %d | Merged: %d | Pending: %d | Blocked: %d | All merged: %t\n\n",
+		summary.Total, summary.Merged, summary.Pending, summary.Blocked, summary.AllMerged)
 	b.WriteString("| Sub-issue # | PR | PR state | CI | +/- | Type | TL;DR | Score |\n")
 	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	if len(rows) == 0 {
@@ -365,8 +419,8 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 	}
 
 	out := lg.Stdout()
-	fmt.Fprintf(out, "fanout status #%d: total=%d merged=%d pending=%d all_merged=%t\n",
-		report.Parent, report.Summary.Total, report.Summary.Merged, report.Summary.Pending, report.Summary.AllMerged)
+	fmt.Fprintf(out, "fanout status #%d: total=%d merged=%d pending=%d blocked=%d all_merged=%t\n",
+		report.Parent, report.Summary.Total, report.Summary.Merged, report.Summary.Pending, report.Summary.Blocked, report.Summary.AllMerged)
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "(no recorded children)")
 		return exitcode.OK
