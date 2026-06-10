@@ -4,6 +4,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**ドキュメントサイト:** <https://butaosuinu.github.io/fanout/ja/> —
+インストールからワークフロー、CLI リファレンスまでの完全ガイド(日英)。
+
 GitHub の親 issue に紐づく OPEN のサブ issue を、子ごとに 1 つの tmux ペインへ
 ファンアウトします。各ペインは独立した git worktree を持ち、issue ごとの
 ブリーフィングファイルを参照するプロンプトでエージェント CLI が起動します。

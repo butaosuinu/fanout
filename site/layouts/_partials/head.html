@@ -1,0 +1,26 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+{{ $title := .Title }}
+{{ if .IsHome }}
+  {{ $title = printf "fanout — %s" (site.Params.tagline | default site.Language.Params.tagline) }}
+{{ else }}
+  {{ $title = printf "%s · fanout" .Title }}
+{{ end }}
+<title>{{ $title }}</title>
+<meta name="description" content="{{ with .Description }}{{ . }}{{ else }}Fan a GitHub parent issue's OPEN sub-issues out into parallel tmux panes — one git worktree, one agent per child.{{ end }}">
+<link rel="canonical" href="{{ .Permalink }}">
+{{ range .AllTranslations -}}
+<link rel="alternate" hreflang="{{ .Language.Lang }}" href="{{ .Permalink }}">
+{{ end -}}
+<meta property="og:title" content="{{ $title }}">
+<meta property="og:type" content="website">
+<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:description" content="{{ with .Description }}{{ . }}{{ else }}Fan a GitHub parent issue's OPEN sub-issues out into parallel tmux panes.{{ end }}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21 3.5 8M12 21 8.6 6.2M12 21l3.4-14.8M12 21 20.5 8' stroke='%23165E83' stroke-width='1.7' stroke-linecap='round' fill='none'/%3E%3Ccircle cx='12' cy='21' r='2' fill='%2300A3AF'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Shippori+Mincho+B1:wght@500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+{{ with resources.Get "css/main.css" | minify | fingerprint }}
+<link rel="stylesheet" href="{{ .RelPermalink }}" integrity="{{ .Data.Integrity }}">
+{{ end }}

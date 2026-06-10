@@ -1,0 +1,39 @@
+baseURL = "https://butaosuinu.github.io/fanout/"
+title = "fanout"
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = false
+enableRobotsTXT = true
+disableKinds = ["taxonomy", "term"]
+
+[languages]
+  [languages.en]
+    locale = "en"
+    label = "English"
+    weight = 1
+    [languages.en.params]
+      tagline = "Fan a parent issue out into parallel panes — quietly."
+  [languages.ja]
+    locale = "ja"
+    label = "日本語"
+    weight = 2
+    [languages.ja.params]
+      tagline = "ひとつの親 issue を、扇のように。"
+
+[params]
+  github = "https://github.com/butaosuinu/fanout"
+  installCmd = "curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh"
+
+[markup]
+  [markup.highlight]
+    noClasses = false
+    codeFences = true
+    guessSyntax = false
+  [markup.goldmark.renderer]
+    unsafe = true
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+[minify]
+  [minify.tdewolff.html]
+    keepWhitespace = false

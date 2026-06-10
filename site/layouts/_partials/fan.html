@@ -1,0 +1,128 @@
+<svg class="fan" viewBox="0 0 800 540" role="img"
+     aria-label="{{ if eq .Language.Lang "ja" }}親 issue #123 を要として、子 issue のペインが扇のように開く図{{ else }}Diagram: child-issue panes opening like a folding fan from parent issue #123 at the pivot{{ end }}">
+  <g class="fan-stage">
+
+    <path class="arc" d="M 55.3 281 A 398 398 0 0 1 744.7 281"/>
+    <path class="arc" style="animation-delay:1.3s" d="M 218.1 375 A 210 210 0 0 1 581.9 375"/>
+
+    <!-- blade 1 / #124 auth -->
+    <g style="--closed:-12deg; --d:.15s; --dur:.85s" transform="rotate(-60 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#124</text>
+        <circle class="dot-on" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">auth</text>
+        <rect class="bar" x="366" y="163" width="58" height="4" rx="2"/>
+        <rect class="bar b2" x="366" y="175" width="66" height="4" rx="2"/>
+        <rect class="bar" x="366" y="187" width="42" height="4" rx="2"/>
+        <rect class="caret" x="366" y="200" width="7" height="12"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%12</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- blade 2 / #125 docs -->
+    <g style="--closed:-36deg; --d:.21s; --dur:.9s" transform="rotate(-36 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#125</text>
+        <circle class="dot-off" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">docs</text>
+        <rect class="bar b2" x="366" y="163" width="48" height="4" rx="2"/>
+        <rect class="bar" x="366" y="175" width="64" height="4" rx="2"/>
+        <rect class="bar" x="366" y="187" width="56" height="4" rx="2"/>
+        <rect class="bar" x="366" y="199" width="34" height="4" rx="2"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%13</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- blade 3 / #126 state -->
+    <g style="--closed:-60deg; --d:.27s; --dur:.95s" transform="rotate(-12 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#126</text>
+        <circle class="dot-on" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">state</text>
+        <rect class="bar" x="366" y="163" width="62" height="4" rx="2"/>
+        <rect class="bar" x="366" y="175" width="44" height="4" rx="2"/>
+        <rect class="bar b2" x="366" y="187" width="68" height="4" rx="2"/>
+        <rect class="caret" style="animation-delay:.4s" x="366" y="200" width="7" height="12"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%14</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- blade 4 / #127 tui -->
+    <g style="--closed:-84deg; --d:.33s; --dur:1s" transform="rotate(12 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#127</text>
+        <circle class="dot-off" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">tui</text>
+        <rect class="bar" x="366" y="163" width="52" height="4" rx="2"/>
+        <rect class="bar b2" x="366" y="175" width="58" height="4" rx="2"/>
+        <rect class="bar" x="366" y="187" width="64" height="4" rx="2"/>
+        <rect class="bar" x="366" y="199" width="40" height="4" rx="2"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%15</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- blade 5 / #128 dash -->
+    <g style="--closed:-108deg; --d:.39s; --dur:1.05s" transform="rotate(36 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#128</text>
+        <circle class="dot-on" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">dash</text>
+        <rect class="bar b2" x="366" y="163" width="66" height="4" rx="2"/>
+        <rect class="bar" x="366" y="175" width="50" height="4" rx="2"/>
+        <rect class="bar" x="366" y="187" width="58" height="4" rx="2"/>
+        <rect class="caret" style="animation-delay:.8s" x="366" y="200" width="7" height="12"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%16</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- blade 6 / #129 ci -->
+    <g style="--closed:-132deg; --d:.45s; --dur:1.1s" transform="rotate(60 400 480)">
+      <g class="blade-in">
+        <line class="rib" x1="400" y1="470" x2="400" y2="262"/>
+        <rect class="pane-fill" x="352" y="104" width="96" height="152" rx="10"/>
+        <rect class="pane-hd" x="352" y="104" width="96" height="26" rx="10"/>
+        <rect class="pane-hd" x="352" y="117" width="96" height="13"/>
+        <text class="t-num" x="366" y="122">#129</text>
+        <circle class="dot-off" cx="433" cy="117" r="3"/>
+        <text class="t-name" x="366" y="150">ci</text>
+        <rect class="bar" x="366" y="163" width="46" height="4" rx="2"/>
+        <rect class="bar" x="366" y="175" width="62" height="4" rx="2"/>
+        <rect class="bar b2" x="366" y="187" width="38" height="4" rx="2"/>
+        <text class="t-id" x="434" y="246" text-anchor="end">%17</text>
+        <rect class="pane-line" x="352" y="104" width="96" height="152" rx="10"/>
+      </g>
+    </g>
+
+    <!-- 要(かなめ)= 親 issue -->
+    <circle class="kaname-ring" cx="400" cy="480" r="23"/>
+    <circle class="kaname-body" cx="400" cy="480" r="13.5"/>
+    <circle class="kaname-pin" cx="400" cy="480" r="4.5"/>
+    <circle class="kaname-dot" cx="400" cy="471.5" r="1.8"/>
+  </g>
+  <text class="t-kaname" x="400" y="524" text-anchor="middle">要 — <tspan>parent issue #123</tspan></text>
+</svg>

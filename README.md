@@ -4,6 +4,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**Docs site:** <https://butaosuinu.github.io/fanout/> — installation, workflow,
+CLI reference and more, in English and Japanese.
+
 Fans a GitHub parent issue's OPEN sub-issues out into one tmux pane per child.
 Each pane gets its own git worktree and an agent CLI launched with a prompt
 that points at a per-issue briefing file.

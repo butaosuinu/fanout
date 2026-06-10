@@ -1,0 +1,41 @@
+[nav_docs]
+other = "ドキュメント"
+
+[nav_installation]
+other = "インストール"
+
+[nav_quickstart]
+other = "クイックスタート"
+
+[nav_workflow]
+other = "ワークフロー"
+
+[nav_cli]
+other = "CLI リファレンス"
+
+[docs_section]
+other = "ドキュメント"
+
+[copy]
+other = "コピー"
+
+[copied]
+other = "コピーしました"
+
+[prev_page]
+other = "前へ"
+
+[next_page]
+other = "次へ"
+
+[footer_sub]
+other = "ひとつの親 issue を、扇のように。"
+
+[back_to_top]
+other = "ページ先頭へ"
+
+[on_this_section]
+other = "ガイド"
+
+[edit_note]
+other = "MIT License"

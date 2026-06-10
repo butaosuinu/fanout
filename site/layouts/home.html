@@ -1,0 +1,193 @@
+{{ define "main" }}
+<div class="home">
+
+<!-- ================= ヒーロー ================= -->
+<section class="hero" id="install" style="padding-top:96px">
+  {{ partial "breeze.html" . }}
+
+  <div class="wrap" style="position:relative; z-index:2">
+    <p class="kicker rise" style="--d:.05s">{{ .Params.hero.kicker }}</p>
+    <h1 class="wordmark rise" style="--d:.12s">fanout<span class="dot">.</span></h1>
+
+    <div class="fan-holder rise" style="--d:.2s">
+      {{ partial "fan.html" . }}
+    </div>
+
+    <h2 class="tagline rise" style="--d:.5s">{{ .Params.hero.tagline | safeHTML }}</h2>
+    <p class="subcopy rise" style="--d:.62s">{{ .Params.hero.subcopy | safeHTML }}</p>
+
+    <div class="cta rise" style="--d:.74s">
+      <div class="install">
+        <pre id="install-cmd"><span class="p">curl</span> -fsSL <span class="u">https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh</span> | sh</pre>
+        <button class="copy-btn" type="button" aria-label="{{ i18n "copy" }}">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="5.5" y="5.5" width="9" height="9" rx="2"/>
+            <path d="M10.5 3.5v-1a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 2.5V9A1.5 1.5 0 0 0 3 10.5h1"/>
+          </svg>
+          <span>{{ i18n "copy" }}</span>
+        </button>
+      </div>
+      <p class="cta-note">{{ .Params.hero.ctaNote }}</p>
+      <nav class="cta-links" aria-label="secondary">
+        <a href="{{ "/docs/quickstart/" | relLangURL }}">{{ .Params.hero.ctaQuickstart }} &rarr;</a>
+        <a href="{{ "/docs/installation/" | relLangURL }}">{{ .Params.hero.ctaInstall }} &rarr;</a>
+      </nav>
+    </div>
+  </div>
+</section>
+
+<div class="fold" role="presentation"></div>
+
+<!-- ================= クイックスタート ================= -->
+<section id="quickstart">
+  <div class="tate" aria-hidden="true">
+    <span class="ji">扇</span>
+    <span class="yomi">ougi&nbsp;/&nbsp;fan</span>
+  </div>
+  <div class="wrap term-zone">
+    <div class="sec-head center">
+      <p class="kicker">Quickstart</p>
+      <h2>{{ .Params.quickstart.title }}</h2>
+      <p>{{ .Params.quickstart.lede | safeHTML }}</p>
+    </div>
+
+    <div class="terminal" role="img" aria-label="fanout 123 --agent claude">
+      <div class="term-bar">
+        <i></i><i></i><i></i>
+        <span class="term-title">tmux &mdash; fanout</span>
+      </div>
+      <pre><span class="tp">$</span> <span class="tk">fanout 123 --agent claude</span>
+<span class="tp">✓</span> <span class="tn">#124</span> fix-login-timeout   <span class="td">→ pane %12</span>
+<span class="tp">✓</span> <span class="tn">#125</span> update-docs         <span class="td">→ pane %13</span>
+<span class="tp">✓</span> <span class="tn">#126</span> refactor-state      <span class="td">→ pane %14</span>
+<span class="td">created <span class="tk">3</span> · skipped <span class="tk">1</span> · deferred <span class="tk">2</span> (blocked)</span>
+<span class="tp">$</span> <span class="cursor"></span></pre>
+    </div>
+    <p class="term-caption">{{ .Params.quickstart.caption | safeHTML }}</p>
+  </div>
+</section>
+
+<div class="fold" role="presentation"></div>
+
+<!-- ================= 機能 ================= -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">Features</p>
+      <h2>{{ .Params.features.title }}</h2>
+      <p>{{ .Params.features.lede | safeHTML }}</p>
+    </div>
+
+    <div class="cards">
+      {{ range .Params.features.items }}
+      <article class="card">
+        <span class="no">{{ .no }}</span>
+        {{ partial "ico.html" .icon }}
+        <h3>{{ .title }}</h3>
+        <p>{{ .body | safeHTML }}</p>
+        {{ with .link }}<a class="card-link" href="{{ . | relLangURL }}" aria-label="{{ $.Title }}"></a>{{ end }}
+      </article>
+      {{ end }}
+    </div>
+  </div>
+</section>
+
+<div class="fold" role="presentation"></div>
+
+<!-- ================= ワークフロー ================= -->
+<section id="workflow" style="overflow:hidden">
+  <div class="tate" aria-hidden="true">
+    <span class="ji">風</span>
+    <span class="yomi">kaze&nbsp;/&nbsp;breeze</span>
+  </div>
+
+  <div class="breeze" aria-hidden="true">
+    <svg viewBox="0 0 1440 480" preserveAspectRatio="xMidYMid slice">
+      <g style="--bdur:23s; --bd:3s">
+        <path d="M-760 120 C -620 100, -500 146, -360 126 S -120 100, 30 124 S 270 146, 410 126"/>
+        <path d="M-690 152 C -570 136, -470 166, -350 152 S -170 134, -60 150"/>
+      </g>
+    </svg>
+  </div>
+
+  <div class="wrap" style="position:relative; z-index:2">
+    <div class="sec-head center">
+      <p class="kicker">Workflow</p>
+      <h2>{{ .Params.workflow.title }}</h2>
+      <p>{{ .Params.workflow.lede | safeHTML }}</p>
+    </div>
+
+    <div class="steps">
+      {{ range .Params.workflow.steps }}
+      <div class="step">
+        <div class="num">{{ .num }}</div>
+        <h3>{{ .title }}</h3>
+        <p>{{ .body | safeHTML }}</p>
+        <span class="chip">{{ .chip }}</span>
+      </div>
+      {{ end }}
+    </div>
+  </div>
+</section>
+
+<div class="fold" role="presentation"></div>
+
+<!-- ================= CLI リファレンス抜粋 ================= -->
+<section id="cli">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">CLI Reference</p>
+      <h2>{{ .Params.cli.title }}</h2>
+      <p>{{ .Params.cli.lede | safeHTML }}</p>
+    </div>
+
+    <div class="cli-table">
+      {{ range .Params.cli.rows }}
+      <div class="cli-row">
+        <code>{{ .cmd }}</code>
+        <span>{{ .desc | safeHTML }}</span>
+      </div>
+      {{ end }}
+    </div>
+    <p style="margin-top:26px; font-size:14px;">
+      <a href="{{ "/docs/cli/" | relLangURL }}">{{ .Params.cli.more }} &rarr;</a>
+    </p>
+  </div>
+</section>
+
+<div class="fold" role="presentation"></div>
+
+<!-- ================= 終奏 ================= -->
+<section class="coda">
+  <div class="wrap">
+    <p class="kicker">One more breeze</p>
+    <h2 style="margin-top:14px">{{ .Params.coda.title }}</h2>
+    <div class="cta">
+      <span class="chip" style="font-family:var(--f-code); font-size:14px; padding:12px 26px; border-radius:10px;">$ fanout 123 --agent claude</span>
+      <nav class="cta-links" aria-label="footer-cta">
+        <a href="{{ "/docs/" | relLangURL }}">{{ .Params.coda.docsLink }} &rarr;</a>
+        <a href="{{ site.Params.github }}" target="_blank" rel="noopener">GitHub &nearr;</a>
+      </nav>
+    </div>
+  </div>
+</section>
+
+</div>
+{{ end }}
+
+{{ define "scripts" }}
+<script>
+const btn = document.querySelector('.copy-btn');
+if (btn) btn.addEventListener('click', async () => {
+  const cmd = document.getElementById('install-cmd').textContent.trim();
+  try { await navigator.clipboard.writeText(cmd); } catch (e) { /* noop */ }
+  btn.classList.add('done');
+  btn.querySelector('span').textContent = {{ i18n "copied" | jsonify }};
+  setTimeout(() => {
+    btn.classList.remove('done');
+    btn.querySelector('span').textContent = {{ i18n "copy" | jsonify }};
+  }, 1800);
+});
+</script>
+{{ end }}

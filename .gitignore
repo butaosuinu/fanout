@@ -11,3 +11,7 @@ tests/tmp/
 # Local dmux/cmux session artifacts (machine-local hook output; never committed)
 .claude/dmux/
 .claude/hooks/dmux-stop-hook.cjs
+# Hugo build output (site/ is built in CI by pages.yml)
+site/public/
+site/.hugo_build.lock
+site/resources/
