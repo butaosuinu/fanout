@@ -17,17 +17,19 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. Its
-header shows `total` / `merged` / `pending` / `blocked` rollup counts, with
-`blocked` based on OPEN blockers from child `## Blocked by` sections or parent
-task-list rows. Press `n` to create a manual agent pane from a required prompt,
-selectable `claude` / `codex` agent, and optional slug. Manual panes use
-synthetic `@manual` state entries and appear in the list after launch. Press
-`Enter` or `o` on a live row to focus that pane, and press `p` to refresh the
-read-only output snapshot shown in the detail panel. Rows whose recorded pane
-no longer exists in tmux are marked `stale!` and are skipped by focus/peek
-actions. Press `q` to leave the console; the tmux session and child panes are
-left running.
+through the same GitHub CLI source used by `fanout <parent> --status`. For
+recorded issue parents it also reloads the parent child set and shows wave /
+blocker columns using the same `## Blocked by` and `(blocked by #N)` sources as
+`--unblocked-only`; blocked children that have not been fanned yet appear as
+`deferred` rows, and CLOSED blockers are shown as resolved. Its header shows
+`total` / `merged` / `pending` / `blocked` rollup counts. Press
+`n` to create a manual agent pane from a required prompt, selectable
+`claude` / `codex` agent, and optional slug. Manual panes use synthetic
+`@manual` state entries and appear in the list after launch. Press `Enter` or
+`o` on a live row to focus that pane, and press `p` to refresh the read-only
+output snapshot shown in the detail panel. Rows whose recorded pane no longer
+exists in tmux are marked `stale!` and are skipped by focus/peek actions. Press
+`q` to leave the console; the tmux session and child panes are left running.
 Select a recorded pane and press `c` to close it, `m` to fast-forward merge its
 branch, or `x` to clean up merged/closed siblings for the same parent. Each
 lifecycle action asks for confirmation and uses the same core path as the
@@ -265,7 +267,7 @@ child can be retried.
 
 `fanout <parent> --status` is read-only: it reads `.fanout/state.json` to
 enumerate children already fanned out under that specific parent, queries
-each child through `gh api graphql` for issue state/body and
+each child through `gh api graphql` against
 `repository.issue.closedByPullRequestsReferences(first: 100)` (cursor-
 paginated when a child is closed by more than 100 PRs) so the response
 carries `state`, `mergedAt`, `reviewDecision`, and the latest commit's CI
@@ -282,8 +284,6 @@ mode does not fetch PR diff stats unless `--post-dashboard` is also set, so the
 additional review/CI fields come from the same per-issue GraphQL lookup. It does
 not require dmux or a live tmux session. Issue-mode parents only — Projects v2
 URLs as parent are rejected up-front for the current JSON schema.
-`summary.blocked` counts recorded children with OPEN blockers from child
-`## Blocked by` sections or parent task-list rows.
 In a state file that has fanned multiple parents, children of other parents are
 filtered out so `summary.all_merged` reflects only the requested parent. Set
 `FANOUT_STATE_PATH` to point directly at a state file when reading from outside
@@ -306,7 +306,6 @@ the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
     "total":      2,
     "merged":     1,
     "pending":    1,
-    "blocked":    0,
     "all_merged": false
   }
 }

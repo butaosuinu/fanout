@@ -17,16 +17,17 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。ヘッダーには `total` / `merged` /
-`pending` / `blocked` の集約 count を表示し、`blocked` は子 issue の
-`## Blocked by` セクションまたは親 task-list 行にある OPEN blocker から算出します。
-`n` で必須 prompt、`claude` / `codex` の agent 選択、任意 slug を指定して
-manual agent pane を作成できます。manual pane は synthetic な `@manual` state
-entry として記録され、起動後に一覧へ表示されます。live 行で `Enter` または `o`
-を押すとその pane にフォーカスし、`p` で detail panel の read-only 出力
-スナップショットを更新します。記録はあるものの tmux 上に存在しない pane は
-`stale!` と表示し、focus / peek の対象から除外します。`q` でコンソールを離脱
-できますが、tmux session と子 pane は残ります。
+issue / closed-by PR 状態を定期更新します。記録済みの issue 親については親の子一覧も
+再読込し、`--unblocked-only` と同じ `## Blocked by` / `(blocked by #N)` から
+wave / blocker 列を表示します。まだ fanout されていない blocked 子は `deferred` 行で
+表示され、CLOSED blocker は resolved として区別されます。ヘッダーには `total` /
+`merged` / `pending` / `blocked` の集約 count を表示します。`n` で必須 prompt、`claude` / `codex`
+の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
+は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
+live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
+panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
+存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
+コンソールを離脱できますが、tmux session と子 pane は残ります。
 記録済み pane を選択して `c` で close、`m` で branch の fast-forward merge、
 `x` で同じ親の merged/closed 子を cleanup できます。各 lifecycle 操作は確認を挟み、
 対応する `--close` / `--merge` / `--cleanup` CLI コマンドと同じコア処理を使います。
@@ -271,8 +272,6 @@ GitHub の機械可読データと PR 本文だけから作り、LLM は呼び�
 field は同じ per-issue GraphQL lookup から取得します。dmux や live tmux session は不要です。
 現在の JSON schema は issue parent 用なので、Projects v2 URL を parent にした
 `--status` は拒否します。
-`summary.blocked` は、子 issue の `## Blocked by` セクションまたは親 task-list 行にある
-OPEN blocker を持つ記録済み子 issue 数です。
 
 `--post-dashboard` は `--status` 系で唯一 GitHub に書き込む option です。コメント
 本文の先頭に `<!-- fanout:dashboard parent=N -->` を置き、
