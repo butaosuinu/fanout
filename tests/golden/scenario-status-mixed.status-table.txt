@@ -1,4 +1,4 @@
-fanout status #200: total=3 merged=1 pending=2 all_merged=false
+fanout status #200: total=3 merged=1 pending=2 blocked=0 all_merged=false
 ISSUE  STATE   PR    PR_STATE           CI    TYPE  FILES  DIFF                                 LINK
 -----  ------  ----  -----------------  ----  ----  -----  -----------------------------------  ----
 #201   CLOSED  #601  merged             pass  feat  5      +120 ++++++++++++  -8  -             https://github.com/butaosuinu/fanout-fixtures/pull/601

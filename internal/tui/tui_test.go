@@ -74,6 +74,9 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	if second.IssueState != "CLOSED" || second.PRSummary != "#12 merged" || second.CIStatus != "pass" {
 		t.Fatalf("issue/pr/ci = %q/%q/%q, want CLOSED/#12 merged/pass", second.IssueState, second.PRSummary, second.CIStatus)
 	}
+	if !second.HasMergedPR {
+		t.Fatal("HasMergedPR = false, want true for merged PR")
+	}
 	if second.WaveBadge != "W2 ready" || second.Blockers != "resolved #1" {
 		t.Fatalf("wave/blockers = %q/%q, want W2 ready/resolved #1", second.WaveBadge, second.Blockers)
 	}
@@ -169,6 +172,29 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.issues, issues) {
 		t.Fatalf("issues = %#v, want partial results %#v", got.issues, issues)
+	}
+}
+
+func TestViewRendersHUDCounts(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo"})
+	m.width = 100
+	m.height = 30
+	m.panes = []paneView{
+		{Parent: "200", IssueNum: 201, Name: "one"},
+		{Parent: "200", IssueNum: 202, Name: "two"},
+		{Parent: "200", IssueNum: 203, Name: "three"},
+	}
+	m.issues = map[issueKey]issueStatus{
+		{Parent: "200", Num: 201}: {State: "CLOSED", PRs: []ghissue.PRRef{{Number: 11, State: "MERGED"}}},
+		{Parent: "200", Num: 202}: {State: "OPEN"},
+		{Parent: "200", Num: 203}: {State: "OPEN", HasOpenBlockers: true},
+	}
+	m.panes = applyIssueStatuses(m.panes, m.issues)
+	m.refreshRows()
+
+	got := m.View()
+	if !strings.Contains(got, "total=3 merged=1 pending=2 blocked=1") {
+		t.Fatalf("View() = %q, want HUD counts", got)
 	}
 }
 

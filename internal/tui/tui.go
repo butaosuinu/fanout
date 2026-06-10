@@ -81,6 +81,7 @@ type paneView struct {
 	TmuxTitle    string
 	IssueState   string
 	PRSummary    string
+	HasMergedPR  bool
 	Wave         int
 	WaveLabel    string
 	WaveBadge    string
@@ -92,6 +93,13 @@ type paneView struct {
 	Agent        string
 	CreatedAt    string
 	Prompt       string
+}
+
+type hudSummary struct {
+	Total   int
+	Merged  int
+	Pending int
+	Blocked int
 }
 
 type viewMode int
@@ -500,6 +508,7 @@ func (m model) View() string {
 	if m.opts.ProjectRoot != "" {
 		header += " " + dimStyle.Render(m.opts.ProjectRoot)
 	}
+	header += " " + dimStyle.Render(formatHUD(summarizeHUD(m.panes)))
 
 	footer := dimStyle.Render(m.footerText())
 	if m.notice != "" {
@@ -1340,6 +1349,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 		if hasStatus {
 			view.IssueState = dash(status.State)
 			view.PRSummary = summarizePRs(status.PRs)
+			view.HasMergedPR = hasMergedPR(status.PRs)
 			view.CIStatus = summarizePRCI(status.PRs)
 		}
 		out = append(out, view)
@@ -1349,18 +1359,19 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			continue
 		}
 		out = append(out, paneView{
-			Parent:     key.Parent,
-			IssueNum:   key.Num,
-			Name:       issueTitle(status, key.Num),
-			TmuxState:  syntheticTmuxState(status),
-			IssueState: dash(status.State),
-			PRSummary:  summarizePRs(status.PRs),
-			CIStatus:   summarizePRCI(status.PRs),
-			Wave:       status.Wave,
-			WaveLabel:  status.WaveLabel,
-			WaveBadge:  waveBadge(status.Wave, status.HasOpenBlockers),
-			Blockers:   dash(status.Blockers),
-			Blocked:    status.HasOpenBlockers,
+			Parent:      key.Parent,
+			IssueNum:    key.Num,
+			Name:        issueTitle(status, key.Num),
+			TmuxState:   syntheticTmuxState(status),
+			IssueState:  dash(status.State),
+			PRSummary:   summarizePRs(status.PRs),
+			HasMergedPR: hasMergedPR(status.PRs),
+			CIStatus:    summarizePRCI(status.PRs),
+			Wave:        status.Wave,
+			WaveLabel:   status.WaveLabel,
+			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
+			Blockers:    dash(status.Blockers),
+			Blocked:     status.HasOpenBlockers,
 		})
 	}
 	sortPaneViews(out)
@@ -1377,6 +1388,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 		if status, ok := issues[key]; ok {
 			out[i].IssueState = dash(status.State)
 			out[i].PRSummary = summarizePRs(status.PRs)
+			out[i].HasMergedPR = hasMergedPR(status.PRs)
 			out[i].Wave = status.Wave
 			if status.WaveLabel != "" {
 				out[i].WaveLabel = status.WaveLabel
@@ -1392,18 +1404,19 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			continue
 		}
 		out = append(out, paneView{
-			Parent:     key.Parent,
-			IssueNum:   key.Num,
-			Name:       issueTitle(status, key.Num),
-			TmuxState:  syntheticTmuxState(status),
-			IssueState: dash(status.State),
-			PRSummary:  summarizePRs(status.PRs),
-			CIStatus:   summarizePRCI(status.PRs),
-			Wave:       status.Wave,
-			WaveLabel:  status.WaveLabel,
-			WaveBadge:  waveBadge(status.Wave, status.HasOpenBlockers),
-			Blockers:   dash(status.Blockers),
-			Blocked:    status.HasOpenBlockers,
+			Parent:      key.Parent,
+			IssueNum:    key.Num,
+			Name:        issueTitle(status, key.Num),
+			TmuxState:   syntheticTmuxState(status),
+			IssueState:  dash(status.State),
+			PRSummary:   summarizePRs(status.PRs),
+			HasMergedPR: hasMergedPR(status.PRs),
+			CIStatus:    summarizePRCI(status.PRs),
+			Wave:        status.Wave,
+			WaveLabel:   status.WaveLabel,
+			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
+			Blockers:    dash(status.Blockers),
+			Blocked:     status.HasOpenBlockers,
 		})
 	}
 	sortPaneViews(out)
@@ -1698,6 +1711,15 @@ func selectedPR(prs []ghissue.PRRef) (ghissue.PRRef, bool) {
 	return prs[0], true
 }
 
+func hasMergedPR(prs []ghissue.PRRef) bool {
+	for _, pr := range prs {
+		if pr.State == "MERGED" {
+			return true
+		}
+	}
+	return false
+}
+
 func paneName(pane state.Pane) string {
 	if strings.TrimSpace(pane.DisplayName) != "" {
 		return pane.DisplayName
@@ -1752,6 +1774,24 @@ func cloneIssueStatuses(in map[issueKey]issueStatus) map[issueKey]issueStatus {
 		out[k] = v
 	}
 	return out
+}
+
+func summarizeHUD(panes []paneView) hudSummary {
+	summary := hudSummary{Total: len(panes)}
+	for _, pane := range panes {
+		if pane.HasMergedPR {
+			summary.Merged++
+		}
+		if pane.Blocked {
+			summary.Blocked++
+		}
+	}
+	summary.Pending = summary.Total - summary.Merged
+	return summary
+}
+
+func formatHUD(summary hudSummary) string {
+	return fmt.Sprintf("total=%d merged=%d pending=%d blocked=%d", summary.Total, summary.Merged, summary.Pending, summary.Blocked)
 }
 
 func formatClock(t time.Time) string {

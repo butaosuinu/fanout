@@ -51,11 +51,13 @@ creates one new tmux pane per child. Each pane gets its own git worktree under
 plain shell it creates or attaches a deterministic fanout-managed tmux session
 for the current repository, then runs the console there. From inside tmux it
 turns the current pane into the console. The console shows `.fanout/state.json`
-panes with live tmux plus issue/PR status, lets the user press `n` to launch a
-manual prompt-based `claude` / `codex` pane, and exits on `q` without killing
-the session or child panes. On a selected recorded pane, `c` closes it, `m`
-fast-forward merges its recorded branch, and `x` cleans up merged/closed
-siblings for the same parent after confirmation.
+panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` /
+`blocked` header rollup, lets the user press `n` to launch a manual
+prompt-based `claude` / `codex` pane, and exits on `q` without killing the
+session or child panes.
+On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
+branch, and `x` cleans up merged/closed siblings for the same parent after
+confirmation.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form
@@ -222,9 +224,9 @@ Use this only when the user explicitly asks to wait until child PRs merge and
 then continue parent-scope work. After the real fanout run succeeds, poll
 `fanout --status <PARENT>` from the parent worktree. The command reads
 `.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
-`summary.all_merged` for the recorded children. Use the default JSON format for
-automation; `--format table` is for human review of PR state, CI, diff stats,
-and links.
+`summary.all_merged` plus `summary.blocked` for the recorded children. Use the
+default JSON format for automation; `--format table` is for human review of PR
+state, CI, diff stats, and links.
 Use `--post-dashboard` only when the user explicitly wants a parent issue
 rollup comment; it writes to GitHub even though it is attached to `--status`.
 

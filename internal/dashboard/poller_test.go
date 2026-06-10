@@ -8,6 +8,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/sessionview"
+	"github.com/butaosuinu/fanout/internal/state"
 )
 
 type countingGH struct {
@@ -58,6 +59,26 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	}
 	if snap.Degraded.GitHub {
 		t.Fatal("GitHub should not be degraded on success")
+	}
+}
+
+func TestDistinctIssueNumsSkipsSyntheticManualPanes(t *testing.T) {
+	got := distinctIssueNums(state.Store{Panes: []state.Pane{
+		{IssueNum: -1},
+		{IssueNum: 0},
+		{IssueNum: 102},
+		{IssueNum: 101},
+		{IssueNum: 102},
+	}})
+
+	want := []int{101, 102}
+	if len(got) != len(want) {
+		t.Fatalf("distinctIssueNums() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("distinctIssueNums() = %#v, want %#v", got, want)
+		}
 	}
 }
 
