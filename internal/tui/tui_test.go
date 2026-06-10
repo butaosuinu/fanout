@@ -285,6 +285,119 @@ func TestGHUpdatePreservesNotificationBaselineOnPartialError(t *testing.T) {
 	}
 }
 
+func TestGHUpdateDoesNotOverwriteNotificationBaselineOnPartialError(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	initial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "waiting", State: "OPEN", Blockers: "OPEN #99", HasOpenBlockers: true},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	partial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "waiting", State: "OPEN", Blockers: "-", HasOpenBlockers: false},
+	}
+	updated, cmd := m.Update(ghLoadedMsg{issues: partial, at: time.Unix(2, 0), err: errBoom})
+	if cmd != nil {
+		t.Fatal("partial GH snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	updated, cmd = m.Update(ghLoadedMsg{issues: initial, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("recovered unchanged waiting snapshot returned notification command, want nil")
+	}
+	if len(notifier.events) != 0 {
+		t.Fatalf("notifier events = %#v, want none", notifier.events)
+	}
+}
+
+func TestGHUpdateNotifiesUsableTransitionOnPartialError(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	initial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "omitted", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "pass"}}},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	partial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "CLOSED", PRs: []ghissue.PRRef{{Number: 901, State: "MERGED", CIStatus: "pass"}}},
+	}
+	updated, cmd := m.Update(ghLoadedMsg{issues: partial, at: time.Unix(2, 0), err: errBoom})
+	if cmd == nil {
+		t.Fatal("partial transition GH snapshot returned nil command, want notification command")
+	}
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = updated.(model).Update(msg)
+	m = updated.(model)
+
+	recovered := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "visible", State: "CLOSED", PRs: []ghissue.PRRef{{Number: 901, State: "MERGED", CIStatus: "pass"}}},
+		{Parent: "100", Num: 102}: {Title: "omitted", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "pass"}}},
+	}
+	updated, cmd = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("recovered already-notified snapshot returned notification command, want nil")
+	}
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventMerged, Parent: "100", IssueNum: 101, Title: "visible", PRNumber: 901, CIStatus: "pass"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+}
+
+func TestGHUpdateRecordsPartialRecoveryBeforeLaterTransition(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	initial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "flaky", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "fail"}}},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	recoveredPartial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "flaky", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "pass"}}},
+	}
+	updated, cmd := m.Update(ghLoadedMsg{issues: recoveredPartial, at: time.Unix(2, 0), err: errBoom})
+	if cmd != nil {
+		t.Fatal("partial CI recovery returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	failedAgainPartial := map[issueKey]issueStatus{
+		{Parent: "100", Num: 101}: {Title: "flaky", State: "OPEN", PRs: []ghissue.PRRef{{Number: 901, State: "OPEN", CIStatus: "fail"}}},
+	}
+	updated, cmd = m.Update(ghLoadedMsg{issues: failedAgainPartial, at: time.Unix(3, 0), err: errBoom})
+	if cmd == nil {
+		t.Fatal("partial CI failure returned nil command, want notification command")
+	}
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = updated.(model).Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventCIFailed, Parent: "100", IssueNum: 101, Title: "flaky", PRNumber: 901, CIStatus: "fail"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+}
+
 func TestViewRendersHUDCounts(t *testing.T) {
 	m := newModel(Options{ProjectRoot: "/repo"})
 	m.width = 100

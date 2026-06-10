@@ -456,19 +456,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var notifyCmd tea.Cmd
 		if msg.issues != nil {
+			wasPrimed := m.notifyPrimed
 			events := detectIssueTransitions(m.notifications, msg.issues)
-			nextNotifications := issueTransitionSnapshots(msg.issues)
-			if msg.err != nil {
-				nextNotifications = mergeIssueTransitionSnapshots(m.notifications, nextNotifications)
+			if msg.err == nil {
+				m.notifications = issueTransitionSnapshots(msg.issues)
+				if !m.notifyPrimed {
+					m.notifyPrimed = true
+				}
+			} else if wasPrimed {
+				m.notifications = mergePartialIssueTransitionSnapshots(m.notifications, msg.issues)
 			}
-			m.notifications = nextNotifications
-			if m.notifyPrimed {
+			if wasPrimed {
 				notifyCmd = m.notifyEventsCmd(events)
 				if len(events) > 0 {
 					m.notice = transitionNotice(events)
 				}
-			} else {
-				m.notifyPrimed = true
 			}
 			m.issues = msg.issues
 		}
@@ -1180,15 +1182,33 @@ func issueTransitionSnapshots(statuses map[issueKey]issueStatus) map[issueKey]is
 	return out
 }
 
-func mergeIssueTransitionSnapshots(previous, current map[issueKey]issueTransitionSnapshot) map[issueKey]issueTransitionSnapshot {
-	out := make(map[issueKey]issueTransitionSnapshot, len(previous)+len(current))
+func mergePartialIssueTransitionSnapshots(previous map[issueKey]issueTransitionSnapshot, statuses map[issueKey]issueStatus) map[issueKey]issueTransitionSnapshot {
+	out := make(map[issueKey]issueTransitionSnapshot, len(previous))
 	for key, snapshot := range previous {
 		out[key] = snapshot
 	}
-	for key, snapshot := range current {
-		out[key] = snapshot
+	for key, status := range statuses {
+		current := transitionSnapshot(status)
+		if prev, ok := previous[key]; ok {
+			current = mergePartialIssueTransitionSnapshot(prev, current)
+		}
+		out[key] = current
 	}
 	return out
+}
+
+func mergePartialIssueTransitionSnapshot(previous, current issueTransitionSnapshot) issueTransitionSnapshot {
+	if previous.HasMerged && !current.HasMerged {
+		current.HasMerged = true
+		if current.PRNumber == 0 {
+			current.PRNumber = previous.PRNumber
+		}
+	}
+	if previous.Waiting && !current.Waiting && !current.HasMerged && current.State != "CLOSED" && current.Blockers == "-" {
+		current.Waiting = true
+		current.Blockers = previous.Blockers
+	}
+	return current
 }
 
 func transitionSnapshot(status issueStatus) issueTransitionSnapshot {
