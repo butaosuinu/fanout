@@ -36,8 +36,9 @@ func TestNormalizeTUISlug(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "empty", raw: "  ", want: ""},
-		{name: "kebab", raw: "  manual-pane-1  ", want: "manual-pane-1"},
+		{name: "kebab", raw: "  manual-1-pane  ", want: "manual-1-pane"},
 		{name: "trailing hyphen", raw: "manual-", want: "manual-"},
+		{name: "issue-like numeric suffix", raw: "debug-12", wantErr: true},
 		{name: "uppercase", raw: "Manual", wantErr: true},
 		{name: "space", raw: "manual pane", wantErr: true},
 	} {

@@ -140,6 +140,9 @@ func normalizeTUISlug(raw string) (string, error) {
 	if !isKebabSlug(slug) {
 		return "", fmt.Errorf("slug must be lowercase kebab-case (alnum+hyphens, starting with alnum), got: %q", slug)
 	}
+	if hasIssueLikeNumericSuffix(slug) {
+		return "", fmt.Errorf("manual slug must not end with an issue-like numeric suffix: %q", slug)
+	}
 	return slug, nil
 }
 
@@ -153,6 +156,19 @@ func isKebabSlug(slug string) bool {
 		}
 	}
 	return slug != ""
+}
+
+func hasIssueLikeNumericSuffix(slug string) bool {
+	i := strings.LastIndex(slug, "-")
+	if i < 0 || i == len(slug)-1 {
+		return false
+	}
+	for _, r := range slug[i+1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func bufferedLaunchError(stdout, stderr bytes.Buffer, fallback string) error {

@@ -132,6 +132,19 @@ func TestExistingWorktreeFannedPreservesCurrentParentQualifiedFallback(t *testin
 	}
 }
 
+func TestExistingWorktreeFannedIgnoresGeneratedManualPaneSlug(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", manualPaneSlug("Diagnostics", -12)))
+	cfg := &cliflags.Config{ParentRef: "200"}
+	issues := []ghissue.Issue{{Number: 12, Title: "Diagnostics", State: "OPEN"}}
+
+	got := existingWorktreeFanned(cfg, root, issues, nil)
+
+	if got[12] {
+		t.Fatalf("fanned = %#v, generated manual slug must not skip issue #12", got)
+	}
+}
+
 func TestBuildPlanSkipFilter(t *testing.T) {
 	children := []ghissue.Issue{
 		{Number: 201, Title: "keep one", State: "OPEN"},

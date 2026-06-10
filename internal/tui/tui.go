@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
@@ -88,6 +89,9 @@ type paneView struct {
 	Blockers     string
 	Blocked      bool
 	CIStatus     string
+	DiffSummary  string
+	DirtyState   string
+	WorktreeErr  string
 	BranchName   string
 	WorktreePath string
 	Agent        string
@@ -191,6 +195,12 @@ type lifecycleDoneMsg struct {
 	pane   paneView
 	code   exitcode.Code
 	output string
+}
+
+type worktreeStatView struct {
+	Diff  string
+	Dirty string
+	Err   string
 }
 
 type paneFocusedMsg struct {
@@ -856,8 +866,11 @@ func (m model) detailContent() string {
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
-		fmt.Sprintf("worktree=%s", dash(pane.WorktreePath)),
+		fmt.Sprintf("worktree=%s diff=%s dirty=%s", dash(pane.WorktreePath), dash(pane.DiffSummary), dash(pane.DirtyState)),
 		fmt.Sprintf("created=%s", dash(pane.CreatedAt)),
+	}
+	if pane.WorktreeErr != "" {
+		lines = append(lines, "worktree_error="+pane.WorktreeErr)
 	}
 	peekBudget := maxInt(2, m.detail.Height-len(lines)-1)
 	lines = append(lines, m.peekContent(pane, peekBudget)...)
@@ -995,7 +1008,8 @@ func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneV
 	}
 	tmuxPanes, err := tmuxrun.ListAllPanes()
 	tmuxKnown := err == nil
-	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues), err
+	worktrees := loadWorktreeStats(store.Panes)
+	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues, worktrees), err
 }
 
 func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
@@ -1089,16 +1103,14 @@ func loadParentIssues(gh ghissue.Runner, parent string, panes []state.Pane) ([]g
 	}
 	children, err := mergeParentIssueChildren(parentNum, subIssues, parentBody, panes, gh.IssueDetail)
 	if err != nil {
-		return nil, parentBody, errors.Join(loadErr, err)
+		return children, parentBody, errors.Join(loadErr, err)
 	}
-	assignIssueWaveLabels(children, ghissue.TaskListWaves(parentBody))
 	return children, parentBody, loadErr
 }
 
 func mergeParentIssueChildren(parentNum int, subIssues []ghissue.Issue, parentBody string, panes []state.Pane, issueDetail func(int) (ghissue.Issue, error)) ([]ghissue.Issue, error) {
 	existing := parentChildNumbers(parentNum, subIssues)
-	extra := []ghissue.Issue{}
-	extra = append(extra, loadMissingIssueDetails(ghissue.TaskListNumbers(parentBody), existing, issueDetail)...)
+	extra, loadErr := loadMissingIssueDetails(ghissue.TaskListNumbers(parentBody), existing, issueDetail)
 	for _, pane := range panes {
 		if pane.IssueNum <= 0 || existing[pane.IssueNum] {
 			continue
@@ -1110,7 +1122,9 @@ func mergeParentIssueChildren(parentNum int, subIssues []ghissue.Issue, parentBo
 		extra = append(extra, detail)
 		existing[pane.IssueNum] = true
 	}
-	return ghissue.MergeExtra(subIssues, extra), nil
+	children := ghissue.MergeExtra(subIssues, extra)
+	assignIssueWaveLabels(children, ghissue.TaskListWaves(parentBody))
+	return children, loadErr
 }
 
 func assignIssueWaveLabels(issues []ghissue.Issue, labels map[int]string) {
@@ -1129,20 +1143,22 @@ func parentChildNumbers(parentNum int, subIssues []ghissue.Issue) map[int]bool {
 	return existing
 }
 
-func loadMissingIssueDetails(nums []int, existing map[int]bool, issueDetail func(int) (ghissue.Issue, error)) []ghissue.Issue {
+func loadMissingIssueDetails(nums []int, existing map[int]bool, issueDetail func(int) (ghissue.Issue, error)) ([]ghissue.Issue, error) {
 	extra := []ghissue.Issue{}
+	var loadErr error
 	for _, num := range nums {
 		if existing[num] {
 			continue
 		}
 		detail, err := issueDetail(num)
 		if err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
 			continue
 		}
 		extra = append(extra, detail)
 		existing[num] = true
 	}
-	return extra
+	return extra, loadErr
 }
 
 func loadRecordedPaneIssues(gh ghissue.Runner, panes []state.Pane) ([]ghissue.Issue, string, error) {
@@ -1312,7 +1328,7 @@ func normalizedParent(parent string) string {
 	return strconv.Itoa(parentNum)
 }
 
-func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[issueKey]issueStatus) []paneView {
+func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
 	tmuxByID := map[string]tmuxrun.PaneInfo{}
 	for _, pane := range tmuxPanes {
 		tmuxByID[pane.ID] = pane
@@ -1337,6 +1353,8 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			Blockers:     dash(status.Blockers),
 			Blocked:      status.HasOpenBlockers,
 			CIStatus:     "-",
+			DiffSummary:  "-",
+			DirtyState:   "-",
 			BranchName:   pane.BranchName,
 			WorktreePath: relativePath(projectRoot, pane.WorktreePath),
 			Agent:        pane.Agent,
@@ -1351,6 +1369,11 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			view.PRSummary = summarizePRs(status.PRs)
 			view.HasMergedPR = hasMergedPR(status.PRs)
 			view.CIStatus = summarizePRCI(status.PRs)
+		}
+		if stat, ok := worktrees[pane.WorktreePath]; ok {
+			view.DiffSummary = stat.Diff
+			view.DirtyState = stat.Dirty
+			view.WorktreeErr = stat.Err
 		}
 		out = append(out, view)
 	}
@@ -1464,6 +1487,8 @@ func (p paneView) tableRow() table.Row {
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 12),
 		truncate(dash(p.CIStatus), 7),
+		dash(p.DiffSummary),
+		dash(p.DirtyState),
 		truncate(dash(p.BranchName), 18),
 		dash(p.PaneID),
 	}
@@ -1478,9 +1503,9 @@ func (p paneView) canPeek() bool {
 }
 
 func columnsForWidth(width int) []table.Column {
-	nameWidth := clampInt(width/5, 14, 28)
-	blockerWidth := clampInt(width/5, 12, 22)
-	branchWidth := clampInt(width/6, 10, 18)
+	nameWidth := clampInt(width/7, 12, 20)
+	blockerWidth := clampInt(width/8, 10, 16)
+	branchWidth := clampInt(width/8, 10, 16)
 	return []table.Column{
 		{Title: "PARENT", Width: 10},
 		{Title: "ISSUE", Width: 7},
@@ -1492,8 +1517,41 @@ func columnsForWidth(width int) []table.Column {
 		{Title: "STATE", Width: 8},
 		{Title: "PR", Width: 12},
 		{Title: "CI", Width: 7},
+		{Title: "DIFF", Width: 8},
+		{Title: "DIRTY", Width: 7},
 		{Title: "BRANCH", Width: branchWidth},
 		{Title: "PANE", Width: 7},
+	}
+}
+
+func loadWorktreeStats(panes []state.Pane) map[string]worktreeStatView {
+	runner := gitstat.Runner{}
+	stats := map[string]worktreeStatView{}
+	for _, pane := range panes {
+		path := strings.TrimSpace(pane.WorktreePath)
+		if path == "" {
+			continue
+		}
+		if _, ok := stats[path]; ok {
+			continue
+		}
+		stats[path] = worktreeStatForPath(runner, path)
+	}
+	return stats
+}
+
+func worktreeStatForPath(runner gitstat.Runner, path string) worktreeStatView {
+	stat, err := runner.Worktree(path)
+	if err != nil {
+		return worktreeStatView{Diff: "-", Dirty: "unknown", Err: err.Error()}
+	}
+	dirty := "clean"
+	if stat.Dirty {
+		dirty = "dirty"
+	}
+	return worktreeStatView{
+		Diff:  fmt.Sprintf("+%d/-%d", stat.Additions, stat.Deletions),
+		Dirty: dirty,
 	}
 }
 
@@ -1591,6 +1649,9 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 		p.CIStatus,
 		p.BranchName,
 		p.WorktreePath,
+		p.DiffSummary,
+		p.DirtyState,
+		p.WorktreeErr,
 		p.Agent,
 		p.WaveLabel,
 		p.WaveBadge,

@@ -210,6 +210,7 @@ thead th[aria-sort] { color: var(--cyan); }
 thead th[aria-sort]::after { content: " ▾"; font-size: 0.8em; }
 thead th[aria-sort="ascending"]::after { content: " ▴"; }
 .col-c { text-align: center; }
+.col-diff { text-align: right; }
 tbody td {
   padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--line);
   font-size: 0.83rem; vertical-align: middle; white-space: nowrap;
@@ -221,6 +222,8 @@ tbody tr:hover td { background: rgba(255,255,255,.025); }
 .cell-name { color: var(--ink); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
 .cell-agent { color: var(--ink-dim); text-transform: lowercase; }
 .cell-branch { color: var(--ink-faint); max-width: 28ch; overflow: hidden; text-overflow: ellipsis; }
+.cell-diff { color: var(--amber); font-weight: 700; font-variant-numeric: tabular-nums; }
+.cell-diff.warn { color: var(--red); }
 .col-c.cell { text-align: center; }
 
 .dot { display: inline-block; width: 0.66rem; height: 0.66rem; border-radius: 50%; background: var(--ink-faint); }
@@ -236,6 +239,8 @@ tbody tr:hover td { background: rgba(255,255,255,.025); }
 .tag.UNKNOWN{ color: var(--ink-faint); border-color: var(--line); }
 .tag.MERGED { color: var(--violet); border-color: rgba(192,139,255,.45); background: rgba(192,139,255,.12); }
 .tag.none   { color: var(--ink-faint); }
+.tag.dirty  { color: var(--amber); border-color: rgba(255,180,84,.45); background: rgba(255,180,84,.12); }
+.tag.clean  { color: var(--lime);  border-color: rgba(126,231,135,.35); background: rgba(126,231,135,.08); }
 
 /* ---- empty state ---- */
 .empty {

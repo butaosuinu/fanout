@@ -55,8 +55,11 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 			},
 		},
 	}
+	worktrees := map[string]worktreeStatView{
+		"/repo/.fanout/worktrees/second": {Diff: "+12/-3", Dirty: "dirty"},
+	}
 
-	got := buildPaneViews(projectRoot, panes, tmuxPanes, true, issues)
+	got := buildPaneViews(projectRoot, panes, tmuxPanes, true, issues, worktrees)
 
 	if len(got) != 2 {
 		t.Fatalf("buildPaneViews len = %d, want 2", len(got))
@@ -73,6 +76,9 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	}
 	if second.IssueState != "CLOSED" || second.PRSummary != "#12 merged" || second.CIStatus != "pass" {
 		t.Fatalf("issue/pr/ci = %q/%q/%q, want CLOSED/#12 merged/pass", second.IssueState, second.PRSummary, second.CIStatus)
+	}
+	if second.DiffSummary != "+12/-3" || second.DirtyState != "dirty" {
+		t.Fatalf("worktree stat = %q/%q, want +12/-3/dirty", second.DiffSummary, second.DirtyState)
 	}
 	if !second.HasMergedPR {
 		t.Fatal("HasMergedPR = false, want true for merged PR")
@@ -92,7 +98,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 }
 
 func TestBuildPaneViewsMarksTmuxUnknownWhenListFails(t *testing.T) {
-	got := buildPaneViews("/repo", []state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil)
+	got := buildPaneViews("/repo", []state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("buildPaneViews len = %d, want 1", len(got))
 	}
@@ -108,7 +114,7 @@ func TestBuildPaneViewsAddsDeferredIssueRows(t *testing.T) {
 		{Parent: "100", Num: 3}: {Title: "closed child", State: "CLOSED", Wave: 1, Blockers: "-"},
 	}
 
-	got := buildPaneViews("/repo", []state.Pane{{Parent: "100", IssueNum: 1, Slug: "ready-child-1"}}, nil, true, issues)
+	got := buildPaneViews("/repo", []state.Pane{{Parent: "100", IssueNum: 1, Slug: "ready-child-1"}}, nil, true, issues, nil)
 
 	if len(got) != 3 {
 		t.Fatalf("buildPaneViews len = %d, want recorded pane plus deferred issue", len(got))
@@ -131,7 +137,7 @@ func TestBuildPaneViewsMatchesNormalizedNumericParents(t *testing.T) {
 		{Parent: "300", Num: 501}: {Title: "child", State: "OPEN", Wave: 1},
 	}
 
-	got := buildPaneViews("/repo", []state.Pane{{Parent: "0300", IssueNum: 501, Slug: "child"}}, nil, true, issues)
+	got := buildPaneViews("/repo", []state.Pane{{Parent: "0300", IssueNum: 501, Slug: "child"}}, nil, true, issues, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("buildPaneViews len = %d, want one real pane without synthetic duplicate", len(got))
@@ -352,18 +358,20 @@ func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 func TestFilterPaneViewsSearchesTextAndPredicates(t *testing.T) {
 	panes := []paneView{
 		{
-			Parent:     "142",
-			IssueNum:   115,
-			Name:       "state agent wave filters",
-			TmuxState:  "live",
-			IssueState: "OPEN",
-			PRSummary:  "#201 open",
-			CIStatus:   "pass",
-			BranchName: "feat/dashboard-filter",
-			Agent:      "codex",
-			Wave:       2,
-			WaveLabel:  "wave5",
-			WaveBadge:  "W2 blocked",
+			Parent:      "142",
+			IssueNum:    115,
+			Name:        "state agent wave filters",
+			TmuxState:   "live",
+			IssueState:  "OPEN",
+			PRSummary:   "#201 open",
+			CIStatus:    "pass",
+			BranchName:  "feat/dashboard-filter",
+			DiffSummary: "+12/-3",
+			DirtyState:  "dirty",
+			Agent:       "codex",
+			Wave:        2,
+			WaveLabel:   "wave5",
+			WaveBadge:   "W2 blocked",
 		},
 		{
 			Parent:     "142",
@@ -393,6 +401,14 @@ func TestFilterPaneViewsSearchesTextAndPredicates(t *testing.T) {
 	got = filterPaneViews(panes, "#115")
 	if len(got) != 1 || got[0].IssueNum != 115 {
 		t.Fatalf("filterPaneViews issue search = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "dirty")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews dirty search = %#v, want only #115", got)
+	}
+	got = filterPaneViews(panes, "+12/-3")
+	if len(got) != 1 || got[0].IssueNum != 115 {
+		t.Fatalf("filterPaneViews diff search = %#v, want only #115", got)
 	}
 }
 
@@ -545,7 +561,7 @@ func TestParentDependenciesFormatsOpenAndClosedBlockers(t *testing.T) {
 func TestLoadMissingIssueDetailsSkipsLookupFailures(t *testing.T) {
 	existing := map[int]bool{100: true}
 
-	got := loadMissingIssueDetails([]int{100, 101, 102}, existing, func(num int) (ghissue.Issue, error) {
+	got, err := loadMissingIssueDetails([]int{100, 101, 102}, existing, func(num int) (ghissue.Issue, error) {
 		if num == 101 {
 			return ghissue.Issue{}, errBoom
 		}
@@ -556,11 +572,40 @@ func TestLoadMissingIssueDetailsSkipsLookupFailures(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("loadMissingIssueDetails() = %#v, want %#v", got, want)
 	}
+	if err == nil || !strings.Contains(err.Error(), "#101") {
+		t.Fatalf("loadMissingIssueDetails() error = %v, want #101 partial error", err)
+	}
 	if existing[101] {
 		t.Fatal("failed lookup should not mark #101 as existing")
 	}
 	if !existing[102] {
 		t.Fatal("loaded lookup should mark #102 as existing")
+	}
+}
+
+func TestMergeParentIssueChildrenReturnsPartialRowsWithLookupError(t *testing.T) {
+	parentBody := "**wave5**\n- [ ] #101 missing child\n- [ ] #102 loaded child\n"
+
+	got, err := mergeParentIssueChildren(100, []ghissue.Issue{{Number: 103, Title: "sub", State: "OPEN"}}, parentBody, nil, func(num int) (ghissue.Issue, error) {
+		if num == 101 {
+			return ghissue.Issue{}, errBoom
+		}
+		return ghissue.Issue{Number: num, Title: "loaded", State: "OPEN"}, nil
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "#101") {
+		t.Fatalf("mergeParentIssueChildren() error = %v, want #101 partial error", err)
+	}
+	gotNums := []int{}
+	for _, issue := range got {
+		gotNums = append(gotNums, issue.Number)
+	}
+	wantNums := []int{103, 102}
+	if !reflect.DeepEqual(gotNums, wantNums) {
+		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, wantNums)
+	}
+	if got[1].Wave != "wave5" {
+		t.Fatalf("partial row wave = %q, want wave5", got[1].Wave)
 	}
 }
 

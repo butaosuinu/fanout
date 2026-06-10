@@ -199,10 +199,11 @@ func (p *poller) refreshGH() {
 func (p *poller) build() sessionview.Snapshot {
 	repo, _, _ := p.ghIdentity()
 	return sessionview.Build(repo, p.projectRoot, sessionview.Collectors{
-		LoadState: sessionview.StateLoader(p.projectRoot),
-		LivePanes: sessionview.LivePanes(),
-		IssuePRs:  p.issuePRsFromCache,
-		Now:       time.Now,
+		LoadState:    sessionview.StateLoader(p.projectRoot),
+		LivePanes:    sessionview.LivePanes(),
+		IssuePRs:     p.issuePRsFromCache,
+		WorktreeStat: sessionview.GitWorktreeStat(p.projectRoot),
+		Now:          time.Now,
 	})
 }
 

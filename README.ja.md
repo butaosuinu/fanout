@@ -17,7 +17,10 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。`/` でロード済み行をメモリ内検索し、
+issue / closed-by PR 状態を定期更新します。各行には pane worktree の
+`git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による
+`dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を
+確認できます。`/` でロード済み行をメモリ内検索し、
 `state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
 フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
 継続します。記録済みの issue 親については親の子一覧も再読込し、

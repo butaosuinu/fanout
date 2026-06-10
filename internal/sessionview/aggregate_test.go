@@ -53,6 +53,12 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 			}
 			return "OPEN", []ghissue.PRRef{}, nil
 		},
+		WorktreeStat: func(path string) (WorktreeStat, error) {
+			if path == "/wt/%1" {
+				return WorktreeStat{DiffSummary: "+12/-3", DirtyState: "dirty"}, nil
+			}
+			return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+		},
 	}
 	snap := Build("owner/name", "/root", c)
 
@@ -73,6 +79,9 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 	}
 	if !p100.Panes[0].HasMergedPR || !p100.Panes[0].Alive || p100.Panes[0].IssueState != "CLOSED" {
 		t.Fatalf("#101 view = %+v", p100.Panes[0])
+	}
+	if p100.Panes[0].DiffSummary != "+12/-3" || p100.Panes[0].DirtyState != "dirty" {
+		t.Fatalf("#101 worktree stat = %q/%q, want +12/-3/dirty", p100.Panes[0].DiffSummary, p100.Panes[0].DirtyState)
 	}
 	if p100.Panes[1].Alive {
 		t.Fatalf("#102 should be dead (paneID %%2 not in live set)")
@@ -161,6 +170,29 @@ func TestBuildCacheMissIsUnknownNotDegraded(t *testing.T) {
 	}
 	if snap.Sessions[0].Panes[0].IssueState != IssueStateUnknown {
 		t.Fatalf("issue state = %q want UNKNOWN", snap.Sessions[0].Panes[0].IssueState)
+	}
+}
+
+func TestBuildWorktreeStatErrorIsPerPane(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		WorktreeStat: func(path string) (WorktreeStat, error) {
+			return WorktreeStat{}, errors.New("git unavailable")
+		},
+	}
+	snap := Build("o/n", "/root", c)
+	got := snap.Sessions[0].Panes[0]
+	if got.DiffSummary != "-" || got.DirtyState != "unknown" {
+		t.Fatalf("worktree stat = %q/%q, want -/unknown", got.DiffSummary, got.DirtyState)
+	}
+	if got.WorktreeErr == "" {
+		t.Fatal("WorktreeErr should carry the per-pane gitstat failure")
+	}
+	if snap.Degraded.GitHub || snap.Degraded.Tmux {
+		t.Fatalf("worktree error should not mark gh/tmux degraded: %+v", snap.Degraded)
 	}
 }
 

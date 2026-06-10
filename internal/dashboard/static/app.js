@@ -23,6 +23,8 @@ function sortValue(pane, key) {
     case "name": return (pane.displayName || pane.slug || "").toLowerCase();
     case "agent": return (pane.agent || "").toLowerCase();
     case "branch": return (pane.branchName || "").toLowerCase();
+    case "diff": return diffMagnitude(pane.diffSummary);
+    case "dirty": return dirtySort(pane.dirtyState);
     case "alive": return pane.alive ? 1 : 0;
     case "issueState": return (pane.issueState || "").toLowerCase();
     case "pr": return prState(pane.prs);
@@ -31,9 +33,20 @@ function sortValue(pane, key) {
 }
 function matches(pane, f) {
   if (!f) return true;
-  return [pane.issueNum, pane.displayName, pane.slug, pane.agent, pane.branchName, pane.issueState]
+  return [pane.issueNum, pane.displayName, pane.slug, pane.agent, pane.branchName, pane.diffSummary, pane.dirtyState, pane.issueState]
     .map((v) => String(v == null ? "" : v).toLowerCase())
     .some((s) => s.includes(f));
+}
+function diffMagnitude(raw) {
+  const m = String(raw || "").match(/\+(\d+)\/-(\d+)/);
+  return m ? Number(m[1]) + Number(m[2]) : -1;
+}
+function dirtySort(raw) {
+  switch (String(raw || "").toLowerCase()) {
+    case "dirty": return 2;
+    case "clean": return 1;
+    default: return 0;
+  }
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
@@ -116,15 +129,28 @@ function draw() {
 function rowHtml(p) {
   const pr = prState(p.prs);
   const ist = p.issueState || "UNKNOWN";
+  const diff = p.diffSummary || "-";
+  const dirty = p.dirtyState || "unknown";
+  const wtErr = p.worktreeErr || "";
   return `<tr>
     <td class="col-num cell-num">#${p.issueNum}</td>
     <td class="cell-name" title="${esc(p.displayName || p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td class="cell-agent">${esc(p.agent || "—")}</td>
     <td class="cell-branch" title="${esc(p.branchName)}">${esc(p.branchName || "—")}</td>
+    <td class="col-diff"><span class="cell-diff ${wtErr ? "warn" : ""}" title="${esc(wtErr || "worktree diff")}">${esc(diff)}</span></td>
+    <td class="col-c"><span class="tag ${dirtyClass(dirty)}" title="${esc(wtErr || "worktree status")}">${esc(dirty)}</span></td>
     <td class="col-c"><span class="dot ${p.alive ? "alive" : ""}" title="${p.alive ? "live" : "exited"}"></span></td>
     <td class="col-c"><span class="tag ${esc(ist)}">${esc(ist.toLowerCase())}</span></td>
     <td class="col-c"><span class="tag ${esc(pr)}">${pr === "none" ? "—" : esc(pr.toLowerCase())}</span></td>
   </tr>`;
+}
+
+function dirtyClass(raw) {
+  switch (String(raw || "").toLowerCase()) {
+    case "dirty": return "dirty";
+    case "clean": return "clean";
+    default: return "UNKNOWN";
+  }
 }
 
 function markSort(headers) {

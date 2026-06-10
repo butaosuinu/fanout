@@ -125,8 +125,11 @@ func TestManualPaneSlugBoundsPromptDerivedSlug(t *testing.T) {
 	if len(got) > naming.MaxSlugLength {
 		t.Fatalf("manualPaneSlug len = %d, want <= %d: %q", len(got), naming.MaxSlugLength, got)
 	}
-	if !strings.HasSuffix(got, "-12") {
-		t.Fatalf("manualPaneSlug = %q, want -12 suffix", got)
+	if !strings.HasPrefix(got, "manual-12-") || !strings.HasSuffix(got, "-pane") {
+		t.Fatalf("manualPaneSlug = %q, want manual-12-...-pane", got)
+	}
+	if strings.HasSuffix(got, "-12") {
+		t.Fatalf("manualPaneSlug = %q, must not end with an issue-like numeric suffix", got)
 	}
 }
 

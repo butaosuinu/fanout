@@ -29,9 +29,10 @@ type Collectors struct {
 	// counts as alive only when its id is present AND the live path is at/under
 	// its recorded worktree — pane ids are reused across tmux server restarts,
 	// so id-only matching would falsely revive stale rows.
-	LivePanes func() (map[string]string, error)
-	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
-	Now       func() time.Time
+	LivePanes    func() (map[string]string, error)
+	IssuePRs     func(num int) (issueState string, prs []ghissue.PRRef, err error)
+	WorktreeStat func(path string) (WorktreeStat, error)
+	Now          func() time.Time
 }
 
 // Build assembles a Snapshot. It never returns an error: a read-only dashboard
@@ -94,6 +95,26 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		}{st, prs}
 		return st, prs
 	}
+	worktreeCache := map[string]struct {
+		stat WorktreeStat
+		err  error
+	}{}
+	fetchWorktree := func(path string) (WorktreeStat, string) {
+		path = strings.TrimSpace(path)
+		if path == "" || c.WorktreeStat == nil {
+			return unknownWorktreeStat(), ""
+		}
+		if got, ok := worktreeCache[path]; ok {
+			return got.stat, errString(got.err)
+		}
+		stat, err := c.WorktreeStat(path)
+		stat = normalizeWorktreeStat(stat)
+		worktreeCache[path] = struct {
+			stat WorktreeStat
+			err  error
+		}{stat, err}
+		return stat, errString(err)
+	}
 
 	grouped := groupByParent(store.Panes)
 	for _, parent := range sortedParents(grouped) {
@@ -103,6 +124,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
 		for _, p := range panes {
 			issueState, prs := fetch(p.IssueNum)
+			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath)
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
 				Slug:         p.Slug,
@@ -116,6 +138,9 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				IssueState:   issueState,
 				PRs:          prs,
 				HasMergedPR:  hasMergedPR(prs),
+				DiffSummary:  worktreeStat.DiffSummary,
+				DirtyState:   worktreeStat.DirtyState,
+				WorktreeErr:  worktreeErr,
 			}
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
@@ -129,6 +154,27 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	}
 	finalize(&snap.Rollup)
 	return snap
+}
+
+func unknownWorktreeStat() WorktreeStat {
+	return WorktreeStat{DiffSummary: "-", DirtyState: "unknown"}
+}
+
+func normalizeWorktreeStat(stat WorktreeStat) WorktreeStat {
+	if stat.DiffSummary == "" {
+		stat.DiffSummary = "-"
+	}
+	if stat.DirtyState == "" {
+		stat.DirtyState = "unknown"
+	}
+	return stat
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func groupByParent(panes []state.Pane) map[string][]state.Pane {

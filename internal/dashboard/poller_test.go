@@ -64,11 +64,13 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 
 func TestDistinctIssueNumsSkipsSyntheticManualPanes(t *testing.T) {
 	got := distinctIssueNums(state.Store{Panes: []state.Pane{
-		{IssueNum: -1},
+		{Parent: "@manual", IssueNum: -1},
+		{Parent: "@manual", IssueNum: -2},
 		{IssueNum: 0},
 		{IssueNum: 102},
 		{IssueNum: 101},
 		{IssueNum: 102},
+		{IssueNum: 101},
 	}})
 
 	want := []int{101, 102}

@@ -32,7 +32,14 @@ type Session struct {
 	Rollup Rollup     `json:"rollup"`
 }
 
-// PaneView is one recorded pane augmented with tmux liveness and gh state.
+// WorktreeStat is the small git status summary for one recorded pane worktree.
+type WorktreeStat struct {
+	DiffSummary string
+	DirtyState  string
+}
+
+// PaneView is one recorded pane augmented with tmux liveness, gh state, and git
+// worktree status.
 type PaneView struct {
 	IssueNum     int             `json:"issueNum"`
 	Slug         string          `json:"slug"`
@@ -46,6 +53,9 @@ type PaneView struct {
 	IssueState   string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
 	PRs          []ghissue.PRRef `json:"prs"`
 	HasMergedPR  bool            `json:"hasMergedPr"`
+	DiffSummary  string          `json:"diffSummary"`           // +X/-Y from git diff --shortstat HEAD
+	DirtyState   string          `json:"dirtyState"`            // dirty / clean / unknown
+	WorktreeErr  string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.

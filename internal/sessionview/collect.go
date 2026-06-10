@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
@@ -32,6 +33,25 @@ func LivePanes() func() (map[string]string, error) {
 			m[p.ID] = p.CurrentPath
 		}
 		return m, nil
+	}
+}
+
+// GitWorktreeStat returns a collector for per-pane worktree diff/dirty state.
+func GitWorktreeStat(projectRoot string) func(string) (WorktreeStat, error) {
+	runner := gitstat.Runner{Cwd: projectRoot}
+	return func(path string) (WorktreeStat, error) {
+		stat, err := runner.Worktree(path)
+		if err != nil {
+			return unknownWorktreeStat(), err
+		}
+		dirty := "clean"
+		if stat.Dirty {
+			dirty = "dirty"
+		}
+		return WorktreeStat{
+			DiffSummary: fmt.Sprintf("+%d/-%d", stat.Additions, stat.Deletions),
+			DirtyState:  dirty,
+		}, nil
 	}
 }
 

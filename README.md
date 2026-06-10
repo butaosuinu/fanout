@@ -17,7 +17,10 @@ tmux it turns the current pane into the console.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
-through the same GitHub CLI source used by `fanout <parent> --status`. Press
+through the same GitHub CLI source used by `fanout <parent> --status`. Each row
+also shows the pane worktree's `git diff --shortstat HEAD` summary as `+X/-Y`
+and `dirty`/`clean` from `git status --porcelain`, so uncommitted work is
+visible without agent instrumentation. Press
 `/` to filter the loaded rows in memory with free-text terms or predicates such
 as `state:open`, `agent:codex`, and `wave:wave5`. Filtering does not trigger
 extra data fetches, and the automatic state / GitHub refresh continues while a
