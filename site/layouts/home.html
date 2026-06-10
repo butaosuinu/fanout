@@ -19,7 +19,8 @@
     <div class="cta rise" style="--d:.74s">
       <div class="install">
         <pre id="install-cmd"><span class="p">curl</span> -fsSL <span class="u">https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh</span> | sh</pre>
-        <button class="copy-btn" type="button" aria-label="{{ i18n "copy" }}">
+        <button class="copy-btn" type="button" aria-label="{{ i18n "copy" }}"
+                data-copy="{{ i18n "copy" }}" data-copied="{{ i18n "copied" }}">
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor"
                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="5.5" y="5.5" width="9" height="9" rx="2"/>
@@ -184,10 +185,10 @@ if (btn) btn.addEventListener('click', async () => {
   const cmd = document.getElementById('install-cmd').textContent.trim();
   try { await navigator.clipboard.writeText(cmd); } catch (e) { /* noop */ }
   btn.classList.add('done');
-  btn.querySelector('span').textContent = {{ i18n "copied" }};
+  btn.querySelector('span').textContent = btn.dataset.copied;
   setTimeout(() => {
     btn.classList.remove('done');
-    btn.querySelector('span').textContent = {{ i18n "copy" }};
+    btn.querySelector('span').textContent = btn.dataset.copy;
   }, 1800);
 });
 </script>
