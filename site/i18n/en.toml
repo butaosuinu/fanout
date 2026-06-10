@@ -1,18 +1,3 @@
-[nav_docs]
-other = "Docs"
-
-[nav_installation]
-other = "Installation"
-
-[nav_quickstart]
-other = "Quickstart"
-
-[nav_workflow]
-other = "Workflow"
-
-[nav_cli]
-other = "CLI Reference"
-
 [docs_section]
 other = "Documentation"
 
@@ -31,11 +16,5 @@ other = "Next"
 [footer_sub]
 other = "Fan a parent issue out into parallel panes — quietly."
 
-[back_to_top]
-other = "Back to top"
-
 [on_this_section]
 other = "Guide"
-
-[edit_note]
-other = "MIT License"

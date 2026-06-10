@@ -1,6 +1,6 @@
 <header class="nav">
   <div class="nav-inner">
-    <a class="brand" href="{{ "/" | relLangURL }}" aria-label="fanout home">
+    <a class="brand" href="{{ site.Home.RelPermalink }}" aria-label="fanout home">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M12 21 3.5 8M12 21 8.6 6.2M12 21l3.4-14.8M12 21 20.5 8"
               stroke="#165E83" stroke-width="1.7" stroke-linecap="round"/>
@@ -11,11 +11,10 @@
       fanout
     </a>
     <ul class="nav-links">
-      <li><a href="{{ "/docs/" | relLangURL }}">{{ i18n "nav_docs" }}</a></li>
-      <li><a href="{{ "/docs/installation/" | relLangURL }}">{{ i18n "nav_installation" }}</a></li>
-      <li><a href="{{ "/docs/quickstart/" | relLangURL }}">{{ i18n "nav_quickstart" }}</a></li>
-      <li><a href="{{ "/docs/workflow/" | relLangURL }}">{{ i18n "nav_workflow" }}</a></li>
-      <li><a href="{{ "/docs/cli/" | relLangURL }}">{{ i18n "nav_cli" }}</a></li>
+      {{ with site.GetPage "/docs" }}<li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>{{ end }}
+      {{ range slice "/docs/installation" "/docs/quickstart" "/docs/workflow" "/docs/cli" }}
+      {{ with site.GetPage . }}<li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>{{ end }}
+      {{ end }}
       <li class="keep">
         <span class="lang-switch" aria-label="language">
           {{ $cur := . -}}

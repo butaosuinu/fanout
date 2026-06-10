@@ -79,8 +79,8 @@ If fanout settings resolve `prReviewGate=false`, child Claude briefings also car
 Notes:
 
 - The gate is HEAD-pinned: any new commit re-arms it, so review again before the PR. The marker is worktree-local, so fanout's parallel panes don't interfere with each other.
-- Detection is a simple, best-effort regex on the command string. Indirect forms (`eval`, `xargs`, `sh -c "<string>"`) can slip through, and a commit message or PR comment body that contains `gh pr create` next to shell operators can trip a false positive — use `FANOUT_SKIP_PR_REVIEW=1` to get past one.
-- Without `jq` the hook fails closed and denies anything that looks like PR creation. Install `jq`, or `export FANOUT_SKIP_PR_REVIEW=1`.
+- Detection runs through a shell tokenizer (a Python companion parser), so command words are distinguished from quoted argument values — a commit message that merely mentions `gh pr create` does not trip it. Indirect forms (`eval`, `xargs`, `sh -c "<string>"`) can still slip through; that is accepted for fanout's normal flow.
+- Without `python3` the hook fails closed: it denies anything that coarsely looks like PR creation. Install `python3`, or `export FANOUT_SKIP_PR_REVIEW=1`.
 - `make install` overwrites a same-named global `post-work-review` skill; back it up first if you maintain your own copy.
 
 ## Project mode returns no items
@@ -115,7 +115,7 @@ Default slug/branch generation adds a parent token before the issue suffix, so t
 ### Why pane creation needs no polling
 
 ```bash
-tmux split-window -t <invoking-pane> -d -P -F '#{pane_id}'
+tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree>
 ```
 
 returns the new pane id synchronously, without selecting the child pane — so no popup interception and no completion polling is needed.

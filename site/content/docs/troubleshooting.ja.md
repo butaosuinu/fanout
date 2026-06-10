@@ -79,8 +79,8 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 メモ:
 
 - ゲートは HEAD に固定されます。新しいコミットを積むと再武装されるので、PR の前にもう一度レビューしてください。marker は worktree ローカルなので、fanout の並列ペイン同士が干渉することはありません。
-- 検出はコマンド文字列に対する単純な正規表現ベースのベストエフォートです。`eval` / `xargs` / `sh -c "<文字列>"` のような間接実行はすり抜けることがあり、コミットメッセージや PR コメントの本文にシェル演算子と一緒に `gh pr create` という文字列を書いた場合などは過検知し得ます — その場合は `FANOUT_SKIP_PR_REVIEW=1` で回避してください。
-- `jq` が無い環境では fail-closed(PR 作成らしきコマンドを deny)になります。`jq` をインストールするか、`export FANOUT_SKIP_PR_REVIEW=1` してください。
+- 検出はシェルトークナイザ(Python 製のコンパニオンパーサ)を通します。コマンド語と引用された引数値を区別するので、コミットメッセージに `gh pr create` と書いただけでは引っかかりません。`eval` / `xargs` / `sh -c "<文字列>"` のような間接実行はすり抜けることがありますが、fanout の通常フローでは許容範囲としています。
+- `python3` が無い環境では fail-closed になり、PR 作成らしきコマンドを粗い判定で deny します。`python3` をインストールするか、`export FANOUT_SKIP_PR_REVIEW=1` してください。
 - `make install` は同名のグローバル `post-work-review` skill を上書きします。独自に管理しているコピーがある場合は事前にバックアップしてください。
 
 ## Project モードで items が取れない
@@ -115,7 +115,7 @@ state・ロック・pane 作成について「なぜそうなっているのか�
 ### pane 作成にポーリングが不要な理由
 
 ```bash
-tmux split-window -t <invoking-pane> -d -P -F '#{pane_id}'
+tmux split-window -t <invoking-pane> -d -h -P -F '#{pane_id}' -c <worktree>
 ```
 
 が子ペインを選択せずに新しい pane id を同期的に返すため、popup の横取りも完了ポーリングも不要です。

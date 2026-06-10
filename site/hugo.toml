@@ -21,7 +21,14 @@ disableKinds = ["taxonomy", "term"]
 
 [params]
   github = "https://github.com/butaosuinu/fanout"
-  installCmd = "curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh"
+
+[page]
+  nextPrevInSectionSortOrder = "asc"
+
+[module]
+  [module.hugoVersion]
+    extended = true
+    min = "0.163.0"
 
 [markup]
   [markup.highlight]

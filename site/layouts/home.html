@@ -30,8 +30,8 @@
       </div>
       <p class="cta-note">{{ .Params.hero.ctaNote }}</p>
       <nav class="cta-links" aria-label="secondary">
-        <a href="{{ "/docs/quickstart/" | relLangURL }}">{{ .Params.hero.ctaQuickstart }} &rarr;</a>
-        <a href="{{ "/docs/installation/" | relLangURL }}">{{ .Params.hero.ctaInstall }} &rarr;</a>
+        {{ with site.GetPage "/docs/quickstart" }}<a href="{{ .RelPermalink }}">{{ $.Params.hero.ctaQuickstart }} &rarr;</a>{{ end }}
+        {{ with site.GetPage "/docs/installation" }}<a href="{{ .RelPermalink }}">{{ $.Params.hero.ctaInstall }} &rarr;</a>{{ end }}
       </nav>
     </div>
   </div>
@@ -52,12 +52,12 @@
       <p>{{ .Params.quickstart.lede | safeHTML }}</p>
     </div>
 
-    <div class="terminal" role="img" aria-label="fanout 123 --agent claude">
+    <div class="terminal" role="img" aria-label="fanout 123 --agent claude --unblocked-only">
       <div class="term-bar">
         <i></i><i></i><i></i>
         <span class="term-title">tmux &mdash; fanout</span>
       </div>
-      <pre><span class="tp">$</span> <span class="tk">fanout 123 --agent claude</span>
+      <pre><span class="tp">$</span> <span class="tk">fanout 123 --agent claude --unblocked-only</span>
 <span class="tp">✓</span> <span class="tn">#124</span> fix-login-timeout   <span class="td">→ pane %12</span>
 <span class="tp">✓</span> <span class="tn">#125</span> update-docs         <span class="td">→ pane %13</span>
 <span class="tp">✓</span> <span class="tn">#126</span> refactor-state      <span class="td">→ pane %14</span>
@@ -86,7 +86,8 @@
         {{ partial "ico.html" .icon }}
         <h3>{{ .title }}</h3>
         <p>{{ .body | safeHTML }}</p>
-        {{ with .link }}<a class="card-link" href="{{ . | relLangURL }}" aria-label="{{ $.Title }}"></a>{{ end }}
+        {{ $t := .title }}
+        {{ with .link }}{{ with site.GetPage . }}<a class="card-link" href="{{ .RelPermalink }}" aria-label="{{ $t }}"></a>{{ end }}{{ end }}
       </article>
       {{ end }}
     </div>
@@ -151,7 +152,7 @@
       {{ end }}
     </div>
     <p style="margin-top:26px; font-size:14px;">
-      <a href="{{ "/docs/cli/" | relLangURL }}">{{ .Params.cli.more }} &rarr;</a>
+      {{ with site.GetPage "/docs/cli" }}<a href="{{ .RelPermalink }}">{{ $.Params.cli.more }} &rarr;</a>{{ end }}
     </p>
   </div>
 </section>
@@ -166,7 +167,7 @@
     <div class="cta">
       <span class="chip" style="font-family:var(--f-code); font-size:14px; padding:12px 26px; border-radius:10px;">$ fanout 123 --agent claude</span>
       <nav class="cta-links" aria-label="footer-cta">
-        <a href="{{ "/docs/" | relLangURL }}">{{ .Params.coda.docsLink }} &rarr;</a>
+        {{ with site.GetPage "/docs" }}<a href="{{ .RelPermalink }}">{{ $.Params.coda.docsLink }} &rarr;</a>{{ end }}
         <a href="{{ site.Params.github }}" target="_blank" rel="noopener">GitHub &nearr;</a>
       </nav>
     </div>
@@ -183,10 +184,10 @@ if (btn) btn.addEventListener('click', async () => {
   const cmd = document.getElementById('install-cmd').textContent.trim();
   try { await navigator.clipboard.writeText(cmd); } catch (e) { /* noop */ }
   btn.classList.add('done');
-  btn.querySelector('span').textContent = {{ i18n "copied" | jsonify }};
+  btn.querySelector('span').textContent = {{ i18n "copied" }};
   setTimeout(() => {
     btn.classList.remove('done');
-    btn.querySelector('span').textContent = {{ i18n "copy" | jsonify }};
+    btn.querySelector('span').textContent = {{ i18n "copy" }};
   }, 1800);
 });
 </script>
