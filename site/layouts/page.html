@@ -1,0 +1,41 @@
+{{ define "main" }}
+<div class="docs">
+  {{ partial "sidebar.html" . }}
+
+  {{ with .Params.kanji }}
+  <div class="tate" aria-hidden="true">
+    <span class="ji">{{ . }}</span>
+    <span class="yomi">{{ $.Params.yomi }}</span>
+  </div>
+  {{ end }}
+
+  <article class="docs-main">
+    <header class="doc-head">
+      <p class="kicker">{{ i18n "docs_section" }}</p>
+      <h1>{{ .Title }}</h1>
+      {{ with .Description }}<p class="lead">{{ . }}</p>{{ end }}
+    </header>
+
+    <div class="prose">
+      {{ .Content }}
+    </div>
+
+    {{ if or .PrevInSection .NextInSection }}
+    <nav class="doc-nav" aria-label="pagination">
+      {{ with .PrevInSection }}
+      <a class="prev" href="{{ .RelPermalink }}">
+        <span class="dir">&larr; {{ i18n "prev_page" }}</span>
+        <span class="t">{{ .LinkTitle }}</span>
+      </a>
+      {{ end }}
+      {{ with .NextInSection }}
+      <a class="next" href="{{ .RelPermalink }}">
+        <span class="dir">{{ i18n "next_page" }} &rarr;</span>
+        <span class="t">{{ .LinkTitle }}</span>
+      </a>
+      {{ end }}
+    </nav>
+    {{ end }}
+  </article>
+</div>
+{{ end }}

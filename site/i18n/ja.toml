@@ -1,0 +1,20 @@
+[docs_section]
+other = "ドキュメント"
+
+[copy]
+other = "コピー"
+
+[copied]
+other = "コピーしました"
+
+[prev_page]
+other = "前へ"
+
+[next_page]
+other = "次へ"
+
+[footer_sub]
+other = "ひとつの親 issue を、扇のように。"
+
+[on_this_section]
+other = "ガイド"

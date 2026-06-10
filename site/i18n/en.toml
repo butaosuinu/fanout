@@ -1,0 +1,20 @@
+[docs_section]
+other = "Documentation"
+
+[copy]
+other = "Copy"
+
+[copied]
+other = "Copied"
+
+[prev_page]
+other = "Previous"
+
+[next_page]
+other = "Next"
+
+[footer_sub]
+other = "Fan a parent issue out into parallel panes — quietly."
+
+[on_this_section]
+other = "Guide"

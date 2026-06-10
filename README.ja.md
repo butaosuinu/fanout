@@ -4,6 +4,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**ドキュメントサイト:** <https://butaosuinu.github.io/fanout/ja/> —
+インストールからワークフロー、CLI リファレンスまでの完全ガイド(日英)。
+
 `fanout` は、並列 issue 作業のための standalone な tmux ベースのコンソール兼
 ランチャーです。引数なしの `fanout` で現在のリポジトリ用の常駐 TUI コンソールを
 開き、manual agent pane の作成、既存 child pane への focus、close / merge /

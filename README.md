@@ -4,6 +4,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**Docs site:** <https://butaosuinu.github.io/fanout/> — installation, workflow,
+CLI reference and more, in English and Japanese.
+
 `fanout` is a standalone tmux-based console and launcher for parallel issue
 work. Run `fanout` with no arguments to open the persistent TUI console for the
 current repository; from there you can create manual agent panes, focus existing

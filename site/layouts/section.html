@@ -1,0 +1,27 @@
+{{ define "main" }}
+<div class="docs docs-index">
+  {{ partial "sidebar.html" . }}
+
+  <article class="docs-main">
+    <header class="doc-head">
+      <p class="kicker">{{ i18n "docs_section" }}</p>
+      <h1>{{ .Title }}</h1>
+      {{ with .Description }}<p class="lead">{{ . }}</p>{{ end }}
+    </header>
+
+    <div class="prose">
+      {{ .Content }}
+    </div>
+
+    <div class="cards">
+      {{ range .Pages.ByWeight }}
+      <article class="card">
+        <h3>{{ with .Params.kanji }}<span class="ji" aria-hidden="true">{{ . }}</span>{{ end }}{{ .LinkTitle }}</h3>
+        <p>{{ .Description }}</p>
+        <a class="card-link" href="{{ .RelPermalink }}" aria-label="{{ .LinkTitle }}"></a>
+      </article>
+      {{ end }}
+    </div>
+  </article>
+</div>
+{{ end }}

@@ -1,0 +1,15 @@
+<aside class="docs-side">
+  <p class="side-kicker">{{ i18n "on_this_section" }}</p>
+  <ul>
+    {{ $cur := . }}
+    {{ range (where .Site.RegularPages "Section" "docs").ByWeight }}
+    <li>
+      <a href="{{ .RelPermalink }}"{{ if .Eq $cur }} aria-current="page"{{ end }}>
+        <span class="ji" aria-hidden="true">{{ .Params.kanji }}</span>
+        {{ .LinkTitle }}
+      </a>
+    </li>
+    {{ end }}
+  </ul>
+  <a class="side-home" href="{{ site.Home.RelPermalink }}">&larr; fanout</a>
+</aside>
