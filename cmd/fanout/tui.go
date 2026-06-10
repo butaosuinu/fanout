@@ -15,7 +15,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/log"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
+	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
@@ -42,6 +44,18 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
+	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	notifier, err := fanoutnotify.New(fanoutnotify.Config{
+		Channels:        resolvedSettings.Notifications,
+		TmuxTarget:      session,
+		NtfyURL:         resolvedSettings.NtfyURL,
+		SlackWebhookURL: resolvedSettings.SlackWebhookURL,
+		BellWriter:      os.Stdout,
+	})
+	if err != nil {
+		lg.Err("notifications: %v", err)
+		return exitcode.Env
+	}
 	restoreTitle := markTUIRunning()
 	defer restoreTitle()
 	if err := fanouttui.Run(fanouttui.Options{
@@ -51,6 +65,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		GHInterval:    20 * time.Second,
 		DefaultAgent:  defaultTUIAgent(),
 		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName),
+		Notifier:      notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
 		return exitcode.Env

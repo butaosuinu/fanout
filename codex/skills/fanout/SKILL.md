@@ -58,6 +58,9 @@ session or child panes.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
 branch, and `x` cleans up merged/closed siblings for the same parent after
 confirmation.
+The TUI also compares consecutive GitHub snapshots and notifies once per
+transition when a child becomes merged, CI turns failing, or a child becomes
+waiting on an open blocker; channels are configured through fanout settings.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form

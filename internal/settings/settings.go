@@ -22,6 +22,9 @@ type Settings struct {
 	AgentTeamsHint     bool
 	PRVisualization    bool
 	DashboardKeybind   bool
+	Notifications      string
+	NtfyURL            string
+	SlackWebhookURL    string
 }
 
 // CLIOverrides holds tri-state command-line overrides. nil means the flag was
@@ -42,6 +45,9 @@ type overrides struct {
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
+	Notifications      *string
+	NtfyURL            *string
+	SlackWebhookURL    *string
 }
 
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
@@ -57,6 +63,7 @@ func Defaults() Settings {
 		AgentTeamsHint:     true,
 		PRVisualization:    true,
 		DashboardKeybind:   true,
+		Notifications:      "bell",
 	}
 }
 
@@ -66,10 +73,10 @@ func Resolve(projectRoot string, cli CLIOverrides, warnf WarnFunc) Settings {
 	out := Defaults()
 	apply(&out, loadFile(UserConfigPath(), warnf))
 	if projectRoot != "" {
-		apply(&out, loadFile(RepoConfigPath(projectRoot), warnf))
+		apply(&out, repoOverrides(RepoConfigPath(projectRoot), warnf))
 	}
 	apply(&out, envOverrides(warnf))
-	apply(&out, overrides(cli))
+	apply(&out, cliOverrides(cli))
 	return out
 }
 
@@ -110,6 +117,76 @@ func apply(s *Settings, o overrides) {
 	if o.DashboardKeybind != nil {
 		s.DashboardKeybind = *o.DashboardKeybind
 	}
+	if o.Notifications != nil {
+		s.Notifications = *o.Notifications
+	}
+	if o.NtfyURL != nil {
+		s.NtfyURL = *o.NtfyURL
+	}
+	if o.SlackWebhookURL != nil {
+		s.SlackWebhookURL = *o.SlackWebhookURL
+	}
+}
+
+func cliOverrides(cli CLIOverrides) overrides {
+	return overrides{
+		AutoPullRequest:    cli.AutoPullRequest,
+		PRReviewGate:       cli.PRReviewGate,
+		BriefingCodeReview: cli.BriefingCodeReview,
+		AgentTeamsHint:     cli.AgentTeamsHint,
+		PRVisualization:    cli.PRVisualization,
+		DashboardKeybind:   cli.DashboardKeybind,
+	}
+}
+
+func repoOverrides(path string, warnf WarnFunc) overrides {
+	out := loadFile(path, warnf)
+	if out.NtfyURL != nil {
+		warn(warnf, "settings %s: ntfyURL is ignored in repo config; use user config or FANOUT_NTFY_URL", path)
+		out.NtfyURL = nil
+	}
+	if out.SlackWebhookURL != nil {
+		warn(warnf, "settings %s: slackWebhookURL is ignored in repo config; use user config or FANOUT_SLACK_WEBHOOK_URL", path)
+		out.SlackWebhookURL = nil
+	}
+	if out.Notifications != nil {
+		out.Notifications = repoSafeNotifications(path, *out.Notifications, warnf)
+	}
+	return out
+}
+
+func repoSafeNotifications(path, raw string, warnf WarnFunc) *string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	if len(parts) == 0 {
+		return nil
+	}
+	safe := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		ch := strings.ToLower(strings.TrimSpace(part))
+		if ch == "" || seen[ch] {
+			continue
+		}
+		switch ch {
+		case "ntfy", "slack":
+			warn(warnf, "settings %s: notification channel %q is ignored in repo config; use user config or FANOUT_NOTIFICATIONS", path, ch)
+		case "none":
+			none := "none"
+			return &none
+		case "bell", "tmux":
+			seen[ch] = true
+			safe = append(safe, ch)
+		default:
+			warn(warnf, "settings %s: notification channel %q is ignored in repo config; allowed repo channels are bell, tmux, none", path, ch)
+		}
+	}
+	if len(safe) == 0 {
+		return nil
+	}
+	value := strings.Join(safe, ",")
+	return &value
 }
 
 func loadFile(path string, warnf WarnFunc) overrides {
@@ -132,7 +209,7 @@ func loadFile(path string, warnf WarnFunc) overrides {
 	}
 
 	var out overrides
-	known := map[string]func(*bool){
+	boolKeys := map[string]func(*bool){
 		"autoPullRequest":    func(v *bool) { out.AutoPullRequest = v },
 		"prReviewGate":       func(v *bool) { out.PRReviewGate = v },
 		"briefingCodeReview": func(v *bool) { out.BriefingCodeReview = v },
@@ -140,22 +217,39 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
 		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
 	}
+	stringKeys := map[string]func(*string){
+		"notifications":   func(v *string) { out.Notifications = v },
+		"ntfyURL":         func(v *string) { out.NtfyURL = v },
+		"slackWebhookURL": func(v *string) { out.SlackWebhookURL = v },
+	}
 	for key, raw := range root {
-		set, ok := known[key]
-		if !ok {
-			warn(warnf, "settings %s: unknown key %q (ignored)", path, key)
+		if set, ok := boolKeys[key]; ok {
+			if strings.TrimSpace(string(raw)) == "null" {
+				warn(warnf, "settings %s: %s must be a boolean (ignored)", path, key)
+				continue
+			}
+			var v bool
+			if err := json.Unmarshal(raw, &v); err != nil {
+				warn(warnf, "settings %s: %s must be a boolean (ignored)", path, key)
+				continue
+			}
+			set(&v)
 			continue
 		}
-		if strings.TrimSpace(string(raw)) == "null" {
-			warn(warnf, "settings %s: %s must be a boolean (ignored)", path, key)
+		if set, ok := stringKeys[key]; ok {
+			if strings.TrimSpace(string(raw)) == "null" {
+				warn(warnf, "settings %s: %s must be a string (ignored)", path, key)
+				continue
+			}
+			var v string
+			if err := json.Unmarshal(raw, &v); err != nil {
+				warn(warnf, "settings %s: %s must be a string (ignored)", path, key)
+				continue
+			}
+			set(&v)
 			continue
 		}
-		var v bool
-		if err := json.Unmarshal(raw, &v); err != nil {
-			warn(warnf, "settings %s: %s must be a boolean (ignored)", path, key)
-			continue
-		}
-		set(&v)
+		warn(warnf, "settings %s: unknown key %q (ignored)", path, key)
 	}
 	return out
 }
@@ -180,6 +274,16 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
+	readString := func(name string, set func(*string)) {
+		raw, ok := os.LookupEnv(name)
+		if !ok {
+			return
+		}
+		set(&raw)
+	}
+	readString("FANOUT_NOTIFICATIONS", func(v *string) { out.Notifications = v })
+	readString("FANOUT_NTFY_URL", func(v *string) { out.NtfyURL = v })
+	readString("FANOUT_SLACK_WEBHOOK_URL", func(v *string) { out.SlackWebhookURL = v })
 	return out
 }
 

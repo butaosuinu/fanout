@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/charmbracelet/bubbles/table"
@@ -45,6 +46,7 @@ type Options struct {
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
 	CapturePaneOutput func(string, int) (string, error)
+	Notifier          transitionNotifier
 	lifecycle         lifecycleRunner
 }
 
@@ -71,6 +73,20 @@ type issueStatus struct {
 	WaveLabel       string
 	Blockers        string
 	HasOpenBlockers bool
+}
+
+type transitionNotifier interface {
+	Notify([]fanoutnotify.Event) error
+}
+
+type issueTransitionSnapshot struct {
+	State     string
+	HasMerged bool
+	CIStatus  string
+	Waiting   bool
+	PRNumber  int
+	Title     string
+	Blockers  string
 }
 
 type paneView struct {
@@ -147,6 +163,7 @@ type model struct {
 	lastGH          time.Time
 	stateErr        string
 	ghErr           string
+	notifyErr       string
 	notice          string
 	newPane         newPaneForm
 	peek            panePeek
@@ -154,6 +171,8 @@ type model struct {
 	actionRunning   bool
 	quitAfterAction bool
 	actionMessage   string
+	notifications   map[issueKey]issueTransitionSnapshot
+	notifyPrimed    bool
 }
 
 type paneFilter struct {
@@ -227,6 +246,10 @@ type stateTickMsg time.Time
 type ghTickMsg time.Time
 type launchPaneMsg struct {
 	err error
+}
+type transitionNotifiedMsg struct {
+	count int
+	err   error
 }
 
 var errPaneNotAlive = errors.New("pane is no longer live")
@@ -331,11 +354,12 @@ func newModel(opts Options) model {
 	t.SetStyles(styles)
 
 	return model{
-		opts:   opts,
-		mode:   modeMonitor,
-		table:  t,
-		detail: viewport.New(120, detailHeight),
-		issues: map[issueKey]issueStatus{},
+		opts:          opts,
+		mode:          modeMonitor,
+		table:         t,
+		detail:        viewport.New(120, detailHeight),
+		issues:        map[issueKey]issueStatus{},
+		notifications: map[issueKey]issueTransitionSnapshot{},
 	}
 }
 
@@ -430,15 +454,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ghErr = ""
 		}
+		var notifyCmd tea.Cmd
 		if msg.issues != nil {
+			wasPrimed := m.notifyPrimed
+			events := detectIssueTransitions(m.notifications, msg.issues)
+			if msg.err == nil {
+				m.notifications = issueTransitionSnapshots(msg.issues)
+				if !m.notifyPrimed {
+					m.notifyPrimed = true
+				}
+			} else if wasPrimed {
+				m.notifications = mergePartialIssueTransitionSnapshots(m.notifications, msg.issues)
+			}
+			if wasPrimed {
+				notifyCmd = m.notifyEventsCmd(events)
+				if len(events) > 0 {
+					m.notice = transitionNotice(events)
+				}
+			}
 			m.issues = msg.issues
 		}
 		m.lastGH = msg.at
 		m.refreshRows()
 		if msg.scheduleNext {
-			return m, tea.Tick(m.opts.GHInterval, func(t time.Time) tea.Msg { return ghTickMsg(t) })
+			return m, tea.Batch(
+				tea.Tick(m.opts.GHInterval, func(t time.Time) tea.Msg { return ghTickMsg(t) }),
+				notifyCmd,
+			)
 		}
-		return m, nil
+		return m, notifyCmd
 	case lifecycleDoneMsg:
 		m.actionRunning = false
 		m.actionMessage = lifecycleResultMessage(msg)
@@ -481,6 +525,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.peek = panePeek{PaneID: msg.paneID, Output: msg.output, At: msg.at}
 		}
 		m.refreshDetail()
+		return m, nil
+	case transitionNotifiedMsg:
+		if msg.err != nil {
+			m.notifyErr = msg.err.Error()
+		} else {
+			m.notifyErr = ""
+		}
 		return m, nil
 	}
 	return m, nil
@@ -532,6 +583,9 @@ func (m model) View() string {
 	}
 	if m.ghErr != "" {
 		footer += "\n" + warnStyle.Render("gh: "+m.ghErr)
+	}
+	if m.notifyErr != "" {
+		footer += "\n" + warnStyle.Render("notify: "+m.notifyErr)
 	}
 
 	if m.mode == modeNewPane {
@@ -1001,6 +1055,17 @@ func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
 	}
 }
 
+func (m model) notifyEventsCmd(events []fanoutnotify.Event) tea.Cmd {
+	if len(events) == 0 || m.opts.Notifier == nil {
+		return nil
+	}
+	notifier := m.opts.Notifier
+	events = append([]fanoutnotify.Event(nil), events...)
+	return func() tea.Msg {
+		return transitionNotifiedMsg{count: len(events), err: notifier.Notify(events)}
+	}
+}
+
 func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneView, error) {
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
@@ -1082,6 +1147,117 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 		}
 	}
 	return statuses, loadErr
+}
+
+func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, current map[issueKey]issueStatus) []fanoutnotify.Event {
+	if len(previous) == 0 || len(current) == 0 {
+		return nil
+	}
+	keys := sortedIssueKeys(current)
+	events := []fanoutnotify.Event{}
+	for _, key := range keys {
+		prev, ok := previous[key]
+		if !ok {
+			continue
+		}
+		next := transitionSnapshot(current[key])
+		if !prev.HasMerged && next.HasMerged {
+			events = append(events, transitionEvent(fanoutnotify.EventMerged, key, next))
+		}
+		if prev.CIStatus != "fail" && next.CIStatus == "fail" {
+			events = append(events, transitionEvent(fanoutnotify.EventCIFailed, key, next))
+		}
+		if !prev.Waiting && next.Waiting {
+			events = append(events, transitionEvent(fanoutnotify.EventWaiting, key, next))
+		}
+	}
+	return events
+}
+
+func issueTransitionSnapshots(statuses map[issueKey]issueStatus) map[issueKey]issueTransitionSnapshot {
+	out := make(map[issueKey]issueTransitionSnapshot, len(statuses))
+	for key, status := range statuses {
+		out[key] = transitionSnapshot(status)
+	}
+	return out
+}
+
+func mergePartialIssueTransitionSnapshots(previous map[issueKey]issueTransitionSnapshot, statuses map[issueKey]issueStatus) map[issueKey]issueTransitionSnapshot {
+	out := make(map[issueKey]issueTransitionSnapshot, len(previous))
+	for key, snapshot := range previous {
+		out[key] = snapshot
+	}
+	for key, status := range statuses {
+		current := transitionSnapshot(status)
+		if prev, ok := previous[key]; ok {
+			current = mergePartialIssueTransitionSnapshot(prev, current)
+		}
+		out[key] = current
+	}
+	return out
+}
+
+func mergePartialIssueTransitionSnapshot(previous, current issueTransitionSnapshot) issueTransitionSnapshot {
+	if previous.HasMerged && !current.HasMerged {
+		current.HasMerged = true
+		if current.PRNumber == 0 {
+			current.PRNumber = previous.PRNumber
+		}
+	}
+	if previous.Waiting && !current.Waiting && !current.HasMerged && current.State != "CLOSED" && current.Blockers == "-" {
+		current.Waiting = true
+		current.Blockers = previous.Blockers
+	}
+	return current
+}
+
+func transitionSnapshot(status issueStatus) issueTransitionSnapshot {
+	pr, _ := selectedPR(status.PRs)
+	return issueTransitionSnapshot{
+		State:     strings.ToUpper(strings.TrimSpace(status.State)),
+		HasMerged: hasMergedPR(status.PRs),
+		CIStatus:  strings.ToLower(strings.TrimSpace(summarizePRCI(status.PRs))),
+		Waiting:   status.HasOpenBlockers || strings.EqualFold(status.State, "WAITING"),
+		PRNumber:  pr.Number,
+		Title:     status.Title,
+		Blockers:  status.Blockers,
+	}
+}
+
+func transitionEvent(kind fanoutnotify.EventKind, key issueKey, snapshot issueTransitionSnapshot) fanoutnotify.Event {
+	return fanoutnotify.Event{
+		Kind:     kind,
+		Parent:   key.Parent,
+		IssueNum: key.Num,
+		Title:    snapshot.Title,
+		PRNumber: snapshot.PRNumber,
+		CIStatus: snapshot.CIStatus,
+		Blockers: snapshot.Blockers,
+	}
+}
+
+func sortedIssueKeys(statuses map[issueKey]issueStatus) []issueKey {
+	keys := make([]issueKey, 0, len(statuses))
+	for key := range statuses {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Parent != keys[j].Parent {
+			return keys[i].Parent < keys[j].Parent
+		}
+		return keys[i].Num < keys[j].Num
+	})
+	return keys
+}
+
+func transitionNotice(events []fanoutnotify.Event) string {
+	if len(events) == 0 {
+		return ""
+	}
+	if len(events) == 1 {
+		return events[0].Message()
+	}
+	return fmt.Sprintf("%d state changes: %s", len(events), events[0].Message())
 }
 
 func loadParentIssues(gh ghissue.Runner, parent string, panes []state.Pane) ([]ghissue.Issue, string, error) {
