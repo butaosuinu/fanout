@@ -29,9 +29,7 @@ const (
 	codexPlanTUIStartupPoll    = 200 * time.Millisecond
 )
 
-var (
-	errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex Plan TUI startup")
-)
+var errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex Plan TUI startup")
 
 type paneRequest struct {
 	ParentRef           string
