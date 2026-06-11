@@ -9,7 +9,11 @@ code in this repository.
 (`go build ./cmd/fanout`) and places it at `$(BINDIR)/fanout`. `make build-go`
 produces the local `./fanout-go` binary the tests exercise; `make test` runs
 the Go unit tests plus the bats black-box suite against that binary via
-`FANOUT_BIN`; `make lint` is go vet + gofmt + shellcheck of the test shims.
+`FANOUT_BIN`; `make lint` is pinned golangci-lint v2 (`.golangci-lint-version`,
+config `.golangci.yml`) + shellcheck of the test shims. `make fmt` formats
+(gofumpt/goimports), `make fix` runs `go fix` idiom updates (run `make test`
+after applying), and `make vuln` runs govulncheck (network; deliberately not
+part of `lint`).
 
 The Claude Code integration files (`claude/commands/fanout.md` slash command
 and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file

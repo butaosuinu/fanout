@@ -191,7 +191,10 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 make test           # Go ユニットテスト + Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
-make lint           # go vet + gofmt + テスト用 shim の shellcheck
+make lint           # pinned golangci-lint v2 (.golangci.yml) + テスト用 shim の shellcheck
+make fmt            # golangci-lint fmt による gofumpt/goimports 整形
+make fix            # go fix のイディオム更新 (適用後は make test を実行)
+make vuln           # govulncheck (ネットワーク要。意図的に make lint には含めない)
 make build-go       # Go CLI を ./fanout-go としてビルド
 ```
 

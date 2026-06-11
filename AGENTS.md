@@ -8,8 +8,11 @@ repository.
 `fanout` is a Go CLI (`cmd/fanout` + `internal/`); `make install` builds it
 (`go build ./cmd/fanout`) and installs it at `$(BINDIR)/fanout`. `make build-go`
 produces the local `./fanout-go` binary; `make test` runs the Go unit tests plus
-the bats black-box suite against it (via `FANOUT_BIN`); `make lint` is
-go vet + gofmt + a shellcheck of the test shims.
+the bats black-box suite against it (via `FANOUT_BIN`); `make lint` is the
+pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) plus
+a shellcheck of the test shims. `make fmt` formats (gofumpt/goimports),
+`make fix` runs `go fix` idiom updates (run `make test` after applying), and
+`make vuln` runs govulncheck.
 
 Source-of-truth integration files:
 
@@ -36,12 +39,23 @@ the README before changing CLI behavior.
   inside tmux.
 - Validate logic without creating worktrees or panes by appending `--dry-run`,
   e.g. `./fanout-go <parent-issue> --agent claude --dry-run`.
-- Lint with `make lint` (go vet + gofmt + a shellcheck of the bats test shims).
-  Treat shellcheck quoting warnings on the shims as real.
+- Lint with `make lint` (pinned golangci-lint v2 + a shellcheck of the bats
+  test shims). Treat shellcheck quoting warnings on the shims as real.
 - Run `make test` (Go unit tests + Tier 1/Tier 2 bats against `./fanout-go`)
   before relying on a change.
 - A live end-to-end test requires tmux, an agent CLI, and a real GitHub parent
   issue or Project with OPEN child issues. There is no mock layer.
+
+## Lint / Format Conventions
+
+- Discard an error on purpose with `_ =` plus a comment stating why it is safe
+  to ignore; never leave a call silently unchecked.
+- `make lint` is the source of truth. Editor integrations may run a different
+  golangci-lint version; the pinned version (`.golangci-lint-version`) wins.
+- To bump golangci-lint, edit `.golangci-lint-version` (the Makefile and the
+  CI lint job both read it) and fix any new findings in the same PR.
+- Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone
+  so bulk-formatting commits stay out of `git blame`.
 
 ## Architecture Notes
 

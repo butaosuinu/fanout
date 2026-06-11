@@ -1,0 +1,28 @@
+# Isolated from the required lint gate on purpose: govulncheck fetches the
+# vulnerability DB over the network and can fail on new CVEs without any code
+# change. Do not add this workflow to branch-protection required checks.
+# `make vuln` (go.mod tool directive) keeps the local/CI versions identical.
+name: vuln
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ['go.mod', 'go.sum', '**.go', '.github/workflows/vuln.yml']
+  schedule:
+    - cron: '17 21 * * 1'   # weekly, Tuesday 06:17 JST
+  workflow_dispatch:
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: make vuln

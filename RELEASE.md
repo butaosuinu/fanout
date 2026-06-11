@@ -43,7 +43,7 @@ no goreleaser config — the workflow is the whole pipeline.
    ```bash
    gh run list --branch main --workflow test.yml --limit 1 \
      --json headSha,conclusion          # conclusion == "success" on main's tip
-   make test && make lint                # optional local re-check
+   make test && make lint && make vuln   # optional local re-check (vuln needs network)
    git tag -l vX.Y.Z                     # must be empty — tag not yet used
    ```
 
