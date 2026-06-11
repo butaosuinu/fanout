@@ -195,20 +195,20 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
 		"--post-dashboard":          func(cfg *Config) { cfg.PostDashboard = true },
 		"--cleanup":                 func(cfg *Config) { cfg.CleanupMode = true },
-		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = boolPtr(true) },
-		"--no-auto-pr":              func(cfg *Config) { cfg.AutoPullRequest = boolPtr(false) },
-		"--pr-review-gate":          func(cfg *Config) { cfg.PRReviewGate = boolPtr(true) },
-		"--no-pr-review-gate":       func(cfg *Config) { cfg.PRReviewGate = boolPtr(false) },
-		"--briefing-code-review":    func(cfg *Config) { cfg.BriefingCodeReview = boolPtr(true) },
-		"--no-briefing-code-review": func(cfg *Config) { cfg.BriefingCodeReview = boolPtr(false) },
-		"--agent-teams-hint":        func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(true) },
-		"--no-agent-teams-hint":     func(cfg *Config) { cfg.AgentTeamsHint = boolPtr(false) },
-		"--codex-plan-mode":         func(cfg *Config) { cfg.CodexPlanMode = boolPtr(true) },
-		"--no-codex-plan-mode":      func(cfg *Config) { cfg.CodexPlanMode = boolPtr(false) },
-		"--pr-visualization":        func(cfg *Config) { cfg.PRVisualization = boolPtr(true) },
-		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = boolPtr(false) },
-		"--dashboard-keybind":       func(cfg *Config) { cfg.DashboardKeybind = boolPtr(true) },
-		"--no-dashboard-keybind":    func(cfg *Config) { cfg.DashboardKeybind = boolPtr(false) },
+		"--auto-pr":                 func(cfg *Config) { cfg.AutoPullRequest = new(true) },
+		"--no-auto-pr":              func(cfg *Config) { cfg.AutoPullRequest = new(false) },
+		"--pr-review-gate":          func(cfg *Config) { cfg.PRReviewGate = new(true) },
+		"--no-pr-review-gate":       func(cfg *Config) { cfg.PRReviewGate = new(false) },
+		"--briefing-code-review":    func(cfg *Config) { cfg.BriefingCodeReview = new(true) },
+		"--no-briefing-code-review": func(cfg *Config) { cfg.BriefingCodeReview = new(false) },
+		"--agent-teams-hint":        func(cfg *Config) { cfg.AgentTeamsHint = new(true) },
+		"--no-agent-teams-hint":     func(cfg *Config) { cfg.AgentTeamsHint = new(false) },
+		"--codex-plan-mode":         func(cfg *Config) { cfg.CodexPlanMode = new(true) },
+		"--no-codex-plan-mode":      func(cfg *Config) { cfg.CodexPlanMode = new(false) },
+		"--pr-visualization":        func(cfg *Config) { cfg.PRVisualization = new(true) },
+		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = new(false) },
+		"--dashboard-keybind":       func(cfg *Config) { cfg.DashboardKeybind = new(true) },
+		"--no-dashboard-keybind":    func(cfg *Config) { cfg.DashboardKeybind = new(false) },
 	}
 
 	requireValue := func(flag string, i int) (string, bool) {
@@ -288,10 +288,6 @@ type parseState struct {
 
 type valueOption func(*Config, *parseState, string) error
 type boolOption func(*Config)
-
-func boolPtr(v bool) *bool {
-	return &v
-}
 
 func setParent(parent *string, arg string, lg *log.Logger) bool {
 	if *parent == "" {

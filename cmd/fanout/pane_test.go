@@ -173,7 +173,7 @@ func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
 }
 
 func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
-	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: boolPtr(true)}
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
 
 	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
@@ -195,7 +195,7 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 }
 
 func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testing.T) {
-	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: boolPtr(true)}
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: new(true)}
 	req := paneRequest{
 		Number:              1,
 		Prompt:              "[fanout #1] plan",

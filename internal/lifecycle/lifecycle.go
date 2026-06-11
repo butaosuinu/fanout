@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
@@ -293,7 +293,7 @@ func sortedUnique(nums []int) []int {
 	for num := range set {
 		out = append(out, num)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out
 }
 

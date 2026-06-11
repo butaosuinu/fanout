@@ -2,7 +2,8 @@ package main
 
 import (
 	"fmt"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
@@ -32,7 +33,7 @@ func logAlreadyFanned(skipped []int, lg *log.Logger) {
 	if len(skipped) == 0 {
 		return
 	}
-	sort.Ints(skipped)
+	slices.Sort(skipped)
 	parts := make([]string, len(skipped))
 	for i, num := range skipped {
 		parts[i] = fmt.Sprintf("#%d", num)
@@ -114,7 +115,7 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 func issueCSV(issues []ghissue.Issue) string {
 	nums := make([]string, len(issues))
 	for i, issue := range issues {
-		nums[i] = fmt.Sprintf("%d", issue.Number)
+		nums[i] = strconv.Itoa(issue.Number)
 	}
 	return strings.Join(nums, ",")
 }

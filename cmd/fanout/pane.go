@@ -336,10 +336,7 @@ func manualPaneSlug(title string, number int) string {
 	}
 	prefix := fmt.Sprintf("manual-%d-", number)
 	suffix := "-pane"
-	maxBase := naming.MaxSlugLength - len(prefix) - len(suffix)
-	if maxBase < 1 {
-		maxBase = 1
-	}
+	maxBase := max(naming.MaxSlugLength-len(prefix)-len(suffix), 1)
 	if len(base) > maxBase {
 		base = strings.Trim(base[:maxBase], "-")
 		if base == "" {

@@ -299,8 +299,8 @@ func checkedOutWorktree(root, branch string) string {
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, "worktree ") {
-			current = strings.TrimPrefix(line, "worktree ")
+		if after, ok := strings.CutPrefix(line, "worktree "); ok {
+			current = after
 			continue
 		}
 		if strings.TrimPrefix(line, "branch refs/heads/") == branch {

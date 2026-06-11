@@ -270,7 +270,7 @@ func TestEnsureLocalExcludeIsIdempotent(t *testing.T) {
 
 func countLines(body, want string) int {
 	var count int
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if line == want {
 			count++
 		}

@@ -42,11 +42,11 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:          "700",
 		Agent:              "claude",
-		AutoPullRequest:    boolPtr(false),
-		PRReviewGate:       boolPtr(true),
-		BriefingCodeReview: boolPtr(false),
-		AgentTeamsHint:     boolPtr(false),
-		PRVisualization:    boolPtr(true),
+		AutoPullRequest:    new(false),
+		PRReviewGate:       new(true),
+		BriefingCodeReview: new(false),
+		AgentTeamsHint:     new(false),
+		PRVisualization:    new(true),
 	}
 
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
@@ -67,7 +67,7 @@ func TestPrintSummaryPreservesCodexPlanModeInLimitRerunHint(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:     "700",
 		Agent:         "codex",
-		CodexPlanMode: boolPtr(true),
+		CodexPlanMode: new(true),
 	}
 
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
@@ -180,8 +180,4 @@ func TestShellQuoteIsCopyPasteSafe(t *testing.T) {
 			}
 		})
 	}
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }

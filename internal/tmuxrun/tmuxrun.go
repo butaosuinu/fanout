@@ -86,7 +86,7 @@ func ListLivePanes() ([]LivePane, error) {
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
 	var panes []LivePane
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
