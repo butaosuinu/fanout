@@ -81,13 +81,17 @@ Build the binary with `make build-go` and validate with `make test`.
   for the dashboard), and `BindDashboardKey`.
 - `internal/sessionview` is the shared read-only data layer: it aggregates
   `.fanout/state.json` + tmux liveness + GitHub PR state into a `Snapshot`
-  grouped by parent ("Session"). IO is injected via `Collectors` so it is pure
-  and unit-testable; both the web dashboard (now) and a future TUI consume the
-  same `Build`.
+  grouped by parent ("Session"); pane rows carry wave/blockers, CI status, the
+  tmux pane title, and the original prompt. IO is injected via `Collectors`
+  (the `LivePanes` collector returns each live pane's current path and title)
+  so it is pure and unit-testable; both the web dashboard (now) and a future
+  TUI consume the same `Build`.
 - `internal/dashboard` is the localhost web server: `server.go` (GET-only mux,
   token middleware, SSE), `poller.go` (two-tier state/tmux + throttled gh
-  refresh, broadcast on change), `sse.go` (channel hub), `runfile.go`
-  (`.fanout/dashboard.json` reuse-if-running), and an embedded `static/` SPA.
+  refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
+  (`GET /api/peek`, a read-only capture-pane of one recorded pane),
+  `runfile.go` (`.fanout/dashboard.json` reuse-if-running), and an embedded
+  `static/` SPA (PAPER BREEZE light/dark, matching the docs site).
 - `internal/agent` maps supported agents (`claude`, `codex`) to launch
   commands and validates installed CLIs for live mode.
 - `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
@@ -116,7 +120,10 @@ Build the binary with `make build-go` and validate with `make test`.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
   carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
-  state. The "no HTTP/sockets" guidance elsewhere is about the legacy
+  state. `GET /api/peek` stays inside that boundary (a read-only
+  `tmux capture-pane` of a recorded pane), and Google Fonts is the single
+  allowed external fetch from the SPA (loaded `no-referrer` so the tokened URL
+  never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI
   decision to dashboard #117, which this implements standalone (no TUI
   dependency — the future TUI just reuses `internal/sessionview`). Keep it

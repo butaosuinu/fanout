@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,16 +20,25 @@ const (
 	defaultGHInterval    = 20 * time.Second
 )
 
-// GHProvider is the per-issue GitHub fetch the poller throttles and caches.
-// *sessionview.GH satisfies it; tests inject a fake.
+// GHProvider is the GitHub fetch surface the poller throttles and caches:
+// per-issue PR state plus the per-parent wave/blocker graph.
+// sessionview.GH satisfies it; tests inject a fake.
 type GHProvider interface {
 	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error)
 }
 
 type ghCacheEntry struct {
 	state string
 	prs   []ghissue.PRRef
 	err   error
+}
+
+// waveCacheEntry is one parent's cached wave graph. FetchWaveGraph keeps
+// partial results next to a joined error, so both fields can be non-zero.
+type waveCacheEntry struct {
+	info map[int]sessionview.WaveInfo
+	err  error
 }
 
 // poller owns the authoritative latest Snapshot. A cheap tick reloads
@@ -56,8 +67,9 @@ type poller struct {
 	latestJSON []byte
 	lastKey    []byte
 
-	cacheMu sync.Mutex
-	cache   map[int]ghCacheEntry
+	cacheMu   sync.Mutex
+	cache     map[int]ghCacheEntry
+	waveCache map[string]waveCacheEntry // keyed by normalized parent
 }
 
 func newPollerBase(projectRoot string, h *hub) *poller {
@@ -67,6 +79,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		cheapInterval: defaultCheapInterval,
 		ghInterval:    defaultGHInterval,
 		cache:         map[int]ghCacheEntry{},
+		waveCache:     map[string]waveCacheEntry{},
 	}
 }
 
@@ -179,6 +192,23 @@ func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
 	return e.state, e.prs, e.err
 }
 
+// wavesFromCache mirrors issuePRsFromCache for the per-parent wave graph: a
+// sticky GitHub failure short-circuits to (nil, err), and a cache miss is
+// (nil, nil) — "not fetched yet", which Build renders as zero-valued wave
+// fields without marking GitHub degraded.
+func (p *poller) wavesFromCache(parent string) (map[int]sessionview.WaveInfo, error) {
+	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
+		return nil, ghErr
+	}
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	e, ok := p.waveCache[normalizeParent(parent)]
+	if !ok {
+		return nil, nil // cache miss: unknown, not degraded
+	}
+	return e.info, e.err
+}
+
 func (p *poller) refreshGH() {
 	_, gh, _ := p.ghIdentity()
 	if gh == nil {
@@ -194,6 +224,16 @@ func (p *poller) refreshGH() {
 		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
 		p.cacheMu.Unlock()
 	}
+	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
+	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
+	// and backfill unlinked children for numeric ones.
+	numsByParent := recordedNumsByParent(store)
+	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
+		info, err := gh.Waves(parent, numsByParent[parent])
+		p.cacheMu.Lock()
+		p.waveCache[parent] = waveCacheEntry{info: info, err: err}
+		p.cacheMu.Unlock()
+	}
 }
 
 func (p *poller) build() sessionview.Snapshot {
@@ -202,6 +242,7 @@ func (p *poller) build() sessionview.Snapshot {
 		LoadState:    sessionview.StateLoader(p.projectRoot),
 		LivePanes:    sessionview.LivePanes(),
 		IssuePRs:     p.issuePRsFromCache,
+		Waves:        p.wavesFromCache,
 		WorktreeStat: sessionview.GitWorktreeStat(p.projectRoot),
 		Now:          time.Now,
 	})
@@ -241,6 +282,8 @@ func (p *poller) snapshotJSON() []byte {
 // contentKey is the change-detection key: the snapshot JSON with the timestamp
 // blanked, so a tick that only advances GeneratedAt does not trigger a redundant
 // broadcast/redraw.
+// PaneView now carries the live tmux pane title, so a title change alone
+// produces an SSE frame (intended — the dashboard surfaces titles live).
 func contentKey(snap sessionview.Snapshot) []byte {
 	snap.GeneratedAt = ""
 	b, _ := json.Marshal(snap)
@@ -261,4 +304,38 @@ func distinctIssueNums(store state.Store) []int {
 	}
 	slices.Sort(nums)
 	return nums
+}
+
+// normalizeParent canonicalizes numeric parents via an Atoi round-trip so
+// "0100" and "100" share one wave-cache entry, mirroring how state's
+// parentMatches treats them as the same parent. Non-numeric parents
+// (@manual, Project URLs) pass through unchanged.
+func normalizeParent(parent string) string {
+	if n, err := strconv.Atoi(parent); err == nil {
+		return strconv.Itoa(n)
+	}
+	return parent
+}
+
+// recordedNumsByParent groups each distinct normalized parent in state to the
+// sorted positive issue numbers recorded under it. Synthetic pane numbers
+// (IssueNum <= 0, e.g. @manual rows) stay out — FetchWaveGraph skips them
+// anyway — but their parent still gets an (empty) entry so its wave cache
+// resolves to a hit instead of a perpetual miss.
+func recordedNumsByParent(store state.Store) map[string][]int {
+	grouped := map[string]map[int]bool{}
+	for _, p := range store.Panes {
+		key := normalizeParent(p.Parent)
+		if grouped[key] == nil {
+			grouped[key] = map[int]bool{}
+		}
+		if p.IssueNum > 0 {
+			grouped[key][p.IssueNum] = true
+		}
+	}
+	out := make(map[string][]int, len(grouped))
+	for parent, set := range grouped {
+		out[parent] = slices.Sorted(maps.Keys(set))
+	}
+	return out
 }

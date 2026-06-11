@@ -3,17 +3,23 @@ package dashboard
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 )
 
 type countingGH struct {
-	mu    sync.Mutex
-	calls map[int]int
+	mu        sync.Mutex
+	calls     map[int]int
+	waveCalls map[string]int
+	waveNums  map[string][]int // recordedNums passed per parent (last call)
+	waves     map[string]map[int]sessionview.WaveInfo
+	wavesErr  error
 }
 
 func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
@@ -24,6 +30,21 @@ func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	}
 	g.calls[num]++
 	return "CLOSED", []ghissue.PRRef{{Number: 900 + num, State: "MERGED"}}, nil
+}
+
+func (g *countingGH) Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.waveCalls == nil {
+		g.waveCalls = map[string]int{}
+		g.waveNums = map[string][]int{}
+	}
+	g.waveCalls[parent]++
+	g.waveNums[parent] = slices.Clone(recordedNums)
+	if g.wavesErr != nil {
+		return nil, g.wavesErr
+	}
+	return g.waves[parent], nil
 }
 
 func writeState(t *testing.T, root, body string) {
@@ -43,7 +64,12 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	  {"parent":"100","issueNum":102,"slug":"b","paneId":"%2","agent":"codex"}
 	]}`)
 
-	gh := &countingGH{}
+	gh := &countingGH{waves: map[string]map[int]sessionview.WaveInfo{
+		"100": {
+			101: {Wave: 1, Blockers: []blockers.Status{}},
+			102: {Wave: 2, WaveLabel: "wave 2", Blocked: true, Blockers: []blockers.Status{{Num: 101, State: "OPEN"}}},
+		},
+	}}
 	p := newPoller("o/n", root, gh, nil, newHub())
 	p.refreshGH()
 	snap := p.build()
@@ -51,14 +77,110 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	if gh.calls[101] != 1 || gh.calls[102] != 1 {
 		t.Fatalf("expected one gh call per issue, got %v", gh.calls)
 	}
+	if len(gh.waveCalls) != 1 || gh.waveCalls["100"] != 1 {
+		t.Fatalf("expected one Waves call for parent 100, got %v", gh.waveCalls)
+	}
+	if !slices.Equal(gh.waveNums["100"], []int{101, 102}) {
+		t.Fatalf("recorded nums for parent 100 = %v, want [101 102]", gh.waveNums["100"])
+	}
 	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 2 {
 		t.Fatalf("unexpected snapshot shape: %+v", snap.Sessions)
 	}
 	if !snap.Sessions[0].Panes[0].HasMergedPR {
 		t.Fatal("PR state from cache should reach the built snapshot")
 	}
+	second := snap.Sessions[0].Panes[1]
+	if second.Wave != 2 || second.WaveLabel != "wave 2" || !second.Blocked {
+		t.Fatalf("wave data from cache should reach the built snapshot, got %+v", second)
+	}
+	if len(second.Blockers) != 1 || second.Blockers[0].Num != 101 {
+		t.Fatalf("blocker rows should reach the built snapshot, got %+v", second.Blockers)
+	}
 	if snap.Degraded.GitHub {
 		t.Fatal("GitHub should not be degraded on success")
+	}
+}
+
+func TestRefreshGHCallsWavesOncePerNormalizedParent(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"0100","issueNum":101,"slug":"a","paneId":"%1"},
+	  {"parent":"100","issueNum":102,"slug":"b","paneId":"%2"},
+	  {"parent":"@manual","issueNum":-1,"slug":"m","paneId":"%3"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.refreshGH()
+
+	if len(gh.waveCalls) != 2 || gh.waveCalls["100"] != 1 || gh.waveCalls["@manual"] != 1 {
+		t.Fatalf("expected one Waves call per normalized parent, got %v", gh.waveCalls)
+	}
+	if !slices.Equal(gh.waveNums["100"], []int{101, 102}) {
+		t.Fatalf(`"0100" and "100" must pool recorded nums, got %v`, gh.waveNums["100"])
+	}
+	if len(gh.waveNums["@manual"]) != 0 {
+		t.Fatalf("synthetic nums must stay out of recordedNums, got %v", gh.waveNums["@manual"])
+	}
+}
+
+func TestWavesErrorDegradesGitHub(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	gh := &countingGH{wavesErr: errRepoUnresolvedForTest}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.refreshGH()
+	snap := p.build()
+
+	if !snap.Degraded.GitHub {
+		t.Fatal("a Waves failure must mark GitHub degraded")
+	}
+	// IssuePRs succeeded, so PR state still reaches the snapshot (partial data).
+	if !snap.Sessions[0].Panes[0].HasMergedPR {
+		t.Fatal("PR state should survive a wave-graph failure")
+	}
+}
+
+func TestWaveCacheMissDoesNotDegrade(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	// gh resolved but refreshGH never ran (pre first gh tick): every wave lookup
+	// is a cache miss, which must read as "not fetched yet", not a failure.
+	p := newPoller("o/n", root, &countingGH{}, nil, newHub())
+	snap := p.build()
+
+	if snap.Degraded.GitHub {
+		t.Fatal("a wave cache miss before the first refresh must not degrade GitHub")
+	}
+	pane := snap.Sessions[0].Panes[0]
+	if pane.Wave != 0 || pane.Blocked || len(pane.Blockers) != 0 {
+		t.Fatalf("cache miss should leave zero-valued wave fields, got %+v", pane)
+	}
+}
+
+func TestRecordedNumsByParentNormalizesAndSkipsSynthetic(t *testing.T) {
+	got := recordedNumsByParent(state.Store{Panes: []state.Pane{
+		{Parent: "0300", IssueNum: 302},
+		{Parent: "300", IssueNum: 301},
+		{Parent: "300", IssueNum: 301}, // duplicate
+		{Parent: "@manual", IssueNum: -1},
+		{Parent: "400", IssueNum: 0},
+	}})
+
+	if len(got) != 3 {
+		t.Fatalf("recordedNumsByParent() = %#v, want 3 parents", got)
+	}
+	if !slices.Equal(got["300"], []int{301, 302}) {
+		t.Fatalf("parent 300 nums = %v, want [301 302]", got["300"])
+	}
+	if len(got["@manual"]) != 0 || len(got["400"]) != 0 {
+		t.Fatalf("non-positive nums must be dropped, got %#v", got)
 	}
 }
 

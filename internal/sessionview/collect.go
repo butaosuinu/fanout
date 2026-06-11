@@ -20,17 +20,18 @@ func StateLoader(projectRoot string) func() (state.Store, error) {
 }
 
 // LivePanes returns a LivePanes collector that maps each live tmux pane id to
-// its current path, so Build can require both an id match and a path under the
-// recorded worktree (robust against server-restart pane-id reuse).
-func LivePanes() func() (map[string]string, error) {
-	return func() (map[string]string, error) {
+// its current path and title, so Build can require both an id match and a path
+// under the recorded worktree (robust against server-restart pane-id reuse)
+// and surface the live pane title.
+func LivePanes() func() (map[string]LivePaneInfo, error) {
+	return func() (map[string]LivePaneInfo, error) {
 		panes, err := tmuxrun.ListLivePanes()
 		if err != nil {
 			return nil, err
 		}
-		m := make(map[string]string, len(panes))
+		m := make(map[string]LivePaneInfo, len(panes))
 		for _, p := range panes {
-			m[p.ID] = p.CurrentPath
+			m[p.ID] = LivePaneInfo{Path: p.CurrentPath, Title: p.Title}
 		}
 		return m, nil
 	}
@@ -91,4 +92,14 @@ func (g GH) NameWithOwner() string {
 // IssuePRs fetches one issue's state and closed-by PR refs from GitHub.
 func (g GH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return g.runner.IssueWithPRs(g.owner, g.repo, num)
+}
+
+// Waves fetches one parent's wave/blocker graph keyed by child issue number.
+// The Collectors.Waves field takes only the parent — the poller closes over
+// the recorded issue numbers it observed in state and wraps this method.
+// Partial results are returned alongside a non-nil error (FetchWaveGraph joins
+// per-issue failures), so callers can cache the partial graph and degrade.
+func (g GH) Waves(parent string, recordedNums []int) (map[int]WaveInfo, error) {
+	graph, err := FetchWaveGraph(g.runner, parent, recordedNums)
+	return graph.Info, err
 }
