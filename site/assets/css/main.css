@@ -100,39 +100,49 @@ html[lang=en] .prose h3{ letter-spacing:.005em; }
   display:flex; align-items:center; gap:28px; margin-left:auto;
   list-style:none; font-size:13.5px; font-weight:500;
 }
-.nav-links a{
+.nav-links a{ white-space:nowrap; }
+.nav-links li.keep{ flex:none; }
+/* テキストリンク様式(下線アニメ・padding:4px 0)はピル類(li.keep)に漏らさない */
+.nav-links li:not(.keep) a{
   position:relative; color:var(--ink-78); padding:4px 0;
 }
-.nav-links a::after{
+.nav-links li:not(.keep) a::after{
   content:""; position:absolute; left:0; right:0; bottom:0;
   height:1.5px; background:var(--asagi);
   transform:scaleX(0); transform-origin:left center;
   transition:transform .32s var(--ease-fan);
 }
-.nav-links a:hover{ color:var(--ai); }
-.nav-links a:hover::after{ transform:scaleX(1); }
-.nav-links a[aria-current="page"]{ color:var(--ai); }
-.nav-links a[aria-current="page"]::after{ transform:scaleX(1); background:var(--suna); }
+.nav-links li:not(.keep) a:hover{ color:var(--ai); }
+.nav-links li:not(.keep) a:hover::after{ transform:scaleX(1); }
+.nav-links li:not(.keep) a[aria-current="page"]{ color:var(--ai); }
+.nav-links li:not(.keep) a[aria-current="page"]::after{ transform:scaleX(1); background:var(--suna); }
 .nav-gh{
   display:inline-flex; align-items:center; gap:7px;
   border:1px solid var(--suna); border-radius:999px;
-  padding:6px 16px; font-size:13px; font-weight:500;
+  padding:7px 18px; font-size:13px; font-weight:500;
   color:var(--ai); background:var(--paper);
   transition:border-color .25s ease, color .25s ease, transform .25s ease;
 }
 .nav-gh:hover{ border-color:var(--asagi); color:var(--asagi); transform:translateY(-1px); }
+
+/* 言語スイッチャー — 1 つの枠に EN | 日本語 を固定順で収め、選択中を白群で塗る */
 .lang-switch{
-  display:inline-flex; align-items:center; gap:6px;
-  font-size:12.5px; font-weight:500; color:var(--ink-60);
+  display:inline-flex; align-items:center;
+  padding:3px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:var(--paper);
+  font-size:12px; font-weight:500; line-height:1.6;
 }
-.lang-switch a{
-  padding:3px 9px; border-radius:999px;
-  border:1px solid transparent;
-  color:var(--ink-60);
-}
-.lang-switch a:hover{ color:var(--asagi); border-color:var(--suna); }
+.lang-switch a,
 .lang-switch .on{
-  color:var(--ai); border-color:var(--suna); background:var(--paper);
+  display:inline-flex; align-items:center;
+  padding:2px 12px; border-radius:999px;
+}
+.lang-switch a{ color:var(--ink-60); }
+.lang-switch a:hover{ color:var(--asagi); }
+.lang-switch .on{
+  color:var(--ai-deep);
+  background:rgba(201,232,236,.7);
 }
 
 /* ============================================================
@@ -753,6 +763,10 @@ code.in{
    ============================================================ */
 @media (max-width:1480px){ .docs .tate{ display:none; } }
 @media (max-width:1340px){ .tate{ display:none; } }
+@media (max-width:1120px){
+  /* 日本語ナビはラベルが長く、820px より手前で詰まる */
+  html[lang=ja] .nav-links li:not(.keep){ display:none; }
+}
 @media (max-width:1024px){
   .cards{ grid-template-columns:repeat(2, 1fr); }
   .docs{ grid-template-columns:200px minmax(0,1fr); gap:40px; }
@@ -783,6 +797,12 @@ code.in{
   .tagline{ letter-spacing:.03em; }
   .cli-row code{ font-size:12.5px; }
   .prose pre{ font-size:12.5px; padding:14px 16px; }
+}
+@media (max-width:480px){
+  .nav-inner{ gap:14px; }
+  .nav-gh{ padding:7px 11px; }
+  .gh-label{ display:none; }
+  .lang-switch a, .lang-switch .on{ padding:2px 9px; }
 }
 
 /* ============================================================
