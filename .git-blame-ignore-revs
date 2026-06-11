@@ -1,2 +1,3 @@
-# style(go): golangci-lint fmt による gofumpt/goimports 一括整形 (#191)
-5b8b9334950aaade59cb4abc70d7b8aa85b1b8d5
+# #205 squash: .golangci.yml 追加と gofumpt/goimports 一括整形 (#191)
+# (整形差分のほか .golangci.yml と本ファイルの追加を含む squash コミット)
+cf435be5367f905af17b81ba66a41263dc7f214c
