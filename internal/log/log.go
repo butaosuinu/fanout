@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/butaosuinu/fanout/internal/tty"
 )
@@ -34,17 +35,34 @@ func New(debug bool) *Logger {
 func NewWith(out, err io.Writer, debug bool) *Logger {
 	l := &Logger{out: out, err: err, color: tty.IsColorCapable(out), debug: debug}
 	if l.color {
-		// Match bash tput colors: blue, green, yellow, red, dim.
-		l.palette = Palette{
-			Info:  "\x1b[34m",
-			Ok:    "\x1b[32m",
-			Warn:  "\x1b[33m",
-			Err:   "\x1b[31m",
-			Dim:   "\x1b[2m",
-			Reset: "\x1b[0m",
-		}
+		l.palette = paletteFor(os.Getenv("TERM"), os.Getenv("COLORTERM"))
 	}
 	return l
+}
+
+// paletteFor picks the richest palette the terminal advertises.
+func paletteFor(term, colorterm string) Palette {
+	// Match bash tput colors: blue, green, yellow, red, dim.
+	p := Palette{
+		Info:  "\x1b[34m",
+		Ok:    "\x1b[32m",
+		Warn:  "\x1b[33m",
+		Err:   "\x1b[31m",
+		Dim:   "\x1b[2m",
+		Reset: "\x1b[0m",
+	}
+	if strings.Contains(term, "256color") || strings.Contains(term, "truecolor") ||
+		strings.EqualFold(colorterm, "truecolor") || strings.EqualFold(colorterm, "24bit") {
+		// 256-color approximations of the PAPER BREEZE palette
+		// (site/assets/css/main.css; keep in sync with the internal/tui
+		// AdaptiveColor palette): 藍, 青緑, 土, 紅 — mid-brightness values
+		// readable on both light and dark backgrounds.
+		p.Info = "\x1b[38;5;31m"
+		p.Ok = "\x1b[38;5;36m"
+		p.Warn = "\x1b[38;5;136m"
+		p.Err = "\x1b[38;5;167m"
+	}
+	return p
 }
 
 func (l *Logger) Info(format string, a ...any) {
