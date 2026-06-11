@@ -61,6 +61,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -69,10 +71,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: golangci-lint
+        # version-file needs golangci-lint-action >= v9.2.0
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version
+
       - name: Install shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
 
-      - name: Run lint
-        run: make lint
+      - name: Shell lint
+        run: make lint-shell

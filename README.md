@@ -200,7 +200,10 @@ install above ships a prebuilt binary and needs no Go.
 make test           # Go unit tests + Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
-make lint           # go vet + gofmt + shellcheck of the test shims
+make lint           # pinned golangci-lint v2 (.golangci.yml) + shellcheck of the test shims
+make fmt            # gofumpt/goimports formatting via golangci-lint fmt
+make fix            # go fix idiom updates (run make test after applying)
+make vuln           # govulncheck (network; deliberately not part of make lint)
 make build-go       # build the Go CLI as ./fanout-go
 ```
 
