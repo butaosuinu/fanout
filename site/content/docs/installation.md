@@ -73,7 +73,7 @@ The curl/wget install path normally does not attach the `com.apple.quarantine` e
 xattr -d com.apple.quarantine /path/to/fanout
 ```
 
-Apple Silicon requires every executable to carry at least an ad-hoc signature. The release workflow builds darwin binaries on macOS with Go 1.23, so the Go linker signs the binary as part of the build. Do not run an external `strip` after release packaging; it can invalidate the signature. If a local copy is damaged, ad-hoc re-sign it with:
+Apple Silicon requires every executable to carry at least an ad-hoc signature. The release workflow builds darwin binaries on macOS with Go 1.26, so the Go linker signs the binary as part of the build. Do not run an external `strip` after release packaging; it can invalidate the signature. If a local copy is damaged, ad-hoc re-sign it with:
 
 ```bash
 codesign -s - /path/to/fanout
@@ -95,7 +95,7 @@ CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
-Building from a checkout needs a **Go toolchain** (Go 1.23+): `make install`, `make link`, and `make build-go` all run `go build ./cmd/fanout`. The curl install above ships a prebuilt binary and needs no Go.
+Building from a checkout needs a **Go toolchain** (Go 1.26+): `make install`, `make link`, and `make build-go` all run `go build ./cmd/fanout`. The curl install above ships a prebuilt binary and needs no Go.
 
 ## Keeping it updated
 
