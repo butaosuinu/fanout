@@ -9,9 +9,11 @@ import (
 	"strings"
 )
 
-const userShellExpr = `"${SHELL:-/bin/sh}"`
-const paneListFormat = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
-const paneAlternateFormat = "#{alternate_on}"
+const (
+	userShellExpr       = `"${SHELL:-/bin/sh}"`
+	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+	paneAlternateFormat = "#{alternate_on}"
+)
 
 // PaneInfo describes a pane currently known to tmux.
 type PaneInfo struct {

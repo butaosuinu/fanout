@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 var errBoom = errors.New("boom")

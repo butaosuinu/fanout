@@ -939,7 +939,7 @@ func requestUserInputResponse(raw json.RawMessage) map[string]any {
 				continue
 			}
 			answers[id] = map[string][]string{
-				"answers": []string{codexPlanUserInputFallbackAnswer},
+				"answers": {codexPlanUserInputFallbackAnswer},
 			}
 		}
 	}

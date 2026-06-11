@@ -14,6 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -22,11 +28,6 @@ import (
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -244,11 +245,14 @@ type panePeek struct {
 	Loading bool
 }
 
-type stateTickMsg time.Time
-type ghTickMsg time.Time
-type launchPaneMsg struct {
-	err error
-}
+type (
+	stateTickMsg  time.Time
+	ghTickMsg     time.Time
+	launchPaneMsg struct {
+		err error
+	}
+)
+
 type transitionNotifiedMsg struct {
 	count int
 	err   error

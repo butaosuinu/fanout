@@ -286,8 +286,10 @@ type parseState struct {
 	formatExplicit bool
 }
 
-type valueOption func(*Config, *parseState, string) error
-type boolOption func(*Config)
+type (
+	valueOption func(*Config, *parseState, string) error
+	boolOption  func(*Config)
+)
 
 func setParent(parent *string, arg string, lg *log.Logger) bool {
 	if *parent == "" {
