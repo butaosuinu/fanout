@@ -233,7 +233,7 @@ func TestGHUpdateNotifiesTransitionsOnceAfterInitialSnapshot(t *testing.T) {
 		t.Fatalf("notice = %q, want transition summary", m.notice)
 	}
 
-	updated, cmd = m.Update(ghLoadedMsg{issues: nextIssues, at: time.Unix(3, 0)})
+	_, cmd = m.Update(ghLoadedMsg{issues: nextIssues, at: time.Unix(3, 0)})
 	if cmd != nil {
 		t.Fatal("unchanged GH snapshot returned notification command, want nil")
 	}
@@ -305,7 +305,7 @@ func TestGHUpdateDoesNotOverwriteNotificationBaselineOnPartialError(t *testing.T
 	}
 	m = updated.(model)
 
-	updated, cmd = m.Update(ghLoadedMsg{issues: initial, at: time.Unix(3, 0)})
+	_, cmd = m.Update(ghLoadedMsg{issues: initial, at: time.Unix(3, 0)})
 	if cmd != nil {
 		t.Fatal("recovered unchanged waiting snapshot returned notification command, want nil")
 	}
@@ -343,7 +343,7 @@ func TestGHUpdateNotifiesUsableTransitionOnPartialError(t *testing.T) {
 		{Parent: "100", Num: 101}: {Title: "visible", State: "CLOSED", PRs: []ghissue.PRRef{{Number: 901, State: "MERGED", CIStatus: "pass"}}},
 		{Parent: "100", Num: 102}: {Title: "omitted", State: "OPEN", PRs: []ghissue.PRRef{{Number: 902, State: "OPEN", CIStatus: "pass"}}},
 	}
-	updated, cmd = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
+	_, cmd = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
 	if cmd != nil {
 		t.Fatal("recovered already-notified snapshot returned notification command, want nil")
 	}

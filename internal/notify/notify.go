@@ -222,7 +222,8 @@ func (s ntfySink) Notify(event Event) error {
 	if err != nil {
 		return fmt.Errorf("ntfy post: %w", err)
 	}
-	defer resp.Body.Close()
+	// Fire-and-forget notification; only the status code matters, not the body.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("ntfy post: status %d", resp.StatusCode)
 	}
@@ -238,7 +239,8 @@ func (s slackSink) Notify(event Event) error {
 	if err != nil {
 		return fmt.Errorf("slack post: %w", err)
 	}
-	defer resp.Body.Close()
+	// Fire-and-forget notification; only the status code matters, not the body.
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("slack post: status %d", resp.StatusCode)
 	}

@@ -41,7 +41,7 @@ type Options struct {
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
 // port-in-use error surfaces synchronously) and computes the URL; Run serves
-// until the context is cancelled.
+// until the context is canceled.
 type Server struct {
 	listener   net.Listener
 	httpServer *http.Server
@@ -61,7 +61,8 @@ func New(opts Options) (*Server, error) {
 	}
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
-		ln.Close()
+		// Cleanup of a listener we will never serve on; the type error is the one to report.
+		_ = ln.Close()
 		return nil, fmt.Errorf("unexpected listener address %T", ln.Addr())
 	}
 
@@ -76,7 +77,8 @@ func New(opts Options) (*Server, error) {
 	}
 	handler, err := s.handler()
 	if err != nil {
-		ln.Close()
+		// Same cleanup-only close as above.
+		_ = ln.Close()
 		return nil, err
 	}
 	s.httpServer = &http.Server{Handler: handler}
@@ -111,7 +113,7 @@ func (s *Server) Start(ctx context.Context) {
 	}()
 }
 
-// Wait blocks until ctx is cancelled (then shuts down gracefully) or the server
+// Wait blocks until ctx is canceled (then shuts down gracefully) or the server
 // stops on its own. ErrServerClosed (the normal shutdown path) is reported nil.
 func (s *Server) Wait(ctx context.Context) error {
 	select {
@@ -125,7 +127,7 @@ func (s *Server) Wait(ctx context.Context) error {
 	}
 }
 
-// Run starts polling and serves until ctx is cancelled, then shuts down
+// Run starts polling and serves until ctx is canceled, then shuts down
 // gracefully.
 func (s *Server) Run(ctx context.Context) error {
 	s.Start(ctx)
@@ -184,7 +186,8 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Write(s.poller.snapshotJSON())
+	// A failed response write means the client went away; nothing to do here.
+	_, _ = w.Write(s.poller.snapshotJSON())
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -215,8 +218,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	ch := s.hub.subscribe()
 	defer s.hub.unsubscribe(ch)
 
-	// Paint immediately so a fresh tab doesn't wait for the next tick.
-	w.Write(sseFrame(s.poller.snapshotJSON()))
+	// Paint immediately so a fresh tab doesn't wait for the next tick. Write
+	// errors here and below mean the client disconnected; the loop exits via
+	// r.Context().Done() rather than by inspecting them.
+	_, _ = w.Write(sseFrame(s.poller.snapshotJSON()))
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(sseHeartbeat)
@@ -230,10 +235,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // hub closed on shutdown
 			}
-			w.Write(payload)
+			_, _ = w.Write(payload)
 			flusher.Flush()
 		case <-heartbeat.C:
-			w.Write([]byte(": ping\n\n"))
+			_, _ = w.Write([]byte(": ping\n\n"))
 			flusher.Flush()
 		}
 	}

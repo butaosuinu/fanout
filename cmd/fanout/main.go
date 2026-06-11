@@ -481,13 +481,13 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 				issue.Body = detail.Body
 			}
 		}
-		if createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName) {
-			result.Created++
-			result.CreatedNums = append(result.CreatedNums, issue.Number)
-		} else {
+		// Fail fast: stop after the first failed child launch.
+		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName) {
 			result.Failed++
 			break
 		}
+		result.Created++
+		result.CreatedNums = append(result.CreatedNums, issue.Number)
 		if i < len(targets)-1 {
 			if cfg.SleepBetween > 0 {
 				sleepBetweenIssues(time.Duration(cfg.SleepBetween * float64(time.Second)))

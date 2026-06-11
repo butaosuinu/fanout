@@ -84,14 +84,16 @@ func Lock(path string) (*LockedStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open fanout state lock %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		// Cleanup of the never-locked handle; the flock error is the one to report.
+		_ = f.Close()
 		return nil, fmt.Errorf("lock fanout state %s: %w", lockPath, err)
 	}
 	store, err := Load(path)
 	if err != nil {
+		// Best-effort unwind; the Load error is the one to report.
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	return &LockedStore{path: path, file: f, Store: store}, nil
@@ -111,12 +113,12 @@ func (l *LockedStore) Unlock() error {
 }
 
 func (l *LockedStore) RecordPane(p Pane) error {
-	l.Store.Upsert(p)
+	l.Upsert(p)
 	return save(l.path, l.Store)
 }
 
 func (l *LockedStore) RemovePane(parent string, issueNum int) error {
-	if !l.Store.Remove(parent, issueNum) {
+	if !l.Remove(parent, issueNum) {
 		return nil
 	}
 	return save(l.path, l.Store)

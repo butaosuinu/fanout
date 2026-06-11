@@ -64,7 +64,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	// Install local excludes BEFORE creating any .fanout artifact (the startup
 	// lock, the run file), so none of them ever surface in `git status` even if
 	// startup fails early (e.g. a port-in-use bind error).
-	if err := worktree.EnsureLocalExclude(root); err != nil {
+	if err = worktree.EnsureLocalExclude(root); err != nil {
 		lg.Debug("dashboard: ensure local exclude: %v", err)
 	}
 

@@ -99,7 +99,8 @@ func (r Runner) gh(args ...string) ([]byte, error) {
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return out, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
 		}
 		return out, err
@@ -107,20 +108,20 @@ func (r Runner) gh(args ...string) ([]byte, error) {
 	return out, nil
 }
 
-func (r Runner) ghWithInput(input string, args ...string) ([]byte, error) {
+func (r Runner) ghWithInput(input string, args ...string) error {
 	cmd := exec.Command("gh", args...)
 	if r.Cwd != "" {
 		cmd.Dir = r.Cwd
 	}
 	cmd.Stdin = strings.NewReader(input)
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return out, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+	if _, err := cmd.Output(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
 		}
-		return out, err
+		return err
 	}
-	return out, nil
+	return nil
 }
 
 // RepoNameWithOwner runs `gh repo view --json nameWithOwner -q .nameWithOwner`.
@@ -413,14 +414,12 @@ func parseIssueCommentPages(out []byte) ([][]issueCommentPageItem, error) {
 }
 
 func (r Runner) PostIssueComment(parent int, body string) error {
-	_, err := r.ghWithInput(body, "issue", "comment", strconv.Itoa(parent), "--body-file", "-")
-	return err
+	return r.ghWithInput(body, "issue", "comment", strconv.Itoa(parent), "--body-file", "-")
 }
 
 func (r Runner) EditIssueComment(owner, repo, id, body string) error {
 	path := fmt.Sprintf("/repos/%s/%s/issues/comments/%s", owner, repo, id)
-	_, err := r.ghWithInput(body, "api", "-X", "PATCH", path, "-F", "body=@-")
-	return err
+	return r.ghWithInput(body, "api", "-X", "PATCH", path, "-F", "body=@-")
 }
 
 func commentID(raw json.RawMessage, databaseID int, url string) string {
@@ -536,7 +535,7 @@ query($owner: String!, $number: Int!, $first: Int!, $after: String) {
 				// Mirror the shell's actionable message, including the
 				// canonical project URL so the user can check it.
 				projectURL := fmt.Sprintf("https://github.com/%s/%s/projects/%d", ownerType, owner, number)
-				return result, fmt.Errorf("%s: %s (check the URL, token scopes, and project visibility)", err, projectURL)
+				return result, fmt.Errorf("%w: %s (check the URL, token scopes, and project visibility)", err, projectURL)
 			}
 			return result, err
 		}
@@ -619,7 +618,7 @@ type projectItem struct {
 // syntactically valid URL whose project number is wrong or whose token can't
 // see it. ProjectItems wraps it with the project URL + actionable guidance to
 // match the shell's `die "Project not found or not accessible: $parent (...)"`.
-var errProjectNotFound = errors.New("Project not found or not accessible")
+var errProjectNotFound = errors.New("Project not found or not accessible") //nolint:staticcheck // ST1005: "Project" (GitHub Projects) is a proper noun, and the text must match the shell's die message
 
 func parseProjectPage(raw []byte, entryField string) (projectPage, error) {
 	var root struct {

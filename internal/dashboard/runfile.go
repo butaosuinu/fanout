@@ -80,7 +80,7 @@ func RemoveRunFile(projectRoot string) error {
 func RemoveOwnRunFile(projectRoot, token string, pid int) error {
 	rf, err := ReadRunFile(projectRoot)
 	if err != nil || rf == nil {
-		return nil
+		return nil //nolint:nilerr // an unreadable run file cannot be proven ours; leave it rather than clobber a newer server's record
 	}
 	if rf.PID != pid {
 		return nil
@@ -126,7 +126,8 @@ func (rf *RunFile) IsLive() bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	// Read-only health probe; the body is never read, so the Close error is moot.
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -165,7 +166,8 @@ func LockStartup(projectRoot string) (*os.File, error) {
 		return nil, err
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
+		// Cleanup of the never-locked handle; the flock error is the one to report.
+		_ = f.Close()
 		return nil, err
 	}
 	return f, nil

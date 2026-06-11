@@ -12,7 +12,7 @@ func TestResolveAcceptsExistingSessionOverride(t *testing.T) {
 	repo := newGitRepo(t)
 	installTmuxShim(t)
 	t.Setenv("TMUX_PANE", "%caller")
-	chdir(t, repo)
+	t.Chdir(repo)
 
 	info, err := Resolve("target")
 	if err != nil {
@@ -37,7 +37,7 @@ func TestResolveTargetsInvokingPaneByDefault(t *testing.T) {
 	repo := newGitRepo(t)
 	installTmuxShim(t)
 	t.Setenv("TMUX_PANE", "%caller")
-	chdir(t, repo)
+	t.Chdir(repo)
 
 	info, err := Resolve("")
 	if err != nil {
@@ -55,7 +55,7 @@ func TestResolveFallsBackToTmuxPaneID(t *testing.T) {
 	repo := newGitRepo(t)
 	installTmuxShim(t)
 	t.Setenv("TMUX_PANE", "")
-	chdir(t, repo)
+	t.Chdir(repo)
 
 	info, err := Resolve("")
 	if err != nil {
@@ -70,7 +70,7 @@ func TestResolveRejectsMissingSessionOverride(t *testing.T) {
 	repo := newGitRepo(t)
 	installTmuxShim(t)
 	t.Setenv("TMUX_PANE", "%caller")
-	chdir(t, repo)
+	t.Chdir(repo)
 
 	_, err := Resolve("missing")
 	if err == nil {
@@ -90,22 +90,6 @@ func newGitRepo(t *testing.T) string {
 		t.Fatalf("git init failed: %v\n%s", err, out)
 	}
 	return repo
-}
-
-func chdir(t *testing.T, dir string) {
-	t.Helper()
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(old); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
 }
 
 func installTmuxShim(t *testing.T) {

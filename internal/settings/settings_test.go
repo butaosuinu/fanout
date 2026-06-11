@@ -202,15 +202,10 @@ func clearEnv(t *testing.T) {
 		"FANOUT_NTFY_URL",
 		"FANOUT_SLACK_WEBHOOK_URL",
 	} {
-		old, hadOld := os.LookupEnv(name)
+		// t.Setenv registers restoration of the original value (or unset state);
+		// the follow-up Unsetenv leaves the variable unset for the test body.
+		t.Setenv(name, "")
 		os.Unsetenv(name)
-		t.Cleanup(func() {
-			if hadOld {
-				_ = os.Setenv(name, old)
-			} else {
-				_ = os.Unsetenv(name)
-			}
-		})
 	}
 }
 

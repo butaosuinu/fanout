@@ -93,7 +93,7 @@ func newLazyPoller(projectRoot string, resolve func() (string, GHProvider, error
 // loop. The first GitHub refresh runs inside the loop goroutine, not here, so a
 // slow gh on a large repo never blocks the HTTP server from coming up or Ctrl-C
 // from being handled. The loop stops and closes all SSE subscribers when ctx is
-// cancelled.
+// canceled.
 func (p *poller) Start(ctx context.Context) {
 	p.rebuildAndBroadcast()
 	go p.loop(ctx)

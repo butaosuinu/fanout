@@ -84,7 +84,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	}
 
 	if req.BriefingPath != "" && (!cfg.DryRun || req.WriteBriefingDryRun) {
-		if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
+		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 			lg.Err("#%d: write briefing: %v", req.Number, err)
 			return false
 		}
@@ -410,7 +410,7 @@ func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
 				return nil
 			case codexPlanTUIStatusFailed:
 				if status.Error == "" {
-					return fmt.Errorf("Codex Plan TUI setup failed")
+					return fmt.Errorf("Codex Plan TUI setup failed") //nolint:staticcheck // ST1005: "Codex Plan TUI" is a proper noun
 				}
 				return errors.New(status.Error)
 			default:
@@ -421,7 +421,7 @@ func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("%w after %s; last status error: %v", errCodexPlanStartupTimeout, timeout, lastErr)
+				return fmt.Errorf("%w after %s; last status error: %w", errCodexPlanStartupTimeout, timeout, lastErr)
 			}
 			return fmt.Errorf("%w after %s; no status file at %s", errCodexPlanStartupTimeout, timeout, statusPath)
 		}

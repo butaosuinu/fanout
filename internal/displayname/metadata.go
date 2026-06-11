@@ -31,7 +31,7 @@ func WriteFanoutMetadata(worktreePath string, meta FanoutMetadata) error {
 	path := filepath.Join(dir, "worktree-metadata.json")
 	m := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &m); err != nil {
+		if err = json.Unmarshal(data, &m); err != nil {
 			return fmt.Errorf("parse existing metadata %s: %w", path, err)
 		}
 		if m == nil {

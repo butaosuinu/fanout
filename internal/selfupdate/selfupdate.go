@@ -254,7 +254,8 @@ func ResolvePlan(opts Options) (Plan, error) {
 		InstallerURL:   InstallScriptURL,
 	}
 
-	if req.Version != "" {
+	switch {
+	case req.Version != "":
 		plan.TargetSource = "pinned"
 		plan.ExplicitTarget = true
 		if _, ok := parseVersion(req.Version); !ok {
@@ -267,12 +268,12 @@ func ResolvePlan(opts Options) (Plan, error) {
 			plan.Outcome = DevBuild
 			return plan, nil
 		}
-	} else if Compare(opts.CurrentVersion, "") == DevBuild {
+	case Compare(opts.CurrentVersion, "") == DevBuild:
 		plan.TargetVersion = "latest"
 		plan.TargetSource = "latest"
 		plan.Outcome = DevBuild
 		return plan, nil
-	} else {
+	default:
 		latest, err := opts.LatestTag()
 		if err != nil {
 			return plan, fail(FailureGitHub, "failed to fetch latest release tag: %w", err)

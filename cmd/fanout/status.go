@@ -95,10 +95,10 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 			Summary:  statusSummary{AllMerged: false},
 		}
 		if cfg.Format == "table" {
-			if code := writeStatusTable(report, rt.projectRoot, lg); code != exitcode.OK {
+			if code = writeStatusTable(report, rt.projectRoot, lg); code != exitcode.OK {
 				return code
 			}
-		} else if code := writeStatusReport(report, lg); code != exitcode.OK {
+		} else if code = writeStatusReport(report, lg); code != exitcode.OK {
 			return code
 		}
 		if cfg.PostDashboard {
