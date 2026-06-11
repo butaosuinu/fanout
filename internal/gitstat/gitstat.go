@@ -2,6 +2,7 @@
 package gitstat
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,7 +59,8 @@ func (r Runner) git(args ...string) ([]byte, error) {
 	cmd.Env = gitEnv()
 	out, err := cmd.Output()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return out, fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
 		}
 		return out, err

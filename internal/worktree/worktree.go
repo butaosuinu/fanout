@@ -105,7 +105,7 @@ func Prepare(opts Options) (Result, error) {
 }
 
 // EnsureLocalExclude keeps generated fanout runtime files out of the user's git status.
-func EnsureLocalExclude(root string) error {
+func EnsureLocalExclude(root string) (err error) {
 	excludePath, err := gitTrim(root, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
 		return fmt.Errorf("resolve git exclude path: %w", err)
@@ -123,22 +123,28 @@ func EnsureLocalExclude(root string) error {
 	}
 	missing := missingExcludePatterns(body)
 
-	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
 		return fmt.Errorf("create git exclude directory: %w", err)
 	}
 	f, err := os.OpenFile(excludePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open git exclude: %w", err)
 	}
-	defer f.Close()
+	// This is a write path: a failed Close can mean the appended patterns were
+	// never flushed, so propagate it instead of discarding.
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("close git exclude: %w", cerr)
+		}
+	}()
 
 	if len(body) > 0 && body[len(body)-1] != '\n' {
-		if _, err := f.WriteString("\n"); err != nil {
+		if _, err = f.WriteString("\n"); err != nil {
 			return fmt.Errorf("append git exclude newline: %w", err)
 		}
 	}
 	for _, pattern := range missing {
-		if _, err := f.WriteString(pattern + "\n"); err != nil {
+		if _, err = f.WriteString(pattern + "\n"); err != nil {
 			return fmt.Errorf("append git exclude pattern: %w", err)
 		}
 	}
@@ -240,7 +246,7 @@ func RefreshBase(root, base string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := git(root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
+	if _, err = git(root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
 		return fmt.Errorf("git fetch origin %s: %w", details.FetchBranch, err)
 	}
 	originSHA, err := gitTrim(root, "rev-parse", "--verify", details.OriginRef)
@@ -254,7 +260,7 @@ func RefreshBase(root, base string) error {
 	localRef := "refs/heads/" + details.LocalBranch
 	localSHA, err := gitTrim(root, "rev-parse", "--verify", localRef)
 	if err != nil {
-		if _, err := git(root, "branch", details.LocalBranch, originSHA); err != nil {
+		if _, err = git(root, "branch", details.LocalBranch, originSHA); err != nil {
 			return fmt.Errorf("create local base branch %s: %w", details.LocalBranch, err)
 		}
 		return nil
@@ -269,7 +275,7 @@ func RefreshBase(root, base string) error {
 	if mergeBase != localSHA {
 		return fmt.Errorf("local branch %s has diverged from origin/%s", details.LocalBranch, details.FetchBranch)
 	}
-	if _, err := git(root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
+	if _, err = git(root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
 		return nil
 	}
 
@@ -327,7 +333,7 @@ func git(dir string, args ...string) ([]byte, error) {
 		if msg == "" {
 			return out, err
 		}
-		return out, fmt.Errorf("%v: %s", err, msg)
+		return out, fmt.Errorf("%w: %s", err, msg)
 	}
 	return out, nil
 }

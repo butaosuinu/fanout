@@ -110,10 +110,10 @@ func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = locked.Unlock() })
 
-	if err := locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%1"}); err != nil {
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%2"}); err != nil {
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PaneID: "%2"}); err != nil {
 		t.Fatal(err)
 	}
 

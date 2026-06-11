@@ -47,7 +47,7 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	}
 	defer unlockState("--close", locked, lg)
 
-	panes := panesForIssue(locked.Store.PanesForParent(parent), issueNum)
+	panes := panesForIssue(locked.PanesForParent(parent), issueNum)
 	if len(panes) == 0 {
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
@@ -102,7 +102,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	defer unlockState("--cleanup", locked, lg)
 
-	panes := locked.Store.PanesForParent(parent)
+	panes := locked.PanesForParent(parent)
 	if len(panes) == 0 {
 		lg.Info("--cleanup: no recorded panes for parent %s", parent)
 		return exitcode.OK

@@ -192,7 +192,7 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	if err != nil {
 		return err
 	}
-	if err := startCodexPlanTurn(client, thread, cwd, cfg.Prompt); err != nil {
+	if err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt); err != nil {
 		return err
 	}
 
@@ -225,7 +225,7 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	case <-time.After(codexRemoteTUIStartupGrace):
 	}
 
-	if err := writeCodexPlanTUIStatus(cfg.StatusFile, codexPlanTUIStatus{
+	if err = writeCodexPlanTUIStatus(cfg.StatusFile, codexPlanTUIStatus{
 		Status:    codexPlanTUIStatusReady,
 		ThreadID:  thread.ID,
 		SessionID: thread.SessionID,
@@ -397,7 +397,8 @@ func freeLocalPort() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("reserve localhost port for Codex app-server: %w", err)
 	}
-	defer ln.Close()
+	// Close error is irrelevant: the listener only reserved the port.
+	defer func() { _ = ln.Close() }()
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
 		return 0, fmt.Errorf("reserve localhost port for Codex app-server: unexpected address %s", ln.Addr())
@@ -409,8 +410,8 @@ func connectCodexRemoteAppClient(server *codexRemoteAppServer, timeout time.Dura
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if err, ok := server.Exited(); ok {
-			return nil, fmt.Errorf("codex app-server exited before websocket connection: %v%s", err, serverLogSuffix(server))
+		if ok, err := server.Exited(); ok {
+			return nil, fmt.Errorf("codex app-server exited before websocket connection: %w%s", err, serverLogSuffix(server))
 		}
 		conn, err := dialWebSocket(server.Addr, time.Second)
 		if err == nil {
@@ -440,17 +441,17 @@ func serverLogSuffix(server *codexRemoteAppServer) string {
 	return "; app-server output: " + logs
 }
 
-func (s *codexRemoteAppServer) Exited() (error, bool) {
+func (s *codexRemoteAppServer) Exited() (bool, error) {
 	if s == nil {
-		return nil, true
+		return true, nil
 	}
 	select {
 	case <-s.done:
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.err, true
+		return true, s.err
 	default:
-		return nil, false
+		return false, nil
 	}
 }
 
@@ -458,7 +459,7 @@ func (s *codexRemoteAppServer) Close() {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return
 	}
-	if _, ok := s.Exited(); ok {
+	if ok, _ := s.Exited(); ok {
 		return
 	}
 	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
@@ -520,13 +521,13 @@ func dialWebSocket(rawURL string, timeout time.Duration) (*websocketJSONConn, er
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err = conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	br := bufio.NewReader(conn)
 	keyBytes := make([]byte, 16)
-	if _, err := rand.Read(keyBytes); err != nil {
+	if _, err = rand.Read(keyBytes); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("generate websocket key: %w", err)
 	}
@@ -544,7 +545,7 @@ func dialWebSocket(rawURL string, timeout time.Duration) (*websocketJSONConn, er
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + key + "\r\n" +
 		"Sec-WebSocket-Version: 13\r\n\r\n"
-	if _, err := io.WriteString(conn, req); err != nil {
+	if _, err = io.WriteString(conn, req); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("write websocket handshake: %w", err)
 	}
@@ -553,6 +554,9 @@ func dialWebSocket(rawURL string, timeout time.Duration) (*websocketJSONConn, er
 		_ = conn.Close()
 		return nil, fmt.Errorf("read websocket handshake: %w", err)
 	}
+	// The handshake response body is unused: a 101 carries no body, and for any
+	// other status the connection is discarded below. Close never reads from br.
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		_ = conn.Close()
 		return nil, fmt.Errorf("websocket handshake returned %s", resp.Status)
@@ -561,7 +565,7 @@ func dialWebSocket(rawURL string, timeout time.Duration) (*websocketJSONConn, er
 		_ = conn.Close()
 		return nil, fmt.Errorf("websocket handshake accept mismatch")
 	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
+	if err = conn.SetDeadline(time.Time{}); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -582,13 +586,11 @@ func (w *websocketJSONConn) Send(v any) error {
 }
 
 func (w *websocketJSONConn) Receive() (appServerMessage, error) {
-	for {
-		payload, err := w.readTextMessage()
-		if err != nil {
-			return appServerMessage{}, err
-		}
-		return parseAppServerLine(payload)
+	payload, err := w.readTextMessage()
+	if err != nil {
+		return appServerMessage{}, err
 	}
+	return parseAppServerLine(payload)
 }
 
 func (w *websocketJSONConn) Close() error {
@@ -1003,14 +1005,14 @@ func resolveCodexModel(client *codexAppClient, cwd string) (string, error) {
 	})
 	if modelErr != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, modelErr)
+			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
 		}
 		return "", fmt.Errorf("resolve codex model from model/list: %w", modelErr)
 	}
 	model, err := modelListDefault(modelResult)
 	if err != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, err)
+			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
 		}
 		return "", err
 	}

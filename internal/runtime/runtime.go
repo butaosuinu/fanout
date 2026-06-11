@@ -25,7 +25,7 @@ func Resolve(sessionOverride string) (*Info, error) {
 		return nil, err
 	}
 	if sessionOverride != "" {
-		if err := validateTmuxSession(sessionOverride); err != nil {
+		if err = validateTmuxSession(sessionOverride); err != nil {
 			return nil, err
 		}
 		session = sessionOverride

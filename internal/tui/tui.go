@@ -642,7 +642,7 @@ func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.actionMessage = lifecycleRunningMessage(pending)
 		return m, m.lifecycleCmd(pending)
 	case "n", "esc", "q", "ctrl+c":
-		m.actionMessage = fmt.Sprintf("%s cancelled", m.pendingAction.action)
+		m.actionMessage = fmt.Sprintf("%s canceled", m.pendingAction.action)
 		m.pendingAction = nil
 		return m, nil
 	}
@@ -762,8 +762,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.newPane.launching {
-		switch msg.String() {
-		case "ctrl+c":
+		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
 		return m, nil
@@ -793,6 +792,8 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.newPane.prompt, cmd = m.newPane.prompt.Update(msg)
 	case newPaneFieldSlug:
 		m.newPane.slug, cmd = m.newPane.slug.Update(msg)
+	default:
+		// The agent field is a toggle, not a text input; no message routing.
 	}
 	return m, cmd
 }
@@ -872,8 +873,7 @@ func (m model) newPaneFieldView(field newPaneField, label, value string) string 
 }
 
 func (m model) agentSelectorView() string {
-	claude := "claude"
-	codex := "codex"
+	var claude, codex string
 	if m.newPane.agent == "claude" {
 		claude = titleStyle.Render("[claude]")
 		codex = dimStyle.Render(" codex ")
@@ -1579,8 +1579,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 }
 
 func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []paneView {
-	out := make([]paneView, len(panes))
-	copy(out, panes)
+	out := slices.Clone(panes)
 	seen := map[issueKey]bool{}
 	for i := range out {
 		key := keyForIssue(out[i].Parent, out[i].IssueNum)
@@ -2037,27 +2036,27 @@ func formatClock(t time.Time) string {
 	return t.Format("15:04:05")
 }
 
-func truncate(s string, max int) string {
+func truncate(s string, maxLen int) string {
 	s = strings.TrimSpace(s)
-	return truncateRunes(s, max)
+	return truncateRunes(s, maxLen)
 }
 
-func truncatePreserveSpace(s string, max int) string {
-	return truncateRunes(s, max)
+func truncatePreserveSpace(s string, maxLen int) string {
+	return truncateRunes(s, maxLen)
 }
 
-func truncateRunes(s string, max int) string {
+func truncateRunes(s string, maxLen int) string {
 	runes := []rune(s)
-	if max <= 0 || len(runes) <= max {
+	if maxLen <= 0 || len(runes) <= maxLen {
 		return s
 	}
-	if max <= 1 {
-		return string(runes[:max])
+	if maxLen <= 1 {
+		return string(runes[:maxLen])
 	}
-	if max <= 3 {
-		return string(runes[:max])
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
 	}
-	return string(runes[:max-3]) + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 func trimLastRune(s string) string {
@@ -2076,13 +2075,13 @@ func compactMessage(s string) string {
 	return truncate(strings.Join(fields, " "), 160)
 }
 
-func tailLines(s string, max int) []string {
-	if max <= 0 {
+func tailLines(s string, maxLen int) []string {
+	if maxLen <= 0 {
 		return nil
 	}
 	raw := strings.Split(s, "\n")
-	if len(raw) > max {
-		raw = raw[len(raw)-max:]
+	if len(raw) > maxLen {
+		raw = raw[len(raw)-maxLen:]
 	}
 	out := make([]string, 0, len(raw))
 	for _, line := range raw {
