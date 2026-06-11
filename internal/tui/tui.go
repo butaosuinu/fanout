@@ -26,6 +26,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
@@ -1102,32 +1103,11 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 	}
 
 	prCache := map[int]issueStatus{}
-	stateCache := map[int]string{}
 	var loadErr error
 	for _, parent := range parents {
-		children, parentBody, err := loadParentIssues(gh, parent, store.PanesForParent(parent))
-		if err != nil {
-			loadErr = errors.Join(loadErr, err)
-			if len(children) == 0 {
-				fallbackChildren, fallbackBody, fallbackErr := loadRecordedPaneIssues(gh, store.PanesForParent(parent))
-				if fallbackErr != nil {
-					return nil, errors.Join(loadErr, fallbackErr)
-				}
-				children = fallbackChildren
-				if parentBody == "" {
-					parentBody = fallbackBody
-				}
-			}
-		}
-		if err := hydrateIssues(gh, children); err != nil {
-			return nil, err
-		}
-		deps := parentDependencies(parent, children, parentBody, stateCache, func(num int) string {
-			stateName, _ := gh.IssueState(num)
-			return stateName
-		})
-		waves := dependencyWaves(children, deps)
-		for _, issue := range children {
+		graph, err := sessionview.FetchWaveGraph(gh, parent, recordedIssueNums(store.PanesForParent(parent)))
+		loadErr = errors.Join(loadErr, err)
+		for _, issue := range graph.Children {
 			key := keyForIssue(parent, issue.Number)
 			cached, ok := prCache[issue.Number]
 			if !ok {
@@ -1141,15 +1121,26 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			if cached.State == "" {
 				cached.State = issue.State
 			}
+			info := graph.Info[issue.Number]
 			cached.Title = issue.Title
-			cached.Wave = waves[issue.Number]
-			cached.WaveLabel = issue.Wave
-			cached.Blockers = formatBlockers(deps[issue.Number])
-			cached.HasOpenBlockers = hasOpenBlocker(deps[issue.Number])
+			cached.Wave = info.Wave
+			cached.WaveLabel = info.WaveLabel
+			cached.Blockers = blockers.FormatStatuses(info.Blockers)
+			cached.HasOpenBlockers = info.Blocked
 			statuses[key] = cached
 		}
 	}
 	return statuses, loadErr
+}
+
+func recordedIssueNums(panes []state.Pane) []int {
+	nums := make([]int, 0, len(panes))
+	for _, pane := range panes {
+		if pane.IssueNum > 0 {
+			nums = append(nums, pane.IssueNum)
+		}
+	}
+	return nums
 }
 
 func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, current map[issueKey]issueStatus) []fanoutnotify.Event {
@@ -1213,11 +1204,11 @@ func mergePartialIssueTransitionSnapshot(previous, current issueTransitionSnapsh
 }
 
 func transitionSnapshot(status issueStatus) issueTransitionSnapshot {
-	pr, _ := selectedPR(status.PRs)
+	pr, _ := ghissue.PrimaryPR(status.PRs)
 	return issueTransitionSnapshot{
 		State:     strings.ToUpper(strings.TrimSpace(status.State)),
 		HasMerged: hasMergedPR(status.PRs),
-		CIStatus:  strings.ToLower(strings.TrimSpace(summarizePRCI(status.PRs))),
+		CIStatus:  strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(status.PRs))),
 		Waiting:   status.HasOpenBlockers || strings.EqualFold(status.State, "WAITING"),
 		PRNumber:  pr.Number,
 		Title:     status.Title,
@@ -1259,215 +1250,6 @@ func transitionNotice(events []fanoutnotify.Event) string {
 		return events[0].Message()
 	}
 	return fmt.Sprintf("%d state changes: %s", len(events), events[0].Message())
-}
-
-func loadParentIssues(gh ghissue.Runner, parent string, panes []state.Pane) ([]ghissue.Issue, string, error) {
-	parentNum, err := strconv.Atoi(parent)
-	if err != nil {
-		return loadRecordedPaneIssues(gh, panes)
-	}
-
-	parentBody, err := gh.ParentBody(parentNum)
-	var loadErr error
-	if err != nil {
-		loadErr = errors.Join(loadErr, fmt.Errorf("parent body #%d: %w", parentNum, err))
-		parentBody = ""
-	}
-	subIssues, err := gh.SubIssueList(parentNum)
-	if err != nil {
-		loadErr = errors.Join(loadErr, fmt.Errorf("sub-issues #%d: %w", parentNum, err))
-		subIssues = nil
-	}
-	children, err := mergeParentIssueChildren(parentNum, subIssues, parentBody, panes, gh.IssueDetail)
-	if err != nil {
-		return children, parentBody, errors.Join(loadErr, err)
-	}
-	return children, parentBody, loadErr
-}
-
-func mergeParentIssueChildren(parentNum int, subIssues []ghissue.Issue, parentBody string, panes []state.Pane, issueDetail func(int) (ghissue.Issue, error)) ([]ghissue.Issue, error) {
-	existing := parentChildNumbers(parentNum, subIssues)
-	extra, loadErr := loadMissingIssueDetails(ghissue.TaskListNumbers(parentBody), existing, issueDetail)
-	for _, pane := range panes {
-		if pane.IssueNum <= 0 || existing[pane.IssueNum] {
-			continue
-		}
-		detail, err := issueDetail(pane.IssueNum)
-		if err != nil {
-			return nil, fmt.Errorf("#%d: %w", pane.IssueNum, err)
-		}
-		extra = append(extra, detail)
-		existing[pane.IssueNum] = true
-	}
-	children := ghissue.MergeExtra(subIssues, extra)
-	assignIssueWaveLabels(children, ghissue.TaskListWaves(parentBody))
-	return children, loadErr
-}
-
-func assignIssueWaveLabels(issues []ghissue.Issue, labels map[int]string) {
-	for i := range issues {
-		if label := labels[issues[i].Number]; label != "" {
-			issues[i].Wave = label
-		}
-	}
-}
-
-func parentChildNumbers(parentNum int, subIssues []ghissue.Issue) map[int]bool {
-	existing := map[int]bool{parentNum: true}
-	for _, issue := range subIssues {
-		existing[issue.Number] = true
-	}
-	return existing
-}
-
-func loadMissingIssueDetails(nums []int, existing map[int]bool, issueDetail func(int) (ghissue.Issue, error)) ([]ghissue.Issue, error) {
-	extra := []ghissue.Issue{}
-	var loadErr error
-	for _, num := range nums {
-		if existing[num] {
-			continue
-		}
-		detail, err := issueDetail(num)
-		if err != nil {
-			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
-			continue
-		}
-		extra = append(extra, detail)
-		existing[num] = true
-	}
-	return extra, loadErr
-}
-
-func loadRecordedPaneIssues(gh ghissue.Runner, panes []state.Pane) ([]ghissue.Issue, string, error) {
-	children := make([]ghissue.Issue, 0, len(panes))
-	seen := map[int]bool{}
-	for _, pane := range panes {
-		if pane.IssueNum <= 0 || seen[pane.IssueNum] {
-			continue
-		}
-		detail, err := gh.IssueDetail(pane.IssueNum)
-		if err != nil {
-			return nil, "", fmt.Errorf("#%d: %w", pane.IssueNum, err)
-		}
-		children = append(children, detail)
-		seen[pane.IssueNum] = true
-	}
-	return children, "", nil
-}
-
-func hydrateIssues(gh ghissue.Runner, issues []ghissue.Issue) error {
-	for i := range issues {
-		if issues[i].Body != "" {
-			continue
-		}
-		detail, err := gh.IssueDetail(issues[i].Number)
-		if err != nil {
-			return fmt.Errorf("#%d: %w", issues[i].Number, err)
-		}
-		issues[i].Body = detail.Body
-		issues[i].Labels = detail.Labels
-		if issues[i].Title == "" {
-			issues[i].Title = detail.Title
-		}
-		if issues[i].State == "" {
-			issues[i].State = detail.State
-		}
-	}
-	return nil
-}
-
-func parentDependencies(parent string, issues []ghissue.Issue, parentBody string, stateCache map[int]string, issueState func(int) string) map[int][]blockerStatus {
-	deps := make(map[int][]blockerStatus, len(issues))
-	for _, issue := range issues {
-		childBlockers := blockers.FromChildBody(issue.Body)
-		parentBlockers := []int{}
-		if _, err := strconv.Atoi(parent); err == nil {
-			parentBlockers = blockers.FromParentRow(parentBody, issue.Number)
-		}
-		nums := blockers.Dedupe(childBlockers, parentBlockers)
-		rows := make([]blockerStatus, 0, len(nums))
-		for _, num := range nums {
-			stateName, ok := stateCache[num]
-			if !ok {
-				stateName = issueState(num)
-				if stateName == "" {
-					stateName = "UNKNOWN"
-				}
-				stateCache[num] = stateName
-			}
-			rows = append(rows, blockerStatus{Num: num, State: strings.ToUpper(stateName)})
-		}
-		deps[issue.Number] = rows
-	}
-	return deps
-}
-
-type blockerStatus struct {
-	Num   int
-	State string
-}
-
-func dependencyWaves(issues []ghissue.Issue, deps map[int][]blockerStatus) map[int]int {
-	childSet := map[int]bool{}
-	for _, issue := range issues {
-		childSet[issue.Number] = true
-	}
-	waves := map[int]int{}
-	visiting := map[int]bool{}
-	var waveFor func(int) int
-	waveFor = func(num int) int {
-		if wave := waves[num]; wave > 0 {
-			return wave
-		}
-		if visiting[num] {
-			return 1
-		}
-		visiting[num] = true
-		maxBlockerWave := 0
-		for _, blocker := range deps[num] {
-			blockerWave := 1
-			if childSet[blocker.Num] {
-				blockerWave = waveFor(blocker.Num)
-			}
-			if blockerWave > maxBlockerWave {
-				maxBlockerWave = blockerWave
-			}
-		}
-		delete(visiting, num)
-		waves[num] = maxBlockerWave + 1
-		return waves[num]
-	}
-	for _, issue := range issues {
-		waveFor(issue.Number)
-	}
-	return waves
-}
-
-func formatBlockers(rows []blockerStatus) string {
-	if len(rows) == 0 {
-		return "-"
-	}
-	parts := make([]string, len(rows))
-	for i, row := range rows {
-		switch row.State {
-		case "OPEN":
-			parts[i] = fmt.Sprintf("OPEN #%d", row.Num)
-		case "CLOSED":
-			parts[i] = fmt.Sprintf("resolved #%d", row.Num)
-		default:
-			parts[i] = fmt.Sprintf("%s #%d", dash(row.State), row.Num)
-		}
-	}
-	return strings.Join(parts, ", ")
-}
-
-func hasOpenBlocker(rows []blockerStatus) bool {
-	for _, row := range rows {
-		if row.State == "OPEN" {
-			return true
-		}
-	}
-	return false
 }
 
 func recordedParents(panes []state.Pane) []string {
@@ -1545,7 +1327,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			view.IssueState = dash(status.State)
 			view.PRSummary = summarizePRs(status.PRs)
 			view.HasMergedPR = hasMergedPR(status.PRs)
-			view.CIStatus = summarizePRCI(status.PRs)
+			view.CIStatus = ghissue.SummarizeCI(status.PRs)
 		}
 		if stat, ok := worktrees[pane.WorktreePath]; ok {
 			view.DiffSummary = stat.Diff
@@ -1566,7 +1348,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 			IssueState:  dash(status.State),
 			PRSummary:   summarizePRs(status.PRs),
 			HasMergedPR: hasMergedPR(status.PRs),
-			CIStatus:    summarizePRCI(status.PRs),
+			CIStatus:    ghissue.SummarizeCI(status.PRs),
 			Wave:        status.Wave,
 			WaveLabel:   status.WaveLabel,
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
@@ -1595,7 +1377,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			out[i].WaveBadge = waveBadge(status.Wave, status.HasOpenBlockers)
 			out[i].Blockers = dash(status.Blockers)
 			out[i].Blocked = status.HasOpenBlockers
-			out[i].CIStatus = summarizePRCI(status.PRs)
+			out[i].CIStatus = ghissue.SummarizeCI(status.PRs)
 		}
 	}
 	for key, status := range issues {
@@ -1610,7 +1392,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			IssueState:  dash(status.State),
 			PRSummary:   summarizePRs(status.PRs),
 			HasMergedPR: hasMergedPR(status.PRs),
-			CIStatus:    summarizePRCI(status.PRs),
+			CIStatus:    ghissue.SummarizeCI(status.PRs),
 			Wave:        status.Wave,
 			WaveLabel:   status.WaveLabel,
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
@@ -1921,31 +1703,11 @@ func issueTitle(status issueStatus, num int) string {
 }
 
 func summarizePRs(prs []ghissue.PRRef) string {
-	pr, ok := selectedPR(prs)
+	pr, ok := ghissue.PrimaryPR(prs)
 	if !ok {
 		return "-"
 	}
 	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState())
-}
-
-func summarizePRCI(prs []ghissue.PRRef) string {
-	pr, ok := selectedPR(prs)
-	if !ok {
-		return "-"
-	}
-	return dash(pr.CIStatus)
-}
-
-func selectedPR(prs []ghissue.PRRef) (ghissue.PRRef, bool) {
-	if len(prs) == 0 {
-		return ghissue.PRRef{}, false
-	}
-	for _, pr := range prs {
-		if pr.State == "MERGED" {
-			return pr, true
-		}
-	}
-	return prs[0], true
 }
 
 func hasMergedPR(prs []ghissue.PRRef) bool {

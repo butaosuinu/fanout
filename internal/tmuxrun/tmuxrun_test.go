@@ -106,15 +106,15 @@ printf '%%43\n'
 	}
 }
 
-func TestListLivePanesParsesIDAndPath(t *testing.T) {
+func TestListLivePanesParsesIDPathAndTitle(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")
 	tmuxPath := filepath.Join(dir, "tmux")
-	// Each line is "#{pane_id}\t#{pane_current_path}"; include a blank line and
-	// surrounding whitespace to exercise trimming.
+	// Each line is "#{pane_id}\t#{pane_current_path}\t#{pane_title}"; include a
+	// blank line and an empty title to exercise trimming and optional titles.
 	script := "#!/bin/sh\n" +
 		`printf '%s\n' "$@" > "$TMUXRUN_ARGS"` + "\n" +
-		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\n\n'` + "\n"
+		`printf '%%9\t/wt/nine\tnine: child\n%%10\t/wt/ten\t\n\n'` + "\n"
 	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +126,8 @@ func TestListLivePanesParsesIDAndPath(t *testing.T) {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	if len(panes) != 2 ||
-		panes[0] != (LivePane{ID: "%9", CurrentPath: "/wt/nine"}) ||
-		panes[1] != (LivePane{ID: "%10", CurrentPath: "/wt/ten"}) {
+		panes[0] != (LivePane{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child"}) ||
+		panes[1] != (LivePane{ID: "%10", CurrentPath: "/wt/ten", Title: ""}) {
 		t.Fatalf("ListLivePanes() = %#v", panes)
 	}
 
@@ -136,9 +136,40 @@ func TestListLivePanesParsesIDAndPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	gotArgs := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	wantArgs := []string{"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}"}
+	wantArgs := []string{"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}\t#{pane_title}"}
 	if strings.Join(gotArgs, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("tmux args = %#v, want %#v", gotArgs, wantArgs)
+	}
+}
+
+func TestParseListLivePanesOutput(t *testing.T) {
+	input := "%1\t/wt/one\tfanout: child #12\n" +
+		"%2\t/wt/two\ttitle\twith\ttabs\n" + // title is the last field, so its tabs survive
+		"%3\t/wt/three\t\n" + // empty title
+		"%4\t/wt/four\n" + // missing title field
+		"\t/wt/orphan\ttitle\n" + // empty id: skipped
+		"no-tabs-at-all\n" + // missing path field: skipped
+		"   \n"
+
+	got := parseListLivePanesOutput(input)
+
+	want := []LivePane{
+		{ID: "%1", CurrentPath: "/wt/one", Title: "fanout: child #12"},
+		{ID: "%2", CurrentPath: "/wt/two", Title: "title\twith\ttabs"},
+		{ID: "%3", CurrentPath: "/wt/three", Title: ""},
+		{ID: "%4", CurrentPath: "/wt/four", Title: ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseListLivePanesOutput() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseListLivePanesOutputTrimsCarriageReturns(t *testing.T) {
+	got := parseListLivePanesOutput("%5\t/wt/five\tcrlf title\r\n")
+
+	want := []LivePane{{ID: "%5", CurrentPath: "/wt/five", Title: "crlf title"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseListLivePanesOutput() = %#v, want %#v", got, want)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 const (
 	userShellExpr       = `"${SHELL:-/bin/sh}"`
 	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+	livePaneListFormat  = "#{pane_id}\t#{pane_current_path}\t#{pane_title}"
 	paneAlternateFormat = "#{alternate_on}"
 )
 
@@ -66,15 +67,16 @@ func BuildPaneLaunchCommand(agentCommand string) string {
 	return "exec /bin/sh -lc " + shellQuote(body)
 }
 
-// LivePane is one live tmux pane: its server-scoped id and the cwd of its
-// foreground process.
+// LivePane is one live tmux pane: its server-scoped id, the cwd of its
+// foreground process, and its pane title (empty when tmux reports none).
 type LivePane struct {
 	ID          string
 	CurrentPath string
+	Title       string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
-// current path (`tmux list-panes -a -F '#{pane_id}\t#{pane_current_path}'`). The
+// current path and title (`tmux list-panes -a -F livePaneListFormat`). The
 // dashboard matches a recorded pane on BOTH its id and a current path under its
 // worktree: pane ids are server-scoped and reused after a tmux server restart,
 // so id-only matching would falsely mark a stale row live when an unrelated new
@@ -83,24 +85,39 @@ type LivePane struct {
 // Distinct from ListPanes(target), which returns richer PaneInfo for a single
 // target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
 func ListLivePanes() ([]LivePane, error) {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}").Output()
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneListFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
+	return parseListLivePanesOutput(string(out)), nil
+}
+
+// parseListLivePanesOutput parses livePaneListFormat lines. The title field is
+// last and taken verbatim because pane titles may themselves contain tabs; ids
+// and paths cannot in this format. Malformed lines (empty pane id, missing
+// path field) are skipped rather than failing the whole liveness sweep.
+func parseListLivePanesOutput(out string) []LivePane {
 	var panes []LivePane
-	for line := range strings.SplitSeq(string(out), "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		id, path, _ := strings.Cut(line, "\t")
-		id = strings.TrimSpace(id)
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 2 {
+			continue
+		}
+		id := strings.TrimSpace(fields[0])
 		if id == "" {
 			continue
 		}
-		panes = append(panes, LivePane{ID: id, CurrentPath: path})
+		pane := LivePane{ID: id, CurrentPath: fields[1]}
+		if len(fields) == 3 {
+			pane.Title = fields[2]
+		}
+		panes = append(panes, pane)
 	}
-	return panes, nil
+	return panes
 }
 
 // BindDashboardKey registers a tmux key binding (under the prefix table) that

@@ -65,6 +65,31 @@ func (pr PRRef) DisplayState() string {
 	return strings.ToLower(state)
 }
 
+// PrimaryPR picks the ref that best represents an issue's closing PRs: the
+// first MERGED ref wins, otherwise the first ref. ok is false when prs is
+// empty.
+func PrimaryPR(prs []PRRef) (PRRef, bool) {
+	if len(prs) == 0 {
+		return PRRef{}, false
+	}
+	for _, pr := range prs {
+		if pr.State == "MERGED" {
+			return pr, true
+		}
+	}
+	return prs[0], true
+}
+
+// SummarizeCI reports the primary PR's normalized CI status ("pass" / "fail" /
+// "pending"); "-" when there is no PR or no recorded rollup.
+func SummarizeCI(prs []PRRef) string {
+	pr, ok := PrimaryPR(prs)
+	if !ok || strings.TrimSpace(pr.CIStatus) == "" {
+		return "-"
+	}
+	return pr.CIStatus
+}
+
 type PRDiffStat struct {
 	Number       int    `json:"number"`
 	Additions    int    `json:"additions"`

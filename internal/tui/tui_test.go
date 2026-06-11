@@ -724,123 +724,16 @@ func TestRecordedParentsDedupesAndSorts(t *testing.T) {
 	}
 }
 
-func TestParentChildNumbersIncludesParent(t *testing.T) {
-	got := parentChildNumbers(100, []ghissue.Issue{{Number: 101}})
-
-	if !got[100] {
-		t.Fatal("parent issue should be marked existing")
-	}
-	if !got[101] {
-		t.Fatal("sub-issue should be marked existing")
-	}
-}
-
-func TestMergeParentIssueChildrenUsesParentBodyWithoutSubIssues(t *testing.T) {
-	parentBody := "- [ ] #101 first child (blocked by #201)\n- [ ] #102 second child\n"
-
-	got, err := mergeParentIssueChildren(100, nil, parentBody, []state.Pane{{IssueNum: 101}}, func(num int) (ghissue.Issue, error) {
-		return ghissue.Issue{Number: num, Title: "issue"}, nil
+func TestRecordedIssueNumsFiltersNonPositive(t *testing.T) {
+	got := recordedIssueNums([]state.Pane{
+		{IssueNum: 5},
+		{IssueNum: 0},
+		{IssueNum: -1},
+		{IssueNum: 6},
 	})
-	if err != nil {
-		t.Fatalf("mergeParentIssueChildren() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("mergeParentIssueChildren() len = %d, want 2", len(got))
-	}
-
-	gotNums := []int{got[0].Number, got[1].Number}
-	want := []int{101, 102}
-	if !reflect.DeepEqual(gotNums, want) {
-		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, want)
-	}
-}
-
-func TestParentDependenciesFormatsOpenAndClosedBlockers(t *testing.T) {
-	issues := []ghissue.Issue{
-		{Number: 101, Body: "## Blocked by\n- #201\n- #202\n"},
-	}
-	states := map[int]string{201: "OPEN", 202: "CLOSED", 203: "OPEN"}
-	parentBody := "- [ ] #101 parent dependency (blocked by #202, #203)\n"
-
-	deps := parentDependencies("100", issues, parentBody, map[int]string{}, func(num int) string {
-		return states[num]
-	})
-
-	got := formatBlockers(deps[101])
-	want := "OPEN #201, resolved #202, OPEN #203"
-	if got != want {
-		t.Fatalf("formatBlockers() = %q, want %q", got, want)
-	}
-	if !hasOpenBlocker(deps[101]) {
-		t.Fatal("hasOpenBlocker() = false, want true")
-	}
-}
-
-func TestLoadMissingIssueDetailsSkipsLookupFailures(t *testing.T) {
-	existing := map[int]bool{100: true}
-
-	got, err := loadMissingIssueDetails([]int{100, 101, 102}, existing, func(num int) (ghissue.Issue, error) {
-		if num == 101 {
-			return ghissue.Issue{}, errBoom
-		}
-		return ghissue.Issue{Number: num, Title: "loaded"}, nil
-	})
-
-	want := []ghissue.Issue{{Number: 102, Title: "loaded"}}
+	want := []int{5, 6}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("loadMissingIssueDetails() = %#v, want %#v", got, want)
-	}
-	if err == nil || !strings.Contains(err.Error(), "#101") {
-		t.Fatalf("loadMissingIssueDetails() error = %v, want #101 partial error", err)
-	}
-	if existing[101] {
-		t.Fatal("failed lookup should not mark #101 as existing")
-	}
-	if !existing[102] {
-		t.Fatal("loaded lookup should mark #102 as existing")
-	}
-}
-
-func TestMergeParentIssueChildrenReturnsPartialRowsWithLookupError(t *testing.T) {
-	parentBody := "**wave5**\n- [ ] #101 missing child\n- [ ] #102 loaded child\n"
-
-	got, err := mergeParentIssueChildren(100, []ghissue.Issue{{Number: 103, Title: "sub", State: "OPEN"}}, parentBody, nil, func(num int) (ghissue.Issue, error) {
-		if num == 101 {
-			return ghissue.Issue{}, errBoom
-		}
-		return ghissue.Issue{Number: num, Title: "loaded", State: "OPEN"}, nil
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "#101") {
-		t.Fatalf("mergeParentIssueChildren() error = %v, want #101 partial error", err)
-	}
-	gotNums := []int{}
-	for _, issue := range got {
-		gotNums = append(gotNums, issue.Number)
-	}
-	wantNums := []int{103, 102}
-	if !reflect.DeepEqual(gotNums, wantNums) {
-		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, wantNums)
-	}
-	if got[1].Wave != "wave5" {
-		t.Fatalf("partial row wave = %q, want wave5", got[1].Wave)
-	}
-}
-
-func TestDependencyWavesUseParentBlockerDepth(t *testing.T) {
-	issues := []ghissue.Issue{{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}
-	deps := map[int][]blockerStatus{
-		1: nil,
-		2: {{Num: 1, State: "CLOSED"}},
-		3: {{Num: 2, State: "OPEN"}},
-		4: {{Num: 99, State: "OPEN"}},
-	}
-
-	got := dependencyWaves(issues, deps)
-
-	want := map[int]int{1: 1, 2: 2, 3: 3, 4: 2}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("dependencyWaves() = %#v, want %#v", got, want)
+		t.Fatalf("recordedIssueNums() = %#v, want %#v", got, want)
 	}
 }
 
