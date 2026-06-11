@@ -73,7 +73,7 @@ curl/wget 経由のインストールでは通常 `com.apple.quarantine` 拡張�
 xattr -d com.apple.quarantine /path/to/fanout
 ```
 
-Apple Silicon では、すべての実行ファイルに最低限 ad-hoc 署名が必要です。Release workflow は macOS 上で Go 1.23 の darwin バイナリをビルドするため、Go linker がビルド時に署名します。Release package 作成後に外部 `strip` をかけると署名が壊れることがあるので避けてください。ローカルコピーが壊れた場合は次で ad-hoc 再署名できます:
+Apple Silicon では、すべての実行ファイルに最低限 ad-hoc 署名が必要です。Release workflow は macOS 上で Go 1.26 の darwin バイナリをビルドするため、Go linker がビルド時に署名します。Release package 作成後に外部 `strip` をかけると署名が壊れることがあるので避けてください。ローカルコピーが壊れた場合は次で ad-hoc 再署名できます:
 
 ```bash
 codesign -s - /path/to/fanout
@@ -95,7 +95,7 @@ CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データデ�
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
-チェックアウトからのビルドには **Go ツールチェイン**(Go 1.23+)が必要です。`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は不要です。
+チェックアウトからのビルドには **Go ツールチェイン**(Go 1.26+)が必要です。`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は不要です。
 
 ## 更新を保つ
 
