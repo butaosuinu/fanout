@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['go.mod', 'go.sum', '**.go', '.github/workflows/vuln.yml']
+    paths: ['go.mod', 'go.sum', '**.go', 'Makefile', '.github/workflows/vuln.yml']
   schedule:
     - cron: '17 21 * * 1'   # weekly, Tuesday 06:17 JST
   workflow_dispatch:

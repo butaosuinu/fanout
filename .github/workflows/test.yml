@@ -72,6 +72,7 @@ jobs:
           go-version-file: go.mod
 
       - name: golangci-lint
+        # version-file needs golangci-lint-action >= v9.2.0
         uses: golangci/golangci-lint-action@v9
         with:
           version-file: .golangci-lint-version
