@@ -5,7 +5,7 @@ package blockers
 
 import (
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -23,7 +23,7 @@ var (
 func FromChildBody(body string) []int {
 	out := []int{}
 	inSection := false
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		lower := strings.ToLower(line)
 		if blockedBySectionStartRE.MatchString(lower) {
 			inSection = true
@@ -57,7 +57,7 @@ func FromParentRow(parentBody string, child int) []int {
 	rowPrefix := regexp.MustCompile(`^\s*-\s+\[[ xX]\]\s*#` + strconv.Itoa(child) + `(?:[^0-9]|$)`)
 	blockedByRE := regexp.MustCompile(`(?i)\(blocked by\s+([^)]+)\)`)
 	out := []int{}
-	for _, line := range strings.Split(parentBody, "\n") {
+	for line := range strings.SplitSeq(parentBody, "\n") {
 		if !rowPrefix.MatchString(line) {
 			continue
 		}
@@ -85,6 +85,6 @@ func Dedupe(a, b []int) []int {
 	for n := range seen {
 		out = append(out, n)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out
 }

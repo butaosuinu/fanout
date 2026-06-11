@@ -3,11 +3,13 @@ package tui
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -604,7 +606,7 @@ func (m model) View() string {
 		lipgloss.Left,
 		header,
 		m.table.View(),
-		panelStyle.Width(maxInt(0, m.width)).Render(detail.View()),
+		panelStyle.Width(max(0, m.width)).Render(detail.View()),
 		footer,
 	)
 }
@@ -618,10 +620,7 @@ func (m *model) resize() {
 		m.newPane.prompt.Width = inputWidth
 		m.newPane.slug.Width = inputWidth
 	}
-	tableHeight := m.height - detailHeight - 5
-	if tableHeight < 4 {
-		tableHeight = 4
-	}
+	tableHeight := max(m.height-detailHeight-5, 4)
 	m.table.SetWidth(m.width)
 	m.table.SetHeight(tableHeight)
 	m.table.SetColumns(columnsForWidth(m.width))
@@ -857,7 +856,7 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	return formStyle.Width(maxInt(0, m.width-4)).Render(strings.Join(lines, "\n"))
+	return formStyle.Width(max(0, m.width-4)).Render(strings.Join(lines, "\n"))
 }
 
 func (m model) newPaneFieldView(field newPaneField, label, value string) string {
@@ -926,7 +925,7 @@ func (m model) detailContent() string {
 	if pane.WorktreeErr != "" {
 		lines = append(lines, "worktree_error="+pane.WorktreeErr)
 	}
-	peekBudget := maxInt(2, m.detail.Height-len(lines)-1)
+	peekBudget := max(2, m.detail.Height-len(lines)-1)
 	lines = append(lines, m.peekContent(pane, peekBudget)...)
 	if pane.Prompt != "" && len(lines) < m.detail.Height {
 		lines = append(lines, "prompt="+pane.Prompt)
@@ -1018,7 +1017,7 @@ func (m model) peekContent(pane paneView, maxLines int) []string {
 	}
 	lines := []string{header + ":"}
 	for _, line := range tailLines(out, maxLines) {
-		lines = append(lines, truncatePreserveSpace(line, maxInt(20, m.detail.Width-2)))
+		lines = append(lines, truncatePreserveSpace(line, max(20, m.detail.Width-2)))
 	}
 	return lines
 }
@@ -1184,9 +1183,7 @@ func issueTransitionSnapshots(statuses map[issueKey]issueStatus) map[issueKey]is
 
 func mergePartialIssueTransitionSnapshots(previous map[issueKey]issueTransitionSnapshot, statuses map[issueKey]issueStatus) map[issueKey]issueTransitionSnapshot {
 	out := make(map[issueKey]issueTransitionSnapshot, len(previous))
-	for key, snapshot := range previous {
-		out[key] = snapshot
-	}
+	maps.Copy(out, previous)
 	for key, status := range statuses {
 		current := transitionSnapshot(status)
 		if prev, ok := previous[key]; ok {
@@ -1241,11 +1238,11 @@ func sortedIssueKeys(statuses map[issueKey]issueStatus) []issueKey {
 	for key := range statuses {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Parent != keys[j].Parent {
-			return keys[i].Parent < keys[j].Parent
+	slices.SortFunc(keys, func(a, b issueKey) int {
+		if c := cmp.Compare(a.Parent, b.Parent); c != 0 {
+			return c
 		}
-		return keys[i].Num < keys[j].Num
+		return cmp.Compare(a.Num, b.Num)
 	})
 	return keys
 }
@@ -1481,13 +1478,13 @@ func recordedParents(panes []state.Pane) []string {
 	for parent := range seen {
 		parents = append(parents, parent)
 	}
-	sort.Slice(parents, func(i, j int) bool {
-		left, leftErr := strconv.Atoi(parents[i])
-		right, rightErr := strconv.Atoi(parents[j])
+	slices.SortFunc(parents, func(a, b string) int {
+		left, leftErr := strconv.Atoi(a)
+		right, rightErr := strconv.Atoi(b)
 		if leftErr == nil && rightErr == nil {
-			return left < right
+			return cmp.Compare(left, right)
 		}
-		return parents[i] < parents[j]
+		return strings.Compare(a, b)
 	})
 	return parents
 }
@@ -1623,14 +1620,14 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 }
 
 func sortPaneViews(panes []paneView) {
-	sort.Slice(panes, func(i, j int) bool {
-		if panes[i].Parent != panes[j].Parent {
-			return panes[i].Parent < panes[j].Parent
+	slices.SortFunc(panes, func(a, b paneView) int {
+		if c := cmp.Compare(a.Parent, b.Parent); c != 0 {
+			return c
 		}
-		if panes[i].Wave != panes[j].Wave {
-			return panes[i].Wave < panes[j].Wave
+		if c := cmp.Compare(a.Wave, b.Wave); c != 0 {
+			return c
 		}
-		return panes[i].IssueNum < panes[j].IssueNum
+		return cmp.Compare(a.IssueNum, b.IssueNum)
 	})
 }
 
@@ -1759,7 +1756,7 @@ func filterPaneViews(panes []paneView, query string) []paneView {
 
 func parsePaneFilter(query string) paneFilter {
 	var filter paneFilter
-	for _, token := range strings.Fields(strings.ToLower(strings.TrimSpace(query))) {
+	for token := range strings.FieldsSeq(strings.ToLower(strings.TrimSpace(query))) {
 		key, value, ok := splitFilterToken(token)
 		if !ok {
 			filter.terms = append(filter.terms, token)
@@ -2007,9 +2004,7 @@ func relativePath(root, path string) string {
 
 func cloneIssueStatuses(in map[issueKey]issueStatus) map[issueKey]issueStatus {
 	out := make(map[issueKey]issueStatus, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
+	maps.Copy(out, in)
 	return out
 }
 
@@ -2107,11 +2102,4 @@ func clampInt(v, low, high int) int {
 		return high
 	}
 	return v
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

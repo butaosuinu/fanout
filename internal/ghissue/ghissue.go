@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -664,7 +664,7 @@ var (
 func TaskListNumbers(parentBody string) []int {
 	seen := map[int]bool{}
 	var out []int
-	for _, line := range strings.Split(parentBody, "\n") {
+	for line := range strings.SplitSeq(parentBody, "\n") {
 		m := taskListRE.FindStringSubmatch(line)
 		if len(m) != 2 {
 			continue
@@ -676,7 +676,7 @@ func TaskListNumbers(parentBody string) []int {
 		seen[n] = true
 		out = append(out, n)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -685,7 +685,7 @@ func TaskListNumbers(parentBody string) []int {
 func TaskListWaves(parentBody string) map[int]string {
 	out := map[int]string{}
 	currentWave := ""
-	for _, line := range strings.Split(parentBody, "\n") {
+	for line := range strings.SplitSeq(parentBody, "\n") {
 		if m := taskListRE.FindStringSubmatch(line); len(m) == 2 {
 			if currentWave == "" {
 				continue

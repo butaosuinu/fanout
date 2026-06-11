@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -457,12 +458,7 @@ func existingWorktreeNames(root string) []string {
 }
 
 func worktreeNameMatchesExact(names []string, slug string) bool {
-	for _, name := range names {
-		if name == slug {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(names, slug)
 }
 
 func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bool {
@@ -536,7 +532,7 @@ func ghSubIssueAvailable() bool {
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if first, _, ok := strings.Cut(line, "\t"); ok && first == "gh sub-issue" {
 			return true
 		}

@@ -46,8 +46,8 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 	t.Setenv("FANOUT_SLACK_WEBHOOK_URL", "https://hooks.example/slack")
 
 	got := Resolve(repo, CLIOverrides{
-		AutoPullRequest: boolp(true),
-		PRVisualization: boolp(false),
+		AutoPullRequest: new(true),
+		PRVisualization: new(false),
 	}, t.Fatalf)
 
 	want := Settings{
@@ -222,10 +222,6 @@ func writeConfig(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
-}
-
-func boolp(v bool) *bool {
-	return &v
 }
 
 func assertWarningContains(t *testing.T, warnings []string, want string) {

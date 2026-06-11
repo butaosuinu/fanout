@@ -21,10 +21,7 @@ func Slug(title string, num int) string {
 		base = "issue"
 	}
 	suffix := fmt.Sprintf("-%d", num)
-	maxBase := MaxSlugLength - len(suffix)
-	if maxBase < 1 {
-		maxBase = 1
-	}
+	maxBase := max(MaxSlugLength-len(suffix), 1)
 	if len(base) > maxBase {
 		base = strings.Trim(base[:maxBase], "-")
 		if base == "" {
@@ -87,10 +84,7 @@ func QualifySlugForParent(slug, parentRef string, issueNum int) string {
 	}
 	parentToken := parentToken(parentRef)
 	extra := "-" + parentToken + suffix
-	maxBase := MaxSlugLength - len(extra)
-	if maxBase < 1 {
-		maxBase = 1
-	}
+	maxBase := max(MaxSlugLength-len(extra), 1)
 	if len(base) > maxBase {
 		base = strings.Trim(base[:maxBase], "-")
 		if base == "" {

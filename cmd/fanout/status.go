@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -439,13 +439,13 @@ func writeStatusTable(report statusReport, projectRoot string, lg *log.Logger) e
 		len("LINK"),
 	}
 	for _, row := range rows {
-		widths[0] = maxInt(widths[0], len(row.Issue))
-		widths[1] = maxInt(widths[1], len(row.IssueState))
-		widths[2] = maxInt(widths[2], len(row.PR))
-		widths[3] = maxInt(widths[3], len(row.PRState))
-		widths[4] = maxInt(widths[4], len(row.CI))
-		widths[5] = maxInt(widths[5], len(row.Type))
-		widths[6] = maxInt(widths[6], len(row.Files))
+		widths[0] = max(widths[0], len(row.Issue))
+		widths[1] = max(widths[1], len(row.IssueState))
+		widths[2] = max(widths[2], len(row.PR))
+		widths[3] = max(widths[3], len(row.PRState))
+		widths[4] = max(widths[4], len(row.CI))
+		widths[5] = max(widths[5], len(row.Type))
+		widths[6] = max(widths[6], len(row.Files))
 	}
 
 	headers := []string{"ISSUE", "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
@@ -517,10 +517,10 @@ func statusTableRows(report statusReport, projectRoot string, lg *log.Logger) ([
 				lg.Err("--status: gh pr view #%d failed: %v", pr.Number, err)
 				return nil, 0, 0, 0, exitcode.GitHub
 			}
-			addWidth = maxInt(addWidth, len(fmt.Sprintf("+%d", stat.Additions)))
-			delWidth = maxInt(delWidth, len(fmt.Sprintf("-%d", stat.Deletions)))
-			maxLines = maxInt(maxLines, stat.Additions)
-			maxLines = maxInt(maxLines, stat.Deletions)
+			addWidth = max(addWidth, len(fmt.Sprintf("+%d", stat.Additions)))
+			delWidth = max(delWidth, len(fmt.Sprintf("-%d", stat.Deletions)))
+			maxLines = max(maxLines, stat.Additions)
+			maxLines = max(maxLines, stat.Deletions)
 			rows = append(rows, statusTableRow{
 				Issue:      "#" + strconv.Itoa(child.Num),
 				IssueState: dashIfEmpty(child.State),
@@ -580,7 +580,7 @@ func scaledStatusBar(value, maxValue int) int {
 }
 
 func colorPad(color, reset, s string, width int) string {
-	return colorWrap(color, reset, s) + strings.Repeat(" ", maxInt(0, width-len(s)))
+	return colorWrap(color, reset, s) + strings.Repeat(" ", max(0, width-len(s)))
 }
 
 func colorWrap(color, reset, s string) string {
@@ -606,7 +606,7 @@ func statusTableLine(cols []string, widths []int) string {
 }
 
 func padRight(s string, width int) string {
-	return s + strings.Repeat(" ", maxInt(0, width-len(s)))
+	return s + strings.Repeat(" ", max(0, width-len(s)))
 }
 
 func dashIfEmpty(s string) string {
@@ -616,18 +616,11 @@ func dashIfEmpty(s string) string {
 	return s
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func sortedKeys(set map[int]bool) []int {
 	nums := make([]int, 0, len(set))
 	for n := range set {
 		nums = append(nums, n)
 	}
-	sort.Ints(nums)
+	slices.Sort(nums)
 	return nums
 }

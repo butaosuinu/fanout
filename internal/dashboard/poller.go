@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -259,6 +259,6 @@ func distinctIssueNums(store state.Store) []int {
 			nums = append(nums, p.IssueNum)
 		}
 	}
-	sort.Ints(nums)
+	slices.Sort(nums)
 	return nums
 }

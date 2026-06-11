@@ -1,8 +1,9 @@
 package sessionview
 
 import (
+	"cmp"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -119,7 +120,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	grouped := groupByParent(store.Panes)
 	for _, parent := range sortedParents(grouped) {
 		panes := grouped[parent]
-		sort.Slice(panes, func(i, j int) bool { return panes[i].IssueNum < panes[j].IssueNum })
+		slices.SortFunc(panes, func(a, b state.Pane) int { return cmp.Compare(a.IssueNum, b.IssueNum) })
 
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
 		for _, p := range panes {
@@ -192,18 +193,18 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 	for k := range grouped {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		ni, ei := strconv.Atoi(keys[i])
-		nj, ej := strconv.Atoi(keys[j])
+	slices.SortFunc(keys, func(a, b string) int {
+		na, ea := strconv.Atoi(a)
+		nb, eb := strconv.Atoi(b)
 		switch {
-		case ei == nil && ej == nil:
-			return ni < nj
-		case ei == nil:
-			return true // numeric before non-numeric
-		case ej == nil:
-			return false
+		case ea == nil && eb == nil:
+			return cmp.Compare(na, nb)
+		case ea == nil:
+			return -1 // numeric before non-numeric
+		case eb == nil:
+			return 1
 		default:
-			return keys[i] < keys[j]
+			return strings.Compare(a, b)
 		}
 	})
 	return keys
