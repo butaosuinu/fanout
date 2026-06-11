@@ -17,11 +17,14 @@
       {{ end }}
       <li class="keep">
         <span class="lang-switch" aria-label="language">
-          {{ $cur := . -}}
-          <span class="on">{{ if eq .Language.Lang "ja" }}日本語{{ else }}EN{{ end }}</span>
-          {{- range .Translations }}
+          {{ $curLang := .Language.Lang -}}
+          {{ range .AllTranslations -}}
+          {{ if eq .Language.Lang $curLang -}}
+          <span class="on" aria-current="true">{{ if eq .Language.Lang "ja" }}日本語{{ else }}EN{{ end }}</span>
+          {{ else -}}
           <a href="{{ .RelPermalink }}" lang="{{ .Language.Lang }}" hreflang="{{ .Language.Lang }}">{{ if eq .Language.Lang "ja" }}日本語{{ else }}EN{{ end }}</a>
-          {{- end }}
+          {{ end -}}
+          {{ end -}}
         </span>
       </li>
       <li class="keep">

@@ -113,26 +113,37 @@ html[lang=en] .prose h3{ letter-spacing:.005em; }
 .nav-links a:hover::after{ transform:scaleX(1); }
 .nav-links a[aria-current="page"]{ color:var(--ai); }
 .nav-links a[aria-current="page"]::after{ transform:scaleX(1); background:var(--suna); }
-.nav-gh{
-  display:inline-flex; align-items:center; gap:7px;
+/* GitHub ピルと言語スイッチャーは .nav-links a のテキストリンク用スタイル
+   (padding:4px 0 と下線 ::after)に specificity で勝つ必要がある */
+.nav-links a.nav-gh{
+  display:inline-flex; align-items:center; gap:7px; flex:none;
   border:1px solid var(--suna); border-radius:999px;
-  padding:6px 16px; font-size:13px; font-weight:500;
+  padding:7px 18px; font-size:13px; font-weight:500;
   color:var(--ai); background:var(--paper);
   transition:border-color .25s ease, color .25s ease, transform .25s ease;
 }
-.nav-gh:hover{ border-color:var(--asagi); color:var(--asagi); transform:translateY(-1px); }
+.nav-links a.nav-gh:hover{ border-color:var(--asagi); color:var(--asagi); transform:translateY(-1px); }
+.nav-links a.nav-gh::after{ content:none; }
+
+/* 言語スイッチャー — 1 つの枠に EN | 日本語 を固定順で収め、選択中を白群で塗る */
 .lang-switch{
-  display:inline-flex; align-items:center; gap:6px;
-  font-size:12.5px; font-weight:500; color:var(--ink-60);
+  display:inline-flex; align-items:center;
+  padding:3px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:var(--paper);
+  font-size:12px; font-weight:500; line-height:1.6;
 }
-.lang-switch a{
-  padding:3px 9px; border-radius:999px;
-  border:1px solid transparent;
-  color:var(--ink-60);
-}
-.lang-switch a:hover{ color:var(--asagi); border-color:var(--suna); }
+.nav-links .lang-switch a,
 .lang-switch .on{
-  color:var(--ai); border-color:var(--suna); background:var(--paper);
+  display:inline-flex; align-items:center;
+  padding:2px 12px; border-radius:999px;
+}
+.nav-links .lang-switch a{ color:var(--ink-60); }
+.nav-links .lang-switch a:hover{ color:var(--asagi); }
+.nav-links .lang-switch a::after{ content:none; }
+.lang-switch .on{
+  color:var(--ai-deep);
+  background:rgba(201,232,236,.7);
 }
 
 /* ============================================================
