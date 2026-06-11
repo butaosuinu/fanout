@@ -1,0 +1,143 @@
+# golangci-lint v2 設定(v2.12.2 / config schema v2)。issue #191 で導入。
+#
+# 不採用 linter と根拠:
+# - gosec: exec.Command 35 箇所で G204 誤検出過多 — git/gh/tmux ラッパが製品の本質
+# - exhaustruct: 新規プロジェクト専用
+# - gochecknoglobals: ldflags 注入 version/commit・regexp・lipgloss スタイル・
+#   agent registry が全て正当
+# - funlen / gocognit / cyclop: codex_plan_tui.go 1144 行と TUI Update ループが即死
+# - lll / nlreturn / wsl_v5 / varnamelen / err113 / mnd / depguard / dupl /
+#   contextcheck: コミュニティ合意でノイズ
+# - forcetypeassert: errcheck の check-type-assertions で代替
+# - prealloc / perfsprint: 計測なし最適化
+# - ireturn: bubbletea の Update が tea.Model を返す規約と非両立
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard            # errcheck / govet / ineffassign / staticcheck / unused
+  enable:
+    # バグ検出
+    - bodyclose                # selfupdate の HTTP レスポンス Body Close 漏れ
+    - copyloopvar              # Go 1.22+ で不要なループ変数コピー
+    - durationcheck
+    - errorlint                # errors.Is/As 不使用の比較・型アサーション
+    - exhaustive               # enum switch の網羅性
+    - makezero
+    - nilerr
+    - nilnesserr
+    - reassign
+    # コード品質
+    - gocritic                 # 既定チェックのみ。experimental は opt-in しない
+    - intrange                 # for i := range n(可変インクリメントの引数パーサ 3 箇所は対象外)
+    - modernize                # 回帰防止(一括 fix は先行 issue で実施済み)
+    - predeclared
+    - unconvert
+    - unparam
+    - usestdlibvars
+    # スタイル(低ノイズのみ)
+    - misspell                 # CLI のユーザー向け文言が多いため採用
+    - revive                   # 厳選 rules(exported / package-comments は外す)
+    # テスト品質
+    - thelper
+    - usetesting               # tenv の後継
+    # 運用ガード(現状違反ゼロのラチェット)
+    - gochecknoinits           # 現在 init() は 0 件
+    - nolintlint               # nolint に理由と linter 指定を必須化
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # std-error-handling preset は使わない: worktree.go の書き込みパス defer f.Close()
+      # のような実害ケースを検出対象に残すため。fmt 出力系のみ精密除外。
+      exclude-functions:
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*strings.Builder).WriteString
+        - (*strings.Builder).WriteByte
+        - (*strings.Builder).WriteRune
+        - (*bytes.Buffer).WriteString
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    staticcheck:
+      # v2.12.2 デフォルトの明示(将来のデフォルト変更に左右されない)
+      checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+    exhaustive:
+      default-signifies-exhaustive: true
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+    nolintlint:
+      allow-unused: false
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - comments
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+    paths:
+      # nested go.mod で通常自動除外されるが、パス指定実行・エディタ統合の事故防止
+      - \.dmux/
+      - \.fanout/
+      - \.cache/
+      - tests/tmp/
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/butaosuinu/fanout
+      extra-rules: false
+    goimports:
+      local-prefixes:
+        - github.com/butaosuinu/fanout
+  exclusions:
+    generated: lax
+    paths:
+      - \.dmux/
+      - \.fanout/
+      - \.cache/
+      - tests/tmp/
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
