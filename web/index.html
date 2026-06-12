@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- External requests policy: Google Fonts (fonts.googleapis.com /
+     fonts.gstatic.com) are approved as the page's only external requests.
+     The page URL carries the API token (?token=), so
+     <meta name="referrer" content="no-referrer"> is KEPT: the tokened URL
+     must never leak via the Referer header — to the font origins included.
+     Everything else (favicon, CSS, JS) is local / inline.
+     The font stylesheet loads non-blocking (media-swap) so a hanging proxy
+     cannot stall first paint of the localhost dashboard. -->
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="light dark" />
+<title>fanout dashboard</title>
+<script>
+/* FOUC avoidance — runs before first paint. localStorage key: fanout.theme
+ * (a plain non-module script: Vite leaves it untouched, so it still runs
+ * before the bundle loads). */
+(function () {
+  try {
+    var t = localStorage.getItem("fanout.theme");
+    if (t !== "light" && t !== "dark")
+      t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = "light"; }
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+<noscript><link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" /></noscript>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M1.17 14.25A12.5 12.5 0 0 1 22.83 14.25L17.2 17.5A6 6 0 0 0 6.8 17.5Z' fill='%23C9E8EC' stroke='%23165E83' stroke-width='1.4' stroke-linejoin='round'/%3E%3Cpath d='M12 20.5 1.17 14.25M12 20.5 5.75 9.68M12 20.5 12 8M12 20.5 18.25 9.68M12 20.5 22.83 14.25' stroke='%23165E83' stroke-width='1.9' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='20.5' r='2.4' fill='%2300A3AF'/%3E%3C/svg%3E" />
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

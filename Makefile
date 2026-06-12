@@ -14,6 +14,10 @@ GO         ?= go
 GO_BIN     ?= fanout-go
 GOCACHE    ?= $(CURDIR)/.cache/go-build
 
+PNPM       ?= pnpm
+WEB_DIR    := web
+STATIC_DIR := internal/dashboard/static
+
 # .golangci-lint-version is the single source for the pinned golangci-lint
 # version; CI (golangci-lint-action in .github/workflows/test.yml) reads the
 # same file via `version-file`.
@@ -21,13 +25,29 @@ GOLANGCI_LINT_VERSION ?= $(shell cat .golangci-lint-version)
 GOLANGCI_LINT_BIN     := $(CURDIR)/.cache/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT_CACHE   ?= $(CURDIR)/.cache/golangci-lint
 
-.PHONY: install link uninstall build-go clean-go install-integrations link-integrations uninstall-integrations go-test test test-tier1 test-tier2 lint lint-go lint-shell fmt fix vuln check-bats
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 lint lint-go lint-shell lint-web fmt fix vuln check-bats
 
-build-go:
+# The dashboard web UI (web/, React + Vite) is built into $(STATIC_DIR) and
+# embedded via go:embed. The bundle is never committed, so building the binary
+# needs Node.js + pnpm (see web/.nvmrc / web/package.json packageManager).
+$(WEB_DIR)/node_modules/.installed: $(WEB_DIR)/package.json $(WEB_DIR)/pnpm-lock.yaml
+	cd $(WEB_DIR) && $(PNPM) install --frozen-lockfile
+	@touch $@
+
+build-web: $(WEB_DIR)/node_modules/.installed
+	@# emptyOutDir:false keeps .gitkeep alive, so sweep stale assets ourselves.
+	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
+	cd $(WEB_DIR) && $(PNPM) run build
+
+build-go: build-web
 	GOCACHE="$(GOCACHE)" $(GO) build -o "$(GO_BIN)" ./cmd/fanout
 
 clean-go:
 	rm -f "$(GO_BIN)"
+
+clean-web:
+	rm -rf $(WEB_DIR)/node_modules
+	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
 install-integrations:
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
@@ -91,8 +111,11 @@ uninstall: uninstall-integrations
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
 # --- test / lint -------------------------------------------------------------
-# `make test`         — build the Go binary, run Go unit tests + Tier 1 + Tier 2
-#                       black-box tests against it via FANOUT_BIN.
+# `make test`         — build the Go binary, run Go unit tests + web UI tests
+#                       (vitest) + Tier 1 + Tier 2 black-box tests against it
+#                       via FANOUT_BIN.
+# `make test-web`     — dashboard web UI tests (vitest; needs Node + pnpm).
+# `make lint-web`     — dashboard web UI type check (tsc --noEmit).
 # `make test-tier1`   — flag / prerequisite tests, no live tmux panes.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
 # `make lint`         — pinned golangci-lint v2 (.golangci.yml) plus shellcheck
@@ -120,7 +143,9 @@ check-bats:
 	  exit 1; \
 	}
 
-test: go-test test-tier1 test-tier2
+# build-web first: go-test embeds whatever is in $(STATIC_DIR), so the asset
+# smoke tests must see a fresh bundle (not a skip, not a stale local build).
+test: build-web go-test test-web test-tier1 test-tier2
 
 test-tier1: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
@@ -128,8 +153,17 @@ test-tier1: build-go check-bats
 test-tier2: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
 
+# go-test alone stays Node-free: the embedded-asset smoke tests skip themselves
+# when the bundle is absent. `make test` and CI's go-unit job order `build-web`
+# first so those tests actually run against a fresh bundle.
 go-test:
 	GOCACHE="$(GOCACHE)" $(GO) test ./...
+
+test-web: $(WEB_DIR)/node_modules/.installed
+	cd $(WEB_DIR) && $(PNPM) run test
+
+lint-web: $(WEB_DIR)/node_modules/.installed
+	cd $(WEB_DIR) && $(PNPM) run typecheck
 
 # Binary install because upstream does not guarantee `go install`; the URL is
 # pinned to the release tag.

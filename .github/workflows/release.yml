@@ -9,9 +9,41 @@ permissions:
   contents: write
 
 jobs:
+  # Build the dashboard web bundle once and share it, so all four platform
+  # binaries embed byte-identical assets (and a missing bundle fails loudly
+  # instead of shipping the "run make build-web" fallback page).
+  web-assets:
+    name: Build web assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build bundle
+        run: make build-web
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: internal/dashboard/static/
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
+    needs: web-assets
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +71,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Download web bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: internal/dashboard/static/
+
       - name: Build archive
         env:
           GOOS: ${{ matrix.goos }}
@@ -48,6 +86,10 @@ jobs:
           version="${GITHUB_REF_NAME}"
           commit="${GITHUB_SHA::7}"
           asset="fanout_${GOOS}_${GOARCH}.tar.gz"
+
+          # Guard: go build succeeds even without the bundle (.gitkeep embed),
+          # so fail here rather than ship a binary with the fallback page.
+          test -f internal/dashboard/static/index.html
 
           rm -rf dist artifacts
           mkdir -p dist artifacts

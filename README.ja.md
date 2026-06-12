@@ -182,22 +182,27 @@ CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データデ�
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
-チェックアウトからのビルドには **Go ツールチェイン**（Go 1.26+）が必要です。
-`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout`
-を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は
-不要です。
+チェックアウトからのビルドには **Go ツールチェイン**（Go 1.26+）に加えて
+**Node.js 24+ と pnpm 10+** が必要です。`make install`・`make link`・
+`make build-go` はまずダッシュボード Web UI をビルドし(`make build-web`、
+`web/` の Vite バンドル)、それを embed して `go build ./cmd/fanout` を実行
+します。上記の curl インストールは prebuilt バイナリを配置するので Go も
+Node も不要です。
 
 ## 開発
 
 ```bash
-make test           # Go ユニットテスト + Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
+make test           # Go ユニットテスト + Web UI テスト + Tier 1 + Tier 2 黒箱テスト (bats-core 必須)
 make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
+make test-web       # ダッシュボード Web UI テスト (vitest)
 make lint           # pinned golangci-lint v2 (.golangci.yml) + テスト用 shim の shellcheck
+make lint-web       # ダッシュボード Web UI の型チェック (tsc --noEmit)
 make fmt            # golangci-lint fmt による gofumpt/goimports 整形
 make fix            # go fix のイディオム更新 (適用後は make test を実行)
 make vuln           # govulncheck (ネットワーク要。意図的に make lint には含めない)
-make build-go       # Go CLI を ./fanout-go としてビルド
+make build-web      # ダッシュボード Web UI を internal/dashboard/static/ にビルド
+make build-go       # Web バンドル + Go CLI を ./fanout-go としてビルド
 ```
 
 bats: macOS は `brew install bats-core`、Debian/Ubuntu は `apt install bats`。
@@ -207,6 +212,19 @@ Tier 1 は CLI サーフェス (エラーメッセージ + exit code)、Tier 2 �
 `--dry-run` 出力を意図的に変更した場合は
 `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で golden を再生成してください。
 Tier 3 (live tmux E2E) は手動運用のままです。
+
+ダッシュボード Web UI は `web/`(React + Vite + TypeScript、pnpm)にあります。
+ビルド成果物は**コミットしません**。`make build-web` が
+`internal/dashboard/static/` にバンドルを出力し、`go:embed` がそれを取り込み
+ます(バンドル無しのチェックアウトもコンパイルでき、その場合は「make
+build-web を実行してください」ページを配信します)。ホットリロード付きで UI
+を開発するには、データサーバと Vite dev サーバ(`/api/*` を proxy)を起動し
+ます:
+
+```bash
+./fanout-go dashboard --web --port 7777 --no-token   # ターミナル 1
+cd web && pnpm install && pnpm dev                   # ターミナル 2 → http://localhost:5173
+```
 
 ## 前提条件
 

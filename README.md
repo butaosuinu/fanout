@@ -193,21 +193,26 @@ CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
-Building from a checkout needs a **Go toolchain** (Go 1.26+): `make install`,
-`make link`, and `make build-go` all run `go build ./cmd/fanout`. The curl
-install above ships a prebuilt binary and needs no Go.
+Building from a checkout needs a **Go toolchain** (Go 1.26+) plus **Node.js
+24+ and pnpm 10+**: `make install`, `make link`, and `make build-go` first
+build the dashboard web UI (`make build-web`, Vite bundle under `web/`) and
+embed it into `go build ./cmd/fanout`. The curl install above ships a prebuilt
+binary and needs neither Go nor Node.
 
 ## Development
 
 ```bash
-make test           # Go unit tests + Tier 1 + Tier 2 black-box tests (bats-core required)
+make test           # Go unit tests + web UI tests + Tier 1 + Tier 2 black-box tests (bats-core required)
 make test-tier1     # flag/prereq tests only
 make test-tier2     # --dry-run golden tests against fixture scenarios
+make test-web       # dashboard web UI tests (vitest)
 make lint           # pinned golangci-lint v2 (.golangci.yml) + shellcheck of the test shims
+make lint-web       # dashboard web UI type check (tsc --noEmit)
 make fmt            # gofumpt/goimports formatting via golangci-lint fmt
 make fix            # go fix idiom updates (run make test after applying)
 make vuln           # govulncheck (network; deliberately not part of make lint)
-make build-go       # build the Go CLI as ./fanout-go
+make build-web      # build the dashboard web UI bundle into internal/dashboard/static/
+make build-go       # build the web bundle + the Go CLI as ./fanout-go
 ```
 
 bats: `brew install bats-core` on macOS, `apt install bats` on Debian/Ubuntu.
@@ -216,6 +221,18 @@ Tier 1 locks the CLI surface (error messages + exit codes); Tier 2 locks the
 `--dry-run` planning output against fixture scenarios under `tests/fixtures/`.
 Regenerate Tier 2 goldens with `FANOUT_GOLDEN_UPDATE=1 make test-tier2` when you
 intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
+
+The dashboard web UI lives in `web/` (React + Vite + TypeScript, pnpm). The
+built bundle is **not committed**; `make build-web` emits it into
+`internal/dashboard/static/` where `go:embed` picks it up (a checkout without
+the bundle still compiles and serves a "run make build-web" page). For UI work
+with hot reload, start a data server and the Vite dev server, which proxies
+`/api/*` to it:
+
+```bash
+./fanout-go dashboard --web --port 7777 --no-token   # terminal 1
+cd web && pnpm install && pnpm dev                   # terminal 2 → http://localhost:5173
+```
 
 ## Prerequisites
 

@@ -5,15 +5,20 @@ code in this repository.
 
 ## Project Shape
 
-`fanout` is a Go CLI (`cmd/fanout` + `internal/`). `make install` builds it
-(`go build ./cmd/fanout`) and places it at `$(BINDIR)/fanout`. `make build-go`
-produces the local `./fanout-go` binary the tests exercise; `make test` runs
-the Go unit tests plus the bats black-box suite against that binary via
-`FANOUT_BIN`; `make lint` is pinned golangci-lint v2 (`.golangci-lint-version`,
-config `.golangci.yml`) + shellcheck of the test shims. `make fmt` formats
-(gofumpt/goimports), `make fix` runs `go fix` idiom updates (run `make test`
-after applying), and `make vuln` runs govulncheck (network; deliberately not
-part of `lint`).
+`fanout` is a Go CLI (`cmd/fanout` + `internal/`) plus a dashboard web UI
+(`web/`, React + Vite + TypeScript, pnpm). `make install` builds it and places
+it at `$(BINDIR)/fanout`. `make build-go` produces the local `./fanout-go`
+binary the tests exercise; it depends on `make build-web`, which bundles
+`web/` into `internal/dashboard/static/` for `go:embed` — the bundle is never
+committed (only `static/.gitkeep` is tracked; `//go:embed all:static` keeps a
+bundle-less checkout compiling without Node, serving a fallback page). `make
+test` runs the Go unit tests, the web UI vitest suite (`make test-web`), and
+the bats black-box suite against the binary via `FANOUT_BIN`; `make lint` is
+pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) +
+shellcheck of the test shims (Node-free on purpose; the web type check is
+`make lint-web`). `make fmt` formats (gofumpt/goimports), `make fix` runs
+`go fix` idiom updates (run `make test` after applying), and `make vuln` runs
+govulncheck (network; deliberately not part of `lint`).
 
 The Claude Code integration files (`claude/commands/fanout.md` slash command
 and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file
@@ -87,11 +92,18 @@ Build the binary with `make build-go` and validate with `make test`.
   so it is pure and unit-testable; both the web dashboard (now) and a future
   TUI consume the same `Build`.
 - `internal/dashboard` is the localhost web server: `server.go` (GET-only mux,
-  token middleware, SSE), `poller.go` (two-tier state/tmux + throttled gh
-  refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
-  (`GET /api/peek`, a read-only capture-pane of one recorded pane),
-  `runfile.go` (`.fanout/dashboard.json` reuse-if-running), and an embedded
-  `static/` SPA (PAPER BREEZE light/dark, matching the docs site).
+  token middleware, SSE, `Cache-Control: no-store` static serving with a
+  fallback page when the bundle is absent), `poller.go` (two-tier state/tmux +
+  throttled gh refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
+  (`GET /api/peek`, a read-only capture-pane of one recorded pane), and
+  `runfile.go` (`.fanout/dashboard.json` reuse-if-running). The SPA itself
+  lives in `web/` (React + Vite + TS, PAPER BREEZE light/dark matching the
+  docs site): `src/lib/` is the pure logic layer (wire types mirroring
+  `sessionview` JSON tags, filter/sort/link builders), `src/hooks/` owns
+  transport (`useSnapshot` SSE + polling fallback, `usePeek`, `useTheme`), and
+  tests are integration-first (vitest + testing-library + MSW; SSE via a
+  FakeEventSource). `make build-web` emits the bundle into `static/`
+  (deterministic names `assets/app.js` / `assets/app.css`, never committed).
 - `internal/agent` maps supported agents (`claude`, `codex`) to launch
   commands and validates installed CLIs for live mode.
 - `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
@@ -138,6 +150,11 @@ Build the binary with `make build-go` and validate with `make test`.
 
 - Worktree refresh must preserve user work. If a local base branch is dirty,
   ahead, or diverged, fail rather than forcing it.
+- `go:embed` snapshots whatever is on disk at build time: after editing
+  `web/src`, build via `make build-go` (not raw `go build`) or the binary
+  ships a stale bundle. The embedded-asset Go tests skip when the bundle is
+  absent — CI's go-unit job runs `make build-web` first so they actually run;
+  keep that wiring when touching `.github/workflows/test.yml`.
 - Keep the public TUI entrypoint as no-argument `fanout`; do not reintroduce a
   user-facing `fanout tui` compatibility path.
 - Keep the state lock close to live launch behavior. Moving exclude setup or

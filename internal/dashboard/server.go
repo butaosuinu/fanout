@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -160,9 +161,6 @@ func (s *Server) handler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	// http.FileServer(http.FS(sub)) is equivalent to http.FileServerFS but does
-	// not require Go 1.22+, keeping the package buildable on any supported Go.
-	fileServer := http.FileServer(http.FS(sub))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(healthzPath, s.getOnly(func(w http.ResponseWriter, _ *http.Request) {
@@ -174,9 +172,47 @@ func (s *Server) handler() (http.Handler, error) {
 	mux.HandleFunc("/api/peek", s.getOnly(s.requireToken(s.handlePeek)))
 	// Catch-all: the embedded SPA. The HTML shell is token-free so the page can
 	// load and then read ?token= for its /api/* calls.
-	mux.Handle("/", s.getOnly(fileServer.ServeHTTP))
+	mux.Handle("/", s.getOnly(s.staticHandler(sub)))
 	return mux, nil
 }
+
+// staticHandler serves the embedded SPA bundle (built from web/ by Vite). The
+// bundle uses stable filenames (assets/app.js, no content hash), so responses
+// are marked no-store to keep browsers from caching a bundle across binary
+// updates. When the bundle is absent (a fresh checkout builds fine because
+// static/ tracks only .gitkeep), "/" serves a small instruction page instead
+// of http.FileServer's directory listing, and every other path 404s.
+func (s *Server) staticHandler(sub fs.FS) http.HandlerFunc {
+	// http.FileServer(http.FS(sub)) is equivalent to http.FileServerFS but does
+	// not require Go 1.22+, keeping the package buildable on any supported Go.
+	fileServer := http.FileServer(http.FS(sub))
+	_, statErr := fs.Stat(sub, "index.html")
+	built := statErr == nil
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if !built {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, fallbackIndexHTML)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	}
+}
+
+// fallbackIndexHTML is served at "/" when the binary was built without the web
+// assets (e.g. `go build` without `make build-web`). It keeps the title marker
+// "fanout dashboard" that tests and health tooling look for.
+const fallbackIndexHTML = `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>fanout dashboard</title></head>
+<body><h1>fanout dashboard</h1>
+<p>Web UI assets are not built into this binary. Run <code>make build-web</code>
+(or <code>make build-go</code>) and rebuild, then restart the dashboard.</p>
+</body></html>
+`
 
 // getOnly rejects non-GET/HEAD methods with 405 (the dashboard is read-only).
 func (s *Server) getOnly(next http.HandlerFunc) http.HandlerFunc {

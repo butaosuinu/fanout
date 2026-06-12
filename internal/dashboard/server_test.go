@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"testing"
@@ -180,6 +181,22 @@ func TestStreamHeadReturnsWithoutSubscribing(t *testing.T) {
 	}
 }
 
+// assetsBuilt reports whether the Vite bundle is present in the embedded FS.
+// A fresh checkout tracks only static/.gitkeep, so asset-dependent tests skip
+// themselves; CI runs `make build-web` first so they actually execute there.
+func assetsBuilt(t *testing.T) bool {
+	t.Helper()
+	sub, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		t.Fatalf("fs.Sub: %v", err)
+	}
+	_, err = fs.Stat(sub, "index.html")
+	return err == nil
+}
+
+// TestIndexServedAtRoot passes in both build states: with the bundle embedded
+// it sees the real SPA shell, without it the fallback page — both carry the
+// "fanout dashboard" title marker, and both must be 200 + no-store.
 func TestIndexServedAtRoot(t *testing.T) {
 	srv := newTestServer(t, "")
 	resp, err := http.Get(srv.base + "/")
@@ -187,17 +204,56 @@ func TestIndexServedAtRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d want 200", resp.StatusCode)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("GET / Cache-Control = %q want no-store", cc)
+	}
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "fanout dashboard") {
 		t.Fatalf("index missing title: %s", body)
 	}
 }
 
+// TestUnbuiltAssetsServeFallbackOnly guards the no-bundle path: "/" gets the
+// instruction page (not http.FileServer's directory listing, which would
+// expose .gitkeep), and other paths 404.
+func TestUnbuiltAssetsServeFallbackOnly(t *testing.T) {
+	if assetsBuilt(t) {
+		t.Skip("web assets are built; the fallback path is unreachable")
+	}
+	srv := newTestServer(t, "")
+
+	resp, err := http.Get(srv.base + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "make build-web") {
+		t.Fatalf("fallback page missing build hint: %s", body)
+	}
+
+	resp, err = http.Get(srv.base + "/.gitkeep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /.gitkeep status = %d want 404", resp.StatusCode)
+	}
+}
+
 // TestStaticAssetsSmoke is a regression guard for the go:embed wiring: it
-// asserts the embedded SPA assets are served at their expected paths and carry
-// the markers the live UI depends on (the HUD running counter in index.html,
-// and the reconcile renderer + agentState wiring in app.js).
+// asserts the built SPA bundle is served at its stable paths (index.html
+// referencing assets/app.js) and that the bundle carries markers the live UI
+// depends on (the HUD running counter and the agentState wiring — string
+// literals/property names that survive minification).
 func TestStaticAssetsSmoke(t *testing.T) {
+	if !assetsBuilt(t) {
+		t.Skip("web assets not built; run `make build-web` (CI builds them before go-test)")
+	}
 	srv := newTestServer(t, "")
 
 	resp, err := http.Get(srv.base + "/")
@@ -209,20 +265,25 @@ func TestStaticAssetsSmoke(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / status = %d want 200", resp.StatusCode)
 	}
-	if !strings.Contains(string(body), `id="s-running"`) {
-		t.Fatalf("index missing running counter marker id=\"s-running\": %s", body)
+	for _, marker := range []string{`id="root"`, "assets/app.js"} {
+		if !strings.Contains(string(body), marker) {
+			t.Fatalf("index missing marker %q: %s", marker, body)
+		}
 	}
 
-	resp, err = http.Get(srv.base + "/app.js")
+	resp, err = http.Get(srv.base + "/assets/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /app.js status = %d want 200", resp.StatusCode)
+		t.Fatalf("GET /assets/app.js status = %d want 200", resp.StatusCode)
 	}
-	for _, marker := range []string{"renderSessions", "agentState"} {
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("GET /assets/app.js Cache-Control = %q want no-store", cc)
+	}
+	for _, marker := range []string{"s-running", "agentState"} {
 		if !strings.Contains(string(body), marker) {
 			t.Fatalf("app.js missing marker %q", marker)
 		}
