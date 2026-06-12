@@ -205,9 +205,10 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			} else if snap.Degraded.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
-				// pane 死亡かつ tmux 正常のときは tmux 列が stale を伝えるので
-				// 空のままにする。
-				pv.AgentState = p.AgentStatus
+				// state.json は手編集されうる入力なので option 値と同じく
+				// running/done 以外は捨てる。pane 死亡かつ tmux 正常のときは
+				// tmux 列が stale を伝えるので空のままにする。
+				pv.AgentState = normalizeAgentState(p.AgentStatus)
 			}
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)

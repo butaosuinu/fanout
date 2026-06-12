@@ -411,9 +411,11 @@ func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) 
 	recorded := pane("1", 2, "%1")
 	recorded.AgentStatus = "running"
 	unrecorded := pane("1", 3, "%2") // 旧 state 行: agentStatus 無し
+	tampered := pane("1", 4, "%3")   // 手編集された state 行: 規定外の値は捨てる
+	tampered.AgentStatus = "<b>maybe</b>"
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(recorded, unrecorded),
+		LoadState: storeOf(recorded, unrecorded, tampered),
 		LivePanes: func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") },
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 		Waves:     wavesNone,
@@ -425,6 +427,9 @@ func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) 
 	}
 	if panes[1].AgentState != "" {
 		t.Fatalf("degraded-tmux AgentState without recorded status = %q, want empty", panes[1].AgentState)
+	}
+	if panes[2].AgentState != "" {
+		t.Fatalf("degraded-tmux AgentState with tampered status = %q, want empty", panes[2].AgentState)
 	}
 	if snap.Rollup.Running != 1 {
 		t.Fatalf("Rollup.Running = %d, want 1 (fallback row counts)", snap.Rollup.Running)
