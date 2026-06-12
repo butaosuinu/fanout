@@ -258,6 +258,11 @@ html[data-theme="dark"] .theme-toggle .ic-moon{ display:none; }
 .filter-bar{
   margin-top:10px;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+  /* rise の fill(both)は終了後も opacity/transform を「適用中」とみなし、
+   * .filter-bar と後続の .session 双方に恒久スタッキングコンテキストを作る。
+   * 両者 z-index:auto だと DOM 順で session が popover ごと上に描画されるため、
+   * filter-bar 全体を明示的に持ち上げる(nav の 40 より下)。 */
+  position:relative; z-index:30;
 }
 /* GitHub PR 風ドロップダウン(FilterDropdown)。trigger は旧 select と同じ
  * 砂色ピル、popover は和紙カード + fdIn の扇イージングで開く。 */
