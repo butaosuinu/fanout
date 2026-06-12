@@ -337,6 +337,32 @@ describe("フィルタ", () => {
     await user.click(screen.getByRole("button", { name: "agent で絞り込み" }));
     expect(screen.getByRole("option", { name: "gemini" })).toBeInTheDocument();
   });
+
+  it("非 searchable は先頭文字 typeahead で option へジャンプする", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.keyboard("c"); // open → closed へジャンプ
+    expect(screen.getByRole("option", { name: "closed" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("listitem", { name: "フィルタ state:closed を外す" })).toBeInTheDocument();
+  });
+
+  it("トグルオフは手打ちの同キー重複トークンも全て外す", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.type(screen.getByRole("searchbox"), "state:open STATE:CLOSED");
+    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    await user.click(trigger);
+    // 最初の同キートークン(open)がアクティブ表示。クリックで同キーを一掃
+    await user.click(screen.getByRole("option", { name: "open" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(trigger).not.toHaveClass("on");
+  });
 });
 
 describe("ソート", () => {

@@ -100,7 +100,11 @@ a:hover{ color:var(--asagi); }
 .wrap{ width:min(var(--maxw), calc(100% - 48px)); margin-inline:auto; }
 
 @keyframes riseIn{ from{ opacity:0; transform:translateY(14px); } }
-.rise{ animation:riseIn .7s var(--ease-fan) both; animation-delay:var(--d,0s); }
+/* fill は backwards: 遅延中だけ from 状態を保持し、終了後はアニメを「適用中」
+ * にしない。both だと終了後も opacity/transform が適用扱いになり、全 .rise
+ * 要素に恒久スタッキングコンテキストが残って popover 類が DOM 順で後続要素の
+ * 下に描画される(riseIn は from しか無いので見た目は both と同一)。 */
+.rise{ animation:riseIn .7s var(--ease-fan) backwards; animation-delay:var(--d,0s); }
 
 /* ============================================================ ナビ */
 .nav{
@@ -258,10 +262,10 @@ html[data-theme="dark"] .theme-toggle .ic-moon{ display:none; }
 .filter-bar{
   margin-top:10px;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px;
-  /* rise の fill(both)は終了後も opacity/transform を「適用中」とみなし、
-   * .filter-bar と後続の .session 双方に恒久スタッキングコンテキストを作る。
-   * 両者 z-index:auto だと DOM 順で session が popover ごと上に描画されるため、
-   * filter-bar 全体を明示的に持ち上げる(nav の 40 より下)。 */
+  /* rise アニメ実行中(0.7s + 遅延)は .filter-bar / .session が一時的に
+   * スタッキングコンテキストになり DOM 順で後の session が上に描画されるため、
+   * popover が開く可能性のある filter-bar を明示的に持ち上げておく
+   * (恒久残留の方は .rise の fill=backwards で根本対処済み。nav の 40 より下)。 */
   position:relative; z-index:30;
 }
 /* GitHub PR 風ドロップダウン(FilterDropdown)。trigger は旧 select と同じ
@@ -291,7 +295,10 @@ html[data-theme="dark"] .theme-toggle .ic-moon{ display:none; }
 }
 @keyframes fdIn{ from{ opacity:0; transform:translateY(-5px) scale(.97); } }
 .fd-pop{
-  position:absolute; top:calc(100% + 6px); left:0; z-index:30; /* nav(40)の下 */
+  /* z-index は .filter-bar コンテキスト内の兄弟順制御のみ(nav との前後は
+   * 親 .filter-bar の z-index:30 が決める) */
+  position:absolute; top:calc(100% + 6px); left:0; z-index:1;
+  outline:none; /* tabIndex=-1 の余白クリック受け */
   min-width:184px;
   background:var(--paper);
   border:1px solid var(--suna); border-radius:12px;
@@ -325,7 +332,9 @@ html[data-theme="dark"] .theme-toggle .ic-moon{ display:none; }
   transition:background-color .15s ease, color .15s ease;
 }
 .fd-opt:hover{ background:var(--byakugun-bg); color:var(--sumi); }
-.fd-opt:focus-visible{ outline:none; background:var(--byakugun-bg); color:var(--sumi); }
+/* :focus(-visible でなく)で塗る: クリック開時のプログラムフォーカスでも
+ * roving カーソル位置が見えるように */
+.fd-opt:focus{ outline:none; background:var(--byakugun-bg); color:var(--sumi); }
 .fd-opt .fd-check{
   flex:none; color:var(--asagi);
   opacity:0; transform:scale(.6);

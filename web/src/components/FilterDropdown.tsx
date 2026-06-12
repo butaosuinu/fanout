@@ -1,36 +1,39 @@
-import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { memo, useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 
 export type Option = readonly [value: string, label: string];
 
 /* GitHub PR 風フィルタードロップダウン(8 キー共通)。trigger ボタン +
  * role="listbox" の popover で、選択は onPickToken による key:value トークン
  * 書込のみ — 「#filter のテキストが単一の真実」という既存モデルは変えない。
- * アクティブ値の再クリックは onRemoveToken(トグルオフ)。
+ * アクティブ値の再クリックは onClearKey(同キーのトークンを全て外す
+ * トグルオフ — 手打ちの重複キーも取り残さない)。
  *
  * - 開いている間は選択肢を凍結する: 2 秒 tick の snapshot 更新で開いたメニュー
  *   がズレたり閉じたりしない(旧 DynamicSelect の focus-freeze の置き換え)。
- * - Esc は popover を閉じて trigger にフォーカスを戻し、stopPropagation で
- *   Drawer の document keydown へ漏らさない(drawer まで閉じない)。
+ * - キー処理はルート div に置く: popover が開いている間は trigger に
+ *   フォーカスが戻っていても(Shift+Tab)Esc / 矢印 / typeahead が効く。
+ *   Esc は popover を閉じて trigger にフォーカスを戻し、preventDefault +
+ *   stopPropagation で Drawer の document keydown へ漏らさない(Drawer 側も
+ *   defaultPrevented を見る)。
  * - option は flat button の roving tabindex(ArrowUp/Down で巡回、Enter で
- *   選択)。searchable(agent / wave)は検索 input から ↓ で option 列に入る。 */
-export function FilterDropdown({
+ *   選択、非 searchable は先頭文字 typeahead)。searchable(agent / wave)は
+ *   検索 input から ↓ で option 列に入る。 */
+export const FilterDropdown = memo(function FilterDropdown({
   dataKey,
   ariaLabel,
-  placeholder,
   options,
   active,
   searchable = false,
   onPickToken,
-  onRemoveToken,
+  onClearKey,
 }: {
   dataKey: string;
   ariaLabel: string;
-  placeholder: string;
-  options: Option[];
-  active: { raw: string; value: string } | null;
+  options: readonly Option[];
+  active: string | null; // 適用中トークンの値(小文字)。tokenForKey の結果
   searchable?: boolean;
   onPickToken: (key: string, value: string) => void;
-  onRemoveToken: (tok: string) => void;
+  onClearKey: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -41,17 +44,21 @@ export function FilterDropdown({
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const frozen = useRef(options);
 
-  const base = open ? frozen.current : options;
+  // 開いている間しか描画されないので、常に凍結値を読む(開く瞬間に再同期)
+  const base = frozen.current;
   const q = query.trim().toLowerCase();
   const visible =
     searchable && q
       ? base.filter(([v, l]) => v.toLowerCase().includes(q) || l.toLowerCase().includes(q))
       : base;
 
+  const isActive = (value: string) => active === value.toLowerCase();
+  const listId = `fd-list-${dataKey}`;
+
   const openPopover = () => {
     frozen.current = options; // 開く瞬間の選択肢で凍結
     setQuery("");
-    const idx = active ? options.findIndex(([v]) => v.toLowerCase() === active.value) : -1;
+    const idx = active ? options.findIndex(([v]) => isActive(v)) : -1;
     setCursor(idx >= 0 ? idx : 0);
     setOpen(true);
   };
@@ -60,7 +67,7 @@ export function FilterDropdown({
     if (refocus) triggerRef.current?.focus();
   };
   const pick = (value: string) => {
-    if (active && active.value === value.toLowerCase()) onRemoveToken(active.raw);
+    if (isActive(value)) onClearKey(dataKey);
     else onPickToken(dataKey, value);
     close(true);
   };
@@ -86,10 +93,8 @@ export function FilterDropdown({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open]);
 
-  const focusOption = (idx: number) => {
-    setCursor(idx);
-    optionRefs.current[idx]?.focus();
-  };
+  // cursor は option の onFocus が単一の書き手(click / Tab / 矢印すべて経由)
+  const focusOption = (idx: number) => optionRefs.current[idx]?.focus();
   const moveCursor = (delta: 1 | -1) => {
     if (!visible.length) return;
     // 検索 input からの矢印キーは端から option 列に入る(↓=先頭 / ↑=末尾)
@@ -97,7 +102,25 @@ export function FilterDropdown({
     focusOption((from + delta + visible.length) % visible.length);
   };
 
-  const onPopoverKeyDown = (e: KeyboardEvent) => {
+  /* 非 searchable はネイティブ select 同等の先頭文字 typeahead(現在位置の
+   * 次から巡回検索)。 */
+  const typeahead = (ch: string) => {
+    const n = visible.length;
+    for (let i = 1; i <= n; i++) {
+      const idx = (cursor + i) % n;
+      if (visible[idx]?.[1].toLowerCase().startsWith(ch)) {
+        focusOption(idx);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /* ルート div のキー処理: trigger にフォーカスが戻っていても popover が
+   * 開いていれば効く(.fd-pop 限定にすると Esc が Drawer に漏れる)。 */
+  const onRootKeyDown = (e: KeyboardEvent) => {
+    if (!open || e.nativeEvent.isComposing) return; // IME 変換中のキーは奪わない
+    const inSearch = document.activeElement === searchRef.current;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation(); // Drawer の document keydown に漏らさない
@@ -105,18 +128,21 @@ export function FilterDropdown({
     } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       moveCursor(e.key === "ArrowDown" ? 1 : -1);
-    } else if ((e.key === "Home" || e.key === "End") && document.activeElement !== searchRef.current) {
+    } else if ((e.key === "Home" || e.key === "End") && !inSearch) {
       e.preventDefault();
       if (visible.length) focusOption(e.key === "Home" ? 0 : visible.length - 1);
+    } else if (!searchable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (typeahead(e.key.toLowerCase())) e.preventDefault();
     }
   };
 
-  /* 検索 input の Enter は先頭の絞り込み結果を選択(GitHub 同様) */
+  /* 検索 input の Enter は roving cursor 位置(既定 = アクティブ or 先頭の
+   * 絞り込み結果)を選択。IME の変換確定 Enter は奪わない。 */
   const onSearchKeyDown = (e: KeyboardEvent) => {
-    if (e.key !== "Enter") return;
+    if (e.nativeEvent.isComposing || e.key !== "Enter") return;
     e.preventDefault();
-    const first = visible[0];
-    if (first) pick(first[0]);
+    const target = visible[cursor] ?? visible[0];
+    if (target) pick(target[0]);
   };
 
   /* Tab 等でフォーカスが外に出たら閉じる(外側 click は pointerdown が先に処理) */
@@ -124,17 +150,16 @@ export function FilterDropdown({
     if (open && e.relatedTarget && !rootRef.current?.contains(e.relatedTarget as Node)) setOpen(false);
   };
 
-  optionRefs.current.length = visible.length;
   return (
-    <div className="fd" ref={rootRef} onBlur={onBlur}>
+    <div className="fd" ref={rootRef} onBlur={onBlur} onKeyDown={onRootKeyDown}>
       <button
         ref={triggerRef}
         type="button"
         className={active ? "fd-trigger on" : "fd-trigger"}
-        data-key={dataKey}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listId : undefined}
         onClick={() => (open ? close(false) : openPopover())}
         onKeyDown={(e) => {
           if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -143,7 +168,7 @@ export function FilterDropdown({
           }
         }}
       >
-        {placeholder}
+        {dataKey}
         <svg className="fd-caret" viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
           <path
             d="M4 6.2 8 10l4-3.8"
@@ -156,7 +181,9 @@ export function FilterDropdown({
         </svg>
       </button>
       {open && (
-        <div className="fd-pop" onKeyDown={onPopoverKeyDown}>
+        /* tabIndex=-1: popover の余白クリックでフォーカスを body に逃がさない
+         * (逃がすと root のキー処理が届かず Esc が Drawer に漏れる) */
+        <div className="fd-pop" tabIndex={-1}>
           {searchable && (
             <div className="fd-search">
               <input
@@ -164,7 +191,7 @@ export function FilterDropdown({
                 type="text"
                 value={query}
                 placeholder="絞り込み…"
-                aria-label={`${placeholder} の選択肢を検索`}
+                aria-label={`${dataKey} の選択肢を検索`}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => {
@@ -175,14 +202,14 @@ export function FilterDropdown({
               />
             </div>
           )}
-          <div role="listbox" aria-label={ariaLabel} className="fd-list">
+          <div role="listbox" id={listId} aria-label={ariaLabel} className="fd-list">
             {visible.map(([v, l], i) => (
               <button
                 key={v}
                 type="button"
                 role="option"
                 className="fd-opt"
-                aria-selected={active?.value === v.toLowerCase()}
+                aria-selected={isActive(v)}
                 tabIndex={i === cursor ? 0 : -1}
                 ref={(el) => {
                   optionRefs.current[i] = el;
@@ -209,4 +236,4 @@ export function FilterDropdown({
       )}
     </div>
   );
-}
+});
