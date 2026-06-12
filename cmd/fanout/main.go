@@ -515,7 +515,6 @@ func checkDeps(cfg *cliflags.Config) []string {
 	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
 	if cfg.StatusMode || cfg.CleanupMode || !lifecycle {
 		check("gh", "gh (brew install gh)")
-		check("jq", "jq (brew install jq)")
 	}
 
 	if !cfg.StatusMode && !lifecycle {

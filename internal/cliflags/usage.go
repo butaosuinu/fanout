@@ -150,7 +150,7 @@ Options:
   -h, --help          Show this message.
 
 Prerequisites:
-  * gh, jq, git, tmux installed. gh-sub-issue extension is required for
+  * gh, git, tmux installed. gh-sub-issue extension is required for
     issue mode only; project mode uses gh api graphql.
   * fanout pane-creation mode is invoked from inside a tmux session. TUI mode
     can be started from a plain shell; it creates or attaches its tmux session.
