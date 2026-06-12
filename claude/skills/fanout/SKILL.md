@@ -61,7 +61,7 @@ Do not invoke unprompted just because an issue has sub-issues. Pane creation is 
 
 Before running the real command:
 
-1. **Prerequisites** — `gh`, `jq`, `git`, `tmux`, and the `gh-sub-issue` extension must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
+1. **Prerequisites** — `gh`, `git`, and `tmux` must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
 2. **Resolve the parent target for batch pane creation** — if the user's intent is the TUI console, skip target resolution and run `fanout` with no arguments. Otherwise, first use any issue ref (`#N` or `N`) or Projects v2 URL in the user's request / recent context. If neither is clear, actively list candidates from the current repo/worktree instead of asking for a pasted number/URL:
    1. Run `gh issue list --state open --json number,title --limit 100`.
    2. Get the repo owner login with `gh repo view --json owner -q .owner.login`.
@@ -139,7 +139,7 @@ Run fanout from the target repository worktree so `git rev-parse --show-toplevel
 ## Project mode notes
 
 - **URL shape** — the CLI matches `^https://github\.com/(users|orgs)/<owner>/projects/<num>([/?].*)?$`. Both user-owned and organization-owned Projects v2 boards are supported, and any trailing `/views/<n>` segment or `?filterQuery=...` query string is preserved verbatim — the CLI extracts only the `users|orgs`, `<owner>`, and `<num>` it needs. Anything else is rejected at arg-parse time.
-- **Source of truth** — children come from the Project's `items` node via GraphQL (`gh api graphql`), all pages, in board order. The Sub-issues API and parent-body scan are **not** consulted in project mode. The parent body (which doesn't exist for a Project) is not read. In project mode the CLI also skips the `gh-sub-issue` extension dependency check, so a missing extension is not a blocker.
+- **Source of truth** — children come from the Project's `items` node via GraphQL (`gh api graphql`), all pages, in board order. The Sub-issues API and parent-body scan are **not** consulted in project mode. The parent body (which doesn't exist for a Project) is not read.
 - **`--project-status` filtering** — see the `## Running` section above. The default is `Todo`, which mirrors the common "queue everything I'm planning to start" workflow. Use `--project-status all` for a full fan-out, or a single explicit value for any other column.
 - **`gh` scope** — Projects v2 GraphQL requires the `read:project` scope. If `fanout` exits with an authorization failure on the `projectV2` query (`HTTP 401` / `Resource not accessible by integration`), tell the user to run `gh auth refresh -s read:project` and retry. The default `repo` scope alone is not sufficient.
 - **Cross-repo items are skipped** — items whose `content.repository.nameWithOwner` does not match the current git repository are warned and skipped. fanout's briefing / worktree paths assume a single repo (`/tmp/fanout-<repo>-<N>.md`, worktrees under the project root), so cross-repo items would create panes pointing at the wrong checkout. Surface the warning rather than retrying.
@@ -198,7 +198,7 @@ When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README
 - `unknown agent` — use one of the supported MVP agents (`claude`, `codex`).
 - `agent "<name>" is not installed` — install that CLI or choose another agent.
 - `prepare worktree` — inspect the git error; `--no-refresh` can bypass base branch refresh only when the stale base is intentional.
-- `gh sub-issue list failed` — install `gh extension install yahsan2/gh-sub-issue` or run `gh auth status`.
+- `sub-issues fetch failed` — run `gh auth status`; an HTTP 404 means the parent issue number does not exist.
 - `no sub-issues on #<N>` is not a failure; fanout exits 0.
 - Project mode `HTTP 401` / `Resource not accessible by integration` against `projectV2` — the user's `gh` token lacks `read:project`. Tell them to run `gh auth refresh -s read:project` and rerun.
 - Project mode `no items in Project (after status/repo filter). nothing to do.` is not a failure; fanout exits 0.

@@ -72,7 +72,7 @@ prompt-based agent pane from the console.
    - `agent is required` → rerun with `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`.
    - `unknown agent` / `agent ... is not installed` → choose or install a supported agent CLI.
    - `prepare worktree` → inspect the git error; use `--no-refresh` only when skipping base refresh is intentional.
-   - Missing `gh-sub-issue` extension → `gh extension install yahsan2/gh-sub-issue`.
+   - `sub-issues fetch failed` → run `gh auth status`; an HTTP 404 means the parent issue number does not exist.
 
 ## Notes
 

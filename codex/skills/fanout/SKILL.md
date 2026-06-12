@@ -96,8 +96,8 @@ use this workflow directly.
 
 ## Pre-Flight
 
-1. Prerequisites are `gh`, `jq`, `git`, `tmux`, and the `gh-sub-issue`
-   extension. The CLI validates these on startup, so rely on its error output.
+1. Prerequisites are `gh`, `git`, and `tmux`. The CLI validates these on
+   startup, so rely on its error output.
 2. Choose the launch lane. TUI mode is `fanout` with no arguments; it can start
    from a plain shell because it creates or attaches the repository's
    fanout-managed tmux session, and from inside tmux it uses the current pane.
@@ -301,10 +301,8 @@ numbers as `--include A,B,C` to both dry-run and execution.
 ## Project Mode
 
 When the positional argument is a Projects v2 URL, fanout enumerates the
-Project's items via GraphQL (`gh api graphql`) instead of the Sub-issues API
-+ parent body. The `gh-sub-issue` extension dependency check is skipped in
-project mode, so a missing extension is not a blocker for project URLs.
-Key points:
+Project's items via GraphQL (`gh api graphql`) instead of the Sub-issues
+API + parent body. Key points:
 
 - **URL shape** — the CLI matches
   `^https://github\.com/(users|orgs)/<owner>/projects/<num>([/?].*)?$`.
@@ -402,8 +400,8 @@ the likely next action:
 - `agent "<name>" is not installed`: install that CLI or choose another agent.
 - `prepare worktree`: inspect the git error; `--no-refresh` can bypass base
   branch refresh only when the stale base is intentional.
-- `gh sub-issue list failed`: check `gh auth status` and install
-  `gh extension install yahsan2/gh-sub-issue`.
+- `sub-issues fetch failed`: check `gh auth status`; an HTTP 404 means the
+  parent issue number does not exist.
 - `no sub-issues on #<N>` is not a failure; fanout exits 0.
 - Project mode `HTTP 401` / `Resource not accessible by integration`
   against `projectV2`: the user's `gh` token lacks the `read:project` scope.
