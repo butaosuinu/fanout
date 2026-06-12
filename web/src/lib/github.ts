@@ -22,7 +22,7 @@ export function prUrl(repo: string, n: number): string {
  * github.com Projects URL(プレフィックス検証つきパススルー)。それ以外は "". */
 export function parentUrl(repo: string, parent: string): string {
   if (/^\d+$/.test(parent)) return issueUrl(repo, Number(parent));
-  if (/^https:\/\/github\.com\//.test(parent)) return parent;
+  if (parent.startsWith("https://github.com/")) return parent;
   return "";
 }
 

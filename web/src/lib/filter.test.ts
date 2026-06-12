@@ -24,9 +24,9 @@ describe("parseQuery", () => {
   });
 });
 
-describe("matches", () => {
-  const q = (s: string) => parseQuery(s);
+const q = (s: string) => parseQuery(s);
 
+describe("matches", () => {
   it("自由語は haystack(名前・ブランチ・wave 等)を部分一致で見る", () => {
     const p = makePane({ displayName: "Fix Login", branchName: "fanout/fix-login" });
     expect(matches(p, q("login"))).toBe(true);

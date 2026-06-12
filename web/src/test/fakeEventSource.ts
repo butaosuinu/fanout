@@ -2,7 +2,7 @@ import { vi } from "vitest";
 
 /* jsdom に EventSource が無いので、テストから手動で open / snapshot / error を
  * 発火できる代替を global 注入する。アプリ側(useSnapshot)は本物と同じ API
- * (addEventListener / onerror / close)しか使わない。 */
+ * (addEventListener / close)しか使わない。 */
 export class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -14,7 +14,6 @@ export class FakeEventSource {
 
   url: string;
   closed = false;
-  onerror: ((e: Event) => void) | null = null;
   private listeners = new Map<string, Set<(e: MessageEvent) => void>>();
 
   constructor(url: string) {
@@ -46,7 +45,7 @@ export class FakeEventSource {
   }
 
   emitError(): void {
-    this.onerror?.(new Event("error"));
+    this.dispatch("error", new MessageEvent("error"));
   }
 
   private dispatch(type: string, e: MessageEvent): void {

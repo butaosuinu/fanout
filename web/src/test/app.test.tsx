@@ -63,6 +63,9 @@ function basicSnapshot() {
   );
 }
 
+/* テーブルのデータ行(ヘッダ行を除く) */
+const bodyRows = () => within(screen.getByRole("table")).getAllByRole("row").slice(1);
+
 function peekHandler(outputFor: (pane: string | null) => string) {
   return http.get("/api/peek", ({ request }) => {
     const pane = new URL(request.url).searchParams.get("pane");
@@ -394,7 +397,6 @@ describe("ソート", () => {
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    const bodyRows = () => within(screen.getByRole("table")).getAllByRole("row").slice(1);
     // 初期は issueNum 昇順
     expect(bodyRows()[0]).toHaveTextContent("Fix login");
 

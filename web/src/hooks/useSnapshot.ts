@@ -79,12 +79,12 @@ export function useSnapshot(token: string): { snap: Snapshot | null; conn: ConnS
       setConn({ up: true, label: "streaming" });
       setSnap(JSON.parse((e as MessageEvent).data) as Snapshot);
     });
-    es.onerror = () => {
+    es.addEventListener("error", () => {
       if (disposed) return;
       setConn({ up: false, label: "stream lost" });
       es.close();
       startPolling();
-    };
+    });
 
     return () => {
       disposed = true;
