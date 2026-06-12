@@ -383,3 +383,30 @@ func TestFetchWaveGraphDegradationPropagatesToDependents(t *testing.T) {
 		t.Fatalf("Info[103] = %#v, want fresh (independent)", graph.Info[103])
 	}
 }
+
+func TestFetchWaveGraphFailedChildLookupDegradesDependents(t *testing.T) {
+	t.Parallel()
+
+	// Recorded child #103 fails IssueDetail and is dropped from the child set;
+	// #101 is blocked by #103, so its wave was computed from an incomplete DAG.
+	client := &fakeGraphClient{
+		parentBody: "",
+		subIssues: []ghissue.Issue{
+			{Number: 101, Title: "dependent", State: "OPEN", Body: "## Blocked by\n- #103\n"},
+			{Number: 102, Title: "free", State: "OPEN", Body: "x"},
+		},
+		detailErr: map[int]error{103: errGraphBoom},
+		states:    map[int]string{103: "OPEN"},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", []int{103})
+	if err == nil || !strings.Contains(err.Error(), "#103") {
+		t.Fatalf("FetchWaveGraph() error = %v, want #103 lookup error", err)
+	}
+	if !graph.Info[101].Degraded {
+		t.Fatalf("Info[101] = %#v, want Degraded (blocker #103 failed to load)", graph.Info[101])
+	}
+	if graph.Info[102].Degraded {
+		t.Fatalf("Info[102] = %#v, want fresh (independent)", graph.Info[102])
+	}
+}

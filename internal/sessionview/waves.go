@@ -50,8 +50,9 @@ type WaveGraph struct {
 // child fetches already returned, so only out-of-set blockers resolve lazily
 // through IssueState.
 func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (WaveGraph, error) {
-	children, parentBody, includeParentRows, hydrated, parentBodyFailed, loadErr := fetchWaveChildren(c, parent, recordedNums)
-	failed, hydrateErr := hydrateIssueBodies(c, children, hydrated)
+	fetched, loadErr := fetchWaveChildren(c, parent, recordedNums)
+	children, parentBody, includeParentRows := fetched.children, fetched.parentBody, fetched.includeParentRows
+	failed, hydrateErr := hydrateIssueBodies(c, children, fetched.hydrated)
 	loadErr = errors.Join(loadErr, hydrateErr)
 
 	// Pre-seed with in-set states: SubIssueList/IssueDetail already carry State,
@@ -95,12 +96,12 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 	// state of one of its blockers.
 	degraded := make(map[int]bool, len(children))
 	for _, issue := range children {
-		if failed[issue.Number] || (includeParentRows && parentBodyFailed) {
+		if failed[issue.Number] || (includeParentRows && fetched.parentBodyFailed) || fetched.subIssuesFailed {
 			degraded[issue.Number] = true
 			continue
 		}
 		for _, dep := range deps[issue.Number] {
-			if failedStates[dep.Num] {
+			if failedStates[dep.Num] || fetched.failedChildren[dep.Num] {
 				degraded[issue.Number] = true
 				break
 			}
@@ -138,49 +139,72 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 	return WaveGraph{Children: children, Info: info}, errors.Join(loadErr, stateErr)
 }
 
+// waveChildren is fetchWaveChildren's result: the resolved child set plus the
+// failure context the degradation marking needs.
+type waveChildren struct {
+	children          []ghissue.Issue
+	parentBody        string
+	includeParentRows bool
+	// hydrated marks children that already came from IssueDetail so hydration
+	// does not re-fetch issues whose body is genuinely empty.
+	hydrated map[int]bool
+	// parentBodyFailed: task-list blocker rows were unreadable — every child's
+	// blocker data is suspect.
+	parentBodyFailed bool
+	// subIssuesFailed: the Sub-issues listing was unreadable, so an unknown
+	// set of children is missing — every remaining row's wave is suspect.
+	subIssuesFailed bool
+	// failedChildren are issue numbers that should be children but whose
+	// IssueDetail failed; they are absent from children, and rows depending
+	// on them computed waves from an incomplete DAG.
+	failedChildren map[int]bool
+}
+
 // fetchWaveChildren resolves the child set and reports whether parent
 // task-list rows participate in blocker parsing. Non-numeric parents have no
-// parent issue to scan, so only recorded pane issues remain. hydrated marks
-// children that already came from IssueDetail so hydration does not re-fetch
-// issues whose body is genuinely empty.
-func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([]ghissue.Issue, string, bool, map[int]bool, bool, error) {
-	hydrated := map[int]bool{}
+// parent issue to scan, so only recorded pane issues remain.
+func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) (waveChildren, error) {
+	out := waveChildren{hydrated: map[int]bool{}, failedChildren: map[int]bool{}}
 	parentNum, convErr := strconv.Atoi(parent)
 	if convErr != nil {
-		children, err := loadIssueDetails(c, recordedNums, map[int]bool{}, hydrated)
-		return children, "", false, hydrated, false, err
+		children, err := loadIssueDetails(c, recordedNums, map[int]bool{}, out.hydrated, out.failedChildren)
+		out.children = children
+		return out, err
 	}
 
 	var loadErr error
-	parentBodyFailed := false
 	parentBody, err := c.ParentBody(parentNum)
 	if err != nil {
 		loadErr = errors.Join(loadErr, fmt.Errorf("parent body #%d: %w", parentNum, err))
 		parentBody = ""
-		parentBodyFailed = true
+		out.parentBodyFailed = true
 	}
 	subIssues, err := c.SubIssueList(parentNum)
 	if err != nil {
 		loadErr = errors.Join(loadErr, fmt.Errorf("sub-issues #%d: %w", parentNum, err))
 		subIssues = nil
+		out.subIssuesFailed = true
 	}
 	existing := map[int]bool{parentNum: true}
 	for _, issue := range subIssues {
 		existing[issue.Number] = true
 	}
-	taskExtra, taskErr := loadIssueDetails(c, ghissue.TaskListNumbers(parentBody), existing, hydrated)
-	recordedExtra, recordedErr := loadIssueDetails(c, recordedNums, existing, hydrated)
-	children := ghissue.MergeExtra(subIssues, append(taskExtra, recordedExtra...))
-	assignWaveLabels(children, ghissue.TaskListWaves(parentBody))
-	return children, parentBody, true, hydrated, parentBodyFailed, errors.Join(loadErr, taskErr, recordedErr)
+	taskExtra, taskErr := loadIssueDetails(c, ghissue.TaskListNumbers(parentBody), existing, out.hydrated, out.failedChildren)
+	recordedExtra, recordedErr := loadIssueDetails(c, recordedNums, existing, out.hydrated, out.failedChildren)
+	out.children = ghissue.MergeExtra(subIssues, append(taskExtra, recordedExtra...))
+	assignWaveLabels(out.children, ghissue.TaskListWaves(parentBody))
+	out.parentBody = parentBody
+	out.includeParentRows = true
+	return out, errors.Join(loadErr, taskErr, recordedErr)
 }
 
 // loadIssueDetails fetches IssueDetail for each num not already in existing,
 // joining per-issue failures and keeping the rest. Loaded nums are marked in
 // existing (failed ones are not, so a later source may retry them) and in
 // hydrated, because IssueDetail returns the full issue — re-fetching it during
-// hydration would double the gh calls for genuinely body-less issues.
-func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated map[int]bool) ([]ghissue.Issue, error) {
+// hydration would double the gh calls for genuinely body-less issues. Failed
+// nums are recorded in failed so dependents can be flagged degraded.
+func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated, failed map[int]bool) ([]ghissue.Issue, error) {
 	extra := []ghissue.Issue{}
 	var loadErr error
 	for _, num := range nums {
@@ -190,11 +214,13 @@ func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated map[int
 		detail, err := c.IssueDetail(num)
 		if err != nil {
 			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
+			failed[num] = true
 			continue
 		}
 		extra = append(extra, detail)
 		existing[num] = true
 		hydrated[num] = true
+		delete(failed, num) // a later source recovered this issue
 	}
 	return extra, loadErr
 }
