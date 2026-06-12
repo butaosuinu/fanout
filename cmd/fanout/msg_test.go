@@ -71,7 +71,19 @@ func TestParseMsgFlags(t *testing.T) {
 			}
 		}},
 		{name: "inline value on boolean flag", args: []string{"inbox", "--all=1"}, code: exitcode.Invocation},
-		{name: "self must be positive", args: []string{"inbox", "--self", "-3"}, code: exitcode.Invocation},
+		{name: "zero self is rejected", args: []string{"inbox", "--self", "0"}, code: exitcode.Invocation},
+		{name: "negative self is a manual-pane synthetic number", args: []string{"inbox", "--self", "-3", "--parent", "68"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.self != -3 {
+				t.Errorf("self = %d, want -3", f.self)
+			}
+		}},
+		{name: "negative to targets a manual pane", args: []string{"send", "--to", "-2", "--self", "-1", "--parent", "68", "hi"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.to != -2 || f.self != -1 {
+				t.Errorf("to, self = %d, %d, want -2, -1", f.to, f.self)
+			}
+		}},
 		{name: "empty parent", args: []string{"inbox", "--parent", ""}, code: exitcode.Invocation},
 		{name: "prose parent", args: []string{"inbox", "--parent", "not-a-ref"}, code: exitcode.Invocation},
 		{name: "parent is canonicalized", args: []string{"inbox", "--self", "70", "--parent", "0068"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
@@ -160,6 +172,18 @@ func TestResolveMsgIdentity(t *testing.T) {
 			flags:  msgFlags{verb: "send", parent: "77"},
 			detect: func() (team.Identity, error) { return detected, nil },
 			code:   exitcode.OK, wantSelf: 70, wantParent: "77", wantPane: "%1",
+		},
+		{
+			name:  "manual pane negative synthetic issue is accepted",
+			flags: msgFlags{verb: "inbox"},
+			detect: func() (team.Identity, error) {
+				return team.Identity{
+					Issue:  -1,
+					Parent: "@manual",
+					Pane:   state.Pane{IssueNum: -1, Parent: "@manual", PaneID: "%9"},
+				}, nil
+			},
+			code: exitcode.OK, wantSelf: -1, wantParent: "@manual", wantPane: "%9",
 		},
 		{
 			name:   "detection failure",

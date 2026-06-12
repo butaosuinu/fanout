@@ -121,7 +121,12 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 		return code
 	}
 	defer func() { _ = db.Close() }()
-	return runMsgVerb(flags, msgstore.New(db, parent), self, parent, pane, lg)
+	store, err := msgstore.New(db, parent)
+	if err != nil {
+		lg.Err("msg %s: %v", flags.verb, err)
+		return exitcode.Backend
+	}
+	return runMsgVerb(flags, store, self, parent, pane, lg)
 }
 
 // parseMsgFlags parses `msg` argv. A nil msgFlags means "stop with this
@@ -234,9 +239,12 @@ func parseMsgFlag(f *msgFlags, allowed map[string]bool, args []string, i int, lg
 func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.Code {
 	switch flag {
 	case "--self":
+		// Zero is the "not given" sentinel; negative numbers are valid — TUI
+		// manual panes record synthetic issue numbers -1, -2, ... (pane.go
+		// nextSyntheticPaneNumber) and team.Detect returns them verbatim.
 		n, err := strconv.Atoi(value)
-		if err != nil || n <= 0 {
-			lg.Err("msg %s: --self must be a positive issue number, got: %s", f.verb, value)
+		if err != nil || n == 0 {
+			lg.Err("msg %s: --self must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", f.verb, value)
 			return exitcode.Invocation
 		}
 		f.self = n
@@ -251,8 +259,8 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 		f.parent = ref
 	case "--to":
 		n, err := strconv.Atoi(value)
-		if err != nil || n <= 0 {
-			lg.Err("msg %s: --to must be a positive issue number, got: %s", f.verb, value)
+		if err != nil || n == 0 {
+			lg.Err("msg %s: --to must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", f.verb, value)
 			return exitcode.Invocation
 		}
 		f.to = n
@@ -333,7 +341,9 @@ func resolveMsgIdentity(f *msgFlags, lg *log.Logger) (int, string, msgstore.Peer
 		lg.Err("msg %s: parent is unknown; pass --parent <ref>", f.verb)
 		return 0, "", msgstore.Peer{}, exitcode.Invocation
 	}
-	if needSelf && self <= 0 {
+	// Negative self is legitimate: manual panes carry synthetic numbers
+	// (-1, -2, ...) under the @manual parent. Only zero means unknown.
+	if needSelf && self == 0 {
 		lg.Err("msg %s: self issue is unknown; pass --self <issue>", f.verb)
 		return 0, "", msgstore.Peer{}, exitcode.Invocation
 	}

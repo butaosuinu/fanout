@@ -3,6 +3,7 @@ package msgstore
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/team"
@@ -18,14 +19,18 @@ func openTestStore(t *testing.T) *Store {
 		t.Fatalf("team.Open(%q): %v", path, err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close db: %v", err)
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("close db: %v", closeErr)
 		}
 	})
-	if err := team.EnsureSchema(db); err != nil {
-		t.Fatalf("team.EnsureSchema: %v", err)
+	if schemaErr := team.EnsureSchema(db); schemaErr != nil {
+		t.Fatalf("team.EnsureSchema: %v", schemaErr)
 	}
-	return New(db, "68")
+	s, err := New(db, "68")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
 }
 
 func mustSend(t *testing.T, s *Store, from, to int, kind, body string) Message {
@@ -236,10 +241,27 @@ func TestMarkReadAllAdvancesCursorAndNeverRegresses(t *testing.T) {
 	}
 }
 
+func TestNewRejectsForeignParent(t *testing.T) {
+	s := openTestStore(t)
+	seedStore(t, s)
+
+	// The v1 schema keys peers/board_cursors by issue alone, so one DB file
+	// must serve one parent; opening it for another parent must fail loudly.
+	if _, err := New(s.db, "99"); err == nil || !strings.Contains(err.Error(), "one team DB serves one parent") {
+		t.Fatalf("New for foreign parent = %v, want single-parent rejection", err)
+	}
+	if _, err := New(s.db, "68"); err != nil {
+		t.Fatalf("New for the resident parent: %v", err)
+	}
+}
+
+// Defense in depth: even if a mixed DB exists (constructed here by bypassing
+// New), every messages statement stays parent-scoped so cross-parent reads
+// and mark-read --id (user-supplied ids) cannot touch another team's rows.
 func TestParentScopesMessages(t *testing.T) {
 	s := openTestStore(t)
 	seedStore(t, s)
-	other := New(s.db, "99")
+	other := &Store{db: s.db, parent: "99"}
 
 	msgs, _, err := other.Inbox(70, false, false, testNow)
 	if err != nil {
@@ -249,8 +271,6 @@ func TestParentScopesMessages(t *testing.T) {
 		t.Errorf("other parent inbox = %v, want empty", messageIDs(msgs))
 	}
 
-	// mark-read is parent-scoped too: a shared FANOUT_DB_PATH DB must not let
-	// one parent's mark-read flip another parent's rows (ids are user input).
 	marked, err := other.MarkReadIDs(70, []int64{1, 2}, testNow)
 	if err != nil {
 		t.Fatalf("MarkReadIDs other parent: %v", err)

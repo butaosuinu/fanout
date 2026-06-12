@@ -8,6 +8,7 @@ package msgstore
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -51,19 +52,32 @@ type MarkResult struct {
 
 // Store wraps an open team DB scoped to one parent ref. The parent scopes
 // every messages query; peers and board_cursors are per-DB because the v1
-// schema (internal/team) keys them by issue alone — sound under the default
-// one-DB-per-parent convention (team.DBPath). Pointing FANOUT_DB_PATH at one
-// shared file for SEVERAL parents keeps messages correctly isolated, but
-// board cursors and peer rows are then shared across those parents (a cursor
-// advanced under one parent hides older board posts under another). Keep one
-// DB per parent; per-parent cursors need a v2 schema migration.
+// schema (internal/team) keys them by issue alone. That is sound only under
+// the one-DB-per-parent convention (team.DBPath), so New enforces it.
 type Store struct {
 	db     *sql.DB
 	parent string
 }
 
-func New(db *sql.DB, parent string) *Store {
-	return &Store{db: db, parent: parent}
+// New wraps db scoped to parent. It rejects a DB that already holds another
+// parent's messages: peers and board_cursors are keyed by issue alone in the
+// v1 schema, so sharing one DB file across parents would leak cursors and
+// peer rows across team boundaries even though messages are parent-scoped.
+// Per-parent cursors/peers need a v2 schema migration in internal/team.
+func New(db *sql.DB, parent string) (*Store, error) {
+	var other string
+	err := db.QueryRow("SELECT parent FROM messages WHERE parent != ? LIMIT 1", parent).Scan(&other)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// parent is the DB's sole tenant — the v1 single-parent invariant holds.
+	case err != nil:
+		return nil, fmt.Errorf("check team db parent: %w", err)
+	default:
+		return nil, fmt.Errorf(
+			"team db already holds messages for parent %s; one team DB serves one parent (use a separate FANOUT_DB_PATH per parent)",
+			other)
+	}
+	return &Store{db: db, parent: parent}, nil
 }
 
 const messageColumns = "id, from_issue, to_issue, kind, body, created_at, read_at, reply_to"

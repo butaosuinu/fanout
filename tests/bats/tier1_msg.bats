@@ -62,7 +62,7 @@ msg_env() {
   msg_env
   run_fanout msg send --to abc --self 70 --parent 68 hello
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--to must be a positive issue number"* ]]
+  [[ "$output" == *"--to must be a non-zero issue number"* ]]
 }
 
 @test "msg send without a body exits 2" {
@@ -163,4 +163,24 @@ msg_env() {
   run_fanout msg send --to 71 --self 70 --parent 68 -- --kind is body text
   assert_success
   [[ "$output" == *"sent #1 to #71"* ]]
+}
+
+@test "msg detects a manual pane (negative synthetic issue under @manual)" {
+  msg_env
+  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"@manual","issueNum":-1,"slug":"manual-1-scratch","branchName":"","paneId":"%1","agent":"claude","displayName":"scratch","worktreePath":"","prompt":"scratch work","createdAt":"2026-06-13T00:00:00Z"}]}' \
+    > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg inbox --json
+  assert_success
+  [[ "$output" == *'"self": -1'* ]]
+  [[ "$output" == *'"parent": "@manual"'* ]]
+}
+
+@test "msg rejects a DB already holding another parent's messages: exit 4" {
+  msg_env
+  run_fanout msg send --to 71 --self 70 --parent 68 hello
+  assert_success
+  run_fanout msg send --to 71 --self 70 --parent 99 hello again
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"one team DB serves one parent"* ]]
 }
