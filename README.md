@@ -216,9 +216,8 @@ intentionally change dry-run output. Tier 3 (live tmux E2E) stays manual.
 
 ## Prerequisites
 
-- The default pane-creation flow needs `gh` CLI, `jq`, `git`, `tmux`, and the
-  `gh-sub-issue` extension (`gh extension install yahsan2/gh-sub-issue`).
-  `--status` and `--cleanup` use `gh`/`jq`/`git`; `--merge` and `--close` use
+- The default pane-creation flow needs `gh` CLI, `git`, and `tmux`.
+  `--status` and `--cleanup` use `gh`/`git`; `--merge` and `--close` use
   `git` (`--close`/`--cleanup` treat an already-missing tmux pane as stale).
   fanout checks the dependencies needed for the selected mode at startup and
   prints install hints on failure. Children can be declared via
@@ -713,15 +712,16 @@ should branch from the selected base.
 
 ## What fanout actually does
 
-1. Verifies `gh`, `jq`, `git`, `tmux`, and `gh-sub-issue` are installed.
+1. Verifies `gh`, `git`, and `tmux` are installed.
 2. Resolves the repository root with `git rev-parse --show-toplevel`, the
    current tmux session with `tmux display-message -p '#{session_name}'`, and
    the invoking pane from `$TMUX_PANE` (or `#{pane_id}` as a fallback).
 3. Resolves the agent from `--agent` or `FANOUT_AGENT`; live mode verifies the
    selected agent CLI is installed.
 4. Enumerates children by taking the union of two sources (run from the project
-   root): (a) `gh sub-issue list <parent>` for issues formally linked via the
-   Sub-issues API, and (b) GitHub task-list references in the parent body —
+   root): (a) the GitHub Sub-issues API
+   (`gh api repos/{owner}/{repo}/issues/<N>/sub_issues`) for formally linked
+   issues, and (b) GitHub task-list references in the parent body —
    any line matching `^\s*-\s+\[[ xX]\] ... #NUM` contributes `#NUM` (same-repo
    only; `owner/repo#NUM` is skipped). Body-sourced numbers are hydrated via
    `gh issue view`. Only `state == "OPEN"` children are processed.
@@ -781,12 +781,13 @@ base branch, an existing branch name, or a stale/missing remote branch. Use
 Use `--no-refresh` only when you intentionally want to branch from the current
 local base/ref.
 
-### "gh sub-issue list failed"
+### "sub-issues fetch failed"
 
-- No `gh-sub-issue` extension: `gh extension install yahsan2/gh-sub-issue`.
 - Not authenticated: `gh auth status`.
-- Parent issue doesn't exist or has no sub-issues tagged via the extension:
-  fanout exits 0 with `no sub-issues on #<parent>`.
+- Parent issue doesn't exist: the Sub-issues API returns HTTP 404 and fanout
+  exits 1 — check the issue number.
+- Zero linked sub-issues is not an error: fanout exits 0 with
+  `no sub-issues on #<parent>`.
 
 ### Slug or branch names are not what you want
 

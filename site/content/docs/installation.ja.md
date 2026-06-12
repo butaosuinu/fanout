@@ -14,12 +14,10 @@ yomi: install
 | ツール | 用途 |
 |---|---|
 | `gh` | GitHub CLI — issue、PR 状態、GraphQL |
-| `jq` | JSON 処理 |
 | `git` | worktree、branch、merge |
 | `tmux` | 子ペイン |
-| `gh-sub-issue` | Sub-issues の列挙 — `gh extension install yahsan2/gh-sub-issue` |
 
-fanout は選択されたモードに必要な依存を起動時にチェックし、失敗時にはインストールのヒントを表示します。`--status` と `--cleanup` は `gh`/`jq`/`git`、`--merge` と `--close` は `git` を使います。
+fanout は選択されたモードに必要な依存を起動時にチェックし、失敗時にはインストールのヒントを表示します。`--status` と `--cleanup` は `gh`/`git`、`--merge` と `--close` は `git` を使います。
 
 > **Project モード時のみ**: Project items を取得する GraphQL クエリのため、`gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project` で付与してください。issue モード(`fanout <N>`)では不要です。
 

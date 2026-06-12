@@ -208,9 +208,8 @@ Tier 3 (live tmux E2E) は手動運用のままです。
 
 ## 前提条件
 
-- 既定の fanout 作成フローでは `gh` CLI、`jq`、`git`、`tmux`、`gh-sub-issue`
-  拡張（`gh extension install yahsan2/gh-sub-issue`）が必要です。`--status` と
-  `--cleanup` は `gh`/`jq`/`git`、`--merge` と `--close` は `git` を使います
+- 既定の fanout 作成フローでは `gh` CLI、`git`、`tmux` が必要です。`--status` と
+  `--cleanup` は `gh`/`git`、`--merge` と `--close` は `git` を使います
   （`--close`/`--cleanup` の tmux pane kill は pane が既に無い場合 stale として
   扱います）。fanout は必要な依存を起動時にチェックし、失敗時には
   インストールのヒントを表示します。子 issue は
@@ -625,14 +624,15 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
 
 ## fanout が実際にやること
 
-1. `gh`、`jq`、`git`、`tmux`、`gh-sub-issue` がインストールされているかを確認。
+1. `gh`、`git`、`tmux` がインストールされているかを確認。
 2. `git rev-parse --show-toplevel` でリポジトリルートを、`tmux display-message -p
    '#{session_name}'` で現在の tmux セッションを、`$TMUX_PANE`（fallback は
    `#{pane_id}`）で起動元 pane を解決する。
 3. `--agent` または `FANOUT_AGENT` から agent を解決する。live 実行では、その
    agent CLI が `PATH` 上にあることも確認する。
 4. 2 つのソースの和集合で子を列挙する（いずれもプロジェクトルートから実行）:
-   (a) `gh sub-issue list <parent>` で Sub-issues API に正式リンクされている
+   (a) GitHub Sub-issues API
+   （`gh api repos/{owner}/{repo}/issues/<N>/sub_issues`）で正式リンクされている
    子、(b) 親本文中の GitHub タスクリスト参照 — `^\s*-\s+\[[ xX]\] ... #NUM`
    にマッチする行の `#NUM` を拾う（同一リポジトリ内のみ。`owner/repo#NUM`
    形式はスキップ）。本文由来の番号は `gh issue view` で本体情報を引く。
@@ -684,12 +684,13 @@ branch 名、stale/missing remote branch です。base を変えるには
 `origin/<branch>` を指定できます。意図的に現在の local base/ref から切る場合にだけ
 `--no-refresh` を使ってください。
 
-### "gh sub-issue list failed"
+### "sub-issues fetch failed"
 
-- `gh-sub-issue` 拡張が無い: `gh extension install yahsan2/gh-sub-issue`。
 - 未認証: `gh auth status`。
-- 親 issue が存在しない、または拡張経由で紐づけられたサブ issue が無い:
-  fanout は `no sub-issues on #<parent>` と出して exit 0 する。
+- 親 issue が存在しない: Sub-issues API が HTTP 404 を返し、fanout は exit 1
+  する。issue 番号を確認すること。
+- リンクされたサブ issue がゼロなのはエラーではない: fanout は
+  `no sub-issues on #<parent>` と出して exit 0 する。
 
 ### slug や branch 名が意図と違う
 
@@ -716,8 +717,6 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
   `sh -c "<文字列>"` のような間接実行や、コミットメッセージ・PR コメントの本文に
   シェル演算子と一緒に `gh pr create` という文字列を書いた場合などは取りこぼし／過検知
   し得ます。その場合は `FANOUT_SKIP_PR_REVIEW=1` で回避してください。
-- jq が無い環境では fail-closed（PR 作成らしきコマンドを deny）になります。`jq` を
-  インストールするか `export FANOUT_SKIP_PR_REVIEW=1` してください。
 - `make install` は同名のグローバル `post-work-review` skill を上書きします。独自に
   管理しているコピーがある場合は事前にバックアップしてください。
 

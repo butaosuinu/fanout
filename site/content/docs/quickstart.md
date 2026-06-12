@@ -34,13 +34,13 @@ fanout 123
 
 Each child gets a pane in the current tmux session, an isolated worktree under `.fanout/worktrees/<slug>/`, and the selected agent started with a one-line briefing prompt.
 
-> The pane-creation flow needs `gh`, `jq`, `git`, `tmux`, and the `gh-sub-issue` extension on your `PATH`. fanout checks the dependencies at startup and prints install hints on failure — see [Installation]({{< relref "/docs/installation" >}}).
+> The pane-creation flow needs `gh`, `git`, and `tmux` on your `PATH`. fanout checks the dependencies at startup and prints install hints on failure — see [Installation]({{< relref "/docs/installation" >}}).
 
 ## How child issues are declared
 
 fanout enumerates children by taking the union of two sources:
 
-- issues formally linked via the **Sub-issues API** (`gh sub-issue list <parent>`, through the `gh-sub-issue` extension), and
+- issues formally linked via the **Sub-issues API** (`gh api repos/{owner}/{repo}/issues/<N>/sub_issues`), and
 - **task-list references in the parent body** — any line matching `- [ ] #NUM ...` contributes `#NUM`.
 
 ```text
@@ -55,7 +55,7 @@ Task-list references are same-repo only; `owner/repo#NUM` is skipped. Body-sourc
 
 A live run walks these steps:
 
-1. Verifies `gh`, `jq`, `git`, `tmux`, and `gh-sub-issue` are installed.
+1. Verifies `gh`, `git`, and `tmux` are installed.
 2. Resolves the repository root with `git rev-parse --show-toplevel`, the current tmux session and invoking pane, and the agent from `--agent` or `FANOUT_AGENT`.
 3. Enumerates children as the union of Sub-issues and parent task-list rows; only OPEN children are processed.
 4. Reads `.fanout/state.json` and skips children whose `(parent, issueNum)` pair is already recorded.

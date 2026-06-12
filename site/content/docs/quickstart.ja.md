@@ -34,13 +34,13 @@ fanout 123
 
 各子 issue は、現在の tmux セッション内のペイン、`.fanout/worktrees/<slug>/` 配下の独立した worktree、そして 1 行 briefing prompt 付きで起動した agent を得ます。
 
-> ペイン作成フローには `gh`、`jq`、`git`、`tmux`、`gh-sub-issue` 拡張が `PATH` 上に必要です。fanout は依存を起動時にチェックし、失敗時にはインストールのヒントを表示します — [インストール]({{< relref "/docs/installation" >}})を参照してください。
+> ペイン作成フローには `gh`、`git`、`tmux` が `PATH` 上に必要です。fanout は依存を起動時にチェックし、失敗時にはインストールのヒントを表示します — [インストール]({{< relref "/docs/installation" >}})を参照してください。
 
 ## 子 issue の宣言方法
 
 fanout は 2 つのソースの和集合で子を列挙します:
 
-- **Sub-issues API** に正式リンクされている issue（`gh-sub-issue` 拡張経由の `gh sub-issue list <parent>`）
+- **Sub-issues API** に正式リンクされている issue（`gh api repos/{owner}/{repo}/issues/<N>/sub_issues`）
 - **親本文のタスクリスト参照** — `- [ ] #NUM ...` にマッチする行の `#NUM`
 
 ```text
@@ -55,7 +55,7 @@ fanout は 2 つのソースの和集合で子を列挙します:
 
 live 実行は次のステップで進みます:
 
-1. `gh`、`jq`、`git`、`tmux`、`gh-sub-issue` がインストールされているかを確認する。
+1. `gh`、`git`、`tmux` がインストールされているかを確認する。
 2. `git rev-parse --show-toplevel` でリポジトリルートを、現在の tmux セッションと起動元 pane を、`--agent` または `FANOUT_AGENT` から agent を解決する。
 3. Sub-issues と親タスクリスト行の和集合で子を列挙する（OPEN の子のみ処理）。
 4. `.fanout/state.json` を読み、`(parent, issueNum)` ペアが記録済みの子はスキップする。

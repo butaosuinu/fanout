@@ -40,16 +40,16 @@ fanout 123 --base-branch origin/main
 
 Use `--no-refresh` only when you intentionally want to branch from the current local base/ref. fanout never forces the base branch into shape — if it cannot refresh it safely, it fails rather than destroying your local work.
 
-## "gh sub-issue list failed"
+## "sub-issues fetch failed"
 
-- The `gh-sub-issue` extension is not installed, or you are not authenticated:
+- You are not authenticated:
 
 ```bash
-gh extension install yahsan2/gh-sub-issue
 gh auth status
 ```
 
-- The parent issue does not exist, or has no sub-issues linked via the extension. Zero sub-issues is not an error — fanout exits 0 with:
+- The parent issue does not exist: the Sub-issues API returns HTTP 404 and fanout exits 1 — check the issue number.
+- Zero linked sub-issues is not an error — fanout exits 0 with:
 
 ```text
 no sub-issues on #<parent>

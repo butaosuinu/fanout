@@ -14,12 +14,10 @@ The default pane-creation flow needs these tools on your `PATH`:
 | Tool | Used for |
 |---|---|
 | `gh` | GitHub CLI — issues, PR state, GraphQL |
-| `jq` | JSON processing |
 | `git` | worktrees, branches, merges |
 | `tmux` | child panes |
-| `gh-sub-issue` | Sub-issues enumeration — `gh extension install yahsan2/gh-sub-issue` |
 
-fanout checks the dependencies needed for the selected mode at startup and prints install hints on failure. `--status` and `--cleanup` use `gh`/`jq`/`git`; `--merge` and `--close` use `git`.
+fanout checks the dependencies needed for the selected mode at startup and prints install hints on failure. `--status` and `--cleanup` use `gh`/`git`; `--merge` and `--close` use `git`.
 
 > **Project mode only:** the `gh` CLI must have the `read:project` scope so the GraphQL query that lists Project items can succeed. Add it with `gh auth refresh -s read:project`. Issue mode (`fanout <N>`) does not need this scope.
 

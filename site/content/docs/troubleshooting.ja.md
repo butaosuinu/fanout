@@ -40,16 +40,16 @@ fanout 123 --base-branch origin/main
 
 `--no-refresh` は、意図的に現在の local base/ref から切りたいときにだけ使ってください。fanout は base branch を force で整えることはしません — 安全に refresh できない場合は、ユーザーのローカル作業を壊す代わりに失敗します。
 
-## "gh sub-issue list failed"
+## "sub-issues fetch failed"
 
-- `gh-sub-issue` 拡張が入っていない、または未認証:
+- 未認証:
 
 ```bash
-gh extension install yahsan2/gh-sub-issue
 gh auth status
 ```
 
-- 親 issue が存在しない、または拡張経由で紐づけられたサブ issue が無い。サブ issue ゼロはエラーではなく、fanout は次を表示して exit 0 します:
+- 親 issue が存在しない: Sub-issues API が HTTP 404 を返し、fanout は exit 1 します。issue 番号を確認してください。
+- リンクされたサブ issue がゼロなのはエラーではなく、fanout は次を表示して exit 0 します:
 
 ```text
 no sub-issues on #<parent>
