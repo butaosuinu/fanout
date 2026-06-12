@@ -50,8 +50,13 @@ type MarkResult struct {
 }
 
 // Store wraps an open team DB scoped to one parent ref. The parent scopes
-// every messages query; peers and board_cursors are per-DB (the DB itself is
-// per-parent, see team.DBPath).
+// every messages query; peers and board_cursors are per-DB because the v1
+// schema (internal/team) keys them by issue alone — sound under the default
+// one-DB-per-parent convention (team.DBPath). Pointing FANOUT_DB_PATH at one
+// shared file for SEVERAL parents keeps messages correctly isolated, but
+// board cursors and peer rows are then shared across those parents (a cursor
+// advanced under one parent hides older board posts under another). Keep one
+// DB per parent; per-parent cursors need a v2 schema migration.
 type Store struct {
 	db     *sql.DB
 	parent string
