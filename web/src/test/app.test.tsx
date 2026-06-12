@@ -350,6 +350,22 @@ describe("フィルタ", () => {
     expect(screen.getByRole("listitem", { name: "フィルタ state:closed を外す" })).toBeInTheDocument();
   });
 
+  it("label 表記の別名トークン(wave:w2)もアクティブ表示・トグルオフできる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.type(screen.getByRole("searchbox"), "wave:w2");
+    const trigger = screen.getByRole("button", { name: "wave で絞り込み" });
+    expect(trigger).toHaveClass("on");
+    await user.click(trigger);
+    const opt = screen.getByRole("option", { name: "w2" });
+    expect(opt).toHaveAttribute("aria-selected", "true");
+    await user.click(opt);
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(trigger).not.toHaveClass("on");
+  });
+
   it("トグルオフは手打ちの同キー重複トークンも全て外す", async () => {
     const user = userEvent.setup();
     render(<App />);

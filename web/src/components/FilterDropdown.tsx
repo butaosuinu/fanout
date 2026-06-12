@@ -52,13 +52,15 @@ export const FilterDropdown = memo(function FilterDropdown({
       ? base.filter(([v, l]) => v.toLowerCase().includes(q) || l.toLowerCase().includes(q))
       : base;
 
-  const isActive = (value: string) => active === value.toLowerCase();
+  /* 手打ちトークンは label 表記の別名でも来る(wave:w2 — matches() が
+   * fmtWave 経由で受け付ける)ので、value と label の両方で照合する */
+  const isActive = ([v, l]: Option) => active === v.toLowerCase() || active === l.toLowerCase();
   const listId = `fd-list-${dataKey}`;
 
   const openPopover = () => {
     frozen.current = options; // 開く瞬間の選択肢で凍結
     setQuery("");
-    const idx = active ? options.findIndex(([v]) => isActive(v)) : -1;
+    const idx = active ? options.findIndex(isActive) : -1;
     setCursor(idx >= 0 ? idx : 0);
     setOpen(true);
   };
@@ -66,9 +68,9 @@ export const FilterDropdown = memo(function FilterDropdown({
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
   };
-  const pick = (value: string) => {
-    if (isActive(value)) onClearKey(dataKey);
-    else onPickToken(dataKey, value);
+  const pick = (opt: Option) => {
+    if (isActive(opt)) onClearKey(dataKey);
+    else onPickToken(dataKey, opt[0]);
     close(true);
   };
 
@@ -142,7 +144,7 @@ export const FilterDropdown = memo(function FilterDropdown({
     if (e.nativeEvent.isComposing || e.key !== "Enter") return;
     e.preventDefault();
     const target = visible[cursor] ?? visible[0];
-    if (target) pick(target[0]);
+    if (target) pick(target);
   };
 
   /* Tab 等でフォーカスが外に出たら閉じる(外側 click は pointerdown が先に処理) */
@@ -209,12 +211,12 @@ export const FilterDropdown = memo(function FilterDropdown({
                 type="button"
                 role="option"
                 className="fd-opt"
-                aria-selected={isActive(v)}
+                aria-selected={isActive([v, l])}
                 tabIndex={i === cursor ? 0 : -1}
                 ref={(el) => {
                   optionRefs.current[i] = el;
                 }}
-                onClick={() => pick(v)}
+                onClick={() => pick([v, l])}
                 onFocus={() => setCursor(i)} // click / Tab でのフォーカス移動も roving に反映
               >
                 <svg className="fd-check" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
