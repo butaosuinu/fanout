@@ -38,7 +38,7 @@
   --f-code: "M PLUS 1 Code",ui-monospace,"SFMono-Regular",Menlo,monospace;
 
   --ease-fan: cubic-bezier(.22,1,.36,1);
-  --maxw: 1180px;
+  --maxw: 1416px;
   --nav-h: 60px;
 }
 html[data-theme="dark"]{
@@ -111,7 +111,7 @@ a:hover{ color:var(--asagi); }
   border-bottom:1px solid var(--suna);
 }
 .nav-inner{
-  width:min(1280px, calc(100% - 40px)); margin-inline:auto;
+  width:min(calc(var(--maxw) + 100px), calc(100% - 40px)); margin-inline:auto;
   display:flex; align-items:center; gap:14px;
   height:var(--nav-h);
 }
@@ -357,9 +357,9 @@ tbody tr.selected td:first-child{ box-shadow:inset 2px 0 0 var(--asagi); }
 td.c-issue{ color:var(--ai); font-weight:500; }
 td.c-name{
   font-family:var(--f-body); color:var(--sumi);
-  max-width:240px; overflow:hidden; text-overflow:ellipsis;
+  max-width:288px; overflow:hidden; text-overflow:ellipsis;
 }
-td.c-branch{ color:var(--ink-60); max-width:200px; overflow:hidden; text-overflow:ellipsis; }
+td.c-branch{ color:var(--ink-60); max-width:240px; overflow:hidden; text-overflow:ellipsis; }
 td.c-diff .add{ color:var(--ok); }
 td.c-diff .del{ color:var(--err); }
 td.c-diff.fault{ color:var(--err); }
