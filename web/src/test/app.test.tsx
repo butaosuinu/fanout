@@ -623,6 +623,11 @@ describe("plan(Codex Plan Mode)", () => {
 });
 
 describe("drawer リサイズ", () => {
+  beforeEach(() => {
+    // hook はビューポート上限(innerWidth - 360)でも clamp する。jsdom 既定の
+    // 1024px だと上限 921px になりドラッグ値が読みにくいので広い画面に固定。
+    Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
+  });
   const openDrawer = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
     await user.click(screen.getByText(name));
     return await screen.findByRole("complementary", { name: "ペイン詳細" });
@@ -653,9 +658,9 @@ describe("drawer リサイズ", () => {
     expect(drawerWidthVar(drawer)).toBe("840px"); // 初期幅 = 従来 420px の 2 倍
 
     const grip = within(drawer).getByRole("separator", { name: "詳細パネルの幅を変更" });
-    fireEvent.pointerDown(grip, { button: 0, pointerId: 1, clientX: 800 });
+    fireEvent.pointerDown(grip, { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     expect(document.documentElement).toHaveClass("drawer-resizing");
-    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 680 });
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 680, buttons: 1 });
     expect(drawerWidthVar(drawer)).toBe("960px"); // 右アンカー: 左ドラッグで拡大
     fireEvent.pointerUp(grip, { pointerId: 1, clientX: 680 });
     expect(document.documentElement).not.toHaveClass("drawer-resizing");

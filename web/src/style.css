@@ -522,8 +522,8 @@ a.gh-pill:hover .tag{ border-color:var(--asagi); color:var(--asagi); }
 html.drawer-resizing .drawer-grip::after{ opacity:1; }
 .drawer-grip:focus-visible{ outline:none; }
 html.drawer-resizing{ user-select:none; cursor:col-resize; }
+/* ヘッダ常時表示は flex column(#drawer)+ .drawer-body のスクロールが担う */
 .drawer-head{
-  position:sticky; top:0; z-index:2;
   display:flex; align-items:center; gap:10px;
   padding:16px 20px 13px;
   background:var(--paper);

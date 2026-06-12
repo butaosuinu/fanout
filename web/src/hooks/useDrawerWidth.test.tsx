@@ -10,7 +10,7 @@ function Probe() {
   const { width, gripProps } = useDrawerWidth();
   return (
     <div>
-      <div data-testid="grip" tabIndex={0} {...gripProps} />
+      <div data-testid="grip" {...gripProps} />
       <output data-testid="width">{width}</output>
     </div>
   );
@@ -19,9 +19,16 @@ function Probe() {
 const width = () => Number(screen.getByTestId("width").textContent);
 const grip = () => screen.getByTestId("grip");
 
+/* hook はビューポート上限(innerWidth - 360 / ≤1100px は 90vw)でも clamp する。
+ * jsdom の既定 innerWidth(1024)だと上限 921px になり値が読みにくいので、
+ * 既定は広い画面に固定し、ビューポート clamp 自体は専用ケースで検証する。 */
+const setInnerWidth = (w: number) =>
+  Object.defineProperty(window, "innerWidth", { value: w, configurable: true, writable: true });
+
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.classList.remove("drawer-resizing");
+  setInnerWidth(2000); // 上限 = min(1600, 2000 - 360) = 1600
 });
 
 describe("useDrawerWidth", () => {
@@ -54,14 +61,14 @@ describe("useDrawerWidth", () => {
 
   it("左ドラッグで拡大・右ドラッグで縮小し、pointerup でのみ永続化する", () => {
     render(<Probe />);
-    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800 });
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     expect(document.documentElement).toHaveClass("drawer-resizing");
 
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 700 });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 700, buttons: 1 });
     expect(width()).toBe(940); // 840 + (800 - 700)
     expect(localStorage.getItem("fanout.drawerWidth")).toBeNull(); // ドラッグ中は未保存
 
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 860 });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 860, buttons: 1 });
     expect(width()).toBe(780); // 840 + (800 - 860)
 
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 860 });
@@ -71,10 +78,10 @@ describe("useDrawerWidth", () => {
 
   it("ドラッグ中の幅も 320–1600px に clamp する", () => {
     render(<Probe />);
-    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800 });
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000 });
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
     expect(width()).toBe(1600);
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 3000 });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 3000, buttons: 1 });
     expect(width()).toBe(320);
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 3000 });
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("320");
@@ -82,19 +89,19 @@ describe("useDrawerWidth", () => {
 
   it("ドラッグ外の pointermove・別 pointerId の move は無視する", () => {
     render(<Probe />);
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 100 });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 100, buttons: 1 });
     expect(width()).toBe(840);
 
-    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800 });
-    fireEvent.pointerMove(grip(), { pointerId: 2, clientX: 100 });
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 2, clientX: 100, buttons: 1 });
     expect(width()).toBe(840);
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 800 });
   });
 
   it("pointercancel はドラッグを終了するが永続化しない", () => {
     render(<Probe />);
-    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800 });
-    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 700 });
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 700, buttons: 1 });
     fireEvent.pointerCancel(grip(), { pointerId: 1 });
     expect(document.documentElement).not.toHaveClass("drawer-resizing");
     expect(localStorage.getItem("fanout.drawerWidth")).toBeNull();
@@ -102,7 +109,7 @@ describe("useDrawerWidth", () => {
 
   it("ドラッグ中の unmount で html.drawer-resizing を残さない", () => {
     const probe = render(<Probe />);
-    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800 });
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     expect(document.documentElement).toHaveClass("drawer-resizing");
     probe.unmount();
     expect(document.documentElement).not.toHaveClass("drawer-resizing");
@@ -127,5 +134,61 @@ describe("useDrawerWidth", () => {
     fireEvent.keyDown(grip(), { key: "ArrowRight" });
     expect(width()).toBe(816);
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("816");
+  });
+
+  it("修飾キー付きの矢印(Alt+← = 履歴等)は奪わない", () => {
+    render(<Probe />);
+    fireEvent.keyDown(grip(), { key: "ArrowLeft", altKey: true });
+    fireEvent.keyDown(grip(), { key: "ArrowLeft", metaKey: true });
+    fireEvent.keyDown(grip(), { key: "ArrowLeft", ctrlKey: true });
+    expect(width()).toBe(840);
+    expect(localStorage.getItem("fanout.drawerWidth")).toBeNull();
+  });
+
+  it("操作値・保存値もビューポート上限(innerWidth - 360)で clamp する", () => {
+    setInnerWidth(1440); // 上限 1080
+    render(<Probe />);
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
+    expect(width()).toBe(1080); // 1600 ではなく実描画上限まで
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: -2000 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("1080");
+  });
+
+  it("≤1100px のオーバーレイでは上限 90vw、保存値の読込も同様に clamp する", () => {
+    setInnerWidth(1000); // 上限 900
+    localStorage.setItem("fanout.drawerWidth", "1600");
+    render(<Probe />);
+    expect(width()).toBe(900);
+  });
+
+  it("無移動クリックでは永続化しない(保存値なし = デフォルト追従を保つ)", () => {
+    render(<Probe />);
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 800 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBeNull();
+  });
+
+  it("微調整ドラッグ直後の dblclick はリセットとして扱わない", () => {
+    render(<Probe />);
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 760, buttons: 1 }); // 40px 移動
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 760 });
+    expect(width()).toBe(880);
+    fireEvent.doubleClick(grip()); // 直前ドラッグの誤爆 → 無視
+    expect(width()).toBe(880);
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("880");
+  });
+
+  it("ボタン解放を取り逃しても buttons=0 の move でドラッグを終了する", () => {
+    render(<Probe />);
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 700, buttons: 1 });
+    expect(width()).toBe(940);
+    // capture が効かない環境: pointerup が grip 外で起き、buttons=0 の move だけ届く
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 600, buttons: 0 });
+    expect(document.documentElement).not.toHaveClass("drawer-resizing");
+    expect(width()).toBe(940); // 取り逃し後の hover では動かない
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("940");
   });
 });

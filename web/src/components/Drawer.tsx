@@ -1,9 +1,5 @@
 import { Fragment, useEffect, type CSSProperties } from "react";
-import {
-  DRAWER_MAX_WIDTH,
-  DRAWER_MIN_WIDTH,
-  useDrawerWidth,
-} from "../hooks/useDrawerWidth";
+import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
@@ -86,17 +82,9 @@ export function Drawer({
       aria-label="ペイン詳細"
       style={{ "--drawer-w": `${width}px` } as CSSProperties}
     >
-      <div
-        className="drawer-grip"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="詳細パネルの幅を変更"
-        aria-valuenow={width}
-        aria-valuemin={DRAWER_MIN_WIDTH}
-        aria-valuemax={DRAWER_MAX_WIDTH}
-        tabIndex={0}
-        {...gripProps}
-      />
+      {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
+          セパレータ意味論だけ落ちる事故を防ぐ) */}
+      <div className="drawer-grip" {...gripProps} />
       <header className="drawer-head">
         <h3>
           <span className="d-issue" id="d-issue">
