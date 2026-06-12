@@ -4,7 +4,9 @@
  * stream drops. The token (when the server requires one) rides as a ?token=
  * query param, read from this page's own URL. No build step, no dependencies.
  * UI logic mirrors docs/mockups/dashboard-paper-breeze.html (the approved
- * design contract); only the transport + /api/peek wiring is real here. */
+ * design contract); only the transport + /api/peek wiring is real here.
+ * 描画はキー付き差分パッチ(reconcile): SSE 更新ごとに innerHTML を全置換せず、
+ * 変化したセクション/行だけ更新する(rise 再生・hover/フォーカス喪失の防止)。 */
 
 const token = new URLSearchParams(location.search).get("token") || "";
 const q = (path) => path + (token ? "?token=" + encodeURIComponent(token) : "");
@@ -105,6 +107,34 @@ const SORTS = {
 };
 
 /* ---- 描画 ---- */
+/* 直前に書き込んだ HTML 文字列と一致するなら DOM を触らない。DOM の再シリア
+ * ライズは round-trip しないので、比較は常に「自分が書いた文字列」と行う。 */
+const htmlCache = new WeakMap();
+function setHtml(el, html) {
+  if (htmlCache.get(el) === html) return false;
+  el.innerHTML = html;
+  htmlCache.set(el, html);
+  return true;
+}
+/* key 付き子要素のカーソル走査 reconcile。順序どおりに既存ノードを再利用し、
+ * ずれたノードは insertBefore で移動(要素の状態が保たれちらつかない)、無い
+ * ものは make() で生成、ループ後に余った子を remove する。 */
+function reconcile(container, items, keyOf, make, patch) {
+  let cursor = container.firstElementChild;
+  for (const item of items) {
+    let node = cursor && keyOf(cursor) === item.key ? cursor : null;
+    if (!node) {
+      for (let n = cursor; n; n = n.nextElementSibling) {
+        if (keyOf(n) === item.key) { node = n; break; }
+      }
+      if (!node) node = make(item);
+      container.insertBefore(node, cursor);
+    }
+    patch(node, item);
+    cursor = node.nextElementSibling;
+  }
+  while (cursor) { const gone = cursor; cursor = cursor.nextElementSibling; gone.remove(); }
+}
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
 }
@@ -121,13 +151,13 @@ function blockersCell(p, openBlk) {
 function rowKey(parent, p) {
   return `${parent}#${p.issueNum}`;
 }
-function rowHtml(p, key) {
+/* 12 <td> セルのみ。tr 自体は makeRow が生成し、selected クラスは
+ * classList 操作専用(markup には含めない)。 */
+function rowCellsHtml(p) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
-  const sel = state.selected === key ? " selected" : "";
-  return `<tr class="row${sel}" data-key="${esc(key)}" tabindex="0">
-    <td class="c-issue">#${esc(p.issueNum)}</td>
+  return `<td class="c-issue">#${esc(p.issueNum)}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td>${esc(p.agent || "—")}</td>
     <td>${fmtWave(p) ? esc(fmtWave(p)) : '<span class="muted">—</span>'}</td>
@@ -138,8 +168,7 @@ function rowHtml(p, key) {
     <td>${ci === "pass" ? tagHtml("t-ok", "pass") : ci === "fail" ? tagHtml("t-err", "fail") : ci === "pending" ? tagHtml("t-warn", "pending") : '<span class="muted">—</span>'}</td>
     <td title="${esc(p.tmuxTitle || "")}"><span class="dot ${p.alive ? "on" : "off"}" aria-hidden="true"></span>${p.alive ? "live" : esc(p.tmuxState || "stale")}</td>
     <td>${p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">?</span>'}</td>
-    <td>${prCell(pr)}</td>
-  </tr>`;
+    <td>${prCell(pr)}</td>`;
 }
 function diffHtml(p) {
   const m = /^\+(\d+)\/-(\d+)$/.exec(p.diffSummary || "");
@@ -160,7 +189,7 @@ const COLS = [
   ["ci", "ci"], ["tmux", "tmux"], ["state", "state"], ["pr", "pr"],
 ];
 
-function draw() {
+function draw(animate) {
   const snap = state.snap;
   if (!snap) return;
 
@@ -178,9 +207,28 @@ function draw() {
   banner.hidden = !msgs.length;
   banner.textContent = msgs.join(" · ");
 
+  renderSessions(snap, animate);
+
+  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0 };
+  $("s-total").textContent = r.total; $("s-live").textContent = r.live;
+  $("s-merged").textContent = r.merged; $("s-pending").textContent = r.pending;
+  $("s-blocked").textContent = r.blocked;
+  $("hud-fill").style.width = (r.total ? (r.merged / r.total) * 100 : 0) + "%";
+  $("status").textContent = "telemetry @ " + clock(snap.generatedAt);
+  syncDrawer();
+}
+
+/* セッション一覧の差分パッチ描画。filter+sort 済みの順序付きリストを作り、
+ * #sessions の子(section[data-parent] でキー付け)へ reconcile する。空状態
+ * (該当なし)も key="" の専用エントリとして同じループで扱う。animate===true
+ * (SSE 更新)のときだけ新規セクションに rise 入場アニメを付与する。 */
+function renderSessions(snap, animate) {
+  if (!snap) return;
   const terms = parseQuery(state.filter);
+  const thsHtml = COLS.map(([key, label]) =>
+    `<th data-sort="${key}" aria-sort="${state.sortKey === key ? (state.sortDir === 1 ? "ascending" : "descending") : "none"}">${label}${state.sortKey === key ? ` <span class="dir">${state.sortDir === 1 ? "▴" : "▾"}</span>` : ""}</th>`).join("");
   let shown = 0, total = 0;
-  const out = [];
+  const items = [];
   for (const s of snap.sessions || []) {
     const all = s.panes || [];
     total += all.length;
@@ -199,32 +247,49 @@ function draw() {
     const parentLabel = /^\d+$/.test(parent) ? "#" + parent : parent.replace(/^https:\/\/github\.com\//, "");
     const sr = s.rollup || { total: all.length, merged: 0 };
     const pct = sr.total ? Math.round((sr.merged / sr.total) * 100) : 0;
-    const ths = COLS.map(([key, label]) =>
-      `<th data-sort="${key}" aria-sort="${state.sortKey === key ? (state.sortDir === 1 ? "ascending" : "descending") : "none"}">${label}${state.sortKey === key ? ` <span class="dir">${state.sortDir === 1 ? "▴" : "▾"}</span>` : ""}</th>`).join("");
-    out.push(`<section class="session rise">
-      <header class="session-head">
-        <h2><span class="s-parent">${esc(parentLabel)}</span></h2>
-        <div class="s-progress"><span>${sr.merged}/${sr.total} merged</span><div class="bar"><i style="width:${pct}%"></i></div></div>
-      </header>
-      <div class="table-wrap"><table>
-        <thead><tr>${ths}</tr></thead>
-        <tbody>${panes.map((p) => rowHtml(p, rowKey(parent, p))).join("")}</tbody>
-      </table></div>
-    </section>`);
+    items.push({
+      key: parent,
+      headHtml: `<h2><span class="s-parent">${esc(parentLabel)}</span></h2>
+        <div class="s-progress"><span>${sr.merged}/${sr.total} merged</span><div class="bar"><i style="width:${pct}%"></i></div></div>`,
+      thsHtml,
+      rows: panes.map((p) => ({ key: rowKey(parent, p), cells: rowCellsHtml(p) })),
+    });
   }
-  if (!out.length) {
-    out.push(`<section class="session"><div class="empty"><span class="ji">no panes in the breeze</span>${total ? "フィルタに一致するペインがありません" : "アクティブなセッションがありません"}</div></section>`);
+  if (!items.length) {
+    items.push({ key: "", emptyHtml: `<div class="empty"><span class="ji">no panes in the breeze</span>${total ? "フィルタに一致するペインがありません" : "アクティブなセッションがありません"}</div>` });
   }
-  $("sessions").innerHTML = out.join("");
+  reconcile($("sessions"), items, (n) => n.dataset.parent, (item) => makeSection(item, animate), patchSection);
   $("filter-count").textContent = `${shown} / ${total}`;
-  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0 };
-  $("s-total").textContent = r.total; $("s-live").textContent = r.live;
-  $("s-merged").textContent = r.merged; $("s-pending").textContent = r.pending;
-  $("s-blocked").textContent = r.blocked;
-  $("hud-fill").style.width = (r.total ? (r.merged / r.total) * 100 : 0) + "%";
-  $("status").textContent = "telemetry @ " + clock(snap.generatedAt);
-  bindRows();
-  syncDrawer();
+}
+/* 空状態(emptyHtml 持ち・key="")は .empty 1 枚のフラット構造で、従来どおり
+ * rise なし。通常セクションはスケルトンを作り patchSection が中身を埋める。 */
+const SECTION_SKELETON = '<header class="session-head"></header><div class="table-wrap"><table><thead><tr></tr></thead><tbody></tbody></table></div>';
+function makeSection(item, animate) {
+  const sec = document.createElement("section");
+  sec.className = "session" + (animate && item.emptyHtml == null ? " rise" : "");
+  sec.dataset.parent = item.key;
+  if (item.emptyHtml == null) setHtml(sec, SECTION_SKELETON);
+  return sec;
+}
+function patchSection(sec, item) {
+  if (item.emptyHtml != null) { setHtml(sec, item.emptyHtml); return; }
+  // 空状態ノードが同キーで再利用された場合(degenerate な parent="")に備え、
+  // スケルトン欠落時は組み直す。
+  if (!sec.querySelector(".session-head")) setHtml(sec, SECTION_SKELETON);
+  setHtml(sec.querySelector(".session-head"), item.headHtml);
+  setHtml(sec.querySelector("thead tr"), item.thsHtml); // ソート変更時のみ変化
+  reconcile(sec.querySelector("tbody"), item.rows, (n) => n.dataset.key, makeRow, patchRow);
+}
+function makeRow(item) {
+  const tr = document.createElement("tr");
+  tr.className = "row"; // 行には rise を付けない — セクションのみ
+  tr.dataset.key = item.key;
+  tr.tabIndex = 0;
+  return tr;
+}
+function patchRow(tr, item) {
+  setHtml(tr, item.cells);
+  tr.classList.toggle("selected", state.selected === item.key);
 }
 
 /* ---- 詳細ドロワー + peek ---- */
@@ -259,16 +324,16 @@ function renderDrawer(p) {
   $("d-tmux").textContent = p.alive ? "live" : (p.tmuxState || "stale");
   $("d-title").textContent = p.tmuxTitle || "—";
   $("d-created").textContent = p.createdAt ? p.createdAt.replace("T", " ").slice(0, 16) : "—";
-  $("d-state").innerHTML = p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>';
+  setHtml($("d-state"), p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>');
   $("d-wave").textContent = fmtWave(p) || "—";
   $("d-blockers").textContent = fmtBlockers(p);
   $("d-path").textContent = (p.worktreePath || "—") + (p.worktreeErr ? ` (${p.worktreeErr})` : "");
   $("d-branch").textContent = p.branchName || "—";
   $("d-diff").textContent = p.diffSummary || "—";
-  $("d-dirty").innerHTML = p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">unknown</span>';
-  $("d-prs").innerHTML = (p.prs && p.prs.length)
+  setHtml($("d-dirty"), p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">unknown</span>');
+  setHtml($("d-prs"), (p.prs && p.prs.length)
     ? p.prs.map((pr) => `<li>${prCell(pr)}${pr.ci ? " " + (pr.ci === "pass" ? tagHtml("t-ok", "ci pass") : pr.ci === "fail" ? tagHtml("t-err", "ci fail") : tagHtml("t-warn", "ci pending")) : ""}${pr.reviewDecision ? " " + tagHtml("", pr.reviewDecision.toLowerCase().replace(/_/g, " ")) : ""}</li>`).join("")
-    : '<li class="muted">—</li>';
+    : '<li class="muted">—</li>');
   $("d-prompt").textContent = p.prompt || "—";
   $("peek-title").textContent = `${p.paneId} — ${p.agent || "?"}`;
   startPeek(p);
@@ -322,35 +387,44 @@ async function fetchPeek(paneId) {
   }
 }
 
+/* 選択の変更は再描画しない — selected クラスの付け替えだけ行う */
+function updateSelection() {
+  for (const tr of document.querySelectorAll("tr.row.selected")) tr.classList.remove("selected");
+  const tr = rowFor(state.selected);
+  if (tr) tr.classList.add("selected");
+}
 function openDrawer(key) {
   state.selected = key;
-  draw();
-  const tr = rowFor(key);
-  if (tr) tr.focus();
+  updateSelection();
+  syncDrawer();
+  rowFor(key)?.focus();
 }
 function closeDrawer() {
   const key = state.selected;
   state.selected = null;
-  draw(); // syncDrawer hides the drawer and stops the peek
-  const tr = rowFor(key);
-  if (tr) tr.focus(); // restore focus to the originating row
+  updateSelection();
+  renderDrawer(null); // hides the drawer and stops the peek
+  rowFor(key)?.focus(); // restore focus to the originating row
 }
 
-function bindRows() {
-  document.querySelectorAll("tr.row").forEach((tr) => {
-    const open = () => openDrawer(tr.dataset.key);
-    tr.addEventListener("click", open);
-    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
-  });
-  document.querySelectorAll("th[data-sort]").forEach((th) => {
-    th.addEventListener("click", () => {
-      const k = th.dataset.sort;
-      if (state.sortKey === k) state.sortDir = -state.sortDir;
-      else { state.sortKey = k; state.sortDir = 1; }
-      draw();
-    });
-  });
-}
+/* 行クリック/ソートはイベント委譲 — 描画ごとのリスナー張り直しをしない */
+$("sessions").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return; // 後続機能(リンク化)の前提ガード: リンクは行選択にしない
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const k = th.dataset.sort;
+    if (state.sortKey === k) state.sortDir = -state.sortDir;
+    else { state.sortKey = k; state.sortDir = 1; }
+    renderSessions(state.snap, false);
+    return;
+  }
+  const tr = e.target.closest("tr.row");
+  if (tr) openDrawer(tr.dataset.key);
+});
+$("sessions").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  if (e.target.matches && e.target.matches("tr.row")) { e.preventDefault(); openDrawer(e.target.dataset.key); }
+});
 
 /* ---- テーマ(FOUC ブートストラップは index.html 側) ---- */
 function applyThemeButton() {
@@ -378,7 +452,9 @@ function setConn(up, text) {
   if (label) label.textContent = text;
 }
 
-function render(snap) { state.snap = snap; draw(); }
+/* SSE/ポーリング更新は animate=true(定常 tick は文字列一致で no-op)。
+ * フィルタ入力・ソートクリックは animate=false(rise 再生なし)。 */
+function render(snap) { state.snap = snap; draw(true); }
 
 /* ---- transport ---- */
 let pollTimer = null;
@@ -408,7 +484,7 @@ function connect() {
 }
 
 /* ---- wiring ---- */
-$("filter").addEventListener("input", (e) => { state.filter = e.target.value; draw(); });
+$("filter").addEventListener("input", (e) => { state.filter = e.target.value; renderSessions(state.snap, false); });
 $("drawer-close").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.selected) closeDrawer(); });
 
