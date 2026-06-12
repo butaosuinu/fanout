@@ -6,7 +6,10 @@
  * UI logic mirrors docs/mockups/dashboard-paper-breeze.html (the approved
  * design contract); only the transport + /api/peek wiring is real here.
  * 描画はキー付き差分パッチ(reconcile): SSE 更新ごとに innerHTML を全置換せず、
- * 変化したセクション/行だけ更新する(rise 再生・hover/フォーカス喪失の防止)。 */
+ * 変化したセクション/行だけ更新する(rise 再生・hover/フォーカス喪失の防止)。
+ * diffSummary (+X/-Y) は base ブランチ比の総作業量(コミット済み+未コミット)。
+ * pane.agentState は "running" / "done" / ""(不明)— tmux 列・ドロワー・HUD
+ * (rollup.running)に表示する。 */
 
 const token = new URLSearchParams(location.search).get("token") || "";
 const q = (path) => path + (token ? "?token=" + encodeURIComponent(token) : "");
@@ -113,7 +116,7 @@ function parseQuery(str) {
 }
 function matches(p, terms) {
   const hay = [p.issueNum, p.displayName, p.slug, p.agent, p.branchName, p.diffSummary,
-    p.dirtyState, p.issueState, p.tmuxTitle, fmtWave(p), fmtBlockers(p)].join(" ").toLowerCase();
+    p.dirtyState, p.issueState, p.tmuxTitle, p.agentState, fmtWave(p), fmtBlockers(p)].join(" ").toLowerCase();
   for (const t of terms) {
     if (t.word) { if (!hay.includes(t.word)) return false; continue; }
     const pr = prPrimary(p.prs);
@@ -231,6 +234,13 @@ function reconcile(container, items, keyOf, make, patch) {
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
 }
+/* agentState バッジ。"running" / "done" 以外(空 = pane 死亡・不明)は "" を返し、
+ * 呼び出し側が省略 or ミュート表示を選ぶ。 */
+function agentStateTag(s) {
+  if (s === "running") return tagHtml("t-warn", "running");
+  if (s === "done") return tagHtml("t-ok", "done");
+  return "";
+}
 /* blockers セル: "resolved" は全 blocker が CLOSED 確定のときだけ。state 取得に
  * 失敗した UNKNOWN 行が混ざる場合は unknown と表示する(解決済みと誤認させない)。 */
 function blockersCell(p, openBlk) {
@@ -250,6 +260,7 @@ function rowCellsHtml(p) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
+  const run = agentStateTag(p.agentState);
   return `<td class="c-issue">${linkHtml(issueUrl(p.issueNum), "#" + esc(p.issueNum))}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td>${esc(p.agent || "—")}</td>
@@ -259,7 +270,7 @@ function rowCellsHtml(p) {
     <td class="c-diff${p.worktreeErr ? " fault" : ""}" title="${esc(p.worktreeErr || "")}">${diffHtml(p)}</td>
     <td>${p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">—</span>'}</td>
     <td>${ci === "pass" ? tagHtml("t-ok", "pass") : ci === "fail" ? tagHtml("t-err", "fail") : ci === "pending" ? tagHtml("t-warn", "pending") : '<span class="muted">—</span>'}</td>
-    <td title="${esc(p.tmuxTitle || "")}"><span class="dot ${p.alive ? "on" : "off"}" aria-hidden="true"></span>${p.alive ? "live" : esc(p.tmuxState || "stale")}</td>
+    <td title="${esc(p.tmuxTitle || "")}"><span class="dot ${p.alive ? "on" : "off"}" aria-hidden="true"></span>${p.alive ? "live" : esc(p.tmuxState || "stale")}${run ? " " + run : ""}</td>
     <td>${p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">?</span>'}</td>
     <td>${prCell(pr)}</td>`;
 }
@@ -304,8 +315,9 @@ function draw(animate) {
   refreshSelectOptions(snap);
   renderSessions(snap, animate);
 
-  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0 };
+  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0, running: 0 };
   $("s-total").textContent = r.total; $("s-live").textContent = r.live;
+  $("s-running").textContent = r.running ?? 0;
   $("s-merged").textContent = r.merged; $("s-pending").textContent = r.pending;
   $("s-blocked").textContent = r.blocked;
   $("hud-fill").style.width = (r.total ? (r.merged / r.total) * 100 : 0) + "%";
@@ -417,6 +429,7 @@ function renderDrawer(p) {
   $("d-agent").textContent = p.agent || "—";
   $("d-pane").textContent = p.paneId || "—";
   $("d-tmux").textContent = p.alive ? "live" : (p.tmuxState || "stale");
+  setHtml($("d-run"), agentStateTag(p.agentState) || '<span class="muted">—</span>');
   $("d-title").textContent = p.tmuxTitle || "—";
   $("d-created").textContent = p.createdAt ? p.createdAt.replace("T", " ").slice(0, 16) : "—";
   setHtml($("d-state"), p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>');
