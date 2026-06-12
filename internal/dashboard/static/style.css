@@ -252,6 +252,43 @@ html[data-theme="dark"] .theme-toggle .ic-moon{ display:none; }
   white-space:nowrap;
 }
 
+/* ============================================================ フィルタバー(ドロップダウン+チップ) */
+.filter-bar{
+  margin-top:10px;
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+}
+.filter-bar select{
+  font-family:var(--f-code); font-size:12px;
+  color:var(--ink-60);
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:999px;
+  padding:4px 12px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+.filter-bar select:hover{ border-color:var(--asagi); color:var(--sumi); }
+.filter-bar select:focus{ outline:none; border-color:var(--asagi); color:var(--sumi); }
+#chips{ display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.chip{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--f-code); font-size:11px; font-weight:500;
+  letter-spacing:.03em;
+  color:var(--ai-deep);
+  background:color-mix(in srgb, var(--asagi) 8%, transparent);
+  border:1px solid color-mix(in srgb, var(--asagi) 35%, transparent);
+  border-radius:999px;
+  padding:2px 10px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, background-color .25s ease;
+}
+.chip .x{ color:var(--ink-40); transition:color .25s ease; }
+.chip:hover{
+  color:var(--err);
+  border-color:color-mix(in srgb, var(--err) 45%, transparent);
+  background:color-mix(in srgb, var(--err) 8%, transparent);
+}
+.chip:hover .x{ color:var(--err); }
+
 /* ============================================================ セッションカード */
 #sessions{ display:flex; flex-direction:column; gap:26px; margin-top:26px; }
 .session{

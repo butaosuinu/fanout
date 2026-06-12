@@ -100,7 +100,7 @@ function clock(iso) {
 }
 
 /* 構造化フィルタ: key:value + 自由語、すべて AND。未知キーは自由語に降格 */
-const FILTER_KEYS = new Set(["state", "agent", "wave", "ci", "dirty", "live", "issue", "pr"]);
+const FILTER_KEYS = new Set(["state", "agent", "wave", "ci", "dirty", "live", "issue", "pr", "run"]);
 function parseQuery(str) {
   const terms = [];
   for (const tok of String(str).trim().split(/\s+/)) {
@@ -119,6 +119,7 @@ function matches(p, terms) {
     const pr = prPrimary(p.prs);
     switch (t.key) {
       case "state": if ((p.tmuxState === t.value ? p.tmuxState : String(p.issueState || "").toLowerCase()) !== t.value) return false; break;
+      case "run": if ((p.agentState || "") !== t.value) return false; break;
       case "agent": if (!String(p.agent || "").toLowerCase().includes(t.value)) return false; break;
       case "wave": if (String(p.wave ?? "") !== t.value && (p.waveLabel || "").toLowerCase() !== t.value && fmtWave(p).toLowerCase() !== t.value) return false; break;
       case "ci": if (paneCI(p) !== t.value) return false; break;
@@ -129,6 +130,58 @@ function matches(p, terms) {
     }
   }
   return true;
+}
+
+/* ---- フィルタ操作 UI(ドロップダウン+チップ) ----
+ * #filter のテキストが単一の真実 — ドロップダウンは key:value トークンを書き
+ * 込むだけで手打ち構文と完全互換。チップは適用中トークン(手打ち含む)の
+ * 可視化+クリック削除。 */
+function filterTokens() {
+  return state.filter.trim().split(/\s+/).filter(Boolean);
+}
+function setFilterText(toks) {
+  const text = toks.join(" ");
+  $("filter").value = text;
+  state.filter = text;
+  renderChips();
+  renderSessions(state.snap, false); // filter-count もここで更新される
+}
+/* 同キーの既存トークンを置き換えて追加(state:open → state:closed は上書き) */
+function setToken(key, value) {
+  const prefix = key + ":";
+  const toks = filterTokens().filter((t) => !t.toLowerCase().startsWith(prefix));
+  toks.push(prefix + value);
+  setFilterText(toks);
+}
+function removeToken(tok) {
+  setFilterText(filterTokens().filter((t) => t !== tok));
+}
+function renderChips() {
+  setHtml($("chips"), filterTokens().map((t) =>
+    `<button type="button" class="chip" role="listitem" data-tok="${esc(t)}" aria-label="フィルタ ${esc(t)} を外す">${esc(t)}<span class="x" aria-hidden="true">×</span></button>`).join(""));
+}
+/* snapshot から agent / wave の選択肢を導出。agent は重複排除し、トークンが
+ * 空白 split される都合上、空白を含む値は除外。wave は数値昇順で
+ * value=N(matches() の wave case は String(p.wave) と比較)・表示 "wN"。 */
+function refreshSelectOptions(snap) {
+  const agents = new Set();
+  const waves = new Set();
+  for (const s of snap.sessions || []) {
+    for (const p of s.panes || []) {
+      const a = String(p.agent || "").trim();
+      if (a && !/\s/.test(a)) agents.add(a);
+      if (p.wave) waves.add(p.wave);
+    }
+  }
+  patchSelect($("f-agent"), "agent", [...agents].sort().map((a) => [a, a]));
+  patchSelect($("f-wave"), "wave", [...waves].sort((x, y) => x - y).map((w) => [String(w), "w" + w]));
+}
+/* select の option 差し替え。フォーカス中(=開いている可能性)は再構築しない —
+ * 2 秒 tick がユーザーの開いたドロップダウンを閉じてしまうのを防ぐ。 */
+function patchSelect(sel, label, pairs) {
+  if (document.activeElement === sel) return;
+  setHtml(sel, `<option value="">${esc(label)}</option>` +
+    pairs.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(""));
 }
 
 const SORTS = {
@@ -248,6 +301,7 @@ function draw(animate) {
   banner.hidden = !msgs.length;
   banner.textContent = msgs.join(" · ");
 
+  refreshSelectOptions(snap);
   renderSessions(snap, animate);
 
   const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0 };
@@ -525,7 +579,18 @@ function connect() {
 }
 
 /* ---- wiring ---- */
-$("filter").addEventListener("input", (e) => { state.filter = e.target.value; renderSessions(state.snap, false); });
+$("filter").addEventListener("input", (e) => { state.filter = e.target.value; renderChips(); renderSessions(state.snap, false); });
+/* ドロップダウン選択 → トークン書込 → select はプレースホルダーに戻す */
+$("filter-bar").addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-key]");
+  if (!sel || !sel.value) return;
+  setToken(sel.dataset.key, sel.value);
+  sel.value = "";
+});
+$("chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("button.chip");
+  if (chip) removeToken(chip.dataset.tok);
+});
 $("drawer-close").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.selected) closeDrawer(); });
 
