@@ -214,6 +214,15 @@ func TestMergeDegradedIssueStatuses(t *testing.T) {
 			want:     map[issueKey]issueStatus{key: cleared},
 		},
 		{
+			// Hydration failed but parent task-list rows still produced some
+			// blocker text — the previous entry (computed with the child body)
+			// is strictly better last-known data.
+			name:     "degraded entry with partial parent-row blockers restores previous",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Wave: 1, Blockers: "OPEN #7", HasOpenBlockers: true, WaveDegraded: true}},
+			want:     map[issueKey]issueStatus{key: restored},
+		},
+		{
 			name:     "fresh blocker data replaces old entry",
 			previous: map[issueKey]issueStatus{key: blocked},
 			current:  map[issueKey]issueStatus{key: unblocked},

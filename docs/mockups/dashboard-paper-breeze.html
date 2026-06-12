@@ -861,6 +861,14 @@ const SORTS = {
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
 }
+/* blockers セル: "resolved" は全 blocker が CLOSED 確定のときだけ。state 取得に
+ * 失敗した UNKNOWN 行が混ざる場合は unknown と表示する(解決済みと誤認させない)。 */
+function blockersCell(p, openBlk) {
+  if (p.blocked) return tagHtml("t-warn", openBlk + " open");
+  if (!p.blockers || !p.blockers.length) return '<span class="muted">—</span>';
+  const allClosed = p.blockers.every((b) => b.state === "CLOSED");
+  return allClosed ? '<span class="muted">resolved</span>' : '<span class="muted">unknown</span>';
+}
 /* 行の安定キー — 選択は parent#issueNum、paneId は capture 対象にだけ使う */
 function rowKey(parent, p) {
   return `${parent}#${p.issueNum}`;
@@ -875,7 +883,7 @@ function rowHtml(p, key) {
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName)}</td>
     <td>${esc(p.agent)}</td>
     <td>${fmtWave(p) ? esc(fmtWave(p)) : '<span class="muted">—</span>'}</td>
-    <td title="${esc(fmtBlockers(p))}">${p.blocked ? tagHtml("t-warn", openBlk + " open") : (p.blockers && p.blockers.length ? '<span class="muted">resolved</span>' : '<span class="muted">—</span>')}</td>
+    <td title="${esc(fmtBlockers(p))}">${blockersCell(p, openBlk)}</td>
     <td class="c-branch" title="${esc(p.branchName)}">${esc(p.branchName)}</td>
     <td class="c-diff${p.worktreeErr ? " fault" : ""}" title="${esc(p.worktreeErr || "")}">${diffHtml(p)}</td>
     <td>${p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">—</span>'}</td>

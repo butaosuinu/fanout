@@ -3,6 +3,7 @@ package dashboard
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -323,3 +324,57 @@ type errRepoUnresolved struct{}
 func (errRepoUnresolved) Error() string { return "repo unresolved" }
 
 var errRepoUnresolvedForTest error = errRepoUnresolved{}
+
+func TestMergeDegradedWaveInfos(t *testing.T) {
+	t.Parallel()
+
+	blocked := sessionview.WaveInfo{Wave: 2, WaveLabel: "wave2", Blockers: []blockers.Status{{Num: 99, State: "OPEN"}}, Blocked: true}
+	degraded := sessionview.WaveInfo{Wave: 1, Degraded: true}
+	fresh := sessionview.WaveInfo{Wave: 2, WaveLabel: "wave2", Blockers: []blockers.Status{{Num: 99, State: "CLOSED"}}}
+
+	tests := []struct {
+		name     string
+		previous map[int]sessionview.WaveInfo
+		current  map[int]sessionview.WaveInfo
+		want     map[int]sessionview.WaveInfo
+	}{
+		{
+			name:    "no previous passes current through",
+			current: map[int]sessionview.WaveInfo{101: degraded},
+			want:    map[int]sessionview.WaveInfo{101: degraded},
+		},
+		{
+			name:     "degraded row keeps previous data",
+			previous: map[int]sessionview.WaveInfo{101: blocked},
+			current:  map[int]sessionview.WaveInfo{101: degraded},
+			want:     map[int]sessionview.WaveInfo{101: blocked},
+		},
+		{
+			name:     "fresh row replaces previous",
+			previous: map[int]sessionview.WaveInfo{101: blocked},
+			current:  map[int]sessionview.WaveInfo{101: fresh},
+			want:     map[int]sessionview.WaveInfo{101: fresh},
+		},
+		{
+			name:     "row dropped by partial fetch is restored",
+			previous: map[int]sessionview.WaveInfo{101: blocked, 102: fresh},
+			current:  map[int]sessionview.WaveInfo{101: degraded},
+			want:     map[int]sessionview.WaveInfo{101: blocked, 102: fresh},
+		},
+		{
+			name:     "degraded previous does not mask newer degraded row",
+			previous: map[int]sessionview.WaveInfo{101: degraded},
+			current:  map[int]sessionview.WaveInfo{101: {Wave: 3, Degraded: true}},
+			want:     map[int]sessionview.WaveInfo{101: {Wave: 3, Degraded: true}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := mergeDegradedWaveInfos(tt.previous, tt.current)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeDegradedWaveInfos = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}

@@ -256,9 +256,33 @@ func (p *poller) refreshGH() {
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
 		info, err := gh.Waves(parent, numsByParent[parent])
 		p.cacheMu.Lock()
+		if err != nil {
+			// Partial failure: keep last-known rows instead of dropping
+			// previously confirmed blockers until the next clean pass.
+			info = mergeDegradedWaveInfos(p.waveCache[parent].info, info)
+		}
 		p.waveCache[parent] = waveCacheEntry{info: info, err: err}
 		p.cacheMu.Unlock()
 	}
+}
+
+// mergeDegradedWaveInfos overlays a degraded wave fetch onto the previous
+// cache entry: rows missing from the new graph are restored wholesale, and
+// rows whose body hydration failed keep the previous (non-degraded) data.
+// Fresh rows always win, so the merge self-heals on the next clean refresh.
+func mergeDegradedWaveInfos(previous, current map[int]sessionview.WaveInfo) map[int]sessionview.WaveInfo {
+	if len(previous) == 0 {
+		return current
+	}
+	out := make(map[int]sessionview.WaveInfo, max(len(previous), len(current)))
+	maps.Copy(out, previous)
+	for num, info := range current {
+		if prev, ok := previous[num]; ok && info.Degraded && !prev.Degraded {
+			continue // keep prev (already copied)
+		}
+		out[num] = info
+	}
+	return out
 }
 
 func (p *poller) build() sessionview.Snapshot {
