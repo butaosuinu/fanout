@@ -7,9 +7,11 @@ package team
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	// Registers the pure-Go "sqlite" database/sql driver (no cgo, no
 	// external sqlite3 binary).
@@ -58,21 +60,24 @@ var schemaStatements = []string{
   issue INTEGER PRIMARY KEY, last_read_id INTEGER NOT NULL DEFAULT 0)`,
 }
 
-// Open opens the team DB at path, creating it with mode 0600 when missing
-// (the DB lives in world-readable /tmp), and returns a pooled handle whose
-// every connection has the WAL / busy_timeout / foreign_keys preamble
-// applied via the DSN. It does not create parent directories and does not
-// run EnsureSchema; callers that may be first to touch the DB call
-// EnsureSchema next.
+// Open opens the team DB at path, creating it with mode 0600 when missing,
+// and returns a pooled handle whose every connection has the WAL /
+// busy_timeout / foreign_keys preamble applied via the DSN. The default
+// path is predictable and lives in world-writable /tmp, so an existing DB
+// file — and any pre-existing WAL/SHM sidecar — is accepted only when it is
+// a regular file owned by the current user with no group/other access;
+// anything else, including a planted symlink, fails loudly instead of
+// letting another local user read or corrupt team messages. Open does not
+// create parent directories and does not run EnsureSchema; callers that may
+// be first to touch the DB call EnsureSchema next.
 func Open(path string) (*sql.DB, error) {
-	// Pre-create with 0600 before the driver's own create path runs with
-	// umask-dependent permissions. An existing file keeps its mode.
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("create team db %s: %w", path, err)
+	if err := ensurePrivateDBFile(path); err != nil {
+		return nil, fmt.Errorf("open team db: %w", err)
 	}
-	if err = f.Close(); err != nil {
-		return nil, fmt.Errorf("create team db %s: %w", path, err)
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if err := validatePrivateFile(sidecar); err != nil {
+			return nil, fmt.Errorf("open team db %s: %w", path, err)
+		}
 	}
 
 	db, err := sql.Open(driverName, "file:"+dsnPathEscaper.Replace(path)+"?"+dsnPragmas)
@@ -84,6 +89,53 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open team db %s: %w", path, err)
 	}
 	return db, nil
+}
+
+// ensurePrivateDBFile creates path with 0600 before the driver's own create
+// path runs with umask-dependent permissions, and verifies that a
+// pre-existing file is private to the current user. O_NOFOLLOW rejects a
+// planted symlink atomically, and the fstat-based check leaves no window
+// between validation and use of the inode.
+func ensurePrivateDBFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return err
+	}
+	info, statErr := f.Stat()
+	closeErr := f.Close()
+	if statErr != nil {
+		return statErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return checkPrivate(path, info)
+}
+
+// validatePrivateFile applies checkPrivate to path when it exists; a
+// missing file is fine (SQLite creates sidecars with the DB's mode).
+func validatePrivateFile(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return checkPrivate(path, info)
+}
+
+func checkPrivate(path string, info os.FileInfo) error {
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file; remove it and retry", path)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf("%s is group/world accessible (%04o); chmod 600 or remove it", path, perm)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("%s is owned by uid %d, not the current user; remove it and retry", path, st.Uid)
+	}
+	return nil
 }
 
 // EnsureSchema creates the v1 tables and index idempotently and stamps

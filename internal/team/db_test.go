@@ -35,28 +35,69 @@ func TestOpenCreatesFileWith0600(t *testing.T) {
 	}
 }
 
-func TestOpenKeepsExistingFileMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "team.db")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
-		t.Fatalf("pre-create: %v", err)
-	}
-	// WriteFile perms are narrowed by the umask (e.g. 077 → 0600); force the
-	// fixture mode so the preservation assertion is umask-independent.
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatalf("chmod fixture: %v", err)
-	}
-	db, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o644 {
-		t.Errorf("perm = %o, want pre-existing 0644 left untouched", perm)
-	}
+// The default DB path is predictable and sits in world-writable /tmp;
+// loose or planted artifacts must be rejected, not silently adopted.
+func TestOpenRejectsUnsafeExistingFiles(t *testing.T) {
+	t.Run("group/world accessible db", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "team.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("pre-create: %v", err)
+		}
+		// Chmod explicitly: WriteFile perms are narrowed by the umask.
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatalf("chmod fixture: %v", err)
+		}
+		_, err := Open(path)
+		if err == nil || !strings.Contains(err.Error(), "group/world accessible") {
+			t.Fatalf("Open on a 0644 db = %v, want group/world accessible error", err)
+		}
+	})
+
+	t.Run("symlinked db path", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.db")
+		if err := os.WriteFile(target, nil, 0o600); err != nil {
+			t.Fatalf("pre-create target: %v", err)
+		}
+		link := filepath.Join(dir, "team.db")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		if _, err := Open(link); err == nil {
+			t.Fatal("Open through a symlink succeeded, want error")
+		}
+	})
+
+	t.Run("planted wal sidecar", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "team.db")
+		if err := os.WriteFile(path+"-wal", nil, 0o600); err != nil {
+			t.Fatalf("pre-create sidecar: %v", err)
+		}
+		if err := os.Chmod(path+"-wal", 0o644); err != nil {
+			t.Fatalf("chmod sidecar: %v", err)
+		}
+		_, err := Open(path)
+		if err == nil || !strings.Contains(err.Error(), "group/world accessible") {
+			t.Fatalf("Open with a 0644 -wal sidecar = %v, want group/world accessible error", err)
+		}
+	})
+
+	t.Run("own private db is accepted", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "team.db")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("pre-create: %v", err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatalf("chmod fixture: %v", err)
+		}
+		db, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open on own 0600 db: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
 }
 
 func TestOpenMissingParentDirErrors(t *testing.T) {
