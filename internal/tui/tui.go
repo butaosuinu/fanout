@@ -1567,13 +1567,13 @@ func loadWorktreeStats(panes []state.Pane) map[string]worktreeStatView {
 		if _, ok := stats[path]; ok {
 			continue
 		}
-		stats[path] = worktreeStatForPath(runner, path)
+		stats[path] = worktreeStatForPath(runner, path, pane.BaseBranch)
 	}
 	return stats
 }
 
-func worktreeStatForPath(runner gitstat.Runner, path string) worktreeStatView {
-	stat, err := runner.Worktree(path)
+func worktreeStatForPath(runner gitstat.Runner, path, baseRef string) worktreeStatView {
+	stat, err := runner.Worktree(path, baseRef)
 	if err != nil {
 		return worktreeStatView{Diff: "-", Dirty: "unknown", Err: err.Error()}
 	}

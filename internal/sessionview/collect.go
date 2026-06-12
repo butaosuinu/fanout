@@ -38,10 +38,12 @@ func LivePanes() func() (map[string]LivePaneInfo, error) {
 }
 
 // GitWorktreeStat returns a collector for per-pane worktree diff/dirty state.
-func GitWorktreeStat(projectRoot string) func(string) (WorktreeStat, error) {
+// baseRef is the pane's recorded base branch; gitstat diffs against its
+// merge-base ("" falls back to origin/HEAD, then HEAD).
+func GitWorktreeStat(projectRoot string) func(path, baseRef string) (WorktreeStat, error) {
 	runner := gitstat.Runner{Cwd: projectRoot}
-	return func(path string) (WorktreeStat, error) {
-		stat, err := runner.Worktree(path)
+	return func(path, baseRef string) (WorktreeStat, error) {
+		stat, err := runner.Worktree(path, baseRef)
 		if err != nil {
 			return unknownWorktreeStat(), err
 		}

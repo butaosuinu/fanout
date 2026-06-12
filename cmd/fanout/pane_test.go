@@ -16,6 +16,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 func TestShortIssueTitleTruncatesOnRuneBoundary(t *testing.T) {
@@ -53,6 +54,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Prompt:              "[fanout #83 of #81] state-idempotency-83: read /tmp/fanout-fanout-83.md and begin.",
 		Agent:               "codex",
 		Wave:                "wave5",
+		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
 	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now)
@@ -68,6 +70,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 	if got.Wave != "wave5" {
 		t.Fatalf("wave = %q, want wave5", got.Wave)
+	}
+	if got.BaseBranch != "main" {
+		t.Fatalf("baseBranch = %q, want main", got.BaseBranch)
 	}
 }
 

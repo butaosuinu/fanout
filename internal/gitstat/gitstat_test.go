@@ -47,7 +47,7 @@ func TestRunnerWorktreeCountsTrackedDiffAndPorcelainDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Runner{}.Worktree(repo)
+	got, err := Runner{}.Worktree(repo, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +67,93 @@ func TestRunnerWorktreeForcesUntrackedFilesIntoDirtyCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Runner{}.Worktree(repo)
+	got, err := Runner{}.Worktree(repo, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Additions != 0 || got.Deletions != 0 || !got.Dirty {
 		t.Fatalf("Worktree() = %+v, want +0/-0 dirty", got)
+	}
+}
+
+// initBaseRepo creates a repo whose "main" branch holds tracked.txt = "one\n"
+// and checks out a "feature" branch with one committed line ("two\n") plus one
+// uncommitted line ("three\n"): +2 vs main's merge-base, +1 vs HEAD.
+func initBaseRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "add", "tracked.txt")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "add", "tracked.txt")
+	gitTest(t, repo, "commit", "-m", "committed work")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+func TestRunnerWorktreeCountsCommittedAndUncommittedAgainstBase(t *testing.T) {
+	repo := initBaseRepo(t)
+
+	got, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 2 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +2/-0 dirty (committed + uncommitted vs main)", got)
+	}
+}
+
+func TestRunnerWorktreeFallsBackToOriginPrefixedBase(t *testing.T) {
+	repo := initBaseRepo(t)
+	// Move main behind origin/main only: the bare "main" candidate must fail
+	// and the "origin/"+base fallback must resolve.
+	gitTest(t, repo, "update-ref", "refs/remotes/origin/main", "main")
+	gitTest(t, repo, "branch", "-D", "main")
+
+	got, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 2 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +2/-0 dirty via origin/main", got)
+	}
+}
+
+func TestRunnerWorktreeEmptyBaseUsesOriginHEAD(t *testing.T) {
+	repo := initBaseRepo(t)
+	gitTest(t, repo, "update-ref", "refs/remotes/origin/main", "main")
+	gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	got, err := Runner{}.Worktree(repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 2 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +2/-0 dirty via origin/HEAD", got)
+	}
+}
+
+func TestRunnerWorktreeUnresolvableBaseFallsBackToHEAD(t *testing.T) {
+	repo := initBaseRepo(t)
+
+	got, err := Runner{}.Worktree(repo, "no-such-branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 1 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +1/-0 dirty (HEAD fallback counts only uncommitted)", got)
 	}
 }
 

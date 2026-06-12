@@ -53,7 +53,7 @@ type Collectors struct {
 	//     info is still applied (FetchWaveGraph keeps partial results).
 	// A nil collector means the GitHub tier is disabled, like a nil IssuePRs.
 	Waves        func(parent string) (map[int]WaveInfo, error)
-	WorktreeStat func(path string) (WorktreeStat, error)
+	WorktreeStat func(path, baseRef string) (WorktreeStat, error)
 	Now          func() time.Time
 }
 
@@ -141,17 +141,18 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		stat WorktreeStat
 		err  error
 	}{}
-	fetchWorktree := func(path string) (WorktreeStat, string) {
+	fetchWorktree := func(path, baseRef string) (WorktreeStat, string) {
 		path = strings.TrimSpace(path)
 		if path == "" || c.WorktreeStat == nil {
 			return unknownWorktreeStat(), ""
 		}
-		if got, ok := worktreeCache[path]; ok {
+		key := path + "\x00" + baseRef
+		if got, ok := worktreeCache[key]; ok {
 			return got.stat, errString(got.err)
 		}
-		stat, err := c.WorktreeStat(path)
+		stat, err := c.WorktreeStat(path, baseRef)
 		stat = normalizeWorktreeStat(stat)
-		worktreeCache[path] = struct {
+		worktreeCache[key] = struct {
 			stat WorktreeStat
 			err  error
 		}{stat, err}
@@ -167,7 +168,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		waveInfo := fetchWaves(parent)
 		for _, p := range panes {
 			issueState, prs := fetch(p.IssueNum)
-			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath)
+			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			alive := paneAlive(live, p.PaneID, p.WorktreePath)
 			wi := waveInfo[p.IssueNum]
 			pv := PaneView{

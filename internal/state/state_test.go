@@ -75,6 +75,7 @@ func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 		IssueNum:     83,
 		Slug:         "state-idempotency-83",
 		BranchName:   "fanout/state-idempotency-83",
+		BaseBranch:   "main",
 		PaneID:       "%42",
 		Agent:        "codex",
 		DisplayName:  "State Idempotency",
@@ -99,6 +100,47 @@ func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 	}
 	if got := decoded.Panes[0].PaneID; got != "%42" {
 		t.Fatalf("paneId = %q, want %%42", got)
+	}
+	if got := decoded.Panes[0].BaseBranch; got != "main" {
+		t.Fatalf("baseBranch = %q, want main", got)
+	}
+}
+
+func TestLoadLegacyRowWithoutBaseBranchDefaultsToEmpty(t *testing.T) {
+	root := t.TempDir()
+	legacy := `{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "81",
+      "issueNum": 83,
+      "slug": "state-idempotency-83",
+      "branchName": "fanout/state-idempotency-83",
+      "paneId": "%42",
+      "agent": "codex",
+      "displayName": "State Idempotency",
+      "worktreePath": "/repo/.fanout/worktrees/state-idempotency-83",
+      "prompt": "p",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}`
+	if err := os.MkdirAll(filepath.Dir(Path(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(root), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 1 {
+		t.Fatalf("pane count = %d, want 1", len(loaded.Panes))
+	}
+	if got := loaded.Panes[0].BaseBranch; got != "" {
+		t.Fatalf("legacy baseBranch = %q, want empty", got)
 	}
 }
 

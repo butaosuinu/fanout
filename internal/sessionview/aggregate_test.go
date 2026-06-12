@@ -63,9 +63,12 @@ func mergedPR(n int) []ghissue.PRRef {
 }
 
 func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
+	p101 := pane("100", 101, "%1")
+	p101.BaseBranch = "main"
+	gotBaseRefs := map[string]string{}
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(pane("100", 102, "%2"), pane("100", 101, "%1"), pane("90", 91, "%9")),
+		LoadState: storeOf(pane("100", 102, "%2"), p101, pane("90", 91, "%9")),
 		LivePanes: livePanesAt("%1", "%9"),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
 			if num == 101 {
@@ -74,7 +77,8 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 			return "OPEN", []ghissue.PRRef{}, nil
 		},
 		Waves: wavesNone,
-		WorktreeStat: func(path string) (WorktreeStat, error) {
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			gotBaseRefs[path] = baseRef
 			if path == "/wt/%1" {
 				return WorktreeStat{DiffSummary: "+12/-3", DirtyState: "dirty"}, nil
 			}
@@ -82,6 +86,15 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 		},
 	}
 	snap := Build("owner/name", "/root", c)
+
+	// the state row's BaseBranch must reach the worktree-stat collector;
+	// rows without one pass "" (legacy rows).
+	if gotBaseRefs["/wt/%1"] != "main" {
+		t.Fatalf("baseRef for /wt/%%1 = %q, want main", gotBaseRefs["/wt/%1"])
+	}
+	if gotBaseRefs["/wt/%2"] != "" {
+		t.Fatalf("baseRef for /wt/%%2 = %q, want empty (legacy row)", gotBaseRefs["/wt/%2"])
+	}
 
 	if snap.GeneratedAt != "2026-06-06T12:00:00Z" {
 		t.Fatalf("GeneratedAt = %q", snap.GeneratedAt)
@@ -203,7 +216,7 @@ func TestBuildWorktreeStatErrorIsPerPane(t *testing.T) {
 		LivePanes: livePanesAt(),
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 		Waves:     wavesNone,
-		WorktreeStat: func(path string) (WorktreeStat, error) {
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
 			return WorktreeStat{}, errors.New("git unavailable")
 		},
 	}

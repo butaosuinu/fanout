@@ -163,6 +163,7 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time) stat
 		IssueNum:     req.Number,
 		Slug:         req.Slug,
 		BranchName:   req.BranchName,
+		BaseBranch:   req.Worktree.BaseBranch,
 		PaneID:       paneID,
 		Agent:        req.Agent,
 		DisplayName:  paneTitle(req),

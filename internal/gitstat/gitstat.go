@@ -29,15 +29,17 @@ type Runner struct {
 	Cwd string
 }
 
-// Worktree returns additions/deletions from `git diff --shortstat HEAD` and
-// dirty state from `git status --porcelain`.
-func (r Runner) Worktree(path string) (Stat, error) {
+// Worktree returns additions/deletions from `git diff --shortstat` against the
+// merge-base with baseRef (= committed + staged + unstaged total since the
+// branch diverged) and dirty state from `git status --porcelain`. A baseRef
+// that cannot be resolved silently falls back to HEAD (uncommitted-only diff).
+func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Stat{}, fmt.Errorf("worktree path is empty")
 	}
 
-	diffOut, err := r.git("-C", path, "diff", "--shortstat", "HEAD")
+	diffOut, err := r.git("-C", path, "diff", "--shortstat", r.diffBase(path, baseRef))
 	if err != nil {
 		return Stat{}, err
 	}
@@ -49,6 +51,36 @@ func (r Runner) Worktree(path string) (Stat, error) {
 	stat := parseShortStat(string(diffOut))
 	stat.Dirty = strings.TrimSpace(string(statusOut)) != ""
 	return stat, nil
+}
+
+// diffBase resolves the ref the diff is measured against: the merge-base of
+// HEAD and the recorded base branch (trying "origin/<base>" as well), or
+// origin/HEAD for legacy rows without a recorded base. Resolution failures
+// never become errors — they fall back to "HEAD", keeping the WorktreeErr
+// contract that only the final diff/status calls may fail.
+func (r Runner) diffBase(path, baseRef string) string {
+	baseRef = strings.TrimSpace(baseRef)
+	var candidates []string
+	if baseRef != "" {
+		candidates = append(candidates, baseRef)
+		if !strings.HasPrefix(baseRef, "origin/") && !strings.HasPrefix(baseRef, "refs/") {
+			candidates = append(candidates, "origin/"+baseRef)
+		}
+	} else if out, err := r.git("-C", path, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if head := strings.TrimSpace(string(out)); head != "" {
+			candidates = append(candidates, head)
+		}
+	}
+	for _, candidate := range candidates {
+		out, err := r.git("-C", path, "merge-base", candidate, "HEAD")
+		if err != nil {
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return sha
+		}
+	}
+	return "HEAD"
 }
 
 func (r Runner) git(args ...string) ([]byte, error) {
