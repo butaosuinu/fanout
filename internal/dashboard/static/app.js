@@ -18,6 +18,36 @@ const state = { snap: null, sortKey: "issueNum", sortDir: 1, filter: "", selecte
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, "\\$&"));
 
+/* ---- GitHub リンク ---- */
+/* snap.repo("owner/name")を検証してリポジトリ URL の基底を返す。形式不一致
+ * (空・予期しない文字)なら "" — その場合リンク化せず素テキストに落とす。 */
+function ghBase() {
+  const repo = state.snap?.repo || "";
+  return /^[\w.-]+\/[\w.-]+$/.test(repo) ? "https://github.com/" + repo : "";
+}
+function issueUrl(n) {
+  const base = ghBase();
+  return base && n ? `${base}/issues/${n}` : "";
+}
+function prUrl(n) {
+  const base = ghBase();
+  return base && n ? `${base}/pull/${n}` : "";
+}
+/* Issue-mode parents are plain numbers; Project-mode parents are already a
+ * github.com Projects URL(プレフィックス検証つきパススルー)。それ以外は "". */
+function parentUrl(parent) {
+  if (/^\d+$/.test(parent)) return issueUrl(parent);
+  if (/^https:\/\/github\.com\//.test(parent)) return parent;
+  return "";
+}
+/* inner は呼び出し側で esc 済みの HTML だけを渡すこと。href は esc() を通す
+ * (Projects URL パススルー対策)。url が空なら inner をそのまま返す。token は
+ * index.html の <meta name="referrer" content="no-referrer"> により漏れない。 */
+function linkHtml(url, inner, cls) {
+  if (!url) return inner;
+  return `<a class="${cls || "gh"}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+}
+
 /* ghissue.PrimaryPR と同じ選択規則(MERGED 優先、なければ先頭)。ciStatus と
  * 同じ PR を指すよう backend とミラーしておかないと、PR 列と ci 列が別の PR を
  * 表示してしまう。 */
@@ -44,14 +74,24 @@ function paneCI(p) {
   return p.ciStatus === "-" ? "" : p.ciStatus;
 }
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
- * anything else (UNKNOWN etc.) → "<STATE> #N". */
+ * anything else (UNKNOWN etc.) → "<STATE> #N". blockerLabel はその #N を除いた
+ * 状態ラベル部分(プレーンテキスト): fmtBlockers(title 属性・検索 haystack)と
+ * ドロワーのリンク化 HTML(blockersHtml)で共用する。 */
+function blockerLabel(b) {
+  if (b.state === "OPEN") return "OPEN";
+  if (b.state === "CLOSED") return "resolved";
+  return String(b.state ?? "").trim() || "-";
+}
 function fmtBlockers(p) {
   if (!p.blockers || !p.blockers.length) return "-";
-  return p.blockers.map((b) => {
-    if (b.state === "OPEN") return `OPEN #${b.num}`;
-    if (b.state === "CLOSED") return `resolved #${b.num}`;
-    return `${String(b.state ?? "").trim() || "-"} #${b.num}`;
-  }).join(", ");
+  return p.blockers.map((b) => `${blockerLabel(b)} #${b.num}`).join(", ");
+}
+/* ドロワー用: fmtBlockers と同表記のまま各 #N を issue リンクに(repo 未解決時
+ * は linkHtml が素テキストに落とす)。 */
+function blockersHtml(p) {
+  if (!p.blockers || !p.blockers.length) return "-";
+  return p.blockers.map((b) =>
+    `${esc(blockerLabel(b))} ${linkHtml(issueUrl(b.num), "#" + esc(b.num))}`).join(", ");
 }
 function fmtWave(p) { return p.waveLabel || (p.wave ? `w${p.wave}` : ""); }
 function clock(iso) {
@@ -157,7 +197,7 @@ function rowCellsHtml(p) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
-  return `<td class="c-issue">#${esc(p.issueNum)}</td>
+  return `<td class="c-issue">${linkHtml(issueUrl(p.issueNum), "#" + esc(p.issueNum))}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td>${esc(p.agent || "—")}</td>
     <td>${fmtWave(p) ? esc(fmtWave(p)) : '<span class="muted">—</span>'}</td>
@@ -180,7 +220,8 @@ function prCell(pr) {
   const cls = pr.state === "MERGED" ? "t-merged" : pr.state === "OPEN" ? "t-open" : "";
   const draft = pr.isDraft ? " t-draft" : "";
   // PRRef carries no title on the wire (ghissue.PRRef) — number/state only.
-  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`);
+  // 行の PR 列・ドロワーの PR リスト共通で、ピルごと PR ページへのリンクに包む。
+  return linkHtml(prUrl(pr.number), tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`), "gh gh-pill");
 }
 
 const COLS = [
@@ -249,7 +290,7 @@ function renderSessions(snap, animate) {
     const pct = sr.total ? Math.round((sr.merged / sr.total) * 100) : 0;
     items.push({
       key: parent,
-      headHtml: `<h2><span class="s-parent">${esc(parentLabel)}</span></h2>
+      headHtml: `<h2><span class="s-parent">${linkHtml(parentUrl(parent), esc(parentLabel))}</span></h2>
         <div class="s-progress"><span>${sr.merged}/${sr.total} merged</span><div class="bar"><i style="width:${pct}%"></i></div></div>`,
       thsHtml,
       rows: panes.map((p) => ({ key: rowKey(parent, p), cells: rowCellsHtml(p) })),
@@ -317,7 +358,7 @@ function renderDrawer(p) {
   const drawer = $("drawer");
   if (!p) { stopPeek(); drawer.hidden = true; return; }
   drawer.hidden = false;
-  $("d-issue").textContent = "#" + p.issueNum;
+  setHtml($("d-issue"), linkHtml(issueUrl(p.issueNum), "#" + esc(p.issueNum)));
   $("d-name").textContent = p.displayName || p.slug || "—";
   $("d-agent").textContent = p.agent || "—";
   $("d-pane").textContent = p.paneId || "—";
@@ -326,7 +367,7 @@ function renderDrawer(p) {
   $("d-created").textContent = p.createdAt ? p.createdAt.replace("T", " ").slice(0, 16) : "—";
   setHtml($("d-state"), p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>');
   $("d-wave").textContent = fmtWave(p) || "—";
-  $("d-blockers").textContent = fmtBlockers(p);
+  setHtml($("d-blockers"), blockersHtml(p));
   $("d-path").textContent = (p.worktreePath || "—") + (p.worktreeErr ? ` (${p.worktreeErr})` : "");
   $("d-branch").textContent = p.branchName || "—";
   $("d-diff").textContent = p.diffSummary || "—";
@@ -409,7 +450,7 @@ function closeDrawer() {
 
 /* 行クリック/ソートはイベント委譲 — 描画ごとのリスナー張り直しをしない */
 $("sessions").addEventListener("click", (e) => {
-  if (e.target.closest("a")) return; // 後続機能(リンク化)の前提ガード: リンクは行選択にしない
+  if (e.target.closest("a")) return; // GitHub リンク(issue / PR / 親)は行選択にしない
   const th = e.target.closest("th[data-sort]");
   if (th) {
     const k = th.dataset.sort;
