@@ -60,14 +60,18 @@ type PaneView struct {
 	DirtyState   string          `json:"dirtyState"`            // dirty / clean / unknown
 	WorktreeErr  string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 
-	TmuxState string            `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
-	TmuxTitle string            `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
-	Prompt    string            `json:"prompt,omitempty"`    // state row's original prompt
-	CIStatus  string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase
-	Wave      int               `json:"wave,omitempty"`      // DAG depth, 1-based; 0 = unknown
-	WaveLabel string            `json:"waveLabel,omitempty"` // state row wave label, else parent-body heading
-	Blockers  []blockers.Status `json:"blockers"`            // always non-nil; serializes as []
-	Blocked   bool              `json:"blocked"`             // at least one blocker still OPEN
+	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
+	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
+	// AgentState は "running" / "done" / ""(pane 死亡・不明)。alive な pane は
+	// pane_current_command からの動的判定、tmux 不通時は state.json の起動時
+	// 記録値(AgentStatus)への fallback。
+	AgentState string            `json:"agentState,omitempty"`
+	Prompt     string            `json:"prompt,omitempty"`    // state row's original prompt
+	CIStatus   string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase
+	Wave       int               `json:"wave,omitempty"`      // DAG depth, 1-based; 0 = unknown
+	WaveLabel  string            `json:"waveLabel,omitempty"` // state row wave label, else parent-body heading
+	Blockers   []blockers.Status `json:"blockers"`            // always non-nil; serializes as []
+	Blocked    bool              `json:"blocked"`             // at least one blocker still OPEN
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.
@@ -76,6 +80,7 @@ type Rollup struct {
 	Merged    int  `json:"merged"`  // panes with at least one MERGED PR
 	Pending   int  `json:"pending"` // total - merged
 	Live      int  `json:"live"`    // panes whose tmux pane is alive
+	Running   int  `json:"running"` // agent プロセスがフォアグラウンドで実行中のペイン数
 	Blocked   int  `json:"blocked"` // panes whose blockers still have an OPEN issue
 	AllMerged bool `json:"allMerged"`
 }

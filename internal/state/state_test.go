@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -141,6 +142,39 @@ func TestLoadLegacyRowWithoutBaseBranchDefaultsToEmpty(t *testing.T) {
 	}
 	if got := loaded.Panes[0].BaseBranch; got != "" {
 		t.Fatalf("legacy baseBranch = %q, want empty", got)
+	}
+}
+
+func TestAgentStatusRoundTripsAndOmitsWhenEmpty(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, AgentStatus: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 84}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.Find("81", 83)
+	if !ok || got.AgentStatus != "running" {
+		t.Fatalf("agentStatus = %q (found=%v), want running", got.AgentStatus, ok)
+	}
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// omitempty: agentStatus 無しの行にはキー自体が現れない
+	if n := strings.Count(string(data), `"agentStatus"`); n != 1 {
+		t.Fatalf("agentStatus key appears %d times, want 1:\n%s", n, data)
 	}
 }
 

@@ -40,6 +40,12 @@ func livePanesAt(paneIDs ...string) func() (map[string]LivePaneInfo, error) {
 	}
 }
 
+// livePanesWith builds a LivePanes collector serving the given map verbatim,
+// for tests that need per-pane titles/commands beyond livePanesAt's defaults.
+func livePanesWith(m map[string]LivePaneInfo) func() (map[string]LivePaneInfo, error) {
+	return func() (map[string]LivePaneInfo, error) { return m, nil }
+}
+
 // wavesNone is a Waves collector that always reports a cache miss (not fetched
 // yet) — the non-degraded GitHub baseline for tests not exercising waves.
 func wavesNone(parent string) (map[int]WaveInfo, error) {
@@ -347,6 +353,82 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 	}
 	if panes[1].Alive || panes[1].TmuxTitle != "" {
 		t.Fatalf("dead pane must not carry a title: alive=%v title=%q", panes[1].Alive, panes[1].TmuxTitle)
+	}
+}
+
+func TestDeriveAgentState(t *testing.T) {
+	cases := map[string]string{
+		"":                    "",
+		"claude":              "running",
+		"codex":               "running",
+		"node":                "running",
+		"python3":             "running",
+		"-zsh":                "done", // ログインシェルは先頭 "-" 付き
+		"zsh":                 "done",
+		"/bin/bash":           "done", // tmux はパスを返すことがある
+		"/usr/local/bin/fish": "done",
+		"pwsh":                "done",
+	}
+	for command, want := range cases {
+		if got := deriveAgentState(command); got != want {
+			t.Errorf("deriveAgentState(%q) = %q, want %q", command, got, want)
+		}
+	}
+}
+
+func TestBuildAgentStateFromLiveCommand(t *testing.T) {
+	dead := pane("1", 6, "%5")
+	dead.AgentStatus = "running" // pane 死亡 + tmux 正常なら記録値は使われない
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), dead),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%1": {Path: "/wt/%1", Command: "claude"},
+			"%2": {Path: "/wt/%2", Command: "-zsh"},
+			"%3": {Path: "/wt/%3", Command: "/bin/bash"},
+			"%4": {Path: "/wt/%4"}, // コマンド listing が degrade した alive pane
+			// %5 は live set に居ない(pane 死亡)
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:    wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	wants := []string{"running", "done", "done", "", ""}
+	for i, want := range wants {
+		if panes[i].AgentState != want {
+			t.Fatalf("#%d AgentState = %q, want %q", panes[i].IssueNum, panes[i].AgentState, want)
+		}
+	}
+	if snap.Sessions[0].Rollup.Running != 1 {
+		t.Fatalf("session Rollup.Running = %d, want 1", snap.Sessions[0].Rollup.Running)
+	}
+	if snap.Rollup.Running != 1 {
+		t.Fatalf("snapshot Rollup.Running = %d, want 1", snap.Rollup.Running)
+	}
+}
+
+func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) {
+	recorded := pane("1", 2, "%1")
+	recorded.AgentStatus = "running"
+	unrecorded := pane("1", 3, "%2") // 旧 state 行: agentStatus 無し
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(recorded, unrecorded),
+		LivePanes: func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") },
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if panes[0].AgentState != "running" {
+		t.Fatalf("degraded-tmux AgentState = %q, want fallback to recorded \"running\"", panes[0].AgentState)
+	}
+	if panes[1].AgentState != "" {
+		t.Fatalf("degraded-tmux AgentState without recorded status = %q, want empty", panes[1].AgentState)
+	}
+	if snap.Rollup.Running != 1 {
+		t.Fatalf("Rollup.Running = %d, want 1 (fallback row counts)", snap.Rollup.Running)
 	}
 }
 

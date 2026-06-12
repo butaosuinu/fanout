@@ -171,6 +171,7 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time) stat
 		Prompt:       req.Prompt,
 		Wave:         req.Wave,
 		CreatedAt:    now.Format(time.RFC3339),
+		AgentStatus:  "running",
 	}
 }
 

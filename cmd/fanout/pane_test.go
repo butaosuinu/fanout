@@ -74,6 +74,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	if got.BaseBranch != "main" {
 		t.Fatalf("baseBranch = %q, want main", got.BaseBranch)
 	}
+	if got.AgentStatus != "running" {
+		t.Fatalf("agentStatus = %q, want running (起動時記録)", got.AgentStatus)
+	}
 }
 
 func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {

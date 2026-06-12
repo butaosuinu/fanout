@@ -106,18 +106,21 @@ printf '%%43\n'
 	}
 }
 
-// installLivePanesShim installs a tmux shim that answers the two
+// installLivePanesShim installs a tmux shim that answers the three
 // `list-panes -a -F <format>` calls ListLivePanes makes, dispatching on the
 // format argument ($4): pathBody for livePanePathFormat, titleBody for
-// livePaneTitleFormat. Both argvs are appended to the args file separated by
-// "---" lines.
-func installLivePanesShim(t *testing.T, pathBody, titleBody string) string {
+// livePaneTitleFormat, commandBody for livePaneCommandFormat. Each argv is
+// appended to the args file separated by "---" lines.
+func installLivePanesShim(t *testing.T, pathBody, titleBody, commandBody string) string {
 	t.Helper()
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 case "$4" in
 *pane_current_path*)
 	` + pathBody + `
+	;;
+*pane_current_command*)
+	` + commandBody + `
 	;;
 *pane_title*)
 	` + titleBody + `
@@ -127,21 +130,23 @@ esac
 	return installTmuxShim(t, script)
 }
 
-func TestListLivePanesJoinsPathAndTitleOutputsByID(t *testing.T) {
+func TestListLivePanesJoinsPathTitleAndCommandOutputsByID(t *testing.T) {
 	// Path and title are each the last field of their own listing, so embedded
-	// tabs in either survive the strings.Cut split. An empty title stays empty.
+	// tabs in either survive the strings.Cut split. An empty title stays empty,
+	// and an id absent from the command listing degrades to an empty command.
 	argsPath := installLivePanesShim(t,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n%%11\t/wt/eleven\n\n'`,
-		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`)
+		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`,
+		`printf '%%9\tclaude\n%%10\t-zsh\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child"},
-		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs"},
-		{ID: "%11", CurrentPath: "/wt/eleven", Title: ""},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", CurrentCommand: "claude"},
+		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", CurrentCommand: "-zsh"},
+		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", CurrentCommand: ""},
 	}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
@@ -150,6 +155,7 @@ func TestListLivePanesJoinsPathAndTitleOutputsByID(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_command}", "---",
 	})
 }
 
@@ -161,13 +167,14 @@ func TestListLivePanesDropsForgedPathLineAbsentFromTitleOutput(t *testing.T) {
 	// only the pre-newline fragment of its crafted path.
 	installLivePanesShim(t,
 		`printf '%%9\t/tmp/evil\n%%5\t/wt/recorded\n'`,
-		`printf '%%9\tnine\n'`)
+		`printf '%%9\tnine\n'`,
+		`printf '%%9\tnode\n%%5\tclaude\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
-	want := []LivePane{{ID: "%9", CurrentPath: "/tmp/evil", Title: "nine"}}
+	want := []LivePane{{ID: "%9", CurrentPath: "/tmp/evil", Title: "nine", CurrentCommand: "node"}}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
 	}
@@ -175,10 +182,13 @@ func TestListLivePanesDropsForgedPathLineAbsentFromTitleOutput(t *testing.T) {
 
 func TestListLivePanesReturnsTitlelessPanesWhenTitleCallFails(t *testing.T) {
 	// Titles are cosmetic, liveness is not: a failing title listing degrades
-	// to panes with empty titles instead of failing the sweep.
+	// to panes with empty titles instead of failing the sweep. The command
+	// listing is never reached on this early-return path, so commands stay
+	// empty even though the shim would answer.
 	installLivePanesShim(t,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\n'`,
-		`exit 1`)
+		`exit 1`,
+		`printf '%%9\tclaude\n%%10\tclaude\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
@@ -194,7 +204,7 @@ func TestListLivePanesReturnsTitlelessPanesWhenTitleCallFails(t *testing.T) {
 }
 
 func TestListLivePanesFailsWhenPathCallFails(t *testing.T) {
-	installLivePanesShim(t, `exit 1`, `printf '%%9\tnine\n'`)
+	installLivePanesShim(t, `exit 1`, `printf '%%9\tnine\n'`, `printf '%%9\tclaude\n'`)
 
 	if _, err := ListLivePanes(); err == nil {
 		t.Fatal("ListLivePanes() succeeded, want error when the path listing fails")
@@ -232,15 +242,15 @@ func TestParseLivePanePathsTrimsCarriageReturns(t *testing.T) {
 	}
 }
 
-func TestParseLivePaneTitles(t *testing.T) {
+func TestParseLivePaneField(t *testing.T) {
 	input := "%1\tfanout: child #12\n" +
-		"%2\ttitle\twith\ttabs\n" + // title is the last field, so its tabs survive
-		"%3\t\n" + // empty title kept
-		"no-tab-at-all\n" + // missing title field: skipped
+		"%2\ttitle\twith\ttabs\n" + // field is the last value, so its tabs survive
+		"%3\t\n" + // empty field kept
+		"no-tab-at-all\n" + // missing field: skipped
 		"not-an-id\ttitle\n" + // non-%N id: skipped
 		"%6\tcrlf title\r\n"
 
-	got := parseLivePaneTitles(input)
+	got := parseLivePaneField(input)
 
 	want := map[string]string{
 		"%1": "fanout: child #12",
@@ -249,7 +259,43 @@ func TestParseLivePaneTitles(t *testing.T) {
 		"%6": "crlf title",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseLivePaneTitles() = %#v, want %#v", got, want)
+		t.Fatalf("parseLivePaneField() = %#v, want %#v", got, want)
+	}
+}
+
+func TestListLivePanesDegradesToEmptyCommandsWhenCommandCallFails(t *testing.T) {
+	// コマンドは表示専用で liveness の根拠ではない: コマンド listing の失敗は
+	// 空コマンドへ degrade し、sweep 自体は成功する。
+	installLivePanesShim(t,
+		`printf '%%9\t/wt/nine\n'`,
+		`printf '%%9\tnine\n'`,
+		`exit 1`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{{ID: "%9", CurrentPath: "/wt/nine", Title: "nine", CurrentCommand: ""}}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
+	}
+}
+
+func TestListLivePanesDropsCommandRowsForUnjoinedIDs(t *testing.T) {
+	// path+title のクロスチェックを通過していない id のコマンド行は捨てられる:
+	// コマンド listing は検証済み id のルックアップ専用で、pane を生まない。
+	installLivePanesShim(t,
+		`printf '%%9\t/wt/nine\n'`,
+		`printf '%%9\tnine\n'`,
+		`printf '%%9\tclaude\n%%5\tforged\n'`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{{ID: "%9", CurrentPath: "/wt/nine", Title: "nine", CurrentCommand: "claude"}}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
 	}
 }
 
@@ -779,13 +825,14 @@ func TestListLivePanesDropsDuplicateForgedIDs(t *testing.T) {
 	// because the genuine row cannot be told apart from the forged one.
 	installLivePanesShim(t,
 		`printf '%%5\t/real/path\n%%5\t/wt/recorded\n%%7\t/other\n'`,
-		`printf '%%5\treal title\n%%7\tother title\n'`)
+		`printf '%%5\treal title\n%%7\tother title\n'`,
+		`printf '%%5\tclaude\n%%7\tvim\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
-	want := []LivePane{{ID: "%7", CurrentPath: "/other", Title: "other title"}}
+	want := []LivePane{{ID: "%7", CurrentPath: "/other", Title: "other title", CurrentCommand: "vim"}}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want only %%7 (duplicate %%5 dropped): %#v", panes, want)
 	}

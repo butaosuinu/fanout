@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	userShellExpr       = `"${SHELL:-/bin/sh}"`
-	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
-	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
-	livePaneTitleFormat = "#{pane_id}\t#{pane_title}"
-	paneAlternateFormat = "#{alternate_on}"
+	userShellExpr         = `"${SHELL:-/bin/sh}"`
+	paneListFormat        = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+	livePanePathFormat    = "#{pane_id}\t#{pane_current_path}"
+	livePaneTitleFormat   = "#{pane_id}\t#{pane_title}"
+	livePaneCommandFormat = "#{pane_id}\t#{pane_current_command}"
+	paneAlternateFormat   = "#{alternate_on}"
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -76,11 +77,15 @@ func BuildPaneLaunchCommand(agentCommand string) string {
 }
 
 // LivePane is one live tmux pane: its server-scoped id, the cwd of its
-// foreground process, and its pane title (empty when tmux reports none).
+// foreground process, its pane title (empty when tmux reports none), and its
+// foreground command name (empty when the command listing failed).
 type LivePane struct {
 	ID          string
 	CurrentPath string
 	Title       string
+	// CurrentCommand は #{pane_current_command}(フォアグラウンドプロセス名)。
+	// コマンド listing が失敗したとき・join 済み id に対応する行が無いときは空。
+	CurrentCommand string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
@@ -90,10 +95,10 @@ type LivePane struct {
 // row live when an unrelated new pane reuses the same %N. An error (e.g. tmux
 // absent) lets callers degrade.
 //
-// It issues two list-panes calls (livePanePathFormat then livePaneTitleFormat)
-// so each variable-content field is last on its line and survives strings.Cut
-// with embedded tabs intact — both pane paths and pane titles may legally
-// contain tabs.
+// It issues three list-panes calls (livePanePathFormat, livePaneTitleFormat,
+// then livePaneCommandFormat) so each variable-content field is last on its
+// line and survives strings.Cut with embedded tabs intact — both pane paths
+// and pane titles may legally contain tabs.
 //
 // Injection defense: pane_current_path is just a directory name, so a crafted
 // path containing a newline can forge whole extra lines in the path listing.
@@ -118,7 +123,18 @@ func ListLivePanes() ([]LivePane, error) {
 	if err != nil {
 		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
 	}
-	titles := parseLivePaneTitles(string(titleOut))
+	titles := parseLivePaneField(string(titleOut))
+	// 第 3 の listing: 各 pane のフォアグラウンドコマンド。ダッシュボードが
+	// agent 実行中/完了の表示判定に使う。タイトル同様コマンドは表示専用で
+	// liveness の根拠ではないので、失敗は空コマンドへ degrade する。join 規則
+	// も不変: path+title のクロスチェックが唯一の liveness 根拠であり、コマンド
+	// はそれを通過した検証済み id のルックアップのみ(欠落は "")。したがって
+	// 偽装された pane_current_command は最悪でも表示上の agent 状態を誤らせる
+	// だけで、stale な pane を live に見せることはできない。
+	commands := map[string]string{}
+	if commandOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneCommandFormat).Output(); err == nil {
+		commands = parseLivePaneField(string(commandOut))
+	}
 	// A real tmux listing emits each pane id exactly once; a duplicate means a
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
@@ -139,6 +155,7 @@ func ListLivePanes() ([]LivePane, error) {
 			continue
 		}
 		pane.Title = title
+		pane.CurrentCommand = commands[pane.ID]
 		joined = append(joined, pane)
 	}
 	return joined, nil
@@ -163,22 +180,25 @@ func parseLivePanePaths(out string) []LivePane {
 	return panes
 }
 
-// parseLivePaneTitles parses livePaneTitleFormat lines into an id-to-title
-// map. The title is the last field, so strings.Cut keeps any embedded tabs
-// intact. tmux rejects newlines in pane titles, so unlike pane paths a title
-// cannot forge extra lines here; ids failing the %N check are skipped anyway
-// for symmetry with parseLivePanePaths.
-func parseLivePaneTitles(out string) map[string]string {
-	titles := make(map[string]string)
+// parseLivePaneField parses "#{pane_id}\t<field>" lines — the shared parser
+// for livePaneTitleFormat and livePaneCommandFormat — into an id-to-field
+// map. The field is the last value on its line, so strings.Cut keeps any
+// embedded tabs intact.
+// tmux rejects newlines in pane titles, and a pane_current_command is a
+// process name, so unlike pane paths neither field can forge extra lines
+// here; ids failing the %N check are skipped anyway for symmetry with
+// parseLivePanePaths.
+func parseLivePaneField(out string) map[string]string {
+	fields := make(map[string]string)
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimRight(line, "\r")
-		id, title, ok := strings.Cut(line, "\t")
+		id, field, ok := strings.Cut(line, "\t")
 		if !ok || !paneIDPattern.MatchString(id) {
 			continue
 		}
-		titles[id] = title
+		fields[id] = field
 	}
-	return titles
+	return fields
 }
 
 // BindDashboardKey registers a tmux key binding (under the prefix table) that

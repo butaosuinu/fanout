@@ -21,6 +21,9 @@ type LivePaneInfo struct {
 	Path string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
+	// Command は pane のフォアグラウンドコマンド(#{pane_current_command})。
+	// tmux から取得できなかったときは ""。
+	Command string
 }
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
@@ -197,6 +200,13 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			}
 			if alive {
 				pv.TmuxTitle = live[p.PaneID].Title
+				pv.AgentState = deriveAgentState(live[p.PaneID].Command)
+			} else if snap.Degraded.Tmux {
+				// tmux 不通時は動的判定ができないので、起動時に state.json へ
+				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
+				// pane 死亡かつ tmux 正常のときは tmux 列が stale を伝えるので
+				// 空のままにする。
+				pv.AgentState = p.AgentStatus
 			}
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
@@ -302,6 +312,29 @@ func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 	}
 }
 
+// shellCommands は deriveAgentState が「agent は終了してシェルに戻った」と
+// みなすフォアグラウンドコマンド名の集合。
+var shellCommands = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true,
+	"ksh": true, "tcsh": true, "csh": true, "ash": true, "nu": true, "pwsh": true,
+}
+
+// deriveAgentState は tmux の #{pane_current_command} から agent の実行状態を
+// 導く。正規化として先頭の "-" を剥がし basename を小文字化する(ログイン
+// シェルは "-zsh" のような形で、tmux はフルパスを返すことがある)。シェル集合
+// に含まれれば "done"(agent は終了してシェルに戻った)、空文字なら ""(不明)、
+// それ以外(claude / codex / node / python 等)は "running"。
+func deriveAgentState(command string) string {
+	if command == "" {
+		return ""
+	}
+	name := strings.ToLower(filepath.Base(strings.TrimPrefix(command, "-")))
+	if shellCommands[name] {
+		return "done"
+	}
+	return "running"
+}
+
 // normalizeBlockers keeps PaneView.Blockers non-nil so it serializes as []
 // rather than null (the SPA iterates it unconditionally).
 func normalizeBlockers(rows []blockers.Status) []blockers.Status {
@@ -336,6 +369,9 @@ func accumulate(r *Rollup, pv PaneView) {
 	}
 	if pv.Alive {
 		r.Live++
+	}
+	if pv.AgentState == "running" {
+		r.Running++
 	}
 	if pv.Blocked {
 		r.Blocked++
