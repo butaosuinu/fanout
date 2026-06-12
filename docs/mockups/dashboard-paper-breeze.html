@@ -791,7 +791,8 @@ function ciWorst(prs) {
 /* Pane-level CI — the wire's p.ciStatus (primary-PR CI, lowercase, "-" when no
  * PR); worst-of-prs is only a fallback for snapshots predating the field. */
 function paneCI(p) {
-  return p.ciStatus && p.ciStatus !== "-" ? p.ciStatus : ciWorst(p.prs);
+  if (p.ciStatus == null || p.ciStatus === "") return ciWorst(p.prs);
+  return p.ciStatus === "-" ? "" : p.ciStatus;
 }
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
  * anything else (UNKNOWN etc.) → "<STATE> #N". */

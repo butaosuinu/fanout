@@ -44,8 +44,8 @@ type WaveGraph struct {
 // child fetches already returned, so only out-of-set blockers resolve lazily
 // through IssueState.
 func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (WaveGraph, error) {
-	children, parentBody, includeParentRows, loadErr := fetchWaveChildren(c, parent, recordedNums)
-	loadErr = errors.Join(loadErr, hydrateIssueBodies(c, children))
+	children, parentBody, includeParentRows, hydrated, loadErr := fetchWaveChildren(c, parent, recordedNums)
+	loadErr = errors.Join(loadErr, hydrateIssueBodies(c, children, hydrated))
 
 	// Pre-seed with in-set states: SubIssueList/IssueDetail already carry State,
 	// so re-fetching it per blocker would burn gh API budget for nothing. Empty
@@ -95,12 +95,15 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 
 // fetchWaveChildren resolves the child set and reports whether parent
 // task-list rows participate in blocker parsing. Non-numeric parents have no
-// parent issue to scan, so only recorded pane issues remain.
-func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([]ghissue.Issue, string, bool, error) {
+// parent issue to scan, so only recorded pane issues remain. hydrated marks
+// children that already came from IssueDetail so hydration does not re-fetch
+// issues whose body is genuinely empty.
+func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([]ghissue.Issue, string, bool, map[int]bool, error) {
+	hydrated := map[int]bool{}
 	parentNum, convErr := strconv.Atoi(parent)
 	if convErr != nil {
-		children, err := loadIssueDetails(c, recordedNums, map[int]bool{})
-		return children, "", false, err
+		children, err := loadIssueDetails(c, recordedNums, map[int]bool{}, hydrated)
+		return children, "", false, hydrated, err
 	}
 
 	var loadErr error
@@ -118,17 +121,19 @@ func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([
 	for _, issue := range subIssues {
 		existing[issue.Number] = true
 	}
-	taskExtra, taskErr := loadIssueDetails(c, ghissue.TaskListNumbers(parentBody), existing)
-	recordedExtra, recordedErr := loadIssueDetails(c, recordedNums, existing)
+	taskExtra, taskErr := loadIssueDetails(c, ghissue.TaskListNumbers(parentBody), existing, hydrated)
+	recordedExtra, recordedErr := loadIssueDetails(c, recordedNums, existing, hydrated)
 	children := ghissue.MergeExtra(subIssues, append(taskExtra, recordedExtra...))
 	assignWaveLabels(children, ghissue.TaskListWaves(parentBody))
-	return children, parentBody, true, errors.Join(loadErr, taskErr, recordedErr)
+	return children, parentBody, true, hydrated, errors.Join(loadErr, taskErr, recordedErr)
 }
 
 // loadIssueDetails fetches IssueDetail for each num not already in existing,
 // joining per-issue failures and keeping the rest. Loaded nums are marked in
-// existing; failed ones are not, so a later source may retry them.
-func loadIssueDetails(c IssueGraphClient, nums []int, existing map[int]bool) ([]ghissue.Issue, error) {
+// existing (failed ones are not, so a later source may retry them) and in
+// hydrated, because IssueDetail returns the full issue — re-fetching it during
+// hydration would double the gh calls for genuinely body-less issues.
+func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated map[int]bool) ([]ghissue.Issue, error) {
 	extra := []ghissue.Issue{}
 	var loadErr error
 	for _, num := range nums {
@@ -142,17 +147,20 @@ func loadIssueDetails(c IssueGraphClient, nums []int, existing map[int]bool) ([]
 		}
 		extra = append(extra, detail)
 		existing[num] = true
+		hydrated[num] = true
 	}
 	return extra, loadErr
 }
 
 // hydrateIssueBodies fills bodies (and missing titles/states) the Sub-issues
-// API leaves blank. Per-issue failures are joined and the rest hydrated — a
-// degraded row beats a blank dashboard (the TUI used to hard-fail here).
-func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue) error {
+// API leaves blank. Issues in hydrated already came from IssueDetail and are
+// skipped even when their body is genuinely empty. Per-issue failures are
+// joined and the rest hydrated — a degraded row beats a blank dashboard (the
+// TUI used to hard-fail here).
+func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map[int]bool) error {
 	var loadErr error
 	for i := range issues {
-		if issues[i].Body != "" {
+		if issues[i].Body != "" || hydrated[issues[i].Number] {
 			continue
 		}
 		detail, err := c.IssueDetail(issues[i].Number)

@@ -29,11 +29,14 @@ function ciWorst(prs) {
   }
   return worst;
 }
-/* Pane-level CI — the wire's p.ciStatus (primary-PR CI, lowercase, "-" when no
- * PR) so the dashboard agrees with the TUI; worst-of-prs is only a fallback
- * for snapshots predating the field. */
+/* Pane-level CI — the wire's p.ciStatus (primary-PR CI, lowercase, "-" when
+ * the primary PR has no CI) so the dashboard agrees with the TUI. "-" means
+ * "no CI", not "unknown": falling back to worst-of-prs there would surface a
+ * non-primary PR's failure. The fallback is only for snapshots predating the
+ * field entirely. */
 function paneCI(p) {
-  return p.ciStatus && p.ciStatus !== "-" ? p.ciStatus : ciWorst(p.prs);
+  if (p.ciStatus == null || p.ciStatus === "") return ciWorst(p.prs);
+  return p.ciStatus === "-" ? "" : p.ciStatus;
 }
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
  * anything else (UNKNOWN etc.) → "<STATE> #N". */

@@ -26,6 +26,7 @@ type fakeGraphClient struct {
 	subIssuesErr  error
 	details       map[int]ghissue.Issue
 	detailErr     map[int]error
+	detailCalls   map[int]int
 	states        map[int]string
 	stateCalls    map[int]int
 }
@@ -45,6 +46,10 @@ func (f *fakeGraphClient) SubIssueList(int) ([]ghissue.Issue, error) {
 }
 
 func (f *fakeGraphClient) IssueDetail(num int) (ghissue.Issue, error) {
+	if f.detailCalls == nil {
+		f.detailCalls = map[int]int{}
+	}
+	f.detailCalls[num]++
 	if err := f.detailErr[num]; err != nil {
 		return ghissue.Issue{}, err
 	}
@@ -279,5 +284,30 @@ func TestFetchWaveGraphCachesExternalBlockerStates(t *testing.T) {
 		if got := graph.Info[num].Blockers; !reflect.DeepEqual(got, want) {
 			t.Fatalf("Info[%d].Blockers = %#v, want %#v", num, got, want)
 		}
+	}
+}
+
+func TestFetchWaveGraphSkipsRehydratingDetailLoadedChildren(t *testing.T) {
+	t.Parallel()
+
+	// 201 comes from a recorded pane via IssueDetail with a genuinely empty
+	// body; hydration must not fetch it a second time.
+	client := &fakeGraphClient{
+		parentBody: "",
+		subIssues:  []ghissue.Issue{{Number: 101, Title: "sub", State: "OPEN", Body: "x"}},
+		details: map[int]ghissue.Issue{
+			201: {Number: 201, Title: "recorded", State: "OPEN", Body: ""},
+		},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", []int{201})
+	if err != nil {
+		t.Fatalf("FetchWaveGraph() error = %v", err)
+	}
+	if got := client.detailCalls[201]; got != 1 {
+		t.Fatalf("IssueDetail(#201) calls = %d, want 1 (no re-hydration)", got)
+	}
+	if _, ok := graph.Info[201]; !ok {
+		t.Fatalf("Info missing #201: %#v", graph.Info)
 	}
 }
