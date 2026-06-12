@@ -40,6 +40,11 @@ func TestOpenKeepsExistingFileMode(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatalf("pre-create: %v", err)
 	}
+	// WriteFile perms are narrowed by the umask (e.g. 077 → 0600); force the
+	// fixture mode so the preservation assertion is umask-independent.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod fixture: %v", err)
+	}
 	db, err := Open(path)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

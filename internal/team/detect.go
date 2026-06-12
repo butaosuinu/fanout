@@ -44,52 +44,78 @@ type Identity struct {
 
 // Sentinel errors for the detection taxonomy; match with errors.Is.
 var (
-	ErrNotInTmux    = errors.New("not inside a tmux pane (TMUX_PANE is unset)")
-	ErrPaneNotFound = errors.New("current tmux pane is not recorded in fanout state")
+	ErrNotInTmux    = errors.New("cannot detect the invoking pane: TMUX_PANE is unset and the working directory is not a fanout worktree")
+	ErrPaneNotFound = errors.New("current pane is not recorded in fanout state")
 )
 
-// IdentifyPane is the pure detection core: it resolves paneID against an
-// already-loaded state store. Rows are scanned newest-first because state
-// appends in launch order and tmux reuses pane ids across server restarts,
-// so a stale row can share a pane id with the live pane. The matched row's
-// recorded IssueNum/Parent are authoritative (cmd/fanout records them from
-// the same request that built the prompt); the prompt-tag parse only fills
-// fields a degenerate row is missing. A missing state file yields
-// ErrPaneNotFound because state.Load returns an empty store for absent
-// files.
-func IdentifyPane(paneID string, st state.Store) (Identity, error) {
-	if paneID == "" {
+// IdentifyPane is the pure detection core: it resolves the invoking pane
+// against an already-loaded state store. worktree, when non-empty, is the
+// fanout child worktree the caller runs in and is the primary key: a
+// WorktreePath match identifies the pane even after tmux restarts. paneID is
+// the fallback; rows whose recorded WorktreePath conflicts with the live
+// worktree are skipped because tmux reuses pane ids across server restarts
+// and such a row belongs to a dead pane. Rows are scanned newest-first
+// (state appends in launch order). The matched row's recorded
+// IssueNum/Parent are authoritative; the prompt-tag parse only fills fields
+// a degenerate row is missing. A missing state file yields ErrPaneNotFound
+// because state.Load returns an empty store for absent files.
+func IdentifyPane(paneID, worktree string, st state.Store) (Identity, error) {
+	if paneID == "" && worktree == "" {
 		return Identity{}, ErrNotInTmux
+	}
+	if worktree != "" {
+		for _, pane := range slices.Backward(st.Panes) {
+			if pane.WorktreePath == worktree {
+				return paneIdentity(pane), nil
+			}
+		}
+	}
+	if paneID == "" {
+		return Identity{}, fmt.Errorf("worktree %s: %w", worktree, ErrPaneNotFound)
 	}
 	for _, pane := range slices.Backward(st.Panes) {
 		if pane.PaneID != paneID {
 			continue
 		}
-		id := Identity{Issue: pane.IssueNum, Parent: pane.Parent, Pane: pane}
-		if id.Issue <= 0 || id.Parent == "" {
-			if n, parent, ok := ParseFanoutTag(pane.Prompt); ok {
-				if id.Issue <= 0 {
-					id.Issue = n
-				}
-				if id.Parent == "" {
-					id.Parent = parent
-				}
-			}
+		if worktree != "" && pane.WorktreePath != "" && pane.WorktreePath != worktree {
+			continue
 		}
-		return id, nil
+		return paneIdentity(pane), nil
 	}
 	return Identity{}, fmt.Errorf("pane %s: %w", paneID, ErrPaneNotFound)
 }
 
-// Detect resolves the invoking pane's identity from the environment:
-// TMUX_PANE names the pane, and the state file comes from FANOUT_STATE_PATH
-// when set (same semantics as cmd/fanout) or from the owning project root's
-// .fanout/state.json (OwnerProjectRoot), so detection also works from
-// inside a child worktree, where the toplevel is the worktree, not the
-// owner.
+func paneIdentity(pane state.Pane) Identity {
+	id := Identity{Issue: pane.IssueNum, Parent: pane.Parent, Pane: pane}
+	if id.Issue <= 0 || id.Parent == "" {
+		if n, parent, ok := ParseFanoutTag(pane.Prompt); ok {
+			if id.Issue <= 0 {
+				id.Issue = n
+			}
+			if id.Parent == "" {
+				id.Parent = parent
+			}
+		}
+	}
+	return id
+}
+
+// Detect resolves the invoking pane's identity from the environment. Two
+// signals feed IdentifyPane: TMUX_PANE names the pane, and the current git
+// toplevel — when it sits at the fanout child-worktree convention — names
+// the worktree, which keeps detection correct across tmux server restarts
+// and even works from a plain shell inside the worktree. The state file
+// comes from FANOUT_STATE_PATH when set (same semantics as cmd/fanout) or
+// from the owning project root's .fanout/state.json (OwnerProjectRoot).
 func Detect() (Identity, error) {
 	paneID := os.Getenv("TMUX_PANE")
-	if paneID == "" {
+	worktree := ""
+	if top, err := gitToplevel(); err == nil {
+		if _, ok := childWorktreeOwner(top); ok {
+			worktree = top
+		}
+	}
+	if paneID == "" && worktree == "" {
 		return Identity{}, ErrNotInTmux
 	}
 	statePath := os.Getenv(fanoutStatePathEnv)
@@ -108,7 +134,7 @@ func Detect() (Identity, error) {
 	if err != nil {
 		return Identity{}, fmt.Errorf("detect fanout pane: %w", err)
 	}
-	return IdentifyPane(paneID, st)
+	return IdentifyPane(paneID, worktree, st)
 }
 
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
@@ -122,6 +148,17 @@ const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 // points at the original checkout that holds no fanout state. Anywhere else
 // the toplevel itself is the owner.
 func OwnerProjectRoot() (string, error) {
+	top, err := gitToplevel()
+	if err != nil {
+		return "", err
+	}
+	if owner, ok := childWorktreeOwner(top); ok {
+		return owner, nil
+	}
+	return top, nil
+}
+
+func gitToplevel() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("current directory is not inside a git work tree")
@@ -130,9 +167,16 @@ func OwnerProjectRoot() (string, error) {
 	if top == "" {
 		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
 	}
+	return top, nil
+}
+
+// childWorktreeOwner reports whether top sits at the fanout child-worktree
+// convention <owner>/.fanout/worktrees/<slug> (internal/worktree) and
+// returns the owner root when it does.
+func childWorktreeOwner(top string) (string, bool) {
 	parent := filepath.Dir(top)
 	if filepath.Base(parent) == "worktrees" && filepath.Base(filepath.Dir(parent)) == ".fanout" {
-		return filepath.Dir(filepath.Dir(parent)), nil
+		return filepath.Dir(filepath.Dir(parent)), true
 	}
-	return top, nil
+	return "", false
 }

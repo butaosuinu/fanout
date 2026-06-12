@@ -2,6 +2,7 @@ package team
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,16 +85,24 @@ func TestIdentifyPane(t *testing.T) {
 		PaneID:   "%9",
 		Prompt:   "do stuff",
 	}
+	inWorktree := state.Pane{
+		Parent:       "68",
+		IssueNum:     70,
+		PaneID:       "%2",
+		WorktreePath: "/repo/.fanout/worktrees/msg-cli-70",
+		Prompt:       "[fanout #70 of #68] msg-cli-70: t. read /tmp/y.md and begin.",
+	}
 
 	tests := []struct {
 		name       string
 		paneID     string
+		worktree   string
 		store      state.Store
 		wantIssue  int
 		wantParent string
 		wantErr    error
 	}{
-		{name: "empty pane id", paneID: "", store: state.Store{}, wantErr: ErrNotInTmux},
+		{name: "no pane id and no worktree", paneID: "", store: state.Store{}, wantErr: ErrNotInTmux},
 		{
 			name:       "recorded row wins",
 			paneID:     "%5",
@@ -136,10 +145,48 @@ func TestIdentifyPane(t *testing.T) {
 			wantIssue:  42,
 			wantParent: "@manual",
 		},
+		{
+			name:       "worktree match beats pane id",
+			paneID:     "%5",
+			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
+			store:      state.Store{Panes: []state.Pane{recorded, inWorktree}},
+			wantIssue:  70,
+			wantParent: "68",
+		},
+		{
+			name:       "worktree alone identifies without pane id",
+			paneID:     "",
+			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
+			store:      state.Store{Panes: []state.Pane{inWorktree}},
+			wantIssue:  70,
+			wantParent: "68",
+		},
+		{
+			name:     "worktree alone without matching row",
+			paneID:   "",
+			worktree: "/repo/.fanout/worktrees/other",
+			store:    state.Store{Panes: []state.Pane{inWorktree}},
+			wantErr:  ErrPaneNotFound,
+		},
+		{
+			name:     "reused pane id with conflicting worktree is rejected",
+			paneID:   "%2",
+			worktree: "/repo/.fanout/worktrees/other",
+			store:    state.Store{Panes: []state.Pane{inWorktree}},
+			wantErr:  ErrPaneNotFound,
+		},
+		{
+			name:       "pane id match tolerates rows without a recorded worktree",
+			paneID:     "%5",
+			worktree:   "/repo/.fanout/worktrees/other",
+			store:      state.Store{Panes: []state.Pane{recorded}},
+			wantIssue:  69,
+			wantParent: "68",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id, err := IdentifyPane(tt.paneID, tt.store)
+			id, err := IdentifyPane(tt.paneID, tt.worktree, tt.store)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("IdentifyPane error = %v, want %v", err, tt.wantErr)
@@ -153,14 +200,14 @@ func TestIdentifyPane(t *testing.T) {
 				t.Errorf("IdentifyPane = (#%d of %q), want (#%d of %q)",
 					id.Issue, id.Parent, tt.wantIssue, tt.wantParent)
 			}
-			if id.Pane.PaneID != tt.paneID {
-				t.Errorf("Identity.Pane.PaneID = %q, want %q", id.Pane.PaneID, tt.paneID)
-			}
 		})
 	}
 }
 
 func TestDetectWithStatePathOverride(t *testing.T) {
+	// A bare temp dir is not a git work tree, so detection rests on
+	// TMUX_PANE + FANOUT_STATE_PATH alone regardless of where tests run.
+	t.Chdir(t.TempDir())
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	fixture := `{"schemaVersion":1,"panes":[{"parent":"68","issueNum":69,"slug":"s","paneId":"%5","prompt":"[fanout #69 of #68] s: t. read /tmp/x.md and begin."}]}`
 	if err := os.WriteFile(statePath, []byte(fixture), 0o600); err != nil {
@@ -178,10 +225,58 @@ func TestDetectWithStatePathOverride(t *testing.T) {
 	}
 }
 
-func TestDetectOutsideTmux(t *testing.T) {
+func TestDetectOutsideTmuxAndWorktree(t *testing.T) {
+	t.Chdir(t.TempDir())
 	t.Setenv("TMUX_PANE", "")
 	if _, err := Detect(); !errors.Is(err, ErrNotInTmux) {
 		t.Fatalf("Detect outside tmux = %v, want ErrNotInTmux", err)
+	}
+}
+
+// Inside a fanout child worktree the worktree path alone identifies the
+// pane — even from a plain shell without TMUX_PANE, and across tmux server
+// restarts that reassign pane ids.
+func TestDetectFromWorktreeWithoutTmuxPane(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	owner := t.TempDir()
+	runGit(t, owner, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(owner, "README.md"), []byte("x\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, owner, "add", ".")
+	runGit(t, owner, "commit", "-m", "init")
+	child := filepath.Join(owner, ".fanout", "worktrees", "s-7")
+	runGit(t, owner, "worktree", "add", child, "-b", "s-7")
+
+	// Record the worktree path the way fanout does, matching what git
+	// reports as the toplevel (symlinks resolved, e.g. /var -> /private/var
+	// on macOS).
+	recordedPath, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", child, err)
+	}
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	fixture := fmt.Sprintf(
+		`{"schemaVersion":1,"panes":[{"parent":"3","issueNum":7,"slug":"s-7","paneId":"%%0","worktreePath":%q,"prompt":"[fanout #7 of #3] s-7: t. read /tmp/x.md and begin."}]}`,
+		recordedPath,
+	)
+	if err = os.WriteFile(statePath, []byte(fixture), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	t.Chdir(child)
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv(fanoutStatePathEnv, statePath)
+
+	id, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if id.Issue != 7 || id.Parent != "3" {
+		t.Errorf("Detect = (#%d of %q), want (#7 of \"3\")", id.Issue, id.Parent)
 	}
 }
 
