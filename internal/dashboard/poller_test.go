@@ -407,3 +407,37 @@ func TestRefreshGHFetchesUncachedParentDespiteWaveThrottle(t *testing.T) {
 		t.Fatalf("Waves(200) calls = %d, want 1 (uncached parent bypasses throttle)", gh.waveCalls["200"])
 	}
 }
+
+func TestRefreshGHFetchesNewIssueUnderCachedParentDespiteThrottle(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = time.Hour
+	p.refreshGH()
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("Waves(100) calls = %d, want 1 (first pass)", gh.waveCalls["100"])
+	}
+
+	// A NEW issue under the already-cached parent must trigger a refetch;
+	// once attempted, further ticks with the same nums stay throttled even if
+	// the lookup keeps failing (no per-tick retry loop).
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"},
+	  {"parent":"100","issueNum":102,"slug":"b","paneId":"%2"}
+	]}`)
+	p.refreshGH()
+	if gh.waveCalls["100"] != 2 {
+		t.Fatalf("Waves(100) calls = %d, want 2 (new issue bypasses throttle)", gh.waveCalls["100"])
+	}
+	if !slices.Equal(gh.waveNums["100"], []int{101, 102}) {
+		t.Fatalf("recordedNums = %v, want [101 102]", gh.waveNums["100"])
+	}
+	p.refreshGH()
+	if gh.waveCalls["100"] != 2 {
+		t.Fatalf("Waves(100) calls = %d, want 2 (same nums stay throttled)", gh.waveCalls["100"])
+	}
+}

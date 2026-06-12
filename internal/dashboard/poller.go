@@ -42,9 +42,13 @@ type ghCacheEntry struct {
 
 // waveCacheEntry is one parent's cached wave graph. FetchWaveGraph keeps
 // partial results next to a joined error, so both fields can be non-zero.
+// attempted records the recorded issue numbers the fetch was asked about, so
+// the throttle bypass fires once per newly recorded issue without retrying
+// permanently failing lookups every tick.
 type waveCacheEntry struct {
-	info map[int]sessionview.WaveInfo
-	err  error
+	info      map[int]sessionview.WaveInfo
+	err       error
+	attempted map[int]bool
 }
 
 // poller owns the authoritative latest Snapshot. A cheap tick reloads
@@ -248,31 +252,46 @@ func (p *poller) refreshGH() {
 	// the UI populates immediately. Child bodies are deliberately refetched on
 	// each pass (no cross-cycle body cache) so edits to "## Blocked by"
 	// sections still show up; the slower cadence bounds that cost.
-	// Parents not yet in the cache bypass the throttle: a row recorded just
-	// after a wave pass would otherwise show no wave/blocker data for a full
-	// waveInterval. Known parents stay on the slow cadence.
+	// Parents whose cache does not yet cover every recorded issue bypass the
+	// throttle: a row recorded just after a wave pass would otherwise show no
+	// wave/blocker data for a full waveInterval. Coverage is judged against
+	// the nums the last fetch was ASKED about (attempted), not what it
+	// returned, so a permanently failing lookup does not retry every tick.
+	// Fully covered parents stay on the slow cadence.
 	due := p.lastWaveRefresh.IsZero() || time.Since(p.lastWaveRefresh) >= p.waveInterval
 	if due {
 		p.lastWaveRefresh = time.Now()
 	}
 	numsByParent := recordedNumsByParent(store)
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
+		nums := numsByParent[parent]
 		if !due {
 			p.cacheMu.Lock()
-			_, cached := p.waveCache[parent]
+			e, cached := p.waveCache[parent]
+			covered := cached
+			for _, num := range nums {
+				if cached && !e.attempted[num] {
+					covered = false
+					break
+				}
+			}
 			p.cacheMu.Unlock()
-			if cached {
+			if covered {
 				continue
 			}
 		}
-		info, err := gh.Waves(parent, numsByParent[parent])
+		info, err := gh.Waves(parent, nums)
+		attempted := make(map[int]bool, len(nums))
+		for _, num := range nums {
+			attempted[num] = true
+		}
 		p.cacheMu.Lock()
 		if err != nil {
 			// Partial failure: keep last-known rows instead of dropping
 			// previously confirmed blockers until the next clean pass.
 			info = mergeDegradedWaveInfos(p.waveCache[parent].info, info)
 		}
-		p.waveCache[parent] = waveCacheEntry{info: info, err: err}
+		p.waveCache[parent] = waveCacheEntry{info: info, err: err, attempted: attempted}
 		p.cacheMu.Unlock()
 	}
 }

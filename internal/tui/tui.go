@@ -467,15 +467,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var notifyCmd tea.Cmd
 		if msg.issues != nil {
+			// Merge BEFORE transition detection: a degraded refresh can carry
+			// partial blocker data (e.g. parent rows without the child body)
+			// that the display immediately discards — notifications must not
+			// fire on data the user never sees.
+			issues := msg.issues
+			if msg.err != nil && m.issues != nil {
+				issues = mergeDegradedIssueStatuses(m.issues, msg.issues)
+			}
 			wasPrimed := m.notifyPrimed
-			events := detectIssueTransitions(m.notifications, msg.issues)
+			events := detectIssueTransitions(m.notifications, issues)
 			if msg.err == nil {
-				m.notifications = issueTransitionSnapshots(msg.issues)
+				m.notifications = issueTransitionSnapshots(issues)
 				if !m.notifyPrimed {
 					m.notifyPrimed = true
 				}
 			} else if wasPrimed {
-				m.notifications = mergePartialIssueTransitionSnapshots(m.notifications, msg.issues)
+				m.notifications = mergePartialIssueTransitionSnapshots(m.notifications, issues)
 			}
 			if wasPrimed {
 				notifyCmd = m.notifyEventsCmd(events)
@@ -483,11 +491,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = transitionNotice(events)
 				}
 			}
-			if msg.err != nil && m.issues != nil {
-				m.issues = mergeDegradedIssueStatuses(m.issues, msg.issues)
-			} else {
-				m.issues = msg.issues
-			}
+			m.issues = issues
 		}
 		m.lastGH = msg.at
 		m.refreshRows()
