@@ -60,8 +60,8 @@ func verifyLivePane(paneID, worktree string) error {
 		if pane.ID != paneID {
 			continue
 		}
-		if worktree != "" && pane.CurrentPath != worktree &&
-			!strings.HasPrefix(pane.CurrentPath, worktree+string(filepath.Separator)) {
+		if worktree == "" || (pane.CurrentPath != worktree &&
+			!strings.HasPrefix(pane.CurrentPath, worktree+string(filepath.Separator))) {
 			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
 		}
 		return nil
@@ -99,6 +99,13 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	worktree, ok := s.poller.livePaneWorktree(paneID)
 	if !ok {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
+		return
+	}
+	// Legacy/hand-written rows without a recorded worktree are alive on an
+	// id-only basis, which cannot survive tmux pane-id reuse. Without a path
+	// to verify against, capture could read an unrelated pane — refuse.
+	if worktree == "" {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

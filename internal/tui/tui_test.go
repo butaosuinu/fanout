@@ -1122,3 +1122,21 @@ func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 		t.Fatal("launch success did not request a state reload")
 	}
 }
+
+func TestMergeDegradedIssueStatusKeepsWaveOfUnblockedPrevious(t *testing.T) {
+	// Previously confirmed unblocked ("-") but with valid wave fields: a
+	// degraded refresh must not blank Wave/WaveLabel.
+	key := issueKey{Parent: "100", Num: 101}
+	previous := map[issueKey]issueStatus{
+		key: {Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "-"},
+	}
+	current := map[issueKey]issueStatus{
+		key: {Title: "child", State: "OPEN", Blockers: "-", WaveDegraded: true},
+	}
+
+	got := mergeDegradedIssueStatuses(previous, current)
+	want := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "-", WaveDegraded: true}
+	if !reflect.DeepEqual(got[key], want) {
+		t.Fatalf("merged = %#v, want %#v", got[key], want)
+	}
+}

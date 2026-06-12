@@ -342,3 +342,20 @@ func TestPeekVerifyFailureIs404AndSkipsCapture(t *testing.T) {
 		t.Fatalf("capture calls = %d, want 0 (verify failed first)", calls)
 	}
 }
+
+func TestPeekRowWithoutWorktreeIs404(t *testing.T) {
+	t.Parallel()
+	fake := &fakeCapture{out: "should never be read"}
+	srv := newPeekServer(t, "", fake)
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].WorktreePath = "" // legacy id-only-alive row
+	publishSnapshot(srv, snap)
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", status, body)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture calls = %d, want 0 (no worktree to verify against)", calls)
+	}
+}

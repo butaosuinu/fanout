@@ -1219,14 +1219,19 @@ func mergeDegradedIssueStatuses(previous, current map[issueKey]issueStatus) map[
 // when a degraded refresh dropped them (failed child-body hydration renders a
 // still-blocked child with "-" blockers and no blocked badge).
 func mergeDegradedIssueStatus(previous, current issueStatus) issueStatus {
-	// Restore only rows whose hydration actually failed this refresh. A
-	// non-degraded row is fresh data — a confirmed "-" (blocker list
-	// legitimately removed) must not be masked by stale data just because an
-	// unrelated issue errored in the same refresh. A degraded row is restored
-	// even when parent-row blockers produced partial text: the previous entry
-	// was computed with the child body and is strictly better last-known data.
-	if !current.WaveDegraded || degradedBlockers(previous.Blockers) {
+	// Restore only rows whose wave/blocker inputs actually failed this
+	// refresh. A non-degraded row is fresh data — a confirmed "-" (blocker
+	// list legitimately removed) must not be masked by stale data just
+	// because an unrelated issue errored in the same refresh. A degraded row
+	// is restored even when parent-row blockers produced partial text, and
+	// even when the previous display was a confirmed unblocked "-": its
+	// Wave/WaveLabel are still valid last-known data the degraded refresh
+	// would otherwise blank.
+	if !current.WaveDegraded {
 		return current
+	}
+	if degradedBlockers(previous.Blockers) && previous.Wave == 0 && previous.WaveLabel == "" {
+		return current // previous carries nothing better to preserve
 	}
 	current.Blockers = previous.Blockers
 	current.HasOpenBlockers = previous.HasOpenBlockers
