@@ -199,7 +199,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func TestMainRepoRoot(t *testing.T) {
+func TestOwnerProjectRoot(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -216,40 +216,51 @@ func TestMainRepoRoot(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatalf("mkdir subdir: %v", err)
 	}
-	worktree := filepath.Join(mainRoot, ".fanout", "worktrees", "child-1")
-	runGit(t, mainRoot, "worktree", "add", worktree, "-b", "child-1")
-	worktreeSubdir := filepath.Join(worktree, "internal")
-	if err := os.MkdirAll(worktreeSubdir, 0o755); err != nil {
+	childOfMain := filepath.Join(mainRoot, ".fanout", "worktrees", "child-1")
+	runGit(t, mainRoot, "worktree", "add", childOfMain, "-b", "child-1")
+	childOfMainSubdir := filepath.Join(childOfMain, "internal")
+	if err := os.MkdirAll(childOfMainSubdir, 0o755); err != nil {
 		t.Fatalf("mkdir worktree subdir: %v", err)
 	}
 
-	wantRoot, err := filepath.EvalSymlinks(mainRoot)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", mainRoot, err)
+	// A fanout run started from a user's own linked worktree records state
+	// under that worktree and creates children there; from such a child the
+	// owner must be the linked worktree, not the original checkout.
+	linked := filepath.Join(t.TempDir(), "linked")
+	runGit(t, mainRoot, "worktree", "add", linked, "-b", "linked")
+	childOfLinked := filepath.Join(linked, ".fanout", "worktrees", "child-2")
+	runGit(t, linked, "worktree", "add", childOfLinked, "-b", "child-2")
+
+	resolve := func(path string) string {
+		t.Helper()
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q): %v", path, err)
+		}
+		return resolved
 	}
 
 	tests := []struct {
 		name string
 		cwd  string
+		want string
 	}{
-		{name: "main repo root", cwd: mainRoot},
-		{name: "main repo subdir", cwd: subdir},
-		{name: "child worktree root", cwd: worktree},
-		{name: "child worktree subdir", cwd: worktreeSubdir},
+		{name: "owner repo root", cwd: mainRoot, want: mainRoot},
+		{name: "owner repo subdir", cwd: subdir, want: mainRoot},
+		{name: "child worktree root", cwd: childOfMain, want: mainRoot},
+		{name: "child worktree subdir", cwd: childOfMainSubdir, want: mainRoot},
+		{name: "linked worktree as owner", cwd: linked, want: linked},
+		{name: "child of linked worktree owner", cwd: childOfLinked, want: linked},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Chdir(tt.cwd)
-			got, err := MainRepoRoot()
+			got, err := OwnerProjectRoot()
 			if err != nil {
-				t.Fatalf("MainRepoRoot: %v", err)
+				t.Fatalf("OwnerProjectRoot: %v", err)
 			}
-			resolved, err := filepath.EvalSymlinks(got)
-			if err != nil {
-				t.Fatalf("EvalSymlinks(%q): %v", got, err)
-			}
-			if resolved != wantRoot {
-				t.Errorf("MainRepoRoot from %s = %q (resolved %q), want %q", tt.name, got, resolved, wantRoot)
+			if resolve(got) != resolve(tt.want) {
+				t.Errorf("OwnerProjectRoot from %s = %q, want %q", tt.name, got, tt.want)
 			}
 		})
 	}

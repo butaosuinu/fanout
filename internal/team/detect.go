@@ -83,10 +83,10 @@ func IdentifyPane(paneID string, st state.Store) (Identity, error) {
 
 // Detect resolves the invoking pane's identity from the environment:
 // TMUX_PANE names the pane, and the state file comes from FANOUT_STATE_PATH
-// when set (same semantics as cmd/fanout) or from the main repository
-// root's .fanout/state.json — resolved via the git common dir so detection
-// also works from inside a child worktree, where the toplevel is the
-// worktree, not the main root.
+// when set (same semantics as cmd/fanout) or from the owning project root's
+// .fanout/state.json (OwnerProjectRoot), so detection also works from
+// inside a child worktree, where the toplevel is the worktree, not the
+// owner.
 func Detect() (Identity, error) {
 	paneID := os.Getenv("TMUX_PANE")
 	if paneID == "" {
@@ -98,7 +98,7 @@ func Detect() (Identity, error) {
 			statePath = abs
 		}
 	} else {
-		root, err := MainRepoRoot()
+		root, err := OwnerProjectRoot()
 		if err != nil {
 			return Identity{}, fmt.Errorf("detect fanout pane: %w", err)
 		}
@@ -113,37 +113,26 @@ func Detect() (Identity, error) {
 
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 
-// MainRepoRoot resolves the main repository root from the current working
-// directory, even inside a child worktree under .fanout/worktrees/<slug>/
-// (where git rev-parse --show-toplevel returns the worktree root). It takes
-// the parent of the shared .git directory reported by git rev-parse
-// --git-common-dir.
-func MainRepoRoot() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+// OwnerProjectRoot resolves the project root whose .fanout/state.json covers
+// the current working directory. Fanout places child worktrees under
+// <owner>/.fanout/worktrees/<slug>/ (internal/worktree), so when the current
+// git toplevel sits at that path the owner is three levels up. Deriving the
+// owner from the path — instead of the shared git common dir — stays correct
+// when the owning checkout is itself a linked worktree, where the common dir
+// points at the original checkout that holds no fanout state. Anywhere else
+// the toplevel itself is the owner.
+func OwnerProjectRoot() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		// git < 2.31 lacks --path-format; fall back to the relative form,
-		// which git computes against the current working directory.
-		out, err = exec.Command("git", "rev-parse", "--git-common-dir").Output()
-		if err != nil {
-			return "", fmt.Errorf("current directory is not inside a git repository")
-		}
+		return "", fmt.Errorf("current directory is not inside a git work tree")
 	}
-	dir := strings.TrimSpace(string(out))
-	if dir == "" {
-		return "", fmt.Errorf("git rev-parse --git-common-dir returned an empty path")
+	top := strings.TrimSpace(string(out))
+	if top == "" {
+		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
 	}
-	if !filepath.IsAbs(dir) {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("resolve git common dir %q: %w", dir, err)
-		}
-		dir = filepath.Join(cwd, dir)
+	parent := filepath.Dir(top)
+	if filepath.Base(parent) == "worktrees" && filepath.Base(filepath.Dir(parent)) == ".fanout" {
+		return filepath.Dir(filepath.Dir(parent)), nil
 	}
-	dir = filepath.Clean(dir)
-	if filepath.Base(dir) != ".git" {
-		// Bare repos or GIT_DIR overrides: erroring loudly beats silently
-		// reading the wrong state.json.
-		return "", fmt.Errorf("cannot infer main repository root from git common dir %q", dir)
-	}
-	return filepath.Dir(dir), nil
+	return top, nil
 }
