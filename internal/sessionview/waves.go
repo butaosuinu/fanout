@@ -90,23 +90,49 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 	deps := blockers.Dependencies(childRows, includeParentRows, parentBody, stateOf)
 	waves := blockers.Waves(childNums, deps)
 
-	info := make(map[int]WaveInfo, len(children))
+	// A row is degraded when any input to its wave/blocker computation could
+	// not be read: its own body, the parent body (task-list rows), or the
+	// state of one of its blockers.
+	degraded := make(map[int]bool, len(children))
 	for _, issue := range children {
-		// A row is degraded when any input to its wave/blocker computation
-		// could not be read: its own body, the parent body (task-list rows),
-		// or the state of one of its blockers.
-		degraded := failed[issue.Number] || (includeParentRows && parentBodyFailed)
+		if failed[issue.Number] || (includeParentRows && parentBodyFailed) {
+			degraded[issue.Number] = true
+			continue
+		}
 		for _, dep := range deps[issue.Number] {
 			if failedStates[dep.Num] {
-				degraded = true
+				degraded[issue.Number] = true
+				break
 			}
 		}
+	}
+	// Wave depth is derived from the blocker DAG, so degradation propagates to
+	// dependents: a child blocked by a degraded issue inherits a possibly-wrong
+	// wave. The set only grows, so the fixed point terminates even on cycles.
+	for changed := true; changed; {
+		changed = false
+		for _, issue := range children {
+			if degraded[issue.Number] {
+				continue
+			}
+			for _, dep := range deps[issue.Number] {
+				if degraded[dep.Num] {
+					degraded[issue.Number] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+
+	info := make(map[int]WaveInfo, len(children))
+	for _, issue := range children {
 		info[issue.Number] = WaveInfo{
 			Wave:      waves[issue.Number],
 			WaveLabel: issue.Wave,
 			Blockers:  deps[issue.Number],
 			Blocked:   blockers.HasOpen(deps[issue.Number]),
-			Degraded:  degraded,
+			Degraded:  degraded[issue.Number],
 		}
 	}
 	return WaveGraph{Children: children, Info: info}, errors.Join(loadErr, stateErr)

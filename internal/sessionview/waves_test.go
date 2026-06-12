@@ -353,3 +353,33 @@ func TestFetchWaveGraphBlockerStateFailureMarksDependentDegraded(t *testing.T) {
 		t.Fatalf("Info[102] = %#v, want fresh (no failed inputs)", graph.Info[102])
 	}
 }
+
+func TestFetchWaveGraphDegradationPropagatesToDependents(t *testing.T) {
+	t.Parallel()
+
+	// #101's body fails to hydrate; #102 is blocked by #101 so its wave depth
+	// was computed from incomplete data; #103 is independent and stays fresh.
+	client := &fakeGraphClient{
+		parentBody: "",
+		subIssues: []ghissue.Issue{
+			{Number: 101, Title: "broken", State: "OPEN"},
+			{Number: 102, Title: "dependent", State: "OPEN", Body: "## Blocked by\n- #101\n"},
+			{Number: 103, Title: "free", State: "OPEN", Body: "x"},
+		},
+		detailErr: map[int]error{101: errGraphBoom},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err == nil || !strings.Contains(err.Error(), "#101") {
+		t.Fatalf("FetchWaveGraph() error = %v, want #101 hydration error", err)
+	}
+	if !graph.Info[101].Degraded {
+		t.Fatalf("Info[101] = %#v, want Degraded (hydration failed)", graph.Info[101])
+	}
+	if !graph.Info[102].Degraded {
+		t.Fatalf("Info[102] = %#v, want Degraded (depends on degraded #101)", graph.Info[102])
+	}
+	if graph.Info[103].Degraded {
+		t.Fatalf("Info[103] = %#v, want fresh (independent)", graph.Info[103])
+	}
+}
