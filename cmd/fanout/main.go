@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
+	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -200,7 +201,12 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		printDryRunPlan(plan, lg, c)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c, commandName)
+	var teamCtx *briefing.TeamContext
+	if cfg.Team {
+		teamCtx = buildTeamContext(rt.info.ProjectRoot, cfg.ParentRef, plan.Targets)
+	}
+
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register the tmux keybinding so the user can pop the read-only dashboard
@@ -209,6 +215,17 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 	// repos. Best-effort, live runs only.
 	if !cfg.DryRun && result.Created > 0 {
 		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
+	}
+
+	// Seed the peers registry for --team runs, fail-fast partial successes
+	// included. Best-effort: this runs outside the executePlan loop and a
+	// failure only warns, never changes the exit code.
+	if cfg.Team && len(result.CreatedNums) > 0 {
+		if cfg.DryRun {
+			fmt.Fprintf(lg.Stdout(), "%s# would seed team registry: %d peer(s) -> %s%s\n", c.Dim, len(result.CreatedNums), teamCtx.DBPath, c.Reset)
+		} else {
+			seedTeamRegistry(lg, teamCtx.DBPath, recorder.Store, cfg.ParentRef, result.CreatedNums)
+		}
 	}
 
 	if result.Failed > 0 {
@@ -471,7 +488,7 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -482,7 +499,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			}
 		}
 		// Fail fast: stop after the first failed child launch.
-		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName) {
+		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName, teamCtx) {
 			result.Failed++
 			break
 		}

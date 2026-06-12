@@ -105,6 +105,12 @@ Options:
                       Register (or skip) a tmux 'prefix + D' keybinding after a
                       live fan-out so the read-only web dashboard can be opened
                       from any pane. Default: on.
+  --team              Opt in to sibling-pane messaging for this run: add a
+                      "Coordinating with your sibling panes" section (roster +
+                      shared SQLite DB path) to every child briefing and seed
+                      the created panes into the per-parent peers registry.
+                      Best-effort; registry failures never fail the fan-out.
+                      Default: off.
   --sleep <seconds>   Pause between pane-creation requests. Default 4.
   --popup-timeout <s> Deprecated compatibility flag; accepted but ignored by
                       the direct tmux path.

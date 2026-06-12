@@ -52,6 +52,7 @@ type Config struct {
 	DryRun             bool
 	Debug              bool
 	UnblockedOnly      bool
+	Team               bool
 	StatusMode         bool
 	PostDashboard      bool
 	CloseNum           int
@@ -192,6 +193,7 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--debug":                   func(cfg *Config) { cfg.Debug = true },
 		"--no-refresh":              func(cfg *Config) { cfg.NoRefresh = true },
 		"--unblocked-only":          func(cfg *Config) { cfg.UnblockedOnly = true },
+		"--team":                    func(cfg *Config) { cfg.Team = true },
 		"--status":                  func(cfg *Config) { cfg.StatusMode = true },
 		"--post-dashboard":          func(cfg *Config) { cfg.PostDashboard = true },
 		"--cleanup":                 func(cfg *Config) { cfg.CleanupMode = true },
@@ -388,6 +390,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
 			return statusConflict(lg, boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
+		case cfg.Team:
+			return statusConflict(lg, "--team")
 		case state.sleepExplicit:
 			return statusConflict(lg, "--sleep")
 		case state.popupExplicit:
@@ -449,6 +453,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return lifecycleConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
 			return lifecycleConflict(lg, boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
+		case cfg.Team:
+			return lifecycleConflict(lg, "--team")
 		case state.sleepExplicit:
 			return lifecycleConflict(lg, "--sleep")
 		case state.popupExplicit:

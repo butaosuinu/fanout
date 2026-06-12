@@ -311,6 +311,18 @@ load helpers
   [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --agent"* ]]
 }
 
+@test "--close conflicts with --team: exit 2" {
+  run_fanout 20 --close 4 --team
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --team"* ]]
+}
+
+@test "--status conflicts with --team: exit 2" {
+  run_fanout --status 1 --team
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --team"* ]]
+}
+
 @test "--only with non-integer entry: exit 1" {
   run_fanout 20 --only 4,abc
   [ "$status" -eq 1 ]
