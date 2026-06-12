@@ -42,6 +42,10 @@ type Options struct {
 	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
 	// nil defaults to tmuxrun.CapturePaneOutput; tests inject a fake.
 	CapturePane func(paneID string, lines int) (string, error)
+	// VerifyPane re-checks, at request time, that paneID is still a live tmux
+	// pane sitting at/under the recorded worktree. nil defaults to a
+	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
+	VerifyPane func(paneID, worktree string) error
 }
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
@@ -56,6 +60,7 @@ type Server struct {
 	base        string // http://127.0.0.1:<port>
 	serveErr    chan error
 	capturePane func(paneID string, lines int) (string, error)
+	verifyPane  func(paneID, worktree string) error
 }
 
 // New binds the loopback listener and assembles the handler. The returned
@@ -76,6 +81,10 @@ func New(opts Options) (*Server, error) {
 	if capture == nil {
 		capture = tmuxrun.CapturePaneOutput
 	}
+	verify := opts.VerifyPane
+	if verify == nil {
+		verify = verifyLivePane
+	}
 	h := newHub()
 	s := &Server{
 		listener:    ln,
@@ -85,6 +94,7 @@ func New(opts Options) (*Server, error) {
 		base:        fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
 		serveErr:    make(chan error, 1),
 		capturePane: capture,
+		verifyPane:  verify,
 	}
 	handler, err := s.handler()
 	if err != nil {

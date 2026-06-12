@@ -378,3 +378,32 @@ func TestMergeDegradedWaveInfos(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshGHFetchesUncachedParentDespiteWaveThrottle(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = time.Hour // throttle would block everything but the first pass
+	p.refreshGH()
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("Waves(100) calls = %d, want 1 (first pass)", gh.waveCalls["100"])
+	}
+
+	// A new parent recorded mid-interval must be fetched immediately; the
+	// already-cached parent stays throttled.
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"},
+	  {"parent":"200","issueNum":201,"slug":"b","paneId":"%2"}
+	]}`)
+	p.refreshGH()
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("Waves(100) calls = %d, want 1 (still throttled)", gh.waveCalls["100"])
+	}
+	if gh.waveCalls["200"] != 1 {
+		t.Fatalf("Waves(200) calls = %d, want 1 (uncached parent bypasses throttle)", gh.waveCalls["200"])
+	}
+}

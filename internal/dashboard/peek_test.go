@@ -3,6 +3,7 @@ package dashboard
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -53,14 +54,15 @@ func peekSnapshot(alive bool) sessionview.Snapshot {
 		Sessions: []sessionview.Session{{
 			Parent: "#1",
 			Panes: []sessionview.PaneView{{
-				IssueNum:    2,
-				Slug:        "child",
-				DisplayName: "child",
-				Agent:       "claude",
-				BranchName:  "fanout/child",
-				PaneID:      "%5",
-				CreatedAt:   "2026-06-12T00:00:00Z",
-				Alive:       alive,
+				IssueNum:     2,
+				Slug:         "child",
+				DisplayName:  "child",
+				Agent:        "claude",
+				BranchName:   "fanout/child",
+				PaneID:       "%5",
+				WorktreePath: "/wt/child",
+				CreatedAt:    "2026-06-12T00:00:00Z",
+				Alive:        alive,
 			}},
 		}},
 	}
@@ -86,6 +88,9 @@ func newPeekServer(t *testing.T, token string, capture *fakeCapture) *Server {
 		Token:       token,
 		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
 		CapturePane: capture.capture,
+		// Request-time revalidation is exercised by TestPeekVerifyFailureIs404;
+		// everywhere else a no-op keeps the fixture's liveness authoritative.
+		VerifyPane: func(string, string) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -302,5 +307,38 @@ func TestPeekHeadSkipsCapture(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("HEAD triggered %d capture(s)", calls)
+	}
+}
+
+func TestPeekVerifyFailureIs404AndSkipsCapture(t *testing.T) {
+	t.Parallel()
+	fake := &fakeCapture{out: "should never be read"}
+	srv, err := New(Options{
+		ProjectRoot: t.TempDir(),
+		Port:        0,
+		Token:       "",
+		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
+		CapturePane: fake.capture,
+		VerifyPane: func(paneID, worktree string) error {
+			if worktree != "/wt/child" {
+				t.Errorf("VerifyPane worktree = %q, want recorded /wt/child", worktree)
+			}
+			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	publishSnapshot(srv, peekSnapshot(true))
+	go func() { _ = srv.httpServer.Serve(srv.listener) }()
+	t.Cleanup(func() { _ = srv.httpServer.Close() })
+	waitReady(t, srv.base)
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", status, body)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture calls = %d, want 0 (verify failed first)", calls)
 	}
 }

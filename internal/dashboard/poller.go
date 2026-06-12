@@ -248,12 +248,23 @@ func (p *poller) refreshGH() {
 	// the UI populates immediately. Child bodies are deliberately refetched on
 	// each pass (no cross-cycle body cache) so edits to "## Blocked by"
 	// sections still show up; the slower cadence bounds that cost.
-	if !p.lastWaveRefresh.IsZero() && time.Since(p.lastWaveRefresh) < p.waveInterval {
-		return
+	// Parents not yet in the cache bypass the throttle: a row recorded just
+	// after a wave pass would otherwise show no wave/blocker data for a full
+	// waveInterval. Known parents stay on the slow cadence.
+	due := p.lastWaveRefresh.IsZero() || time.Since(p.lastWaveRefresh) >= p.waveInterval
+	if due {
+		p.lastWaveRefresh = time.Now()
 	}
-	p.lastWaveRefresh = time.Now()
 	numsByParent := recordedNumsByParent(store)
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
+		if !due {
+			p.cacheMu.Lock()
+			_, cached := p.waveCache[parent]
+			p.cacheMu.Unlock()
+			if cached {
+				continue
+			}
+		}
 		info, err := gh.Waves(parent, numsByParent[parent])
 		p.cacheMu.Lock()
 		if err != nil {

@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const (
@@ -28,17 +32,41 @@ var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 // Defined here rather than in poller.go because /api/peek is its only
 // consumer. The zero-value snapshot has nil Sessions, which ranges as empty,
 // so an unpublished snapshot simply reports false.
-func (p *poller) hasLivePane(paneID string) bool {
+func (p *poller) livePaneWorktree(paneID string) (string, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
 			if sess.Panes[i].PaneID == paneID && sess.Panes[i].Alive {
-				return true
+				return sess.Panes[i].WorktreePath, true
 			}
 		}
 	}
-	return false
+	return "", false
+}
+
+// verifyLivePane is the default Options.VerifyPane: it re-resolves the pane id
+// against tmux at request time and requires the pane's current path to sit
+// at/under the recorded worktree (same rule as sessionview's paneAlive). The
+// snapshot's Alive flag can be up to one cheap-tick stale, which is enough for
+// a tmux restart to hand %N to an unrelated pane; this check shrinks that
+// reuse window from seconds to the instant before capture.
+func verifyLivePane(paneID, worktree string) error {
+	panes, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		return fmt.Errorf("tmux list-panes: %w", err)
+	}
+	for _, pane := range panes {
+		if pane.ID != paneID {
+			continue
+		}
+		if worktree != "" && pane.CurrentPath != worktree &&
+			!strings.HasPrefix(pane.CurrentPath, worktree+string(filepath.Separator)) {
+			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
+		}
+		return nil
+	}
+	return fmt.Errorf("pane %s is gone", paneID)
 }
 
 // peekResponse is the GET /api/peek wire contract the SPA consumes.
@@ -68,7 +96,8 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = min(max(n, 1), peekMaxLines)
 	}
-	if !s.poller.hasLivePane(paneID) {
+	worktree, ok := s.poller.livePaneWorktree(paneID)
+	if !ok {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
 		return
 	}
@@ -78,6 +107,13 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	// HEAD early-return) so a probe never triggers a capture.
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// The snapshot check above can be a cheap-tick stale; revalidate id+path
+	// against tmux right before reading so a freshly reused pane id cannot
+	// expose an unrelated pane's contents.
+	if err := s.verifyPane(paneID, worktree); err != nil {
+		peekError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	out, err := s.capturePane(paneID, lines)
