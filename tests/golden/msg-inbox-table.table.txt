@@ -1,0 +1,5 @@
+ID  FROM  TO     KIND     CREATED               BODY
+--  ----  -----  -------  --------------------  ----------------------
+1   #71   #70    note     2026-06-13T00:00:00Z  first note to 70
+2   #71   #70    blocker  2026-06-13T00:00:00Z  waiting on your schema
+3   #71   board  note     2026-06-13T00:00:00Z  board update from 71

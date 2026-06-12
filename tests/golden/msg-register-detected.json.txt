@@ -1,0 +1,12 @@
+{
+  "peer": {
+    "issue": 70,
+    "pane_id": "%1",
+    "slug": "msg-cli-surface-70",
+    "worktree_path": "",
+    "agent": "claude",
+    "display_name": "msg cli surface",
+    "joined_at": "2026-06-13T00:00:00Z",
+    "last_seen": "2026-06-13T00:00:00Z"
+  }
+}

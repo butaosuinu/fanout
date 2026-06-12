@@ -1,0 +1,47 @@
+{
+  "self": 70,
+  "parent": "68",
+  "all": false,
+  "messages": [
+    {
+      "id": 1,
+      "from": 71,
+      "to": 70,
+      "board": false,
+      "kind": "note",
+      "body": "first note to 70",
+      "created_at": "2026-06-13T00:00:00Z",
+      "read_at": null,
+      "reply_to": null
+    },
+    {
+      "id": 2,
+      "from": 71,
+      "to": 70,
+      "board": false,
+      "kind": "blocker",
+      "body": "waiting on your schema",
+      "created_at": "2026-06-13T00:00:00Z",
+      "read_at": null,
+      "reply_to": null
+    },
+    {
+      "id": 3,
+      "from": 71,
+      "to": null,
+      "board": true,
+      "kind": "note",
+      "body": "board update from 71",
+      "created_at": "2026-06-13T00:00:00Z",
+      "read_at": null,
+      "reply_to": null
+    }
+  ],
+  "marked_read": {
+    "message_ids": [
+      1,
+      2
+    ],
+    "board_cursor": 3
+  }
+}

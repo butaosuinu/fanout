@@ -123,10 +123,10 @@ check-bats:
 test: go-test test-tier1 test-tier2
 
 test-tier1: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_briefing.bats tests/bats/tier1_msg.bats
 
 test-tier2: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats tests/bats/tier2_msg.bats
 
 go-test:
 	GOCACHE="$(GOCACHE)" $(GO) test ./...

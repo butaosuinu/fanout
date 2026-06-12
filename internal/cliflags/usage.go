@@ -139,6 +139,9 @@ Options:
                       live — pane liveness, issue state, PR merge status.
                       127.0.0.1-bound, GET-only, token-gated. See
                       'fanout dashboard --help'.
+  msg                 Subcommand. Peer messaging between fanout panes over a
+                      per-parent SQLite DB: send/post/mark-read/register plus
+                      peers/inbox/board read views. See 'fanout msg --help'.
   update              Subcommand. Replace this binary and bundled Claude/Codex
                       integrations through install.sh immediately. Supports
                       --version <tag> and --no-skills.
