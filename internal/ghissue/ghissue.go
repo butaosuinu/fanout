@@ -1,4 +1,4 @@
-// Package ghissue wraps the `gh` CLI calls fanout makes — sub-issue list,
+// Package ghissue wraps the `gh` CLI calls fanout makes — Sub-issues listing,
 // issue view (full and field-projected). It also assembles the children union
 // (Sub-issues API + parent body task-list scan + --include).
 package ghissue
@@ -167,31 +167,39 @@ func (r Runner) LatestReleaseTag() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// SubIssueList runs `gh sub-issue list <parent> --json number,title,state` and
-// returns the flattened, state-uppercased issue rows.
+type subIssueItem struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state"`
+}
+
+// SubIssueList lists the parent's sub-issues through the official GitHub
+// Sub-issues REST API and returns the flattened, state-uppercased issue rows.
+// The REST API reports state in lowercase (`open`/`closed`).
 func (r Runner) SubIssueList(parent int) ([]Issue, error) {
-	out, err := r.gh("sub-issue", "list", strconv.Itoa(parent), "--json", "number,title,state")
+	endpoint := fmt.Sprintf("repos/{owner}/{repo}/issues/%d/sub_issues?per_page=100", parent)
+	out, err := r.gh("api", "--paginate", "--slurp", endpoint)
 	if err != nil {
 		return nil, err
 	}
-	var wrap struct {
-		SubIssues []struct {
-			Number int    `json:"number"`
-			Title  string `json:"title"`
-			State  string `json:"state"`
-		} `json:"subIssues"`
+	pages, err := parsePages[subIssueItem](out)
+	if err != nil {
+		return nil, fmt.Errorf("parse gh issue %d sub_issues: %w", parent, err)
 	}
-	if err := json.Unmarshal(out, &wrap); err != nil {
-		return nil, fmt.Errorf("parse gh sub-issue list output: %w", err)
+	total := 0
+	for _, page := range pages {
+		total += len(page)
 	}
-	issues := make([]Issue, 0, len(wrap.SubIssues))
-	for _, s := range wrap.SubIssues {
-		issues = append(issues, Issue{
-			Number: s.Number,
-			Title:  s.Title,
-			State:  strings.ToUpper(s.State),
-			Labels: []Label{},
-		})
+	issues := make([]Issue, 0, total)
+	for _, page := range pages {
+		for _, s := range page {
+			issues = append(issues, Issue{
+				Number: s.Number,
+				Title:  s.Title,
+				State:  strings.ToUpper(s.State),
+				Labels: []Label{},
+			})
+		}
 	}
 	return issues, nil
 }
@@ -399,7 +407,7 @@ func (r Runner) FindDashboardComment(parent int, marker string) (IssueComment, b
 		return IssueComment{}, false, err
 	}
 
-	pages, err := parseIssueCommentPages(out)
+	pages, err := parsePages[issueCommentPageItem](out)
 	if err != nil {
 		return IssueComment{}, false, fmt.Errorf("parse gh issue %d comments: %w", parent, err)
 	}
@@ -425,17 +433,20 @@ type issueCommentPageItem struct {
 	Body       string          `json:"body"`
 }
 
-func parseIssueCommentPages(out []byte) ([][]issueCommentPageItem, error) {
-	var pages [][]issueCommentPageItem
+// parsePages decodes `gh api --paginate --slurp` output: an array of pages,
+// each page an array of items. Plain single-array output (no slurp wrapper)
+// is accepted as one page.
+func parsePages[T any](out []byte) ([][]T, error) {
+	var pages [][]T
 	if err := json.Unmarshal(out, &pages); err == nil {
 		return pages, nil
 	}
 
-	var single []issueCommentPageItem
+	var single []T
 	if err := json.Unmarshal(out, &single); err != nil {
 		return nil, err
 	}
-	return [][]issueCommentPageItem{single}, nil
+	return [][]T{single}, nil
 }
 
 func (r Runner) PostIssueComment(parent int, body string) error {

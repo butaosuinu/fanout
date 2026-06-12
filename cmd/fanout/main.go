@@ -283,7 +283,7 @@ func loadIssueChildren(cfg *cliflags.Config, gh ghissue.Runner, lg *log.Logger) 
 	lg.Info("fetching sub-issues of #%d", cfg.Parent)
 	subIssues, err := gh.SubIssueList(cfg.Parent)
 	if err != nil {
-		lg.Err("gh sub-issue list failed: %v", err)
+		lg.Err("sub-issues fetch failed: %v", err)
 		return childLoadResult{}, exitcode.Env
 	}
 
@@ -519,22 +519,6 @@ func checkDeps(cfg *cliflags.Config) []string {
 
 	if !cfg.StatusMode && !lifecycle {
 		check("tmux", "tmux (brew install tmux)")
-		if cfg.ParentMode == cliflags.ModeIssue && !ghSubIssueAvailable() {
-			missing = append(missing, "gh-sub-issue extension (gh extension install yahsan2/gh-sub-issue)")
-		}
 	}
 	return missing
-}
-
-func ghSubIssueAvailable() bool {
-	out, err := exec.Command("gh", "extension", "list").Output()
-	if err != nil {
-		return false
-	}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		if first, _, ok := strings.Cut(line, "\t"); ok && first == "gh sub-issue" {
-			return true
-		}
-	}
-	return false
 }

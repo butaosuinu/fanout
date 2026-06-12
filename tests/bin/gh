@@ -4,13 +4,11 @@
 # Each Tier 2 test sets FIXTURE_DIR=tests/fixtures/<name> before invoking
 # fanout. The shim reads per-call fixtures from that directory:
 #
-#   gh extension list
-#       — always returns a line advertising the gh-sub-issue extension.
-#         (fanout:396 only checks presence, never the version.)
-#
-#   gh sub-issue list <parent> --json number,title,state
-#       — echoes $FIXTURE_DIR/gh-sub-issue-list.json verbatim
-#         (shape: {"subIssues":[...]}).
+#   gh api --paginate --slurp repos/{owner}/{repo}/issues/<N>/sub_issues?per_page=100
+#       — echoes $FIXTURE_DIR/gh-sub-issue-list.json verbatim (slurp shape:
+#         array of pages, each page an array of issue objects with lowercase
+#         state). The issue number is ignored: each fixture scenario carries
+#         one sub-issue list, same as the historical `gh sub-issue list` shim.
 #
 #   gh issue view <N> --json ... [-q <filter>]
 #       — echoes $FIXTURE_DIR/gh-issue-view-<N>.json verbatim, or if a -q
@@ -116,18 +114,6 @@ extract_jq_filter() {
 }
 
 case "${1:-}" in
-  extension)
-    if [[ "${2:-}" == "list" ]]; then
-      printf 'gh sub-issue\tyahsan2/gh-sub-issue\tv0.5.0\n'
-      exit 0
-    fi
-    ;;
-  sub-issue)
-    if [[ "${2:-}" == "list" ]]; then
-      emit_fixture "$fixture/gh-sub-issue-list.json" "" "gh sub-issue list $*"
-      exit 0
-    fi
-    ;;
   issue)
     if [[ "${2:-}" == "view" ]]; then
       num="${3:-}"
@@ -198,6 +184,10 @@ case "${1:-}" in
         num="${path#repos/\{owner\}/\{repo\}/issues/}"
         num="${num%%/comments?per_page=100}"
         emit_fixture "$fixture/gh-issue-comments-$num.json" "" "gh api paginated issue comments $num"
+        exit 0
+      fi
+      if [[ "$path" == repos/\{owner\}/\{repo\}/issues/*/sub_issues\?per_page=100 ]]; then
+        emit_fixture "$fixture/gh-sub-issue-list.json" "" "gh api paginated sub_issues ($path)"
         exit 0
       fi
     fi
