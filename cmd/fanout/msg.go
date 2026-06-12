@@ -151,8 +151,10 @@ func parseMsgFlags(args []string, lg *log.Logger) (*msgFlags, exitcode.Code) {
 				continue
 			}
 			// Help wins only while no body word has been seen; `send --to 71
-			// try -h here` must send the message, not print usage and exit 0.
-			if a == "--help" || (a == "-h" && len(body) == 0) {
+			// ask about --help` must not silently print usage and exit 0
+			// instead of sending. (A post-body --help still fails loudly as
+			// an unknown option — use `--` to put flag-like words in a body.)
+			if (a == "--help" || a == "-h") && len(body) == 0 {
 				fmt.Fprint(lg.Stdout(), msgUsage)
 				return nil, exitcode.OK
 			}

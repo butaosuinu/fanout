@@ -94,6 +94,7 @@ func TestParseMsgFlags(t *testing.T) {
 				t.Errorf("body = %q, want %q", f.body, "try -h now")
 			}
 		}},
+		{name: "long help after body word fails loudly, never silent usage", args: []string{"send", "--to", "71", "ask", "about", "--help"}, code: exitcode.Invocation},
 		{name: "terminator lets the body carry flag-like words", args: []string{"send", "--to", "71", "--", "--kind", "is part of the body"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
 			t.Helper()
 			if f.body != "--kind is part of the body" || f.kind != "note" {
