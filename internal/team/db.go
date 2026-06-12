@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 
 	// Registers the pure-Go "sqlite" database/sql driver (no cgo, no
 	// external sqlite3 binary).
@@ -30,6 +31,13 @@ const (
 	// compatibility.
 	schemaUserVersion = 1
 )
+
+// dsnPathEscaper percent-encodes the bytes that would derail file-URI
+// parsing of the DSN: '?' starts the query (pragmas dropped, wrong file
+// opened), '#' the fragment, and '%' itself because SQLite percent-decodes
+// the URI path. A checkout directory named with such bytes reaches DBPath
+// via filepath.Base, so the path cannot be assumed clean.
+var dsnPathEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
 // schemaStatements is the agreed v1 DDL from the #68 design. messages unifies
 // 1:1 and board traffic: to_issue IS NULL means a board/broadcast post, and
@@ -67,11 +75,7 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create team db %s: %w", path, err)
 	}
 
-	// The DSN keeps path verbatim: a path containing '?' or '#' would
-	// derail the query parsing (pragmas dropped, wrong file opened). The
-	// computed /tmp/fanout-* convention never produces those characters;
-	// FANOUT_DB_PATH overrides must avoid them.
-	db, err := sql.Open(driverName, "file:"+path+"?"+dsnPragmas)
+	db, err := sql.Open(driverName, "file:"+dsnPathEscaper.Replace(path)+"?"+dsnPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("open team db %s: %w", path, err)
 	}

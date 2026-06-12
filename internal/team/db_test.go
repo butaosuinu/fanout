@@ -114,6 +114,37 @@ func TestOpenAppliesPragmaPreamble(t *testing.T) {
 	}
 }
 
+// A checkout directory named with URI delimiters reaches DBPath via
+// filepath.Base; the DSN must escape them so SQLite opens the right file
+// with the pragmas intact instead of treating them as query/fragment.
+func TestOpenEscapesURIDelimitersInPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "we?ird#100%.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", path, err)
+	}
+	defer db.Close()
+
+	var timeout string
+	if err = db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("busy_timeout: %v", err)
+	}
+	if timeout != "5000" {
+		t.Errorf("busy_timeout = %q, want 5000 (pragmas dropped by DSN parsing?)", timeout)
+	}
+
+	if err = EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %q: %v", path, err)
+	}
+	if info.Size() == 0 {
+		t.Errorf("DB file %q is empty: SQLite wrote to a different (misparsed) path", path)
+	}
+}
+
 func TestEnsureSchema(t *testing.T) {
 	db, _ := openTestDB(t)
 	if err := EnsureSchema(db); err != nil {
