@@ -17,6 +17,7 @@
   --asagi:   #00A3AF;
   --byakugun:#C9E8EC;
   --byakugun-bg: rgba(201,232,236,.5);
+  --leaf:    #C9E8EC; /* ロゴの扇面 */
   --suna:    #E2D9C8;
   --suna-soft: rgba(226,217,200,.65);
   --ok:   #0E7A6E;
@@ -54,6 +55,7 @@ html[data-theme="dark"]{
   --asagi:   #33BFC9;
   --byakugun:#C9E8EC;
   --byakugun-bg: rgba(51,191,201,.13);
+  --leaf:    rgba(51,191,201,.22); /* ロゴの扇面 */
   --suna:    rgba(233,227,214,.16);
   --suna-soft: rgba(233,227,214,.10);
   --ok:   #58BFA4;
@@ -122,7 +124,7 @@ a:hover{ color:var(--asagi); }
 }
 .brand svg{ display:block; }
 .brand .rib{ stroke:var(--ai); }
-.brand .arc{ stroke:var(--suna); }
+.brand .leaf{ fill:var(--leaf); stroke:var(--ai); }
 .brand .pivot{ fill:var(--asagi); }
 .brand-sub{
   font-family:var(--f-body); font-size:11px; font-weight:700;
