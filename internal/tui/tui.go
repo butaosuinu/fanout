@@ -304,13 +304,25 @@ func (l actionLogger) Stderr() io.Writer {
 	return l.w
 }
 
+// PAPER BREEZE palette (site/assets/css/main.css; keep the internal/log
+// 256-color approximations in sync). Light = site values (紅 is an addition;
+// the site defines no red), dark = same hue lifted for dark backgrounds.
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("34"))
-	dimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	warnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
-	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("31"))
-	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(lipgloss.Color("240"))
-	formStyle  = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(lipgloss.Color("240"))
+	colorAi     = lipgloss.AdaptiveColor{Light: "#165E83", Dark: "#6FAECE"} // 藍
+	colorAsagi  = lipgloss.AdaptiveColor{Light: "#00A3AF", Dark: "#2BC4CF"} // 浅葱
+	colorInk    = lipgloss.AdaptiveColor{Light: "#797D80", Dark: "#8A9096"} // 墨60%
+	colorSuna   = lipgloss.AdaptiveColor{Light: "#E2D9C8", Dark: "#5C564C"} // 砂
+	colorTsuchi = lipgloss.AdaptiveColor{Light: "#9A6B2F", Dark: "#C9974F"} // 土
+	colorBeni   = lipgloss.AdaptiveColor{Light: "#B5495B", Dark: "#E07A8B"} // 紅
+)
+
+var (
+	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAi)
+	dimStyle   = lipgloss.NewStyle().Foreground(colorInk)
+	warnStyle  = lipgloss.NewStyle().Foreground(colorTsuchi)
+	errStyle   = lipgloss.NewStyle().Foreground(colorBeni)
+	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
+	formStyle  = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorSuna)
 )
 
 // Run starts the Bubble Tea TUI.
@@ -355,8 +367,8 @@ func newModel(opts Options) model {
 		table.WithHeight(12),
 	)
 	styles := table.DefaultStyles()
-	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("34"))
-	styles.Selected = styles.Selected.Bold(true).Foreground(lipgloss.Color("32"))
+	styles.Header = styles.Header.Bold(true).Foreground(colorAi)
+	styles.Selected = styles.Selected.Bold(true).Foreground(colorAsagi)
 	t.SetStyles(styles)
 
 	return model{
