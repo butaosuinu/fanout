@@ -35,7 +35,8 @@ Options:
   --json           Emit JSON instead of the human-readable view.
   --self <N>       Act as child issue N (overrides pane detection).
   --parent <ref>   Parent issue number or Projects URL (overrides pane detection).
-  --dry-run        Write verbs only: print what would be written, touch nothing.
+  --dry-run        Write verbs only: print '# would ...' lines describing the
+                   writes, touch nothing. Not combinable with --json.
   --to <N>         send: recipient child issue number.
   --kind <K>       send/post: message kind (default: note).
   --id <N>         mark-read: message id (repeatable).
@@ -273,6 +274,12 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 }
 
 func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
+	// Dry-run output is the "# would ..." line contract, not JSON; reject the
+	// combination instead of silently handing automation non-JSON output.
+	if f.dryRun && f.json {
+		lg.Err("msg %s: --dry-run cannot be combined with --json (dry-run prints '# would ...' lines)", f.verb)
+		return exitcode.Invocation
+	}
 	switch f.verb {
 	case "send":
 		if f.to == 0 {

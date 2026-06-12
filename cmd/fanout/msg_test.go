@@ -59,6 +59,7 @@ func TestParseMsgFlags(t *testing.T) {
 		}},
 		{name: "inbox rejects positional", args: []string{"inbox", "hello"}, code: exitcode.Invocation},
 		{name: "inbox rejects dry-run", args: []string{"inbox", "--dry-run"}, code: exitcode.Invocation},
+		{name: "dry-run rejects json", args: []string{"send", "--dry-run", "--json", "--to", "71", "--self", "70", "--parent", "68", "hi"}, code: exitcode.Invocation},
 		{name: "board rejects mark-read", args: []string{"board", "--mark-read"}, code: exitcode.Invocation},
 		{name: "peers rejects --to", args: []string{"peers", "--to", "5"}, code: exitcode.Invocation},
 		{name: "unknown option", args: []string{"peers", "--bogus"}, code: exitcode.Invocation},

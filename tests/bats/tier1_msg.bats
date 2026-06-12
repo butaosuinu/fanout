@@ -93,6 +93,13 @@ msg_env() {
   [[ "$output" == *"--dry-run is not supported"* ]]
 }
 
+@test "msg send rejects --dry-run with --json: exit 2" {
+  msg_env
+  run_fanout msg send --dry-run --json --to 71 --self 70 --parent 68 hello
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--dry-run cannot be combined with --json"* ]]
+}
+
 @test "msg peers rejects a verb-foreign flag: exit 2" {
   msg_env
   run_fanout msg peers --to 5 --parent 68
