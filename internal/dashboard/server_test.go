@@ -9,11 +9,16 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/sessionview"
 )
 
 type fakeGH struct{}
 
 func (fakeGH) IssuePRs(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil }
+
+func (fakeGH) Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error) {
+	return nil, nil
+}
 
 // newTestServer binds an ephemeral server in a temp project root with no state
 // file (empty snapshot) and runs it until the test ends.

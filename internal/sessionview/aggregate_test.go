@@ -1,10 +1,13 @@
 package sessionview
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/state"
 )
@@ -27,13 +30,30 @@ func pane(parent string, num int, paneID string) state.Pane {
 
 // livePanesAt builds a LivePanes collector marking the given panes live, mapping
 // each pane id to its recorded worktree path (so paneAlive's path check passes).
-func livePanesAt(paneIDs ...string) func() (map[string]string, error) {
-	return func() (map[string]string, error) {
-		m := map[string]string{}
+func livePanesAt(paneIDs ...string) func() (map[string]LivePaneInfo, error) {
+	return func() (map[string]LivePaneInfo, error) {
+		m := map[string]LivePaneInfo{}
 		for _, id := range paneIDs {
-			m[id] = "/wt/" + id
+			m[id] = LivePaneInfo{Path: "/wt/" + id}
 		}
 		return m, nil
+	}
+}
+
+// wavesNone is a Waves collector that always reports a cache miss (not fetched
+// yet) — the non-degraded GitHub baseline for tests not exercising waves.
+func wavesNone(parent string) (map[int]WaveInfo, error) {
+	return nil, nil
+}
+
+// wavesOf builds a Waves collector serving the same WaveInfo map for any
+// parent and counting calls through calls (when non-nil).
+func wavesOf(info map[int]WaveInfo, calls *int) func(string) (map[int]WaveInfo, error) {
+	return func(parent string) (map[int]WaveInfo, error) {
+		if calls != nil {
+			*calls++
+		}
+		return info, nil
 	}
 }
 
@@ -53,6 +73,7 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 			}
 			return "OPEN", []ghissue.PRRef{}, nil
 		},
+		Waves: wavesNone,
 		WorktreeStat: func(path string) (WorktreeStat, error) {
 			if path == "/wt/%1" {
 				return WorktreeStat{DiffSummary: "+12/-3", DirtyState: "dirty"}, nil
@@ -115,8 +136,9 @@ func TestBuildDegradesWhenTmuxFails(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(pane("1", 2, "%1")),
-		LivePanes: func() (map[string]string, error) { return nil, errors.New("tmux not found") },
+		LivePanes: func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") },
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
 	}
 	snap := Build("o/n", "/root", c)
 	if !snap.Degraded.Tmux {
@@ -163,6 +185,7 @@ func TestBuildCacheMissIsUnknownNotDegraded(t *testing.T) {
 		LivePanes: livePanesAt(),
 		// cheap-tier collector: cache miss returns ("", nil, nil)
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "", nil, nil },
+		Waves:    wavesNone,
 	}
 	snap := Build("o/n", "/root", c)
 	if snap.Degraded.GitHub {
@@ -179,6 +202,7 @@ func TestBuildWorktreeStatErrorIsPerPane(t *testing.T) {
 		LoadState: storeOf(pane("1", 2, "%1")),
 		LivePanes: livePanesAt(),
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
 		WorktreeStat: func(path string) (WorktreeStat, error) {
 			return WorktreeStat{}, errors.New("git unavailable")
 		},
@@ -202,8 +226,10 @@ func TestBuildPaneIDReusedAtOtherPathIsDead(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(pane("1", 2, "%1")),
-		LivePanes: func() (map[string]string, error) { return map[string]string{"%1": "/some/other/dir"}, nil },
-		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		LivePanes: func() (map[string]LivePaneInfo, error) {
+			return map[string]LivePaneInfo{"%1": {Path: "/some/other/dir"}}, nil
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 	}
 	snap := Build("o/n", "/root", c)
 	if snap.Sessions[0].Panes[0].Alive {
@@ -215,8 +241,10 @@ func TestBuildAliveWhenPaneInWorktreeSubdir(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(pane("1", 2, "%1")), // worktree /wt/%1
-		LivePanes: func() (map[string]string, error) { return map[string]string{"%1": "/wt/%1/sub/dir"}, nil },
-		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		LivePanes: func() (map[string]LivePaneInfo, error) {
+			return map[string]LivePaneInfo{"%1": {Path: "/wt/%1/sub/dir"}}, nil
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 	}
 	snap := Build("o/n", "/root", c)
 	if !snap.Sessions[0].Panes[0].Alive {
@@ -254,5 +282,221 @@ func TestBuildLoadStateErrorReturnsReason(t *testing.T) {
 	}
 	if len(snap.Sessions) != 0 {
 		t.Fatal("no sessions on load error")
+	}
+}
+
+func TestBuildTmuxStateMatrix(t *testing.T) {
+	noPane := pane("1", 2, "")
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(noPane, pane("1", 3, "%1"), pane("1", 4, "%2")),
+		LivePanes: livePanesAt("%1"), // %2 is recorded but not live
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	panes := Build("o/n", "/root", c).Sessions[0].Panes
+	if panes[0].TmuxState != "-" {
+		t.Fatalf("no-pane TmuxState = %q want -", panes[0].TmuxState)
+	}
+	if panes[1].TmuxState != "live" {
+		t.Fatalf("live TmuxState = %q want live", panes[1].TmuxState)
+	}
+	if panes[2].TmuxState != "stale" {
+		t.Fatalf("dead TmuxState = %q want stale", panes[2].TmuxState)
+	}
+
+	c.LivePanes = func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") }
+	panes = Build("o/n", "/root", c).Sessions[0].Panes
+	if panes[0].TmuxState != "-" {
+		t.Fatalf("no-pane TmuxState under degraded tmux = %q want -", panes[0].TmuxState)
+	}
+	if panes[1].TmuxState != "unknown" || panes[2].TmuxState != "unknown" {
+		t.Fatalf("degraded-tmux TmuxState = %q,%q want unknown,unknown", panes[1].TmuxState, panes[2].TmuxState)
+	}
+}
+
+func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2")),
+		LivePanes: func() (map[string]LivePaneInfo, error) {
+			return map[string]LivePaneInfo{
+				"%1": {Path: "/wt/%1", Title: "two: child"},
+				"%2": {Path: "/somewhere/else", Title: "reused id"}, // path mismatch -> dead
+			}, nil
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:    wavesNone,
+	}
+	panes := Build("o/n", "/root", c).Sessions[0].Panes
+	if panes[0].TmuxTitle != "two: child" {
+		t.Fatalf("alive TmuxTitle = %q want %q", panes[0].TmuxTitle, "two: child")
+	}
+	if panes[1].Alive || panes[1].TmuxTitle != "" {
+		t.Fatalf("dead pane must not carry a title: alive=%v title=%q", panes[1].Alive, panes[1].TmuxTitle)
+	}
+}
+
+func TestBuildPromptPassthrough(t *testing.T) {
+	p := pane("1", 2, "%1")
+	p.Prompt = "Implement #2 as designed"
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(p),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	got := Build("o/n", "/root", c).Sessions[0].Panes[0].Prompt
+	if got != "Implement #2 as designed" {
+		t.Fatalf("Prompt = %q want passthrough of the state row prompt", got)
+	}
+}
+
+func TestBuildCIStatusFromPrimaryPR(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2")),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			if num == 2 {
+				return "OPEN", []ghissue.PRRef{{Number: 9, State: "OPEN", CIStatus: " PASS "}}, nil
+			}
+			return "OPEN", nil, nil // no PR
+		},
+		Waves: wavesNone,
+	}
+	panes := Build("o/n", "/root", c).Sessions[0].Panes
+	if panes[0].CIStatus != "pass" {
+		t.Fatalf("CIStatus = %q want lowercased-trimmed %q", panes[0].CIStatus, "pass")
+	}
+	if panes[1].CIStatus != "-" {
+		t.Fatalf("CIStatus without PR = %q want -", panes[1].CIStatus)
+	}
+}
+
+func TestBuildWavesMissIsNotDegraded(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	if snap.Degraded.GitHub {
+		t.Fatal("waves cache miss must NOT mark GitHub degraded")
+	}
+	pv := snap.Sessions[0].Panes[0]
+	if pv.Wave != 0 || pv.WaveLabel != "" || pv.Blocked {
+		t.Fatalf("waves miss must leave zero-valued fields, got %+v", pv)
+	}
+	if pv.Blockers == nil || len(pv.Blockers) != 0 {
+		t.Fatalf("Blockers = %#v want non-nil empty slice", pv.Blockers)
+	}
+}
+
+func TestBuildWavesErrorDegradesGitHub(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     func(parent string) (map[int]WaveInfo, error) { return nil, errors.New("gh graph down") },
+	}
+	snap := Build("o/n", "/root", c)
+	if !snap.Degraded.GitHub {
+		t.Fatal("waves error should set Degraded.GitHub")
+	}
+	if !strings.Contains(snap.Degraded.Reason, "gh graph down") {
+		t.Fatalf("Degraded.Reason = %q should carry the waves error", snap.Degraded.Reason)
+	}
+	if snap.Sessions[0].Panes[0].Blockers == nil {
+		t.Fatal("Blockers must stay non-nil on waves error")
+	}
+}
+
+func TestBuildWavesDataPopulatesPanesAndRollups(t *testing.T) {
+	calls := 0
+	info := map[int]WaveInfo{
+		101: {Wave: 1, WaveLabel: "wave1", Blockers: []blockers.Status{}, Blocked: false},
+		102: {
+			Wave:      2,
+			WaveLabel: "wave2",
+			Blockers:  []blockers.Status{{Num: 101, State: "OPEN"}},
+			Blocked:   true,
+		},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1"), pane("100", 102, "%2")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesOf(info, &calls),
+	}
+	snap := Build("o/n", "/root", c)
+	if calls != 1 {
+		t.Fatalf("waves should be fetched once per distinct parent, got %d calls", calls)
+	}
+	panes := snap.Sessions[0].Panes
+	if panes[0].Wave != 1 || panes[0].WaveLabel != "wave1" || panes[0].Blocked {
+		t.Fatalf("#101 wave view = %+v", panes[0])
+	}
+	if panes[1].Wave != 2 || panes[1].WaveLabel != "wave2" || !panes[1].Blocked {
+		t.Fatalf("#102 wave view = %+v", panes[1])
+	}
+	if len(panes[1].Blockers) != 1 || panes[1].Blockers[0] != (blockers.Status{Num: 101, State: "OPEN"}) {
+		t.Fatalf("#102 blockers = %#v", panes[1].Blockers)
+	}
+	if snap.Sessions[0].Rollup.Blocked != 1 {
+		t.Fatalf("session Rollup.Blocked = %d want 1", snap.Sessions[0].Rollup.Blocked)
+	}
+	if snap.Rollup.Blocked != 1 {
+		t.Fatalf("snapshot Rollup.Blocked = %d want 1", snap.Rollup.Blocked)
+	}
+}
+
+func TestBuildWaveLabelStateRowWinsOverGraph(t *testing.T) {
+	withRow := pane("100", 101, "%1")
+	withRow.Wave = "row-label"
+	noRow := pane("100", 102, "%2")
+	info := map[int]WaveInfo{
+		101: {Wave: 1, WaveLabel: "graph-label"},
+		102: {Wave: 1, WaveLabel: "graph-label"},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(withRow, noRow),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesOf(info, nil),
+	}
+	panes := Build("o/n", "/root", c).Sessions[0].Panes
+	if panes[0].WaveLabel != "row-label" {
+		t.Fatalf("WaveLabel = %q; the state row label must win over the graph label", panes[0].WaveLabel)
+	}
+	if panes[1].WaveLabel != "graph-label" {
+		t.Fatalf("WaveLabel = %q; the graph label must fill in when the row has none", panes[1].WaveLabel)
+	}
+}
+
+func TestBuildBlockersMarshalAsEmptyArray(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	pv := Build("o/n", "/root", c).Sessions[0].Panes[0]
+	if pv.Blockers == nil {
+		t.Fatal("Blockers must be non-nil for JSON stability")
+	}
+	raw, err := json.Marshal(pv)
+	if err != nil {
+		t.Fatalf("marshal pane view: %v", err)
+	}
+	if !strings.Contains(string(raw), `"blockers":[]`) {
+		t.Fatalf("pane view JSON should contain \"blockers\":[] — got %s", raw)
 	}
 }

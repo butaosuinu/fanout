@@ -26,6 +26,50 @@ func TestPRRefDisplayState(t *testing.T) {
 	}
 }
 
+func TestPrimaryPR(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prs     []PRRef
+		wantNum int
+		wantOK  bool
+	}{
+		{name: "empty", prs: nil, wantNum: 0, wantOK: false},
+		{name: "first when none merged", prs: []PRRef{{Number: 1, State: "OPEN"}, {Number: 2, State: "CLOSED"}}, wantNum: 1, wantOK: true},
+		{name: "merged wins over earlier refs", prs: []PRRef{{Number: 1, State: "OPEN"}, {Number: 2, State: "MERGED"}}, wantNum: 2, wantOK: true},
+		{name: "first merged wins", prs: []PRRef{{Number: 1, State: "MERGED"}, {Number: 2, State: "MERGED"}}, wantNum: 1, wantOK: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, ok := PrimaryPR(tc.prs)
+			if pr.Number != tc.wantNum || ok != tc.wantOK {
+				t.Fatalf("PrimaryPR() = #%d, %v, want #%d, %v", pr.Number, ok, tc.wantNum, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestSummarizeCI(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prs  []PRRef
+		want string
+	}{
+		{name: "no prs", prs: nil, want: "-"},
+		{name: "no rollup", prs: []PRRef{{Number: 1, State: "OPEN"}}, want: "-"},
+		{name: "primary status", prs: []PRRef{{Number: 1, State: "OPEN", CIStatus: "fail"}}, want: "fail"},
+		{
+			name: "merged pr selected over first",
+			prs:  []PRRef{{Number: 1, State: "OPEN", CIStatus: "fail"}, {Number: 2, State: "MERGED", CIStatus: "pass"}},
+			want: "pass",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SummarizeCI(tc.prs); got != tc.want {
+				t.Fatalf("SummarizeCI(%#v) = %q, want %q", tc.prs, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeCIStatus(t *testing.T) {
 	for _, tc := range []struct {
 		in   string

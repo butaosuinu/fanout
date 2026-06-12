@@ -413,9 +413,26 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   reopens the existing URL. Disable the auto-binding with `--no-dashboard-keybind`
   (fan-out) / `--no-keybind` (dashboard), the `dashboardKeybind` config key, or
   `FANOUT_DASHBOARD_KEYBIND=0`.
+- **Session table + HUD.** Each pane row shows issue, agent, wave and open
+  blockers (from the parent issue graph), branch, diff/dirty, CI status, tmux
+  liveness with the current pane title, and PR state; the HUD on top includes
+  a repo-wide blocked count.
+- **Detail drawer with live peek.** Click a row to open a right-side drawer:
+  pane metadata, wave/blockers, worktree, PRs with CI, the original prompt,
+  and a *peek* at the pane's recent output (`GET /api/peek`, a read-only
+  `tmux capture-pane` refreshed every 5 s while open).
+- **Structured filtering.** The filter box ANDs free words with
+  `state:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` /
+  `pr:` terms — e.g. `agent:claude wave:2 ci:fail`.
+- **Light/dark themes.** The PAPER BREEZE UI matches the docs site; the header
+  toggle persists to `localStorage` (`fanout.theme`) and defaults to your
+  `prefers-color-scheme`.
 - **localhost only.** The server binds `127.0.0.1` and exposes GET-only
-  endpoints (`/api/snapshot`, an SSE `/api/stream`, and the embedded UI). `--port`
-  defaults to `0` (an OS-assigned ephemeral port); the chosen URL is printed.
+  endpoints (`/api/snapshot`, an SSE `/api/stream`, `/api/peek`, and the
+  embedded UI). `--port` defaults to `0` (an OS-assigned ephemeral port); the
+  chosen URL is printed. The UI's one external request is its Google Fonts
+  stylesheet, loaded with a `no-referrer` policy so the tokened dashboard URL
+  never leaks.
 - **Token by default.** A random token is generated each start and embedded in
   the printed/opened URL, gating `/api/*` so other local users or processes
   cannot read your issue/PR data off the loopback port. Pass `--no-token` on a

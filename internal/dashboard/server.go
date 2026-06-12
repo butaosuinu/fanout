@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const (
@@ -37,19 +39,28 @@ type Options struct {
 	//   ("",  nil,      err) -> sticky Degraded.GitHub
 	// A nil ResolveGH disables the GitHub tier entirely (state-only, no degrade).
 	ResolveGH func() (repo string, gh GHProvider, err error)
+	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
+	// nil defaults to tmuxrun.CapturePaneOutput; tests inject a fake.
+	CapturePane func(paneID string, lines int) (string, error)
+	// VerifyPane re-checks, at request time, that paneID is still a live tmux
+	// pane sitting at/under the recorded worktree. nil defaults to a
+	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
+	VerifyPane func(paneID, worktree string) error
 }
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
 // port-in-use error surfaces synchronously) and computes the URL; Run serves
 // until the context is canceled.
 type Server struct {
-	listener   net.Listener
-	httpServer *http.Server
-	poller     *poller
-	hub        *hub
-	token      string
-	base       string // http://127.0.0.1:<port>
-	serveErr   chan error
+	listener    net.Listener
+	httpServer  *http.Server
+	poller      *poller
+	hub         *hub
+	token       string
+	base        string // http://127.0.0.1:<port>
+	serveErr    chan error
+	capturePane func(paneID string, lines int) (string, error)
+	verifyPane  func(paneID, worktree string) error
 }
 
 // New binds the loopback listener and assembles the handler. The returned
@@ -66,14 +77,24 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("unexpected listener address %T", ln.Addr())
 	}
 
+	capture := opts.CapturePane
+	if capture == nil {
+		capture = tmuxrun.CapturePaneOutput
+	}
+	verify := opts.VerifyPane
+	if verify == nil {
+		verify = verifyLivePane
+	}
 	h := newHub()
 	s := &Server{
-		listener: ln,
-		hub:      h,
-		poller:   newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h),
-		token:    opts.Token,
-		base:     fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
-		serveErr: make(chan error, 1),
+		listener:    ln,
+		hub:         h,
+		poller:      newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h),
+		token:       opts.Token,
+		base:        fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
+		serveErr:    make(chan error, 1),
+		capturePane: capture,
+		verifyPane:  verify,
 	}
 	handler, err := s.handler()
 	if err != nil {
@@ -150,6 +171,7 @@ func (s *Server) handler() (http.Handler, error) {
 	}))
 	mux.HandleFunc("/api/snapshot", s.getOnly(s.requireToken(s.handleSnapshot)))
 	mux.HandleFunc("/api/stream", s.getOnly(s.requireToken(s.handleStream)))
+	mux.HandleFunc("/api/peek", s.getOnly(s.requireToken(s.handlePeek)))
 	// Catch-all: the embedded SPA. The HTML shell is token-free so the page can
 	// load and then read ?token= for its /api/* calls.
 	mux.Handle("/", s.getOnly(fileServer.ServeHTTP))

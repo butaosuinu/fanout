@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,12 +18,20 @@ import (
 const (
 	defaultCheapInterval = 2 * time.Second
 	defaultGHInterval    = 20 * time.Second
+	// defaultWaveInterval throttles the wave-graph phase to every third gh
+	// tick. One wave pass costs many gh calls per parent (parent body +
+	// sub-issue list + per-child body hydration + out-of-set blocker states),
+	// so running it at PR cadence would burn through GitHub's hourly API
+	// budget on busy boards and leave the dashboard permanently rate-limited.
+	defaultWaveInterval = 3 * defaultGHInterval
 )
 
-// GHProvider is the per-issue GitHub fetch the poller throttles and caches.
-// *sessionview.GH satisfies it; tests inject a fake.
+// GHProvider is the GitHub fetch surface the poller throttles and caches:
+// per-issue PR state plus the per-parent wave/blocker graph.
+// sessionview.GH satisfies it; tests inject a fake.
 type GHProvider interface {
 	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error)
 }
 
 type ghCacheEntry struct {
@@ -30,9 +40,22 @@ type ghCacheEntry struct {
 	err   error
 }
 
+// waveCacheEntry is one parent's cached wave graph. FetchWaveGraph keeps
+// partial results next to a joined error, so both fields can be non-zero.
+// attempted records the recorded issue numbers the fetch was asked about, so
+// the throttle bypass fires once per newly recorded issue without retrying
+// permanently failing lookups every tick.
+type waveCacheEntry struct {
+	info      map[int]sessionview.WaveInfo
+	err       error
+	attempted map[int]bool
+}
+
 // poller owns the authoritative latest Snapshot. A cheap tick reloads
 // state.json + tmux liveness (~2s); a throttled GitHub tick refreshes per-issue
-// PR state (~20s). sessionview.Build reads gh only through the cache, so the
+// PR state (~20s), with the costlier per-parent wave-graph phase further
+// throttled to waveInterval (~60s) to respect the gh API budget.
+// sessionview.Build reads gh only through the cache, so the
 // cheap tick never blocks on the network. Snapshots broadcast over SSE only when
 // their content (ignoring the timestamp) actually changes.
 type poller struct {
@@ -41,6 +64,12 @@ type poller struct {
 
 	cheapInterval time.Duration
 	ghInterval    time.Duration
+	waveInterval  time.Duration
+
+	// lastWaveRefresh tracks when the wave-graph phase last ran. It is only
+	// touched by refreshGH, which runs solely on the single gh goroutine
+	// (tests call it directly, also single-threaded), so it needs no lock.
+	lastWaveRefresh time.Time
 
 	// ghMu guards the GitHub identity (repo/gh/ghErr) so the deferred resolution
 	// running on the gh goroutine can publish it while the cheap ticker reads it.
@@ -56,8 +85,9 @@ type poller struct {
 	latestJSON []byte
 	lastKey    []byte
 
-	cacheMu sync.Mutex
-	cache   map[int]ghCacheEntry
+	cacheMu   sync.Mutex
+	cache     map[int]ghCacheEntry
+	waveCache map[string]waveCacheEntry // keyed by normalized parent
 }
 
 func newPollerBase(projectRoot string, h *hub) *poller {
@@ -66,7 +96,9 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		hub:           h,
 		cheapInterval: defaultCheapInterval,
 		ghInterval:    defaultGHInterval,
+		waveInterval:  defaultWaveInterval,
 		cache:         map[int]ghCacheEntry{},
+		waveCache:     map[string]waveCacheEntry{},
 	}
 }
 
@@ -179,6 +211,23 @@ func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
 	return e.state, e.prs, e.err
 }
 
+// wavesFromCache mirrors issuePRsFromCache for the per-parent wave graph: a
+// sticky GitHub failure short-circuits to (nil, err), and a cache miss is
+// (nil, nil) — "not fetched yet", which Build renders as zero-valued wave
+// fields without marking GitHub degraded.
+func (p *poller) wavesFromCache(parent string) (map[int]sessionview.WaveInfo, error) {
+	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
+		return nil, ghErr
+	}
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	e, ok := p.waveCache[normalizeParent(parent)]
+	if !ok {
+		return nil, nil // cache miss: unknown, not degraded
+	}
+	return e.info, e.err
+}
+
 func (p *poller) refreshGH() {
 	_, gh, _ := p.ghIdentity()
 	if gh == nil {
@@ -194,6 +243,76 @@ func (p *poller) refreshGH() {
 		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
 		p.cacheMu.Unlock()
 	}
+	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
+	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
+	// and backfill unlinked children for numeric ones.
+	// This phase runs on its own, slower cadence (waveInterval) because each
+	// pass is many gh calls per parent — coupling it to every PR tick would
+	// exhaust GitHub's hourly API budget. The first refresh always runs it so
+	// the UI populates immediately. Child bodies are deliberately refetched on
+	// each pass (no cross-cycle body cache) so edits to "## Blocked by"
+	// sections still show up; the slower cadence bounds that cost.
+	// Parents whose cache does not yet cover every recorded issue bypass the
+	// throttle: a row recorded just after a wave pass would otherwise show no
+	// wave/blocker data for a full waveInterval. Coverage is judged against
+	// the nums the last fetch was ASKED about (attempted), not what it
+	// returned, so a permanently failing lookup does not retry every tick.
+	// Fully covered parents stay on the slow cadence.
+	due := p.lastWaveRefresh.IsZero() || time.Since(p.lastWaveRefresh) >= p.waveInterval
+	if due {
+		p.lastWaveRefresh = time.Now()
+	}
+	numsByParent := recordedNumsByParent(store)
+	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
+		nums := numsByParent[parent]
+		if !due {
+			p.cacheMu.Lock()
+			e, cached := p.waveCache[parent]
+			covered := cached
+			for _, num := range nums {
+				if cached && !e.attempted[num] {
+					covered = false
+					break
+				}
+			}
+			p.cacheMu.Unlock()
+			if covered {
+				continue
+			}
+		}
+		info, err := gh.Waves(parent, nums)
+		attempted := make(map[int]bool, len(nums))
+		for _, num := range nums {
+			attempted[num] = true
+		}
+		p.cacheMu.Lock()
+		if err != nil {
+			// Partial failure: keep last-known rows instead of dropping
+			// previously confirmed blockers until the next clean pass.
+			info = mergeDegradedWaveInfos(p.waveCache[parent].info, info)
+		}
+		p.waveCache[parent] = waveCacheEntry{info: info, err: err, attempted: attempted}
+		p.cacheMu.Unlock()
+	}
+}
+
+// mergeDegradedWaveInfos overlays a degraded wave fetch onto the previous
+// cache entry: rows missing from the new graph are restored wholesale, and
+// rows whose body hydration failed keep the previous (non-degraded) data.
+// Fresh rows always win, so the merge self-heals on the next clean refresh.
+func mergeDegradedWaveInfos(previous, current map[int]sessionview.WaveInfo) map[int]sessionview.WaveInfo {
+	if len(previous) == 0 {
+		return current
+	}
+	out := make(map[int]sessionview.WaveInfo, max(len(previous), len(current)))
+	maps.Copy(out, previous)
+	for num, info := range current {
+		if prev, ok := previous[num]; ok && info.Degraded && !prev.Degraded {
+			continue // keep prev (already copied)
+		}
+		out[num] = info
+	}
+	return out
 }
 
 func (p *poller) build() sessionview.Snapshot {
@@ -202,6 +321,7 @@ func (p *poller) build() sessionview.Snapshot {
 		LoadState:    sessionview.StateLoader(p.projectRoot),
 		LivePanes:    sessionview.LivePanes(),
 		IssuePRs:     p.issuePRsFromCache,
+		Waves:        p.wavesFromCache,
 		WorktreeStat: sessionview.GitWorktreeStat(p.projectRoot),
 		Now:          time.Now,
 	})
@@ -241,6 +361,8 @@ func (p *poller) snapshotJSON() []byte {
 // contentKey is the change-detection key: the snapshot JSON with the timestamp
 // blanked, so a tick that only advances GeneratedAt does not trigger a redundant
 // broadcast/redraw.
+// PaneView now carries the live tmux pane title, so a title change alone
+// produces an SSE frame (intended — the dashboard surfaces titles live).
 func contentKey(snap sessionview.Snapshot) []byte {
 	snap.GeneratedAt = ""
 	b, _ := json.Marshal(snap)
@@ -261,4 +383,38 @@ func distinctIssueNums(store state.Store) []int {
 	}
 	slices.Sort(nums)
 	return nums
+}
+
+// normalizeParent canonicalizes numeric parents via an Atoi round-trip so
+// "0100" and "100" share one wave-cache entry, mirroring how state's
+// parentMatches treats them as the same parent. Non-numeric parents
+// (@manual, Project URLs) pass through unchanged.
+func normalizeParent(parent string) string {
+	if n, err := strconv.Atoi(parent); err == nil {
+		return strconv.Itoa(n)
+	}
+	return parent
+}
+
+// recordedNumsByParent groups each distinct normalized parent in state to the
+// sorted positive issue numbers recorded under it. Synthetic pane numbers
+// (IssueNum <= 0, e.g. @manual rows) stay out — FetchWaveGraph skips them
+// anyway — but their parent still gets an (empty) entry so its wave cache
+// resolves to a hit instead of a perpetual miss.
+func recordedNumsByParent(store state.Store) map[string][]int {
+	grouped := map[string]map[int]bool{}
+	for _, p := range store.Panes {
+		key := normalizeParent(p.Parent)
+		if grouped[key] == nil {
+			grouped[key] = map[int]bool{}
+		}
+		if p.IssueNum > 0 {
+			grouped[key][p.IssueNum] = true
+		}
+	}
+	out := make(map[string][]int, len(grouped))
+	for parent, set := range grouped {
+		out[parent] = slices.Sorted(maps.Keys(set))
+	}
+	return out
 }

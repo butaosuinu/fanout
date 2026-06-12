@@ -8,9 +8,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/state"
 )
+
+// LivePaneInfo is what Build needs to know about one live tmux pane: the cwd
+// of its foreground process (for the worktree-path liveness check) and its
+// pane title (surfaced as PaneView.TmuxTitle when the pane is alive).
+type LivePaneInfo struct {
+	// Path is the pane's current working directory.
+	Path string
+	// Title is the tmux pane title; "" when tmux reports none.
+	Title string
+}
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
 // future TUI supply real implementations; tests supply fakes. Build owns no IO
@@ -26,12 +37,22 @@ import (
 //     unresolved); the pane shows UNKNOWN and Degraded.GitHub is set.
 type Collectors struct {
 	LoadState func() (state.Store, error)
-	// LivePanes maps each live tmux pane id to its current working path. A pane
-	// counts as alive only when its id is present AND the live path is at/under
-	// its recorded worktree — pane ids are reused across tmux server restarts,
-	// so id-only matching would falsely revive stale rows.
-	LivePanes    func() (map[string]string, error)
-	IssuePRs     func(num int) (issueState string, prs []ghissue.PRRef, err error)
+	// LivePanes maps each live tmux pane id to its current working path and
+	// title. A pane counts as alive only when its id is present AND the live
+	// path is at/under its recorded worktree — pane ids are reused across tmux
+	// server restarts, so id-only matching would falsely revive stale rows.
+	LivePanes func() (map[string]LivePaneInfo, error)
+	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
+	// Waves follows the same three-outcome cache contract as IssuePRs, keyed by
+	// parent instead of issue number (the caller closes over the recorded issue
+	// numbers it passes to FetchWaveGraph):
+	//   - (info, nil)  → known wave/blocker graph for the parent's children.
+	//   - (nil, nil)   → not fetched yet (cache miss); panes show zero-valued
+	//     wave fields but this does NOT mark GitHub as degraded.
+	//   - (info, err)  → a real failure; Degraded.GitHub is set and any partial
+	//     info is still applied (FetchWaveGraph keeps partial results).
+	// A nil collector means the GitHub tier is disabled, like a nil IssuePRs.
+	Waves        func(parent string) (map[int]WaveInfo, error)
 	WorktreeStat func(path string) (WorktreeStat, error)
 	Now          func() time.Time
 }
@@ -57,7 +78,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		return snap
 	}
 
-	live := map[string]string{}
+	live := map[string]LivePaneInfo{}
 	if c.LivePanes == nil {
 		snap.Degraded.Tmux = true
 	} else if set, err := c.LivePanes(); err != nil {
@@ -96,6 +117,26 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		}{st, prs}
 		return st, prs
 	}
+	// One waves read per distinct parent, cached across the Build call.
+	waveCache := map[string]map[int]WaveInfo{}
+	fetchWaves := func(parent string) map[int]WaveInfo {
+		if got, ok := waveCache[parent]; ok {
+			return got
+		}
+		var info map[int]WaveInfo
+		if c.Waves == nil {
+			snap.Degraded.GitHub = true
+		} else {
+			got, err := c.Waves(parent)
+			if err != nil {
+				snap.Degraded.GitHub = true
+				snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "github: "+err.Error())
+			}
+			info = got // a (nil, nil) cache miss leaves zero-valued wave fields
+		}
+		waveCache[parent] = info
+		return info
+	}
 	worktreeCache := map[string]struct {
 		stat WorktreeStat
 		err  error
@@ -123,9 +164,12 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		slices.SortFunc(panes, func(a, b state.Pane) int { return cmp.Compare(a.IssueNum, b.IssueNum) })
 
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
+		waveInfo := fetchWaves(parent)
 		for _, p := range panes {
 			issueState, prs := fetch(p.IssueNum)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath)
+			alive := paneAlive(live, p.PaneID, p.WorktreePath)
+			wi := waveInfo[p.IssueNum]
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
 				Slug:         p.Slug,
@@ -135,13 +179,23 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				PaneID:       p.PaneID,
 				WorktreePath: p.WorktreePath,
 				CreatedAt:    p.CreatedAt,
-				Alive:        paneAlive(live, p.PaneID, p.WorktreePath),
+				Alive:        alive,
 				IssueState:   issueState,
 				PRs:          prs,
 				HasMergedPR:  hasMergedPR(prs),
 				DiffSummary:  worktreeStat.DiffSummary,
 				DirtyState:   worktreeStat.DirtyState,
 				WorktreeErr:  worktreeErr,
+				TmuxState:    tmuxStateOf(p.PaneID, snap.Degraded.Tmux, alive),
+				Prompt:       p.Prompt,
+				CIStatus:     strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
+				Wave:         wi.Wave,
+				WaveLabel:    firstNonEmpty(p.Wave, wi.WaveLabel),
+				Blockers:     normalizeBlockers(wi.Blockers),
+				Blocked:      wi.Blocked,
+			}
+			if alive {
+				pv.TmuxTitle = live[p.PaneID].Title
 			}
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
@@ -215,7 +269,7 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 // match defends against tmux reusing a %N id for an unrelated pane after a
 // server restart. A row without a recorded worktree (legacy) falls back to an
 // id-only match.
-func paneAlive(live map[string]string, paneID, worktree string) bool {
+func paneAlive(live map[string]LivePaneInfo, paneID, worktree string) bool {
 	if paneID == "" {
 		return false
 	}
@@ -227,8 +281,42 @@ func paneAlive(live map[string]string, paneID, worktree string) bool {
 		return true
 	}
 	wt := filepath.Clean(worktree)
-	cp := filepath.Clean(cur)
+	cp := filepath.Clean(cur.Path)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+// tmuxStateOf mirrors the TUI's tmux-state strings so `state:` filters behave
+// identically across surfaces: "-" for a row that never had a pane, "unknown"
+// when tmux itself could not be read, "live"/"stale" otherwise.
+func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
+	switch {
+	case strings.TrimSpace(paneID) == "":
+		return "-"
+	case tmuxDegraded:
+		return "unknown"
+	case alive:
+		return "live"
+	default:
+		return "stale"
+	}
+}
+
+// normalizeBlockers keeps PaneView.Blockers non-nil so it serializes as []
+// rather than null (the SPA iterates it unconditionally).
+func normalizeBlockers(rows []blockers.Status) []blockers.Status {
+	if rows == nil {
+		return []blockers.Status{}
+	}
+	return rows
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func hasMergedPR(prs []ghissue.PRRef) bool {
@@ -247,6 +335,9 @@ func accumulate(r *Rollup, pv PaneView) {
 	}
 	if pv.Alive {
 		r.Live++
+	}
+	if pv.Blocked {
+		r.Blocked++
 	}
 }
 

@@ -343,9 +343,25 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   2 回目以降は既存 URL を開き直すだけです。自動登録は
   `--no-dashboard-keybind`（fan-out）/ `--no-keybind`（dashboard）・設定キー
   `dashboardKeybind`・`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます。
+- **Session テーブル + HUD。** 各ペイン行に issue・agent・wave と未解決
+  blocker（親 issue グラフ由来）・branch・diff/dirty・CI 状態・tmux 生存と
+  現在のペインタイトル・PR 状態を表示し、上部の HUD には repo 全体の blocked
+  数も並びます。
+- **詳細ドロワーとライブ peek。** 行クリックで右側ドロワーが開き、ペインの
+  メタ情報・wave/blockers・worktree・CI 付き PR・元プロンプトに加え、ペインの
+  直近出力を *peek* 表示します（`GET /api/peek`、読み取り専用の
+  `tmux capture-pane`、表示中は 5 秒ごとに更新）。
+- **構造化フィルタ。** フィルタ欄は自由語と
+  `state:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` /
+  `pr:` の各 term を AND で組み合わせます — 例: `agent:claude wave:2 ci:fail`。
+- **ライト / ダークテーマ。** docs サイトと揃えた PAPER BREEZE デザインで、
+  ヘッダのトグル選択は `localStorage`（`fanout.theme`）に保存されます。既定は
+  `prefers-color-scheme` に従います。
 - **localhost 限定。** `127.0.0.1` にのみバインドし、GET 専用の endpoint
-  （`/api/snapshot`、SSE の `/api/stream`、埋め込み UI）を公開します。`--port` は
-  既定 `0`（OS 割り当ての ephemeral port）で、確定した URL を表示します。
+  （`/api/snapshot`、SSE の `/api/stream`、`/api/peek`、埋め込み UI）を公開します。
+  `--port` は既定 `0`（OS 割り当ての ephemeral port）で、確定した URL を表示します。
+  UI からの唯一の外部リクエストは Google Fonts の stylesheet で、`no-referrer`
+  ポリシーにより token 付きダッシュボード URL が外部に漏れることはありません。
 - **トークン既定 ON。** 起動毎にランダムトークンを生成して URL に埋め込み、`/api/*`
   をゲートします。同一ホストの他ユーザ/プロセスからループバックポート経由で
   issue/PR データを読まれるのを防ぎます。単一ユーザ端末では `--no-token` で外せます。

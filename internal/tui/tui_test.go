@@ -183,6 +183,117 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 	}
 }
 
+func TestMergeDegradedIssueStatuses(t *testing.T) {
+	key := issueKey{Parent: "100", Num: 101}
+	blocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true}
+	degraded := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false, WaveDegraded: true}
+	unblocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false}
+	cleared := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false}
+	restored := blocked
+	restored.WaveDegraded = true
+
+	tests := []struct {
+		name     string
+		previous map[issueKey]issueStatus
+		current  map[issueKey]issueStatus
+		want     map[issueKey]issueStatus
+	}{
+		{
+			name:     "degraded entry keeps old wave and blocker fields",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: restored},
+		},
+		{
+			// A non-degraded "-" is a confirmed clear: blockers legitimately
+			// removed must not be masked by stale data when an unrelated row
+			// errored in the same refresh.
+			name:     "legitimately cleared blockers are not restored",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: cleared},
+			want:     map[issueKey]issueStatus{key: cleared},
+		},
+		{
+			// Hydration failed but parent task-list rows still produced some
+			// blocker text — the previous entry (computed with the child body)
+			// is strictly better last-known data.
+			name:     "degraded entry with partial parent-row blockers restores previous",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Wave: 1, Blockers: "OPEN #7", HasOpenBlockers: true, WaveDegraded: true}},
+			want:     map[issueKey]issueStatus{key: restored},
+		},
+		{
+			name:     "fresh blocker data replaces old entry",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: unblocked},
+			want:     map[issueKey]issueStatus{key: unblocked},
+		},
+		{
+			name:     "new key passes through",
+			previous: map[issueKey]issueStatus{},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: degraded},
+		},
+		{
+			name:     "dropped key restored wholesale",
+			previous: map[issueKey]issueStatus{key: blocked, {Parent: "100", Num: 102}: unblocked},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: restored, {Parent: "100", Num: 102}: unblocked},
+		},
+		{
+			name:     "previous without blocker data does not mask new entry",
+			previous: map[issueKey]issueStatus{key: degraded},
+			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Blockers: ""}},
+			want:     map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Blockers: ""}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeDegradedIssueStatuses(tt.previous, tt.current)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeDegradedIssueStatuses = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateKeepsLastKnownBlockersOnDegradedRefresh(t *testing.T) {
+	m := newModel(Options{})
+	key := issueKey{Parent: "100", Num: 101}
+	dropped := issueKey{Parent: "100", Num: 102}
+	initial := map[issueKey]issueStatus{
+		key:     {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true},
+		dropped: {Title: "recorded child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "resolved #98"},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	degraded := map[issueKey]issueStatus{
+		key: {Title: "blocked child", State: "OPEN", Blockers: "-", HasOpenBlockers: false, WaveDegraded: true},
+	}
+	updated, _ = m.Update(ghLoadedMsg{issues: degraded, at: time.Unix(2, 0), err: errBoom})
+	m = updated.(model)
+
+	wantMerged := map[issueKey]issueStatus{
+		key:     {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true, WaveDegraded: true},
+		dropped: initial[dropped],
+	}
+	if !reflect.DeepEqual(m.issues, wantMerged) {
+		t.Fatalf("issues after degraded refresh = %#v, want last-known %#v", m.issues, wantMerged)
+	}
+
+	recovered := map[issueKey]issueStatus{
+		key: {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false},
+	}
+	updated, _ = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
+	m = updated.(model)
+
+	if !reflect.DeepEqual(m.issues, recovered) {
+		t.Fatalf("issues after successful refresh = %#v, want wholesale replacement %#v", m.issues, recovered)
+	}
+}
+
 func TestGHUpdateNotifiesTransitionsOnceAfterInitialSnapshot(t *testing.T) {
 	notifier := &fakeTransitionNotifier{}
 	m := newModel(Options{Notifier: notifier})
@@ -724,123 +835,16 @@ func TestRecordedParentsDedupesAndSorts(t *testing.T) {
 	}
 }
 
-func TestParentChildNumbersIncludesParent(t *testing.T) {
-	got := parentChildNumbers(100, []ghissue.Issue{{Number: 101}})
-
-	if !got[100] {
-		t.Fatal("parent issue should be marked existing")
-	}
-	if !got[101] {
-		t.Fatal("sub-issue should be marked existing")
-	}
-}
-
-func TestMergeParentIssueChildrenUsesParentBodyWithoutSubIssues(t *testing.T) {
-	parentBody := "- [ ] #101 first child (blocked by #201)\n- [ ] #102 second child\n"
-
-	got, err := mergeParentIssueChildren(100, nil, parentBody, []state.Pane{{IssueNum: 101}}, func(num int) (ghissue.Issue, error) {
-		return ghissue.Issue{Number: num, Title: "issue"}, nil
+func TestRecordedIssueNumsFiltersNonPositive(t *testing.T) {
+	got := recordedIssueNums([]state.Pane{
+		{IssueNum: 5},
+		{IssueNum: 0},
+		{IssueNum: -1},
+		{IssueNum: 6},
 	})
-	if err != nil {
-		t.Fatalf("mergeParentIssueChildren() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("mergeParentIssueChildren() len = %d, want 2", len(got))
-	}
-
-	gotNums := []int{got[0].Number, got[1].Number}
-	want := []int{101, 102}
-	if !reflect.DeepEqual(gotNums, want) {
-		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, want)
-	}
-}
-
-func TestParentDependenciesFormatsOpenAndClosedBlockers(t *testing.T) {
-	issues := []ghissue.Issue{
-		{Number: 101, Body: "## Blocked by\n- #201\n- #202\n"},
-	}
-	states := map[int]string{201: "OPEN", 202: "CLOSED", 203: "OPEN"}
-	parentBody := "- [ ] #101 parent dependency (blocked by #202, #203)\n"
-
-	deps := parentDependencies("100", issues, parentBody, map[int]string{}, func(num int) string {
-		return states[num]
-	})
-
-	got := formatBlockers(deps[101])
-	want := "OPEN #201, resolved #202, OPEN #203"
-	if got != want {
-		t.Fatalf("formatBlockers() = %q, want %q", got, want)
-	}
-	if !hasOpenBlocker(deps[101]) {
-		t.Fatal("hasOpenBlocker() = false, want true")
-	}
-}
-
-func TestLoadMissingIssueDetailsSkipsLookupFailures(t *testing.T) {
-	existing := map[int]bool{100: true}
-
-	got, err := loadMissingIssueDetails([]int{100, 101, 102}, existing, func(num int) (ghissue.Issue, error) {
-		if num == 101 {
-			return ghissue.Issue{}, errBoom
-		}
-		return ghissue.Issue{Number: num, Title: "loaded"}, nil
-	})
-
-	want := []ghissue.Issue{{Number: 102, Title: "loaded"}}
+	want := []int{5, 6}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("loadMissingIssueDetails() = %#v, want %#v", got, want)
-	}
-	if err == nil || !strings.Contains(err.Error(), "#101") {
-		t.Fatalf("loadMissingIssueDetails() error = %v, want #101 partial error", err)
-	}
-	if existing[101] {
-		t.Fatal("failed lookup should not mark #101 as existing")
-	}
-	if !existing[102] {
-		t.Fatal("loaded lookup should mark #102 as existing")
-	}
-}
-
-func TestMergeParentIssueChildrenReturnsPartialRowsWithLookupError(t *testing.T) {
-	parentBody := "**wave5**\n- [ ] #101 missing child\n- [ ] #102 loaded child\n"
-
-	got, err := mergeParentIssueChildren(100, []ghissue.Issue{{Number: 103, Title: "sub", State: "OPEN"}}, parentBody, nil, func(num int) (ghissue.Issue, error) {
-		if num == 101 {
-			return ghissue.Issue{}, errBoom
-		}
-		return ghissue.Issue{Number: num, Title: "loaded", State: "OPEN"}, nil
-	})
-
-	if err == nil || !strings.Contains(err.Error(), "#101") {
-		t.Fatalf("mergeParentIssueChildren() error = %v, want #101 partial error", err)
-	}
-	gotNums := []int{}
-	for _, issue := range got {
-		gotNums = append(gotNums, issue.Number)
-	}
-	wantNums := []int{103, 102}
-	if !reflect.DeepEqual(gotNums, wantNums) {
-		t.Fatalf("mergeParentIssueChildren() nums = %#v, want %#v", gotNums, wantNums)
-	}
-	if got[1].Wave != "wave5" {
-		t.Fatalf("partial row wave = %q, want wave5", got[1].Wave)
-	}
-}
-
-func TestDependencyWavesUseParentBlockerDepth(t *testing.T) {
-	issues := []ghissue.Issue{{Number: 1}, {Number: 2}, {Number: 3}, {Number: 4}}
-	deps := map[int][]blockerStatus{
-		1: nil,
-		2: {{Num: 1, State: "CLOSED"}},
-		3: {{Num: 2, State: "OPEN"}},
-		4: {{Num: 99, State: "OPEN"}},
-	}
-
-	got := dependencyWaves(issues, deps)
-
-	want := map[int]int{1: 1, 2: 2, 3: 3, 4: 2}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("dependencyWaves() = %#v, want %#v", got, want)
+		t.Fatalf("recordedIssueNums() = %#v, want %#v", got, want)
 	}
 }
 
@@ -1116,5 +1120,23 @@ func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("launch success did not request a state reload")
+	}
+}
+
+func TestMergeDegradedIssueStatusKeepsWaveOfUnblockedPrevious(t *testing.T) {
+	// Previously confirmed unblocked ("-") but with valid wave fields: a
+	// degraded refresh must not blank Wave/WaveLabel.
+	key := issueKey{Parent: "100", Num: 101}
+	previous := map[issueKey]issueStatus{
+		key: {Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "-"},
+	}
+	current := map[issueKey]issueStatus{
+		key: {Title: "child", State: "OPEN", Blockers: "-", WaveDegraded: true},
+	}
+
+	got := mergeDegradedIssueStatuses(previous, current)
+	want := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "-", WaveDegraded: true}
+	if !reflect.DeepEqual(got[key], want) {
+		t.Fatalf("merged = %#v, want %#v", got[key], want)
 	}
 }
