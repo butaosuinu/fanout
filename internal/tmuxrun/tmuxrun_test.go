@@ -771,3 +771,22 @@ func TestSetPaneTitleAllowsEmptyTitle(t *testing.T) {
 		t.Fatalf("tmux args body = %q, want %q", string(body), want)
 	}
 }
+
+func TestListLivePanesDropsDuplicateForgedIDs(t *testing.T) {
+	// A newline-bearing cwd can forge a second "%5" row pointing at a recorded
+	// worktree. %5 exists in the (unforgeable) title listing, so presence
+	// alone would admit the forgery — a duplicated id must be dropped entirely
+	// because the genuine row cannot be told apart from the forged one.
+	installLivePanesShim(t,
+		`printf '%%5\t/real/path\n%%5\t/wt/recorded\n%%7\t/other\n'`,
+		`printf '%%5\treal title\n%%7\tother title\n'`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{{ID: "%7", CurrentPath: "/other", Title: "other title"}}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want only %%7 (duplicate %%5 dropped): %#v", panes, want)
+	}
+}

@@ -119,8 +119,19 @@ func ListLivePanes() ([]LivePane, error) {
 		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
 	}
 	titles := parseLivePaneTitles(string(titleOut))
+	// A real tmux listing emits each pane id exactly once; a duplicate means a
+	// newline-bearing pane_current_path forged an extra row reusing a REAL id
+	// (which would pass the title-listing check below). Conservatively drop
+	// such ids entirely — we cannot tell the genuine row from the forgery.
+	idCounts := make(map[string]int, len(panes))
+	for _, pane := range panes {
+		idCounts[pane.ID]++
+	}
 	var joined []LivePane
 	for _, pane := range panes {
+		if idCounts[pane.ID] != 1 {
+			continue
+		}
 		title, ok := titles[pane.ID]
 		if !ok {
 			// Absent from the unforgeable title listing: a phantom row
