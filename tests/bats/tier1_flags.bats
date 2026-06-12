@@ -371,13 +371,12 @@ load helpers
 # force_missing rebuilds PATH to exclude the named command(s) while keeping
 # jq / awk / grep / ... reachable so fanout can still run its prereq loop.
 
-@test "missing gh: reports gh + gh-sub-issue extension, exit 1" {
+@test "missing gh: exit 1" {
   force_missing gh
   run_fanout 20 --agent claude
   [ "$status" -eq 1 ]
   [[ "$output" == *"missing dependencies"* ]]
   [[ "$output" == *"gh (brew install gh)"* ]]
-  [[ "$output" == *"gh-sub-issue extension"* ]]
 }
 
 @test "missing jq: exit 1" {

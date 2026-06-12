@@ -118,3 +118,59 @@ Some notes about the same wave.
 		t.Fatalf("TaskListWaves assigned cross-repo issue 999: %#v", got)
 	}
 }
+
+func TestParsePages(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      string
+		want    [][]subIssueItem
+		wantErr bool
+	}{
+		{
+			name: "slurp pages",
+			in:   `[[{"number":1,"title":"a","state":"open"}],[{"number":2,"title":"b","state":"closed"}]]`,
+			want: [][]subIssueItem{{{Number: 1, Title: "a", State: "open"}}, {{Number: 2, Title: "b", State: "closed"}}},
+		},
+		{
+			name: "single array fallback",
+			in:   `[{"number":1,"title":"a","state":"open"}]`,
+			want: [][]subIssueItem{{{Number: 1, Title: "a", State: "open"}}},
+		},
+		{
+			name: "empty page",
+			in:   `[[]]`,
+			want: [][]subIssueItem{{}},
+		},
+		{
+			name:    "invalid JSON",
+			in:      `{"subIssues":[]}`,
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parsePages[subIssueItem]([]byte(tc.in))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parsePages(%q) = %#v, want error", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePages(%q) error: %v", tc.in, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("parsePages(%q) = %#v, want %#v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if len(got[i]) != len(tc.want[i]) {
+					t.Fatalf("parsePages(%q) page %d = %#v, want %#v", tc.in, i, got[i], tc.want[i])
+				}
+				for j := range got[i] {
+					if got[i][j] != tc.want[i][j] {
+						t.Fatalf("parsePages(%q)[%d][%d] = %#v, want %#v", tc.in, i, j, got[i][j], tc.want[i][j])
+					}
+				}
+			}
+		})
+	}
+}
