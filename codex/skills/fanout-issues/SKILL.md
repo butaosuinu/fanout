@@ -24,7 +24,7 @@ dependency graph, labels/assignees, and target repo before creating anything.
 ## Preconditions
 
 - Use the repository the user is working in unless they provide `--repo OWNER/REPO` or name another repo.
-- Verify `gh` is authenticated and `gh sub-issue --help` works. If the extension is missing, tell the user to install `gh extension install yahsan2/gh-sub-issue`.
+- Verify `gh` is authenticated (`gh auth status`). Sub-issue linking uses the GitHub Sub-issues REST API through `gh api`.
 - Keep all child issues in the same repo as the parent. `fanout` skips cross-repo task-list references.
 - Preserve user-provided labels, assignees, milestones, and projects when they are relevant to both parent and children.
 
@@ -89,10 +89,10 @@ The `## Fanout children` rows must be same-repo task-list rows in the form
 
 ## Create Issues
 
-Prefer `gh issue create` plus `gh sub-issue add` over `gh sub-issue create`
-because `gh issue create --body-file` handles multiline bodies reliably.
-Write bodies to temporary Markdown files first instead of embedding large
-Markdown strings in shell commands.
+Create issues with `gh issue create --body-file` (it handles multiline bodies
+reliably), then link each child to its parent through the GitHub Sub-issues
+REST API with `gh api`. Write bodies to temporary Markdown files first instead
+of embedding large Markdown strings in shell commands.
 
 Recommended sequence:
 
@@ -109,7 +109,8 @@ child_url=$(gh issue create -R "$repo" \
   --body-file /tmp/fanout-child-1.md)
 child_num="${child_url##*/}"
 
-gh sub-issue add "$parent_num" "$child_num" -R "$repo"
+child_id=$(gh api "repos/$repo/issues/$child_num" --jq .id)
+gh api --silent -X POST "repos/$repo/issues/$parent_num/sub_issues" -F sub_issue_id="$child_id"
 ```
 
 For an existing parent, fetch and preserve its current body before appending or
@@ -123,7 +124,8 @@ gh issue edit "$parent_num" -R "$repo" --body-file /tmp/fanout-parent-final.md
 For an existing child, do not recreate it. Link it:
 
 ```bash
-gh sub-issue add "$parent_num" "$child_num" -R "$repo"
+child_id=$(gh api "repos/$repo/issues/$child_num" --jq .id)
+gh api --silent -X POST "repos/$repo/issues/$parent_num/sub_issues" -F sub_issue_id="$child_id"
 ```
 
 ## Update Parent
@@ -142,13 +144,14 @@ GitHub Sub-issues relationship:
 Run:
 
 ```bash
-gh sub-issue list "$parent_num" -R "$repo" --json number,title,state
+gh api --paginate "repos/$repo/issues/$parent_num/sub_issues" \
+  --jq '.[] | [.number, .state, .title] | @tsv'
 gh issue view "$parent_num" -R "$repo" --json body -q .body
 ```
 
 Confirm:
 
-- Every intended child appears in `gh sub-issue list` with `state` open.
+- Every intended child appears in the sub-issues API response with `state` open.
 - The parent body has a same-repo task-list row for every child.
 - Blocked children have both child-body `## Blocked by` references and parent-row `(blocked by #N)` trailers.
 - No cross-repo `owner/repo#N` row is required for fanout discovery.
