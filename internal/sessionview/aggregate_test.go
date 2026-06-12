@@ -40,6 +40,12 @@ func livePanesAt(paneIDs ...string) func() (map[string]LivePaneInfo, error) {
 	}
 }
 
+// livePanesWith builds a LivePanes collector serving the given map verbatim,
+// for tests that need per-pane titles/agent states beyond livePanesAt's defaults.
+func livePanesWith(m map[string]LivePaneInfo) func() (map[string]LivePaneInfo, error) {
+	return func() (map[string]LivePaneInfo, error) { return m, nil }
+}
+
 // wavesNone is a Waves collector that always reports a cache miss (not fetched
 // yet) — the non-degraded GitHub baseline for tests not exercising waves.
 func wavesNone(parent string) (map[int]WaveInfo, error) {
@@ -63,9 +69,12 @@ func mergedPR(n int) []ghissue.PRRef {
 }
 
 func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
+	p101 := pane("100", 101, "%1")
+	p101.BaseBranch = "main"
+	gotBaseRefs := map[string]string{}
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(pane("100", 102, "%2"), pane("100", 101, "%1"), pane("90", 91, "%9")),
+		LoadState: storeOf(pane("100", 102, "%2"), p101, pane("90", 91, "%9")),
 		LivePanes: livePanesAt("%1", "%9"),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
 			if num == 101 {
@@ -74,7 +83,8 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 			return "OPEN", []ghissue.PRRef{}, nil
 		},
 		Waves: wavesNone,
-		WorktreeStat: func(path string) (WorktreeStat, error) {
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			gotBaseRefs[path] = baseRef
 			if path == "/wt/%1" {
 				return WorktreeStat{DiffSummary: "+12/-3", DirtyState: "dirty"}, nil
 			}
@@ -82,6 +92,15 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 		},
 	}
 	snap := Build("owner/name", "/root", c)
+
+	// the state row's BaseBranch must reach the worktree-stat collector;
+	// rows without one pass "" (legacy rows).
+	if gotBaseRefs["/wt/%1"] != "main" {
+		t.Fatalf("baseRef for /wt/%%1 = %q, want main", gotBaseRefs["/wt/%1"])
+	}
+	if gotBaseRefs["/wt/%2"] != "" {
+		t.Fatalf("baseRef for /wt/%%2 = %q, want empty (legacy row)", gotBaseRefs["/wt/%2"])
+	}
 
 	if snap.GeneratedAt != "2026-06-06T12:00:00Z" {
 		t.Fatalf("GeneratedAt = %q", snap.GeneratedAt)
@@ -203,7 +222,7 @@ func TestBuildWorktreeStatErrorIsPerPane(t *testing.T) {
 		LivePanes: livePanesAt(),
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 		Waves:     wavesNone,
-		WorktreeStat: func(path string) (WorktreeStat, error) {
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
 			return WorktreeStat{}, errors.New("git unavailable")
 		},
 	}
@@ -334,6 +353,86 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 	}
 	if panes[1].Alive || panes[1].TmuxTitle != "" {
 		t.Fatalf("dead pane must not carry a title: alive=%v title=%q", panes[1].Alive, panes[1].TmuxTitle)
+	}
+}
+
+func TestNormalizeAgentState(t *testing.T) {
+	cases := map[string]string{
+		"":           "",
+		"running":    "running",
+		"done":       "done",
+		" running ":  "running", // 余分な空白は剥がす
+		"claude":     "",        // ラッパー外の値は不明扱い
+		"bash":       "",
+		"x\ty":       "", // pane 内プロセスが偽装した文字列も不明扱い
+		"RUNNING":    "", // 値はラッパーが設定する小文字リテラルのみ
+		"done extra": "",
+	}
+	for raw, want := range cases {
+		if got := normalizeAgentState(raw); got != want {
+			t.Errorf("normalizeAgentState(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func TestBuildAgentStateFromLiveOption(t *testing.T) {
+	dead := pane("1", 6, "%5")
+	dead.AgentStatus = "running" // pane 死亡 + tmux 正常なら記録値は使われない
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), dead),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%1": {Path: "/wt/%1", AgentState: "running"},
+			"%2": {Path: "/wt/%2", AgentState: "done"},
+			"%3": {Path: "/wt/%3", AgentState: "forged junk"}, // 偽装/未知の値は不明へ
+			"%4": {Path: "/wt/%4"},                            // option 未設定の alive pane(旧版 fanout 起動など)
+			// %5 は live set に居ない(pane 死亡)
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:    wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	wants := []string{"running", "done", "", "", ""}
+	for i, want := range wants {
+		if panes[i].AgentState != want {
+			t.Fatalf("#%d AgentState = %q, want %q", panes[i].IssueNum, panes[i].AgentState, want)
+		}
+	}
+	if snap.Sessions[0].Rollup.Running != 1 {
+		t.Fatalf("session Rollup.Running = %d, want 1", snap.Sessions[0].Rollup.Running)
+	}
+	if snap.Rollup.Running != 1 {
+		t.Fatalf("snapshot Rollup.Running = %d, want 1", snap.Rollup.Running)
+	}
+}
+
+func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) {
+	recorded := pane("1", 2, "%1")
+	recorded.AgentStatus = "running"
+	unrecorded := pane("1", 3, "%2") // 旧 state 行: agentStatus 無し
+	tampered := pane("1", 4, "%3")   // 手編集された state 行: 規定外の値は捨てる
+	tampered.AgentStatus = "<b>maybe</b>"
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(recorded, unrecorded, tampered),
+		LivePanes: func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") },
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if panes[0].AgentState != "running" {
+		t.Fatalf("degraded-tmux AgentState = %q, want fallback to recorded \"running\"", panes[0].AgentState)
+	}
+	if panes[1].AgentState != "" {
+		t.Fatalf("degraded-tmux AgentState without recorded status = %q, want empty", panes[1].AgentState)
+	}
+	if panes[2].AgentState != "" {
+		t.Fatalf("degraded-tmux AgentState with tampered status = %q, want empty", panes[2].AgentState)
+	}
+	if snap.Rollup.Running != 1 {
+		t.Fatalf("Rollup.Running = %d, want 1 (fallback row counts)", snap.Rollup.Running)
 	}
 }
 

@@ -192,3 +192,39 @@ func TestIndexServedAtRoot(t *testing.T) {
 		t.Fatalf("index missing title: %s", body)
 	}
 }
+
+// TestStaticAssetsSmoke is a regression guard for the go:embed wiring: it
+// asserts the embedded SPA assets are served at their expected paths and carry
+// the markers the live UI depends on (the HUD running counter in index.html,
+// and the reconcile renderer + agentState wiring in app.js).
+func TestStaticAssetsSmoke(t *testing.T) {
+	srv := newTestServer(t, "")
+
+	resp, err := http.Get(srv.base + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d want 200", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `id="s-running"`) {
+		t.Fatalf("index missing running counter marker id=\"s-running\": %s", body)
+	}
+
+	resp, err = http.Get(srv.base + "/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /app.js status = %d want 200", resp.StatusCode)
+	}
+	for _, marker := range []string{"renderSessions", "agentState"} {
+		if !strings.Contains(string(body), marker) {
+			t.Fatalf("app.js missing marker %q", marker)
+		}
+	}
+}

@@ -36,9 +36,12 @@ Typical single-tool flow:
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane
 IDs still exist in tmux, and periodically refreshes issue / closed-by PR state
 through the same GitHub CLI source used by `fanout <parent> --status`. Each row
-also shows the pane worktree's `git diff --shortstat HEAD` summary as `+X/-Y`
-and `dirty`/`clean` from `git status --porcelain`, so uncommitted work is
-visible without agent instrumentation. Press
+also shows the pane worktree's total work size as `+X/-Y` — `git diff
+--shortstat` against the merge-base with the recorded base branch, so committed
+and uncommitted changes both count (rows recorded before the base branch was
+tracked fall back to `origin/HEAD`, then `HEAD`) — and `dirty`/`clean` from
+`git status --porcelain`, which flags uncommitted work without agent
+instrumentation. Press
 `/` to filter the loaded rows in memory with free-text terms or predicates such
 as `state:open`, `agent:codex`, and `wave:wave5`. Filtering does not trigger
 extra data fetches, and the automatic state / GitHub refresh continues while a
@@ -414,15 +417,19 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   `FANOUT_DASHBOARD_KEYBIND=0`.
 - **Session table + HUD.** Each pane row shows issue, agent, wave and open
   blockers (from the parent issue graph), branch, diff/dirty, CI status, tmux
-  liveness with the current pane title, and PR state; the HUD on top includes
-  a repo-wide blocked count.
+  liveness with the current pane title and a `running` / `done` agent-state
+  badge (reported live by the pane's launch wrapper; when tmux is unreachable
+  it falls back to the launch-time record, which can be stale), and PR state;
+  the HUD on top includes repo-wide running and blocked counts.
 - **Detail drawer with live peek.** Click a row to open a right-side drawer:
   pane metadata, wave/blockers, worktree, PRs with CI, the original prompt,
   and a *peek* at the pane's recent output (`GET /api/peek`, a read-only
   `tmux capture-pane` refreshed every 5 s while open).
 - **Structured filtering.** The filter box ANDs free words with
-  `state:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` /
-  `pr:` terms — e.g. `agent:claude wave:2 ci:fail`.
+  `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
+  `issue:` / `pr:` terms — e.g. `agent:claude wave:2 ci:fail run:running`.
+  The dropdowns next to the box write the same tokens for you, and active
+  terms appear as removable chips.
 - **Light/dark themes.** The PAPER BREEZE UI matches the docs site; the header
   toggle persists to `localStorage` (`fanout.theme`) and defaults to your
   `prefers-color-scheme`.

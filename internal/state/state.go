@@ -24,10 +24,13 @@ type Store struct {
 // GitHub issue number, while synthetic launches use a reserved parent such as
 // @manual with non-GitHub numbers that only need to be unique under that parent.
 type Pane struct {
-	Parent       string `json:"parent"`
-	IssueNum     int    `json:"issueNum"`
-	Slug         string `json:"slug"`
-	BranchName   string `json:"branchName"`
+	Parent     string `json:"parent"`
+	IssueNum   int    `json:"issueNum"`
+	Slug       string `json:"slug"`
+	BranchName string `json:"branchName"`
+	// BaseBranch is the resolved base branch the worktree branched from
+	// (e.g. "main"). Legacy rows recorded before this field load as "".
+	BaseBranch   string `json:"baseBranch,omitempty"`
 	PaneID       string `json:"paneId"`
 	Agent        string `json:"agent"`
 	Wave         string `json:"wave,omitempty"`
@@ -35,6 +38,10 @@ type Pane struct {
 	WorktreePath string `json:"worktreePath"`
 	Prompt       string `json:"prompt"`
 	CreatedAt    string `json:"createdAt"`
+	// AgentStatus は起動時に "running" を記録する。終了検知デーモンは無いので
+	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
+	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
+	AgentStatus string `json:"agentStatus,omitempty"`
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.

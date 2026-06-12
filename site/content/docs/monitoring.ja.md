@@ -17,7 +17,7 @@ fanout   # start the persistent tmux console
 
 素のシェルから起動した場合は、現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または attach し、その session 内でコンソールを開始します。tmux 内から起動した場合は、現在の pane をそのままコンソール画面にします。
 
-コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue / closed-by PR 状態を定期更新します。各行には pane worktree の `git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による `dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を確認できます。
+コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue / closed-by PR 状態を定期更新します。各行には pane worktree の総作業量 `+X/-Y`（記録した base ブランチとの merge-base に対する `git diff --shortstat`。コミット済み + 未 commit の合計で、base 未記録の旧行は `origin/HEAD` → `HEAD` に fallback）と、`git status --porcelain` による `dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業の有無を確認できます。
 
 `/` を押すとロード済み行をメモリ内でフィルタでき、フリーテキストのほか `state:open`、`agent:codex`、`wave:wave5` のような述語も使えます。フィルタが追加 fetch を発生させることはなく、フィルタ中も state / GitHub の自動更新は継続します。
 

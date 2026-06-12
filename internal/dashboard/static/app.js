@@ -4,7 +4,12 @@
  * stream drops. The token (when the server requires one) rides as a ?token=
  * query param, read from this page's own URL. No build step, no dependencies.
  * UI logic mirrors docs/mockups/dashboard-paper-breeze.html (the approved
- * design contract); only the transport + /api/peek wiring is real here. */
+ * design contract); only the transport + /api/peek wiring is real here.
+ * 描画はキー付き差分パッチ(reconcile): SSE 更新ごとに innerHTML を全置換せず、
+ * 変化したセクション/行だけ更新する(rise 再生・hover/フォーカス喪失の防止)。
+ * diffSummary (+X/-Y) は base ブランチ比の総作業量(コミット済み+未コミット)。
+ * pane.agentState は "running" / "done" / ""(不明)— tmux 列・ドロワー・HUD
+ * (rollup.running)に表示する。 */
 
 const token = new URLSearchParams(location.search).get("token") || "";
 const q = (path) => path + (token ? "?token=" + encodeURIComponent(token) : "");
@@ -15,6 +20,38 @@ const state = { snap: null, sortKey: "issueNum", sortDir: 1, filter: "", selecte
 /* ---- helpers ---- */
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, "\\$&"));
+
+/* ---- GitHub リンク ---- */
+/* snap.repo("owner/name")を検証してリポジトリ URL の基底を返す。形式不一致
+ * (空・予期しない文字)なら "" — その場合リンク化せず素テキストに落とす。 */
+function ghBase() {
+  const repo = state.snap?.repo || "";
+  return /^[\w.-]+\/[\w.-]+$/.test(repo) ? "https://github.com/" + repo : "";
+}
+/* n > 0 ガード: @manual ペインの合成番号(-1, -2, …)は GitHub issue ではない
+ * ので、リンク化せず素テキスト表示に落とす(repo 未解決時 fallback と同様)。 */
+function issueUrl(n) {
+  const base = ghBase();
+  return base && n > 0 ? `${base}/issues/${n}` : "";
+}
+function prUrl(n) {
+  const base = ghBase();
+  return base && n > 0 ? `${base}/pull/${n}` : "";
+}
+/* Issue-mode parents are plain numbers; Project-mode parents are already a
+ * github.com Projects URL(プレフィックス検証つきパススルー)。それ以外は "". */
+function parentUrl(parent) {
+  if (/^\d+$/.test(parent)) return issueUrl(parent);
+  if (/^https:\/\/github\.com\//.test(parent)) return parent;
+  return "";
+}
+/* inner は呼び出し側で esc 済みの HTML だけを渡すこと。href は esc() を通す
+ * (Projects URL パススルー対策)。url が空なら inner をそのまま返す。token は
+ * index.html の <meta name="referrer" content="no-referrer"> により漏れない。 */
+function linkHtml(url, inner, cls) {
+  if (!url) return inner;
+  return `<a class="${cls || "gh"}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+}
 
 /* ghissue.PrimaryPR と同じ選択規則(MERGED 優先、なければ先頭)。ciStatus と
  * 同じ PR を指すよう backend とミラーしておかないと、PR 列と ci 列が別の PR を
@@ -42,14 +79,24 @@ function paneCI(p) {
   return p.ciStatus === "-" ? "" : p.ciStatus;
 }
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
- * anything else (UNKNOWN etc.) → "<STATE> #N". */
+ * anything else (UNKNOWN etc.) → "<STATE> #N". blockerLabel はその #N を除いた
+ * 状態ラベル部分(プレーンテキスト): fmtBlockers(title 属性・検索 haystack)と
+ * ドロワーのリンク化 HTML(blockersHtml)で共用する。 */
+function blockerLabel(b) {
+  if (b.state === "OPEN") return "OPEN";
+  if (b.state === "CLOSED") return "resolved";
+  return String(b.state ?? "").trim() || "-";
+}
 function fmtBlockers(p) {
   if (!p.blockers || !p.blockers.length) return "-";
-  return p.blockers.map((b) => {
-    if (b.state === "OPEN") return `OPEN #${b.num}`;
-    if (b.state === "CLOSED") return `resolved #${b.num}`;
-    return `${String(b.state ?? "").trim() || "-"} #${b.num}`;
-  }).join(", ");
+  return p.blockers.map((b) => `${blockerLabel(b)} #${b.num}`).join(", ");
+}
+/* ドロワー用: fmtBlockers と同表記のまま各 #N を issue リンクに(repo 未解決時
+ * は linkHtml が素テキストに落とす)。 */
+function blockersHtml(p) {
+  if (!p.blockers || !p.blockers.length) return "-";
+  return p.blockers.map((b) =>
+    `${esc(blockerLabel(b))} ${linkHtml(issueUrl(b.num), "#" + esc(b.num))}`).join(", ");
 }
 function fmtWave(p) { return p.waveLabel || (p.wave ? `w${p.wave}` : ""); }
 function clock(iso) {
@@ -58,7 +105,7 @@ function clock(iso) {
 }
 
 /* 構造化フィルタ: key:value + 自由語、すべて AND。未知キーは自由語に降格 */
-const FILTER_KEYS = new Set(["state", "agent", "wave", "ci", "dirty", "live", "issue", "pr"]);
+const FILTER_KEYS = new Set(["state", "agent", "wave", "ci", "dirty", "live", "issue", "pr", "run"]);
 function parseQuery(str) {
   const terms = [];
   for (const tok of String(str).trim().split(/\s+/)) {
@@ -71,12 +118,13 @@ function parseQuery(str) {
 }
 function matches(p, terms) {
   const hay = [p.issueNum, p.displayName, p.slug, p.agent, p.branchName, p.diffSummary,
-    p.dirtyState, p.issueState, p.tmuxTitle, fmtWave(p), fmtBlockers(p)].join(" ").toLowerCase();
+    p.dirtyState, p.issueState, p.tmuxTitle, p.agentState, fmtWave(p), fmtBlockers(p)].join(" ").toLowerCase();
   for (const t of terms) {
     if (t.word) { if (!hay.includes(t.word)) return false; continue; }
     const pr = prPrimary(p.prs);
     switch (t.key) {
       case "state": if ((p.tmuxState === t.value ? p.tmuxState : String(p.issueState || "").toLowerCase()) !== t.value) return false; break;
+      case "run": if ((p.agentState || "") !== t.value) return false; break;
       case "agent": if (!String(p.agent || "").toLowerCase().includes(t.value)) return false; break;
       case "wave": if (String(p.wave ?? "") !== t.value && (p.waveLabel || "").toLowerCase() !== t.value && fmtWave(p).toLowerCase() !== t.value) return false; break;
       case "ci": if (paneCI(p) !== t.value) return false; break;
@@ -87,6 +135,58 @@ function matches(p, terms) {
     }
   }
   return true;
+}
+
+/* ---- フィルタ操作 UI(ドロップダウン+チップ) ----
+ * #filter のテキストが単一の真実 — ドロップダウンは key:value トークンを書き
+ * 込むだけで手打ち構文と完全互換。チップは適用中トークン(手打ち含む)の
+ * 可視化+クリック削除。 */
+function filterTokens() {
+  return state.filter.trim().split(/\s+/).filter(Boolean);
+}
+function setFilterText(toks) {
+  const text = toks.join(" ");
+  $("filter").value = text;
+  state.filter = text;
+  renderChips();
+  renderSessions(state.snap, false); // filter-count もここで更新される
+}
+/* 同キーの既存トークンを置き換えて追加(state:open → state:closed は上書き) */
+function setToken(key, value) {
+  const prefix = key + ":";
+  const toks = filterTokens().filter((t) => !t.toLowerCase().startsWith(prefix));
+  toks.push(prefix + value);
+  setFilterText(toks);
+}
+function removeToken(tok) {
+  setFilterText(filterTokens().filter((t) => t !== tok));
+}
+function renderChips() {
+  setHtml($("chips"), filterTokens().map((t) =>
+    `<button type="button" class="chip" role="listitem" data-tok="${esc(t)}" aria-label="フィルタ ${esc(t)} を外す">${esc(t)}<span class="x" aria-hidden="true">×</span></button>`).join(""));
+}
+/* snapshot から agent / wave の選択肢を導出。agent は重複排除し、トークンが
+ * 空白 split される都合上、空白を含む値は除外。wave は数値昇順で
+ * value=N(matches() の wave case は String(p.wave) と比較)・表示 "wN"。 */
+function refreshSelectOptions(snap) {
+  const agents = new Set();
+  const waves = new Set();
+  for (const s of snap.sessions || []) {
+    for (const p of s.panes || []) {
+      const a = String(p.agent || "").trim();
+      if (a && !/\s/.test(a)) agents.add(a);
+      if (p.wave) waves.add(p.wave);
+    }
+  }
+  patchSelect($("f-agent"), "agent", [...agents].sort().map((a) => [a, a]));
+  patchSelect($("f-wave"), "wave", [...waves].sort((x, y) => x - y).map((w) => [String(w), "w" + w]));
+}
+/* select の option 差し替え。フォーカス中(=開いている可能性)は再構築しない —
+ * 2 秒 tick がユーザーの開いたドロップダウンを閉じてしまうのを防ぐ。 */
+function patchSelect(sel, label, pairs) {
+  if (document.activeElement === sel) return;
+  setHtml(sel, `<option value="">${esc(label)}</option>` +
+    pairs.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join(""));
 }
 
 const SORTS = {
@@ -105,8 +205,43 @@ const SORTS = {
 };
 
 /* ---- 描画 ---- */
+/* 直前に書き込んだ HTML 文字列と一致するなら DOM を触らない。DOM の再シリア
+ * ライズは round-trip しないので、比較は常に「自分が書いた文字列」と行う。 */
+const htmlCache = new WeakMap();
+function setHtml(el, html) {
+  if (htmlCache.get(el) === html) return false;
+  el.innerHTML = html;
+  htmlCache.set(el, html);
+  return true;
+}
+/* key 付き子要素のカーソル走査 reconcile。順序どおりに既存ノードを再利用し、
+ * ずれたノードは insertBefore で移動(要素の状態が保たれちらつかない)、無い
+ * ものは make() で生成、ループ後に余った子を remove する。 */
+function reconcile(container, items, keyOf, make, patch) {
+  let cursor = container.firstElementChild;
+  for (const item of items) {
+    let node = cursor && keyOf(cursor) === item.key ? cursor : null;
+    if (!node) {
+      for (let n = cursor; n; n = n.nextElementSibling) {
+        if (keyOf(n) === item.key) { node = n; break; }
+      }
+      if (!node) node = make(item);
+      container.insertBefore(node, cursor);
+    }
+    patch(node, item);
+    cursor = node.nextElementSibling;
+  }
+  while (cursor) { const gone = cursor; cursor = cursor.nextElementSibling; gone.remove(); }
+}
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
+}
+/* agentState バッジ。"running" / "done" 以外(空 = pane 死亡・不明)は "" を返し、
+ * 呼び出し側が省略 or ミュート表示を選ぶ。 */
+function agentStateTag(s) {
+  if (s === "running") return tagHtml("t-warn", "running");
+  if (s === "done") return tagHtml("t-ok", "done");
+  return "";
 }
 /* blockers セル: "resolved" は全 blocker が CLOSED 確定のときだけ。state 取得に
  * 失敗した UNKNOWN 行が混ざる場合は unknown と表示する(解決済みと誤認させない)。 */
@@ -121,13 +256,14 @@ function blockersCell(p, openBlk) {
 function rowKey(parent, p) {
   return `${parent}#${p.issueNum}`;
 }
-function rowHtml(p, key) {
+/* 12 <td> セルのみ。tr 自体は makeRow が生成し、selected クラスは
+ * classList 操作専用(markup には含めない)。 */
+function rowCellsHtml(p) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
-  const sel = state.selected === key ? " selected" : "";
-  return `<tr class="row${sel}" data-key="${esc(key)}" tabindex="0">
-    <td class="c-issue">#${esc(p.issueNum)}</td>
+  const run = agentStateTag(p.agentState);
+  return `<td class="c-issue">${linkHtml(issueUrl(p.issueNum), "#" + esc(p.issueNum))}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td>${esc(p.agent || "—")}</td>
     <td>${fmtWave(p) ? esc(fmtWave(p)) : '<span class="muted">—</span>'}</td>
@@ -136,10 +272,9 @@ function rowHtml(p, key) {
     <td class="c-diff${p.worktreeErr ? " fault" : ""}" title="${esc(p.worktreeErr || "")}">${diffHtml(p)}</td>
     <td>${p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">—</span>'}</td>
     <td>${ci === "pass" ? tagHtml("t-ok", "pass") : ci === "fail" ? tagHtml("t-err", "fail") : ci === "pending" ? tagHtml("t-warn", "pending") : '<span class="muted">—</span>'}</td>
-    <td title="${esc(p.tmuxTitle || "")}"><span class="dot ${p.alive ? "on" : "off"}" aria-hidden="true"></span>${p.alive ? "live" : esc(p.tmuxState || "stale")}</td>
+    <td title="${esc(p.tmuxTitle || "")}"><span class="dot ${p.alive ? "on" : "off"}" aria-hidden="true"></span>${p.alive ? "live" : esc(p.tmuxState || "stale")}${run ? " " + run : ""}</td>
     <td>${p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">?</span>'}</td>
-    <td>${prCell(pr)}</td>
-  </tr>`;
+    <td>${prCell(pr)}</td>`;
 }
 function diffHtml(p) {
   const m = /^\+(\d+)\/-(\d+)$/.exec(p.diffSummary || "");
@@ -151,7 +286,8 @@ function prCell(pr) {
   const cls = pr.state === "MERGED" ? "t-merged" : pr.state === "OPEN" ? "t-open" : "";
   const draft = pr.isDraft ? " t-draft" : "";
   // PRRef carries no title on the wire (ghissue.PRRef) — number/state only.
-  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`);
+  // 行の PR 列・ドロワーの PR リスト共通で、ピルごと PR ページへのリンクに包む。
+  return linkHtml(prUrl(pr.number), tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`), "gh gh-pill");
 }
 
 const COLS = [
@@ -160,7 +296,7 @@ const COLS = [
   ["ci", "ci"], ["tmux", "tmux"], ["state", "state"], ["pr", "pr"],
 ];
 
-function draw() {
+function draw(animate) {
   const snap = state.snap;
   if (!snap) return;
 
@@ -178,9 +314,30 @@ function draw() {
   banner.hidden = !msgs.length;
   banner.textContent = msgs.join(" · ");
 
+  refreshSelectOptions(snap);
+  renderSessions(snap, animate);
+
+  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0, running: 0 };
+  $("s-total").textContent = r.total; $("s-live").textContent = r.live;
+  $("s-running").textContent = r.running ?? 0;
+  $("s-merged").textContent = r.merged; $("s-pending").textContent = r.pending;
+  $("s-blocked").textContent = r.blocked;
+  $("hud-fill").style.width = (r.total ? (r.merged / r.total) * 100 : 0) + "%";
+  $("status").textContent = "telemetry @ " + clock(snap.generatedAt);
+  syncDrawer();
+}
+
+/* セッション一覧の差分パッチ描画。filter+sort 済みの順序付きリストを作り、
+ * #sessions の子(section[data-parent] でキー付け)へ reconcile する。空状態
+ * (該当なし)も key="" の専用エントリとして同じループで扱う。animate===true
+ * (SSE 更新)のときだけ新規セクションに rise 入場アニメを付与する。 */
+function renderSessions(snap, animate) {
+  if (!snap) return;
   const terms = parseQuery(state.filter);
+  const thsHtml = COLS.map(([key, label]) =>
+    `<th data-sort="${key}" aria-sort="${state.sortKey === key ? (state.sortDir === 1 ? "ascending" : "descending") : "none"}">${label}${state.sortKey === key ? ` <span class="dir">${state.sortDir === 1 ? "▴" : "▾"}</span>` : ""}</th>`).join("");
   let shown = 0, total = 0;
-  const out = [];
+  const items = [];
   for (const s of snap.sessions || []) {
     const all = s.panes || [];
     total += all.length;
@@ -199,32 +356,49 @@ function draw() {
     const parentLabel = /^\d+$/.test(parent) ? "#" + parent : parent.replace(/^https:\/\/github\.com\//, "");
     const sr = s.rollup || { total: all.length, merged: 0 };
     const pct = sr.total ? Math.round((sr.merged / sr.total) * 100) : 0;
-    const ths = COLS.map(([key, label]) =>
-      `<th data-sort="${key}" aria-sort="${state.sortKey === key ? (state.sortDir === 1 ? "ascending" : "descending") : "none"}">${label}${state.sortKey === key ? ` <span class="dir">${state.sortDir === 1 ? "▴" : "▾"}</span>` : ""}</th>`).join("");
-    out.push(`<section class="session rise">
-      <header class="session-head">
-        <h2><span class="s-parent">${esc(parentLabel)}</span></h2>
-        <div class="s-progress"><span>${sr.merged}/${sr.total} merged</span><div class="bar"><i style="width:${pct}%"></i></div></div>
-      </header>
-      <div class="table-wrap"><table>
-        <thead><tr>${ths}</tr></thead>
-        <tbody>${panes.map((p) => rowHtml(p, rowKey(parent, p))).join("")}</tbody>
-      </table></div>
-    </section>`);
+    items.push({
+      key: parent,
+      headHtml: `<h2><span class="s-parent">${linkHtml(parentUrl(parent), esc(parentLabel))}</span></h2>
+        <div class="s-progress"><span>${sr.merged}/${sr.total} merged</span><div class="bar"><i style="width:${pct}%"></i></div></div>`,
+      thsHtml,
+      rows: panes.map((p) => ({ key: rowKey(parent, p), cells: rowCellsHtml(p) })),
+    });
   }
-  if (!out.length) {
-    out.push(`<section class="session"><div class="empty"><span class="ji">no panes in the breeze</span>${total ? "フィルタに一致するペインがありません" : "アクティブなセッションがありません"}</div></section>`);
+  if (!items.length) {
+    items.push({ key: "", emptyHtml: `<div class="empty"><span class="ji">no panes in the breeze</span>${total ? "フィルタに一致するペインがありません" : "アクティブなセッションがありません"}</div>` });
   }
-  $("sessions").innerHTML = out.join("");
+  reconcile($("sessions"), items, (n) => n.dataset.parent, (item) => makeSection(item, animate), patchSection);
   $("filter-count").textContent = `${shown} / ${total}`;
-  const r = snap.rollup || { total: 0, merged: 0, pending: 0, live: 0, blocked: 0 };
-  $("s-total").textContent = r.total; $("s-live").textContent = r.live;
-  $("s-merged").textContent = r.merged; $("s-pending").textContent = r.pending;
-  $("s-blocked").textContent = r.blocked;
-  $("hud-fill").style.width = (r.total ? (r.merged / r.total) * 100 : 0) + "%";
-  $("status").textContent = "telemetry @ " + clock(snap.generatedAt);
-  bindRows();
-  syncDrawer();
+}
+/* 空状態(emptyHtml 持ち・key="")は .empty 1 枚のフラット構造で、従来どおり
+ * rise なし。通常セクションはスケルトンを作り patchSection が中身を埋める。 */
+const SECTION_SKELETON = '<header class="session-head"></header><div class="table-wrap"><table><thead><tr></tr></thead><tbody></tbody></table></div>';
+function makeSection(item, animate) {
+  const sec = document.createElement("section");
+  sec.className = "session" + (animate && item.emptyHtml == null ? " rise" : "");
+  sec.dataset.parent = item.key;
+  if (item.emptyHtml == null) setHtml(sec, SECTION_SKELETON);
+  return sec;
+}
+function patchSection(sec, item) {
+  if (item.emptyHtml != null) { setHtml(sec, item.emptyHtml); return; }
+  // 空状態ノードが同キーで再利用された場合(degenerate な parent="")に備え、
+  // スケルトン欠落時は組み直す。
+  if (!sec.querySelector(".session-head")) setHtml(sec, SECTION_SKELETON);
+  setHtml(sec.querySelector(".session-head"), item.headHtml);
+  setHtml(sec.querySelector("thead tr"), item.thsHtml); // ソート変更時のみ変化
+  reconcile(sec.querySelector("tbody"), item.rows, (n) => n.dataset.key, makeRow, patchRow);
+}
+function makeRow(item) {
+  const tr = document.createElement("tr");
+  tr.className = "row"; // 行には rise を付けない — セクションのみ
+  tr.dataset.key = item.key;
+  tr.tabIndex = 0;
+  return tr;
+}
+function patchRow(tr, item) {
+  setHtml(tr, item.cells);
+  tr.classList.toggle("selected", state.selected === item.key);
 }
 
 /* ---- 詳細ドロワー + peek ---- */
@@ -252,23 +426,24 @@ function renderDrawer(p) {
   const drawer = $("drawer");
   if (!p) { stopPeek(); drawer.hidden = true; return; }
   drawer.hidden = false;
-  $("d-issue").textContent = "#" + p.issueNum;
+  setHtml($("d-issue"), linkHtml(issueUrl(p.issueNum), "#" + esc(p.issueNum)));
   $("d-name").textContent = p.displayName || p.slug || "—";
   $("d-agent").textContent = p.agent || "—";
   $("d-pane").textContent = p.paneId || "—";
   $("d-tmux").textContent = p.alive ? "live" : (p.tmuxState || "stale");
+  setHtml($("d-run"), agentStateTag(p.agentState) || '<span class="muted">—</span>');
   $("d-title").textContent = p.tmuxTitle || "—";
   $("d-created").textContent = p.createdAt ? p.createdAt.replace("T", " ").slice(0, 16) : "—";
-  $("d-state").innerHTML = p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>';
+  setHtml($("d-state"), p.issueState === "OPEN" ? tagHtml("t-open", "OPEN") : p.issueState === "CLOSED" ? tagHtml("", "CLOSED") : '<span class="muted">UNKNOWN</span>');
   $("d-wave").textContent = fmtWave(p) || "—";
-  $("d-blockers").textContent = fmtBlockers(p);
+  setHtml($("d-blockers"), blockersHtml(p));
   $("d-path").textContent = (p.worktreePath || "—") + (p.worktreeErr ? ` (${p.worktreeErr})` : "");
   $("d-branch").textContent = p.branchName || "—";
   $("d-diff").textContent = p.diffSummary || "—";
-  $("d-dirty").innerHTML = p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">unknown</span>';
-  $("d-prs").innerHTML = (p.prs && p.prs.length)
+  setHtml($("d-dirty"), p.dirtyState === "clean" ? tagHtml("t-ok", "clean") : p.dirtyState === "dirty" ? tagHtml("t-warn", "dirty") : '<span class="muted">unknown</span>');
+  setHtml($("d-prs"), (p.prs && p.prs.length)
     ? p.prs.map((pr) => `<li>${prCell(pr)}${pr.ci ? " " + (pr.ci === "pass" ? tagHtml("t-ok", "ci pass") : pr.ci === "fail" ? tagHtml("t-err", "ci fail") : tagHtml("t-warn", "ci pending")) : ""}${pr.reviewDecision ? " " + tagHtml("", pr.reviewDecision.toLowerCase().replace(/_/g, " ")) : ""}</li>`).join("")
-    : '<li class="muted">—</li>';
+    : '<li class="muted">—</li>');
   $("d-prompt").textContent = p.prompt || "—";
   $("peek-title").textContent = `${p.paneId} — ${p.agent || "?"}`;
   startPeek(p);
@@ -322,35 +497,44 @@ async function fetchPeek(paneId) {
   }
 }
 
+/* 選択の変更は再描画しない — selected クラスの付け替えだけ行う */
+function updateSelection() {
+  for (const tr of document.querySelectorAll("tr.row.selected")) tr.classList.remove("selected");
+  const tr = rowFor(state.selected);
+  if (tr) tr.classList.add("selected");
+}
 function openDrawer(key) {
   state.selected = key;
-  draw();
-  const tr = rowFor(key);
-  if (tr) tr.focus();
+  updateSelection();
+  syncDrawer();
+  rowFor(key)?.focus();
 }
 function closeDrawer() {
   const key = state.selected;
   state.selected = null;
-  draw(); // syncDrawer hides the drawer and stops the peek
-  const tr = rowFor(key);
-  if (tr) tr.focus(); // restore focus to the originating row
+  updateSelection();
+  renderDrawer(null); // hides the drawer and stops the peek
+  rowFor(key)?.focus(); // restore focus to the originating row
 }
 
-function bindRows() {
-  document.querySelectorAll("tr.row").forEach((tr) => {
-    const open = () => openDrawer(tr.dataset.key);
-    tr.addEventListener("click", open);
-    tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
-  });
-  document.querySelectorAll("th[data-sort]").forEach((th) => {
-    th.addEventListener("click", () => {
-      const k = th.dataset.sort;
-      if (state.sortKey === k) state.sortDir = -state.sortDir;
-      else { state.sortKey = k; state.sortDir = 1; }
-      draw();
-    });
-  });
-}
+/* 行クリック/ソートはイベント委譲 — 描画ごとのリスナー張り直しをしない */
+$("sessions").addEventListener("click", (e) => {
+  if (e.target.closest("a")) return; // GitHub リンク(issue / PR / 親)は行選択にしない
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const k = th.dataset.sort;
+    if (state.sortKey === k) state.sortDir = -state.sortDir;
+    else { state.sortKey = k; state.sortDir = 1; }
+    renderSessions(state.snap, false);
+    return;
+  }
+  const tr = e.target.closest("tr.row");
+  if (tr) openDrawer(tr.dataset.key);
+});
+$("sessions").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  if (e.target.matches && e.target.matches("tr.row")) { e.preventDefault(); openDrawer(e.target.dataset.key); }
+});
 
 /* ---- テーマ(FOUC ブートストラップは index.html 側) ---- */
 function applyThemeButton() {
@@ -378,7 +562,9 @@ function setConn(up, text) {
   if (label) label.textContent = text;
 }
 
-function render(snap) { state.snap = snap; draw(); }
+/* SSE/ポーリング更新は animate=true(定常 tick は文字列一致で no-op)。
+ * フィルタ入力・ソートクリックは animate=false(rise 再生なし)。 */
+function render(snap) { state.snap = snap; draw(true); }
 
 /* ---- transport ---- */
 let pollTimer = null;
@@ -408,7 +594,18 @@ function connect() {
 }
 
 /* ---- wiring ---- */
-$("filter").addEventListener("input", (e) => { state.filter = e.target.value; draw(); });
+$("filter").addEventListener("input", (e) => { state.filter = e.target.value; renderChips(); renderSessions(state.snap, false); });
+/* ドロップダウン選択 → トークン書込 → select はプレースホルダーに戻す */
+$("filter-bar").addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-key]");
+  if (!sel || !sel.value) return;
+  setToken(sel.dataset.key, sel.value);
+  sel.value = "";
+});
+$("chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("button.chip");
+  if (chip) removeToken(chip.dataset.tok);
+});
 $("drawer-close").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.selected) closeDrawer(); });
 

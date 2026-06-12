@@ -32,10 +32,12 @@ attach し、その session 内でコンソールを開始します。tmux 内�
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済み pane ID が tmux 上に
 まだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で
-issue / closed-by PR 状態を定期更新します。各行には pane worktree の
-`git diff --shortstat HEAD` による `+X/-Y` と、`git status --porcelain` による
-`dirty`/`clean` も表示するため、agent 側の instrumentation なしで未 commit 作業を
-確認できます。`/` でロード済み行をメモリ内検索し、
+issue / closed-by PR 状態を定期更新します。各行には pane worktree の総作業量
+`+X/-Y`（記録した base ブランチとの merge-base に対する `git diff --shortstat`。
+コミット済み + 未 commit の合計で、base 未記録の旧行は `origin/HEAD` → `HEAD` に
+fallback）と、`git status --porcelain` による `dirty`/`clean` も表示するため、
+agent 側の instrumentation なしで未 commit 作業の有無を確認できます。
+`/` でロード済み行をメモリ内検索し、
 `state:open`、`agent:codex`、`wave:wave5` のような述語でも絞り込めます。
 フィルタは追加 fetch を発生させず、フィルタ中も state / GitHub の自動更新は
 継続します。記録済みの issue 親については親の子一覧も再読込し、
@@ -344,15 +346,19 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   `dashboardKeybind`・`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます。
 - **Session テーブル + HUD。** 各ペイン行に issue・agent・wave と未解決
   blocker（親 issue グラフ由来）・branch・diff/dirty・CI 状態・tmux 生存と
-  現在のペインタイトル・PR 状態を表示し、上部の HUD には repo 全体の blocked
-  数も並びます。
+  現在のペインタイトル・`running` / `done` の agent 実行状態バッジ（ペインの
+  起動ラッパーがライブに報告。tmux 不通時は起動時の記録値に fallback するため
+  stale になりえます）・PR 状態を表示し、上部の HUD には repo 全体の running /
+  blocked 数も並びます。
 - **詳細ドロワーとライブ peek。** 行クリックで右側ドロワーが開き、ペインの
   メタ情報・wave/blockers・worktree・CI 付き PR・元プロンプトに加え、ペインの
   直近出力を *peek* 表示します（`GET /api/peek`、読み取り専用の
   `tmux capture-pane`、表示中は 5 秒ごとに更新）。
 - **構造化フィルタ。** フィルタ欄は自由語と
-  `state:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` /
-  `pr:` の各 term を AND で組み合わせます — 例: `agent:claude wave:2 ci:fail`。
+  `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
+  `issue:` / `pr:` の各 term を AND で組み合わせます — 例:
+  `agent:claude wave:2 ci:fail run:running`。フィルタ欄の隣のドロップダウンは
+  同じ token を書き込み、適用中の term はクリックで外せるチップとして並びます。
 - **ライト / ダークテーマ。** docs サイトと揃えた PAPER BREEZE デザインで、
   ヘッダのトグル選択は `localStorage`（`fanout.theme`）に保存されます。既定は
   `prefers-color-scheme` に従います。

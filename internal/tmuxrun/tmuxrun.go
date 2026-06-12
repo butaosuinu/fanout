@@ -15,7 +15,17 @@ const (
 	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
 	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
 	livePaneTitleFormat = "#{pane_id}\t#{pane_title}"
-	paneAlternateFormat = "#{alternate_on}"
+	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
+	// wrapper sets to "running" before the agent starts and "done" after it
+	// exits. It is the dashboard's agent-state signal: #{pane_current_command}
+	// cannot be used because the non-interactive `sh -lc` wrapper runs without
+	// job control, so the agent shares the wrapper's process group and tmux
+	// reports the wrapper shell's name for the whole agent run (verified on
+	// tmux 3.6a/macOS; Linux resolves the foreground pgrp leader the same way).
+	// Pane user options die with the pane, matching the liveness boundary.
+	agentStateOption         = "@fanout_agent_state"
+	livePaneAgentStateFormat = "#{pane_id}\t#{" + agentStateOption + "}"
+	paneAlternateFormat      = "#{alternate_on}"
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -66,21 +76,41 @@ func splitPane(target, worktreePath, launchCommand string) (string, error) {
 
 // BuildPaneLaunchCommand returns a tmux shell-command that starts the agent via
 // a POSIX wrapper and leaves the user's shell behind after the agent exits.
+//
+// The wrapper also reports the agent's run state explicitly through the
+// agentStateOption pane user option ("running" before the agent starts,
+// "done" once it exited). The pane must be targeted with an explicit
+// -t "$TMUX_PANE" (tmux exports it into pane processes): a bare
+// `set-option -p` resolves the *active* pane of the current window, which is
+// not the fanout pane — split-window -d leaves the invoking pane active
+// (verified on tmux 3.6a). Failures are silenced and never block the agent
+// launch; the state is display-only telemetry.
 func BuildPaneLaunchCommand(agentCommand string) string {
 	agentCommand = strings.TrimSpace(agentCommand)
 	if agentCommand == "" {
 		return ""
 	}
-	body := agentCommand + `; __fanout_status=$?; printf '\n[fanout] agent exited with status %d; returning to shell.\n' "$__fanout_status"; exec ` + userShellExpr + ` -l`
+	setState := func(value string) string {
+		return `tmux set-option -p -t "$TMUX_PANE" ` + agentStateOption + " " + value + " 2>/dev/null; "
+	}
+	body := setState("running") +
+		agentCommand +
+		`; __fanout_status=$?; ` + setState("done") + `printf '\n[fanout] agent exited with status %d; returning to shell.\n' "$__fanout_status"; exec ` + userShellExpr + ` -l`
 	return "exec /bin/sh -lc " + shellQuote(body)
 }
 
 // LivePane is one live tmux pane: its server-scoped id, the cwd of its
-// foreground process, and its pane title (empty when tmux reports none).
+// foreground process, its pane title (empty when tmux reports none), and the
+// agent run state its launch wrapper recorded (empty when unknown).
 type LivePane struct {
 	ID          string
 	CurrentPath string
 	Title       string
+	// AgentState は pane user option @fanout_agent_state の値。fanout の起動
+	// ラッパー(BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
+	// "done" を設定する。旧版 fanout やラッパー外で起動した pane では未設定で
+	// ""。listing が失敗したとき・join 済み id に対応する行が無いときも空。
+	AgentState string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
@@ -90,10 +120,10 @@ type LivePane struct {
 // row live when an unrelated new pane reuses the same %N. An error (e.g. tmux
 // absent) lets callers degrade.
 //
-// It issues two list-panes calls (livePanePathFormat then livePaneTitleFormat)
-// so each variable-content field is last on its line and survives strings.Cut
-// with embedded tabs intact — both pane paths and pane titles may legally
-// contain tabs.
+// It issues three list-panes calls (livePanePathFormat, livePaneTitleFormat,
+// then livePaneAgentStateFormat) so each variable-content field is last on its
+// line and survives strings.Cut with embedded tabs intact — both pane paths
+// and pane titles may legally contain tabs.
 //
 // Injection defense: pane_current_path is just a directory name, so a crafted
 // path containing a newline can forge whole extra lines in the path listing.
@@ -118,7 +148,20 @@ func ListLivePanes() ([]LivePane, error) {
 	if err != nil {
 		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
 	}
-	titles := parseLivePaneTitles(string(titleOut))
+	titles := parseLivePaneField(string(titleOut))
+	// 第 3 の listing: 各 pane の @fanout_agent_state(起動ラッパーが agent
+	// 実行前後に設定する pane user option)。ダッシュボードが agent 実行中/完了
+	// の表示判定に使う。タイトル同様この値は表示専用で liveness の根拠ではない
+	// ので、失敗は空値へ degrade する。join 規則も不変: path+title のクロス
+	// チェックが唯一の liveness 根拠であり、agent 状態はそれを通過した検証済み
+	// id のルックアップのみ(欠落は "")。pane 内のプロセスは自ペインの option
+	// を任意の文字列(改行入り含む)に設定できるが、parseLivePaneField の
+	// duplicate-id drop が他ペイン行の上書きを防ぎ、残る影響は最悪でも自ペイン
+	// の表示上の agent 状態のみ — stale な pane を live に見せることはできない。
+	agentStates := map[string]string{}
+	if stateOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneAgentStateFormat).Output(); err == nil {
+		agentStates = parseLivePaneField(string(stateOut))
+	}
 	// A real tmux listing emits each pane id exactly once; a duplicate means a
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
@@ -139,6 +182,7 @@ func ListLivePanes() ([]LivePane, error) {
 			continue
 		}
 		pane.Title = title
+		pane.AgentState = agentStates[pane.ID]
 		joined = append(joined, pane)
 	}
 	return joined, nil
@@ -163,22 +207,43 @@ func parseLivePanePaths(out string) []LivePane {
 	return panes
 }
 
-// parseLivePaneTitles parses livePaneTitleFormat lines into an id-to-title
-// map. The title is the last field, so strings.Cut keeps any embedded tabs
-// intact. tmux rejects newlines in pane titles, so unlike pane paths a title
-// cannot forge extra lines here; ids failing the %N check are skipped anyway
-// for symmetry with parseLivePanePaths.
-func parseLivePaneTitles(out string) map[string]string {
-	titles := make(map[string]string)
+// parseLivePaneField parses "#{pane_id}\t<field>" lines — the shared parser
+// for livePaneTitleFormat and livePaneAgentStateFormat — into an id-to-field
+// map. The field is the last value on its line, so strings.Cut keeps any
+// embedded tabs intact.
+//
+// Injection defense: tmux rejects newlines in pane titles, so the title
+// listing cannot forge extra lines. The agent-state listing CAN be forged: a
+// pane user option is settable to an arbitrary string (newlines included) by
+// any process inside the pane, so a hostile pane can emit a fake "%N\t<field>"
+// line imitating another pane. (A pane_current_command listing would be
+// forgeable the same way, via newline-bearing process names — argv[0] on
+// Linux, executable basename on macOS.) Two layers contain that: lines whose
+// id fails the %N check are skipped, and an id that appears more than once is
+// dropped entirely — the genuine line cannot be told apart from the forgery,
+// so the field conservatively degrades to absent ("" at the join) instead of
+// letting a later forged line overwrite another pane's entry. The residual
+// impact is the attacker mis-reporting its own pane's display-only field.
+func parseLivePaneField(out string) map[string]string {
+	fields := make(map[string]string)
+	dropped := map[string]bool{}
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimRight(line, "\r")
-		id, title, ok := strings.Cut(line, "\t")
+		id, field, ok := strings.Cut(line, "\t")
 		if !ok || !paneIDPattern.MatchString(id) {
 			continue
 		}
-		titles[id] = title
+		if dropped[id] {
+			continue
+		}
+		if _, seen := fields[id]; seen {
+			delete(fields, id)
+			dropped[id] = true
+			continue
+		}
+		fields[id] = field
 	}
-	return titles
+	return fields
 }
 
 // BindDashboardKey registers a tmux key binding (under the prefix table) that

@@ -106,18 +106,21 @@ printf '%%43\n'
 	}
 }
 
-// installLivePanesShim installs a tmux shim that answers the two
+// installLivePanesShim installs a tmux shim that answers the three
 // `list-panes -a -F <format>` calls ListLivePanes makes, dispatching on the
 // format argument ($4): pathBody for livePanePathFormat, titleBody for
-// livePaneTitleFormat. Both argvs are appended to the args file separated by
-// "---" lines.
-func installLivePanesShim(t *testing.T, pathBody, titleBody string) string {
+// livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat. Each argv
+// is appended to the args file separated by "---" lines.
+func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string) string {
 	t.Helper()
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 case "$4" in
 *pane_current_path*)
 	` + pathBody + `
+	;;
+*fanout_agent_state*)
+	` + agentStateBody + `
 	;;
 *pane_title*)
 	` + titleBody + `
@@ -127,21 +130,24 @@ esac
 	return installTmuxShim(t, script)
 }
 
-func TestListLivePanesJoinsPathAndTitleOutputsByID(t *testing.T) {
+func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 	// Path and title are each the last field of their own listing, so embedded
-	// tabs in either survive the strings.Cut split. An empty title stays empty.
+	// tabs in either survive the strings.Cut split. An empty title stays empty,
+	// and an id absent from the agent-state listing (a pane not launched by the
+	// fanout wrapper) degrades to an empty agent state.
 	argsPath := installLivePanesShim(t,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n%%11\t/wt/eleven\n\n'`,
-		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`)
+		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`,
+		`printf '%%9\trunning\n%%10\tdone\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child"},
-		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs"},
-		{ID: "%11", CurrentPath: "/wt/eleven", Title: ""},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running"},
+		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done"},
+		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: ""},
 	}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
@@ -150,6 +156,7 @@ func TestListLivePanesJoinsPathAndTitleOutputsByID(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_agent_state}", "---",
 	})
 }
 
@@ -161,13 +168,14 @@ func TestListLivePanesDropsForgedPathLineAbsentFromTitleOutput(t *testing.T) {
 	// only the pre-newline fragment of its crafted path.
 	installLivePanesShim(t,
 		`printf '%%9\t/tmp/evil\n%%5\t/wt/recorded\n'`,
-		`printf '%%9\tnine\n'`)
+		`printf '%%9\tnine\n'`,
+		`printf '%%9\trunning\n%%5\trunning\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
-	want := []LivePane{{ID: "%9", CurrentPath: "/tmp/evil", Title: "nine"}}
+	want := []LivePane{{ID: "%9", CurrentPath: "/tmp/evil", Title: "nine", AgentState: "running"}}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
 	}
@@ -175,10 +183,13 @@ func TestListLivePanesDropsForgedPathLineAbsentFromTitleOutput(t *testing.T) {
 
 func TestListLivePanesReturnsTitlelessPanesWhenTitleCallFails(t *testing.T) {
 	// Titles are cosmetic, liveness is not: a failing title listing degrades
-	// to panes with empty titles instead of failing the sweep.
+	// to panes with empty titles instead of failing the sweep. The agent-state
+	// listing is never reached on this early-return path, so agent states stay
+	// empty even though the shim would answer.
 	installLivePanesShim(t,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\n'`,
-		`exit 1`)
+		`exit 1`,
+		`printf '%%9\trunning\n%%10\trunning\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
@@ -194,7 +205,7 @@ func TestListLivePanesReturnsTitlelessPanesWhenTitleCallFails(t *testing.T) {
 }
 
 func TestListLivePanesFailsWhenPathCallFails(t *testing.T) {
-	installLivePanesShim(t, `exit 1`, `printf '%%9\tnine\n'`)
+	installLivePanesShim(t, `exit 1`, `printf '%%9\tnine\n'`, `printf '%%9\trunning\n'`)
 
 	if _, err := ListLivePanes(); err == nil {
 		t.Fatal("ListLivePanes() succeeded, want error when the path listing fails")
@@ -232,15 +243,15 @@ func TestParseLivePanePathsTrimsCarriageReturns(t *testing.T) {
 	}
 }
 
-func TestParseLivePaneTitles(t *testing.T) {
+func TestParseLivePaneField(t *testing.T) {
 	input := "%1\tfanout: child #12\n" +
-		"%2\ttitle\twith\ttabs\n" + // title is the last field, so its tabs survive
-		"%3\t\n" + // empty title kept
-		"no-tab-at-all\n" + // missing title field: skipped
+		"%2\ttitle\twith\ttabs\n" + // field is the last value, so its tabs survive
+		"%3\t\n" + // empty field kept
+		"no-tab-at-all\n" + // missing field: skipped
 		"not-an-id\ttitle\n" + // non-%N id: skipped
 		"%6\tcrlf title\r\n"
 
-	got := parseLivePaneTitles(input)
+	got := parseLivePaneField(input)
 
 	want := map[string]string{
 		"%1": "fanout: child #12",
@@ -249,7 +260,86 @@ func TestParseLivePaneTitles(t *testing.T) {
 		"%6": "crlf title",
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseLivePaneTitles() = %#v, want %#v", got, want)
+		t.Fatalf("parseLivePaneField() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseLivePaneFieldDropsDuplicateIDs(t *testing.T) {
+	// 同一 id が複数回現れたら丸ごと捨てる(3 回以上でも復活しない): 本物と
+	// 偽装行(改行入り option 値が注入した "%N\t<field>")は区別できないため、
+	// last-wins で偽装行に上書きさせず保守的に「不明」へ degrade する。
+	input := "%1\tgenuine\n" +
+		"%2\tkept\n" +
+		"%1\tforged\n" +
+		"%1\tforged again\n"
+
+	got := parseLivePaneField(input)
+
+	want := map[string]string{"%2": "kept"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseLivePaneField() = %#v, want %#v (duplicate %%1 dropped)", got, want)
+	}
+}
+
+func TestListLivePanesDegradesToEmptyAgentStateWhenAgentStateCallFails(t *testing.T) {
+	// agent 状態は表示専用で liveness の根拠ではない: agent-state listing の
+	// 失敗は空値へ degrade し、sweep 自体は成功する。
+	installLivePanesShim(t,
+		`printf '%%9\t/wt/nine\n'`,
+		`printf '%%9\tnine\n'`,
+		`exit 1`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{{ID: "%9", CurrentPath: "/wt/nine", Title: "nine", AgentState: ""}}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
+	}
+}
+
+func TestListLivePanesDropsAgentStateRowsForUnjoinedIDs(t *testing.T) {
+	// path+title のクロスチェックを通過していない id の agent-state 行は捨て
+	// られる: agent-state listing は検証済み id のルックアップ専用で、pane を
+	// 生まない。
+	installLivePanesShim(t,
+		`printf '%%9\t/wt/nine\n'`,
+		`printf '%%9\tnine\n'`,
+		`printf '%%9\trunning\n%%5\tforged\n'`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{{ID: "%9", CurrentPath: "/wt/nine", Title: "nine", AgentState: "running"}}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
+	}
+}
+
+func TestListLivePanesDropsForgedAgentStateLineForAnotherPane(t *testing.T) {
+	// pane user option の値は pane 内プロセスが自由に設定できる(改行入り含む):
+	// %2 が自分の @fanout_agent_state を "x\n%1\tdone" にすると、agent-state
+	// listing に偽の "%1\tdone" 行が混ざり、%1 は 2 回現れる。duplicate-id drop
+	// により %1 の agent 状態は ""(不明)へ degrade し、偽装行が running 中の
+	// %1 を done に見せることはできない。%2 自身は "x" のままで、これは
+	// sessionview 側の正規化で ""(不明)に落ちる。
+	installLivePanesShim(t,
+		`printf '%%1\t/wt/one\n%%2\t/wt/two\n'`,
+		`printf '%%1\tone\n%%2\ttwo\n'`,
+		`printf '%%1\trunning\n%%2\tx\n%%1\tdone\n'`)
+
+	panes, err := ListLivePanes()
+	if err != nil {
+		t.Fatalf("ListLivePanes() failed: %v", err)
+	}
+	want := []LivePane{
+		{ID: "%1", CurrentPath: "/wt/one", Title: "one", AgentState: ""},
+		{ID: "%2", CurrentPath: "/wt/two", Title: "two", AgentState: "x"},
+	}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
 	}
 }
 
@@ -333,6 +423,27 @@ func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildPaneLaunchCommand() = %q, want substring %q", got, want)
 		}
+	}
+}
+
+func TestBuildPaneLaunchCommandReportsAgentStateAroundAgentRun(t *testing.T) {
+	// ラッパーは agent 実行状態を pane user option で明示する: agent 起動前に
+	// "running"、終了ステータス取得後に "done"。#{pane_current_command} は
+	// 非対話 sh ラッパー経由だと agent 実行中もシェル名を返すため使えない。
+	got := BuildPaneLaunchCommand("/tmp/bin/claude 'prompt'")
+	// -t "$TMUX_PANE" は必須: 素の set-option -p はウィンドウの active pane
+	// (= split-window -d では呼び出し元 pane)に解決されてしまう。
+	setRunning := `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; `
+	setDone := `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; `
+	runningAt := strings.Index(got, setRunning)
+	agentAt := strings.Index(got, "/tmp/bin/claude")
+	statusAt := strings.Index(got, "__fanout_status=$?")
+	doneAt := strings.Index(got, setDone)
+	if runningAt < 0 || agentAt < 0 || statusAt < 0 || doneAt < 0 {
+		t.Fatalf("BuildPaneLaunchCommand() = %q, want running/agent/status/done markers", got)
+	}
+	if runningAt >= agentAt || agentAt >= statusAt || statusAt >= doneAt {
+		t.Fatalf("BuildPaneLaunchCommand() = %q, want order running < agent < status capture < done", got)
 	}
 }
 
@@ -779,13 +890,14 @@ func TestListLivePanesDropsDuplicateForgedIDs(t *testing.T) {
 	// because the genuine row cannot be told apart from the forged one.
 	installLivePanesShim(t,
 		`printf '%%5\t/real/path\n%%5\t/wt/recorded\n%%7\t/other\n'`,
-		`printf '%%5\treal title\n%%7\tother title\n'`)
+		`printf '%%5\treal title\n%%7\tother title\n'`,
+		`printf '%%5\trunning\n%%7\tdone\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
-	want := []LivePane{{ID: "%7", CurrentPath: "/other", Title: "other title"}}
+	want := []LivePane{{ID: "%7", CurrentPath: "/other", Title: "other title", AgentState: "done"}}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want only %%7 (duplicate %%5 dropped): %#v", panes, want)
 	}

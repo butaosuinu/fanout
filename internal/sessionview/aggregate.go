@@ -21,6 +21,10 @@ type LivePaneInfo struct {
 	Path string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
+	// AgentState は pane user option @fanout_agent_state の値("running" /
+	// "done")。fanout の起動ラッパーが agent 実行前後に設定する。未設定
+	// (旧版 fanout やラッパー外で起動した pane)や取得失敗時は ""。
+	AgentState string
 }
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
@@ -53,7 +57,7 @@ type Collectors struct {
 	//     info is still applied (FetchWaveGraph keeps partial results).
 	// A nil collector means the GitHub tier is disabled, like a nil IssuePRs.
 	Waves        func(parent string) (map[int]WaveInfo, error)
-	WorktreeStat func(path string) (WorktreeStat, error)
+	WorktreeStat func(path, baseRef string) (WorktreeStat, error)
 	Now          func() time.Time
 }
 
@@ -141,17 +145,18 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		stat WorktreeStat
 		err  error
 	}{}
-	fetchWorktree := func(path string) (WorktreeStat, string) {
+	fetchWorktree := func(path, baseRef string) (WorktreeStat, string) {
 		path = strings.TrimSpace(path)
 		if path == "" || c.WorktreeStat == nil {
 			return unknownWorktreeStat(), ""
 		}
-		if got, ok := worktreeCache[path]; ok {
+		key := path + "\x00" + baseRef
+		if got, ok := worktreeCache[key]; ok {
 			return got.stat, errString(got.err)
 		}
-		stat, err := c.WorktreeStat(path)
+		stat, err := c.WorktreeStat(path, baseRef)
 		stat = normalizeWorktreeStat(stat)
-		worktreeCache[path] = struct {
+		worktreeCache[key] = struct {
 			stat WorktreeStat
 			err  error
 		}{stat, err}
@@ -167,7 +172,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		waveInfo := fetchWaves(parent)
 		for _, p := range panes {
 			issueState, prs := fetch(p.IssueNum)
-			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath)
+			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			alive := paneAlive(live, p.PaneID, p.WorktreePath)
 			wi := waveInfo[p.IssueNum]
 			pv := PaneView{
@@ -196,6 +201,14 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			}
 			if alive {
 				pv.TmuxTitle = live[p.PaneID].Title
+				pv.AgentState = normalizeAgentState(live[p.PaneID].AgentState)
+			} else if snap.Degraded.Tmux {
+				// tmux 不通時は動的判定ができないので、起動時に state.json へ
+				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
+				// state.json は手編集されうる入力なので option 値と同じく
+				// running/done 以外は捨てる。pane 死亡かつ tmux 正常のときは
+				// tmux 列が stale を伝えるので空のままにする。
+				pv.AgentState = normalizeAgentState(p.AgentStatus)
 			}
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
@@ -301,6 +314,26 @@ func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 	}
 }
 
+// normalizeAgentState は tmux pane user option @fanout_agent_state の値を
+// PaneView.AgentState に正規化する。fanout の起動ラッパー
+// (tmuxrun.BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
+// "done" を設定する。それ以外の値(未設定 = 旧版 fanout やラッパー外で起動
+// した pane、あるいは pane 内プロセスが偽装した文字列)は ""(不明)に落とす。
+// #{pane_current_command} ヒューリスティックは使えない: 非対話 sh -lc
+// ラッパー経由の agent はラッパーと同一プロセスグループで動き、tmux は agent
+// 実行中もラッパーシェル名を報告するため、fanout 起動 pane では常に「done」
+// 誤判定になる。
+func normalizeAgentState(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "running":
+		return "running"
+	case "done":
+		return "done"
+	default:
+		return ""
+	}
+}
+
 // normalizeBlockers keeps PaneView.Blockers non-nil so it serializes as []
 // rather than null (the SPA iterates it unconditionally).
 func normalizeBlockers(rows []blockers.Status) []blockers.Status {
@@ -335,6 +368,9 @@ func accumulate(r *Rollup, pv PaneView) {
 	}
 	if pv.Alive {
 		r.Live++
+	}
+	if pv.AgentState == "running" {
+		r.Running++
 	}
 	if pv.Blocked {
 		r.Blocked++

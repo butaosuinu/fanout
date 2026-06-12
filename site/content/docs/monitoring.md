@@ -17,7 +17,7 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console.
 
-The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status`. Each row also shows the pane worktree's `git diff --shortstat HEAD` summary as `+X/-Y` and `dirty`/`clean` from `git status --porcelain`, so uncommitted work is visible without any agent instrumentation.
+The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status`. Each row also shows the pane worktree's total work size as `+X/-Y` — `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`) — and `dirty`/`clean` from `git status --porcelain`, which flags uncommitted work without any agent instrumentation.
 
 Press `/` to filter the loaded rows in memory, with free-text terms or predicates such as `state:open`, `agent:codex`, and `wave:wave5`. Filtering never triggers extra data fetches, and the automatic state / GitHub refresh continues while a filter is active.
 

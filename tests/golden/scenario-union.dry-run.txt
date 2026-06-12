@@ -17,7 +17,7 @@
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root worktree add -b fanout/api-child-301 <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/api-child-301 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/api-child-301 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #301 of #300] api-child-301: API child. read /tmp/fanout-project_root-301.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/api-child-301 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; claude '\''\'\'''\''[fanout #301 of #300] api-child-301: API child. read /tmp/fanout-project_root-301.md and begin.'\''\'\'''\''; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T api-child-301
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
@@ -35,7 +35,7 @@
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root branch -f main refs/remotes/origin/main
     # if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree
     $ git -C <REPO>/tests/fixtures/scenario-union/project_root worktree add -b fanout/body-only-302 <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/body-only-302 main
-    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/body-only-302 'exec /bin/sh -lc '\''claude '\''\'\'''\''[fanout #302 of #300] body-only-302: Body-only. read /tmp/fanout-project_root-302.md and begin.'\''\'\'''\''; __fanout_status=$?; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
+    $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-union/project_root/.fanout/worktrees/body-only-302 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; claude '\''\'\'''\''[fanout #302 of #300] body-only-302: Body-only. read /tmp/fanout-project_root-302.md and begin.'\''\'\'''\''; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T body-only-302
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>

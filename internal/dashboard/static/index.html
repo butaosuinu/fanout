@@ -71,6 +71,7 @@
       <section class="hud rise" style="--d:.05s" aria-label="集計">
         <div class="stat"><label>panes</label><b id="s-total">0</b></div>
         <div class="stat"><label>live</label><b id="s-live">0</b></div>
+        <div class="stat"><label>running</label><b id="s-running">0</b></div>
         <div class="stat"><label>merged</label><b id="s-merged">0</b></div>
         <div class="stat"><label>pending</label><b id="s-pending">0</b></div>
         <div class="stat warned"><label>blocked</label><b id="s-blocked">0</b></div>
@@ -81,8 +82,53 @@
 
       <div class="toolbar rise" style="--d:.2s">
         <input id="filter" type="search" autocomplete="off" spellcheck="false"
-               placeholder="filter — 自由語 or state:open agent:claude wave:1 ci:fail dirty:yes" />
+               placeholder="filter — 自由語 or state:open run:running agent:claude wave:1 ci:fail dirty:yes" />
         <span id="filter-count"></span>
+      </div>
+
+      <div class="filter-bar rise" style="--d:.25s" id="filter-bar">
+        <select data-key="state" aria-label="issue / tmux 状態で絞り込み">
+          <option value="">state</option>
+          <option value="open">open</option>
+          <option value="closed">closed</option>
+          <option value="live">live</option>
+          <option value="stale">stale</option>
+        </select>
+        <select data-key="run" aria-label="agent 実行状態で絞り込み">
+          <option value="">run</option>
+          <option value="running">running</option>
+          <option value="done">done</option>
+        </select>
+        <select data-key="ci" aria-label="CI 結果で絞り込み">
+          <option value="">ci</option>
+          <option value="pass">pass</option>
+          <option value="fail">fail</option>
+          <option value="pending">pending</option>
+        </select>
+        <select data-key="dirty" aria-label="worktree の dirty 状態で絞り込み">
+          <option value="">dirty</option>
+          <option value="yes">yes</option>
+          <option value="no">no</option>
+        </select>
+        <select data-key="live" aria-label="tmux ペイン生死で絞り込み">
+          <option value="">live</option>
+          <option value="yes">yes</option>
+          <option value="no">no</option>
+        </select>
+        <select data-key="pr" aria-label="PR 状態で絞り込み">
+          <option value="">pr</option>
+          <option value="merged">merged</option>
+          <option value="open">open</option>
+          <option value="closed">closed</option>
+          <option value="none">none</option>
+        </select>
+        <select id="f-agent" data-key="agent" aria-label="agent で絞り込み">
+          <option value="">agent</option>
+        </select>
+        <select id="f-wave" data-key="wave" aria-label="wave で絞り込み">
+          <option value="">wave</option>
+        </select>
+        <span id="chips" role="list" aria-label="適用中のフィルタ"></span>
       </div>
 
       <main id="sessions" aria-live="polite"></main>
@@ -108,6 +154,7 @@
           <dt>agent</dt><dd id="d-agent"></dd>
           <dt>pane</dt><dd id="d-pane"></dd>
           <dt>tmux</dt><dd id="d-tmux"></dd>
+          <dt>run</dt><dd id="d-run"></dd>
           <dt>title</dt><dd id="d-title"></dd>
           <dt>created</dt><dd id="d-created"></dd>
           <dt>issue</dt><dd id="d-state"></dd>
