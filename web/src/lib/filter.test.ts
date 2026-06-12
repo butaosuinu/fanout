@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePane } from "../test/fixtures";
-import { filterTokens, matches, parseQuery, removeToken, replaceToken } from "./filter";
+import { filterTokens, matches, parseQuery, removeToken, replaceToken, tokenForKey } from "./filter";
 
 describe("parseQuery", () => {
   it("key:value トークンと自由語を区別する", () => {
@@ -114,5 +114,16 @@ describe("トークン操作", () => {
 
   it("removeToken は完全一致のみ外す", () => {
     expect(removeToken(["state:open", "state:o"], "state:open")).toEqual(["state:o"]);
+  });
+
+  it("tokenForKey は指定キーのトークンを raw(原文)+ value(小文字)で返す", () => {
+    expect(tokenForKey(["claude", "state:open"], "state")).toEqual({ raw: "state:open", value: "open" });
+    // 手打ちの大文字でも raw は原文のまま — removeToken の exact-match 除去に使える
+    expect(tokenForKey(["STATE:Open"], "state")).toEqual({ raw: "STATE:Open", value: "open" });
+  });
+
+  it("tokenForKey は該当キーが無ければ null(自由語・他キー・前方一致違いは見ない)", () => {
+    expect(tokenForKey([], "state")).toBeNull();
+    expect(tokenForKey(["open", "agent:claude", "statex:open"], "state")).toBeNull();
   });
 });

@@ -112,3 +112,13 @@ export function replaceToken(tokens: string[], key: string, value: string): stri
 export function removeToken(tokens: string[], tok: string): string[] {
   return tokens.filter((t) => t !== tok);
 }
+
+/* 指定キーの key:value トークンを探す(手打ち含め最初の 1 つ)。raw は
+ * removeToken での exact-match 除去用の原文、value は選択肢との小文字比較用。 */
+export function tokenForKey(tokens: string[], key: string): { raw: string; value: string } | null {
+  const prefix = `${key}:`;
+  for (const t of tokens) {
+    if (t.toLowerCase().startsWith(prefix)) return { raw: t, value: t.slice(prefix.length).toLowerCase() };
+  }
+  return null;
+}

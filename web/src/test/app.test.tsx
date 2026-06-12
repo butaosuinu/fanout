@@ -181,29 +181,161 @@ describe("フィルタ", () => {
     expect(screen.getByText("フィルタに一致するペインがありません")).toBeInTheDocument();
   });
 
-  it("select はトークンを書き込み、同キーは上書き、選択後はプレースホルダーに戻る", async () => {
+  it("trigger クリックで popover が開き、option 選択でトークン書込・閉じて trigger に復帰、同キーは上書き", async () => {
     const user = userEvent.setup();
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    const stateSel = screen.getByRole("combobox", { name: "issue / tmux 状態で絞り込み" });
-    await user.selectOptions(stateSel, "open");
-    expect(screen.getByRole("listitem", { name: "フィルタ state:open を外す" })).toBeInTheDocument();
-    expect(stateSel).toHaveValue("");
+    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
 
-    await user.selectOptions(stateSel, "closed");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const listbox = screen.getByRole("listbox", { name: "issue / tmux 状態で絞り込み" });
+    await user.click(within(listbox).getByRole("option", { name: "open" }));
+
+    expect(screen.getByRole("listitem", { name: "フィルタ state:open を外す" })).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); // 選択で閉じる
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("option", { name: "closed" }));
     expect(screen.queryByRole("listitem", { name: "フィルタ state:open を外す" })).not.toBeInTheDocument();
     expect(screen.getByRole("listitem", { name: "フィルタ state:closed を外す" })).toBeInTheDocument();
   });
 
-  it("agent / wave の動的 select は snapshot 由来の選択肢を持つ", () => {
+  it("アクティブ option は aria-selected で示し、再クリックでトグルオフする", async () => {
+    const user = userEvent.setup();
     render(<App />);
     streamSnapshot(basicSnapshot());
-    const agentSel = screen.getByRole("combobox", { name: "agent で絞り込み" });
-    expect(within(agentSel).getByRole("option", { name: "claude" })).toBeInTheDocument();
-    expect(within(agentSel).getByRole("option", { name: "codex" })).toBeInTheDocument();
-    const waveSel = screen.getByRole("combobox", { name: "wave で絞り込み" });
-    expect(within(waveSel).getByRole("option", { name: "w2" })).toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("option", { name: "open" }));
+    expect(trigger).toHaveClass("on"); // 適用中スタイル
+
+    await user.click(trigger);
+    const opt = screen.getByRole("option", { name: "open" });
+    expect(opt).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "closed" })).toHaveAttribute("aria-selected", "false");
+
+    await user.click(opt);
+    expect(screen.queryByRole("listitem", { name: "フィルタ state:open を外す" })).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(trigger).not.toHaveClass("on");
+  });
+
+  it("popover 外の pointerdown で閉じる(トークンは書かない)", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Fix login"));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+  });
+
+  it("Esc は popover だけ閉じて trigger に復帰し、Drawer の document keydown へ漏らさない", async () => {
+    server.use(peekHandler(() => "boot ok"));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByText("Fix login"));
+    await screen.findByRole("complementary", { name: "ペイン詳細" });
+
+    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("complementary", { name: "ペイン詳細" })).toBeInTheDocument(); // drawer 残存
+
+    await user.keyboard("{Escape}"); // popover が閉じた後の Esc は drawer に届く
+    expect(screen.queryByRole("complementary", { name: "ペイン詳細" })).not.toBeInTheDocument();
+  });
+
+  it("キーボード操作: ArrowDown/Up の roving tabindex で巡回し、Enter で選択する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    act(() => trigger.focus());
+    await user.keyboard("{ArrowDown}"); // trigger 上の ↓ で開く
+    const opts = within(screen.getByRole("listbox")).getAllByRole("option");
+    expect(opts.map((o) => o.textContent)).toEqual(["open", "closed", "live", "stale"]);
+    expect(opts[0]).toHaveFocus();
+    expect(opts[0]).toHaveAttribute("tabindex", "0");
+    expect(opts[1]).toHaveAttribute("tabindex", "-1");
+
+    await user.keyboard("{ArrowDown}");
+    expect(opts[1]).toHaveFocus();
+    expect(opts[1]).toHaveAttribute("tabindex", "0");
+    expect(opts[0]).toHaveAttribute("tabindex", "-1");
+
+    await user.keyboard("{ArrowUp}{ArrowUp}"); // 先頭から上へはラップして末尾
+    expect(opts[3]).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("listitem", { name: "フィルタ state:stale を外す" })).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("agent / wave は snapshot 由来の選択肢を検索 input で絞り込め、Enter で先頭を選択する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByRole("button", { name: "agent で絞り込み" }));
+    const listbox = screen.getByRole("listbox", { name: "agent で絞り込み" });
+    expect(within(listbox).getByRole("option", { name: "claude" })).toBeInTheDocument();
+    expect(within(listbox).getByRole("option", { name: "codex" })).toBeInTheDocument();
+
+    const search = screen.getByRole("textbox", { name: "agent の選択肢を検索" });
+    expect(search).toHaveFocus(); // searchable は開いた直後に検索へフォーカス
+    await user.keyboard("cod");
+    expect(within(listbox).queryByRole("option", { name: "claude" })).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("listitem", { name: "フィルタ agent:codex を外す" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "wave で絞り込み" }));
+    await user.click(screen.getByRole("option", { name: "w2" }));
+    expect(screen.getByRole("listitem", { name: "フィルタ wave:2 を外す" })).toBeInTheDocument();
+  });
+
+  it("開いている popover の選択肢は freeze され、閉じて開き直すと新 option が反映される", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByRole("button", { name: "agent で絞り込み" }));
+    const listbox = screen.getByRole("listbox", { name: "agent で絞り込み" });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(2);
+
+    // 開いたまま snapshot 更新(gemini の pane 追加)— 閉じず・選択肢も不変
+    act(() => {
+      FakeEventSource.latest().emitSnapshot(
+        makeSnapshot([
+          makeSession("142", [
+            makePane({ issueNum: 101, agent: "claude" }),
+            makePane({ issueNum: 102, agent: "codex" }),
+            makePane({ issueNum: 103, agent: "gemini" }),
+          ]),
+        ]),
+      );
+    });
+    expect(within(listbox).getAllByRole("option")).toHaveLength(2);
+    expect(within(listbox).queryByRole("option", { name: "gemini" })).not.toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "agent で絞り込み" }));
+    expect(screen.getByRole("option", { name: "gemini" })).toBeInTheDocument();
   });
 });
 
