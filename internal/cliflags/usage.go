@@ -3,6 +3,8 @@ package cliflags
 import (
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 )
 
 const usageText = `Usage: fanout
@@ -183,4 +185,29 @@ Exit codes (update):
 // Usage writes the help text to w.
 func Usage(w io.Writer) {
 	fmt.Fprint(w, usageText)
+}
+
+// NormalizeParentRef canonicalizes a parent reference exactly the way Parse
+// records it in Config.ParentRef: integer refs lose leading zeros, Projects
+// v2 URLs drop any trailing path/query. ok is false when raw is neither.
+// Consumers that persist or compare parent refs (fanout msg scopes every
+// messages row by this string) must normalize through here so an explicit
+// --parent matches the refs recorded at pane-launch time.
+func NormalizeParentRef(raw string) (ref string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if reAllDigits.MatchString(raw) {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return "", false
+		}
+		return strconv.Itoa(n), true
+	}
+	if m := reProjectURL.FindStringSubmatch(raw); len(m) == 5 {
+		n, err := strconv.Atoi(m[3])
+		if err != nil {
+			return "", false
+		}
+		return fmt.Sprintf("https://github.com/%s/%s/projects/%d", m[1], m[2], n), true
+	}
+	return "", false
 }

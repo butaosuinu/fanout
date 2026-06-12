@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/msgstore"
@@ -237,11 +238,14 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 		}
 		f.self = n
 	case "--parent":
-		if strings.TrimSpace(value) == "" {
-			lg.Err("msg %s: --parent must not be empty", f.verb)
+		// Canonicalize so an explicit ref matches the parent recorded at
+		// pane-launch time: "0068" and "68" must scope the same messages.
+		ref, ok := cliflags.NormalizeParentRef(value)
+		if !ok {
+			lg.Err("msg %s: --parent must be an issue number or a GitHub Projects v2 URL, got: %s", f.verb, value)
 			return exitcode.Invocation
 		}
-		f.parent = value
+		f.parent = ref
 	case "--to":
 		n, err := strconv.Atoi(value)
 		if err != nil || n <= 0 {

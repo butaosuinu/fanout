@@ -72,6 +72,13 @@ func TestParseMsgFlags(t *testing.T) {
 		{name: "inline value on boolean flag", args: []string{"inbox", "--all=1"}, code: exitcode.Invocation},
 		{name: "self must be positive", args: []string{"inbox", "--self", "-3"}, code: exitcode.Invocation},
 		{name: "empty parent", args: []string{"inbox", "--parent", ""}, code: exitcode.Invocation},
+		{name: "prose parent", args: []string{"inbox", "--parent", "not-a-ref"}, code: exitcode.Invocation},
+		{name: "parent is canonicalized", args: []string{"inbox", "--self", "70", "--parent", "0068"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.parent != "68" {
+				t.Errorf("parent = %q, want %q (leading zeros must collapse)", f.parent, "68")
+			}
+		}},
 		{name: "register dry-run", args: []string{"register", "--dry-run", "--self", "70", "--parent", "68"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
 			t.Helper()
 			if !f.dryRun {
