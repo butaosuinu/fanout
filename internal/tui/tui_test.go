@@ -183,6 +183,92 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 	}
 }
 
+func TestMergeDegradedIssueStatuses(t *testing.T) {
+	key := issueKey{Parent: "100", Num: 101}
+	blocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true}
+	degraded := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false}
+	unblocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false}
+
+	tests := []struct {
+		name     string
+		previous map[issueKey]issueStatus
+		current  map[issueKey]issueStatus
+		want     map[issueKey]issueStatus
+	}{
+		{
+			name:     "degraded entry keeps old wave and blocker fields",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: blocked},
+		},
+		{
+			name:     "fresh blocker data replaces old entry",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: unblocked},
+			want:     map[issueKey]issueStatus{key: unblocked},
+		},
+		{
+			name:     "new key passes through",
+			previous: map[issueKey]issueStatus{},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: degraded},
+		},
+		{
+			name:     "dropped key restored wholesale",
+			previous: map[issueKey]issueStatus{key: blocked, {Parent: "100", Num: 102}: unblocked},
+			current:  map[issueKey]issueStatus{key: degraded},
+			want:     map[issueKey]issueStatus{key: blocked, {Parent: "100", Num: 102}: unblocked},
+		},
+		{
+			name:     "previous without blocker data does not mask new entry",
+			previous: map[issueKey]issueStatus{key: degraded},
+			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Blockers: ""}},
+			want:     map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Blockers: ""}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeDegradedIssueStatuses(tt.previous, tt.current)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeDegradedIssueStatuses = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUpdateKeepsLastKnownBlockersOnDegradedRefresh(t *testing.T) {
+	m := newModel(Options{})
+	key := issueKey{Parent: "100", Num: 101}
+	dropped := issueKey{Parent: "100", Num: 102}
+	initial := map[issueKey]issueStatus{
+		key:     {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true},
+		dropped: {Title: "recorded child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "resolved #98"},
+	}
+
+	updated, _ := m.Update(ghLoadedMsg{issues: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	degraded := map[issueKey]issueStatus{
+		key: {Title: "blocked child", State: "OPEN", Blockers: "-", HasOpenBlockers: false},
+	}
+	updated, _ = m.Update(ghLoadedMsg{issues: degraded, at: time.Unix(2, 0), err: errBoom})
+	m = updated.(model)
+
+	if !reflect.DeepEqual(m.issues, initial) {
+		t.Fatalf("issues after degraded refresh = %#v, want last-known %#v", m.issues, initial)
+	}
+
+	recovered := map[issueKey]issueStatus{
+		key: {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false},
+	}
+	updated, _ = m.Update(ghLoadedMsg{issues: recovered, at: time.Unix(3, 0)})
+	m = updated.(model)
+
+	if !reflect.DeepEqual(m.issues, recovered) {
+		t.Fatalf("issues after successful refresh = %#v, want wholesale replacement %#v", m.issues, recovered)
+	}
+}
+
 func TestGHUpdateNotifiesTransitionsOnceAfterInitialSnapshot(t *testing.T) {
 	notifier := &fakeTransitionNotifier{}
 	m := newModel(Options{Notifier: notifier})

@@ -29,9 +29,21 @@ function ciWorst(prs) {
   }
   return worst;
 }
+/* Pane-level CI — the wire's p.ciStatus (primary-PR CI, lowercase, "-" when no
+ * PR) so the dashboard agrees with the TUI; worst-of-prs is only a fallback
+ * for snapshots predating the field. */
+function paneCI(p) {
+  return p.ciStatus && p.ciStatus !== "-" ? p.ciStatus : ciWorst(p.prs);
+}
+/* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
+ * anything else (UNKNOWN etc.) → "<STATE> #N". */
 function fmtBlockers(p) {
   if (!p.blockers || !p.blockers.length) return "-";
-  return p.blockers.map((b) => (b.state === "OPEN" ? `OPEN #${b.num}` : `resolved #${b.num}`)).join(", ");
+  return p.blockers.map((b) => {
+    if (b.state === "OPEN") return `OPEN #${b.num}`;
+    if (b.state === "CLOSED") return `resolved #${b.num}`;
+    return `${String(b.state ?? "").trim() || "-"} #${b.num}`;
+  }).join(", ");
 }
 function fmtWave(p) { return p.waveLabel || (p.wave ? `w${p.wave}` : ""); }
 function clock(iso) {
@@ -60,8 +72,8 @@ function matches(p, terms) {
     switch (t.key) {
       case "state": if ((p.tmuxState === t.value ? p.tmuxState : String(p.issueState || "").toLowerCase()) !== t.value) return false; break;
       case "agent": if (!String(p.agent || "").toLowerCase().includes(t.value)) return false; break;
-      case "wave": if (String(p.wave ?? "") !== t.value && (p.waveLabel || "").toLowerCase() !== t.value) return false; break;
-      case "ci": if (ciWorst(p.prs) !== t.value) return false; break;
+      case "wave": if (String(p.wave ?? "") !== t.value && (p.waveLabel || "").toLowerCase() !== t.value && fmtWave(p).toLowerCase() !== t.value) return false; break;
+      case "ci": if (paneCI(p) !== t.value) return false; break;
       case "dirty": if ((t.value === "yes") !== (p.dirtyState === "dirty")) return false; break;
       case "live": if ((t.value === "yes") !== !!p.alive) return false; break;
       case "issue": if (String(p.issueNum) !== t.value) return false; break;
@@ -74,15 +86,15 @@ function matches(p, terms) {
 const SORTS = {
   issueNum: (p) => p.issueNum ?? 0,
   name: (p) => String(p.displayName || p.slug || "").toLowerCase(),
-  agent: (p) => String(p.agent || ""),
+  agent: (p) => String(p.agent || "").toLowerCase(),
   wave: (p) => p.wave || 99,
   blockers: (p) => (p.blockers || []).filter((b) => b.state === "OPEN").length,
-  branch: (p) => String(p.branchName || ""),
+  branch: (p) => String(p.branchName || "").toLowerCase(),
   diff: (p) => { const m = /\+(\d+)\/-(\d+)/.exec(p.diffSummary || ""); return m ? +m[1] + +m[2] : -1; },
   dirty: (p) => ({ clean: 0, dirty: 1, unknown: 2 }[p.dirtyState] ?? 3),
-  ci: (p) => ({ fail: 0, pending: 1, pass: 2 }[ciWorst(p.prs)] ?? 3),
+  ci: (p) => ({ fail: 0, pending: 1, pass: 2 }[paneCI(p)] ?? 3),
   tmux: (p) => (p.alive ? 0 : 1),
-  state: (p) => String(p.issueState || ""),
+  state: (p) => String(p.issueState || "").toLowerCase(),
   pr: (p) => { const pr = prPrimary(p.prs); return { MERGED: 0, OPEN: 1, CLOSED: 2 }[pr && pr.state] ?? 3; },
 };
 
@@ -92,7 +104,7 @@ function tagHtml(cls, label, title) {
 }
 function rowHtml(p) {
   const pr = prPrimary(p.prs);
-  const ci = ciWorst(p.prs);
+  const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
   const sel = state.selected === p.paneId ? " selected" : "";
   return `<tr class="row${sel}" data-pane-id="${esc(p.paneId)}" tabindex="0">
@@ -119,7 +131,8 @@ function prCell(pr) {
   if (!pr) return '<span class="muted">—</span>';
   const cls = pr.state === "MERGED" ? "t-merged" : pr.state === "OPEN" ? "t-open" : "";
   const draft = pr.isDraft ? " t-draft" : "";
-  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`, pr.title);
+  // PRRef carries no title on the wire (ghissue.PRRef) — number/state only.
+  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`);
 }
 
 const COLS = [

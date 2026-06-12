@@ -479,7 +479,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = transitionNotice(events)
 				}
 			}
-			m.issues = msg.issues
+			if msg.err != nil && m.issues != nil {
+				m.issues = mergeDegradedIssueStatuses(m.issues, msg.issues)
+			} else {
+				m.issues = msg.issues
+			}
 		}
 		m.lastGH = msg.at
 		m.refreshRows()
@@ -1187,6 +1191,44 @@ func mergePartialIssueTransitionSnapshots(previous map[issueKey]issueTransitionS
 		out[key] = current
 	}
 	return out
+}
+
+// mergeDegradedIssueStatuses keeps last-known display data when an errored
+// refresh returns a degraded partial snapshot: keys dropped from the partial
+// result are restored wholesale from the previous snapshot, and keys present
+// in both keep their previous wave/blocker fields when the partial entry lost
+// them. New keys pass through unchanged.
+func mergeDegradedIssueStatuses(previous, current map[issueKey]issueStatus) map[issueKey]issueStatus {
+	out := make(map[issueKey]issueStatus, max(len(previous), len(current)))
+	maps.Copy(out, previous)
+	for key, status := range current {
+		if prev, ok := previous[key]; ok {
+			status = mergeDegradedIssueStatus(prev, status)
+		}
+		out[key] = status
+	}
+	return out
+}
+
+// mergeDegradedIssueStatus restores the previous wave/blocker display fields
+// when a degraded refresh dropped them (failed child-body hydration renders a
+// still-blocked child with "-" blockers and no blocked badge).
+func mergeDegradedIssueStatus(previous, current issueStatus) issueStatus {
+	if !degradedBlockers(current.Blockers) || degradedBlockers(previous.Blockers) {
+		return current
+	}
+	current.Blockers = previous.Blockers
+	current.HasOpenBlockers = previous.HasOpenBlockers
+	current.Wave = previous.Wave
+	current.WaveLabel = previous.WaveLabel
+	return current
+}
+
+// degradedBlockers reports whether a formatted blockers string carries no
+// blocker information ("-" or empty), the signature of a degraded refresh.
+func degradedBlockers(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	return trimmed == "" || trimmed == "-"
 }
 
 func mergePartialIssueTransitionSnapshot(previous, current issueTransitionSnapshot) issueTransitionSnapshot {

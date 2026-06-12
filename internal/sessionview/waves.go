@@ -38,18 +38,36 @@ type WaveGraph struct {
 // FetchWaveGraph loads a parent's children (Sub-issues API ∪ parent task-list
 // rows ∪ recordedNums for a numeric parent; recordedNums only for @manual or
 // Project parents), hydrates missing bodies, and computes blocker statuses
-// plus dependency waves. Per-issue failures are joined and partial results
-// kept so consumers degrade instead of going blank. Out-of-set blocker states
-// resolve lazily through IssueState with a per-call cache.
+// plus dependency waves. Per-issue failures (including blocker IssueState
+// lookups) are joined and partial results kept so consumers degrade instead
+// of going blank. The blocker state cache is pre-seeded with the states the
+// child fetches already returned, so only out-of-set blockers resolve lazily
+// through IssueState.
 func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (WaveGraph, error) {
 	children, parentBody, includeParentRows, loadErr := fetchWaveChildren(c, parent, recordedNums)
 	loadErr = errors.Join(loadErr, hydrateIssueBodies(c, children))
 
+	// Pre-seed with in-set states: SubIssueList/IssueDetail already carry State,
+	// so re-fetching it per blocker would burn gh API budget for nothing. Empty
+	// states stay out so stateOf can still fall back to a live lookup.
 	stateCache := map[int]string{}
+	for _, issue := range children {
+		if issue.State != "" {
+			stateCache[issue.Number] = issue.State
+		}
+	}
+	var stateErr error
 	stateOf := func(num int) string {
 		state, ok := stateCache[num]
 		if !ok {
-			state, _ = c.IssueState(num) // failures degrade to UNKNOWN downstream
+			var err error
+			state, err = c.IssueState(num)
+			if err != nil {
+				// Downstream renders the empty state as UNKNOWN; surface the
+				// failure so consumers can flag degradation instead of showing
+				// UNKNOWN with no indicator.
+				stateErr = errors.Join(stateErr, fmt.Errorf("blocker state #%d: %w", num, err))
+			}
 			stateCache[num] = state
 		}
 		return state
@@ -72,7 +90,7 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 			Blocked:   blockers.HasOpen(deps[issue.Number]),
 		}
 	}
-	return WaveGraph{Children: children, Info: info}, loadErr
+	return WaveGraph{Children: children, Info: info}, errors.Join(loadErr, stateErr)
 }
 
 // fetchWaveChildren resolves the child set and reports whether parent

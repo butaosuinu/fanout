@@ -19,16 +19,21 @@ const (
 // it, so the endpoint can never address an arbitrary tmux target.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
-// hasPane reports whether paneID appears in the poller's latest committed
-// snapshot. Defined here rather than in poller.go because /api/peek is its
-// only consumer. The zero-value snapshot has nil Sessions, which ranges as
-// empty, so an unpublished snapshot simply reports false.
-func (p *poller) hasPane(paneID string) bool {
+// hasLivePane reports whether paneID appears in the poller's latest committed
+// snapshot as a live pane. Requiring Alive (not mere presence in state) closes
+// a pane-id-reuse hole: after a tmux server restart an unrelated pane can take
+// over a recorded id, and only the snapshot's liveness check (pane id plus
+// worktree-path match, see sessionview's paneAlive) ties the id back to this
+// child — a bare id match would let /api/peek capture a stranger's terminal.
+// Defined here rather than in poller.go because /api/peek is its only
+// consumer. The zero-value snapshot has nil Sessions, which ranges as empty,
+// so an unpublished snapshot simply reports false.
+func (p *poller) hasLivePane(paneID string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
-			if sess.Panes[i].PaneID == paneID {
+			if sess.Panes[i].PaneID == paneID && sess.Panes[i].Alive {
 				return true
 			}
 		}
@@ -46,8 +51,8 @@ type peekResponse struct {
 
 // handlePeek serves GET /api/peek?pane=%N[&lines=K]: a one-shot capture-pane
 // snapshot of one recorded pane. capture-pane only reads the pane, so the
-// dashboard stays mutation-free. Only panes present in the current snapshot
-// may be peeked; lines is clamped to [1, peekMaxLines].
+// dashboard stays mutation-free. Only panes live in the current snapshot may
+// be peeked; lines is clamped to [1, peekMaxLines].
 func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	paneID := r.URL.Query().Get("pane")
 	if !paneIDRe.MatchString(paneID) {
@@ -63,8 +68,8 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = min(max(n, 1), peekMaxLines)
 	}
-	if !s.poller.hasPane(paneID) {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not in the current sessions", paneID))
+	if !s.poller.hasLivePane(paneID) {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

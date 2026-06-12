@@ -8,7 +8,9 @@
      The page URL carries the API token (?token=), so
      <meta name="referrer" content="no-referrer"> is KEPT: the tokened URL
      must never leak via the Referer header — to the font origins included.
-     Everything else (favicon, CSS, JS) is local / inline. -->
+     Everything else (favicon, CSS, JS) is local / inline.
+     The font stylesheet loads non-blocking (media-swap) so a hanging proxy
+     cannot stall first paint of the localhost dashboard. -->
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="light dark" />
 <title>fanout dashboard</title>
@@ -25,7 +27,8 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+<noscript><link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" /></noscript>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M12 21 3.5 8M12 21 8.6 6.2M12 21l3.4-14.8M12 21 20.5 8' stroke='%23165E83' stroke-width='1.7' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='21' r='2.2' fill='%2300A3AF'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="style.css" />
 <script src="app.js" defer></script>

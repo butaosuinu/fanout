@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -12,9 +13,16 @@ import (
 const (
 	userShellExpr       = `"${SHELL:-/bin/sh}"`
 	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
-	livePaneListFormat  = "#{pane_id}\t#{pane_current_path}\t#{pane_title}"
+	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
+	livePaneTitleFormat = "#{pane_id}\t#{pane_title}"
 	paneAlternateFormat = "#{alternate_on}"
 )
+
+// paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
+// skip lines whose id field does not match, so a crafted directory name
+// containing newlines cannot inject arbitrary phantom rows into the liveness
+// sweep.
+var paneIDPattern = regexp.MustCompile(`^%[0-9]+$`)
 
 // PaneInfo describes a pane currently known to tmux.
 type PaneInfo struct {
@@ -76,48 +84,90 @@ type LivePane struct {
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
-// current path and title (`tmux list-panes -a -F livePaneListFormat`). The
-// dashboard matches a recorded pane on BOTH its id and a current path under its
-// worktree: pane ids are server-scoped and reused after a tmux server restart,
-// so id-only matching would falsely mark a stale row live when an unrelated new
-// pane reuses the same %N. An error (e.g. tmux absent) lets callers degrade.
+// current path and title. The dashboard matches a recorded pane on BOTH its id
+// and a current path under its worktree: pane ids are server-scoped and reused
+// after a tmux server restart, so id-only matching would falsely mark a stale
+// row live when an unrelated new pane reuses the same %N. An error (e.g. tmux
+// absent) lets callers degrade.
+//
+// It issues two list-panes calls (livePanePathFormat then livePaneTitleFormat)
+// so each variable-content field is last on its line and survives strings.Cut
+// with embedded tabs intact — both pane paths and pane titles may legally
+// contain tabs.
+//
+// Injection defense: pane_current_path is just a directory name, so a crafted
+// path containing a newline can forge whole extra lines in the path listing.
+// Two layers stop that from producing phantom panes: (1) both parsers skip
+// lines whose id field is not a well-formed %N pane id, discarding junk
+// fragments; (2) a forged line that does imitate "%N\t<path>" is still dropped
+// unless the same id appears in the title listing, which cannot be forged
+// because tmux rejects newlines in pane titles (verified on tmux 3.6a). So a
+// LivePane is emitted only for ids present in BOTH outputs. If the title call
+// fails entirely, panes are returned with empty titles rather than failing the
+// sweep — titles are cosmetic, liveness is not.
 //
 // Distinct from ListPanes(target), which returns richer PaneInfo for a single
 // target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
 func ListLivePanes() ([]LivePane, error) {
-	out, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneListFormat).Output()
+	pathOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePanePathFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
-	return parseListLivePanesOutput(string(out)), nil
+	panes := parseLivePanePaths(string(pathOut))
+	titleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneTitleFormat).Output()
+	if err != nil {
+		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
+	}
+	titles := parseLivePaneTitles(string(titleOut))
+	var joined []LivePane
+	for _, pane := range panes {
+		title, ok := titles[pane.ID]
+		if !ok {
+			// Absent from the unforgeable title listing: a phantom row
+			// injected via a newline-bearing pane_current_path. Drop it.
+			continue
+		}
+		pane.Title = title
+		joined = append(joined, pane)
+	}
+	return joined, nil
 }
 
-// parseListLivePanesOutput parses livePaneListFormat lines. The title field is
-// last and taken verbatim because pane titles may themselves contain tabs; ids
-// and paths cannot in this format. Malformed lines (empty pane id, missing
-// path field) are skipped rather than failing the whole liveness sweep.
-func parseListLivePanesOutput(out string) []LivePane {
+// parseLivePanePaths parses livePanePathFormat lines into LivePanes with empty
+// titles. The path is the last field, so strings.Cut keeps any embedded tabs
+// intact. Lines whose id field is not a well-formed %N pane id are skipped:
+// a path containing newlines splits into extra lines whose first field will
+// not normally look like a pane id (forged "%N\t..." lines are handled by the
+// cross-check in ListLivePanes).
+func parseLivePanePaths(out string) []LivePane {
 	var panes []LivePane
 	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimRight(line, "\r")
-		if strings.TrimSpace(line) == "" {
+		id, path, ok := strings.Cut(line, "\t")
+		if !ok || !paneIDPattern.MatchString(id) {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 3)
-		if len(fields) < 2 {
-			continue
-		}
-		id := strings.TrimSpace(fields[0])
-		if id == "" {
-			continue
-		}
-		pane := LivePane{ID: id, CurrentPath: fields[1]}
-		if len(fields) == 3 {
-			pane.Title = fields[2]
-		}
-		panes = append(panes, pane)
+		panes = append(panes, LivePane{ID: id, CurrentPath: path})
 	}
 	return panes
+}
+
+// parseLivePaneTitles parses livePaneTitleFormat lines into an id-to-title
+// map. The title is the last field, so strings.Cut keeps any embedded tabs
+// intact. tmux rejects newlines in pane titles, so unlike pane paths a title
+// cannot forge extra lines here; ids failing the %N check are skipped anyway
+// for symmetry with parseLivePanePaths.
+func parseLivePaneTitles(out string) map[string]string {
+	titles := make(map[string]string)
+	for line := range strings.SplitSeq(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		id, title, ok := strings.Cut(line, "\t")
+		if !ok || !paneIDPattern.MatchString(id) {
+			continue
+		}
+		titles[id] = title
+	}
+	return titles
 }
 
 // BindDashboardKey registers a tmux key binding (under the prefix table) that

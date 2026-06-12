@@ -1,20 +1,17 @@
 package dashboard
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/sessionview"
 )
 
 // errPaneGone simulates capture-pane failing on a stale pane / dead tmux server.
@@ -46,46 +43,45 @@ func (f *fakeCapture) snapshot() (int, string, int) {
 	return f.calls, f.paneID, f.lines
 }
 
-// writePeekState seeds .fanout/state.json with one pane ("%5") so the poller's
-// initial snapshot — published before the server starts serving — contains a
-// known pane id for /api/peek to validate against.
-func writePeekState(t *testing.T, root string) {
-	t.Helper()
-	store := state.Store{
-		SchemaVersion: state.SchemaVersion,
-		Panes: []state.Pane{{
-			Parent:       "#1",
-			IssueNum:     2,
-			Slug:         "child",
-			BranchName:   "fanout/child",
-			PaneID:       "%5",
-			Agent:        "claude",
-			DisplayName:  "child",
-			WorktreePath: filepath.Join(root, ".fanout", "worktrees", "child"),
-			CreatedAt:    "2026-06-12T00:00:00Z",
+// peekSnapshot is the fixture /api/peek validates against: one session with a
+// single pane "%5" whose tmux liveness is controlled by alive. Tests publish
+// it into the poller directly instead of seeding state.json because the real
+// poller recomputes Alive from the live tmux server, which a test cannot (and
+// should not) control.
+func peekSnapshot(alive bool) sessionview.Snapshot {
+	return sessionview.Snapshot{
+		Sessions: []sessionview.Session{{
+			Parent: "#1",
+			Panes: []sessionview.PaneView{{
+				IssueNum:    2,
+				Slug:        "child",
+				DisplayName: "child",
+				Agent:       "claude",
+				BranchName:  "fanout/child",
+				PaneID:      "%5",
+				CreatedAt:   "2026-06-12T00:00:00Z",
+				Alive:       alive,
+			}},
 		}},
-	}
-	data, err := json.Marshal(store)
-	if err != nil {
-		t.Fatalf("marshal state: %v", err)
-	}
-	dir := filepath.Join(root, ".fanout")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir .fanout: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), data, 0o644); err != nil {
-		t.Fatalf("write state.json: %v", err)
 	}
 }
 
-// newPeekServer is newTestServer plus a seeded state file and an injected fake
-// CapturePane.
+// publishSnapshot installs snap as the poller's committed snapshot. Safe at
+// any point in these tests: newPeekServer never starts the poller loop, so no
+// rebuild overwrites the fixture.
+func publishSnapshot(srv *Server, snap sessionview.Snapshot) {
+	srv.poller.mu.Lock()
+	defer srv.poller.mu.Unlock()
+	srv.poller.latest = snap
+}
+
+// newPeekServer is newTestServer plus an injected fake CapturePane and a
+// published snapshot whose one pane ("%5") is live. It serves HTTP without
+// starting the poller loop so each test fully controls pane liveness.
 func newPeekServer(t *testing.T, token string, capture *fakeCapture) *Server {
 	t.Helper()
-	root := t.TempDir()
-	writePeekState(t, root)
 	srv, err := New(Options{
-		ProjectRoot: root,
+		ProjectRoot: t.TempDir(),
 		Port:        0,
 		Token:       token,
 		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
@@ -94,9 +90,9 @@ func newPeekServer(t *testing.T, token string, capture *fakeCapture) *Server {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go srv.Run(ctx)
-	t.Cleanup(cancel)
+	publishSnapshot(srv, peekSnapshot(true))
+	go func() { _ = srv.httpServer.Serve(srv.listener) }()
+	t.Cleanup(func() { _ = srv.httpServer.Close() })
 	waitReady(t, srv.base)
 	return srv
 }
@@ -191,6 +187,28 @@ func TestPeekUnknownPaneIs404(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for an unknown pane", calls)
+	}
+}
+
+// TestPeekRecordedButDeadPaneIs404 locks in the pane-id-reuse defense: a pane
+// id that is recorded in the snapshot but not Alive (e.g. an unrelated pane
+// took over the id after a tmux server restart) must 404 without ever invoking
+// capture-pane — even though the capture itself would succeed.
+func TestPeekRecordedButDeadPaneIs404(t *testing.T) {
+	fake := &fakeCapture{out: "an unrelated pane's terminal"}
+	srv := newPeekServer(t, "", fake)
+	publishSnapshot(srv, peekSnapshot(false))
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("dead pane status = %d want 404, body %s", status, body)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "not live") {
+		t.Fatalf("body = %s want a JSON error mentioning the pane is not live", body)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture ran %d time(s) for a dead pane", calls)
 	}
 }
 

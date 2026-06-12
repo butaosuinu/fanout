@@ -62,7 +62,7 @@ func (f *fakeGraphClient) IssueState(num int) (string, error) {
 	f.stateCalls[num]++
 	state, ok := f.states[num]
 	if !ok {
-		return "UNKNOWN", errGraphBoom
+		return "", errGraphBoom // real gh returns no state on failure
 	}
 	return state, nil
 }
@@ -201,6 +201,58 @@ func TestFetchWaveGraphHydrationErrorTolerant(t *testing.T) {
 	}
 	if got := graph.Info[101]; got.Wave != 1 {
 		t.Fatalf("Info[101] = %#v, want wave 1", got)
+	}
+}
+
+func TestFetchWaveGraphPreSeedsInSetBlockerStates(t *testing.T) {
+	client := &fakeGraphClient{
+		parentBody: "- [ ] #101 first (blocked by #102)\n- [ ] #102 second\n",
+		details: map[int]ghissue.Issue{
+			101: {Number: 101, Title: "first", State: "OPEN", Body: "x"},
+			102: {Number: 102, Title: "second", State: "CLOSED", Body: "x"},
+		},
+		// states is empty: an IssueState call for #102 would error, so the
+		// assertions below also prove the pre-seeded cache short-circuits it.
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err != nil {
+		t.Fatalf("FetchWaveGraph() error = %v", err)
+	}
+
+	if len(client.stateCalls) != 0 {
+		t.Fatalf("IssueState calls = %v, want none (in-set states pre-seeded)", client.stateCalls)
+	}
+	want := []blockers.Status{{Num: 102, State: "CLOSED"}}
+	if got := graph.Info[101].Blockers; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Info[101].Blockers = %#v, want %#v", got, want)
+	}
+	if graph.Info[101].Blocked {
+		t.Fatal("Info[101].Blocked = true, want false (blocker is CLOSED)")
+	}
+}
+
+func TestFetchWaveGraphIssueStateFailureSurfacesInError(t *testing.T) {
+	client := &fakeGraphClient{
+		parentBody: "- [ ] #101 first (blocked by #300)\n",
+		details: map[int]ghissue.Issue{
+			101: {Number: 101, Title: "first", State: "OPEN", Body: "x"},
+		},
+		// #300 is out-of-set and missing from states, so IssueState fails.
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+
+	if err == nil || !strings.Contains(err.Error(), "blocker state #300") {
+		t.Fatalf("FetchWaveGraph() error = %v, want blocker state #300 partial error", err)
+	}
+	if got, want := childNumbers(graph), []int{101}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("children = %#v, want %#v", got, want)
+	}
+	// Partial results survive: the failed lookup renders UNKNOWN downstream.
+	want := []blockers.Status{{Num: 300, State: "UNKNOWN"}}
+	if got := graph.Info[101].Blockers; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Info[101].Blockers = %#v, want %#v", got, want)
 	}
 }
 

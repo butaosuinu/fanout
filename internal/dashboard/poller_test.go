@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -121,6 +122,35 @@ func TestRefreshGHCallsWavesOncePerNormalizedParent(t *testing.T) {
 	}
 	if len(gh.waveNums["@manual"]) != 0 {
 		t.Fatalf("synthetic nums must stay out of recordedNums, got %v", gh.waveNums["@manual"])
+	}
+}
+
+func TestRefreshGHThrottlesWavePhaseToWaveInterval(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+
+	// First refresh always runs the wave phase so the UI populates; a second
+	// refresh within waveInterval skips it while the PR phase still runs.
+	p.refreshGH()
+	p.refreshGH()
+
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("Waves calls within waveInterval = %d, want 1 (first refresh only)", gh.waveCalls["100"])
+	}
+	if gh.calls[101] != 2 {
+		t.Fatalf("IssuePRs calls = %d, want 2 (PR phase runs every tick)", gh.calls[101])
+	}
+
+	// Once waveInterval has elapsed the wave phase runs again.
+	p.lastWaveRefresh = time.Now().Add(-p.waveInterval)
+	p.refreshGH()
+	if gh.waveCalls["100"] != 2 {
+		t.Fatalf("Waves calls after waveInterval elapsed = %d, want 2", gh.waveCalls["100"])
 	}
 }
 

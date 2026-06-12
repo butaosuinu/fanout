@@ -18,6 +18,12 @@ import (
 const (
 	defaultCheapInterval = 2 * time.Second
 	defaultGHInterval    = 20 * time.Second
+	// defaultWaveInterval throttles the wave-graph phase to every third gh
+	// tick. One wave pass costs many gh calls per parent (parent body +
+	// sub-issue list + per-child body hydration + out-of-set blocker states),
+	// so running it at PR cadence would burn through GitHub's hourly API
+	// budget on busy boards and leave the dashboard permanently rate-limited.
+	defaultWaveInterval = 3 * defaultGHInterval
 )
 
 // GHProvider is the GitHub fetch surface the poller throttles and caches:
@@ -43,7 +49,9 @@ type waveCacheEntry struct {
 
 // poller owns the authoritative latest Snapshot. A cheap tick reloads
 // state.json + tmux liveness (~2s); a throttled GitHub tick refreshes per-issue
-// PR state (~20s). sessionview.Build reads gh only through the cache, so the
+// PR state (~20s), with the costlier per-parent wave-graph phase further
+// throttled to waveInterval (~60s) to respect the gh API budget.
+// sessionview.Build reads gh only through the cache, so the
 // cheap tick never blocks on the network. Snapshots broadcast over SSE only when
 // their content (ignoring the timestamp) actually changes.
 type poller struct {
@@ -52,6 +60,12 @@ type poller struct {
 
 	cheapInterval time.Duration
 	ghInterval    time.Duration
+	waveInterval  time.Duration
+
+	// lastWaveRefresh tracks when the wave-graph phase last ran. It is only
+	// touched by refreshGH, which runs solely on the single gh goroutine
+	// (tests call it directly, also single-threaded), so it needs no lock.
+	lastWaveRefresh time.Time
 
 	// ghMu guards the GitHub identity (repo/gh/ghErr) so the deferred resolution
 	// running on the gh goroutine can publish it while the cheap ticker reads it.
@@ -78,6 +92,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		hub:           h,
 		cheapInterval: defaultCheapInterval,
 		ghInterval:    defaultGHInterval,
+		waveInterval:  defaultWaveInterval,
 		cache:         map[int]ghCacheEntry{},
 		waveCache:     map[string]waveCacheEntry{},
 	}
@@ -227,6 +242,16 @@ func (p *poller) refreshGH() {
 	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
 	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
 	// and backfill unlinked children for numeric ones.
+	// This phase runs on its own, slower cadence (waveInterval) because each
+	// pass is many gh calls per parent — coupling it to every PR tick would
+	// exhaust GitHub's hourly API budget. The first refresh always runs it so
+	// the UI populates immediately. Child bodies are deliberately refetched on
+	// each pass (no cross-cycle body cache) so edits to "## Blocked by"
+	// sections still show up; the slower cadence bounds that cost.
+	if !p.lastWaveRefresh.IsZero() && time.Since(p.lastWaveRefresh) < p.waveInterval {
+		return
+	}
+	p.lastWaveRefresh = time.Now()
 	numsByParent := recordedNumsByParent(store)
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
 		info, err := gh.Waves(parent, numsByParent[parent])

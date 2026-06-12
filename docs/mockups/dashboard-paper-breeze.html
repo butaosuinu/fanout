@@ -9,6 +9,8 @@
   IDs / class names / data attributes / localStorage key are the FINAL
   contract for internal/dashboard/static/{index.html,style.css,app.js}.
   Fonts: Google Fonts (user-approved). no-referrer is kept in the real SPA.
+  The font stylesheet loads non-blocking (media-swap) so a hanging proxy
+  cannot stall first paint — same pattern as the real SPA.
 -->
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="light dark" />
@@ -26,7 +28,8 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+<noscript><link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=M+PLUS+1+Code:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet" /></noscript>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M12 21 3.5 8M12 21 8.6 6.2M12 21l3.4-14.8M12 21 20.5 8' stroke='%23165E83' stroke-width='1.7' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='21' r='2.2' fill='%2300A3AF'/%3E%3C/svg%3E" />
 <style>
 /* ============================================================
@@ -669,16 +672,16 @@ const SAMPLE = {
           worktreePath: ".fanout/worktrees/sessionview-135", createdAt: "2026-06-09T10:02:00+09:00",
           alive: false, tmuxState: "stale", tmuxTitle: "",
           issueState: "CLOSED", wave: 1, waveLabel: "wave1", blockers: [], blocked: false,
-          prs: [{ number: 168, state: "MERGED", title: "sessionview 抽出", url: "#", author: "butaosuinu", ci: "pass" }],
-          hasMergedPr: true, diffSummary: "+412/-96", dirtyState: "clean", worktreeErr: "",
+          prs: [{ number: 168, state: "MERGED", url: "#", author: "butaosuinu", ci: "pass" }],
+          hasMergedPr: true, ciStatus: "pass", diffSummary: "+412/-96", dirtyState: "clean", worktreeErr: "",
           prompt: "internal/sessionview を新設し、state.json + tmux 生死 + GitHub PR 状態を Snapshot に集約する。" },
         { issueNum: 136, slug: "tui-shell-136", displayName: "TUI コンソール骨格(Bubble Tea)",
           agent: "claude", branchName: "fanout/tui-shell-136", paneId: "%7",
           worktreePath: ".fanout/worktrees/tui-shell-136", createdAt: "2026-06-10T14:31:00+09:00",
           alive: true, tmuxState: "live", tmuxTitle: "✳ claude — tui shell",
           issueState: "OPEN", wave: 1, waveLabel: "wave1", blockers: [], blocked: false,
-          prs: [{ number: 171, state: "OPEN", title: "TUI 骨格", url: "#", author: "butaosuinu", ci: "pending" }],
-          hasMergedPr: false, diffSummary: "+1280/-44", dirtyState: "dirty", worktreeErr: "",
+          prs: [{ number: 171, state: "OPEN", url: "#", author: "butaosuinu", ci: "pending" }],
+          hasMergedPr: false, ciStatus: "pending", diffSummary: "+1280/-44", dirtyState: "dirty", worktreeErr: "",
           prompt: "Bubble Tea で常駐 TUI コンソールの骨格を実装する。" },
         { issueNum: 137, slug: "peek-137", displayName: "ペイン詳細パネルと peek",
           agent: "codex", branchName: "fanout/peek-137", paneId: "%12",
@@ -686,8 +689,8 @@ const SAMPLE = {
           alive: true, tmuxState: "live", tmuxTitle: "✳ codex — peek 実装",
           issueState: "OPEN", wave: 2, waveLabel: "wave2",
           blockers: [{ num: 136, state: "OPEN" }, { num: 135, state: "CLOSED" }], blocked: true,
-          prs: [{ number: 176, state: "OPEN", title: "詳細パネル", url: "#", author: "butaosuinu", ci: "pending", reviewDecision: "REVIEW_REQUIRED" }],
-          hasMergedPr: false, diffSummary: "+302/-18", dirtyState: "dirty", worktreeErr: "",
+          prs: [{ number: 176, state: "OPEN", url: "#", author: "butaosuinu", ci: "pending", reviewDecision: "REVIEW_REQUIRED" }],
+          hasMergedPr: false, ciStatus: "pending", diffSummary: "+302/-18", dirtyState: "dirty", worktreeErr: "",
           prompt: "## 概要\nTUI の詳細パネルに tmux ペイン出力の peek(直近80行)を追加する。\n\n## 受け入れ条件\n- 選択行の切替で 300ms 以内に更新\n- ANSI エスケープを除去して表示" },
         { issueNum: 138, slug: "esc-check-138", displayName: "<script>alert(1)<\/script> エスケープ確認",
           agent: "claude", branchName: "fanout/esc-check-138", paneId: "%13",
@@ -695,7 +698,7 @@ const SAMPLE = {
           alive: false, tmuxState: "stale", tmuxTitle: "",
           issueState: "UNKNOWN", wave: 2, waveLabel: "wave2",
           blockers: [{ num: 136, state: "OPEN" }], blocked: true,
-          prs: [], hasMergedPr: false, diffSummary: "-", dirtyState: "unknown",
+          prs: [], hasMergedPr: false, ciStatus: "-", diffSummary: "-", dirtyState: "unknown",
           worktreeErr: "git status: exit status 128",
           prompt: "<img src=x onerror=alert(1)> がそのまま描画されないことを確認するための行。" },
         { issueNum: 139, slug: "sse-reconnect-139", displayName: "ダッシュボード SSE 再接続",
@@ -703,16 +706,16 @@ const SAMPLE = {
           worktreePath: ".fanout/worktrees/sse-reconnect-139", createdAt: "2026-06-10T16:40:00+09:00",
           alive: false, tmuxState: "stale", tmuxTitle: "",
           issueState: "CLOSED", wave: 1, waveLabel: "wave1", blockers: [], blocked: false,
-          prs: [{ number: 170, state: "MERGED", title: "SSE 再接続", url: "#", author: "butaosuinu", ci: "pass" }],
-          hasMergedPr: true, diffSummary: "+96/-12", dirtyState: "clean", worktreeErr: "",
+          prs: [{ number: 170, state: "MERGED", url: "#", author: "butaosuinu", ci: "pass" }],
+          hasMergedPr: true, ciStatus: "pass", diffSummary: "+96/-12", dirtyState: "clean", worktreeErr: "",
           prompt: "EventSource 切断時に polling へフォールバックし、復帰したら stream に戻す。" },
         { issueNum: 141, slug: "relnotes-141", displayName: "リリースノート自動化",
           agent: "claude", branchName: "fanout/relnotes-141", paneId: "%15",
           worktreePath: ".fanout/worktrees/relnotes-141", createdAt: "2026-06-12T09:12:00+09:00",
           alive: true, tmuxState: "live", tmuxTitle: "✳ claude — relnotes",
           issueState: "OPEN", wave: 3, waveLabel: "wave3", blockers: [], blocked: false,
-          prs: [{ number: 172, state: "OPEN", title: "relnotes", url: "#", author: "butaosuinu", ci: "fail", isDraft: true }],
-          hasMergedPr: false, diffSummary: "+204/-7", dirtyState: "dirty", worktreeErr: "",
+          prs: [{ number: 172, state: "OPEN", url: "#", author: "butaosuinu", ci: "fail", isDraft: true }],
+          hasMergedPr: false, ciStatus: "fail", diffSummary: "+204/-7", dirtyState: "dirty", worktreeErr: "",
           prompt: "タグ作成時にリリースノートの下書きを生成する。" }
       ]
     },
@@ -725,23 +728,23 @@ const SAMPLE = {
           worktreePath: ".fanout/worktrees/drop-jq-203", createdAt: "2026-06-08T13:20:00+09:00",
           alive: false, tmuxState: "stale", tmuxTitle: "",
           issueState: "CLOSED", wave: 1, waveLabel: "", blockers: [], blocked: false,
-          prs: [{ number: 209, state: "MERGED", title: "drop jq", url: "#", author: "butaosuinu", ci: "pass" }],
-          hasMergedPr: true, diffSummary: "+88/-214", dirtyState: "clean", worktreeErr: "",
+          prs: [{ number: 209, state: "MERGED", url: "#", author: "butaosuinu", ci: "pass" }],
+          hasMergedPr: true, ciStatus: "pass", diffSummary: "+88/-214", dirtyState: "clean", worktreeErr: "",
           prompt: "jq への依存を Go 実装に置き換える。" },
         { issueNum: 204, slug: "sub-issue-204", displayName: "gh-sub-issue 拡張の置換",
           agent: "claude", branchName: "fanout/sub-issue-204", paneId: "%23",
           worktreePath: ".fanout/worktrees/sub-issue-204", createdAt: "2026-06-11T15:48:00+09:00",
           alive: true, tmuxState: "live", tmuxTitle: "✳ claude — sub-issue",
           issueState: "OPEN", wave: 1, waveLabel: "", blockers: [], blocked: false,
-          prs: [{ number: 213, state: "OPEN", title: "sub-issue native", url: "#", author: "butaosuinu", ci: "pass", reviewDecision: "APPROVED" }],
-          hasMergedPr: false, diffSummary: "+342/-186", dirtyState: "clean", worktreeErr: "",
+          prs: [{ number: 213, state: "OPEN", url: "#", author: "butaosuinu", ci: "pass", reviewDecision: "APPROVED" }],
+          hasMergedPr: false, ciStatus: "pass", diffSummary: "+342/-186", dirtyState: "clean", worktreeErr: "",
           prompt: "gh-sub-issue 拡張を GraphQL ネイティブ実装で置き換える。" },
         { issueNum: 207, slug: "gh-native-207", displayName: "gh ネイティブ化の検討",
           agent: "codex", branchName: "fanout/gh-native-207", paneId: "%24",
           worktreePath: ".fanout/worktrees/gh-native-207", createdAt: "2026-06-12T10:55:00+09:00",
           alive: true, tmuxState: "live", tmuxTitle: "✳ codex — survey",
           issueState: "OPEN", wave: 0, waveLabel: "", blockers: [], blocked: false,
-          prs: [], hasMergedPr: false, diffSummary: "-", dirtyState: "clean", worktreeErr: "",
+          prs: [], hasMergedPr: false, ciStatus: "-", diffSummary: "-", dirtyState: "clean", worktreeErr: "",
           prompt: "gh api 呼び出しを go-gh ライブラリ直叩きへ移行できるか調査し、所見を issue にまとめる。" }
       ]
     }
@@ -785,9 +788,20 @@ function ciWorst(prs) {
   }
   return worst;
 }
+/* Pane-level CI — the wire's p.ciStatus (primary-PR CI, lowercase, "-" when no
+ * PR); worst-of-prs is only a fallback for snapshots predating the field. */
+function paneCI(p) {
+  return p.ciStatus && p.ciStatus !== "-" ? p.ciStatus : ciWorst(p.prs);
+}
+/* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
+ * anything else (UNKNOWN etc.) → "<STATE> #N". */
 function fmtBlockers(p) {
   if (!p.blockers || !p.blockers.length) return "-";
-  return p.blockers.map((b) => (b.state === "OPEN" ? `OPEN #${b.num}` : `resolved #${b.num}`)).join(", ");
+  return p.blockers.map((b) => {
+    if (b.state === "OPEN") return `OPEN #${b.num}`;
+    if (b.state === "CLOSED") return `resolved #${b.num}`;
+    return `${String(b.state ?? "").trim() || "-"} #${b.num}`;
+  }).join(", ");
 }
 function fmtWave(p) { return p.waveLabel || (p.wave ? `w${p.wave}` : ""); }
 function clock(iso) {
@@ -817,7 +831,7 @@ function matches(p, terms) {
       case "state": if ((p.tmuxState === t.value ? p.tmuxState : p.issueState.toLowerCase()) !== t.value) return false; break;
       case "agent": if (!String(p.agent).toLowerCase().includes(t.value)) return false; break;
       case "wave": if (String(p.wave) !== t.value && (p.waveLabel || "").toLowerCase() !== t.value) return false; break;
-      case "ci": if (ciWorst(p.prs) !== t.value) return false; break;
+      case "ci": if (paneCI(p) !== t.value) return false; break;
       case "dirty": if ((t.value === "yes") !== (p.dirtyState === "dirty")) return false; break;
       case "live": if ((t.value === "yes") !== !!p.alive) return false; break;
       case "issue": if (String(p.issueNum) !== t.value) return false; break;
@@ -836,7 +850,7 @@ const SORTS = {
   branch: (p) => p.branchName,
   diff: (p) => { const m = /\+(\d+)\/-(\d+)/.exec(p.diffSummary || ""); return m ? +m[1] + +m[2] : -1; },
   dirty: (p) => ({ clean: 0, dirty: 1, unknown: 2 }[p.dirtyState] ?? 3),
-  ci: (p) => ({ fail: 0, pending: 1, pass: 2 }[ciWorst(p.prs)] ?? 3),
+  ci: (p) => ({ fail: 0, pending: 1, pass: 2 }[paneCI(p)] ?? 3),
   tmux: (p) => (p.alive ? 0 : 1),
   state: (p) => p.issueState,
   pr: (p) => { const pr = prPrimary(p.prs); return { MERGED: 0, OPEN: 1, CLOSED: 2 }[pr && pr.state] ?? 3; },
@@ -848,7 +862,7 @@ function tagHtml(cls, label, title) {
 }
 function rowHtml(p) {
   const pr = prPrimary(p.prs);
-  const ci = ciWorst(p.prs);
+  const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
   const sel = state.selected === p.paneId ? " selected" : "";
   return `<tr class="row${sel}" data-pane-id="${esc(p.paneId)}" tabindex="0">
@@ -875,7 +889,8 @@ function prCell(pr) {
   if (!pr) return '<span class="muted">—</span>';
   const cls = pr.state === "MERGED" ? "t-merged" : pr.state === "OPEN" ? "t-open" : "";
   const draft = pr.isDraft ? " t-draft" : "";
-  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`, pr.title);
+  // PRRef carries no title on the wire (ghissue.PRRef) — number/state only.
+  return tagHtml(cls + draft, `#${pr.number} ${pr.isDraft ? "draft" : pr.state}`);
 }
 
 const COLS = [
