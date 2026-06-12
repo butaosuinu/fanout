@@ -192,6 +192,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				DirtyState:   worktreeStat.DirtyState,
 				WorktreeErr:  worktreeErr,
 				TmuxState:    tmuxStateOf(p.PaneID, snap.Degraded.Tmux, alive),
+				PlanMode:     p.CodexPlanMode,
 				Prompt:       p.Prompt,
 				CIStatus:     strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 				Wave:         wi.Wave,

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
@@ -23,26 +24,75 @@ const (
 // it, so the endpoint can never address an arbitrary tmux target.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
-// hasLivePane reports whether paneID appears in the poller's latest committed
-// snapshot as a live pane. Requiring Alive (not mere presence in state) closes
-// a pane-id-reuse hole: after a tmux server restart an unrelated pane can take
-// over a recorded id, and only the snapshot's liveness check (pane id plus
-// worktree-path match, see sessionview's paneAlive) ties the id back to this
-// child — a bare id match would let /api/peek capture a stranger's terminal.
-// Defined here rather than in poller.go because /api/peek is its only
-// consumer. The zero-value snapshot has nil Sessions, which ranges as empty,
+// livePaneView returns the snapshot row whose pane id is paneID, but only when
+// the poller's latest committed snapshot reports it as a live pane. Requiring
+// Alive (not mere presence in state) closes a pane-id-reuse hole: after a tmux
+// server restart an unrelated pane can take over a recorded id, and only the
+// snapshot's liveness check (pane id plus worktree-path match, see
+// sessionview's paneAlive) ties the id back to this child — a bare id match
+// would let /api/peek or /api/plan capture a stranger's terminal. Defined here
+// rather than in poller.go because the capture endpoints are its only
+// consumers. The zero-value snapshot has nil Sessions, which ranges as empty,
 // so an unpublished snapshot simply reports false.
-func (p *poller) livePaneWorktree(paneID string) (string, bool) {
+func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
 			if sess.Panes[i].PaneID == paneID && sess.Panes[i].Alive {
-				return sess.Panes[i].WorktreePath, true
+				return sess.Panes[i], true
 			}
 		}
 	}
-	return "", false
+	return sessionview.PaneView{}, false
+}
+
+// requireLivePane is the request-validation chain GET /api/peek and
+// GET /api/plan share: pane-id shape (400), snapshot liveness via livePaneView
+// (404), and recorded-worktree presence (404 — legacy/hand-written rows
+// without a worktree are alive on an id-only basis, which cannot survive tmux
+// pane-id reuse; without a path to verify against, capture could read an
+// unrelated pane, so refuse). On ok=false the JSON error response has already
+// been written.
+func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
+	if !paneIDRe.MatchString(paneID) {
+		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
+		return sessionview.PaneView{}, false
+	}
+	pv, ok := s.poller.livePaneView(paneID)
+	if !ok {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
+		return sessionview.PaneView{}, false
+	}
+	if pv.WorktreePath == "" {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
+		return sessionview.PaneView{}, false
+	}
+	return pv, true
+}
+
+// beginPaneCapture is the capture preamble shared by GET /api/peek and
+// GET /api/plan: response headers, the HEAD early-return (getOnly permits
+// HEAD; answer it before running tmux — mirrors handleStream's HEAD
+// early-return — so a probe never triggers a capture), and the request-time
+// tmux revalidation. The snapshot check in requireLivePane can be a
+// cheap-tick stale, which is enough for a tmux restart to hand the id to an
+// unrelated pane; verifying id+path right before reading shrinks that reuse
+// window to the instant before capture. A false return means the response is
+// complete (HEAD answered, or verify failed with 404) and the handler must
+// not capture.
+func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, paneID, worktree string) bool {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+	if err := s.verifyPane(paneID, worktree); err != nil {
+		peekError(w, http.StatusNotFound, err.Error())
+		return false
+	}
+	return true
 }
 
 // verifyLivePane is the default Options.VerifyPane: it re-resolves the pane id
@@ -83,8 +133,8 @@ type peekResponse struct {
 // be peeked; lines is clamped to [1, peekMaxLines].
 func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	paneID := r.URL.Query().Get("pane")
-	if !paneIDRe.MatchString(paneID) {
-		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
+	pv, ok := s.requireLivePane(w, paneID)
+	if !ok {
 		return
 	}
 	lines := peekDefaultLines
@@ -96,31 +146,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = min(max(n, 1), peekMaxLines)
 	}
-	worktree, ok := s.poller.livePaneWorktree(paneID)
-	if !ok {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
-		return
-	}
-	// Legacy/hand-written rows without a recorded worktree are alive on an
-	// id-only basis, which cannot survive tmux pane-id reuse. Without a path
-	// to verify against, capture could read an unrelated pane — refuse.
-	if worktree == "" {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	// getOnly permits HEAD; answer it before running tmux (mirrors handleStream's
-	// HEAD early-return) so a probe never triggers a capture.
-	if r.Method == http.MethodHead {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	// The snapshot check above can be a cheap-tick stale; revalidate id+path
-	// against tmux right before reading so a freshly reused pane id cannot
-	// expose an unrelated pane's contents.
-	if err := s.verifyPane(paneID, worktree); err != nil {
-		peekError(w, http.StatusNotFound, err.Error())
+	if !s.beginPaneCapture(w, r, paneID, pv.WorktreePath) {
 		return
 	}
 	out, err := s.capturePane(paneID, lines)

@@ -902,3 +902,95 @@ func TestListLivePanesDropsDuplicateForgedIDs(t *testing.T) {
 		t.Fatalf("ListLivePanes() = %#v, want only %%7 (duplicate %%5 dropped): %#v", panes, want)
 	}
 }
+
+// installPlanCaptureShim installs a tmux shim answering CapturePlanSource's
+// calls: display-message (alternate_on の問い合わせ) は altOn を、履歴 capture
+// は histBody を、alternate screen capture は altBody を返す。argv は呼び出し
+// ごとに "---" 行で区切って args ファイルへ追記される。
+func installPlanCaptureShim(t *testing.T, altOn, histBody, altBody string) string {
+	t.Helper()
+	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+case "$1" in
+display-message)
+	printf '%s\n' '` + altOn + `'
+	;;
+capture-pane)
+	if [ "$2" = "-a" ]; then
+		printf '%s\n' '` + altBody + `'
+	else
+		printf '%s\n' '` + histBody + `'
+	fi
+	;;
+esac
+`
+	return installTmuxShim(t, script)
+}
+
+// splitShimInvocations は "---" 区切りの args ファイル行を呼び出しごとの argv
+// に分解する。
+func splitShimInvocations(lines []string) [][]string {
+	var out [][]string
+	var cur []string
+	for _, line := range lines {
+		if line == "---" {
+			out = append(out, cur)
+			cur = nil
+			continue
+		}
+		cur = append(cur, line)
+	}
+	return out
+}
+
+func TestCapturePlanSourceCapturesJoinedHistory(t *testing.T) {
+	argsPath := installPlanCaptureShim(t, "0", "history with plan", "alt screen")
+
+	out, err := CapturePlanSource("%7", 2000)
+	if err != nil {
+		t.Fatalf("CapturePlanSource() failed: %v", err)
+	}
+	if out != "history with plan\n" {
+		t.Fatalf("output = %q, want history only (alternate screen off)", out)
+	}
+	calls := splitShimInvocations(readTmuxArgs(t, argsPath))
+	if len(calls) != 2 {
+		t.Fatalf("tmux calls = %d (%#v), want history capture + alternate_on probe", len(calls), calls)
+	}
+	// -J が折返し行を結合し、ペイン幅で分断された <proposed_plan> タグを
+	// 一行に戻す。-S -<lines> は通常スクリーンの履歴側にだけ付く。
+	wantHist := []string{"capture-pane", "-p", "-J", "-t", "%7", "-S", "-2000"}
+	if strings.Join(calls[0], "\x00") != strings.Join(wantHist, "\x00") {
+		t.Fatalf("history capture args = %#v, want %#v", calls[0], wantHist)
+	}
+}
+
+func TestCapturePlanSourceAppendsAlternateScreenLast(t *testing.T) {
+	argsPath := installPlanCaptureShim(t, "1", "history with plan", "alt screen render")
+
+	out, err := CapturePlanSource("%7", 2000)
+	if err != nil {
+		t.Fatalf("CapturePlanSource() failed: %v", err)
+	}
+	// alternate screen は末尾連結 — last-block 検索で最新レンダが勝つ。
+	if out != "history with plan\n\nalt screen render\n" {
+		t.Fatalf("output = %q, want history + alternate screen appended last", out)
+	}
+	calls := splitShimInvocations(readTmuxArgs(t, argsPath))
+	if len(calls) != 3 {
+		t.Fatalf("tmux calls = %d (%#v), want history + probe + alternate capture", len(calls), calls)
+	}
+	wantAlt := []string{"capture-pane", "-a", "-p", "-J", "-t", "%7"}
+	if strings.Join(calls[2], "\x00") != strings.Join(wantAlt, "\x00") {
+		t.Fatalf("alternate capture args = %#v, want %#v", calls[2], wantAlt)
+	}
+}
+
+func TestCapturePlanSourceRejectsBadArgs(t *testing.T) {
+	if _, err := CapturePlanSource("", 100); err == nil {
+		t.Fatal("CapturePlanSource(\"\") = nil error, want pane-id error")
+	}
+	if _, err := CapturePlanSource("%1", -1); err == nil {
+		t.Fatal("CapturePlanSource(lines=-1) = nil error, want lines error")
+	}
+}

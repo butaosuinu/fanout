@@ -159,19 +159,20 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 
 func statePane(req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
 	return state.Pane{
-		Parent:       req.ParentRef,
-		IssueNum:     req.Number,
-		Slug:         req.Slug,
-		BranchName:   req.BranchName,
-		BaseBranch:   req.Worktree.BaseBranch,
-		PaneID:       paneID,
-		Agent:        req.Agent,
-		DisplayName:  paneTitle(req),
-		WorktreePath: worktreePath,
-		Prompt:       req.Prompt,
-		Wave:         req.Wave,
-		CreatedAt:    now.Format(time.RFC3339),
-		AgentStatus:  "running",
+		Parent:        req.ParentRef,
+		IssueNum:      req.Number,
+		Slug:          req.Slug,
+		BranchName:    req.BranchName,
+		BaseBranch:    req.Worktree.BaseBranch,
+		PaneID:        paneID,
+		Agent:         req.Agent,
+		CodexPlanMode: req.CodexPlanMode,
+		DisplayName:   paneTitle(req),
+		WorktreePath:  worktreePath,
+		Prompt:        req.Prompt,
+		Wave:          req.Wave,
+		CreatedAt:     now.Format(time.RFC3339),
+		AgentStatus:   "running",
 	}
 }
 

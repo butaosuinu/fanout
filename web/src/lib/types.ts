@@ -39,6 +39,7 @@ export interface PaneView {
   tmuxState: string; // "live" / "stale" / "unknown" / "-"
   tmuxTitle?: string;
   agentState?: string; // "running" / "done" / ""(不明)
+  planMode?: boolean; // Codex Plan Mode 起動ペイン(/api/plan・Plan セクションの対象)
   prompt?: string;
   ciStatus?: string; // lowercase; "-" = primary PR に CI なし
   wave?: number; // 0(unknown)はフィールドごと欠落
@@ -82,4 +83,13 @@ export interface PeekResponse {
   lines: number;
   capturedAt: string;
   output: string;
+}
+
+/* 正は internal/dashboard/plan.go の planResponse。found:false は「plan-mode
+ * ペインだが取得可能な出力に完全な plan ブロックが無い」を表す正常応答(200)。 */
+export interface PlanResponse {
+  paneId: string;
+  capturedAt: string;
+  found: boolean;
+  plan: string;
 }

@@ -424,6 +424,53 @@ func CapturePaneOutput(paneID string, lines int) (string, error) {
 	return capturePaneOutput(paneID, lines, false)
 }
 
+// CapturePlanSource はダッシュボードの GET /api/plan が <proposed_plan> ブロック
+// を探すための読み取り専用テキストを返す: 通常スクリーンの履歴
+// (capture-pane -p -J -S -<lines>。-J が折返し行を結合するので、ペイン幅で
+// 分断されたタグも一行に戻る)に、alternate screen 中(codex TUI)はその内容
+// (-a -p -J)を末尾へ連結する。最新レンダが末尾に来るので、last-block 検索では
+// alternate screen 側の plan が勝つ。CapturePaneOutput(peek 用、最新画面優先)
+// とは目的が違うため別関数にしてある。
+func CapturePlanSource(paneID string, lines int) (string, error) {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return "", fmt.Errorf("pane id is required")
+	}
+	if lines < 0 {
+		return "", fmt.Errorf("lines must be non-negative")
+	}
+	out, err := capturePlanScreen(paneID, lines, false)
+	if err != nil {
+		return "", err
+	}
+	if paneAlternateOn(paneID) {
+		// alternate screen の取得失敗は履歴のみへ degrade(peek と同じ精神:
+		// 追加情報は best-effort、本体の履歴が読めていれば応答は返す)。
+		if alt, altErr := capturePlanScreen(paneID, 0, true); altErr == nil {
+			out += "\n" + alt
+		}
+	}
+	return out, nil
+}
+
+// capturePlanScreen は CapturePlanSource 専用の capture-pane 呼び出し。
+// capturePaneOutput と違い常に -J を付け、折返しで分断された
+// <proposed_plan> タグを結合して検索可能にする。
+func capturePlanScreen(paneID string, lines int, alternateScreen bool) (string, error) {
+	args := []string{"capture-pane", "-p", "-J", "-t", paneID}
+	if alternateScreen {
+		args = []string{"capture-pane", "-a", "-p", "-J", "-t", paneID}
+	}
+	if !alternateScreen && lines > 0 {
+		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+	}
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: %w", err)
+	}
+	return string(out), nil
+}
+
 func paneAlternateOn(paneID string) bool {
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, paneAlternateFormat).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "1"

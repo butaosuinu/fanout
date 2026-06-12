@@ -552,6 +552,36 @@ a.gh-pill:hover .tag{ border-color:var(--asagi); color:var(--asagi); }
   white-space:pre-wrap; overflow-wrap:anywhere;
   max-height:180px; overflow-y:auto;
 }
+/* plan — Codex Plan Mode の提案プラン。和紙カード + 浅葱の左罫で、dark terminal
+   風の peek(流れる出力)と「文書」を視覚的に区別する */
+.plan-card{
+  font-family:var(--f-code); font-size:12px; line-height:1.9;
+  color:var(--ink-78);
+  background:var(--paper);
+  border:1px solid var(--suna);
+  border-left:3px solid var(--asagi);
+  border-radius:0 10px 10px 0;
+  padding:12px 14px;
+  white-space:pre-wrap; overflow-wrap:anywhere;
+  max-height:320px; overflow-y:auto;
+}
+.plan-meta{
+  margin-top:7px;
+  display:flex; align-items:center; gap:10px;
+  font-family:var(--f-code); font-size:11px; color:var(--ink-40);
+}
+.plan-reload{
+  margin-left:auto;
+  font-family:var(--f-code); font-size:11px;
+  color:var(--ai);
+  background:transparent;
+  border:1px solid var(--suna); border-radius:999px;
+  padding:2px 12px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+.plan-reload:hover{ border-color:var(--asagi); color:var(--asagi); }
+
 /* peek — docs サイトの terminal ブロック(両テーマ固定) */
 .terminal{
   background:var(--term-bg);

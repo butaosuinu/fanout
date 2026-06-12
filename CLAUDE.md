@@ -95,12 +95,16 @@ Build the binary with `make build-go` and validate with `make test`.
   token middleware, SSE, `Cache-Control: no-store` static serving with a
   fallback page when the bundle is absent), `poller.go` (two-tier state/tmux +
   throttled gh refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
-  (`GET /api/peek`, a read-only capture-pane of one recorded pane), and
-  `runfile.go` (`.fanout/dashboard.json` reuse-if-running). The SPA itself
+  (`GET /api/peek`, a read-only capture-pane of one recorded pane; also the
+  `livePaneView` validation chain `plan.go` reuses), `plan.go`
+  (`GET /api/plan`, the last complete `<proposed_plan>` block of a recorded
+  Codex Plan Mode pane), and `runfile.go` (`.fanout/dashboard.json`
+  reuse-if-running). The SPA itself
   lives in `web/` (React + Vite + TS, PAPER BREEZE light/dark matching the
   docs site): `src/lib/` is the pure logic layer (wire types mirroring
   `sessionview` JSON tags, filter/sort/link builders), `src/hooks/` owns
-  transport (`useSnapshot` SSE + polling fallback, `usePeek`, `useTheme`), and
+  transport (`useSnapshot` SSE + polling fallback, `usePeek`, `usePlan`,
+  `useTheme`), and
   tests are integration-first (vitest + testing-library + MSW; SSE via a
   FakeEventSource). `make build-web` emits the bundle into `static/`
   (deterministic names `assets/app.js` / `assets/app.css`, never committed).
@@ -132,10 +136,11 @@ Build the binary with `make build-go` and validate with `make test`.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
   carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
-  state. `GET /api/peek` stays inside that boundary (a read-only
-  `tmux capture-pane` of a recorded pane), and Google Fonts is the single
-  allowed external fetch from the SPA (loaded `no-referrer` so the tokened URL
-  never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
+  state. `GET /api/peek` and `GET /api/plan` stay inside that boundary (both
+  are a read-only `tmux capture-pane` of a recorded pane; `/api/plan` is
+  further gated to panes recorded with `codexPlanMode`), and Google Fonts is
+  the single allowed external fetch from the SPA (loaded `no-referrer` so the
+  tokened URL never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI
   decision to dashboard #117, which this implements standalone (no TUI
   dependency — the future TUI just reuses `internal/sessionview`). Keep it

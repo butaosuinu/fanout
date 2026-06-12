@@ -372,6 +372,12 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   メタ情報・wave/blockers・worktree・CI 付き PR・元プロンプトに加え、ペインの
   直近出力を *peek* 表示します（`GET /api/peek`、読み取り専用の
   `tmux capture-pane`、表示中は 5 秒ごとに更新）。
+- **Codex Plan Mode ペインの plan 表示。** `--codex-plan-mode` で起動した
+  ペインでは、ドロワーに *plan* セクションが追加され、ペイン出力中の最後の
+  完全な `<proposed_plan>` ブロックを表示します（`GET /api/plan`、こちらも
+  読み取り専用の `tmux capture-pane`。開いたとき一度だけ取得し、再取得ボタンで
+  手動更新）。長い plan は codex TUI の alternate screen からスクロールアウト
+  して取得できないことがあり、その場合は未検出の旨を表示します。
 - **構造化フィルタ。** フィルタ欄は自由語と
   `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
   `issue:` / `pr:` の各 term を AND で組み合わせます — 例:
@@ -381,7 +387,8 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   ヘッダのトグル選択は `localStorage`（`fanout.theme`）に保存されます。既定は
   `prefers-color-scheme` に従います。
 - **localhost 限定。** `127.0.0.1` にのみバインドし、GET 専用の endpoint
-  （`/api/snapshot`、SSE の `/api/stream`、`/api/peek`、埋め込み UI）を公開します。
+  （`/api/snapshot`、SSE の `/api/stream`、`/api/peek`、`/api/plan`、
+  埋め込み UI）を公開します。
   `--port` は既定 `0`（OS 割り当ての ephemeral port）で、確定した URL を表示します。
   UI からの唯一の外部リクエストは Google Fonts の stylesheet で、`no-referrer`
   ポリシーにより token 付きダッシュボード URL が外部に漏れることはありません。

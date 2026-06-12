@@ -1,10 +1,30 @@
 import { Fragment, useEffect } from "react";
 import { usePeek } from "../hooks/usePeek";
+import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import { blockerLabel, fmtWave } from "../lib/pane";
 import type { PaneView } from "../lib/types";
 import { AgentStateTag, DirtyTag, GhLink, IssueStateTag, PrPill, Tag } from "./ui";
+
+function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
+  const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
+  return (
+    <section className="d-sec">
+      <h4>plan — 提案中のプラン</h4>
+      {/* capture 出力は敵性入力 — markdown レンダせずテキストノードのみで描画 */}
+      <pre className="plan-card" id="plan-pre">
+        {plan.text}
+      </pre>
+      <div className="plan-meta" id="plan-meta">
+        <span>{plan.meta}</span>
+        <button type="button" className="plan-reload" onClick={plan.refetch}>
+          再取得
+        </button>
+      </div>
+    </section>
+  );
+}
 
 function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
   const peek = usePeek({ paneId: pane.paneId, alive: pane.alive }, token);
@@ -168,6 +188,7 @@ export function Drawer({
             {pane.prompt || "—"}
           </pre>
         </section>
+        {pane.planMode && <PlanPanel pane={pane} token={token} />}
         <PeekPanel pane={pane} token={token} />
       </div>
     </aside>

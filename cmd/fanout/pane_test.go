@@ -54,6 +54,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Prompt:              "[fanout #83 of #81] state-idempotency-83: read /tmp/fanout-fanout-83.md and begin.",
 		Agent:               "codex",
 		Wave:                "wave5",
+		CodexPlanMode:       true,
 		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
@@ -76,6 +77,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 	if got.AgentStatus != "running" {
 		t.Fatalf("agentStatus = %q, want running (起動時記録)", got.AgentStatus)
+	}
+	if !got.CodexPlanMode {
+		t.Fatal("codexPlanMode = false, want passthrough of req.CodexPlanMode")
 	}
 }
 
