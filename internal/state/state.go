@@ -39,8 +39,8 @@ type Pane struct {
 	Prompt       string `json:"prompt"`
 	CreatedAt    string `json:"createdAt"`
 	// AgentStatus は起動時に "running" を記録する。終了検知デーモンは無いので
-	// 表示側は tmux の動的判定(pane_current_command)を優先し、tmux 不通時のみ
-	// この記録値に fallback する。
+	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
+	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
 	AgentStatus string `json:"agentStatus,omitempty"`
 }
 

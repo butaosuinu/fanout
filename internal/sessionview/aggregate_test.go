@@ -41,7 +41,7 @@ func livePanesAt(paneIDs ...string) func() (map[string]LivePaneInfo, error) {
 }
 
 // livePanesWith builds a LivePanes collector serving the given map verbatim,
-// for tests that need per-pane titles/commands beyond livePanesAt's defaults.
+// for tests that need per-pane titles/agent states beyond livePanesAt's defaults.
 func livePanesWith(m map[string]LivePaneInfo) func() (map[string]LivePaneInfo, error) {
 	return func() (map[string]LivePaneInfo, error) { return m, nil }
 }
@@ -356,37 +356,36 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 	}
 }
 
-func TestDeriveAgentState(t *testing.T) {
+func TestNormalizeAgentState(t *testing.T) {
 	cases := map[string]string{
-		"":                    "",
-		"claude":              "running",
-		"codex":               "running",
-		"node":                "running",
-		"python3":             "running",
-		"-zsh":                "done", // ログインシェルは先頭 "-" 付き
-		"zsh":                 "done",
-		"/bin/bash":           "done", // tmux はパスを返すことがある
-		"/usr/local/bin/fish": "done",
-		"pwsh":                "done",
+		"":           "",
+		"running":    "running",
+		"done":       "done",
+		" running ":  "running", // 余分な空白は剥がす
+		"claude":     "",        // ラッパー外の値は不明扱い
+		"bash":       "",
+		"x\ty":       "", // pane 内プロセスが偽装した文字列も不明扱い
+		"RUNNING":    "", // 値はラッパーが設定する小文字リテラルのみ
+		"done extra": "",
 	}
-	for command, want := range cases {
-		if got := deriveAgentState(command); got != want {
-			t.Errorf("deriveAgentState(%q) = %q, want %q", command, got, want)
+	for raw, want := range cases {
+		if got := normalizeAgentState(raw); got != want {
+			t.Errorf("normalizeAgentState(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
 
-func TestBuildAgentStateFromLiveCommand(t *testing.T) {
+func TestBuildAgentStateFromLiveOption(t *testing.T) {
 	dead := pane("1", 6, "%5")
 	dead.AgentStatus = "running" // pane 死亡 + tmux 正常なら記録値は使われない
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), dead),
 		LivePanes: livePanesWith(map[string]LivePaneInfo{
-			"%1": {Path: "/wt/%1", Command: "claude"},
-			"%2": {Path: "/wt/%2", Command: "-zsh"},
-			"%3": {Path: "/wt/%3", Command: "/bin/bash"},
-			"%4": {Path: "/wt/%4"}, // コマンド listing が degrade した alive pane
+			"%1": {Path: "/wt/%1", AgentState: "running"},
+			"%2": {Path: "/wt/%2", AgentState: "done"},
+			"%3": {Path: "/wt/%3", AgentState: "forged junk"}, // 偽装/未知の値は不明へ
+			"%4": {Path: "/wt/%4"},                            // option 未設定の alive pane(旧版 fanout 起動など)
 			// %5 は live set に居ない(pane 死亡)
 		}),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
@@ -394,7 +393,7 @@ func TestBuildAgentStateFromLiveCommand(t *testing.T) {
 	}
 	snap := Build("o/n", "/root", c)
 	panes := snap.Sessions[0].Panes
-	wants := []string{"running", "done", "done", "", ""}
+	wants := []string{"running", "done", "", "", ""}
 	for i, want := range wants {
 		if panes[i].AgentState != want {
 			t.Fatalf("#%d AgentState = %q, want %q", panes[i].IssueNum, panes[i].AgentState, want)

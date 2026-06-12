@@ -63,8 +63,9 @@ type PaneView struct {
 	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
 	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
 	// AgentState は "running" / "done" / ""(pane 死亡・不明)。alive な pane は
-	// pane_current_command からの動的判定、tmux 不通時は state.json の起動時
-	// 記録値(AgentStatus)への fallback。
+	// 起動ラッパーが設定する tmux pane user option @fanout_agent_state からの
+	// 動的判定、tmux 不通時は state.json の起動時記録値(AgentStatus)への
+	// fallback。
 	AgentState string            `json:"agentState,omitempty"`
 	Prompt     string            `json:"prompt,omitempty"`    // state row's original prompt
 	CIStatus   string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase
@@ -80,7 +81,7 @@ type Rollup struct {
 	Merged    int  `json:"merged"`  // panes with at least one MERGED PR
 	Pending   int  `json:"pending"` // total - merged
 	Live      int  `json:"live"`    // panes whose tmux pane is alive
-	Running   int  `json:"running"` // agent プロセスがフォアグラウンドで実行中のペイン数
+	Running   int  `json:"running"` // agent が実行中(AgentState=="running")のペイン数
 	Blocked   int  `json:"blocked"` // panes whose blockers still have an OPEN issue
 	AllMerged bool `json:"allMerged"`
 }

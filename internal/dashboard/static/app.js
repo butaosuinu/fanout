@@ -28,13 +28,15 @@ function ghBase() {
   const repo = state.snap?.repo || "";
   return /^[\w.-]+\/[\w.-]+$/.test(repo) ? "https://github.com/" + repo : "";
 }
+/* n > 0 ガード: @manual ペインの合成番号(-1, -2, …)は GitHub issue ではない
+ * ので、リンク化せず素テキスト表示に落とす(repo 未解決時 fallback と同様)。 */
 function issueUrl(n) {
   const base = ghBase();
-  return base && n ? `${base}/issues/${n}` : "";
+  return base && n > 0 ? `${base}/issues/${n}` : "";
 }
 function prUrl(n) {
   const base = ghBase();
-  return base && n ? `${base}/pull/${n}` : "";
+  return base && n > 0 ? `${base}/pull/${n}` : "";
 }
 /* Issue-mode parents are plain numbers; Project-mode parents are already a
  * github.com Projects URL(プレフィックス検証つきパススルー)。それ以外は "". */

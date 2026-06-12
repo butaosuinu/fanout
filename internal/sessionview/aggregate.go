@@ -21,9 +21,10 @@ type LivePaneInfo struct {
 	Path string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
-	// Command は pane のフォアグラウンドコマンド(#{pane_current_command})。
-	// tmux から取得できなかったときは ""。
-	Command string
+	// AgentState は pane user option @fanout_agent_state の値("running" /
+	// "done")。fanout の起動ラッパーが agent 実行前後に設定する。未設定
+	// (旧版 fanout やラッパー外で起動した pane)や取得失敗時は ""。
+	AgentState string
 }
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
@@ -200,7 +201,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			}
 			if alive {
 				pv.TmuxTitle = live[p.PaneID].Title
-				pv.AgentState = deriveAgentState(live[p.PaneID].Command)
+				pv.AgentState = normalizeAgentState(live[p.PaneID].AgentState)
 			} else if snap.Degraded.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
@@ -312,27 +313,24 @@ func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 	}
 }
 
-// shellCommands は deriveAgentState が「agent は終了してシェルに戻った」と
-// みなすフォアグラウンドコマンド名の集合。
-var shellCommands = map[string]bool{
-	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true,
-	"ksh": true, "tcsh": true, "csh": true, "ash": true, "nu": true, "pwsh": true,
-}
-
-// deriveAgentState は tmux の #{pane_current_command} から agent の実行状態を
-// 導く。正規化として先頭の "-" を剥がし basename を小文字化する(ログイン
-// シェルは "-zsh" のような形で、tmux はフルパスを返すことがある)。シェル集合
-// に含まれれば "done"(agent は終了してシェルに戻った)、空文字なら ""(不明)、
-// それ以外(claude / codex / node / python 等)は "running"。
-func deriveAgentState(command string) string {
-	if command == "" {
+// normalizeAgentState は tmux pane user option @fanout_agent_state の値を
+// PaneView.AgentState に正規化する。fanout の起動ラッパー
+// (tmuxrun.BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
+// "done" を設定する。それ以外の値(未設定 = 旧版 fanout やラッパー外で起動
+// した pane、あるいは pane 内プロセスが偽装した文字列)は ""(不明)に落とす。
+// #{pane_current_command} ヒューリスティックは使えない: 非対話 sh -lc
+// ラッパー経由の agent はラッパーと同一プロセスグループで動き、tmux は agent
+// 実行中もラッパーシェル名を報告するため、fanout 起動 pane では常に「done」
+// 誤判定になる。
+func normalizeAgentState(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "running":
+		return "running"
+	case "done":
+		return "done"
+	default:
 		return ""
 	}
-	name := strings.ToLower(filepath.Base(strings.TrimPrefix(command, "-")))
-	if shellCommands[name] {
-		return "done"
-	}
-	return "running"
 }
 
 // normalizeBlockers keeps PaneView.Blockers non-nil so it serializes as []
