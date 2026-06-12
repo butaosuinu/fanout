@@ -17,10 +17,11 @@ type WaveInfo struct {
 	WaveLabel string
 	Blockers  []blockers.Status
 	Blocked   bool // at least one blocker is still OPEN
-	// Degraded marks rows whose body hydration failed: the wave/blocker
-	// fields were computed without the child's body and may be missing data.
-	// Consumers can keep last-known display data for exactly these rows
-	// instead of treating "no blockers" as freshly confirmed.
+	// Degraded marks rows whose wave/blocker inputs could not all be read
+	// (child-body hydration, parent body, or a blocker's state lookup
+	// failed): the fields may be missing data. Consumers can keep last-known
+	// display data for exactly these rows instead of treating "no blockers"
+	// as freshly confirmed.
 	Degraded bool
 }
 
@@ -49,7 +50,7 @@ type WaveGraph struct {
 // child fetches already returned, so only out-of-set blockers resolve lazily
 // through IssueState.
 func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (WaveGraph, error) {
-	children, parentBody, includeParentRows, hydrated, loadErr := fetchWaveChildren(c, parent, recordedNums)
+	children, parentBody, includeParentRows, hydrated, parentBodyFailed, loadErr := fetchWaveChildren(c, parent, recordedNums)
 	failed, hydrateErr := hydrateIssueBodies(c, children, hydrated)
 	loadErr = errors.Join(loadErr, hydrateErr)
 
@@ -63,6 +64,7 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 		}
 	}
 	var stateErr error
+	failedStates := map[int]bool{}
 	stateOf := func(num int) string {
 		state, ok := stateCache[num]
 		if !ok {
@@ -73,6 +75,7 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 				// failure so consumers can flag degradation instead of showing
 				// UNKNOWN with no indicator.
 				stateErr = errors.Join(stateErr, fmt.Errorf("blocker state #%d: %w", num, err))
+				failedStates[num] = true
 			}
 			stateCache[num] = state
 		}
@@ -89,12 +92,21 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 
 	info := make(map[int]WaveInfo, len(children))
 	for _, issue := range children {
+		// A row is degraded when any input to its wave/blocker computation
+		// could not be read: its own body, the parent body (task-list rows),
+		// or the state of one of its blockers.
+		degraded := failed[issue.Number] || (includeParentRows && parentBodyFailed)
+		for _, dep := range deps[issue.Number] {
+			if failedStates[dep.Num] {
+				degraded = true
+			}
+		}
 		info[issue.Number] = WaveInfo{
 			Wave:      waves[issue.Number],
 			WaveLabel: issue.Wave,
 			Blockers:  deps[issue.Number],
 			Blocked:   blockers.HasOpen(deps[issue.Number]),
-			Degraded:  failed[issue.Number],
+			Degraded:  degraded,
 		}
 	}
 	return WaveGraph{Children: children, Info: info}, errors.Join(loadErr, stateErr)
@@ -105,19 +117,21 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 // parent issue to scan, so only recorded pane issues remain. hydrated marks
 // children that already came from IssueDetail so hydration does not re-fetch
 // issues whose body is genuinely empty.
-func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([]ghissue.Issue, string, bool, map[int]bool, error) {
+func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([]ghissue.Issue, string, bool, map[int]bool, bool, error) {
 	hydrated := map[int]bool{}
 	parentNum, convErr := strconv.Atoi(parent)
 	if convErr != nil {
 		children, err := loadIssueDetails(c, recordedNums, map[int]bool{}, hydrated)
-		return children, "", false, hydrated, err
+		return children, "", false, hydrated, false, err
 	}
 
 	var loadErr error
+	parentBodyFailed := false
 	parentBody, err := c.ParentBody(parentNum)
 	if err != nil {
 		loadErr = errors.Join(loadErr, fmt.Errorf("parent body #%d: %w", parentNum, err))
 		parentBody = ""
+		parentBodyFailed = true
 	}
 	subIssues, err := c.SubIssueList(parentNum)
 	if err != nil {
@@ -132,7 +146,7 @@ func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) ([
 	recordedExtra, recordedErr := loadIssueDetails(c, recordedNums, existing, hydrated)
 	children := ghissue.MergeExtra(subIssues, append(taskExtra, recordedExtra...))
 	assignWaveLabels(children, ghissue.TaskListWaves(parentBody))
-	return children, parentBody, true, hydrated, errors.Join(loadErr, taskErr, recordedErr)
+	return children, parentBody, true, hydrated, parentBodyFailed, errors.Join(loadErr, taskErr, recordedErr)
 }
 
 // loadIssueDetails fetches IssueDetail for each num not already in existing,

@@ -311,3 +311,45 @@ func TestFetchWaveGraphSkipsRehydratingDetailLoadedChildren(t *testing.T) {
 		t.Fatalf("Info missing #201: %#v", graph.Info)
 	}
 }
+
+func TestFetchWaveGraphParentBodyFailureMarksChildrenDegraded(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeGraphClient{
+		parentBodyErr: errGraphBoom,
+		subIssues:     []ghissue.Issue{{Number: 101, Title: "sub", State: "OPEN", Body: "x"}},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err == nil || !strings.Contains(err.Error(), "parent body #100") {
+		t.Fatalf("FetchWaveGraph() error = %v, want parent body failure", err)
+	}
+	if !graph.Info[101].Degraded {
+		t.Fatalf("Info[101] = %#v, want Degraded (task-list blockers unreadable)", graph.Info[101])
+	}
+}
+
+func TestFetchWaveGraphBlockerStateFailureMarksDependentDegraded(t *testing.T) {
+	t.Parallel()
+
+	// #101 depends on out-of-set #300 whose state lookup fails; #102 has no
+	// blockers and must stay fresh.
+	client := &fakeGraphClient{
+		parentBody: "",
+		subIssues: []ghissue.Issue{
+			{Number: 101, Title: "blocked", State: "OPEN", Body: "## Blocked by\n- #300\n"},
+			{Number: 102, Title: "free", State: "OPEN", Body: "x"},
+		},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err == nil || !strings.Contains(err.Error(), "blocker state #300") {
+		t.Fatalf("FetchWaveGraph() error = %v, want blocker state failure", err)
+	}
+	if !graph.Info[101].Degraded {
+		t.Fatalf("Info[101] = %#v, want Degraded (blocker #300 state unknown)", graph.Info[101])
+	}
+	if graph.Info[102].Degraded {
+		t.Fatalf("Info[102] = %#v, want fresh (no failed inputs)", graph.Info[102])
+	}
+}

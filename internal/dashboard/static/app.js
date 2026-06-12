@@ -16,9 +16,12 @@ const state = { snap: null, sortKey: "issueNum", sortDir: 1, filter: "", selecte
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(String(s)) : String(s).replace(/["\\]/g, "\\$&"));
 
+/* ghissue.PrimaryPR と同じ選択規則(MERGED 優先、なければ先頭)。ciStatus と
+ * 同じ PR を指すよう backend とミラーしておかないと、PR 列と ci 列が別の PR を
+ * 表示してしまう。 */
 function prPrimary(prs) {
   if (!prs || !prs.length) return null;
-  return prs.find((p) => p.state === "MERGED") || prs.find((p) => p.state === "OPEN") || prs[0];
+  return prs.find((p) => p.state === "MERGED") || prs[0];
 }
 function ciWorst(prs) {
   const rank = { fail: 3, pending: 2, pass: 1 };
