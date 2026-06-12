@@ -111,6 +111,7 @@ a:hover{ color:var(--asagi); }
   border-bottom:1px solid var(--suna);
 }
 .nav-inner{
+  /* +100px は意図的な nav のオーバーハング(nav > コンテンツの関係を維持) */
   width:min(calc(var(--maxw) + 100px), calc(100% - 40px)); margin-inline:auto;
   display:flex; align-items:center; gap:14px;
   height:var(--nav-h);
@@ -355,6 +356,8 @@ tbody tr.selected td{
 }
 tbody tr.selected td:first-child{ box-shadow:inset 2px 0 0 var(--asagi); }
 td.c-issue{ color:var(--ai); font-weight:500; }
+/* c-name / c-branch の上限は --maxw と連動して手動スケール(1416/1180 = 1.2x)。
+   --maxw を変えるときはここも見直すこと。 */
 td.c-name{
   font-family:var(--f-body); color:var(--sumi);
   max-width:288px; overflow:hidden; text-overflow:ellipsis;
