@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -27,11 +28,12 @@ const (
 )
 
 // GHProvider is the GitHub fetch surface the poller throttles and caches:
-// per-issue PR state plus the per-parent wave/blocker graph.
+// per-issue PR state plus the per-parent wave/blocker graph (child set
+// included, so not-started children can render as synthetic rows).
 // sessionview.GH satisfies it; tests inject a fake.
 type GHProvider interface {
 	IssuePRs(num int) (string, []ghissue.PRRef, error)
-	Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error)
+	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
 }
 
 type ghCacheEntry struct {
@@ -46,7 +48,7 @@ type ghCacheEntry struct {
 // the throttle bypass fires once per newly recorded issue without retrying
 // permanently failing lookups every tick.
 type waveCacheEntry struct {
-	info      map[int]sessionview.WaveInfo
+	graph     sessionview.WaveGraph
 	err       error
 	attempted map[int]bool
 }
@@ -212,20 +214,20 @@ func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
 }
 
 // wavesFromCache mirrors issuePRsFromCache for the per-parent wave graph: a
-// sticky GitHub failure short-circuits to (nil, err), and a cache miss is
-// (nil, nil) — "not fetched yet", which Build renders as zero-valued wave
-// fields without marking GitHub degraded.
-func (p *poller) wavesFromCache(parent string) (map[int]sessionview.WaveInfo, error) {
+// sticky GitHub failure short-circuits to (zero, err), and a cache miss is
+// (zero, nil) — "not fetched yet", which Build renders as zero-valued wave
+// fields (and no synthetic rows) without marking GitHub degraded.
+func (p *poller) wavesFromCache(parent string) (sessionview.WaveGraph, error) {
 	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
-		return nil, ghErr
+		return sessionview.WaveGraph{}, ghErr
 	}
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	e, ok := p.waveCache[normalizeParent(parent)]
 	if !ok {
-		return nil, nil // cache miss: unknown, not degraded
+		return sessionview.WaveGraph{}, nil // cache miss: unknown, not degraded
 	}
-	return e.info, e.err
+	return e.graph, e.err
 }
 
 func (p *poller) refreshGH() {
@@ -237,12 +239,11 @@ func (p *poller) refreshGH() {
 	if err != nil {
 		return
 	}
-	for _, num := range distinctIssueNums(store) {
-		st, prs, err := gh.IssuePRs(num)
-		p.cacheMu.Lock()
-		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
-		p.cacheMu.Unlock()
-	}
+	// Phase 1: per-issue PR state. The fetch set is the recorded issue numbers
+	// UNION the children the wave cache already discovered — not-started
+	// children have no state row, but their synthetic rows still surface
+	// issue/PR/CI state.
+	p.refreshIssuePRs(gh, unionNums(distinctIssueNums(store), p.cachedChildNums()))
 	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
 	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
 	// and backfill unlinked children for numeric ones.
@@ -280,7 +281,7 @@ func (p *poller) refreshGH() {
 				continue
 			}
 		}
-		info, err := gh.Waves(parent, nums)
+		graph, err := gh.Waves(parent, nums)
 		attempted := make(map[int]bool, len(nums))
 		for _, num := range nums {
 			attempted[num] = true
@@ -288,12 +289,110 @@ func (p *poller) refreshGH() {
 		p.cacheMu.Lock()
 		if err != nil {
 			// Partial failure: keep last-known rows instead of dropping
-			// previously confirmed blockers until the next clean pass.
-			info = mergeDegradedWaveInfos(p.waveCache[parent].info, info)
+			// previously confirmed blockers (or already-discovered children)
+			// until the next clean pass.
+			graph = mergeDegradedWaveGraph(p.waveCache[parent].graph, graph)
 		}
-		p.waveCache[parent] = waveCacheEntry{info: info, err: err, attempted: attempted}
+		p.waveCache[parent] = waveCacheEntry{graph: graph, err: err, attempted: attempted}
 		p.cacheMu.Unlock()
 	}
+	// The child set only becomes known after a wave pass. Fetch the PR state of
+	// freshly discovered children right away so their synthetic rows do not sit
+	// at UNKNOWN until the next gh tick; already-known children were covered by
+	// phase 1 (and will be again next tick).
+	p.refreshIssuePRs(gh, p.uncachedIssueNums(p.cachedChildNums()))
+}
+
+// refreshIssuePRs fetches issue/PR state for each num and stores the result
+// (success or failure) in the PR cache.
+func (p *poller) refreshIssuePRs(gh GHProvider, nums []int) {
+	for _, num := range nums {
+		st, prs, err := gh.IssuePRs(num)
+		p.cacheMu.Lock()
+		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
+		p.cacheMu.Unlock()
+	}
+}
+
+// cachedChildNums returns the distinct positive child issue numbers the wave
+// cache knows across all parents, sorted ascending. These are the synthetic
+// not-started row candidates, so their PR state is refreshed alongside the
+// recorded issues.
+func (p *poller) cachedChildNums() []int {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	seen := map[int]bool{}
+	var nums []int
+	for _, e := range p.waveCache {
+		for _, child := range e.graph.Children {
+			if child.Number > 0 && !seen[child.Number] {
+				seen[child.Number] = true
+				nums = append(nums, child.Number)
+			}
+		}
+	}
+	slices.Sort(nums)
+	return nums
+}
+
+// uncachedIssueNums filters nums down to those without a PR cache entry yet.
+func (p *poller) uncachedIssueNums(nums []int) []int {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	var out []int
+	for _, num := range nums {
+		if _, ok := p.cache[num]; !ok {
+			out = append(out, num)
+		}
+	}
+	return out
+}
+
+// unionNums merges two ascending distinct slices into one, distinct and sorted.
+func unionNums(a, b []int) []int {
+	seen := make(map[int]bool, len(a)+len(b))
+	out := make([]int, 0, len(a)+len(b))
+	for _, n := range slices.Concat(a, b) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// mergeDegradedWaveGraph overlays a degraded wave fetch onto the previous
+// cache entry: the per-child info merges via mergeDegradedWaveInfos and the
+// child sets union by issue number, so previously discovered not-started
+// children do not flicker out of the dashboard during a partial failure.
+// Fresh data always wins, so the merge self-heals on the next clean refresh.
+func mergeDegradedWaveGraph(previous, current sessionview.WaveGraph) sessionview.WaveGraph {
+	return sessionview.WaveGraph{
+		Children: mergeWaveChildren(previous.Children, current.Children),
+		Info:     mergeDegradedWaveInfos(previous.Info, current.Info),
+	}
+}
+
+// mergeWaveChildren unions two child sets by issue number: children dropped by
+// the partial fetch are restored from the previous set, same-number children
+// keep the fresh data. The result is sorted ascending for determinism.
+func mergeWaveChildren(previous, current []ghissue.Issue) []ghissue.Issue {
+	if len(previous) == 0 {
+		return current
+	}
+	seen := make(map[int]bool, len(current))
+	for _, child := range current {
+		seen[child.Number] = true
+	}
+	out := slices.Clone(current)
+	for _, child := range previous {
+		if !seen[child.Number] {
+			out = append(out, child)
+		}
+	}
+	slices.SortFunc(out, func(a, b ghissue.Issue) int { return cmp.Compare(a.Number, b.Number) })
+	return out
 }
 
 // mergeDegradedWaveInfos overlays a degraded wave fetch onto the previous

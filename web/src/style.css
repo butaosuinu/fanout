@@ -429,6 +429,9 @@ tbody tr.selected td{
   border-bottom-color:color-mix(in srgb, var(--asagi) 35%, transparent);
 }
 tbody tr.selected td:first-child{ box-shadow:inset 2px 0 0 var(--asagi); }
+/* 未開始(synthetic)行 — pane がまだ無い「予定」の子 issue。透明度を落とし
+   破線の下罫線で実 row と区別する。選択時の浅葱アクセントは通常行と同じ。 */
+tbody tr.ghost td{ opacity:.55; border-bottom-style:dashed; }
 td.c-issue{ color:var(--ai); font-weight:500; }
 /* c-name / c-branch の上限は --maxw と連動して手動スケール(1416/1180 = 1.2x)。
    --maxw を変えるときはここも見直すこと。 */

@@ -13,6 +13,8 @@ const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: read
       ["closed", "closed"],
       ["live", "live"],
       ["stale", "stale"],
+      ["queued", "queued"], // 未開始(synthetic)行の tmux 状態
+      ["deferred", "deferred"], // blocker 待ちの未開始行
     ],
   },
   {

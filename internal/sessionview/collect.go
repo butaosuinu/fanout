@@ -96,12 +96,12 @@ func (g GH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return g.runner.IssueWithPRs(g.owner, g.repo, num)
 }
 
-// Waves fetches one parent's wave/blocker graph keyed by child issue number.
-// The Collectors.Waves field takes only the parent — the poller closes over
-// the recorded issue numbers it observed in state and wraps this method.
-// Partial results are returned alongside a non-nil error (FetchWaveGraph joins
-// per-issue failures), so callers can cache the partial graph and degrade.
-func (g GH) Waves(parent string, recordedNums []int) (map[int]WaveInfo, error) {
-	graph, err := FetchWaveGraph(g.runner, parent, recordedNums)
-	return graph.Info, err
+// Waves fetches one parent's wave/blocker graph: the resolved child set plus
+// per-child wave/blocker info keyed by issue number. The Collectors.Waves
+// field takes only the parent — the poller closes over the recorded issue
+// numbers it observed in state and wraps this method. Partial results are
+// returned alongside a non-nil error (FetchWaveGraph joins per-issue
+// failures), so callers can cache the partial graph and degrade.
+func (g GH) Waves(parent string, recordedNums []int) (WaveGraph, error) {
+	return FetchWaveGraph(g.runner, parent, recordedNums)
 }

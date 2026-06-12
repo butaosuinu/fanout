@@ -20,7 +20,7 @@ type countingGH struct {
 	calls     map[int]int
 	waveCalls map[string]int
 	waveNums  map[string][]int // recordedNums passed per parent (last call)
-	waves     map[string]map[int]sessionview.WaveInfo
+	waves     map[string]sessionview.WaveGraph
 	wavesErr  error
 }
 
@@ -34,7 +34,7 @@ func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return "CLOSED", []ghissue.PRRef{{Number: 900 + num, State: "MERGED"}}, nil
 }
 
-func (g *countingGH) Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error) {
+func (g *countingGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.waveCalls == nil {
@@ -44,7 +44,7 @@ func (g *countingGH) Waves(parent string, recordedNums []int) (map[int]sessionvi
 	g.waveCalls[parent]++
 	g.waveNums[parent] = slices.Clone(recordedNums)
 	if g.wavesErr != nil {
-		return nil, g.wavesErr
+		return sessionview.WaveGraph{}, g.wavesErr
 	}
 	return g.waves[parent], nil
 }
@@ -66,11 +66,11 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	  {"parent":"100","issueNum":102,"slug":"b","paneId":"%2","agent":"codex"}
 	]}`)
 
-	gh := &countingGH{waves: map[string]map[int]sessionview.WaveInfo{
-		"100": {
+	gh := &countingGH{waves: map[string]sessionview.WaveGraph{
+		"100": {Info: map[int]sessionview.WaveInfo{
 			101: {Wave: 1, Blockers: []blockers.Status{}},
 			102: {Wave: 2, WaveLabel: "wave 2", Blocked: true, Blockers: []blockers.Status{{Num: 101, State: "OPEN"}}},
-		},
+		}},
 	}}
 	p := newPoller("o/n", root, gh, nil, newHub())
 	p.refreshGH()
@@ -376,6 +376,81 @@ func TestMergeDegradedWaveInfos(t *testing.T) {
 				t.Fatalf("mergeDegradedWaveInfos = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMergeDegradedWaveGraphUnionsChildren(t *testing.T) {
+	t.Parallel()
+
+	previous := sessionview.WaveGraph{
+		Children: []ghissue.Issue{{Number: 103, Title: "old three"}, {Number: 101, Title: "one"}},
+		Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+	}
+	current := sessionview.WaveGraph{
+		Children: []ghissue.Issue{{Number: 103, Title: "new three"}},
+		Info:     map[int]sessionview.WaveInfo{103: {Wave: 2}},
+	}
+
+	got := mergeDegradedWaveGraph(previous, current)
+	// Children: dropped #101 is restored, #103 keeps the fresh title, sorted.
+	wantChildren := []ghissue.Issue{{Number: 101, Title: "one"}, {Number: 103, Title: "new three"}}
+	if !reflect.DeepEqual(got.Children, wantChildren) {
+		t.Fatalf("merged children = %#v, want %#v", got.Children, wantChildren)
+	}
+	// Info: same last-known-data semantics as mergeDegradedWaveInfos.
+	if got.Info[101].Wave != 1 || got.Info[103].Wave != 2 {
+		t.Fatalf("merged info = %#v", got.Info)
+	}
+}
+
+func TestRefreshGHFetchesPRsForWaveChildren(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+
+	// The wave graph knows a child (#103) with no recorded pane. Its PR state
+	// must be fetched in the same refresh the child is discovered in — not a
+	// full gh tick later — so the synthetic row paints with real data.
+	gh := &countingGH{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{
+				{Number: 101, Title: "recorded", State: "OPEN"},
+				{Number: 103, Title: "queued child", State: "OPEN"},
+			},
+			Info: map[int]sessionview.WaveInfo{101: {Wave: 1}, 103: {Wave: 2}},
+		},
+	}}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = time.Hour
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls after first refresh = %d, want 1 (post-wave fetch)", gh.calls[103])
+	}
+
+	// Once cached, the child joins the phase-1 fetch set on every tick even
+	// while the wave phase stays throttled.
+	p.refreshGH()
+	if gh.calls[103] != 2 {
+		t.Fatalf("IssuePRs(103) calls after second refresh = %d, want 2 (phase-1 union)", gh.calls[103])
+	}
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("Waves(100) calls = %d, want 1 (throttled)", gh.waveCalls["100"])
+	}
+
+	// The built snapshot renders the child as a synthetic not-started row with
+	// the cached PR state (countingGH reports a merged PR for every issue).
+	snap := p.build()
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 {
+		t.Fatalf("want recorded+synthetic panes, got %+v", panes)
+	}
+	queued := panes[1]
+	if queued.IssueNum != 103 || !queued.NotStarted || !queued.HasMergedPR {
+		t.Fatalf("synthetic pane = %+v", queued)
+	}
+	if snap.Rollup.NotStarted != 1 || snap.Rollup.Total != 2 {
+		t.Fatalf("rollup = %+v, want notStarted=1 total=2", snap.Rollup)
 	}
 }
 

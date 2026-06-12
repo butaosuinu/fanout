@@ -46,15 +46,19 @@ export interface PaneView {
   waveLabel?: string;
   blockers: BlockerStatus[];
   blocked: boolean;
+  /* 記録 pane の無い「未開始」子 issue の synthetic 行。pane 由来フィールドは
+   * zero、tmuxState は closed / deferred / queued / unknown(TUI と同一文字列) */
+  notStarted?: boolean;
 }
 
 export interface Rollup {
-  total: number;
+  total: number; // synthetic(未開始)行込み
   merged: number;
   pending: number;
   live: number;
   running: number;
   blocked: number;
+  notStarted: number; // 未開始子 issue(synthetic 行)数
   allMerged: boolean;
 }
 

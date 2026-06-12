@@ -8,6 +8,7 @@ export function makeRollup(over: Partial<Rollup> = {}): Rollup {
     live: 0,
     running: 0,
     blocked: 0,
+    notStarted: 0,
     allMerged: false,
     ...over,
   };
@@ -32,6 +33,32 @@ export function makePane(over: Partial<PaneView> = {}): PaneView {
     tmuxState: "live",
     blockers: [],
     blocked: false,
+    ...over,
+  };
+}
+
+/* 未開始(synthetic)子 issue 行 — Go 側 Build が emit する synthetic PaneView
+ * と同じ形(pane 由来フィールドは zero、diff/dirty は "-")。 */
+export function makeQueuedPane(over: Partial<PaneView> = {}): PaneView {
+  return {
+    issueNum: 103,
+    slug: "",
+    displayName: "Queued child",
+    agent: "",
+    branchName: "",
+    paneId: "",
+    worktreePath: "",
+    createdAt: "",
+    alive: false,
+    issueState: "OPEN",
+    prs: null,
+    hasMergedPr: false,
+    diffSummary: "-",
+    dirtyState: "-",
+    tmuxState: "queued",
+    blockers: [],
+    blocked: false,
+    notStarted: true,
     ...over,
   };
 }

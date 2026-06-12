@@ -28,6 +28,79 @@ function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   );
 }
 
+/* 未開始(synthetic)行の状態説明。tmuxState は Go 側 syntheticTmuxState の
+ * closed / deferred / queued / unknown と 1:1。 */
+const NOT_STARTED_NOTES: Record<string, string> = {
+  queued: "未開始 — この子 issue の pane はまだ起動していません。",
+  deferred: "未開始 — open な blocker があるため待機中です。",
+  closed: "pane が起動しないまま issue は close されました。",
+  unknown: "未開始 — issue 状態を取得できていません。",
+};
+
+function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
+  return (
+    <section className="d-sec">
+      <h4>wave / blockers</h4>
+      <dl className="d-kv">
+        <dt>wave</dt>
+        <dd id="d-wave">{fmtWave(pane) || "—"}</dd>
+        <dt>blockers</dt>
+        <dd id="d-blockers">
+          {pane.blockers && pane.blockers.length
+            ? pane.blockers.map((b, i) => (
+                <Fragment key={b.num}>
+                  {i > 0 && ", "}
+                  {blockerLabel(b)} <GhLink url={issueUrl(repo, b.num)}>#{b.num}</GhLink>
+                </Fragment>
+              ))
+            : "-"}
+        </dd>
+      </dl>
+    </section>
+  );
+}
+
+function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
+  return (
+    <section className="d-sec">
+      <h4>pull requests</h4>
+      <ul className="d-prs" id="d-prs">
+        {pane.prs && pane.prs.length ? (
+          pane.prs.map((pr) => (
+            <li key={pr.number}>
+              <PrPill repo={repo} pr={pr} />
+              {pr.ci === "pass" ? (
+                <>
+                  {" "}
+                  <Tag cls="t-ok">ci pass</Tag>
+                </>
+              ) : pr.ci === "fail" ? (
+                <>
+                  {" "}
+                  <Tag cls="t-err">ci fail</Tag>
+                </>
+              ) : pr.ci ? (
+                <>
+                  {" "}
+                  <Tag cls="t-warn">ci pending</Tag>
+                </>
+              ) : null}
+              {pr.reviewDecision && (
+                <>
+                  {" "}
+                  <Tag>{pr.reviewDecision.toLowerCase().replace(/_/g, " ")}</Tag>
+                </>
+              )}
+            </li>
+          ))
+        ) : (
+          <li className="muted">—</li>
+        )}
+      </ul>
+    </section>
+  );
+}
+
 function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
   const peek = usePeek({ paneId: pane.paneId, alive: pane.alive }, token);
   return (
@@ -96,114 +169,85 @@ export function Drawer({
           ✕
         </button>
       </header>
-      <div className="drawer-body">
-        <section className="d-sec">
-          <h4>pane</h4>
-          <dl className="d-kv">
-            <dt>agent</dt>
-            <dd id="d-agent">{pane.agent || "—"}</dd>
-            <dt>pane</dt>
-            <dd id="d-pane">{pane.paneId || "—"}</dd>
-            <dt>tmux</dt>
-            <dd id="d-tmux">{pane.alive ? "live" : pane.tmuxState || "stale"}</dd>
-            <dt>run</dt>
-            <dd id="d-run">
-              {pane.agentState === "running" || pane.agentState === "done" ? (
-                <AgentStateTag state={pane.agentState} />
-              ) : (
-                <span className="muted">—</span>
-              )}
-            </dd>
-            <dt>title</dt>
-            <dd id="d-title">{pane.tmuxTitle || "—"}</dd>
-            <dt>created</dt>
-            <dd id="d-created">{fmtCreated(pane.createdAt)}</dd>
-            <dt>issue</dt>
-            <dd id="d-state">
-              <IssueStateTag state={pane.issueState} unknownLabel="UNKNOWN" />
-            </dd>
-          </dl>
-        </section>
-        <section className="d-sec">
-          <h4>wave / blockers</h4>
-          <dl className="d-kv">
-            <dt>wave</dt>
-            <dd id="d-wave">{fmtWave(pane) || "—"}</dd>
-            <dt>blockers</dt>
-            <dd id="d-blockers">
-              {pane.blockers && pane.blockers.length
-                ? pane.blockers.map((b, i) => (
-                    <Fragment key={b.num}>
-                      {i > 0 && ", "}
-                      {blockerLabel(b)} <GhLink url={issueUrl(repo, b.num)}>#{b.num}</GhLink>
-                    </Fragment>
-                  ))
-                : "-"}
-            </dd>
-          </dl>
-        </section>
-        <section className="d-sec">
-          <h4>worktree</h4>
-          <dl className="d-kv">
-            <dt>path</dt>
-            <dd id="d-path">
-              {(pane.worktreePath || "—") + (pane.worktreeErr ? ` (${pane.worktreeErr})` : "")}
-            </dd>
-            <dt>branch</dt>
-            <dd id="d-branch">{pane.branchName || "—"}</dd>
-            <dt>diff</dt>
-            <dd id="d-diff">{pane.diffSummary || "—"}</dd>
-            <dt>state</dt>
-            <dd id="d-dirty">
-              <DirtyTag state={pane.dirtyState} unknownLabel="unknown" />
-            </dd>
-          </dl>
-        </section>
-        <section className="d-sec">
-          <h4>pull requests</h4>
-          <ul className="d-prs" id="d-prs">
-            {pane.prs && pane.prs.length ? (
-              pane.prs.map((pr) => (
-                <li key={pr.number}>
-                  <PrPill repo={repo} pr={pr} />
-                  {pr.ci === "pass" ? (
-                    <>
-                      {" "}
-                      <Tag cls="t-ok">ci pass</Tag>
-                    </>
-                  ) : pr.ci === "fail" ? (
-                    <>
-                      {" "}
-                      <Tag cls="t-err">ci fail</Tag>
-                    </>
-                  ) : pr.ci ? (
-                    <>
-                      {" "}
-                      <Tag cls="t-warn">ci pending</Tag>
-                    </>
-                  ) : null}
-                  {pr.reviewDecision && (
-                    <>
-                      {" "}
-                      <Tag>{pr.reviewDecision.toLowerCase().replace(/_/g, " ")}</Tag>
-                    </>
-                  )}
-                </li>
-              ))
-            ) : (
-              <li className="muted">—</li>
-            )}
-          </ul>
-        </section>
-        <section className="d-sec">
-          <h4>prompt</h4>
-          <pre className="d-prompt" id="d-prompt">
-            {pane.prompt || "—"}
-          </pre>
-        </section>
-        {pane.planMode && <PlanPanel pane={pane} token={token} />}
-        <PeekPanel pane={pane} token={token} />
-      </div>
+      {pane.notStarted ? (
+        /* 未開始(synthetic)行の縮約表示: pane / worktree / prompt / peek は
+         * 実体が無いので出さない(PeekPanel を mount しない = /api/peek 不発)。
+         * pane が起動すると同じ rowKey のままこの分岐が実 row 表示に切り替わる。 */
+        <div className="drawer-body">
+          <section className="d-sec">
+            <h4>issue</h4>
+            <dl className="d-kv">
+              <dt>issue</dt>
+              <dd id="d-state">
+                <IssueStateTag state={pane.issueState} unknownLabel="UNKNOWN" />
+              </dd>
+              <dt>状態</dt>
+              <dd id="d-not-started">
+                {NOT_STARTED_NOTES[pane.tmuxState] ?? NOT_STARTED_NOTES["unknown"]}
+              </dd>
+            </dl>
+          </section>
+          <WaveSection pane={pane} repo={repo} />
+          <PrsSection pane={pane} repo={repo} />
+        </div>
+      ) : (
+        <div className="drawer-body">
+          <section className="d-sec">
+            <h4>pane</h4>
+            <dl className="d-kv">
+              <dt>agent</dt>
+              <dd id="d-agent">{pane.agent || "—"}</dd>
+              <dt>pane</dt>
+              <dd id="d-pane">{pane.paneId || "—"}</dd>
+              <dt>tmux</dt>
+              <dd id="d-tmux">{pane.alive ? "live" : pane.tmuxState || "stale"}</dd>
+              <dt>run</dt>
+              <dd id="d-run">
+                {pane.agentState === "running" || pane.agentState === "done" ? (
+                  <AgentStateTag state={pane.agentState} />
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </dd>
+              <dt>title</dt>
+              <dd id="d-title">{pane.tmuxTitle || "—"}</dd>
+              <dt>created</dt>
+              <dd id="d-created">{fmtCreated(pane.createdAt)}</dd>
+              <dt>issue</dt>
+              <dd id="d-state">
+                <IssueStateTag state={pane.issueState} unknownLabel="UNKNOWN" />
+              </dd>
+            </dl>
+          </section>
+          <WaveSection pane={pane} repo={repo} />
+          <section className="d-sec">
+            <h4>worktree</h4>
+            <dl className="d-kv">
+              <dt>path</dt>
+              <dd id="d-path">
+                {(pane.worktreePath || "—") + (pane.worktreeErr ? ` (${pane.worktreeErr})` : "")}
+              </dd>
+              <dt>branch</dt>
+              <dd id="d-branch">{pane.branchName || "—"}</dd>
+              <dt>diff</dt>
+              <dd id="d-diff">{pane.diffSummary || "—"}</dd>
+              <dt>state</dt>
+              <dd id="d-dirty">
+                <DirtyTag state={pane.dirtyState} unknownLabel="unknown" />
+              </dd>
+            </dl>
+          </section>
+          <PrsSection pane={pane} repo={repo} />
+          <section className="d-sec">
+            <h4>prompt</h4>
+            <pre className="d-prompt" id="d-prompt">
+              {pane.prompt || "—"}
+            </pre>
+          </section>
+          {pane.planMode && <PlanPanel pane={pane} token={token} />}
+          <PeekPanel pane={pane} token={token} />
+        </div>
+      )}
     </aside>
   );
 }

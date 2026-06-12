@@ -17,8 +17,8 @@ type fakeGH struct{}
 
 func (fakeGH) IssuePRs(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil }
 
-func (fakeGH) Waves(parent string, recordedNums []int) (map[int]sessionview.WaveInfo, error) {
-	return nil, nil
+func (fakeGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
+	return sessionview.WaveGraph{}, nil
 }
 
 // newTestServer binds an ephemeral server in a temp project root with no state

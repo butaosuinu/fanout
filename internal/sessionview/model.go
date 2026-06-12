@@ -77,17 +77,24 @@ type PaneView struct {
 	WaveLabel string            `json:"waveLabel,omitempty"` // state row wave label, else parent-body heading
 	Blockers  []blockers.Status `json:"blockers"`            // always non-nil; serializes as []
 	Blocked   bool              `json:"blocked"`             // at least one blocker still OPEN
+	// NotStarted は state.json に記録 pane が無い「未開始」の子 issue を表す
+	// synthetic 行(TUI の synthetic 行の web 移植)。PaneID/Agent/Branch 等の
+	// pane 由来フィールドは zero、TmuxState は closed/deferred/queued/unknown。
+	NotStarted bool `json:"notStarted,omitempty"`
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.
+// Total/Merged/Pending/Blocked count synthetic not-started rows too, so the
+// progress band reflects session completion, not just launched panes.
 type Rollup struct {
-	Total     int  `json:"total"`
-	Merged    int  `json:"merged"`  // panes with at least one MERGED PR
-	Pending   int  `json:"pending"` // total - merged
-	Live      int  `json:"live"`    // panes whose tmux pane is alive
-	Running   int  `json:"running"` // agent が実行中(AgentState=="running")のペイン数
-	Blocked   int  `json:"blocked"` // panes whose blockers still have an OPEN issue
-	AllMerged bool `json:"allMerged"`
+	Total      int  `json:"total"`
+	Merged     int  `json:"merged"`     // panes with at least one MERGED PR
+	Pending    int  `json:"pending"`    // total - merged
+	Live       int  `json:"live"`       // panes whose tmux pane is alive
+	Running    int  `json:"running"`    // agent が実行中(AgentState=="running")のペイン数
+	Blocked    int  `json:"blocked"`    // panes whose blockers still have an OPEN issue
+	NotStarted int  `json:"notStarted"` // 未開始子 issue(synthetic 行)の数
+	AllMerged  bool `json:"allMerged"`
 }
 
 // Degraded records which collectors failed so the UI can show a banner instead
