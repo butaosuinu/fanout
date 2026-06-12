@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // type-aware モードは使わない — 型起因の検査は tsc (pnpm run typecheck) が担当。
+  "plugins": ["react", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "env": {
+    "browser": true,
+    "builtin": true
+  },
+  "rules": {
+    // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (filter.ts 等) を保護する。
+    "typescript/no-non-null-assertion": "off",
+    // automatic JSX runtime (tsconfig jsx: "react-jsx") なので React の import は不要。
+    "react/react-in-jsx-scope": "off",
+    // 既存コードはスプレッドコピー後に sort しており非破壊。toSorted は lib ES2022 に無い。
+    "unicorn/no-array-sort": "off",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }]
+  },
+  "overrides": [
+    {
+      "files": ["src/test/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
+      "plugins": ["vitest"],
+      "env": { "vitest": true }
+    }
+  ]
+}

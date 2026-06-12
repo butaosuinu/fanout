@@ -1,0 +1,7 @@
+{
+  // printWidth 100: 既存の手 wrap に最も近く、一括 reformat の diff が最小になる幅。
+  "printWidth": 100,
+  // style.css は対象外 — PAPER BREEZE の手揃え(カラム整列・1 行ルール)を機械整形で
+  // 壊さない。oxfmt の整形対象は TS/TSX のみ。
+  "ignorePatterns": ["**/*.css"]
+}
