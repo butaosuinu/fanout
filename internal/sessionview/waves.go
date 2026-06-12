@@ -17,6 +17,11 @@ type WaveInfo struct {
 	WaveLabel string
 	Blockers  []blockers.Status
 	Blocked   bool // at least one blocker is still OPEN
+	// Degraded marks rows whose body hydration failed: the wave/blocker
+	// fields were computed without the child's body and may be missing data.
+	// Consumers can keep last-known display data for exactly these rows
+	// instead of treating "no blockers" as freshly confirmed.
+	Degraded bool
 }
 
 // IssueGraphClient is the gh surface FetchWaveGraph needs. ghissue.Runner
@@ -45,7 +50,8 @@ type WaveGraph struct {
 // through IssueState.
 func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (WaveGraph, error) {
 	children, parentBody, includeParentRows, hydrated, loadErr := fetchWaveChildren(c, parent, recordedNums)
-	loadErr = errors.Join(loadErr, hydrateIssueBodies(c, children, hydrated))
+	failed, hydrateErr := hydrateIssueBodies(c, children, hydrated)
+	loadErr = errors.Join(loadErr, hydrateErr)
 
 	// Pre-seed with in-set states: SubIssueList/IssueDetail already carry State,
 	// so re-fetching it per blocker would burn gh API budget for nothing. Empty
@@ -88,6 +94,7 @@ func FetchWaveGraph(c IssueGraphClient, parent string, recordedNums []int) (Wave
 			WaveLabel: issue.Wave,
 			Blockers:  deps[issue.Number],
 			Blocked:   blockers.HasOpen(deps[issue.Number]),
+			Degraded:  failed[issue.Number],
 		}
 	}
 	return WaveGraph{Children: children, Info: info}, errors.Join(loadErr, stateErr)
@@ -155,9 +162,11 @@ func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated map[int
 // hydrateIssueBodies fills bodies (and missing titles/states) the Sub-issues
 // API leaves blank. Issues in hydrated already came from IssueDetail and are
 // skipped even when their body is genuinely empty. Per-issue failures are
-// joined and the rest hydrated — a degraded row beats a blank dashboard (the
-// TUI used to hard-fail here).
-func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map[int]bool) error {
+// joined (with the failed issue numbers reported so rows can be flagged
+// degraded) and the rest hydrated — a degraded row beats a blank dashboard
+// (the TUI used to hard-fail here).
+func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map[int]bool) (map[int]bool, error) {
+	failed := map[int]bool{}
 	var loadErr error
 	for i := range issues {
 		if issues[i].Body != "" || hydrated[issues[i].Number] {
@@ -166,6 +175,7 @@ func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map
 		detail, err := c.IssueDetail(issues[i].Number)
 		if err != nil {
 			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issues[i].Number, err))
+			failed[issues[i].Number] = true
 			continue
 		}
 		issues[i].Body = detail.Body
@@ -177,7 +187,7 @@ func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map
 			issues[i].State = detail.State
 		}
 	}
-	return loadErr
+	return failed, loadErr
 }
 
 func assignWaveLabels(issues []ghissue.Issue, labels map[int]string) {

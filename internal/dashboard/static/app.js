@@ -105,12 +105,17 @@ const SORTS = {
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
 }
-function rowHtml(p) {
+/* 行の安定キー。tmux 再起動後は pane id (%N) が別 issue の古い行と重複しうる
+ * ので、選択は parent#issueNum で識別し、paneId は capture 対象にだけ使う。 */
+function rowKey(parent, p) {
+  return `${parent}#${p.issueNum}`;
+}
+function rowHtml(p, key) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
-  const sel = state.selected === p.paneId ? " selected" : "";
-  return `<tr class="row${sel}" data-pane-id="${esc(p.paneId)}" tabindex="0">
+  const sel = state.selected === key ? " selected" : "";
+  return `<tr class="row${sel}" data-key="${esc(key)}" tabindex="0">
     <td class="c-issue">#${esc(p.issueNum)}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName || p.slug || "—")}</td>
     <td>${esc(p.agent || "—")}</td>
@@ -192,7 +197,7 @@ function draw() {
       </header>
       <div class="table-wrap"><table>
         <thead><tr>${ths}</tr></thead>
-        <tbody>${panes.map(rowHtml).join("")}</tbody>
+        <tbody>${panes.map((p) => rowHtml(p, rowKey(parent, p))).join("")}</tbody>
       </table></div>
     </section>`);
   }
@@ -212,12 +217,15 @@ function draw() {
 }
 
 /* ---- 詳細ドロワー + peek ---- */
-function findPane(paneId) {
-  for (const s of state.snap?.sessions || []) for (const p of s.panes || []) if (p.paneId === paneId) return p;
+function findPane(key) {
+  for (const s of state.snap?.sessions || []) {
+    const parent = String(s.parent || "");
+    for (const p of s.panes || []) if (rowKey(parent, p) === key) return p;
+  }
   return null;
 }
-function rowFor(paneId) {
-  return paneId ? document.querySelector(`tr.row[data-pane-id="${cssEsc(paneId)}"]`) : null;
+function rowFor(key) {
+  return key ? document.querySelector(`tr.row[data-key="${cssEsc(key)}"]`) : null;
 }
 /* draw() の末尾で選択中ペインを再描画。snapshot から消えたら通知して閉じる */
 function syncDrawer() {
@@ -227,7 +235,7 @@ function syncDrawer() {
   const gone = state.selected;
   state.selected = null;
   renderDrawer(null);
-  $("status").textContent = `pane ${gone} は snapshot から消えたため詳細を閉じました · ` + $("status").textContent;
+  $("status").textContent = `${gone} は snapshot から消えたため詳細を閉じました · ` + $("status").textContent;
 }
 function renderDrawer(p) {
   const drawer = $("drawer");
@@ -303,23 +311,23 @@ async function fetchPeek(paneId) {
   }
 }
 
-function openDrawer(paneId) {
-  state.selected = paneId;
+function openDrawer(key) {
+  state.selected = key;
   draw();
-  const tr = rowFor(paneId);
+  const tr = rowFor(key);
   if (tr) tr.focus();
 }
 function closeDrawer() {
-  const paneId = state.selected;
+  const key = state.selected;
   state.selected = null;
   draw(); // syncDrawer hides the drawer and stops the peek
-  const tr = rowFor(paneId);
+  const tr = rowFor(key);
   if (tr) tr.focus(); // restore focus to the originating row
 }
 
 function bindRows() {
   document.querySelectorAll("tr.row").forEach((tr) => {
-    const open = () => openDrawer(tr.dataset.paneId);
+    const open = () => openDrawer(tr.dataset.key);
     tr.addEventListener("click", open);
     tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
   });

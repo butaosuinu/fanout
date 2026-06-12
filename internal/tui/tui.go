@@ -77,6 +77,10 @@ type issueStatus struct {
 	WaveLabel       string
 	Blockers        string
 	HasOpenBlockers bool
+	// WaveDegraded marks rows whose body hydration failed in this refresh:
+	// the wave/blocker fields were computed without the child's body, so an
+	// empty Blockers value means "could not read", not "confirmed clear".
+	WaveDegraded bool
 }
 
 type transitionNotifier interface {
@@ -1131,6 +1135,7 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			cached.WaveLabel = info.WaveLabel
 			cached.Blockers = blockers.FormatStatuses(info.Blockers)
 			cached.HasOpenBlockers = info.Blocked
+			cached.WaveDegraded = info.Degraded
 			statuses[key] = cached
 		}
 	}
@@ -1214,7 +1219,11 @@ func mergeDegradedIssueStatuses(previous, current map[issueKey]issueStatus) map[
 // when a degraded refresh dropped them (failed child-body hydration renders a
 // still-blocked child with "-" blockers and no blocked badge).
 func mergeDegradedIssueStatus(previous, current issueStatus) issueStatus {
-	if !degradedBlockers(current.Blockers) || degradedBlockers(previous.Blockers) {
+	// Restore only rows whose hydration actually failed this refresh. A
+	// non-degraded "-" is a confirmed clear (e.g. the blocker list was
+	// legitimately removed) and must not be masked by stale data just
+	// because an unrelated issue errored in the same refresh.
+	if !current.WaveDegraded || !degradedBlockers(current.Blockers) || degradedBlockers(previous.Blockers) {
 		return current
 	}
 	current.Blockers = previous.Blockers

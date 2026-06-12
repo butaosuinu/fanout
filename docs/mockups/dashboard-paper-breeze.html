@@ -771,7 +771,7 @@ const SAMPLE_PEEK = `$ codex --resume
 /* ============================================================
    state / helpers — 実装後の app.js と同じ構造
    ============================================================ */
-const state = { snap: SAMPLE, sortKey: "issueNum", sortDir: 1, filter: "", selected: "%12" };
+const state = { snap: SAMPLE, sortKey: "issueNum", sortDir: 1, filter: "", selected: "#142#137" };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -861,12 +861,16 @@ const SORTS = {
 function tagHtml(cls, label, title) {
   return `<span class="tag ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(label)}</span>`;
 }
-function rowHtml(p) {
+/* 行の安定キー — 選択は parent#issueNum、paneId は capture 対象にだけ使う */
+function rowKey(parent, p) {
+  return `${parent}#${p.issueNum}`;
+}
+function rowHtml(p, key) {
   const pr = prPrimary(p.prs);
   const ci = paneCI(p);
   const openBlk = (p.blockers || []).filter((b) => b.state === "OPEN").length;
-  const sel = state.selected === p.paneId ? " selected" : "";
-  return `<tr class="row${sel}" data-pane-id="${esc(p.paneId)}" tabindex="0">
+  const sel = state.selected === key ? " selected" : "";
+  return `<tr class="row${sel}" data-key="${esc(key)}" tabindex="0">
     <td class="c-issue">#${p.issueNum}</td>
     <td class="c-name" title="${esc(p.slug)}">${esc(p.displayName)}</td>
     <td>${esc(p.agent)}</td>
@@ -926,7 +930,7 @@ function draw() {
       </header>
       <div class="table-wrap"><table>
         <thead><tr>${ths}</tr></thead>
-        <tbody>${panes.map(rowHtml).join("")}</tbody>
+        <tbody>${panes.map((p) => rowHtml(p, rowKey(parentLabel, p))).join("")}</tbody>
       </table></div>
     </section>`);
   }
@@ -944,8 +948,11 @@ function draw() {
   bindRows();
 }
 
-function findPane(paneId) {
-  for (const s of state.snap.sessions) for (const p of s.panes) if (p.paneId === paneId) return p;
+function findPane(key) {
+  for (const s of state.snap.sessions) {
+    const parent = /^\d+$/.test(String(s.parent)) ? "#" + s.parent : String(s.parent).replace(/^https:\/\/github\.com\//, "");
+    for (const p of s.panes) if (rowKey(parent, p) === key) return p;
+  }
   return null;
 }
 function renderDrawer(p) {
@@ -978,7 +985,7 @@ function renderDrawer(p) {
 
 function bindRows() {
   document.querySelectorAll("tr.row").forEach((tr) => {
-    const open = () => { state.selected = tr.dataset.paneId; draw(); renderDrawer(findPane(state.selected)); };
+    const open = () => { state.selected = tr.dataset.key; draw(); renderDrawer(findPane(state.selected)); };
     tr.addEventListener("click", open);
     tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
   });

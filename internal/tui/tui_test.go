@@ -186,8 +186,11 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 func TestMergeDegradedIssueStatuses(t *testing.T) {
 	key := issueKey{Parent: "100", Num: 101}
 	blocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true}
-	degraded := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false}
+	degraded := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false, WaveDegraded: true}
 	unblocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false}
+	cleared := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false}
+	restored := blocked
+	restored.WaveDegraded = true
 
 	tests := []struct {
 		name     string
@@ -199,7 +202,16 @@ func TestMergeDegradedIssueStatuses(t *testing.T) {
 			name:     "degraded entry keeps old wave and blocker fields",
 			previous: map[issueKey]issueStatus{key: blocked},
 			current:  map[issueKey]issueStatus{key: degraded},
-			want:     map[issueKey]issueStatus{key: blocked},
+			want:     map[issueKey]issueStatus{key: restored},
+		},
+		{
+			// A non-degraded "-" is a confirmed clear: blockers legitimately
+			// removed must not be masked by stale data when an unrelated row
+			// errored in the same refresh.
+			name:     "legitimately cleared blockers are not restored",
+			previous: map[issueKey]issueStatus{key: blocked},
+			current:  map[issueKey]issueStatus{key: cleared},
+			want:     map[issueKey]issueStatus{key: cleared},
 		},
 		{
 			name:     "fresh blocker data replaces old entry",
@@ -217,7 +229,7 @@ func TestMergeDegradedIssueStatuses(t *testing.T) {
 			name:     "dropped key restored wholesale",
 			previous: map[issueKey]issueStatus{key: blocked, {Parent: "100", Num: 102}: unblocked},
 			current:  map[issueKey]issueStatus{key: degraded},
-			want:     map[issueKey]issueStatus{key: blocked, {Parent: "100", Num: 102}: unblocked},
+			want:     map[issueKey]issueStatus{key: restored, {Parent: "100", Num: 102}: unblocked},
 		},
 		{
 			name:     "previous without blocker data does not mask new entry",
@@ -249,13 +261,17 @@ func TestUpdateKeepsLastKnownBlockersOnDegradedRefresh(t *testing.T) {
 	m = updated.(model)
 
 	degraded := map[issueKey]issueStatus{
-		key: {Title: "blocked child", State: "OPEN", Blockers: "-", HasOpenBlockers: false},
+		key: {Title: "blocked child", State: "OPEN", Blockers: "-", HasOpenBlockers: false, WaveDegraded: true},
 	}
 	updated, _ = m.Update(ghLoadedMsg{issues: degraded, at: time.Unix(2, 0), err: errBoom})
 	m = updated.(model)
 
-	if !reflect.DeepEqual(m.issues, initial) {
-		t.Fatalf("issues after degraded refresh = %#v, want last-known %#v", m.issues, initial)
+	wantMerged := map[issueKey]issueStatus{
+		key:     {Title: "blocked child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true, WaveDegraded: true},
+		dropped: initial[dropped],
+	}
+	if !reflect.DeepEqual(m.issues, wantMerged) {
+		t.Fatalf("issues after degraded refresh = %#v, want last-known %#v", m.issues, wantMerged)
 	}
 
 	recovered := map[issueKey]issueStatus{
