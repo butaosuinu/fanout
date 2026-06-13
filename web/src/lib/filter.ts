@@ -36,6 +36,7 @@ export function parseQuery(str: string): Term[] {
 export function matches(p: PaneView, terms: Term[]): boolean {
   const hay = [
     p.issueNum,
+    p.taskId,
     p.displayName,
     p.slug,
     p.agent,
@@ -94,7 +95,8 @@ export function matches(p: PaneView, terms: Term[]): boolean {
         if ((t.value === "yes") !== !!p.alive) return false;
         break;
       case "issue":
-        if (String(p.issueNum) !== t.value) return false;
+        if (String(p.issueNum) !== t.value && String(p.taskId ?? "").toLowerCase() !== t.value)
+          return false;
         break;
       case "pr":
         if ((pr?.state ?? "none").toLowerCase() !== t.value) return false;

@@ -3,6 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
@@ -106,6 +109,83 @@ func TestBuildPaneViewsMarksTmuxUnknownWhenListFails(t *testing.T) {
 	}
 	if got[0].TmuxState != "unknown" {
 		t.Fatalf("TmuxState = %q, want unknown", got[0].TmuxState)
+	}
+}
+
+func TestBuildPaneViewsTaskIDDisplayFallback(t *testing.T) {
+	mergedAt := "2026-06-13T00:00:00Z"
+	issues := map[issueKey]issueStatus{
+		keyForTask("plan:alpha", "task-a"): {
+			State: "UNKNOWN",
+			PRs: []ghissue.PRRef{{
+				Number:   42,
+				State:    "MERGED",
+				MergedAt: &mergedAt,
+				CIStatus: "pass",
+			}},
+		},
+	}
+	got := buildPaneViews("/repo", []state.Pane{
+		{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-b", PaneID: "%2"},
+		{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-a", PaneID: "%1"},
+	}, nil, true, issues, nil)
+
+	if len(got) != 2 {
+		t.Fatalf("buildPaneViews len = %d, want 2", len(got))
+	}
+	if got[0].TaskID != "task-a" || got[1].TaskID != "task-b" {
+		t.Fatalf("task order = %q,%q want task-a,task-b", got[0].TaskID, got[1].TaskID)
+	}
+	if got[0].Name != "task-a" {
+		t.Fatalf("Name = %q, want task id fallback", got[0].Name)
+	}
+	if row := got[0].tableRow(); row[1] != "task-a" {
+		t.Fatalf("issue column = %q, want task id", row[1])
+	}
+	if got[0].PRSummary != "#42 merged" || got[0].CIStatus != "pass" || !got[0].HasMergedPR {
+		t.Fatalf("task PR fields = pr:%q ci:%q merged:%v", got[0].PRSummary, got[0].CIStatus, got[0].HasMergedPR)
+	}
+	if filtered := filterPaneViews(got, "task-a"); len(filtered) != 1 || filtered[0].TaskID != "task-a" {
+		t.Fatalf("task id filter = %+v, want only task-a", filtered)
+	}
+}
+
+func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".fanout", "state.json"), []byte(`{"schemaVersion":1,"panes":[
+	  {"parent":"plan:alpha","issueNum":0,"taskId":"task-a","branchName":"fanout/task-a","paneId":"%1"}
+	]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := installTUIFakeGH(t, `[{
+	  "number":42,
+	  "state":"MERGED",
+	  "mergedAt":"2026-06-13T00:00:00Z",
+	  "isDraft":false,
+	  "reviewDecision":"APPROVED",
+	  "statusCheckRollup":{"state":"SUCCESS"}
+	}]`)
+
+	statuses, err := loadIssueStatuses(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, ok := statuses[keyForTask("plan:alpha", "task-a")]
+	if !ok {
+		t.Fatalf("missing task status in %#v", statuses)
+	}
+	if status.State != sessionview.IssueStateUnknown || len(status.PRs) != 1 || status.PRs[0].Number != 42 || status.PRs[0].CIStatus != "pass" {
+		t.Fatalf("task branch status = %+v", status)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "pr list --head fanout/task-a --state all") {
+		t.Fatalf("fake gh args did not include branch PR lookup:\n%s", args)
 	}
 }
 
@@ -1035,6 +1115,34 @@ func (f *fakeLifecycleRunner) Cleanup(opts lifecycle.Options, parent string, lg 
 	f.cleanupParent = parent
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake cleanup\n")
 	return f.code
+}
+
+func installTUIFakeGH(t *testing.T, prListOutput string) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "gh")
+	body := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$GH_FAKE_ARGS"
+if [[ "$1 $2" == "repo view" ]]; then
+  printf 'o/n'
+  exit 0
+fi
+if [[ "$1 $2" == "pr list" ]]; then
+  printf '%s' "$GH_FAKE_PR_LIST"
+  exit 0
+fi
+printf 'unexpected gh command: %s\n' "$*" >&2
+exit 1
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_FAKE_ARGS", argsPath)
+	t.Setenv("GH_FAKE_PR_LIST", prListOutput)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
 }
 
 func keyRunes(s string) tea.KeyMsg {

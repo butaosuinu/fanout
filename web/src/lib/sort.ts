@@ -7,7 +7,7 @@ type SortKeyFn = (p: PaneView) => number | string;
 
 export const SORTS: Record<string, SortKeyFn> = {
   issueNum: (p) => p.issueNum ?? 0,
-  name: (p) => String(p.displayName || p.slug || "").toLowerCase(),
+  name: (p) => String(p.displayName || p.slug || p.taskId || "").toLowerCase(),
   agent: (p) => String(p.agent ?? "").toLowerCase(),
   wave: (p) => p.wave || 99,
   blockers: (p) => (p.blockers ?? []).filter((b) => b.state === "OPEN").length,
@@ -41,7 +41,18 @@ export const COLS: ReadonlyArray<readonly [key: string, label: string]> = [
   ["pr", "pr"],
 ];
 
-/* 非破壊ソート。一次キーが同値なら issueNum 昇順の安定二次ソート。 */
+function tieKey(p: PaneView): string {
+  return String(p.taskId || p.issueNum).toLowerCase();
+}
+
+function tieCompare(a: PaneView, b: PaneView): number {
+  if ((a.issueNum ?? 0) > 0 && (b.issueNum ?? 0) > 0) {
+    return (a.issueNum ?? 0) - (b.issueNum ?? 0);
+  }
+  return tieKey(a).localeCompare(tieKey(b));
+}
+
+/* 非破壊ソート。一次キーが同値なら issueNum/taskId 昇順の安定二次ソート。 */
 export function sortPanes(panes: PaneView[], sortKey: string, dir: SortDir): PaneView[] {
   const fn = SORTS[sortKey] ?? SORTS["issueNum"]!;
   return [...panes].sort((a, b) => {
@@ -49,6 +60,6 @@ export function sortPanes(panes: PaneView[], sortKey: string, dir: SortDir): Pan
     const kb = fn(b);
     if (ka < kb) return -dir;
     if (ka > kb) return dir;
-    return (a.issueNum ?? 0) - (b.issueNum ?? 0);
+    return tieCompare(a, b);
   });
 }

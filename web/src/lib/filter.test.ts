@@ -94,6 +94,15 @@ describe("matches", () => {
   it("issue: は完全一致", () => {
     expect(matches(makePane({ issueNum: 12 }), q("issue:12"))).toBe(true);
     expect(matches(makePane({ issueNum: 123 }), q("issue:12"))).toBe(false);
+    expect(matches(makePane({ issueNum: 0, taskId: "plan-lint" }), q("issue:plan-lint"))).toBe(
+      true,
+    );
+  });
+
+  it("taskId は自由語検索の対象になる", () => {
+    const p = makePane({ issueNum: 0, taskId: "plan-dashboard" });
+    expect(matches(p, q("dashboard"))).toBe(true);
+    expect(matches(p, q("plan-review"))).toBe(false);
   });
 
   it("pr: は primary PR の状態、無ければ none", () => {

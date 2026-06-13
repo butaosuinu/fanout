@@ -17,6 +17,8 @@ type fakeGH struct{}
 
 func (fakeGH) IssuePRs(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil }
 
+func (fakeGH) BranchPRs(branch string) ([]ghissue.PRRef, error) { return nil, nil }
+
 func (fakeGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
 	return sessionview.WaveGraph{}, nil
 }

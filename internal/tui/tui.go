@@ -57,6 +57,7 @@ type Options struct {
 type issueKey struct {
 	Parent string
 	Num    int
+	TaskID string
 }
 
 // LaunchRequest describes one manual pane launch requested from the TUI.
@@ -100,6 +101,7 @@ type issueTransitionSnapshot struct {
 type paneView struct {
 	Parent       string
 	IssueNum     int
+	TaskID       string
 	Name         string
 	PaneID       string
 	TmuxState    string
@@ -944,7 +946,7 @@ func (m model) detailContent() string {
 		return "No panes match the current filter."
 	}
 	lines := []string{
-		fmt.Sprintf("%s #%d  %s", pane.Parent, pane.IssueNum, pane.Name),
+		fmt.Sprintf("%s %s  %s", pane.Parent, pane.itemLabel(), pane.Name),
 		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
@@ -1111,8 +1113,9 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 		return nil, err
 	}
 	parents := recordedParents(store.Panes)
+	taskRows := recordedTaskRows(store.Panes)
 	statuses := map[issueKey]issueStatus{}
-	if len(parents) == 0 {
+	if len(parents) == 0 && len(taskRows) == 0 {
 		return statuses, nil
 	}
 
@@ -1127,6 +1130,7 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 	}
 
 	prCache := map[int]issueStatus{}
+	branchCache := map[string]branchStatus{}
 	var loadErr error
 	for _, parent := range parents {
 		graph, err := sessionview.FetchWaveGraph(gh, parent, recordedIssueNums(store.PanesForParent(parent)))
@@ -1155,7 +1159,32 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			statuses[key] = cached
 		}
 	}
+	for _, task := range taskRows {
+		cached, ok := branchCache[task.BranchName]
+		if !ok {
+			prs, err := gh.PRsForBranch(task.BranchName)
+			if err != nil {
+				loadErr = errors.Join(loadErr, fmt.Errorf("branch %s: %w", task.BranchName, err))
+				continue
+			}
+			cached = branchStatus{PRs: prs}
+			branchCache[task.BranchName] = cached
+		}
+		statuses[task.key] = issueStatus{
+			State: sessionview.IssueStateUnknown,
+			PRs:   cached.PRs,
+		}
+	}
 	return statuses, loadErr
+}
+
+type taskStatusRow struct {
+	key        issueKey
+	BranchName string
+}
+
+type branchStatus struct {
+	PRs []ghissue.PRRef
 }
 
 func recordedIssueNums(panes []state.Pane) []int {
@@ -1175,6 +1204,9 @@ func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, curre
 	keys := sortedIssueKeys(current)
 	events := []fanoutnotify.Event{}
 	for _, key := range keys {
+		if key.TaskID != "" {
+			continue
+		}
 		prev, ok := previous[key]
 		if !ok {
 			continue
@@ -1311,7 +1343,10 @@ func sortedIssueKeys(statuses map[issueKey]issueStatus) []issueKey {
 		if c := cmp.Compare(a.Parent, b.Parent); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.Num, b.Num)
+		if c := cmp.Compare(a.Num, b.Num); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.TaskID, b.TaskID)
 	})
 	return keys
 }
@@ -1349,8 +1384,54 @@ func recordedParents(panes []state.Pane) []string {
 	return parents
 }
 
+func recordedTaskRows(panes []state.Pane) []taskStatusRow {
+	seen := map[issueKey]bool{}
+	var rows []taskStatusRow
+	for _, pane := range panes {
+		branch := strings.TrimSpace(pane.BranchName)
+		taskID := strings.TrimSpace(pane.TaskID)
+		if pane.Parent == "" || pane.IssueNum > 0 || taskID == "" || branch == "" {
+			continue
+		}
+		key := keyForTask(pane.Parent, taskID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rows = append(rows, taskStatusRow{key: key, BranchName: branch})
+	}
+	slices.SortFunc(rows, func(a, b taskStatusRow) int {
+		if c := cmp.Compare(a.key.Parent, b.key.Parent); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.key.TaskID, b.key.TaskID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.BranchName, b.BranchName)
+	})
+	return rows
+}
+
 func keyForIssue(parent string, num int) issueKey {
 	return issueKey{Parent: normalizedParent(parent), Num: num}
+}
+
+func keyForPane(pane state.Pane) issueKey {
+	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
+		return keyForTask(pane.Parent, pane.TaskID)
+	}
+	return keyForIssue(pane.Parent, pane.IssueNum)
+}
+
+func keyForPaneView(pane paneView) issueKey {
+	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
+		return keyForTask(pane.Parent, pane.TaskID)
+	}
+	return keyForIssue(pane.Parent, pane.IssueNum)
+}
+
+func keyForTask(parent, taskID string) issueKey {
+	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID)}
 }
 
 func normalizedParent(parent string) string {
@@ -1369,12 +1450,13 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 	out := make([]paneView, 0, len(panes))
 	seen := map[issueKey]bool{}
 	for _, pane := range panes {
-		key := keyForIssue(pane.Parent, pane.IssueNum)
+		key := keyForPane(pane)
 		status, hasStatus := issues[key]
 		seen[key] = true
 		view := paneView{
 			Parent:       pane.Parent,
 			IssueNum:     pane.IssueNum,
+			TaskID:       pane.TaskID,
 			Name:         paneName(pane),
 			PaneID:       pane.PaneID,
 			TmuxState:    tmuxState(pane.PaneID, tmuxByID, tmuxKnown),
@@ -1411,7 +1493,7 @@ func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.
 		out = append(out, view)
 	}
 	for key, status := range issues {
-		if seen[key] {
+		if seen[key] || key.TaskID != "" {
 			continue
 		}
 		out = append(out, paneView{
@@ -1438,7 +1520,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 	out := slices.Clone(panes)
 	seen := map[issueKey]bool{}
 	for i := range out {
-		key := keyForIssue(out[i].Parent, out[i].IssueNum)
+		key := keyForPaneView(out[i])
 		seen[key] = true
 		if status, ok := issues[key]; ok {
 			out[i].IssueState = dash(status.State)
@@ -1455,7 +1537,7 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 		}
 	}
 	for key, status := range issues {
-		if seen[key] {
+		if seen[key] || key.TaskID != "" {
 			continue
 		}
 		out = append(out, paneView{
@@ -1486,7 +1568,10 @@ func sortPaneViews(panes []paneView) {
 		if c := cmp.Compare(a.Wave, b.Wave); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.IssueNum, b.IssueNum)
+		if c := cmp.Compare(a.IssueNum, b.IssueNum); c != 0 {
+			return c
+		}
+		return strings.Compare(a.itemLabel(), b.itemLabel())
 	})
 }
 
@@ -1503,7 +1588,7 @@ func (p paneView) tableRow() table.Row {
 	}
 	return table.Row{
 		compactParent(p.Parent),
-		"#" + strconv.Itoa(p.IssueNum),
+		p.itemLabel(),
 		truncate(dash(p.waveCell()), 12),
 		truncate(dash(p.Blockers), 22),
 		truncate(p.Name, 28),
@@ -1663,6 +1748,8 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 	}
 	searchText := strings.ToLower(strings.Join([]string{
 		p.Parent,
+		p.TaskID,
+		p.itemLabel(),
 		"#" + strconv.Itoa(p.IssueNum),
 		strconv.Itoa(p.IssueNum),
 		p.Name,
@@ -1793,7 +1880,17 @@ func paneName(pane state.Pane) string {
 	if strings.TrimSpace(pane.Slug) != "" {
 		return pane.Slug
 	}
+	if strings.TrimSpace(pane.TaskID) != "" {
+		return pane.TaskID
+	}
 	return "#" + strconv.Itoa(pane.IssueNum)
+}
+
+func (p paneView) itemLabel() string {
+	if strings.TrimSpace(p.TaskID) != "" {
+		return p.TaskID
+	}
+	return "#" + strconv.Itoa(p.IssueNum)
 }
 
 func tmuxState(paneID string, panes map[string]tmuxrun.PaneInfo, known bool) string {

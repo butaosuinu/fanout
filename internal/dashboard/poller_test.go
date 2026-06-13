@@ -16,12 +16,13 @@ import (
 )
 
 type countingGH struct {
-	mu        sync.Mutex
-	calls     map[int]int
-	waveCalls map[string]int
-	waveNums  map[string][]int // recordedNums passed per parent (last call)
-	waves     map[string]sessionview.WaveGraph
-	wavesErr  error
+	mu          sync.Mutex
+	calls       map[int]int
+	branchCalls map[string]int
+	waveCalls   map[string]int
+	waveNums    map[string][]int // recordedNums passed per parent (last call)
+	waves       map[string]sessionview.WaveGraph
+	wavesErr    error
 }
 
 func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
@@ -32,6 +33,16 @@ func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	}
 	g.calls[num]++
 	return "CLOSED", []ghissue.PRRef{{Number: 900 + num, State: "MERGED"}}, nil
+}
+
+func (g *countingGH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.branchCalls == nil {
+		g.branchCalls = map[string]int{}
+	}
+	g.branchCalls[branch]++
+	return []ghissue.PRRef{{Number: 700, State: "MERGED"}}, nil
 }
 
 func (g *countingGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
@@ -56,6 +67,36 @@ func writeState(t *testing.T, root, body string) {
 	}
 	if err := os.WriteFile(filepath.Join(root, ".fanout", "state.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPollerRefreshGHPopulatesBranchCacheAndBuildReadsIt(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"plan:alpha","issueNum":0,"taskId":"task-a","branchName":"fanout/task-a","slug":"a","paneId":"%1"},
+	  {"parent":"plan:alpha","issueNum":0,"taskId":"task-b","branchName":"fanout/task-a","slug":"b","paneId":"%2"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.refreshGH()
+	snap := p.build()
+
+	if len(gh.calls) != 0 {
+		t.Fatalf("IssuePRs calls = %v, want none for task-only rows", gh.calls)
+	}
+	if gh.branchCalls["fanout/task-a"] != 1 {
+		t.Fatalf("BranchPRs(fanout/task-a) calls = %d, want 1", gh.branchCalls["fanout/task-a"])
+	}
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 2 {
+		t.Fatalf("unexpected snapshot shape: %+v", snap.Sessions)
+	}
+	got := snap.Sessions[0].Panes[0]
+	if got.TaskID != "task-a" || got.IssueState != sessionview.IssueStateUnknown || !got.HasMergedPR {
+		t.Fatalf("task branch PR state should reach the snapshot, got %+v", got)
+	}
+	if snap.Degraded.GitHub {
+		t.Fatal("GitHub should not be degraded on branch PR success")
 	}
 }
 
@@ -234,6 +275,21 @@ func TestDistinctIssueNumsSkipsSyntheticManualPanes(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("distinctIssueNums() = %#v, want %#v", got, want)
 		}
+	}
+}
+
+func TestDistinctTaskBranchesUsesIssueLessTaskRows(t *testing.T) {
+	got := distinctTaskBranches(state.Store{Panes: []state.Pane{
+		{Parent: "plan:a", IssueNum: 0, TaskID: "task-a", BranchName: " fanout/task-a "},
+		{Parent: "plan:a", IssueNum: 0, TaskID: "task-b", BranchName: "fanout/task-a"},
+		{Parent: "plan:a", IssueNum: 0, TaskID: "task-c", BranchName: "fanout/task-c"},
+		{Parent: "plan:a", IssueNum: 0, TaskID: "", BranchName: "fanout/no-task"},
+		{Parent: "100", IssueNum: 101, TaskID: "task-issue", BranchName: "fanout/issue"},
+	}})
+
+	want := []string{"fanout/task-a", "fanout/task-c"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("distinctTaskBranches() = %#v, want %#v", got, want)
 	}
 }
 

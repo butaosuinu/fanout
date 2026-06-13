@@ -96,6 +96,11 @@ func (g GH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return g.runner.IssueWithPRs(g.owner, g.repo, num)
 }
 
+// BranchPRs fetches PR refs by head branch for issue-less task rows.
+func (g GH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
+	return g.runner.PRsForBranch(branch)
+}
+
 // Waves fetches one parent's wave/blocker graph: the resolved child set plus
 // per-child wave/blocker info keyed by issue number. The Collectors.Waves
 // field takes only the parent — the poller closes over the recorded issue

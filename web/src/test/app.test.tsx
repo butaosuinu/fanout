@@ -116,6 +116,20 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("#101")).toBeInTheDocument(); // 素テキストには落ちる
   });
 
+  it("plan 行は #0 ではなく taskId を表示する", () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("plan:alpha", [
+          makePane({ issueNum: 0, taskId: "plan-lint", displayName: "Lint plan" }),
+        ]),
+      ]),
+    );
+    expect(screen.getByText("plan-lint")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "plan-lint" })).not.toBeInTheDocument();
+    expect(screen.queryByText("#0")).not.toBeInTheDocument();
+  });
+
   it("degraded フラグで banner を表示し、正常時は隠す", () => {
     render(<App />);
     streamSnapshot(makeSnapshot([], { degraded: { tmux: true, github: true } }));

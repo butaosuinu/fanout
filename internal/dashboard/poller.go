@@ -28,11 +28,13 @@ const (
 )
 
 // GHProvider is the GitHub fetch surface the poller throttles and caches:
-// per-issue PR state plus the per-parent wave/blocker graph (child set
-// included, so not-started children can render as synthetic rows).
+// per-issue PR state, per-branch PR refs for task rows, plus the per-parent
+// wave/blocker graph (child set included, so not-started children can render
+// as synthetic rows).
 // sessionview.GH satisfies it; tests inject a fake.
 type GHProvider interface {
 	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	BranchPRs(branch string) ([]ghissue.PRRef, error)
 	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
 }
 
@@ -40,6 +42,11 @@ type ghCacheEntry struct {
 	state string
 	prs   []ghissue.PRRef
 	err   error
+}
+
+type branchPRCacheEntry struct {
+	prs []ghissue.PRRef
+	err error
 }
 
 // waveCacheEntry is one parent's cached wave graph. FetchWaveGraph keeps
@@ -87,9 +94,10 @@ type poller struct {
 	latestJSON []byte
 	lastKey    []byte
 
-	cacheMu   sync.Mutex
-	cache     map[int]ghCacheEntry
-	waveCache map[string]waveCacheEntry // keyed by normalized parent
+	cacheMu     sync.Mutex
+	cache       map[int]ghCacheEntry
+	branchCache map[string]branchPRCacheEntry
+	waveCache   map[string]waveCacheEntry // keyed by normalized parent
 }
 
 func newPollerBase(projectRoot string, h *hub) *poller {
@@ -100,6 +108,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		ghInterval:    defaultGHInterval,
 		waveInterval:  defaultWaveInterval,
 		cache:         map[int]ghCacheEntry{},
+		branchCache:   map[string]branchPRCacheEntry{},
 		waveCache:     map[string]waveCacheEntry{},
 	}
 }
@@ -213,6 +222,19 @@ func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
 	return e.state, e.prs, e.err
 }
 
+func (p *poller) branchPRsFromCache(branch string) ([]ghissue.PRRef, error) {
+	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
+		return nil, ghErr
+	}
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	e, ok := p.branchCache[branch]
+	if !ok {
+		return nil, nil // cache miss: unknown, not degraded
+	}
+	return e.prs, e.err
+}
+
 // wavesFromCache mirrors issuePRsFromCache for the per-parent wave graph: a
 // sticky GitHub failure short-circuits to (zero, err), and a cache miss is
 // (zero, nil) — "not fetched yet", which Build renders as zero-valued wave
@@ -246,6 +268,7 @@ func (p *poller) refreshGH() {
 	// hourly GitHub API budget (the exact failure the wave throttle exists
 	// to prevent).
 	p.refreshIssuePRs(gh, distinctIssueNums(store))
+	p.refreshBranchPRs(gh, distinctTaskBranches(store))
 	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
 	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
 	// and backfill unlinked children for numeric ones.
@@ -368,6 +391,15 @@ func (p *poller) refreshIssuePRs(gh GHProvider, nums []int) {
 	}
 }
 
+func (p *poller) refreshBranchPRs(gh GHProvider, branches []string) {
+	for _, branch := range branches {
+		prs, err := gh.BranchPRs(branch)
+		p.cacheMu.Lock()
+		p.branchCache[branch] = branchPRCacheEntry{prs: prs, err: err}
+		p.cacheMu.Unlock()
+	}
+}
+
 // mergeDegradedWaveGraph overlays a degraded wave fetch onto the previous
 // cache entry: the per-child info merges via mergeDegradedWaveInfos and the
 // child sets union by issue number, so previously discovered not-started
@@ -426,6 +458,7 @@ func (p *poller) build() sessionview.Snapshot {
 		LoadState:    sessionview.StateLoader(p.projectRoot),
 		LivePanes:    sessionview.LivePanes(),
 		IssuePRs:     p.issuePRsFromCache,
+		BranchPRs:    p.branchPRsFromCache,
 		Waves:        p.wavesFromCache,
 		WorktreeStat: sessionview.GitWorktreeStat(p.projectRoot),
 		Now:          time.Now,
@@ -488,6 +521,23 @@ func distinctIssueNums(store state.Store) []int {
 	}
 	slices.Sort(nums)
 	return nums
+}
+
+func distinctTaskBranches(store state.Store) []string {
+	seen := map[string]bool{}
+	var branches []string
+	for _, p := range store.Panes {
+		branch := strings.TrimSpace(p.BranchName)
+		if p.IssueNum > 0 || p.TaskID == "" || branch == "" {
+			continue
+		}
+		if !seen[branch] {
+			seen[branch] = true
+			branches = append(branches, branch)
+		}
+	}
+	slices.Sort(branches)
+	return branches
 }
 
 // recordedNumsByParent groups each distinct normalized parent in state to the

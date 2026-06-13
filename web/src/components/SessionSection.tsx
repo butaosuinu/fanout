@@ -7,6 +7,7 @@ import {
   fmtWave,
   openBlockerCount,
   paneCI,
+  paneLabel,
   prPrimary,
   rowKey,
 } from "../lib/pane";
@@ -62,7 +63,7 @@ function PaneRow({
   return (
     <tr className={cls} tabIndex={0} ref={registerRow} onClick={onClick} onKeyDown={onKeyDown}>
       <td className="c-issue">
-        <GhLink url={issueUrl(repo, pane.issueNum)}>#{pane.issueNum}</GhLink>
+        <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
         {pane.displayName || pane.slug || "—"}
