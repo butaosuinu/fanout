@@ -51,7 +51,7 @@ PR を出した瞬間が終わりではない。ベースブランチが進め�
 ## 対象 PR の特定
 
 ```bash
-gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefName,baseRefName,author,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify,url,title,statusCheckRollup
+gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,headRefName,baseRefName,author,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify,url,title,statusCheckRollup
 ```
 
 引数で PR 番号 / URL が渡されたらそれを `$pr` とし、無引数（現在ブランチの PR を対象）なら `$pr` は空。`$pr` が**非空のときだけ**位置引数として渡す（`gh pr view ${pr:+"$pr"} …` のように、空なら**引数を付けない**）。`gh pr view ""` / `gh pr checks ""` は空文字でも argv エントリになり、`gh` の「引数なし＝現在ブランチの PR」フォールバックを壊すので、`"$pr"` をそのまま空で渡してはいけない。`$pr` が非空なら、この pass の全 gh 呼び出し（`gh pr view`・`gh pr checks`・GraphQL の `$num`）に必ず渡す — 無引数で叩くと別ブランチ指定時に別の PR を監視してしまう。
@@ -83,7 +83,7 @@ me=$(gh api user -q .login)
 
 `author.login` を要に置くのは、`headRepositoryOwner.login` は **リポジトリ／org の owner であって PR author とは限らない**ため（自分の repo や org に collaborator がブランチを作って PR を開くと head owner は自分/org でも author は他人）。逆に head owner で絞ると、自分が author の org PR を弾いてしまう。`maintainerCanModify=true`（fork の「メンテナの編集を許可」）は認可根拠にしない（コミット追記の許可であって履歴 rewrite の許可ではない）。
 
-**push 先 remote `<head-remote>` の解決**: PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う（`isCrossRepository` に関わらず。`origin` 決め打ちにしないのは、fork レイアウトで `origin` が fork を指すと PR head を取り違えるため）。**一致する remote が無い場合**（自分の fork PR だが clone に base remote しか無い等。`gh pr checkout` は PR を出すが fork remote を追加しないことがある）は、**`git remote add <name> <headRepository.url>` で名前付き remote を足して `git fetch <name> "$head"` してから**、その remote 経由で通常どおり `git push --force-with-lease <name> HEAD:"$head"` する。**raw URL を直接 push 先にする `git push --force-with-lease <url> …` は使わない** — URL には remote-tracking ref が無く、`--force-with-lease`（暗黙形）が比較対象を持てずに stale 扱いで reject される。どうしても URL 直 push が要るなら、fetch した head SHA を明示 lease 値にする（`--force-with-lease="$head":<fetched-sha>`）。それでも解決できなければエスカレーション。
+**push 先 remote `<head-remote>` の解決**: PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う（`isCrossRepository` に関わらず。`origin` 決め打ちにしないのは、fork レイアウトで `origin` が fork を指すと PR head を取り違えるため）。**一致する remote が無い場合**（自分の fork PR だが clone に base remote しか無い等。`gh pr checkout` は PR を出すが fork remote を追加しないことがある）は、fork の **clone URL を導出してから** 名前付き remote を足す。`gh pr view --json headRepository` は `id`/`name`/`nameWithOwner` しか返さず **URL を含まない**ので、`headRepository.nameWithOwner` と PR のホスト（`url` のホスト部）から URL を組み立てる（例: `https://github.com/<nameWithOwner>.git`）か、`gh repo view <nameWithOwner> --json url -q .url` で取得する。そのうえで **`git remote add <name> <url>` → `git fetch <name> "$head"`** してから、その remote 経由で通常どおり `git push --force-with-lease <name> HEAD:"$head"` する。**raw URL を直接 push 先にする `git push --force-with-lease <url> …` は使わない** — URL には remote-tracking ref が無く、`--force-with-lease`（暗黙形）が比較対象を持てずに stale 扱いで reject される。どうしても URL 直 push が要るなら、fetch した head SHA を明示 lease 値にする（`--force-with-lease="$head":<fetched-sha>`）。それでも解決できなければエスカレーション。
 
 **ローカル HEAD が PR head を含むか検証**（rebase / force-push の前に必ず）:
 
@@ -107,7 +107,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 1. `gh pr view --json …`（PR 状態）。
 2. CI: `gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow`（`$pr` を必ず渡す。`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks ${pr:+"$pr"} --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
 3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身・各スレッドの先頭/最新コメント）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
-4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の本文（`CHANGES_REQUESTED` だけでなく **`COMMENTED` も含め**、具体的な修正依頼があるもの）・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、レビュー本文に依頼が残っていても approve/green で完了扱いになる）。純粋な情報共有のみの COMMENTED は対象外。
+4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の本文（`CHANGES_REQUESTED` だけでなく **`COMMENTED` も含め**、具体的な修正依頼があるもの）・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、レビュー本文に依頼が残っていても approve/green で完了扱いになる）。純粋な情報共有のみの COMMENTED は対象外。**`gh pr view --json comments` はトップレベルコメントを `first:100` でしか取らない**ので、100 を超える PR では GraphQL（`issueComments`/`comments` の `pageInfo.endCursor`）で全ページ辿ってから完了/ skip 判定に使う（後ろのページの actionable コメントを取りこぼさない）。
 
 ### B. 終了判定（最初に行う）
 
@@ -115,10 +115,10 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
 - `state=OPEN` かつ **`isDraft=false`** かつ **マージ可能**（`mergeable=MERGEABLE`。`mergeStateStatus` は `CLEAN` を厳密要求しない — 後述）かつ CI（必須チェック）が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** かつ **承認シグナルが立っている** → **完了**。「マージ可能・グリーン・承認（または不要）で未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。
-  - **`mergeStateStatus` は厳密に `CLEAN` でなくてよい**。up-to-date を必須にしないリポジトリでは、ベースが進んでも `mergeable=MERGEABLE` のまま `mergeStateStatus=BEHIND` になり、衝突が無いので C で rebase する必要もない。この状態を `CLEAN` でないからと弾くと、対処対象が無いのに永遠に完了できない。完了判定は **`mergeable=MERGEABLE` + 必須チェック pass** を軸にし、`DIRTY`（衝突）や `BLOCKED`（必須未達）だけを「未完了」とみなす。
+  - **`mergeStateStatus` は厳密に `CLEAN` でなくてよいが、`BEHIND` は条件付き**。up-to-date を**必須にしない**リポジトリでは、ベースが進んでも `mergeable=MERGEABLE` のまま `mergeStateStatus=BEHIND` になり、衝突が無いので rebase 不要 → この `BEHIND` は完了可。だが**up-to-date を必須にする**リポジトリ（ブランチ保護の `required_status_checks.strict` = `requiresStrictStatusChecks` が true）では、`BEHIND` のままだと GitHub がマージをブロックする → この場合は完了にせず C の rebase で追従させる。strict 設定は `gh api repos/$owner/$repo/branches/$base/protection`（権限があれば）で確認し、取れなければ安全側に倒して `BEHIND` は rebase する。完了判定は **`mergeable=MERGEABLE` + 必須チェック pass + （`CLEAN` または strict 不要の `BEHIND`）** を軸にし、`DIRTY`（衝突）/ `BLOCKED`（必須未達）/ strict な `BEHIND` を「未完了」とみなす。
   - 「承認シグナル」は**レビュアー構成で変わる**。次のいずれかで承認相当とみなす:
     1. `reviewDecision=APPROVED`。
-    2. **レビューが要求されていない**: ブランチ保護で必須レビューが無く、`reviewDecision` が `null`/空でレビュー依頼も無い（待つべき人間レビューが存在しない）→ 承認を待たず完了可。`null` を「未承認」と取り違えて永遠に待たない。
+    2. **レビューが要求されていない**: ブランチ保護で必須レビューが無く、`reviewDecision` が `null`/空で、**かつ `reviewRequests` が空**（手動で依頼された未応答の人間レビュアーもいない）→ 承認を待たず完了可。`reviewRequests` を見ずに `null` だけで判断すると、手動依頼したレビュアーの到着前に完了してしまう。
     3. 自動レビュー bot（例: codex-connector）運用では、その bot の**再レビューが clean（新規 actionable なし）**＝ 👍/approve 相当（[[feedback_codex_review_approval]]）。
   - 「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。`reviewDecision` だけで「指摘なし」と即断しない（COMMENTED スレッドやトップレベルコメントを取りこぼす）。
 - `state=OPEN` で **CI green・衝突なし・未対応指摘 0 だが、必須の人間レビューが要求されていてまだ `APPROVED` でない**（`reviewDecision=REVIEW_REQUIRED`/`CHANGES_REQUESTED` 解消待ち等）→ **完了にはせず「reviewer-wait（アイドル）」として監視を継続**する。ここで loop を抜けると、遅れて来るレビュー / CI 変化を取りこぼす。長間隔（後述）で「対処対象なし・承認待ち。約 N 分後に再確認」と報告して再 pass する（ただし上記のとおり、レビューが**そもそも不要**なら待たずに完了する）。
