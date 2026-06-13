@@ -23,7 +23,10 @@
     // Restriction ルールはカテゴリに含まれないので明示 enable が必要。これを
     // 書かないと off override も no-op になり、components/hooks の `!` も
     // 素通りしてしまう。lib/test だけ override で外す(下記)。
-    "typescript/no-non-null-assertion": "error"
+    "typescript/no-non-null-assertion": "error",
+    // describe ブロック内に snapshot ファクトリや MSW handler を置くのは
+    // テストの一般的な可読パターン。外スコープ強制は構成を散らすので off。
+    "unicorn/consistent-function-scoping": "off"
   },
   "overrides": [
     {
