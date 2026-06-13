@@ -96,18 +96,32 @@ func New(db *sql.DB, parent string) (*Store, error) {
 	return &Store{db: db, parent: parent}, nil
 }
 
-// claimDBOwner records parent as the DB's owner when no owner exists yet and
-// returns the owner on record. The CHECK(id = 1) singleton plus the no-op
-// conflict clause make concurrent first opens race-safe: exactly one parent
-// wins the claim and the loser reads the winner's row.
+// claimDBOwner records the DB's owner when no owner row exists yet and
+// returns the owner on record. A DB predating msg_db_owner may already hold
+// message rows; their parent — not the requested one — seeds the claim, so a
+// wrong first opener cannot hijack ownership of an existing team DB and lock
+// the resident parent out. The CHECK(id = 1) singleton plus the no-op
+// conflict clause make concurrent first opens race-safe: exactly one claim
+// wins and the loser reads the winner's row.
 func claimDBOwner(db *sql.DB, parent string) (string, error) {
 	if _, err := db.Exec(
 		"CREATE TABLE IF NOT EXISTS msg_db_owner (id INTEGER PRIMARY KEY CHECK (id = 1), parent TEXT NOT NULL)",
 	); err != nil {
 		return "", fmt.Errorf("ensure team db owner table: %w", err)
 	}
+	resident := parent
+	var found string
+	err := db.QueryRow("SELECT parent FROM messages ORDER BY id LIMIT 1").Scan(&found)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// No messages yet: the requested parent may claim the DB.
+	case err != nil:
+		return "", fmt.Errorf("discover team db resident parent: %w", err)
+	default:
+		resident = found
+	}
 	if _, err := db.Exec(
-		"INSERT INTO msg_db_owner(id, parent) VALUES (1, ?) ON CONFLICT(id) DO NOTHING", parent,
+		"INSERT INTO msg_db_owner(id, parent) VALUES (1, ?) ON CONFLICT(id) DO NOTHING", resident,
 	); err != nil {
 		return "", fmt.Errorf("claim team db owner: %w", err)
 	}

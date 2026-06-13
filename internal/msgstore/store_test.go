@@ -255,6 +255,25 @@ func TestNewRejectsForeignParent(t *testing.T) {
 	}
 }
 
+func TestNewSeedsLegacyOwnerFromMessages(t *testing.T) {
+	s := openTestStore(t)
+	seedStore(t, s)
+	// Simulate a DB created before msg_db_owner existed.
+	if _, err := s.db.Exec("DROP TABLE msg_db_owner"); err != nil {
+		t.Fatalf("drop owner table: %v", err)
+	}
+
+	// A wrong first opener must not hijack ownership of the legacy DB: the
+	// claim seeds from the resident parent found in messages, so the open is
+	// rejected AND the recorded owner stays the resident.
+	if _, err := New(s.db, "99"); err == nil || !strings.Contains(err.Error(), "owned by parent 68") {
+		t.Fatalf("New(99) on a legacy DB = %v, want rejection naming resident 68", err)
+	}
+	if _, err := New(s.db, "68"); err != nil {
+		t.Fatalf("New(68) after the failed hijack: %v", err)
+	}
+}
+
 func TestNewOwnershipSurvivesRegisterOnlyDB(t *testing.T) {
 	s := openTestStore(t)
 	// Register a peer but write no message: the messages table alone cannot
