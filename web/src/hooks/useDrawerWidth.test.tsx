@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useDrawerWidth } from "./useDrawerWidth";
 
@@ -160,6 +160,27 @@ describe("useDrawerWidth", () => {
     localStorage.setItem("fanout.drawerWidth", "1600");
     render(<Probe />);
     expect(width()).toBe(900);
+  });
+
+  it("ビューポート縮小の resize で内部 width を再 clamp(stale startWidth を防ぐ)", () => {
+    render(<Probe />);
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
+    expect(width()).toBe(1600); // 2000px なので上限 1600
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: -2000 });
+
+    // ウィンドウを 1200px に縮小 → 上限 840。resize で内部 width も追従する
+    setInnerWidth(1200);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(width()).toBe(840);
+
+    // 次のドラッグは clamp 済みの 840 から始まる(デッドゾーンなし)
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 2, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 2, clientX: 820, buttons: 1 }); // 右 20px = 縮小
+    expect(width()).toBe(820);
+    fireEvent.pointerUp(grip(), { pointerId: 2, clientX: 820 });
   });
 
   it("無移動クリックでは永続化しない(保存値なし = デフォルト追従を保つ)", () => {

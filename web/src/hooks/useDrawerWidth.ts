@@ -96,6 +96,22 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     [],
   );
 
+  /* ビューポート縮小で CSS が描画幅を clamp したら、内部値・aria-valuenow・
+   * 永続対象も同じ上限へ追従させる。追従しないと widthRef.current が古い
+   * ワイド値のまま残り、次ドラッグの startWidth が実描画より大きくなって
+   * デッドゾーン(右へ大きく動かすまで縮まらない)を生み、aria も実幅と
+   * 乖離する。 */
+  useEffect(() => {
+    const onResize = () => {
+      const clamped = clampWidth(widthRef.current);
+      if (clamped !== widthRef.current) setWidth(clamped);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // setWidth / widthRef は安定参照。マウント中ずっと同じリスナーでよい。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const endDrag = (e: PointerEvent<HTMLElement>): boolean => {
     const drag = dragRef.current;
     if (!drag || e.pointerId !== drag.pointerId) return false;
@@ -122,7 +138,10 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     tabIndex: 0,
     onPointerDown: (e) => {
       if (e.button !== 0 || !e.isPrimary || dragRef.current) return;
-      dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth: widthRef.current };
+      // resize イベントを取り逃していても現在ビューポートの上限から開始する
+      const startWidth = clampWidth(widthRef.current);
+      if (startWidth !== widthRef.current) setWidth(startWidth);
+      dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth };
       movedRef.current = false;
       e.currentTarget.setPointerCapture?.(e.pointerId);
       document.documentElement.classList.add(RESIZING_CLASS);
