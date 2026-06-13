@@ -184,6 +184,40 @@ describe("useDrawerWidth", () => {
     fireEvent.pointerUp(grip(), { pointerId: 2, clientX: 820 });
   });
 
+  it("描画上限に張り付いた状態の拡大ドラッグは大きい intent(保存値)を縮めない", () => {
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840
+    render(<Probe />);
+    expect(width()).toBe(840); // 1300 は cap されて 840 描画
+
+    // 拡大方向(左 20px)に引いても描画は 840 のまま、intent 1300 は維持
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 780, buttons: 1 });
+    expect(width()).toBe(840);
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 780 });
+
+    // 広い画面に戻すと設定した 1300 が復元する(860 に縮んでいない)
+    setInnerWidth(2000);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(width()).toBe(1300);
+  });
+
+  it("描画上限に張り付いた状態でも縮小ドラッグは見えている幅から追従する", () => {
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840
+    render(<Probe />);
+    expect(width()).toBe(840);
+
+    // 縮小方向(右 40px)→ 見えている 840 から 800 へ
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 840, buttons: 1 });
+    expect(width()).toBe(800);
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 840 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("800");
+  });
+
   it("bottom sheet 相当の縮小を経ても intent を失わず、広げれば設定幅へ復元する", () => {
     localStorage.setItem("fanout.drawerWidth", "1300");
     render(<Probe />);

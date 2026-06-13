@@ -162,8 +162,17 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
       }
       const dx = drag.startX - e.clientX;
       if (dx === 0) return; // 無移動では intent を触らない(rendered への巻き戻り防止)
+      const candidate = clampIntent(drag.startWidth + dx);
+      // 描画上限に張り付いた状態(intent が見えている startWidth より大きい)で
+      // さらに拡大方向へ引いても描画は変わらない。ここで intent を startWidth
+      // ベースに縮めると、広い画面で見えるはずの大きい保存値を失う。拡大方向は
+      // intent を維持し、見えている幅より縮めたときだけ追従する。
+      if (candidate >= drag.startWidth && intentRef.current > drag.startWidth) {
+        movedRef.current = true; // ジェスチャーはあったので click 扱いにしない
+        return;
+      }
       if (Math.abs(dx) > CLICK_SLOP) movedRef.current = true;
-      setIntent(clampIntent(drag.startWidth + dx));
+      setIntent(candidate);
     },
     onPointerUp: finishDrag,
     onPointerCancel: (e) => {
