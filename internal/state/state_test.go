@@ -27,6 +27,8 @@ func TestFannedNumbersForParentDedupesByParentAndIssue(t *testing.T) {
 		{Parent: "0300", IssueNum: 502},
 		{Parent: "400", IssueNum: 601},
 		{Parent: "300", IssueNum: 501},
+		{Parent: "300", IssueNum: 0, TaskID: "task-a"},
+		{Parent: "300", IssueNum: -1},
 	}}
 
 	got := store.FannedNumbersForParent("300")
@@ -48,6 +50,7 @@ func TestFannedNumbersForOtherParents(t *testing.T) {
 		{Parent: "0300", IssueNum: 502},
 		{Parent: "400", IssueNum: 501},
 		{Parent: "500", IssueNum: 601},
+		{Parent: "400", IssueNum: 0, TaskID: "task-a"},
 	}}
 
 	got := store.FannedNumbersForOtherParents("300")
@@ -145,6 +148,51 @@ func TestLoadLegacyRowWithoutBaseBranchDefaultsToEmpty(t *testing.T) {
 	}
 }
 
+func TestLegacyStateRoundTripOmitsTaskID(t *testing.T) {
+	root := t.TempDir()
+	legacy := `{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "81",
+      "issueNum": 83,
+      "slug": "state-idempotency-83",
+      "branchName": "fanout/state-idempotency-83",
+      "paneId": "%42",
+      "agent": "codex",
+      "displayName": "State Idempotency",
+      "worktreePath": "/repo/.fanout/worktrees/state-idempotency-83",
+      "prompt": "p",
+      "createdAt": "2026-06-04T00:00:00Z"
+    }
+  ]
+}`
+	if err := os.MkdirAll(filepath.Dir(Path(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(root), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = save(Path(root), loaded); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"taskId"`) {
+		t.Fatalf("legacy round-trip added taskId:\n%s", data)
+	}
+	if got, want := string(data), legacy+"\n"; got != want {
+		t.Fatalf("legacy round-trip changed bytes:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
 func TestAgentStatusRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)
@@ -212,6 +260,38 @@ func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
 	}
 }
 
+func TestTaskIDRoundTripsAndOmitsWhenEmpty(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err = locked.RecordPane(Pane{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-a", PaneID: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(Pane{Parent: "plan:alpha", IssueNum: 1, PaneID: "%2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.FindTask("plan:alpha", "task-a")
+	if !ok || got.PaneID != "%1" {
+		t.Fatalf("FindTask() = %+v (found=%v), want pane %%1", got, ok)
+	}
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), `"taskId"`); n != 1 {
+		t.Fatalf("taskId key appears %d times, want 1:\n%s", n, data)
+	}
+}
+
 func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)
@@ -239,6 +319,47 @@ func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
 	}
 }
 
+func TestUpsertTaskReplacesSameParentTaskID(t *testing.T) {
+	store := Store{}
+	store.UpsertTask(Pane{Parent: "211", IssueNum: 0, TaskID: "task-a", PaneID: "%1"})
+	store.UpsertTask(Pane{Parent: "0211", IssueNum: 0, TaskID: "task-b", PaneID: "%2"})
+	store.UpsertTask(Pane{Parent: "211", IssueNum: 99, TaskID: "task-a", PaneID: "%3"})
+
+	if len(store.Panes) != 2 {
+		t.Fatalf("pane count = %d, want 2: %+v", len(store.Panes), store.Panes)
+	}
+	got, ok := store.FindTask("211", "task-a")
+	if !ok || got.PaneID != "%3" || got.IssueNum != 99 {
+		t.Fatalf("FindTask(task-a) = %+v (found=%v), want pane %%3 issue #99", got, ok)
+	}
+	if _, ok := store.FindTask("211", "task-b"); !ok {
+		t.Fatalf("task-b was clobbered: %+v", store.Panes)
+	}
+	fanned := store.FannedTaskIDsForParent("211")
+	if !fanned["task-a"] || !fanned["task-b"] || len(fanned) != 2 {
+		t.Fatalf("FannedTaskIDsForParent() = %#v, want task-a and task-b", fanned)
+	}
+}
+
+func TestUpsertTaskFallsBackToIssueNumberWhenEitherSideLacksTaskID(t *testing.T) {
+	store := Store{Panes: []Pane{{Parent: "211", IssueNum: 42, PaneID: "%old"}}}
+	store.UpsertTask(Pane{Parent: "0211", IssueNum: 42, TaskID: "task-c", PaneID: "%new"})
+
+	if len(store.Panes) != 1 {
+		t.Fatalf("pane count after legacy replacement = %d, want 1: %+v", len(store.Panes), store.Panes)
+	}
+	got, ok := store.FindTask("211", "task-c")
+	if !ok || got.PaneID != "%new" {
+		t.Fatalf("legacy row was not replaced by task row: %+v (found=%v)", got, ok)
+	}
+
+	store.UpsertTask(Pane{Parent: "211", IssueNum: 42, PaneID: "%legacy"})
+	got, ok = store.Find("211", 42)
+	if len(store.Panes) != 1 || !ok || got.PaneID != "%legacy" || got.TaskID != "" {
+		t.Fatalf("issue fallback replacement = %+v (found=%v), panes=%+v", got, ok, store.Panes)
+	}
+}
+
 func TestRemoveDeletesAllSameParentIssueRows(t *testing.T) {
 	store := Store{Panes: []Pane{
 		{Parent: "84", IssueNum: 101, PaneID: "%1"},
@@ -258,5 +379,35 @@ func TestRemoveDeletesAllSameParentIssueRows(t *testing.T) {
 	}
 	if _, ok := store.Find("85", 101); !ok {
 		t.Fatalf("different parent same issue was removed: %+v", store.Panes)
+	}
+}
+
+func TestLockedStoreRemoveTaskPane(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err = locked.RecordPane(Pane{Parent: "211", IssueNum: 0, TaskID: "task-a", PaneID: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(Pane{Parent: "211", IssueNum: 0, TaskID: "task-b", PaneID: "%2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RemoveTaskPane("0211", "task-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("211", "task-a"); ok {
+		t.Fatalf("task-a still present: %+v", loaded.Panes)
+	}
+	if got, ok := loaded.FindTask("211", "task-b"); !ok || got.PaneID != "%2" {
+		t.Fatalf("task-b = %+v (found=%v), want pane %%2", got, ok)
 	}
 }

@@ -1,6 +1,12 @@
 package ghissue
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestPRRefDisplayState(t *testing.T) {
 	mergedAt := "2026-06-09T00:00:00Z"
@@ -70,6 +76,87 @@ func TestSummarizeCI(t *testing.T) {
 	}
 }
 
+func TestPRsForBranchMapsListOutput(t *testing.T) {
+	mergedAt := "2026-06-13T01:02:03Z"
+	argsPath := installFakeGH(t, `[
+  {
+    "number": 10,
+    "state": "MERGED",
+    "mergedAt": "2026-06-13T01:02:03Z",
+    "isDraft": false,
+    "reviewDecision": "APPROVED",
+    "statusCheckRollup": {"state": "SUCCESS"}
+  },
+  {
+    "number": 11,
+    "state": "OPEN",
+    "mergedAt": null,
+    "isDraft": true,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "statusCheckRollup": [{"status": "IN_PROGRESS"}]
+  },
+  {
+    "number": 12,
+    "state": "OPEN",
+    "mergedAt": null,
+    "isDraft": false,
+    "reviewDecision": "",
+    "statusCheckRollup": [
+      {"status": "COMPLETED", "conclusion": "SUCCESS"},
+      {"status": "COMPLETED", "conclusion": "TIMED_OUT"}
+    ]
+  }
+]`)
+
+	got, err := (Runner{}).PRsForBranch("fanout/taskid-state-pr-213")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []PRRef{
+		{
+			Number:         10,
+			State:          "MERGED",
+			MergedAt:       &mergedAt,
+			ReviewDecision: "APPROVED",
+			CIStatus:       "pass",
+		},
+		{
+			Number:         11,
+			State:          "OPEN",
+			IsDraft:        true,
+			ReviewDecision: "REVIEW_REQUIRED",
+			CIStatus:       "pending",
+		},
+		{
+			Number:   12,
+			State:    "OPEN",
+			CIStatus: "fail",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PRsForBranch() = %#v, want %#v", got, want)
+	}
+	assertFakeGHArgs(t, argsPath, []string{
+		"pr", "list",
+		"--head", "fanout/taskid-state-pr-213",
+		"--state", "all",
+		"--json", "number,state,mergedAt,isDraft,reviewDecision,statusCheckRollup",
+	})
+}
+
+func TestPRsForBranchReturnsEmptyList(t *testing.T) {
+	installFakeGH(t, `[]`)
+
+	got, err := (Runner{}).PRsForBranch("fanout/no-prs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("PRsForBranch() = %#v, want empty", got)
+	}
+}
+
 func TestNormalizeCIStatus(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
@@ -78,6 +165,10 @@ func TestNormalizeCIStatus(t *testing.T) {
 		{in: "SUCCESS", want: "pass"},
 		{in: "FAILURE", want: "fail"},
 		{in: "ERROR", want: "fail"},
+		{in: "CANCELLED", want: "fail"}, //nolint:misspell // GitHub's CheckConclusionState enum spells this CANCELLED.
+		{in: "TIMED_OUT", want: "fail"},
+		{in: "ACTION_REQUIRED", want: "fail"},
+		{in: "STARTUP_FAILURE", want: "fail"},
 		{in: "PENDING", want: "pending"},
 		{in: "EXPECTED", want: "pending"},
 		{in: "", want: ""},
@@ -85,6 +176,37 @@ func TestNormalizeCIStatus(t *testing.T) {
 		if got := normalizeCIStatus(tc.in); got != tc.want {
 			t.Fatalf("normalizeCIStatus(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func installFakeGH(t *testing.T, output string) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "gh")
+	body := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "$GH_FAKE_ARGS"
+printf '%s' "$GH_FAKE_OUTPUT"
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_FAKE_ARGS", argsPath)
+	t.Setenv("GH_FAKE_OUTPUT", output)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
+
+func assertFakeGHArgs(t *testing.T, argsPath string, want []string) {
+	t.Helper()
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("gh args = %#v, want %#v", got, want)
 	}
 }
 
