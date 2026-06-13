@@ -81,6 +81,11 @@ type PaneView struct {
 	// synthetic 行(TUI の synthetic 行の web 移植)。PaneID/Agent/Branch 等の
 	// pane 由来フィールドは zero、TmuxState は closed/deferred/queued/unknown。
 	NotStarted bool `json:"notStarted,omitempty"`
+	// closeUnconfirmed は synthetic な CLOSED 行のうち PR 状態を確認できなかった
+	// もの(IssuePRs が miss/失敗し wave graph の状態へ fallback)を示す内部
+	// フラグ。一時的な gh 失敗で session が 100%/AllMerged に見えないよう、
+	// こうした行は rollup に残す。JSON には出さない(非エクスポート)。
+	closeUnconfirmed bool
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.

@@ -233,28 +233,32 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					continue
 				}
 				issueState, prs := fetch(child.Number)
+				closeUnconfirmed := false
 				if issueState == IssueStateUnknown && child.State != "" {
 					// PR キャッシュ未取得でも wave graph は issue 状態を知って
 					// いる(Sub-issues API / IssueDetail が state を返す)ので
-					// fallback する。
+					// fallback する。ただし PR 状態は未確認なので、CLOSED に
+					// fallback した行は rollup から落とさない(下記 countsInRollup)。
 					issueState = child.State
+					closeUnconfirmed = strings.EqualFold(issueState, "CLOSED")
 				}
 				wi := graph.Info[child.Number]
 				pv := PaneView{
-					IssueNum:    child.Number,
-					DisplayName: issueDisplayName(child),
-					IssueState:  issueState,
-					PRs:         prs,
-					HasMergedPR: hasMergedPR(prs),
-					DiffSummary: "-",
-					DirtyState:  "-",
-					TmuxState:   SyntheticTmuxState(issueState, wi.Blocked),
-					CIStatus:    strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
-					Wave:        wi.Wave,
-					WaveLabel:   wi.WaveLabel,
-					Blockers:    normalizeBlockers(wi.Blockers),
-					Blocked:     wi.Blocked,
-					NotStarted:  true,
+					IssueNum:         child.Number,
+					DisplayName:      issueDisplayName(child),
+					IssueState:       issueState,
+					PRs:              prs,
+					HasMergedPR:      hasMergedPR(prs),
+					DiffSummary:      "-",
+					DirtyState:       "-",
+					TmuxState:        SyntheticTmuxState(issueState, wi.Blocked),
+					CIStatus:         strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
+					Wave:             wi.Wave,
+					WaveLabel:        wi.WaveLabel,
+					Blockers:         normalizeBlockers(wi.Blockers),
+					Blocked:          wi.Blocked,
+					NotStarted:       true,
+					closeUnconfirmed: closeUnconfirmed,
 				}
 				session.Panes = append(session.Panes, pv)
 				if countsInRollup(pv) {
@@ -490,7 +494,14 @@ func countsInRollup(pv PaneView) bool {
 	if !pv.NotStarted {
 		return true
 	}
-	return !strings.EqualFold(pv.IssueState, "CLOSED") || pv.HasMergedPR
+	if !strings.EqualFold(pv.IssueState, "CLOSED") || pv.HasMergedPR {
+		return true
+	}
+	// CLOSED かつ merged PR なし: PR lookup で「merged なし」を確認できたとき
+	// だけ rollup から落とす(not-planned 等の確定 close)。PR 状態が未確認
+	// (キャッシュ miss/失敗で wave graph 状態へ fallback)なら算入し、一時的な
+	// gh 失敗で session が 100%/AllMerged に見えるのを防ぐ。
+	return pv.closeUnconfirmed
 }
 
 func accumulate(r *Rollup, pv PaneView) {

@@ -721,6 +721,43 @@ func TestBuildClosedSyntheticChildDoesNotBlockAllMerged(t *testing.T) {
 	}
 }
 
+// PR lookup が失敗(IssuePRs エラー)した CLOSED 子は PR 状態が未確認なので
+// rollup に算入し、一時的な gh 失敗で session が誤って AllMerged に見えるのを
+// 防ぐ。
+func TestBuildUnconfirmedClosedSyntheticChildStaysInRollup(t *testing.T) {
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, Title: "merged", State: "CLOSED"},
+			{Number: 103, Title: "closed but PR unknown", State: "CLOSED"},
+		},
+		Info: map[int]WaveInfo{},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			if num == 101 {
+				return "CLOSED", mergedPR(501), nil
+			}
+			// #103 は PR lookup 失敗(レート制限等)。状態は wave graph の
+			// CLOSED に fallback するが、merged PR の有無は未確認。
+			return "", nil, errors.New("rate limited")
+		},
+		Waves: wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 || panes[1].IssueState != "CLOSED" {
+		t.Fatalf("unconfirmed closed row must still render as CLOSED: %+v", panes)
+	}
+	r := snap.Sessions[0].Rollup
+	// #103 は算入される → Total 2 / Pending 1 / AllMerged false(完了扱いしない)
+	if r.Total != 2 || r.AllMerged || r.Pending != 1 {
+		t.Fatalf("unconfirmed closed child must stay in rollup: %+v", r)
+	}
+}
+
 func TestBuildWaveCacheMissEmitsNoSyntheticRows(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
