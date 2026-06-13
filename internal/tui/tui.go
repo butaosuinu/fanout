@@ -1491,16 +1491,9 @@ func sortPaneViews(panes []paneView) {
 }
 
 func syntheticTmuxState(status issueStatus) string {
-	switch {
-	case strings.EqualFold(status.State, "CLOSED"):
-		return "closed"
-	case status.HasOpenBlockers:
-		return "deferred"
-	case strings.EqualFold(status.State, "OPEN"):
-		return "queued"
-	default:
-		return "unknown"
-	}
+	// web ダッシュボードの synthetic 行と同一文字列を保証する単一実装に委譲
+	// (`state:queued` 等のフィルタ語彙が TUI / web で割れないように)。
+	return sessionview.SyntheticTmuxState(status.State, status.HasOpenBlockers)
 }
 
 func (p paneView) tableRow() table.Row {

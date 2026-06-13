@@ -56,6 +56,7 @@ export function makeQueuedPane(over: Partial<PaneView> = {}): PaneView {
     diffSummary: "-",
     dirtyState: "-",
     tmuxState: "queued",
+    ciStatus: "-", // Go 側は synthetic 行にも常に CIStatus を入れる
     blockers: [],
     blocked: false,
     notStarted: true,

@@ -225,7 +225,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		// そのまま実 row に置き換わる。"0100"/"100" のようなエイリアス親は同じ
 		// wave graph を共有するため、normalize したキーごとに一度だけ emit し、
 		// 未記録判定もエイリアス session 横断で行う。
-		if normKey := normalizeParentKey(parent); !syntheticEmitted[normKey] {
+		if normKey := NormalizeParent(parent); !syntheticEmitted[normKey] {
 			syntheticEmitted[normKey] = true
 			recorded := recordedByParent[normKey]
 			for _, child := range childrenByNumber(graph.Children) {
@@ -248,7 +248,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					HasMergedPR: hasMergedPR(prs),
 					DiffSummary: "-",
 					DirtyState:  "-",
-					TmuxState:   syntheticTmuxState(issueState, wi.Blocked),
+					TmuxState:   SyntheticTmuxState(issueState, wi.Blocked),
 					CIStatus:    strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 					Wave:        wi.Wave,
 					WaveLabel:   wi.WaveLabel,
@@ -257,14 +257,18 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					NotStarted:  true,
 				}
 				session.Panes = append(session.Panes, pv)
-				accumulate(&session.Rollup, pv)
+				if countsInRollup(pv) {
+					accumulate(&session.Rollup, pv)
+				}
 			}
 		}
 		finalize(&session.Rollup)
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			accumulate(&snap.Rollup, pv)
+			if countsInRollup(pv) {
+				accumulate(&snap.Rollup, pv)
+			}
 		}
 	}
 	finalize(&snap.Rollup)
@@ -312,7 +316,13 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 		nb, eb := strconv.Atoi(b)
 		switch {
 		case ea == nil && eb == nil:
-			return cmp.Compare(na, nb)
+			if c := cmp.Compare(na, nb); c != 0 {
+				return c
+			}
+			// エイリアス親("0100"/"100")は数値比較で等しい。raw 文字列で
+			// タイブレークしないと map 順で session 順序と synthetic 行の
+			// 帰属先が build ごとに揺れ、SSE が毎 tick 発火する。
+			return strings.Compare(a, b)
 		case ea == nil:
 			return -1 // numeric before non-numeric
 		case eb == nil:
@@ -324,10 +334,11 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 	return keys
 }
 
-// normalizeParentKey は数値親を Atoi 往復で正規化する("0100" と "100" を同一
-// 親として扱う)。dashboard poller の normalizeParent / state の parentMatches
-// と同じ規則。
-func normalizeParentKey(parent string) string {
+// NormalizeParent は数値親を Atoi 往復で正規化する("0100" と "100" を同一
+// 親として扱う)。state の parentMatches と同じ規則で、dashboard poller の
+// wave cache キーもこれを使う(規則が割れるとエイリアス親の synthetic 行が
+// 二重 emit / 消失する)。
+func NormalizeParent(parent string) string {
 	if n, err := strconv.Atoi(parent); err == nil {
 		return strconv.Itoa(n)
 	}
@@ -341,7 +352,7 @@ func normalizeParentKey(parent string) string {
 func recordedNumsByNormalizedParent(panes []state.Pane) map[string]map[int]bool {
 	out := map[string]map[int]bool{}
 	for _, p := range panes {
-		key := normalizeParentKey(p.Parent)
+		key := NormalizeParent(p.Parent)
 		if out[key] == nil {
 			out[key] = map[int]bool{}
 		}
@@ -369,11 +380,11 @@ func issueDisplayName(child ghissue.Issue) string {
 	return "#" + strconv.Itoa(child.Number)
 }
 
-// syntheticTmuxState は未開始子 issue の tmux 列値。internal/tui の
-// syntheticTmuxState と完全一致させる(`state:queued` 等のフィルタが TUI と
+// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/tui の synthetic
+// 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
 // web で同じ意味を持つ): closed → deferred → queued の優先順で判定し、issue
 // 状態が取れないものは unknown。
-func syntheticTmuxState(issueState string, blocked bool) string {
+func SyntheticTmuxState(issueState string, blocked bool) string {
 	switch {
 	case strings.EqualFold(issueState, "CLOSED"):
 		return "closed"
@@ -470,6 +481,18 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 	return false
 }
 
+// countsInRollup は rollup に算入する行かどうか。PR が merge されないまま
+// CLOSED になった synthetic 子(not-planned 等)は除外する(行としては表示
+// する): 算入すると Pending に永久に残り、セッション進捗が 100% / AllMerged
+// に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
+// 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
+func countsInRollup(pv PaneView) bool {
+	if !pv.NotStarted {
+		return true
+	}
+	return !strings.EqualFold(pv.IssueState, "CLOSED") || pv.HasMergedPR
+}
+
 func accumulate(r *Rollup, pv PaneView) {
 	r.Total++
 	if pv.HasMergedPR {
@@ -484,7 +507,9 @@ func accumulate(r *Rollup, pv PaneView) {
 	if pv.Blocked {
 		r.Blocked++
 	}
-	if pv.NotStarted {
+	if pv.NotStarted && pv.TmuxState != "closed" {
+		// NotStarted は「まだ起動しうる作業」のカウンタ: merged 済みで閉じた
+		// synthetic 子は Total/Merged には入るがここには数えない。
 		r.NotStarted++
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,7 +223,7 @@ func (p *poller) wavesFromCache(parent string) (sessionview.WaveGraph, error) {
 	}
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
-	e, ok := p.waveCache[normalizeParent(parent)]
+	e, ok := p.waveCache[sessionview.NormalizeParent(parent)]
 	if !ok {
 		return sessionview.WaveGraph{}, nil // cache miss: unknown, not degraded
 	}
@@ -239,11 +239,13 @@ func (p *poller) refreshGH() {
 	if err != nil {
 		return
 	}
-	// Phase 1: per-issue PR state. The fetch set is the recorded issue numbers
-	// UNION the children the wave cache already discovered — not-started
-	// children have no state row, but their synthetic rows still surface
-	// issue/PR/CI state.
-	p.refreshIssuePRs(gh, unionNums(distinctIssueNums(store), p.cachedChildNums()))
+	// Phase 1: per-issue PR state for RECORDED issues only. Not-started
+	// children get their PR state inside the wave pass below, at the slower
+	// wave cadence — unioning them here would scale the 20s tick with the
+	// total child count instead of the launched pane count and exhaust the
+	// hourly GitHub API budget (the exact failure the wave throttle exists
+	// to prevent).
+	p.refreshIssuePRs(gh, distinctIssueNums(store))
 	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
 	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
 	// and backfill unlinked children for numeric ones.
@@ -264,6 +266,10 @@ func (p *poller) refreshGH() {
 		p.lastWaveRefresh = time.Now()
 	}
 	numsByParent := recordedNumsByParent(store)
+	// state から消えた親(--cleanup 済み等)の wave エントリは捨てる: その
+	// session はもう build されないのに、子の PR fetch だけを永遠に駆動して
+	// しまう(stale エントリは wave パスの対象外なので自然回復もしない)。
+	p.pruneWaveCache(numsByParent)
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
 		nums := numsByParent[parent]
 		if !due {
@@ -293,14 +299,60 @@ func (p *poller) refreshGH() {
 			// until the next clean pass.
 			graph = mergeDegradedWaveGraph(p.waveCache[parent].graph, graph)
 		}
+		p.cacheMu.Unlock()
+		// Fetch the children's PR state BEFORE publishing the graph: the 2s
+		// cheap ticker rebuilds concurrently, and publishing first would
+		// broadcast torn frames (synthetic rows without PR/CI data) for every
+		// child until the fetch loop catches up.
+		p.refreshChildPRs(gh, graph, nums)
+		p.cacheMu.Lock()
 		p.waveCache[parent] = waveCacheEntry{graph: graph, err: err, attempted: attempted}
 		p.cacheMu.Unlock()
 	}
-	// The child set only becomes known after a wave pass. Fetch the PR state of
-	// freshly discovered children right away so their synthetic rows do not sit
-	// at UNKNOWN until the next gh tick; already-known children were covered by
-	// phase 1 (and will be again next tick).
-	p.refreshIssuePRs(gh, p.uncachedIssueNums(p.cachedChildNums()))
+}
+
+// refreshChildPRs fetches PR state for a parent's not-started children (those
+// outside the recorded set), as part of the wave pass — i.e. at the wave
+// cadence, not the 20s PR tick. CLOSED children that already have a successful
+// cache entry are skipped: their PR set still matters (a merged PR keeps the
+// ghost row green) but can no longer change; a reopen flips child.State on a
+// later wave pass and re-enters the child here.
+func (p *poller) refreshChildPRs(gh GHProvider, graph sessionview.WaveGraph, recorded []int) {
+	rec := make(map[int]bool, len(recorded))
+	for _, n := range recorded {
+		rec[n] = true
+	}
+	var nums []int
+	for _, child := range graph.Children {
+		if child.Number <= 0 || rec[child.Number] {
+			continue
+		}
+		if strings.EqualFold(child.State, "CLOSED") && p.hasFreshPRCache(child.Number) {
+			continue
+		}
+		nums = append(nums, child.Number)
+	}
+	slices.Sort(nums)
+	p.refreshIssuePRs(gh, nums)
+}
+
+// hasFreshPRCache reports whether num has a successful PR cache entry.
+func (p *poller) hasFreshPRCache(num int) bool {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	e, ok := p.cache[num]
+	return ok && e.err == nil
+}
+
+// pruneWaveCache drops wave entries whose parent no longer has state rows.
+func (p *poller) pruneWaveCache(numsByParent map[string][]int) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	for parent := range p.waveCache {
+		if _, ok := numsByParent[parent]; !ok {
+			delete(p.waveCache, parent)
+		}
+	}
 }
 
 // refreshIssuePRs fetches issue/PR state for each num and stores the result
@@ -312,54 +364,6 @@ func (p *poller) refreshIssuePRs(gh GHProvider, nums []int) {
 		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
 		p.cacheMu.Unlock()
 	}
-}
-
-// cachedChildNums returns the distinct positive child issue numbers the wave
-// cache knows across all parents, sorted ascending. These are the synthetic
-// not-started row candidates, so their PR state is refreshed alongside the
-// recorded issues.
-func (p *poller) cachedChildNums() []int {
-	p.cacheMu.Lock()
-	defer p.cacheMu.Unlock()
-	seen := map[int]bool{}
-	var nums []int
-	for _, e := range p.waveCache {
-		for _, child := range e.graph.Children {
-			if child.Number > 0 && !seen[child.Number] {
-				seen[child.Number] = true
-				nums = append(nums, child.Number)
-			}
-		}
-	}
-	slices.Sort(nums)
-	return nums
-}
-
-// uncachedIssueNums filters nums down to those without a PR cache entry yet.
-func (p *poller) uncachedIssueNums(nums []int) []int {
-	p.cacheMu.Lock()
-	defer p.cacheMu.Unlock()
-	var out []int
-	for _, num := range nums {
-		if _, ok := p.cache[num]; !ok {
-			out = append(out, num)
-		}
-	}
-	return out
-}
-
-// unionNums merges two ascending distinct slices into one, distinct and sorted.
-func unionNums(a, b []int) []int {
-	seen := make(map[int]bool, len(a)+len(b))
-	out := make([]int, 0, len(a)+len(b))
-	for _, n := range slices.Concat(a, b) {
-		if !seen[n] {
-			seen[n] = true
-			out = append(out, n)
-		}
-	}
-	slices.Sort(out)
-	return out
 }
 
 // mergeDegradedWaveGraph overlays a degraded wave fetch onto the previous
@@ -484,17 +488,6 @@ func distinctIssueNums(store state.Store) []int {
 	return nums
 }
 
-// normalizeParent canonicalizes numeric parents via an Atoi round-trip so
-// "0100" and "100" share one wave-cache entry, mirroring how state's
-// parentMatches treats them as the same parent. Non-numeric parents
-// (@manual, Project URLs) pass through unchanged.
-func normalizeParent(parent string) string {
-	if n, err := strconv.Atoi(parent); err == nil {
-		return strconv.Itoa(n)
-	}
-	return parent
-}
-
 // recordedNumsByParent groups each distinct normalized parent in state to the
 // sorted positive issue numbers recorded under it. Synthetic pane numbers
 // (IssueNum <= 0, e.g. @manual rows) stay out — FetchWaveGraph skips them
@@ -503,7 +496,7 @@ func normalizeParent(parent string) string {
 func recordedNumsByParent(store state.Store) map[string][]int {
 	grouped := map[string]map[int]bool{}
 	for _, p := range store.Panes {
-		key := normalizeParent(p.Parent)
+		key := sessionview.NormalizeParent(p.Parent)
 		if grouped[key] == nil {
 			grouped[key] = map[int]bool{}
 		}

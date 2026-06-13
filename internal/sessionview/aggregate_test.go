@@ -676,13 +676,48 @@ func TestBuildAppendsSyntheticPanesForUnrecordedChildren(t *testing.T) {
 	if blocked.TmuxState != "deferred" || !blocked.Blocked || len(blocked.Blockers) != 1 {
 		t.Fatalf("blocked synthetic pane = %+v", blocked)
 	}
-	// rollup: synthetic 行も Total/Merged/Pending/Blocked に入り、NotStarted を数える
+	// rollup: OPEN/不明の synthetic 行は Total/Pending/Blocked と NotStarted に
+	// 入る。merged PR 持ちで CLOSED の #103 は Total/Merged に入る(pane なしで
+	// 完了した作業)が NotStarted には数えない。
 	r := snap.Sessions[0].Rollup
-	if r.Total != 4 || r.NotStarted != 3 || r.Merged != 1 || r.Pending != 3 || r.Blocked != 1 {
+	if r.Total != 4 || r.NotStarted != 2 || r.Merged != 1 || r.Pending != 3 || r.Blocked != 1 {
 		t.Fatalf("session rollup = %+v", r)
 	}
-	if snap.Rollup.NotStarted != 3 || snap.Rollup.Total != 4 {
+	if snap.Rollup.NotStarted != 2 || snap.Rollup.Total != 4 {
 		t.Fatalf("snapshot rollup = %+v", snap.Rollup)
+	}
+}
+
+// CLOSED のまま起動されなかった synthetic 子が rollup から除外され、全 merge
+// 済みセッションの AllMerged を妨げないことを単体で固定する。
+func TestBuildClosedSyntheticChildDoesNotBlockAllMerged(t *testing.T) {
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, Title: "merged", State: "CLOSED"},
+			{Number: 103, Title: "not planned", State: "CLOSED"},
+		},
+		Info: map[int]WaveInfo{},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			if num == 101 {
+				return "CLOSED", mergedPR(501), nil
+			}
+			return "CLOSED", nil, nil // PR なしで閉じられた子
+		},
+		Waves: wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 || panes[1].TmuxState != "closed" {
+		t.Fatalf("closed synthetic row must still render: %+v", panes)
+	}
+	r := snap.Sessions[0].Rollup
+	if r.Total != 1 || !r.AllMerged || r.Pending != 0 || r.NotStarted != 0 {
+		t.Fatalf("closed synthetic child must not block AllMerged: %+v", r)
 	}
 }
 
@@ -762,8 +797,8 @@ func TestSyntheticTmuxStateMatchesTUIStrings(t *testing.T) {
 		{"", false, "unknown"},
 	}
 	for _, tc := range cases {
-		if got := syntheticTmuxState(tc.issueState, tc.blocked); got != tc.want {
-			t.Errorf("syntheticTmuxState(%q, %v) = %q, want %q", tc.issueState, tc.blocked, got, tc.want)
+		if got := SyntheticTmuxState(tc.issueState, tc.blocked); got != tc.want {
+			t.Errorf("SyntheticTmuxState(%q, %v) = %q, want %q", tc.issueState, tc.blocked, got, tc.want)
 		}
 	}
 }

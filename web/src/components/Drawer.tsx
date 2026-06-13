@@ -4,7 +4,7 @@ import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
-import { blockerLabel, fmtWave } from "../lib/pane";
+import { blockerLabel, fmtWave, notStartedNote } from "../lib/pane";
 import type { PaneView } from "../lib/types";
 import { AgentStateTag, DirtyTag, GhLink, IssueStateTag, PrPill, Tag } from "./ui";
 
@@ -30,13 +30,6 @@ function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
 
 /* 未開始(synthetic)行の状態説明。tmuxState は Go 側 syntheticTmuxState の
  * closed / deferred / queued / unknown と 1:1。 */
-const NOT_STARTED_NOTES: Record<string, string> = {
-  queued: "未開始 — この子 issue の pane はまだ起動していません。",
-  deferred: "未開始 — open な blocker があるため待機中です。",
-  closed: "pane が起動しないまま issue は close されました。",
-  unknown: "未開始 — issue 状態を取得できていません。",
-};
-
 function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
   return (
     <section className="d-sec">
@@ -183,7 +176,7 @@ export function Drawer({
               </dd>
               <dt>状態</dt>
               <dd id="d-not-started">
-                {NOT_STARTED_NOTES[pane.tmuxState] ?? NOT_STARTED_NOTES["unknown"]}
+                {notStartedNote(pane.tmuxState)}
               </dd>
             </dl>
           </section>

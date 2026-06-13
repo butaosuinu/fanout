@@ -58,7 +58,7 @@ export interface Rollup {
   live: number;
   running: number;
   blocked: number;
-  notStarted: number; // 未開始子 issue(synthetic 行)数
+  notStarted?: number; // 未開始子 issue(synthetic 行)数。旧サーバーの snapshot は省略
   allMerged: boolean;
 }
 

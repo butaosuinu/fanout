@@ -403,6 +403,64 @@ func TestMergeDegradedWaveGraphUnionsChildren(t *testing.T) {
 	}
 }
 
+// state から消えた親の wave エントリは prune され、その子の PR fetch も止まる。
+func TestRefreshGHPrunesWaveCacheForRemovedParents(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+	gh := &countingGH{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{{Number: 103, Title: "child", State: "OPEN"}},
+			Info:     map[int]sessionview.WaveInfo{},
+		},
+	}}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = 0 // 常に wave パスを走らせる
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls = %d, want 1", gh.calls[103])
+	}
+
+	// 親 100 の state 行が消える(--cleanup 相当)
+	writeState(t, root, `{"schemaVersion":1,"panes":[]}`)
+	p.refreshGH()
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls after cleanup = %d, want 1 (pruned)", gh.calls[103])
+	}
+	p.cacheMu.Lock()
+	_, cached := p.waveCache["100"]
+	p.cacheMu.Unlock()
+	if cached {
+		t.Fatalf("waveCache entry for removed parent must be pruned")
+	}
+}
+
+// CLOSED で PR キャッシュ済みの子は wave パスでも再 fetch しない(終端状態)。
+func TestRefreshChildPRsSkipsClosedCachedChildren(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+	gh := &countingGH{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{{Number: 103, Title: "closed child", State: "CLOSED"}},
+			Info:     map[int]sessionview.WaveInfo{},
+		},
+	}}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = 0
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls = %d, want 1 (first fetch)", gh.calls[103])
+	}
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls = %d, want 1 (closed+cached skipped)", gh.calls[103])
+	}
+}
+
 func TestRefreshGHFetchesPRsForWaveChildren(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
@@ -428,14 +486,19 @@ func TestRefreshGHFetchesPRsForWaveChildren(t *testing.T) {
 		t.Fatalf("IssuePRs(103) calls after first refresh = %d, want 1 (post-wave fetch)", gh.calls[103])
 	}
 
-	// Once cached, the child joins the phase-1 fetch set on every tick even
-	// while the wave phase stays throttled.
+	// 子の PR fetch は wave cadence に閉じる: wave パスが throttle されている
+	// tick では子を再 fetch しない(20 秒 tick のコストは記録 pane 数に比例
+	// させ、全子 issue 数に比例させない — gh API 予算の防衛線)。
 	p.refreshGH()
-	if gh.calls[103] != 2 {
-		t.Fatalf("IssuePRs(103) calls after second refresh = %d, want 2 (phase-1 union)", gh.calls[103])
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls after throttled refresh = %d, want 1 (wave cadence only)", gh.calls[103])
 	}
 	if gh.waveCalls["100"] != 1 {
 		t.Fatalf("Waves(100) calls = %d, want 1 (throttled)", gh.waveCalls["100"])
+	}
+	// 記録 pane の方は毎 tick fetch される
+	if gh.calls[101] != 2 {
+		t.Fatalf("IssuePRs(101) calls = %d, want 2 (every tick)", gh.calls[101])
 	}
 
 	// The built snapshot renders the child as a synthetic not-started row with
@@ -449,8 +512,10 @@ func TestRefreshGHFetchesPRsForWaveChildren(t *testing.T) {
 	if queued.IssueNum != 103 || !queued.NotStarted || !queued.HasMergedPR {
 		t.Fatalf("synthetic pane = %+v", queued)
 	}
-	if snap.Rollup.NotStarted != 1 || snap.Rollup.Total != 2 {
-		t.Fatalf("rollup = %+v, want notStarted=1 total=2", snap.Rollup)
+	// countingGH は全 issue に CLOSED+merged を返すので、synthetic 子は
+	// 「pane なしで完了」として Total/Merged に入り NotStarted には数えない
+	if snap.Rollup.NotStarted != 0 || snap.Rollup.Total != 2 || !snap.Rollup.AllMerged {
+		t.Fatalf("rollup = %+v, want total=2 allMerged", snap.Rollup)
 	}
 }
 

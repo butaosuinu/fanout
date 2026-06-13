@@ -70,3 +70,15 @@ export function findPane(snap: Snapshot | null, key: string | null): PaneView | 
   }
   return null;
 }
+
+/* 未開始(synthetic)行の Drawer 状態説明文。キーは tmuxState。 */
+const NOT_STARTED_NOTES: Record<string, string> = {
+  queued: "未開始 — この子 issue の pane はまだ起動していません。",
+  deferred: "未開始 — open な blocker があるため待機中です。",
+  closed: "pane が起動しないまま issue は close されました。",
+  unknown: "未開始 — issue 状態を取得できていません。",
+};
+
+export function notStartedNote(tmuxState: string): string {
+  return NOT_STARTED_NOTES[tmuxState] ?? NOT_STARTED_NOTES["unknown"]!;
+}

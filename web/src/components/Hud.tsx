@@ -33,7 +33,7 @@ export function Hud({ rollup }: { rollup: Rollup | null | undefined }) {
           <b id="s-running">{r.running ?? 0}</b>
         </div>
         <div className="stat">
-          <label>queued</label>
+          <label>not started</label>
           {/* 未開始(synthetic)行数。旧 snapshot にはフィールドが無いので ?? 0 */}
           <b id="s-queued">{r.notStarted ?? 0}</b>
         </div>
