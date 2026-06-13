@@ -21,11 +21,21 @@ func Path(projectRoot string, num int) string {
 	return fmt.Sprintf("/tmp/fanout-%s-%d.md", repo, num)
 }
 
-// TaskPath returns /tmp/fanout-<repo_slug>-<planSlug>-<taskID>.md.
-// The single-hyphen shape is part of the plan-mode briefing contract.
+// TaskPath returns /tmp/fanout-<repo_slug>-<escaped-planSlug>-<escaped-taskID>.md.
 func TaskPath(projectRoot, planSlug, taskID string) string {
 	repo := filepath.Base(projectRoot)
-	return fmt.Sprintf("/tmp/fanout-%s-%s-%s.md", repo, planSlug, taskID)
+	return fmt.Sprintf("/tmp/fanout-%s-%s-%s.md", repo, taskPathComponent(planSlug), taskPathComponent(taskID))
+}
+
+var taskPathComponentReplacer = strings.NewReplacer(
+	"%", "%25",
+	"-", "%2D",
+	"/", "%2F",
+	"\\", "%5C",
+)
+
+func taskPathComponent(value string) string {
+	return taskPathComponentReplacer.Replace(value)
 }
 
 // TeamSibling is one roster entry of a --team run: a child pane created

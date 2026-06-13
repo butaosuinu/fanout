@@ -8,12 +8,16 @@ import (
 )
 
 func TestTaskPathUsesPlanTaskNamespace(t *testing.T) {
-	got := TaskPath("/repos/project_root", "plan-alpha", "task-001")
-	want := "/tmp/fanout-project_root-plan-alpha-task-001.md"
+	root := "/repos/project_root"
+	got := TaskPath(root, "plan-alpha", "task-001")
+	want := "/tmp/fanout-project_root-plan%2Dalpha-task%2D001.md"
 	if got != want {
 		t.Fatalf("TaskPath() = %q, want %q", got, want)
 	}
-	if got == Path("/repos/project_root", 214) {
+	if got == TaskPath(root, "plan", "alpha-task-001") {
+		t.Fatalf("TaskPath() collides across plan/task boundary: %q", got)
+	}
+	if got == Path(root, 214) {
 		t.Fatalf("TaskPath() collides with issue Path(): %q", got)
 	}
 }
