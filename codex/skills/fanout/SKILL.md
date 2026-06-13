@@ -23,12 +23,14 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
+fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see Notes)
 fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
@@ -182,8 +184,8 @@ dry-run, generated pane names, or confirmation.
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
-   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, and
-   `--no-pr-visualization`.
+   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`,
+   `--no-pr-visualization`, and `--team`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -430,3 +432,31 @@ the likely next action:
   command runs through a POSIX wrapper and returns to the user's shell after the
   agent exits. `--session` is the explicit escape hatch for targeting a
   different session.
+- `--team` (forwarded like any other flag, default off) opts the run into
+  sibling-pane peer messaging: it adds a "Coordinating with your sibling panes"
+  section to each child's standard briefing and seeds the created panes into a
+  per-parent peer registry (best-effort — registry failures never fail the
+  fan-out). Codex Plan Mode children (`--codex-plan-mode`) get the minimal Plan
+  briefing, so the section is skipped for them — they are still seeded and can
+  run `fanout msg`. Suggest it when children touch shared files or have ordering
+  dependencies.
+
+## Sibling coordination (--team / fanout msg)
+
+Fanned panes are separate agent sessions that coordinate through a per-parent
+SQLite message bus. This is unrelated to Claude Code Agent Teams (Claude-only,
+single-session) and works the same for `codex` and `claude` panes.
+
+- Enable with `--team` on the fan-out. Inside a fanned pane, `fanout msg`
+  auto-detects which child you are (from the tmux pane + `.fanout/state.json`)
+  and which parent you belong to.
+- Verbs: `peers` (live roster), `inbox [--all] [--mark-read]` (unread 1:1 +
+  board), `board [--all]`, `send --to <N> [--kind K] "<body>"`,
+  `post [--kind K] "<body>"`, `mark-read [--id N ...|--all]`, `register`.
+- Common options: `--json`, `--self <N>` / `--parent <ref>` (override
+  detection), `--dry-run` (write verbs only; prints `# would ...`, not
+  combinable with `--json`). `kind` is a free-form label (default `note`).
+  Exit codes: `0` ok, `2` bad invocation, `4` SQLite backend failure.
+- Coordination is pull-based — messages persist and siblings read them at their
+  own checkpoints; there is no nudge. The DB is a plaintext SQLite file under
+  `/tmp` (`0600`, owner-only): never put secrets in messages.

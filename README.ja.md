@@ -238,6 +238,9 @@ cd web && pnpm install && pnpm dev                   # ターミナル 2 → htt
 - **Project モード時のみ**: Project items を取得する GraphQL クエリのため、
   `gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project`
   で付与してください。issue モード（`fanout <N>`）では不要です。
+- **`--team` / `fanout msg`** は per-parent の SQLite データベースを使いますが、
+  ドライバは pure-Go で binary に同梱されています。外部 `sqlite3` の追加
+  インストールは**不要**です。
 - 起動レーンを選んでください:
   - TUI モード（引数なしの `fanout`）は素のシェルから起動できます。現在の
     リポジトリ用の fanout 管理 tmux session を作成または attach してから
@@ -272,12 +275,14 @@ fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # 状態を読み、任意で dashboard を投稿
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
 fanout <parent-issue> --close <NUM> # 記録済み子 worktree/pane を後始末
 fanout <parent-issue> --cleanup     # merge/close 済みの記録済み子を後始末
 fanout dashboard --web              # 読み取り専用の localhost Web ダッシュボード（Session 表示）
+fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging（下記参照）
 fanout --check-update               # この binary と最新 release を比較
 fanout update                       # install.sh 経由で binary + integrations を置換
 fanout --help
@@ -401,6 +406,77 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   tmux 外でも生存不明として配信を継続します。
 
 全フラグは `fanout dashboard --help` を参照してください。
+
+### 兄弟協調（SQLite による peer messaging）
+
+親 issue を複数ペインに fan-out すると、各ペインは互いを認識できない独立した
+agent セッションになります。`--team` と `fanout msg` サブコマンドは、それらに
+軽量な opt-in の協調手段を与えます ——「共有スキーマを今から触る」「自分の branch
+は `feat/x`、それを base に rebase して」「ブロック中、#42 終わった人いる?」と
+いったやり取りを、人間がペイン間を往復して伝える必要なく行えます。
+
+**なぜ存在するのか（Agent Teams との違い）。** Claude Code の Agent Teams は
+*1 セッション内のチームメイト*を協調させます。fanout のペインは*別プロセス*
+（各々が独自の git worktree で動く `claude`/`codex` セッション）なので、
+セッション跨ぎのチャネルが必要です。peer messaging がそのチャネルで、`claude`
+ペインでも `codex` ペインでも同じく機能し、共有のモデルコンテキストを必要と
+しません。
+
+**何なのか。** parent ごとの SQLite メッセージバスです。同じ親の兄弟は全員が
+同じデータベースに到達し、そこには 2 種類のトラフィックが流れます: 全兄弟への
+ブロードキャストである共有**ボード**と、1 つの issue 番号宛の **1:1** メッセージ
+です。各メッセージは自由記述の `kind` ラベルを持ちます（既定 `note`。固定語彙は
+無く、`blocker` / `heads-up` などチームで有用なものを使えます）。データベースは
+`/tmp/fanout-<repo>-<parent>.db` に置かれます（`FANOUT_DB_PATH` で上書き可）。
+
+**有効化（`--team`）。** fan-out 実行に `--team` を足します:
+
+```
+fanout 123 --team --agent claude
+```
+
+これは 2 つのことを行い、いずれも best-effort です（レジストリの失敗が fan-out
+を止めることはありません）: 「Coordinating with your sibling panes」節 ——
+起動時点の roster と共有 DB パス、いくつかのチェックポイント —— を各子の通常
+briefing に付け、バッチ起動後に作成済みペインを親の peer レジストリに seed します。
+
+> [!NOTE]
+> Codex Plan Mode の子（`--agent codex --codex-plan-mode`）は最小限の
+> Plan Mode briefing を受け取るため、協調節は**付きません**。レジストリへの
+> seed は行われ `fanout msg` も通常どおり使えます —— 注入される briefing 節
+> だけがスキップされます。
+
+**使い方（`fanout msg`）。** fanout したペイン内なら、`fanout msg` は自分が
+どの子か（tmux pane と `.fanout/state.json` から）・どの親に属すかを自動検出
+します:
+
+```
+fanout msg peers                      # live な兄弟 roster
+fanout msg inbox [--mark-read]        # 未読の 1:1 メッセージ + 未読のボード投稿
+fanout msg board [--all]              # 共有ボード
+fanout msg send --to 42 "auth.go を触る前に feat/login を base に rebase して"
+fanout msg post --kind heads-up "go.mod を編集中 — lockfile の編集は控えて"
+fanout msg mark-read --all            # inbox を drain しボードカーソルを進める
+fanout msg register                   # このペインを roster に（再）登録
+```
+
+verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`
+（ペイン検出を上書き）、`--dry-run`（write verb のみ —— `# would ...` の書き込み
+内容を表示し何も触らない。`--json` とは併用不可）。exit code: `0` 成功、`2` 不正な
+呼び出し、`4` SQLite バックエンド失敗。
+
+協調は **pull ベース**です: メッセージは DB に永続し、兄弟は自分のチェックポイント
+で読みます（`fanout msg` は忙しいペインに割り込みません）。メッセージは短く事実
+ベースに保ってください。
+
+> [!WARNING]
+> データベースは `/tmp` 配下の**平文** SQLite ファイルです。fanout は `0600`
+> （自分のみ）で作成し、group/world 可読や別ユーザ所有のものは開かず拒否します
+> が、`/tmp` は共有スクラッチ領域です。**秘密情報・トークン・認証情報をメッセージ
+> に載せないでください。** DB と briefing roster は使い捨てです。終わったら
+> `/tmp/fanout-<repo>-<parent>.db*` を削除してください。
+
+全サーフェスは `fanout msg --help` を参照してください。
 
 ### `--check-update`
 
@@ -571,6 +647,14 @@ fanout 123 --no-auto-pr
 
 # この shell では Agent Teams ヒントを無効化
 export FANOUT_AGENT_TEAMS_HINT=0
+
+# この run で兄弟ペイン間の peer messaging を有効化（briefing roster + peer
+# レジストリを per-parent SQLite バス上に）。その後 fanout したペイン内で:
+fanout 123 --team --agent claude
+fanout msg peers                       # この fan-out に他に誰がいるか
+fanout msg post --kind heads-up "go.mod を編集中 — lockfile の編集は控えて"
+fanout msg send --to 4 "auth.go を触る前に feat/login を base に rebase して"
+fanout msg inbox --mark-read           # 自分宛のメッセージを読み drain する
 
 # .fanout/state.json に記録された子 issue と closed-by PR/review/CI 状態を読む。
 # 既定は automation 向け JSON、table は PR/CI/差分確認、任意で親 dashboard コメント。

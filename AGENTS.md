@@ -64,7 +64,8 @@ The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
 orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
 `internal/` holds `agent`,
 `cliflags`, `ghissue`, `runtime`, `worktree`, `tmuxrun`, `state`, `naming`,
-`blockers`, `displayname`, `briefing`, plus `atomicfs`/`log`/`tty`/`exitcode`.
+`blockers`, `displayname`, `briefing`, `team`, `msgstore`, plus
+`atomicfs`/`log`/`tty`/`exitcode`.
 
 - Runtime discovery (`internal/runtime`) resolves the git repo root with
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux for
@@ -97,6 +98,17 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
 - `--status`, `--close`, `--merge`, and `--cleanup` operate from
   `.fanout/state.json`; set `FANOUT_STATE_PATH` to point at a specific state
   file outside the repository checkout.
+- `--team` (`cmd/fanout/team.go`) and the `fanout msg` subcommand
+  (`cmd/fanout/msg.go`) are sibling-pane peer messaging over a per-parent
+  SQLite bus. `internal/team` owns the DB (`modernc.org/sqlite`, pure-Go — no
+  external `sqlite3` binary; file `0600`/owner-only) scoped to
+  `/tmp/fanout-<repo>-<parent>.db` (`FANOUT_DB_PATH` overrides), plus pane
+  identity detection from `.fanout/state.json` (the `[fanout #N of #P]` prompt
+  prefix is a fallback) and the peer roster; `internal/msgstore` is the
+  send/post/inbox/board/mark-read query layer. The briefing coordination
+  section is shared by `claude` and `codex` panes — distinct from Claude-only
+  Agent Teams. Messaging is pull-based; there is no idle nudge in the merged
+  code (that is the separate, unmerged #72).
 
 ## Be Careful
 

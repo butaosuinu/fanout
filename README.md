@@ -247,6 +247,9 @@ cd web && pnpm install && pnpm dev                   # terminal 2 → http://loc
   the GraphQL query that lists Project items can succeed. Add it with
   `gh auth refresh -s read:project`. Issue-mode (`fanout <N>`) does not
   need this scope.
+- **`--team` / `fanout msg`** use a per-parent SQLite database, but the driver
+  is pure-Go and compiled into the binary — there is **no** external `sqlite3`
+  install to add.
 - Choose the launch lane:
   - TUI mode (`fanout` with no arguments) can be invoked from a plain shell. It
     creates or attaches a fanout-managed tmux session for the current
@@ -283,12 +286,14 @@ fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
+fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see below)
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -474,6 +479,79 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 Run `fanout dashboard --help` for the full flag list.
 
+### Sibling coordination (peer messaging over SQLite)
+
+When you fan a parent issue out into several panes, those panes are independent
+agent sessions that cannot see each other. `--team` plus the `fanout msg`
+subcommand give them a lightweight, opt-in way to coordinate — "I'm about to
+touch the shared schema", "my branch is `feat/x`, rebase off it", "blocked,
+anyone done with #42?" — without a human relaying messages between panes.
+
+**Why this exists (and how it differs from Agent Teams).** Claude Code's Agent
+Teams coordinates *teammates inside one session*. fanout's panes are *separate
+processes* — each its own `claude`/`codex` session in its own git worktree — so
+they need a cross-session channel. peer messaging is that channel: it works the
+same for `claude` and `codex` panes, and needs no shared model context.
+
+**What it is.** A per-parent SQLite message bus. Every sibling of the same
+parent reaches the same database, which carries two traffic types: a shared
+**board** (broadcast to all siblings) and **1:1** messages (addressed to one
+issue number). Each message has a free-form `kind` label (default `note`; no
+fixed vocabulary — use whatever your team finds useful, e.g. `blocker`,
+`heads-up`). The database lives at `/tmp/fanout-<repo>-<parent>.db` (override
+with `FANOUT_DB_PATH`).
+
+**Turning it on (`--team`).** Add `--team` to a fan-out run:
+
+```
+fanout 123 --team --agent claude
+```
+
+This does two things, both best-effort (a registry failure never fails the
+fan-out): it appends a "Coordinating with your sibling panes" section — a
+launch-time roster plus the shared DB path and a few checkpoints — to each
+child's standard briefing, and after the batch launches it seeds the created
+panes into the parent's peer registry.
+
+> [!NOTE]
+> Codex Plan Mode children (`--agent codex --codex-plan-mode`) receive the
+> minimal Plan-Mode briefing instead, so the coordination section is **not**
+> added to them. They are still seeded into the registry and can use
+> `fanout msg` normally — only the injected briefing section is skipped.
+
+**Using it (`fanout msg`).** Inside any fanned pane, `fanout msg` auto-detects
+which child you are (from the tmux pane and `.fanout/state.json`) and which
+parent you belong to:
+
+```
+fanout msg peers                      # live sibling roster
+fanout msg inbox [--mark-read]        # unread 1:1 messages + unread board posts
+fanout msg board [--all]              # the shared board
+fanout msg send --to 42 "rebase off feat/login before you touch auth.go"
+fanout msg post --kind heads-up "editing go.mod — hold lockfile edits"
+fanout msg mark-read --all            # drain your inbox + advance the board cursor
+fanout msg register                   # (re-)register this pane in the roster
+```
+
+Common options across verbs: `--json` (machine-readable output), `--self <N>`
+and `--parent <ref>` (override pane detection), and `--dry-run` (write verbs
+only — prints the `# would ...` writes and touches nothing; not combinable with
+`--json`). Exit codes: `0` success, `2` invalid invocation, `4` SQLite backend
+failure.
+
+Coordination is **pull-based**: messages persist in the DB and a sibling reads
+them at its own checkpoints (`fanout msg` does not interrupt a busy pane). Keep
+messages short and factual.
+
+> [!WARNING]
+> The database is a **plaintext** SQLite file under `/tmp`. fanout creates it
+> `0600` (owner-only) and refuses to open one that is group/world-readable or
+> owned by another user, but `/tmp` is shared scratch space — **do not put
+> secrets, tokens, or credentials in messages.** The DB and its briefing
+> roster are throwaway; delete `/tmp/fanout-<repo>-<parent>.db*` when done.
+
+Run `fanout msg --help` for the full surface.
+
 ### `--check-update`
 
 `fanout --check-update` is read-only. It fetches the latest release tag from
@@ -654,6 +732,14 @@ fanout 123 --no-auto-pr
 
 # Disable the Agent Teams hint globally for this shell
 export FANOUT_AGENT_TEAMS_HINT=0
+
+# Enable sibling-pane peer messaging for this run (briefing roster + peer
+# registry over a per-parent SQLite bus). Then, from inside any fanned pane:
+fanout 123 --team --agent claude
+fanout msg peers                       # who else is in this fan-out
+fanout msg post --kind heads-up "editing go.mod — hold lockfile edits"
+fanout msg send --to 4 "rebase off feat/login before touching auth.go"
+fanout msg inbox --mark-read           # read + drain messages addressed to me
 
 # Status from .fanout/state.json: default JSON for automation, optional table
 # for PR state / CI / diff scans, optional parent dashboard comment.
