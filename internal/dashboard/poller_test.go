@@ -437,6 +437,31 @@ func TestRefreshGHPrunesWaveCacheForRemovedParents(t *testing.T) {
 	}
 }
 
+// OPEN 時代の古いキャッシュが残っていても、CLOSED へ遷移した子は再 fetch
+// される(キャッシュ側も CLOSED のときだけスキップ)。
+func TestRefreshChildPRsRefetchesOnOpenToClosedTransition(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"}
+	]}`)
+	gh := &countingGH{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{{Number: 103, Title: "closing child", State: "CLOSED"}},
+			Info:     map[int]sessionview.WaveInfo{},
+		},
+	}}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.waveInterval = 0
+	// OPEN 時代のキャッシュを偽装(graph は既に CLOSED を報告している)
+	p.cacheMu.Lock()
+	p.cache[103] = ghCacheEntry{state: "OPEN"}
+	p.cacheMu.Unlock()
+	p.refreshGH()
+	if gh.calls[103] != 1 {
+		t.Fatalf("IssuePRs(103) calls = %d, want 1 (stale OPEN cache must refetch)", gh.calls[103])
+	}
+}
+
 // CLOSED で PR キャッシュ済みの子は wave パスでも再 fetch しない(終端状態)。
 func TestRefreshChildPRsSkipsClosedCachedChildren(t *testing.T) {
 	root := t.TempDir()

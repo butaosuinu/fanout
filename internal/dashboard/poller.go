@@ -313,10 +313,11 @@ func (p *poller) refreshGH() {
 
 // refreshChildPRs fetches PR state for a parent's not-started children (those
 // outside the recorded set), as part of the wave pass — i.e. at the wave
-// cadence, not the 20s PR tick. CLOSED children that already have a successful
-// cache entry are skipped: their PR set still matters (a merged PR keeps the
-// ghost row green) but can no longer change; a reopen flips child.State on a
-// later wave pass and re-enters the child here.
+// cadence, not the 20s PR tick. A child is skipped only when BOTH the graph
+// and the PR cache agree it is CLOSED: that state is terminal (the PR set can
+// no longer change), and Build prefers the cached state, so skipping on the
+// graph state alone would freeze a stale OPEN cache entry forever after an
+// OPEN→CLOSED transition. A reopen flips child.State and re-enters here.
 func (p *poller) refreshChildPRs(gh GHProvider, graph sessionview.WaveGraph, recorded []int) {
 	rec := make(map[int]bool, len(recorded))
 	for _, n := range recorded {
@@ -327,7 +328,7 @@ func (p *poller) refreshChildPRs(gh GHProvider, graph sessionview.WaveGraph, rec
 		if child.Number <= 0 || rec[child.Number] {
 			continue
 		}
-		if strings.EqualFold(child.State, "CLOSED") && p.hasFreshPRCache(child.Number) {
+		if strings.EqualFold(child.State, "CLOSED") && p.cachedPRStateClosed(child.Number) {
 			continue
 		}
 		nums = append(nums, child.Number)
@@ -336,12 +337,13 @@ func (p *poller) refreshChildPRs(gh GHProvider, graph sessionview.WaveGraph, rec
 	p.refreshIssuePRs(gh, nums)
 }
 
-// hasFreshPRCache reports whether num has a successful PR cache entry.
-func (p *poller) hasFreshPRCache(num int) bool {
+// cachedPRStateClosed reports whether num has a successful PR cache entry that
+// already recorded the issue as CLOSED.
+func (p *poller) cachedPRStateClosed(num int) bool {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	e, ok := p.cache[num]
-	return ok && e.err == nil
+	return ok && e.err == nil && strings.EqualFold(e.state, "CLOSED")
 }
 
 // pruneWaveCache drops wave entries whose parent no longer has state rows.
