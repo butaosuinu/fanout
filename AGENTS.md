@@ -57,7 +57,8 @@ the README before changing CLI behavior.
 - The dashboard web UI (`web/`) lints with `make lint-web` (oxlint + oxfmt
   `--check` + `tsc --noEmit`; configs `web/.oxlintrc.json` /
   `web/.oxfmtrc.json`) and formats with `make fmt-web` (oxfmt, printWidth
-  100). Keep `make lint` Node-free; web checks stay in `lint-web`.
+  100; scope is `web/src` + `vite.config.ts` — CSS and web/ root JSON are
+  excluded). Keep `make lint` Node-free; web checks stay in `lint-web`.
 - Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone
   so bulk-formatting commits stay out of `git blame`.
 

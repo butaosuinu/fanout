@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "oxlint",
+    "lint": "oxlint --max-warnings=0",
     "lint:fix": "oxlint --fix",
     "fmt": "oxfmt src vite.config.ts",
     "fmt:check": "oxfmt --check src vite.config.ts",

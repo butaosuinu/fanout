@@ -11,15 +11,25 @@
     "builtin": true
   },
   "rules": {
-    // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (filter.ts 等) を保護する。
-    "typescript/no-non-null-assertion": "off",
     // automatic JSX runtime (tsconfig jsx: "react-jsx") なので React の import は不要。
     "react/react-in-jsx-scope": "off",
     // 既存コードはスプレッドコピー後に sort しており非破壊。toSorted は lib ES2022 に無い。
     "unicorn/no-array-sort": "off",
-    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }]
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    // ^_ プレフィックスが unused-vars の公認イディオムなので、underscore を
+    // 咎める rule とは両立しない(suspicious は --max-warnings=0 で CI を
+    // 落とすため、矛盾警告を残せない)。
+    "eslint/no-underscore-dangle": "off"
   },
   "overrides": [
+    {
+      // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (filter.ts / sort.ts
+      // 等の正規表現・境界チェック直後) は lib / test に集中している。
+      // components / hooks では `!` は tsc も黙らせる本物の危険なので rule を
+      // 生かしたままにする。
+      "files": ["src/lib/**", "src/test/**"],
+      "rules": { "typescript/no-non-null-assertion": "off" }
+    },
     {
       "files": ["src/test/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
       "plugins": ["vitest"],

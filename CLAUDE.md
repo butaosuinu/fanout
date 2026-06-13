@@ -18,7 +18,7 @@ pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) +
 shellcheck of the test shims (Node-free on purpose; the web lint is
 `make lint-web` = oxlint + oxfmt `--check` + tsc, configs `web/.oxlintrc.json`
 / `web/.oxfmtrc.json`). `make fmt` formats Go (gofumpt/goimports),
-`make fmt-web` formats `web/` (oxfmt, printWidth 100), `make fix` runs
+`make fmt-web` formats `web/src` + `vite.config.ts` (oxfmt, printWidth 100; CSS と web/ 直下の JSON は対象外), `make fix` runs
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
 
