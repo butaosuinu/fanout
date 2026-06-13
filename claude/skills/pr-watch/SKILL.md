@@ -164,23 +164,30 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 未対応のレビュー指摘を集めて、コードで対処する。対象は**インラインスレッドだけではない** — 次の 2 系統を両方拾う:
 
 1. 取得:
-   - **サマリ／トップレベルの requested changes**: `gh pr view "$pr" --json reviews,comments,latestReviews,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision=CHANGES_REQUESTED` なのにインラインスレッドが 0、というケースがあるので、`latestReviews`/`reviews` の `state=CHANGES_REQUESTED` の本文や、対応を要求する PR コメント本文も**対処すべきレビュー作業として扱う**（これを見ないと「直す対象が無い」と誤判断して永遠に idle になる）。
+   - **サマリ／トップレベルの requested changes**: `gh pr view "$pr" --json latestReviews,comments,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision=CHANGES_REQUESTED` なのにインラインスレッドが 0、というケースがあるので、`latestReviews` の `state=CHANGES_REQUESTED` の本文や、対応を要求する PR コメント本文も**対処すべきレビュー作業として扱う**（これを見ないと「直す対象が無い」と誤判断して永遠に idle になる）。**判断には `latestReviews`（レビュアーごとの現在状態。承認・dismiss 済みは反映される）を使い、歴史的な `reviews` 全件は使わない** — 後で approve / dismiss された古い `CHANGES_REQUESTED` を蒸し返して対処対象にしてしまうため。
    - **未解決のインラインスレッド**（どの指摘がまだ open か）は GraphQL で `isResolved` を見る:
 
      ```bash
-     gh api graphql -f query='
-       query($owner:String!,$repo:String!,$num:Int!){
+     gh api graphql --paginate -f query='
+       query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
          repository(owner:$owner,name:$repo){
            pullRequest(number:$num){
-             reviewThreads(first:100){
+             reviewThreads(first:100, after:$endCursor){
+               pageInfo{ hasNextPage endCursor }
                nodes{ isResolved isOutdated path
                  comments(first:20){ nodes{ databaseId author{login} body } } } } } } }' \
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
 
+     **必ず全ページを辿る**（`--paginate` + `pageInfo.endCursor`）。`first:100` の 1 ページだけ見ると、スレッドが 100 を超える PR で後ろのページの未解決スレッドを取りこぼし、B が「未解決 0」と誤判定して完了してしまう。
+
      各スレッドについて **先頭（top-level）コメントの `databaseId`**（= `comments.nodes[0].databaseId`）を控えておく。返信エンドポイント（E-4）はこの top-level ID しか受け付けないため。
 
-2. `isResolved=false` のスレッド **および 1 で拾ったサマリ／トップレベルの requested-change 本文**を対象に、指摘内容をコードで対処する。インラインスレッドが 0 でも `reviewDecision=CHANGES_REQUESTED` が残っているなら、レビュー本文側に対処対象があるとみなして拾う。設計判断・仕様確認を伴う指摘（「この方針で良いか」「ここは別実装にすべきでは」等、機械的に直せないもの）は無理に実装せず、その旨を整理してユーザーにエスカレーションする。
+2. `isResolved=false` のスレッド **および 1 で拾ったサマリ／トップレベルの requested-change 本文**を対象に、指摘内容をコードで対処する。インラインスレッドが 0 でも `reviewDecision=CHANGES_REQUESTED` が残っているなら、レビュー本文側に対処対象があるとみなして拾う。
+
+   **ただし「自分（watcher）が既に対応・返信済み」のスレッドは再処理しない**。resolve はレビュアーに委ねる方針（E-5）なので、対応済みスレッドも次 pass まで `isResolved=false` のまま見える。スレッドの**最新コメントが自分の返信**で、それ以降にレビュアーの新規コメントが無いなら「対応済み・レビュアー待ち」とみなして skip する（スレッドごとに「自分が最後に返信した commit / 時刻」を記憶し、レビュアーが新たに反応＝新規コメント追加 or resolve するまで触らない）。これをやらないと同じ修正・返信を毎 pass 重複させ、oscillation に陥る。
+
+   設計判断・仕様確認を伴う指摘（「この方針で良いか」「ここは別実装にすべきでは」等、機械的に直せないもの）は無理に実装せず、その旨を整理してユーザーにエスカレーションする。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（C/D と同じく push 先は解決済み `<head-remote>` の head ref に明示ピン。素の `git push` は使わない）。
 4. **fix を push してから**返信する（順序が逆だと「直した」と言ったのに反映されていない状態を作る）。返信は対応コミットを参照して簡潔に:
    - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `comments.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
@@ -232,7 +239,7 @@ C/D/E のどれも該当しなければ、この pass は「対処対象なし�
 ## 安全ガードレール
 
 - **全 push は解決済み `<head-remote>` の head ref に明示ピンする**（`git push [--force-with-lease] <head-remote> HEAD:<headRefName>`）。C の rebase 後・D の CI 修正・E のレビュー修正のいずれも対象。refspec 無しの素の push（`push.default` 依存で別ブランチを巻き込みうる）や無印 `--force` は使わない。fork PR では `<head-remote>` が `origin` でない／push 権限が無いことがあるので、解決手順で確認できなければ force-push せずエスカレーション。lease 失敗 = 他者更新ありとみなし、fetch して再評価し、状況をユーザーへ。
-- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**force-push の認可は「`headRefName` の head リポジトリ owner == 今の認証ユーザー（`gh api user -q .login`）」だけで判断する**。`maintainerCanModify=true`（fork PR で「メンテナの編集を許可」）は認可根拠にしない — 履歴 rewrite の許可ではないので、他者 fork に force-push するとガードレール違反になる。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
+- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**force-push の認可は「head リポジトリ owner == 今の認証ユーザー（`gh api user -q .login`）」かつ「PR `author` == 同ユーザー」の両方で判断する**（「push 先 remote の解決と force-push 認可」と同一基準）。owner だけで判断すると、自分が owner の repo に collaborator が作ったブランチを rewrite してしまう。`maintainerCanModify=true`（fork PR で「メンテナの編集を許可」）も認可根拠にしない — 履歴 rewrite の許可ではないので、他者 fork に force-push するとガードレール違反になる。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
 - **衝突を片側採用で機械的に潰さない**。確信が持てる hunk だけ自動解決し、意味的判断が要る箇所は abort してエスカレーション（C-4）。
 - **リポジトリのレビューゲートを尊重する**。`gh pr create` を `.claude/hooks/` 等でゲートしているリポジトリ（この repo の `pre-pr-review-gate.sh` 等）では、この skill は PR を作らないのでゲート対象外だが、push する fix にも品質基準を勝手に下げない。エスケープハッチ（`FANOUT_SKIP_PR_REVIEW` 等）を無断で使わない。
 - **CI を直すために CI 設定（ワークフロー yaml）を緩めて通す、テストを消して通す等の「通すための改竄」をしない**。原因を直すのが目的。設定変更が本当に必要なら理由を添えてユーザーに確認。
