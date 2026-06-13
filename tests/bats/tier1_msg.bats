@@ -184,3 +184,12 @@ msg_env() {
   [ "$status" -eq 4 ]
   [[ "$output" == *"one team DB serves one parent"* ]]
 }
+
+@test "msg ownership claim covers register-only DBs (no message rows): exit 4" {
+  msg_env
+  run_fanout msg register --self 70 --parent 68
+  assert_success
+  run_fanout msg peers --parent 99
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"owned by parent 68"* ]]
+}

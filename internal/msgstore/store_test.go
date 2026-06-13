@@ -255,6 +255,22 @@ func TestNewRejectsForeignParent(t *testing.T) {
 	}
 }
 
+func TestNewOwnershipSurvivesRegisterOnlyDB(t *testing.T) {
+	s := openTestStore(t)
+	// Register a peer but write no message: the messages table alone cannot
+	// reveal the resident parent, so ownership must come from the claim.
+	if _, err := s.Register(Peer{Issue: 70}, testNow); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	if _, err := New(s.db, "99"); err == nil || !strings.Contains(err.Error(), "owned by parent 68") {
+		t.Fatalf("New on a register-only DB for a foreign parent = %v, want ownership rejection", err)
+	}
+	if _, err := New(s.db, "68"); err != nil {
+		t.Fatalf("reopening for the owner: %v", err)
+	}
+}
+
 // Defense in depth: even if a mixed DB exists (constructed here by bypassing
 // New), every messages statement stays parent-scoped so cross-parent reads
 // and mark-read --id (user-supplied ids) cannot touch another team's rows.

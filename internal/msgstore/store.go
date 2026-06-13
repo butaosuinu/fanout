@@ -59,17 +59,33 @@ type Store struct {
 	parent string
 }
 
-// New wraps db scoped to parent. It rejects a DB that already holds another
-// parent's messages: peers and board_cursors are keyed by issue alone in the
-// v1 schema, so sharing one DB file across parents would leak cursors and
-// peer rows across team boundaries even though messages are parent-scoped.
-// Per-parent cursors/peers need a v2 schema migration in internal/team.
+// New wraps db scoped to parent. It enforces the single-parent invariant by
+// persisting ownership: the first parent to open the DB claims it in the
+// msg_db_owner singleton (this store's own bookkeeping table, separate from
+// the internal/team v1 schema), and every later open must present the same
+// parent. Evidence-based checks (inspecting messages rows) are not enough —
+// a register-only DB has peer rows but no message row revealing its parent.
+// peers and board_cursors are keyed by issue alone in the v1 schema, so a
+// shared DB would leak cursors and peer rows across team boundaries; the
+// claim makes that unrepresentable. Per-parent cursors/peers need a v2
+// schema migration in internal/team, at which point this table can go.
 func New(db *sql.DB, parent string) (*Store, error) {
+	owner, err := claimDBOwner(db, parent)
+	if err != nil {
+		return nil, err
+	}
+	if owner != parent {
+		return nil, fmt.Errorf(
+			"team db is owned by parent %s; one team DB serves one parent (use a separate FANOUT_DB_PATH per parent)",
+			owner)
+	}
+	// Defense in depth for DBs whose owner row was removed by hand: foreign
+	// message rows still reveal a conflicting tenant.
 	var other string
-	err := db.QueryRow("SELECT parent FROM messages WHERE parent != ? LIMIT 1", parent).Scan(&other)
+	err = db.QueryRow("SELECT parent FROM messages WHERE parent != ? LIMIT 1", parent).Scan(&other)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// parent is the DB's sole tenant — the v1 single-parent invariant holds.
+		// parent is the DB's sole tenant — the single-parent invariant holds.
 	case err != nil:
 		return nil, fmt.Errorf("check team db parent: %w", err)
 	default:
@@ -78,6 +94,28 @@ func New(db *sql.DB, parent string) (*Store, error) {
 			other)
 	}
 	return &Store{db: db, parent: parent}, nil
+}
+
+// claimDBOwner records parent as the DB's owner when no owner exists yet and
+// returns the owner on record. The CHECK(id = 1) singleton plus the no-op
+// conflict clause make concurrent first opens race-safe: exactly one parent
+// wins the claim and the loser reads the winner's row.
+func claimDBOwner(db *sql.DB, parent string) (string, error) {
+	if _, err := db.Exec(
+		"CREATE TABLE IF NOT EXISTS msg_db_owner (id INTEGER PRIMARY KEY CHECK (id = 1), parent TEXT NOT NULL)",
+	); err != nil {
+		return "", fmt.Errorf("ensure team db owner table: %w", err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO msg_db_owner(id, parent) VALUES (1, ?) ON CONFLICT(id) DO NOTHING", parent,
+	); err != nil {
+		return "", fmt.Errorf("claim team db owner: %w", err)
+	}
+	var owner string
+	if err := db.QueryRow("SELECT parent FROM msg_db_owner WHERE id = 1").Scan(&owner); err != nil {
+		return "", fmt.Errorf("read team db owner: %w", err)
+	}
+	return owner, nil
 }
 
 const messageColumns = "id, from_issue, to_issue, kind, body, created_at, read_at, reply_to"
