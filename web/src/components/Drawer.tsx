@@ -15,12 +15,23 @@ function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
       <h4>plan — 提案中のプラン</h4>
       {/* capture 出力は敵性入力 — markdown レンダせずテキストノードのみで描画。
           tabIndex: 長い plan のスクロールをキーボードで届くように */}
-      <pre className="plan-card" id="plan-pre" tabIndex={0} role="region" aria-label="提案中のプラン">
+      <pre
+        className="plan-card"
+        id="plan-pre"
+        tabIndex={0}
+        role="region"
+        aria-label="提案中のプラン"
+      >
         {plan.text}
       </pre>
       <div className="plan-meta" id="plan-meta" aria-live="polite">
         <span>{plan.loading ? "取得中…" : plan.meta}</span>
-        <button type="button" className="plan-reload" onClick={plan.refetch} disabled={plan.loading}>
+        <button
+          type="button"
+          className="plan-reload"
+          onClick={plan.refetch}
+          disabled={plan.loading}
+        >
           再取得
         </button>
       </div>
@@ -175,9 +186,7 @@ export function Drawer({
                 <IssueStateTag state={pane.issueState} unknownLabel="UNKNOWN" />
               </dd>
               <dt>状態</dt>
-              <dd id="d-not-started">
-                {notStartedNote(pane.tmuxState)}
-              </dd>
+              <dd id="d-not-started">{notStartedNote(pane.tmuxState)}</dd>
             </dl>
           </section>
           <WaveSection pane={pane} repo={repo} />

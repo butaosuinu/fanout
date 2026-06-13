@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSnapshot } from "../hooks/useSnapshot";
 import { readToken } from "../lib/api";
-import { filterTokens, matches, parseQuery, removeToken, replaceToken, stripKey } from "../lib/filter";
+import {
+  filterTokens,
+  matches,
+  parseQuery,
+  removeToken,
+  replaceToken,
+  stripKey,
+} from "../lib/filter";
 import { clock, degradedMessages } from "../lib/format";
 import { deriveAgents, deriveWaves } from "../lib/options";
 import { findPane } from "../lib/pane";
@@ -144,7 +151,9 @@ export function App() {
                 <section className="session">
                   <div className="empty">
                     <span className="ji">no panes in the breeze</span>
-                    {total ? "フィルタに一致するペインがありません" : "アクティブなセッションがありません"}
+                    {total
+                      ? "フィルタに一致するペインがありません"
+                      : "アクティブなセッションがありません"}
                   </div>
                 </section>
               )}
@@ -170,7 +179,13 @@ export function App() {
           </div>
         </div>
         {selectedPane && selected && (
-          <Drawer key={selected} pane={selectedPane} repo={repo} token={token} onClose={closeDrawer} />
+          <Drawer
+            key={selected}
+            pane={selectedPane}
+            repo={repo}
+            token={token}
+            onClose={closeDrawer}
+          />
         )}
       </div>
     </>

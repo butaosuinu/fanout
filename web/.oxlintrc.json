@@ -1,0 +1,53 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // type-aware モードは使わない — 型起因の検査は tsc (pnpm run typecheck) が担当。
+  // eslint(core)は oxlint 1.69 では plugins 指定に関わらず常時有効だが、
+  // ドキュメントは「plugins 指定で default を置換」とも読めるため、no-unused-vars 等の
+  // core ルールが必ず効くよう明示しておく(test override も同様)。
+  "plugins": ["eslint", "react", "typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "env": {
+    "browser": true,
+    "builtin": true
+  },
+  "rules": {
+    // automatic JSX runtime (tsconfig jsx: "react-jsx") なので React の import は不要。
+    "react/react-in-jsx-scope": "off",
+    // 既存コードはスプレッドコピー後に sort しており非破壊。toSorted は lib ES2022 に無い。
+    "unicorn/no-array-sort": "off",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    // ^_ プレフィックスが unused-vars の公認イディオムなので、underscore を
+    // 咎める rule とは両立しない(suspicious は --max-warnings=0 で CI を
+    // 落とすため、矛盾警告を残せない)。
+    "eslint/no-underscore-dangle": "off",
+    // Restriction ルールはカテゴリに含まれないので明示 enable が必要。これを
+    // 書かないと off override も no-op になり、components/hooks の `!` も
+    // 素通りしてしまう。lib/test だけ override で外す(下記)。
+    "typescript/no-non-null-assertion": "error",
+    // describe ブロック内に snapshot ファクトリや MSW handler を置くのは
+    // テストの一般的な可読パターン。外スコープ強制は構成を散らすので off。
+    "unicorn/consistent-function-scoping": "off"
+  },
+  "overrides": [
+    {
+      // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (filter.ts / sort.ts
+      // 等の正規表現・境界チェック直後) は lib / test に集中している。
+      // components / hooks では `!` は tsc も黙らせる本物の危険なので rule を
+      // 生かしたままにする。
+      "files": ["src/lib/**", "src/test/**"],
+      "rules": { "typescript/no-non-null-assertion": "off" }
+    },
+    {
+      // vitest プラグイン/globals は test ファイルにだけ足す。oxlint 1.69 の
+      // 実挙動では override の plugins は base にマージされるが、ドキュメントは
+      // 「指定すると置換」とも読めるため、バージョン非依存に base プラグインも
+      // 明示して test に base ルールが必ず適用されるようにする。
+      "files": ["src/test/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
+      "plugins": ["eslint", "react", "typescript", "unicorn", "oxc", "vitest"],
+      "env": { "vitest": true }
+    }
+  ]
+}

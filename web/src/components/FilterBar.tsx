@@ -4,63 +4,64 @@ import { FilterDropdown, type Option } from "./FilterDropdown";
 
 /* 静的キーのドロップダウン定義。options をモジュール定数にすることで
  * memo(FilterDropdown) が snapshot tick の再レンダーをスキップできる。 */
-const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: readonly Option[] }[] = [
-  {
-    key: "state",
-    ariaLabel: "issue / tmux 状態で絞り込み",
-    options: [
-      ["open", "open"],
-      ["closed", "closed"],
-      ["live", "live"],
-      ["stale", "stale"],
-      ["queued", "queued"], // 未開始(synthetic)行の tmux 状態
-      ["deferred", "deferred"], // blocker 待ちの未開始行
-    ],
-  },
-  {
-    key: "run",
-    ariaLabel: "agent 実行状態で絞り込み",
-    options: [
-      ["running", "running"],
-      ["done", "done"],
-    ],
-  },
-  {
-    key: "ci",
-    ariaLabel: "CI 結果で絞り込み",
-    options: [
-      ["pass", "pass"],
-      ["fail", "fail"],
-      ["pending", "pending"],
-    ],
-  },
-  {
-    key: "dirty",
-    ariaLabel: "worktree の dirty 状態で絞り込み",
-    options: [
-      ["yes", "yes"],
-      ["no", "no"],
-    ],
-  },
-  {
-    key: "live",
-    ariaLabel: "tmux ペイン生死で絞り込み",
-    options: [
-      ["yes", "yes"],
-      ["no", "no"],
-    ],
-  },
-  {
-    key: "pr",
-    ariaLabel: "PR 状態で絞り込み",
-    options: [
-      ["merged", "merged"],
-      ["open", "open"],
-      ["closed", "closed"],
-      ["none", "none"],
-    ],
-  },
-];
+const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: readonly Option[] }[] =
+  [
+    {
+      key: "state",
+      ariaLabel: "issue / tmux 状態で絞り込み",
+      options: [
+        ["open", "open"],
+        ["closed", "closed"],
+        ["live", "live"],
+        ["stale", "stale"],
+        ["queued", "queued"], // 未開始(synthetic)行の tmux 状態
+        ["deferred", "deferred"], // blocker 待ちの未開始行
+      ],
+    },
+    {
+      key: "run",
+      ariaLabel: "agent 実行状態で絞り込み",
+      options: [
+        ["running", "running"],
+        ["done", "done"],
+      ],
+    },
+    {
+      key: "ci",
+      ariaLabel: "CI 結果で絞り込み",
+      options: [
+        ["pass", "pass"],
+        ["fail", "fail"],
+        ["pending", "pending"],
+      ],
+    },
+    {
+      key: "dirty",
+      ariaLabel: "worktree の dirty 状態で絞り込み",
+      options: [
+        ["yes", "yes"],
+        ["no", "no"],
+      ],
+    },
+    {
+      key: "live",
+      ariaLabel: "tmux ペイン生死で絞り込み",
+      options: [
+        ["yes", "yes"],
+        ["no", "no"],
+      ],
+    },
+    {
+      key: "pr",
+      ariaLabel: "PR 状態で絞り込み",
+      options: [
+        ["merged", "merged"],
+        ["open", "open"],
+        ["closed", "closed"],
+        ["none", "none"],
+      ],
+    },
+  ];
 
 export function FilterBar({
   filter,
@@ -91,8 +92,18 @@ export function FilterBar({
       {STATIC_DROPDOWNS.map((d) => (
         <FilterDropdown key={d.key} {...dd(d.key)} ariaLabel={d.ariaLabel} options={d.options} />
       ))}
-      <FilterDropdown {...dd("agent")} ariaLabel="agent で絞り込み" options={agentOptions} searchable />
-      <FilterDropdown {...dd("wave")} ariaLabel="wave で絞り込み" options={waveOptions} searchable />
+      <FilterDropdown
+        {...dd("agent")}
+        ariaLabel="agent で絞り込み"
+        options={agentOptions}
+        searchable
+      />
+      <FilterDropdown
+        {...dd("wave")}
+        ariaLabel="wave で絞り込み"
+        options={waveOptions}
+        searchable
+      />
       <span id="chips" role="list" aria-label="適用中のフィルタ">
         {tokens.map((t) => (
           <button

@@ -25,7 +25,7 @@ GOLANGCI_LINT_VERSION ?= $(shell cat .golangci-lint-version)
 GOLANGCI_LINT_BIN     := $(CURDIR)/.cache/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT_CACHE   ?= $(CURDIR)/.cache/golangci-lint
 
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 lint lint-go lint-shell lint-web fmt fix vuln check-bats
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats
 
 # The dashboard web UI (web/, React + Vite) is built into $(STATIC_DIR) and
 # embedded via go:embed. The bundle is never committed, so building the binary
@@ -115,7 +115,10 @@ uninstall: uninstall-integrations
 #                       (vitest) + Tier 1 + Tier 2 black-box tests against it
 #                       via FANOUT_BIN.
 # `make test-web`     — dashboard web UI tests (vitest; needs Node + pnpm).
-# `make lint-web`     — dashboard web UI type check (tsc --noEmit).
+# `make lint-web`     — dashboard web UI lint: oxlint + oxfmt --check + type
+#                       check (tsc --noEmit), cheap-first. Needs Node + pnpm;
+#                       `make lint` stays Node-free on purpose.
+# `make fmt-web`      — dashboard web UI formatting (oxfmt; web/.oxfmtrc.json).
 # `make test-tier1`   — flag / prerequisite tests, no live tmux panes.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
 # `make lint`         — pinned golangci-lint v2 (.golangci.yml) plus shellcheck
@@ -162,8 +165,12 @@ go-test:
 test-web: $(WEB_DIR)/node_modules/.installed
 	cd $(WEB_DIR) && $(PNPM) run test
 
+# Cheap-first: oxlint (ms) -> oxfmt --check (ms) -> tsc (s).
 lint-web: $(WEB_DIR)/node_modules/.installed
-	cd $(WEB_DIR) && $(PNPM) run typecheck
+	cd $(WEB_DIR) && $(PNPM) run lint && $(PNPM) run fmt:check && $(PNPM) run typecheck
+
+fmt-web: $(WEB_DIR)/node_modules/.installed
+	cd $(WEB_DIR) && $(PNPM) run fmt
 
 # Binary install because upstream does not guarantee `go install`; the URL is
 # pinned to the release tag.

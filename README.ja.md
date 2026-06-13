@@ -197,8 +197,9 @@ make test-tier1     # フラグ / prereq テストのみ
 make test-tier2     # --dry-run ゴールデン出力テスト (fixture 駆動)
 make test-web       # ダッシュボード Web UI テスト (vitest)
 make lint           # pinned golangci-lint v2 (.golangci.yml) + テスト用 shim の shellcheck
-make lint-web       # ダッシュボード Web UI の型チェック (tsc --noEmit)
+make lint-web       # ダッシュボード Web UI の lint (oxlint + oxfmt --check + tsc --noEmit)
 make fmt            # golangci-lint fmt による gofumpt/goimports 整形
+make fmt-web        # ダッシュボード Web UI の整形 (oxfmt)
 make fix            # go fix のイディオム更新 (適用後は make test を実行)
 make vuln           # govulncheck (ネットワーク要。意図的に make lint には含めない)
 make build-web      # ダッシュボード Web UI を internal/dashboard/static/ にビルド

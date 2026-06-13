@@ -15,8 +15,10 @@ bundle-less checkout compiling without Node, serving a fallback page). `make
 test` runs the Go unit tests, the web UI vitest suite (`make test-web`), and
 the bats black-box suite against the binary via `FANOUT_BIN`; `make lint` is
 pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) +
-shellcheck of the test shims (Node-free on purpose; the web type check is
-`make lint-web`). `make fmt` formats (gofumpt/goimports), `make fix` runs
+shellcheck of the test shims (Node-free on purpose; the web lint is
+`make lint-web` = oxlint + oxfmt `--check` + tsc, configs `web/.oxlintrc.json`
+/ `web/.oxfmtrc.json`). `make fmt` formats Go (gofumpt/goimports),
+`make fmt-web` formats `web/src` + `vite.config.ts` (oxfmt, printWidth 100; CSS と web/ 直下の JSON は対象外), `make fix` runs
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
 

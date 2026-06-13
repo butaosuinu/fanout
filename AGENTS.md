@@ -54,6 +54,11 @@ the README before changing CLI behavior.
   golangci-lint version; the pinned version (`.golangci-lint-version`) wins.
 - To bump golangci-lint, edit `.golangci-lint-version` (the Makefile and the
   CI lint job both read it) and fix any new findings in the same PR.
+- The dashboard web UI (`web/`) lints with `make lint-web` (oxlint + oxfmt
+  `--check` + `tsc --noEmit`; configs `web/.oxlintrc.json` /
+  `web/.oxfmtrc.json`) and formats with `make fmt-web` (oxfmt, printWidth
+  100; scope is `web/src` + `vite.config.ts` — CSS and web/ root JSON are
+  excluded). Keep `make lint` Node-free; web checks stay in `lint-web`.
 - Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone
   so bulk-formatting commits stay out of `git blame`.
 

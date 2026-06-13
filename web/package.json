@@ -10,6 +10,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "lint": "oxlint --max-warnings=0",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt src vite.config.ts",
+    "fmt:check": "oxfmt --check src vite.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -28,6 +32,8 @@
     "@vitejs/plugin-react": "^6.0.2",
     "jsdom": "^29.1.1",
     "msw": "^2.14.6",
+    "oxfmt": "0.54.0",
+    "oxlint": "^1.69.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.8"

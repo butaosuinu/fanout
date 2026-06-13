@@ -165,7 +165,9 @@ export function SessionSection({
                 <th
                   key={key}
                   data-sort={key}
-                  aria-sort={sortKey === key ? (sortDir === 1 ? "ascending" : "descending") : "none"}
+                  aria-sort={
+                    sortKey === key ? (sortDir === 1 ? "ascending" : "descending") : "none"
+                  }
                   onClick={() => onSort(key)}
                 >
                   {label}
