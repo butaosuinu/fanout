@@ -28,7 +28,7 @@ const setInnerWidth = (w: number) =>
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.classList.remove("drawer-resizing");
-  setInnerWidth(2000); // 上限 = min(1600, 2000 - 360) = 1600
+  setInnerWidth(2000); // 上限 = min(1416, 2000 - 360) = 1416(コンテンツ幅 cap)
 });
 
 describe("useDrawerWidth", () => {
@@ -43,7 +43,7 @@ describe("useDrawerWidth", () => {
     expect(width()).toBe(560);
   });
 
-  it("保存値は 320–1600px に clamp し、不正値はデフォルトへ落とす", () => {
+  it("保存値は 320–1416px に clamp し、不正値はデフォルトへ落とす", () => {
     localStorage.setItem("fanout.drawerWidth", "100");
     const small = render(<Probe />);
     expect(width()).toBe(320);
@@ -51,7 +51,7 @@ describe("useDrawerWidth", () => {
 
     localStorage.setItem("fanout.drawerWidth", "99999");
     const large = render(<Probe />);
-    expect(width()).toBe(1600);
+    expect(width()).toBe(1416);
     large.unmount();
 
     localStorage.setItem("fanout.drawerWidth", "abc");
@@ -76,11 +76,11 @@ describe("useDrawerWidth", () => {
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("780");
   });
 
-  it("ドラッグ中の幅も 320–1600px に clamp する", () => {
+  it("ドラッグ中の幅も 320–1416px に clamp する", () => {
     render(<Probe />);
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
-    expect(width()).toBe(1600);
+    expect(width()).toBe(1416);
     fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 3000, buttons: 1 });
     expect(width()).toBe(320);
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 3000 });
@@ -145,14 +145,15 @@ describe("useDrawerWidth", () => {
     expect(localStorage.getItem("fanout.drawerWidth")).toBeNull();
   });
 
-  it("操作値・保存値もビューポート上限(innerWidth - 360)で clamp する", () => {
-    setInnerWidth(1440); // 上限 1080
+  it("狭い画面では描画を viewport 上限に抑え、intent(保存値)は静的上限まで伸ばす", () => {
+    setInnerWidth(1440); // viewport 上限 1080、静的上限 1416
     render(<Probe />);
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
-    expect(width()).toBe(1080); // 1600 ではなく実描画上限まで
+    expect(width()).toBe(1080); // 描画はビューポート上限で頭打ち
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: -2000 });
-    expect(localStorage.getItem("fanout.drawerWidth")).toBe("1080");
+    // intent は静的上限まで伸びる(広い画面に移れば 1416 で描画される)
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("1416");
   });
 
   it("≤1100px のオーバーレイでは上限 90vw、保存値の読込も同様に clamp する", () => {
@@ -162,25 +163,45 @@ describe("useDrawerWidth", () => {
     expect(width()).toBe(900);
   });
 
-  it("ビューポート縮小の resize で内部 width を再 clamp(stale startWidth を防ぐ)", () => {
+  it("ビューポート縮小では描画だけ追従し、次ドラッグは見えている幅起点(デッドゾーンなし)", () => {
     render(<Probe />);
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
     fireEvent.pointerMove(grip(), { pointerId: 1, clientX: -2000, buttons: 1 });
-    expect(width()).toBe(1600); // 2000px なので上限 1600
+    expect(width()).toBe(1416); // 2000px の上限(コンテンツ幅 cap)
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: -2000 });
 
-    // ウィンドウを 1200px に縮小 → 上限 840。resize で内部 width も追従する
+    // ウィンドウを 1200px に縮小 → 描画は min(1416, 1200-360)=840 へ追従
     setInnerWidth(1200);
     act(() => {
       window.dispatchEvent(new Event("resize"));
     });
     expect(width()).toBe(840);
 
-    // 次のドラッグは clamp 済みの 840 から始まる(デッドゾーンなし)
+    // 次のドラッグは見えている 840 から始まる(stale な 1416 起点にならない)
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 2, clientX: 800, isPrimary: true });
     fireEvent.pointerMove(grip(), { pointerId: 2, clientX: 820, buttons: 1 }); // 右 20px = 縮小
     expect(width()).toBe(820);
     fireEvent.pointerUp(grip(), { pointerId: 2, clientX: 820 });
+  });
+
+  it("bottom sheet 相当の縮小を経ても intent を失わず、広げれば設定幅へ復元する", () => {
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    render(<Probe />);
+    expect(width()).toBe(1300); // 2000px: min(1300, 1416)
+
+    // 800px(bottom sheet 帯)へ縮小 → 描画は 720(800*0.9)だが intent は保持
+    setInnerWidth(800);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(width()).toBe(720);
+
+    // 2000px に戻すと設定した 1300 に復元(下方向 clamp で失わない)
+    setInnerWidth(2000);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(width()).toBe(1300);
   });
 
   it("無移動クリックでは永続化しない(保存値なし = デフォルト追従を保つ)", () => {

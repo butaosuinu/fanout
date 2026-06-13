@@ -1,46 +1,58 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 
 export const DRAWER_DEFAULT_WIDTH = 840;
 export const DRAWER_MIN_WIDTH = 320;
-export const DRAWER_MAX_WIDTH = 1600;
+// ドロワーはコンテンツ領域(style.css の --maxw)より広げない。これより広い
+// グリッドコンテナはそもそも無く、main 列を不当に潰すだけなので静的上限を
+// コンテンツ幅に合わせる。--maxw を変えたらここも合わせること。
+export const DRAWER_MAX_WIDTH = 1416;
 
+// main 列に最低限残す幅(デスクトップ grid 時)。CSS の calc(100vw - 360px) と同期。
+const MAIN_MIN = 360;
 const STORAGE_KEY = "fanout.drawerWidth";
 const RESIZING_CLASS = "drawer-resizing";
 const KEY_STEP = 24;
-// この移動量(px)を超えたドラッグ直後の dblclick はリセットとして扱わない
-// (微調整ドラッグ 2 連発が dblclick に化けて幅を吹き飛ばすのを防ぐ)
+// この移動量(px)を超えたドラッグだけ「リサイズ操作」とみなす(無移動クリックや
+// 微調整 2 連発の dblclick 誤爆で intent を書き換えないため)。
 const CLICK_SLOP = 4;
 
-/* CSS 側のビューポート上限(calc(100vw - 360px) / ≤1100px は 90vw)と同じ値。
- * 描画は CSS の clamp が常に守るが、操作値・保存値・aria-valuenow も実描画を
- * 超えないようここでも同じ上限でクランプする(超えると逆ドラッグにデッド
- * ゾーンができ、aria が実幅と乖離する)。 */
+// intent(ユーザーが設定した幅)の静的な健全範囲だけを守る。ビューポート由来の
+// 上限は描画時に別途かける(rendered)。
+function clampIntent(w: number): number {
+  return Math.min(DRAWER_MAX_WIDTH, Math.max(DRAWER_MIN_WIDTH, Math.round(w)));
+}
+
+/* 現在のビューポート/レイアウトで実際に描画できる最大幅。CSS の clamp と必ず
+ * 一致させる: ≤1100px は overlay(グリッド外)なので 90vw、それ以上は grid 内
+ * なので main 列に MAIN_MIN を残しつつコンテンツ幅(DRAWER_MAX_WIDTH)も超えない。 */
 function viewportMax(): number {
   const vw = window.innerWidth;
-  const cssMax = vw <= 1100 ? vw * 0.9 : vw - 360;
-  return Math.min(DRAWER_MAX_WIDTH, Math.max(DRAWER_MIN_WIDTH, Math.floor(cssMax)));
+  const cap = vw <= 1100 ? vw * 0.9 : Math.min(vw - MAIN_MIN, DRAWER_MAX_WIDTH);
+  return Math.max(DRAWER_MIN_WIDTH, Math.floor(cap));
 }
 
-function clampWidth(w: number): number {
-  return Math.min(viewportMax(), Math.max(DRAWER_MIN_WIDTH, Math.round(w)));
+/* intent を「いま描画できる幅」に落とした値。--drawer-w と aria-valuenow に使う。
+ * intent 自体は保持したまま、狭い画面では描画だけ縮める(広げれば intent に戻る)。 */
+function renderedWidth(intent: number): number {
+  return Math.min(intent, viewportMax());
 }
 
-/* 初期値は localStorage から同期 read(Drawer は key={selected} で remount される
- * ため、保存値さえ読めれば state は Drawer 内で完結する)。localStorage は
+/* 初期 intent は localStorage から同期 read(Drawer は key={selected} で remount
+ * されるため、保存値さえ読めれば state は Drawer 内で完結する)。localStorage は
  * private mode で例外を投げるので try/catch で握りつぶす(useTheme と同じ)。
- * 不正値はデフォルトへ、範囲外は clamp。 */
-function initialWidth(): number {
+ * 不正値はデフォルトへ、範囲外は intent の静的範囲へ clamp。 */
+function initialIntent(): number {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const n = Number(raw);
-      if (Number.isFinite(n) && n > 0) return clampWidth(n);
+      if (Number.isFinite(n) && n > 0) return clampIntent(n);
     }
   } catch {
     /* private mode */
   }
-  return Math.min(DRAWER_DEFAULT_WIDTH, viewportMax());
+  return DRAWER_DEFAULT_WIDTH;
 }
 
 function persist(w: number) {
@@ -68,24 +80,27 @@ export interface DrawerGripProps {
   onKeyDown: (e: KeyboardEvent<HTMLElement>) => void;
 }
 
-/* ドロワー幅(px)の管理。値は CSS 変数 --drawer-w としてだけ反映する。
- * 描画上のクランプは CSS の clamp が一次防衛で、ここでは操作値も同じ
- * ビューポート上限(viewportMax)に揃えて aria と保存値の正直さを保つ。
- * ドロワーは右アンカーなので左ドラッグで拡大。setPointerCapture は jsdom に
- * 存在しないため optional chain で呼ぶ(pointerup での解放は implicit release に
- * 任せる)。永続化は「幅が実際に変わった」pointerup / キー操作時のみ —
- * 無移動クリックで保存すると、保存値なし(=将来のデフォルト変更に追従)の
- * ユーザーを暗黙にオプトアウトさせてしまう。 */
+/* ドロワー幅の管理。intent(ユーザー設定値、静的 320–1416px・保存対象)と
+ * rendered(intent を現在ビューポートで clamp した描画値)を分離する:
+ * - 描画 (--drawer-w) と aria-valuenow は rendered。CSS の clamp と一致する。
+ * - intent はビューポートが狭くなっても保持されるので、bottom sheet を経由
+ *   したり画面を縮めて戻したりしても、設定した幅を失わず復元できる。
+ * - ドラッグは「いま見えている幅(rendered)」を起点にするのでデッドゾーンが
+ *   出ない。右アンカーなので左ドラッグで拡大。
+ * setPointerCapture は jsdom に無いため optional chain で呼ぶ(解放は implicit
+ * release に任せる)。永続化は実際に動いた pointerup / キー操作時のみ。 */
 export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } {
-  const [width, setWidthState] = useState<number>(initialWidth);
-  const widthRef = useRef(width);
+  const [intent, setIntentState] = useState<number>(initialIntent);
+  const intentRef = useRef(intent);
   const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
-  // 直前のドラッグが CLICK_SLOP を超えて動いたか(dblclick リセット抑制用)
+  // 直前のドラッグが CLICK_SLOP を超えて動いたか(保存 / dblclick リセット判定)
   const movedRef = useRef(false);
+  // ビューポート変化で rendered を再計算するための再描画トリガー(intent は不変)
+  const [, bumpRender] = useReducer((c: number) => c + 1, 0);
 
-  const setWidth = (w: number) => {
-    widthRef.current = w;
-    setWidthState(w);
+  const setIntent = (w: number) => {
+    intentRef.current = w;
+    setIntentState(w);
   };
 
   /* ドラッグ中に unmount(pane 切替の remount)しても html に状態を残さない */
@@ -96,21 +111,16 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     [],
   );
 
-  /* ビューポート縮小で CSS が描画幅を clamp したら、内部値・aria-valuenow・
-   * 永続対象も同じ上限へ追従させる。追従しないと widthRef.current が古い
-   * ワイド値のまま残り、次ドラッグの startWidth が実描画より大きくなって
-   * デッドゾーン(右へ大きく動かすまで縮まらない)を生み、aria も実幅と
-   * 乖離する。 */
+  /* ビューポートが変わったら rendered を再計算する(intent は触らない)。これに
+   * より bottom sheet(≤820px で CSS が width:100%)を経由しても intent を縮め
+   * ず、画面を広げれば設定値に戻る。 */
   useEffect(() => {
-    const onResize = () => {
-      const clamped = clampWidth(widthRef.current);
-      if (clamped !== widthRef.current) setWidth(clamped);
-    };
+    const onResize = () => bumpRender();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-    // setWidth / widthRef は安定参照。マウント中ずっと同じリスナーでよい。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const rendered = renderedWidth(intent);
 
   const endDrag = (e: PointerEvent<HTMLElement>): boolean => {
     const drag = dragRef.current;
@@ -120,28 +130,24 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     return true;
   };
 
-  // 幅が変わったドラッグだけ保存する(終了理由を問わず共通)
+  // 実際に動いたドラッグだけ intent を保存する(終了理由を問わず共通)
   const finishDrag = (e: PointerEvent<HTMLElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const changed = widthRef.current !== drag.startWidth;
-    if (endDrag(e) && changed) persist(widthRef.current);
+    if (!dragRef.current) return;
+    if (endDrag(e) && movedRef.current) persist(intentRef.current);
   };
 
   const gripProps: DrawerGripProps = {
     role: "separator",
     "aria-orientation": "vertical",
     "aria-label": "詳細パネルの幅を変更",
-    "aria-valuenow": width,
+    "aria-valuenow": rendered,
     "aria-valuemin": DRAWER_MIN_WIDTH,
-    "aria-valuemax": DRAWER_MAX_WIDTH,
+    "aria-valuemax": viewportMax(),
     tabIndex: 0,
     onPointerDown: (e) => {
       if (e.button !== 0 || !e.isPrimary || dragRef.current) return;
-      // resize イベントを取り逃していても現在ビューポートの上限から開始する
-      const startWidth = clampWidth(widthRef.current);
-      if (startWidth !== widthRef.current) setWidth(startWidth);
-      dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth };
+      // 起点は「いま見えている幅」= rendered。これで縮小後でもデッドゾーンなし。
+      dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth: rendered };
       movedRef.current = false;
       e.currentTarget.setPointerCapture?.(e.pointerId);
       document.documentElement.classList.add(RESIZING_CLASS);
@@ -155,8 +161,9 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
         return;
       }
       const dx = drag.startX - e.clientX;
+      if (dx === 0) return; // 無移動では intent を触らない(rendered への巻き戻り防止)
       if (Math.abs(dx) > CLICK_SLOP) movedRef.current = true;
-      setWidth(clampWidth(drag.startWidth + dx));
+      setIntent(clampIntent(drag.startWidth + dx));
     },
     onPointerUp: finishDrag,
     onPointerCancel: (e) => {
@@ -167,7 +174,7 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     onLostPointerCapture: finishDrag,
     onDoubleClick: () => {
       if (movedRef.current) return; // 微調整ドラッグ 2 連発の誤爆を抑制
-      setWidth(Math.min(DRAWER_DEFAULT_WIDTH, viewportMax()));
+      setIntent(DRAWER_DEFAULT_WIDTH);
       try {
         localStorage.removeItem(STORAGE_KEY);
       } catch {
@@ -176,16 +183,17 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
     },
     onKeyDown: (e) => {
       if (e.altKey || e.metaKey || e.ctrlKey) return; // Alt+← は履歴等に譲る
-      // 右アンカーなので ArrowLeft = セパレータを左へ = 拡大
+      // 右アンカーなので ArrowLeft = セパレータを左へ = 拡大。キーボードは
+      // 「いま見えている幅」起点で調整するので rendered を基準にする。
       const delta = e.key === "ArrowLeft" ? KEY_STEP : e.key === "ArrowRight" ? -KEY_STEP : 0;
       if (!delta) return;
       e.preventDefault();
-      const next = clampWidth(widthRef.current + delta);
-      if (next === widthRef.current) return;
-      setWidth(next);
+      const next = clampIntent(rendered + delta);
+      if (next === intentRef.current) return;
+      setIntent(next);
       persist(next);
     },
   };
 
-  return { width, gripProps };
+  return { width: rendered, gripProps };
 }

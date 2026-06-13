@@ -494,8 +494,10 @@ a.gh-pill:hover .tag{ border-color:var(--asagi); color:var(--asagi); }
 /* ============================================================ 詳細ドロワー */
 #drawer{
   /* 幅は CSS 変数 --drawer-w のみで制御(inline width 禁止 — media query が
-   * cascade で上書きできるように)。上限はリスト側に最低 360px を保証する。 */
-  width:clamp(320px, var(--drawer-w, 840px), calc(100vw - 360px));
+   * cascade で上書きできるように)。上限はリスト側に最低 360px を残し、かつ
+   * グリッドコンテナのコンテンツ幅(--maxw)も超えない(超えると main 列が
+   * 不当に潰れる)。hook の viewportMax と一致させること。 */
+  width:clamp(320px, var(--drawer-w, 840px), min(calc(100vw - 360px), var(--maxw)));
   position:sticky; top:var(--nav-h);
   height:calc(100vh - var(--nav-h));
   display:flex; flex-direction:column;
