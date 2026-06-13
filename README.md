@@ -503,9 +503,15 @@ fanout 123 --team --agent claude
 
 This does two things, both best-effort (a registry failure never fails the
 fan-out): it appends a "Coordinating with your sibling panes" section — a
-launch-time roster plus the shared DB path and a few checkpoints — to every
-child briefing, and after the batch launches it seeds the created panes into
-the parent's peer registry.
+launch-time roster plus the shared DB path and a few checkpoints — to each
+child's standard briefing, and after the batch launches it seeds the created
+panes into the parent's peer registry.
+
+> [!NOTE]
+> Codex Plan Mode children (`--agent codex --codex-plan-mode`) receive the
+> minimal Plan-Mode briefing instead, so the coordination section is **not**
+> added to them. They are still seeded into the registry and can use
+> `fanout msg` normally — only the injected briefing section is skipped.
 
 **Using it (`fanout msg`).** Inside any fanned pane, `fanout msg` auto-detects
 which child you are (from the tmux pane and `.fanout/state.json`) and which

@@ -184,8 +184,8 @@ dry-run, generated pane names, or confirmation.
    `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`,
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
-   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, and
-   `--no-pr-visualization`.
+   `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`,
+   `--no-pr-visualization`, and `--team`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -434,9 +434,12 @@ the likely next action:
   different session.
 - `--team` (forwarded like any other flag, default off) opts the run into
   sibling-pane peer messaging: it adds a "Coordinating with your sibling panes"
-  section to each child briefing and seeds the created panes into a per-parent
-  peer registry (best-effort — registry failures never fail the fan-out).
-  Suggest it when children touch shared files or have ordering dependencies.
+  section to each child's standard briefing and seeds the created panes into a
+  per-parent peer registry (best-effort — registry failures never fail the
+  fan-out). Codex Plan Mode children (`--codex-plan-mode`) get the minimal Plan
+  briefing, so the section is skipped for them — they are still seeded and can
+  run `fanout msg`. Suggest it when children touch shared files or have ordering
+  dependencies.
 
 ## Sibling coordination (--team / fanout msg)
 

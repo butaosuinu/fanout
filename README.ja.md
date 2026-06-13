@@ -430,8 +430,14 @@ fanout 123 --team --agent claude
 
 これは 2 つのことを行い、いずれも best-effort です（レジストリの失敗が fan-out
 を止めることはありません）: 「Coordinating with your sibling panes」節 ——
-起動時点の roster と共有 DB パス、いくつかのチェックポイント —— を各子 briefing
-に付け、バッチ起動後に作成済みペインを親の peer レジストリに seed します。
+起動時点の roster と共有 DB パス、いくつかのチェックポイント —— を各子の通常
+briefing に付け、バッチ起動後に作成済みペインを親の peer レジストリに seed します。
+
+> [!NOTE]
+> Codex Plan Mode の子（`--agent codex --codex-plan-mode`）は最小限の
+> Plan Mode briefing を受け取るため、協調節は**付きません**。レジストリへの
+> seed は行われ `fanout msg` も通常どおり使えます —— 注入される briefing 節
+> だけがスキップされます。
 
 **使い方（`fanout msg`）。** fanout したペイン内なら、`fanout msg` は自分が
 どの子か（tmux pane と `.fanout/state.json` から）・どの親に属すかを自動検出

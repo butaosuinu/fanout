@@ -125,10 +125,12 @@ Build the binary with `make build-go` and validate with `make test`.
   `internal/msgstore` is the query layer for send/post/inbox/board/mark-read.
   `cmd/fanout/team.go` wires `--team` (briefing roster via `buildTeamContext`
   plus a post-`executePlan` peer seed), and `cmd/fanout/msg.go` is the
-  `fanout msg` island. The briefing coordination section is shared by both
-  `claude` and `codex` panes (`internal/briefing` injects it agent-agnostic);
-  it is distinct from Claude Code Agent Teams, which is Claude-only and
-  coordinates inside a single session. Messaging is pull-based: nothing in the
+  `fanout msg` island. The briefing coordination section is injected
+  agent-agnostic into the standard briefing for both `claude` and `codex`
+  panes, but `briefing.Render` returns the minimal Codex Plan Mode briefing
+  before appending it, so `--codex-plan-mode` children are seeded into the
+  registry without the coordination section. It is distinct from Claude Code
+  Agent Teams, which is Claude-only and coordinates inside a single session. Messaging is pull-based: nothing in the
   merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
   set by the launch wrapper in `internal/tmuxrun`) idle-nudge accelerator is a
   separate, still-unmerged issue (#72) — do not assume an idle gate exists.
