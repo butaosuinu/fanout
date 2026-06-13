@@ -100,18 +100,19 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
 ### A. 状態取得
 
-この pass の判断材料を、**B の終了判定に必要なものまで含めて先に揃える**（B が「CI 全 pass」「未解決スレッド 0」を見るのに、それらを A で取っていないと取りこぼす）。3 つを取る:
+この pass の判断材料を、**B の終了判定に必要なものまで含めて先に揃える**（B が「CI 全 pass」「未対応のレビュー指摘 0」を見るのに、それらを A で取っていないと取りこぼす）。4 つを取る:
 
 1. `gh pr view --json …`（PR 状態）。
 2. CI: `gh pr checks "$pr" --json name,state,bucket,link,workflow`（`$pr` を必ず渡す。`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks "$pr" --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
-3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
+3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身・各スレッドの先頭/最新コメント）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
+4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view "$pr" --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の `state=CHANGES_REQUESTED` 本文・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、トップレベルに actionable コメントが残っていても approve/green で完了扱いになる）。
 
 ### B. 終了判定（最初に行う）
 
 対処に入る前に、まず「もう終わっていないか」を見る。無駄な rebase / 修正を避けるため、この判定を pass の先頭に置く:
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
-- `state=OPEN` かつ `reviewDecision=APPROVED` かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 で数えた未解決レビュースレッドが 0** → **やることなし＝実質完了**。「マージ可能・承認済み・グリーンで未解決指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。未解決スレッドの 0 判定は必ず A-3 の `reviewThreads` 実取得に基づくこと（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドを取りこぼす）。
+- `state=OPEN` かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** → **やることなし＝実質完了**。「マージ可能・グリーンで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。完了判定はスレッド数だけでなく **A-4 のサマリ/トップレベル指摘も 0** であることを要件にする（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドやトップレベルコメントを取りこぼす）。なお「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。
 - それ以外 → C 以降で対処対象を洗う。
 
 ### C. マージコンフリクト対応（rebase + 自動解決）
@@ -175,22 +176,29 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
              reviewThreads(first:100, after:$endCursor){
                pageInfo{ hasNextPage endCursor }
                nodes{ isResolved isOutdated path
-                 comments(first:20){ nodes{ databaseId author{login} body } } } } } } }' \
+                 topLevel: comments(first:1){ nodes{ databaseId } }
+                 latest:   comments(last:1){ nodes{ author{login} createdAt } } } } } } }' \
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
 
      **必ず全ページを辿る**（`--paginate` + `pageInfo.endCursor`）。`first:100` の 1 ページだけ見ると、スレッドが 100 を超える PR で後ろのページの未解決スレッドを取りこぼし、B が「未解決 0」と誤判定して完了してしまう。
 
-     各スレッドについて **先頭（top-level）コメントの `databaseId`**（= `comments.nodes[0].databaseId`）を控えておく。返信エンドポイント（E-4）はこの top-level ID しか受け付けないため。
+     スレッドごとに 2 つを別々に取る:
+     - **`topLevel`（`comments(first:1)`）の `databaseId`** = 返信先。reply エンドポイント（E-4）はこの先頭コメント ID しか受け付けない。
+     - **`latest`（`comments(last:1)`）の `author`/`createdAt`** = skip 判定用の最新コメント。`comments(first:N)` で「古い方」を取って最新だと誤認しない（N を超えるとレビュアーの新しい反応を見落とし、対応済みと誤判定する）。スレッドのコメントが多いときは `last:` か末尾ページで最新を確実に取る。
 
 2. `isResolved=false` のスレッド **および 1 で拾ったサマリ／トップレベルの requested-change 本文**を対象に、指摘内容をコードで対処する。インラインスレッドが 0 でも `reviewDecision=CHANGES_REQUESTED` が残っているなら、レビュー本文側に対処対象があるとみなして拾う。
 
-   **ただし「自分（watcher）が既に対応・返信済み」のスレッドは再処理しない**。resolve はレビュアーに委ねる方針（E-5）なので、対応済みスレッドも次 pass まで `isResolved=false` のまま見える。スレッドの**最新コメントが自分の返信**で、それ以降にレビュアーの新規コメントが無いなら「対応済み・レビュアー待ち」とみなして skip する（スレッドごとに「自分が最後に返信した commit / 時刻」を記憶し、レビュアーが新たに反応＝新規コメント追加 or resolve するまで触らない）。これをやらないと同じ修正・返信を毎 pass 重複させ、oscillation に陥る。
+   **ただし「自分（watcher）が既に対応・返信済み」の指摘は再処理しない**。これは**インラインスレッドにもサマリ／トップレベル指摘にも等しく適用する**。resolve はレビュアーに委ねる方針（E-5）なので、対応済みでも次 pass まで `isResolved=false`（スレッド）や `reviewDecision=CHANGES_REQUESTED`／元コメント（サマリ・トップレベル）として見え続ける:
+   - インラインスレッド: クエリの `latest`（`comments(last:1)`）が**自分の返信**で、それ以降にレビュアーの新規コメントが無いなら skip。
+   - サマリ／トップレベル: 自分が当該 requested-change に対する返信（review への返信や `gh pr comment`）を済ませ、その後レビュアーが新たに反応していないなら skip。
+
+   いずれも「自分が最後に対応・返信した commit / 時刻」をスレッド・レビュー単位で記憶し、レビュアーが新たに反応（新規コメント or resolve or 新しいレビュー）するまで触らない。これをやらないと同じ修正・返信を毎 pass 重複させ、oscillation に陥る。
 
    設計判断・仕様確認を伴う指摘（「この方針で良いか」「ここは別実装にすべきでは」等、機械的に直せないもの）は無理に実装せず、その旨を整理してユーザーにエスカレーションする。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（C/D と同じく push 先は解決済み `<head-remote>` の head ref に明示ピン。素の `git push` は使わない）。
 4. **fix を push してから**返信する（順序が逆だと「直した」と言ったのに反映されていない状態を作る）。返信は対応コミットを参照して簡潔に:
-   - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `comments.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
+   - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `topLevel.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
    - 全体への一言: `gh pr comment "$num" --body "<要約>"`
 5. **スレッドの resolve は確信があるときだけ**。基本はレビュアーに委ねる（自分で resolve すると、レビュアーが再確認する前に閉じてしまう）。
 
