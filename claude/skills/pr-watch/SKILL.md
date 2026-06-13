@@ -76,12 +76,14 @@ C/D/E のどの push もこの解決に従う。head ref を `$head`（= `headRe
 me=$(gh api user -q .login)
 ```
 
-1. `headRepositoryOwner.login == $me`（head リポジトリが自分のもの）。
-2. PR の `author.login == $me`（自分が開いた PR）。
+1. PR の `author.login == $me`（自分が開いた PR）。
+2. **head ブランチに push 権限がある**。判定:
+   - `isCrossRepository == false`（head が base リポジトリにある = 通常の同一リポジトリ PR）→ そのリポジトリで作業できている以上 push 権限あり。**`headRepositoryOwner.login` が自分か org かは問わない**（org リポジトリでは head owner は org になるが、自分が author でメンバーなら push できる）。
+   - `isCrossRepository == true`（head が fork）→ `headRepositoryOwner.login == $me`（自分の fork）のときだけ push 権限あり。他者の fork は不可。
 
-両方要求するのは、`headRepositoryOwner.login` は **リポジトリの owner であって PR author とは限らない**ため。自分の repo に collaborator がブランチを作って PR を開いた場合、head owner は自分でも author は他人なので、author を見ないと他人のブランチを rewrite してしまう。`maintainerCanModify=true`（fork の「メンテナの編集を許可」）も認可根拠にしない（コミット追記の許可であって履歴 rewrite の許可ではない）。
+`author.login` を要に置くのは、`headRepositoryOwner.login` は **リポジトリ／org の owner であって PR author とは限らない**ため（自分の repo や org に collaborator がブランチを作って PR を開くと head owner は自分/org でも author は他人）。逆に head owner で絞ると、自分が author の org PR を弾いてしまう。`maintainerCanModify=true`（fork の「メンテナの編集を許可」）は認可根拠にしない（コミット追記の許可であって履歴 rewrite の許可ではない）。
 
-**push 先 remote `<head-remote>` の解決**: `isCrossRepository` に関わらず、PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う。`origin` 決め打ちにしないのは、fork レイアウト（`origin`=自分の fork、`upstream`=base repo）では `isCrossRepository=false` でも PR head が base repo 側に居て、`origin` に押すと別 ref を作るだけで PR head が変わらないため。一致する remote が無い（自分の）fork PR は `gh pr checkout <num>` で remote/追跡ブランチを用意してそれを使う。解決できなければエスカレーション。
+**push 先 remote `<head-remote>` の解決**: PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う（`isCrossRepository` に関わらず。`origin` 決め打ちにしないのは、fork レイアウトで `origin` が fork を指すと PR head を取り違えるため）。**一致する remote が無い場合**（自分の fork PR だが clone に base remote しか無い等。`gh pr checkout` は PR を出すが fork remote を追加しないことがある）は、`git remote add <name> <headRepository.url>` で remote を足して fetch するか、push 時に `headRepository` の URL を直接 refspec 先に使う（`git push --force-with-lease <url> HEAD:"$head"`）。それでも解決できなければエスカレーション。
 
 **ローカル HEAD が PR head を含むか検証**（rebase / force-push の前に必ず）:
 
@@ -112,7 +114,10 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 対処に入る前に、まず「もう終わっていないか」を見る。無駄な rebase / 修正を避けるため、この判定を pass の先頭に置く:
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
-- `state=OPEN` かつ **`isDraft=false`** かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** → **やることなし＝実質完了**。「マージ可能・グリーンで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。完了判定はスレッド数だけでなく **A-4 のサマリ/トップレベル指摘も 0** であることを要件にする（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドやトップレベルコメントを取りこぼす）。なお「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。
+- `state=OPEN` かつ **`isDraft=false`** かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** かつ **承認シグナルが立っている** → **完了**。「マージ可能・グリーン・承認済みで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。
+  - 「承認シグナル」は**レビュアーの種類で変わる**: 人間レビュアーが要るリポジトリでは `reviewDecision=APPROVED`。自動レビュー bot（例: codex-connector）では、その bot が再レビューして**新規 actionable を出さない clean 状態**が approve 相当（[[feedback_codex_review_approval]] のように 👍/clean をもって承認とみなす運用）。どちらの承認シグナルを使うかは pass の冒頭で決める。
+  - 「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。`reviewDecision` だけで「指摘なし」と即断しない（COMMENTED スレッドやトップレベルコメントを取りこぼす）。
+- `state=OPEN` で **CI green・衝突なし・未対応指摘 0 だが、承認シグナルがまだ立っていない**（`reviewDecision=REVIEW_REQUIRED`/空でレビュー待ち、bot 再レビュー待ち等）→ **完了にはせず「reviewer-wait（アイドル）」として監視を継続**する。ここで loop を抜けると、この skill が本来拾うべき**遅れて来るレビュー / CI 変化を取りこぼす**。長間隔（後述）で「対処対象なし・承認待ち。約 N 分後に再確認」と報告して再 pass する。
 - **`isDraft=true`（ドラフト）なら完了にしない**。ドラフトはレビュー / マージ前提が揃わないので、衝突・CI の追従（C/D）は続けつつ「ドラフトのままなので approve/マージ判定はスキップ。ready 化待ち」と報告して**監視を継続**する（ここで loop を抜けると、ビルド途中のドラフトで監視が止まってしまう）。
 - それ以外 → C 以降で対処対象を洗う。
 
@@ -161,6 +166,8 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（新規コミットを足すだけだが、`push.default` 依存を避けるため push 先は常に「push 先 remote の解決」で決めた `<head-remote>` の head ref に明示ピンする。rebase していないので fast-forward になり lease は通る）。push 後、CI は再実行されるので、この pass では「修正を push した。CI 再実行を待つ」とし、次 pass は短間隔で再確認する。
 4. **flaky / インフラ起因が疑われる失敗**（タイムアウト、外部サービス 5xx、無関係なネットワークエラー）はコード修正で直らない。1 回は再実行を促し（`gh run rerun <run-id> --failed` の提案）、それでも再現するならユーザーにエスカレーション。コードに無い原因をコードで延々いじらない。
 
+5. **必須チェックが未報告で `mergeStateStatus=BLOCKED`**（ブランチ保護が待っている required status が `gh pr checks` に `fail`/`cancel` として出てこない＝まだ走っていない / 報告が来ていない）の取り扱い。この状態は `fail`/`cancel` が無いので 1〜4 で拾えず、B も `BLOCKED` で完了できないため、**何もしないと idle で永遠にポーリングしてしまう**。`bucket=pending` の required チェックが進行中なら短間隔で待つ（CI 進行中扱い）。どのチェックも走っておらず required status が**欠落**しているなら、その required workflow を `gh run rerun`／再 dispatch するか、自動で起こせないなら「required チェック `<name>` が未報告で BLOCKED。手動でトリガー / 設定確認が要る」とユーザーにエスカレーションする（漫然と long-poll しない）。
+
 ### E. レビューコメント対応
 
 未対応のレビュー指摘を集めて、コードで対処する。対象は**インラインスレッドだけではない** — 次の 2 系統を両方拾う:
@@ -178,7 +185,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
                pageInfo{ hasNextPage endCursor }
                nodes{ isResolved isOutdated path line originalLine diffSide
                  topLevel: comments(first:1){ nodes{ databaseId body diffHunk } }
-                 latest:   comments(last:1){ nodes{ author{login} createdAt } } } } } } }' \
+                 latest:   comments(last:1){ nodes{ author{login} createdAt body } } } } } } }' \
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
 
@@ -186,7 +193,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
      スレッドごとに次を取る:
      - **`topLevel`（`comments(first:1)`）の `databaseId` / `body` / `diffHunk`**、および スレッドの `path`/`line` = **対処すべき指摘そのもの**（本文・該当ハンク・位置）と返信先。reply エンドポイント（E-4）はこの先頭コメント ID しか受け付けない。**`body` を取らないと実装すべき内容が分からず、推測 / 空振りエスカレーションに陥る**ので必ず取得する。
-     - **`latest`（`comments(last:1)`）の `author`/`createdAt`** = skip 判定用の最新コメント。`comments(first:N)` で「古い方」を取って最新だと誤認しない（N を超えるとレビュアーの新しい反応を見落とし、対応済みと誤判定する）。スレッドのコメントが多いときは `last:` か末尾ページで最新を確実に取る。
+     - **`latest`（`comments(last:1)`）の `author`/`createdAt`/`body`** = skip 判定用の最新コメント。`comments(first:N)` で「古い方」を取って最新だと誤認しない（N を超えるとレビュアーの新しい反応を見落とし、対応済みと誤判定する）。スレッドのコメントが多いときは `last:` か末尾ページで最新を確実に取る。**最新が自分でなくレビュアーの新規返信のとき（再対応が必要なケース）は、対処すべき指摘は `topLevel.body` ではなく `latest.body`（レビュアーの新しい要求）**。古い先頭コメントだけ見て stale な内容を直さない。
 
 2. `isResolved=false` のスレッド **および 1 で拾ったサマリ／トップレベルの requested-change 本文**を対象に、指摘内容をコードで対処する。インラインスレッドが 0 でも `reviewDecision=CHANGES_REQUESTED` が残っているなら、レビュー本文側に対処対象があるとみなして拾う。
 
@@ -248,7 +255,7 @@ C/D/E のどれも該当しなければ、この pass は「対処対象なし�
 ## 安全ガードレール
 
 - **全 push は解決済み `<head-remote>` の head ref に明示ピンする**（`git push [--force-with-lease] <head-remote> HEAD:<headRefName>`）。C の rebase 後・D の CI 修正・E のレビュー修正のいずれも対象。refspec 無しの素の push（`push.default` 依存で別ブランチを巻き込みうる）や無印 `--force` は使わない。fork PR では `<head-remote>` が `origin` でない／push 権限が無いことがあるので、解決手順で確認できなければ force-push せずエスカレーション。lease 失敗 = 他者更新ありとみなし、fetch して再評価し、状況をユーザーへ。
-- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**force-push の認可は「head リポジトリ owner == 今の認証ユーザー（`gh api user -q .login`）」かつ「PR `author` == 同ユーザー」の両方で判断する**（「push 先 remote の解決と force-push 認可」と同一基準）。owner だけで判断すると、自分が owner の repo に collaborator が作ったブランチを rewrite してしまう。`maintainerCanModify=true`（fork PR で「メンテナの編集を許可」）も認可根拠にしない — 履歴 rewrite の許可ではないので、他者 fork に force-push するとガードレール違反になる。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
+- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**force-push の認可は「PR `author` == 今の認証ユーザー（`gh api user -q .login`）」かつ「head ブランチに push 権限がある（同一リポジトリ PR は可／fork は `headRepositoryOwner.login==自分` の自分の fork のみ）」で判断する**（「push 先 remote の解決と force-push 認可」と同一基準）。head owner だけで絞ると org リポジトリの自分の PR（head owner=org）を弾くか、collaborator の同一リポジトリ PR を rewrite してしまうので、author を要に置く。`maintainerCanModify=true`（fork PR で「メンテナの編集を許可」）は認可根拠にしない — 履歴 rewrite の許可ではないので、他者 fork に force-push するとガードレール違反になる。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
 - **衝突を片側採用で機械的に潰さない**。確信が持てる hunk だけ自動解決し、意味的判断が要る箇所は abort してエスカレーション（C-4）。
 - **リポジトリのレビューゲートを尊重する**。`gh pr create` を `.claude/hooks/` 等でゲートしているリポジトリ（この repo の `pre-pr-review-gate.sh` 等）では、この skill は PR を作らないのでゲート対象外だが、push する fix にも品質基準を勝手に下げない。エスケープハッチ（`FANOUT_SKIP_PR_REVIEW` 等）を無断で使わない。
 - **CI を直すために CI 設定（ワークフロー yaml）を緩めて通す、テストを消して通す等の「通すための改竄」をしない**。原因を直すのが目的。設定変更が本当に必要なら理由を添えてユーザーに確認。
