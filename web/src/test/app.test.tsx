@@ -268,7 +268,14 @@ describe("フィルタ", () => {
     act(() => trigger.focus());
     await user.keyboard("{ArrowDown}"); // trigger 上の ↓ で開く
     const opts = within(screen.getByRole("listbox")).getAllByRole("option");
-    expect(opts.map((o) => o.textContent)).toEqual(["open", "closed", "live", "stale"]);
+    expect(opts.map((o) => o.textContent)).toEqual([
+      "open",
+      "closed",
+      "live",
+      "stale",
+      "queued",
+      "deferred",
+    ]);
     expect(opts[0]).toHaveFocus();
     expect(opts[0]).toHaveAttribute("tabindex", "0");
     expect(opts[1]).toHaveAttribute("tabindex", "-1");
@@ -278,11 +285,11 @@ describe("フィルタ", () => {
     expect(opts[1]).toHaveAttribute("tabindex", "0");
     expect(opts[0]).toHaveAttribute("tabindex", "-1");
 
-    await user.keyboard("{ArrowUp}{ArrowUp}"); // 先頭から上へはラップして末尾
-    expect(opts[3]).toHaveFocus();
+    await user.keyboard("{ArrowUp}{ArrowUp}"); // 先頭から上へはラップして末尾(deferred)
+    expect(opts[opts.length - 1]).toHaveFocus();
 
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("listitem", { name: "フィルタ state:stale を外す" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: "フィルタ state:deferred を外す" })).toBeInTheDocument();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
@@ -723,8 +730,9 @@ describe("未開始(queued)子 issue", () => {
     render(<App />);
     streamSnapshot(queuedSnapshot());
 
-    const stateSel = screen.getByRole("combobox", { name: "issue / tmux 状態で絞り込み" });
-    await user.selectOptions(stateSel, "queued");
+    // GitHub PR 風 popover(#249): trigger を開いて queued option を選ぶ
+    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.click(screen.getByRole("option", { name: "queued" }));
     expect(screen.getByText("Queued child")).toBeInTheDocument();
     expect(screen.queryByText("Fix login")).not.toBeInTheDocument();
     expect(screen.queryByText("Deferred child")).not.toBeInTheDocument();
