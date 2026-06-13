@@ -83,7 +83,7 @@ me=$(gh api user -q .login)
 
 `author.login` を要に置くのは、`headRepositoryOwner.login` は **リポジトリ／org の owner であって PR author とは限らない**ため（自分の repo や org に collaborator がブランチを作って PR を開くと head owner は自分/org でも author は他人）。逆に head owner で絞ると、自分が author の org PR を弾いてしまう。`maintainerCanModify=true`（fork の「メンテナの編集を許可」）は認可根拠にしない（コミット追記の許可であって履歴 rewrite の許可ではない）。
 
-**push 先 remote `<head-remote>` の解決**: PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う（`isCrossRepository` に関わらず。`origin` 決め打ちにしないのは、fork レイアウトで `origin` が fork を指すと PR head を取り違えるため）。**一致する remote が無い場合**（自分の fork PR だが clone に base remote しか無い等。`gh pr checkout` は PR を出すが fork remote を追加しないことがある）は、`git remote add <name> <headRepository.url>` で remote を足して fetch するか、push 時に `headRepository` の URL を直接 refspec 先に使う（`git push --force-with-lease <url> HEAD:"$head"`）。それでも解決できなければエスカレーション。
+**push 先 remote `<head-remote>` の解決**: PR の `headRepository`（owner/name・URL）に**実際に一致する local remote**を `git remote -v` から探して使う（`isCrossRepository` に関わらず。`origin` 決め打ちにしないのは、fork レイアウトで `origin` が fork を指すと PR head を取り違えるため）。**一致する remote が無い場合**（自分の fork PR だが clone に base remote しか無い等。`gh pr checkout` は PR を出すが fork remote を追加しないことがある）は、**`git remote add <name> <headRepository.url>` で名前付き remote を足して `git fetch <name> "$head"` してから**、その remote 経由で通常どおり `git push --force-with-lease <name> HEAD:"$head"` する。**raw URL を直接 push 先にする `git push --force-with-lease <url> …` は使わない** — URL には remote-tracking ref が無く、`--force-with-lease`（暗黙形）が比較対象を持てずに stale 扱いで reject される。どうしても URL 直 push が要るなら、fetch した head SHA を明示 lease 値にする（`--force-with-lease="$head":<fetched-sha>`）。それでも解決できなければエスカレーション。
 
 **ローカル HEAD が PR head を含むか検証**（rebase / force-push の前に必ず）:
 
@@ -114,10 +114,14 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 対処に入る前に、まず「もう終わっていないか」を見る。無駄な rebase / 修正を避けるため、この判定を pass の先頭に置く:
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
-- `state=OPEN` かつ **`isDraft=false`** かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** かつ **承認シグナルが立っている** → **完了**。「マージ可能・グリーン・承認済みで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。
-  - 「承認シグナル」は**レビュアーの種類で変わる**: 人間レビュアーが要るリポジトリでは `reviewDecision=APPROVED`。自動レビュー bot（例: codex-connector）では、その bot が再レビューして**新規 actionable を出さない clean 状態**が approve 相当（[[feedback_codex_review_approval]] のように 👍/clean をもって承認とみなす運用）。どちらの承認シグナルを使うかは pass の冒頭で決める。
+- `state=OPEN` かつ **`isDraft=false`** かつ **マージ可能**（`mergeable=MERGEABLE`。`mergeStateStatus` は `CLEAN` を厳密要求しない — 後述）かつ CI（必須チェック）が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** かつ **承認シグナルが立っている** → **完了**。「マージ可能・グリーン・承認（または不要）で未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。
+  - **`mergeStateStatus` は厳密に `CLEAN` でなくてよい**。up-to-date を必須にしないリポジトリでは、ベースが進んでも `mergeable=MERGEABLE` のまま `mergeStateStatus=BEHIND` になり、衝突が無いので C で rebase する必要もない。この状態を `CLEAN` でないからと弾くと、対処対象が無いのに永遠に完了できない。完了判定は **`mergeable=MERGEABLE` + 必須チェック pass** を軸にし、`DIRTY`（衝突）や `BLOCKED`（必須未達）だけを「未完了」とみなす。
+  - 「承認シグナル」は**レビュアー構成で変わる**。次のいずれかで承認相当とみなす:
+    1. `reviewDecision=APPROVED`。
+    2. **レビューが要求されていない**: ブランチ保護で必須レビューが無く、`reviewDecision` が `null`/空でレビュー依頼も無い（待つべき人間レビューが存在しない）→ 承認を待たず完了可。`null` を「未承認」と取り違えて永遠に待たない。
+    3. 自動レビュー bot（例: codex-connector）運用では、その bot の**再レビューが clean（新規 actionable なし）**＝ 👍/approve 相当（[[feedback_codex_review_approval]]）。
   - 「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。`reviewDecision` だけで「指摘なし」と即断しない（COMMENTED スレッドやトップレベルコメントを取りこぼす）。
-- `state=OPEN` で **CI green・衝突なし・未対応指摘 0 だが、承認シグナルがまだ立っていない**（`reviewDecision=REVIEW_REQUIRED`/空でレビュー待ち、bot 再レビュー待ち等）→ **完了にはせず「reviewer-wait（アイドル）」として監視を継続**する。ここで loop を抜けると、この skill が本来拾うべき**遅れて来るレビュー / CI 変化を取りこぼす**。長間隔（後述）で「対処対象なし・承認待ち。約 N 分後に再確認」と報告して再 pass する。
+- `state=OPEN` で **CI green・衝突なし・未対応指摘 0 だが、必須の人間レビューが要求されていてまだ `APPROVED` でない**（`reviewDecision=REVIEW_REQUIRED`/`CHANGES_REQUESTED` 解消待ち等）→ **完了にはせず「reviewer-wait（アイドル）」として監視を継続**する。ここで loop を抜けると、遅れて来るレビュー / CI 変化を取りこぼす。長間隔（後述）で「対処対象なし・承認待ち。約 N 分後に再確認」と報告して再 pass する（ただし上記のとおり、レビューが**そもそも不要**なら待たずに完了する）。
 - **`isDraft=true`（ドラフト）なら完了にしない**。ドラフトはレビュー / マージ前提が揃わないので、衝突・CI の追従（C/D）は続けつつ「ドラフトのままなので approve/マージ判定はスキップ。ready 化待ち」と報告して**監視を継続**する（ここで loop を抜けると、ビルド途中のドラフトで監視が止まってしまう）。
 - それ以外 → C 以降で対処対象を洗う。
 
@@ -126,7 +130,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 `mergeable=CONFLICTING` または `mergeStateStatus` が `DIRTY` / `BEHIND` のとき:
 
 1. 作業ツリーが dirty なら、まず未コミット変更を commit するか stash するかを判断（勝手に捨てない）。
-2. ベースを取得して rebase。**rebase 先は PR の base リポジトリの `$base`（= `baseRefName`）**であって、head（fork）側の同名ブランチではない。fork PR では `origin` が fork を指し base リポジトリは別 remote（`upstream` 等）のことがあるので、base リポジトリを指す remote を `<base-remote>` として解決してから当てる（非 fork なら `origin`。判別に迷うなら base repo の URL から直接 fetch する）:
+2. ベースを取得して rebase。**rebase 先は PR の base リポジトリの `$base`（= `baseRefName`）**であって、head（fork）側の同名ブランチではない。`<base-remote>` は **PR の base リポジトリ（`baseRefName` を持つ repo = `gh pr view` が対象とする repo の `owner/name`・URL）に一致する local remote**を `git remote -v` から探して解決する。`isCrossRepository` フラグで「非 fork なら origin」と決め打ちにしないこと — triangular clone（`origin`=自分の fork、`upstream`=base repo）では `isCrossRepository=false` でも `origin` は base ではないので、fork 側の古い/不在の `$base` に rebase してしまう。一致 remote が無ければ base repo の URL から直接 fetch する:
 
    ```bash
    git fetch "<base-remote>" "$base"   # 例: git fetch origin main / git fetch upstream main
@@ -153,11 +157,13 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
 `gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow` で **`bucket` が `fail` または `cancel`** のチェックを特定する（`cancel`=キャンセルされた必須チェックを無視すると、B は「全 pass でない」ので完了できず、D が拾わないと永遠に idle/long-poll になる）。`cancel` は原因修正の対象ではなく、まず `gh run rerun <run-id>`（外部 CI なら再実行をユーザーに促す）で回し直し、繰り返すならエスカレーション。`fail` は以下で原因を直す:
 
-1. 失敗チェックが **GitHub Actions の run か外部 CI かをまず判別する**。`gh pr checks --json` の各チェックの `link` が GitHub Actions の run URL（`…/actions/runs/<id>…`）か、`workflow` が埋まっているものだけが Actions。Actions なら失敗 run のログを **失敗ジョブのみ**精読する（run id は `link` から、または `gh run list --branch "$head" --json databaseId,conclusion,workflowName` で取得）:
+1. 失敗チェックが **GitHub Actions の run か外部 CI かをまず判別する**。`gh pr checks --json` の各チェックの `link` が GitHub Actions の run URL（`…/actions/runs/<id>…`）か、`workflow` が埋まっているものだけが Actions。Actions なら失敗 run のログを **失敗ジョブのみ**精読する（run id は `link` から、または `gh run list -R "$owner/$repo" --branch "$head" --json databaseId,conclusion,workflowName` で取得）:
 
    ```bash
-   gh run view <run-id> --log-failed
+   gh run view -R "$owner/$repo" <run-id> --log-failed
    ```
+
+   **`gh run` 系には必ず `-R "$owner/$repo"`（対象 PR のリポジトリ）を付ける**。付けないと、PR を URL 指定したときや triangular/fork checkout で `gh` のデフォルトリポジトリが PR の base と異なる場合、別リポジトリの run を見に行って失敗 run を取り損ねる。
 
    ログ全文ではなく失敗部分だけを取るのは、出力肥大とトークン浪費を避けるため。
 
@@ -207,7 +213,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（C/D と同じく push 先は解決済み `<head-remote>` の head ref に明示ピン。素の `git push` は使わない）。
 4. **fix を push してから**返信する（順序が逆だと「直した」と言ったのに反映されていない状態を作る）。返信は対応コミットを参照して簡潔に:
    - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `topLevel.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
-   - 全体への一言: `gh pr comment "$num" --body "<要約>"`
+   - 全体への一言: `gh pr comment -R "$owner/$repo" "$num" --body "<要約>"`（`-R` で対象 PR のリポジトリを明示する。bare `$num` だけだと、URL 指定や triangular checkout で `gh` のデフォルトリポジトリ側の別 `#num` に付いたり失敗したりする。REST replies が `$owner/$repo` を使うのと揃える）。
 5. **スレッドの resolve は確信があるときだけ**。基本はレビュアーに委ねる（自分で resolve すると、レビュアーが再確認する前に閉じてしまう）。
 
 C/D/E のどれも該当しなければ、この pass は「対処対象なし」。終了判定 B に戻って完了か継続待ちかを決める。
