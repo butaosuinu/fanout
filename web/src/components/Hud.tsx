@@ -1,13 +1,17 @@
 import type { CSSProperties } from "react";
 import type { Rollup } from "../lib/types";
 
-const EMPTY_ROLLUP: Pick<Rollup, "total" | "merged" | "pending" | "live" | "running" | "blocked"> = {
+const EMPTY_ROLLUP: Pick<
+  Rollup,
+  "total" | "merged" | "pending" | "live" | "running" | "blocked" | "notStarted"
+> = {
   total: 0,
   merged: 0,
   pending: 0,
   live: 0,
   running: 0,
   blocked: 0,
+  notStarted: 0,
 };
 
 export function Hud({ rollup }: { rollup: Rollup | null | undefined }) {
@@ -27,6 +31,11 @@ export function Hud({ rollup }: { rollup: Rollup | null | undefined }) {
         <div className="stat">
           <label>running</label>
           <b id="s-running">{r.running ?? 0}</b>
+        </div>
+        <div className="stat">
+          <label>not started</label>
+          {/* 未開始(synthetic)行数。旧 snapshot にはフィールドが無いので ?? 0 */}
+          <b id="s-queued">{r.notStarted ?? 0}</b>
         </div>
         <div className="stat">
           <label>merged</label>

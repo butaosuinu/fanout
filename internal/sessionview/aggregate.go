@@ -50,13 +50,16 @@ type Collectors struct {
 	// Waves follows the same three-outcome cache contract as IssuePRs, keyed by
 	// parent instead of issue number (the caller closes over the recorded issue
 	// numbers it passes to FetchWaveGraph):
-	//   - (info, nil)  → known wave/blocker graph for the parent's children.
-	//   - (nil, nil)   → not fetched yet (cache miss); panes show zero-valued
-	//     wave fields but this does NOT mark GitHub as degraded.
-	//   - (info, err)  → a real failure; Degraded.GitHub is set and any partial
-	//     info is still applied (FetchWaveGraph keeps partial results).
+	//   - (graph, nil) with non-nil Info → known wave/blocker graph; the child
+	//     set (graph.Children) also seeds synthetic not-started rows for
+	//     children without a recorded pane.
+	//   - (zero WaveGraph, nil) → not fetched yet (cache miss); panes show
+	//     zero-valued wave fields and no synthetic rows appear, but this does
+	//     NOT mark GitHub as degraded.
+	//   - (graph, err) → a real failure; Degraded.GitHub is set and any partial
+	//     graph is still applied (FetchWaveGraph keeps partial results).
 	// A nil collector means the GitHub tier is disabled, like a nil IssuePRs.
-	Waves        func(parent string) (map[int]WaveInfo, error)
+	Waves        func(parent string) (WaveGraph, error)
 	WorktreeStat func(path, baseRef string) (WorktreeStat, error)
 	Now          func() time.Time
 }
@@ -122,12 +125,12 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		return st, prs
 	}
 	// One waves read per distinct parent, cached across the Build call.
-	waveCache := map[string]map[int]WaveInfo{}
-	fetchWaves := func(parent string) map[int]WaveInfo {
+	waveCache := map[string]WaveGraph{}
+	fetchWaves := func(parent string) WaveGraph {
 		if got, ok := waveCache[parent]; ok {
 			return got
 		}
-		var info map[int]WaveInfo
+		var graph WaveGraph
 		if c.Waves == nil {
 			snap.Degraded.GitHub = true
 		} else {
@@ -136,10 +139,10 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				snap.Degraded.GitHub = true
 				snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "github: "+err.Error())
 			}
-			info = got // a (nil, nil) cache miss leaves zero-valued wave fields
+			graph = got // a zero-valued cache miss leaves zero wave fields and no synthetic rows
 		}
-		waveCache[parent] = info
-		return info
+		waveCache[parent] = graph
+		return graph
 	}
 	worktreeCache := map[string]struct {
 		stat WorktreeStat
@@ -164,17 +167,19 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	}
 
 	grouped := groupByParent(store.Panes)
+	recordedByParent := recordedNumsByNormalizedParent(store.Panes)
+	syntheticEmitted := map[string]bool{}
 	for _, parent := range sortedParents(grouped) {
 		panes := grouped[parent]
 		slices.SortFunc(panes, func(a, b state.Pane) int { return cmp.Compare(a.IssueNum, b.IssueNum) })
 
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
-		waveInfo := fetchWaves(parent)
+		graph := fetchWaves(parent)
 		for _, p := range panes {
 			issueState, prs := fetch(p.IssueNum)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			alive := paneAlive(live, p.PaneID, p.WorktreePath)
-			wi := waveInfo[p.IssueNum]
+			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
 				Slug:         p.Slug,
@@ -214,11 +219,60 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
 		}
+		// 記録 pane の無い wave graph 上の子 issue を「未開始」の synthetic 行
+		// として追加する(TUI の synthetic 行の web 移植)。rowKey は
+		// (parent, issueNum) なので、pane が起動した次の snapshot ではこの行が
+		// そのまま実 row に置き換わる。"0100"/"100" のようなエイリアス親は同じ
+		// wave graph を共有するため、normalize したキーごとに一度だけ emit し、
+		// 未記録判定もエイリアス session 横断で行う。
+		if normKey := NormalizeParent(parent); !syntheticEmitted[normKey] {
+			syntheticEmitted[normKey] = true
+			recorded := recordedByParent[normKey]
+			for _, child := range childrenByNumber(graph.Children) {
+				if child.Number <= 0 || recorded[child.Number] {
+					continue
+				}
+				issueState, prs := fetch(child.Number)
+				closeUnconfirmed := false
+				if issueState == IssueStateUnknown && child.State != "" {
+					// PR キャッシュ未取得でも wave graph は issue 状態を知って
+					// いる(Sub-issues API / IssueDetail が state を返す)ので
+					// fallback する。ただし PR 状態は未確認なので、CLOSED に
+					// fallback した行は rollup から落とさない(下記 countsInRollup)。
+					issueState = child.State
+					closeUnconfirmed = strings.EqualFold(issueState, "CLOSED")
+				}
+				wi := graph.Info[child.Number]
+				pv := PaneView{
+					IssueNum:         child.Number,
+					DisplayName:      issueDisplayName(child),
+					IssueState:       issueState,
+					PRs:              prs,
+					HasMergedPR:      hasMergedPR(prs),
+					DiffSummary:      "-",
+					DirtyState:       "-",
+					TmuxState:        SyntheticTmuxState(issueState, wi.Blocked),
+					CIStatus:         strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
+					Wave:             wi.Wave,
+					WaveLabel:        wi.WaveLabel,
+					Blockers:         normalizeBlockers(wi.Blockers),
+					Blocked:          wi.Blocked,
+					NotStarted:       true,
+					closeUnconfirmed: closeUnconfirmed,
+				}
+				session.Panes = append(session.Panes, pv)
+				if countsInRollup(pv) {
+					accumulate(&session.Rollup, pv)
+				}
+			}
+		}
 		finalize(&session.Rollup)
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			accumulate(&snap.Rollup, pv)
+			if countsInRollup(pv) {
+				accumulate(&snap.Rollup, pv)
+			}
 		}
 	}
 	finalize(&snap.Rollup)
@@ -266,7 +320,13 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 		nb, eb := strconv.Atoi(b)
 		switch {
 		case ea == nil && eb == nil:
-			return cmp.Compare(na, nb)
+			if c := cmp.Compare(na, nb); c != 0 {
+				return c
+			}
+			// エイリアス親("0100"/"100")は数値比較で等しい。raw 文字列で
+			// タイブレークしないと map 順で session 順序と synthetic 行の
+			// 帰属先が build ごとに揺れ、SSE が毎 tick 発火する。
+			return strings.Compare(a, b)
 		case ea == nil:
 			return -1 // numeric before non-numeric
 		case eb == nil:
@@ -276,6 +336,69 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 		}
 	})
 	return keys
+}
+
+// NormalizeParent は数値親を Atoi 往復で正規化する("0100" と "100" を同一
+// 親として扱う)。state の parentMatches と同じ規則で、dashboard poller の
+// wave cache キーもこれを使う(規則が割れるとエイリアス親の synthetic 行が
+// 二重 emit / 消失する)。
+func NormalizeParent(parent string) string {
+	if n, err := strconv.Atoi(parent); err == nil {
+		return strconv.Itoa(n)
+	}
+	return parent
+}
+
+// recordedNumsByNormalizedParent は normalize した親キーごとの記録済み issue
+// 番号集合。synthetic 行の「未記録」判定はエイリアス session 横断で行う —
+// "0100" 配下に記録済みの子を "100" session が synthetic として二重 emit して
+// はならない。
+func recordedNumsByNormalizedParent(panes []state.Pane) map[string]map[int]bool {
+	out := map[string]map[int]bool{}
+	for _, p := range panes {
+		key := NormalizeParent(p.Parent)
+		if out[key] == nil {
+			out[key] = map[int]bool{}
+		}
+		if p.IssueNum > 0 {
+			out[key][p.IssueNum] = true
+		}
+	}
+	return out
+}
+
+// childrenByNumber は wave graph の子集合を issue 番号昇順のクローンで返し、
+// synthetic 行の出力順を決定的にする(FetchWaveGraph の子順はソース由来)。
+func childrenByNumber(children []ghissue.Issue) []ghissue.Issue {
+	out := slices.Clone(children)
+	slices.SortFunc(out, func(a, b ghissue.Issue) int { return cmp.Compare(a.Number, b.Number) })
+	return out
+}
+
+// issueDisplayName は synthetic 行の表示名: issue タイトル、無ければ "#<num>"
+// (TUI の issueTitle と同じ規則)。
+func issueDisplayName(child ghissue.Issue) string {
+	if strings.TrimSpace(child.Title) != "" {
+		return child.Title
+	}
+	return "#" + strconv.Itoa(child.Number)
+}
+
+// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/tui の synthetic
+// 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
+// web で同じ意味を持つ): closed → deferred → queued の優先順で判定し、issue
+// 状態が取れないものは unknown。
+func SyntheticTmuxState(issueState string, blocked bool) string {
+	switch {
+	case strings.EqualFold(issueState, "CLOSED"):
+		return "closed"
+	case blocked:
+		return "deferred"
+	case strings.EqualFold(issueState, "OPEN"):
+		return "queued"
+	default:
+		return "unknown"
+	}
 }
 
 // paneAlive reports whether a recorded pane is live: a tmux pane with its id
@@ -362,6 +485,25 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 	return false
 }
 
+// countsInRollup は rollup に算入する行かどうか。PR が merge されないまま
+// CLOSED になった synthetic 子(not-planned 等)は除外する(行としては表示
+// する): 算入すると Pending に永久に残り、セッション進捗が 100% / AllMerged
+// に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
+// 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
+func countsInRollup(pv PaneView) bool {
+	if !pv.NotStarted {
+		return true
+	}
+	if !strings.EqualFold(pv.IssueState, "CLOSED") || pv.HasMergedPR {
+		return true
+	}
+	// CLOSED かつ merged PR なし: PR lookup で「merged なし」を確認できたとき
+	// だけ rollup から落とす(not-planned 等の確定 close)。PR 状態が未確認
+	// (キャッシュ miss/失敗で wave graph 状態へ fallback)なら算入し、一時的な
+	// gh 失敗で session が 100%/AllMerged に見えるのを防ぐ。
+	return pv.closeUnconfirmed
+}
+
 func accumulate(r *Rollup, pv PaneView) {
 	r.Total++
 	if pv.HasMergedPR {
@@ -375,6 +517,11 @@ func accumulate(r *Rollup, pv PaneView) {
 	}
 	if pv.Blocked {
 		r.Blocked++
+	}
+	if pv.NotStarted && pv.TmuxState != "closed" {
+		// NotStarted は「まだ起動しうる作業」のカウンタ: merged 済みで閉じた
+		// synthetic 子は Total/Merged には入るがここには数えない。
+		r.NotStarted++
 	}
 }
 

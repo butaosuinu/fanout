@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../components/App";
 import type { Snapshot } from "../lib/types";
 import { FakeEventSource, installFakeEventSource, removeEventSource } from "./fakeEventSource";
-import { makePane, makeRollup, makeSession, makeSnapshot } from "./fixtures";
+import { makePane, makeQueuedPane, makeRollup, makeSession, makeSnapshot } from "./fixtures";
 import { server } from "./server";
 
 /* App 全体の統合テスト。モックはネットワーク境界のみ:
@@ -268,7 +268,14 @@ describe("フィルタ", () => {
     act(() => trigger.focus());
     await user.keyboard("{ArrowDown}"); // trigger 上の ↓ で開く
     const opts = within(screen.getByRole("listbox")).getAllByRole("option");
-    expect(opts.map((o) => o.textContent)).toEqual(["open", "closed", "live", "stale"]);
+    expect(opts.map((o) => o.textContent)).toEqual([
+      "open",
+      "closed",
+      "live",
+      "stale",
+      "queued",
+      "deferred",
+    ]);
     expect(opts[0]).toHaveFocus();
     expect(opts[0]).toHaveAttribute("tabindex", "0");
     expect(opts[1]).toHaveAttribute("tabindex", "-1");
@@ -278,11 +285,11 @@ describe("フィルタ", () => {
     expect(opts[1]).toHaveAttribute("tabindex", "0");
     expect(opts[0]).toHaveAttribute("tabindex", "-1");
 
-    await user.keyboard("{ArrowUp}{ArrowUp}"); // 先頭から上へはラップして末尾
-    expect(opts[3]).toHaveFocus();
+    await user.keyboard("{ArrowUp}{ArrowUp}"); // 先頭から上へはラップして末尾(deferred)
+    expect(opts[opts.length - 1]).toHaveFocus();
 
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("listitem", { name: "フィルタ state:stale を外す" })).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: "フィルタ state:deferred を外す" })).toBeInTheDocument();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
@@ -673,6 +680,119 @@ describe("drawer リサイズ", () => {
     expect(
       within(drawer2).getByRole("separator", { name: "詳細パネルの幅を変更" }),
     ).toHaveAttribute("aria-valuenow", "960");
+  });
+});
+
+describe("未開始(queued)子 issue", () => {
+  /* 起動済み 1 + 未開始 2(queued / deferred)の snapshot。Go 側 Build の
+   * synthetic 行と同じワイヤ形。 */
+  function queuedSnapshot() {
+    return makeSnapshot(
+      [
+        makeSession(
+          "142",
+          [
+            makePane({ issueNum: 101, displayName: "Fix login", agent: "claude", paneId: "%1" }),
+            makeQueuedPane({ issueNum: 103, displayName: "Queued child" }),
+            makeQueuedPane({
+              issueNum: 104,
+              displayName: "Deferred child",
+              tmuxState: "deferred",
+              blocked: true,
+              blockers: [{ num: 103, state: "OPEN" }],
+            }),
+          ],
+          { notStarted: 2 },
+        ),
+      ],
+      { rollup: makeRollup({ total: 3, live: 1, notStarted: 2 }) },
+    );
+  }
+
+  it("ghost 行として tmux 列に queued / deferred を描画し、HUD に未開始数が出る", () => {
+    const { container } = render(<App />);
+    streamSnapshot(queuedSnapshot());
+
+    const queuedRow = screen.getByText("Queued child").closest("tr")!;
+    expect(queuedRow).toHaveClass("ghost");
+    expect(queuedRow).toHaveTextContent("queued");
+    const deferredRow = screen.getByText("Deferred child").closest("tr")!;
+    expect(deferredRow).toHaveClass("ghost");
+    expect(deferredRow).toHaveTextContent("deferred");
+    // 起動済みの行は ghost にならない
+    expect(screen.getByText("Fix login").closest("tr")).not.toHaveClass("ghost");
+    // HUD の queued カウンタ(rollup.notStarted)
+    expect(container.querySelector("#s-queued")).toHaveTextContent("2");
+  });
+
+  it("state:queued フィルタで未開始行だけに絞れる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(queuedSnapshot());
+
+    // GitHub PR 風 popover(#249): trigger を開いて queued option を選ぶ
+    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.click(screen.getByRole("option", { name: "queued" }));
+    expect(screen.getByText("Queued child")).toBeInTheDocument();
+    expect(screen.queryByText("Fix login")).not.toBeInTheDocument();
+    expect(screen.queryByText("Deferred child")).not.toBeInTheDocument();
+    expect(screen.getByText("1 / 3")).toBeInTheDocument();
+  });
+
+  it("未開始行の drawer は縮約表示になり /api/peek を呼ばない", async () => {
+    let peekCalls = 0;
+    server.use(
+      http.get("/api/peek", () => {
+        peekCalls++;
+        return HttpResponse.json({ paneId: "?", lines: 80, capturedAt: "", output: "" });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(queuedSnapshot());
+
+    await user.click(screen.getByText("Deferred child"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(
+      within(drawer).getByText("未開始 — open な blocker があるため待機中です。"),
+    ).toBeInTheDocument();
+    // wave/blockers と PR は出すが、pane / worktree / prompt / peek は出さない
+    expect(within(drawer).getByText("wave / blockers")).toBeInTheDocument();
+    expect(within(drawer).getByText("pull requests")).toBeInTheDocument();
+    expect(within(drawer).getByRole("link", { name: "#103" })).toBeInTheDocument();
+    expect(within(drawer).queryByText("worktree")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("prompt")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/peek/)).not.toBeInTheDocument();
+    expect(peekCalls).toBe(0);
+  });
+
+  it("pane 起動で同じ行キーのまま実 row に置き換わる", async () => {
+    server.use(peekHandler(() => "booted"));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(queuedSnapshot());
+
+    // 未開始行を選択 → 次の snapshot で同 issue の pane が起動
+    await user.click(screen.getByText("Queued child"));
+    await screen.findByRole("complementary", { name: "ペイン詳細" });
+
+    act(() => {
+      FakeEventSource.latest().emitSnapshot(
+        makeSnapshot([
+          makeSession("142", [
+            makePane({ issueNum: 101, displayName: "Fix login" }),
+            makePane({ issueNum: 103, displayName: "Queued child", paneId: "%3", alive: true }),
+          ]),
+        ]),
+      );
+    });
+    // rowKey(142#103)が安定しているので drawer は開いたまま実 row 表示に切り替わる
+    const drawer = screen.getByRole("complementary", { name: "ペイン詳細" });
+    expect(within(drawer).getByText("worktree")).toBeInTheDocument();
+    expect(await within(drawer).findByText("booted")).toBeInTheDocument();
+    // 行側("Queued child" は drawer ヘッダにも出るので table 内に限定)
+    const row = within(screen.getByRole("table")).getByText("Queued child").closest("tr");
+    expect(row).not.toHaveClass("ghost");
   });
 });
 

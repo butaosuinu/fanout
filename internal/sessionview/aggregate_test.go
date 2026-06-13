@@ -48,18 +48,25 @@ func livePanesWith(m map[string]LivePaneInfo) func() (map[string]LivePaneInfo, e
 
 // wavesNone is a Waves collector that always reports a cache miss (not fetched
 // yet) — the non-degraded GitHub baseline for tests not exercising waves.
-func wavesNone(parent string) (map[int]WaveInfo, error) {
-	return nil, nil
+func wavesNone(parent string) (WaveGraph, error) {
+	return WaveGraph{}, nil
 }
 
-// wavesOf builds a Waves collector serving the same WaveInfo map for any
-// parent and counting calls through calls (when non-nil).
-func wavesOf(info map[int]WaveInfo, calls *int) func(string) (map[int]WaveInfo, error) {
-	return func(parent string) (map[int]WaveInfo, error) {
+// wavesOf builds a Waves collector serving the same WaveInfo map (no child
+// set, so no synthetic rows) for any parent and counting calls through calls
+// (when non-nil).
+func wavesOf(info map[int]WaveInfo, calls *int) func(string) (WaveGraph, error) {
+	return wavesGraphOf(WaveGraph{Info: info}, calls)
+}
+
+// wavesGraphOf builds a Waves collector serving the same full WaveGraph for
+// any parent.
+func wavesGraphOf(graph WaveGraph, calls *int) func(string) (WaveGraph, error) {
+	return func(parent string) (WaveGraph, error) {
 		if calls != nil {
 			*calls++
 		}
-		return info, nil
+		return graph, nil
 	}
 }
 
@@ -520,7 +527,7 @@ func TestBuildWavesErrorDegradesGitHub(t *testing.T) {
 		LoadState: storeOf(pane("1", 2, "%1")),
 		LivePanes: livePanesAt(),
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
-		Waves:     func(parent string) (map[int]WaveInfo, error) { return nil, errors.New("gh graph down") },
+		Waves:     func(parent string) (WaveGraph, error) { return WaveGraph{}, errors.New("gh graph down") },
 	}
 	snap := Build("o/n", "/root", c)
 	if !snap.Degraded.GitHub {
@@ -595,6 +602,241 @@ func TestBuildWaveLabelStateRowWinsOverGraph(t *testing.T) {
 	}
 	if panes[1].WaveLabel != "graph-label" {
 		t.Fatalf("WaveLabel = %q; the graph label must fill in when the row has none", panes[1].WaveLabel)
+	}
+}
+
+func TestBuildAppendsSyntheticPanesForUnrecordedChildren(t *testing.T) {
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 104, State: "OPEN"}, // タイトル無し → "#104" fallback
+			{Number: 101, Title: "Recorded", State: "OPEN"},
+			{Number: 103, Title: "Queued child", State: "OPEN"},
+			{Number: 105, Title: "Blocked child", State: "OPEN"},
+		},
+		Info: map[int]WaveInfo{
+			101: {Wave: 1},
+			103: {Wave: 2, WaveLabel: "wave2", Blockers: []blockers.Status{}},
+			104: {Wave: 2},
+			105: {Wave: 3, Blockers: []blockers.Status{{Num: 103, State: "OPEN"}}, Blocked: true},
+		},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt("%1"),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			switch num {
+			case 103:
+				return "CLOSED", mergedPR(503), nil // PR キャッシュが状態と PR を知っている
+			case 104:
+				return "", nil, nil // キャッシュ未取得 → graph の State へ fallback
+			default:
+				return "OPEN", nil, nil
+			}
+		},
+		Waves: wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 4 {
+		t.Fatalf("want 1 recorded + 3 synthetic panes, got %+v", panes)
+	}
+	if panes[0].IssueNum != 101 || panes[0].NotStarted {
+		t.Fatalf("recorded pane must come first and not be synthetic: %+v", panes[0])
+	}
+	// synthetic 行は記録行の後に issue 番号昇順で並ぶ
+	if panes[1].IssueNum != 103 || panes[2].IssueNum != 104 || panes[3].IssueNum != 105 {
+		t.Fatalf("synthetic order = %d,%d,%d want 103,104,105",
+			panes[1].IssueNum, panes[2].IssueNum, panes[3].IssueNum)
+	}
+	queued := panes[1]
+	if !queued.NotStarted || queued.Alive || queued.PaneID != "" || queued.Agent != "" || queued.BranchName != "" {
+		t.Fatalf("synthetic pane must carry zero pane fields: %+v", queued)
+	}
+	if queued.DisplayName != "Queued child" {
+		t.Fatalf("DisplayName = %q want the issue title", queued.DisplayName)
+	}
+	if queued.IssueState != "CLOSED" || !queued.HasMergedPR || queued.TmuxState != "closed" {
+		t.Fatalf("PR-cache-backed synthetic pane = %+v", queued)
+	}
+	if queued.DiffSummary != "-" || queued.DirtyState != "-" {
+		t.Fatalf("synthetic diff/dirty = %q/%q want -/-", queued.DiffSummary, queued.DirtyState)
+	}
+	if queued.Wave != 2 || queued.WaveLabel != "wave2" {
+		t.Fatalf("synthetic wave fields = %+v", queued)
+	}
+	noTitle := panes[2]
+	if noTitle.DisplayName != "#104" {
+		t.Fatalf("DisplayName = %q want #104 fallback", noTitle.DisplayName)
+	}
+	if noTitle.IssueState != "OPEN" || noTitle.TmuxState != "queued" {
+		t.Fatalf("PR cache miss must fall back to the graph issue state: %+v", noTitle)
+	}
+	blocked := panes[3]
+	if blocked.TmuxState != "deferred" || !blocked.Blocked || len(blocked.Blockers) != 1 {
+		t.Fatalf("blocked synthetic pane = %+v", blocked)
+	}
+	// rollup: OPEN/不明の synthetic 行は Total/Pending/Blocked と NotStarted に
+	// 入る。merged PR 持ちで CLOSED の #103 は Total/Merged に入る(pane なしで
+	// 完了した作業)が NotStarted には数えない。
+	r := snap.Sessions[0].Rollup
+	if r.Total != 4 || r.NotStarted != 2 || r.Merged != 1 || r.Pending != 3 || r.Blocked != 1 {
+		t.Fatalf("session rollup = %+v", r)
+	}
+	if snap.Rollup.NotStarted != 2 || snap.Rollup.Total != 4 {
+		t.Fatalf("snapshot rollup = %+v", snap.Rollup)
+	}
+}
+
+// CLOSED のまま起動されなかった synthetic 子が rollup から除外され、全 merge
+// 済みセッションの AllMerged を妨げないことを単体で固定する。
+func TestBuildClosedSyntheticChildDoesNotBlockAllMerged(t *testing.T) {
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, Title: "merged", State: "CLOSED"},
+			{Number: 103, Title: "not planned", State: "CLOSED"},
+		},
+		Info: map[int]WaveInfo{},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			if num == 101 {
+				return "CLOSED", mergedPR(501), nil
+			}
+			return "CLOSED", nil, nil // PR なしで閉じられた子
+		},
+		Waves: wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 || panes[1].TmuxState != "closed" {
+		t.Fatalf("closed synthetic row must still render: %+v", panes)
+	}
+	r := snap.Sessions[0].Rollup
+	if r.Total != 1 || !r.AllMerged || r.Pending != 0 || r.NotStarted != 0 {
+		t.Fatalf("closed synthetic child must not block AllMerged: %+v", r)
+	}
+}
+
+// PR lookup が失敗(IssuePRs エラー)した CLOSED 子は PR 状態が未確認なので
+// rollup に算入し、一時的な gh 失敗で session が誤って AllMerged に見えるのを
+// 防ぐ。
+func TestBuildUnconfirmedClosedSyntheticChildStaysInRollup(t *testing.T) {
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, Title: "merged", State: "CLOSED"},
+			{Number: 103, Title: "closed but PR unknown", State: "CLOSED"},
+		},
+		Info: map[int]WaveInfo{},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			if num == 101 {
+				return "CLOSED", mergedPR(501), nil
+			}
+			// #103 は PR lookup 失敗(レート制限等)。状態は wave graph の
+			// CLOSED に fallback するが、merged PR の有無は未確認。
+			return "", nil, errors.New("rate limited")
+		},
+		Waves: wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 || panes[1].IssueState != "CLOSED" {
+		t.Fatalf("unconfirmed closed row must still render as CLOSED: %+v", panes)
+	}
+	r := snap.Sessions[0].Rollup
+	// #103 は算入される → Total 2 / Pending 1 / AllMerged false(完了扱いしない)
+	if r.Total != 2 || r.AllMerged || r.Pending != 1 {
+		t.Fatalf("unconfirmed closed child must stay in rollup: %+v", r)
+	}
+}
+
+func TestBuildWaveCacheMissEmitsNoSyntheticRows(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("100", 101, "%1")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	if len(snap.Sessions[0].Panes) != 1 {
+		t.Fatalf("a wave cache miss must not invent synthetic rows: %+v", snap.Sessions[0].Panes)
+	}
+	if snap.Rollup.NotStarted != 0 {
+		t.Fatalf("Rollup.NotStarted = %d want 0", snap.Rollup.NotStarted)
+	}
+}
+
+func TestBuildSyntheticEmittedOncePerAliasedParent(t *testing.T) {
+	// "0100" と "100" は normalize すると同一親で、同じ wave graph を共有する。
+	// 未記録の #103 はどちらか一方の session にだけ現れ、記録済みの #101/#102
+	// はエイリアス横断で「記録済み」と判定されて synthetic にならない。
+	graph := WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, State: "OPEN"},
+			{Number: 102, State: "OPEN"},
+			{Number: 103, Title: "Queued", State: "OPEN"},
+		},
+		Info: map[int]WaveInfo{101: {Wave: 1}, 102: {Wave: 1}, 103: {Wave: 2}},
+	}
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("0100", 101, "%1"), pane("100", 102, "%2")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesGraphOf(graph, nil),
+	}
+	snap := Build("o/n", "/root", c)
+	if len(snap.Sessions) != 2 {
+		t.Fatalf("want 2 alias sessions, got %d", len(snap.Sessions))
+	}
+	total := 0
+	var synthetic []int
+	for _, sess := range snap.Sessions {
+		total += len(sess.Panes)
+		for _, pv := range sess.Panes {
+			if pv.NotStarted {
+				synthetic = append(synthetic, pv.IssueNum)
+			}
+		}
+	}
+	if total != 3 {
+		t.Fatalf("total panes = %d want 3 (2 recorded + 1 synthetic)", total)
+	}
+	if len(synthetic) != 1 || synthetic[0] != 103 {
+		t.Fatalf("synthetic nums = %v want [103] emitted exactly once", synthetic)
+	}
+	if snap.Rollup.NotStarted != 1 {
+		t.Fatalf("Rollup.NotStarted = %d want 1", snap.Rollup.NotStarted)
+	}
+}
+
+func TestSyntheticTmuxStateMatchesTUIStrings(t *testing.T) {
+	cases := []struct {
+		issueState string
+		blocked    bool
+		want       string
+	}{
+		{"CLOSED", false, "closed"},
+		{"closed", true, "closed"}, // closed は blocked より優先(TUI と同順)
+		{"OPEN", true, "deferred"},
+		{"OPEN", false, "queued"},
+		{"open", false, "queued"},
+		{IssueStateUnknown, false, "unknown"},
+		{"", false, "unknown"},
+	}
+	for _, tc := range cases {
+		if got := SyntheticTmuxState(tc.issueState, tc.blocked); got != tc.want {
+			t.Errorf("SyntheticTmuxState(%q, %v) = %q, want %q", tc.issueState, tc.blocked, got, tc.want)
+		}
 	}
 }
 

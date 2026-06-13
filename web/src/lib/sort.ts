@@ -18,7 +18,7 @@ export const SORTS: Record<string, SortKeyFn> = {
   },
   dirty: (p) => ({ clean: 0, dirty: 1, unknown: 2 })[p.dirtyState] ?? 3,
   ci: (p) => ({ fail: 0, pending: 1, pass: 2 })[paneCI(p)] ?? 3,
-  tmux: (p) => (p.alive ? 0 : 1),
+  tmux: (p) => (p.alive ? 0 : p.notStarted ? 2 : 1), // alive < stale < 未開始(synthetic)
   state: (p) => String(p.issueState ?? "").toLowerCase(),
   pr: (p) => {
     const pr = prPrimary(p.prs);

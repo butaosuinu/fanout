@@ -56,14 +56,11 @@ function PaneRow({
     e.preventDefault();
     onSelect();
   };
+  // 未開始(synthetic)行は .ghost で一段引いた表示。rowKey は同じなので
+  // pane が起動した snapshot からはそのまま実 row として描画される。
+  const cls = `row${pane.notStarted ? " ghost" : ""}${selected ? " selected" : ""}`;
   return (
-    <tr
-      className={selected ? "row selected" : "row"}
-      tabIndex={0}
-      ref={registerRow}
-      onClick={onClick}
-      onKeyDown={onKeyDown}
-    >
+    <tr className={cls} tabIndex={0} ref={registerRow} onClick={onClick} onKeyDown={onKeyDown}>
       <td className="c-issue">
         <GhLink url={issueUrl(repo, pane.issueNum)}>#{pane.issueNum}</GhLink>
       </td>
