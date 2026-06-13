@@ -33,7 +33,7 @@ fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
 
-`fanout dashboard --web` is a standalone subcommand (no parent argument): it starts a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it to the user when they ask to "watch"/"monitor" parallel panes, but do not run it as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; pass `--no-dashboard-keybind` to suppress that.
+`fanout dashboard --web` is a standalone subcommand (no parent argument): it starts a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it to the user when they ask to "watch"/"monitor" parallel panes, but do not run it as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; launched panes record their owner project root so the key still opens the right dashboard from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. Pass `--no-dashboard-keybind` to suppress that.
 
 **Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
 

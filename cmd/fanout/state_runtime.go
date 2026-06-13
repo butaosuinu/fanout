@@ -49,6 +49,67 @@ func resolveStateRuntime() (fanoutStateRuntime, error) {
 	return fanoutStateRuntime{projectRoot: root, statePath: state.Path(root)}, nil
 }
 
+// resolveDisplayProjectRoot resolves the project root whose fanout Session
+// state should be displayed by dashboard-style surfaces (the resident TUI and
+// web dashboard). Unlike action/status modes, display commands are often launched
+// from Codex/dmux wrappers whose process cwd can differ from the tmux pane's
+// visible current path. Prefer a conventional FANOUT_STATE_PATH
+// (<root>/.fanout/state.json), then the cwd root when it already owns state,
+// then the tmux pane path when that is the only state-owning root available.
+func resolveDisplayProjectRoot() (string, error) {
+	if raw := os.Getenv(fanoutStatePathEnv); raw != "" {
+		path, err := filepath.Abs(raw)
+		if err != nil {
+			path = raw
+		}
+		return inferProjectRootFromStatePath(path), nil
+	}
+	top, err := gitToplevelFromCwd()
+	if err != nil {
+		return "", err
+	}
+	return resolveDisplayProjectRootFrom(top, tmuxPaneGitToplevel, projectHasState), nil
+}
+
+func resolveDisplayProjectRootFrom(cwdTop string, tmuxTop func() (string, error), hasState func(string) bool) string {
+	cwdRoot := resolveRootFromTop(cwdTop, hasState)
+	if hasState(cwdRoot) {
+		return cwdRoot
+	}
+	if tmuxTop == nil {
+		return cwdRoot
+	}
+	top, err := tmuxTop()
+	if err != nil || strings.TrimSpace(top) == "" {
+		return cwdRoot
+	}
+	tmuxRoot := resolveRootFromTop(top, hasState)
+	if hasState(tmuxRoot) {
+		return tmuxRoot
+	}
+	return cwdRoot
+}
+
+func projectHasState(dir string) bool {
+	return fileExists(state.Path(dir))
+}
+
+func tmuxPaneGitToplevel() (string, error) {
+	pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if pane == "" {
+		return "", fmt.Errorf("not inside a tmux pane")
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{pane_current_path}").Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
+	}
+	path := strings.TrimSpace(string(out))
+	if path == "" {
+		return "", fmt.Errorf("tmux pane current path is empty")
+	}
+	return gitToplevelAt(path)
+}
+
 func inferProjectRootFromStatePath(path string) string {
 	stateDir := filepath.Dir(path)
 	if filepath.Base(stateDir) == ".fanout" {
@@ -61,7 +122,15 @@ func inferProjectRootFromStatePath(path string) string {
 }
 
 func gitToplevelFromCwd() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	return gitToplevelAt("")
+}
+
+func gitToplevelAt(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	if strings.TrimSpace(dir) != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("current directory is not inside a git work tree")
 	}

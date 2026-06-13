@@ -19,6 +19,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
@@ -279,10 +280,23 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
+	if !cfg.DryRun {
+		markCurrentPaneProjectRoot(info.ProjectRoot, lg)
+	}
 	return &runtimeInfo{
 		info: info,
 		gh:   ghissue.Runner{Cwd: info.ProjectRoot},
 	}, exitcode.OK
+}
+
+func markCurrentPaneProjectRoot(projectRoot string, lg *log.Logger) {
+	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if paneID == "" {
+		return
+	}
+	if err := tmuxrun.SetPaneProjectRoot(paneID, projectRoot); err != nil {
+		lg.Debug("dashboard project root hint: %v", err)
+	}
 }
 
 type childLoadResult struct {

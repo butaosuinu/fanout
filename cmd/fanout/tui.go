@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -56,7 +55,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("notifications: %v", err)
 		return exitcode.Env
 	}
-	restoreTitle := markTUIRunning()
+	restoreTitle := markTUIRunning(projectRoot)
 	defer restoreTitle()
 	if err := fanouttui.Run(fanouttui.Options{
 		ProjectRoot:   projectRoot,
@@ -239,11 +238,12 @@ func enterTUISession(projectRoot, commandName string, lg *log.Logger) exitcode.C
 	return exitcode.OK
 }
 
-func markTUIRunning() func() {
+func markTUIRunning(projectRoot string) func() {
 	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if paneID == "" {
 		return func() {}
 	}
+	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot) // Best-effort dashboard keybinding hint.
 	originalTitle, err := tmuxrun.PaneTitle(paneID)
 	if err != nil {
 		originalTitle = "fanout"
@@ -279,15 +279,7 @@ func firstSessionPane(session string) (tmuxrun.PaneInfo, error) {
 }
 
 func tuiProjectRoot() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("current directory is not inside a git work tree")
-	}
-	root := strings.TrimSpace(string(out))
-	if root == "" {
-		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
-	}
-	return root, nil
+	return resolveDisplayProjectRoot()
 }
 
 func fanoutTUISessionName(projectRoot string) string {

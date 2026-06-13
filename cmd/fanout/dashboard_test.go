@@ -102,6 +102,47 @@ func TestResolveRootFromTop(t *testing.T) {
 	}
 }
 
+func TestResolveDisplayProjectRootFromFallsBackToTmuxPaneState(t *testing.T) {
+	has := func(roots ...string) func(string) bool {
+		set := map[string]bool{}
+		for _, r := range roots {
+			set[r] = true
+		}
+		return func(dir string) bool { return set[dir] }
+	}
+
+	tmuxTop := func(root string) func() (string, error) {
+		return func() (string, error) { return root, nil }
+	}
+
+	// Codex/dmux can execute commands with a process cwd in a helper worktree
+	// while tmux still reports the visible pane path in the repo that owns the
+	// fanout state. Display commands should show the state-owning root instead
+	// of silently rendering an empty Session list from the helper worktree.
+	if got := resolveDisplayProjectRootFrom("/repo/.dmux/worktrees/codex", tmuxTop("/repo"), has("/repo")); got != "/repo" {
+		t.Fatalf("tmux fallback root = %q want /repo", got)
+	}
+
+	// The process cwd still wins when it already has fanout state; this keeps a
+	// normal checked-out worktree from being hijacked by a stale tmux cwd.
+	if got := resolveDisplayProjectRootFrom("/worktree", tmuxTop("/repo"), has("/worktree", "/repo")); got != "/worktree" {
+		t.Fatalf("cwd-owned root = %q want /worktree", got)
+	}
+
+	// A tmux pane that is itself in a fanned child worktree should resolve to
+	// the owner checkout that holds .fanout/state.json.
+	child := "/repo/.fanout/worktrees/child-1"
+	if got := resolveDisplayProjectRootFrom("/empty", tmuxTop(child), has("/repo")); got != "/repo" {
+		t.Fatalf("tmux child fallback root = %q want /repo", got)
+	}
+
+	// If neither side has fanout state, stay with the command cwd rather than
+	// guessing an unrelated tmux location.
+	if got := resolveDisplayProjectRootFrom("/empty", tmuxTop("/repo"), has()); got != "/empty" {
+		t.Fatalf("no-state fallback root = %q want /empty", got)
+	}
+}
+
 func TestRandomTokenIsHexAndUnique(t *testing.T) {
 	a, err := randomToken()
 	if err != nil {
