@@ -112,6 +112,26 @@ Build the binary with `make build-go` and validate with `make test`.
 - `internal/naming` deterministically generates slugs and branch names.
   `--name` may override slug, display name, and branch. The skills generate
   these flags from issue context; the CLI does not call an LLM.
+- `internal/team` + `internal/msgstore` back the `--team` / `fanout msg`
+  sibling-coordination feature (parent #68, waves #69–#71). `internal/team`
+  owns the per-parent SQLite bus: `db.go` opens it with `modernc.org/sqlite`
+  (pure-Go, no external `sqlite3` binary) in WAL mode at file mode `0600` and
+  refuses a group/world-readable or foreign-owned file; `path.go` scopes the
+  DB to `/tmp/fanout-<repo>-<parent_key>.db` (collapsing leading zeros on
+  numeric parents, slugifying Project URLs; `FANOUT_DB_PATH` overrides);
+  `detect.go` resolves the invoking pane's identity from `.fanout/state.json`
+  by `(parent, issueNum)`, with the `[fanout #N of #P]` prompt prefix
+  (`FanoutTagRE`) as a fallback; `registry.go` `UpsertPeer` seeds the roster.
+  `internal/msgstore` is the query layer for send/post/inbox/board/mark-read.
+  `cmd/fanout/team.go` wires `--team` (briefing roster via `buildTeamContext`
+  plus a post-`executePlan` peer seed), and `cmd/fanout/msg.go` is the
+  `fanout msg` island. The briefing coordination section is shared by both
+  `claude` and `codex` panes (`internal/briefing` injects it agent-agnostic);
+  it is distinct from Claude Code Agent Teams, which is Claude-only and
+  coordinates inside a single session. Messaging is pull-based: nothing in the
+  merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
+  set by the launch wrapper in `internal/tmuxrun`) idle-nudge accelerator is a
+  separate, still-unmerged issue (#72) — do not assume an idle gate exists.
 - `internal/ghissue`, `internal/blockers`, `internal/briefing`,
   `internal/settings`, `internal/displayname`, `internal/atomicfs`,
   `internal/log`, `internal/tty`, and `internal/exitcode` hold the remaining
