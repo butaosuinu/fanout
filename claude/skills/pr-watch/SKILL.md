@@ -51,12 +51,12 @@ PR を出した瞬間が終わりではない。ベースブランチが進め�
 ## 対象 PR の特定
 
 ```bash
-gh pr view "$pr" --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefName,baseRefName,author,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify,url,title,statusCheckRollup
+gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,headRefName,baseRefName,author,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify,url,title,statusCheckRollup
 ```
 
-引数で PR 番号 / URL が渡されたらそれを `$pr` とし、無引数（現在ブランチの PR を対象）なら `$pr` は空。**この pass の全 gh 呼び出し（`gh pr view "$pr"`・`gh pr checks "$pr"`・GraphQL の番号 `$num`）に必ず `$pr`/`$num` を渡す**。無引数の `gh pr checks` / `gh pr view` は「現在ブランチの PR」を読むので、別ブランチから番号/URL 指定したのに無引数で叩くと**別の PR を監視してしまう**。
+引数で PR 番号 / URL が渡されたらそれを `$pr` とし、無引数（現在ブランチの PR を対象）なら `$pr` は空。`$pr` が**非空のときだけ**位置引数として渡す（`gh pr view ${pr:+"$pr"} …` のように、空なら**引数を付けない**）。`gh pr view ""` / `gh pr checks ""` は空文字でも argv エントリになり、`gh` の「引数なし＝現在ブランチの PR」フォールバックを壊すので、`"$pr"` をそのまま空で渡してはいけない。`$pr` が非空なら、この pass の全 gh 呼び出し（`gh pr view`・`gh pr checks`・GraphQL の `$num`）に必ず渡す — 無引数で叩くと別ブランチ指定時に別の PR を監視してしまう。
 
-`headRefName` が現在のローカルブランチ名と一致することを確認する（不一致ならユーザーに確認）。
+`headRefName` が現在のローカルブランチ名と一致することを確認する。**不一致（= 別ブランチから番号/URL でその PR を対象にしている）の場合は、confirm だけで先へ進まない**。C/D/E は `HEAD:"$head"` に push するので、現在 HEAD が対象 PR と無関係なブランチのままだと**別ブランチのコミットで PR を上書き**してしまう。まず `gh pr checkout "$pr"`（または `<head-remote>` から `$head` を fetch してそのブランチへ）で対象 PR head をチェックアウトしてから進むか、それができないならこの pass を止めてユーザーにエスカレーションする。
 
 主要フィールドの意味:
 
@@ -103,16 +103,17 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 この pass の判断材料を、**B の終了判定に必要なものまで含めて先に揃える**（B が「CI 全 pass」「未対応のレビュー指摘 0」を見るのに、それらを A で取っていないと取りこぼす）。4 つを取る:
 
 1. `gh pr view --json …`（PR 状態）。
-2. CI: `gh pr checks "$pr" --json name,state,bucket,link,workflow`（`$pr` を必ず渡す。`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks "$pr" --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
+2. CI: `gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow`（`$pr` を必ず渡す。`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks ${pr:+"$pr"} --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
 3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身・各スレッドの先頭/最新コメント）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
-4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view "$pr" --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の `state=CHANGES_REQUESTED` 本文・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、トップレベルに actionable コメントが残っていても approve/green で完了扱いになる）。
+4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の `state=CHANGES_REQUESTED` 本文・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、トップレベルに actionable コメントが残っていても approve/green で完了扱いになる）。
 
 ### B. 終了判定（最初に行う）
 
 対処に入る前に、まず「もう終わっていないか」を見る。無駄な rebase / 修正を避けるため、この判定を pass の先頭に置く:
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
-- `state=OPEN` かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** → **やることなし＝実質完了**。「マージ可能・グリーンで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。完了判定はスレッド数だけでなく **A-4 のサマリ/トップレベル指摘も 0** であることを要件にする（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドやトップレベルコメントを取りこぼす）。なお「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。
+- `state=OPEN` かつ **`isDraft=false`** かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 の未対応スレッドが 0 かつ A-4 の未対応サマリ/トップレベル指摘が 0** → **やることなし＝実質完了**。「マージ可能・グリーンで未対応のレビュー指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。完了判定はスレッド数だけでなく **A-4 のサマリ/トップレベル指摘も 0** であることを要件にする（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドやトップレベルコメントを取りこぼす）。なお「未対応」は E の skip ルール（自分が既に対応・返信済みでレビュアーの新規反応待ちのものは対応済み扱い）を適用して数える。
+- **`isDraft=true`（ドラフト）なら完了にしない**。ドラフトはレビュー / マージ前提が揃わないので、衝突・CI の追従（C/D）は続けつつ「ドラフトのままなので approve/マージ判定はスキップ。ready 化待ち」と報告して**監視を継続**する（ここで loop を抜けると、ビルド途中のドラフトで監視が止まってしまう）。
 - それ以外 → C 以降で対処対象を洗う。
 
 ### C. マージコンフリクト対応（rebase + 自動解決）
@@ -145,7 +146,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
 ### D. CI 失敗対応
 
-`gh pr checks "$pr" --json name,state,bucket,link,workflow` で **`bucket` が `fail` または `cancel`** のチェックを特定する（`cancel`=キャンセルされた必須チェックを無視すると、B は「全 pass でない」ので完了できず、D が拾わないと永遠に idle/long-poll になる）。`cancel` は原因修正の対象ではなく、まず `gh run rerun <run-id>`（外部 CI なら再実行をユーザーに促す）で回し直し、繰り返すならエスカレーション。`fail` は以下で原因を直す:
+`gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow` で **`bucket` が `fail` または `cancel`** のチェックを特定する（`cancel`=キャンセルされた必須チェックを無視すると、B は「全 pass でない」ので完了できず、D が拾わないと永遠に idle/long-poll になる）。`cancel` は原因修正の対象ではなく、まず `gh run rerun <run-id>`（外部 CI なら再実行をユーザーに促す）で回し直し、繰り返すならエスカレーション。`fail` は以下で原因を直す:
 
 1. 失敗チェックが **GitHub Actions の run か外部 CI かをまず判別する**。`gh pr checks --json` の各チェックの `link` が GitHub Actions の run URL（`…/actions/runs/<id>…`）か、`workflow` が埋まっているものだけが Actions。Actions なら失敗 run のログを **失敗ジョブのみ**精読する（run id は `link` から、または `gh run list --branch "$head" --json databaseId,conclusion,workflowName` で取得）:
 
@@ -165,7 +166,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 未対応のレビュー指摘を集めて、コードで対処する。対象は**インラインスレッドだけではない** — 次の 2 系統を両方拾う:
 
 1. 取得:
-   - **サマリ／トップレベルの requested changes**: `gh pr view "$pr" --json latestReviews,comments,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision=CHANGES_REQUESTED` なのにインラインスレッドが 0、というケースがあるので、`latestReviews` の `state=CHANGES_REQUESTED` の本文や、対応を要求する PR コメント本文も**対処すべきレビュー作業として扱う**（これを見ないと「直す対象が無い」と誤判断して永遠に idle になる）。**判断には `latestReviews`（レビュアーごとの現在状態。承認・dismiss 済みは反映される）を使い、歴史的な `reviews` 全件は使わない** — 後で approve / dismiss された古い `CHANGES_REQUESTED` を蒸し返して対処対象にしてしまうため。
+   - **サマリ／トップレベルの requested changes**: `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision=CHANGES_REQUESTED` なのにインラインスレッドが 0、というケースがあるので、`latestReviews` の `state=CHANGES_REQUESTED` の本文や、対応を要求する PR コメント本文も**対処すべきレビュー作業として扱う**（これを見ないと「直す対象が無い」と誤判断して永遠に idle になる）。**判断には `latestReviews`（レビュアーごとの現在状態。承認・dismiss 済みは反映される）を使い、歴史的な `reviews` 全件は使わない** — 後で approve / dismiss された古い `CHANGES_REQUESTED` を蒸し返して対処対象にしてしまうため。
    - **未解決のインラインスレッド**（どの指摘がまだ open か）は GraphQL で `isResolved` を見る:
 
      ```bash
@@ -175,16 +176,16 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
            pullRequest(number:$num){
              reviewThreads(first:100, after:$endCursor){
                pageInfo{ hasNextPage endCursor }
-               nodes{ isResolved isOutdated path
-                 topLevel: comments(first:1){ nodes{ databaseId } }
+               nodes{ isResolved isOutdated path line originalLine diffSide
+                 topLevel: comments(first:1){ nodes{ databaseId body diffHunk } }
                  latest:   comments(last:1){ nodes{ author{login} createdAt } } } } } } }' \
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
 
      **必ず全ページを辿る**（`--paginate` + `pageInfo.endCursor`）。`first:100` の 1 ページだけ見ると、スレッドが 100 を超える PR で後ろのページの未解決スレッドを取りこぼし、B が「未解決 0」と誤判定して完了してしまう。
 
-     スレッドごとに 2 つを別々に取る:
-     - **`topLevel`（`comments(first:1)`）の `databaseId`** = 返信先。reply エンドポイント（E-4）はこの先頭コメント ID しか受け付けない。
+     スレッドごとに次を取る:
+     - **`topLevel`（`comments(first:1)`）の `databaseId` / `body` / `diffHunk`**、および スレッドの `path`/`line` = **対処すべき指摘そのもの**（本文・該当ハンク・位置）と返信先。reply エンドポイント（E-4）はこの先頭コメント ID しか受け付けない。**`body` を取らないと実装すべき内容が分からず、推測 / 空振りエスカレーションに陥る**ので必ず取得する。
      - **`latest`（`comments(last:1)`）の `author`/`createdAt`** = skip 判定用の最新コメント。`comments(first:N)` で「古い方」を取って最新だと誤認しない（N を超えるとレビュアーの新しい反応を見落とし、対応済みと誤判定する）。スレッドのコメントが多いときは `last:` か末尾ページで最新を確実に取る。
 
 2. `isResolved=false` のスレッド **および 1 で拾ったサマリ／トップレベルの requested-change 本文**を対象に、指摘内容をコードで対処する。インラインスレッドが 0 でも `reviewDecision=CHANGES_REQUESTED` が残っているなら、レビュー本文側に対処対象があるとみなして拾う。
