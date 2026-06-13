@@ -56,9 +56,14 @@ export function blockersAllClosed(p: PaneView): boolean {
   return !!p.blockers && p.blockers.length > 0 && p.blockers.every((b) => b.state === "CLOSED");
 }
 
+export function paneLabel(p: PaneView): string {
+  return p.taskId || `#${p.issueNum}`;
+}
+
 /* 行の安定キー。tmux 再起動後は pane id (%N) が別 issue の古い行と重複しうる
- * ので、選択は parent#issueNum で識別し、paneId は capture 対象にだけ使う。 */
+ * ので、選択は parent + issueNum/taskId で識別し、paneId は capture 対象にだけ使う。 */
 export function rowKey(parent: string, p: PaneView): string {
+  if (p.taskId) return `${parent}@${p.taskId}`;
   return `${parent}#${p.issueNum}`;
 }
 

@@ -3,6 +3,7 @@ import { makePane } from "../test/fixtures";
 import { sortPanes } from "./sort";
 
 const nums = (ps: { issueNum: number }[]) => ps.map((p) => p.issueNum);
+const taskIds = (ps: { taskId?: string }[]) => ps.map((p) => p.taskId);
 
 describe("sortPanes", () => {
   it("diff は +X/-Y の総量、パース不能は -1(先頭)", () => {
@@ -34,6 +35,12 @@ describe("sortPanes", () => {
     const c = makePane({ issueNum: 2, agent: "codex" });
     expect(nums(sortPanes([a, b, c], "agent", 1))).toEqual([1, 3, 2]);
     expect(nums(sortPanes([a, b, c], "agent", -1))).toEqual([2, 1, 3]);
+  });
+
+  it("issueNum が同じ task 行は taskId で安定ソートする", () => {
+    const b = makePane({ issueNum: 0, taskId: "task-b", agent: "codex" });
+    const a = makePane({ issueNum: 0, taskId: "task-a", agent: "codex" });
+    expect(taskIds(sortPanes([b, a], "agent", 1))).toEqual(["task-a", "task-b"]);
   });
 
   it("dir 反転で順序が逆になる", () => {

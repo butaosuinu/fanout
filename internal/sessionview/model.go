@@ -45,6 +45,7 @@ type WorktreeStat struct {
 // worktree status.
 type PaneView struct {
 	IssueNum     int             `json:"issueNum"`
+	TaskID       string          `json:"taskId,omitempty"`
 	Slug         string          `json:"slug"`
 	DisplayName  string          `json:"displayName"`
 	Agent        string          `json:"agent"`

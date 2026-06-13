@@ -478,6 +478,84 @@ func TestBuildPlanModePassthrough(t *testing.T) {
 	}
 }
 
+func TestBuildTaskIDPaneUsesBranchPRs(t *testing.T) {
+	first := pane("plan:alpha", 0, "%1")
+	first.TaskID = "task-b"
+	first.BranchName = "fanout/task-branch"
+	second := pane("plan:alpha", 0, "%2")
+	second.TaskID = "task-a"
+	second.BranchName = "fanout/task-branch"
+
+	branchCalls := 0
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(first, second),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			t.Fatalf("IssuePRs(%d) called for task row", num)
+			return "", nil, nil
+		},
+		BranchPRs: func(branch string) ([]ghissue.PRRef, error) {
+			branchCalls++
+			if branch != "fanout/task-branch" {
+				t.Fatalf("BranchPRs branch = %q, want fanout/task-branch", branch)
+			}
+			return mergedPR(701), nil
+		},
+		Waves: wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+
+	if branchCalls != 1 {
+		t.Fatalf("BranchPRs calls = %d, want one cached call for the shared branch", branchCalls)
+	}
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 {
+		t.Fatalf("panes = %+v, want two task panes", panes)
+	}
+	if panes[0].TaskID != "task-a" || panes[1].TaskID != "task-b" {
+		t.Fatalf("task pane order = %q,%q want task-a,task-b", panes[0].TaskID, panes[1].TaskID)
+	}
+	for _, pv := range panes {
+		if pv.IssueState != IssueStateUnknown || !pv.HasMergedPR || len(pv.PRs) != 1 {
+			t.Fatalf("task pane should carry branch PR state and unknown issue state: %+v", pv)
+		}
+	}
+	if snap.Sessions[0].Rollup.Total != 2 || snap.Sessions[0].Rollup.Merged != 2 || !snap.Sessions[0].Rollup.AllMerged {
+		t.Fatalf("task rollup = %+v, want all merged", snap.Sessions[0].Rollup)
+	}
+	raw, err := json.Marshal(panes[0])
+	if err != nil {
+		t.Fatalf("marshal task pane: %v", err)
+	}
+	if !strings.Contains(string(raw), `"taskId":"task-a"`) {
+		t.Fatalf("task pane JSON should include taskId: %s", raw)
+	}
+}
+
+func TestBuildTaskIDBranchPRFailureDegradesGitHub(t *testing.T) {
+	task := pane("plan:alpha", 0, "%1")
+	task.TaskID = "task-a"
+	task.BranchName = "fanout/task-a"
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(task),
+		LivePanes: livePanesAt(),
+		BranchPRs: func(branch string) ([]ghissue.PRRef, error) {
+			return nil, errors.New("gh pr list failed")
+		},
+		Waves: wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	if !snap.Degraded.GitHub || !strings.Contains(snap.Degraded.Reason, "gh pr list failed") {
+		t.Fatalf("branch PR failure should degrade GitHub, got %+v", snap.Degraded)
+	}
+	pv := snap.Sessions[0].Panes[0]
+	if pv.IssueState != IssueStateUnknown || pv.PRs == nil || len(pv.PRs) != 0 {
+		t.Fatalf("failed task pane = %+v, want UNKNOWN and non-nil empty PRs", pv)
+	}
+}
+
 func TestBuildCIStatusFromPrimaryPR(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
@@ -858,5 +936,8 @@ func TestBuildBlockersMarshalAsEmptyArray(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"blockers":[]`) {
 		t.Fatalf("pane view JSON should contain \"blockers\":[] — got %s", raw)
+	}
+	if strings.Contains(string(raw), `"taskId"`) {
+		t.Fatalf("issue pane JSON should omit empty taskId for wire compatibility — got %s", raw)
 	}
 }

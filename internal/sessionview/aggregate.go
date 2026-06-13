@@ -47,6 +47,10 @@ type Collectors struct {
 	// server restarts, so id-only matching would falsely revive stale rows.
 	LivePanes func() (map[string]LivePaneInfo, error)
 	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
+	// BranchPRs mirrors IssuePRs for issue-less task rows keyed by head branch:
+	// a nil PR slice with nil error is a cache miss, while a non-nil error marks
+	// GitHub degraded.
+	BranchPRs func(branch string) ([]ghissue.PRRef, error)
 	// Waves follows the same three-outcome cache contract as IssuePRs, keyed by
 	// parent instead of issue number (the caller closes over the recorded issue
 	// numbers it passes to FetchWaveGraph):
@@ -95,12 +99,13 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		live = set
 	}
 
-	// One gh read per distinct issue number, cached across sessions.
+	// One gh read per distinct issue number or branch, cached across sessions.
 	prCache := map[int]struct {
 		state string
 		prs   []ghissue.PRRef
 	}{}
-	fetch := func(num int) (string, []ghissue.PRRef) {
+	branchPRCache := map[string][]ghissue.PRRef{}
+	fetchIssue := func(num int) (string, []ghissue.PRRef) {
 		if got, ok := prCache[num]; ok {
 			return got.state, got.prs
 		}
@@ -123,6 +128,36 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			prs   []ghissue.PRRef
 		}{st, prs}
 		return st, prs
+	}
+	fetchBranch := func(branch string) []ghissue.PRRef {
+		branch = strings.TrimSpace(branch)
+		if got, ok := branchPRCache[branch]; ok {
+			return got
+		}
+		prs := []ghissue.PRRef{}
+		if branch == "" {
+			branchPRCache[branch] = prs
+			return prs
+		}
+		if c.BranchPRs == nil {
+			snap.Degraded.GitHub = true
+		} else if gotPRs, err := c.BranchPRs(branch); err != nil {
+			snap.Degraded.GitHub = true
+			snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "github: "+err.Error())
+		} else if gotPRs != nil {
+			prs = gotPRs
+		}
+		branchPRCache[branch] = prs
+		return prs
+	}
+	fetchPanePRs := func(p state.Pane) (string, []ghissue.PRRef) {
+		if p.IssueNum <= 0 && strings.TrimSpace(p.TaskID) != "" && strings.TrimSpace(p.BranchName) != "" {
+			return IssueStateUnknown, fetchBranch(p.BranchName)
+		}
+		if p.IssueNum <= 0 {
+			return IssueStateUnknown, []ghissue.PRRef{}
+		}
+		return fetchIssue(p.IssueNum)
 	}
 	// One waves read per distinct parent, cached across the Build call.
 	waveCache := map[string]WaveGraph{}
@@ -171,17 +206,23 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	syntheticEmitted := map[string]bool{}
 	for _, parent := range sortedParents(grouped) {
 		panes := grouped[parent]
-		slices.SortFunc(panes, func(a, b state.Pane) int { return cmp.Compare(a.IssueNum, b.IssueNum) })
+		slices.SortFunc(panes, func(a, b state.Pane) int {
+			if c := cmp.Compare(a.IssueNum, b.IssueNum); c != 0 {
+				return c
+			}
+			return strings.Compare(taskSortKey(a), taskSortKey(b))
+		})
 
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
 		graph := fetchWaves(parent)
 		for _, p := range panes {
-			issueState, prs := fetch(p.IssueNum)
+			issueState, prs := fetchPanePRs(p)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			alive := paneAlive(live, p.PaneID, p.WorktreePath)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
+				TaskID:       p.TaskID,
 				Slug:         p.Slug,
 				DisplayName:  p.DisplayName,
 				Agent:        p.Agent,
@@ -232,7 +273,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				if child.Number <= 0 || recorded[child.Number] {
 					continue
 				}
-				issueState, prs := fetch(child.Number)
+				issueState, prs := fetchIssue(child.Number)
 				closeUnconfirmed := false
 				if issueState == IssueStateUnknown && child.State != "" {
 					// PR キャッシュ未取得でも wave graph は issue 状態を知って
@@ -306,6 +347,16 @@ func groupByParent(panes []state.Pane) map[string][]state.Pane {
 		out[p.Parent] = append(out[p.Parent], p)
 	}
 	return out
+}
+
+func taskSortKey(p state.Pane) string {
+	if strings.TrimSpace(p.TaskID) != "" {
+		return p.TaskID
+	}
+	if strings.TrimSpace(p.BranchName) != "" {
+		return p.BranchName
+	}
+	return p.Slug
 }
 
 // sortedParents orders numeric parents (issue numbers) ascending and before any

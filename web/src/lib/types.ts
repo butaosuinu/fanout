@@ -22,6 +22,7 @@ export interface Session {
 
 export interface PaneView {
   issueNum: number;
+  taskId?: string;
   slug: string;
   displayName: string;
   agent: string;

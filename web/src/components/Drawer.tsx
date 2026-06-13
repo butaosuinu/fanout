@@ -4,7 +4,7 @@ import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
-import { blockerLabel, fmtWave, notStartedNote } from "../lib/pane";
+import { blockerLabel, fmtWave, notStartedNote, paneLabel } from "../lib/pane";
 import type { PaneView } from "../lib/types";
 import { AgentStateTag, DirtyTag, GhLink, IssueStateTag, PrPill, Tag } from "./ui";
 
@@ -165,7 +165,7 @@ export function Drawer({
       <header className="drawer-head">
         <h3>
           <span className="d-issue" id="d-issue">
-            <GhLink url={issueUrl(repo, pane.issueNum)}>#{pane.issueNum}</GhLink>
+            <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
           </span>
           <span id="d-name">{pane.displayName || pane.slug || "—"}</span>
         </h3>
