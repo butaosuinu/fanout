@@ -64,21 +64,30 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// extractLastPlan は capture 出力中の最後の「完全な」
+// extractLastPlan は capture 出力中の最後の「中身のある完全な」
 // <proposed_plan>...</proposed_plan> ブロックの中身を返す(前後空白は trim)。
-// 探索は LastIndex 2 回の素朴なテキスト検索: 最後の閉じタグ → その手前の
-// 最後の開きタグ。閉じタグ未到達(開きタグのみ)はブロック不成立で false。
-// capture 出力は markdown として構造を持たないので、plan 本文のコードフェンス
-// 内に書かれたタグも本物のタグと区別しない(既知の割り切り — その場合は
-// フェンス内の最後のブロックが勝つ)。
+// 後方走査のテキスト検索: 最後の閉じタグ → その手前の最後の開きタグの組を
+// 候補とし、中身が空・"..." (briefing の指示文
+// 「wrapped in <proposed_plan>...</proposed_plan>」が transcript にエコー
+// された行)のブロックはスキップしてさらに前を探す。閉じタグ未到達
+// (開きタグのみ = 生成中)はブロック不成立で false。capture 出力は構造を
+// 持たないので、plan 本文のコードフェンス内に書かれたタグも本物と区別しない
+// (既知の割り切り)。
 func extractLastPlan(out string) (string, bool) {
-	end := strings.LastIndex(out, planCloseTag)
-	if end < 0 {
-		return "", false
+	rest := out
+	for {
+		end := strings.LastIndex(rest, planCloseTag)
+		if end < 0 {
+			return "", false
+		}
+		start := strings.LastIndex(rest[:end], planOpenTag)
+		if start < 0 {
+			return "", false
+		}
+		body := strings.TrimSpace(rest[start+len(planOpenTag) : end])
+		if body != "" && body != "..." && body != "…" {
+			return body, true
+		}
+		rest = rest[:start] // 空/指示文エコーのブロックより前を探す
 	}
-	start := strings.LastIndex(out[:end], planOpenTag)
-	if start < 0 {
-		return "", false
-	}
-	return strings.TrimSpace(out[start+len(planOpenTag) : end]), true
 }

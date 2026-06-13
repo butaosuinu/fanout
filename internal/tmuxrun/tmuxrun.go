@@ -436,8 +436,9 @@ func CapturePlanSource(paneID string, lines int) (string, error) {
 	if paneID == "" {
 		return "", fmt.Errorf("pane id is required")
 	}
-	if lines < 0 {
-		return "", fmt.Errorf("lines must be non-negative")
+	if lines <= 0 {
+		// 0 を許すと -S が付かず viewport のみの浅い capture に静かに退化する
+		return "", fmt.Errorf("lines must be positive")
 	}
 	out, err := capturePlanScreen(paneID, lines, false)
 	if err != nil {

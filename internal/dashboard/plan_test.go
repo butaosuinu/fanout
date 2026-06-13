@@ -294,6 +294,29 @@ func TestPlanWithoutBlockIsFoundFalse(t *testing.T) {
 	}
 }
 
+// HEAD も PlanMode ゲートを通る: 非 plan-mode pane への HEAD は 404
+// (GET が成功しないリクエストは HEAD でも成功しない)。capture は走らない。
+func TestPlanHEADOnNonPlanPaneIs404(t *testing.T) {
+	fake := &fakeCapture{}
+	srv := newPlanServer(t, "", fake)
+	publishSnapshot(srv, planSnapshot(true, false)) // %5 は live だが plan-mode でない
+	req, err := http.NewRequest(http.MethodHead, planURL(srv.base, map[string]string{"pane": "%5"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("HEAD non-plan pane status = %d want 404", resp.StatusCode)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture ran %d time(s)", calls)
+	}
+}
+
 func TestExtractLastPlan(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -344,6 +367,31 @@ func TestExtractLastPlan(t *testing.T) {
 			name:      "空文字列は false",
 			out:       "",
 			wantFound: false,
+		},
+		{
+			name: "briefing 指示文のエコー(中身が ...)はスキップして前の実ブロックを返す",
+			out:  "<proposed_plan>real plan</proposed_plan>\nwrapped in <proposed_plan>...</proposed_plan>.",
+			// briefing は「wrapped in <proposed_plan>...</proposed_plan>」という
+			// 指示文を含み、transcript にエコーされうる。中身 "..." は plan では
+			// ないので後方走査でスキップする。
+			wantPlan:  "real plan",
+			wantFound: true,
+		},
+		{
+			name:      "指示文のエコーしか無ければ false",
+			out:       "wrapped in <proposed_plan>...</proposed_plan>.",
+			wantFound: false,
+		},
+		{
+			name:      "空白のみのブロックはスキップ(found:true で空 plan を返さない)",
+			out:       "<proposed_plan>  \n</proposed_plan>",
+			wantFound: false,
+		},
+		{
+			name:      "空白のみのブロックの前に実ブロックがあればそれを返す",
+			out:       "<proposed_plan>real</proposed_plan>\n<proposed_plan>\n</proposed_plan>",
+			wantPlan:  "real",
+			wantFound: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

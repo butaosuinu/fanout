@@ -12,13 +12,14 @@ function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   return (
     <section className="d-sec">
       <h4>plan — 提案中のプラン</h4>
-      {/* capture 出力は敵性入力 — markdown レンダせずテキストノードのみで描画 */}
-      <pre className="plan-card" id="plan-pre">
+      {/* capture 出力は敵性入力 — markdown レンダせずテキストノードのみで描画。
+          tabIndex: 長い plan のスクロールをキーボードで届くように */}
+      <pre className="plan-card" id="plan-pre" tabIndex={0} role="region" aria-label="提案中のプラン">
         {plan.text}
       </pre>
-      <div className="plan-meta" id="plan-meta">
-        <span>{plan.meta}</span>
-        <button type="button" className="plan-reload" onClick={plan.refetch}>
+      <div className="plan-meta" id="plan-meta" aria-live="polite">
+        <span>{plan.loading ? "取得中…" : plan.meta}</span>
+        <button type="button" className="plan-reload" onClick={plan.refetch} disabled={plan.loading}>
           再取得
         </button>
       </div>

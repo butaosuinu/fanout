@@ -183,6 +183,16 @@ func TestPeekInvalidLinesIs400(t *testing.T) {
 	}
 }
 
+// 検証順は pane の生存確認が lines パースより先(共有ヘルパ化に伴う意図的な
+// 契約): 死んだ pane + 不正 lines の組合せは 400 ではなく 404 を返す。
+func TestPeekDeadPaneWithInvalidLinesIs404(t *testing.T) {
+	srv := newPeekServer(t, "", &fakeCapture{})
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%999", "lines": "abc"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("dead pane + lines=abc status = %d want 404, body %s", status, body)
+	}
+}
+
 func TestPeekUnknownPaneIs404(t *testing.T) {
 	fake := &fakeCapture{}
 	srv := newPeekServer(t, "", fake)
