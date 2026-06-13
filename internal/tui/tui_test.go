@@ -188,6 +188,31 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	}
 }
 
+func TestBuildPaneViewsCarriesTaskID(t *testing.T) {
+	got := buildPaneViews("/repo", []state.Pane{
+		{
+			Parent:       "plan:launch-plan",
+			IssueNum:     0,
+			TaskID:       "api-client",
+			Slug:         "launch-plan-api-client",
+			WorktreePath: "/repo/.fanout/worktrees/launch-plan-api-client",
+		},
+	}, nil, true, nil, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("buildPaneViews len = %d, want 1 task row", len(got))
+	}
+	if got[0].TaskID != "api-client" || got[0].itemLabel() != "api-client" {
+		t.Fatalf("task identity = %q/%q, want api-client", got[0].TaskID, got[0].itemLabel())
+	}
+	if got[0].IssueState != "-" {
+		t.Fatalf("IssueState = %q, want task row to skip issue status", got[0].IssueState)
+	}
+	if got[0].tableRow()[1] != "api-client" {
+		t.Fatalf("table identity cell = %q, want api-client", got[0].tableRow()[1])
+	}
+}
+
 func TestBuildPaneViewsAddsDeferredIssueRows(t *testing.T) {
 	issues := map[issueKey]issueStatus{
 		{Parent: "100", Num: 1}: {Title: "ready child", State: "OPEN", Wave: 1, Blockers: "-"},
@@ -828,6 +853,10 @@ func TestFilterPaneViewsSearchesTextAndPredicates(t *testing.T) {
 	if len(got) != 1 || got[0].IssueNum != 115 {
 		t.Fatalf("filterPaneViews diff search = %#v, want only #115", got)
 	}
+	got = filterPaneViews([]paneView{{TaskID: "api-client", Name: "plan task"}}, "task:api")
+	if len(got) != 1 || got[0].TaskID != "api-client" {
+		t.Fatalf("filterPaneViews task predicate = %#v, want api-client task", got)
+	}
 }
 
 func TestRefreshRowsKeepsFilterDuringStateAndGHUpdates(t *testing.T) {
@@ -997,6 +1026,32 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("done returned nil command, want state/GH reload")
+	}
+}
+
+func TestLifecycleKeysRejectPlanTaskRows(t *testing.T) {
+	for _, key := range []string{"c", "m", "x"} {
+		t.Run(key, func(t *testing.T) {
+			runner := &fakeLifecycleRunner{code: exitcode.OK}
+			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m.allPanes = []paneView{{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Name: "task"}}
+			m.refreshRows()
+
+			updated, cmd := m.Update(keyRunes(key))
+			m = updated.(model)
+			if cmd != nil {
+				t.Fatalf("Update(%q) returned command for task row", key)
+			}
+			if m.pendingAction != nil {
+				t.Fatalf("pendingAction = %#v, want nil for task row", m.pendingAction)
+			}
+			if !strings.Contains(m.actionMessage, "not available for plan task api-client") {
+				t.Fatalf("actionMessage = %q, want task rejection", m.actionMessage)
+			}
+			if runner.closeParent != "" || runner.cleanupParent != "" {
+				t.Fatalf("lifecycle runner was called: close=%q cleanup=%q", runner.closeParent, runner.cleanupParent)
+			}
+		})
 	}
 }
 

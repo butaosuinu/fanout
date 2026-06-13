@@ -1,0 +1,4 @@
+[info] tmux session: fanout-fixture
+[info] tmux target:  %1
+[info] project root: <REPO>/tests/fixtures/scenario-plan-complete-leaf/project_root
+[ ok ] all 1 selected plan task(s) already have a fanout pane or are complete. nothing to do.

@@ -1,0 +1,4 @@
+[info] tmux session: fanout-fixture
+[info] tmux target:  %1
+[info] project root: <REPO>/tests/fixtures/scenario-plan-idempotency/project_root
+[ ok ] all 2 plan task(s) already have a fanout pane. nothing to do.

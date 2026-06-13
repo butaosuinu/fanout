@@ -81,6 +81,25 @@ briefing prompt. It records launched panes in `.fanout/state.json`, keyed by
 have a recorded fanout pane. This path uses tmux directly and does not require
 dmux.
 
+## Plan specs
+
+`fanout plan <spec.json|plan-slug>` is the issue-less batch lane for work that
+is already decomposed into local task specs instead of GitHub child issues. A
+spec uses `version: 1`, a `plan` object (`slug`, `title`, optional
+`base_branch`), and `tasks` with kebab-case `id`, `title`, `briefing`, optional
+`slug`, `display_name`, `branch`, `wave`, and `blocked_by` task IDs. A bare
+`plan-slug` loads `<git-root>/.fanout/plans/<plan-slug>.json`; live runs copy
+the source spec into that directory for later reruns.
+
+Plan panes are recorded under parent `plan:<slug>` with `taskId` and
+`issueNum: 0`, so reruns skip task panes already in `.fanout/state.json` or in
+`.fanout/worktrees/`. Use `--dry-run` to inspect the git/tmux/agent actions,
+`--only` / `--skip` with task IDs, `--limit` to launch a wave subset, and
+`--unblocked-only` to defer tasks whose `blocked_by` dependencies do not yet
+have a merged PR on their explicit or generated branch. The generated task
+briefing avoids issue-closing footers and asks task PRs to end with
+`Plan: <slug> / Task: <id>`.
+
 ## Project mode
 
 In addition to a parent issue number, fanout's positional argument also

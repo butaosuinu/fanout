@@ -13,6 +13,7 @@ export const FILTER_KEYS = new Set([
   "dirty",
   "live",
   "issue",
+  "task",
   "pr",
   "run",
 ]);
@@ -109,6 +110,9 @@ export function matches(p: PaneView, terms: Term[]): boolean {
           String(p.taskId ?? "").toLowerCase() !== t.value
         )
           return false;
+        break;
+      case "task":
+        if ((p.taskId ?? "").toLowerCase() !== t.value) return false;
         break;
       case "pr":
         if ((p.derived?.filterValues?.pr ?? pr?.state ?? "none").toLowerCase() !== t.value)

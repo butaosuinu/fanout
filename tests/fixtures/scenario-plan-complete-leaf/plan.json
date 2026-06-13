@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "ui-shell",
+      "title": "Build UI shell",
+      "briefing": "## Goal\nBuild UI shell"
+    }
+  ]
+}

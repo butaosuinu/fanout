@@ -9,6 +9,7 @@ import (
 
 const usageText = `Usage: fanout
        fanout <parent-issue|project-url> [options]
+       fanout plan <spec.json|plan-slug> [options]
 
 With no arguments, starts fanout's persistent tmux console. The console creates
 or attaches a fanout-managed tmux session when launched from a plain shell, and
@@ -142,6 +143,9 @@ Options:
                       reported without starting conflict resolution.
   --cleanup           Close recorded child worktrees whose issue is CLOSED or
                       has a MERGED closed-by PR.
+  plan                Subcommand. Launch issue-less task panes from a JSON
+                      plan spec, or rerun a spec copied under
+                      .fanout/plans/<slug>.json. See 'fanout plan --help'.
   dashboard           Subcommand. Start a read-only localhost web dashboard
                       that visualizes fanout Sessions (panes grouped by parent)
                       live — pane liveness, issue state, PR merge status.

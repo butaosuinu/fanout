@@ -1,0 +1,12 @@
+[
+  {
+    "number": 42,
+    "state": "MERGED",
+    "mergedAt": "2026-06-13T00:00:00Z",
+    "isDraft": false,
+    "reviewDecision": "APPROVED",
+    "statusCheckRollup": {
+      "state": "SUCCESS"
+    }
+  }
+]

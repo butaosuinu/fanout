@@ -197,6 +197,7 @@ type paneFilter struct {
 	live   []string
 	issues []string
 	prs    []string
+	tasks  []string
 }
 
 type stateLoadedMsg struct {
@@ -689,6 +690,10 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = "no pane selected"
 		return m, nil
 	}
+	if pane.isTask() {
+		m.actionMessage = fmt.Sprintf("%s is not available for plan task %s", action, pane.identityLabel())
+		return m, nil
+	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
 	m.actionMessage = confirmMessage(action, pane)
 	return m, nil
@@ -729,12 +734,12 @@ func confirmMessage(action lifecycleAction, pane paneView) string {
 	case actionCleanup:
 		return fmt.Sprintf("confirm cleanup for parent %s? y/n", dash(pane.Parent))
 	default:
-		return fmt.Sprintf("confirm %s #%d? y/n", action, pane.IssueNum)
+		return fmt.Sprintf("confirm %s %s? y/n", action, pane.identityLabel())
 	}
 }
 
 func lifecycleResultMessage(msg lifecycleDoneMsg) string {
-	prefix := fmt.Sprintf("%s #%d", msg.action, msg.pane.IssueNum)
+	prefix := fmt.Sprintf("%s %s", msg.action, msg.pane.identityLabel())
 	if msg.action == actionCleanup {
 		prefix = fmt.Sprintf("%s parent %s", msg.action, dash(msg.pane.Parent))
 	}
@@ -752,7 +757,7 @@ func lifecycleRunningMessage(pending pendingLifecycleAction) string {
 	if pending.action == actionCleanup {
 		return fmt.Sprintf("%s parent %s...", pending.action, dash(pending.pane.Parent))
 	}
-	return fmt.Sprintf("%s #%d...", pending.action, pending.pane.IssueNum)
+	return fmt.Sprintf("%s %s...", pending.action, pending.pane.identityLabel())
 }
 
 func (m model) renderActionMessage() string {
@@ -1642,7 +1647,7 @@ func applyIssueStatuses(projectRoot string, panes []paneView, issues map[issueKe
 		}
 	}
 	for key, status := range issues {
-		if seen[key] || key.TaskID != "" {
+		if seen[key] || key.TaskID != "" || key.Num <= 0 {
 			continue
 		}
 		view := paneView{
@@ -1826,6 +1831,8 @@ func parsePaneFilter(query string) paneFilter {
 			filter.issues = append(filter.issues, value)
 		case "pr":
 			filter.prs = append(filter.prs, value)
+		case "task", "t":
+			filter.tasks = append(filter.tasks, value)
 		default:
 			filter.terms = append(filter.terms, token)
 		}
@@ -1849,7 +1856,7 @@ func splitFilterToken(token string) (string, string, bool) {
 func (f paneFilter) empty() bool {
 	return len(f.terms) == 0 && len(f.states) == 0 && len(f.agents) == 0 && len(f.waves) == 0 &&
 		len(f.runs) == 0 && len(f.cis) == 0 && len(f.dirty) == 0 && len(f.live) == 0 &&
-		len(f.issues) == 0 && len(f.prs) == 0
+		len(f.issues) == 0 && len(f.prs) == 0 && len(f.tasks) == 0
 }
 
 func (p paneView) matchesFilter(filter paneFilter) bool {
@@ -1905,12 +1912,18 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 			return false
 		}
 	}
+	for _, task := range filter.tasks {
+		if !containsFold(task, p.TaskID) {
+			return false
+		}
+	}
 	searchText := strings.ToLower(strings.Join([]string{
 		p.Parent,
 		p.TaskID,
 		p.itemLabel(),
 		"#" + strconv.Itoa(p.IssueNum),
 		strconv.Itoa(p.IssueNum),
+		p.TaskID,
 		p.Name,
 		p.PaneID,
 		p.TmuxState,
@@ -2019,6 +2032,17 @@ func (p paneView) dependencyWaveText() string {
 		return ""
 	}
 	return fmt.Sprintf("wave%d", p.Wave)
+}
+
+func (p paneView) isTask() bool {
+	return strings.TrimSpace(p.TaskID) != ""
+}
+
+func (p paneView) identityLabel() string {
+	if p.isTask() {
+		return p.TaskID
+	}
+	return "#" + strconv.Itoa(p.IssueNum)
 }
 
 func firstNonEmpty(values ...string) string {

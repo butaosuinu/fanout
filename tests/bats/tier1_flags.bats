@@ -26,12 +26,14 @@ load helpers
   run_fanout -h
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: fanout"* ]]
+  [[ "$output" == *"fanout plan <spec.json|plan-slug> [options]"* ]]
 }
 
 @test "--help prints usage and exits 0" {
   run_fanout --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage: fanout"* ]]
+  [[ "$output" == *"plan                Subcommand."* ]]
   [[ "$output" == *"update              Subcommand."* ]]
   [[ "$output" == *"--codex-plan-mode / --no-codex-plan-mode"* ]]
   [[ "$output" == *"Exit codes (update):"* ]]
@@ -133,6 +135,140 @@ load helpers
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"fanout is already up to date: v0.2.0"* ]]
+}
+
+@test "plan --help prints usage and exits 0" {
+  run_fanout plan --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: fanout plan"* ]]
+  [[ "$output" == *"--only <task-id[,id...]>"* ]]
+}
+
+@test "plan missing spec: usage + exit 2" {
+  run_fanout plan
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Usage: fanout plan"* ]]
+}
+
+@test "plan unknown flag rejects issue-mode-only --include: exit 2" {
+  run_fanout plan "$BATS_TEST_TMPDIR/spec.json" --include 1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown plan option: --include"* ]]
+  [[ "$output" == *"Usage: fanout plan"* ]]
+}
+
+@test "plan rejects --only and --skip together: exit 1" {
+  run_fanout plan "$BATS_TEST_TMPDIR/spec.json" --only api-client --skip base-types
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--only and --skip are mutually exclusive"* ]]
+}
+
+@test "plan missing spec file: exit 1" {
+  run_fanout plan "$BATS_TEST_TMPDIR/missing.json" --dry-run --agent claude
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"read plan spec"* ]]
+}
+
+@test "plan invalid JSON: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/invalid.json"
+  printf '{"version":' > "$spec"
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"parse plan spec"* ]]
+}
+
+@test "plan version mismatch: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/version.json"
+  cat > "$spec" <<'JSON'
+{
+  "version": 2,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [{"id": "api-client", "title": "Extract API client", "briefing": "## Goal\nExtract it"}]
+}
+JSON
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"version must be 1, got 2"* ]]
+}
+
+@test "plan duplicate task id: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/duplicate.json"
+  cat > "$spec" <<'JSON'
+{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "api-client", "title": "Extract API client", "briefing": "## Goal\nExtract it"},
+    {"id": "api-client", "title": "Extract API client again", "briefing": "## Goal\nExtract it again"}
+  ]
+}
+JSON
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"duplicates tasks[0].id"* ]]
+}
+
+@test "plan duplicate final slug: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/duplicate-final-slug.json"
+  cat > "$spec" <<'JSON'
+{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "api-client", "title": "Extract API client", "briefing": "## Goal\nExtract it"},
+    {"id": "worker", "title": "Worker", "slug": "launch-plan-extract-api-client-api-client", "briefing": "## Goal\nBuild it"}
+  ]
+}
+JSON
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"final slug"* ]]
+}
+
+@test "plan duplicate final branch: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/duplicate-final-branch.json"
+  cat > "$spec" <<'JSON'
+{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "api-client", "title": "Extract API client", "briefing": "## Goal\nExtract it"},
+    {"id": "worker", "title": "Worker", "branch": "fanout/launch-plan-extract-api-client-api-client", "briefing": "## Goal\nBuild it"}
+  ]
+}
+JSON
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"final branch"* ]]
+}
+
+@test "plan blocked_by cycle: exit 1" {
+  local spec="$BATS_TEST_TMPDIR/cycle.json"
+  cat > "$spec" <<'JSON'
+{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "base-types", "title": "Define base types", "briefing": "## Goal\nDefine it", "blocked_by": ["api-client"]},
+    {"id": "api-client", "title": "Extract API client", "briefing": "## Goal\nExtract it", "blocked_by": ["base-types"]}
+  ]
+}
+JSON
+
+  run_fanout plan "$spec" --dry-run --agent claude
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"blocked_by cycle detected"* ]]
 }
 
 @test "no positional argument enters TUI mode: outside git exits 1" {

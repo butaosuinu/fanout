@@ -215,7 +215,10 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		})
 
 		session := Session{Parent: parent, Panes: make([]PaneView, 0, len(panes))}
-		graph := fetchWaves(parent)
+		graph := WaveGraph{}
+		if hasPositiveIssuePane(panes) {
+			graph = fetchWaves(parent)
+		}
 		for _, p := range panes {
 			issueState, prs := fetchPanePRs(p)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
@@ -321,6 +324,15 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	}
 	finalize(&snap.Rollup)
 	return snap
+}
+
+func hasPositiveIssuePane(panes []state.Pane) bool {
+	for _, pane := range panes {
+		if pane.IssueNum > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func unknownWorktreeStat() WorktreeStat {
