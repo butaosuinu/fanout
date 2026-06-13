@@ -145,7 +145,7 @@ func TestNewPaneRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Shared child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), true)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), true, nil)
 
 	if got.Slug != "shared-child-parent-200-501" {
 		t.Fatalf("slug = %q, want shared-child-parent-200-501", got.Slug)
@@ -162,7 +162,7 @@ func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
 	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
@@ -173,7 +173,7 @@ func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Wave child", Body: "body", Wave: "wave5"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
 
 	if got.Wave != "wave5" {
 		t.Fatalf("Wave = %q, want wave5", got.Wave)
@@ -184,7 +184,7 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
 
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")

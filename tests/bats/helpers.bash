@@ -64,6 +64,11 @@ setup() {
   # lifecycle operations at another test's state file.
   unset FANOUT_STATE_PATH
 
+  # `--team` honors FANOUT_DB_PATH as a registry DB override; an ambient value
+  # would also rewrite the DB path shown in --team briefings. Unset for
+  # deterministic briefing/golden assertions.
+  unset FANOUT_DB_PATH
+
   # Supply the tmux shim with a PID that's alive for the full test run.
   # Kept for compatibility with older fixture helpers; current direct-runtime
   # shims do not need tmux option liveness checks.
@@ -78,6 +83,12 @@ teardown() {
   # Tier 1 tests don't reach the briefing path, but scrub defensively so a
   # future test (or a Tier 2 leakage) doesn't confuse the next run.
   rm -f /tmp/fanout-*.md 2>/dev/null || true
+  # --team registry DBs share the same /tmp prefix (team.DBPath). Dry-run
+  # tests never create one, but scrub defensively for future live tests.
+  # Scoped to the fixture repo slug (always project_root): a bare
+  # /tmp/fanout-*.db glob would delete the live, durable message DBs of any
+  # real --team session on this machine, unlike the regenerable .md briefings.
+  rm -f /tmp/fanout-project_root-*.db /tmp/fanout-project_root-*.db-wal /tmp/fanout-project_root-*.db-shm 2>/dev/null || true
 }
 
 # Run the repo-local fanout binary under bats' `run`, folding stderr into

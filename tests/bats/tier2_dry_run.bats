@@ -128,6 +128,18 @@ load helpers
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
+@test "--team variant of scenario-sub-issue-only: briefing grows and registry seed is printed" {
+  # Reuses the scenario-sub-issue-only fixture. --team must add the sibling
+  # coordination section to every briefing (size lines diverge from
+  # scenario-sub-issue-only.dry-run.txt) and print the would-seed line after
+  # the summary; without --team the sibling goldens stay byte-identical.
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --team
+  assert_success
+  assert_golden scenario-sub-issue-only-team
+}
+
 @test "Go settings disabled variant of scenario-sub-issue-only: briefing size tracks toggles" {
   skip_unless_fanout_go
   use_fixture scenario-sub-issue-only

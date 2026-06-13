@@ -66,8 +66,8 @@ type paneStateRecorder interface {
 	RemovePane(parent string, issueNum int) error
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette, commandName string) bool {
-	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents)
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) bool {
+	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents, teamCtx)
 	return createPane(cfg, lg, info, req, recorder, c, commandName)
 }
 
@@ -217,7 +217,7 @@ func buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, prompt, statusPath st
 	return strings.Join(quoted, " ")
 }
 
-func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, sharedAcrossParents bool) paneRequest {
+func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, sharedAcrossParents bool, teamCtx *briefing.TeamContext) paneRequest {
 	slug := naming.Slug(issue.Title, issue.Number)
 	slugOverridden := false
 	branchOverride := ""
@@ -254,7 +254,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode, teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode {
 		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, issue.Number, cfg.DryRun)

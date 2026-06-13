@@ -115,6 +115,45 @@ load helpers
   grep -q "Open a pull request with \"Closes #101\"" /tmp/fanout-project_root-101.md
 }
 
+@test "--team briefing for claude contains sibling section, roster, DB path, and msg cheatsheet" {
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --team
+  assert_success
+  local briefing="/tmp/fanout-project_root-101.md"
+  grep -q "## Coordinating with your sibling panes" "$briefing"
+  grep -q "You are the pane for issue #101 (parent #100)" "$briefing"
+  grep -q "(you)" "$briefing"
+  grep -q "#102:" "$briefing"
+  grep -q "/tmp/fanout-project_root-100.db" "$briefing"
+  grep -q "fanout msg peers" "$briefing"
+  grep -q "fanout msg send --to <N>" "$briefing"
+  grep -q "Agent Teams, which coordinates teammates inside your own single session" "$briefing"
+  # The sibling #102 briefing carries the same roster with the marker moved.
+  grep -q "## Coordinating with your sibling panes" /tmp/fanout-project_root-102.md
+  grep -q "You are the pane for issue #102" /tmp/fanout-project_root-102.md
+}
+
+@test "--team briefing for codex contains sibling section alongside the codex review gate" {
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --team --agent codex
+  assert_success
+  local briefing="/tmp/fanout-project_root-101.md"
+  grep -q "## Coordinating with your sibling panes" "$briefing"
+  grep -q "/tmp/fanout-project_root-100.db" "$briefing"
+  grep -q "codex review --uncommitted" "$briefing"
+}
+
+@test "briefing without --team omits the sibling coordination section" {
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100
+  assert_success
+  local briefing="/tmp/fanout-project_root-101.md"
+  ! grep -q "Coordinating with your sibling panes" "$briefing"
+  ! grep -q "fanout msg" "$briefing"
+}
+
 @test "Go settings: disabled PR review gate adds bypass notice for Claude" {
   skip_unless_fanout_go
   use_fixture scenario-sub-issue-only

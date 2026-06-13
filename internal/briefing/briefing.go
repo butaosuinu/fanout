@@ -21,9 +21,27 @@ func Path(projectRoot string, num int) string {
 	return fmt.Sprintf("/tmp/fanout-%s-%d.md", repo, num)
 }
 
+// TeamSibling is one roster entry of a --team run: a child pane created
+// alongside this briefing's issue.
+type TeamSibling struct {
+	Num   int
+	Title string
+}
+
+// TeamContext carries the --team coordination data into the briefing: the
+// display-ready parent label, the shared SQLite DB path (computed once per
+// run so briefing and registry seed always agree), and the launch-time
+// sibling roster built from this run's plan targets (self included).
+type TeamContext struct {
+	ParentLabel string // "#68" for issue parents, Project URLs verbatim
+	DBPath      string
+	Siblings    []TeamSibling
+}
+
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
-func Render(num int, title, body, agent, baseBranch string, s settings.Settings, codexPlanMode bool) string {
+// team is nil unless the run opted in with --team.
+func Render(num int, title, body, agent, baseBranch string, s settings.Settings, codexPlanMode bool, team *TeamContext) string {
 	if codexPlanMode {
 		return renderCodexPlanBriefing(num, title, body)
 	}
@@ -49,6 +67,9 @@ func Render(num int, title, body, agent, baseBranch string, s settings.Settings,
 	base := strings.Join(lines, "\n") + "\n"
 	if s.AutoPullRequest && s.PRVisualization {
 		base += prVisualizationSection(num, baseBranch)
+	}
+	if team != nil {
+		base += teamSection(num, team)
 	}
 	if agent == "codex" {
 		return base + codexReviewSection(s.AutoPullRequest)
@@ -171,6 +192,51 @@ Before committing your final changes, run the ` + "`/code-review`" + ` slash com
 files you've changed. /code-review is a Claude Code skill that reviews changed code
 for reuse, quality, and efficiency and fixes issues it finds. Apply its fixes,
 re-run lint/test, then commit and push as described above.
+`
+
+// teamSection renders the --team coordination block appended to the shared
+// base briefing for every agent. The roster is the launch-time snapshot of
+// this run's targets; the text points at `fanout msg peers` for the live
+// list and degrades gracefully while the msg subcommand (#70) is unmerged.
+func teamSection(num int, t *TeamContext) string {
+	var roster strings.Builder
+	for _, sibling := range t.Siblings {
+		fmt.Fprintf(&roster, "- #%d: %s", sibling.Num, sibling.Title)
+		if sibling.Num == num {
+			roster.WriteString(" (you)")
+		}
+		roster.WriteString("\n")
+	}
+	return fmt.Sprintf(teamSectionTemplate, num, t.ParentLabel, roster.String(), t.DBPath)
+}
+
+const teamSectionTemplate = `
+## Coordinating with your sibling panes
+
+You are the pane for issue #%d (parent %s), launched alongside these sibling panes:
+%s
+A shared SQLite message board for this parent lives at:
+%s
+The roster above is a launch-time snapshot; ` + "`fanout msg peers`" + ` is the live list.
+
+Cheatsheet (best-effort; skip messaging if the ` + "`fanout msg`" + ` subcommand is unavailable):
+- ` + "`fanout msg peers`" + `                 — live sibling roster
+- ` + "`fanout msg inbox [--mark-read]`" + `  — read messages addressed to you
+- ` + "`fanout msg board`" + `                 — read the shared board
+- ` + "`fanout msg send --to <N> \"<body>\"`" + ` — message sibling #N directly
+- ` + "`fanout msg post \"<body>\"`" + `        — post to the shared board
+
+Checkpoints (lightweight; never block waiting for a reply):
+1. After reading this briefing, check ` + "`fanout msg inbox`" + ` and ` + "`fanout msg board`" + ` once.
+   Siblings are registered after the whole batch has launched, so a missing DB or
+   an empty roster early in the run only means they have not joined yet — do not
+   give up on messaging; just check again at the next checkpoint.
+2. Before touching files siblings may share (configs, schemas, lockfiles), post a one-line heads-up.
+3. Check your inbox once more before opening the PR.
+
+Etiquette: keep messages short and factual — file paths, branch names, issue numbers.
+Note: this is messaging between separate panes; it is unrelated to Claude Code
+Agent Teams, which coordinates teammates inside your own single session.
 `
 
 const agentTeamsSection = `
