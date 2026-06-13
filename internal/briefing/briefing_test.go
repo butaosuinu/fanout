@@ -7,6 +7,17 @@ import (
 	"github.com/butaosuinu/fanout/internal/settings"
 )
 
+func TestTaskPathUsesPlanTaskNamespace(t *testing.T) {
+	got := TaskPath("/repos/project_root", "plan-alpha", "task-001")
+	want := "/tmp/fanout-project_root-plan-alpha-task-001.md"
+	if got != want {
+		t.Fatalf("TaskPath() = %q, want %q", got, want)
+	}
+	if got == Path("/repos/project_root", 214) {
+		t.Fatalf("TaskPath() collides with issue Path(): %q", got)
+	}
+}
+
 func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	defaults := settings.Defaults()
 	for _, agent := range []string{"claude", "codex"} {
@@ -48,6 +59,121 @@ func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
 	want := "git diff --name-only 'foo;bar'...HEAD"
 	if !strings.Contains(got, want) {
 		t.Fatalf("Render(...) missing shell-quoted base branch command %q", want)
+	}
+}
+
+func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T) {
+	defaults := settings.Defaults()
+	for _, tc := range []struct {
+		agent string
+		wants []string
+	}{
+		{
+			agent: "claude",
+			wants: []string{
+				"run the `/code-review` slash command",
+				"Optional: Agent Teams",
+			},
+		},
+		{
+			agent: "codex",
+			wants: []string{
+				"codex review --uncommitted",
+				"Only after the review loop is clean should you commit, push, and open the PR",
+			},
+		},
+	} {
+		got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", tc.agent, "release/v1", defaults)
+		commonWants := []string{
+			`You are assigned task "task-001" of plan "Launch Plan" (plan:plan-alpha) in this repository.`,
+			"Title: Task title",
+			"Task body",
+			"Make focused, minimal changes scoped to this single task",
+			`Open a pull request and end the PR body with "Plan: plan-alpha / Task: task-001"`,
+			"do not add an issue-closing footer",
+			"stop and report the ambiguity in this pane",
+			"structure the PR body",
+			"`Plan: plan-alpha / Task: task-001`",
+			"git diff --name-only release/v1...HEAD",
+			"Diagram gate",
+		}
+		for _, want := range append(commonWants, tc.wants...) {
+			if !strings.Contains(got, want) {
+				t.Fatalf("RenderTask(..., %q) missing %q:\n%s", tc.agent, want, got)
+			}
+		}
+		assertIssueLessTaskBriefing(t, got)
+	}
+}
+
+func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
+	defaults := settings.Defaults()
+
+	noAutoPR := defaults
+	noAutoPR.AutoPullRequest = false
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "release/v1", noAutoPR)
+	for _, unwanted := range []string{
+		"Open a pull request",
+		"structure the PR body",
+		"Diagram gate",
+		"open the PR",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderTask(..., AutoPullRequest=false) contains %q:\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "Only after the review loop is clean should you commit and push the branch") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR codex review gate:\n%s", got)
+	}
+	assertIssueLessTaskBriefing(t, got)
+
+	noVisualization := defaults
+	noVisualization.PRVisualization = false
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", noVisualization)
+	if !strings.Contains(got, `Open a pull request and end the PR body with "Plan: plan-alpha / Task: task-001"`) {
+		t.Fatalf("RenderTask(..., PRVisualization=false) missing auto-PR task requirement:\n%s", got)
+	}
+	for _, unwanted := range []string{"structure the PR body", "Diagram gate"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderTask(..., PRVisualization=false) contains %q:\n%s", unwanted, got)
+		}
+	}
+	assertIssueLessTaskBriefing(t, got)
+
+	claudeToggles := defaults
+	claudeToggles.PRReviewGate = false
+	claudeToggles.BriefingCodeReview = false
+	claudeToggles.AgentTeamsHint = false
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", claudeToggles)
+	if !strings.Contains(got, "The PR review gate is disabled for this fanout run") {
+		t.Fatalf("RenderTask(..., PRReviewGate=false) missing bypass notice:\n%s", got)
+	}
+	for _, unwanted := range []string{
+		"run the `/code-review` slash command",
+		"Optional: Agent Teams",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderTask(..., disabled claude toggles) contains %q:\n%s", unwanted, got)
+		}
+	}
+	assertIssueLessTaskBriefing(t, got)
+}
+
+func TestRenderTaskPRVisualizationQuotesBaseBranch(t *testing.T) {
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "foo;bar", settings.Defaults())
+	want := "git diff --name-only 'foo;bar'...HEAD"
+	if !strings.Contains(got, want) {
+		t.Fatalf("RenderTask(...) missing shell-quoted base branch command %q:\n%s", want, got)
+	}
+	assertIssueLessTaskBriefing(t, got)
+}
+
+func assertIssueLessTaskBriefing(t *testing.T, got string) {
+	t.Helper()
+	for _, unwanted := range []string{"Closes #", "GitHub issue #"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("issue-less task briefing contains %q:\n%s", unwanted, got)
+		}
 	}
 }
 

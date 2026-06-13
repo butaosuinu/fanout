@@ -1,5 +1,5 @@
-// Package briefing builds the per-issue task brief that fanout drops at
-// /tmp/fanout-<repo>-<N>.md and points the agent at via the one-line prompt.
+// Package briefing builds task briefs that fanout drops under /tmp and points
+// the agent at via the one-line prompt.
 //
 // The body is locked in by Tier 2 goldens (briefing size: NNN bytes) — both
 // the heredoc text and the trailing newline must match fanout:799-814 byte
@@ -19,6 +19,13 @@ import (
 func Path(projectRoot string, num int) string {
 	repo := filepath.Base(projectRoot)
 	return fmt.Sprintf("/tmp/fanout-%s-%d.md", repo, num)
+}
+
+// TaskPath returns /tmp/fanout-<repo_slug>-<planSlug>-<taskID>.md.
+// The single-hyphen shape is part of the plan-mode briefing contract.
+func TaskPath(projectRoot, planSlug, taskID string) string {
+	repo := filepath.Base(projectRoot)
+	return fmt.Sprintf("/tmp/fanout-%s-%s-%s.md", repo, planSlug, taskID)
 }
 
 // TeamSibling is one roster entry of a --team run: a child pane created
@@ -41,12 +48,95 @@ type TeamContext struct {
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
 // team is nil unless the run opted in with --team.
-func Render(num int, title, body, agent, baseBranch string, s settings.Settings, codexPlanMode bool, team *TeamContext) string {
+func Render(num int, title, body, agentName, baseBranch string, s settings.Settings, codexPlanMode bool, team *TeamContext) string {
 	if codexPlanMode {
 		return renderCodexPlanBriefing(num, title, body)
 	}
-	lines := []string{
-		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
+	return renderWorkBriefing(workBriefing{
+		header:                     fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
+		title:                      title,
+		body:                       body,
+		scopeRequirement:           "- Make focused, minimal changes scoped to this single issue.",
+		autoPullRequestRequirement: fmt.Sprintf("- Open a pull request with \"Closes #%d\" in the body.", num),
+		ambiguityRequirement:       "- If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.",
+		prFooter:                   issuePRFooter(num),
+		agentName:                  agentName,
+		baseBranch:                 baseBranch,
+		settings:                   s,
+		team:                       team,
+		teamIssueNum:               num,
+	})
+}
+
+// RenderTask produces an issue-less task brief. The task variant deliberately
+// avoids GitHub issue closing references because there is no issue to close.
+func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch string, s settings.Settings) string {
+	footer := taskPRFooter(planSlug, taskID)
+	return renderWorkBriefing(workBriefing{
+		header:                     fmt.Sprintf("You are assigned task \"%s\" of plan \"%s\" (plan:%s) in this repository.", taskID, planTitle, planSlug),
+		title:                      title,
+		body:                       body,
+		scopeRequirement:           "- Make focused, minimal changes scoped to this single task.",
+		autoPullRequestRequirement: fmt.Sprintf("- Open a pull request and end the PR body with \"%s\"; do not add an issue-closing footer because this task has no corresponding GitHub issue.", footer.line),
+		ambiguityRequirement:       "- If the scope is ambiguous, stop and report the ambiguity in this pane instead of guessing.",
+		prFooter:                   footer,
+		agentName:                  agentName,
+		baseBranch:                 baseBranch,
+		settings:                   s,
+	})
+}
+
+type workBriefing struct {
+	header                     string
+	title                      string
+	body                       string
+	scopeRequirement           string
+	autoPullRequestRequirement string
+	ambiguityRequirement       string
+	prFooter                   prFooter
+	agentName                  string
+	baseBranch                 string
+	settings                   settings.Settings
+	team                       *TeamContext
+	teamIssueNum               int
+}
+
+func renderWorkBriefing(b workBriefing) string {
+	lines := baseRequirementLines(b.header, b.title, b.body, b.scopeRequirement)
+	if b.settings.AutoPullRequest {
+		lines = append(lines, b.autoPullRequestRequirement)
+	}
+	lines = append(lines, b.ambiguityRequirement)
+
+	base := strings.Join(lines, "\n") + "\n"
+	if b.settings.AutoPullRequest && b.settings.PRVisualization {
+		base += prVisualizationSection(b.prFooter, b.baseBranch)
+	}
+	if b.team != nil {
+		base += teamSection(b.teamIssueNum, b.team)
+	}
+	if b.agentName == "codex" {
+		return base + codexReviewSection(b.settings.AutoPullRequest)
+	}
+	if b.agentName != "claude" {
+		return base
+	}
+
+	if !b.settings.PRReviewGate {
+		base += reviewGateBypassSection
+	}
+	if b.settings.BriefingCodeReview {
+		base += codeReviewSection
+	}
+	if b.settings.AgentTeamsHint {
+		base += agentTeamsSection
+	}
+	return base
+}
+
+func baseRequirementLines(header, title, body, scopeRequirement string) []string {
+	return []string{
+		header,
 		"",
 		fmt.Sprintf("Title: %s", title),
 		"",
@@ -55,39 +145,10 @@ func Render(num int, title, body, agent, baseBranch string, s settings.Settings,
 		"",
 		"Requirements:",
 		"- You are working inside a git worktree that was prepared for this task. Do not create additional worktrees.",
-		"- Make focused, minimal changes scoped to this single issue.",
+		scopeRequirement,
 		"- Run the project's lint/test commands if they exist (inspect package.json / Makefile / pyproject.toml first).",
 		"- When implementation passes tests, commit and push the branch.",
 	}
-	if s.AutoPullRequest {
-		lines = append(lines, fmt.Sprintf("- Open a pull request with \"Closes #%d\" in the body.", num))
-	}
-	lines = append(lines, "- If the scope is ambiguous, stop and leave a comment on the issue instead of guessing.")
-
-	base := strings.Join(lines, "\n") + "\n"
-	if s.AutoPullRequest && s.PRVisualization {
-		base += prVisualizationSection(num, baseBranch)
-	}
-	if team != nil {
-		base += teamSection(num, team)
-	}
-	if agent == "codex" {
-		return base + codexReviewSection(s.AutoPullRequest)
-	}
-	if agent != "claude" {
-		return base
-	}
-
-	if !s.PRReviewGate {
-		base += reviewGateBypassSection
-	}
-	if s.BriefingCodeReview {
-		base += codeReviewSection
-	}
-	if s.AgentTeamsHint {
-		base += agentTeamsSection
-	}
-	return base
 }
 
 func renderCodexPlanBriefing(num int, title, body string) string {
@@ -122,7 +183,7 @@ When opening the PR, structure the PR body in this order:
 3. **Changes by file** — inside ` + "`<details><summary>Changed files</summary>`" + `, add a ` + "`File | What changed | Why`" + ` table that lists only files you actually touched.
 4. **Risk** — add a ` + "`> [!WARNING]`" + ` block only for real risks. Do not add filler such as "no risk".
 5. **Test plan** — list the lint/test commands you ran and their results.
-6. **Footer** — end with ` + "`Closes #%d`" + ` on its own line so GitHub closes the child issue on merge.
+6. **Footer** — end with ` + "`%s`" + ` on its own line%s.
 
 Ground every substantive claim in the branch diff and current worktree. Before
 opening the PR, compare the PR body with ` + "`git diff --name-only %s...HEAD`" + `
@@ -141,11 +202,30 @@ is dropped; omit the whole diagram if it does not carry review value. GitHub
 renders ` + "```mermaid" + ` directly, so do not use image-generation tools.
 `
 
-func prVisualizationSection(num int, baseBranch string) string {
+type prFooter struct {
+	line   string
+	suffix string
+}
+
+func issuePRFooter(num int) prFooter {
+	return prFooter{
+		line:   fmt.Sprintf("Closes #%d", num),
+		suffix: " so GitHub closes the child issue on merge",
+	}
+}
+
+func taskPRFooter(planSlug, taskID string) prFooter {
+	return prFooter{
+		line:   fmt.Sprintf("Plan: %s / Task: %s", planSlug, taskID),
+		suffix: " to identify the issue-less task",
+	}
+}
+
+func prVisualizationSection(footer prFooter, baseBranch string) string {
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
-	return fmt.Sprintf(prVisualizationSectionTemplate, num, agent.ShellQuote(baseBranch))
+	return fmt.Sprintf(prVisualizationSectionTemplate, footer.line, footer.suffix, agent.ShellQuote(baseBranch))
 }
 
 func codexReviewSection(autoPullRequest bool) string {
