@@ -25,6 +25,7 @@ export function ciWorst(prs: PRRef[] | null | undefined): string {
  * non-primary PR's failure. The fallback is only for snapshots predating the
  * field entirely. */
 export function paneCI(p: PaneView): string {
+  if (p.derived?.ci != null) return p.derived.ci;
   if (p.ciStatus == null || p.ciStatus === "") return ciWorst(p.prs);
   return p.ciStatus === "-" ? "" : p.ciStatus;
 }
@@ -38,15 +39,22 @@ export function blockerLabel(b: BlockerStatus): string {
 }
 
 export function fmtBlockers(p: PaneView): string {
+  if (p.derived?.blockersText) return p.derived.blockersText;
   if (!p.blockers || !p.blockers.length) return "-";
   return p.blockers.map((b) => `${blockerLabel(b)} #${b.num}`).join(", ");
 }
 
 export function fmtWave(p: PaneView): string {
-  return p.waveLabel || (p.wave ? `w${p.wave}` : "");
+  if (p.derived?.waveText && p.derived.waveText !== "-") return p.derived.waveText;
+  return p.waveLabel || compactWave(p);
+}
+
+export function compactWave(p: PaneView): string {
+  return p.wave ? `w${p.wave}` : "";
 }
 
 export function openBlockerCount(p: PaneView): number {
+  if (p.derived?.openBlockers != null) return p.derived.openBlockers;
   return (p.blockers ?? []).filter((b) => b.state === "OPEN").length;
 }
 

@@ -71,6 +71,11 @@ describe("matches", () => {
     expect(matches(labeled, q("wave:w1*"))).toBe(true);
   });
 
+  it("derived waveText が full label のときも compact wN alias で一致する", () => {
+    const p = makePane({ wave: 2, derived: { waveText: "W2 ready", dependencyWave: "wave2" } });
+    expect(matches(p, q("wave:w2"))).toBe(true);
+  });
+
   it("ci: は paneCI(primary-PR の ciStatus、'-' は CI なし)を見る", () => {
     expect(matches(makePane({ ciStatus: "fail" }), q("ci:fail"))).toBe(true);
     expect(matches(makePane({ ciStatus: "-" }), q("ci:fail"))).toBe(false);
@@ -120,6 +125,20 @@ describe("matches", () => {
     const p = makePane({ agent: "claude", dirtyState: "dirty" });
     expect(matches(p, q("agent:claude dirty:yes"))).toBe(true);
     expect(matches(p, q("agent:claude dirty:no"))).toBe(false);
+  });
+
+  it("derived の filterText / filterValues を優先する", () => {
+    const p = makePane({
+      displayName: "fallback",
+      agentState: "",
+      dirtyState: "clean",
+      derived: {
+        filterText: "shared haystack",
+        filterValues: { run: "running", dirty: "yes", live: "no", issue: "777", pr: "merged" },
+      },
+    });
+    expect(matches(p, q("shared run:running dirty:yes live:no issue:777 pr:merged"))).toBe(true);
+    expect(matches(p, q("fallback"))).toBe(false);
   });
 });
 

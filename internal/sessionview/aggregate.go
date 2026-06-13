@@ -2,6 +2,7 @@ package sessionview
 
 import (
 	"cmp"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -257,6 +258,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				// tmux 列が stale を伝えるので空のままにする。
 				pv.AgentState = normalizeAgentState(p.AgentStatus)
 			}
+			pv.Derived = DerivePane(projectRoot, parent, pv)
 			session.Panes = append(session.Panes, pv)
 			accumulate(&session.Rollup, pv)
 		}
@@ -301,6 +303,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					NotStarted:       true,
 					closeUnconfirmed: closeUnconfirmed,
 				}
+				pv.Derived = DerivePane(projectRoot, parent, pv)
 				session.Panes = append(session.Panes, pv)
 				if countsInRollup(pv) {
 					accumulate(&session.Rollup, pv)
@@ -589,4 +592,302 @@ func appendReason(existing, add string) string {
 		return existing // collapse repeated identical reasons (e.g. one per issue)
 	}
 	return existing + "; " + add
+}
+
+// DerivePane computes display/filter/sort helper values from the canonical
+// PaneView fields. parent is passed separately because PaneView deliberately
+// does not repeat its containing Session parent on the public wire shape.
+func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
+	name := paneName(pv)
+	prSummary, prNum, prState := summarizePR(pv.PRs)
+	ci := paneCI(pv)
+	waveBadge := WaveBadge(pv.Wave, pv.Blocked)
+	waveText := WaveText(pv.WaveLabel, waveBadge)
+	dependencyWave := DependencyWaveText(pv.Wave)
+	blockersText := BlockersText(pv.Blockers)
+	openBlockers := OpenBlockerCount(pv.Blockers)
+	diffTotal, diffParsed := ParseDiffTotal(pv.DiffSummary)
+	relWorktree := RelativePath(projectRoot, pv.WorktreePath)
+
+	filterValues := map[string]string{
+		"state": strings.ToLower(strings.TrimSpace(firstMatchingState(pv.TmuxState, pv.IssueState))),
+		"run":   strings.ToLower(strings.TrimSpace(pv.AgentState)),
+		"agent": strings.ToLower(strings.TrimSpace(pv.Agent)),
+		"wave":  strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
+		"ci":    strings.ToLower(strings.TrimSpace(ci)),
+		"dirty": yesNo(pv.DirtyState == "dirty"),
+		"live":  yesNo(pv.Alive),
+		"issue": issueFilterValue(pv),
+		"pr":    strings.ToLower(firstNonEmpty(prState, "none")),
+	}
+	if pv.Wave <= 0 {
+		filterValues["wave"] = strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.WaveLabel, dependencyWave)))
+	}
+
+	filterText := strings.ToLower(strings.Join([]string{
+		parent,
+		pv.TaskID,
+		"#" + strconv.Itoa(pv.IssueNum),
+		strconv.Itoa(pv.IssueNum),
+		name,
+		pv.Slug,
+		pv.PaneID,
+		pv.TmuxState,
+		pv.TmuxTitle,
+		pv.AgentState,
+		pv.IssueState,
+		prSummary,
+		ci,
+		pv.BranchName,
+		pv.WorktreePath,
+		relWorktree,
+		pv.DiffSummary,
+		pv.DirtyState,
+		pv.WorktreeErr,
+		pv.Agent,
+		pv.WaveLabel,
+		waveBadge,
+		waveText,
+		blockersText,
+		dependencyWave,
+		pv.CreatedAt,
+		pv.Prompt,
+	}, "\n"))
+
+	canFocus := canFocusPane(pv.PaneID, pv.TmuxState)
+	return PaneDerived{
+		Name:             name,
+		PRSummary:        prSummary,
+		PrimaryPRNumber:  prNum,
+		PrimaryPRState:   prState,
+		CI:               ci,
+		WaveBadge:        waveBadge,
+		WaveText:         waveText,
+		DependencyWave:   dependencyWave,
+		BlockersText:     blockersText,
+		OpenBlockers:     openBlockers,
+		DiffTotal:        diffTotal,
+		DiffParsed:       diffParsed,
+		FilterText:       filterText,
+		FilterValues:     filterValues,
+		CanFocus:         canFocus,
+		CanPeek:          canFocus,
+		WorktreeRelative: relWorktree,
+		Sort: PaneSortKeys{
+			IssueNum: pv.IssueNum,
+			Name:     strings.ToLower(name),
+			Agent:    strings.ToLower(pv.Agent),
+			Wave:     waveSortKey(pv.Wave),
+			Blockers: openBlockers,
+			Branch:   strings.ToLower(pv.BranchName),
+			Diff:     diffSortKey(diffTotal, diffParsed),
+			Dirty:    dirtyRank(pv.DirtyState),
+			CI:       ciRank(ci),
+			Tmux:     tmuxRank(pv),
+			State:    strings.ToLower(pv.IssueState),
+			PR:       prRank(prState),
+		},
+	}
+}
+
+func paneName(pv PaneView) string {
+	return firstNonEmpty(pv.DisplayName, pv.Slug, pv.TaskID, "#"+strconv.Itoa(pv.IssueNum))
+}
+
+func issueFilterValue(pv PaneView) string {
+	if pv.IssueNum <= 0 && strings.TrimSpace(pv.TaskID) != "" {
+		return strings.ToLower(strings.TrimSpace(pv.TaskID))
+	}
+	return strconv.Itoa(pv.IssueNum)
+}
+
+func summarizePR(prs []ghissue.PRRef) (summary string, number int, state string) {
+	pr, ok := ghissue.PrimaryPR(prs)
+	if !ok {
+		return "-", 0, "none"
+	}
+	return "#" + strconv.Itoa(pr.Number) + " " + dash(pr.DisplayState()), pr.Number, strings.ToLower(pr.State)
+}
+
+func paneCI(pv PaneView) string {
+	if strings.TrimSpace(pv.CIStatus) == "" || pv.CIStatus == "-" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(pv.CIStatus))
+}
+
+// WaveBadge returns the compact TUI wave badge: WN ready / WN blocked.
+func WaveBadge(wave int, blocked bool) string {
+	if wave <= 0 {
+		return "-"
+	}
+	state := "ready"
+	if blocked {
+		state = "blocked"
+	}
+	return fmt.Sprintf("W%d %s", wave, state)
+}
+
+// WaveText joins the human label and computed badge without duplicate dashes.
+func WaveText(label, badge string) string {
+	parts := nonDashStrings(label, badge)
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, " ")
+}
+
+func DependencyWaveText(wave int) string {
+	if wave <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("wave%d", wave)
+}
+
+func BlockersText(rows []blockers.Status) string {
+	if len(rows) == 0 {
+		return "-"
+	}
+	return blockers.FormatStatuses(rows)
+}
+
+func OpenBlockerCount(rows []blockers.Status) int {
+	n := 0
+	for _, row := range rows {
+		if row.State == "OPEN" {
+			n++
+		}
+	}
+	return n
+}
+
+func ParseDiffTotal(summary string) (int, bool) {
+	s := strings.TrimSpace(summary)
+	if !strings.HasPrefix(s, "+") {
+		return 0, false
+	}
+	addPart, delPart, ok := strings.Cut(s[1:], "/-")
+	if !ok {
+		return 0, false
+	}
+	add, errA := strconv.Atoi(addPart)
+	del, errD := strconv.Atoi(delPart)
+	if errA != nil || errD != nil {
+		return 0, false
+	}
+	return add + del, true
+}
+
+func RelativePath(root, path string) string {
+	if root == "" || path == "" {
+		return path
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return path
+	}
+	return rel
+}
+
+func firstMatchingState(tmuxState, issueState string) string {
+	if strings.TrimSpace(tmuxState) != "" && tmuxState != "-" {
+		return tmuxState
+	}
+	return issueState
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func waveSortKey(wave int) int {
+	if wave <= 0 {
+		return 99
+	}
+	return wave
+}
+
+func diffSortKey(total int, parsed bool) int {
+	if !parsed {
+		return -1
+	}
+	return total
+}
+
+func dirtyRank(state string) int {
+	switch state {
+	case "clean":
+		return 0
+	case "dirty":
+		return 1
+	case "unknown":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func ciRank(ci string) int {
+	switch ci {
+	case "fail":
+		return 0
+	case "pending":
+		return 1
+	case "pass":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func tmuxRank(pv PaneView) int {
+	switch {
+	case pv.Alive:
+		return 0
+	case pv.NotStarted:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func prRank(state string) int {
+	switch strings.ToUpper(state) {
+	case "MERGED":
+		return 0
+	case "OPEN":
+		return 1
+	case "CLOSED":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func canFocusPane(paneID, tmuxState string) bool {
+	return strings.TrimSpace(paneID) != "" && tmuxState != "stale" && tmuxState != "-"
+}
+
+func nonDashStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "-" || seen[value] {
+			continue
+		}
+		out = append(out, value)
+		seen[value] = true
+	}
+	return out
+}
+
+func dash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
