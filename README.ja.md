@@ -365,7 +365,9 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   を押すだけで開けます。ライブ fan-out 後（およびダッシュボード起動時）に fanout が
   この tmux キーバインドを自動登録するため、どのペインからでも呼び出せます。キーは
   detached な `fanout-dashboard` ウィンドウでサーバを起動するのでキー押下後も生き続け、
-  2 回目以降は既存 URL を開き直すだけです。自動登録は
+  2 回目以降は既存 URL を開き直すだけです。fanout は起動したペインに owner
+  project root を記録するため、Codex などの agent TUI で tmux の
+  `pane_current_path` が stale でも正しい dashboard を開けます。自動登録は
   `--no-dashboard-keybind`（fan-out）/ `--no-keybind`（dashboard）・設定キー
   `dashboardKeybind`・`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます。
 - **Session テーブル + HUD。** 各ペイン行に issue・agent・wave と未解決

@@ -24,6 +24,7 @@ const (
 	// tmux 3.6a/macOS; Linux resolves the foreground pgrp leader the same way).
 	// Pane user options die with the pane, matching the liveness boundary.
 	agentStateOption         = "@fanout_agent_state"
+	projectRootOption        = "@fanout_project_root"
 	livePaneAgentStateFormat = "#{pane_id}\t#{" + agentStateOption + "}"
 	paneAlternateFormat      = "#{alternate_on}"
 )
@@ -250,11 +251,14 @@ func parseLivePaneField(out string) map[string]string {
 // opens the read-only web dashboard. It binds the key directly to `new-window`
 // (not run-shell), so:
 //
-//   - tmux expands `#{pane_current_path}` to the *active pane's* cwd at keypress
-//     time, making a single global key open the dashboard for whichever repo the
-//     pressing pane belongs to (multi-repo / multi-session safe). cmdDashboard
-//     then resolves that cwd to the main working tree, so pressing from a child
-//     worktree pane still reads the parent `.fanout/state.json`.
+//   - tmux expands @fanout_project_root (when fanout recorded it on the pane)
+//     or `#{pane_current_path}` at keypress time, making a single global key
+//     open the dashboard for whichever repo the pressing pane belongs to
+//     (multi-repo / multi-session safe). The explicit pane option covers agent
+//     TUIs such as Codex where tmux's current-path signal can remain stuck on
+//     the parent shell's cwd. cmdDashboard then resolves that cwd to the main
+//     working tree, so pressing from a child worktree pane still reads the
+//     parent `.fanout/state.json`.
 //   - The command runs through exactly one shell (new-window's), so the binary
 //     path needs a single level of quoting — handling install paths with spaces
 //     without the fragile double-quoting a run-shell wrapper would require.
@@ -271,12 +275,29 @@ func BindDashboardKey(key, fanoutBin string) error {
 		return fmt.Errorf("tmux bind-key: key and fanout binary path are required")
 	}
 	launch := shellQuote(fanoutBin) + " dashboard --web --open"
+	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
 	args := []string{
 		"bind-key", key, "new-window", "-d", "-n", "fanout-dashboard",
-		"-c", "#{pane_current_path}", launch,
+		"-c", startDir, launch,
 	}
 	if err := exec.Command("tmux", args...).Run(); err != nil {
 		return fmt.Errorf("tmux bind-key %s: %w", key, err)
+	}
+	return nil
+}
+
+// SetPaneProjectRoot records the fanout state owner on a pane. The dashboard
+// keybinding prefers this over #{pane_current_path}, which can be stale inside
+// agent TUIs such as Codex that do not update tmux's foreground cwd signal.
+func SetPaneProjectRoot(paneID, projectRoot string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if strings.TrimSpace(projectRoot) == "" {
+		return fmt.Errorf("project root is required")
+	}
+	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, projectRootOption, projectRoot).Run(); err != nil {
+		return fmt.Errorf("tmux set-option %s: %w", projectRootOption, err)
 	}
 	return nil
 }

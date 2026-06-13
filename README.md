@@ -435,9 +435,11 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   itself starts) fanout registers that tmux keybinding for you, so any pane can
   pop the dashboard. The key launches the server in a detached
   `fanout-dashboard` window, so it outlives the keypress; a second press just
-  reopens the existing URL. Disable the auto-binding with `--no-dashboard-keybind`
-  (fan-out) / `--no-keybind` (dashboard), the `dashboardKeybind` config key, or
-  `FANOUT_DASHBOARD_KEYBIND=0`.
+  reopens the existing URL. fanout records the owning project root on launched
+  panes, so the key keeps working from agent TUIs such as Codex even when tmux
+  reports a stale `pane_current_path`. Disable the auto-binding with
+  `--no-dashboard-keybind` (fan-out) / `--no-keybind` (dashboard), the
+  `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0`.
 - **Session table + HUD.** Each pane row shows issue, agent, wave and open
   blockers (from the parent issue graph), branch, diff/dirty, CI status, tmux
   liveness with the current pane title and a `running` / `done` agent-state

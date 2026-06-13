@@ -365,8 +365,12 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	}
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	// Each tmux argv on its own line: bind-key D new-window -d -n
-	// fanout-dashboard -c #{pane_current_path} <launch>.
-	want := []string{"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard", "-c", "#{pane_current_path}", "/abs/path/fanout dashboard --web --open"}
+	// fanout-dashboard -c <root-or-current-path> <launch>.
+	want := []string{
+		"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard",
+		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
+		"/abs/path/fanout dashboard --web --open",
+	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("tmux args = %#v, want %#v", got, want)
 	}
@@ -408,6 +412,19 @@ func TestBindDashboardKeyRejectsEmptyArgs(t *testing.T) {
 	if err := BindDashboardKey("D", ""); err == nil {
 		t.Fatal("BindDashboardKey(empty bin) should error")
 	}
+}
+
+func TestSetPaneProjectRoot(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneProjectRoot("%42", "/tmp/My Repo"); err != nil {
+		t.Fatalf("SetPaneProjectRoot() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_project_root", "/tmp/My Repo",
+	})
 }
 
 func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {

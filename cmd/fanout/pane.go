@@ -122,6 +122,9 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
 		lg.Warn("#%d: %v", req.Number, err)
 	}
+	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
+		lg.Warn("#%d: dashboard project root hint: %v", req.Number, err)
+	}
 	if err := tmuxrun.SelectTiled(info.Target); err != nil {
 		lg.Warn("#%d: %v", req.Number, err)
 	}

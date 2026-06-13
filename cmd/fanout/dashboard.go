@@ -259,7 +259,8 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 		return
 	}
 	// The binding resolves the repo from the pressing pane at keypress time
-	// (#{pane_current_path}) and cmdDashboard maps that to the main worktree, so
+	// (@fanout_project_root when fanout recorded it, otherwise
+	// #{pane_current_path}) and cmdDashboard maps that to the main worktree, so
 	// no repo root needs to be baked in here.
 	if err := tmuxrun.BindDashboardKey(defaultDashboardKey, bin); err != nil {
 		lg.Debug("dashboard keybind: %v (not in tmux?)", err)
@@ -277,13 +278,7 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 // — it never escapes into an unrelated ancestor checkout that merely happens to
 // have its own .fanout/state.json. A never-fanned worktree falls back to itself.
 func dashboardProjectRoot() (string, error) {
-	top, err := gitToplevelFromCwd()
-	if err != nil {
-		return "", err
-	}
-	return resolveRootFromTop(top, func(dir string) bool {
-		return fileExists(filepath.Join(dir, ".fanout", "state.json"))
-	}), nil
+	return resolveDisplayProjectRoot()
 }
 
 func resolveRootFromTop(top string, hasState func(string) bool) string {
