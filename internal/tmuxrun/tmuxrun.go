@@ -589,6 +589,35 @@ func SendKeys(target string, keys ...string) error {
 	return nil
 }
 
+// SendLiteralLine types text into paneID literally and submits it with Enter,
+// as `fanout msg nudge` does to drop a one-line hint into a peer agent's
+// input. It targets the pane id directly (not through exactSessionTarget,
+// which is the session-name "=" seam) and uses two send-keys calls on purpose:
+// -l forces literal interpretation so a text containing tmux key names ("C-c",
+// "Enter") is typed verbatim, but -l applies to every argument of one call, so
+// the submitting Enter must be a separate, non-literal send-keys. The "--"
+// terminates option parsing before the payload: without it a text starting
+// with "-" (e.g. "-n ...") is rejected as an unknown flag (verified on tmux
+// 3.6a), which would matter for future reusers of this primitive even though
+// today's only caller passes a fixed hint. The split is not transactional: if
+// the literal send succeeds but the Enter fails the hint sits unsubmitted in
+// the input buffer, which is harmless (it is just text) and fits the
+// best-effort contract — the message it points at is already persisted, so a
+// failed nudge never loses information.
+func SendLiteralLine(paneID, text string) error {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", "--", text).Run(); err != nil {
+		return fmt.Errorf("tmux send-keys -l: %w", err)
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
+		return fmt.Errorf("tmux send-keys Enter: %w", err)
+	}
+	return nil
+}
+
 // AttachOrSwitch attaches to a session outside tmux or switches clients inside tmux.
 func AttachOrSwitch(name string) error {
 	name = strings.TrimSpace(name)

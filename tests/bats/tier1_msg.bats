@@ -165,6 +165,59 @@ msg_env() {
   [[ "$output" == *"sent #1 to #71"* ]]
 }
 
+@test "msg nudge without a target exits 2" {
+  msg_env
+  run_fanout msg nudge --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"target issue <N> is required"* ]]
+}
+
+@test "msg nudge with a non-integer target exits 2" {
+  msg_env
+  run_fanout msg nudge abc --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"target must be a non-zero issue number"* ]]
+}
+
+@test "msg nudge with a second target exits 2" {
+  msg_env
+  run_fanout msg nudge 71 72 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"takes exactly one target issue"* ]]
+}
+
+@test "msg nudge rejects --to (target is positional): exit 2" {
+  msg_env
+  run_fanout msg nudge --to 71 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--to is not supported"* ]]
+}
+
+@test "msg nudge for an unrecorded peer is a best-effort no-op success" {
+  msg_env
+  # A recipient absent from state.json never touches tmux: nudge is best-effort
+  # (the message is already persisted by send), so it exits 0 and reports the
+  # skip instead of failing. Deterministic without a controllable tmux server.
+  printf '%s\n' '{"schemaVersion":1,"panes":[]}' > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg nudge 99 --parent 68 --json
+  assert_success
+  [[ "$output" == *'"nudged": false'* ]]
+  [[ "$output" == *"not recorded"* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/team.db" ]
+}
+
+@test "msg nudge --dry-run prints the would-line and touches no DB" {
+  msg_env
+  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"68","issueNum":70,"slug":"s","branchName":"b","paneId":"%1","agent":"claude","displayName":"d","worktreePath":"","prompt":"[fanout #70 of #68] s","createdAt":"2026-06-13T00:00:00Z"}]}' \
+    > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg nudge 70 --dry-run --parent 68
+  assert_success
+  [[ "$output" == *"# would send-keys -t %1 -l "* ]]
+  [ ! -e "$BATS_TEST_TMPDIR/team.db" ]
+}
+
 @test "msg detects a manual pane (negative synthetic issue under @manual)" {
   msg_env
   printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"@manual","issueNum":-1,"slug":"manual-1-scratch","branchName":"","paneId":"%1","agent":"claude","displayName":"scratch","worktreePath":"","prompt":"scratch work","createdAt":"2026-06-13T00:00:00Z"}]}' \

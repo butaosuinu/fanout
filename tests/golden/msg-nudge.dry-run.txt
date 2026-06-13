@@ -1,0 +1,1 @@
+# would send-keys -t %1 -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #70, only if agent is running)

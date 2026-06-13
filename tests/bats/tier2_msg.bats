@@ -72,6 +72,19 @@ seed_msg_db() {
   assert_golden msg-register-bare
 }
 
+@test "msg nudge --dry-run golden (pane id resolved from state.json)" {
+  msg_env
+  # nudge resolves the recipient pane id from state.json (never the DB), so the
+  # dry-run line is deterministic given a fixed FANOUT_STATE_PATH. The agent
+  # state is read live only on the real path, never in dry-run.
+  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"68","issueNum":70,"slug":"msg-cli-surface-70","branchName":"fanout/msg-cli-surface-70","paneId":"%1","agent":"claude","displayName":"msg cli surface","worktreePath":"","prompt":"[fanout #70 of #68] msg-cli-surface-70: msg CLI.","createdAt":"2026-06-13T00:00:00Z"}]}' \
+    > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg nudge 70 --dry-run --parent 68
+  assert_success
+  assert_golden msg-nudge
+}
+
 @test "msg inbox --json golden: unread 1:1 + board union" {
   msg_env
   seed_msg_db
