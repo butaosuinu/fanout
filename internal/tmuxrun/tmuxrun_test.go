@@ -807,6 +807,101 @@ func TestSendKeysPreservesPaneTarget(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "%1", "q"})
 }
 
+func TestPaneAgentStateBuildsArgsAndTrims(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf 'running\r\n'
+`)
+
+	got, err := PaneAgentState("%1")
+	if err != nil {
+		t.Fatalf("PaneAgentState() failed: %v", err)
+	}
+	if got != "running" {
+		t.Fatalf("PaneAgentState() = %q, want running (CR/LF trimmed)", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "-t", "%1", "#{@fanout_agent_state}"})
+}
+
+func TestPaneAgentStateReturnsEmptyForUnsetOptionOnLivePane(t *testing.T) {
+	// An alive pane whose @fanout_agent_state was never set (legacy / launched
+	// outside the wrapper) makes tmux exit zero with empty output; the value is
+	// "", not an error, so the nudge gate degrades to no-op rather than failing.
+	installTmuxShim(t, `printf ''
+`)
+
+	got, err := PaneAgentState("%1")
+	if err != nil {
+		t.Fatalf("PaneAgentState() failed: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("PaneAgentState() = %q, want empty string", got)
+	}
+}
+
+func TestPaneAgentStateErrorsWhenPaneGone(t *testing.T) {
+	installTmuxShim(t, `exit 1
+`)
+
+	if _, err := PaneAgentState("%404"); err == nil {
+		t.Fatal("PaneAgentState() succeeded, want error when tmux cannot resolve the pane")
+	}
+}
+
+func TestPaneAgentStateRejectsEmptyPaneID(t *testing.T) {
+	if _, err := PaneAgentState("  "); err == nil {
+		t.Fatal("PaneAgentState(empty) should error")
+	}
+}
+
+func TestSendLiteralLineTypesTextThenEnter(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+`)
+
+	if err := SendLiteralLine("%3", "[fanout] peer message"); err != nil {
+		t.Fatalf("SendLiteralLine() failed: %v", err)
+	}
+	// Two calls: the literal text (-l so key names stay text; -- so a leading
+	// dash is not parsed as a flag) then a bare Enter, both targeting the pane
+	// id directly (no "=" session prefix).
+	assertTmuxArgs(t, argsPath, []string{
+		"send-keys", "-t", "%3", "-l", "--", "[fanout] peer message", "---",
+		"send-keys", "-t", "%3", "Enter", "---",
+	})
+}
+
+func TestSendLiteralLineTypesDashLeadingTextLiterally(t *testing.T) {
+	// The "--" terminator lets a payload beginning with "-" through as literal
+	// text instead of an unknown flag — the hardening that matters for future
+	// reusers of this primitive.
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+`)
+
+	if err := SendLiteralLine("%3", "-n dash-leading"); err != nil {
+		t.Fatalf("SendLiteralLine() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{
+		"send-keys", "-t", "%3", "-l", "--", "-n dash-leading", "---",
+		"send-keys", "-t", "%3", "Enter", "---",
+	})
+}
+
+func TestSendLiteralLineRejectsEmptyPaneID(t *testing.T) {
+	if err := SendLiteralLine("", "hi"); err == nil {
+		t.Fatal("SendLiteralLine(empty pane id) should error")
+	}
+}
+
+func TestSendLiteralLineErrorsWhenLiteralSendFails(t *testing.T) {
+	installTmuxShim(t, `exit 1
+`)
+
+	if err := SendLiteralLine("%3", "hi"); err == nil {
+		t.Fatal("SendLiteralLine() succeeded, want error when the literal send-keys fails")
+	}
+}
+
 func TestFocusPaneSelectsWindowAndPane(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"

@@ -13,7 +13,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/msgstore"
+	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/team"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const msgUsage = `Usage: fanout msg <verb> [options] [body...]
@@ -31,12 +33,21 @@ Write verbs:
   mark-read [--id N ... | --all]       Mark 1:1 messages read (--all also advances the board cursor).
   register                             Upsert this pane into the peers table.
 
+Notify verbs:
+  nudge <N>                      Best-effort: drop an inbox hint into peer #N's
+                                 pane via tmux send-keys, but only when its
+                                 agent is running. Never touches the DB (the
+                                 message is already persisted by send); a pane
+                                 that is gone, idle-unknown, or done is a no-op
+                                 success, so a failed nudge never breaks
+                                 messaging.
+
 Options:
   --json           Emit JSON instead of the human-readable view.
   --self <N>       Act as child issue N (overrides pane detection).
   --parent <ref>   Parent issue number or Projects URL (overrides pane detection).
-  --dry-run        Write verbs only: print '# would ...' lines describing the
-                   writes, touch nothing. Not combinable with --json.
+  --dry-run        Write/notify verbs only: print '# would ...' lines describing
+                   the writes, touch nothing. Not combinable with --json.
   --to <N>         send: recipient child issue number.
   --kind <K>       send/post: message kind (default: note).
   --id <N>         mark-read: message id (repeatable).
@@ -45,11 +56,39 @@ Options:
   -h, --help       Show this help.
 
 Exit codes: 0 success, 2 invalid invocation, 4 backend (SQLite) failure.
+nudge is best-effort: operational failures (pane gone, agent not running,
+send-keys failure) exit 0 with a warning, never 4.
 `
 
 // detectIdentity is swapped by tests to avoid depending on the developer's
 // live tmux/state environment (same pattern as sleepBetweenIssues).
 var detectIdentity = team.Detect
+
+// nudgeText is the hint `msg nudge` types into a peer pane. It carries no
+// message body on purpose — only a pointer to the inbox — so the actual
+// content stays in the SQLite DB and the pane never displays a peer's words
+// out of context. The em dash is intentional; it is a stable UTF-8 literal.
+const nudgeText = "[fanout] peer message in your inbox — run: fanout msg inbox"
+
+// paneAgentState and sendLiteralLine are the tmux seams nudge drives, declared
+// as vars so unit tests can swap them without a live tmux server (same pattern
+// as detectIdentity). The dry-run path uses neither — it must stay tmux-free
+// so its golden is deterministic.
+var (
+	paneAgentState  = tmuxrun.PaneAgentState
+	sendLiteralLine = tmuxrun.SendLiteralLine
+	// loadStateStore resolves and loads .fanout/state.json read-only, the same
+	// way --status/--close/etc do (resolveStateRuntime honors
+	// FANOUT_STATE_PATH then the git toplevel). nudge needs the recipient's
+	// recorded pane id, which lives here, not in the messages DB.
+	loadStateStore = func() (state.Store, error) {
+		rt, err := resolveStateRuntime()
+		if err != nil {
+			return state.Store{}, err
+		}
+		return state.Load(rt.statePath)
+	}
+)
 
 type msgFlags struct {
 	verb     string
@@ -77,6 +116,9 @@ var msgVerbFlags = map[string]map[string]bool{
 	"post":      {"--dry-run": true, "--kind": true},
 	"mark-read": {"--dry-run": true, "--id": true, "--all": true},
 	"register":  {"--dry-run": true},
+	// nudge's target is a positional <N>, not --to; --dry-run is its only
+	// verb-specific flag (universal --json/--self/--parent still apply).
+	"nudge": {"--dry-run": true},
 }
 
 var msgUniversalFlags = map[string]bool{"--json": true, "--self": true, "--parent": true}
@@ -110,6 +152,13 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 	self, parent, pane, code := resolveMsgIdentity(flags, lg)
 	if code != exitcode.OK {
 		return code
+	}
+
+	// nudge reads neither the messages DB nor the generic dry-run printer: it
+	// resolves the recipient from state.json and pushes via tmux, so short it
+	// out before openMsgDB (and before the DB-oriented dry-run path).
+	if flags.verb == "nudge" {
+		return runMsgNudge(flags, parent, lg)
 	}
 
 	if flags.dryRun {
@@ -166,6 +215,12 @@ func parseMsgFlags(args []string, lg *log.Logger) (*msgFlags, exitcode.Code) {
 			}
 		}
 		if terminated || !strings.HasPrefix(a, "--") {
+			if f.verb == "nudge" {
+				if code := setNudgeTarget(f, a, lg); code != exitcode.OK {
+					return nil, code
+				}
+				continue
+			}
 			if !msgBodyVerbs[f.verb] {
 				lg.Err("msg %s: unexpected argument: %s", f.verb, a)
 				return nil, exitcode.Invocation
@@ -234,6 +289,24 @@ func parseMsgFlag(f *msgFlags, allowed map[string]bool, args []string, i int, lg
 		return 0, exitcode.Invocation
 	}
 	return 0, exitcode.OK
+}
+
+// setNudgeTarget parses nudge's single positional <N> into f.to. Like --to it
+// accepts negative synthetic numbers (manual @manual panes) but rejects zero
+// and non-integers; a second positional is an error — nudge targets exactly
+// one peer. Reusing f.to keeps the recipient field shared with send.
+func setNudgeTarget(f *msgFlags, arg string, lg *log.Logger) exitcode.Code {
+	if f.to != 0 {
+		lg.Err("msg nudge: takes exactly one target issue, got extra argument: %s", arg)
+		return exitcode.Invocation
+	}
+	n, err := strconv.Atoi(arg)
+	if err != nil || n == 0 {
+		lg.Err("msg nudge: target must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", arg)
+		return exitcode.Invocation
+	}
+	f.to = n
+	return exitcode.OK
 }
 
 func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.Code {
@@ -305,6 +378,13 @@ func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
 			lg.Err("msg mark-read: pass either --id <n> (repeatable) or --all")
 			return exitcode.Invocation
 		}
+	case "nudge":
+		// setNudgeTarget already rejected zero/non-integer; a still-zero f.to
+		// means no positional target was supplied at all.
+		if f.to == 0 {
+			lg.Err("msg nudge: target issue <N> is required")
+			return exitcode.Invocation
+		}
 	}
 	return exitcode.OK
 }
@@ -315,7 +395,10 @@ func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
 func resolveMsgIdentity(f *msgFlags, lg *log.Logger) (int, string, msgstore.Peer, exitcode.Code) {
 	self, parent := f.self, f.parent
 	pane := msgstore.Peer{Issue: self}
-	needSelf := f.verb != "peers"
+	// nudge, like peers, only needs the parent (to scope state.json) — it
+	// targets a peer, never speaks as self — so it does not require self to be
+	// detectable.
+	needSelf := f.verb != "peers" && f.verb != "nudge"
 	if (needSelf && self == 0) || parent == "" {
 		id, err := detectIdentity()
 		if err != nil {
@@ -678,4 +761,103 @@ func sqlLiteral(s string) string {
 func msgBackendErr(verb string, err error, lg *log.Logger) exitcode.Code {
 	lg.Err("msg %s: %v", verb, err)
 	return exitcode.Backend
+}
+
+// --- nudge -------------------------------------------------------------
+
+// msgNudgeReport is the --json encoding of a nudge attempt. Nudged is true only
+// when the send-keys actually went out; Reason explains every other outcome so
+// automation can tell a delivered push from a best-effort no-op.
+type msgNudgeReport struct {
+	Target     int    `json:"target"`
+	PaneID     string `json:"pane_id"`
+	AgentState string `json:"agent_state"`
+	Nudged     bool   `json:"nudged"`
+	Reason     string `json:"reason"`
+}
+
+// shouldNudge reports whether a pane in the given @fanout_agent_state should
+// receive a send-keys nudge. Only "running" — a live agent launched by the
+// fanout wrapper — qualifies. "done" (agent exited, bare shell), "" (unset:
+// legacy or non-fanout pane), and any other value are no-op successes so a
+// hint never lands in a shell or an unrelated pane.
+//
+// This is the deliberate re-design of the original "agentStatus == idle" gate:
+// the dmux idle/analyzing/waiting/working enum no longer exists, and the only
+// live signal (@fanout_agent_state) cannot distinguish a busy agent from one
+// idle at its prompt. Gating on "running" is safe in practice because the
+// supported agents (claude, codex) queue typed input during a turn rather than
+// aborting it, so a nudge to a busy agent is picked up at its next checkpoint —
+// the same pull the message already guarantees, only sooner.
+func shouldNudge(agentState string) bool {
+	return agentState == "running"
+}
+
+// runMsgNudge resolves peer f.to's recorded pane from state.json and, unless
+// --dry-run, pushes the inbox hint when its agent is running. Every
+// operational miss (recipient absent, no pane id, pane gone, agent not
+// running, send-keys failure) is a no-op SUCCESS with a warning/reason: the
+// message is already persisted by send, so a failed nudge must never break
+// messaging. Only invocation errors (handled earlier) exit non-zero.
+func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
+	st, err := loadStateStore()
+	if err != nil {
+		lg.Err("msg nudge: %v", err)
+		return exitcode.Invocation
+	}
+	pane, found := st.Find(parent, f.to)
+
+	if f.dryRun {
+		lg.Dim("%s", nudgeDryRunLine(f.to, pane.PaneID, found))
+		return exitcode.OK
+	}
+
+	report := msgNudgeReport{Target: f.to, PaneID: pane.PaneID}
+	switch {
+	case !found:
+		report.Reason = "recipient is not recorded in fanout state"
+	case pane.PaneID == "":
+		report.Reason = "recipient has no recorded pane"
+	default:
+		// Re-read the agent state live, immediately before sending, to shrink
+		// the window between the check and the push (TOCTOU).
+		report.AgentState, err = paneAgentState(pane.PaneID)
+		switch {
+		case err != nil:
+			report.Reason = "pane is gone or tmux is unavailable"
+		case !shouldNudge(report.AgentState):
+			report.Reason = fmt.Sprintf("agent is not running (state %q)", report.AgentState)
+		default:
+			if sendErr := sendLiteralLine(pane.PaneID, nudgeText); sendErr != nil {
+				report.Reason = fmt.Sprintf("send-keys failed: %v", sendErr)
+			} else {
+				report.Nudged = true
+			}
+		}
+	}
+	return writeMsgNudgeResult(f, report, lg)
+}
+
+// nudgeDryRunLine renders the would-be tmux push as a single deterministic
+// line, resolved from state.json only (never live tmux) so it is golden
+// stable. An unresolved recipient prints a <unknown> pane id rather than
+// erroring, keeping the dry-run a single informative line.
+func nudgeDryRunLine(target int, paneID string, found bool) string {
+	if !found || paneID == "" {
+		paneID = "<unknown>"
+	}
+	return fmt.Sprintf("# would send-keys -t %s -l %s then Enter (target #%d, only if agent is running)",
+		paneID, sqlLiteral(nudgeText), target)
+}
+
+func writeMsgNudgeResult(f *msgFlags, report msgNudgeReport, lg *log.Logger) exitcode.Code {
+	if f.json {
+		return writeMsgJSON(report, lg)
+	}
+	if report.Nudged {
+		lg.Ok("nudged #%d", report.Target)
+	} else {
+		lg.Warn("did not nudge #%d: %s", report.Target, report.Reason)
+	}
+	return exitcode.OK
 }
