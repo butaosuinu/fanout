@@ -1,0 +1,2 @@
+# would UPDATE messages SET read_at = '2026-06-13T00:00:00Z' WHERE parent = '68' AND to_issue = 70 AND read_at IS NULL
+# would UPSERT board_cursors(issue=70, last_read_id=MAX(id) of board posts)

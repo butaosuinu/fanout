@@ -198,3 +198,28 @@ func assertBoolPtr(t *testing.T, name string, got *bool, want bool) {
 		t.Fatalf("%s = %v, want %v", name, *got, want)
 	}
 }
+
+func TestNormalizeParentRef(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		raw    string
+		want   string
+		wantOK bool
+	}{
+		{name: "issue number", raw: "68", want: "68", wantOK: true},
+		{name: "leading zeros collapse", raw: "0068", want: "68", wantOK: true},
+		{name: "surrounding whitespace", raw: " 68 ", want: "68", wantOK: true},
+		{name: "project URL", raw: "https://github.com/users/butaosuinu/projects/3", want: "https://github.com/users/butaosuinu/projects/3", wantOK: true},
+		{name: "project URL drops views suffix", raw: "https://github.com/orgs/acme/projects/12/views/1?query=x", want: "https://github.com/orgs/acme/projects/12", wantOK: true},
+		{name: "empty", raw: "", wantOK: false},
+		{name: "prose", raw: "not-a-ref", wantOK: false},
+		{name: "non-project URL", raw: "https://github.com/butaosuinu/fanout/issues/68", wantOK: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := NormalizeParentRef(tc.raw)
+			if ok != tc.wantOK || got != tc.want {
+				t.Fatalf("NormalizeParentRef(%q) = (%q, %t), want (%q, %t)", tc.raw, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}

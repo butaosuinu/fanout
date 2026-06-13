@@ -53,6 +53,9 @@ func main() {
 	if isDashboardRequest(os.Args[1:]) {
 		os.Exit(int(cmdDashboard(os.Args[2:], lg)))
 	}
+	if isMsgRequest(os.Args[1:]) {
+		os.Exit(int(cmdMsg(os.Args[2:], lg)))
+	}
 
 	pr := cliflags.Parse(os.Args[1:], lg, os.Stdout)
 	if pr.Code != exitcode.OK || pr.Config == nil {
