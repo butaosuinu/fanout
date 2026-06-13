@@ -19,13 +19,15 @@ type Store struct {
 	Panes         []Pane `json:"panes"`
 }
 
-// Pane records one launched agent pane. Parent and IssueNum form the
+// Pane records one launched agent pane. Parent and IssueNum form the legacy
 // idempotency key: issue fanout uses the parent issue or Project ref plus the
 // GitHub issue number, while synthetic launches use a reserved parent such as
 // @manual with non-GitHub numbers that only need to be unique under that parent.
+// TaskID is an additive key for issue-less task rows.
 type Pane struct {
 	Parent     string `json:"parent"`
 	IssueNum   int    `json:"issueNum"`
+	TaskID     string `json:"taskId,omitempty"`
 	Slug       string `json:"slug"`
 	BranchName string `json:"branchName"`
 	// BaseBranch is the resolved base branch the worktree branched from
@@ -125,7 +127,7 @@ func (l *LockedStore) Unlock() error {
 }
 
 func (l *LockedStore) RecordPane(p Pane) error {
-	l.Upsert(p)
+	l.UpsertTask(p)
 	return save(l.path, l.Store)
 }
 
@@ -136,10 +138,17 @@ func (l *LockedStore) RemovePane(parent string, issueNum int) error {
 	return save(l.path, l.Store)
 }
 
+func (l *LockedStore) RemoveTaskPane(parent, taskID string) error {
+	if !l.removeTask(parent, taskID) {
+		return nil
+	}
+	return save(l.path, l.Store)
+}
+
 func (s Store) FannedNumbersForParent(parent string) map[int]bool {
 	out := map[int]bool{}
 	for _, pane := range s.Panes {
-		if parentMatches(pane.Parent, parent) {
+		if pane.IssueNum > 0 && parentMatches(pane.Parent, parent) {
 			out[pane.IssueNum] = true
 		}
 	}
@@ -149,8 +158,18 @@ func (s Store) FannedNumbersForParent(parent string) map[int]bool {
 func (s Store) FannedNumbersForOtherParents(parent string) map[int]bool {
 	out := map[int]bool{}
 	for _, pane := range s.Panes {
-		if !parentMatches(pane.Parent, parent) {
+		if pane.IssueNum > 0 && !parentMatches(pane.Parent, parent) {
 			out[pane.IssueNum] = true
+		}
+	}
+	return out
+}
+
+func (s Store) FannedTaskIDsForParent(parent string) map[string]bool {
+	out := map[string]bool{}
+	for _, pane := range s.Panes {
+		if pane.TaskID != "" && parentMatches(pane.Parent, parent) {
+			out[pane.TaskID] = true
 		}
 	}
 	return out
@@ -159,6 +178,18 @@ func (s Store) FannedNumbersForOtherParents(parent string) map[int]bool {
 func (s Store) Find(parent string, issueNum int) (Pane, bool) {
 	for _, pane := range s.Panes {
 		if pane.IssueNum == issueNum && parentMatches(pane.Parent, parent) {
+			return pane, true
+		}
+	}
+	return Pane{}, false
+}
+
+func (s Store) FindTask(parent, taskID string) (Pane, bool) {
+	if taskID == "" {
+		return Pane{}, false
+	}
+	for _, pane := range s.Panes {
+		if pane.TaskID == taskID && parentMatches(pane.Parent, parent) {
 			return pane, true
 		}
 	}
@@ -186,11 +217,39 @@ func (s *Store) Upsert(p Pane) {
 	s.Panes = append(s.Panes, p)
 }
 
+func (s *Store) UpsertTask(p Pane) {
+	s.normalize()
+	for i := range s.Panes {
+		if taskPaneMatches(s.Panes[i], p) {
+			s.Panes[i] = p
+			return
+		}
+	}
+	s.Panes = append(s.Panes, p)
+}
+
 func (s *Store) Remove(parent string, issueNum int) bool {
 	kept := s.Panes[:0]
 	removed := false
 	for _, pane := range s.Panes {
 		if pane.IssueNum == issueNum && parentMatches(pane.Parent, parent) {
+			removed = true
+			continue
+		}
+		kept = append(kept, pane)
+	}
+	s.Panes = kept
+	return removed
+}
+
+func (s *Store) removeTask(parent, taskID string) bool {
+	if taskID == "" {
+		return false
+	}
+	kept := s.Panes[:0]
+	removed := false
+	for _, pane := range s.Panes {
+		if pane.TaskID == taskID && parentMatches(pane.Parent, parent) {
 			removed = true
 			continue
 		}
@@ -232,4 +291,14 @@ func parentMatches(stored, filter string) bool {
 	storedNum, storedErr := strconv.Atoi(stored)
 	filterNum, filterErr := strconv.Atoi(filter)
 	return storedErr == nil && filterErr == nil && storedNum == filterNum
+}
+
+func taskPaneMatches(stored, incoming Pane) bool {
+	if !parentMatches(stored.Parent, incoming.Parent) {
+		return false
+	}
+	if stored.TaskID != "" && incoming.TaskID != "" {
+		return stored.TaskID == incoming.TaskID
+	}
+	return stored.IssueNum == incoming.IssueNum
 }

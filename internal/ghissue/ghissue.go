@@ -338,6 +338,27 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 	return snapshot.State, snapshot.PRs, nil
 }
 
+func (r Runner) PRsForBranch(branch string) ([]PRRef, error) {
+	out, err := r.gh(
+		"pr", "list",
+		"--head", branch,
+		"--state", "all",
+		"--json", "number,state,mergedAt,isDraft,reviewDecision,statusCheckRollup",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var refs []prListItem
+	if err := json.Unmarshal(out, &refs); err != nil {
+		return nil, fmt.Errorf("parse gh pr list --head %q: %w", branch, err)
+	}
+	prs := make([]PRRef, 0, len(refs))
+	for _, pr := range refs {
+		prs = append(prs, pr.ref())
+	}
+	return prs, nil
+}
+
 type prRefGraphQL struct {
 	Number         int     `json:"number"`
 	State          string  `json:"state"`
@@ -355,6 +376,15 @@ type prRefGraphQL struct {
 	} `json:"commits"`
 }
 
+type prListItem struct {
+	Number            int             `json:"number"`
+	State             string          `json:"state"`
+	MergedAt          *string         `json:"mergedAt"`
+	IsDraft           bool            `json:"isDraft"`
+	ReviewDecision    string          `json:"reviewDecision"`
+	StatusCheckRollup json.RawMessage `json:"statusCheckRollup"`
+}
+
 func (pr prRefGraphQL) ref() PRRef {
 	return PRRef{
 		Number:         pr.Number,
@@ -366,11 +396,74 @@ func (pr prRefGraphQL) ref() PRRef {
 	}
 }
 
+func (pr prListItem) ref() PRRef {
+	return PRRef{
+		Number:         pr.Number,
+		State:          pr.State,
+		MergedAt:       pr.MergedAt,
+		IsDraft:        pr.IsDraft,
+		ReviewDecision: pr.ReviewDecision,
+		CIStatus:       ciStatusFromStatusCheckRollup(pr.StatusCheckRollup),
+	}
+}
+
 func (pr prRefGraphQL) statusCheckRollupState() string {
 	if len(pr.Commits.Nodes) == 0 || pr.Commits.Nodes[0].Commit.StatusCheckRollup == nil {
 		return ""
 	}
 	return pr.Commits.Nodes[0].Commit.StatusCheckRollup.State
+}
+
+func ciStatusFromStatusCheckRollup(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+
+	var rollup struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(raw, &rollup); err == nil && strings.TrimSpace(rollup.State) != "" {
+		return normalizeCIStatus(rollup.State)
+	}
+
+	var checks []struct {
+		State      string `json:"state"`
+		Conclusion string `json:"conclusion"`
+		Status     string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &checks); err != nil {
+		return ""
+	}
+
+	sawPass := false
+	sawPending := false
+	for _, check := range checks {
+		status := strings.ToUpper(strings.TrimSpace(check.Status))
+		if status != "" && status != "COMPLETED" {
+			sawPending = true
+			continue
+		}
+		state := check.State
+		if strings.TrimSpace(state) == "" {
+			state = check.Conclusion
+		}
+		switch normalizeCIStatus(state) {
+		case "fail":
+			return "fail"
+		case "pending":
+			sawPending = true
+		case "pass":
+			sawPass = true
+		}
+	}
+	if sawPending {
+		return "pending"
+	}
+	if sawPass {
+		return "pass"
+	}
+	return ""
 }
 
 func normalizeCIStatus(state string) string {
@@ -379,7 +472,7 @@ func normalizeCIStatus(state string) string {
 		return ""
 	case "SUCCESS":
 		return "pass"
-	case "ERROR", "FAILURE":
+	case "ACTION_REQUIRED", "CANCELLED", "CANCELED", "ERROR", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT": //nolint:misspell // GitHub's CheckConclusionState enum spells this CANCELLED.
 		return "fail"
 	case "EXPECTED", "PENDING":
 		return "pending"
