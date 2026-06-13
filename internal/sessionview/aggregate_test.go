@@ -452,6 +452,25 @@ func TestBuildPromptPassthrough(t *testing.T) {
 	}
 }
 
+func TestBuildPlanModePassthrough(t *testing.T) {
+	planPane := pane("1", 2, "%1")
+	planPane.CodexPlanMode = true
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(planPane, pane("1", 3, "%2")),
+		LivePanes: livePanesAt(),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:     wavesNone,
+	}
+	panes := Build("o/n", "/root", c).Sessions[0].Panes
+	if !panes[0].PlanMode {
+		t.Fatal("PlanMode = false want passthrough of the state row CodexPlanMode")
+	}
+	if panes[1].PlanMode {
+		t.Fatal("PlanMode = true for a non-plan row, want false")
+	}
+}
+
 func TestBuildCIStatusFromPrimaryPR(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

@@ -508,6 +508,120 @@ describe("drawer + peek", () => {
   });
 });
 
+describe("plan(Codex Plan Mode)", () => {
+  /* %1 = planMode(codex)、%2 = 通常ペイン。Plan セクションの表示有無を対比する */
+  function planModeSnapshot() {
+    return makeSnapshot([
+      makeSession("142", [
+        makePane({
+          issueNum: 101,
+          displayName: "Fix login",
+          agent: "codex",
+          paneId: "%1",
+          planMode: true,
+        }),
+        makePane({ issueNum: 102, displayName: "Add docs", agent: "codex", paneId: "%2" }),
+      ]),
+    ]);
+  }
+
+  function planHandler(body: () => { found: boolean; plan: string }) {
+    return http.get("/api/plan", ({ request }) => {
+      const pane = new URL(request.url).searchParams.get("pane");
+      return HttpResponse.json({
+        paneId: pane ?? "?",
+        capturedAt: "2026-06-13T01:23:55Z",
+        ...body(),
+      });
+    });
+  }
+
+  it("planMode のペインだけ Plan セクションを表示し、plan 本文を <pre> テキストで描画する", async () => {
+    server.use(
+      peekHandler(() => "boot ok"),
+      planHandler(() => ({ found: true, plan: "## Plan\n1. <b>not html</b>" })),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(planModeSnapshot());
+
+    await user.click(screen.getByText("Fix login"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(within(drawer).getByText("plan — 提案中のプラン")).toBeInTheDocument();
+    // capture 出力は敵性入力 — タグ混じりでもテキストノードとしてそのまま出る
+    const pre = await within(drawer).findByText(/1\. <b>not html<\/b>/);
+    expect(pre.tagName).toBe("PRE");
+    expect(pre.querySelector("b")).toBeNull();
+    expect(drawer.querySelector("#plan-meta")).toHaveTextContent(/captured \d{2}:\d{2}:\d{2}/);
+
+    // 通常ペインには Plan セクション自体が出ない(/api/plan も呼ばれない)
+    await user.click(screen.getByText("Add docs"));
+    await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(screen.queryByText("plan — 提案中のプラン")).not.toBeInTheDocument();
+  });
+
+  it("found:false は未検出の説明文言を表示する", async () => {
+    server.use(
+      peekHandler(() => "boot ok"),
+      planHandler(() => ({ found: false, plan: "" })),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(planModeSnapshot());
+
+    await user.click(screen.getByText("Fix login"));
+    expect(await screen.findByText(/plan が見つかりません/)).toBeInTheDocument();
+  });
+
+  it("再取得ボタンで /api/plan を再フェッチする", async () => {
+    let calls = 0;
+    server.use(
+      peekHandler(() => "boot ok"),
+      planHandler(() => {
+        calls++;
+        return { found: true, plan: `plan v${calls}` };
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(planModeSnapshot());
+
+    await user.click(screen.getByText("Fix login"));
+    expect(await screen.findByText("plan v1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "再取得" }));
+    expect(await screen.findByText("plan v2")).toBeInTheDocument();
+    expect(screen.queryByText("plan v1")).not.toBeInTheDocument();
+  });
+
+  it("plan はポーリングしない(時間経過では再フェッチされない)", async () => {
+    let planCalls = 0;
+    server.use(
+      peekHandler(() => "boot ok"),
+      planHandler(() => {
+        planCalls++;
+        return { found: true, plan: "stable plan" };
+      }),
+    );
+    vi.useFakeTimers();
+    render(<App />);
+    streamSnapshot(planModeSnapshot());
+
+    fireEvent.click(screen.getByText("Fix login"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("stable plan")).toBeInTheDocument();
+    expect(planCalls).toBe(1);
+
+    // peek の 5s ポーリング周期を 3 回分進めても plan は 1 回のまま
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(planCalls).toBe(1);
+  });
+});
+
 describe("transport フォールバック", () => {
   it("SSE 断でポーリングに移行し、更新が継続する", async () => {
     const polled = makeSnapshot([

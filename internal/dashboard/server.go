@@ -43,6 +43,10 @@ type Options struct {
 	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
 	// nil defaults to tmuxrun.CapturePaneOutput; tests inject a fake.
 	CapturePane func(paneID string, lines int) (string, error)
+	// CapturePlan is the read-only tmux capture behind GET /api/plan (scrollback
+	// plus alternate screen, wrapped lines joined). nil defaults to
+	// tmuxrun.CapturePlanSource; tests inject a fake.
+	CapturePlan func(paneID string, lines int) (string, error)
 	// VerifyPane re-checks, at request time, that paneID is still a live tmux
 	// pane sitting at/under the recorded worktree. nil defaults to a
 	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
@@ -61,6 +65,7 @@ type Server struct {
 	base        string // http://127.0.0.1:<port>
 	serveErr    chan error
 	capturePane func(paneID string, lines int) (string, error)
+	capturePlan func(paneID string, lines int) (string, error)
 	verifyPane  func(paneID, worktree string) error
 }
 
@@ -82,6 +87,10 @@ func New(opts Options) (*Server, error) {
 	if capture == nil {
 		capture = tmuxrun.CapturePaneOutput
 	}
+	capturePlan := opts.CapturePlan
+	if capturePlan == nil {
+		capturePlan = tmuxrun.CapturePlanSource
+	}
 	verify := opts.VerifyPane
 	if verify == nil {
 		verify = verifyLivePane
@@ -95,6 +104,7 @@ func New(opts Options) (*Server, error) {
 		base:        fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
 		serveErr:    make(chan error, 1),
 		capturePane: capture,
+		capturePlan: capturePlan,
 		verifyPane:  verify,
 	}
 	handler, err := s.handler()
@@ -170,6 +180,7 @@ func (s *Server) handler() (http.Handler, error) {
 	mux.HandleFunc("/api/snapshot", s.getOnly(s.requireToken(s.handleSnapshot)))
 	mux.HandleFunc("/api/stream", s.getOnly(s.requireToken(s.handleStream)))
 	mux.HandleFunc("/api/peek", s.getOnly(s.requireToken(s.handlePeek)))
+	mux.HandleFunc("/api/plan", s.getOnly(s.requireToken(s.handlePlan)))
 	// Catch-all: the embedded SPA. The HTML shell is token-free so the page can
 	// load and then read ?token= for its /api/* calls.
 	mux.Handle("/", s.getOnly(s.staticHandler(sub)))

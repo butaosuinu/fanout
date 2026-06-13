@@ -30,14 +30,19 @@ type Pane struct {
 	BranchName string `json:"branchName"`
 	// BaseBranch is the resolved base branch the worktree branched from
 	// (e.g. "main"). Legacy rows recorded before this field load as "".
-	BaseBranch   string `json:"baseBranch,omitempty"`
-	PaneID       string `json:"paneId"`
-	Agent        string `json:"agent"`
-	Wave         string `json:"wave,omitempty"`
-	DisplayName  string `json:"displayName"`
-	WorktreePath string `json:"worktreePath"`
-	Prompt       string `json:"prompt"`
-	CreatedAt    string `json:"createdAt"`
+	BaseBranch string `json:"baseBranch,omitempty"`
+	PaneID     string `json:"paneId"`
+	Agent      string `json:"agent"`
+	// CodexPlanMode は --codex-plan-mode(app-server Plan turn + 対話 Codex TUI)
+	// で起動したペインかどうか。ダッシュボードの GET /api/plan が plan 抽出の
+	// 対象ペインを限定するために参照する。additive なフィールドなので
+	// SchemaVersion は据え置き(旧版 fanout は未知キーとして無視して読める)。
+	CodexPlanMode bool   `json:"codexPlanMode,omitempty"`
+	Wave          string `json:"wave,omitempty"`
+	DisplayName   string `json:"displayName"`
+	WorktreePath  string `json:"worktreePath"`
+	Prompt        string `json:"prompt"`
+	CreatedAt     string `json:"createdAt"`
 	// AgentStatus は起動時に "running" を記録する。終了検知デーモンは無いので
 	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
 	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。

@@ -178,6 +178,40 @@ func TestAgentStatusRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, CodexPlanMode: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 84}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.Find("81", 83)
+	if !ok || !got.CodexPlanMode {
+		t.Fatalf("codexPlanMode = %v (found=%v), want true", got.CodexPlanMode, ok)
+	}
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// omitempty: plan モードでない行にはキー自体が現れない(additive な
+	// フィールドなので旧 state との差分も plan ペインの行に限られる)
+	if n := strings.Count(string(data), `"codexPlanMode"`); n != 1 {
+		t.Fatalf("codexPlanMode key appears %d times, want 1:\n%s", n, data)
+	}
+}
+
 func TestRecordPaneReplacesSameParentIssue(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)

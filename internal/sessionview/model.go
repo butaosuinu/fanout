@@ -66,13 +66,17 @@ type PaneView struct {
 	// 起動ラッパーが設定する tmux pane user option @fanout_agent_state からの
 	// 動的判定、tmux 不通時は state.json の起動時記録値(AgentStatus)への
 	// fallback。
-	AgentState string            `json:"agentState,omitempty"`
-	Prompt     string            `json:"prompt,omitempty"`    // state row's original prompt
-	CIStatus   string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase
-	Wave       int               `json:"wave,omitempty"`      // DAG depth, 1-based; 0 = unknown
-	WaveLabel  string            `json:"waveLabel,omitempty"` // state row wave label, else parent-body heading
-	Blockers   []blockers.Status `json:"blockers"`            // always non-nil; serializes as []
-	Blocked    bool              `json:"blocked"`             // at least one blocker still OPEN
+	AgentState string `json:"agentState,omitempty"`
+	// PlanMode は Codex Plan Mode(--codex-plan-mode)で起動した記録ペインか
+	// どうか(state row の CodexPlanMode の passthrough)。ダッシュボードは
+	// このフラグで GET /api/plan の対象と Plan セクションの表示を限定する。
+	PlanMode  bool              `json:"planMode,omitempty"`
+	Prompt    string            `json:"prompt,omitempty"`    // state row's original prompt
+	CIStatus  string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase
+	Wave      int               `json:"wave,omitempty"`      // DAG depth, 1-based; 0 = unknown
+	WaveLabel string            `json:"waveLabel,omitempty"` // state row wave label, else parent-body heading
+	Blockers  []blockers.Status `json:"blockers"`            // always non-nil; serializes as []
+	Blocked   bool              `json:"blocked"`             // at least one blocker still OPEN
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.

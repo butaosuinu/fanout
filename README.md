@@ -442,6 +442,12 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   pane metadata, wave/blockers, worktree, PRs with CI, the original prompt,
   and a *peek* at the pane's recent output (`GET /api/peek`, a read-only
   `tmux capture-pane` refreshed every 5 s while open).
+- **Plan view for Codex Plan Mode panes.** For panes launched with
+  `--codex-plan-mode`, the drawer adds a *plan* section showing the last
+  complete `<proposed_plan>` block in the pane's output (`GET /api/plan`,
+  also a read-only `tmux capture-pane`; fetched once on open, with a manual
+  refresh button). A long plan can scroll out of the codex TUI's alternate
+  screen, in which case the section reports that no plan was found.
 - **Structured filtering.** The filter box ANDs free words with
   `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
   `issue:` / `pr:` terms — e.g. `agent:claude wave:2 ci:fail run:running`.
@@ -451,8 +457,8 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   toggle persists to `localStorage` (`fanout.theme`) and defaults to your
   `prefers-color-scheme`.
 - **localhost only.** The server binds `127.0.0.1` and exposes GET-only
-  endpoints (`/api/snapshot`, an SSE `/api/stream`, `/api/peek`, and the
-  embedded UI). `--port` defaults to `0` (an OS-assigned ephemeral port); the
+  endpoints (`/api/snapshot`, an SSE `/api/stream`, `/api/peek`, `/api/plan`,
+  and the embedded UI). `--port` defaults to `0` (an OS-assigned ephemeral port); the
   chosen URL is printed. The UI's one external request is its Google Fonts
   stylesheet, loaded with a `no-referrer` policy so the tokened dashboard URL
   never leaks.
