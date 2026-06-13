@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { makePane } from "../test/fixtures";
-import { filterTokens, matches, parseQuery, removeToken, replaceToken, stripKey, tokenForKey } from "./filter";
+import {
+  filterTokens,
+  matches,
+  parseQuery,
+  removeToken,
+  replaceToken,
+  stripKey,
+  tokenForKey,
+} from "./filter";
 
 describe("parseQuery", () => {
   it("key:value トークンと自由語を区別する", () => {
@@ -68,7 +76,10 @@ describe("matches", () => {
     expect(matches(makePane({ ciStatus: "-" }), q("ci:fail"))).toBe(false);
     // ciStatus 不在の旧 snapshot は worst-of-prs に fallback
     expect(
-      matches(makePane({ prs: [{ number: 1, state: "OPEN", mergedAt: null, ci: "fail" }] }), q("ci:fail")),
+      matches(
+        makePane({ prs: [{ number: 1, state: "OPEN", mergedAt: null, ci: "fail" }] }),
+        q("ci:fail"),
+      ),
     ).toBe(true);
   });
 
@@ -109,7 +120,10 @@ describe("トークン操作", () => {
   });
 
   it("replaceToken は同キーを上書きする", () => {
-    expect(replaceToken(["state:open", "claude"], "state", "closed")).toEqual(["claude", "state:closed"]);
+    expect(replaceToken(["state:open", "claude"], "state", "closed")).toEqual([
+      "claude",
+      "state:closed",
+    ]);
   });
 
   it("removeToken は完全一致のみ外す", () => {
@@ -128,7 +142,9 @@ describe("トークン操作", () => {
   });
 
   it("stripKey は同キーのトークンを重複・大文字違いごと全て外す", () => {
-    expect(stripKey(["state:open", "STATE:closed", "agent:claude"], "state")).toEqual(["agent:claude"]);
+    expect(stripKey(["state:open", "STATE:closed", "agent:claude"], "state")).toEqual([
+      "agent:claude",
+    ]);
     expect(stripKey(["claude"], "state")).toEqual(["claude"]);
   });
 });

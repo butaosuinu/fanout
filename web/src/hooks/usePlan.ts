@@ -26,7 +26,12 @@ type ViewState = Omit<PlanView, "refetch">;
  * 一度表示できた plan は alive が落ちても保持する(pane 終了で読みかけの文書を
  * 消さない)。 */
 export function usePlan(pane: { paneId: string; alive: boolean } | null, token: string): PlanView {
-  const [view, setView] = useState<ViewState>({ text: LOADING, meta: "—", found: false, loading: true });
+  const [view, setView] = useState<ViewState>({
+    text: LOADING,
+    meta: "—",
+    found: false,
+    loading: true,
+  });
   const [generation, setGeneration] = useState(0);
   const refetch = useCallback(() => setGeneration((g) => g + 1), []);
   const paneId = pane?.paneId ?? null;
@@ -37,7 +42,14 @@ export function usePlan(pane: { paneId: string; alive: boolean } | null, token: 
     if (!alive) {
       // 取得済みの plan は残す(snapshot の alive 反転で文書を吹き飛ばさない)
       setView((v) =>
-        v.found ? v : { text: "(plan を取得できません — ペインは終了しています)", meta: "—", found: false, loading: false },
+        v.found
+          ? v
+          : {
+              text: "(plan を取得できません — ペインは終了しています)",
+              meta: "—",
+              found: false,
+              loading: false,
+            },
       );
       return;
     }

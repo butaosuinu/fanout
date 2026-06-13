@@ -2,7 +2,15 @@ import type { ReactNode } from "react";
 import { prUrl } from "../lib/github";
 import type { PRRef } from "../lib/types";
 
-export function Tag({ cls = "", title, children }: { cls?: string; title?: string; children: ReactNode }) {
+export function Tag({
+  cls = "",
+  title,
+  children,
+}: {
+  cls?: string;
+  title?: string;
+  children: ReactNode;
+}) {
   return (
     <span className={cls ? `tag ${cls}` : "tag"} title={title}>
       {children}
@@ -13,7 +21,15 @@ export function Tag({ cls = "", title, children }: { cls?: string; title?: strin
 /* url が空(repo 未解決・@manual の負番号 issue など)ならリンク化せず子を
  * そのまま返す。url の安全性は lib/github の検証で担保済み — ここでは新しい
  * URL を組み立てないこと。 */
-export function GhLink({ url, cls = "gh", children }: { url: string; cls?: string; children: ReactNode }) {
+export function GhLink({
+  url,
+  cls = "gh",
+  children,
+}: {
+  url: string;
+  cls?: string;
+  children: ReactNode;
+}) {
   if (!url) return <>{children}</>;
   return (
     <a className={cls} href={url} target="_blank" rel="noopener noreferrer">
@@ -40,7 +56,13 @@ export function DirtyTag({ state, unknownLabel = "—" }: { state: string; unkno
 
 /* issue 状態のタグ。unknown 時の表示は行("?")とドロワー("UNKNOWN")で
  * 異なるため引数化する。 */
-export function IssueStateTag({ state, unknownLabel = "?" }: { state: string; unknownLabel?: string }) {
+export function IssueStateTag({
+  state,
+  unknownLabel = "?",
+}: {
+  state: string;
+  unknownLabel?: string;
+}) {
   if (state === "OPEN") return <Tag cls="t-open">OPEN</Tag>;
   if (state === "CLOSED") return <Tag>CLOSED</Tag>;
   return <span className="muted">{unknownLabel}</span>;

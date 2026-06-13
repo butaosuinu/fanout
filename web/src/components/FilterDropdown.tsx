@@ -149,7 +149,8 @@ export const FilterDropdown = memo(function FilterDropdown({
 
   /* Tab 等でフォーカスが外に出たら閉じる(外側 click は pointerdown が先に処理) */
   const onBlur = (e: FocusEvent) => {
-    if (open && e.relatedTarget && !rootRef.current?.contains(e.relatedTarget as Node)) setOpen(false);
+    if (open && e.relatedTarget && !rootRef.current?.contains(e.relatedTarget as Node))
+      setOpen(false);
   };
 
   return (
@@ -219,7 +220,13 @@ export const FilterDropdown = memo(function FilterDropdown({
                 onClick={() => pick([v, l])}
                 onFocus={() => setCursor(i)} // click / Tab でのフォーカス移動も roving に反映
               >
-                <svg className="fd-check" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <svg
+                  className="fd-check"
+                  viewBox="0 0 16 16"
+                  width="12"
+                  height="12"
+                  aria-hidden="true"
+                >
                   <path
                     d="M3.2 8.6 6.6 12l6.2-7.4"
                     fill="none"

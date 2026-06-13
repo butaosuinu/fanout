@@ -12,10 +12,30 @@ function ThemeToggle() {
       aria-pressed={theme === "dark"}
       onClick={toggle}
     >
-      <svg className="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <svg
+        className="ic-moon"
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
         <path d="M20.4 14.2A8.6 8.6 0 0 1 9.8 3.6a8.6 8.6 0 1 0 10.6 10.6Z" />
       </svg>
-      <svg className="ic-sun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <svg
+        className="ic-sun"
+        width="15"
+        height="15"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
         <circle cx="12" cy="12" r="4.2" />
         <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.2 5.2l1.7 1.7M17.1 17.1l1.7 1.7M18.8 5.2l-1.7 1.7M6.9 17.1l-1.7 1.7" />
       </svg>
@@ -23,7 +43,15 @@ function ThemeToggle() {
   );
 }
 
-export function Nav({ repo, projectRoot, conn }: { repo: string; projectRoot: string; conn: ConnState }) {
+export function Nav({
+  repo,
+  projectRoot,
+  conn,
+}: {
+  repo: string;
+  projectRoot: string;
+  conn: ConnState;
+}) {
   return (
     <header className="nav">
       <div className="nav-inner">

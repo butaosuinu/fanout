@@ -118,9 +118,7 @@ describe("snapshot 描画", () => {
 
   it("degraded フラグで banner を表示し、正常時は隠す", () => {
     render(<App />);
-    streamSnapshot(
-      makeSnapshot([], { degraded: { tmux: true, github: true } }),
-    );
+    streamSnapshot(makeSnapshot([], { degraded: { tmux: true, github: true } }));
     const banner = screen.getByRole("status");
     expect(banner).toHaveTextContent("GitHub データ取得が不安定");
     expect(banner).toHaveTextContent("tmux が利用できません");
@@ -198,14 +196,20 @@ describe("フィルタ", () => {
     const listbox = screen.getByRole("listbox", { name: "issue / tmux 状態で絞り込み" });
     await user.click(within(listbox).getByRole("option", { name: "open" }));
 
-    expect(screen.getByRole("listitem", { name: "フィルタ state:open を外す" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "フィルタ state:open を外す" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); // 選択で閉じる
     expect(trigger).toHaveFocus();
 
     await user.click(trigger);
     await user.click(screen.getByRole("option", { name: "closed" }));
-    expect(screen.queryByRole("listitem", { name: "フィルタ state:open を外す" })).not.toBeInTheDocument();
-    expect(screen.getByRole("listitem", { name: "フィルタ state:closed を外す" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("listitem", { name: "フィルタ state:open を外す" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "フィルタ state:closed を外す" }),
+    ).toBeInTheDocument();
   });
 
   it("アクティブ option は aria-selected で示し、再クリックでトグルオフする", async () => {
@@ -221,10 +225,15 @@ describe("フィルタ", () => {
     await user.click(trigger);
     const opt = screen.getByRole("option", { name: "open" });
     expect(opt).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("option", { name: "closed" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("option", { name: "closed" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
 
     await user.click(opt);
-    expect(screen.queryByRole("listitem", { name: "フィルタ state:open を外す" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("listitem", { name: "フィルタ state:open を外す" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("searchbox")).toHaveValue("");
     expect(trigger).not.toHaveClass("on");
   });
@@ -292,7 +301,9 @@ describe("フィルタ", () => {
     expect(opts[opts.length - 1]).toHaveFocus();
 
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("listitem", { name: "フィルタ state:deferred を外す" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "フィルタ state:deferred を外す" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
@@ -312,7 +323,9 @@ describe("フィルタ", () => {
     await user.keyboard("cod");
     expect(within(listbox).queryByRole("option", { name: "claude" })).not.toBeInTheDocument();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("listitem", { name: "フィルタ agent:codex を外す" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "フィルタ agent:codex を外す" }),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "wave で絞り込み" }));
     await user.click(screen.getByRole("option", { name: "w2" }));
@@ -357,7 +370,9 @@ describe("フィルタ", () => {
     await user.keyboard("c"); // open → closed へジャンプ
     expect(screen.getByRole("option", { name: "closed" })).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("listitem", { name: "フィルタ state:closed を外す" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("listitem", { name: "フィルタ state:closed を外す" }),
+    ).toBeInTheDocument();
   });
 
   it("label 表記の別名トークン(wave:w2)もアクティブ表示・トグルオフできる", async () => {
@@ -635,7 +650,11 @@ describe("drawer リサイズ", () => {
   beforeEach(() => {
     // hook はビューポート上限(innerWidth - 360)でも clamp する。jsdom 既定の
     // 1024px だと上限 921px になりドラッグ値が読みにくいので広い画面に固定。
-    Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
+    Object.defineProperty(window, "innerWidth", {
+      value: 2000,
+      configurable: true,
+      writable: true,
+    });
   });
   const openDrawer = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
     await user.click(screen.getByText(name));

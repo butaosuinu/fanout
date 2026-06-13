@@ -59,13 +59,22 @@ export function matches(p: PaneView, terms: Term[]): boolean {
     switch (t.key) {
       case "state":
         // tmux 状態(live/stale)に一致するならそれを、さもなくば issue 状態を見る
-        if ((p.tmuxState === t.value ? p.tmuxState : String(p.issueState ?? "").toLowerCase()) !== t.value) return false;
+        if (
+          (p.tmuxState === t.value ? p.tmuxState : String(p.issueState ?? "").toLowerCase()) !==
+          t.value
+        )
+          return false;
         break;
       case "run":
         if ((p.agentState ?? "") !== t.value) return false;
         break;
       case "agent":
-        if (!String(p.agent ?? "").toLowerCase().includes(t.value)) return false;
+        if (
+          !String(p.agent ?? "")
+            .toLowerCase()
+            .includes(t.value)
+        )
+          return false;
         break;
       case "wave":
         if (

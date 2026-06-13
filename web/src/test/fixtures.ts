@@ -64,7 +64,11 @@ export function makeQueuedPane(over: Partial<PaneView> = {}): PaneView {
   };
 }
 
-export function makeSession(parent: string, panes: PaneView[], rollup: Partial<Rollup> = {}): Session {
+export function makeSession(
+  parent: string,
+  panes: PaneView[],
+  rollup: Partial<Rollup> = {},
+): Session {
   return { parent, panes, rollup: makeRollup({ total: panes.length, ...rollup }) };
 }
 
