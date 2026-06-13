@@ -78,16 +78,29 @@ const nudgeText = "[fanout] peer message in your inbox — run: fanout msg inbox
 var (
 	listLivePanes   = tmuxrun.ListLivePanes
 	sendLiteralLine = tmuxrun.SendLiteralLine
-	// loadStateStore resolves and loads .fanout/state.json read-only, the same
-	// way --status/--close/etc do (resolveStateRuntime honors
-	// FANOUT_STATE_PATH then the git toplevel). nudge needs the recipient's
-	// recorded pane id, which lives here, not in the messages DB.
+	// loadStateStore resolves and loads the owner checkout's .fanout/state.json
+	// read-only — the recipient's recorded pane id lives there, not in the
+	// messages DB. It resolves the path the way team.Detect does
+	// (FANOUT_STATE_PATH, else OwnerProjectRoot), NOT resolveStateRuntime: nudge
+	// is normally run FROM a child worktree pane
+	// (<owner>/.fanout/worktrees/<slug>), whose own git toplevel has no
+	// state.json. Only OwnerProjectRoot climbs to the owner that holds it — the
+	// same resolver every other msg verb uses (openMsgDB) — so resolveStateRuntime
+	// would silently load an empty store and report every peer "not recorded".
 	loadStateStore = func() (state.Store, error) {
-		rt, err := resolveStateRuntime()
-		if err != nil {
-			return state.Store{}, err
+		statePath := os.Getenv(fanoutStatePathEnv)
+		if statePath != "" {
+			if abs, err := filepath.Abs(statePath); err == nil {
+				statePath = abs
+			}
+		} else {
+			root, err := team.OwnerProjectRoot()
+			if err != nil {
+				return state.Store{}, err
+			}
+			statePath = state.Path(root)
 		}
-		return state.Load(rt.statePath)
+		return state.Load(statePath)
 	}
 )
 
