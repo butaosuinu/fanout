@@ -807,52 +807,6 @@ func TestSendKeysPreservesPaneTarget(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{"send-keys", "-t", "%1", "q"})
 }
 
-func TestPaneAgentStateBuildsArgsAndTrims(t *testing.T) {
-	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
-printf 'running\r\n'
-`)
-
-	got, err := PaneAgentState("%1")
-	if err != nil {
-		t.Fatalf("PaneAgentState() failed: %v", err)
-	}
-	if got != "running" {
-		t.Fatalf("PaneAgentState() = %q, want running (CR/LF trimmed)", got)
-	}
-	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "-t", "%1", "#{@fanout_agent_state}"})
-}
-
-func TestPaneAgentStateReturnsEmptyForUnsetOptionOnLivePane(t *testing.T) {
-	// An alive pane whose @fanout_agent_state was never set (legacy / launched
-	// outside the wrapper) makes tmux exit zero with empty output; the value is
-	// "", not an error, so the nudge gate degrades to no-op rather than failing.
-	installTmuxShim(t, `printf ''
-`)
-
-	got, err := PaneAgentState("%1")
-	if err != nil {
-		t.Fatalf("PaneAgentState() failed: %v", err)
-	}
-	if got != "" {
-		t.Fatalf("PaneAgentState() = %q, want empty string", got)
-	}
-}
-
-func TestPaneAgentStateErrorsWhenPaneGone(t *testing.T) {
-	installTmuxShim(t, `exit 1
-`)
-
-	if _, err := PaneAgentState("%404"); err == nil {
-		t.Fatal("PaneAgentState() succeeded, want error when tmux cannot resolve the pane")
-	}
-}
-
-func TestPaneAgentStateRejectsEmptyPaneID(t *testing.T) {
-	if _, err := PaneAgentState("  "); err == nil {
-		t.Fatal("PaneAgentState(empty) should error")
-	}
-}
-
 func TestSendLiteralLineTypesTextThenEnter(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"

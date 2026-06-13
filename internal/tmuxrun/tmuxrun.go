@@ -541,27 +541,6 @@ func SendKeys(target string, keys ...string) error {
 	return nil
 }
 
-// PaneAgentState returns the @fanout_agent_state pane user option for paneID,
-// re-read live so a nudge gate (fanout msg nudge) sees the current value
-// instead of a cached one — shrinking the TOCTOU window between the check and
-// the send-keys. The value is "running" between agent launch and exit, "done"
-// afterward (see BuildPaneLaunchCommand). A dead pane id makes tmux exit
-// non-zero, so an error doubles as a liveness signal; an *alive* pane whose
-// option was never set (legacy panes, panes launched outside the wrapper)
-// reports ("", nil) — display-message exits zero with empty output. Callers
-// treat both "" and an error as "do not nudge".
-func PaneAgentState(paneID string) (string, error) {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return "", fmt.Errorf("pane id is required")
-	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{"+agentStateOption+"}").Output()
-	if err != nil {
-		return "", fmt.Errorf("tmux display-message %s: %w", agentStateOption, err)
-	}
-	return strings.TrimRight(string(out), "\r\n"), nil
-}
-
 // SendLiteralLine types text into paneID literally and submits it with Enter,
 // as `fanout msg nudge` does to drop a one-line hint into a peer agent's
 // input. It targets the pane id directly (not through exactSessionTarget,

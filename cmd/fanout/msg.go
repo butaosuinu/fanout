@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -70,12 +71,12 @@ var detectIdentity = team.Detect
 // out of context. The em dash is intentional; it is a stable UTF-8 literal.
 const nudgeText = "[fanout] peer message in your inbox — run: fanout msg inbox"
 
-// paneAgentState and sendLiteralLine are the tmux seams nudge drives, declared
+// listLivePanes and sendLiteralLine are the tmux seams nudge drives, declared
 // as vars so unit tests can swap them without a live tmux server (same pattern
 // as detectIdentity). The dry-run path uses neither — it must stay tmux-free
 // so its golden is deterministic.
 var (
-	paneAgentState  = tmuxrun.PaneAgentState
+	listLivePanes   = tmuxrun.ListLivePanes
 	sendLiteralLine = tmuxrun.SendLiteralLine
 	// loadStateStore resolves and loads .fanout/state.json read-only, the same
 	// way --status/--close/etc do (resolveStateRuntime honors
@@ -819,23 +820,66 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 	case pane.PaneID == "":
 		report.Reason = "recipient has no recorded pane"
 	default:
-		// Re-read the agent state live, immediately before sending, to shrink
-		// the window between the check and the push (TOCTOU).
-		report.AgentState, err = paneAgentState(pane.PaneID)
-		switch {
-		case err != nil:
-			report.Reason = "pane is gone or tmux is unavailable"
-		case !shouldNudge(report.AgentState):
-			report.Reason = fmt.Sprintf("agent is not running (state %q)", report.AgentState)
-		default:
-			if sendErr := sendLiteralLine(pane.PaneID, nudgeText); sendErr != nil {
-				report.Reason = fmt.Sprintf("send-keys failed: %v", sendErr)
-			} else {
-				report.Nudged = true
-			}
-		}
+		report.AgentState, report.Reason, report.Nudged = deliverNudge(pane)
 	}
 	return writeMsgNudgeResult(f, report, lg)
+}
+
+// deliverNudge re-reads the live tmux panes immediately before sending (TOCTOU),
+// confirms the recorded pane id STILL belongs to the recipient, and pushes the
+// hint only when its agent is running. The recorded id alone is not enough:
+// tmux reuses %N ids after a server restart, so an id-only check could nudge an
+// unrelated pane that inherited the id — exactly the interruption accident the
+// gate must avoid. matchLivePane applies the same id+worktree liveness check the
+// dashboard uses (sessionview.paneAlive). It returns the observed agent state, a
+// reason when nothing was sent, and whether the push went out; every miss
+// (tmux down, pane gone/reused, agent not running, send failure) is a
+// best-effort no-op because the message is already persisted.
+func deliverNudge(pane state.Pane) (agentState, reason string, nudged bool) {
+	panes, err := listLivePanes()
+	if err != nil {
+		return "", "tmux is unavailable", false
+	}
+	lp, ok := matchLivePane(panes, pane.PaneID, pane.WorktreePath)
+	if !ok {
+		return "", "recipient pane is gone or its id was reused", false
+	}
+	if !shouldNudge(lp.AgentState) {
+		return lp.AgentState, fmt.Sprintf("agent is not running (state %q)", lp.AgentState), false
+	}
+	if err := sendLiteralLine(pane.PaneID, nudgeText); err != nil {
+		return lp.AgentState, fmt.Sprintf("send-keys failed: %v", err), false
+	}
+	return lp.AgentState, "", true
+}
+
+// matchLivePane returns the live pane recorded as paneID only when it is still
+// the recipient's pane: its id must be live AND it must sit at/under the
+// recorded worktree, because tmux reuses %N ids across server restarts. A row
+// without a recorded worktree (legacy) falls back to an id-only match. This
+// mirrors sessionview.paneAlive — the dashboard's liveness convention — so a
+// reused id is treated identically on both surfaces.
+func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree string) (tmuxrun.LivePane, bool) {
+	if paneID == "" {
+		return tmuxrun.LivePane{}, false
+	}
+	for _, lp := range panes {
+		if lp.ID != paneID {
+			continue
+		}
+		if strings.TrimSpace(worktree) == "" {
+			return lp, true
+		}
+		wt := filepath.Clean(worktree)
+		cp := filepath.Clean(lp.CurrentPath)
+		if cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator)) {
+			return lp, true
+		}
+		// id matched but the live pane moved off the recorded worktree: tmux
+		// handed %N to an unrelated pane. Treat it as gone, never nudge it.
+		return tmuxrun.LivePane{}, false
+	}
+	return tmuxrun.LivePane{}, false
 }
 
 // nudgeDryRunLine renders the would-be tmux push as a single deterministic

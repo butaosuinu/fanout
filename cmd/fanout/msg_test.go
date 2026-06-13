@@ -10,6 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/msgstore"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/team"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 func msgTestLogger() *log.Logger {
@@ -417,52 +418,76 @@ func TestNudgeDryRunLine(t *testing.T) {
 }
 
 func TestRunMsgNudge(t *testing.T) {
+	// withPane is a legacy row (no recorded worktree) so it falls back to an
+	// id-only liveness match; withWorktree carries a worktree, so the live pane
+	// must also sit at/under it (the reused-%N defense).
 	withPane := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5"}}}
+	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", WorktreePath: "/wt/recipient"}}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}
+	lp := func(id, path, agentState string) tmuxrun.LivePane {
+		return tmuxrun.LivePane{ID: id, CurrentPath: path, AgentState: agentState}
+	}
 
 	for _, tc := range []struct {
 		name           string
 		flags          msgFlags
 		store          state.Store
 		storeErr       error
-		agentState     string
-		agentErr       error
+		live           []tmuxrun.LivePane
+		listErr        error
 		sendErr        error
 		wantCode       exitcode.Code
-		wantAgentRead  bool // paneAgentState consulted
+		wantListed     bool // listLivePanes consulted
 		wantSendCalled bool // sendLiteralLine invoked
 		wantStdout     string
 		wantStderr     string
 	}{
 		{
-			name: "running pane is nudged", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
-			agentState: "running", wantCode: exitcode.OK, wantAgentRead: true, wantSendCalled: true, wantStdout: "nudged #71",
+			name: "running pane is nudged (legacy id-only match)", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
+			live: []tmuxrun.LivePane{lp("%5", "/anywhere", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			name: "running pane at the recorded worktree is nudged", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			name: "running pane under the recorded worktree is nudged", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient/nested", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			// The core Codex P2: tmux reused %5 for a pane sitting elsewhere.
+			// It must NOT be nudged even though it reports "running".
+			name: "reused id off the recorded worktree is not nudged", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/someone-else", "running")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "gone or its id was reused",
+		},
+		{
+			name: "pane absent from the live set is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%9", "/wt/recipient", "running")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "gone or its id was reused",
 		},
 		{
 			// parent "0068" must still resolve the stored "68" pane via Find's
-			// numeric canonicalization (parentMatches), so the nudge path is
-			// not sensitive to leading-zero parent refs.
-			name: "leading-zero parent still resolves the recipient", flags: msgFlags{verb: "nudge", to: 71, parent: "0068"}, store: withPane,
-			agentState: "running", wantCode: exitcode.OK, wantAgentRead: true, wantSendCalled: true, wantStdout: "nudged #71",
+			// numeric canonicalization (parentMatches).
+			name: "leading-zero parent still resolves the recipient", flags: msgFlags{verb: "nudge", to: 71, parent: "0068"}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
 		},
 		{
-			name: "done pane is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
-			agentState: "done", wantCode: exitcode.OK, wantAgentRead: true, wantStderr: "agent is not running",
+			name: "done pane is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "done")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not running",
 		},
 		{
-			name: "unset state is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
-			agentState: "", wantCode: exitcode.OK, wantAgentRead: true, wantStderr: "agent is not running",
+			name: "unset state is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not running",
 		},
 		{
-			name: "pane gone is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
-			agentErr: errors.New("no such pane"), wantCode: exitcode.OK, wantAgentRead: true, wantStderr: "pane is gone",
+			name: "tmux unavailable is a no-op success", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			listErr: errors.New("tmux down"), wantCode: exitcode.OK, wantListed: true, wantStderr: "tmux is unavailable",
 		},
 		{
-			name: "send-keys failure stays a best-effort success", flags: msgFlags{verb: "nudge", to: 71}, store: withPane,
-			agentState: "running", sendErr: errors.New("boom"), wantCode: exitcode.OK, wantAgentRead: true, wantSendCalled: true, wantStderr: "send-keys failed",
+			name: "send-keys failure stays a best-effort success", flags: msgFlags{verb: "nudge", to: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "running")}, sendErr: errors.New("boom"), wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStderr: "send-keys failed",
 		},
 		{
-			name: "recipient absent from state is a no-op success", flags: msgFlags{verb: "nudge", to: 99}, store: withPane,
+			name: "recipient absent from state is a no-op success", flags: msgFlags{verb: "nudge", to: 99}, store: withWorktree,
 			wantCode: exitcode.OK, wantStderr: "not recorded",
 		},
 		{
@@ -470,11 +495,11 @@ func TestRunMsgNudge(t *testing.T) {
 			wantCode: exitcode.OK, wantStderr: "no recorded pane",
 		},
 		{
-			name: "dry-run prints the would-line and touches no tmux", flags: msgFlags{verb: "nudge", to: 71, dryRun: true}, store: withPane,
+			name: "dry-run prints the would-line and touches no tmux", flags: msgFlags{verb: "nudge", to: 71, dryRun: true}, store: withWorktree,
 			wantCode: exitcode.OK, wantStdout: "# would send-keys -t %5",
 		},
 		{
-			name: "dry-run for an unrecorded recipient prints <unknown> and touches no tmux", flags: msgFlags{verb: "nudge", to: 99, dryRun: true}, store: withPane,
+			name: "dry-run for an unrecorded recipient prints <unknown> and touches no tmux", flags: msgFlags{verb: "nudge", to: 99, dryRun: true}, store: withWorktree,
 			wantCode: exitcode.OK, wantStdout: "# would send-keys -t <unknown>",
 		},
 		{
@@ -482,24 +507,24 @@ func TestRunMsgNudge(t *testing.T) {
 			wantCode: exitcode.Invocation,
 		},
 		{
-			name: "json reports a delivered nudge", flags: msgFlags{verb: "nudge", to: 71, json: true}, store: withPane,
-			agentState: "running", wantCode: exitcode.OK, wantAgentRead: true, wantSendCalled: true,
+			name: "json reports a delivered nudge", flags: msgFlags{verb: "nudge", to: 71, json: true}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true,
 			wantStdout: `"nudged": true`,
 		},
 		{
-			name: "json reports a skipped nudge with a reason", flags: msgFlags{verb: "nudge", to: 71, json: true}, store: withPane,
-			agentState: "done", wantCode: exitcode.OK, wantAgentRead: true, wantStdout: `"nudged": false`,
+			name: "json reports a skipped nudge with a reason", flags: msgFlags{verb: "nudge", to: 71, json: true}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "done")}, wantCode: exitcode.OK, wantListed: true, wantStdout: `"nudged": false`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			origLoad, origState, origSend := loadStateStore, paneAgentState, sendLiteralLine
-			defer func() { loadStateStore, paneAgentState, sendLiteralLine = origLoad, origState, origSend }()
+			origLoad, origList, origSend := loadStateStore, listLivePanes, sendLiteralLine
+			defer func() { loadStateStore, listLivePanes, sendLiteralLine = origLoad, origList, origSend }()
 
 			loadStateStore = func() (state.Store, error) { return tc.store, tc.storeErr }
-			agentRead := false
-			paneAgentState = func(paneID string) (string, error) {
-				agentRead = true
-				return tc.agentState, tc.agentErr
+			listed := false
+			listLivePanes = func() ([]tmuxrun.LivePane, error) {
+				listed = true
+				return tc.live, tc.listErr
 			}
 			sent := false
 			var sentPane, sentText string
@@ -524,8 +549,8 @@ func TestRunMsgNudge(t *testing.T) {
 			if tc.wantCode != exitcode.OK {
 				return
 			}
-			if agentRead != tc.wantAgentRead {
-				t.Errorf("paneAgentState consulted = %v, want %v", agentRead, tc.wantAgentRead)
+			if listed != tc.wantListed {
+				t.Errorf("listLivePanes consulted = %v, want %v", listed, tc.wantListed)
 			}
 			if sent != tc.wantSendCalled {
 				t.Errorf("sendLiteralLine called = %v, want %v", sent, tc.wantSendCalled)
@@ -543,6 +568,40 @@ func TestRunMsgNudge(t *testing.T) {
 			}
 			if tc.wantStderr != "" && !strings.Contains(errb.String(), tc.wantStderr) {
 				t.Errorf("stderr = %q, want substring %q", errb.String(), tc.wantStderr)
+			}
+		})
+	}
+}
+
+func TestMatchLivePane(t *testing.T) {
+	panes := []tmuxrun.LivePane{
+		{ID: "%5", CurrentPath: "/wt/recipient", AgentState: "running"},
+		{ID: "%6", CurrentPath: "/wt/recipient/nested/deep", AgentState: "done"},
+		{ID: "%7", CurrentPath: "/wt/other", AgentState: "running"},
+	}
+	for _, tc := range []struct {
+		name     string
+		paneID   string
+		worktree string
+		wantOK   bool
+		wantID   string // matched pane id when wantOK
+	}{
+		{name: "id + exact worktree", paneID: "%5", worktree: "/wt/recipient", wantOK: true, wantID: "%5"},
+		{name: "id + path under worktree", paneID: "%6", worktree: "/wt/recipient", wantOK: true, wantID: "%6"},
+		{name: "trailing slash on worktree still matches", paneID: "%5", worktree: "/wt/recipient/", wantOK: true, wantID: "%5"},
+		{name: "reused id off the worktree is rejected", paneID: "%7", worktree: "/wt/recipient", wantOK: false},
+		{name: "sibling-prefix path is not under the worktree", paneID: "%5", worktree: "/wt/recip", wantOK: false},
+		{name: "id absent from the live set", paneID: "%9", worktree: "/wt/recipient", wantOK: false},
+		{name: "empty worktree falls back to id-only", paneID: "%7", worktree: "", wantOK: true, wantID: "%7"},
+		{name: "empty pane id never matches", paneID: "", worktree: "/wt/recipient", wantOK: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := matchLivePane(panes, tc.paneID, tc.worktree)
+			if ok != tc.wantOK {
+				t.Fatalf("matchLivePane(%q, %q) ok = %v, want %v", tc.paneID, tc.worktree, ok, tc.wantOK)
+			}
+			if ok && got.ID != tc.wantID {
+				t.Errorf("matched pane id = %q, want %q", got.ID, tc.wantID)
 			}
 		})
 	}
