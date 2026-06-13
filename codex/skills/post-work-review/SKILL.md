@@ -1,6 +1,6 @@
 ---
 name: post-work-review
-description: Use from Codex CLI to run a finish-review loop on current git work before commit or PR: inspect the diff, run codex review with an explicit scope, fix actionable findings, rerun until clean, and record the review marker when the reviewed commit is clean. Use when the user says review して仕上げて, post-review, finalize, コミット前に確認, 二重チェック, codex review もかけて, or asks for a final pre-PR review pass.
+description: "Use from Codex CLI to run a finish-review loop on current git work before commit or PR: inspect the diff, run codex review with an explicit scope, fix actionable findings, rerun until clean, and record the review marker when the reviewed commit is clean. Use when the user says review して仕上げて, post-review, finalize, コミット前に確認, 二重チェック, codex review もかけて, or asks for a final pre-PR review pass."
 metadata:
   short-description: Run a final Codex review loop before PR
 ---

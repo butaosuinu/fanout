@@ -1,6 +1,6 @@
 ---
 name: pr-watch
-description: Use from Codex CLI to monitor an existing pull request after creation and autonomously address merge conflicts, failing CI, and review comments until it is mergeable, green, and approved or genuinely blocked. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, or after PR creation says あとよろしく.
+description: "Use from Codex CLI to monitor an existing pull request after creation and autonomously address merge conflicts, failing CI, and review comments until it is mergeable, green, and approved or genuinely blocked. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, or after PR creation says あとよろしく."
 metadata:
   short-description: Watch and repair an existing PR
 ---
