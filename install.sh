@@ -103,9 +103,14 @@ install_data() {
   fi
 }
 
+# Uninstall runs before the release tarball is fetched/extracted, so the list of
+# integrations to remove cannot be derived from the source the way
+# install_integrations does. Keep this enumeration in sync with whatever
+# claude/commands, claude/skills, and codex/skills the repo ships.
 remove_integrations() {
-  rm -f "$claude_dir/commands/fanout.md"
-  rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues"
+  rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md"
+  rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues" \
+    "$claude_dir/skills/post-work-review" "$claude_dir/skills/pr-watch"
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues"
 }
 
