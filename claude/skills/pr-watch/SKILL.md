@@ -66,12 +66,24 @@ gh pr view --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision
 
 ### push 先 remote の解決（fork 対応・以降の全 push で使う）
 
-C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `headRefName`）とし、push 先 remote を次で決める:
+C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `headRefName`）とし、push 先 remote を次で決める。
+
+まず **force-push の認可**を判定する。基準は「head リポジトリの owner が今の認証ユーザー自身か」**だけ**:
+
+```bash
+me=$(gh api user -q .login)
+# headRepositoryOwner.login と $me が一致するか
+```
+
+- `headRepositoryOwner.login == $me`（= 自分のブランチ。非 fork PR は head owner が base owner と同じく自分）→ force-push **可**。
+- `headRepositoryOwner.login != $me`（= 他者の fork）→ **`maintainerCanModify=true`（「メンテナの編集を許可」）でも force-push しない**。履歴改変は「他者 PR に触らない」ガードレールそのものの違反で、`maintainerCanModify` は維持者によるコミット追記を許すだけで履歴 rewrite の許可ではない。新規コミット追記が要るケースも含め、他者 fork はユーザーにエスカレーションして判断を仰ぐ。
+
+そのうえで push 先 remote を決める:
 
 - `isCrossRepository=false`（head が base リポジトリにある通常ケース）→ 押し先は `origin`。
-- `isCrossRepository=true`（head が fork にある）→ `origin` に押すと base 側に別 ref を作るだけで **PR head は変わらない**。`gh pr checkout <num>` で正しい remote と追跡ブランチを設定し、その remote（`gh pr checkout` が作る `<owner>` 由来の remote、または `headRepositoryOwner.login` の fork を指す remote）へ押す。fork に push 権限が無い（`maintainerCanModify=false` かつ自分が head リポジトリの owner でない）なら **force-push せずエスカレーション**。
+- `isCrossRepository=true` かつ force-push 認可済み（自分の fork）→ `origin` に押すと base 側に別 ref を作るだけで **PR head は変わらない**。`gh pr checkout <num>` で正しい remote と追跡ブランチを設定し、その remote（`gh pr checkout` が作る `<owner>` 由来の remote、または `headRepositoryOwner.login` の fork を指す remote）へ押す。
 
-以降このドキュメントで `<head-remote>` と書いたら、ここで解決した remote を指す。全 push は明示 refspec `<head-remote> HEAD:"$head"` で行う（refspec を省略しない）。
+以降このドキュメントで `<head-remote>` と書いたら、ここで解決した remote を指す。全 push は明示 refspec `<head-remote> HEAD:"$head"` で行う（refspec を省略しない）。force-push 認可が取れない他者 fork では、ここで止めてエスカレーションし、以降の C/D/E の push は行わない。
 
 ## 1 反復（pass）の手順
 
@@ -79,14 +91,18 @@ C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `
 
 ### A. 状態取得
 
-上記 `gh pr view --json …` を 1 回叩いて、この pass の判断材料を揃える。CI の詳細が要るときだけ続けて `gh pr checks --json name,state,bucket,link,workflow` を叩く（`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel` を返す）。
+この pass の判断材料を、**B の終了判定に必要なものまで含めて先に揃える**（B が「CI 全 pass」「未解決スレッド 0」を見るのに、それらを A で取っていないと取りこぼす）。3 つを取る:
+
+1. `gh pr view --json …`（PR 状態）。
+2. CI: `gh pr checks --json name,state,bucket,link,workflow`（`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks … --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
+3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
 
 ### B. 終了判定（最初に行う）
 
 対処に入る前に、まず「もう終わっていないか」を見る。無駄な rebase / 修正を避けるため、この判定を pass の先頭に置く:
 
 - `state` が `MERGED` または `CLOSED` → **完了**。終了報告して loop を抜ける。
-- `state=OPEN` かつ `reviewDecision=APPROVED` かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ未解決レビュースレッド 0 → **やることなし＝実質完了**。「マージ可能・承認済み・グリーンで未解決指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。
+- `state=OPEN` かつ `reviewDecision=APPROVED` かつ `mergeable=MERGEABLE`（`mergeStateStatus=CLEAN`）かつ CI が全 `pass`/`skipping` かつ **A-3 で数えた未解決レビュースレッドが 0** → **やることなし＝実質完了**。「マージ可能・承認済み・グリーンで未解決指摘なし」と報告して loop を抜ける（PR の自動マージはしない。後述「やらないこと」）。未解決スレッドの 0 判定は必ず A-3 の `reviewThreads` 実取得に基づくこと（`reviewDecision` だけで「指摘なし」と即断しない — COMMENTED スレッドを取りこぼす）。
 - それ以外 → C 以降で対処対象を洗う。
 
 ### C. マージコンフリクト対応（rebase + 自動解決）
@@ -94,12 +110,14 @@ C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `
 `mergeable=CONFLICTING` または `mergeStateStatus` が `DIRTY` / `BEHIND` のとき:
 
 1. 作業ツリーが dirty なら、まず未コミット変更を commit するか stash するかを判断（勝手に捨てない）。
-2. ベースを取得して rebase:
+2. ベースを取得して rebase。**rebase 先は PR の base リポジトリの `$base`（= `baseRefName`）**であって、head（fork）側の同名ブランチではない。fork PR では `origin` が fork を指し base リポジトリは別 remote（`upstream` 等）のことがあるので、base リポジトリを指す remote を `<base-remote>` として解決してから当てる（非 fork なら `origin`。判別に迷うなら base repo の URL から直接 fetch する）:
 
    ```bash
-   git fetch origin "$base"            # base は baseRefName
-   git rebase "origin/$base"
+   git fetch "<base-remote>" "$base"   # 例: git fetch origin main / git fetch upstream main
+   git rebase FETCH_HEAD               # いま fetch したベースちょうどに当てる（remote 名のズレに影響されない）
    ```
+
+   `origin/$base` を直書きしないのは、fork 運用だと fork 側の古い・別物のベースに rebase してしまい、real base に対してまだ behind / conflicting な head を push しかねないため。
 
 3. 衝突が出たら、**確信が持てる箇所だけ自動解決**する。確信の基準は「両側の意図が明確で、機械的にどちらか / 両方を残せば正しいと言い切れる」こと（例: import 行の併合、片側が単なる行追加、フォーマット差）。解決したら `git add` → `git rebase --continue`。
 4. **意味的に判断が要る衝突は自動解決しない**: 同じ関数を両側で別ロジックに書き換えている、削除 vs 変更がぶつかる、テストの期待値が両側で食い違う等。`git rebase --abort` で安全な状態へ戻し、後述の oscillation セーフティと同じ要領でユーザーに状況を渡してエスカレーションする（どの hunk が・なぜ自動解決できないかを具体的に）。
@@ -118,13 +136,15 @@ C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `
 
 `gh pr checks --json name,state,bucket,link,workflow` で `bucket=fail` のチェックを特定する:
 
-1. 失敗したワークフロー実行のログを精読する。run id は失敗チェックの `link` から辿るか、`gh run list --branch "$head" --json databaseId,conclusion,workflowName` で取得し、**失敗ジョブのみ**を読む:
+1. 失敗チェックが **GitHub Actions の run か外部 CI かをまず判別する**。`gh pr checks --json` の各チェックの `link` が GitHub Actions の run URL（`…/actions/runs/<id>…`）か、`workflow` が埋まっているものだけが Actions。Actions なら失敗 run のログを **失敗ジョブのみ**精読する（run id は `link` から、または `gh run list --branch "$head" --json databaseId,conclusion,workflowName` で取得）:
 
    ```bash
    gh run view <run-id> --log-failed
    ```
 
    ログ全文ではなく失敗部分だけを取るのは、出力肥大とトークン浪費を避けるため。
+
+   **外部 CI（Buildkite / CircleCI / Jenkins 等、`link` が Actions の run でないチェック）は `gh run` で辿れない**。`gh run view` を当てに行かず、チェックの `link` URL を開いて原因を読むか、ログに自動アクセスできなければ「外部 CI `<name>` が失敗。`<link>` を確認してほしい」とユーザーにエスカレーションする。
 2. 原因を特定して修正する（lint / 型 / テスト / ビルド）。修正前に「CI の何が・なぜ落ちたか」と「何を直すか」を 1〜2 文で宣言。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（新規コミットを足すだけだが、`push.default` 依存を避けるため push 先は常に「push 先 remote の解決」で決めた `<head-remote>` の head ref に明示ピンする。rebase していないので fast-forward になり lease は通る）。push 後、CI は再実行されるので、この pass では「修正を push した。CI 再実行を待つ」とし、次 pass は短間隔で再確認する。
 4. **flaky / インフラ起因が疑われる失敗**（タイムアウト、外部サービス 5xx、無関係なネットワークエラー）はコード修正で直らない。1 回は再実行を促し（`gh run rerun <run-id> --failed` の提案）、それでも再現するならユーザーにエスカレーション。コードに無い原因をコードで延々いじらない。
@@ -148,10 +168,12 @@ C/D/E のどの push もこの解決結果に従う。head ref を `$head`（= `
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
 
+     各スレッドについて **先頭（top-level）コメントの `databaseId`**（= `comments.nodes[0].databaseId`）を控えておく。返信エンドポイント（E-4）はこの top-level ID しか受け付けないため。
+
 2. `isResolved=false` のスレッドだけを対象に、指摘内容をコードで対処する。設計判断・仕様確認を伴う指摘（「この方針で良いか」「ここは別実装にすべきでは」等、機械的に直せないもの）は無理に実装せず、その旨を整理してユーザーにエスカレーションする。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（C/D と同じく push 先は解決済み `<head-remote>` の head ref に明示ピン。素の `git push` は使わない）。
 4. **fix を push してから**返信する（順序が逆だと「直した」と言ったのに反映されていない状態を作る）。返信は対応コミットを参照して簡潔に:
-   - 個別インラインスレッドへの返信: `gh api repos/$owner/$repo/pulls/$num/comments/<comment_databaseId>/replies -f body="<対応内容と commit>"`
+   - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `comments.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
    - 全体への一言: `gh pr comment "$num" --body "<要約>"`
 5. **スレッドの resolve は確信があるときだけ**。基本はレビュアーに委ねる（自分で resolve すると、レビュアーが再確認する前に閉じてしまう）。
 
@@ -200,7 +222,7 @@ C/D/E のどれも該当しなければ、この pass は「対処対象なし�
 ## 安全ガードレール
 
 - **全 push は解決済み `<head-remote>` の head ref に明示ピンする**（`git push [--force-with-lease] <head-remote> HEAD:<headRefName>`）。C の rebase 後・D の CI 修正・E のレビュー修正のいずれも対象。refspec 無しの素の push（`push.default` 依存で別ブランチを巻き込みうる）や無印 `--force` は使わない。fork PR では `<head-remote>` が `origin` でない／push 権限が無いことがあるので、解決手順で確認できなければ force-push せずエスカレーション。lease 失敗 = 他者更新ありとみなし、fetch して再評価し、状況をユーザーへ。
-- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
+- **操作対象は自分の head トピックブランチのみ**。`headRefName` が現在ブランチと一致することを確認してから触る。**force-push の認可は「`headRefName` の head リポジトリ owner == 今の認証ユーザー（`gh api user -q .login`）」だけで判断する**。`maintainerCanModify=true`（fork PR で「メンテナの編集を許可」）は認可根拠にしない — 履歴 rewrite の許可ではないので、他者 fork に force-push するとガードレール違反になる。**他者が作成した PR、`main` / `master` / `release/*` 等の保護ブランチには force-push しない**。
 - **衝突を片側採用で機械的に潰さない**。確信が持てる hunk だけ自動解決し、意味的判断が要る箇所は abort してエスカレーション（C-4）。
 - **リポジトリのレビューゲートを尊重する**。`gh pr create` を `.claude/hooks/` 等でゲートしているリポジトリ（この repo の `pre-pr-review-gate.sh` 等）では、この skill は PR を作らないのでゲート対象外だが、push する fix にも品質基準を勝手に下げない。エスケープハッチ（`FANOUT_SKIP_PR_REVIEW` 等）を無断で使わない。
 - **CI を直すために CI 設定（ワークフロー yaml）を緩めて通す、テストを消して通す等の「通すための改竄」をしない**。原因を直すのが目的。設定変更が本当に必要なら理由を添えてユーザーに確認。
