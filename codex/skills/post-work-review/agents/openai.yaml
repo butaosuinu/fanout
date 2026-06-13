@@ -1,0 +1,7 @@
+interface:
+  display_name: "post-work-review"
+  short_description: "Run a final Codex review loop"
+  default_prompt: "Use $post-work-review to run a final Codex review loop before a PR."
+
+policy:
+  allow_implicit_invocation: true

@@ -81,7 +81,7 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 - ゲートは HEAD に固定されます。新しいコミットを積むと再武装されるので、PR の前にもう一度レビューしてください。marker は worktree ローカルなので、fanout の並列ペイン同士が干渉することはありません。
 - 検出はシェルトークナイザ(Python 製のコンパニオンパーサ)を通します。コマンド語と引用された引数値を区別するので、コミットメッセージに `gh pr create` と書いただけでは引っかかりません。`eval` / `xargs` / `sh -c "<文字列>"` のような間接実行はすり抜けることがありますが、fanout の通常フローでは許容範囲としています。
 - `python3` が無い環境では fail-closed になり、PR 作成らしきコマンドを粗い判定で deny します。`python3` をインストールするか、`export FANOUT_SKIP_PR_REVIEW=1` してください。
-- `make install` は同名のグローバル `post-work-review` skill を上書きします。独自に管理しているコピーがある場合は事前にバックアップしてください。
+- `make install` は Claude / Codex 配下の同名グローバル `post-work-review` / `pr-watch` skill を上書きします。独自に管理しているコピーがある場合は事前にバックアップしてください。
 
 ## Project モードで items が取れない
 
