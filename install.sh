@@ -111,7 +111,8 @@ remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md"
   rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues" \
     "$claude_dir/skills/post-work-review" "$claude_dir/skills/pr-watch"
-  rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues"
+  rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
+    "$codex_dir/skills/pr-watch"
 }
 
 copy_skill_dirs() {

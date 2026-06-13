@@ -22,11 +22,10 @@ shellcheck of the test shims (Node-free on purpose; the web lint is
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
 
-The Claude Code integration files (`claude/commands/fanout.md` slash command
-and `claude/skills/fanout/SKILL.md` skill) and Codex CLI integration file
-(`codex/skills/fanout/SKILL.md`) are bundled in the repo as the source of
-truth. `make install` places them under `~/.claude/` and `~/.codex/`. Do not
-edit installed copies directly.
+The Claude Code integration files under `claude/commands/` and
+`claude/skills/`, plus Codex CLI integration files under `codex/skills/`, are
+bundled in the repo as the source of truth. `make install` places them under
+`~/.claude/` and `~/.codex/`. Do not edit installed copies directly.
 
 The user-facing surface is in `README.md` and `README.ja.md`. Read those before
 changing behavior; this file covers repo-local architecture and maintenance

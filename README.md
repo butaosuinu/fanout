@@ -137,6 +137,7 @@ Installed paths:
 - `$CLAUDE_DIR/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
 - `$CODEX_DIR/skills/fanout/` (default `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
+- `$CODEX_DIR/skills/pr-watch/` (default `~/.codex/skills/pr-watch/`)
 
 `install.sh` detects macOS/Linux and amd64/arm64, downloads
 `fanout_<os>_<arch>.tar.gz` from the latest GitHub Release (or
@@ -823,6 +824,11 @@ Recommended integration for Codex CLI — the skill is bundled under
   parent/child issues, or prepare blocker waves for `fanout --unblocked-only`.
   It mirrors the Claude issue-creation skill: same-repo children, GitHub
   Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
+- **PR watch skill** → `codex/skills/pr-watch/SKILL.md` is installed to
+  `~/.codex/skills/pr-watch/SKILL.md`. Use it by asking Codex to watch a PR
+  after creation, fix merge conflicts, address failing CI, or respond to
+  requested changes. Codex runs it in the current session rather than as a
+  hidden background loop.
 
 The CLI prerequisites above still apply: start the TUI from the target
 repository worktree, and for batch pane creation run from inside tmux, pass

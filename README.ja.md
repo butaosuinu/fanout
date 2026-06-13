@@ -126,6 +126,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CLAUDE_DIR/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
 - `$CODEX_DIR/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
 - `$CODEX_DIR/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+- `$CODEX_DIR/skills/pr-watch/`（既定は `~/.codex/skills/pr-watch/`）
 
 `install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release
 （または `FANOUT_VERSION` で指定した tag）から
@@ -735,6 +736,11 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
   `fanout --unblocked-only` 用の blocker wave 作成を依頼したときに使います。
   Claude 版と同じく、同一リポジトリ内の子 issue、GitHub Sub-issues のリンク、
   親本文のタスクリスト、`## Blocked by` 注記を揃えます。
+- **PR 監視スキル** → `codex/skills/pr-watch/SKILL.md` が
+  `~/.codex/skills/pr-watch/SKILL.md` にインストールされます。PR 作成後の監視、
+  merge conflict の修正、CI failure の対応、requested changes への返信を Codex に
+  依頼したときに使います。Codex では hidden background loop ではなく、現在の
+  セッション内で実行します。
 
 上記の CLI 前提条件はそのまま適用されます: TUI は対象リポジトリの worktree から
 起動し、一括 pane 作成では tmux 内で実行し、agent 名を明示してください。詳しくは

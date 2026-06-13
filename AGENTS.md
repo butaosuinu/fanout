@@ -16,10 +16,9 @@ a shellcheck of the test shims. `make fmt` formats (gofumpt/goimports),
 
 Source-of-truth integration files:
 
-- Claude Code: `claude/commands/fanout.md` and
-  `claude/skills/fanout/SKILL.md`, installed under `~/.claude/`.
-- Codex CLI: `codex/skills/fanout/SKILL.md`, installed under
-  `~/.codex/skills/fanout/`.
+- Claude Code: `claude/commands/` and `claude/skills/`, installed under
+  `~/.claude/`.
+- Codex CLI: `codex/skills/`, installed under `~/.codex/skills/`.
 
 Do not edit installed copies under home directories directly. Edit the repo
 versions and rerun `make install` or `make link`.

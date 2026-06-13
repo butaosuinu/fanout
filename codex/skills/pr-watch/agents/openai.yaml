@@ -1,0 +1,7 @@
+interface:
+  display_name: "pr-watch"
+  short_description: "Watch PR conflicts, CI, and review"
+  default_prompt: "Use $pr-watch to monitor this PR and handle conflicts, CI failures, and review comments."
+
+policy:
+  allow_implicit_invocation: true
