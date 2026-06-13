@@ -1,4 +1,5 @@
-import { Fragment, useEffect } from "react";
+import { Fragment, useEffect, type CSSProperties } from "react";
+import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
@@ -62,6 +63,8 @@ export function Drawer({
   token: string;
   onClose: () => void;
 }) {
+  const { width, gripProps } = useDrawerWidth();
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       // defaultPrevented = 手前のオーバーレイ(フィルタ popover 等)が消費済み
@@ -71,8 +74,17 @@ export function Drawer({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  /* 幅は CSS 変数 --drawer-w 経由でのみ反映する(inline width にすると
+   * ≤820px の bottom sheet など media query が cascade で勝てなくなる)。 */
   return (
-    <aside id="drawer" aria-label="ペイン詳細">
+    <aside
+      id="drawer"
+      aria-label="ペイン詳細"
+      style={{ "--drawer-w": `${width}px` } as CSSProperties}
+    >
+      {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
+          セパレータ意味論だけ落ちる事故を防ぐ) */}
+      <div className="drawer-grip" {...gripProps} />
       <header className="drawer-head">
         <h3>
           <span className="d-issue" id="d-issue">

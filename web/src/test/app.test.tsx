@@ -622,6 +622,60 @@ describe("plan(Codex Plan Mode)", () => {
   });
 });
 
+describe("drawer リサイズ", () => {
+  beforeEach(() => {
+    // hook はビューポート上限(innerWidth - 360)でも clamp する。jsdom 既定の
+    // 1024px だと上限 921px になりドラッグ値が読みにくいので広い画面に固定。
+    Object.defineProperty(window, "innerWidth", { value: 2000, configurable: true, writable: true });
+  });
+  const openDrawer = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
+    await user.click(screen.getByText(name));
+    return await screen.findByRole("complementary", { name: "ペイン詳細" });
+  };
+  const drawerWidthVar = (drawer: HTMLElement) => drawer.style.getPropertyValue("--drawer-w");
+
+  it("localStorage の保存値が --drawer-w と grip の aria-valuenow に反映される", async () => {
+    server.use(peekHandler(() => "boot ok"));
+    localStorage.setItem("fanout.drawerWidth", "560");
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    const drawer = await openDrawer(user, "Fix login");
+    expect(drawerWidthVar(drawer)).toBe("560px");
+    const grip = within(drawer).getByRole("separator", { name: "詳細パネルの幅を変更" });
+    expect(grip).toHaveAttribute("aria-orientation", "vertical");
+    expect(grip).toHaveAttribute("aria-valuenow", "560");
+  });
+
+  it("グリップのドラッグで広がり、pane を切り替えても幅を維持する", async () => {
+    server.use(peekHandler(() => "boot ok"));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    const drawer = await openDrawer(user, "Fix login");
+    expect(drawerWidthVar(drawer)).toBe("840px"); // 初期幅 = 従来 420px の 2 倍
+
+    const grip = within(drawer).getByRole("separator", { name: "詳細パネルの幅を変更" });
+    fireEvent.pointerDown(grip, { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    expect(document.documentElement).toHaveClass("drawer-resizing");
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 680, buttons: 1 });
+    expect(drawerWidthVar(drawer)).toBe("960px"); // 右アンカー: 左ドラッグで拡大
+    fireEvent.pointerUp(grip, { pointerId: 1, clientX: 680 });
+    expect(document.documentElement).not.toHaveClass("drawer-resizing");
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("960");
+
+    // Drawer は pane ごとに remount されるが、保存値からの同期初期化で幅は維持
+    const drawer2 = await openDrawer(user, "Add docs");
+    expect(within(drawer2).getByText("fanout/add-docs")).toBeInTheDocument();
+    expect(drawerWidthVar(drawer2)).toBe("960px");
+    expect(
+      within(drawer2).getByRole("separator", { name: "詳細パネルの幅を変更" }),
+    ).toHaveAttribute("aria-valuenow", "960");
+  });
+});
+
 describe("transport フォールバック", () => {
   it("SSE 断でポーリングに移行し、更新が継続する", async () => {
     const polled = makeSnapshot([
