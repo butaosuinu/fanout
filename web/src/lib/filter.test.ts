@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePane } from "../test/fixtures";
-import { filterTokens, matches, parseQuery, removeToken, replaceToken } from "./filter";
+import { filterTokens, matches, parseQuery, removeToken, replaceToken, stripKey, tokenForKey } from "./filter";
 
 describe("parseQuery", () => {
   it("key:value トークンと自由語を区別する", () => {
@@ -114,5 +114,21 @@ describe("トークン操作", () => {
 
   it("removeToken は完全一致のみ外す", () => {
     expect(removeToken(["state:open", "state:o"], "state:open")).toEqual(["state:o"]);
+  });
+
+  it("tokenForKey は指定キーの最初のトークン値を小文字で返す", () => {
+    expect(tokenForKey(["claude", "state:open"], "state")).toBe("open");
+    // 手打ちの大文字も小文字に正規化して返す(選択肢との比較用)
+    expect(tokenForKey(["STATE:Open"], "state")).toBe("open");
+  });
+
+  it("tokenForKey は該当キーが無ければ null(自由語・他キー・前方一致違いは見ない)", () => {
+    expect(tokenForKey([], "state")).toBeNull();
+    expect(tokenForKey(["open", "agent:claude", "statex:open"], "state")).toBeNull();
+  });
+
+  it("stripKey は同キーのトークンを重複・大文字違いごと全て外す", () => {
+    expect(stripKey(["state:open", "STATE:closed", "agent:claude"], "state")).toEqual(["agent:claude"]);
+    expect(stripKey(["claude"], "state")).toEqual(["claude"]);
   });
 });

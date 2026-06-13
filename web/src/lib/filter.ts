@@ -101,14 +101,36 @@ export function filterTokens(filter: string): string[] {
   return filter.trim().split(/\s+/).filter(Boolean);
 }
 
+/* key: プレフィックス一致(大文字小文字無視)。replaceToken / stripKey /
+ * tokenForKey は必ずこの 1 つの判定を共有する(判定が割れると trigger の
+ * 点灯・チェック表示・チップ行が食い違う)。 */
+function hasKey(tok: string, key: string): boolean {
+  return tok.toLowerCase().startsWith(`${key}:`);
+}
+
 /* 同キーの既存トークンを置き換えて追加(state:open → state:closed は上書き) */
 export function replaceToken(tokens: string[], key: string, value: string): string[] {
-  const prefix = `${key}:`;
-  const toks = tokens.filter((t) => !t.toLowerCase().startsWith(prefix));
-  toks.push(prefix + value);
+  const toks = stripKey(tokens, key);
+  toks.push(`${key}:${value}`);
   return toks;
+}
+
+/* 指定キーのトークンを全て除去(手打ちの重複・大文字違いも残さない)。
+ * ドロップダウンのトグルオフ用 — exact-match の removeToken だと
+ * 「state:open STATE:CLOSED」のような手打ち重複の取り残しが出る。 */
+export function stripKey(tokens: string[], key: string): string[] {
+  return tokens.filter((t) => !hasKey(t, key));
 }
 
 export function removeToken(tokens: string[], tok: string): string[] {
   return tokens.filter((t) => t !== tok);
+}
+
+/* 指定キーの最初の key:value トークンの値(小文字)。ドロップダウンの
+ * アクティブ表示・トグルオフ判定用。該当キーが無ければ null。 */
+export function tokenForKey(tokens: string[], key: string): string | null {
+  for (const t of tokens) {
+    if (hasKey(t, key)) return t.slice(key.length + 1).toLowerCase();
+  }
+  return null;
 }

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSnapshot } from "../hooks/useSnapshot";
 import { readToken } from "../lib/api";
-import { filterTokens, matches, parseQuery, removeToken, replaceToken } from "../lib/filter";
+import { filterTokens, matches, parseQuery, removeToken, replaceToken, stripKey } from "../lib/filter";
 import { clock, degradedMessages } from "../lib/format";
 import { deriveAgents, deriveWaves } from "../lib/options";
 import { findPane } from "../lib/pane";
@@ -88,12 +88,17 @@ export function App() {
       setSortDir(1);
     }
   };
-  const onPickToken = (key: string, value: string) => {
-    setFilter(replaceToken(filterTokens(filter), key, value).join(" "));
-  };
-  const onRemoveToken = (tok: string) => {
-    setFilter(removeToken(filterTokens(filter), tok).join(" "));
-  };
+  /* 関数 setState + useCallback で identity を安定させ、memo(FilterDropdown)
+   * が snapshot tick の再レンダーをスキップできるようにする */
+  const onPickToken = useCallback((key: string, value: string) => {
+    setFilter((f) => replaceToken(filterTokens(f), key, value).join(" "));
+  }, []);
+  const onClearKey = useCallback((key: string) => {
+    setFilter((f) => stripKey(filterTokens(f), key).join(" "));
+  }, []);
+  const onRemoveToken = useCallback((tok: string) => {
+    setFilter((f) => removeToken(filterTokens(f), tok).join(" "));
+  }, []);
   const closeDrawer = () => {
     const key = selected;
     setSelected(null);
@@ -131,6 +136,7 @@ export function App() {
               agents={deriveAgents(snap)}
               waves={deriveWaves(snap)}
               onPickToken={onPickToken}
+              onClearKey={onClearKey}
               onRemoveToken={onRemoveToken}
             />
             <main id="sessions" aria-live="polite">
