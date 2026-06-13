@@ -198,6 +198,10 @@ export function useDrawerWidth(): { width: number; gripProps: DrawerGripProps } 
       if (!delta) return;
       e.preventDefault();
       const next = clampIntent(rendered + delta);
+      // 描画上限に張り付いた状態の拡大はドラッグと同じく no-op にする。capped
+      // な rendered から intent を再計算すると、広い画面で見えるはずの大きい
+      // 保存値を縮めてしまうため。
+      if (next >= rendered && intentRef.current > rendered) return;
       if (next === intentRef.current) return;
       setIntent(next);
       persist(next);

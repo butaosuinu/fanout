@@ -204,6 +204,34 @@ describe("useDrawerWidth", () => {
     expect(width()).toBe(1300);
   });
 
+  it("描画上限に張り付いた状態のキーボード拡大は大きい intent を縮めない", () => {
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840
+    render(<Probe />);
+    expect(width()).toBe(840);
+
+    fireEvent.keyDown(grip(), { key: "ArrowLeft" }); // 拡大 → 描画変えられず no-op
+    expect(width()).toBe(840);
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("1300"); // 864 に縮んでいない
+
+    setInnerWidth(2000);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(width()).toBe(1300);
+  });
+
+  it("描画上限に張り付いた状態でもキーボード縮小は見えている幅から追従する", () => {
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840
+    render(<Probe />);
+    expect(width()).toBe(840);
+
+    fireEvent.keyDown(grip(), { key: "ArrowRight" }); // 縮小 → 816
+    expect(width()).toBe(816);
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("816");
+  });
+
   it("描画上限に張り付いた状態でも縮小ドラッグは見えている幅から追従する", () => {
     localStorage.setItem("fanout.drawerWidth", "1300");
     setInnerWidth(1200); // viewport 上限 840
