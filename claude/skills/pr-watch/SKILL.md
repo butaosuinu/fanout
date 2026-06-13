@@ -107,7 +107,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 1. `gh pr view --json …`（PR 状態）。
 2. CI: `gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow`（`$pr` を必ず渡す。`bucket` が `pass`/`fail`/`pending`/`skipping`/`cancel`）。**`gh pr checks` は pending チェックがあると exit 8、失敗があると非 0 を返す**ので、exit code を成否判定に使わず、`gh pr checks ${pr:+"$pr"} --json … || true` のように**必ず JSON を取り切ってから `bucket` で判断**する（exit 8 をコマンド失敗として扱うと、push→pending の窓でループが止まる）。
 3. 未解決レビュースレッド: E-1 の `reviewThreads` GraphQL を**この時点で**叩き、`isResolved=false` の件数（と中身・各スレッドの先頭/最新コメント）を持っておく。`reviewDecision` は COMMENTED レビューでは変わらないので、スレッドを実際に数えないと未解決指摘を見落とす。
-4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の `state=CHANGES_REQUESTED` 本文・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、トップレベルに actionable コメントが残っていても approve/green で完了扱いになる）。
+4. サマリ／トップレベルの actionable: E-1 と同じ `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision` を取り、`latestReviews` の本文（`CHANGES_REQUESTED` だけでなく **`COMMENTED` も含め**、具体的な修正依頼があるもの）・対応要求のトップレベルコメントを拾う。これらは**未解決 `reviewThread` を作らず `reviewDecision` も変えない**ことがあるので、B はスレッド数だけでなくこの「未対応のサマリ/トップレベル指摘」も 0 か見る（さもないと、レビュー本文に依頼が残っていても approve/green で完了扱いになる）。純粋な情報共有のみの COMMENTED は対象外。
 
 ### B. 終了判定（最初に行う）
 
@@ -155,7 +155,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
 
 ### D. CI 失敗対応
 
-`gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow` で **`bucket` が `fail` または `cancel`** のチェックを特定する（`cancel`=キャンセルされた必須チェックを無視すると、B は「全 pass でない」ので完了できず、D が拾わないと永遠に idle/long-poll になる）。`cancel` は原因修正の対象ではなく、まず `gh run rerun <run-id>`（外部 CI なら再実行をユーザーに促す）で回し直し、繰り返すならエスカレーション。`fail` は以下で原因を直す:
+`gh pr checks ${pr:+"$pr"} --json name,state,bucket,link,workflow` で **`bucket` が `fail` または `cancel`** のチェックを特定する（`cancel`=キャンセルされた必須チェックを無視すると、B は「全 pass でない」ので完了できず、D が拾わないと永遠に idle/long-poll になる）。`cancel` は原因修正の対象ではなく、まず `gh run rerun -R "$owner/$repo" <run-id>`（外部 CI なら再実行をユーザーに促す）で回し直し、繰り返すならエスカレーション。`fail` は以下で原因を直す:
 
 1. 失敗チェックが **GitHub Actions の run か外部 CI かをまず判別する**。`gh pr checks --json` の各チェックの `link` が GitHub Actions の run URL（`…/actions/runs/<id>…`）か、`workflow` が埋まっているものだけが Actions。Actions なら失敗 run のログを **失敗ジョブのみ**精読する（run id は `link` から、または `gh run list -R "$owner/$repo" --branch "$head" --json databaseId,conclusion,workflowName` で取得）:
 
@@ -170,16 +170,16 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
    **外部 CI（Buildkite / CircleCI / Jenkins 等、`link` が Actions の run でないチェック）は `gh run` で辿れない**。`gh run view` を当てに行かず、チェックの `link` URL を開いて原因を読むか、ログに自動アクセスできなければ「外部 CI `<name>` が失敗。`<link>` を確認してほしい」とユーザーにエスカレーションする。
 2. 原因を特定して修正する（lint / 型 / テスト / ビルド）。修正前に「CI の何が・なぜ落ちたか」と「何を直すか」を 1〜2 文で宣言。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（新規コミットを足すだけだが、`push.default` 依存を避けるため push 先は常に「push 先 remote の解決」で決めた `<head-remote>` の head ref に明示ピンする。rebase していないので fast-forward になり lease は通る）。push 後、CI は再実行されるので、この pass では「修正を push した。CI 再実行を待つ」とし、次 pass は短間隔で再確認する。
-4. **flaky / インフラ起因が疑われる失敗**（タイムアウト、外部サービス 5xx、無関係なネットワークエラー）はコード修正で直らない。1 回は再実行を促し（`gh run rerun <run-id> --failed` の提案）、それでも再現するならユーザーにエスカレーション。コードに無い原因をコードで延々いじらない。
+4. **flaky / インフラ起因が疑われる失敗**（タイムアウト、外部サービス 5xx、無関係なネットワークエラー）はコード修正で直らない。1 回は再実行を促し（`gh run rerun -R "$owner/$repo" <run-id> --failed` の提案）、それでも再現するならユーザーにエスカレーション。コードに無い原因をコードで延々いじらない。
 
-5. **必須チェックが未報告で `mergeStateStatus=BLOCKED`**（ブランチ保護が待っている required status が `gh pr checks` に `fail`/`cancel` として出てこない＝まだ走っていない / 報告が来ていない）の取り扱い。この状態は `fail`/`cancel` が無いので 1〜4 で拾えず、B も `BLOCKED` で完了できないため、**何もしないと idle で永遠にポーリングしてしまう**。`bucket=pending` の required チェックが進行中なら短間隔で待つ（CI 進行中扱い）。どのチェックも走っておらず required status が**欠落**しているなら、その required workflow を `gh run rerun`／再 dispatch するか、自動で起こせないなら「required チェック `<name>` が未報告で BLOCKED。手動でトリガー / 設定確認が要る」とユーザーにエスカレーションする（漫然と long-poll しない）。
+5. **必須チェックが未報告で `mergeStateStatus=BLOCKED`**（ブランチ保護が待っている required status が `gh pr checks` に `fail`/`cancel` として出てこない＝まだ走っていない / 報告が来ていない）の取り扱い。この状態は `fail`/`cancel` が無いので 1〜4 で拾えず、B も `BLOCKED` で完了できないため、**何もしないと idle で永遠にポーリングしてしまう**。`bucket=pending` の required チェックが進行中なら短間隔で待つ（CI 進行中扱い）。どのチェックも走っておらず required status が**欠落**しているなら、その required workflow を `gh run rerun -R "$owner/$repo"`／再 dispatch するか、自動で起こせないなら「required チェック `<name>` が未報告で BLOCKED。手動でトリガー / 設定確認が要る」とユーザーにエスカレーションする（漫然と long-poll しない）。
 
 ### E. レビューコメント対応
 
 未対応のレビュー指摘を集めて、コードで対処する。対象は**インラインスレッドだけではない** — 次の 2 系統を両方拾う:
 
 1. 取得:
-   - **サマリ／トップレベルの requested changes**: `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision=CHANGES_REQUESTED` なのにインラインスレッドが 0、というケースがあるので、`latestReviews` の `state=CHANGES_REQUESTED` の本文や、対応を要求する PR コメント本文も**対処すべきレビュー作業として扱う**（これを見ないと「直す対象が無い」と誤判断して永遠に idle になる）。**判断には `latestReviews`（レビュアーごとの現在状態。承認・dismiss 済みは反映される）を使い、歴史的な `reviews` 全件は使わない** — 後で approve / dismiss された古い `CHANGES_REQUESTED` を蒸し返して対処対象にしてしまうため。
+   - **サマリ／トップレベルの requested changes**: `gh pr view ${pr:+"$pr"} --json latestReviews,comments,reviewDecision`。レビュアーが inline ではなくレビュー本文やトップレベルコメントだけで変更を求めると、GitHub は **未解決 `reviewThread` を作らない**。`reviewDecision` も変わらないことがある（承認後の追記や、必須レビューの無い repo では `state=COMMENTED` で出る）。そこで、`latestReviews` の本文を **`state=CHANGES_REQUESTED` に限らず `COMMENTED` も含めて読み**、対応を要求している（具体的な修正依頼がある）ものは対処対象として扱う。`comments`（PR の issue コメント）も同様に対応要求を拾う。これを見ないと「直す対象が無い」と誤判断して、レビュー本文に残った依頼を放置したまま完了/ idle になる。**判断には `latestReviews`（レビュアーごとの現在状態。承認・dismiss 済みは反映される）を使い、歴史的な `reviews` 全件は使わない** — 後で approve / dismiss された古い指摘を蒸し返さないため。純粋に情報共有だけの COMMENTED（具体的依頼が無い）は対処不要として扱う。
    - **未解決のインラインスレッド**（どの指摘がまだ open か）は GraphQL で `isResolved` を見る:
 
      ```bash
@@ -190,7 +190,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
              reviewThreads(first:100, after:$endCursor){
                pageInfo{ hasNextPage endCursor }
                nodes{ isResolved isOutdated path line originalLine diffSide
-                 topLevel: comments(first:1){ nodes{ databaseId body diffHunk } }
+                 topLevel: comments(first:1){ nodes{ fullDatabaseId databaseId body diffHunk } }
                  latest:   comments(last:1){ nodes{ author{login} createdAt body } } } } } } }' \
        -F owner="$owner" -F repo="$repo" -F num="$num"
      ```
@@ -212,7 +212,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD   # PR head が HEAD の祖先か
    設計判断・仕様確認を伴う指摘（「この方針で良いか」「ここは別実装にすべきでは」等、機械的に直せないもの）は無理に実装せず、その旨を整理してユーザーにエスカレーションする。
 3. 修正を commit → `git push --force-with-lease "<head-remote>" HEAD:"$head"`（C/D と同じく push 先は解決済み `<head-remote>` の head ref に明示ピン。素の `git push` は使わない）。
 4. **fix を push してから**返信する（順序が逆だと「直した」と言ったのに反映されていない状態を作る）。返信は対応コミットを参照して簡潔に:
-   - 個別インラインスレッドへの返信は **スレッド先頭コメントの `databaseId`**（E-1 で控えた `topLevel.nodes[0].databaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_databaseId>/replies -f body="<対応内容と commit>"`
+   - 個別インラインスレッドへの返信は **スレッド先頭コメントの id**（E-1 で控えた `topLevel.nodes[0].fullDatabaseId`）に対して行う。返信コメントの ID を渡すと reply エンドポイントは 404 を返すので、必ず top-level ID を使う: `gh api repos/$owner/$repo/pulls/$num/comments/<top_level_id>/replies -f body="<対応内容と commit>"`。**id は `fullDatabaseId` を使う** — 近年の大きいコメント id は GraphQL の `Int` 型 `databaseId` に収まらず `null` になりうるが、REST の reply エンドポイントは数値 id を要求する。`fullDatabaseId`（文字列の完全な数値 id）なら取りこぼさない。
    - 全体への一言: `gh pr comment -R "$owner/$repo" "$num" --body "<要約>"`（`-R` で対象 PR のリポジトリを明示する。bare `$num` だけだと、URL 指定や triangular checkout で `gh` のデフォルトリポジトリ側の別 `#num` に付いたり失敗したりする。REST replies が `$owner/$repo` を使うのと揃える）。
 5. **スレッドの resolve は確信があるときだけ**。基本はレビュアーに委ねる（自分で resolve すると、レビュアーが再確認する前に閉じてしまう）。
 
@@ -293,5 +293,5 @@ C/D/E のどれも該当しなければ、この pass は「対処対象なし�
 - **rebase が複雑で自動解決不能**: `git rebase --abort` で安全に戻し、どの hunk が・なぜ駄目かを添えてユーザーへ（C-4）。
 - **`--force-with-lease` が reject**: 他者が同ブランチに push 済み。`git fetch` で取り込み、状況をユーザーに共有してから再評価。勝手に `--force` で踏み潰さない。
 - **CI ログが巨大**: `gh run view <run-id> --log-failed` で失敗ジョブのみ取得。全文は読まない。
-- **CI が flaky / インフラ起因**: コード修正で直らない。1 回 `gh run rerun <run-id> --failed` を促し、再現するならエスカレーション（D-4）。
+- **CI が flaky / インフラ起因**: コード修正で直らない。1 回 `gh run rerun -R "$owner/$repo" <run-id> --failed` を促し、再現するならエスカレーション（D-4）。
 - **対象 PR がドラフト（`isDraft=true`）**: レビュー / マージ前提が揃わない。衝突・CI の追従はしてよいが、「ドラフトのままなので approve/マージ判定はスキップ」と明示する。
