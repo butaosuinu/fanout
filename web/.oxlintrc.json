@@ -19,7 +19,11 @@
     // ^_ プレフィックスが unused-vars の公認イディオムなので、underscore を
     // 咎める rule とは両立しない(suspicious は --max-warnings=0 で CI を
     // 落とすため、矛盾警告を残せない)。
-    "eslint/no-underscore-dangle": "off"
+    "eslint/no-underscore-dangle": "off",
+    // Restriction ルールはカテゴリに含まれないので明示 enable が必要。これを
+    // 書かないと off override も no-op になり、components/hooks の `!` も
+    // 素通りしてしまう。lib/test だけ override で外す(下記)。
+    "typescript/no-non-null-assertion": "error"
   },
   "overrides": [
     {
@@ -31,8 +35,12 @@
       "rules": { "typescript/no-non-null-assertion": "off" }
     },
     {
+      // vitest プラグイン/globals は test ファイルにだけ足す。oxlint 1.69 の
+      // 実挙動では override の plugins は base にマージされるが、ドキュメントは
+      // 「指定すると置換」とも読めるため、バージョン非依存に base プラグインも
+      // 明示して test に base ルールが必ず適用されるようにする。
       "files": ["src/test/**", "src/**/*.test.ts", "src/**/*.test.tsx"],
-      "plugins": ["vitest"],
+      "plugins": ["react", "typescript", "unicorn", "oxc", "vitest"],
       "env": { "vitest": true }
     }
   ]
