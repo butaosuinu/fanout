@@ -87,7 +87,7 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 			},
 		},
 	} {
-		got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", tc.agent, "release/v1", defaults)
+		got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", tc.agent, "release/v1", defaults, nil)
 		commonWants := []string{
 			`You are assigned task "task-001" of plan "Launch Plan" (plan:plan-alpha) in this repository.`,
 			"Title: Task title",
@@ -115,7 +115,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 
 	noAutoPR := defaults
 	noAutoPR.AutoPullRequest = false
-	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "release/v1", noAutoPR)
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "release/v1", noAutoPR, nil)
 	for _, unwanted := range []string{
 		"Open a pull request",
 		"structure the PR body",
@@ -133,7 +133,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 
 	noVisualization := defaults
 	noVisualization.PRVisualization = false
-	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", noVisualization)
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", noVisualization, nil)
 	if !strings.Contains(got, `Open a pull request and end the PR body with "Plan: plan-alpha / Task: task-001"`) {
 		t.Fatalf("RenderTask(..., PRVisualization=false) missing auto-PR task requirement:\n%s", got)
 	}
@@ -148,7 +148,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	claudeToggles.PRReviewGate = false
 	claudeToggles.BriefingCodeReview = false
 	claudeToggles.AgentTeamsHint = false
-	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", claudeToggles)
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", claudeToggles, nil)
 	if !strings.Contains(got, "The PR review gate is disabled for this fanout run") {
 		t.Fatalf("RenderTask(..., PRReviewGate=false) missing bypass notice:\n%s", got)
 	}
@@ -164,7 +164,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 }
 
 func TestRenderTaskPRVisualizationQuotesBaseBranch(t *testing.T) {
-	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "foo;bar", settings.Defaults())
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "foo;bar", settings.Defaults(), nil)
 	want := "git diff --name-only 'foo;bar'...HEAD"
 	if !strings.Contains(got, want) {
 		t.Fatalf("RenderTask(...) missing shell-quoted base branch command %q:\n%s", want, got)
@@ -234,6 +234,52 @@ func TestTeamSectionAbsentInCodexPlanBriefing(t *testing.T) {
 	got := Render(101, "First child", "Issue body", "codex", "main", settings.Defaults(), true, testTeamContext())
 	if strings.Contains(got, "Coordinating with your sibling panes") {
 		t.Fatalf("codex plan briefing contains the team section:\n%s", got)
+	}
+}
+
+func testTaskTeamContext() *TeamContext {
+	return &TeamContext{
+		ParentLabel: "plan:launch-plan",
+		DBPath:      "/tmp/fanout-project_root-plan-launch-plan.db",
+		Siblings: []TeamSibling{
+			{TaskID: "base-types", Title: "Define base types"},
+			{TaskID: "api-client", Title: "Extract API client"},
+		},
+	}
+}
+
+func TestTaskTeamSectionAddressesSiblingsByTaskID(t *testing.T) {
+	team := testTaskTeamContext()
+	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), team)
+	for _, want := range []string{
+		"## Coordinating with your sibling panes",
+		"You are the pane for task base-types (parent plan:launch-plan)",
+		"- base-types: Define base types (you)",
+		"- api-client: Extract API client",
+		"/tmp/fanout-project_root-plan-launch-plan.db",
+		"fanout msg send --to <task-id>",
+		"Peers are addressed by task id",
+		"Agent Teams, which coordinates teammates inside your own single session",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderTask(..., team) missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "- api-client: Extract API client (you)") {
+		t.Fatal("RenderTask(..., team) marks a non-self sibling as (you)")
+	}
+	// The plan variant must not leak the issue-numbered cheatsheet.
+	if strings.Contains(got, "fanout msg send --to <N>") {
+		t.Fatalf("RenderTask(..., team) used the issue cheatsheet:\n%s", got)
+	}
+	// Issue-closing references stay absent in the task briefing.
+	assertIssueLessTaskBriefing(t, got)
+}
+
+func TestTaskTeamSectionAbsentWithoutTeamContext(t *testing.T) {
+	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), nil)
+	if strings.Contains(got, "Coordinating with your sibling panes") {
+		t.Fatalf("RenderTask(..., team=nil) contains the team section:\n%s", got)
 	}
 }
 

@@ -36,7 +36,13 @@ func TestParseMsgFlags(t *testing.T) {
 			}
 		}},
 		{name: "send missing --to", args: []string{"send", "--self", "70", "--parent", "68", "hi"}, code: exitcode.Invocation},
-		{name: "send non-integer --to", args: []string{"send", "--to", "abc", "--self", "70", "--parent", "68", "hi"}, code: exitcode.Invocation},
+		{name: "send invalid --to token", args: []string{"send", "--to", "ABC", "--self", "70", "--parent", "68", "hi"}, code: exitcode.Invocation},
+		{name: "send task-id --to parses (semantic check is deferred)", args: []string{"send", "--to", "api-client", "--self", "70", "--parent", "68", "hi"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.toRaw != "api-client" || f.to != 0 {
+				t.Errorf("parsed = %+v, want toRaw=api-client to=0", f)
+			}
+		}},
 		{name: "send empty body", args: []string{"send", "--to", "71", "--self", "70", "--parent", "68"}, code: exitcode.Invocation},
 		{name: "send whitespace body", args: []string{"send", "--to", "71", "--self", "70", "--parent", "68", " "}, code: exitcode.Invocation},
 		{name: "post custom kind", args: []string{"post", "--kind", "blocker", "watch", "out"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
@@ -75,7 +81,12 @@ func TestParseMsgFlags(t *testing.T) {
 			}
 		}},
 		{name: "inline value on boolean flag", args: []string{"inbox", "--all=1"}, code: exitcode.Invocation},
-		{name: "zero self is rejected", args: []string{"inbox", "--self", "0"}, code: exitcode.Invocation},
+		{name: "numeric-zero self parses as a task-id shape (rejected later under a numeric parent)", args: []string{"inbox", "--self", "0"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.selfRaw != "0" || f.self != 0 {
+				t.Errorf("parsed = %+v, want selfRaw=0 self=0", f)
+			}
+		}},
 		{name: "negative self is a manual-pane synthetic number", args: []string{"inbox", "--self", "-3", "--parent", "68"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
 			t.Helper()
 			if f.self != -3 {
@@ -138,8 +149,19 @@ func TestParseMsgFlags(t *testing.T) {
 			}
 		}},
 		{name: "nudge without a target exits invalid", args: []string{"nudge"}, code: exitcode.Invocation},
-		{name: "nudge zero target rejected", args: []string{"nudge", "0"}, code: exitcode.Invocation},
-		{name: "nudge non-integer target rejected", args: []string{"nudge", "abc"}, code: exitcode.Invocation},
+		{name: "numeric-zero nudge target parses as a task-id shape (rejected later under a numeric parent)", args: []string{"nudge", "0"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.toRaw != "0" || f.to != 0 {
+				t.Errorf("parsed = %+v, want toRaw=0 to=0", f)
+			}
+		}},
+		{name: "nudge invalid target token rejected", args: []string{"nudge", "ABC"}, code: exitcode.Invocation},
+		{name: "nudge task-id target parses (semantic check is deferred)", args: []string{"nudge", "api-client"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.toRaw != "api-client" || f.to != 0 {
+				t.Errorf("parsed = %+v, want toRaw=api-client to=0", f)
+			}
+		}},
 		{name: "nudge rejects a second target", args: []string{"nudge", "71", "72"}, code: exitcode.Invocation},
 		{name: "nudge does not accept --to", args: []string{"nudge", "--to", "71"}, code: exitcode.Invocation},
 		{name: "nudge dry-run rejects json", args: []string{"nudge", "--dry-run", "--json", "71"}, code: exitcode.Invocation},
@@ -302,14 +324,22 @@ func TestMsgDryRunLines(t *testing.T) {
 			flags: msgFlags{verb: "register"},
 			pane:  msgstore.Peer{Issue: 70, PaneID: "%1", Slug: "s-70", WorktreePath: "/tmp/wt", Agent: "claude", DisplayName: "name"},
 			want: []string{
-				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen) VALUES (70, '%1', 's-70', '/tmp/wt', 'claude', 'name', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z')",
+				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '%1', 's-70', '/tmp/wt', 'claude', 'name', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', NULL)",
 			},
 		},
 		{
 			name:  "register without pane",
 			flags: msgFlags{verb: "register"},
 			want: []string{
-				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen) VALUES (70, '', '', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z')",
+				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '', '', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', NULL)",
+			},
+		},
+		{
+			name:  "register a plan task pane records the task id",
+			flags: msgFlags{verb: "register"},
+			pane:  msgstore.Peer{Issue: -42, TaskID: "api-client", Slug: "launch-plan-api-client"},
+			want: []string{
+				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '', 'launch-plan-api-client', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', 'api-client')",
 			},
 		},
 	} {
@@ -336,7 +366,7 @@ func TestWriteMsgMessagesTable(t *testing.T) {
 	}
 	var out strings.Builder
 	lg := log.NewWith(&out, &strings.Builder{}, false)
-	writeMsgMessagesTable(msgs, true, lg)
+	writeMsgMessagesTable(msgs, true, nil, lg)
 	got := out.String()
 	for _, want := range []string{
 		"ID  FROM  TO     KIND  CREATED               BODY",
@@ -349,14 +379,35 @@ func TestWriteMsgMessagesTable(t *testing.T) {
 	}
 
 	out.Reset()
-	writeMsgMessagesTable(nil, false, lg)
+	writeMsgMessagesTable(nil, false, nil, lg)
 	if got := out.String(); got != "no unread messages\n" {
 		t.Errorf("empty unread table = %q", got)
 	}
 	out.Reset()
-	writeMsgMessagesTable(nil, true, lg)
+	writeMsgMessagesTable(nil, true, nil, lg)
 	if got := out.String(); got != "no messages\n" {
 		t.Errorf("empty all table = %q", got)
+	}
+}
+
+// TestWriteMsgMessagesTablePlanLabels checks that a plan label map renders
+// synthetic peer numbers as task ids in the FROM/TO columns.
+func TestWriteMsgMessagesTablePlanLabels(t *testing.T) {
+	apiNum := -111
+	dbNum := -222
+	msgs := []msgstore.Message{
+		{ID: 1, From: dbNum, To: &apiNum, Kind: "note", Body: "ping", CreatedAt: "2026-06-13T00:00:00Z"},
+	}
+	labels := map[int]string{apiNum: "api-client", dbNum: "db-layer"}
+	var out strings.Builder
+	lg := log.NewWith(&out, &strings.Builder{}, false)
+	writeMsgMessagesTable(msgs, true, labels, lg)
+	got := out.String()
+	if !strings.Contains(got, "db-layer") || !strings.Contains(got, "api-client") {
+		t.Errorf("plan label table missing task ids in:\n%s", got)
+	}
+	if strings.Contains(got, "#-111") || strings.Contains(got, "#-222") {
+		t.Errorf("plan label table leaked synthetic numbers in:\n%s", got)
 	}
 }
 
@@ -394,22 +445,26 @@ func TestShouldNudge(t *testing.T) {
 func TestNudgeDryRunLine(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		target int
+		target string
 		paneID string
 		found  bool
 		want   string
 	}{
 		{
-			name: "resolved pane", target: 70, paneID: "%1", found: true,
+			name: "resolved pane", target: "#70", paneID: "%1", found: true,
 			want: "# would send-keys -t %1 -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #70, only if agent is running)",
 		},
 		{
-			name: "unresolved recipient", target: 99, paneID: "", found: false,
+			name: "unresolved recipient", target: "#99", paneID: "", found: false,
 			want: "# would send-keys -t <unknown> -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #99, only if agent is running)",
 		},
 		{
-			name: "found row but empty pane id", target: 72, paneID: "", found: true,
+			name: "found row but empty pane id", target: "#72", paneID: "", found: true,
 			want: "# would send-keys -t <unknown> -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #72, only if agent is running)",
+		},
+		{
+			name: "plan task recipient renders the task id", target: "api-client", paneID: "%3", found: true,
+			want: "# would send-keys -t %3 -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target api-client, only if agent is running)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -653,5 +708,38 @@ func TestMatchLivePane(t *testing.T) {
 				t.Errorf("matched pane id = %q, want %q", got.ID, tc.wantID)
 			}
 		})
+	}
+}
+
+// TestResolveMemberNum covers the seam that decides whether a token is an issue
+// number or a plan task id once the parent is known — in particular that an
+// all-digit token routes to a task under a plan parent (not the issue number).
+func TestResolveMemberNum(t *testing.T) {
+	var buf strings.Builder
+	lg := log.NewWith(&buf, &buf, false)
+	const planParent = "plan:demo"
+
+	n, code := resolveMemberNum("send", "--to", "123", 123, planParent, lg)
+	if code != exitcode.OK {
+		t.Fatalf("plan all-digit code = %d, want OK", code)
+	}
+	if n == 123 || n >= 0 {
+		t.Errorf("plan all-digit resolved to %d, want a negative task number (not the issue number 123)", n)
+	}
+	if again, _ := resolveMemberNum("send", "--to", "123", 123, planParent, lg); again != n {
+		t.Errorf("resolveMemberNum not deterministic: %d != %d", again, n)
+	}
+
+	if _, code := resolveMemberNum("send", "--to", "api-client", 0, "68", lg); code != exitcode.Invocation {
+		t.Error("a task id under an issue parent must be rejected")
+	}
+	if got, code := resolveMemberNum("send", "--to", "71", 71, "68", lg); code != exitcode.OK || got != 71 {
+		t.Errorf("numeric under issue = (%d, %d), want (71, OK)", got, code)
+	}
+	if got, code := resolveMemberNum("send", "--to", "-1", -1, "68", lg); code != exitcode.OK || got != -1 {
+		t.Errorf("manual negative under issue = (%d, %d), want (-1, OK)", got, code)
+	}
+	if _, code := resolveMemberNum("send", "--to", "-1", -1, planParent, lg); code != exitcode.Invocation {
+		t.Error("a non-task token under a plan parent must be rejected")
 	}
 }

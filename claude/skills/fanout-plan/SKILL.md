@@ -110,6 +110,7 @@ Forward only the flags supported by the current `fanout plan` implementation:
 - `--only <task-id[,id...]>`
 - `--skip <task-id[,id...]>`
 - `--unblocked-only`
+- `--team`
 - `--base-branch <branch>`
 - `--branch-prefix <prefix>`
 - `--no-refresh`
@@ -139,9 +140,12 @@ blockers are complete. Omit it only when the user explicitly asks to launch all
 waves together.
 
 Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
-`--name`, `--project-status`, `--post-dashboard`, `--team`,
-`--popup-timeout`, or `--codex-plan-mode`. Names belong in the spec (`slug`,
-`display_name`, `branch`), and dependencies belong in `blocked_by`.
+`--name`, `--project-status`, `--post-dashboard`, `--popup-timeout`, or
+`--codex-plan-mode`. Names belong in the spec (`slug`, `display_name`,
+`branch`), and dependencies belong in `blocked_by`.
+
+`--team` is supported in plan mode (see "Sibling coordination" below); it is
+not one of the forbidden issue/project-only flags.
 
 Use read/lifecycle flags only when the user explicitly asks for plan task
 status or cleanup, not during initial plan generation:
@@ -151,6 +155,34 @@ status or cleanup, not during initial plan generation:
 - `--close <task-id>`
 - `--merge <task-id>`
 - `--cleanup`
+
+## Sibling coordination (--team / fanout msg)
+
+`fanout plan --team` opts the plan run into sibling-pane peer messaging, the
+same SQLite message bus the issue/project lanes use — it just addresses peers
+by **task id** instead of issue number, because plan tasks have no GitHub
+issue. It adds a "Coordinating with your sibling panes" section to each task's
+briefing and seeds the created task panes into a per-parent peer registry
+(best-effort; a registry failure never fails the fan-out). `--team` is
+incompatible with the read/lifecycle modes (`--status` / `--close` / `--merge`
+/ `--cleanup`).
+
+Suggest it when tasks touch shared files (configs, schemas, lockfiles) or have
+ordering nuances beyond what `blocked_by` already encodes; skip it for fully
+independent tasks. From inside a task pane, `fanout msg` auto-detects which
+task you are (from the tmux pane and `.fanout/state.json`) and which plan you
+belong to. Peers are addressed by task id:
+
+- `fanout msg peers` — live sibling roster (task ids).
+- `fanout msg inbox [--mark-read]` — unread 1:1 + board messages addressed to you.
+- `fanout msg board` — the shared broadcast board.
+- `fanout msg send --to <task-id> "<body>"` — 1:1 message to a sibling task.
+- `fanout msg post "<body>"` — post to the shared board.
+
+Coordination is pull-based: messages persist and a sibling reads them at its
+own checkpoints; nothing nudges a busy pane. The DB is a plaintext SQLite file
+under `/tmp` (`0600`, owner-only) — never put secrets in messages. This is
+distinct from Claude Code Agent Teams (a Claude-only, single-session feature).
 
 ## Run
 

@@ -29,9 +29,10 @@ const (
 	dsnPragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 
 	// schemaUserVersion is the PRAGMA user_version stamped by EnsureSchema.
-	// Future migrations bump it and add nullable columns for forward
-	// compatibility.
-	schemaUserVersion = 1
+	// Migrations bump it and add nullable columns for forward compatibility.
+	// v2 adds the nullable peers.task_id column so issue-less plan tasks
+	// (string task id, synthetic peer number) carry their task id for display.
+	schemaUserVersion = 2
 )
 
 // dsnPathEscaper percent-encodes the bytes that would derail file-URI
@@ -41,15 +42,18 @@ const (
 // via filepath.Base, so the path cannot be assumed clean.
 var dsnPathEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
-// schemaStatements is the agreed v1 DDL from the #68 design. messages unifies
-// 1:1 and board traffic: to_issue IS NULL means a board/broadcast post, and
-// board reads track their position per reader in board_cursors instead of
-// mutating read_at. Statements run one by one so a failure names the
-// offending statement.
+// schemaStatements is the DDL from the #68 design. messages unifies 1:1 and
+// board traffic: to_issue IS NULL means a board/broadcast post, and board
+// reads track their position per reader in board_cursors instead of mutating
+// read_at. Statements run one by one so a failure names the offending
+// statement. The nullable peers.task_id column (v2) records the plan task id
+// of a synthetic plan-task peer; it stays NULL for numeric issue panes. A
+// pre-v2 DB gains the column via the additive ALTER in EnsureSchema.
 var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS peers (
   issue INTEGER PRIMARY KEY, pane_id TEXT, slug TEXT, worktree_path TEXT,
-  agent TEXT, display_name TEXT, joined_at TEXT NOT NULL, last_seen TEXT)`,
+  agent TEXT, display_name TEXT, joined_at TEXT NOT NULL, last_seen TEXT,
+  task_id TEXT)`,
 	`CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT, parent TEXT NOT NULL,
   from_issue INTEGER NOT NULL, to_issue INTEGER,
@@ -138,10 +142,11 @@ func checkPrivate(path string, info os.FileInfo) error {
 	return nil
 }
 
-// EnsureSchema creates the v1 tables and index idempotently and stamps
-// PRAGMA user_version=1. A DB already at version 1 is left untouched apart
-// from the harmless CREATE IF NOT EXISTS re-runs; a DB at a newer version
-// returns an error instead of being downgraded.
+// EnsureSchema creates the tables and index idempotently, brings a pre-v2 DB
+// forward with the additive peers.task_id column, and stamps PRAGMA
+// user_version. A DB already at the current version is left untouched apart
+// from the harmless CREATE IF NOT EXISTS re-runs and the no-op column check; a
+// DB at a newer version returns an error instead of being downgraded.
 func EnsureSchema(db *sql.DB) error {
 	var version int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
@@ -155,11 +160,63 @@ func EnsureSchema(db *sql.DB) error {
 			return fmt.Errorf("ensure team db schema: %w", err)
 		}
 	}
-	if version == 0 {
+	if err := ensurePeersTaskIDColumn(db); err != nil {
+		return err
+	}
+	if version < schemaUserVersion {
 		// PRAGMA cannot take placeholders; the value is a package const.
 		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaUserVersion)); err != nil {
 			return fmt.Errorf("stamp team db schema version: %w", err)
 		}
 	}
 	return nil
+}
+
+// ensurePeersTaskIDColumn adds the nullable peers.task_id column to a pre-v2
+// DB. A fresh DB already has it from schemaStatements, so the column check is
+// a no-op there; a v1 issue DB gains the nullable column without a destructive
+// rebuild and keeps every existing peer row intact.
+func ensurePeersTaskIDColumn(db *sql.DB) error {
+	has, err := columnExists(db, "peers", "task_id")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	if _, err := db.Exec("ALTER TABLE peers ADD COLUMN task_id TEXT"); err != nil {
+		return fmt.Errorf("add peers.task_id column: %w", err)
+	}
+	return nil
+}
+
+// columnExists reports whether table has a column named column, via
+// PRAGMA table_info. table is a package-internal literal, never caller input,
+// so interpolating it into the PRAGMA (which cannot take placeholders) is safe.
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			ctype     string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("inspect %s columns: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	return false, nil
 }

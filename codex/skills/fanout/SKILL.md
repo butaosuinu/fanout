@@ -480,3 +480,6 @@ single-session) and works the same for `codex` and `claude` panes.
 - Coordination is pull-based — messages persist and siblings read them at their
   own checkpoints; there is no nudge. The DB is a plaintext SQLite file under
   `/tmp` (`0600`, owner-only): never put secrets in messages.
+- Plan mode — `fanout plan --team` uses the same `fanout msg` surface, but peers
+  are addressed by task id (`fanout msg send --to <task-id>`) instead of issue
+  number, because issue-less plan tasks have no `#N`. See the fanout-plan skill.

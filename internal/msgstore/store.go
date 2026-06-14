@@ -30,9 +30,13 @@ type Message struct {
 
 // Peer is one peers row, also the canonical JSON encoding. Nullable text
 // columns scan to "" — register writes "" rather than NULL for unknown
-// fields, so the distinction carries no information.
+// fields, so the distinction carries no information. TaskID is set only for
+// issue-less plan-task peers (whose Issue is a synthetic number); it stays ""
+// for numeric issue peers, so JSON omits it and the `fanout msg peers` table
+// falls back to the numeric "#<issue>" label.
 type Peer struct {
 	Issue        int    `json:"issue"`
+	TaskID       string `json:"taskId,omitempty"`
 	PaneID       string `json:"pane_id"`
 	Slug         string `json:"slug"`
 	WorktreePath string `json:"worktree_path"`
@@ -133,6 +137,10 @@ func claimDBOwner(db *sql.DB, parent string) (string, error) {
 }
 
 const messageColumns = "id, from_issue, to_issue, kind, body, created_at, read_at, reply_to"
+
+// peerColumns is the SELECT column order scanPeer expects; Register and Peers
+// share it so the two read paths can never drift from the scan.
+const peerColumns = "issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id"
 
 // boardUnreadCond selects unread board posts: beyond self's cursor, excluding
 // self's own posts so `post` followed by `inbox`/`board` doesn't surface the
@@ -372,18 +380,19 @@ func (s *Store) MarkReadAll(self int, now string) ([]int64, int64, error) {
 // last_seen is refreshed on every call.
 func (s *Store) Register(p Peer, now string) (Peer, error) {
 	_, err := s.db.Exec(
-		`INSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(issue) DO UPDATE SET
   pane_id=excluded.pane_id, slug=excluded.slug, worktree_path=excluded.worktree_path,
-  agent=excluded.agent, display_name=excluded.display_name, last_seen=excluded.last_seen`,
-		p.Issue, p.PaneID, p.Slug, p.WorktreePath, p.Agent, p.DisplayName, now, now,
+  agent=excluded.agent, display_name=excluded.display_name, last_seen=excluded.last_seen,
+  task_id=excluded.task_id`,
+		p.Issue, p.PaneID, p.Slug, p.WorktreePath, p.Agent, p.DisplayName, now, now, nullableText(p.TaskID),
 	)
 	if err != nil {
 		return Peer{}, fmt.Errorf("register peer: %w", err)
 	}
 	row := s.db.QueryRow(
-		"SELECT issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen FROM peers WHERE issue = ?",
+		"SELECT "+peerColumns+" FROM peers WHERE issue = ?",
 		p.Issue,
 	)
 	stored, err := scanPeer(row)
@@ -396,7 +405,7 @@ ON CONFLICT(issue) DO UPDATE SET
 // Peers returns every registered peer ordered by issue.
 func (s *Store) Peers() ([]Peer, error) {
 	rows, err := s.db.Query(
-		"SELECT issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen FROM peers ORDER BY issue",
+		"SELECT " + peerColumns + " FROM peers ORDER BY issue",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list peers: %w", err)
@@ -451,8 +460,8 @@ type rowScanner interface {
 
 func scanPeer(row rowScanner) (Peer, error) {
 	var p Peer
-	var paneID, slug, worktree, agent, display, lastSeen sql.NullString
-	if err := row.Scan(&p.Issue, &paneID, &slug, &worktree, &agent, &display, &p.JoinedAt, &lastSeen); err != nil {
+	var paneID, slug, worktree, agent, display, lastSeen, taskID sql.NullString
+	if err := row.Scan(&p.Issue, &paneID, &slug, &worktree, &agent, &display, &p.JoinedAt, &lastSeen, &taskID); err != nil {
 		return Peer{}, err
 	}
 	p.PaneID = paneID.String
@@ -461,7 +470,17 @@ func scanPeer(row rowScanner) (Peer, error) {
 	p.Agent = agent.String
 	p.DisplayName = display.String
 	p.LastSeen = lastSeen.String
+	p.TaskID = taskID.String
 	return p, nil
+}
+
+// nullableText binds s as NULL when empty (numeric issue peers carry no task
+// id) and as the string otherwise, matching team.UpsertPeer's encoding.
+func nullableText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func scanIDs(rows *sql.Rows) ([]int64, error) {

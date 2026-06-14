@@ -198,6 +198,18 @@ load helpers
   assert_golden scenario-plan-basic-agent-override
 }
 
+@test "--team variant of scenario-plan-basic: task briefings grow and registry seed is printed" {
+  # --team adds the sibling-coordination section (addressed by task id) to every
+  # task briefing (size lines diverge from scenario-plan-basic.dry-run.txt) and
+  # prints the would-seed line after the summary; without --team the plan
+  # goldens stay byte-identical.
+  skip_unless_fanout_go
+  use_fixture scenario-plan-basic
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --team
+  assert_success
+  assert_golden scenario-plan-basic-team
+}
+
 @test "scenario-plan-idempotency: seeded taskId rows are skipped" {
   use_fixture scenario-plan-idempotency
   run_fanout_plan_dry "$FIXTURE_DIR/plan.json"

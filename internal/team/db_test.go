@@ -209,8 +209,13 @@ func TestEnsureSchema(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("user_version = %d, want 1", version)
+	if version != schemaUserVersion {
+		t.Errorf("user_version = %d, want %d", version, schemaUserVersion)
+	}
+
+	// The nullable v2 peers.task_id column must be present on a fresh DB.
+	if has, err := columnExists(db, "peers", "task_id"); err != nil || !has {
+		t.Errorf("peers.task_id column: has=%v err=%v, want present", has, err)
 	}
 
 	// Idempotent: a second run must not error or move the version.
@@ -220,8 +225,51 @@ func TestEnsureSchema(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("user_version after rerun: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("user_version after rerun = %d, want 1", version)
+	if version != schemaUserVersion {
+		t.Errorf("user_version after rerun = %d, want %d", version, schemaUserVersion)
+	}
+}
+
+// TestEnsureSchemaMigratesV1 verifies a pre-v2 DB (peers without task_id,
+// user_version 1) gains the nullable column and is stamped to v2 without
+// losing existing rows.
+func TestEnsureSchemaMigratesV1(t *testing.T) {
+	db, _ := openTestDB(t)
+	// Recreate the v1 peers table (no task_id) and stamp version 1, mimicking
+	// a DB created before the v2 migration.
+	for _, stmt := range []string{
+		`CREATE TABLE peers (
+  issue INTEGER PRIMARY KEY, pane_id TEXT, slug TEXT, worktree_path TEXT,
+  agent TEXT, display_name TEXT, joined_at TEXT NOT NULL, last_seen TEXT)`,
+		`INSERT INTO peers (issue, joined_at) VALUES (70, '2026-06-13T00:00:00Z')`,
+		"PRAGMA user_version = 1",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("seed v1 DB (%s): %v", stmt, err)
+		}
+	}
+
+	if err := EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema migrate: %v", err)
+	}
+
+	if has, err := columnExists(db, "peers", "task_id"); err != nil || !has {
+		t.Errorf("peers.task_id after migrate: has=%v err=%v, want present", has, err)
+	}
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("user_version: %v", err)
+	}
+	if version != schemaUserVersion {
+		t.Errorf("user_version after migrate = %d, want %d", version, schemaUserVersion)
+	}
+	var issue int
+	var taskID sql.NullString
+	if err := db.QueryRow("SELECT issue, task_id FROM peers WHERE issue = 70").Scan(&issue, &taskID); err != nil {
+		t.Fatalf("existing row lost after migrate: %v", err)
+	}
+	if issue != 70 || taskID.Valid {
+		t.Errorf("migrated row = (issue %d, task_id %v), want (70, NULL)", issue, taskID)
 	}
 }
 

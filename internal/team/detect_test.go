@@ -204,6 +204,36 @@ func TestIdentifyPane(t *testing.T) {
 	}
 }
 
+func TestIdentifyPaneSynthesizesPlanTaskIdentity(t *testing.T) {
+	plan := state.Pane{
+		Parent:       "plan:launch-plan",
+		IssueNum:     0,
+		TaskID:       "base-types",
+		PaneID:       "%5",
+		WorktreePath: "/repo/.fanout/worktrees/launch-plan-base-types",
+		Prompt:       "[fanout base-types of plan:launch-plan] launch-plan-base-types: t. read /tmp/x.md and begin.",
+	}
+	st := state.Store{Panes: []state.Pane{plan}}
+
+	id, err := IdentifyPane("%5", "", st)
+	if err != nil {
+		t.Fatalf("IdentifyPane: %v", err)
+	}
+	if id.TaskID != "base-types" {
+		t.Errorf("Identity.TaskID = %q, want base-types", id.TaskID)
+	}
+	if id.Parent != "plan:launch-plan" {
+		t.Errorf("Identity.Parent = %q, want plan:launch-plan", id.Parent)
+	}
+	want := TaskPeerNum("plan:launch-plan", "base-types")
+	if id.Issue != want {
+		t.Errorf("Identity.Issue = %d, want synthetic %d", id.Issue, want)
+	}
+	if id.Issue == 0 {
+		t.Error("Identity.Issue is 0; a plan pane must self-detect a non-zero peer number")
+	}
+}
+
 func TestDetectWithStatePathOverride(t *testing.T) {
 	// A bare temp dir is not a git work tree, so detection rests on
 	// TMUX_PANE + FANOUT_STATE_PATH alone regardless of where tests run.

@@ -39,10 +39,12 @@ func taskPathComponent(value string) string {
 }
 
 // TeamSibling is one roster entry of a --team run: a child pane created
-// alongside this briefing's issue.
+// alongside this briefing's issue or plan task. Num identifies issue siblings;
+// TaskID identifies issue-less plan-task siblings (Num is 0 for those).
 type TeamSibling struct {
-	Num   int
-	Title string
+	Num    int
+	TaskID string
+	Title  string
 }
 
 // TeamContext carries the --team coordination data into the briefing: the
@@ -80,7 +82,8 @@ func Render(num int, title, body, agentName, baseBranch string, s settings.Setti
 
 // RenderTask produces an issue-less task brief. The task variant deliberately
 // avoids GitHub issue closing references because there is no issue to close.
-func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch string, s settings.Settings) string {
+// team is nil unless the run opted in with --team.
+func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch string, s settings.Settings, team *TeamContext) string {
 	footer := taskPRFooter(planSlug, taskID)
 	return renderWorkBriefing(workBriefing{
 		header:                     fmt.Sprintf("You are assigned task \"%s\" of plan \"%s\" (plan:%s) in this repository.", taskID, planTitle, planSlug),
@@ -93,6 +96,8 @@ func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch 
 		agentName:                  agentName,
 		baseBranch:                 baseBranch,
 		settings:                   s,
+		team:                       team,
+		teamTaskID:                 taskID,
 	})
 }
 
@@ -109,6 +114,7 @@ type workBriefing struct {
 	settings                   settings.Settings
 	team                       *TeamContext
 	teamIssueNum               int
+	teamTaskID                 string
 }
 
 func renderWorkBriefing(b workBriefing) string {
@@ -123,7 +129,11 @@ func renderWorkBriefing(b workBriefing) string {
 		base += prVisualizationSection(b.prFooter, b.baseBranch)
 	}
 	if b.team != nil {
-		base += teamSection(b.teamIssueNum, b.team)
+		if b.teamTaskID != "" {
+			base += taskTeamSection(b.teamTaskID, b.team)
+		} else {
+			base += teamSection(b.teamIssueNum, b.team)
+		}
 	}
 	if b.agentName == "codex" {
 		return base + codexReviewSection(b.settings.AutoPullRequest)
@@ -325,6 +335,54 @@ Checkpoints (lightweight; never block waiting for a reply):
 3. Check your inbox once more before opening the PR.
 
 Etiquette: keep messages short and factual — file paths, branch names, issue numbers.
+Note: this is messaging between separate panes; it is unrelated to Claude Code
+Agent Teams, which coordinates teammates inside your own single session.
+`
+
+// taskTeamSection renders the --team coordination block for an issue-less plan
+// task. It mirrors teamSection but addresses peers by their plan task id (the
+// member key plan panes use everywhere) instead of an issue number, since plan
+// tasks have no GitHub issue.
+func taskTeamSection(self string, t *TeamContext) string {
+	var roster strings.Builder
+	for _, sibling := range t.Siblings {
+		fmt.Fprintf(&roster, "- %s: %s", sibling.TaskID, sibling.Title)
+		if sibling.TaskID == self {
+			roster.WriteString(" (you)")
+		}
+		roster.WriteString("\n")
+	}
+	return fmt.Sprintf(taskTeamSectionTemplate, self, t.ParentLabel, roster.String(), t.DBPath)
+}
+
+const taskTeamSectionTemplate = `
+## Coordinating with your sibling panes
+
+You are the pane for task %s (parent %s), launched alongside these sibling panes:
+%s
+A shared SQLite message board for this plan lives at:
+%s
+The roster above is a launch-time snapshot; ` + "`fanout msg peers`" + ` is the live list.
+
+Cheatsheet (best-effort; skip messaging if the ` + "`fanout msg`" + ` subcommand is unavailable):
+- ` + "`fanout msg peers`" + `                          — live sibling roster
+- ` + "`fanout msg inbox [--mark-read]`" + `           — read messages addressed to you
+- ` + "`fanout msg board`" + `                          — read the shared board
+- ` + "`fanout msg send --to <task-id> \"<body>\"`" + ` — message a sibling task directly
+- ` + "`fanout msg post \"<body>\"`" + `                — post to the shared board
+
+Peers are addressed by task id (this plan has no GitHub issue numbers); ` + "`fanout msg peers`" + `
+lists the live task ids.
+
+Checkpoints (lightweight; never block waiting for a reply):
+1. After reading this briefing, check ` + "`fanout msg inbox`" + ` and ` + "`fanout msg board`" + ` once.
+   Siblings are registered after the whole batch has launched, so a missing DB or
+   an empty roster early in the run only means they have not joined yet — do not
+   give up on messaging; just check again at the next checkpoint.
+2. Before touching files siblings may share (configs, schemas, lockfiles), post a one-line heads-up.
+3. Check your inbox once more before opening the PR.
+
+Etiquette: keep messages short and factual — file paths, branch names, task ids.
 Note: this is messaging between separate panes; it is unrelated to Claude Code
 Agent Teams, which coordinates teammates inside your own single session.
 `

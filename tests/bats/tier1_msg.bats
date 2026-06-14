@@ -48,21 +48,32 @@ msg_env() {
   msg_env
   run_fanout msg send --to 71 hello
   [ "$status" -eq 2 ]
-  [[ "$output" == *"pass --self <issue> and --parent <ref>"* ]]
+  [[ "$output" == *"pass --self <issue|task-id> and --parent <ref>"* ]]
 }
 
 @test "msg send without --to exits 2" {
   msg_env
   run_fanout msg send --self 70 --parent 68 hello
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--to <issue> is required"* ]]
+  [[ "$output" == *"--to <issue|task-id> is required"* ]]
 }
 
-@test "msg send with a non-integer --to exits 2" {
+@test "msg send with an invalid --to token exits 2" {
   msg_env
-  run_fanout msg send --to abc --self 70 --parent 68 hello
+  # Uppercase is neither an issue number nor a lowercase-kebab task id, so it is
+  # rejected at parse time.
+  run_fanout msg send --to ABC --self 70 --parent 68 hello
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--to must be a non-zero issue number"* ]]
+  [[ "$output" == *"--to must be a non-zero issue number or a plan task id"* ]]
+}
+
+@test "msg send with a task-id --to under an issue parent exits 2" {
+  msg_env
+  # A valid task id is only addressable under a plan parent; issue/project peers
+  # are addressed by number.
+  run_fanout msg send --to api-client --self 70 --parent 68 hello
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is a task id, only valid under a plan parent"* ]]
 }
 
 @test "msg send without a body exits 2" {
@@ -169,21 +180,21 @@ msg_env() {
   msg_env
   run_fanout msg nudge --parent 68
   [ "$status" -eq 2 ]
-  [[ "$output" == *"target issue <N> is required"* ]]
+  [[ "$output" == *"target <issue|task-id> is required"* ]]
 }
 
-@test "msg nudge with a non-integer target exits 2" {
+@test "msg nudge with an invalid target exits 2" {
   msg_env
-  run_fanout msg nudge abc --parent 68
+  run_fanout msg nudge ABC --parent 68
   [ "$status" -eq 2 ]
-  [[ "$output" == *"target must be a non-zero issue number"* ]]
+  [[ "$output" == *"target must be a non-zero issue number or a plan task id"* ]]
 }
 
 @test "msg nudge with a second target exits 2" {
   msg_env
   run_fanout msg nudge 71 72 --parent 68
   [ "$status" -eq 2 ]
-  [[ "$output" == *"takes exactly one target issue"* ]]
+  [[ "$output" == *"takes exactly one target"* ]]
 }
 
 @test "msg nudge rejects --to (target is positional): exit 2" {
@@ -227,6 +238,48 @@ msg_env() {
   assert_success
   [[ "$output" == *'"self": -1'* ]]
   [[ "$output" == *'"parent": "@manual"'* ]]
+}
+
+@test "msg send/inbox round-trip between plan tasks addressed by task id" {
+  msg_env
+  # Issue-less plan peers are addressed by task id under a plan:<slug> parent.
+  # Identity is explicit so the round-trip does not depend on pane detection.
+  run_fanout msg send --to api-client --self db-layer --parent plan:launch-plan "schema ready"
+  assert_success
+  [[ "$output" == *"to api-client"* ]]
+  run_fanout msg inbox --self api-client --parent plan:launch-plan --json
+  assert_success
+  [[ "$output" == *"schema ready"* ]]
+  [[ "$output" == *'"parent": "plan:launch-plan"'* ]]
+}
+
+@test "msg --to <all-digit task id> targets the task, not numeric peer N" {
+  msg_env
+  # Task id "123" is a valid plan task id. Under a plan parent it must address
+  # the task pane (registered/self-detected as a synthetic number), NOT numeric
+  # peer 123. The "123" pane auto-detects its own self from state.json; a sender
+  # using --to 123 must reach it.
+  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"plan:demo","issueNum":0,"taskId":"123","slug":"demo-123","branchName":"b","paneId":"%1","agent":"claude","displayName":"d","worktreePath":"","prompt":"[fanout 123 of plan:demo] demo-123: t"}]}' \
+    > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg send --to 123 --self db-layer --parent plan:demo "for task 123"
+  assert_success
+  [[ "$output" == *"to 123"* ]]
+  run_fanout msg inbox --json
+  assert_success
+  [[ "$output" == *"for task 123"* ]]
+}
+
+@test "msg auto-detects a plan task pane (parent plan:<slug>)" {
+  msg_env
+  # A recorded plan row (issueNum 0 + taskId) must self-detect from the pane id
+  # and scope messages to the plan parent.
+  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"plan:launch-plan","issueNum":0,"taskId":"api-client","slug":"launch-plan-api-client","branchName":"b","paneId":"%1","agent":"claude","displayName":"API","worktreePath":"","prompt":"[fanout api-client of plan:launch-plan] launch-plan-api-client: t"}]}' \
+    > "$BATS_TEST_TMPDIR/state.json"
+  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
+  run_fanout msg inbox --json
+  assert_success
+  [[ "$output" == *'"parent": "plan:launch-plan"'* ]]
 }
 
 @test "msg rejects a DB already holding another parent's messages: exit 4" {

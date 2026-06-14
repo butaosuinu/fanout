@@ -262,7 +262,7 @@ func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 		Wave:        "2",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
 
 	if got.ParentRef != "plan:launch-plan" || got.TaskID != "api-client" || got.Number != 0 {
 		t.Fatalf("task identity = parent %q task %q issue %d", got.ParentRef, got.TaskID, got.Number)
@@ -295,7 +295,7 @@ func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
@@ -314,7 +314,7 @@ func TestNewTaskPaneRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
 		Briefing: "## Goal\nExtract it",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
 
 	if strings.ContainsAny(got.Prompt, "\n\t") {
 		t.Fatalf("prompt contains embedded newline/tab: %q", got.Prompt)
@@ -328,16 +328,16 @@ func TestNewTaskPaneRequestQualifiesDefaultSlugByPlan(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults())
-	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults())
+	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), nil)
+	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), nil)
 
 	if first.Slug == second.Slug || first.BranchName == second.BranchName {
 		t.Fatalf("default task slugs must be plan-qualified, got %q/%q and %q/%q", first.Slug, first.BranchName, second.Slug, second.BranchName)
 	}
 
 	task.Slug = "shared-api-client"
-	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults())
-	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults())
+	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), nil)
+	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), nil)
 	if first.Slug != "shared-api-client" || second.Slug != "shared-api-client" {
 		t.Fatalf("explicit slug should be shared exactly, got %q and %q", first.Slug, second.Slug)
 	}
