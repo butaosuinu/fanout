@@ -107,17 +107,24 @@ rebase、CI 修正、レビュー修正で push する前に必ず解決する�
 - push は常に明示 refspec を使う。
 - `--force-with-lease` は ancestry check ではない。fetch や background fetch で lease が
   更新されると、remote-only commit を含まないローカル HEAD でも上書きできてしまう。
-  force-with-lease push の直前に必ず head branch を fetch し、remote PR head が現在
-  HEAD の祖先であることを確認する。false なら push せず、remote-only commit を取り込むか
-  ユーザーにエスカレーションする。
+  rebase などの履歴 rewrite や追加 commit を始める前に必ず head branch を fetch し、
+  remote PR head が現在 HEAD の祖先であることを確認して、その SHA を保存する。false なら
+  作業を進めず、remote-only commit を取り込むかユーザーにエスカレーションする。
+- push 直前には head branch を再 fetch し、remote tip が保存した SHA から動いていないことを
+  確認する。remote が動いていたら push せず、取り込みまたはエスカレーションする。
+  rebase 後は古い PR tip が新しい HEAD の祖先とは限らないため、rebase 後に ancestry check を
+  再実行して判断しない。
 
 ```bash
 git fetch "<head-remote>" "$head"
-git merge-base --is-ancestor FETCH_HEAD HEAD
+pr_head_before_work=$(git rev-parse FETCH_HEAD)
+git merge-base --is-ancestor "$pr_head_before_work" HEAD
 ```
 
 ```bash
-git push --force-with-lease "<head-remote>" HEAD:"$head"
+git fetch "<head-remote>" "$head"
+test "$(git rev-parse FETCH_HEAD)" = "$pr_head_before_work"
+git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remote>" HEAD:"$head"
 ```
 
 無印 `--force`、refspec なしの `git push --force-with-lease`、保護ブランチや他者 PR
@@ -129,13 +136,15 @@ git push --force-with-lease "<head-remote>" HEAD:"$head"
 `BEHIND` の場合に対応する。
 
 1. dirty tree なら、勝手に捨てず、commit するか stash するかを判断する。
-2. PR の base repository に一致する remote から base branch を fetch する。fork や
+2. C の PR head guard を rebase 前に実行し、`pr_head_before_work` を保存する。
+3. PR の base repository に一致する remote から base branch を fetch する。fork や
    triangular clone があるので `origin/main` 決め打ちはしない。
-3. `git rebase FETCH_HEAD` で今 fetch した base に rebase する。
-4. import 併合など確信できる hunk だけ自動解決する。意味的判断が必要な衝突は
+4. `git rebase FETCH_HEAD` で今 fetch した base に rebase する。
+5. import 併合など確信できる hunk だけ自動解決する。意味的判断が必要な衝突は
    `git rebase --abort` して、具体的な hunk と理由を添えてエスカレーションする。
-5. rebase 完了後に `git push --force-with-lease "<head-remote>" HEAD:"$head"`。
-6. push したら、その pass では古い CI/log/thread を使わず終了する。必要なら次 pass で
+6. rebase 完了後、push 直前に remote tip が `pr_head_before_work` から動いていないことを
+   確認し、保存した SHA を期待値にした `--force-with-lease` で push する。
+7. push したら、その pass では古い CI/log/thread を使わず終了する。必要なら次 pass で
    状態を取り直す。
 
 ### E. CI 失敗
