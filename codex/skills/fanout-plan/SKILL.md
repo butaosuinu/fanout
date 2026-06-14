@@ -95,9 +95,11 @@ otherwise let fanout resolve the repository default branch or let the user pass
 
 ## CLI Surface
 
-Run from the target repository worktree. `fanout plan` needs `git` and `tmux`;
-`gh` is needed only for `--unblocked-only` blocker completion checks. Use
-`--agent codex` unless the user supplied `--agent` or `FANOUT_AGENT`.
+Run from the target repository worktree. Task creation and dry-run modes need
+`git` and `tmux`; `gh` is additionally needed for `--unblocked-only` blocker
+completion checks. Read/lifecycle action modes need `git` but not tmux;
+`--status` and `--cleanup` also need `gh`. Use `--agent codex` unless the user
+supplied `--agent` or `FANOUT_AGENT`.
 
 Forward only the flags supported by the current `fanout plan` implementation:
 
@@ -129,10 +131,18 @@ blockers are complete. Omit it only when the user explicitly asks to launch all
 waves together.
 
 Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
-`--name`, `--project-status`, `--format`, `--post-dashboard`, `--team`,
-`--popup-timeout`, `--codex-plan-mode`, `--status`, `--close`, `--merge`, or
-`--cleanup`. Names belong in the spec (`slug`, `display_name`, `branch`), and
-dependencies belong in `blocked_by`.
+`--name`, `--project-status`, `--post-dashboard`, `--team`, `--popup-timeout`,
+or `--codex-plan-mode`. Names belong in the spec (`slug`, `display_name`,
+`branch`), and dependencies belong in `blocked_by`.
+
+Use read/lifecycle flags only when the user explicitly asks for plan task
+status or cleanup, not during initial plan generation:
+
+- `--status`
+- `--format <json|table>` (only with `--status`)
+- `--close <task-id>`
+- `--merge <task-id>`
+- `--cleanup`
 
 ## Run
 
@@ -156,19 +166,35 @@ dependencies belong in `blocked_by`.
 
 After a live run, fanout copies the spec to `.fanout/plans/<slug>.json`; later
 runs can re-address it as `fanout plan <slug> ...`. Use `--only <task-id>` or
-`--skip <task-id>` for partial reruns. In the current plan surface, task
-lifecycle flags are not implemented on `fanout plan`; for read-only visibility
-use the no-argument `fanout` TUI or dashboard, and do not invent
-`fanout plan --status` / `--cleanup` unless the CLI has been updated.
+`--skip <task-id>` for partial reruns. For read-only visibility, use
+`fanout plan <slug> --status [--format table]`; for task lifecycle, use
+`fanout plan <slug> --merge <task-id>`, `--close <task-id>`, or `--cleanup`.
+These task modes address task IDs, not issue numbers.
+
+## Status and Lifecycle
+
+`fanout plan <spec-or-slug> --status` loads the spec and state, then looks up
+PRs by branch with `gh pr list --head <branch>` because issue-less tasks have
+no GitHub issue closed-by graph. JSON is the default output; `--format table`
+adds PR state, CI, type, changed-file count, diff bars, and links.
+
+`--merge <task-id>` fast-forwards the recorded task branch into the project
+checkout. `--close <task-id>` removes the recorded task worktree, pane, and
+state row. `--cleanup` removes recorded plan task panes whose head branch has a
+merged PR. These modes honor `FANOUT_STATE_PATH`.
 
 ## Failure Mapping
 
 - Exit 0: success, dry-run success, or nothing to do.
 - Exit 1: environment/preflight, unreadable or invalid spec JSON, invalid
   filter values, missing dependencies, agent/runtime setup, worktree creation,
-  or failed pane launch.
+  failed pane launch, git merge failure, worktree cleanup failure, or state
+  update failure.
 - Exit 2: bad invocation such as missing spec, unknown plan option, or extra
-  positional arguments.
+  positional arguments. For `--status`, missing `git`/`gh` preflight
+  dependencies return 1, while unreadable spec/state and unusable project root
+  return 2; for task lifecycle, an unrecorded task ID returns 2.
+- Exit 3: GitHub PR lookup failure in plan `--status` or `--cleanup`.
 
 For common runtime errors: `fanout must be run inside tmux` means batch pane
 creation needs tmux; `agent is required` means pass `--agent codex` or another

@@ -35,17 +35,29 @@ The skill also generates the `--name` flags (slug / display name / branch) from 
 
 `~/.claude/skills/fanout-issues/` guides the agent when turning a plan into a fanout-ready GitHub parent issue plus linked child issues. It creates same-repo children, links them through GitHub Sub-issues, mirrors them in the parent task list, and records blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that `fanout --unblocked-only` understands.
 
+### The `fanout-plan` skill
+
+`~/.claude/skills/fanout-plan/` backs `/fanout plan`. It turns an approved or
+local implementation plan into a `fanout plan` JSON spec, runs the dry-run
+preview, summarizes tasks/waves/branches, then launches issue-less task panes
+after confirmation.
+
 ### Review and PR follow-up skills
 
 `~/.claude/skills/post-work-review/` backs the local PR review gate: it runs a final review loop and records the reviewed HEAD marker. `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/` watch an existing PR after creation and handle safe conflict, CI, and review-comment follow-up.
 
 ## Codex CLI
 
-The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. Restart any running Codex session after installing or updating the skills so it picks up the new files.
+The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. Restart any running Codex session after installing or updating the skills so it picks up the new files.
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as the Claude command — dry-run first, confirm targets, then run the real command — and it also performs the implicit-child scan and `--name` generation.
 
 The `fanout-issues` skill mirrors the Claude version: ask Codex to create a fanout-ready GitHub issue tree, decompose a plan into parent/child issues, or prepare blocker waves for `fanout --unblocked-only`, and it produces the same same-repo children, GitHub Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
+
+Use `$fanout-plan` or ask Codex for `fanout plan` when you want to fan out a
+local implementation plan without creating GitHub child issues. It writes or
+selects the plan spec, previews `fanout plan ... --dry-run`, and runs live
+after confirmation unless confirmation was explicitly skipped.
 
 Use `$post-work-review` when you want Codex to run a final pre-commit or pre-PR review loop. It invokes `codex review` with an explicit scope, fixes actionable findings, reruns until clean, and records the same marker used by the Claude PR gate when HEAD is clean.
 

@@ -162,10 +162,12 @@ Installed paths:
 - `$CLAUDE_DIR/commands/pr-watch.md` (default `~/.claude/commands/pr-watch.md`)
 - `$CLAUDE_DIR/skills/fanout/` (default `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
+- `$CLAUDE_DIR/skills/fanout-plan/` (default `~/.claude/skills/fanout-plan/`)
 - `$CLAUDE_DIR/skills/post-work-review/` (default `~/.claude/skills/post-work-review/`)
 - `$CLAUDE_DIR/skills/pr-watch/` (default `~/.claude/skills/pr-watch/`)
 - `$CODEX_DIR/skills/fanout/` (default `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
+- `$CODEX_DIR/skills/fanout-plan/` (default `~/.codex/skills/fanout-plan/`)
 - `$CODEX_DIR/skills/post-work-review/` (default `~/.codex/skills/post-work-review/`)
 - `$CODEX_DIR/skills/pr-watch/` (default `~/.codex/skills/pr-watch/`)
 
@@ -319,6 +321,14 @@ fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
+fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+       [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
+       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
+       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+fanout plan <spec.json|plan-slug> --status [--format json|table]
+fanout plan <spec.json|plan-slug> --merge <task-id>
+fanout plan <spec.json|plan-slug> --close <task-id>
+fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
@@ -336,6 +346,106 @@ task-list mode) or a Projects v2 URL (Project mode; see above).
 `--project-status` only applies to Project mode and is ignored otherwise.
 `--popup-timeout` is a deprecated compatibility flag from the old runtime and
 is accepted but ignored by the direct tmux path.
+
+### Plan fan-out (issue-less)
+
+`fanout plan <spec.json|plan-slug>` launches task panes from a local JSON spec
+instead of GitHub child issues. Use it when an implementation plan is already
+split into local tasks and creating issue trees would add noise. A path or
+`*.json` argument is loaded directly; a bare slug loads
+`<git-root>/.fanout/plans/<slug>.json`. Live runs copy the source spec there,
+so later runs can use the shorter slug.
+
+Spec format reference:
+
+```json
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "source": "docs/launch.md",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "title": "Define base types",
+      "briefing": "## Goal\nDefine the shared types.",
+      "display_name": "Base types",
+      "wave": "1"
+    },
+    {
+      "id": "api-client",
+      "title": "Extract API client",
+      "briefing": "## Goal\nExtract the API client.",
+      "blocked_by": ["base-types"],
+      "wave": "2"
+    }
+  ]
+}
+```
+
+Required fields are `version: 1`, `plan.slug`, `plan.title`, and at least one
+task with kebab-case `id`, `title`, and non-empty `briefing`. Optional fields
+are `plan.source`, `plan.base_branch`, and per-task `slug`, `display_name`,
+`branch`, `wave`, and `blocked_by`. Default worktree slugs are plan-qualified
+(`launch-plan-define-base-types-base-types` in the example), generated branches
+use `fanout/<slug>`, and explicit task `branch` values are honored exactly.
+
+```bash
+# Preview the generated worktrees, branches, tmux commands, and task briefings.
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+
+# Launch the currently unblocked tasks.
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+
+# Rerun a saved plan by slug and cap this wave.
+fanout plan launch-plan --agent claude --unblocked-only --limit 2
+
+# Inspect task PR state. JSON is default; table adds PR state, CI, type, files,
+# diff bars, and links.
+fanout plan launch-plan --status
+fanout plan launch-plan --status --format table
+
+# Lifecycle commands address task IDs, not issue numbers.
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --close base-types
+fanout plan launch-plan --cleanup
+```
+
+`--only` and `--skip` take task IDs, not issue numbers. `--unblocked-only`
+checks each task's `blocked_by` list against merged PRs on the dependency
+task's explicit or generated branch. Tasks whose dependencies do not yet have a
+merged PR are reported as `deferred (blocked)` and no pane is created for them.
+`--status` uses `gh pr list --head <branch>` rather than issue closed-by data,
+because plan tasks have no GitHub issue number. Plan task rows are recorded in
+`.fanout/state.json` under parent `plan:<slug>` with `taskId` and
+`issueNum: 0`, so reruns skip rows already recorded or already present under
+`.fanout/worktrees/`.
+
+Plan task briefings are the same standard fanout briefings except they do not
+ask for an issue-closing footer. Auto-PR guidance tells agents to end the PR
+body with `Plan: <slug> / Task: <id>` so the task can be identified without a
+GitHub issue.
+
+When using the bundled agent integrations, `/fanout plan ...` in Claude Code
+routes to `~/.claude/skills/fanout-plan/`, and `$fanout-plan` or "fanout plan"
+requests in Codex route to `~/.codex/skills/fanout-plan/`. The skill writes or
+selects the spec, runs the dry-run first, summarizes the tasks/waves/branches,
+and only runs the live command after confirmation unless the wrapper was asked
+to skip confirmation.
+
+Exit codes follow the existing lanes: normal and dry-run `fanout plan` return
+`0` for success or nothing to do, `1` for environment/spec/filter/preflight or
+launch failures, and `2` for bad invocation. `fanout plan <spec> --status`
+returns `0` when status is emitted, `1` when required dependencies such as
+`git` or `gh` are missing, `2` for invalid invocation, unreadable or invalid
+spec/state, or unusable project root, and `3` for GitHub PR lookup failures.
+Plan `--close`, `--merge`, and `--cleanup` return `0` for success
+(including no eligible cleanup rows), `1` for environment/git/cleanup failures,
+`2` for invalid recorded-task targets, and `3` when cleanup cannot query branch
+PR state.
 
 ### Codex Plan Mode
 
@@ -761,6 +871,19 @@ fanout 123 --agent codex
 # Start Codex children as app-server Plan Mode sessions with interactive TUI.
 fanout 123 --agent codex --codex-plan-mode
 
+# Decompose and launch an issue-less implementation plan from an agent wrapper.
+# Claude Code uses /fanout plan; Codex uses $fanout-plan or a "fanout plan"
+# request. Both preview with fanout plan --dry-run before live launch.
+/fanout plan /tmp/implementation-plan.md
+
+# Run the CLI directly from an existing spec, deferring blocked_by dependencies
+# until their prerequisite task branches have merged PRs.
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --status --format table
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --cleanup
+
 # Remove the automatic PR-opening requirement from child briefings for one run
 fanout 123 --no-auto-pr
 
@@ -837,6 +960,11 @@ repo under `claude/` and get placed by `make install`:
   GitHub Sub-issues, mirrors them in the parent task list, and records
   blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that
   `fanout --unblocked-only` understands.
+- **Plan fan-out skill** → `claude/skills/fanout-plan/SKILL.md` is installed
+  to `~/.claude/skills/fanout-plan/SKILL.md` and backs `/fanout plan`. It
+  turns an approved/local implementation plan into a `fanout plan` spec, runs
+  the dry-run preview, summarizes tasks and waves, then launches the issue-less
+  task panes after confirmation.
 
 Recommended integration for Codex CLI — the skills are bundled under
 `codex/` and get placed by `make install`:
@@ -854,6 +982,11 @@ Recommended integration for Codex CLI — the skills are bundled under
   parent/child issues, or prepare blocker waves for `fanout --unblocked-only`.
   It mirrors the Claude issue-creation skill: same-repo children, GitHub
   Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
+- **Plan fan-out skill** → `codex/skills/fanout-plan/SKILL.md` is installed to
+  `~/.codex/skills/fanout-plan/SKILL.md`. Use it with `$fanout-plan` or by
+  asking Codex for `fanout plan`. It writes/selects a local spec, previews
+  `fanout plan ... --dry-run`, then runs the live issue-less task fan-out after
+  confirmation unless explicitly told to skip confirmation.
 - **Post-work review skill** → `codex/skills/post-work-review/SKILL.md` is
   installed to `~/.codex/skills/post-work-review/SKILL.md`. Use it by asking
   Codex to run a final review loop before commit or PR; it runs

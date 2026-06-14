@@ -35,6 +35,12 @@ skill は `--name` フラグ(slug / display name / branch)も issue のタイト
 
 `~/.claude/skills/fanout-issues/` は、計画を fanout-ready な GitHub 親 issue + リンクされた子 issue 群へ変換する場面で agent を導きます。同一 repo 内の子 issue を作成し、GitHub Sub-issues でリンクし、親本文のタスクリストにミラーし、`fanout --unblocked-only` が読める `## Blocked by` / `(blocked by #N)` 形式で blocker wave も記録します。
 
+### `fanout-plan` skill
+
+`~/.claude/skills/fanout-plan/` は `/fanout plan` を支えます。承認済みまたは
+ローカルの実装計画を `fanout plan` JSON spec に変換し、dry-run preview を実行して
+task / wave / branch を要約し、確認後に issue-less task pane を起動します。
+
 ### レビューと PR follow-up skill
 
 `~/.claude/skills/post-work-review/` はローカルの PR review gate を支え、最終レビュー
@@ -44,11 +50,16 @@ loop を回して reviewed HEAD marker を記録します。`~/.claude/commands/
 
 ## Codex CLI
 
-Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。skill のインストールや更新の後、実行中の Codex セッションがある場合は再起動すると新しいファイルを認識します。
+Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/fanout-plan/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。skill のインストールや更新の後、実行中の Codex セッションがある場合は再起動すると新しいファイルを認識します。
 
 fanout skill は、Codex に「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。Claude のコマンドと同じ安全フロー — まず dry-run、ターゲットを確認、それから本実行 — に従い、暗黙の子参照のスキャンと `--name` 生成も同様に行います。
 
 `fanout-issues` skill も Claude 版をミラーします: fanout-ready な GitHub issue ツリーの作成、計画の親子 issue 化、`fanout --unblocked-only` 用の blocker wave の準備を Codex に依頼したときに使われ、同一 repo の子 issue、GitHub Sub-issues のリンク、親本文のタスクリスト、`## Blocked by` 注記を同じように揃えます。
+
+GitHub child issue を作らずローカル実装計画を fan out したい場合は、`$fanout-plan`
+または `fanout plan` の依頼を使います。spec を作成または選択し、
+`fanout plan ... --dry-run` を preview してから、確認後に live 実行します
+（確認スキップが明示された場合を除く）。
 
 `$post-work-review` は、Codex にコミット前・PR前の最終レビュー loop を依頼するときに使います。明示 scope 付きの `codex review` を実行し、actionable な指摘を修正し、clean になるまで再レビューします。HEAD が clean な場合は Claude PR gate と同じ marker も記録します。
 

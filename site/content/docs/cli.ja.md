@@ -23,6 +23,14 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+       [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
+       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
+       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+fanout plan <spec.json|plan-slug> --status [--format json|table]
+fanout plan <spec.json|plan-slug> --merge <task-id>
+fanout plan <spec.json|plan-slug> --close <task-id>
+fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
@@ -84,6 +92,104 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
+
+## Plan fan-out (issue-less)
+
+`fanout plan <spec.json|plan-slug>` は、GitHub child issue ではなくローカル JSON
+spec から task pane を起動します。path または `*.json` 引数はそのまま読み、
+bare slug は `<git-root>/.fanout/plans/<slug>.json` を読みます。live run は元 spec
+をそこへコピーするため、以後は短い slug で再実行できます。
+
+spec フォーマット:
+
+```json
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "source": "docs/launch.md",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "title": "Define base types",
+      "briefing": "## Goal\nDefine the shared types.",
+      "display_name": "Base types",
+      "wave": "1"
+    },
+    {
+      "id": "api-client",
+      "title": "Extract API client",
+      "briefing": "## Goal\nExtract the API client.",
+      "blocked_by": ["base-types"],
+      "wave": "2"
+    }
+  ]
+}
+```
+
+必須 field は `version: 1`、`plan.slug`、`plan.title`、そして kebab-case
+`id`、`title`、空でない `briefing` を持つ task 1 件以上です。任意 field は
+`plan.source`、`plan.base_branch`、task ごとの `slug`、`display_name`、
+`branch`、`wave`、`blocked_by` です。既定 task slug は plan 名で qualify され、
+生成 branch は task が `branch` を持たない限り `fanout/<slug>` になります。
+
+| フラグ | 引数 | 説明 |
+|---|---|---|
+| `--only` | `<task-id[,id...]>` | 対象を task ID に絞る。存在しない ID は警告して無視する。`--skip` とは併用不可。 |
+| `--skip` | `<task-id[,id...]>` | 指定 task ID を除外する。`--only` とは併用不可。 |
+| `--limit` | `<N>` | 作成する task pane を N 件までに制限し、残りは task ID の再実行 hint として表示する。 |
+| `--unblocked-only` | — | `blocked_by` 依存 task の明示 branch または生成 branch に merge 済み PR がまだ無い task を deferred にする。 |
+| `--base-branch` | `<branch>` | `plan.base_branch` を上書きする。どちらも無い場合は repository default branch を解決する。 |
+| `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
+| `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
+
+```bash
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --agent claude --unblocked-only --limit 2
+```
+
+Plan row は parent `plan:<slug>`、`taskId`、`issueNum: 0` として記録されます。
+Task briefing は issue-closing footer を避け、PR body 末尾を
+`Plan: <slug> / Task: <id>` にするよう指示します。
+
+### Plan status と lifecycle
+
+`fanout plan <spec|slug> --status` は spec と `.fanout/state.json` を読み、
+plan task には issue 番号が無いため `gh pr list --head <branch>` で branch ごとの
+PR を照会します。
+
+```bash
+fanout plan launch-plan --status
+fanout plan launch-plan --status --format table
+```
+
+JSON 出力は `plan`、`tasks[]`（`id`、`branch`、`prs`、`has_merged_pr`、
+`blocked`）、`summary`（`total`、`merged`、`pending`、`blocked`、
+`all_merged`）を含みます。table 形式は PR state、CI、Conventional Commit type、
+変更ファイル数、diff bar、link を追加します。
+
+lifecycle コマンドは task ID を指定します:
+
+```bash
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --close base-types
+fanout plan launch-plan --cleanup
+```
+
+`--merge <task-id>` は記録済み task branch を project checkout へ fast-forward
+します。`--close <task-id>` は記録済み task worktree、pane、state row を削除します。
+`--cleanup` は head branch に merge 済み PR がある記録済み plan task pane を閉じます。
+これらの mode は `FANOUT_STATE_PATH` を尊重します。
+
+agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Claude Code は
+`/fanout plan ...` と `~/.claude/skills/fanout-plan/`、Codex は `$fanout-plan` または
+`fanout plan` 依頼と `~/.codex/skills/fanout-plan/` を使います。skill は spec を
+作成または選択し、`fanout plan ... --dry-run` を実行して task / wave / branch を
+要約し、確認スキップが明示されていない限り確認後に live 実行します。
 
 ## settings 系フラグ
 
@@ -187,7 +293,7 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 
 ## Exit codes
 
-既定の fan-out フローは、成功（「子が無く、何もすることが無い」を含む）で `0`、前提条件 / 環境の問題で `1`、不正な呼び出しで `2` を返します。次の 3 つのモードは独立した exit code 体系を持ちます:
+既定の fan-out フローは、成功（「子が無く、何もすることが無い」を含む）で `0`、前提条件 / 環境の問題で `1`、不正な呼び出しで `2` を返します。`fanout plan` の live / dry-run task 作成も同じ lane を使い、成功または何もすることが無い場合 `0`、環境・spec・filter・preflight・launch の失敗で `1`、不正な呼び出しで `2` です。読み取り・lifecycle 系 mode は独立した exit code 体系を持ちます:
 
 ### `--status`
 
@@ -196,6 +302,24 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 | `0` | status を出力した — 実際の状態は JSON mode の `summary.all_merged` で確認する |
 | `2` | 列挙不能: 不正な呼び出し、読めない / 壊れた state file、使えない project root、Projects v2 URL を parent に指定。state file が無い場合は空の state として扱う |
 | `3` | `gh` API 呼び出しが失敗した（認証、ネットワーク、存在しない issue など） |
+
+### `fanout plan --status`
+
+| Exit code | 意味 |
+|---|---|
+| `0` | plan status を出力した — 実際の状態は JSON mode の `summary.all_merged` で確認する |
+| `1` | status preflight で `git` や `gh` などの必須 dependency が見つからない |
+| `2` | 不正な呼び出し、読めない / 壊れた spec/state、または使えない project root |
+| `3` | task PR 状態を解決する `gh pr list --head <branch>` が失敗した |
+
+### `fanout plan --close` / `--merge` / `--cleanup`
+
+| Exit code | 意味 |
+|---|---|
+| `0` | lifecycle が完了した。cleanup 対象 row が無い場合も含む |
+| `1` | 環境、git merge、worktree 削除、pane cleanup、state 更新のいずれかが失敗した |
+| `2` | 指定 task ID がその plan に記録されていない |
+| `3` | cleanup が branch PR 状態を取得できなかった |
 
 ### `--check-update`
 

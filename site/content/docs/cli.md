@@ -23,6 +23,14 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+       [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
+       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
+       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+fanout plan <spec.json|plan-slug> --status [--format json|table]
+fanout plan <spec.json|plan-slug> --merge <task-id>
+fanout plan <spec.json|plan-slug> --close <task-id>
+fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
 fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
@@ -84,6 +92,105 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
 | `--dry-run` | — | Print the git worktree, tmux split-window and agent launch commands without executing them. |
 | `--debug` | — | Enable extra diagnostic logging. |
+
+## Plan fan-out (issue-less)
+
+`fanout plan <spec.json|plan-slug>` launches task panes from a local JSON spec
+instead of GitHub child issues. A path or `*.json` argument is loaded directly;
+a bare slug loads `<git-root>/.fanout/plans/<slug>.json`. Live runs copy the
+source spec there for shorter reruns.
+
+Spec format:
+
+```json
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "source": "docs/launch.md",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "title": "Define base types",
+      "briefing": "## Goal\nDefine the shared types.",
+      "display_name": "Base types",
+      "wave": "1"
+    },
+    {
+      "id": "api-client",
+      "title": "Extract API client",
+      "briefing": "## Goal\nExtract the API client.",
+      "blocked_by": ["base-types"],
+      "wave": "2"
+    }
+  ]
+}
+```
+
+Required fields are `version: 1`, `plan.slug`, `plan.title`, and one or more
+tasks with kebab-case `id`, `title`, and non-empty `briefing`. Optional fields
+are `plan.source`, `plan.base_branch`, and per-task `slug`, `display_name`,
+`branch`, `wave`, and `blocked_by`. Default task slugs are plan-qualified, and
+generated branches use `fanout/<slug>` unless the task supplies `branch`.
+
+| Flag | Argument | Description |
+|---|---|---|
+| `--only` | `<task-id[,id...]>` | Restrict this run to task IDs. Missing IDs are warned and ignored. Cannot be combined with `--skip`. |
+| `--skip` | `<task-id[,id...]>` | Exclude task IDs. Cannot be combined with `--only`. |
+| `--limit` | `<N>` | Create at most N task panes and print a task-ID rerun hint for the rest. |
+| `--unblocked-only` | — | Defer tasks whose `blocked_by` dependencies do not yet have a merged PR on their explicit or generated branch. |
+| `--base-branch` | `<branch>` | Override `plan.base_branch`; if neither is set, fanout resolves the repository default branch. |
+| `--branch-prefix` | `<prefix>` | Prefix generated task branch names. |
+| `--no-refresh` | — | Skip base-branch refresh before creating task worktrees. |
+
+```bash
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --agent claude --unblocked-only --limit 2
+```
+
+Plan rows are recorded under parent `plan:<slug>` with `taskId` and
+`issueNum: 0`. Task briefings avoid issue-closing footers and ask PR bodies to
+end with `Plan: <slug> / Task: <id>`.
+
+### Plan status and lifecycle
+
+`fanout plan <spec|slug> --status` reads the spec plus `.fanout/state.json`,
+then queries PRs by branch with `gh pr list --head <branch>` because plan tasks
+do not have issue numbers.
+
+```bash
+fanout plan launch-plan --status
+fanout plan launch-plan --status --format table
+```
+
+JSON output contains `plan`, `tasks[]` (`id`, `branch`, `prs`,
+`has_merged_pr`, `blocked`), and `summary` (`total`, `merged`, `pending`,
+`blocked`, `all_merged`). The table format adds PR state, CI, Conventional
+Commit type, changed-file counts, diff bars, and links.
+
+Lifecycle commands address task IDs:
+
+```bash
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --close base-types
+fanout plan launch-plan --cleanup
+```
+
+`--merge <task-id>` fast-forwards the recorded task branch into the project
+checkout. `--close <task-id>` removes the recorded task worktree, pane, and
+state row. `--cleanup` closes recorded plan task panes whose head branch has a
+merged PR. These modes honor `FANOUT_STATE_PATH`.
+
+Agent wrappers route plan fan-out through the bundled skills: Claude Code uses
+`/fanout plan ...` and `~/.claude/skills/fanout-plan/`; Codex uses
+`$fanout-plan` or a `fanout plan` request and `~/.codex/skills/fanout-plan/`.
+The skill writes or selects a spec, runs `fanout plan ... --dry-run`, summarizes
+tasks/waves/branches, and runs live after confirmation unless confirmation was
+explicitly skipped.
 
 ## Settings flags
 
@@ -187,7 +294,7 @@ The boolean settings variables accept `1/true/yes/on` and `0/false/no/off`, case
 
 ## Exit codes
 
-The default fan-out flow exits `0` on success (including "no children, nothing to do"), `1` on a prerequisite or environment problem, and `2` on bad invocation. Three modes have their own exit-code lanes:
+The default fan-out flow exits `0` on success (including "no children, nothing to do"), `1` on a prerequisite or environment problem, and `2` on bad invocation. `fanout plan` uses the same default lane for live and dry-run task creation: `0` for success or nothing to do, `1` for environment/spec/filter/preflight or launch failures, and `2` for bad invocation. Read and lifecycle modes have their own exit-code lanes:
 
 ### `--status`
 
@@ -196,6 +303,24 @@ The default fan-out flow exits `0` on success (including "no children, nothing t
 | `0` | status emitted — check `summary.all_merged` in JSON mode for the actual state |
 | `2` | cannot enumerate: bad invocation, unreadable or malformed state file, unusable project root, or a Projects v2 URL as parent. A missing state file is treated as an empty state |
 | `3` | `gh` API call failed (auth, network, non-existent issue, etc.) |
+
+### `fanout plan --status`
+
+| Exit code | Meaning |
+|---|---|
+| `0` | plan status emitted — check `summary.all_merged` in JSON mode for the actual state |
+| `1` | required dependencies such as `git` or `gh` are missing during status preflight |
+| `2` | bad invocation, unreadable or invalid spec/state, or unusable project root |
+| `3` | `gh pr list --head <branch>` failed while resolving task PR state |
+
+### `fanout plan --close` / `--merge` / `--cleanup`
+
+| Exit code | Meaning |
+|---|---|
+| `0` | lifecycle completed, including cleanup with no eligible rows |
+| `1` | environment, git merge, worktree removal, pane cleanup, or state update failed |
+| `2` | the requested task ID is not recorded for the plan |
+| `3` | cleanup could not query branch PR state |
 
 ### `--check-update`
 

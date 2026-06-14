@@ -43,6 +43,8 @@ Build the binary with `make build-go` and validate with `make test`.
   inside tmux.
 - Verify changes without creating worktrees or panes:
   `./fanout-go <parent-issue> --agent claude --dry-run`.
+- Verify issue-less plan tasks without creating worktrees or panes:
+  `./fanout-go plan <spec.json|plan-slug> --agent claude --dry-run`.
 - Settings (`--auto-pr` / `--no-auto-pr`, `--pr-review-gate` /
   `--no-pr-review-gate`, `--briefing-code-review` /
   `--no-briefing-code-review`, `--agent-teams-hint` /
@@ -63,6 +65,12 @@ Build the binary with `make build-go` and validate with `make test`.
 - `cmd/fanout/main.go` handles parse dispatch, dependency checks, runtime
   resolution, child loading, state loading/locking, and the fail-fast
   `executePlan` loop.
+- `cmd/fanout/plancmd.go` is the issue-less `fanout plan` entrypoint
+  dispatched before normal `cliflags.Parse`. It loads a local plan spec or
+  `.fanout/plans/<slug>.json`, resolves the base branch, builds task rows,
+  applies `--only` / `--skip` / `--limit` / `--unblocked-only`, copies live
+  specs into `.fanout/plans/`, and wires plan `--status`, `--close`, `--merge`,
+  and `--cleanup`.
 - `cmd/fanout/pane.go` is the creation orchestration: briefing render, naming,
   worktree planning/preparation, tmux split/title/layout, state recording,
   metadata write, and agent launch.
@@ -114,7 +122,12 @@ Build the binary with `make build-go` and validate with `make test`.
   commands and validates installed CLIs for live mode.
 - `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
   The coarse lock covers planning and launching so two fanout invocations do
-  not race on the same `(parent, issueNum)` idempotency key.
+  not race on the same `(parent, issueNum)` idempotency key. Issue-less plan
+  rows use parent `plan:<slug>`, `issueNum: 0`, and `taskId`; `taskId` is an
+  additive key used by plan idempotency and task lifecycle.
+- `internal/planspec` owns the pure JSON schema for `fanout plan`: `version`,
+  `plan` metadata, task validation, deterministic task slug/branch defaults,
+  duplicate/collision checks, and `blocked_by` dependency cycle detection.
 - `internal/naming` deterministically generates slugs and branch names.
   `--name` may override slug, display name, and branch. The skills generate
   these flags from issue context; the CLI does not call an LLM.
@@ -143,7 +156,11 @@ Build the binary with `make build-go` and validate with `make test`.
 - `internal/ghissue`, `internal/blockers`, `internal/briefing`,
   `internal/settings`, `internal/displayname`, `internal/atomicfs`,
   `internal/log`, `internal/tty`, and `internal/exitcode` hold the remaining
-  reusable pieces.
+  reusable pieces. Plan status and blocked-task completion use
+  `ghissue.Runner.PRsForBranch` (`gh pr list --head <branch>`) because plan
+  tasks have no issue closed-by graph. `briefing.RenderTask` is the plan-task
+  briefing variant; it removes issue-closing footers and asks PR bodies to end
+  with `Plan: <slug> / Task: <id>`.
 
 ## Behavior Boundaries
 
@@ -151,12 +168,18 @@ Build the binary with `make build-go` and validate with `make test`.
   rows. Project mode uses Project items instead. Prose scanning (`Closes #N`,
   `Depends on #N`, Japanese child-reference idioms) belongs in the Claude/Codex
   skills, which forward accepted candidates through `--include`.
+- `fanout plan` is a separate issue-less lane. It must not overload the
+  issue-mode `Plan` / child enumeration path, must not invent GitHub issue
+  numbers, and must keep task selection keyed by task IDs. Task dependencies
+  are local `blocked_by` IDs whose completion is inferred from merged PRs on
+  task branches.
 - `--unblocked-only` parses blockers from the child body's `## Blocked by`
   section, the parent task-list row trailer `(blocked by #X, #Y)`, and the
   `blocked` label as a weak signal.
 - `--status`, `--close`, `--merge`, and `--cleanup` do not inspect old pane
   prompts or external config. They operate on `.fanout/state.json` or
-  `FANOUT_STATE_PATH`.
+  `FANOUT_STATE_PATH`. The plan variants load the spec first and then operate
+  on `plan:<slug>` task rows.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
   carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
@@ -188,13 +211,20 @@ Build the binary with `make build-go` and validate with `make test`.
   user-facing `fanout tui` compatibility path.
 - Keep the state lock close to live launch behavior. Moving exclude setup or
   lock acquisition can leave dirty `.fanout/state.json.lock` artifacts or
-  reintroduce launch races.
+  reintroduce launch races. Plan live runs also rely on the same lock while
+  copying specs and checking `(plan:<slug>, taskId)` idempotency.
 - `tmux split-window -P` returns the new pane id synchronously; do not add
   polling around pane creation unless a future tmux path stops returning an id.
 - Preserve fail-fast behavior in `executePlan`: stop after the first failed
   child launch.
 - When changing dry-run output, update and inspect Tier 2 goldens before
-  committing.
+  committing. Plan changes usually touch both dry-run and status fixtures /
+  goldens (`scenario-plan-*`); regenerate with `FANOUT_GOLDEN_UPDATE=1 make
+  test-tier2` and review the exact diff.
+- Keep plan branch-derived PR lookups aligned across status, cleanup, and
+  `--unblocked-only`. If branch generation, task `branch` overrides, or
+  `--branch-prefix` behavior changes, update the plan status fixtures and
+  docs together.
 - `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
   `.claude/settings.json`. Run `/post-work-review` before creating a PR, or use
   `FANOUT_SKIP_PR_REVIEW=1` only when the documented escape hatch is intended.

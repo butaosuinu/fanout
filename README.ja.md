@@ -149,10 +149,12 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CLAUDE_DIR/commands/pr-watch.md`（既定は `~/.claude/commands/pr-watch.md`）
 - `$CLAUDE_DIR/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
 - `$CLAUDE_DIR/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
+- `$CLAUDE_DIR/skills/fanout-plan/`（既定は `~/.claude/skills/fanout-plan/`）
 - `$CLAUDE_DIR/skills/post-work-review/`（既定は `~/.claude/skills/post-work-review/`）
 - `$CLAUDE_DIR/skills/pr-watch/`（既定は `~/.claude/skills/pr-watch/`）
 - `$CODEX_DIR/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
 - `$CODEX_DIR/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+- `$CODEX_DIR/skills/fanout-plan/`（既定は `~/.codex/skills/fanout-plan/`）
 - `$CODEX_DIR/skills/post-work-review/`（既定は `~/.codex/skills/post-work-review/`）
 - `$CODEX_DIR/skills/pr-watch/`（既定は `~/.codex/skills/pr-watch/`）
 
@@ -306,6 +308,14 @@ fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
+fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+       [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
+       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
+       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+fanout plan <spec.json|plan-slug> --status [--format json|table]
+fanout plan <spec.json|plan-slug> --merge <task-id>
+fanout plan <spec.json|plan-slug> --close <task-id>
+fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # 状態を読み、任意で dashboard を投稿
 fanout <parent-issue> --merge <NUM> # 記録済み子 branch を ff-only merge
@@ -323,6 +333,101 @@ Projects v2 URL（Project モード、上記参照）のいずれか。`--projec
 は Project モードでのみ意味を持ち、issue モードでは無視されます。
 `--popup-timeout` は旧ランタイム互換の deprecated flag で、direct tmux path
 では受け付けるだけで無視されます。
+
+### Plan fan-out (issue-less)
+
+`fanout plan <spec.json|plan-slug>` は、GitHub child issue ではなくローカル
+JSON spec から task pane を起動する lane です。実装計画がすでにローカル task に
+分解されていて、issue ツリーを作るとノイズになる場合に使います。path または
+`*.json` 引数はそのまま読み、bare slug は
+`<git-root>/.fanout/plans/<slug>.json` を読みます。live run は元 spec をそこへ
+コピーするため、以後は slug だけで再実行できます。
+
+spec フォーマットのリファレンス:
+
+```json
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "source": "docs/launch.md",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "title": "Define base types",
+      "briefing": "## Goal\nDefine the shared types.",
+      "display_name": "Base types",
+      "wave": "1"
+    },
+    {
+      "id": "api-client",
+      "title": "Extract API client",
+      "briefing": "## Goal\nExtract the API client.",
+      "blocked_by": ["base-types"],
+      "wave": "2"
+    }
+  ]
+}
+```
+
+必須 field は `version: 1`、`plan.slug`、`plan.title`、そして kebab-case
+`id`、`title`、空でない `briefing` を持つ task 1 件以上です。任意 field は
+`plan.source`、`plan.base_branch`、task ごとの `slug`、`display_name`、
+`branch`、`wave`、`blocked_by` です。既定の worktree slug は plan 名で
+qualify されます（上例なら `launch-plan-define-base-types-base-types`）。
+生成 branch は `fanout/<slug>` で、task の `branch` があればそれをそのまま使います。
+
+```bash
+# 生成される worktree、branch、tmux command、task briefing を確認
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+
+# 現時点で unblock されている task を起動
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+
+# 保存済み plan を slug で再実行し、この wave を 2 件に制限
+fanout plan launch-plan --agent claude --unblocked-only --limit 2
+
+# task の PR 状態を確認。既定は JSON、table は PR state / CI / type /
+# files / diff bar / link を追加
+fanout plan launch-plan --status
+fanout plan launch-plan --status --format table
+
+# lifecycle は issue 番号ではなく task ID を指定
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --close base-types
+fanout plan launch-plan --cleanup
+```
+
+`--only` と `--skip` は issue 番号ではなく task ID を受け取ります。
+`--unblocked-only` は各 task の `blocked_by` を、依存 task の明示 branch または
+生成 branch に merge 済み PR があるかで判定します。依存に merge 済み PR がまだ
+無い task は `deferred (blocked)` と報告され、その run では pane を作りません。
+`--status` は plan task に GitHub issue 番号が無いため、issue closed-by ではなく
+`gh pr list --head <branch>` を使います。Plan task の row は
+`.fanout/state.json` に parent `plan:<slug>`、`taskId`、`issueNum: 0` で記録され、
+再実行時は state または `.fanout/worktrees/` に既にある row をスキップします。
+
+Plan task briefing は標準の fanout briefing と同じですが、issue-closing footer は
+要求しません。auto-PR guidance は、GitHub issue が無くても task を識別できるよう、
+PR body の末尾を `Plan: <slug> / Task: <id>` にするよう指示します。
+
+同梱の agent 連携を使う場合、Claude Code の `/fanout plan ...` は
+`~/.claude/skills/fanout-plan/` へ、Codex の `$fanout-plan` または "fanout plan"
+依頼は `~/.codex/skills/fanout-plan/` へ routing されます。skill は spec を
+作成または選択し、まず dry-run を実行し、task / wave / branch を要約してから、
+wrapper で確認スキップを明示されていない限り確認後に live command を実行します。
+
+exit code は既存 lane に従います。通常 / dry-run の `fanout plan` は、成功または
+何もすることが無い場合 `0`、環境・spec・filter・preflight・launch の失敗で `1`、
+不正な呼び出しで `2` を返します。`fanout plan <spec> --status` は、status 出力で
+`0`、`git` や `gh` などの必須 dependency が無い場合 `1`、不正な呼び出し・
+読めない / 壊れた spec/state・使えない project root で `2`、GitHub PR lookup
+失敗で `3` です。Plan `--close` / `--merge` / `--cleanup` は、成功（cleanup
+対象無しを含む）で `0`、環境・git・cleanup 失敗で `1`、記録済み task target が
+不正な場合 `2`、cleanup が branch PR 状態を取得できない場合 `3` を返します。
 
 ### Codex Plan Mode
 
@@ -674,6 +779,19 @@ fanout 123 --agent codex
 # Codex 子ペインを app-server Plan Mode + interactive TUI で開始する
 fanout 123 --agent codex --codex-plan-mode
 
+# agent wrapper から issue-less な実装計画を分解して起動する。
+# Claude Code は /fanout plan、Codex は $fanout-plan または "fanout plan"
+# 依頼を使う。どちらも live 起動前に fanout plan --dry-run で preview する。
+/fanout plan /tmp/implementation-plan.md
+
+# 既存 spec から CLI を直接使い、blocked_by 依存は前提 task branch の PR が
+# merge されるまで deferred にする
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --status --format table
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --cleanup
+
 # この run だけ、子 briefing から PR 自動作成指示を外す
 fanout 123 --no-auto-pr
 
@@ -747,6 +865,11 @@ Claude Code 向けの推奨連携 — これらのアセットはこのリポジ
   同一リポジトリ内の子 issue を作成し、GitHub Sub-issues と親本文のタスクリストの
   両方へ反映し、`fanout --unblocked-only` が読める `## Blocked by` /
   `(blocked by #N)` 形式で依存関係の wave も記録します。
+- **plan fan-out スキル** → `claude/skills/fanout-plan/SKILL.md` が
+  `~/.claude/skills/fanout-plan/SKILL.md` にインストールされ、`/fanout plan`
+  を支えます。承認済みまたはローカルの実装計画を `fanout plan` spec に変換し、
+  dry-run preview を実行して task / wave を要約し、確認後に issue-less task pane
+  を起動します。
 
 Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/` 配下に同梱され、
 `make install` で配置されます:
@@ -764,6 +887,11 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
   `fanout --unblocked-only` 用の blocker wave 作成を依頼したときに使います。
   Claude 版と同じく、同一リポジトリ内の子 issue、GitHub Sub-issues のリンク、
   親本文のタスクリスト、`## Blocked by` 注記を揃えます。
+- **plan fan-out スキル** → `codex/skills/fanout-plan/SKILL.md` が
+  `~/.codex/skills/fanout-plan/SKILL.md` にインストールされます。`$fanout-plan`
+  または `fanout plan` の依頼で使います。ローカル spec を作成または選択し、
+  `fanout plan ... --dry-run` を preview してから、確認後に live の issue-less
+  task fan-out を実行します（確認スキップが明示された場合を除く）。
 - **post-work review スキル** → `codex/skills/post-work-review/SKILL.md` が
   `~/.codex/skills/post-work-review/SKILL.md` にインストールされます。Codex に
   コミット前・PR前の最終レビューを依頼したときに使い、明示 scope 付きの
