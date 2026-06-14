@@ -30,12 +30,19 @@ fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
+fanout plan <spec.json|plan-slug>   # issue-less local plan task fan-out (see fanout-plan)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see Notes)
 fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
 
 `fanout dashboard --web` is a standalone subcommand (no parent argument): a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it when the user wants to watch/monitor parallel panes, not as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; launched panes record their owner project root so the key still opens the right dashboard from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. `--no-dashboard-keybind` suppresses the binding.
+
+`fanout plan <spec.json|plan-slug>` is the issue-less plan-task lane. If the
+user asks to fan out an implementation plan, use the `fanout-plan` skill
+(`~/.codex/skills/fanout-plan/SKILL.md`) so Codex decomposes the plan and
+writes the spec JSON before invoking the deterministic CLI. The CLI does not
+call an LLM and does not infer tasks from prose.
 
 **Do not probe the CLI** with `fanout --help`, `fanout -h`, or
 `which fanout`. This SKILL.md is the source-of-truth for the CLI surface —
@@ -89,6 +96,8 @@ user asks to update fanout itself, run `fanout update` immediately.
 If the user asks to start the fanout console / TUI, run `fanout` with no
 arguments directly from the target repository worktree; skip parent resolution,
 dry-run, pane naming, and agent selection.
+If the user asks to fan out an implementation plan, run `$fanout-plan` instead
+of the issue/Project workflow below.
 Do not invoke fanout just because an issue has sub-issues; pane creation is
 visible and the user has to close unwanted panes manually.
 

@@ -1,12 +1,13 @@
 ---
-description: Start the fanout TUI console, or fan out a parent GitHub issue's OPEN sub-issues / GitHub Projects v2 board items into parallel tmux panes via the fanout CLI.
-argument-hint: "[parent-issue | project-url | dashboard] [--go] [extra fanout flags]"
+description: Start the fanout TUI console, fan out a parent GitHub issue / GitHub Projects v2 board, or route an implementation plan through fanout plan.
+argument-hint: "[parent-issue | project-url | dashboard | plan [path]] [--go] [extra fanout flags]"
 ---
 
-Invoke the `fanout` CLI to start the persistent TUI console, or to spawn one
-tmux pane per OPEN sub-issue of a parent GitHub issue / OPEN item of a GitHub
-Projects v2 board. See the `fanout` skill
-(`~/.claude/skills/fanout/SKILL.md`) for context on when and why to use this.
+Invoke the `fanout` CLI to start the persistent TUI console, to spawn one tmux
+pane per OPEN sub-issue of a parent GitHub issue / OPEN item of a GitHub
+Projects v2 board, or to route an implementation plan into `fanout plan`. See
+the `fanout` skill (`~/.claude/skills/fanout/SKILL.md`) for context on when and
+why to use this.
 
 Arguments: `$ARGUMENTS`
 
@@ -23,9 +24,9 @@ prompt-based agent pane from the console.
 
 ## Steps
 
-0. **TUI / dashboard short-circuit (before any target resolution).** If
+0. **TUI / dashboard / plan short-circuit (before any target resolution).** If
    `$ARGUMENTS` is empty, run `fanout` with no arguments from the target
-   repository worktree and stop. For dashboard detection only, look at
+   repository worktree and stop. For dashboard/plan detection, look at
    `$ARGUMENTS` with the wrapper-only flags `--go`/`--wait` ignored — but do NOT
    mutate `$ARGUMENTS` itself; Steps 2/3 still need to see `--go`/`--wait` for
    non-dashboard calls. If, ignoring those wrapper flags, the first token is
@@ -34,8 +35,14 @@ prompt-based agent pane from the console.
    path. Forward the dashboard arguments with `--go`/`--wait` stripped (e.g.
    `fanout dashboard --web --open`) — the `dashboard` parser rejects unknown
    flags like `--go`/`--wait` — and stop here; it starts the standalone
-   read-only localhost web dashboard, which takes no parent argument. Otherwise,
-   leave `$ARGUMENTS` untouched and continue to Step 1.
+   read-only localhost web dashboard, which takes no parent argument. If,
+   ignoring wrapper flags, the first token is `plan` (`/fanout plan [path]`,
+   `/fanout --go plan ...`, etc.), do NOT resolve a parent target, scan issue
+   bodies, add generated `--name` flags, or run issue/project dry-runs. Invoke
+   the `fanout-plan` skill (`~/.claude/skills/fanout-plan/SKILL.md`) with the
+   `plan` token removed, keep `--go` as that skill's confirmation bypass, and
+   strip/warn on `--wait` because wait-and-continue is issue-mode only. Then
+   stop here. Otherwise, leave `$ARGUMENTS` untouched and continue to Step 1.
 
 1. **Resolve the parent target** from `$ARGUMENTS`. Two input shapes are accepted; the first matching token wins:
    - **Issue mode** — first token matching `^#?\d+$` → that integer is `N`. **Strip the leading `#` if present** before invoking `fanout`; the CLI only accepts bare digits in issue mode and rejects `#42`.
@@ -107,6 +114,8 @@ prompt-based agent pane from the console.
 - `/fanout 123 --team` — fan out with sibling-pane peer messaging: each child briefing gets a coordination section and the panes are seeded into the parent's peer registry. Children then coordinate with `fanout msg` from inside their own panes.
 - `/fanout 123 --only 4,7,8,10` — fan out only these four children. `--skip 6,9` is the opposite form (deny-list).
 - `/fanout 123 --unblocked-only` — only children whose blockers are all CLOSED. Great for periodic reruns that walk Wave 1 → 2 → ... automatically.
+- `/fanout plan /tmp/implementation-plan.md` — decompose a local implementation plan into a `fanout plan` spec, preview it, then run after confirmation.
+- `/fanout plan --go` — use the best available approved plan candidate and run the plan fan-out after the dry-run summary without a second confirmation.
 - `/fanout https://github.com/users/butaosuinu/projects/3` — project mode (default). Fans out only the Status=Todo column of the user Project.
 - `/fanout https://github.com/users/butaosuinu/projects/3/views/1` — canonical board-URL form (works the same as the bare project URL; `/views/N` is preserved verbatim and the CLI ignores it).
 - `/fanout https://github.com/users/butaosuinu/projects/3 --project-status all` — project mode, disable the Status filter, fan out every OPEN item.

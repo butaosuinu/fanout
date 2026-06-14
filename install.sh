@@ -110,9 +110,11 @@ install_data() {
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md"
   rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues" \
-    "$claude_dir/skills/post-work-review" "$claude_dir/skills/pr-watch"
+    "$claude_dir/skills/fanout-plan" "$claude_dir/skills/post-work-review" \
+    "$claude_dir/skills/pr-watch"
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
-    "$codex_dir/skills/post-work-review" "$codex_dir/skills/pr-watch"
+    "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
+    "$codex_dir/skills/pr-watch"
 }
 
 copy_skill_dirs() {
