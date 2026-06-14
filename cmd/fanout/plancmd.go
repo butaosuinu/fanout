@@ -213,7 +213,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		}
 		return exitcode.OK
 	}
-	if err := validateTaskAgents(cliCfg, appendTasks(plan.Targets, plan.LimitDeferred)); err != nil {
+	if err := validateTaskAgents(cliCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}

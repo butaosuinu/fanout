@@ -197,7 +197,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		return exitcode.OK
 	}
-	if err := validateIssueAgents(cfg, appendIssues(plan.Targets, plan.LimitDeferred)); err != nil {
+	if err := validateIssueAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
