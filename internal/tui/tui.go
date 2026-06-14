@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ type Options struct {
 	CapturePaneOutput func(string, int) (string, error)
 	Notifier          transitionNotifier
 	lifecycle         lifecycleRunner
+	keyboard          keyboardProtocols
 }
 
 type issueKey struct {
@@ -186,6 +188,7 @@ type model struct {
 	actionMessage   string
 	notifications   map[issueKey]issueTransitionSnapshot
 	notifyPrimed    bool
+	keyboardPaused  bool
 }
 
 type paneFilter struct {
@@ -243,8 +246,9 @@ type worktreeStatView struct {
 }
 
 type paneFocusedMsg struct {
-	paneID string
-	err    error
+	paneID         string
+	err            error
+	keyboardPaused bool
 }
 
 type panePeekLoadedMsg struct {
@@ -345,8 +349,17 @@ var (
 // Run starts the Bubble Tea TUI.
 func Run(opts Options) error {
 	opts = normalizeOptions(opts)
+	keyboard := newShiftEnterProtocols(os.Stdout)
+	keyboard.Enable()
+	defer keyboard.Disable()
+	opts.keyboard = keyboard
 	m := newModel(opts)
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	input, closeInput, err := newShiftEnterProgramInput(os.Stdin)
+	if err != nil {
+		return err
+	}
+	defer closeInput()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithInput(input)).Run()
 	return err
 }
 
@@ -371,6 +384,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.CapturePaneOutput == nil {
 		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
+	}
+	if opts.keyboard == nil {
+		opts.keyboard = noopKeyboardProtocols{}
 	}
 	return opts
 }
@@ -410,6 +426,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case tea.KeyMsg:
+		m.resumeKeyboardProtocols()
 		if m.pendingAction != nil {
 			return m.updatePendingAction(msg)
 		}
@@ -548,6 +565,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "created new agent pane"
 		return m, m.loadStateCmd(false)
 	case paneFocusedMsg:
+		if msg.keyboardPaused {
+			m.keyboardPaused = true
+		}
 		if msg.err != nil {
 			m.notice = fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
 			if errors.Is(msg.err, errPaneNotAlive) {
@@ -778,7 +798,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt.SetWidth(width)
 	prompt.SetHeight(6)
 	prompt.KeyMap.InsertNewline = key.NewBinding(
-		key.WithKeys("shift+enter", "ctrl+j"),
+		key.WithKeys("ctrl+j"),
 		key.WithHelp("shift+enter", "newline"),
 	)
 	prompt.Focus()
@@ -1040,13 +1060,27 @@ func (m *model) focusSelectedCmd() tea.Cmd {
 	paneID := pane.PaneID
 	alive := m.opts.PaneAlive
 	focus := m.opts.FocusPane
+	keyboard := m.opts.keyboard
 	m.notice = fmt.Sprintf("focusing %s...", paneID)
 	return func() tea.Msg {
 		if !alive(paneID) {
 			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive}
 		}
-		return paneFocusedMsg{paneID: paneID, err: focus(paneID)}
+		keyboard.Disable()
+		if err := focus(paneID); err != nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: paneID, err: err}
+		}
+		return paneFocusedMsg{paneID: paneID, keyboardPaused: true}
 	}
+}
+
+func (m *model) resumeKeyboardProtocols() {
+	if !m.keyboardPaused {
+		return
+	}
+	m.opts.keyboard.Enable()
+	m.keyboardPaused = false
 }
 
 func (m *model) peekSelectedCmd(force bool) tea.Cmd {
