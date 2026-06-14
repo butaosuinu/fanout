@@ -14,7 +14,12 @@ worktrees and panes.
 
 Find the source plan in this order:
 
-1. An explicit path argument from `/fanout plan <path>` or the user's message.
+1. An explicit argument from `/fanout plan <arg>` or the user's message. If
+   `<arg>` is a file path, use that file. Otherwise, check whether
+   `.fanout/plans/<arg>.json` exists in the target repository; if it does, use
+   `<arg>` as the saved plan slug and skip spec authoring. If the explicit
+   argument resolves to neither a file nor a saved plan slug, stop and report
+   the missing path/slug instead of rediscovering another source plan.
 2. The newest `~/.claude/plans/*.md` file by modification time.
 3. The current conversation's approved implementation plan.
 
@@ -41,10 +46,12 @@ Use these naming rules:
 - `plan.slug`: lowercase kebab-case, 2-4 words when possible.
 - `task.id`: required lowercase kebab-case, 2-4 words, stable across reruns.
 - `task.display_name`: optional readable pane title, 40 characters or fewer.
-- `task.slug`: optional final worktree slug. Prefer omitting it unless the
-  default from title + id is unclear. If set, use the same policy as fanout's
-  `--name` slug hints: 2-4 lowercase kebab words, starts with alnum, contains
-  only `[a-z0-9-]`, and is unique in the plan.
+- `task.slug`: optional final worktree slug. Prefer omitting it; default slugs
+  are plan-qualified. If set, fanout uses it exactly, so it must be globally
+  unique under `.fanout/worktrees`, not merely unique within this plan. Use the
+  same policy as fanout's `--name` slug hints: 2-4 lowercase kebab words,
+  starts with alnum, and contains only `[a-z0-9-]`. Prefix it with `plan.slug`
+  when that helps avoid collisions, for example `launch-plan-base-types`.
 
 ## Spec JSON
 
@@ -114,6 +121,11 @@ Forward only the flags supported by the current `fanout plan` implementation:
 Use `--dry-run` for preview. Strip `/fanout`'s wrapper-only `--go` before
 calling the CLI; it means "skip confirmation", not a fanout flag.
 
+If the spec contains any non-empty `blocked_by` lists, include
+`--unblocked-only` by default so dependent tasks are deferred until their
+blockers are complete. Omit it only when the user explicitly asks to launch all
+waves together.
+
 Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
 `--name`, `--project-status`, `--format`, `--post-dashboard`, `--team`,
 `--popup-timeout`, `--codex-plan-mode`, `--status`, `--close`, `--merge`, or
@@ -122,10 +134,12 @@ dependencies belong in `blocked_by`.
 
 ## Run
 
-1. Write `/tmp/fanout-plan-<slug>.json`.
+1. If using a saved plan slug from `.fanout/plans/<slug>.json`, keep that slug
+   as the command argument and skip writing a new spec. Otherwise, write
+   `/tmp/fanout-plan-<slug>.json`.
 2. Run:
    ```bash
-   fanout plan /tmp/fanout-plan-<slug>.json --dry-run --agent claude <flags>
+   fanout plan <spec-or-slug> --dry-run --agent claude <flags>
    ```
 3. Summarize the dry-run: plan slug/title, task count, task ids/titles,
    waves, `blocked_by`, generated worktree paths, branch names, and deferred
@@ -134,7 +148,7 @@ dependencies belong in `blocked_by`.
    immediate execution. If the user passed `--dry-run`, stop after the preview.
 5. Run the live command without `--dry-run`:
    ```bash
-   fanout plan /tmp/fanout-plan-<slug>.json --agent claude <flags>
+   fanout plan <spec-or-slug> --agent claude <flags>
    ```
 6. Return the created/skipped/deferred/failed summary.
 
