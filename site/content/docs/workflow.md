@@ -76,6 +76,45 @@ fanout 123 --unblocked-only --limit 3
 
 The second form caps each wave while letting fanout pick the next unblocked batch.
 
+## Issue-less plan fan-out
+
+Use `fanout plan` when the work is already decomposed locally and you do not
+want to create GitHub child issues. The workflow is the same loop, but the
+source of truth is a JSON spec instead of an issue tree:
+
+1. Write or select a plan spec with `version: 1`, `plan.slug`, `plan.title`, and
+   `tasks[]` entries (`id`, `title`, `briefing`, optional `wave`,
+   `blocked_by`, `branch`, `display_name`, and `slug`).
+2. Preview first with `fanout plan <spec> --dry-run --agent <agent>`.
+3. Run live with `fanout plan <spec> --agent <agent>`, usually adding
+   `--unblocked-only` when any task has `blocked_by`.
+4. Monitor with the TUI/dashboard or `fanout plan <slug> --status
+   [--format table]`.
+5. Merge or fold away tasks with task IDs:
+   `fanout plan <slug> --merge <task-id>`, `--close <task-id>`, or
+   `--cleanup`.
+6. Rerun the saved slug for the next wave.
+
+```bash
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --status --format table
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --cleanup
+```
+
+Live runs save the spec to `.fanout/plans/<slug>.json`; rows are stored in
+`.fanout/state.json` under parent `plan:<slug>` with `taskId` and `issueNum: 0`.
+`blocked_by` dependencies are considered complete only after the dependency
+task's explicit or generated branch has a merged PR. Plan task briefings avoid
+GitHub issue-closing footers and tell agents to end PR bodies with
+`Plan: <slug> / Task: <id>`.
+
+The bundled agent wrappers can create the spec for you. In Claude Code,
+`/fanout plan <path-or-plan>` routes to the `fanout-plan` skill; in Codex, use
+`$fanout-plan` or ask for `fanout plan`. The skill summarizes the dry-run
+before live launch unless confirmation was explicitly skipped.
+
 ## Naming and branches
 
 By default each child gets the worktree slug `slugify(title)-<issueNum>` and the branch `fanout/<slug>`. Three flags override this:

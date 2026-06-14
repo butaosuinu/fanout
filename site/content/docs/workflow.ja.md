@@ -76,6 +76,43 @@ fanout 123 --unblocked-only --limit 3
 
 2 つ目の形は、fanout に次の unblocked バッチを選ばせつつ、各 wave の件数を制限します。
 
+## issue-less plan fan-out
+
+作業がローカルで既に分解されていて、GitHub child issue を作りたくない場合は
+`fanout plan` を使います。ループ自体は同じですが、source of truth は issue tree
+ではなく JSON spec です:
+
+1. `version: 1`、`plan.slug`、`plan.title`、`tasks[]` entry（`id`、`title`、
+   `briefing`、任意の `wave`、`blocked_by`、`branch`、`display_name`、`slug`）
+   を持つ plan spec を書く、または選択する。
+2. まず `fanout plan <spec> --dry-run --agent <agent>` で preview する。
+3. live run は `fanout plan <spec> --agent <agent>`。task に `blocked_by` がある
+   場合は通常 `--unblocked-only` も付ける。
+4. TUI / dashboard、または `fanout plan <slug> --status [--format table]` で見る。
+5. task ID を指定して取り込み / 後始末する:
+   `fanout plan <slug> --merge <task-id>`、`--close <task-id>`、`--cleanup`。
+6. 次 wave は保存済み slug で再実行する。
+
+```bash
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan launch-plan --status --format table
+fanout plan launch-plan --merge base-types
+fanout plan launch-plan --cleanup
+```
+
+live run は spec を `.fanout/plans/<slug>.json` に保存します。row は
+`.fanout/state.json` に parent `plan:<slug>`、`taskId`、`issueNum: 0` として
+記録されます。`blocked_by` 依存は、依存 task の明示 branch または生成 branch に
+merge 済み PR ができたときだけ complete とみなされます。Plan task briefing は
+GitHub issue-closing footer を避け、PR body 末尾を
+`Plan: <slug> / Task: <id>` にするよう agent に伝えます。
+
+同梱の agent wrapper は spec 作成も支援できます。Claude Code では
+`/fanout plan <path-or-plan>` が `fanout-plan` skill へ routing されます。Codex では
+`$fanout-plan`、または `fanout plan` の依頼を使います。skill は live launch 前に
+dry-run を要約します（確認スキップが明示された場合を除く）。
+
 ## 命名とブランチ
 
 既定では、各子の worktree slug は `slugify(title)-<issueNum>`、branch は `fanout/<slug>` です。これを 3 つの flag で上書きできます:
