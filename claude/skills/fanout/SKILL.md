@@ -28,12 +28,19 @@ fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
+fanout plan <spec.json|plan-slug>   # issue-less local plan task fan-out (see fanout-plan)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see "Sibling coordination")
 fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
 
 `fanout dashboard --web` is a standalone subcommand (no parent argument): it starts a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it to the user when they ask to "watch"/"monitor" parallel panes, but do not run it as part of the fan-out flow. After a live fan-out, fanout also binds `prefix + D` in tmux to open it; launched panes record their owner project root so the key still opens the right dashboard from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. Pass `--no-dashboard-keybind` to suppress that.
+
+`fanout plan <spec.json|plan-slug>` is the issue-less plan-task lane. If the
+user asks to fan out an implementation plan, route through the `fanout-plan`
+skill (`~/.claude/skills/fanout-plan/SKILL.md`) so the agent decomposes the
+plan and writes the spec JSON before invoking the deterministic CLI. The CLI
+does not call an LLM and does not infer tasks from prose.
 
 **Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
 
@@ -55,6 +62,7 @@ Good fits:
 - The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
 - The user asks to update fanout itself; in that case run `fanout update` immediately.
 - The user asks to start the fanout console / TUI; in that case run `fanout` with no arguments directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
+- The user asks to fan out an implementation plan or invokes `/fanout plan`; use the `fanout-plan` skill instead of the issue/Project workflow below.
 - The user types `/fanout` or mentions "fan out" / "並列展開".
 
 Do not invoke unprompted just because an issue has sub-issues. Pane creation is visible and the user has to close each pane manually if they change their mind — suggest first, wait for a "yes", and prefer routing through the `/fanout` slash command so there is one consistent entry point.
