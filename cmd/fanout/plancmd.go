@@ -130,16 +130,15 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}, lg.Warn)
 
 	cfg.SpecPath = resolvePlanSpecPath(rt.info.ProjectRoot, cfg.SpecArg)
-	spec, err := planspec.Load(cfg.SpecPath)
+	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
 	if err != nil {
 		lg.Err("%v", err)
 		return exitcode.Env
 	}
-	if cfg.BaseBranch == "" {
-		cfg.BaseBranch = spec.Plan.BaseBranch
-	}
-	if cfg.BaseBranch == "" {
-		cfg.BaseBranch = worktree.ResolveDefaultBranch(rt.info.ProjectRoot)
+	cfg.BaseBranch, err = resolvePlanBaseBranch(cfg, spec, rt.info.ProjectRoot)
+	if err != nil {
+		lg.Err("%v", err)
+		return exitcode.Env
 	}
 	if err := validatePlanExecutionNames(spec, cfg); err != nil {
 		lg.Err("validate plan execution names %s: %v", cfg.SpecPath, err)
@@ -164,6 +163,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 			return exitcode.Env
 		}
 	}
+	cfg.SpecArg = planRerunSpecArg(cfg, spec)
 
 	parentRef := planParentRef(spec.Plan.Slug)
 	fanned := mergeTaskFanned(store.FannedTaskIDsForParent(parentRef), existingPlanWorktreeFanned(rt.info.ProjectRoot, spec))
@@ -291,8 +291,8 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		n, _ := strconv.ParseFloat(sleepRaw, 64)
 		cfg.SleepBetween = n
 	}
-	if cfg.BaseBranch != "" && strings.ContainsAny(cfg.BaseBranch, " \t\r\n") {
-		lg.Err("--base-branch must not contain whitespace, got: %s", cfg.BaseBranch)
+	if err := validatePlanBaseBranch("--base-branch", cfg.BaseBranch); err != nil {
+		lg.Err("%v", err)
 		return planCommandConfig{}, exitcode.Env
 	}
 	if cfg.BranchPrefix != "" && strings.ContainsAny(cfg.BranchPrefix, " \t\r\n") {
@@ -376,6 +376,33 @@ func checkPlanDeps(cfg planCommandConfig) []string {
 		check("gh", "gh (brew install gh)")
 	}
 	return missing
+}
+
+func resolvePlanBaseBranch(cfg planCommandConfig, spec planspec.Spec, projectRoot string) (string, error) {
+	if cfg.BaseBranch != "" {
+		return cfg.BaseBranch, nil
+	}
+	if spec.Plan.BaseBranch != "" {
+		if err := validatePlanBaseBranch("plan.base_branch", spec.Plan.BaseBranch); err != nil {
+			return "", err
+		}
+		return spec.Plan.BaseBranch, nil
+	}
+	return worktree.ResolveDefaultBranch(projectRoot), nil
+}
+
+func validatePlanBaseBranch(label, value string) error {
+	if value != "" && strings.ContainsAny(value, " \t\r\n") {
+		return fmt.Errorf("%s must not contain whitespace, got: %s", label, value)
+	}
+	return nil
+}
+
+func planRerunSpecArg(cfg planCommandConfig, spec planspec.Spec) string {
+	if cfg.DryRun {
+		return cfg.SpecArg
+	}
+	return spec.Plan.Slug
 }
 
 func resolvePlanSpecPath(projectRoot, arg string) string {

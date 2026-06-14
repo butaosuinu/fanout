@@ -189,7 +189,7 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 }
 
 func TestBuildPaneViewsCarriesTaskID(t *testing.T) {
-	got := buildPaneViews("/repo", []state.Pane{
+	got := buildPaneViews([]state.Pane{
 		{
 			Parent:       "plan:launch-plan",
 			IssueNum:     0,
@@ -205,8 +205,8 @@ func TestBuildPaneViewsCarriesTaskID(t *testing.T) {
 	if got[0].TaskID != "api-client" || got[0].itemLabel() != "api-client" {
 		t.Fatalf("task identity = %q/%q, want api-client", got[0].TaskID, got[0].itemLabel())
 	}
-	if got[0].IssueState != "-" {
-		t.Fatalf("IssueState = %q, want task row to skip issue status", got[0].IssueState)
+	if got[0].IssueState != sessionview.IssueStateUnknown {
+		t.Fatalf("IssueState = %q, want task row issue state unknown", got[0].IssueState)
 	}
 	if got[0].tableRow()[1] != "api-client" {
 		t.Fatalf("table identity cell = %q, want api-client", got[0].tableRow()[1])

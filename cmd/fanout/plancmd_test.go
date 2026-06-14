@@ -65,6 +65,31 @@ func TestValidatePlanExecutionNamesRejectsFinalDuplicates(t *testing.T) {
 	}
 }
 
+func TestResolvePlanBaseBranchValidatesSpecBranchOnlyWhenUsed(t *testing.T) {
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", BaseBranch: "release candidate"}}
+
+	got, err := resolvePlanBaseBranch(planCommandConfig{BaseBranch: "main"}, spec, t.TempDir())
+	if err != nil || got != "main" {
+		t.Fatalf("resolvePlanBaseBranch() = %q, %v; want main, nil", got, err)
+	}
+
+	_, err = resolvePlanBaseBranch(planCommandConfig{}, spec, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "plan.base_branch must not contain whitespace") {
+		t.Fatalf("resolvePlanBaseBranch() error = %v, want plan.base_branch whitespace error", err)
+	}
+}
+
+func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}
+
+	if got := planRerunSpecArg(planCommandConfig{DryRun: true, SpecArg: "/tmp/plan.json"}, spec); got != "/tmp/plan.json" {
+		t.Fatalf("dry-run rerun spec arg = %q, want original path", got)
+	}
+	if got := planRerunSpecArg(planCommandConfig{SpecArg: "/tmp/plan.json"}, spec); got != "launch-plan" {
+		t.Fatalf("live rerun spec arg = %q, want copied plan slug", got)
+	}
+}
+
 func TestSplitPlanBlockedKeepsSameRunDependenciesOpen(t *testing.T) {
 	tasks := []planspec.Task{
 		{ID: "base-types", Title: "Define base types"},

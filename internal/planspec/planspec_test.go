@@ -196,6 +196,21 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestValidateWithoutResolvedNameChecksDefersSlugAndBranchDuplicates(t *testing.T) {
+	spec := validSpec()
+	spec.Tasks = []Task{
+		{ID: "a", Title: "X", Briefing: "## Goal\nA"},
+		{ID: "b", Title: "B", Briefing: "## Goal\nB", Slug: "x-a", Branch: "fanout/x-a"},
+	}
+
+	if err := Validate(spec); err == nil {
+		t.Fatal("Validate() error = nil, want duplicate resolved name error")
+	}
+	if err := ValidateWithoutResolvedNameChecks(spec); err != nil {
+		t.Fatalf("ValidateWithoutResolvedNameChecks() error = %v, want nil", err)
+	}
+}
+
 func TestTaskResolvedDefaults(t *testing.T) {
 	tests := []struct {
 		name       string

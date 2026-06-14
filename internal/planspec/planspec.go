@@ -42,6 +42,17 @@ type Task struct {
 
 // Load reads, parses, and validates a plan spec JSON file.
 func Load(path string) (Spec, error) {
+	return load(path, Validate)
+}
+
+// LoadWithoutResolvedNameChecks loads and validates a plan spec while leaving
+// final slug/branch collision checks to callers that apply command-specific
+// naming rules.
+func LoadWithoutResolvedNameChecks(path string) (Spec, error) {
+	return load(path, ValidateWithoutResolvedNameChecks)
+}
+
+func load(path string, validate func(Spec) error) (Spec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Spec{}, fmt.Errorf("read plan spec %s: %w", path, err)
@@ -50,7 +61,7 @@ func Load(path string) (Spec, error) {
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return Spec{}, fmt.Errorf("parse plan spec %s: %w", path, err)
 	}
-	if err := Validate(spec); err != nil {
+	if err := validate(spec); err != nil {
 		return Spec{}, fmt.Errorf("validate plan spec %s: %w", path, err)
 	}
 	return spec, nil
@@ -61,8 +72,23 @@ func Validate(spec Spec) error {
 	return spec.Validate()
 }
 
+// ValidateWithoutResolvedNameChecks verifies the schema and dependency graph
+// but skips resolved slug/branch collision checks. fanout plan performs those
+// after applying plan-qualified slugs and command branch-prefix overrides.
+func ValidateWithoutResolvedNameChecks(spec Spec) error {
+	return spec.validate(validateOptions{CheckResolvedNames: false})
+}
+
 // Validate verifies that a plan spec is internally consistent.
 func (s Spec) Validate() error {
+	return s.validate(validateOptions{CheckResolvedNames: true})
+}
+
+type validateOptions struct {
+	CheckResolvedNames bool
+}
+
+func (s Spec) validate(opts validateOptions) error {
 	var errs []error
 	if s.Version != Version {
 		errs = append(errs, fmt.Errorf("version must be %d, got %d", Version, s.Version))
@@ -93,7 +119,7 @@ func (s Spec) Validate() error {
 			}
 		}
 
-		if canResolveSlug(task) {
+		if opts.CheckResolvedNames && canResolveSlug(task) {
 			slug := task.ResolvedSlug()
 			if prev, ok := seenSlugs[slug]; ok {
 				errs = append(errs, fmt.Errorf("tasks[%d].slug %q duplicates tasks[%d].slug", i, slug, prev))
