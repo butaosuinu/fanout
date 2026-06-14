@@ -64,7 +64,7 @@ workflow:
       chip: "--status → --merge → --cleanup"
 cli:
   title: "All you need to remember."
-  lede: "Few flags, quiet output. These seven are the daily moves."
+  lede: "Few flags, quiet output. These eight are the daily moves."
   more: "Full CLI reference"
   rows:
     - cmd: "fanout 123 --agent claude"
@@ -73,6 +73,8 @@ cli:
       desc: "Fan out only children whose blockers are closed &mdash; the next wave"
     - cmd: "fanout 123 --dry-run"
       desc: "Print the plan without touching git or tmux"
+    - cmd: "fanout plan spec.json --agent claude"
+      desc: "Fan out a local plan spec instead of GitHub child issues"
     - cmd: "fanout"
       desc: "Start the persistent TUI console (focus, peek, lifecycle keys)"
     - cmd: "fanout 123 --status"

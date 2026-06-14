@@ -99,7 +99,7 @@ CLAUDE_DIR=/path/to/.claude make install # non-default Claude data dir
 CODEX_DIR=/path/to/.codex make install   # non-default Codex data dir
 ```
 
-Building from a checkout needs a **Go toolchain** (Go 1.26+): `make install`, `make link`, and `make build-go` all run `go build ./cmd/fanout`. The curl install above ships a prebuilt binary and needs no Go.
+Building from a checkout needs a **Go toolchain** (Go 1.26+) plus **Node.js 24+ and pnpm 10+**: `make install`, `make link`, and `make build-go` first build the dashboard web UI (`make build-web`, the Vite bundle under `web/`) and embed it into `go build ./cmd/fanout`. The curl install above ships a prebuilt binary and needs neither Go nor Node.
 
 ## Keeping it updated
 

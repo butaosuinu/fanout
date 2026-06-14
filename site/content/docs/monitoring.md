@@ -58,6 +58,7 @@ For recorded issue parents the console also reloads the parent's child set and s
     "total":      2,
     "merged":     1,
     "pending":    1,
+    "blocked":    0,
     "all_merged": false
   }
 }
@@ -103,15 +104,16 @@ It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, f
 
 ## Web dashboard (fanout dashboard --web)
 
-`fanout dashboard --web` starts a **read-only** web dashboard that visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE: pane liveness (from `tmux list-panes`), issue state, and PR merge status (the same data source as `--status`, reused across every parent in the repo at once). It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
+`fanout dashboard --web` starts a **read-only** web dashboard that visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE: pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty (the same data source as `--status`, reused across every parent in the repo at once). Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-- **localhost only.** The server binds `127.0.0.1` and exposes GET-only endpoints: `/api/snapshot`, an SSE `/api/stream`, and the embedded UI. `--port` defaults to `0` (an OS-assigned ephemeral port); the chosen URL is printed.
+- **localhost only.** The server binds `127.0.0.1` and exposes GET-only endpoints: `/api/snapshot`, an SSE `/api/stream`, `/api/peek` (a `tmux capture-pane` snapshot of one recorded pane), `/api/plan` (the last complete `<proposed_plan>` block of a `--codex-plan-mode` pane), and the embedded UI. `--port` defaults to `0` (an OS-assigned ephemeral port); the chosen URL is printed.
 - **Token by default.** A random token is generated each start and embedded in the printed/opened URL, gating `/api/*` so other local users or processes cannot read your issue/PR data off the loopback port. Pass `--no-token` on a single-user machine to drop it.
 - **`--open`** opens the URL in your default browser. The dashboard reuses a server that is already running (recorded in `.fanout/dashboard.json`) instead of starting a second one.
+- **Single-page UI.** The embedded React + Vite SPA layers more onto the live Session list than the API alone: a structured filter box (free words ANDed with `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` terms, plus dropdowns and removable chips), a detail drawer (click a row) showing pane metadata, wave / blockers, the worktree, PRs with CI, the original prompt, and a live *peek* of recent output refreshed every 5 s, a *plan* section for `--codex-plan-mode` panes, a top HUD with repo-wide running / blocked counts, and a PAPER BREEZE light/dark theme.
 
 Run `fanout dashboard --help` for the full flag list.
 

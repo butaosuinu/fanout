@@ -99,7 +99,7 @@ CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データデ�
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
-チェックアウトからのビルドには **Go ツールチェイン**(Go 1.26+)が必要です。`make install`・`make link`・`make build-go` はいずれも `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go は不要です。
+チェックアウトからのビルドには **Go ツールチェイン**(Go 1.26+)に加えて **Node.js 24+ と pnpm 10+** が必要です。`make install`・`make link`・`make build-go` はまずダッシュボード Web UI をビルドし(`make build-web`、`web/` の Vite バンドル)、それを embed して `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go も Node も不要です。
 
 ## 更新を保つ
 

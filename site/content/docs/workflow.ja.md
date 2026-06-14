@@ -113,6 +113,40 @@ GitHub issue-closing footer を避け、PR body 末尾を
 `$fanout-plan`、または `fanout plan` の依頼を使います。skill は live launch 前に
 dry-run を要約します（確認スキップが明示された場合を除く）。
 
+## 兄弟協調（peer messaging）
+
+親を複数ペインに fan out すると、各子は自分のペインで動く独立した agent
+セッションになり、既定ではペイン同士は互いを認識できません。run ごとに
+`--team` で opt-in すると、fanout が（best-effort で）各子の通常 briefing に
+「Coordinating with your sibling panes」節を注入し、per-parent の peer
+レジストリに seed するので、兄弟がお互いを把握できます。なお `--codex-plan-mode`
+の子はレジストリには seed されますが最小限の Plan-Mode briefing を受け取るため、
+協調節は付きません。
+
+fanout したペイン内では、`fanout msg` が自分が今どの子（または親）かを自動
+検出し、per-parent の SQLite バス `/tmp/fanout-<repo>-<parent>.db`
+（`FANOUT_DB_PATH` で上書き可）上でやり取りします。バスは全員へ配る共有
+`board`（ブロードキャスト）に加え、`--to <issue>` 宛の `1:1` メッセージを
+運びます。協調は pull ベース — 自分から要求しない限り、何かがペインを
+つつくことはありません。
+
+| verb | 効果 |
+|---|---|
+| `peers` | この親で把握している兄弟ペインを一覧する。 |
+| `inbox [--mark-read]` | 自分宛の未読 1:1 メッセージを表示する（任意で既読化）。 |
+| `board [--all]` | 最近のブロードキャストを表示する（`--all` で全件）。 |
+| `send --to <N> <body>` | 兄弟 `#N` へ 1:1 メッセージを送る。 |
+| `post [--kind K] <body>` | 共有 board へブロードキャストを投稿する。 |
+| `mark-read [--all]` | メッセージを既読にする。 |
+| `register` | 自分を peer レジストリへ（再）seed する。 |
+| `nudge <N>` | peer `#N` のペインへ `send-keys` でヒントを送る best-effort 通知。agent が running のときだけ送り、DB は一切触らない。 |
+
+`claude` / `codex` どちらのペインでも同じく動きます。これは 1 セッション内の
+チームメイトを協調させる Claude Code Agent Teams とは別物で、peer messaging は
+別々の fanout ペイン同士を協調させます。全サーフェスは
+[CLI リファレンス]({{< relref "/docs/cli" >}}) または `fanout msg --help` を
+参照してください。
+
 ## 命名とブランチ
 
 既定では、各子の worktree slug は `slugify(title)-<issueNum>`、branch は `fanout/<slug>` です。これを 3 つの flag で上書きできます:
