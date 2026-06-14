@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/planspec"
@@ -87,6 +88,20 @@ func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
 	}
 	if got := planRerunSpecArg(planCommandConfig{SpecArg: "/tmp/plan.json"}, spec); got != "launch-plan" {
 		t.Fatalf("live rerun spec arg = %q, want copied plan slug", got)
+	}
+}
+
+func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
+	cfg := planCommandConfig{StatusMode: true, Format: "json", BranchPrefix: "custom/"}
+
+	if code := validatePlanActionFlags(cfg, "", "", log.New(false)); code != exitcode.OK {
+		t.Fatalf("validatePlanActionFlags() = %d, want %d", code, exitcode.OK)
+	}
+
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}
+	task := planspec.Task{ID: "ui-shell", Title: "Build UI shell"}
+	if got := planTaskBranch(cfg, spec, task); got != "custom/launch-plan-build-ui-shell-ui-shell" {
+		t.Fatalf("planTaskBranch() = %q, want custom prefix fallback branch", got)
 	}
 }
 

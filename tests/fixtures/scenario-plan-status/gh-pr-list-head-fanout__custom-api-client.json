@@ -1,0 +1,10 @@
+[
+  {
+    "number": 502,
+    "state": "OPEN",
+    "mergedAt": null,
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "statusCheckRollup": {"state": "PENDING"}
+  }
+]

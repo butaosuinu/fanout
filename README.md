@@ -99,6 +99,10 @@ Plan panes are recorded under parent `plan:<slug>` with `taskId` and
 have a merged PR on their explicit or generated branch. The generated task
 briefing avoids issue-closing footers and asks task PRs to end with
 `Plan: <slug> / Task: <id>`.
+Use `fanout plan <spec|slug> --status [--format json|table]` to inspect task
+PR/blocked state, `--close <task-id>` or `--merge <task-id>` for one recorded
+task, and `--cleanup` to remove recorded task panes whose head branch has a
+merged PR.
 
 ## Project mode
 

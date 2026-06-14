@@ -1,0 +1,8 @@
+{
+  "number": 502,
+  "additions": 3,
+  "deletions": 4,
+  "changedFiles": 1,
+  "title": "fix: extract API client",
+  "body": "TL;DR: Extracts the API client.\nReview effort: 2"
+}
