@@ -73,6 +73,10 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
 
 4. `latestReviews` とトップレベル `comments` も読む。レビュー本文や PR コメントだけで
    actionable な修正依頼が来ることがあるため、thread だけで未対応 0 と判定しない。
+   `gh pr view --json comments` は先頭 100 件に制限される。完了判定や blocked 判定で
+   トップレベルコメントを使う前に、コメントが多い PR では GraphQL の
+   `issueComments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
+   actionable request を取りこぼさない。
 
 ### B. 終了判定
 
@@ -101,6 +105,16 @@ rebase、CI 修正、レビュー修正で push する前に必ず解決する�
 - local remote は PR の `headRepository.nameWithOwner` に実際に一致するものを使う。
   一致 remote がなければ URL を解決し、remote を追加して fetch してから使う。
 - push は常に明示 refspec を使う。
+- `--force-with-lease` は ancestry check ではない。fetch や background fetch で lease が
+  更新されると、remote-only commit を含まないローカル HEAD でも上書きできてしまう。
+  force-with-lease push の直前に必ず head branch を fetch し、remote PR head が現在
+  HEAD の祖先であることを確認する。false なら push せず、remote-only commit を取り込むか
+  ユーザーにエスカレーションする。
+
+```bash
+git fetch "<head-remote>" "$head"
+git merge-base --is-ancestor FETCH_HEAD HEAD
+```
 
 ```bash
 git push --force-with-lease "<head-remote>" HEAD:"$head"

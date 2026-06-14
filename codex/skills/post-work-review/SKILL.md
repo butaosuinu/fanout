@@ -38,8 +38,12 @@ native review を明示スコープ付きで実行し、指摘を修正して、
 - clean tree のブランチ差分を見る: `codex review --base <default-branch>`
 
 未コミット変更があるときは、まず `--uncommitted` を使う。clean tree で、直前に
-レビュー済みとして marker を書く目的なら `--commit HEAD` を使う。PR 全体相当の
-差分を見たい依頼なら `--base` を使う。
+レビュー済みとして marker を書く目的なら、原則として `--base <default-branch>` を使い、
+PR 全体相当の branch diff をレビューする。`--commit HEAD` だけで marker を書いてよい
+のは、HEAD が base からの唯一の未レビュー commit だと確認できる場合、またはユーザーが
+単一 commit の再レビューだけを明示した場合に限る。複数 commit の feature branch で
+`--commit HEAD` だけを通して marker を書くと、古い commit が未レビューのまま PR gate を
+通す可能性がある。
 
 ## Review Loop
 
@@ -81,7 +85,9 @@ native review を明示スコープ付きで実行し、指摘を修正して、
 
 レビュー済み marker は、レビューが実質的に成功し、かつ working tree が clean
 なときだけ書く。dirty tree では書かない。未コミットの修正が PR に乗らないのに
-HEAD だけをレビュー済み扱いにするのを防ぐため。
+HEAD だけをレビュー済み扱いにするのを防ぐため。さらに、marker 前の成功レビューは
+PR 全体相当の branch/base scope であることを確認する。`--commit HEAD` の成功だけを
+根拠に marker を書くのは、base からの差分がその commit だけだと確認できる場合に限る。
 
 ```bash
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
