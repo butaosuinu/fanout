@@ -81,7 +81,7 @@ Notes:
 - The gate is HEAD-pinned: any new commit re-arms it, so review again before the PR. The marker is worktree-local, so fanout's parallel panes don't interfere with each other.
 - Detection runs through a shell tokenizer (a Python companion parser), so command words are distinguished from quoted argument values — a commit message that merely mentions `gh pr create` does not trip it. Indirect forms (`eval`, `xargs`, `sh -c "<string>"`) can still slip through; that is accepted for fanout's normal flow.
 - Without `python3` the hook fails closed: it denies anything that coarsely looks like PR creation. Install `python3`, or `export FANOUT_SKIP_PR_REVIEW=1`.
-- `make install` overwrites a same-named global `post-work-review` skill; back it up first if you maintain your own copy.
+- `make install` overwrites same-named global `post-work-review` and `pr-watch` skills under Claude and Codex; back up any custom copies first.
 
 ## Project mode returns no items
 

@@ -1,7 +1,7 @@
 ---
 title: Claude Code・Codex 連携
 linkTitle: エージェント連携
-description: "Claude Code / Codex 向けの /fanout スラッシュコマンドと fanout・fanout-issues skill、そして Codex Plan Mode。"
+description: "Claude Code / Codex 向けの同梱 skill と /fanout スラッシュコマンド、そして Codex Plan Mode。"
 weight: 70
 kanji: 連
 yomi: agents
@@ -35,13 +35,24 @@ skill は `--name` フラグ(slug / display name / branch)も issue のタイト
 
 `~/.claude/skills/fanout-issues/` は、計画を fanout-ready な GitHub 親 issue + リンクされた子 issue 群へ変換する場面で agent を導きます。同一 repo 内の子 issue を作成し、GitHub Sub-issues でリンクし、親本文のタスクリストにミラーし、`fanout --unblocked-only` が読める `## Blocked by` / `(blocked by #N)` 形式で blocker wave も記録します。
 
+### レビューと PR follow-up skill
+
+`~/.claude/skills/post-work-review/` はローカルの PR review gate を支え、最終レビュー
+loop を回して reviewed HEAD marker を記録します。`~/.claude/commands/pr-watch.md` と
+`~/.claude/skills/pr-watch/` は、PR 作成後のコンフリクト、CI、レビューコメント対応を
+安全に見張って処理します。
+
 ## Codex CLI
 
-Codex 版の skill は `~/.codex/skills/fanout/` と `~/.codex/skills/fanout-issues/` に配置されます。skill のインストールや更新の後、実行中の Codex セッションがある場合は再起動すると新しいファイルを認識します。
+Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。skill のインストールや更新の後、実行中の Codex セッションがある場合は再起動すると新しいファイルを認識します。
 
 fanout skill は、Codex に「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。Claude のコマンドと同じ安全フロー — まず dry-run、ターゲットを確認、それから本実行 — に従い、暗黙の子参照のスキャンと `--name` 生成も同様に行います。
 
 `fanout-issues` skill も Claude 版をミラーします: fanout-ready な GitHub issue ツリーの作成、計画の親子 issue 化、`fanout --unblocked-only` 用の blocker wave の準備を Codex に依頼したときに使われ、同一 repo の子 issue、GitHub Sub-issues のリンク、親本文のタスクリスト、`## Blocked by` 注記を同じように揃えます。
+
+`$post-work-review` は、Codex にコミット前・PR前の最終レビュー loop を依頼するときに使います。明示 scope 付きの `codex review` を実行し、actionable な指摘を修正し、clean になるまで再レビューします。HEAD が clean な場合は Claude PR gate と同じ marker も記録します。
+
+`$pr-watch` は、PR 作成後に mergeability、失敗 CI、レビューコメントを Codex に確認・修正させたいときに使います。Codex は background scheduler を持たないため、green、reviewer 待ち、CI 待ち、blocked のどの状態かを報告して止まります。
 
 ## Codex Plan Mode
 

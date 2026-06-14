@@ -155,10 +155,15 @@ Installed paths:
 
 - `$BIN_DIR/fanout` (default `~/.local/bin/fanout`)
 - `$CLAUDE_DIR/commands/fanout.md` (default `~/.claude/commands/fanout.md`)
+- `$CLAUDE_DIR/commands/pr-watch.md` (default `~/.claude/commands/pr-watch.md`)
 - `$CLAUDE_DIR/skills/fanout/` (default `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/` (default `~/.claude/skills/fanout-issues/`)
+- `$CLAUDE_DIR/skills/post-work-review/` (default `~/.claude/skills/post-work-review/`)
+- `$CLAUDE_DIR/skills/pr-watch/` (default `~/.claude/skills/pr-watch/`)
 - `$CODEX_DIR/skills/fanout/` (default `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/` (default `~/.codex/skills/fanout-issues/`)
+- `$CODEX_DIR/skills/post-work-review/` (default `~/.codex/skills/post-work-review/`)
+- `$CODEX_DIR/skills/pr-watch/` (default `~/.codex/skills/pr-watch/`)
 
 `install.sh` detects macOS/Linux and amd64/arm64, downloads
 `fanout_<os>_<arch>.tar.gz` from the latest GitHub Release (or
@@ -829,8 +834,8 @@ repo under `claude/` and get placed by `make install`:
   blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that
   `fanout --unblocked-only` understands.
 
-Recommended integration for Codex CLI — the skill is bundled under
-`codex/` and gets placed by `make install`:
+Recommended integration for Codex CLI — the skills are bundled under
+`codex/` and get placed by `make install`:
 
 - **Skill** → `codex/skills/fanout/SKILL.md` is installed to
   `~/.codex/skills/fanout/SKILL.md`. Restart any running Codex session after
@@ -845,6 +850,17 @@ Recommended integration for Codex CLI — the skill is bundled under
   parent/child issues, or prepare blocker waves for `fanout --unblocked-only`.
   It mirrors the Claude issue-creation skill: same-repo children, GitHub
   Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
+- **Post-work review skill** → `codex/skills/post-work-review/SKILL.md` is
+  installed to `~/.codex/skills/post-work-review/SKILL.md`. Use it by asking
+  Codex to run a final review loop before commit or PR; it runs
+  `codex review` with an explicit scope, fixes actionable findings, reruns
+  until clean, and records the same review marker used by the Claude PR gate
+  when the reviewed HEAD is clean.
+- **PR watch skill** → `codex/skills/pr-watch/SKILL.md` is installed to
+  `~/.codex/skills/pr-watch/SKILL.md`. Use it after opening a PR when you want
+  Codex to inspect mergeability, failing CI, and review comments, fix what is
+  safe to fix, push with guarded `--force-with-lease`, and report when the PR
+  is green, reviewer-waiting, or blocked.
 
 The CLI prerequisites above still apply: start the TUI from the target
 repository worktree, and for batch pane creation run from inside tmux, pass
@@ -955,8 +971,8 @@ Notes:
 - Detection is a simple regex on the command string. Contorted forms (`... &&
   gh pr create`, `xargs gh pr create`) can slip through — acceptable for
   fanout's normal flow.
-- `make install` overwrites a same-named global `post-work-review` skill; back
-  it up first if you maintain your own copy.
+- `make install` overwrites same-named global `post-work-review` and
+  `pr-watch` skills under Claude and Codex; back up any custom copies first.
 
 ## Design notes
 

@@ -142,10 +142,15 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 - `$BIN_DIR/fanout`（既定は `~/.local/bin/fanout`）
 - `$CLAUDE_DIR/commands/fanout.md`（既定は `~/.claude/commands/fanout.md`）
+- `$CLAUDE_DIR/commands/pr-watch.md`（既定は `~/.claude/commands/pr-watch.md`）
 - `$CLAUDE_DIR/skills/fanout/`（既定は `~/.claude/skills/fanout/`）
 - `$CLAUDE_DIR/skills/fanout-issues/`（既定は `~/.claude/skills/fanout-issues/`）
+- `$CLAUDE_DIR/skills/post-work-review/`（既定は `~/.claude/skills/post-work-review/`）
+- `$CLAUDE_DIR/skills/pr-watch/`（既定は `~/.claude/skills/pr-watch/`）
 - `$CODEX_DIR/skills/fanout/`（既定は `~/.codex/skills/fanout/`）
 - `$CODEX_DIR/skills/fanout-issues/`（既定は `~/.codex/skills/fanout-issues/`）
+- `$CODEX_DIR/skills/post-work-review/`（既定は `~/.codex/skills/post-work-review/`）
+- `$CODEX_DIR/skills/pr-watch/`（既定は `~/.codex/skills/pr-watch/`）
 
 `install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release
 （または `FANOUT_VERSION` で指定した tag）から
@@ -755,6 +760,16 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
   `fanout --unblocked-only` 用の blocker wave 作成を依頼したときに使います。
   Claude 版と同じく、同一リポジトリ内の子 issue、GitHub Sub-issues のリンク、
   親本文のタスクリスト、`## Blocked by` 注記を揃えます。
+- **post-work review スキル** → `codex/skills/post-work-review/SKILL.md` が
+  `~/.codex/skills/post-work-review/SKILL.md` にインストールされます。Codex に
+  コミット前・PR前の最終レビューを依頼したときに使い、明示 scope 付きの
+  `codex review` を回し、actionable な指摘を直し、clean になるまで再レビューします。
+  reviewed HEAD が clean な場合は Claude の PR gate と同じ marker も記録します。
+- **PR watch スキル** → `codex/skills/pr-watch/SKILL.md` が
+  `~/.codex/skills/pr-watch/SKILL.md` にインストールされます。PR 作成後に
+  mergeability、失敗 CI、レビューコメントを確認し、安全に直せるものを修正し、
+  guarded `--force-with-lease` で push して、green / reviewer 待ち / blocked の
+  状態を報告します。
 
 上記の CLI 前提条件はそのまま適用されます: TUI は対象リポジトリの worktree から
 起動し、一括 pane 作成では tmux 内で実行し、agent 名を明示してください。詳しくは
@@ -855,8 +870,9 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
   `sh -c "<文字列>"` のような間接実行や、コミットメッセージ・PR コメントの本文に
   シェル演算子と一緒に `gh pr create` という文字列を書いた場合などは取りこぼし／過検知
   し得ます。その場合は `FANOUT_SKIP_PR_REVIEW=1` で回避してください。
-- `make install` は同名のグローバル `post-work-review` skill を上書きします。独自に
-  管理しているコピーがある場合は事前にバックアップしてください。
+- `make install` は Claude / Codex 配下の同名グローバル `post-work-review` /
+  `pr-watch` skill を上書きします。独自に管理しているコピーがある場合は事前に
+  バックアップしてください。
 
 ## 設計メモ
 

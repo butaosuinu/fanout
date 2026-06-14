@@ -43,11 +43,15 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 - `$BIN_DIR/fanout`(既定は `~/.local/bin/fanout`)
 - `$CLAUDE_DIR/commands/fanout.md`(既定は `~/.claude/commands/fanout.md`)
+- `$CLAUDE_DIR/commands/pr-watch.md`(既定は `~/.claude/commands/pr-watch.md`)
 - `$CLAUDE_DIR/skills/fanout/`(既定は `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/`(既定は `~/.claude/skills/fanout-issues/`)
 - `$CLAUDE_DIR/skills/post-work-review/`(既定は `~/.claude/skills/post-work-review/` — PR レビューゲートを支える skill。同名 skill を上書きするので、自前のものがあればバックアップを)
+- `$CLAUDE_DIR/skills/pr-watch/`(既定は `~/.claude/skills/pr-watch/`)
 - `$CODEX_DIR/skills/fanout/`(既定は `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/`(既定は `~/.codex/skills/fanout-issues/`)
+- `$CODEX_DIR/skills/post-work-review/`(既定は `~/.codex/skills/post-work-review/`)
+- `$CODEX_DIR/skills/pr-watch/`(既定は `~/.codex/skills/pr-watch/`)
 
 `~/.local/bin` が `PATH` に入っていることを確認してください:
 
