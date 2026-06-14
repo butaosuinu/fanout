@@ -701,9 +701,13 @@ func parseAgentArg(cfg *Config, raw string) error {
 	if !reAllDigits.MatchString(target) {
 		return fmt.Errorf("--agent: <NUM> must be a positive integer, got: '%s'", target)
 	}
-	if name == "" {
-		return fmt.Errorf("--agent #%s: agent name must not be empty", target)
+	n, err := strconv.Atoi(target)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("--agent: <NUM> must be a positive integer, got: '%s'", target)
 	}
-	cfg.AgentOverrides = UpsertAgentOverride(cfg.AgentOverrides, target, name)
+	if name == "" {
+		return fmt.Errorf("--agent #%d: agent name must not be empty", n)
+	}
+	cfg.AgentOverrides = UpsertAgentOverride(cfg.AgentOverrides, strconv.Itoa(n), name)
 	return nil
 }

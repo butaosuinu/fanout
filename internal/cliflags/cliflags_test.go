@@ -82,6 +82,17 @@ func TestParseAgentOverrides(t *testing.T) {
 	}
 }
 
+func TestParseAgentOverrideCanonicalizesIssueNumbers(t *testing.T) {
+	cfg := parseOK(t, "100", "--agent", "001=codex")
+
+	if got := cfg.EffectiveAgentForIssue(1); got != "codex" {
+		t.Fatalf("EffectiveAgentForIssue(1) = %q, want codex", got)
+	}
+	if len(cfg.AgentOverrides) != 1 || cfg.AgentOverrides[0].Target != "1" {
+		t.Fatalf("AgentOverrides = %+v, want canonical target 1", cfg.AgentOverrides)
+	}
+}
+
 func TestParseAgentOverrideRejectsInvalidShapes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -90,6 +101,7 @@ func TestParseAgentOverrideRejectsInvalidShapes(t *testing.T) {
 	}{
 		{name: "empty agent", raw: "4=", want: "agent name must not be empty"},
 		{name: "empty number", raw: "=claude", want: "<NUM> must be a positive integer"},
+		{name: "zero", raw: "0=claude", want: "<NUM> must be a positive integer"},
 		{name: "non-number", raw: "foo=claude", want: "<NUM> must be a positive integer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
