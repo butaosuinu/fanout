@@ -260,6 +260,43 @@ func TestCmdPlanLifecycleCloseUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing
 	}
 }
 
+func TestCmdPlanLifecycleCloseSkipsResolvedBranchValidation(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	specPath := filepath.Join(repo, "launch-plan.json")
+	data := []byte(`{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "base-types", "title": "Define base types", "briefing": "## Goal\nDefine base types"},
+    {"id": "worker", "title": "Worker", "briefing": "## Goal\nWork", "branch": "fanout/launch-plan-define-base-types-base-types"}
+  ]
+}
+`)
+	if err := os.WriteFile(specPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:     "plan:launch-plan",
+		IssueNum:   0,
+		TaskID:     "base-types",
+		BranchName: "custom/launch-plan-define-base-types-base-types",
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, CloseTaskID: "base-types"}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdPlanLifecycle close code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "base-types"); ok {
+		t.Fatalf("task base-types still present in state: %+v", loaded.Panes)
+	}
+}
+
 func TestCmdPlanLifecycleMergeUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	specPath := writePlanLifecycleSpec(t, repo)

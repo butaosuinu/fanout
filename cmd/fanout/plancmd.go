@@ -716,6 +716,13 @@ func loadPlanActionSpec(cfg planCommandConfig, lg *log.Logger) (planspec.Spec, e
 		lg.Err("%s: %v", planActionModeFlag(cfg), err)
 		return planspec.Spec{}, planActionInputCode(cfg)
 	}
+	if cfg.StatusMode {
+		return validatePlanActionSpecNames(cfg, spec, lg)
+	}
+	return spec, exitcode.OK
+}
+
+func validatePlanActionSpecNames(cfg planCommandConfig, spec planspec.Spec, lg *log.Logger) (planspec.Spec, exitcode.Code) {
 	if err := validatePlanExecutionNames(spec, cfg); err != nil {
 		lg.Err("%s: validate plan execution names %s: %v", planActionModeFlag(cfg), cfg.SpecPath, err)
 		return planspec.Spec{}, planActionInputCode(cfg)
