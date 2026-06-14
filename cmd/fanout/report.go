@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/planspec"
 )
 
 type executionResult struct {
@@ -108,7 +109,7 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 			settingsFlags(cfg),
 			worktreeFlags(cfg),
 			nameFlagsFor(cfg, plan.LimitDeferred),
-			optFlag("--agent", cfg.Agent),
+			agentFlagsForIssues(cfg, plan.LimitDeferred),
 			optFlag("--session", cfg.Session))
 	}
 }
@@ -169,6 +170,35 @@ func nameFlagsFor(cfg *cliflags.Config, issues []ghissue.Issue) string {
 	for _, name := range cfg.Names {
 		if wanted[name.Num] {
 			flags = append(flags, optFlag("--name", renderNameOverride(name)))
+		}
+	}
+	return strings.Join(flags, "")
+}
+
+func agentFlagsForIssues(cfg *cliflags.Config, issues []ghissue.Issue) string {
+	wanted := map[string]bool{}
+	for _, issue := range issues {
+		wanted[strconv.Itoa(issue.Number)] = true
+	}
+	return agentFlagsForTargets(cfg.Agent, cfg.AgentOverrides, wanted)
+}
+
+func agentFlagsForTasks(agentName string, overrides []cliflags.AgentOverride, tasks []planspec.Task) string {
+	wanted := map[string]bool{}
+	for _, task := range tasks {
+		wanted[task.ID] = true
+	}
+	return agentFlagsForTargets(agentName, overrides, wanted)
+}
+
+func agentFlagsForTargets(agentName string, overrides []cliflags.AgentOverride, wanted map[string]bool) string {
+	flags := []string{}
+	if agentName != "" {
+		flags = append(flags, optFlag("--agent", agentName))
+	}
+	for _, override := range overrides {
+		if wanted[override.Target] {
+			flags = append(flags, optFlag("--agent", override.Target+"="+override.Name))
 		}
 	}
 	return strings.Join(flags, "")

@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/planspec"
 )
 
 func TestPrintSummaryUsesInvokedCommandNameInLimitRerunHint(t *testing.T) {
@@ -103,6 +104,61 @@ func TestPrintSummaryPreservesDeferredNameFlagsInLimitRerunHint(t *testing.T) {
 	}
 	if strings.Contains(got, "already-created") {
 		t.Fatalf("summary output included non-deferred name override:\n%s", got)
+	}
+}
+
+func TestPrintSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *testing.T) {
+	var out, err bytes.Buffer
+	lg := log.NewWith(&out, &err, false)
+	plan := Plan{
+		LimitDeferred: []ghissue.Issue{{Number: 703}},
+	}
+	cfg := &cliflags.Config{
+		ParentRef: "700",
+		Agent:     "codex",
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "701", Name: "claude"},
+			{Target: "703", Name: "claude"},
+		},
+	}
+
+	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
+
+	got := out.String()
+	want := "  fanout-go 700 --include 703 --only 703 --agent codex --agent '703=claude'\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("summary output did not preserve deferred --agent override:\nwant %q\noutput:\n%s", want, got)
+	}
+	if strings.Contains(got, "701=claude") {
+		t.Fatalf("summary output included non-deferred agent override:\n%s", got)
+	}
+}
+
+func TestPrintTaskSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *testing.T) {
+	var out, err bytes.Buffer
+	lg := log.NewWith(&out, &err, false)
+	plan := taskPlan{
+		LimitDeferred: []planspec.Task{{ID: "api-client"}},
+	}
+	cfg := planCommandConfig{
+		SpecArg:      "launch-plan",
+		Agent:        "claude",
+		SleepBetween: cliflags.DefaultSleepBetween,
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "base-types", Name: "codex"},
+			{Target: "api-client", Name: "codex"},
+		},
+	}
+
+	printTaskSummary(plan, taskExecutionResult{}, cfg, lg, log.Palette{}, "fanout-go")
+
+	got := out.String()
+	want := "  fanout-go plan launch-plan --only api-client --agent claude --agent 'api-client=codex'\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("task summary output did not preserve deferred --agent override:\nwant %q\noutput:\n%s", want, got)
+	}
+	if strings.Contains(got, "base-types=codex") {
+		t.Fatalf("task summary output included non-deferred agent override:\n%s", got)
 	}
 }
 

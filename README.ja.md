@@ -286,8 +286,10 @@ cd web && pnpm install && pnpm dev                   # ターミナル 2 → htt
     セッション内から実行してください。子ペインは `tmux split-window` で直接作成し、
     `--session` 未指定時は起動元 pane を target にします。
 - **エージェント名が解決できること**: `--agent claude` / `--agent codex` を渡すか、
-  `FANOUT_AGENT` を設定してください。未知の agent はペイン作成前に失敗し、実行時
-  には agent CLI がインストール済みかも確認します。
+  `FANOUT_AGENT` を設定してください。子 issue 1 件だけを変える場合は
+  `--agent NUM=name`、`fanout plan` では `--agent task-id=name` を繰り返します。
+  選択対象の未知 agent はペイン作成前に失敗し、実行時には agent CLI が
+  インストール済みかも確認します。
 - 子 worktree は `.fanout/worktrees/<slug>/` に作成されます。分岐前に
   `git fetch --quiet --no-tags` と fast-forward で base branch を fresh 化します。
   base を変える場合は `--base-branch <branch>` を使います（bare な local branch 名と
@@ -300,7 +302,7 @@ cd web && pnpm install && pnpm dev                   # ターミナル 2 → htt
 ```
 fanout # 常駐 tmux コンソールを起動
 fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
-       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -312,7 +314,7 @@ fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
        [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
@@ -435,11 +437,11 @@ exit code は既存 lane に従います。通常 / dry-run の `fanout plan` �
 
 ### Codex Plan Mode
 
-`--codex-plan-mode` は `--agent codex` 専用の opt-in 起動モードです。通常の
-positional `codex "<prompt>"` ではなく、子ごとに Codex app-server を起動し、その
-thread を collaboration mode `plan` で作成し、fanout prompt を app-server 経由で
-initial turn として開始してから、その remote session に interactive Codex TUI を
-attach します。子 briefing も Plan Mode
+`--codex-plan-mode` は per-target の `--agent` 上書き適用後に `codex` へ解決される
+子向けの opt-in 起動モードです。通常の positional `codex "<prompt>"` ではなく、
+子ごとに Codex app-server を起動し、その thread を collaboration mode `plan` で
+作成し、fanout prompt を app-server 経由で initial turn として開始してから、その
+remote session に interactive Codex TUI を attach します。子 briefing も Plan Mode
 向けに差し替わり、`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn では
 ファイル編集・commit・push・PR 作成をしないことを明示します。
 
@@ -784,6 +786,9 @@ fanout 123 --sleep 8
 # 子ペインで起動する agent CLI を選ぶ
 fanout 123 --agent codex
 
+# 一部の子 issue だけ agent を変え、他はデフォルトを使う
+fanout 123 --agent codex --agent 456=claude
+
 # Codex 子ペインを app-server Plan Mode + interactive TUI で開始する
 fanout 123 --agent codex --codex-plan-mode
 
@@ -796,6 +801,7 @@ fanout 123 --agent codex --codex-plan-mode
 # merge されるまで deferred にする
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --agent api-client=codex
 fanout plan launch-plan --status --format table
 fanout plan launch-plan --merge base-types
 fanout plan launch-plan --cleanup
@@ -849,7 +855,9 @@ fanout https://github.com/users/<owner>/projects/<n> --project-status all
 
 fanout は、Claude Code や Codex などのエージェントセッション内から呼び出しても
 安全です。作るのは子用の新規 tmux ペインだけなので、呼び出し元のペインは
-一切触りません。`--agent` を渡すか `FANOUT_AGENT` を設定してください。
+一切触りません。`--agent` を渡すか `FANOUT_AGENT` を設定してください。issue /
+Project の子ごとの上書きには `--agent NUM=name`、`fanout plan` の task ごとの
+上書きには `--agent task-id=name` を繰り返し指定します。
 
 Claude Code 向けの推奨連携 — これらのアセットはこのリポジトリの `claude/` 配下に
 同梱されており、`make install` で配置されます:
@@ -925,7 +933,9 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
 
 上記の CLI 前提条件はそのまま適用されます: TUI は対象リポジトリの worktree から
 起動し、一括 pane 作成では tmux 内で実行し、agent 名を明示してください。詳しくは
-**前提条件** と **トラブルシューティング** を参照してください。
+**前提条件** と **トラブルシューティング** を参照してください。必要に応じて
+issue 子ごとの `--agent NUM=name` や plan task ごとの `--agent task-id=name` で
+global agent を上書きできます。
 
 ## fanout が実際にやること
 
@@ -933,7 +943,8 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
 2. `git rev-parse --show-toplevel` でリポジトリルートを、`tmux display-message -p
    '#{session_name}'` で現在の tmux セッションを、`$TMUX_PANE`（fallback は
    `#{pane_id}`）で起動元 pane を解決する。
-3. `--agent` または `FANOUT_AGENT` から agent を解決する。live 実行では、その
+3. per-target の `--agent NUM=name` / `--agent task-id=name`、global `--agent`、
+   `FANOUT_AGENT` の順に各子の agent を解決する。live 実行では、選択された
    agent CLI が `PATH` 上にあることも確認する。
 4. 2 つのソースの和集合で子を列挙する（いずれもプロジェクトルートから実行）:
    (a) GitHub Sub-issues API
@@ -978,7 +989,8 @@ Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/
 
 `--agent claude` / `--agent codex` を渡すか、`FANOUT_AGENT` を設定してください。
 未知の agent はペイン作成前に失敗し、live 実行では選択された CLI が `PATH` 上に
-無い場合も失敗します。
+無い場合も失敗します。混在実行では、`--agent codex --agent 123=claude` のように
+global default と上書きを併用するか、選択対象すべてに上書きを指定してください。
 
 ### "prepare worktree"
 

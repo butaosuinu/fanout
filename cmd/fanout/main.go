@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
@@ -198,6 +197,10 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		return exitcode.OK
 	}
+	if err := validateIssueAgents(cfg, appendIssues(plan.Targets, plan.LimitDeferred)); err != nil {
+		lg.Err("%s", err.Error())
+		return exitcode.Env
+	}
 
 	logAlreadyFanned(plan.AlreadyFanned, lg)
 	lg.Info("will create %d pane(s); deferred (blocked): %d; deferred (--limit): %d",
@@ -256,23 +259,9 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 	if cfg.Agent == "" {
 		cfg.Agent = os.Getenv("FANOUT_AGENT")
 	}
-	if cfg.Agent == "" {
+	if cfg.Agent == "" && len(cfg.AgentOverrides) == 0 {
 		lg.Err("agent is required; pass --agent <name> or set FANOUT_AGENT")
 		return nil, exitcode.Env
-	}
-	if err := agent.ValidateKnown(cfg.Agent); err != nil {
-		lg.Err("%s", err.Error())
-		return nil, exitcode.Env
-	}
-	if cfg.CodexPlanModeEnabled() && cfg.Agent != "codex" {
-		lg.Err("--codex-plan-mode requires --agent codex")
-		return nil, exitcode.Env
-	}
-	if !cfg.DryRun {
-		if err := agent.ValidateInstalled(cfg.Agent); err != nil {
-			lg.Err("%s", err.Error())
-			return nil, exitcode.Env
-		}
 	}
 
 	lg.Info("tmux session: %s", info.Session)

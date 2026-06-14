@@ -204,6 +204,29 @@ func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
 	}
 }
 
+func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
+	cfg := &cliflags.Config{
+		ParentRef: "200",
+		Agent:     "claude",
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "501", Name: "codex"},
+		},
+	}
+	issue := ghissue.Issue{Number: 501, Title: "Codex child", Body: "body"}
+
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
+
+	if got.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex", got.Agent)
+	}
+	if !strings.Contains(got.BriefingBody, "codex review --uncommitted") {
+		t.Fatalf("briefing did not use codex-specific guidance:\n%s", got.BriefingBody)
+	}
+	if strings.Contains(got.BriefingBody, "Optional: Agent Teams") {
+		t.Fatalf("codex briefing contains Claude-only Agent Teams guidance:\n%s", got.BriefingBody)
+	}
+}
+
 func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
@@ -258,6 +281,27 @@ func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 	}
 	if !strings.Contains(got.BriefingBody, "Plan: launch-plan / Task: api-client") {
 		t.Fatalf("task briefing missing plan/task footer:\n%s", got.BriefingBody)
+	}
+}
+
+func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
+	cfg := &cliflags.Config{
+		Agent:      "claude",
+		BaseBranch: "main",
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "api-client", Name: "codex"},
+		},
+	}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
+
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+
+	if got.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex", got.Agent)
+	}
+	if !strings.Contains(got.BriefingBody, "codex review --uncommitted") {
+		t.Fatalf("task briefing did not use codex-specific guidance:\n%s", got.BriefingBody)
 	}
 }
 

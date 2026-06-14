@@ -172,7 +172,7 @@ run_fanout_dry() {
 }
 
 run_fanout_plan_dry() {
-  run_fanout plan "$@" --dry-run --agent claude --sleep 0
+  run_fanout plan --dry-run --agent claude --sleep 0 "$@"
 }
 
 run_fanout_plan_status() {

@@ -92,6 +92,8 @@ Schema:
 `blocked_by`. Prefer `plan.base_branch` when the source plan names a base;
 otherwise let fanout resolve the repository default branch or let the user pass
 `--base-branch`.
+Do not add an agent field to the JSON schema; per-task agent assignment belongs
+only in repeatable CLI flags such as `--agent base-types=claude`.
 
 ## CLI Surface
 
@@ -99,11 +101,12 @@ Run from the target repository worktree. Task creation and dry-run modes need
 `git` and `tmux`; `gh` is additionally needed for `--unblocked-only` blocker
 completion checks. Read/lifecycle action modes need `git` but not tmux;
 `--status` and `--cleanup` also need `gh`. Use `--agent codex` unless the user
-supplied `--agent` or `FANOUT_AGENT`.
+supplied `--agent` or `FANOUT_AGENT`; repeat `--agent task-id=name` for
+per-task overrides.
 
 Forward only the flags supported by the current `fanout plan` implementation:
 
-- `--agent <name>`
+- `--agent <name|task-id=name>`
 - `--dry-run`
 - `--limit <N>`
 - `--only <task-id[,id...]>`
@@ -124,6 +127,13 @@ Forward only the flags supported by the current `fanout plan` implementation:
 
 Use `--dry-run` for preview. Strip wrapper-only `--go` before calling the CLI;
 it means "skip confirmation", not a fanout flag.
+
+When task context clearly favors a different supported agent, merge explicit
+per-task overrides into the command with `--agent <task-id>=<name>`. Supported
+agents in this build are `claude` and `codex`; do not emit `gemini`. Use
+`claude` for broad refactors or large cross-file work, `codex` for focused
+edits, bug fixes, tests, and review follow-up, and fall back to the global
+default for docs-heavy or ambiguous tasks.
 
 If the spec contains any non-empty `blocked_by` lists, include
 `--unblocked-only` by default so dependent tasks are deferred until their
@@ -151,7 +161,7 @@ status or cleanup, not during initial plan generation:
    `/tmp/fanout-plan-<slug>.json`.
 2. Run:
    ```bash
-   fanout plan <spec-or-slug> --dry-run --agent codex <flags>
+   fanout plan <spec-or-slug> --dry-run --agent codex [--agent base-types=claude] <flags>
    ```
 3. Summarize the dry-run: plan slug/title, task count, task ids/titles,
    waves, `blocked_by`, generated worktree paths, branch names, and deferred
@@ -160,7 +170,7 @@ status or cleanup, not during initial plan generation:
    immediate execution. If the user passed `--dry-run`, stop after the preview.
 5. Run the live command without `--dry-run`:
    ```bash
-   fanout plan <spec-or-slug> --agent codex <flags>
+   fanout plan <spec-or-slug> --agent codex [--agent base-types=claude] <flags>
    ```
 6. Return the created/skipped/deferred/failed summary.
 
@@ -197,6 +207,7 @@ merged PR. These modes honor `FANOUT_STATE_PATH`.
 - Exit 3: GitHub PR lookup failure in plan `--status` or `--cleanup`.
 
 For common runtime errors: `fanout must be run inside tmux` means batch pane
-creation needs tmux; `agent is required` means pass `--agent codex` or another
-supported agent; `unknown plan option` means the flag belongs to another
-fanout mode; spec validation errors should be fixed in the JSON and retried.
+creation needs tmux; `agent is required` means pass `--agent codex`, set
+`FANOUT_AGENT`, or cover every selected task with `--agent task-id=name`;
+`unknown plan option` means the flag belongs to another fanout mode; spec
+validation errors should be fixed in the JSON and retried.

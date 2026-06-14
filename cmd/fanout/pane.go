@@ -229,6 +229,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	slug := naming.Slug(issue.Title, issue.Number)
 	slugOverridden := false
 	branchOverride := ""
+	agentName := cfg.EffectiveAgentForIssue(issue.Number)
 	req := paneRequest{
 		ParentRef:    cfg.ParentRef,
 		Number:       issue.Number,
@@ -240,7 +241,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		WriteBriefingDryRun: true,
 		ShortTitle:          shortIssueTitle(issue.Title),
 		Slug:                slug,
-		Agent:               cfg.Agent,
+		Agent:               agentName,
 		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
@@ -262,7 +263,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode, teamCtx)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode, teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode {
 		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, issue.Number, cfg.DryRun)
@@ -276,6 +277,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 	if branchName == "" {
 		branchName = naming.BranchName("", cfg.BranchPrefix, slug)
 	}
+	agentName := cfg.EffectiveAgent(task.ID)
 	req := paneRequest{
 		ParentRef:           planParentRef(spec.Plan.Slug),
 		Number:              0,
@@ -288,7 +290,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 		Slug:                slug,
 		DisplayNameOverride: task.DisplayName,
 		BranchName:          branchName,
-		Agent:               cfg.Agent,
+		Agent:               agentName,
 		Worktree: worktree.BuildPlan(worktree.Options{
 			ProjectRoot: projectRoot,
 			Slug:        slug,
@@ -297,7 +299,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 			NoRefresh:   cfg.NoRefresh,
 		}),
 	}
-	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, cfg.Agent, req.Worktree.BaseBranch, resolvedSettings)
+	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
 	return req
 }

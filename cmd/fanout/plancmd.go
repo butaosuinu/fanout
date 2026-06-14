@@ -40,6 +40,7 @@ type planCommandConfig struct {
 	SpecArg            string
 	SpecPath           string
 	Agent              string
+	AgentOverrides     []cliflags.AgentOverride
 	BaseBranch         string
 	BranchPrefix       string
 	Limit              int
@@ -175,11 +176,15 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 			}
 		}()
 	}
-	if !cfg.DryRun {
+	copyLivePlanSpec := func() exitcode.Code {
+		if cfg.DryRun {
+			return exitcode.OK
+		}
 		if err := copyPlanSpec(cfg.SpecPath, rt.info.ProjectRoot, spec.Plan.Slug); err != nil {
 			lg.Err("copy plan spec: %v", err)
 			return exitcode.Env
 		}
+		return exitcode.OK
 	}
 	cfg.SpecArg = planRerunSpecArg(cfg, spec)
 
@@ -191,16 +196,29 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	logTaskPlanDetails(plan, lg)
 
 	if plan.AfterFilter == 0 {
+		if code := copyLivePlanSpec(); code != exitcode.OK {
+			return code
+		}
 		lg.Info("all plan tasks filtered out by --only/--skip. nothing to do.")
 		return exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
+		if code := copyLivePlanSpec(); code != exitcode.OK {
+			return code
+		}
 		if len(plan.AlreadyComplete) == 0 {
 			lg.Ok("all %d plan task(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		} else {
 			lg.Ok("all %d selected plan task(s) already have a fanout pane or are complete. nothing to do.", plan.AfterFilter)
 		}
 		return exitcode.OK
+	}
+	if err := validateTaskAgents(cliCfg, appendTasks(plan.Targets, plan.LimitDeferred)); err != nil {
+		lg.Err("%s", err.Error())
+		return exitcode.Env
+	}
+	if code := copyLivePlanSpec(); code != exitcode.OK {
+		return code
 	}
 
 	logAlreadyFannedTasks(plan.AlreadyFanned, lg)
@@ -229,9 +247,10 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcode.Code) {
 	cfg := planCommandConfig{SleepBetween: cliflags.DefaultSleepBetween, Format: cliflags.DefaultFormat}
 	var limitRaw, sleepRaw string
+	var rawAgents []string
 
 	valueOptions := map[string]func(string){
-		"--agent":         func(v string) { cfg.Agent = v },
+		"--agent":         func(v string) { rawAgents = append(rawAgents, v) },
 		"--base-branch":   func(v string) { cfg.BaseBranch = v },
 		"--branch-prefix": func(v string) { cfg.BranchPrefix = v },
 		"--close":         func(v string) { cfg.CloseTaskID = v },
@@ -301,8 +320,14 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		fmt.Fprint(lg.Stderr(), planUsage)
 		return planCommandConfig{}, exitcode.Invocation
 	}
-	if code := validatePlanActionFlags(cfg, limitRaw, sleepRaw, lg); code != exitcode.OK {
+	if code := validatePlanActionFlags(cfg, limitRaw, sleepRaw, len(rawAgents) > 0, lg); code != exitcode.OK {
 		return planCommandConfig{}, code
+	}
+	for _, raw := range rawAgents {
+		if err := parsePlanAgentArg(&cfg, raw); err != nil {
+			lg.Err("%s", err.Error())
+			return planCommandConfig{}, exitcode.Env
+		}
 	}
 	if limitRaw != "" {
 		n, err := parsePlanPositiveInt("--limit", limitRaw)
@@ -366,7 +391,7 @@ func (cfg planCommandConfig) actionMode() bool {
 	return cfg.StatusMode || cfg.CloseTaskID != "" || cfg.MergeTaskID != "" || cfg.CleanupMode
 }
 
-func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, lg *log.Logger) exitcode.Code {
+func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, hasAgentFlags bool, lg *log.Logger) exitcode.Code {
 	if cfg.Format != "json" && cfg.Format != "table" {
 		lg.Err("--format must be one of json,table, got: %s", cfg.Format)
 		return exitcode.Env
@@ -390,7 +415,7 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, l
 		switch {
 		case lifecycleFlags > 0:
 			return planStatusConflict(lg, planLifecycleFlagName(cfg))
-		case cfg.Agent != "":
+		case hasAgentFlags:
 			return planStatusConflict(lg, "--agent")
 		case cfg.BaseBranch != "":
 			return planStatusConflict(lg, "--base-branch")
@@ -431,7 +456,7 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, l
 	}
 	if lifecycleFlags > 0 {
 		switch {
-		case cfg.Agent != "":
+		case hasAgentFlags:
 			return planLifecycleConflict(lg, "--agent")
 		case cfg.BaseBranch != "":
 			return planLifecycleConflict(lg, "--base-branch")
@@ -511,6 +536,7 @@ func (cfg planCommandConfig) cliConfig() *cliflags.Config {
 	return &cliflags.Config{
 		ParentRef:          planSubcommand,
 		Agent:              cfg.Agent,
+		AgentOverrides:     cfg.AgentOverrides,
 		BaseBranch:         cfg.BaseBranch,
 		BranchPrefix:       cfg.BranchPrefix,
 		Session:            cfg.Session,
@@ -547,6 +573,25 @@ func parseTaskIDCSV(flag, csv string) ([]string, error) {
 		out = append(out, part)
 	}
 	return out, nil
+}
+
+func parsePlanAgentArg(cfg *planCommandConfig, raw string) error {
+	if !strings.Contains(raw, "=") {
+		cfg.Agent = raw
+		return nil
+	}
+	eq := strings.IndexByte(raw, '=')
+	target := raw[:eq]
+	name := raw[eq+1:]
+
+	if !rePlanTaskID.MatchString(target) {
+		return fmt.Errorf("--agent: <task-id> must be lowercase kebab-case, got: %s", target)
+	}
+	if name == "" {
+		return fmt.Errorf("--agent %s: agent name must not be empty", target)
+	}
+	cfg.AgentOverrides = cliflags.UpsertAgentOverride(cfg.AgentOverrides, target, name)
+	return nil
 }
 
 func checkPlanDeps(cfg planCommandConfig) []string {
@@ -1343,7 +1388,7 @@ func printTaskSummary(plan taskPlan, result taskExecutionResult, cfg planCommand
 		boolFlag(" --unblocked-only", cfg.UnblockedOnly),
 		settingsFlags(cliCfg),
 		worktreeFlags(cliCfg),
-		optFlag("--agent", cfg.Agent),
+		agentFlagsForTasks(cfg.Agent, cfg.AgentOverrides, plan.LimitDeferred),
 		optFlag("--session", cfg.Session),
 		optFlag("--sleep", sleepFlagValue(cfg.SleepBetween)))
 }
@@ -1370,7 +1415,8 @@ func sleepFlagValue(v float64) string {
 const planUsage = `Usage: fanout plan <spec.json | plan-slug> [options]
 
 Options:
-  --agent <name>              Agent to launch (or FANOUT_AGENT)
+  --agent <name|task-id=name> Agent to launch (or FANOUT_AGENT). Repeat for
+                              per-task overrides.
   --dry-run                   Print worktree/tmux/agent actions without launching
   --status                    Print task status and exit
   --format <json|table>       Output format for --status (default: json)
