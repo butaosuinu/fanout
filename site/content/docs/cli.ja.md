@@ -12,7 +12,7 @@ yomi: reference
 ```text
 fanout # start the persistent tmux console
 fanout <parent-issue|project-url>
-       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -24,7 +24,7 @@ fanout <parent-issue|project-url>
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
        [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
@@ -89,12 +89,17 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
-| `--agent` | `<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認する。 |
+| `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
 | `--session` | `<tmux-session>` | 起動元 pane ではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
 | `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない。既定: off。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
+
+```bash
+fanout 123 --agent codex                  # 全ての子で codex
+fanout 123 --agent codex --agent 456=claude   # 既定は codex、#456 だけ claude
+```
 
 ## Plan fan-out (issue-less)
 
@@ -149,9 +154,12 @@ spec フォーマット:
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
 | `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
 
+`--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。
+
 ```bash
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --agent api-client=codex
 fanout plan launch-plan --agent claude --unblocked-only --limit 2
 ```
 

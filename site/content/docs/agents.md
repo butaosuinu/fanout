@@ -9,7 +9,7 @@ yomi: agents
 
 ## From inside an agent session
 
-fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates NEW panes for children; the caller's pane is never touched. Pass `--agent` or set `FANOUT_AGENT` so child panes know which agent CLI to launch.
+fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates NEW panes for children; the caller's pane is never touched. Pass `--agent` or set `FANOUT_AGENT` so child panes know which agent CLI to launch. To mix agents in one run, add repeatable per-target overrides: `--agent NUM=name` for issue / Project children, or `--agent task-id=name` with `fanout plan`. Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT` — see the [CLI Reference]({{< relref "/docs/cli" >}}).
 
 The CLI prerequisites still apply: run from inside tmux, and run from the repository whose children should branch from the selected base. The integration files below are bundled in the repo and placed by the [install script]({{< relref "/docs/installation" >}}).
 
@@ -65,7 +65,7 @@ Use `$pr-watch` after opening a PR when you want Codex to inspect mergeability, 
 
 ## Codex Plan Mode
 
-`--codex-plan-mode` is an opt-in launch mode for `--agent codex`:
+`--codex-plan-mode` is an opt-in launch mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode

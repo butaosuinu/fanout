@@ -9,7 +9,7 @@ yomi: agents
 
 ## エージェントセッションの中から呼ぶ
 
-fanout は、tmux の中で動いている agent セッション(Claude Code、Codex など)から呼び出しても安全です。作るのは子用の新規 pane だけで、呼び出し元の pane には一切触れません。子 pane がどの agent CLI を起動するか分かるよう、`--agent` を渡すか `FANOUT_AGENT` を設定してください。
+fanout は、tmux の中で動いている agent セッション(Claude Code、Codex など)から呼び出しても安全です。作るのは子用の新規 pane だけで、呼び出し元の pane には一切触れません。子 pane がどの agent CLI を起動するか分かるよう、`--agent` を渡すか `FANOUT_AGENT` を設定してください。1 回の run で agent を混在させたい場合は、繰り返し可能な per-target 上書きを足します: issue / Project の子には `--agent NUM=name`、`fanout plan` では `--agent task-id=name`。各ターゲットはまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します — 詳細は [CLI Reference]({{< relref "/docs/cli" >}}) を参照してください。
 
 CLI の前提条件はそのまま適用されます: tmux 内で実行すること、そして子を分岐させたいリポジトリの中で実行することです。以下の連携ファイルはリポジトリに同梱されており、[インストールスクリプト]({{< relref "/docs/installation" >}})が配置します。
 
@@ -67,7 +67,7 @@ GitHub child issue を作らずローカル実装計画を fan out したい場�
 
 ## Codex Plan Mode
 
-`--codex-plan-mode` は `--agent codex` 専用の opt-in 起動モードです:
+`--codex-plan-mode` は（per-target `--agent` 上書きを適用した後に）`codex` に解決される子向けの opt-in 起動モードです。選択した全ての子が `codex` に解決される必要があり、`claude` の子が混ざっていると起動前に拒否されます:
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
