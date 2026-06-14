@@ -251,6 +251,8 @@ type paneFocusedMsg struct {
 	keyboardPaused bool
 }
 
+type keyboardProtocolsEnabledMsg struct{}
+
 type panePeekLoadedMsg struct {
 	paneID string
 	output string
@@ -350,8 +352,6 @@ var (
 func Run(opts Options) error {
 	opts = normalizeOptions(opts)
 	keyboard := newShiftEnterProtocols(os.Stdout)
-	keyboard.Enable()
-	defer keyboard.Disable()
 	opts.keyboard = keyboard
 	m := newModel(opts)
 	input, closeInput, err := newShiftEnterProgramInput(os.Stdin)
@@ -359,7 +359,18 @@ func Run(opts Options) error {
 		return err
 	}
 	defer closeInput()
-	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithInput(input)).Run()
+	defer keyboard.Disable()
+	_, err = tea.NewProgram(
+		m,
+		tea.WithAltScreen(),
+		tea.WithInput(input),
+		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				keyboard.Disable()
+			}
+			return msg
+		}),
+	).Run()
 	return err
 }
 
@@ -415,11 +426,30 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
+	return tea.Sequence(
+		m.enableKeyboardProtocolsCmd(),
+		tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true)),
+	)
+}
+
+func (m model) enableKeyboardProtocolsCmd() tea.Cmd {
+	keyboard := m.opts.keyboard
+	return func() tea.Msg {
+		keyboard.Enable()
+		return keyboardProtocolsEnabledMsg{}
+	}
+}
+
+func (m model) quit() (tea.Model, tea.Cmd) {
+	m.opts.keyboard.Disable()
+	m.keyboardPaused = false
+	return m, tea.Quit
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case keyboardProtocolsEnabledMsg:
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -447,7 +477,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
-			return m, tea.Quit
+			return m.quit()
 		case "/":
 			m.filterEditing = true
 			m.refreshRows()
@@ -548,7 +578,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.actionMessage = lifecycleResultMessage(msg)
 		if m.quitAfterAction {
 			m.quitAfterAction = false
-			return m, tea.Quit
+			return m.quit()
 		}
 		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case stateTickMsg:
@@ -603,7 +633,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.quit()
 	case "enter", "esc":
 		m.filterEditing = false
 		return m, nil
@@ -824,13 +854,13 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.newPane.launching {
 		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return m.quit()
 		}
 		return m, nil
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.quit()
 	case "esc":
 		m.mode = modeMonitor
 		m.newPane = newPaneForm{}

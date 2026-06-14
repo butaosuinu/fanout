@@ -749,6 +749,37 @@ func TestFocusSelectedPaneRestoresKeyboardProtocolsOnFocusError(t *testing.T) {
 	}
 }
 
+func TestEnableKeyboardProtocolsCmd(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{keyboard: protocols})
+
+	msg := m.enableKeyboardProtocolsCmd()()
+	if _, ok := msg.(keyboardProtocolsEnabledMsg); !ok {
+		t.Fatalf("enableKeyboardProtocolsCmd() msg = %T, want keyboardProtocolsEnabledMsg", msg)
+	}
+	if protocols.enableCount != 1 || protocols.disableCount != 0 {
+		t.Fatalf("protocol calls = enable %d disable %d, want enable 1 disable 0", protocols.enableCount, protocols.disableCount)
+	}
+}
+
+func TestQuitDisablesKeyboardProtocols(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{keyboard: protocols})
+	m.keyboardPaused = true
+
+	next, cmd := m.quit()
+	if cmd == nil {
+		t.Fatal("quit() returned nil command, want tea.Quit")
+	}
+	m = next.(model)
+	if protocols.disableCount != 1 {
+		t.Fatalf("disableCount = %d, want 1", protocols.disableCount)
+	}
+	if m.keyboardPaused {
+		t.Fatal("keyboardPaused = true after quit, want false")
+	}
+}
+
 func TestFocusSelectedPaneSkipsStaleRows(t *testing.T) {
 	called := false
 	m := newModel(Options{
