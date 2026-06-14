@@ -75,7 +75,7 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
    actionable な修正依頼が来ることがあるため、thread だけで未対応 0 と判定しない。
    `gh pr view --json comments` は先頭 100 件に制限される。完了判定や blocked 判定で
    トップレベルコメントを使う前に、コメントが多い PR では GraphQL の
-   `issueComments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
+   `pullRequest.comments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
    actionable request を取りこぼさない。
 
 ### B. 終了判定
