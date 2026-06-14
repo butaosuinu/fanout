@@ -64,7 +64,7 @@ workflow:
       chip: "--status → --merge → --cleanup"
 cli:
   title: "覚えるのは、これだけ。"
-  lede: "フラグは少なく、出力は静かに。日々触るのはこの七手。"
+  lede: "フラグは少なく、出力は静かに。日々触るのはこの八手。"
   more: "CLI リファレンスの全文へ"
   rows:
     - cmd: "fanout 123 --agent claude"
@@ -73,6 +73,8 @@ cli:
       desc: "blocker が解けた子だけを、次の wave として展開する"
     - cmd: "fanout 123 --dry-run"
       desc: "worktree もペインも作らず、計画だけを表示する"
+    - cmd: "fanout plan spec.json --agent claude"
+      desc: "GitHub の子 issue ではなく、ローカルの plan spec を扇状に展開する"
     - cmd: "fanout"
       desc: "常駐 TUI コンソールを起動(フォーカス・ピーク・ライフサイクル操作)"
     - cmd: "fanout 123 --status"

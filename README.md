@@ -13,14 +13,17 @@ current repository; from there you can create manual agent panes, focus existing
 child panes, and run close / merge / cleanup actions. The existing
 `fanout <parent-issue|project-url>` lane still fans a known target out into one
 tmux pane per child, with each pane getting its own git worktree and an agent
-CLI launched from a per-issue briefing file.
+CLI launched from a per-issue briefing file. Two further top-level lanes round
+this out (both documented below): `fanout plan <spec|slug>` fans out an
+issue-less local plan spec instead of GitHub child issues, and `--team` plus
+`fanout msg` give sibling panes SQLite-backed peer messaging.
 
 ## Persistent TUI console
 
 Run `fanout` with no arguments to start the persistent console. From a plain
-shell it creates a deterministic fanout-managed tmux session for the current
-repository, starts the console in that session, and attaches to it. From inside
-tmux it turns the current pane into the console.
+shell it creates (or attaches to an existing) deterministic fanout-managed tmux
+session for the current repository, starts the console in that session, and
+attaches to it. From inside tmux it turns the current pane into the console.
 
 Typical single-tool flow:
 
@@ -507,6 +510,7 @@ the repository checkout; otherwise fanout reads `<git-root>/.fanout/state.json`.
     "total":      2,
     "merged":     1,
     "pending":    1,
+    "blocked":    0,
     "all_merged": false
   }
 }
@@ -599,7 +603,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   screen, in which case the section reports that no plan was found.
 - **Structured filtering.** The filter box ANDs free words with
   `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
-  `issue:` / `pr:` terms — e.g. `agent:claude wave:2 ci:fail run:running`.
+  `issue:` / `task:` / `pr:` terms — e.g. `agent:claude wave:2 ci:fail run:running`.
   The dropdowns next to the box write the same tokens for you, and active
   terms appear as removable chips.
 - **Light/dark themes.** The PAPER BREEZE UI matches the docs site; the header
@@ -675,11 +679,16 @@ fanout msg send --to 42 "rebase off feat/login before you touch auth.go"
 fanout msg post --kind heads-up "editing go.mod — hold lockfile edits"
 fanout msg mark-read --all            # drain your inbox + advance the board cursor
 fanout msg register                   # (re-)register this pane in the roster
+fanout msg nudge 42                   # best-effort: ping peer #42's pane if its agent is running
 ```
 
+`nudge` is a notify verb, not a message: it never touches the DB and is a
+no-op success when the peer's agent is not running (pane gone, state unknown,
+or done) — an idle-but-running pane is still nudged.
+
 Common options across verbs: `--json` (machine-readable output), `--self <N>`
-and `--parent <ref>` (override pane detection), and `--dry-run` (write verbs
-only — prints the `# would ...` writes and touches nothing; not combinable with
+and `--parent <ref>` (override pane detection), and `--dry-run` (write/notify
+verbs only — prints the `# would ...` writes and touches nothing; not combinable with
 `--json`). Exit codes: `0` success, `2` invalid invocation, `4` SQLite backend
 failure.
 
@@ -965,6 +974,19 @@ repo under `claude/` and get placed by `make install`:
   turns an approved/local implementation plan into a `fanout plan` spec, runs
   the dry-run preview, summarizes tasks and waves, then launches the issue-less
   task panes after confirmation.
+- **PR watch slash command** → `claude/commands/pr-watch.md` is installed to
+  `~/.claude/commands/pr-watch.md` and invoked as `/pr-watch [pr-number|pr-url]`.
+  It backs the pr-watch skill.
+- **Post-work review skill** → `claude/skills/post-work-review/SKILL.md` is
+  installed to `~/.claude/skills/post-work-review/SKILL.md` and backs the local
+  PR review gate: it runs a final review loop (code-review plugin then a
+  codex:review loop) and records the reviewed HEAD marker that
+  `.claude/hooks/pre-pr-review-gate.sh` reads.
+- **PR watch skill** → `claude/skills/pr-watch/SKILL.md` is installed to
+  `~/.claude/skills/pr-watch/SKILL.md`. After a PR is opened it watches
+  mergeability, failing CI, and review comments and safely fixes/pushes what it
+  can; it is designed to run under `/loop /pr-watch` with `ScheduleWakeup`
+  self-pacing.
 
 Recommended integration for Codex CLI — the skills are bundled under
 `codex/` and get placed by `make install`:
@@ -1105,9 +1127,13 @@ Notes:
 - The gate is HEAD-pinned: any new commit re-arms it, so review again before
   the PR. The marker is worktree-local, so fanout's parallel panes don't
   interfere with each other.
-- Detection is a simple regex on the command string. Contorted forms (`... &&
-  gh pr create`, `xargs gh pr create`) can slip through — acceptable for
-  fanout's normal flow.
+- Detection runs through a shell tokenizer (a Python companion parser,
+  `pre-pr-review-gate.py`), so command words are distinguished from quoted
+  argument values; a commit message that merely mentions `gh pr create` does
+  not trip it. Indirect forms (`eval`, `xargs`, `sh -c "<string>"`) can still
+  slip through, which is accepted for fanout's normal flow.
+- Without `python3` the hook fails closed: it denies anything that coarsely
+  looks like PR creation. Install `python3`, or `export FANOUT_SKIP_PR_REVIEW=1`.
 - `make install` overwrites same-named global `post-work-review` and
   `pr-watch` skills under Claude and Codex; back up any custom copies first.
 

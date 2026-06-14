@@ -23,6 +23,7 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--team]
 fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
@@ -37,6 +38,7 @@ fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
+fanout msg <verb> [options] [body...]  # peer messaging between sibling panes
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -90,6 +92,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--agent` | `<name>` | Agent CLI to launch in child panes: `claude` or `codex`. Required unless `FANOUT_AGENT` is set. Unknown agents fail before pane creation; live mode also checks that the agent CLI is installed. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
+| `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out. Off by default. |
 | `--dry-run` | — | Print the git worktree, tmux split-window and agent launch commands without executing them. |
 | `--debug` | — | Enable extra diagnostic logging. |
 
@@ -259,6 +262,37 @@ Starts the read-only localhost web dashboard: bound to `127.0.0.1`, GET-only, to
 
 Run `fanout dashboard --help` for the full flag list.
 
+### `fanout msg`
+
+```text
+fanout msg <verb> [options] [body...]
+```
+
+Sibling coordination over a per-parent SQLite message bus. Run from inside a fanned pane: `fanout msg` auto-detects which child you are (from the tmux pane and `.fanout/state.json`) and which parent you belong to. Panes opt in with [`--team`](#run-control-flags) at fan-out time, but any pane can `register` itself afterward. How this differs from Claude Code Agent Teams, and the coordination workflow, are covered in [Workflow]({{< relref "/docs/workflow" >}}).
+
+| Verb | Description |
+|---|---|
+| `peers` | List the registered siblings of this parent. |
+| `inbox` | `[--all] [--mark-read]` — unread 1:1 messages plus unread shared-board posts. `--all` includes read ones; `--mark-read` drains what is shown. |
+| `board` | `[--all]` — the shared board (broadcast to all siblings), cursor-based. `--all` includes already-read posts. |
+| `send` | `--to <N> [--kind K] <body...>` — send a 1:1 message to child issue `<N>`. Trailing words form the body. |
+| `post` | `[--kind K] <body...>` — post `<body...>` to the shared board. |
+| `mark-read` | `[--id <N> ... \| --all]` — mark 1:1 messages read by id (repeatable), or `--all` to mark everything and advance the board cursor. |
+| `register` | Upsert this pane into the peers table (auto-done by `--team`; use it to (re-)join). |
+| `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent is running. A notify verb, not a message: it never touches the DB and is a no-op success when the peer's agent is not running (pane gone, state unknown, or done). |
+
+Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection), and `--dry-run` (write/notify verbs only — prints the `# would ...` writes and touches nothing; not combinable with `--json`).
+
+The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `FANOUT_DB_PATH`. Coordination is **pull-based**: messages persist in the DB and a sibling reads them at its own checkpoints — `fanout msg` does not interrupt a busy pane. The pure-Go SQLite driver is embedded, so no external `sqlite3` is required.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | success (including a best-effort `nudge` no-op when the peer's agent is not running) |
+| `2` | invalid invocation |
+| `4` | SQLite backend failure |
+
+Run `fanout msg --help` for the full surface.
+
 ### `fanout update`
 
 ```text
@@ -288,6 +322,10 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard `prefix + D` tmux keybinding (`dashboardKeybind`). |
+| `FANOUT_NOTIFICATIONS` | Environment layer for the TUI transition notification channels (`notifications`); see [Settings]({{< relref "/docs/settings" >}}). |
+| `FANOUT_NTFY_URL` | Environment layer for the ntfy POST URL (`ntfyURL`). |
+| `FANOUT_SLACK_WEBHOOK_URL` | Environment layer for the Slack webhook POST URL (`slackWebhookURL`). |
+| `FANOUT_DB_PATH` | Override the per-parent peer-messaging SQLite path used by `--team` and `fanout msg`. Default: `/tmp/fanout-<repo>-<parent>.db`. |
 | `FANOUT_SKIP_PR_REVIEW` | One-shot bypass of the PR review-gate hook: prefix `gh pr create` with `FANOUT_SKIP_PR_REVIEW=1`. See [Troubleshooting]({{< relref "/docs/troubleshooting" >}}). |
 
 The boolean settings variables accept `1/true/yes/on` and `0/false/no/off`, case-insensitive. Invalid values are warned and ignored. They sit between CLI flags and the config files in the settings resolution order.

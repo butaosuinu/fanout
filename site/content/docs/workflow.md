@@ -115,6 +115,40 @@ The bundled agent wrappers can create the spec for you. In Claude Code,
 `$fanout-plan` or ask for `fanout plan`. The skill summarizes the dry-run
 before live launch unless confirmation was explicitly skipped.
 
+## Sibling coordination (peer messaging)
+
+When a parent is fanned out, each child is an independent agent session in its
+own pane — by default the panes cannot see each other. Opt in per run with
+`--team`: fanout (best-effort) injects a "Coordinating with your sibling panes"
+section into each child's standard briefing and seeds a per-parent peer registry
+so the siblings know about one another. (`--codex-plan-mode` children are seeded
+into the registry but receive the minimal Plan-Mode briefing, so the roster
+section is not added to them.)
+
+Inside any fanned pane, `fanout msg` auto-detects which child (or parent) you
+are and talks over a per-parent SQLite bus at
+`/tmp/fanout-<repo>-<parent>.db` (override with `FANOUT_DB_PATH`). The bus
+carries a shared `board` (broadcast to everyone) plus `1:1` messages addressed
+with `--to <issue>`. Coordination is pull-based — nothing nudges a pane unless
+you ask it to.
+
+| Verb | Effect |
+|---|---|
+| `peers` | List the sibling panes known for this parent. |
+| `inbox [--mark-read]` | Show your unread 1:1 messages (optionally mark them read). |
+| `board [--all]` | Show recent broadcasts (all of them with `--all`). |
+| `send --to <N> <body>` | Send a 1:1 message to sibling `#N`. |
+| `post [--kind K] <body>` | Post a broadcast to the shared board. |
+| `mark-read [--all]` | Mark messages read. |
+| `register` | (Re-)seed yourself into the peer registry. |
+| `nudge <N>` | Best-effort `send-keys` hint into peer `#N`'s pane — only when its agent is running, and it never touches the DB. |
+
+This works the same for `claude` and `codex` panes. It is distinct from Claude
+Code Agent Teams, which coordinates teammates inside a single session; peer
+messaging coordinates separate fanout panes. See the
+[CLI Reference]({{< relref "/docs/cli" >}}) or `fanout msg --help` for the full
+surface.
+
 ## Naming and branches
 
 By default each child gets the worktree slug `slugify(title)-<issueNum>` and the branch `fanout/<slug>`. Three flags override this:

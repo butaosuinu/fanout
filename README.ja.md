@@ -13,6 +13,10 @@
 cleanup を行えます。既存の `fanout <parent-issue|project-url>` レーンでは、
 既知の親 issue / Project を子ごとに 1 つの tmux ペインへファンアウトし、各ペインに
 独立した git worktree と issue ごとの briefing file を渡した agent CLI を起動します。
+さらに `fanout plan <spec|slug>` はローカルの plan spec から GitHub issue を作らずに
+task pane を起動する issue-less レーンを、`--team` と `fanout msg` は per-parent の
+SQLite バス上で兄弟ペイン同士が連絡を取り合う peer messaging を提供します（いずれも
+下部に専用節があります）。
 
 ## 常駐 TUI コンソール
 
@@ -139,7 +143,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # 配置先や Release tag を指定
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.2.0 sh
 ```
 
 配置パス:
@@ -522,7 +526,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
   して取得できないことがあり、その場合は未検出の旨を表示します。
 - **構造化フィルタ。** フィルタ欄は自由語と
   `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` /
-  `issue:` / `pr:` の各 term を AND で組み合わせます — 例:
+  `issue:` / `task:` / `pr:` の各 term を AND で組み合わせます — 例:
   `agent:claude wave:2 ci:fail run:running`。フィルタ欄の隣のドロップダウンは
   同じ token を書き込み、適用中の term はクリックで外せるチップとして並びます。
 - **ライト / ダークテーマ。** docs サイトと揃えた PAPER BREEZE デザインで、
@@ -595,10 +599,14 @@ fanout msg send --to 42 "auth.go を触る前に feat/login を base に rebase 
 fanout msg post --kind heads-up "go.mod を編集中 — lockfile の編集は控えて"
 fanout msg mark-read --all            # inbox を drain しボードカーソルを進める
 fanout msg register                   # このペインを roster に（再）登録
+fanout msg nudge 42                   # best-effort: agent が running なら peer #42 のペインを ping
 ```
 
+`nudge` は DB を触らない通知専用 verb です。対象の agent が running でない（ペイン消失 / 状態不明 / done）
+ときは何もせず success（no-op）で返します。
+
 verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`
-（ペイン検出を上書き）、`--dry-run`（write verb のみ —— `# would ...` の書き込み
+（ペイン検出を上書き）、`--dry-run`（write・notify verb のみ —— `# would ...` の書き込み
 内容を表示し何も触らない。`--json` とは併用不可）。exit code: `0` 成功、`2` 不正な
 呼び出し、`4` SQLite バックエンド失敗。
 
@@ -870,6 +878,18 @@ Claude Code 向けの推奨連携 — これらのアセットはこのリポジ
   を支えます。承認済みまたはローカルの実装計画を `fanout plan` spec に変換し、
   dry-run preview を実行して task / wave を要約し、確認後に issue-less task pane
   を起動します。
+- **PR watch スラッシュコマンド** → `claude/commands/pr-watch.md` が
+  `~/.claude/commands/pr-watch.md` にインストールされ、`/pr-watch [pr-number|pr-url]`
+  として呼び出せます。pr-watch スキルを呼び出します。
+- **post-work review スキル** → `claude/skills/post-work-review/SKILL.md` が
+  `~/.claude/skills/post-work-review/SKILL.md` にインストールされ、ローカルの
+  PR review gate を支えます。最終レビュー loop（code-review プラグイン → codex:review
+  ループ）を回し、`.claude/hooks/pre-pr-review-gate.sh` が読む reviewed HEAD marker を
+  記録します。
+- **PR watch スキル** → `claude/skills/pr-watch/SKILL.md` が
+  `~/.claude/skills/pr-watch/SKILL.md` にインストールされます。PR 作成後に
+  mergeability・失敗 CI・レビューコメントを見張り、安全に直せるものを修正 / push
+  します。`/loop /pr-watch` で `ScheduleWakeup` self-pacing しながら回す前提です。
 
 Codex CLI 向けの推奨連携 — スキルはこのリポジトリの `codex/` 配下に同梱され、
 `make install` で配置されます:
@@ -998,10 +1018,14 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 - ゲートは HEAD に固定されます。新しいコミットを積むと再武装されるので、PR の前に
   もう一度レビューしてください。marker は worktree ローカルなので、fanout の並列ペイン
   同士が干渉することはありません。
-- 検出はコマンド文字列に対する正規表現ベースのベストエフォートです。`eval` / `xargs` /
-  `sh -c "<文字列>"` のような間接実行や、コミットメッセージ・PR コメントの本文に
-  シェル演算子と一緒に `gh pr create` という文字列を書いた場合などは取りこぼし／過検知
-  し得ます。その場合は `FANOUT_SKIP_PR_REVIEW=1` で回避してください。
+- 検出はシェルトークナイザ（Python 製のコンパニオンパーサ `pre-pr-review-gate.py`）を
+  通します。コマンド語と引用された引数値を区別するので、コミットメッセージに
+  `gh pr create` と書いただけでは引っかかりません。`eval` / `xargs` /
+  `sh -c "<文字列>"` のような間接実行はすり抜けることがありますが、fanout の通常
+  フローでは許容範囲としています。
+- `python3` が無い環境では fail-closed になり、PR 作成らしきコマンドを粗い判定で
+  deny します。`python3` をインストールするか、`export FANOUT_SKIP_PR_REVIEW=1` して
+  ください。
 - `make install` は Claude / Codex 配下の同名グローバル `post-work-review` /
   `pr-watch` skill を上書きします。独自に管理しているコピーがある場合は事前に
   バックアップしてください。

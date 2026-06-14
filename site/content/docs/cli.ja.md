@@ -23,6 +23,7 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--team]
 fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
@@ -37,6 +38,7 @@ fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
 fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed recorded children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
+fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -90,6 +92,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--agent` | `<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認する。 |
 | `--session` | `<tmux-session>` | 起動元 pane ではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
+| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない。既定: off。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
 
@@ -258,6 +261,37 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 全フラグは `fanout dashboard --help` を参照してください。
 
+### `fanout msg`
+
+```text
+fanout msg <verb> [options] [body...]
+```
+
+parent ごとの SQLite メッセージバス上での兄弟協調です。fanout したペイン内で実行すると、`fanout msg` は自分がどの子か（tmux pane と `.fanout/state.json` から）・どの親に属すかを自動検出します。ペインは fan-out 時に [`--team`](#実行制御フラグ) で opt-in しますが、後から任意のペインが自分で `register` することもできます。Claude Code の Agent Teams との違い、および協調のワークフローは[ワークフロー]({{< relref "/docs/workflow" >}})を参照してください。
+
+| verb | 説明 |
+|---|---|
+| `peers` | この親に登録済みの兄弟を一覧する。 |
+| `inbox` | `[--all] [--mark-read]` —— 未読の 1:1 メッセージと未読の共有ボード投稿。`--all` は既読も含め、`--mark-read` は表示分を drain する。 |
+| `board` | `[--all]` —— 共有ボード（全兄弟へのブロードキャスト）。cursor ベース。`--all` は既読の投稿も含める。 |
+| `send` | `--to <N> [--kind K] <body...>` —— 子 issue `<N>` 宛に 1:1 メッセージを送る。末尾の語が body になる。 |
+| `post` | `[--kind K] <body...>` —— `<body...>` を共有ボードに投稿する。 |
+| `mark-read` | `[--id <N> ... \| --all]` —— 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
+| `register` | このペインを peers テーブルに upsert する（`--team` が自動で行う。再 join に使う）。 |
+| `nudge` | `<N>` —— best-effort: peer `#N` の agent が running のときだけ、tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。対象の agent が running でない（ペイン消失 / 状態不明 / done）ときは何もせず success（no-op）。 |
+
+verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）、`--dry-run`（write / notify verb のみ —— `# would ...` の書き込み内容を表示し何も触らない。`--json` とは併用不可）。
+
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。協調は **pull ベース**です: メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます —— `fanout msg` は忙しいペインに割り込みません。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+
+| Exit code | 意味 |
+|---|---|
+| `0` | 成功（対象の agent が running でないときの best-effort `nudge` no-op を含む） |
+| `2` | 不正な呼び出し |
+| `4` | SQLite バックエンドの失敗 |
+
+全サーフェスは `fanout msg --help` を参照してください。
+
 ### `fanout update`
 
 ```text
@@ -287,6 +321,10 @@ fanout check-update
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | ダッシュボード `prefix + D` tmux キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_NOTIFICATIONS` | TUI 遷移通知チャネル（`notifications`）の環境変数レイヤ。[設定]({{< relref "/docs/settings" >}})を参照。 |
+| `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
+| `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |
+| `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite パスを上書きする。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
 | `FANOUT_SKIP_PR_REVIEW` | PR レビューゲート hook の 1 回限りのバイパス: `gh pr create` の先頭に `FANOUT_SKIP_PR_REVIEW=1` を付ける。[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照。 |
 
 bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。不正な値は warn して無視されます。settings の解決順序では CLI flag と設定ファイルの間に位置します。

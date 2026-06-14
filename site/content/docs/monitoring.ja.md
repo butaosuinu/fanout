@@ -58,6 +58,7 @@ fanout   # start the persistent tmux console
     "total":      2,
     "merged":     1,
     "pending":    1,
+    "blocked":    0,
     "all_merged": false
   }
 }
@@ -103,15 +104,16 @@ fanout 123 --status --post-dashboard
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-`fanout dashboard --web` は**読み取り専用**の Web ダッシュボードを起動し、fanout の **Session**（`.fanout/state.json` に記録された pane を親 issue 単位でまとめたもの）をブラウザで SSE によりライブ表示します。pane の生存（`tmux list-panes`）、issue 状態、PR マージ状態（`--status` と同じデータ源を、リポジトリ内の全親について一度に再利用）を更新し続けます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。意図的な便宜が 2 つだけあります: 起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `prefix + D` tmux キーバインドを登録すること(`--no-keybind` でオプトアウト可)です。
+`fanout dashboard --web` は**読み取り専用**の Web ダッシュボードを起動し、fanout の **Session**（`.fanout/state.json` に記録された pane を親 issue 単位でまとめたもの）をブラウザで SSE によりライブ表示します。pane の生存（`tmux list-panes`）、ライブの tmux ペインタイトル、`running` / `done` の agent 実行状態バッジ、wave / 未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty（`--status` と同じデータ源を、リポジトリ内の全親について一度に再利用）を更新し続けます。まだ fanout していない子 issue は synthetic な未開始行として表示されます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。意図的な便宜が 2 つだけあります: 起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `prefix + D` tmux キーバインドを登録すること(`--no-keybind` でオプトアウト可)です。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-- **localhost 限定。** サーバは `127.0.0.1` にのみバインドし、GET 専用の endpoint（`/api/snapshot`、SSE の `/api/stream`、埋め込み UI）を公開します。`--port` は既定 `0`（OS 割り当ての ephemeral port）で、確定した URL が表示されます。
+- **localhost 限定。** サーバは `127.0.0.1` にのみバインドし、GET 専用の endpoint（`/api/snapshot`、SSE の `/api/stream`、`/api/peek`（記録ペイン 1 つの `tmux capture-pane` スナップショット）、`/api/plan`（`--codex-plan-mode` ペインの最後の完全な `<proposed_plan>` ブロック）、埋め込み UI）を公開します。`--port` は既定 `0`（OS 割り当ての ephemeral port）で、確定した URL が表示されます。
 - **トークン既定 ON。** 起動毎にランダムトークンを生成して表示 / オープンされる URL に埋め込み、`/api/*` をゲートします。同一ホストの他ユーザ / プロセスがループバックポート経由で issue/PR データを読むのを防ぎます。単一ユーザ端末では `--no-token` で外せます。
 - **`--open`** は既定ブラウザで URL を開きます。すでに起動中のサーバ（`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しません。
+- **SPA。** 埋め込みの React+Vite SPA は、API 単体よりも多くの情報をライブ Session 一覧に重ねます: 構造化フィルタ欄（自由語と `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` の各 term を AND、ドロップダウンと外せるチップ付き）、行クリックで開く詳細ドロワー（ペインのメタ情報・wave/blockers・worktree・CI 付き PR・元プロンプト、5 秒ごとに更新される直近出力のライブ *peek*）、`--codex-plan-mode` ペインの *plan* セクション、repo 全体の running / blocked 数を出す上部 HUD、PAPER BREEZE のライト/ダークテーマ。
 
 全フラグは `fanout dashboard --help` を参照してください。
 

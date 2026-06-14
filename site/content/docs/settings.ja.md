@@ -1,13 +1,13 @@
 ---
 title: 設定
 linkTitle: 設定
-description: "オン/オフできる 6 つの opinionated な挙動と、その背後にある flag > env > repo > user > default の解決順序。"
+description: "オン/オフできる opinionated な挙動トグルと TUI 通知 channel、そしてその背後にある flag > env > repo > user > default の解決順序。"
 weight: 60
 kanji: 整
 yomi: settings
 ---
 
-fanout は opinionated な 6 つの挙動(briefing の 5 トグル+ダッシュボードの tmux キーバインド)をオン/オフできます。後方互換のため、既定値はすべて `true` です。
+fanout は opinionated な 6 つの挙動(briefing の 5 トグル+ダッシュボードの tmux キーバインド)をオン/オフでき、TUI 通知 channel も選択できます。後方互換のため、bool の既定値はすべて `true`、通知の既定値は `bell` です。
 
 ## 解決順序
 
@@ -16,7 +16,7 @@ fanout は opinionated な 6 つの挙動(briefing の 5 トグル+ダッシュ�
 - リポジトリ設定: `<project_root>/.fanout/config.json`。この `project_root` は親リポジトリルートで、子 worktree ではありません。
 - ユーザー設定: `$XDG_CONFIG_HOME/fanout/config.json`、`XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/config.json`。
 
-## 6 つのトグル
+## トグルと通知 channel
 
 | 挙動 | ファイルキー | env | CLI flag | 既定値 |
 |---|---|---|---|---|
@@ -26,12 +26,15 @@ fanout は opinionated な 6 つの挙動(briefing の 5 トグル+ダッシュ�
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| TUI 状態遷移通知 | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
+| ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | 未設定 |
+| Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
 
-flag の一覧は [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています。
+これらの flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています（CLI リファレンスには、設定ではなく起動フラグである `--codex-plan-mode` も含まれます）。通知設定に CLI flag はありません。
 
 ## config.json サンプル
 
-リポジトリ設定とユーザー設定はどちらも同じ形で、bool のみのフラットな JSON オブジェクトです:
+リポジトリ設定とユーザー設定はどちらも同じ形で、bool のトグルに加えて 3 つの string な通知キーを持つフラットな JSON オブジェクトです:
 
 ```json
 {
@@ -40,15 +43,22 @@ flag の一覧は [CLI リファレンス]({{< relref "/docs/cli" >}})にも載�
   "briefingCodeReview": true,
   "agentTeamsHint": false,
   "prVisualization": true,
-  "dashboardKeybind": true
+  "dashboardKeybind": true,
+  "notifications": "bell",
+  "ntfyURL": "https://ntfy.sh/my-topic",
+  "slackWebhookURL": "https://hooks.slack.com/services/..."
 }
 ```
 
-環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます(大小文字は無視)。
+bool の環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます(大小文字は無視)。
+
+## 通知 channel
+
+`notifications` は comma または空白区切りの selector です。指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。どちらの HTTP channel も outbound POST のみで、inbound socket は開きません。repository-controlled な外部送信を避けるため、repo config で選択できるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、`ntfyURL`、`slackWebhookURL` は user config または環境変数からだけ有効になります。
 
 ## 前方互換
 
-不正な env 値、設定ファイル内の未知キー、bool 以外の値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
+不正な bool env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
 
 ## prVisualization の詳細
 
