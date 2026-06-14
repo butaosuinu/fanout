@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,6 +53,7 @@ type Options struct {
 	CapturePaneOutput func(string, int) (string, error)
 	Notifier          transitionNotifier
 	lifecycle         lifecycleRunner
+	keyboard          keyboardProtocols
 }
 
 type issueKey struct {
@@ -150,7 +154,7 @@ const (
 )
 
 type newPaneForm struct {
-	prompt    textinput.Model
+	prompt    textarea.Model
 	slug      textinput.Model
 	agent     string
 	focus     newPaneField
@@ -184,6 +188,7 @@ type model struct {
 	actionMessage   string
 	notifications   map[issueKey]issueTransitionSnapshot
 	notifyPrimed    bool
+	keyboardPaused  bool
 }
 
 type paneFilter struct {
@@ -241,9 +246,12 @@ type worktreeStatView struct {
 }
 
 type paneFocusedMsg struct {
-	paneID string
-	err    error
+	paneID         string
+	err            error
+	keyboardPaused bool
 }
+
+type keyboardProtocolsEnabledMsg struct{}
 
 type panePeekLoadedMsg struct {
 	paneID string
@@ -352,14 +360,32 @@ var (
 	warnStyle  = lipgloss.NewStyle().Foreground(colorTsuchi)
 	errStyle   = lipgloss.NewStyle().Foreground(colorBeni)
 	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
-	formStyle  = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorSuna)
+	modalStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
 )
 
 // Run starts the Bubble Tea TUI.
 func Run(opts Options) error {
 	opts = normalizeOptions(opts)
+	keyboard := newShiftEnterProtocols(os.Stdout)
+	opts.keyboard = keyboard
 	m := newModel(opts)
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	input, closeInput, err := newShiftEnterProgramInput(os.Stdin)
+	if err != nil {
+		return err
+	}
+	defer closeInput()
+	defer keyboard.Disable()
+	_, err = tea.NewProgram(
+		m,
+		tea.WithAltScreen(),
+		tea.WithInput(input),
+		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				keyboard.Disable()
+			}
+			return msg
+		}),
+	).Run()
 	return err
 }
 
@@ -384,6 +410,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.CapturePaneOutput == nil {
 		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
+	}
+	if opts.keyboard == nil {
+		opts.keyboard = noopKeyboardProtocols{}
 	}
 	return opts
 }
@@ -412,17 +441,37 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
+	return tea.Sequence(
+		m.enableKeyboardProtocolsCmd(),
+		tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true)),
+	)
+}
+
+func (m model) enableKeyboardProtocolsCmd() tea.Cmd {
+	keyboard := m.opts.keyboard
+	return func() tea.Msg {
+		keyboard.Enable()
+		return keyboardProtocolsEnabledMsg{}
+	}
+}
+
+func (m model) quit() (tea.Model, tea.Cmd) {
+	m.opts.keyboard.Disable()
+	m.keyboardPaused = false
+	return m, tea.Quit
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case keyboardProtocolsEnabledMsg:
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
 		return m, nil
 	case tea.KeyMsg:
+		m.resumeKeyboardProtocols()
 		if m.pendingAction != nil {
 			return m.updatePendingAction(msg)
 		}
@@ -443,7 +492,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
-			return m, tea.Quit
+			return m.quit()
 		case "/":
 			m.filterEditing = true
 			m.refreshRows()
@@ -544,7 +593,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.actionMessage = lifecycleResultMessage(msg)
 		if m.quitAfterAction {
 			m.quitAfterAction = false
-			return m, tea.Quit
+			return m.quit()
 		}
 		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case stateTickMsg:
@@ -561,6 +610,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "created new agent pane"
 		return m, m.loadStateCmd(false)
 	case paneFocusedMsg:
+		if msg.keyboardPaused {
+			m.keyboardPaused = true
+		}
 		if msg.err != nil {
 			m.notice = fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
 			if errors.Is(msg.err, errPaneNotAlive) {
@@ -596,7 +648,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.quit()
 	case "enter", "esc":
 		m.filterEditing = false
 		return m, nil
@@ -644,25 +696,19 @@ func (m model) View() string {
 		footer += "\n" + warnStyle.Render("notify: "+m.notifyErr)
 	}
 
-	if m.mode == modeNewPane {
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			header,
-			m.newPaneView(),
-			dimStyle.Render("enter create  tab field  arrows/space agent  esc cancel"),
-			footer,
-		)
-	}
-
 	detail := m.detail
 	detail.SetContent(m.detailContent())
-	return lipgloss.JoinVertical(
+	base := lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
 		m.table.View(),
 		panelStyle.Width(max(0, m.width)).Render(detail.View()),
 		footer,
 	)
+	if m.mode == modeNewPane {
+		return overlayCentered(base, m.newPaneView(), m.width, m.height)
+	}
+	return base
 }
 
 func (m *model) resize() {
@@ -671,7 +717,7 @@ func (m *model) resize() {
 	}
 	if m.mode == modeNewPane {
 		inputWidth := m.formInputWidth()
-		m.newPane.prompt.Width = inputWidth
+		m.newPane.prompt.SetWidth(inputWidth)
 		m.newPane.slug.Width = inputWidth
 	}
 	tableHeight := max(m.height-detailHeight-5, 4)
@@ -797,11 +843,17 @@ func (m *model) openNewPaneForm() {
 }
 
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
-	prompt := textinput.New()
+	prompt := textarea.New()
 	prompt.Placeholder = "Prompt"
 	prompt.Prompt = "> "
+	prompt.ShowLineNumbers = false
 	prompt.CharLimit = 1000
-	prompt.Width = width
+	prompt.SetWidth(width)
+	prompt.SetHeight(6)
+	prompt.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("ctrl+j"),
+		key.WithHelp("shift+enter", "newline"),
+	)
 	prompt.Focus()
 
 	slug := textinput.New()
@@ -825,23 +877,28 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.newPane.launching {
 		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
+			return m.quit()
 		}
 		return m, nil
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m.quit()
 	case "esc":
 		m.mode = modeMonitor
 		m.newPane = newPaneForm{}
 		return m, nil
-	case "tab", "shift+tab", "up", "down":
+	case "tab", "shift+tab":
 		m.moveNewPaneFocus(msg.String())
 		return m, nil
 	case "left", "right", " ":
 		if m.newPane.focus == newPaneFieldAgent {
 			m.toggleNewPaneAgent()
+			return m, nil
+		}
+	case "up", "down":
+		if m.newPane.focus != newPaneFieldPrompt {
+			m.moveNewPaneFocus(msg.String())
 			return m, nil
 		}
 	case "enter":
@@ -923,7 +980,8 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	return formStyle.Width(max(0, m.width-4)).Render(strings.Join(lines, "\n"))
+	lines = append(lines, dimStyle.Render("enter create  shift+enter newline  ctrl+j newline  tab field  arrows/space agent  esc cancel"))
+	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 
 func (m model) newPaneFieldView(field newPaneField, label, value string) string {
@@ -950,7 +1008,38 @@ func (m model) formInputWidth() int {
 	if m.width <= 0 {
 		return 72
 	}
-	return clampInt(m.width-12, 24, 100)
+	return clampInt(m.modalWidth()-8, 24, 92)
+}
+
+func (m model) modalWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return clampInt(m.width-12, 40, 104)
+}
+
+func overlayCentered(base, modal string, width, height int) string {
+	if width <= 0 {
+		return modal
+	}
+	baseLines := strings.Split(base, "\n")
+	if height <= 0 {
+		height = len(baseLines)
+	}
+	for len(baseLines) < height {
+		baseLines = append(baseLines, strings.Repeat(" ", width))
+	}
+
+	modalLines := strings.Split(modal, "\n")
+	top := max((height-len(modalLines))/2, 0)
+	for i, line := range modalLines {
+		idx := top + i
+		if idx >= len(baseLines) {
+			break
+		}
+		baseLines[idx] = lipgloss.PlaceHorizontal(width, lipgloss.Center, line)
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m *model) refreshRows() {
@@ -1024,13 +1113,27 @@ func (m *model) focusSelectedCmd() tea.Cmd {
 	paneID := pane.PaneID
 	alive := m.opts.PaneAlive
 	focus := m.opts.FocusPane
+	keyboard := m.opts.keyboard
 	m.notice = fmt.Sprintf("focusing %s...", paneID)
 	return func() tea.Msg {
 		if !alive(paneID) {
 			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive}
 		}
-		return paneFocusedMsg{paneID: paneID, err: focus(paneID)}
+		keyboard.Disable()
+		if err := focus(paneID); err != nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: paneID, err: err}
+		}
+		return paneFocusedMsg{paneID: paneID, keyboardPaused: true}
 	}
+}
+
+func (m *model) resumeKeyboardProtocols() {
+	if !m.keyboardPaused {
+		return
+	}
+	m.opts.keyboard.Enable()
+	m.keyboardPaused = false
 }
 
 func (m *model) peekSelectedCmd(force bool) tea.Cmd {

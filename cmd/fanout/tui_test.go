@@ -60,6 +60,32 @@ func TestNormalizeTUISlug(t *testing.T) {
 	}
 }
 
+func TestManualPaneOptionsForTUIKeepsSingleLinePromptInline(t *testing.T) {
+	opts := manualPaneOptionsForTUI("inspect workspace", "inspect-workspace", "codex")
+
+	if opts.Title != "inspect workspace" || opts.Prompt != "inspect workspace" {
+		t.Fatalf("single-line title/prompt = %q/%q, want original", opts.Title, opts.Prompt)
+	}
+	if opts.Body != "" {
+		t.Fatalf("single-line body = %q, want empty", opts.Body)
+	}
+	if opts.Slug != "inspect-workspace" || opts.Agent != "codex" {
+		t.Fatalf("slug/agent = %q/%q, want inspect-workspace/codex", opts.Slug, opts.Agent)
+	}
+}
+
+func TestManualPaneOptionsForTUIMultilinePromptUsesBriefingBody(t *testing.T) {
+	prompt := normalizeTUIPrompt("\n  inspect workspace\r\n\ncheck handlers\r")
+	opts := manualPaneOptionsForTUI(prompt, "", "claude")
+
+	if opts.Title != "inspect workspace" || opts.Prompt != "inspect workspace" {
+		t.Fatalf("multiline title/prompt = %q/%q, want first non-empty line", opts.Title, opts.Prompt)
+	}
+	if opts.Body != "inspect workspace\n\ncheck handlers" {
+		t.Fatalf("multiline body = %q, want normalized full prompt", opts.Body)
+	}
+}
+
 func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("PATH", t.TempDir())

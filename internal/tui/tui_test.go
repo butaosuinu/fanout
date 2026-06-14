@@ -678,6 +678,108 @@ func TestFocusSelectedPaneUsesInjectedFocus(t *testing.T) {
 	}
 }
 
+func TestFocusSelectedPanePausesKeyboardProtocolsUntilNextKey(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+		keyboard:  protocols,
+	})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	cmd := m.focusSelectedCmd()
+	if cmd == nil {
+		t.Fatalf("focusSelectedCmd() returned nil, want focus command")
+	}
+	msg, ok := cmd().(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("focusSelectedCmd() msg = %T, want paneFocusedMsg", msg)
+	}
+	if protocols.disableCount != 1 || protocols.enableCount != 0 {
+		t.Fatalf("protocol calls after focus = enable %d disable %d, want enable 0 disable 1", protocols.enableCount, protocols.disableCount)
+	}
+
+	updated, _ := m.Update(msg)
+	m = updated.(model)
+	if !m.keyboardPaused {
+		t.Fatal("keyboardPaused = false, want true")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	m = updated.(model)
+	if protocols.enableCount != 1 || protocols.disableCount != 1 {
+		t.Fatalf("protocol calls after return key = enable %d disable %d, want enable 1 disable 1", protocols.enableCount, protocols.disableCount)
+	}
+	if m.keyboardPaused {
+		t.Fatal("keyboardPaused = true after return key, want false")
+	}
+}
+
+func TestFocusSelectedPaneRestoresKeyboardProtocolsOnFocusError(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			return errors.New("focus failed")
+		},
+		PaneAlive: func(string) bool { return true },
+		keyboard:  protocols,
+	})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	cmd := m.focusSelectedCmd()
+	if cmd == nil {
+		t.Fatalf("focusSelectedCmd() returned nil, want focus command")
+	}
+	msg, ok := cmd().(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("focusSelectedCmd() msg = %T, want paneFocusedMsg", msg)
+	}
+	updated, _ := m.Update(msg)
+	m = updated.(model)
+
+	if protocols.disableCount != 1 || protocols.enableCount != 1 {
+		t.Fatalf("protocol calls after failed focus = enable %d disable %d, want enable 1 disable 1", protocols.enableCount, protocols.disableCount)
+	}
+	if m.keyboardPaused {
+		t.Fatal("keyboardPaused = true after failed focus, want false")
+	}
+}
+
+func TestEnableKeyboardProtocolsCmd(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{keyboard: protocols})
+
+	msg := m.enableKeyboardProtocolsCmd()()
+	if _, ok := msg.(keyboardProtocolsEnabledMsg); !ok {
+		t.Fatalf("enableKeyboardProtocolsCmd() msg = %T, want keyboardProtocolsEnabledMsg", msg)
+	}
+	if protocols.enableCount != 1 || protocols.disableCount != 0 {
+		t.Fatalf("protocol calls = enable %d disable %d, want enable 1 disable 0", protocols.enableCount, protocols.disableCount)
+	}
+}
+
+func TestQuitDisablesKeyboardProtocols(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{keyboard: protocols})
+	m.keyboardPaused = true
+
+	next, cmd := m.quit()
+	if cmd == nil {
+		t.Fatal("quit() returned nil command, want tea.Quit")
+	}
+	m = next.(model)
+	if protocols.disableCount != 1 {
+		t.Fatalf("disableCount = %d, want 1", protocols.disableCount)
+	}
+	if m.keyboardPaused {
+		t.Fatal("keyboardPaused = true after quit, want false")
+	}
+}
+
 func TestFocusSelectedPaneSkipsStaleRows(t *testing.T) {
 	called := false
 	m := newModel(Options{
@@ -730,6 +832,19 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 	if got := m.table.Rows()[0][6]; got != "stale!" {
 		t.Fatalf("table tmux cell = %q, want stale!", got)
 	}
+}
+
+type fakeKeyboardProtocols struct {
+	enableCount  int
+	disableCount int
+}
+
+func (p *fakeKeyboardProtocols) Enable() {
+	p.enableCount++
+}
+
+func (p *fakeKeyboardProtocols) Disable() {
+	p.disableCount++
 }
 
 func TestPeekSelectedPaneLoadsOutputIntoDetail(t *testing.T) {
@@ -1351,6 +1466,69 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	want := LaunchRequest{Prompt: "Inspect the HTTP API", Agent: "codex", Slug: "inspect-http-api"}
 	if got != want {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewPaneFormPromptNewlineKeysDoNotSubmit(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		LaunchPane: func(LaunchRequest) error {
+			called = true
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("first")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = updated.(model)
+
+	if called {
+		t.Fatal("LaunchPane was called for ctrl+j")
+	}
+	if got := m.newPane.prompt.Value(); got != "first\n" {
+		t.Fatalf("prompt after ctrl+j = %q, want newline", got)
+	}
+}
+
+func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) error {
+			got = req
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("Inspect the API\nCheck handlers")
+	m.newPane.slug.SetValue("inspect-api")
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+
+	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agent: "codex", Slug: "inspect-api"}
+	if got != want {
+		t.Fatalf("launch request = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.allPanes = []paneView{{Parent: "100", IssueNum: 1, Name: "existing", TmuxState: "live"}}
+	m.refreshRows()
+	m.openNewPaneForm()
+
+	view := m.View()
+	for _, want := range []string{"PARENT", "existing", "New agent pane", "shift+enter newline"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("modal view missing %q:\n%s", want, view)
+		}
 	}
 }
 

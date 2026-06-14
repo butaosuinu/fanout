@@ -61,9 +61,10 @@ plain shell it creates or attaches a deterministic fanout-managed tmux session
 for the current repository, then runs the console there. From inside tmux it
 turns the current pane into the console. The console shows `.fanout/state.json`
 panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` /
-`blocked` header rollup, lets the user press `n` to launch a manual
-prompt-based `claude` / `codex` pane, and exits on `q` without killing the
-session or child panes.
+`blocked` header rollup, lets the user press `n` to open a modal and launch a
+manual prompt-based `claude` / `codex` pane (multi-line prompt input uses
+`Shift+Enter` for newline, with `Ctrl+J` as a terminal fallback; `Enter`
+creates the pane), and exits on `q` without killing the session or child panes.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
 branch, and `x` cleans up merged/closed siblings for the same parent after
 confirmation.

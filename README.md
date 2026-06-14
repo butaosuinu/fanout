@@ -55,10 +55,12 @@ been fanned yet appear as `deferred` rows, and CLOSED blockers are shown as
 resolved. The TUI and web dashboard consume the same Session snapshot model, so
 labels, filtering terms, PR/CI summaries, and synthetic row states stay aligned
 across both dashboard surfaces. Its header shows `total` / `merged` /
-`pending` / `blocked` rollup counts. Press `n` to create a manual agent pane
-from a required prompt, selectable
-`claude` / `codex` agent, and optional slug. Manual panes use synthetic
-`@manual` state entries and appear in the list after launch. Press `Enter` or
+`pending` / `blocked` rollup counts. Press `n` to open a modal for creating a
+manual agent pane from a required multi-line prompt, selectable `claude` /
+`codex` agent, and optional slug. In the prompt field, `Shift+Enter` inserts a
+newline (`Ctrl+J` is a fallback for terminals that do not distinguish
+`Shift+Enter`); `Enter` creates the pane. Manual panes use synthetic `@manual`
+state entries and appear in the list after launch. Press `Enter` or
 `o` on a live row to focus that pane, and press `p` to refresh the read-only
 output snapshot shown in the detail panel. Rows whose recorded pane no longer
 exists in tmux are marked `stale!` and are skipped by focus/peek actions. Press
