@@ -27,7 +27,7 @@ fanout   # start the persistent tmux console
 
 | キー | 動作 |
 |---|---|
-| `n` | 必須 prompt、`claude` / `codex` の agent 選択、任意 slug を指定して manual agent pane を作成する。manual pane は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
+| `n` | modal を開き、複数行の必須 prompt、`claude` / `codex` の agent 選択、任意 slug を指定して manual agent pane を作成する。prompt 欄では `Shift+Enter` で改行（`Shift+Enter` を区別できない terminal 向けの fallback として `Ctrl+J` も使える）、`Enter` で pane を作成する。manual pane は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
 | `Enter` / `o` | 選択中の live 行の pane にフォーカスする。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
 | `c` | 選択中の pane を close する — 確認を挟み、`--close` と同じコア処理を使う。 |

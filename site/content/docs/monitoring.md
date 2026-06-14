@@ -27,7 +27,7 @@ For recorded issue parents the console also reloads the parent's child set and s
 
 | Key | Action |
 |---|---|
-| `n` | Create a manual agent pane from a required prompt, a `claude` / `codex` agent choice, and an optional slug. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch. |
+| `n` | Open a modal to create a manual agent pane from a required **multi-line** prompt, a `claude` / `codex` agent choice, and an optional slug. In the prompt field, `Shift+Enter` inserts a newline (`Ctrl+J` is a fallback for terminals that do not distinguish `Shift+Enter`); `Enter` creates the pane. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch. |
 | `Enter` / `o` | Focus the selected live row's pane. |
 | `p` | Refresh the read-only output snapshot shown in the detail panel. |
 | `c` | Close the selected pane — confirmation prompt, then the same core path as `--close`. |

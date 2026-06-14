@@ -12,7 +12,7 @@ yomi: reference
 ```text
 fanout # start the persistent tmux console
 fanout <parent-issue|project-url>
-       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -24,7 +24,7 @@ fanout <parent-issue|project-url>
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
        [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
@@ -89,12 +89,17 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | Flag | Argument | Description |
 |---|---|---|
-| `--agent` | `<name>` | Agent CLI to launch in child panes: `claude` or `codex`. Required unless `FANOUT_AGENT` is set. Unknown agents fail before pane creation; live mode also checks that the agent CLI is installed. |
+| `--agent` | `<name>` or `<NUM>=<name>` | Agent CLI to launch in child panes: `claude` or `codex`. Required unless `FANOUT_AGENT` is set. A bare `--agent <name>` sets the default for every child; the repeatable `--agent <NUM>=<name>` form overrides one child issue (or Project item) by number, e.g. `--agent codex --agent 456=claude`. Each child resolves its agent from a matching per-target override first, then the global `--agent`, then `FANOUT_AGENT`. Unknown agents fail before pane creation, and live mode checks that the agent CLI is installed — but only for the agents actually selected this run. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
 | `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out. Off by default. |
 | `--dry-run` | — | Print the git worktree, tmux split-window and agent launch commands without executing them. |
 | `--debug` | — | Enable extra diagnostic logging. |
+
+```bash
+fanout 123 --agent codex                  # codex for every child
+fanout 123 --agent codex --agent 456=claude   # codex default, claude for #456
+```
 
 ## Plan fan-out (issue-less)
 
@@ -149,9 +154,12 @@ generated branches use `fanout/<slug>` unless the task supplies `branch`.
 | `--branch-prefix` | `<prefix>` | Prefix generated task branch names. |
 | `--no-refresh` | — | Skip base-branch refresh before creating task worktrees. |
 
+`--agent` works the same way as in issue mode, but per-target overrides are keyed by task ID instead of issue number: `--agent <name>` sets the default and the repeatable `--agent <task-id>=<name>` form overrides a single task. Each task resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`.
+
 ```bash
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --agent api-client=codex
 fanout plan launch-plan --agent claude --unblocked-only --limit 2
 ```
 
