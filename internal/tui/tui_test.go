@@ -1277,6 +1277,82 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	}
 }
 
+func TestNewPaneFormPromptNewlineKeysDoNotSubmit(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		LaunchPane: func(LaunchRequest) error {
+			called = true
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("first")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = updated.(model)
+
+	if called {
+		t.Fatal("LaunchPane was called for ctrl+j")
+	}
+	if got := m.newPane.prompt.Value(); got != "first\n" {
+		t.Fatalf("prompt after ctrl+j = %q, want newline", got)
+	}
+}
+
+func TestNewPaneFormShiftEnterInsertsNewlineWhenRecognized(t *testing.T) {
+	m := newModel(Options{})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("first")
+
+	updated, _ := m.Update(keyRunes("shift+enter"))
+	m = updated.(model)
+
+	if got := m.newPane.prompt.Value(); got != "first\n" {
+		t.Fatalf("prompt after shift+enter = %q, want newline", got)
+	}
+}
+
+func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) error {
+			got = req
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("Inspect the API\nCheck handlers")
+	m.newPane.slug.SetValue("inspect-api")
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+
+	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agent: "codex", Slug: "inspect-api"}
+	if got != want {
+		t.Fatalf("launch request = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.allPanes = []paneView{{Parent: "100", IssueNum: 1, Name: "existing", TmuxState: "live"}}
+	m.refreshRows()
+	m.openNewPaneForm()
+
+	view := m.View()
+	for _, want := range []string{"PARENT", "existing", "New agent pane", "shift+enter newline"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("modal view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	m := newModel(Options{})
 	m.openNewPaneForm()

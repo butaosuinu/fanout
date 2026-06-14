@@ -46,10 +46,12 @@ agent 側の instrumentation なしで未 commit 作業の有無を確認でき�
 CLOSED blocker は resolved として区別されます。TUI と Web dashboard は同じ
 Session snapshot model を読むため、label、filter 語彙、PR/CI summary、synthetic 行の
 state が両 surface で揃います。ヘッダーには `total` / `merged` /
-`pending` / `blocked` の集約 count を表示します。`n` で必須 prompt、`claude` / `codex`
-の agent 選択、任意 slug を指定して manual agent pane を作成できます。manual pane
-は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示されます。
-live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
+`pending` / `blocked` の集約 count を表示します。`n` で modal を開き、複数行の必須
+prompt、`claude` / `codex` の agent 選択、任意 slug を指定して manual agent pane
+を作成できます。prompt 欄では `Shift+Enter` で改行し、`Shift+Enter` を区別できない
+terminal 向けの fallback として `Ctrl+J` でも改行できます。`Enter` は作成です。
+manual pane は synthetic な `@manual` state entry として記録され、起動後に一覧へ
+表示されます。live 行で `Enter` または `o` を押すとその pane にフォーカスし、`p` で detail
 panel の read-only 出力スナップショットを更新します。記録はあるものの tmux 上に
 存在しない pane は `stale!` と表示し、focus / peek の対象から除外します。`q` で
 コンソールを離脱できますが、tmux session と子 pane は残ります。

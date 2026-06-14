@@ -18,8 +18,8 @@ If `$ARGUMENTS` is empty, or the user is explicitly asking to start the
 persistent fanout TUI / console, stop this pane-creation workflow and run
 `fanout` with no arguments from the target repository worktree. TUI mode does
 not need a parent issue, Project URL, `--agent`, dry-run, generated pane names,
-or confirmation; after it opens the user can press `n` to create a manual
-prompt-based agent pane from the console.
+or confirmation; after it opens the user can press `n` to open the manual pane
+modal and create a prompt-based agent pane from the console.
 
 ## Steps
 

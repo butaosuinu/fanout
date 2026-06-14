@@ -79,7 +79,7 @@ func newTUILaunchPaneFunc(projectRoot, session, commandName string) fanouttui.La
 }
 
 func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanouttui.LaunchRequest) error {
-	prompt := strings.TrimSpace(req.Prompt)
+	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
 		return fmt.Errorf("prompt is required")
 	}
@@ -116,16 +116,41 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanou
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	paneReq := newManualPaneRequest(cfg, projectRoot, store, manualPaneOptions{
-		Title:  prompt,
-		Slug:   slug,
-		Agent:  agentName,
-		Prompt: prompt,
-	})
+	paneReq := newManualPaneRequest(cfg, projectRoot, store, manualPaneOptionsForTUI(prompt, slug, agentName))
 	if !createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
 		return bufferedLaunchError(stdout, stderr, "create pane")
 	}
 	return nil
+}
+
+func manualPaneOptionsForTUI(prompt, slug, agentName string) manualPaneOptions {
+	title := firstPromptLine(prompt)
+	opts := manualPaneOptions{
+		Title:  title,
+		Slug:   slug,
+		Agent:  agentName,
+		Prompt: title,
+	}
+	if strings.Contains(prompt, "\n") {
+		opts.Body = prompt
+	}
+	return opts
+}
+
+func normalizeTUIPrompt(raw string) string {
+	prompt := strings.ReplaceAll(raw, "\r\n", "\n")
+	prompt = strings.ReplaceAll(prompt, "\r", "\n")
+	return strings.TrimSpace(prompt)
+}
+
+func firstPromptLine(prompt string) string {
+	for line := range strings.Lines(prompt) {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return strings.TrimSpace(prompt)
 }
 
 func tuiLaunchTarget(session string) string {
