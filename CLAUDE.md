@@ -41,6 +41,9 @@ Build the binary with `make build-go` and validate with `make test`.
   tmux it uses the current pane.
 - Batch-create child panes: `./fanout-go <parent-issue> --agent claude` from
   inside tmux.
+- Override one child issue's agent with repeatable `--agent NUM=name`; for
+  `fanout plan`, use `--agent task-id=name`. Supported agents remain
+  `claude` and `codex`.
 - Verify changes without creating worktrees or panes:
   `./fanout-go <parent-issue> --agent claude --dry-run`.
 - Verify issue-less plan tasks without creating worktrees or panes:
@@ -119,7 +122,9 @@ Build the binary with `make build-go` and validate with `make test`.
   FakeEventSource). `make build-web` emits the bundle into `static/`
   (deterministic names `assets/app.js` / `assets/app.css`, never committed).
 - `internal/agent` maps supported agents (`claude`, `codex`) to launch
-  commands and validates installed CLIs for live mode.
+  commands and validates installed CLIs for live mode. The batch lanes accept
+  repeatable per-target agent overrides (`NUM=name` for issue/Project children,
+  `task-id=name` for `fanout plan`) and validate only selected targets.
 - `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
   The coarse lock covers planning and launching so two fanout invocations do
   not race on the same `(parent, issueNum)` idempotency key. Issue-less plan

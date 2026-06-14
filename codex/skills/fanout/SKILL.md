@@ -12,7 +12,7 @@ metadata:
 ```
 fanout                            # start the persistent tmux console
 fanout <parent-issue|project-url>
-       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -117,11 +117,12 @@ use this workflow directly.
    inside tmux. If batch mode reports `fanout must be run inside tmux`, tell
    the user to start or attach a tmux session first.
 3. An agent name is required for pane creation. Pass `--agent <name>` or set
-   `FANOUT_AGENT`. MVP supported agents are `claude` and `codex`.
-4. `--codex-plan-mode` is valid only with `--agent codex`. It uses Codex
-   app-server to create the child Plan Mode thread, start the initial Plan turn
-   with the fanout prompt, then attach the interactive Codex TUI to that remote
-   session.
+   `FANOUT_AGENT`; repeat `--agent NUM=name` to override one child issue.
+   Supported agents are `claude` and `codex`.
+4. `--codex-plan-mode` is valid only when every selected child resolves to
+   `codex` after per-issue overrides. It uses Codex app-server to create the
+   child Plan Mode thread, start the initial Plan turn with the fanout prompt,
+   then attach the interactive Codex TUI to that remote session.
 
 ## Workflow
 
@@ -187,7 +188,7 @@ dry-run, generated pane names, or confirmation.
    change the Go `fanout` CLI for it; the CLI already accepts the resolved
    positional arg via `internal/cliflags.Parse()`.
 2. Forward user-supplied fanout flags verbatim:
-   `--agent`, `--limit`, `--only`, `--skip`, `--include`,
+   `--agent` (including repeatable `NUM=name` overrides), `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--format`,
    `--post-dashboard`, `--name`, `--base-branch`, `--branch-prefix`,
    `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`,
@@ -229,6 +230,12 @@ dry-run, generated pane names, or confirmation.
    discovery dry-run output from step 5; fetch per-issue body via
    `gh issue view <num> --json body -q .body` only if the title alone is not
    enough to name the pane.
+   Also choose a per-issue agent only when there is a clear reason and the
+   user did not already provide `--agent NUM=name`: large refactors normally
+   use `claude`; focused bug fixes and review follow-up normally use `codex`;
+   docs-heavy work should stay on the default agent because Gemini is not
+   supported in this build. Forward choices as repeatable `--agent NUM=name`
+   and summarize them in the dry-run.
 7. Dry-run with `fanout <target> --dry-run <flags>`, summarize the mode
    banner (issue / project), targets, briefing paths, generated names,
    skipped/deferred rows, and warnings (including "cross-repo item skipped"
@@ -342,7 +349,8 @@ API + parent body. Key points:
   `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
   guidance in auto-PR child briefings. Defaults are all on, and these settings
   are Go-implementation only.
-- `--codex-plan-mode` / `--no-codex-plan-mode` apply only to `--agent codex`.
+- `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
+  child resolves to `codex`.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
   thread, starts the initial Plan turn with the child prompt through app-server,
   and attaches the interactive Codex TUI to that remote session. fanout does not
@@ -406,9 +414,9 @@ the likely next action:
 - `fanout must be run inside tmux`: batch pane creation needs a tmux session;
   start or attach one and rerun, or start the persistent console with
   no-argument `fanout` from a plain shell.
-- `agent is required`: pass `--agent claude`, `--agent codex`, or set
-  `FANOUT_AGENT`.
-- `unknown agent`: use one of the supported MVP agents (`claude`, `codex`).
+- `agent is required`: pass `--agent claude`, `--agent codex`, set
+  `FANOUT_AGENT`, or cover every selected child with `--agent NUM=name`.
+- `unknown agent`: use one of the supported agents (`claude`, `codex`).
 - `agent "<name>" is not installed`: install that CLI or choose another agent.
 - `prepare worktree`: inspect the git error; `--no-refresh` can bypass base
   branch refresh only when the stale base is intentional.
@@ -429,6 +437,8 @@ the likely next action:
   preferred over hand-built wave lists when blocker annotations exist.
 - Default project-mode filter is `--project-status Todo`. Use
   `--project-status all` for a full sweep of the board's OPEN items.
+- Use repeatable `--agent NUM=name` for per-child overrides; do not emit
+  `gemini` because this build supports only `claude` and `codex`.
 - When a created pane runs `codex`, the per-issue briefing requires the agent
   to run `codex review --uncommitted` after implementation/tests and repeat
   review -> fix -> retest -> review until no findings remain before it commits,

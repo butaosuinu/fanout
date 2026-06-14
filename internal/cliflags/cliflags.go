@@ -45,6 +45,7 @@ type Config struct {
 	Skip               []int
 	Include            []int
 	Names              []NameOverride
+	AgentOverrides     []AgentOverride
 	Session            string
 	SleepBetween       float64
 	PopupTimeoutSec    int
@@ -87,6 +88,43 @@ func (c *Config) FindName(num int) *NameOverride {
 	return nil
 }
 
+// AgentOverride represents a parsed per-target `--agent TARGET=name` entry.
+// Issue mode uses the issue number string as TARGET; plan mode uses task IDs.
+type AgentOverride struct {
+	Target string
+	Name   string
+}
+
+func (c *Config) FindAgent(target string) *AgentOverride {
+	for i := range c.AgentOverrides {
+		if c.AgentOverrides[i].Target == target {
+			return &c.AgentOverrides[i]
+		}
+	}
+	return nil
+}
+
+func (c *Config) EffectiveAgent(target string) string {
+	if agent := c.FindAgent(target); agent != nil {
+		return agent.Name
+	}
+	return c.Agent
+}
+
+func (c *Config) EffectiveAgentForIssue(num int) string {
+	return c.EffectiveAgent(strconv.Itoa(num))
+}
+
+func UpsertAgentOverride(overrides []AgentOverride, target, name string) []AgentOverride {
+	for i := range overrides {
+		if overrides[i].Target == target {
+			overrides[i].Name = name
+			return overrides
+		}
+	}
+	return append(overrides, AgentOverride{Target: target, Name: name})
+}
+
 func (c *Config) HasAnyDisplayName() bool {
 	for _, n := range c.Names {
 		if n.DisplayName != "" {
@@ -119,8 +157,8 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 
 	state := parseState{}
 	valueOptions := map[string]valueOption{
-		"--agent": func(cfg *Config, _ *parseState, v string) error {
-			cfg.Agent = v
+		"--agent": func(_ *Config, state *parseState, v string) error {
+			state.rawAgents = append(state.rawAgents, v)
 			return nil
 		},
 		"--base-branch": func(cfg *Config, _ *parseState, v string) error {
@@ -283,6 +321,7 @@ type parseState struct {
 	sleepRaw       string
 	popupRaw       string
 	rawNames       []string
+	rawAgents      []string
 	sleepExplicit  bool
 	popupExplicit  bool
 	formatExplicit bool
@@ -352,7 +391,7 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--merge")
 		case cfg.CleanupMode:
 			return statusConflict(lg, "--cleanup")
-		case cfg.Agent != "":
+		case len(state.rawAgents) > 0:
 			return statusConflict(lg, "--agent")
 		case cfg.BaseBranch != "":
 			return statusConflict(lg, "--base-branch")
@@ -415,7 +454,7 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 	}
 	if lifecycleFlags > 0 {
 		switch {
-		case cfg.Agent != "":
+		case len(state.rawAgents) > 0:
 			return lifecycleConflict(lg, "--agent")
 		case cfg.BaseBranch != "":
 			return lifecycleConflict(lg, "--base-branch")
@@ -464,6 +503,12 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 
 	for _, raw := range state.rawNames {
 		if err := parseNameArg(cfg, raw); err != nil {
+			lg.Err("%s", err.Error())
+			return ParseResult{Code: exitcode.Env}
+		}
+	}
+	for _, raw := range state.rawAgents {
+		if err := parseAgentArg(cfg, raw); err != nil {
 			lg.Err("%s", err.Error())
 			return ParseResult{Code: exitcode.Env}
 		}
@@ -641,5 +686,28 @@ func parseNameArg(cfg *Config, raw string) error {
 		}
 	}
 	cfg.Names = append(cfg.Names, NameOverride{Num: n, SlugHint: slug, DisplayName: disp, BranchName: branch})
+	return nil
+}
+
+func parseAgentArg(cfg *Config, raw string) error {
+	if !strings.Contains(raw, "=") {
+		cfg.Agent = raw
+		return nil
+	}
+	eq := strings.IndexByte(raw, '=')
+	target := raw[:eq]
+	name := raw[eq+1:]
+
+	if !reAllDigits.MatchString(target) {
+		return fmt.Errorf("--agent: <NUM> must be a positive integer, got: '%s'", target)
+	}
+	n, err := strconv.Atoi(target)
+	if err != nil || n <= 0 {
+		return fmt.Errorf("--agent: <NUM> must be a positive integer, got: '%s'", target)
+	}
+	if name == "" {
+		return fmt.Errorf("--agent #%d: agent name must not be empty", n)
+	}
+	cfg.AgentOverrides = UpsertAgentOverride(cfg.AgentOverrides, strconv.Itoa(n), name)
 	return nil
 }

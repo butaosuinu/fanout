@@ -121,6 +121,13 @@ load helpers
   assert_golden scenario-sub-issue-only-codex
 }
 
+@test "per-issue agent variant of scenario-sub-issue-only: one child can override the default" {
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --agent codex --agent 101=claude
+  assert_success
+  assert_golden scenario-sub-issue-only-agent-override
+}
+
 @test "agent-codex plan mode variant of scenario-sub-issue-only: interactive TUI launch" {
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 --agent codex --codex-plan-mode
@@ -182,6 +189,13 @@ load helpers
   run_fanout_plan_dry "$FIXTURE_DIR/plan.json"
   assert_success
   assert_golden scenario-plan-basic
+}
+
+@test "scenario-plan-basic with per-task agent override: task launch agents can differ" {
+  use_fixture scenario-plan-basic
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --agent codex --agent base-types=claude
+  assert_success
+  assert_golden scenario-plan-basic-agent-override
 }
 
 @test "scenario-plan-idempotency: seeded taskId rows are skipped" {

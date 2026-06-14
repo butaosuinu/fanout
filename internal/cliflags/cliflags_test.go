@@ -56,6 +56,67 @@ func TestParseCodexPlanModeFlag(t *testing.T) {
 	}
 }
 
+func TestParseAgentOverrides(t *testing.T) {
+	cfg := parseOK(t, "100",
+		"--agent", "claude",
+		"--agent", "101=codex",
+		"--agent", "102=claude",
+		"--agent", "101=claude",
+		"--agent", "codex",
+	)
+
+	if cfg.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex", cfg.Agent)
+	}
+	if got := cfg.EffectiveAgentForIssue(101); got != "claude" {
+		t.Fatalf("EffectiveAgentForIssue(101) = %q, want claude", got)
+	}
+	if got := cfg.EffectiveAgentForIssue(102); got != "claude" {
+		t.Fatalf("EffectiveAgentForIssue(102) = %q, want claude", got)
+	}
+	if got := cfg.EffectiveAgentForIssue(103); got != "codex" {
+		t.Fatalf("EffectiveAgentForIssue(103) = %q, want codex", got)
+	}
+	if len(cfg.AgentOverrides) != 2 {
+		t.Fatalf("AgentOverrides = %+v, want 2 last-wins entries", cfg.AgentOverrides)
+	}
+}
+
+func TestParseAgentOverrideCanonicalizesIssueNumbers(t *testing.T) {
+	cfg := parseOK(t, "100", "--agent", "001=codex")
+
+	if got := cfg.EffectiveAgentForIssue(1); got != "codex" {
+		t.Fatalf("EffectiveAgentForIssue(1) = %q, want codex", got)
+	}
+	if len(cfg.AgentOverrides) != 1 || cfg.AgentOverrides[0].Target != "1" {
+		t.Fatalf("AgentOverrides = %+v, want canonical target 1", cfg.AgentOverrides)
+	}
+}
+
+func TestParseAgentOverrideRejectsInvalidShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty agent", raw: "4=", want: "agent name must not be empty"},
+		{name: "empty number", raw: "=claude", want: "<NUM> must be a positive integer"},
+		{name: "zero", raw: "0=claude", want: "<NUM> must be a positive integer"},
+		{name: "non-number", raw: "foo=claude", want: "<NUM> must be a positive integer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			res := Parse([]string{"100", "--agent", tc.raw}, log.NewWith(&stdout, &stderr, false), io.Discard)
+			if res.Code != exitcode.Env {
+				t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Env)
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("stderr = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseWorktreeFlags(t *testing.T) {
 	cfg := parseOK(t,
 		"100",
@@ -159,12 +220,34 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 	}
 }
 
+func TestParseStatusRejectsAgentOverride(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"--status", "100", "--agent", "101=codex"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Invocation {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--status cannot be combined with --agent") {
+		t.Fatalf("stderr = %q, want --status/--agent conflict", got)
+	}
+}
+
 func TestParseTeamFlag(t *testing.T) {
 	if cfg := parseOK(t, "100", "--agent", "claude"); cfg.Team {
 		t.Fatal("Team = true without --team, want false (opt-in)")
 	}
 	if cfg := parseOK(t, "100", "--agent", "claude", "--team"); !cfg.Team {
 		t.Fatal("Team = false with --team, want true")
+	}
+}
+
+func TestParseLifecycleRejectsAgentOverride(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"100", "--close", "101", "--agent", "101=codex"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Invocation {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--close/--merge/--cleanup cannot be combined with --agent") {
+		t.Fatalf("stderr = %q, want lifecycle --agent conflict", got)
 	}
 }
 

@@ -21,9 +21,13 @@ dedicated git worktree under .fanout/worktrees/ and starts the configured agent
 with a briefing that points at /tmp/fanout-<repo>-<num>.md.
 
 Options:
-  --agent <name>      Agent to launch (claude|codex). Required unless
-                      FANOUT_AGENT is set. Unknown agents fail before pane
-                      creation; missing agent CLIs fail in live mode.
+  --agent <name|NUM=name>
+                      Agent to launch (claude|codex). Repeatable: a bare
+                      name is the default, and NUM=name overrides one child
+                      issue. Required unless FANOUT_AGENT is set or every
+                      selected child has an override. Unknown agents fail
+                      before pane creation; missing agent CLIs fail in live
+                      mode.
   --base-branch <branch>
                       Branch to refresh and branch child worktrees from.
                       Default: GitHub default branch, then origin/HEAD, then
@@ -168,7 +172,8 @@ Prerequisites:
   * gh, git, tmux installed.
   * fanout pane-creation mode is invoked from inside a tmux session. TUI mode
     can be started from a plain shell; it creates or attaches its tmux session.
-  * --agent is given, or FANOUT_AGENT is set for pane-creation mode.
+  * --agent is given, FANOUT_AGENT is set, or every selected target has a
+    per-target --agent override for pane-creation mode.
 
 Exit codes (default flow):
   0 success (including "no children, nothing to do")

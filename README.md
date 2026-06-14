@@ -299,8 +299,10 @@ cd web && pnpm install && pnpm dev                   # terminal 2 → http://loc
     `tmux split-window`, targeting the invoking pane unless `--session` is
     supplied.
 - **An agent name must be resolvable**: pass `--agent claude`, `--agent codex`,
-  or set `FANOUT_AGENT`. Unknown agents fail before pane creation; in live
-  mode, fanout also checks that the agent CLI is installed.
+  or set `FANOUT_AGENT`. Repeat `--agent NUM=name` to override one child issue,
+  or `--agent task-id=name` in `fanout plan`. Unknown selected agents fail
+  before pane creation; in live mode, fanout also checks that the agent CLI is
+  installed.
 - fanout creates child worktrees under `.fanout/worktrees/<slug>/`. Before
   branching, it refreshes the base branch with `git fetch --quiet --no-tags`
   and a fast-forward update. Use `--base-branch <branch>` to override the base
@@ -314,7 +316,7 @@ cd web && pnpm install && pnpm dev                   # terminal 2 → http://loc
 ```
 fanout # start the persistent tmux console
 fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
-       [--agent <name>] [--limit <N>] [--only <list>] [--skip <list>]
+       [--agent <name|NUM=name>] [--limit <N>] [--only <list>] [--skip <list>]
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
@@ -326,7 +328,7 @@ fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--team]
-fanout plan <spec.json|plan-slug> [--agent <name>] [--dry-run]
+fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
        [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
@@ -454,11 +456,12 @@ PR state.
 
 ### Codex Plan Mode
 
-`--codex-plan-mode` is an opt-in launch mode for `--agent codex`. Instead of
-running positional `codex "<prompt>"`, fanout starts a Codex app-server for the
-child, creates a `plan` collaboration-mode thread, starts the initial turn with
-the fanout prompt through that app-server, and attaches an interactive Codex TUI
-to the remote session.
+`--codex-plan-mode` is an opt-in launch mode for children that resolve to
+`codex` after per-target `--agent` overrides. Instead of running positional
+`codex "<prompt>"`, fanout starts a Codex app-server for the child, creates a
+`plan` collaboration-mode thread, starts the initial turn with the fanout prompt
+through that app-server, and attaches an interactive Codex TUI to the remote
+session.
 The child briefing is also rewritten for Plan Mode: it asks for a
 `<proposed_plan>` implementation plan and explicitly forbids file edits,
 commits, pushes, and PR creation in that first turn.
@@ -879,6 +882,9 @@ fanout 123 --sleep 8
 # Choose the agent CLI for child panes
 fanout 123 --agent codex
 
+# Override the agent for specific child issues while keeping a default
+fanout 123 --agent codex --agent 456=claude
+
 # Start Codex children as app-server Plan Mode sessions with interactive TUI.
 fanout 123 --agent codex --codex-plan-mode
 
@@ -891,6 +897,7 @@ fanout 123 --agent codex --codex-plan-mode
 # until their prerequisite task branches have merged PRs.
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --dry-run
 fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --unblocked-only
+fanout plan /tmp/fanout-plan-launch-plan.json --agent claude --agent api-client=codex
 fanout plan launch-plan --status --format table
 fanout plan launch-plan --merge base-types
 fanout plan launch-plan --cleanup
@@ -946,7 +953,8 @@ fanout https://github.com/users/<owner>/projects/<n> --project-status all
 fanout is safe to call from an agent session (Claude Code, Codex, etc.) that
 is itself running inside tmux. It only creates NEW panes for children; the
 caller's pane is never touched. Pass `--agent` or set `FANOUT_AGENT` so child
-panes know which agent CLI to launch.
+panes know which agent CLI to launch. Use repeatable `--agent NUM=name` for
+issue/project child overrides, or `--agent task-id=name` with `fanout plan`.
 
 Recommended integration for Claude Code — these assets are bundled in this
 repo under `claude/` and get placed by `make install`:
@@ -1025,8 +1033,9 @@ Recommended integration for Codex CLI — the skills are bundled under
 
 The CLI prerequisites above still apply: start the TUI from the target
 repository worktree, and for batch pane creation run from inside tmux, pass
-`--agent` or set `FANOUT_AGENT`, and run from the repository whose children
-should branch from the selected base.
+`--agent` or set `FANOUT_AGENT` (with optional per-child `--agent NUM=name` or
+per-task `--agent task-id=name` overrides), and run from the repository whose
+children should branch from the selected base.
 
 ## What fanout actually does
 
@@ -1034,8 +1043,9 @@ should branch from the selected base.
 2. Resolves the repository root with `git rev-parse --show-toplevel`, the
    current tmux session with `tmux display-message -p '#{session_name}'`, and
    the invoking pane from `$TMUX_PANE` (or `#{pane_id}` as a fallback).
-3. Resolves the agent from `--agent` or `FANOUT_AGENT`; live mode verifies the
-   selected agent CLI is installed.
+3. Resolves each child agent from per-target `--agent NUM=name` /
+   `--agent task-id=name`, then global `--agent`, then `FANOUT_AGENT`; live
+   mode verifies each selected agent CLI is installed.
 4. Enumerates children by taking the union of two sources (run from the project
    root): (a) the GitHub Sub-issues API
    (`gh api repos/{owner}/{repo}/issues/<N>/sub_issues`) for formally linked
@@ -1087,7 +1097,9 @@ arguments instead.
 
 Pass `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`. Unknown agents
 fail before pane creation; live mode also fails if the selected CLI is not on
-`PATH`.
+`PATH`. For mixed runs, either provide a global default plus overrides such as
+`--agent codex --agent 123=claude`, or cover every selected target with an
+override.
 
 ### "prepare worktree"
 

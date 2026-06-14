@@ -387,6 +387,36 @@ JSON
   [[ "$output" == *"--agent requires an argument"* ]]
 }
 
+@test "--agent per-issue empty name rejected: exit 1" {
+  run_fanout 20 --agent 4=
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--agent #4: agent name must not be empty"* ]]
+}
+
+@test "--agent per-issue empty NUM rejected: exit 1" {
+  run_fanout 20 --agent =claude
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--agent: <NUM> must be a positive integer"* ]]
+}
+
+@test "--agent per-issue non-integer NUM rejected: exit 1" {
+  run_fanout 20 --agent foo=claude
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--agent: <NUM> must be a positive integer"* ]]
+}
+
+@test "plan --agent per-task empty name rejected: exit 1" {
+  run_fanout plan launch-plan --agent api-client=
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--agent api-client: agent name must not be empty"* ]]
+}
+
+@test "plan --agent per-task invalid task id rejected: exit 1" {
+  run_fanout plan launch-plan --agent Api=codex
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--agent: <task-id> must be lowercase kebab-case"* ]]
+}
+
 @test "--limit missing value: exit 1" {
   run_fanout 20 --limit
   [ "$status" -eq 1 ]
@@ -459,6 +489,12 @@ JSON
 
 @test "--cleanup conflicts with action flags: exit 2" {
   run_fanout 20 --cleanup --agent claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --agent"* ]]
+}
+
+@test "--cleanup conflicts with per-issue --agent: exit 2" {
+  run_fanout 20 --cleanup --agent 4=claude
   [ "$status" -eq 2 ]
   [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --agent"* ]]
 }
@@ -572,7 +608,15 @@ JSON
 }
 
 @test "--codex-plan-mode requires --agent codex: exit 1" {
-  run_fanout 20 --agent claude --codex-plan-mode --dry-run
+  use_fixture scenario-sub-issue-only
+  run_fanout 100 --agent claude --codex-plan-mode --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--codex-plan-mode requires --agent codex"* ]]
+}
+
+@test "--codex-plan-mode rejects non-codex per-issue override: exit 1" {
+  use_fixture scenario-sub-issue-only
+  run_fanout 100 --agent codex --agent 101=claude --codex-plan-mode --dry-run
   [ "$status" -eq 1 ]
   [[ "$output" == *"--codex-plan-mode requires --agent codex"* ]]
 }
@@ -615,6 +659,24 @@ JSON
   run_fanout --status 1 --agent claude
   [ "$status" -eq 2 ]
   [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "--status conflicts with per-issue --agent: exit 2" {
+  run_fanout --status 1 --agent 4=claude
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "plan --status conflicts with per-task --agent: exit 2" {
+  run_fanout plan launch-plan --status --agent api-client=codex
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--status cannot be combined with --agent"* ]]
+}
+
+@test "plan --close conflicts with per-task --agent: exit 2" {
+  run_fanout plan launch-plan --close api-client --agent api-client=codex
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--close/--merge/--cleanup cannot be combined with --agent"* ]]
 }
 
 @test "--status conflicts with --base-branch: exit 2" {

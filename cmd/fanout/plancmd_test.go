@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,10 +92,82 @@ func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
 	}
 }
 
+func TestParsePlanAgentOverrides(t *testing.T) {
+	cfg := parsePlanOK(t, "launch-plan",
+		"--agent", "claude",
+		"--agent", "api-client=codex",
+		"--agent", "base-types=claude",
+		"--agent", "api-client=claude",
+		"--agent", "codex",
+	)
+
+	if cfg.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex", cfg.Agent)
+	}
+	cliCfg := cfg.cliConfig()
+	if got := cliCfg.EffectiveAgent("api-client"); got != "claude" {
+		t.Fatalf("EffectiveAgent(api-client) = %q, want claude", got)
+	}
+	if got := cliCfg.EffectiveAgent("base-types"); got != "claude" {
+		t.Fatalf("EffectiveAgent(base-types) = %q, want claude", got)
+	}
+	if got := cliCfg.EffectiveAgent("docs"); got != "codex" {
+		t.Fatalf("EffectiveAgent(docs) = %q, want codex", got)
+	}
+	if len(cfg.AgentOverrides) != 2 {
+		t.Fatalf("AgentOverrides = %+v, want 2 last-wins entries", cfg.AgentOverrides)
+	}
+}
+
+func TestParsePlanAgentOverrideRejectsInvalidShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty agent", raw: "api-client=", want: "agent name must not be empty"},
+		{name: "empty task", raw: "=codex", want: "<task-id> must be lowercase kebab-case"},
+		{name: "uppercase task", raw: "Api=codex", want: "<task-id> must be lowercase kebab-case"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			_, code := parsePlanCommand([]string{"launch-plan", "--agent", tc.raw}, log.NewWith(&stdout, &stderr, false))
+			if code != exitcode.Env {
+				t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Env)
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("stderr = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParsePlanStatusRejectsAgentOverride(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, code := parsePlanCommand([]string{"launch-plan", "--status", "--agent", "api-client=codex"}, log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.Invocation {
+		t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--status cannot be combined with --agent") {
+		t.Fatalf("stderr = %q, want --status/--agent conflict", got)
+	}
+}
+
+func TestParsePlanLifecycleRejectsAgentOverride(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, code := parsePlanCommand([]string{"launch-plan", "--close", "api-client", "--agent", "api-client=codex"}, log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.Invocation {
+		t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Invocation)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--close/--merge/--cleanup cannot be combined with --agent") {
+		t.Fatalf("stderr = %q, want lifecycle --agent conflict", got)
+	}
+}
+
 func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
 	cfg := planCommandConfig{StatusMode: true, Format: "json", BranchPrefix: "custom/"}
 
-	if code := validatePlanActionFlags(cfg, "", "", log.New(false)); code != exitcode.OK {
+	if code := validatePlanActionFlags(cfg, "", "", false, log.New(false)); code != exitcode.OK {
 		t.Fatalf("validatePlanActionFlags() = %d, want %d", code, exitcode.OK)
 	}
 
@@ -103,6 +176,16 @@ func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
 	if got := planTaskBranch(cfg, spec, task); got != "custom/launch-plan-build-ui-shell-ui-shell" {
 		t.Fatalf("planTaskBranch() = %q, want custom prefix fallback branch", got)
 	}
+}
+
+func parsePlanOK(t *testing.T, args ...string) planCommandConfig {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	cfg, code := parsePlanCommand(args, log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.OK {
+		t.Fatalf("parsePlanCommand(%q) failed with code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+	}
+	return cfg
 }
 
 func TestSplitPlanBlockedKeepsSameRunDependenciesOpen(t *testing.T) {
