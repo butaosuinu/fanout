@@ -176,3 +176,52 @@ load helpers
   assert_success
   assert_golden scenario-project-cross-repo
 }
+
+@test "scenario-plan-basic: plan dry-run creates task panes without gh" {
+  use_fixture scenario-plan-basic
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json"
+  assert_success
+  assert_golden scenario-plan-basic
+}
+
+@test "scenario-plan-idempotency: seeded taskId rows are skipped" {
+  use_fixture scenario-plan-idempotency
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json"
+  assert_success
+  assert_golden scenario-plan-idempotency
+}
+
+@test "scenario-plan-blocked: merged blocker branch unlocks selected task" {
+  use_fixture scenario-plan-blocked
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --only api-client --unblocked-only
+  assert_success
+  assert_golden scenario-plan-blocked
+}
+
+@test "scenario-plan-fresh-blocker: empty blocker branch keeps dependent task deferred" {
+  use_fixture scenario-plan-fresh-blocker
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --unblocked-only
+  assert_success
+  assert_golden scenario-plan-fresh-blocker
+}
+
+@test "scenario-plan-complete-blocker: completed blocker is skipped before dependency check" {
+  use_fixture scenario-plan-complete-blocker
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --unblocked-only
+  assert_success
+  assert_golden scenario-plan-complete-blocker
+}
+
+@test "scenario-plan-complete-leaf: completed terminal task is skipped" {
+  use_fixture scenario-plan-complete-leaf
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --unblocked-only
+  assert_success
+  assert_golden scenario-plan-complete-leaf
+}
+
+@test "scenario-plan-limit: --limit caps task plan and prints rerun command" {
+  use_fixture scenario-plan-limit
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --limit 2
+  assert_success
+  assert_golden scenario-plan-limit
+}

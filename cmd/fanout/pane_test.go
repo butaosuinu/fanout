@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
+	"github.com/butaosuinu/fanout/internal/planspec"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
@@ -80,6 +81,25 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 	if !got.CodexPlanMode {
 		t.Fatal("codexPlanMode = false, want passthrough of req.CodexPlanMode")
+	}
+}
+
+func TestStatePaneCapturesTaskID(t *testing.T) {
+	now := time.Date(2026, 6, 13, 1, 2, 3, 0, time.UTC)
+	req := paneRequest{
+		ParentRef:  "plan:launch-plan",
+		TaskID:     "api-client",
+		Slug:       "extract-api-client-api-client",
+		BranchName: "fanout/extract-api-client-api-client",
+		Prompt:     "[fanout api-client of plan:launch-plan]",
+		Agent:      "claude",
+		Worktree:   worktree.Plan{BaseBranch: "main"},
+	}
+
+	got := statePane(req, "%42", "/repo/.fanout/worktrees/extract-api-client-api-client", now)
+
+	if got.Parent != "plan:launch-plan" || got.IssueNum != 0 || got.TaskID != "api-client" {
+		t.Fatalf("task state identity = %+v, want plan parent, issueNum 0, taskID", got)
 	}
 }
 
@@ -203,6 +223,79 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 		if strings.Contains(got.BriefingBody, unexpected) {
 			t.Fatalf("plan briefing contains implementation instruction %q:\n%s", unexpected, got.BriefingBody)
 		}
+	}
+}
+
+func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "release/v1"}
+	spec := planspec.Spec{
+		Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"},
+	}
+	task := planspec.Task{
+		ID:          "api-client",
+		Title:       "Extract API client",
+		Briefing:    "## Goal\nExtract it",
+		DisplayName: "API client",
+		Wave:        "2",
+	}
+
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+
+	if got.ParentRef != "plan:launch-plan" || got.TaskID != "api-client" || got.Number != 0 {
+		t.Fatalf("task identity = parent %q task %q issue %d", got.ParentRef, got.TaskID, got.Number)
+	}
+	if got.Slug != "launch-plan-extract-api-client-api-client" || got.BranchName != "fanout/launch-plan-extract-api-client-api-client" {
+		t.Fatalf("slug/branch = %q/%q", got.Slug, got.BranchName)
+	}
+	if got.BriefingPath != "/tmp/fanout-repo-launch%2Dplan-api%2Dclient.md" {
+		t.Fatalf("briefing path = %q", got.BriefingPath)
+	}
+	if !strings.Contains(got.Prompt, "[fanout api-client of plan:launch-plan] launch-plan-extract-api-client-api-client: Extract API client. read /tmp/fanout-repo-launch%2Dplan-api%2Dclient.md and begin.") {
+		t.Fatalf("prompt = %q", got.Prompt)
+	}
+	if got.DisplayNameOverride != "API client" || got.Wave != "2" {
+		t.Fatalf("display/wave = %q/%q", got.DisplayNameOverride, got.Wave)
+	}
+	if !strings.Contains(got.BriefingBody, "Plan: launch-plan / Task: api-client") {
+		t.Fatalf("task briefing missing plan/task footer:\n%s", got.BriefingBody)
+	}
+}
+
+func TestNewTaskPaneRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{
+		ID:       "api-client",
+		Title:    "Extract API\nclient\tlayer",
+		Briefing: "## Goal\nExtract it",
+	}
+
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults())
+
+	if strings.ContainsAny(got.Prompt, "\n\t") {
+		t.Fatalf("prompt contains embedded newline/tab: %q", got.Prompt)
+	}
+	if !strings.Contains(got.Prompt, "Extract API client layer. read ") {
+		t.Fatalf("prompt did not collapse task title whitespace: %q", got.Prompt)
+	}
+}
+
+func TestNewTaskPaneRequestQualifiesDefaultSlugByPlan(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
+
+	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults())
+	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults())
+
+	if first.Slug == second.Slug || first.BranchName == second.BranchName {
+		t.Fatalf("default task slugs must be plan-qualified, got %q/%q and %q/%q", first.Slug, first.BranchName, second.Slug, second.BranchName)
+	}
+
+	task.Slug = "shared-api-client"
+	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults())
+	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults())
+	if first.Slug != "shared-api-client" || second.Slug != "shared-api-client" {
+		t.Fatalf("explicit slug should be shared exactly, got %q and %q", first.Slug, second.Slug)
 	}
 }
 

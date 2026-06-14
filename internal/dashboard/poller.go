@@ -295,6 +295,9 @@ func (p *poller) refreshGH() {
 	p.pruneWaveCache(numsByParent)
 	for _, parent := range slices.Sorted(maps.Keys(numsByParent)) {
 		nums := numsByParent[parent]
+		if len(nums) == 0 {
+			continue
+		}
 		if !due {
 			p.cacheMu.Lock()
 			e, cached := p.waveCache[parent]
@@ -542,9 +545,9 @@ func distinctTaskBranches(store state.Store) []string {
 
 // recordedNumsByParent groups each distinct normalized parent in state to the
 // sorted positive issue numbers recorded under it. Synthetic pane numbers
-// (IssueNum <= 0, e.g. @manual rows) stay out — FetchWaveGraph skips them
-// anyway — but their parent still gets an (empty) entry so its wave cache
-// resolves to a hit instead of a perpetual miss.
+// (IssueNum <= 0, e.g. @manual or plan task rows) stay out because they have
+// no GitHub issue wave graph to fetch; refreshGH skips parents whose recorded
+// set is empty.
 func recordedNumsByParent(store state.Store) map[string][]int {
 	grouped := map[string]map[int]bool{}
 	for _, p := range store.Panes {

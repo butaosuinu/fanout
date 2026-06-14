@@ -196,6 +196,46 @@ func TestBuildPerSessionAllMerged(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesTaskIDRowsWithoutIssueFetch(t *testing.T) {
+	issueCalls := 0
+	waveCalls := 0
+	c := Collectors{
+		Now: fixedNow,
+		LoadState: storeOf(
+			state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Slug: "launch-plan-api-client", PaneID: "%2", Agent: "claude", DisplayName: "API client", WorktreePath: "/wt/%2"},
+			state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "base-types", Slug: "launch-plan-base-types", PaneID: "%1", Agent: "claude", DisplayName: "Base types", WorktreePath: "/wt/%1"},
+		),
+		LivePanes: livePanesAt("%1", "%2"),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			issueCalls++
+			return "OPEN", nil, nil
+		},
+		Waves: func(parent string) (WaveGraph, error) {
+			waveCalls++
+			return WaveGraph{}, nil
+		},
+	}
+
+	snap := Build("owner/name", "/root", c)
+
+	if issueCalls != 0 || waveCalls != 0 {
+		t.Fatalf("task rows should not fetch issue/wave data, got issue=%d wave=%d", issueCalls, waveCalls)
+	}
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 2 {
+		t.Fatalf("sessions = %+v", snap.Sessions)
+	}
+	if got := []string{snap.Sessions[0].Panes[0].TaskID, snap.Sessions[0].Panes[1].TaskID}; got[0] != "api-client" || got[1] != "base-types" {
+		t.Fatalf("task ids = %v", got)
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"taskId":"api-client"`) {
+		t.Fatalf("snapshot JSON missing taskId: %s", data)
+	}
+}
+
 func TestBuildDegradesWhenTmuxFails(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

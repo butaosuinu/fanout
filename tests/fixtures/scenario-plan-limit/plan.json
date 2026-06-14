@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "title": "Define base types",
+      "briefing": "## Goal\nDefine base types"
+    },
+    {
+      "id": "api-client",
+      "title": "Extract API client",
+      "briefing": "## Goal\nExtract API client"
+    },
+    {
+      "id": "ui-shell",
+      "title": "Build UI shell",
+      "briefing": "## Goal\nBuild UI shell"
+    }
+  ]
+}

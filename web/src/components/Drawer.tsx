@@ -165,7 +165,9 @@ export function Drawer({
       <header className="drawer-head">
         <h3>
           <span className="d-issue" id="d-issue">
-            <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
+            <GhLink url={pane.taskId ? "" : issueUrl(repo, pane.issueNum)}>
+              {paneLabel(pane)}
+            </GhLink>
           </span>
           <span id="d-name">{pane.derived?.name || pane.displayName || pane.slug || "—"}</span>
         </h3>

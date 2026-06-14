@@ -171,6 +171,10 @@ run_fanout_dry() {
   run_fanout --dry-run --agent claude --sleep 0 "$@"
 }
 
+run_fanout_plan_dry() {
+  run_fanout plan "$@" --dry-run --agent claude --sleep 0
+}
+
 # Run fanout in --status mode. Unlike run_fanout_dry, --status is exclusive
 # with --agent / --sleep / --dry-run, so this wrapper passes only --status
 # and the parent issue number plus any extra args the test wants (typically

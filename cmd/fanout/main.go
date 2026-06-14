@@ -51,6 +51,9 @@ func main() {
 	if isCodexPlanTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
 	}
+	if isPlanRequest(os.Args[1:]) {
+		os.Exit(int(cmdPlan(os.Args[2:], lg, commandName)))
+	}
 	if isDashboardRequest(os.Args[1:]) {
 		os.Exit(int(cmdDashboard(os.Args[2:], lg)))
 	}

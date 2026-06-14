@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "plan:launch-plan",
+      "issueNum": 0,
+      "taskId": "base-types",
+      "slug": "launch-plan-define-base-types-base-types",
+      "branchName": "fanout/launch-plan-define-base-types-base-types",
+      "baseBranch": "main",
+      "paneId": "%11",
+      "agent": "claude",
+      "displayName": "launch-plan-define-base-types-base-types",
+      "worktreePath": "/tmp/fanout-fixture/base-types",
+      "prompt": "[fanout base-types of plan:launch-plan]",
+      "createdAt": "2026-06-13T00:00:00Z",
+      "agentStatus": "running"
+    },
+    {
+      "parent": "plan:launch-plan",
+      "issueNum": 0,
+      "taskId": "api-client",
+      "slug": "launch-plan-extract-api-client-api-client",
+      "branchName": "fanout/launch-plan-extract-api-client-api-client",
+      "baseBranch": "main",
+      "paneId": "%12",
+      "agent": "claude",
+      "displayName": "launch-plan-extract-api-client-api-client",
+      "worktreePath": "/tmp/fanout-fixture/api-client",
+      "prompt": "[fanout api-client of plan:launch-plan]",
+      "createdAt": "2026-06-13T00:00:00Z",
+      "agentStatus": "running"
+    }
+  ]
+}

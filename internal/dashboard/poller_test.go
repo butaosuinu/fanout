@@ -144,7 +144,7 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	}
 }
 
-func TestRefreshGHCallsWavesOncePerNormalizedParent(t *testing.T) {
+func TestRefreshGHCallsWavesOncePerNormalizedParentWithRecordedIssues(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
 	  {"parent":"0100","issueNum":101,"slug":"a","paneId":"%1"},
@@ -156,14 +156,14 @@ func TestRefreshGHCallsWavesOncePerNormalizedParent(t *testing.T) {
 	p := newPoller("o/n", root, gh, nil, newHub())
 	p.refreshGH()
 
-	if len(gh.waveCalls) != 2 || gh.waveCalls["100"] != 1 || gh.waveCalls["@manual"] != 1 {
-		t.Fatalf("expected one Waves call per normalized parent, got %v", gh.waveCalls)
+	if len(gh.waveCalls) != 1 || gh.waveCalls["100"] != 1 {
+		t.Fatalf("expected one Waves call per normalized parent with recorded issues, got %v", gh.waveCalls)
 	}
 	if !slices.Equal(gh.waveNums["100"], []int{101, 102}) {
 		t.Fatalf(`"0100" and "100" must pool recorded nums, got %v`, gh.waveNums["100"])
 	}
-	if len(gh.waveNums["@manual"]) != 0 {
-		t.Fatalf("synthetic nums must stay out of recordedNums, got %v", gh.waveNums["@manual"])
+	if _, ok := gh.waveNums["@manual"]; ok {
+		t.Fatalf("parents without positive issue rows must not fetch waves, got %v", gh.waveNums["@manual"])
 	}
 }
 

@@ -63,7 +63,7 @@ function PaneRow({
   return (
     <tr className={cls} tabIndex={0} ref={registerRow} onClick={onClick} onKeyDown={onKeyDown}>
       <td className="c-issue">
-        <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
+        <GhLink url={pane.taskId ? "" : issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
         {pane.derived?.name || pane.displayName || pane.slug || "—"}

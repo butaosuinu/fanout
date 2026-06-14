@@ -71,6 +71,24 @@ Slack webhook POST を opt-in できます。
 記録するため、同じ親での再実行では記録済みの子を重複作成しません。この経路は
 tmux を直接使い、dmux は不要です。
 
+## Plan spec
+
+`fanout plan <spec.json|plan-slug>` は、GitHub child issue ではなくローカルの
+task spec に分解済みの作業を起動する issue-less な一括作成レーンです。spec は
+`version: 1`、`plan` オブジェクト（`slug`、`title`、任意の `base_branch`）と、
+kebab-case の `id`、`title`、`briefing` を持つ `tasks` 配列で構成します。task には
+任意で `slug`、`display_name`、`branch`、`wave`、`blocked_by` task ID を指定できます。
+bare な `plan-slug` は `<git-root>/.fanout/plans/<plan-slug>.json` から読み込みます。
+live run では後続の再実行用に、元 spec をそのディレクトリへコピーします。
+
+Plan pane は parent `plan:<slug>`、`taskId`、`issueNum: 0` として記録されるため、
+再実行時は `.fanout/state.json` や `.fanout/worktrees/` に既存の task pane があれば
+重複作成しません。`--dry-run` で git/tmux/agent 操作を確認でき、`--only` / `--skip`
+は task ID、`--limit` は wave の一部起動、`--unblocked-only` は `blocked_by` 依存が
+明示 branch または生成 branch 上の merged PR で完了するまで deferred にするために
+使います。生成される task briefing は issue-closing footer を避け、task PR の末尾に
+`Plan: <slug> / Task: <id>` を置くよう指示します。
+
 ## Project モード
 
 第1引数には親 issue 番号だけでなく、Projects v2 の URL —

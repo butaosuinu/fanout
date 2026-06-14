@@ -110,6 +110,16 @@ describe("matches", () => {
     expect(matches(p, q("plan-review"))).toBe(false);
   });
 
+  it("task: は taskId の完全一致で、自由語にも taskId が入る", () => {
+    expect(matches(makePane({ issueNum: 0, taskId: "api-client" }), q("task:api-client"))).toBe(
+      true,
+    );
+    expect(matches(makePane({ issueNum: 0, taskId: "api-client" }), q("api-client"))).toBe(true);
+    expect(matches(makePane({ issueNum: 0, taskId: "api-client" }), q("task:base-types"))).toBe(
+      false,
+    );
+  });
+
   it("pr: は primary PR の状態、無ければ none", () => {
     expect(matches(makePane({ prs: null }), q("pr:none"))).toBe(true);
     const prs = [
