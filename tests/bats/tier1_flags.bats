@@ -163,6 +163,22 @@ load helpers
   [[ "$output" == *"--only and --skip are mutually exclusive"* ]]
 }
 
+@test "plan --status missing gh: preflight exit 1" {
+  force_missing gh
+  run_fanout plan launch-plan --status
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing dependencies"* ]]
+  [[ "$output" == *"gh (brew install gh)"* ]]
+}
+
+@test "plan --cleanup missing gh: preflight exit 1" {
+  force_missing gh
+  run_fanout plan launch-plan --cleanup
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing dependencies"* ]]
+  [[ "$output" == *"gh (brew install gh)"* ]]
+}
+
 @test "plan missing spec file: exit 1" {
   run_fanout plan "$BATS_TEST_TMPDIR/missing.json" --dry-run --agent claude
   [ "$status" -eq 1 ]

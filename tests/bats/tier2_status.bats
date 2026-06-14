@@ -113,3 +113,17 @@ load helpers
   assert_success
   assert_status_golden scenario-status-duplicate-panes-500
 }
+
+@test "scenario-plan-status: plan --status reports task branches, PRs, and blockers" {
+  use_fixture scenario-plan-status
+  run_fanout_plan_status launch-plan
+  assert_success
+  assert_golden scenario-plan-status status
+}
+
+@test "scenario-plan-status table: plan --status --format table reuses PR table columns" {
+  use_fixture scenario-plan-status
+  run_fanout_plan_status "$FIXTURE_DIR/plan.json" --format table
+  assert_success
+  assert_golden scenario-plan-status status-table
+}

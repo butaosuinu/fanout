@@ -88,6 +88,10 @@ Plan pane は parent `plan:<slug>`、`taskId`、`issueNum: 0` として記録さ
 明示 branch または生成 branch 上の merged PR で完了するまで deferred にするために
 使います。生成される task briefing は issue-closing footer を避け、task PR の末尾に
 `Plan: <slug> / Task: <id>` を置くよう指示します。
+`fanout plan <spec|slug> --status [--format json|table]` で task の PR / blocker
+状態を確認でき、`--close <task-id>` / `--merge <task-id>` は記録済み task 1 件を
+対象にします。`--cleanup` は head branch に merged PR がある記録済み task pane を
+削除します。
 
 ## Project モード
 

@@ -1,0 +1,53 @@
+{
+  "plan": {
+    "slug": "launch-plan",
+    "title": "Launch plan",
+    "base_branch": "main"
+  },
+  "tasks": [
+    {
+      "id": "base-types",
+      "branch": "fanout/launch-plan-define-base-types-base-types",
+      "prs": [
+        {
+          "number": 501,
+          "state": "MERGED",
+          "mergedAt": "2026-06-13T00:00:00Z",
+          "reviewDecision": "APPROVED",
+          "ci": "pass"
+        }
+      ],
+      "has_merged_pr": true,
+      "blocked": false
+    },
+    {
+      "id": "api-client",
+      "branch": "fanout/custom-api-client",
+      "prs": [
+        {
+          "number": 502,
+          "state": "OPEN",
+          "mergedAt": null,
+          "reviewDecision": "REVIEW_REQUIRED",
+          "ci": "pending"
+        }
+      ],
+      "has_merged_pr": false,
+      "blocked": false
+    },
+    {
+      "id": "ui-shell",
+      "branch": "fanout/launch-plan-build-ui-shell-ui-shell",
+      "prs": [],
+      "has_merged_pr": false,
+      "blocked": true
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "merged": 1,
+    "pending": 2,
+    "blocked": 1,
+    "all_merged": false
+  }
+}

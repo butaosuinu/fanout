@@ -1029,28 +1029,78 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	}
 }
 
-func TestLifecycleKeysRejectPlanTaskRows(t *testing.T) {
-	for _, key := range []string{"c", "m", "x"} {
-		t.Run(key, func(t *testing.T) {
+func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
+	tests := []struct {
+		key    string
+		action lifecycleAction
+		check  func(*testing.T, *fakeLifecycleRunner)
+	}{
+		{
+			key:    "c",
+			action: actionClose,
+			check: func(t *testing.T, runner *fakeLifecycleRunner) {
+				t.Helper()
+				if runner.closeTaskParent != "plan:launch-plan" || runner.closeTaskID != "api-client" {
+					t.Fatalf("CloseTask called with parent=%q task=%q, want plan/api-client", runner.closeTaskParent, runner.closeTaskID)
+				}
+			},
+		},
+		{
+			key:    "m",
+			action: actionMerge,
+			check: func(t *testing.T, runner *fakeLifecycleRunner) {
+				t.Helper()
+				if runner.mergeTaskParent != "plan:launch-plan" || runner.mergeTaskID != "api-client" {
+					t.Fatalf("MergeTask called with parent=%q task=%q, want plan/api-client", runner.mergeTaskParent, runner.mergeTaskID)
+				}
+			},
+		},
+		{
+			key:    "x",
+			action: actionCleanup,
+			check: func(t *testing.T, runner *fakeLifecycleRunner) {
+				t.Helper()
+				if runner.cleanupPlanParent != "plan:launch-plan" {
+					t.Fatalf("CleanupPlan parent = %q, want plan:launch-plan", runner.cleanupPlanParent)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
 			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
 			m.allPanes = []paneView{{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Name: "task"}}
 			m.refreshRows()
 
-			updated, cmd := m.Update(keyRunes(key))
+			updated, cmd := m.Update(keyRunes(tc.key))
 			m = updated.(model)
 			if cmd != nil {
-				t.Fatalf("Update(%q) returned command for task row", key)
+				t.Fatalf("Update(%q) returned command before confirmation", tc.key)
 			}
-			if m.pendingAction != nil {
-				t.Fatalf("pendingAction = %#v, want nil for task row", m.pendingAction)
+			if m.pendingAction == nil || m.pendingAction.action != tc.action {
+				t.Fatalf("pendingAction = %#v, want %s", m.pendingAction, tc.action)
 			}
-			if !strings.Contains(m.actionMessage, "not available for plan task api-client") {
-				t.Fatalf("actionMessage = %q, want task rejection", m.actionMessage)
+			wantMessage := "api-client"
+			if tc.action == actionCleanup {
+				wantMessage = "plan:launch-plan"
 			}
-			if runner.closeParent != "" || runner.cleanupParent != "" {
-				t.Fatalf("lifecycle runner was called: close=%q cleanup=%q", runner.closeParent, runner.cleanupParent)
+			if !strings.Contains(m.actionMessage, wantMessage) {
+				t.Fatalf("actionMessage = %q, want confirmation containing %q", m.actionMessage, wantMessage)
 			}
+
+			updated, cmd = m.Update(keyRunes("y"))
+			if cmd == nil {
+				t.Fatal("confirm returned nil command, want lifecycle command")
+			}
+			m = updated.(model)
+			if !m.actionRunning {
+				t.Fatal("actionRunning = false, want true while command runs")
+			}
+			if _, ok := cmd().(lifecycleDoneMsg); !ok {
+				t.Fatalf("lifecycle command did not return lifecycleDoneMsg")
+			}
+			tc.check(t, runner)
 		})
 	}
 }
@@ -1143,12 +1193,17 @@ func TestLifecycleRunningDefersQuitKeysUntilDone(t *testing.T) {
 }
 
 type fakeLifecycleRunner struct {
-	code          exitcode.Code
-	projectRoot   string
-	statePath     string
-	closeParent   string
-	closeIssue    int
-	cleanupParent string
+	code              exitcode.Code
+	projectRoot       string
+	statePath         string
+	closeParent       string
+	closeIssue        int
+	closeTaskParent   string
+	closeTaskID       string
+	mergeTaskParent   string
+	mergeTaskID       string
+	cleanupParent     string
+	cleanupPlanParent string
 }
 
 type fakeTransitionNotifier struct {
@@ -1170,14 +1225,36 @@ func (f *fakeLifecycleRunner) Close(opts lifecycle.Options, parent string, issue
 	return f.code
 }
 
+func (f *fakeLifecycleRunner) CloseTask(opts lifecycle.Options, parent, taskID string, lg lifecycle.Logger) exitcode.Code {
+	f.projectRoot = opts.ProjectRoot
+	f.statePath = opts.StatePath
+	f.closeTaskParent = parent
+	f.closeTaskID = taskID
+	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close task\n")
+	return f.code
+}
+
 func (f *fakeLifecycleRunner) Merge(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake merge\n")
+	return f.code
+}
+
+func (f *fakeLifecycleRunner) MergeTask(opts lifecycle.Options, parent, taskID string, lg lifecycle.Logger) exitcode.Code {
+	f.mergeTaskParent = parent
+	f.mergeTaskID = taskID
+	fmt.Fprintf(lg.Stderr(), "[ ok ] fake merge task\n")
 	return f.code
 }
 
 func (f *fakeLifecycleRunner) Cleanup(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
 	f.cleanupParent = parent
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake cleanup\n")
+	return f.code
+}
+
+func (f *fakeLifecycleRunner) CleanupPlan(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
+	f.cleanupPlanParent = parent
+	fmt.Fprintf(lg.Stderr(), "[ ok ] fake cleanup plan\n")
 	return f.code
 }
 

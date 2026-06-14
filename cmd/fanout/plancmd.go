@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
 	"github.com/butaosuinu/fanout/internal/planspec"
@@ -51,6 +53,12 @@ type planCommandConfig struct {
 	DryRun             bool
 	Debug              bool
 	UnblockedOnly      bool
+	StatusMode         bool
+	Format             string
+	CloseTaskID        string
+	MergeTaskID        string
+	CleanupMode        bool
+	formatExplicit     bool
 	AutoPullRequest    *bool
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
@@ -103,6 +111,16 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 	if cfg.Debug {
 		lg = log.New(true)
+	}
+	if cfg.actionMode() {
+		if missing := checkPlanActionDeps(cfg); len(missing) > 0 {
+			lg.Err("missing dependencies:")
+			for _, d := range missing {
+				fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
+			}
+			return exitcode.Env
+		}
+		return cmdPlanLifecycle(cfg, lg)
 	}
 
 	if missing := checkPlanDeps(cfg); len(missing) > 0 {
@@ -209,24 +227,32 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 }
 
 func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcode.Code) {
-	cfg := planCommandConfig{SleepBetween: cliflags.DefaultSleepBetween}
+	cfg := planCommandConfig{SleepBetween: cliflags.DefaultSleepBetween, Format: cliflags.DefaultFormat}
 	var limitRaw, sleepRaw string
 
 	valueOptions := map[string]func(string){
 		"--agent":         func(v string) { cfg.Agent = v },
 		"--base-branch":   func(v string) { cfg.BaseBranch = v },
 		"--branch-prefix": func(v string) { cfg.BranchPrefix = v },
+		"--close":         func(v string) { cfg.CloseTaskID = v },
+		"--merge":         func(v string) { cfg.MergeTaskID = v },
 		"--limit":         func(v string) { limitRaw = v },
 		"--only":          func(v string) { cfg.OnlyArg = v },
 		"--skip":          func(v string) { cfg.SkipArg = v },
 		"--session":       func(v string) { cfg.Session = v },
-		"--sleep":         func(v string) { sleepRaw = v },
+		"--format": func(v string) {
+			cfg.Format = v
+			cfg.formatExplicit = true
+		},
+		"--sleep": func(v string) { sleepRaw = v },
 	}
 	boolOptions := map[string]func(){
 		"--dry-run":                 func() { cfg.DryRun = true },
 		"--debug":                   func() { cfg.Debug = true },
 		"--no-refresh":              func() { cfg.NoRefresh = true },
 		"--unblocked-only":          func() { cfg.UnblockedOnly = true },
+		"--status":                  func() { cfg.StatusMode = true },
+		"--cleanup":                 func() { cfg.CleanupMode = true },
 		"--auto-pr":                 func() { cfg.AutoPullRequest = new(true) },
 		"--no-auto-pr":              func() { cfg.AutoPullRequest = new(false) },
 		"--pr-review-gate":          func() { cfg.PRReviewGate = new(true) },
@@ -275,6 +301,9 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		fmt.Fprint(lg.Stderr(), planUsage)
 		return planCommandConfig{}, exitcode.Invocation
 	}
+	if code := validatePlanActionFlags(cfg, limitRaw, sleepRaw, lg); code != exitcode.OK {
+		return planCommandConfig{}, code
+	}
 	if limitRaw != "" {
 		n, err := parsePlanPositiveInt("--limit", limitRaw)
 		if err != nil {
@@ -299,6 +328,18 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		lg.Err("--branch-prefix must not contain whitespace, got: %s", cfg.BranchPrefix)
 		return planCommandConfig{}, exitcode.Env
 	}
+	if cfg.CloseTaskID != "" {
+		if err := validatePlanTaskID("--close", cfg.CloseTaskID); err != nil {
+			lg.Err("%s", err.Error())
+			return planCommandConfig{}, exitcode.Env
+		}
+	}
+	if cfg.MergeTaskID != "" {
+		if err := validatePlanTaskID("--merge", cfg.MergeTaskID); err != nil {
+			lg.Err("%s", err.Error())
+			return planCommandConfig{}, exitcode.Env
+		}
+	}
 	if cfg.OnlyArg != "" && cfg.SkipArg != "" {
 		lg.Err("--only and --skip are mutually exclusive")
 		return planCommandConfig{}, exitcode.Env
@@ -319,6 +360,151 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		}
 	}
 	return cfg, exitcode.OK
+}
+
+func (cfg planCommandConfig) actionMode() bool {
+	return cfg.StatusMode || cfg.CloseTaskID != "" || cfg.MergeTaskID != "" || cfg.CleanupMode
+}
+
+func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, lg *log.Logger) exitcode.Code {
+	if cfg.Format != "json" && cfg.Format != "table" {
+		lg.Err("--format must be one of json,table, got: %s", cfg.Format)
+		return exitcode.Env
+	}
+	if cfg.formatExplicit && !cfg.StatusMode {
+		lg.Err("--format can only be used with --status")
+		return exitcode.Invocation
+	}
+
+	lifecycleFlags := 0
+	if cfg.CloseTaskID != "" {
+		lifecycleFlags++
+	}
+	if cfg.MergeTaskID != "" {
+		lifecycleFlags++
+	}
+	if cfg.CleanupMode {
+		lifecycleFlags++
+	}
+	if cfg.StatusMode {
+		switch {
+		case lifecycleFlags > 0:
+			return planStatusConflict(lg, planLifecycleFlagName(cfg))
+		case cfg.Agent != "":
+			return planStatusConflict(lg, "--agent")
+		case cfg.BaseBranch != "":
+			return planStatusConflict(lg, "--base-branch")
+		case limitRaw != "":
+			return planStatusConflict(lg, "--limit")
+		case cfg.OnlyArg != "":
+			return planStatusConflict(lg, "--only")
+		case cfg.SkipArg != "":
+			return planStatusConflict(lg, "--skip")
+		case cfg.Session != "":
+			return planStatusConflict(lg, "--session")
+		case cfg.DryRun:
+			return planStatusConflict(lg, "--dry-run")
+		case cfg.UnblockedOnly:
+			return planStatusConflict(lg, "--unblocked-only")
+		case cfg.NoRefresh:
+			return planStatusConflict(lg, "--no-refresh")
+		case cfg.AutoPullRequest != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
+		case cfg.PRReviewGate != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate))
+		case cfg.BriefingCodeReview != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
+		case cfg.AgentTeamsHint != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
+		case cfg.PRVisualization != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
+		case cfg.DashboardKeybind != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
+		case sleepRaw != "":
+			return planStatusConflict(lg, "--sleep")
+		}
+	}
+
+	if lifecycleFlags > 1 {
+		lg.Err("--close, --merge, and --cleanup are mutually exclusive")
+		return exitcode.Invocation
+	}
+	if lifecycleFlags > 0 {
+		switch {
+		case cfg.Agent != "":
+			return planLifecycleConflict(lg, "--agent")
+		case cfg.BaseBranch != "":
+			return planLifecycleConflict(lg, "--base-branch")
+		case cfg.BranchPrefix != "":
+			return planLifecycleConflict(lg, "--branch-prefix")
+		case limitRaw != "":
+			return planLifecycleConflict(lg, "--limit")
+		case cfg.OnlyArg != "":
+			return planLifecycleConflict(lg, "--only")
+		case cfg.SkipArg != "":
+			return planLifecycleConflict(lg, "--skip")
+		case cfg.Session != "":
+			return planLifecycleConflict(lg, "--session")
+		case cfg.DryRun:
+			return planLifecycleConflict(lg, "--dry-run")
+		case cfg.UnblockedOnly:
+			return planLifecycleConflict(lg, "--unblocked-only")
+		case cfg.NoRefresh:
+			return planLifecycleConflict(lg, "--no-refresh")
+		case cfg.AutoPullRequest != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--auto-pr", "--no-auto-pr", cfg.AutoPullRequest))
+		case cfg.PRReviewGate != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--pr-review-gate", "--no-pr-review-gate", cfg.PRReviewGate))
+		case cfg.BriefingCodeReview != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
+		case cfg.AgentTeamsHint != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
+		case cfg.PRVisualization != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
+		case cfg.DashboardKeybind != nil:
+			return planLifecycleConflict(lg, planBoolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
+		case sleepRaw != "":
+			return planLifecycleConflict(lg, "--sleep")
+		}
+	}
+	return exitcode.OK
+}
+
+func planStatusConflict(lg *log.Logger, flag string) exitcode.Code {
+	lg.Err("--status cannot be combined with %s", flag)
+	return exitcode.Invocation
+}
+
+func planLifecycleConflict(lg *log.Logger, flag string) exitcode.Code {
+	lg.Err("--close/--merge/--cleanup cannot be combined with %s", flag)
+	return exitcode.Invocation
+}
+
+func planLifecycleFlagName(cfg planCommandConfig) string {
+	switch {
+	case cfg.CloseTaskID != "":
+		return "--close"
+	case cfg.MergeTaskID != "":
+		return "--merge"
+	case cfg.CleanupMode:
+		return "--cleanup"
+	default:
+		return "--close/--merge/--cleanup"
+	}
+}
+
+func planBoolSettingFlag(onFlag, offFlag string, v *bool) string {
+	if v != nil && *v {
+		return onFlag
+	}
+	return offFlag
+}
+
+func validatePlanTaskID(flag, value string) error {
+	if !rePlanTaskID.MatchString(value) {
+		return fmt.Errorf("%s must be a lowercase kebab-case task id, got: %s", flag, value)
+	}
+	return nil
 }
 
 func (cfg planCommandConfig) cliConfig() *cliflags.Config {
@@ -373,6 +559,20 @@ func checkPlanDeps(cfg planCommandConfig) []string {
 	check("git", "git")
 	check("tmux", "tmux (brew install tmux)")
 	if cfg.UnblockedOnly {
+		check("gh", "gh (brew install gh)")
+	}
+	return missing
+}
+
+func checkPlanActionDeps(cfg planCommandConfig) []string {
+	var missing []string
+	check := func(cmd, hint string) {
+		if _, err := exec.LookPath(cmd); err != nil {
+			missing = append(missing, hint)
+		}
+	}
+	check("git", "git")
+	if cfg.StatusMode || cfg.CleanupMode {
 		check("gh", "gh (brew install gh)")
 	}
 	return missing
@@ -452,6 +652,351 @@ func copyPlanSpec(src, projectRoot, slug string) error {
 
 func planParentRef(slug string) string {
 	return "plan:" + slug
+}
+
+type planStatusReport struct {
+	Plan    planspec.Plan    `json:"plan"`
+	Tasks   []planStatusTask `json:"tasks"`
+	Summary statusSummary    `json:"summary"`
+}
+
+type planStatusTask struct {
+	ID          string          `json:"id"`
+	Branch      string          `json:"branch"`
+	PRs         []ghissue.PRRef `json:"prs"`
+	HasMergedPR bool            `json:"has_merged_pr"`
+	Blocked     bool            `json:"blocked"`
+}
+
+func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
+	mode := planActionModeFlag(cfg)
+	rt, code := resolveStateRuntimeForMode(mode, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	cfg.SpecPath = resolvePlanSpecPath(rt.projectRoot, cfg.SpecArg)
+	spec, code := loadPlanActionSpec(cfg, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	parentRef := planParentRef(spec.Plan.Slug)
+
+	switch {
+	case cfg.StatusMode:
+		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
+	case cfg.CloseTaskID != "":
+		return lifecycle.CloseTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.CloseTaskID, lg)
+	case cfg.MergeTaskID != "":
+		return lifecycle.MergeTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.MergeTaskID, lg)
+	case cfg.CleanupMode:
+		return lifecycle.CleanupPlan(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, lg)
+	default:
+		return exitcode.Invocation
+	}
+}
+
+func planActionModeFlag(cfg planCommandConfig) string {
+	switch {
+	case cfg.StatusMode:
+		return "--status"
+	case cfg.CloseTaskID != "":
+		return "--close"
+	case cfg.MergeTaskID != "":
+		return "--merge"
+	case cfg.CleanupMode:
+		return "--cleanup"
+	default:
+		return "plan"
+	}
+}
+
+func loadPlanActionSpec(cfg planCommandConfig, lg *log.Logger) (planspec.Spec, exitcode.Code) {
+	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
+	if err != nil {
+		lg.Err("%s: %v", planActionModeFlag(cfg), err)
+		return planspec.Spec{}, planActionInputCode(cfg)
+	}
+	if cfg.StatusMode {
+		return validatePlanActionSpecNames(cfg, spec, lg)
+	}
+	return spec, exitcode.OK
+}
+
+func validatePlanActionSpecNames(cfg planCommandConfig, spec planspec.Spec, lg *log.Logger) (planspec.Spec, exitcode.Code) {
+	if err := validatePlanExecutionNames(spec, cfg); err != nil {
+		lg.Err("%s: validate plan execution names %s: %v", planActionModeFlag(cfg), cfg.SpecPath, err)
+		return planspec.Spec{}, planActionInputCode(cfg)
+	}
+	return spec, exitcode.OK
+}
+
+func planActionInputCode(cfg planCommandConfig) exitcode.Code {
+	if cfg.StatusMode {
+		return exitcode.Invocation
+	}
+	return exitcode.Env
+}
+
+func cmdPlanStatus(cfg planCommandConfig, spec planspec.Spec, projectRoot, statePath string, lg *log.Logger) exitcode.Code {
+	if projectRoot == "" || !dirExists(projectRoot) {
+		lg.Err("--status: project_root is not a directory: %s (state=%s)", emptyLabel(projectRoot), statePath)
+		return exitcode.Invocation
+	}
+	store, err := state.Load(statePath)
+	if err != nil {
+		lg.Err("--status: fanout state at %s is not valid JSON or has an invalid schema: %v", statePath, err)
+		return exitcode.Invocation
+	}
+	report, code := buildPlanStatusReport(cfg, spec, projectRoot, store, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	if cfg.Format == "table" {
+		return writePlanStatusTable(report, projectRoot, lg)
+	}
+	return writePlanStatusReport(report, lg)
+}
+
+func buildPlanStatusReport(cfg planCommandConfig, spec planspec.Spec, projectRoot string, store state.Store, lg *log.Logger) (planStatusReport, exitcode.Code) {
+	parentRef := planParentRef(spec.Plan.Slug)
+	gh := ghissue.Runner{Cwd: projectRoot}
+	tasks := make([]planStatusTask, 0, len(spec.Tasks))
+	mergedByID := map[string]bool{}
+	for _, task := range spec.Tasks {
+		branch := planStatusBranch(cfg, spec, store, parentRef, task)
+		prs, err := gh.PRsForBranch(branch)
+		if err != nil {
+			lg.Err("--status: gh pr list --head %s failed for task %s: %v", branch, task.ID, err)
+			return planStatusReport{}, exitcode.GitHub
+		}
+		row := planStatusTask{
+			ID:          task.ID,
+			Branch:      branch,
+			PRs:         prs,
+			HasMergedPR: planHasMergedPR(prs),
+		}
+		mergedByID[task.ID] = row.HasMergedPR
+		tasks = append(tasks, row)
+	}
+	for i, task := range spec.Tasks {
+		tasks[i].Blocked = planTaskStatusBlocked(task, mergedByID)
+	}
+	return planStatusReport{
+		Plan:    spec.Plan,
+		Tasks:   tasks,
+		Summary: newPlanStatusSummary(tasks),
+	}, exitcode.OK
+}
+
+func planStatusBranch(cfg planCommandConfig, spec planspec.Spec, store state.Store, parent string, task planspec.Task) string {
+	if branch := recordedTaskBranch(store, parent, task.ID); branch != "" {
+		return branch
+	}
+	return planTaskBranch(cfg, spec, task)
+}
+
+func recordedTaskBranch(store state.Store, parent, taskID string) string {
+	for _, pane := range store.PanesForParent(parent) {
+		if pane.TaskID == taskID && strings.TrimSpace(pane.BranchName) != "" {
+			return strings.TrimSpace(pane.BranchName)
+		}
+	}
+	return ""
+}
+
+func planTaskBranch(cfg planCommandConfig, spec planspec.Spec, task planspec.Task) string {
+	if task.Branch != "" {
+		return task.Branch
+	}
+	return naming.BranchName("", cfg.BranchPrefix, planTaskSlug(spec.Plan.Slug, task))
+}
+
+func planTaskStatusBlocked(task planspec.Task, mergedByID map[string]bool) bool {
+	if mergedByID[task.ID] {
+		return false
+	}
+	for _, depID := range task.BlockedBy {
+		if !mergedByID[depID] {
+			return true
+		}
+	}
+	return false
+}
+
+func newPlanStatusSummary(tasks []planStatusTask) statusSummary {
+	merged := 0
+	blocked := 0
+	for _, task := range tasks {
+		if task.HasMergedPR {
+			merged++
+		}
+		if task.Blocked {
+			blocked++
+		}
+	}
+	return statusSummary{
+		Total:     len(tasks),
+		Merged:    merged,
+		Pending:   len(tasks) - merged,
+		Blocked:   blocked,
+		AllMerged: len(tasks) > 0 && merged == len(tasks),
+	}
+}
+
+func writePlanStatusReport(report planStatusReport, lg *log.Logger) exitcode.Code {
+	out, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		lg.Err("--status: failed to encode plan report: %v", err)
+		return exitcode.GitHub
+	}
+	fmt.Fprintln(lg.Stdout(), string(out))
+	return exitcode.OK
+}
+
+func writePlanStatusTable(report planStatusReport, projectRoot string, lg *log.Logger) exitcode.Code {
+	rows, maxLines, addWidth, delWidth, code := planStatusTableRows(report, projectRoot, lg)
+	if code != exitcode.OK {
+		return code
+	}
+
+	out := lg.Stdout()
+	fmt.Fprintf(out, "fanout plan status %s: total=%d merged=%d pending=%d blocked=%d all_merged=%t\n",
+		report.Plan.Slug, report.Summary.Total, report.Summary.Merged, report.Summary.Pending, report.Summary.Blocked, report.Summary.AllMerged)
+	if len(rows) == 0 {
+		fmt.Fprintln(out, "(no plan tasks)")
+		return exitcode.OK
+	}
+
+	diffWidth := statusDiffWidth(addWidth, delWidth)
+	widths := []int{
+		len("TASK"),
+		len("STATE"),
+		len("PR"),
+		len("PR_STATE"),
+		len("CI"),
+		len("TYPE"),
+		len("FILES"),
+		diffWidth,
+		len("LINK"),
+	}
+	for _, row := range rows {
+		widths[0] = max(widths[0], len(row.Issue))
+		widths[1] = max(widths[1], len(row.IssueState))
+		widths[2] = max(widths[2], len(row.PR))
+		widths[3] = max(widths[3], len(row.PRState))
+		widths[4] = max(widths[4], len(row.CI))
+		widths[5] = max(widths[5], len(row.Type))
+		widths[6] = max(widths[6], len(row.Files))
+	}
+
+	headers := []string{"TASK", "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
+	fmt.Fprintln(out, statusTableLine(headers, widths))
+	separators := []string{
+		strings.Repeat("-", widths[0]),
+		strings.Repeat("-", widths[1]),
+		strings.Repeat("-", widths[2]),
+		strings.Repeat("-", widths[3]),
+		strings.Repeat("-", widths[4]),
+		strings.Repeat("-", widths[5]),
+		strings.Repeat("-", widths[6]),
+		strings.Repeat("-", diffWidth),
+		strings.Repeat("-", widths[8]),
+	}
+	fmt.Fprintln(out, statusTableLine(separators, widths))
+
+	colors := lg.Colors()
+	for _, row := range rows {
+		cols := []string{
+			row.Issue,
+			row.IssueState,
+			row.PR,
+			row.PRState,
+			row.CI,
+			row.Type,
+			row.Files,
+			renderStatusDiff(row, maxLines, addWidth, delWidth, diffWidth, colors),
+			row.Link,
+		}
+		fmt.Fprintln(out, statusTableLine(cols, widths))
+	}
+	return exitcode.OK
+}
+
+func planStatusTableRows(report planStatusReport, projectRoot string, lg *log.Logger) ([]statusTableRow, int, int, int, exitcode.Code) {
+	if len(report.Tasks) == 0 {
+		return nil, 0, len("+0"), len("-0"), exitcode.OK
+	}
+
+	gh := ghissue.Runner{Cwd: projectRoot}
+	nwo, err := gh.RepoNameWithOwner()
+	if err != nil {
+		lg.Err("--status: failed to resolve repo (gh repo view) in %s", projectRoot)
+		return nil, 0, 0, 0, exitcode.GitHub
+	}
+
+	rows := make([]statusTableRow, 0, len(report.Tasks))
+	maxLines := 0
+	addWidth := len("+0")
+	delWidth := len("-0")
+	for _, task := range report.Tasks {
+		if len(task.PRs) == 0 {
+			rows = append(rows, statusTableRow{
+				Issue:      task.ID,
+				IssueState: planStatusState(task),
+				PR:         "-",
+				PRState:    "-",
+				CI:         "-",
+				Type:       "-",
+				Files:      "-",
+				Link:       "-",
+			})
+			continue
+		}
+		for _, pr := range task.PRs {
+			stat, err := gh.PRDiffStat(pr.Number)
+			if err != nil {
+				lg.Err("--status: gh pr view #%d failed: %v", pr.Number, err)
+				return nil, 0, 0, 0, exitcode.GitHub
+			}
+			addWidth = max(addWidth, len(fmt.Sprintf("+%d", stat.Additions)))
+			delWidth = max(delWidth, len(fmt.Sprintf("-%d", stat.Deletions)))
+			maxLines = max(maxLines, stat.Additions)
+			maxLines = max(maxLines, stat.Deletions)
+			rows = append(rows, statusTableRow{
+				Issue:      task.ID,
+				IssueState: planStatusState(task),
+				PR:         "#" + strconv.Itoa(pr.Number),
+				PRState:    dashIfEmpty(pr.DisplayState()),
+				CI:         dashIfEmpty(pr.CIStatus),
+				Type:       conventionalType(stat.Title),
+				Files:      strconv.Itoa(stat.ChangedFiles),
+				Link:       fmt.Sprintf("https://github.com/%s/pull/%d", nwo, pr.Number),
+				Additions:  stat.Additions,
+				Deletions:  stat.Deletions,
+				HasDiff:    true,
+			})
+		}
+	}
+	return rows, maxLines, addWidth, delWidth, exitcode.OK
+}
+
+func planStatusState(task planStatusTask) string {
+	if task.HasMergedPR {
+		return "merged"
+	}
+	if task.Blocked {
+		return "blocked"
+	}
+	return "pending"
+}
+
+func planHasMergedPR(prs []ghissue.PRRef) bool {
+	for _, pr := range prs {
+		if strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func planTaskSlug(planSlug string, task planspec.Task) string {
@@ -827,6 +1372,11 @@ const planUsage = `Usage: fanout plan <spec.json | plan-slug> [options]
 Options:
   --agent <name>              Agent to launch (or FANOUT_AGENT)
   --dry-run                   Print worktree/tmux/agent actions without launching
+  --status                    Print task status and exit
+  --format <json|table>       Output format for --status (default: json)
+  --close <task-id>           Remove a recorded task worktree, pane, and state row
+  --merge <task-id>           Fast-forward merge the recorded task branch
+  --cleanup                   Close task panes whose branch has a MERGED PR
   --limit <N>                 Create at most N panes
   --only <task-id[,id...]>    Restrict to task IDs
   --skip <task-id[,id...]>    Exclude task IDs

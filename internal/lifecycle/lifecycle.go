@@ -66,6 +66,34 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	return exitcode.OK
 }
 
+// CloseTask removes the recorded worktree(s), best-effort kills tmux pane(s),
+// and removes all task state rows matching parent and taskID.
+func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
+	locked, code := lockState("--close", opts, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	defer unlockState("--close", locked, lg)
+
+	panes := panesForTask(locked.PanesForParent(parent), taskID)
+	if len(panes) == 0 {
+		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
+		return exitcode.Invocation
+	}
+	if !cleanupPaneRecords(opts.ProjectRoot, panes, lg) {
+		return exitcode.Env
+	}
+	if err := locked.RemoveTaskPane(parent, taskID); err != nil {
+		lg.Err("%s: remove fanout state: %v", taskID, err)
+		return exitcode.Env
+	}
+	if !pruneWorktrees(opts.ProjectRoot, lg) {
+		return exitcode.Env
+	}
+	lg.Ok("%s: closed fanout worktree and removed state", taskID)
+	return exitcode.OK
+}
+
 // Merge fast-forwards the project checkout to the recorded child branch.
 func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	store, code := loadState("--merge", opts, lg)
@@ -90,6 +118,33 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	lg.Ok("#%d: merged %s with --ff-only", pane.IssueNum, pane.BranchName)
+	return exitcode.OK
+}
+
+// MergeTask fast-forwards the project checkout to the recorded task branch.
+func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
+	store, code := loadState("--merge", opts, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	pane, ok := store.FindTask(parent, taskID)
+	if !ok {
+		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
+		return exitcode.Invocation
+	}
+	if strings.TrimSpace(pane.BranchName) == "" {
+		lg.Err("--merge: task %s has no branchName recorded in %s", taskID, opts.StatePath)
+		return exitcode.Invocation
+	}
+	out, err := gitLifecycle(opts.ProjectRoot, "merge", "--ff-only", pane.BranchName)
+	if err != nil {
+		lg.Err("--merge: git merge --ff-only %s failed for task %s; no conflict resolution was attempted", pane.BranchName, taskID)
+		if s := strings.TrimSpace(string(out)); s != "" {
+			fmt.Fprintln(lg.Stderr(), s)
+		}
+		return exitcode.Env
+	}
+	lg.Ok("%s: merged %s with --ff-only", taskID, pane.BranchName)
 	return exitcode.OK
 }
 
@@ -153,6 +208,75 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	lg.Ok("--cleanup: closed %d merged/closed pane(s)", closed)
+	return exitcode.OK
+}
+
+// CleanupPlan closes every recorded plan task for parent whose recorded branch
+// has at least one MERGED PR.
+func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
+	locked, code := lockState("--cleanup", opts, lg)
+	if code != exitcode.OK {
+		return code
+	}
+	defer unlockState("--cleanup", locked, lg)
+
+	panes := taskPanesForParent(locked.PanesForParent(parent))
+	if len(panes) == 0 {
+		lg.Info("--cleanup: no recorded plan task panes for parent %s", parent)
+		return exitcode.OK
+	}
+
+	eligible := map[string]bool{}
+	checkedBranches := map[string]bool{}
+	gh := ghissue.Runner{Cwd: opts.ProjectRoot}
+	for _, pane := range panes {
+		taskID := strings.TrimSpace(pane.TaskID)
+		branch := strings.TrimSpace(pane.BranchName)
+		if taskID == "" || branch == "" || checkedBranches[branch] {
+			continue
+		}
+		checkedBranches[branch] = true
+		prs, err := gh.PRsForBranch(branch)
+		if err != nil {
+			lg.Err("--cleanup: gh pr list --head %s failed for task %s: %v", branch, taskID, err)
+			return exitcode.GitHub
+		}
+		if branchHasMergedPR(prs) {
+			for _, candidate := range panes {
+				if strings.TrimSpace(candidate.BranchName) == branch {
+					eligible[strings.TrimSpace(candidate.TaskID)] = true
+				}
+			}
+		}
+	}
+	if len(eligible) == 0 {
+		lg.Info("--cleanup: no merged recorded plan task panes for parent %s", parent)
+		return exitcode.OK
+	}
+
+	closed := 0
+	failed := 0
+	for _, taskID := range sortedTaskIDs(eligible) {
+		taskPanes := panesForTask(panes, taskID)
+		if !cleanupPaneRecords(opts.ProjectRoot, taskPanes, lg) {
+			failed++
+			continue
+		}
+		if err := locked.RemoveTaskPane(parent, taskID); err != nil {
+			lg.Err("%s: remove fanout state: %v", taskID, err)
+			failed++
+			continue
+		}
+		closed++
+	}
+	if !pruneWorktrees(opts.ProjectRoot, lg) {
+		failed++
+	}
+	if failed > 0 {
+		lg.Err("--cleanup: closed %d plan task pane(s), failed %d cleanup step(s)", closed, failed)
+		return exitcode.Env
+	}
+	lg.Ok("--cleanup: closed %d merged plan task pane(s)", closed)
 	return exitcode.OK
 }
 
@@ -238,16 +362,16 @@ func cleanupPaneRecords(projectRoot string, panes []state.Pane, lg Logger) bool 
 
 func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {
 	if strings.TrimSpace(pane.WorktreePath) == "" {
-		lg.Warn("#%d: no worktreePath recorded; skipping git worktree remove", pane.IssueNum)
+		lg.Warn("%s: no worktreePath recorded; skipping git worktree remove", paneLabel(pane))
 		return true
 	}
 	if !dirExists(pane.WorktreePath) {
-		lg.Warn("#%d: worktree path already absent: %s", pane.IssueNum, pane.WorktreePath)
+		lg.Warn("%s: worktree path already absent: %s", paneLabel(pane), pane.WorktreePath)
 		return true
 	}
 	out, err := gitLifecycle(projectRoot, "worktree", "remove", pane.WorktreePath, "--force")
 	if err != nil {
-		lg.Err("#%d: git worktree remove %s --force failed", pane.IssueNum, pane.WorktreePath)
+		lg.Err("%s: git worktree remove %s --force failed", paneLabel(pane), pane.WorktreePath)
 		if s := strings.TrimSpace(string(out)); s != "" {
 			fmt.Fprintln(lg.Stderr(), s)
 		}
@@ -258,11 +382,11 @@ func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {
 
 func killPaneBestEffort(pane state.Pane, lg Logger) {
 	if strings.TrimSpace(pane.PaneID) == "" {
-		lg.Warn("#%d: no paneId recorded; skipping tmux kill-pane", pane.IssueNum)
+		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
 		return
 	}
 	if err := tmuxrun.KillPane(pane.PaneID); err != nil {
-		lg.Warn("#%d: tmux kill-pane %s failed; treating pane as stale: %v", pane.IssueNum, pane.PaneID, err)
+		lg.Warn("%s: tmux kill-pane %s failed; treating pane as stale: %v", paneLabel(pane), pane.PaneID, err)
 	}
 }
 
@@ -305,6 +429,52 @@ func panesForIssue(panes []state.Pane, issueNum int) []state.Pane {
 		}
 	}
 	return out
+}
+
+func panesForTask(panes []state.Pane, taskID string) []state.Pane {
+	taskID = strings.TrimSpace(taskID)
+	var out []state.Pane
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.TaskID) == taskID {
+			out = append(out, pane)
+		}
+	}
+	return out
+}
+
+func taskPanesForParent(panes []state.Pane) []state.Pane {
+	var out []state.Pane
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.TaskID) != "" {
+			out = append(out, pane)
+		}
+	}
+	return out
+}
+
+func branchHasMergedPR(prs []ghissue.PRRef) bool {
+	for _, pr := range prs {
+		if strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedTaskIDs(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func paneLabel(pane state.Pane) string {
+	if taskID := strings.TrimSpace(pane.TaskID); taskID != "" {
+		return taskID
+	}
+	return fmt.Sprintf("#%d", pane.IssueNum)
 }
 
 func dirExists(path string) bool {

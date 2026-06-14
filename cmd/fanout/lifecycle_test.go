@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
+	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/state"
 )
@@ -166,6 +167,164 @@ func TestCmdMergeReportsNonFastForwardOnly(t *testing.T) {
 	}
 }
 
+func TestLifecycleCloseTaskRemovesWorktreeKillsPaneAndState(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "api-client")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/api-client", worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "plan:launch-plan",
+		IssueNum:     0,
+		TaskID:       "api-client",
+		BranchName:   "fanout/api-client",
+		PaneID:       "%77",
+		WorktreePath: worktreePath,
+	})
+
+	code := lifecycle.CloseTask(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", "api-client", discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("CloseTask code = %d, want %d", code, exitcode.OK)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists or stat failed unexpectedly: %v", err)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "api-client"); ok {
+		t.Fatalf("task api-client still present in state: %+v", loaded.Panes)
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "kill-pane -t %77") {
+		t.Fatalf("tmux log = %q, want kill-pane for %%77", body)
+	}
+}
+
+func TestLifecycleMergeTaskFastForwardsRecordedBranch(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "-c", "fanout/api-client")
+	if err := os.WriteFile(filepath.Join(repo, "api.txt"), []byte("api\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "api.txt")
+	gitCmdTest(t, repo, "commit", "-m", "api")
+	taskHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "main")
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("main HEAD before merge = %s, want base %s", got, baseHead)
+	}
+	writeLifecycleState(t, repo, state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", BranchName: "fanout/api-client"})
+
+	code := lifecycle.MergeTask(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", "api-client", discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("MergeTask code = %d, want %d", code, exitcode.OK)
+	}
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != taskHead {
+		t.Fatalf("main HEAD after merge = %s, want task %s", got, taskHead)
+	}
+}
+
+func TestCmdPlanLifecycleCloseUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	specPath := writePlanLifecycleSpec(t, repo)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:     "plan:launch-plan",
+		IssueNum:   0,
+		TaskID:     "api-client",
+		BranchName: "fanout/api-client",
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, CloseTaskID: "api-client"}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdPlanLifecycle close code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "api-client"); ok {
+		t.Fatalf("stale task api-client still present in state: %+v", loaded.Panes)
+	}
+}
+
+func TestCmdPlanLifecycleCloseSkipsResolvedBranchValidation(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	specPath := filepath.Join(repo, "launch-plan.json")
+	data := []byte(`{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "base-types", "title": "Define base types", "briefing": "## Goal\nDefine base types"},
+    {"id": "worker", "title": "Worker", "briefing": "## Goal\nWork", "branch": "fanout/launch-plan-define-base-types-base-types"}
+  ]
+}
+`)
+	if err := os.WriteFile(specPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:     "plan:launch-plan",
+		IssueNum:   0,
+		TaskID:     "base-types",
+		BranchName: "custom/launch-plan-define-base-types-base-types",
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, CloseTaskID: "base-types"}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdPlanLifecycle close code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "base-types"); ok {
+		t.Fatalf("task base-types still present in state: %+v", loaded.Panes)
+	}
+}
+
+func TestCmdPlanLifecycleMergeUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	specPath := writePlanLifecycleSpec(t, repo)
+	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "-c", "fanout/api-client")
+	if err := os.WriteFile(filepath.Join(repo, "api.txt"), []byte("api\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "api.txt")
+	gitCmdTest(t, repo, "commit", "-m", "api")
+	taskHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "main")
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("main HEAD before merge = %s, want base %s", got, baseHead)
+	}
+	writeLifecycleState(t, repo, state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", BranchName: "fanout/api-client"})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, MergeTaskID: "api-client"}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdPlanLifecycle merge code = %d, want %d", code, exitcode.OK)
+	}
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != taskHead {
+		t.Fatalf("main HEAD after merge = %s, want task %s", got, taskHead)
+	}
+}
+
 func TestCmdCleanupClosesOnlyMergedOrClosedPanes(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	closedPath := filepath.Join(repo, ".fanout", "worktrees", "closed-child-101")
@@ -237,6 +396,72 @@ esac
 	}
 }
 
+func TestLifecycleCleanupPlanClosesOnlyTasksWithMergedBranchPR(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	mergedPath := filepath.Join(repo, ".fanout", "worktrees", "api-client")
+	openPath := filepath.Join(repo, ".fanout", "worktrees", "ui-shell")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/api-client", mergedPath, "HEAD")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/ui-shell", openPath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghScript := `#!/bin/sh
+if [ "$1 $2" = "pr list" ]; then
+  branch=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --head) branch="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [ "$branch" = "fanout/api-client" ]; then
+    printf '[{"number":42,"state":"MERGED","mergedAt":"2026-06-14T00:00:00Z"}]\n'
+  else
+    printf '[{"number":43,"state":"OPEN","mergedAt":null}]\n'
+  fi
+  exit 0
+fi
+printf 'unexpected gh command: %s\n' "$*" >&2
+exit 1
+`
+	installLifecycleScript(t, "gh", ghScript)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo,
+		state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", BranchName: "fanout/api-client", PaneID: "%201", WorktreePath: mergedPath},
+		state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "ui-shell", BranchName: "fanout/ui-shell", PaneID: "%202", WorktreePath: openPath},
+	)
+
+	code := lifecycle.CleanupPlan(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("CleanupPlan code = %d, want %d", code, exitcode.OK)
+	}
+	if _, err := os.Stat(mergedPath); !os.IsNotExist(err) {
+		t.Fatalf("merged task worktree still exists or stat failed unexpectedly: %v", err)
+	}
+	if _, err := os.Stat(openPath); err != nil {
+		t.Fatalf("open task worktree should remain: %v", err)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "api-client"); ok {
+		t.Fatal("merged task api-client still present in state")
+	}
+	if _, ok := loaded.FindTask("plan:launch-plan", "ui-shell"); !ok {
+		t.Fatal("open task ui-shell was removed from state")
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "kill-pane -t %201") || strings.Contains(string(body), "%202") {
+		t.Fatalf("tmux log = %q, want only %%201 killed", body)
+	}
+}
+
 func initLifecycleRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -289,6 +514,23 @@ func installLifecycleScript(t *testing.T, name, script string) string {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	logPath := filepath.Join(t.TempDir(), name+".log")
 	return logPath
+}
+
+func writePlanLifecycleSpec(t *testing.T, repo string) string {
+	t.Helper()
+	path := filepath.Join(repo, "launch-plan.json")
+	data := []byte(`{
+  "version": 1,
+  "plan": {"slug": "launch-plan", "title": "Launch plan"},
+  "tasks": [
+    {"id": "base-types", "title": "Define base types", "briefing": "## Goal\nDefine base types"}
+  ]
+}
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func discardLogger() *log.Logger {

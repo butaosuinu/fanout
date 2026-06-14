@@ -277,8 +277,11 @@ var errPaneNotAlive = errors.New("pane is no longer live")
 
 type lifecycleRunner interface {
 	Close(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
+	CloseTask(lifecycle.Options, string, string, lifecycle.Logger) exitcode.Code
 	Merge(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
+	MergeTask(lifecycle.Options, string, string, lifecycle.Logger) exitcode.Code
 	Cleanup(lifecycle.Options, string, lifecycle.Logger) exitcode.Code
+	CleanupPlan(lifecycle.Options, string, lifecycle.Logger) exitcode.Code
 }
 
 type defaultLifecycleRunner struct{}
@@ -287,12 +290,24 @@ func (defaultLifecycleRunner) Close(opts lifecycle.Options, parent string, issue
 	return lifecycle.Close(opts, parent, issueNum, lg)
 }
 
+func (defaultLifecycleRunner) CloseTask(opts lifecycle.Options, parent, taskID string, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.CloseTask(opts, parent, taskID, lg)
+}
+
 func (defaultLifecycleRunner) Merge(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
 	return lifecycle.Merge(opts, parent, issueNum, lg)
 }
 
+func (defaultLifecycleRunner) MergeTask(opts lifecycle.Options, parent, taskID string, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.MergeTask(opts, parent, taskID, lg)
+}
+
 func (defaultLifecycleRunner) Cleanup(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
 	return lifecycle.Cleanup(opts, parent, lg)
+}
+
+func (defaultLifecycleRunner) CleanupPlan(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.CleanupPlan(opts, parent, lg)
 }
 
 type actionLogger struct {
@@ -690,10 +705,6 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = "no pane selected"
 		return m, nil
 	}
-	if pane.isTask() {
-		m.actionMessage = fmt.Sprintf("%s is not available for plan task %s", action, pane.identityLabel())
-		return m, nil
-	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
 	m.actionMessage = confirmMessage(action, pane)
 	return m, nil
@@ -711,11 +722,23 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 		var code exitcode.Code
 		switch pending.action {
 		case actionClose:
-			code = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+			if pending.pane.isTask() {
+				code = runner.CloseTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
+			} else {
+				code = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+			}
 		case actionMerge:
-			code = runner.Merge(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+			if pending.pane.isTask() {
+				code = runner.MergeTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
+			} else {
+				code = runner.Merge(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+			}
 		case actionCleanup:
-			code = runner.Cleanup(opts, pending.pane.Parent, lg)
+			if pending.pane.isTask() {
+				code = runner.CleanupPlan(opts, pending.pane.Parent, lg)
+			} else {
+				code = runner.Cleanup(opts, pending.pane.Parent, lg)
+			}
 		default:
 			code = exitcode.Invocation
 			fmt.Fprintf(&buf, "[err ] unknown lifecycle action: %s\n", pending.action)
