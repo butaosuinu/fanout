@@ -167,7 +167,7 @@ export function Drawer({
           <span className="d-issue" id="d-issue">
             <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
           </span>
-          <span id="d-name">{pane.displayName || pane.slug || "—"}</span>
+          <span id="d-name">{pane.derived?.name || pane.displayName || pane.slug || "—"}</span>
         </h3>
         <button id="drawer-close" type="button" aria-label="詳細を閉じる" onClick={onClose}>
           ✕
@@ -227,7 +227,8 @@ export function Drawer({
             <dl className="d-kv">
               <dt>path</dt>
               <dd id="d-path">
-                {(pane.worktreePath || "—") + (pane.worktreeErr ? ` (${pane.worktreeErr})` : "")}
+                {(pane.derived?.worktreeRelative || pane.worktreePath || "—") +
+                  (pane.worktreeErr ? ` (${pane.worktreeErr})` : "")}
               </dd>
               <dt>branch</dt>
               <dd id="d-branch">{pane.branchName || "—"}</dd>

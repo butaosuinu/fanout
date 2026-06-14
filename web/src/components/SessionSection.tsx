@@ -66,7 +66,7 @@ function PaneRow({
         <GhLink url={issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
-        {pane.displayName || pane.slug || "—"}
+        {pane.derived?.name || pane.displayName || pane.slug || "—"}
       </td>
       <td>{pane.agent || "—"}</td>
       <td>{wave || <span className="muted">—</span>}</td>

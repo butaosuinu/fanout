@@ -145,6 +145,44 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 	}
 }
 
+func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(state.Pane{Parent: "100", IssueNum: 101, Slug: "child", DisplayName: "Child work", PaneID: "%1", Agent: "codex", BranchName: "feat/child", WorktreePath: "/repo/.fanout/worktrees/child"}),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{"%1": {Path: "/repo/.fanout/worktrees/child", Title: "child title", AgentState: "running"}}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			return "OPEN", []ghissue.PRRef{{Number: 501, State: "OPEN", CIStatus: "fail"}}, nil
+		},
+		Waves: wavesOf(map[int]WaveInfo{
+			101: {Wave: 2, WaveLabel: "wave2", Blocked: true, Blockers: []blockers.Status{{Num: 99, State: "OPEN"}}},
+		}, nil),
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			return WorktreeStat{DiffSummary: "+12/-3", DirtyState: "dirty"}, nil
+		},
+	}
+
+	pv := Build("o/n", "/repo", c).Sessions[0].Panes[0]
+	d := pv.Derived
+	if d.Name != "Child work" || d.PRSummary != "#501 open" || d.CI != "fail" {
+		t.Fatalf("derived display = %+v", d)
+	}
+	if d.WaveBadge != "W2 blocked" || d.WaveText != "wave2 W2 blocked" || d.BlockersText != "OPEN #99" {
+		t.Fatalf("derived wave/blockers = %+v", d)
+	}
+	if d.DiffTotal != 15 || !d.DiffParsed || d.Sort.Diff != 15 || d.Sort.CI != 0 {
+		t.Fatalf("derived sort/diff = %+v", d)
+	}
+	if d.FilterValues["run"] != "running" || d.FilterValues["dirty"] != "yes" || d.FilterValues["pr"] != "open" {
+		t.Fatalf("derived filter values = %+v", d.FilterValues)
+	}
+	if !strings.Contains(d.FilterText, "child title") || !strings.Contains(d.FilterText, "+12/-3") {
+		t.Fatalf("derived filter text = %q", d.FilterText)
+	}
+	if d.WorktreeRelative != ".fanout/worktrees/child" || !d.CanFocus || !d.CanPeek {
+		t.Fatalf("derived path/focus = %+v", d)
+	}
+}
+
 func TestBuildPerSessionAllMerged(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

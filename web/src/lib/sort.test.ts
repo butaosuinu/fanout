@@ -54,4 +54,18 @@ describe("sortPanes", () => {
     const none = makePane({ issueNum: 2 });
     expect(nums(sortPanes([none, w1], "wave", 1))).toEqual([1, 2]);
   });
+
+  it("derived sort keys を優先する", () => {
+    const highDiff = makePane({
+      issueNum: 1,
+      diffSummary: "+999/-0",
+      derived: { sort: { diff: 1 } },
+    });
+    const lowDiff = makePane({
+      issueNum: 2,
+      diffSummary: "+1/-0",
+      derived: { sort: { diff: 999 } },
+    });
+    expect(nums(sortPanes([lowDiff, highDiff], "diff", 1))).toEqual([1, 2]);
+  });
 });

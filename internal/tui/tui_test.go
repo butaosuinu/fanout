@@ -24,7 +24,6 @@ import (
 var errBoom = errors.New("boom")
 
 func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
-	projectRoot := "/repo"
 	panes := []state.Pane{
 		{
 			Parent:       "200",
@@ -64,7 +63,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 		"/repo/.fanout/worktrees/second": {Diff: "+12/-3", Dirty: "dirty"},
 	}
 
-	got := buildPaneViews(projectRoot, panes, tmuxPanes, true, issues, worktrees)
+	got := buildPaneViews(panes, tmuxPanes, true, issues, worktrees)
 
 	if len(got) != 2 {
 		t.Fatalf("buildPaneViews len = %d, want 2", len(got))
@@ -103,7 +102,7 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 }
 
 func TestBuildPaneViewsMarksTmuxUnknownWhenListFails(t *testing.T) {
-	got := buildPaneViews("/repo", []state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil, nil)
+	got := buildPaneViews([]state.Pane{{IssueNum: 3, PaneID: "%3"}}, nil, false, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("buildPaneViews len = %d, want 1", len(got))
 	}
@@ -125,7 +124,7 @@ func TestBuildPaneViewsTaskIDDisplayFallback(t *testing.T) {
 			}},
 		},
 	}
-	got := buildPaneViews("/repo", []state.Pane{
+	got := buildPaneViews([]state.Pane{
 		{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-b", PaneID: "%2"},
 		{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-a", PaneID: "%1"},
 	}, nil, true, issues, nil)
@@ -196,7 +195,7 @@ func TestBuildPaneViewsAddsDeferredIssueRows(t *testing.T) {
 		{Parent: "100", Num: 3}: {Title: "closed child", State: "CLOSED", Wave: 1, Blockers: "-"},
 	}
 
-	got := buildPaneViews("/repo", []state.Pane{{Parent: "100", IssueNum: 1, Slug: "ready-child-1"}}, nil, true, issues, nil)
+	got := buildPaneViews([]state.Pane{{Parent: "100", IssueNum: 1, Slug: "ready-child-1"}}, nil, true, issues, nil)
 
 	if len(got) != 3 {
 		t.Fatalf("buildPaneViews len = %d, want recorded pane plus deferred issue", len(got))
@@ -219,7 +218,7 @@ func TestBuildPaneViewsMatchesNormalizedNumericParents(t *testing.T) {
 		{Parent: "300", Num: 501}: {Title: "child", State: "OPEN", Wave: 1},
 	}
 
-	got := buildPaneViews("/repo", []state.Pane{{Parent: "0300", IssueNum: 501, Slug: "child"}}, nil, true, issues, nil)
+	got := buildPaneViews([]state.Pane{{Parent: "0300", IssueNum: 501, Slug: "child"}}, nil, true, issues, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("buildPaneViews len = %d, want one real pane without synthetic duplicate", len(got))
@@ -266,11 +265,15 @@ func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 func TestMergeDegradedIssueStatuses(t *testing.T) {
 	key := issueKey{Parent: "100", Num: 101}
 	blocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "OPEN #99", HasOpenBlockers: true}
+	blockedRows := blocked
+	blockedRows.BlockerRows = parseFormattedBlockers("OPEN #99")
 	degraded := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false, WaveDegraded: true}
 	unblocked := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "resolved #99", HasOpenBlockers: false}
 	cleared := issueStatus{Title: "child", State: "OPEN", Wave: 1, WaveLabel: "wave1", Blockers: "-", HasOpenBlockers: false}
 	restored := blocked
 	restored.WaveDegraded = true
+	restoredRows := blockedRows
+	restoredRows.WaveDegraded = true
 
 	tests := []struct {
 		name     string
@@ -301,6 +304,12 @@ func TestMergeDegradedIssueStatuses(t *testing.T) {
 			previous: map[issueKey]issueStatus{key: blocked},
 			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Wave: 1, Blockers: "OPEN #7", HasOpenBlockers: true, WaveDegraded: true}},
 			want:     map[issueKey]issueStatus{key: restored},
+		},
+		{
+			name:     "degraded entry restores previous structured blocker rows",
+			previous: map[issueKey]issueStatus{key: blockedRows},
+			current:  map[issueKey]issueStatus{key: {Title: "child", State: "OPEN", Wave: 1, Blockers: "OPEN #7", BlockerRows: parseFormattedBlockers("OPEN #7"), HasOpenBlockers: true, WaveDegraded: true}},
+			want:     map[issueKey]issueStatus{key: restoredRows},
 		},
 		{
 			name:     "fresh blocker data replaces old entry",
@@ -604,7 +613,7 @@ func TestViewRendersHUDCounts(t *testing.T) {
 		{Parent: "200", Num: 202}: {State: "OPEN"},
 		{Parent: "200", Num: 203}: {State: "OPEN", HasOpenBlockers: true},
 	}
-	m.panes = applyIssueStatuses(m.panes, m.issues)
+	m.panes = applyIssueStatuses("/repo", m.panes, m.issues)
 	m.refreshRows()
 
 	got := m.View()

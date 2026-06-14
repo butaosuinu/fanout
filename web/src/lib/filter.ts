@@ -1,4 +1,4 @@
-import { fmtBlockers, fmtWave, paneCI, prPrimary } from "./pane";
+import { compactWave, fmtBlockers, fmtWave, paneCI, prPrimary } from "./pane";
 import type { PaneView } from "./types";
 
 /* 構造化フィルタ: key:value + 自由語、すべて AND。未知キーは自由語に降格。
@@ -34,23 +34,25 @@ export function parseQuery(str: string): Term[] {
 }
 
 export function matches(p: PaneView, terms: Term[]): boolean {
-  const hay = [
-    p.issueNum,
-    p.taskId,
-    p.displayName,
-    p.slug,
-    p.agent,
-    p.branchName,
-    p.diffSummary,
-    p.dirtyState,
-    p.issueState,
-    p.tmuxTitle,
-    p.agentState,
-    fmtWave(p),
-    fmtBlockers(p),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const hay =
+    p.derived?.filterText ||
+    [
+      p.issueNum,
+      p.taskId,
+      p.displayName,
+      p.slug,
+      p.agent,
+      p.branchName,
+      p.diffSummary,
+      p.dirtyState,
+      p.issueState,
+      p.tmuxTitle,
+      p.agentState,
+      fmtWave(p),
+      fmtBlockers(p),
+    ]
+      .join(" ")
+      .toLowerCase();
   for (const t of terms) {
     if (t.kind === "word") {
       if (!hay.includes(t.word)) return false;
@@ -67,7 +69,7 @@ export function matches(p: PaneView, terms: Term[]): boolean {
           return false;
         break;
       case "run":
-        if ((p.agentState ?? "") !== t.value) return false;
+        if ((p.derived?.filterValues?.run ?? p.agentState ?? "") !== t.value) return false;
         break;
       case "agent":
         if (
@@ -81,6 +83,9 @@ export function matches(p: PaneView, terms: Term[]): boolean {
         if (
           String(p.wave ?? "") !== t.value &&
           (p.waveLabel ?? "").toLowerCase() !== t.value &&
+          (p.derived?.dependencyWave ?? "").toLowerCase() !== t.value &&
+          (p.derived?.waveText ?? "").toLowerCase() !== t.value &&
+          compactWave(p).toLowerCase() !== t.value &&
           fmtWave(p).toLowerCase() !== t.value
         )
           return false;
@@ -89,17 +94,25 @@ export function matches(p: PaneView, terms: Term[]): boolean {
         if (paneCI(p) !== t.value) return false;
         break;
       case "dirty":
-        if ((t.value === "yes") !== (p.dirtyState === "dirty")) return false;
+        if (
+          (p.derived?.filterValues?.dirty ?? (p.dirtyState === "dirty" ? "yes" : "no")) !== t.value
+        )
+          return false;
         break;
       case "live":
-        if ((t.value === "yes") !== !!p.alive) return false;
+        if ((p.derived?.filterValues?.live ?? (p.alive ? "yes" : "no")) !== t.value) return false;
         break;
       case "issue":
-        if (String(p.issueNum) !== t.value && String(p.taskId ?? "").toLowerCase() !== t.value)
+        if (
+          (p.derived?.filterValues?.issue ?? String(p.issueNum)) !== t.value &&
+          String(p.issueNum) !== t.value &&
+          String(p.taskId ?? "").toLowerCase() !== t.value
+        )
           return false;
         break;
       case "pr":
-        if ((pr?.state ?? "none").toLowerCase() !== t.value) return false;
+        if ((p.derived?.filterValues?.pr ?? pr?.state ?? "none").toLowerCase() !== t.value)
+          return false;
         break;
     }
   }

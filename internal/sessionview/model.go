@@ -87,6 +87,48 @@ type PaneView struct {
 	// フラグ。一時的な gh 失敗で session が 100%/AllMerged に見えないよう、
 	// こうした行は rollup に残す。JSON には出さない(非エクスポート)。
 	closeUnconfirmed bool
+	Derived          PaneDerived `json:"derived"`
+}
+
+// PaneDerived holds display/filter/sort-friendly values computed from the
+// canonical PaneView fields. It is additive JSON: older UIs can ignore it, while
+// the TUI and bundled web UI use it to avoid duplicating domain decisions.
+type PaneDerived struct {
+	Name             string            `json:"name,omitempty"`
+	PRSummary        string            `json:"prSummary,omitempty"`
+	PrimaryPRNumber  int               `json:"primaryPrNumber,omitempty"`
+	PrimaryPRState   string            `json:"primaryPrState,omitempty"`
+	CI               string            `json:"ci,omitempty"`
+	WaveBadge        string            `json:"waveBadge,omitempty"`
+	WaveText         string            `json:"waveText,omitempty"`
+	DependencyWave   string            `json:"dependencyWave,omitempty"`
+	BlockersText     string            `json:"blockersText,omitempty"`
+	OpenBlockers     int               `json:"openBlockers,omitempty"`
+	DiffTotal        int               `json:"diffTotal,omitempty"`
+	DiffParsed       bool              `json:"diffParsed,omitempty"`
+	FilterText       string            `json:"filterText,omitempty"`
+	FilterValues     map[string]string `json:"filterValues,omitempty"`
+	Sort             PaneSortKeys      `json:"sort"`
+	CanFocus         bool              `json:"canFocus"`
+	CanPeek          bool              `json:"canPeek"`
+	WorktreeRelative string            `json:"worktreeRelative,omitempty"`
+}
+
+// PaneSortKeys is the shared ranking surface used by the web dashboard while
+// keeping browser-side sorting interactive.
+type PaneSortKeys struct {
+	IssueNum int    `json:"issueNum"`
+	Name     string `json:"name,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+	Wave     int    `json:"wave,omitempty"`
+	Blockers int    `json:"blockers,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Diff     int    `json:"diff,omitempty"`
+	Dirty    int    `json:"dirty,omitempty"`
+	CI       int    `json:"ci,omitempty"`
+	Tmux     int    `json:"tmux,omitempty"`
+	State    string `json:"state,omitempty"`
+	PR       int    `json:"pr,omitempty"`
 }
 
 // Rollup is an aggregate count band, mirroring --status's summary plus liveness.

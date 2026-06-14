@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +22,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/sessionview"
@@ -77,6 +75,7 @@ type issueStatus struct {
 	Wave            int
 	WaveLabel       string
 	Blockers        string
+	BlockerRows     []blockers.Status
 	HasOpenBlockers bool
 	// WaveDegraded marks rows whose body hydration failed in this refresh:
 	// the wave/blocker fields were computed without the child's body, so an
@@ -106,6 +105,7 @@ type paneView struct {
 	PaneID       string
 	TmuxState    string
 	TmuxTitle    string
+	AgentState   string
 	IssueState   string
 	PRSummary    string
 	HasMergedPR  bool
@@ -123,6 +123,7 @@ type paneView struct {
 	Agent        string
 	CreatedAt    string
 	Prompt       string
+	Derived      sessionview.PaneDerived
 }
 
 type hudSummary struct {
@@ -190,6 +191,12 @@ type paneFilter struct {
 	states []string
 	agents []string
 	waves  []string
+	runs   []string
+	cis    []string
+	dirty  []string
+	live   []string
+	issues []string
+	prs    []string
 }
 
 type stateLoadedMsg struct {
@@ -919,7 +926,7 @@ func (m model) formInputWidth() int {
 }
 
 func (m *model) refreshRows() {
-	m.allPanes = applyIssueStatuses(m.allPanes, m.issues)
+	m.allPanes = applyIssueStatuses(m.opts.ProjectRoot, m.allPanes, m.issues)
 	m.panes = filterPaneViews(m.allPanes, m.filterQuery)
 	rows := make([]table.Row, 0, len(m.panes))
 	for _, pane := range m.panes {
@@ -1097,14 +1104,28 @@ func (m model) notifyEventsCmd(events []fanoutnotify.Event) tea.Cmd {
 }
 
 func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneView, error) {
-	store, err := state.LoadProject(projectRoot)
-	if err != nil {
-		return nil, err
+	var stateErr error
+	loadState := func() (state.Store, error) {
+		store, err := state.LoadProject(projectRoot)
+		stateErr = err
+		return store, err
 	}
-	tmuxPanes, err := tmuxrun.ListAllPanes()
-	tmuxKnown := err == nil
-	worktrees := loadWorktreeStats(store.Panes)
-	return buildPaneViews(projectRoot, store.Panes, tmuxPanes, tmuxKnown, issues, worktrees), err
+	var tmuxErr error
+	livePanes := sessionview.LivePanes()
+	live := func() (map[string]sessionview.LivePaneInfo, error) {
+		panes, err := livePanes()
+		tmuxErr = err
+		return panes, err
+	}
+	snap := sessionview.Build("", projectRoot, sessionview.Collectors{
+		LoadState:    loadState,
+		LivePanes:    live,
+		IssuePRs:     issuePRCollector(issues),
+		Waves:        waveCollector(issues),
+		WorktreeStat: sessionview.GitWorktreeStat(projectRoot),
+		Now:          time.Now,
+	})
+	return paneViewsFromSnapshot(projectRoot, snap), errors.Join(stateErr, tmuxErr)
 }
 
 func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
@@ -1154,6 +1175,7 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			cached.Wave = info.Wave
 			cached.WaveLabel = info.WaveLabel
 			cached.Blockers = blockers.FormatStatuses(info.Blockers)
+			cached.BlockerRows = info.Blockers
 			cached.HasOpenBlockers = info.Blocked
 			cached.WaveDegraded = info.Degraded
 			statuses[key] = cached
@@ -1195,6 +1217,81 @@ func recordedIssueNums(panes []state.Pane) []int {
 		}
 	}
 	return nums
+}
+
+func issuePRCollector(issues map[issueKey]issueStatus) func(int) (string, []ghissue.PRRef, error) {
+	byNum := map[int]issueStatus{}
+	for key, status := range issues {
+		if key.Num > 0 {
+			byNum[key.Num] = status
+		}
+	}
+	return func(num int) (string, []ghissue.PRRef, error) {
+		status, ok := byNum[num]
+		if !ok {
+			return "", nil, nil
+		}
+		return status.State, status.PRs, nil
+	}
+}
+
+func waveCollector(issues map[issueKey]issueStatus) func(string) (sessionview.WaveGraph, error) {
+	return func(parent string) (sessionview.WaveGraph, error) {
+		return waveGraphFromStatuses(parent, issues), nil
+	}
+}
+
+func waveGraphFromStatuses(parent string, issues map[issueKey]issueStatus) sessionview.WaveGraph {
+	parent = sessionview.NormalizeParent(parent)
+	graph := sessionview.WaveGraph{Info: map[int]sessionview.WaveInfo{}}
+	for key, status := range issues {
+		if key.Parent != parent || key.Num <= 0 {
+			continue
+		}
+		graph.Children = append(graph.Children, ghissue.Issue{
+			Number: key.Num,
+			Title:  status.Title,
+			State:  status.State,
+		})
+		rows := status.BlockerRows
+		if rows == nil {
+			rows = parseFormattedBlockers(status.Blockers)
+		}
+		graph.Info[key.Num] = sessionview.WaveInfo{
+			Wave:      status.Wave,
+			WaveLabel: status.WaveLabel,
+			Blockers:  rows,
+			Blocked:   status.HasOpenBlockers,
+			Degraded:  status.WaveDegraded,
+		}
+	}
+	slices.SortFunc(graph.Children, func(a, b ghissue.Issue) int { return cmp.Compare(a.Number, b.Number) })
+	return graph
+}
+
+func parseFormattedBlockers(text string) []blockers.Status {
+	text = strings.TrimSpace(text)
+	if text == "" || text == "-" {
+		return nil
+	}
+	rows := []blockers.Status{}
+	for part := range strings.SplitSeq(text, ",") {
+		fields := strings.Fields(strings.TrimSpace(part))
+		if len(fields) < 2 {
+			continue
+		}
+		numText := strings.TrimPrefix(fields[len(fields)-1], "#")
+		num, err := strconv.Atoi(numText)
+		if err != nil {
+			continue
+		}
+		stateName := fields[0]
+		if stateName == "resolved" {
+			stateName = "CLOSED"
+		}
+		rows = append(rows, blockers.Status{Num: num, State: strings.ToUpper(stateName)})
+	}
+	return rows
 }
 
 func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, current map[issueKey]issueStatus) []fanoutnotify.Event {
@@ -1282,6 +1379,7 @@ func mergeDegradedIssueStatus(previous, current issueStatus) issueStatus {
 		return current // previous carries nothing better to preserve
 	}
 	current.Blockers = previous.Blockers
+	current.BlockerRows = previous.BlockerRows
 	current.HasOpenBlockers = previous.HasOpenBlockers
 	current.Wave = previous.Wave
 	current.WaveLabel = previous.WaveLabel
@@ -1416,13 +1514,6 @@ func keyForIssue(parent string, num int) issueKey {
 	return issueKey{Parent: normalizedParent(parent), Num: num}
 }
 
-func keyForPane(pane state.Pane) issueKey {
-	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
-		return keyForTask(pane.Parent, pane.TaskID)
-	}
-	return keyForIssue(pane.Parent, pane.IssueNum)
-}
-
 func keyForPaneView(pane paneView) issueKey {
 	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
 		return keyForTask(pane.Parent, pane.TaskID)
@@ -1442,81 +1533,94 @@ func normalizedParent(parent string) string {
 	return strconv.Itoa(parentNum)
 }
 
-func buildPaneViews(projectRoot string, panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
-	tmuxByID := map[string]tmuxrun.PaneInfo{}
+func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
+	const projectRoot = "/repo"
+	live := map[string]sessionview.LivePaneInfo{}
 	for _, pane := range tmuxPanes {
-		tmuxByID[pane.ID] = pane
+		live[pane.ID] = sessionview.LivePaneInfo{Path: matchingWorktreePath(pane.ID, panes), Title: pane.Title}
 	}
-	out := make([]paneView, 0, len(panes))
-	seen := map[issueKey]bool{}
+	liveCollector := func() (map[string]sessionview.LivePaneInfo, error) {
+		if !tmuxKnown {
+			return nil, errors.New("tmux unavailable")
+		}
+		return live, nil
+	}
+	worktreeCollector := func(path, baseRef string) (sessionview.WorktreeStat, error) {
+		if stat, ok := worktrees[path]; ok {
+			return sessionview.WorktreeStat{DiffSummary: stat.Diff, DirtyState: stat.Dirty}, errFromString(stat.Err)
+		}
+		return sessionview.WorktreeStat{DiffSummary: "-", DirtyState: "unknown"}, nil
+	}
+	snap := sessionview.Build("", projectRoot, sessionview.Collectors{
+		LoadState:    func() (state.Store, error) { return state.Store{SchemaVersion: 1, Panes: panes}, nil },
+		LivePanes:    liveCollector,
+		IssuePRs:     issuePRCollector(issues),
+		Waves:        waveCollector(issues),
+		WorktreeStat: worktreeCollector,
+		Now:          time.Now,
+	})
+	return applyIssueStatuses(projectRoot, paneViewsFromSnapshot(projectRoot, snap), issues)
+}
+
+func matchingWorktreePath(paneID string, panes []state.Pane) string {
 	for _, pane := range panes {
-		key := keyForPane(pane)
-		status, hasStatus := issues[key]
-		seen[key] = true
-		view := paneView{
-			Parent:       pane.Parent,
-			IssueNum:     pane.IssueNum,
-			TaskID:       pane.TaskID,
-			Name:         paneName(pane),
-			PaneID:       pane.PaneID,
-			TmuxState:    tmuxState(pane.PaneID, tmuxByID, tmuxKnown),
-			IssueState:   "-",
-			PRSummary:    "-",
-			Wave:         status.Wave,
-			WaveLabel:    firstNonEmpty(pane.Wave, status.WaveLabel),
-			WaveBadge:    waveBadge(status.Wave, status.HasOpenBlockers),
-			Blockers:     dash(status.Blockers),
-			Blocked:      status.HasOpenBlockers,
-			CIStatus:     "-",
-			DiffSummary:  "-",
-			DirtyState:   "-",
-			BranchName:   pane.BranchName,
-			WorktreePath: relativePath(projectRoot, pane.WorktreePath),
-			Agent:        pane.Agent,
-			CreatedAt:    pane.CreatedAt,
-			Prompt:       pane.Prompt,
+		if pane.PaneID == paneID {
+			return pane.WorktreePath
 		}
-		if tmuxPane, ok := tmuxByID[pane.PaneID]; ok {
-			view.TmuxTitle = tmuxPane.Title
-		}
-		if hasStatus {
-			view.IssueState = dash(status.State)
-			view.PRSummary = summarizePRs(status.PRs)
-			view.HasMergedPR = hasMergedPR(status.PRs)
-			view.CIStatus = ghissue.SummarizeCI(status.PRs)
-		}
-		if stat, ok := worktrees[pane.WorktreePath]; ok {
-			view.DiffSummary = stat.Diff
-			view.DirtyState = stat.Dirty
-			view.WorktreeErr = stat.Err
-		}
-		out = append(out, view)
 	}
-	for key, status := range issues {
-		if seen[key] || key.TaskID != "" {
-			continue
-		}
-		out = append(out, paneView{
-			Parent:      key.Parent,
-			IssueNum:    key.Num,
-			Name:        issueTitle(status, key.Num),
-			TmuxState:   syntheticTmuxState(status),
-			IssueState:  dash(status.State),
-			PRSummary:   summarizePRs(status.PRs),
-			HasMergedPR: hasMergedPR(status.PRs),
-			CIStatus:    ghissue.SummarizeCI(status.PRs),
-			Wave:        status.Wave,
-			WaveLabel:   status.WaveLabel,
-			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
-			Blockers:    dash(status.Blockers),
-			Blocked:     status.HasOpenBlockers,
-		})
+	return ""
+}
+
+func errFromString(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
 	}
-	sortPaneViews(out)
+	return errors.New(s)
+}
+
+func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []paneView {
+	out := []paneView{}
+	for _, session := range snap.Sessions {
+		parent := session.Parent
+		for _, pv := range session.Panes {
+			derived := pv.Derived
+			if derived.Name == "" && derived.PRSummary == "" {
+				derived = sessionview.DerivePane(projectRoot, parent, pv)
+			}
+			out = append(out, paneView{
+				Parent:       parent,
+				IssueNum:     pv.IssueNum,
+				TaskID:       pv.TaskID,
+				Name:         derived.Name,
+				PaneID:       pv.PaneID,
+				TmuxState:    pv.TmuxState,
+				TmuxTitle:    pv.TmuxTitle,
+				AgentState:   pv.AgentState,
+				IssueState:   dash(pv.IssueState),
+				PRSummary:    dash(derived.PRSummary),
+				HasMergedPR:  pv.HasMergedPR,
+				Wave:         pv.Wave,
+				WaveLabel:    pv.WaveLabel,
+				WaveBadge:    derived.WaveBadge,
+				Blockers:     dash(derived.BlockersText),
+				Blocked:      pv.Blocked,
+				CIStatus:     dash(pv.CIStatus),
+				DiffSummary:  pv.DiffSummary,
+				DirtyState:   pv.DirtyState,
+				WorktreeErr:  pv.WorktreeErr,
+				BranchName:   pv.BranchName,
+				WorktreePath: firstNonEmpty(derived.WorktreeRelative, sessionview.RelativePath(projectRoot, pv.WorktreePath)),
+				Agent:        pv.Agent,
+				CreatedAt:    pv.CreatedAt,
+				Prompt:       pv.Prompt,
+				Derived:      derived,
+			})
+		}
+	}
 	return out
 }
 
-func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []paneView {
+func applyIssueStatuses(projectRoot string, panes []paneView, issues map[issueKey]issueStatus) []paneView {
 	out := slices.Clone(panes)
 	seen := map[issueKey]bool{}
 	for i := range out {
@@ -1534,13 +1638,14 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			out[i].Blockers = dash(status.Blockers)
 			out[i].Blocked = status.HasOpenBlockers
 			out[i].CIStatus = ghissue.SummarizeCI(status.PRs)
+			out[i].Derived = derivePaneView(projectRoot, out[i], status.PRs, status.BlockerRows)
 		}
 	}
 	for key, status := range issues {
 		if seen[key] || key.TaskID != "" {
 			continue
 		}
-		out = append(out, paneView{
+		view := paneView{
 			Parent:      key.Parent,
 			IssueNum:    key.Num,
 			Name:        issueTitle(status, key.Num),
@@ -1554,10 +1659,44 @@ func applyIssueStatuses(panes []paneView, issues map[issueKey]issueStatus) []pan
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
 			Blockers:    dash(status.Blockers),
 			Blocked:     status.HasOpenBlockers,
-		})
+		}
+		view.Derived = derivePaneView(projectRoot, view, status.PRs, status.BlockerRows)
+		out = append(out, view)
 	}
 	sortPaneViews(out)
 	return out
+}
+
+func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, blockerRows []blockers.Status) sessionview.PaneDerived {
+	if blockerRows == nil {
+		blockerRows = parseFormattedBlockers(view.Blockers)
+	}
+	return sessionview.DerivePane(projectRoot, view.Parent, sessionview.PaneView{
+		IssueNum:     view.IssueNum,
+		TaskID:       view.TaskID,
+		DisplayName:  view.Name,
+		Agent:        view.Agent,
+		BranchName:   view.BranchName,
+		PaneID:       view.PaneID,
+		WorktreePath: view.WorktreePath,
+		CreatedAt:    view.CreatedAt,
+		Alive:        view.TmuxState == "live",
+		IssueState:   view.IssueState,
+		PRs:          prs,
+		HasMergedPR:  view.HasMergedPR,
+		DiffSummary:  view.DiffSummary,
+		DirtyState:   view.DirtyState,
+		WorktreeErr:  view.WorktreeErr,
+		TmuxState:    view.TmuxState,
+		TmuxTitle:    view.TmuxTitle,
+		AgentState:   view.AgentState,
+		Prompt:       view.Prompt,
+		CIStatus:     strings.ToLower(strings.TrimSpace(view.CIStatus)),
+		Wave:         view.Wave,
+		WaveLabel:    view.WaveLabel,
+		Blockers:     blockerRows,
+		Blocked:      view.Blocked,
+	})
 }
 
 func sortPaneViews(panes []paneView) {
@@ -1634,37 +1773,6 @@ func columnsForWidth(width int) []table.Column {
 	}
 }
 
-func loadWorktreeStats(panes []state.Pane) map[string]worktreeStatView {
-	runner := gitstat.Runner{}
-	stats := map[string]worktreeStatView{}
-	for _, pane := range panes {
-		path := strings.TrimSpace(pane.WorktreePath)
-		if path == "" {
-			continue
-		}
-		if _, ok := stats[path]; ok {
-			continue
-		}
-		stats[path] = worktreeStatForPath(runner, path, pane.BaseBranch)
-	}
-	return stats
-}
-
-func worktreeStatForPath(runner gitstat.Runner, path, baseRef string) worktreeStatView {
-	stat, err := runner.Worktree(path, baseRef)
-	if err != nil {
-		return worktreeStatView{Diff: "-", Dirty: "unknown", Err: err.Error()}
-	}
-	dirty := "clean"
-	if stat.Dirty {
-		dirty = "dirty"
-	}
-	return worktreeStatView{
-		Diff:  fmt.Sprintf("+%d/-%d", stat.Additions, stat.Deletions),
-		Dirty: dirty,
-	}
-}
-
 func (m model) footerText() string {
 	parts := []string{"q quit", "n new", "j/k move", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
 	if m.filterEditing {
@@ -1706,6 +1814,18 @@ func parsePaneFilter(query string) paneFilter {
 			filter.agents = append(filter.agents, value)
 		case "wave", "w":
 			filter.waves = append(filter.waves, value)
+		case "run":
+			filter.runs = append(filter.runs, value)
+		case "ci":
+			filter.cis = append(filter.cis, value)
+		case "dirty":
+			filter.dirty = append(filter.dirty, value)
+		case "live":
+			filter.live = append(filter.live, value)
+		case "issue":
+			filter.issues = append(filter.issues, value)
+		case "pr":
+			filter.prs = append(filter.prs, value)
 		default:
 			filter.terms = append(filter.terms, token)
 		}
@@ -1727,7 +1847,9 @@ func splitFilterToken(token string) (string, string, bool) {
 }
 
 func (f paneFilter) empty() bool {
-	return len(f.terms) == 0 && len(f.states) == 0 && len(f.agents) == 0 && len(f.waves) == 0
+	return len(f.terms) == 0 && len(f.states) == 0 && len(f.agents) == 0 && len(f.waves) == 0 &&
+		len(f.runs) == 0 && len(f.cis) == 0 && len(f.dirty) == 0 && len(f.live) == 0 &&
+		len(f.issues) == 0 && len(f.prs) == 0
 }
 
 func (p paneView) matchesFilter(filter paneFilter) bool {
@@ -1746,6 +1868,43 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 			return false
 		}
 	}
+	for _, run := range filter.runs {
+		if !equalFold(run, p.AgentState) {
+			return false
+		}
+	}
+	for _, ci := range filter.cis {
+		if !equalFold(ci, p.paneCI()) {
+			return false
+		}
+	}
+	for _, dirty := range filter.dirty {
+		if !equalFold(dirty, yesNo(p.DirtyState == "dirty")) {
+			return false
+		}
+	}
+	for _, live := range filter.live {
+		if !equalFold(live, yesNo(p.TmuxState == "live")) {
+			return false
+		}
+	}
+	for _, issue := range filter.issues {
+		value := strings.TrimSpace(p.Derived.FilterValues["issue"])
+		if value == "" {
+			value = strconv.Itoa(p.IssueNum)
+			if p.IssueNum <= 0 && strings.TrimSpace(p.TaskID) != "" {
+				value = strings.ToLower(strings.TrimSpace(p.TaskID))
+			}
+		}
+		if !equalFold(issue, value) {
+			return false
+		}
+	}
+	for _, pr := range filter.prs {
+		if !equalFold(pr, p.primaryPRState()) {
+			return false
+		}
+	}
 	searchText := strings.ToLower(strings.Join([]string{
 		p.Parent,
 		p.TaskID,
@@ -1756,6 +1915,7 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 		p.PaneID,
 		p.TmuxState,
 		p.TmuxTitle,
+		p.AgentState,
 		p.IssueState,
 		p.PRSummary,
 		p.CIStatus,
@@ -1772,12 +1932,47 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 		p.CreatedAt,
 		p.Prompt,
 	}, "\n"))
+	if strings.TrimSpace(p.Derived.FilterText) != "" {
+		searchText += "\n" + p.Derived.FilterText
+	}
 	for _, term := range filter.terms {
 		if !strings.Contains(searchText, term) {
 			return false
 		}
 	}
 	return true
+}
+
+func (p paneView) paneCI() string {
+	if strings.TrimSpace(p.Derived.CI) != "" {
+		return p.Derived.CI
+	}
+	if p.CIStatus == "-" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(p.CIStatus))
+}
+
+func (p paneView) primaryPRState() string {
+	if strings.TrimSpace(p.Derived.PrimaryPRState) != "" {
+		return p.Derived.PrimaryPRState
+	}
+	fields := strings.Fields(p.PRSummary)
+	if len(fields) >= 2 {
+		return strings.ToLower(fields[1])
+	}
+	return "none"
+}
+
+func equalFold(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func containsFold(needle string, values ...string) bool {
@@ -1873,37 +2068,11 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 	return false
 }
 
-func paneName(pane state.Pane) string {
-	if strings.TrimSpace(pane.DisplayName) != "" {
-		return pane.DisplayName
-	}
-	if strings.TrimSpace(pane.Slug) != "" {
-		return pane.Slug
-	}
-	if strings.TrimSpace(pane.TaskID) != "" {
-		return pane.TaskID
-	}
-	return "#" + strconv.Itoa(pane.IssueNum)
-}
-
 func (p paneView) itemLabel() string {
 	if strings.TrimSpace(p.TaskID) != "" {
 		return p.TaskID
 	}
 	return "#" + strconv.Itoa(p.IssueNum)
-}
-
-func tmuxState(paneID string, panes map[string]tmuxrun.PaneInfo, known bool) string {
-	if strings.TrimSpace(paneID) == "" {
-		return "-"
-	}
-	if !known {
-		return "unknown"
-	}
-	if _, ok := panes[paneID]; ok {
-		return "live"
-	}
-	return "stale"
 }
 
 func compactParent(parent string) string {
@@ -1918,17 +2087,6 @@ func compactParent(parent string) string {
 		}
 	}
 	return truncate(parent, 10)
-}
-
-func relativePath(root, path string) string {
-	if root == "" || path == "" {
-		return path
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return path
-	}
-	return rel
 }
 
 func cloneIssueStatuses(in map[issueKey]issueStatus) map[issueKey]issueStatus {

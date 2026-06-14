@@ -50,6 +50,43 @@ export interface PaneView {
   /* 記録 pane の無い「未開始」子 issue の synthetic 行。pane 由来フィールドは
    * zero、tmuxState は closed / deferred / queued / unknown(TUI と同一文字列) */
   notStarted?: boolean;
+  derived?: PaneDerived;
+}
+
+export interface PaneDerived {
+  name?: string;
+  prSummary?: string;
+  primaryPrNumber?: number;
+  primaryPrState?: string;
+  ci?: string;
+  waveBadge?: string;
+  waveText?: string;
+  dependencyWave?: string;
+  blockersText?: string;
+  openBlockers?: number;
+  diffTotal?: number;
+  diffParsed?: boolean;
+  filterText?: string;
+  filterValues?: Record<string, string>;
+  sort?: PaneSortKeys;
+  canFocus?: boolean;
+  canPeek?: boolean;
+  worktreeRelative?: string;
+}
+
+export interface PaneSortKeys {
+  issueNum?: number;
+  name?: string;
+  agent?: string;
+  wave?: number;
+  blockers?: number;
+  branch?: string;
+  diff?: number;
+  dirty?: number;
+  ci?: number;
+  tmux?: number;
+  state?: string;
+  pr?: number;
 }
 
 export interface Rollup {
