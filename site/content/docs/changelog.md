@@ -9,6 +9,12 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.6.0 — 2026-06-15
+
+- **Peer messaging for issue-less plans (`fanout plan --team`).** The plan lane now accepts `--team`, wiring the same sibling-pane coordination the issue / Project lanes use into `fanout plan`. Issue-less plan tasks have no GitHub issue number, so peers are addressed by **task id** — `fanout msg send --to <task-id>`, and `fanout msg peers` lists the live task ids. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. See [Workflow]({{< relref "/docs/workflow" >}}).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.6.0)
+
 ## v0.5.0 — 2026-06-14
 
 - **Per-target agent overrides.** A bare `--agent <name>` still sets the default for every child, but you can now mix agents in one run with the repeatable `--agent <NUM>=<name>` form (issue / Project children) or `--agent <task-id>=<name>` (`fanout plan`). Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`; only the agents actually selected are validated. See [CLI Reference]({{< relref "/docs/cli" >}}).
