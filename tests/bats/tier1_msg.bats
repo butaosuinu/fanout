@@ -262,8 +262,12 @@ msg_env() {
   assert_success
   run_fanout msg register --self api-client --parent plan:demo
   assert_success
-  run_fanout msg send --to api-client --self db-layer --parent plan:demo "ping"
+  # The send echo itself must carry task ids (the sender does not need the
+  # registry to label its own from/to).
+  run_fanout msg send --to api-client --self db-layer --parent plan:demo --json "ping"
   assert_success
+  [[ "$output" == *'"fromTask": "db-layer"'* ]]
+  [[ "$output" == *'"toTask": "api-client"'* ]]
   run_fanout msg inbox --self api-client --parent plan:demo --json
   assert_success
   [[ "$output" == *'"selfTask": "api-client"'* ]]

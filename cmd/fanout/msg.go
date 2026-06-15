@@ -620,13 +620,13 @@ func runMsgVerb(f *msgFlags, store *msgstore.Store, self int, parent string, pan
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgResult(f, msg, fmt.Sprintf("sent #%d to %s", msg.ID, recipientLabel(f, parent)), lg)
+		return writeMsgResult(f, msgSendView(msg, parent, pane.TaskID, f.toRaw), fmt.Sprintf("sent #%d to %s", msg.ID, recipientLabel(f, parent)), lg)
 	case "post":
 		msg, err := store.Post(self, f.kind, f.body, now)
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgResult(f, msg, fmt.Sprintf("posted #%d to the board", msg.ID), lg)
+		return writeMsgResult(f, msgSendView(msg, parent, pane.TaskID, ""), fmt.Sprintf("posted #%d to the board", msg.ID), lg)
 	case "mark-read":
 		return runMsgMarkRead(f, store, self, now, lg)
 	case "register":
@@ -662,6 +662,23 @@ type msgMessageView struct {
 	msgstore.Message
 	FromTask string `json:"fromTask,omitempty"`
 	ToTask   string `json:"toTask,omitempty"`
+}
+
+// msgSendView is the JSON encoding of a send/post echo: the raw message for
+// issue/Project parents (byte-identical), or a task-id-enriched view for plan
+// parents so a sending automation can reuse fromTask/toTask from the response
+// without reverse-engineering the synthetic numbers. fromTask is the sender's
+// task id (the resolved pane's TaskID); toTask is the recipient's (the raw --to
+// token), unset for board posts (msg.To == nil).
+func msgSendView(msg msgstore.Message, parent, fromTask, toTask string) any {
+	if !team.IsPlanParent(parent) {
+		return msg
+	}
+	v := msgMessageView{Message: msg, FromTask: fromTask}
+	if msg.To != nil {
+		v.ToTask = toTask
+	}
+	return v
 }
 
 // msgMessageViews attaches plan task ids to each message's from/to from labels.
