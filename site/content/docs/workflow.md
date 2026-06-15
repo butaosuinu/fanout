@@ -132,6 +132,13 @@ carries a shared `board` (broadcast to everyone) plus `1:1` messages addressed
 with `--to <issue>`. Coordination is pull-based — nothing nudges a pane unless
 you ask it to.
 
+The plan lane supports `--team` too (`fanout plan <spec> --team`). It behaves
+identically, except issue-less plan tasks have no `#N`, so peers are addressed
+by **task id**: `fanout msg send --to <task-id> "<body>"` messages a sibling
+task and `fanout msg peers` lists the live task ids. The plan bus lives at
+`/tmp/fanout-<repo>-plan-<slug>.db`, and `--team` is not combinable with the
+plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`).
+
 | Verb | Effect |
 |---|---|
 | `peers` | List the sibling panes known for this parent. |

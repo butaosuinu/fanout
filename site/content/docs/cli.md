@@ -26,8 +26,9 @@ fanout <parent-issue|project-url>
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
-       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
-       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+       [--unblocked-only] [--team] [--base-branch <branch>]
+       [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
+       [--sleep <seconds>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
 fanout plan <spec.json|plan-slug> --merge <task-id>
 fanout plan <spec.json|plan-slug> --close <task-id>
@@ -153,6 +154,7 @@ generated branches use `fanout/<slug>` unless the task supplies `branch`.
 | `--base-branch` | `<branch>` | Override `plan.base_branch`; if neither is set, fanout resolves the repository default branch. |
 | `--branch-prefix` | `<prefix>` | Prefix generated task branch names. |
 | `--no-refresh` | — | Skip base-branch refresh before creating task worktrees. |
+| `--team` | — | Opt the plan run into sibling coordination, exactly like issue mode — except peers are addressed by **task ID** (issue-less plan tasks have no `#N`). Seeds the plan's per-parent peer registry and appends the roster section to each task briefing. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. Not combinable with the plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`). Off by default. |
 
 `--agent` works the same way as in issue mode, but per-target overrides are keyed by task ID instead of issue number: `--agent <name>` sets the default and the repeatable `--agent <task-id>=<name>` form overrides a single task. Each task resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`.
 
@@ -290,6 +292,8 @@ Sibling coordination over a per-parent SQLite message bus. Run from inside a fan
 | `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent is running. A notify verb, not a message: it never touches the DB and is a no-op success when the peer's agent is not running (pane gone, state unknown, or done). |
 
 Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection), and `--dry-run` (write/notify verbs only — prints the `# would ...` writes and touches nothing; not combinable with `--json`).
+
+Under a [`fanout plan --team`](#plan-fan-out-issue-less) run, peers are addressed by **task ID** rather than issue number: `send --to <task-id>`, and `peers` lists the live task IDs. The `--json` output of plan-mode panes adds `selfTask` / `fromTask` / `toTask` fields so automation can resolve task IDs from the synthetic peer numbers; issue / Project JSON is unchanged.
 
 The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `FANOUT_DB_PATH`. Coordination is **pull-based**: messages persist in the DB and a sibling reads them at its own checkpoints — `fanout msg` does not interrupt a busy pane. The pure-Go SQLite driver is embedded, so no external `sqlite3` is required.
 

@@ -130,6 +130,14 @@ fanout したペイン内では、`fanout msg` が自分が今どの子（また
 運びます。協調は pull ベース — 自分から要求しない限り、何かがペインを
 つつくことはありません。
 
+plan レーンも `--team` に対応します（`fanout plan <spec> --team`）。動作は同じ
+ですが、issue-less な plan task には `#N` が無いため、peer は **task id** で
+指定します: `fanout msg send --to <task-id> "<body>"` で兄弟 task に送り、
+`fanout msg peers` が現在の task id 一覧を表示します。plan のバスは
+`/tmp/fanout-<repo>-plan-<slug>.db` に置かれ、`--team` は plan の
+read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは
+併用できません。
+
 | verb | 効果 |
 |---|---|
 | `peers` | この親で把握している兄弟ペインを一覧する。 |
