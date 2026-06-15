@@ -253,6 +253,24 @@ msg_env() {
   [[ "$output" == *'"parent": "plan:launch-plan"'* ]]
 }
 
+@test "msg plan-mode inbox --json carries task ids, not synthetic numbers" {
+  msg_env
+  # Once peers are seeded (a real --team run does this at launch), inbox/board
+  # --json must surface task ids so automation can address from/to/self without
+  # reverse-engineering the synthetic hash.
+  run_fanout msg register --self db-layer --parent plan:demo
+  assert_success
+  run_fanout msg register --self api-client --parent plan:demo
+  assert_success
+  run_fanout msg send --to api-client --self db-layer --parent plan:demo "ping"
+  assert_success
+  run_fanout msg inbox --self api-client --parent plan:demo --json
+  assert_success
+  [[ "$output" == *'"selfTask": "api-client"'* ]]
+  [[ "$output" == *'"fromTask": "db-layer"'* ]]
+  [[ "$output" == *'"toTask": "api-client"'* ]]
+}
+
 @test "msg --to <all-digit task id> targets the task, not numeric peer N" {
   msg_env
   # Task id "123" is a valid plan task id. Under a plan parent it must address

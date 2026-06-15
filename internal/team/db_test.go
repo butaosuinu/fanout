@@ -273,6 +273,30 @@ func TestEnsureSchemaMigratesV1(t *testing.T) {
 	}
 }
 
+// TestIsDuplicateColumnErrMatchesSQLite pins the duplicate-column detection to
+// the actual driver error message, so a concurrent ADD COLUMN race in
+// ensurePeersTaskIDColumn is recognized (and swallowed) rather than surfacing
+// as a backend failure.
+func TestIsDuplicateColumnErrMatchesSQLite(t *testing.T) {
+	db, _ := openTestDB(t)
+	if _, err := db.Exec("CREATE TABLE t (a INTEGER)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := db.Exec("ALTER TABLE t ADD COLUMN b TEXT"); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+	_, err := db.Exec("ALTER TABLE t ADD COLUMN b TEXT")
+	if err == nil {
+		t.Fatal("expected a duplicate-column error on the second ADD COLUMN")
+	}
+	if !isDuplicateColumnErr(err) {
+		t.Fatalf("isDuplicateColumnErr(%q) = false, want true (driver message drifted)", err)
+	}
+	if isDuplicateColumnErr(nil) {
+		t.Error("isDuplicateColumnErr(nil) = true, want false")
+	}
+}
+
 func TestEnsureSchemaRejectsNewerVersion(t *testing.T) {
 	db, _ := openTestDB(t)
 	if _, err := db.Exec("PRAGMA user_version = 99"); err != nil {

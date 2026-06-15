@@ -175,7 +175,10 @@ func EnsureSchema(db *sql.DB) error {
 // ensurePeersTaskIDColumn adds the nullable peers.task_id column to a pre-v2
 // DB. A fresh DB already has it from schemaStatements, so the column check is
 // a no-op there; a v1 issue DB gains the nullable column without a destructive
-// rebuild and keeps every existing peer row intact.
+// rebuild and keeps every existing peer row intact. SQLite has no
+// ADD COLUMN IF NOT EXISTS, and two panes upgrading the same shared /tmp DB can
+// both observe the column absent and race to ALTER it, so a duplicate-column
+// error from a concurrent winner is treated as success (the column now exists).
 func ensurePeersTaskIDColumn(db *sql.DB) error {
 	has, err := columnExists(db, "peers", "task_id")
 	if err != nil {
@@ -185,9 +188,19 @@ func ensurePeersTaskIDColumn(db *sql.DB) error {
 		return nil
 	}
 	if _, err := db.Exec("ALTER TABLE peers ADD COLUMN task_id TEXT"); err != nil {
+		if isDuplicateColumnErr(err) {
+			return nil
+		}
 		return fmt.Errorf("add peers.task_id column: %w", err)
 	}
 	return nil
+}
+
+// isDuplicateColumnErr reports whether err is SQLite's "duplicate column name"
+// from an ADD COLUMN that lost a concurrent race — i.e. the column already
+// exists, so the migration is effectively done.
+func isDuplicateColumnErr(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }
 
 // columnExists reports whether table has a column named column, via

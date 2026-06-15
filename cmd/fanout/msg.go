@@ -643,11 +643,40 @@ func runMsgVerb(f *msgFlags, store *msgstore.Store, self int, parent string, pan
 }
 
 type msgMessagesReport struct {
-	Self       int                  `json:"self"`
+	Self int `json:"self"`
+	// SelfTask, FromTask, and ToTask are populated only for plan parents, where
+	// the numeric members are negative synthetic peer numbers; they carry the
+	// task ids automation actually addresses by. omitempty keeps issue/Project
+	// JSON byte-identical.
+	SelfTask   string               `json:"selfTask,omitempty"`
 	Parent     string               `json:"parent"`
 	All        bool                 `json:"all"`
-	Messages   []msgstore.Message   `json:"messages"`
+	Messages   []msgMessageView     `json:"messages"`
 	MarkedRead *msgstore.MarkResult `json:"marked_read,omitempty"`
+}
+
+// msgMessageView is a message plus, for plan parents, the task ids of its
+// from/to members. The embedded Message promotes its fields to the top level,
+// so issue-mode JSON (empty FromTask/ToTask) matches the bare Message encoding.
+type msgMessageView struct {
+	msgstore.Message
+	FromTask string `json:"fromTask,omitempty"`
+	ToTask   string `json:"toTask,omitempty"`
+}
+
+// msgMessageViews attaches plan task ids to each message's from/to from labels.
+// With a nil labels map (issue/Project parents) the views carry no task ids.
+func msgMessageViews(msgs []msgstore.Message, labels map[int]string) []msgMessageView {
+	views := make([]msgMessageView, len(msgs))
+	for i, m := range msgs {
+		v := msgMessageView{Message: m}
+		v.FromTask = labels[m.From]
+		if m.To != nil {
+			v.ToTask = labels[*m.To]
+		}
+		views[i] = v
+	}
+	return views
 }
 
 type msgPeersReport struct {
@@ -681,12 +710,22 @@ func runMsgPeers(f *msgFlags, store *msgstore.Store, parent string, lg *log.Logg
 // marked is non-nil only for `inbox --mark-read`. For a plan parent it maps the
 // synthetic peer numbers in From/To back to task ids for a readable table.
 func writeMsgMessages(f *msgFlags, store *msgstore.Store, self int, parent string, msgs []msgstore.Message, marked *msgstore.MarkResult, lg *log.Logger) exitcode.Code {
-	if f.json {
-		return writeMsgJSON(msgMessagesReport{Self: self, Parent: parent, All: f.all, Messages: msgs, MarkedRead: marked}, lg)
-	}
+	// labels is nil for issue/Project parents (no peers query, no task ids) and
+	// maps synthetic numbers to task ids for plan parents — used by both the
+	// JSON enrichment and the human table.
 	labels, code := msgMemberLabels(store, parent, lg)
 	if code != exitcode.OK {
 		return code
+	}
+	if f.json {
+		return writeMsgJSON(msgMessagesReport{
+			Self:       self,
+			SelfTask:   labels[self],
+			Parent:     parent,
+			All:        f.all,
+			Messages:   msgMessageViews(msgs, labels),
+			MarkedRead: marked,
+		}, lg)
 	}
 	writeMsgMessagesTable(msgs, f.all, labels, lg)
 	if marked != nil {
