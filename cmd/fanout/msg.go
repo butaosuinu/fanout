@@ -628,7 +628,7 @@ func runMsgVerb(f *msgFlags, store *msgstore.Store, self int, parent string, pan
 		}
 		return writeMsgResult(f, msgSendView(msg, parent, pane.TaskID, ""), fmt.Sprintf("posted #%d to the board", msg.ID), lg)
 	case "mark-read":
-		return runMsgMarkRead(f, store, self, now, lg)
+		return runMsgMarkRead(f, store, self, pane.TaskID, now, lg)
 	case "register":
 		peer, err := store.Register(pane, now)
 		if err != nil {
@@ -703,6 +703,7 @@ type msgPeersReport struct {
 
 type msgMarkReadReport struct {
 	Self        int     `json:"self"`
+	SelfTask    string  `json:"selfTask,omitempty"`
 	MarkedIDs   []int64 `json:"marked_ids"`
 	BoardCursor *int64  `json:"board_cursor,omitempty"`
 }
@@ -789,8 +790,10 @@ func peerDisplayLabel(p msgstore.Peer) string {
 	return "#" + strconv.Itoa(p.Issue)
 }
 
-func runMsgMarkRead(f *msgFlags, store *msgstore.Store, self int, now string, lg *log.Logger) exitcode.Code {
-	report := msgMarkReadReport{Self: self}
+func runMsgMarkRead(f *msgFlags, store *msgstore.Store, self int, selfTask, now string, lg *log.Logger) exitcode.Code {
+	// selfTask is the reader's plan task id ("" for issue/Project parents), so
+	// plan-mode --json surfaces it alongside the synthetic Self number.
+	report := msgMarkReadReport{Self: self, SelfTask: selfTask}
 	if f.all {
 		marked, cursor, err := store.MarkReadAll(self, now)
 		if err != nil {
@@ -1000,6 +1003,7 @@ func msgBackendErr(verb string, err error, lg *log.Logger) exitcode.Code {
 // automation can tell a delivered push from a best-effort no-op.
 type msgNudgeReport struct {
 	Target     int    `json:"target"`
+	TargetTask string `json:"targetTask,omitempty"`
 	PaneID     string `json:"pane_id"`
 	AgentState string `json:"agent_state"`
 	Nudged     bool   `json:"nudged"`
@@ -1052,6 +1056,9 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 	}
 
 	report := msgNudgeReport{Target: f.to, PaneID: pane.PaneID}
+	if team.IsPlanParent(parent) {
+		report.TargetTask = f.toRaw
+	}
 	switch {
 	case !found:
 		report.Reason = "recipient is not recorded in fanout state"
