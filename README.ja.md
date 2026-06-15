@@ -318,8 +318,9 @@ fanout <parent-issue|project-url>  # 一括 pane 作成; tmux 内から実行
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
-       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
-       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+       [--unblocked-only] [--team] [--base-branch <branch>]
+       [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
+       [--sleep <seconds>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
 fanout plan <spec.json|plan-slug> --merge <task-id>
 fanout plan <spec.json|plan-slug> --close <task-id>
@@ -569,8 +570,9 @@ agent セッションになります。`--team` と `fanout msg` サブコマン
 
 **何なのか。** parent ごとの SQLite メッセージバスです。同じ親の兄弟は全員が
 同じデータベースに到達し、そこには 2 種類のトラフィックが流れます: 全兄弟への
-ブロードキャストである共有**ボード**と、1 つの issue 番号宛の **1:1** メッセージ
-です。各メッセージは自由記述の `kind` ラベルを持ちます（既定 `note`。固定語彙は
+ブロードキャストである共有**ボード**と、1 つの peer 宛（issue 番号、または
+`fanout plan --team` では plan の task id）の **1:1** メッセージです。各メッセージは
+自由記述の `kind` ラベルを持ちます（既定 `note`。固定語彙は
 無く、`blocker` / `heads-up` などチームで有用なものを使えます）。データベースは
 `/tmp/fanout-<repo>-<parent>.db` に置かれます（`FANOUT_DB_PATH` で上書き可）。
 
@@ -590,6 +592,14 @@ briefing に付け、バッチ起動後に作成済みペインを親の peer �
 > Plan Mode briefing を受け取るため、協調節は**付きません**。レジストリへの
 > seed は行われ `fanout msg` も通常どおり使えます —— 注入される briefing 節
 > だけがスキップされます。
+
+**issue-less plan（`fanout plan --team`）。** plan レーンも `--team` に対応します。
+動作は同じですが、issue-less な plan task には `#N` が無いため、peer は issue 番号
+ではなく **task id** で指定します。task ペインからは
+`fanout msg send --to <task-id> "<body>"` で兄弟 task に送り、`fanout msg peers` が
+現在の task id 一覧を表示します。plan の DB は `/tmp/fanout-<repo>-plan-<slug>.db`
+です。`--team` は plan の read/lifecycle モード（`--status` / `--close` / `--merge`
+/ `--cleanup`）とは併用できません。
 
 **使い方（`fanout msg`）。** fanout したペイン内なら、`fanout msg` は自分が
 どの子か（tmux pane と `.fanout/state.json` から）・どの親に属すかを自動検出

@@ -70,3 +70,42 @@ func TestUpsertPeerInsertsAndRewritesOnConflict(t *testing.T) {
 		t.Errorf("last_seen = %q, want NULL after the conflict rewrite", lastSeen.String)
 	}
 }
+
+func TestUpsertPeerKeysPlanTaskBySyntheticNumber(t *testing.T) {
+	db, _ := openTestDB(t)
+	if err := EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	pane := state.Pane{
+		Parent:       "plan:launch-plan",
+		IssueNum:     0,
+		TaskID:       "base-types",
+		PaneID:       "%5",
+		Slug:         "launch-plan-base-types",
+		WorktreePath: "/repo/.fanout/worktrees/launch-plan-base-types",
+		Agent:        "claude",
+		DisplayName:  "Base types",
+	}
+	if err := UpsertPeer(db, pane, "2026-06-13T01:00:00Z"); err != nil {
+		t.Fatalf("UpsertPeer plan task: %v", err)
+	}
+
+	wantNum := TaskPeerNum(pane.Parent, pane.TaskID)
+	if wantNum >= 0 {
+		t.Fatalf("synthetic peer number = %d, want negative", wantNum)
+	}
+	var (
+		issue  int
+		taskID sql.NullString
+	)
+	if err := db.QueryRow("SELECT issue, task_id FROM peers WHERE issue = ?", wantNum).Scan(&issue, &taskID); err != nil {
+		t.Fatalf("select plan peer: %v", err)
+	}
+	if issue != wantNum {
+		t.Errorf("peer issue = %d, want synthetic %d", issue, wantNum)
+	}
+	if !taskID.Valid || taskID.String != "base-types" {
+		t.Errorf("peer task_id = %v, want base-types", taskID)
+	}
+}

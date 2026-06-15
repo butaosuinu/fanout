@@ -37,8 +37,9 @@ func ParseFanoutTag(prompt string) (issue int, parent string, ok bool) {
 
 // Identity is the resolved "who am I" of a fanout pane.
 type Identity struct {
-	Issue  int        // child issue number (state.Pane.IssueNum)
-	Parent string     // parent ref: issue number string or Projects URL
+	Issue  int        // peer number: child IssueNum, or synthetic for plan tasks
+	TaskID string     // plan task id (state.Pane.TaskID); "" for issue panes
+	Parent string     // parent ref: issue number string, Projects URL, or plan:<slug>
 	Pane   state.Pane // full state row, for slug/agent/worktree consumers
 }
 
@@ -86,7 +87,7 @@ func IdentifyPane(paneID, worktree string, st state.Store) (Identity, error) {
 }
 
 func paneIdentity(pane state.Pane) Identity {
-	id := Identity{Issue: pane.IssueNum, Parent: pane.Parent, Pane: pane}
+	id := Identity{Issue: pane.IssueNum, TaskID: pane.TaskID, Parent: pane.Parent, Pane: pane}
 	if id.Issue <= 0 || id.Parent == "" {
 		if n, parent, ok := ParseFanoutTag(pane.Prompt); ok {
 			if id.Issue <= 0 {
@@ -96,6 +97,13 @@ func paneIdentity(pane state.Pane) Identity {
 				id.Parent = parent
 			}
 		}
+	}
+	// Plan-task panes carry a string TaskID and IssueNum 0; synthesize the
+	// same stable peer number the registry seed and the
+	// `fanout msg --to <task-id>` translation use, so a plan pane self-detects
+	// a non-zero, message-addressable self without changing the int schema.
+	if id.Issue == 0 && id.TaskID != "" && id.Parent != "" {
+		id.Issue = TaskPeerNum(id.Parent, id.TaskID)
 	}
 	return id
 }

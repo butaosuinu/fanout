@@ -105,12 +105,18 @@ var (
 )
 
 type msgFlags struct {
-	verb     string
-	json     bool
-	dryRun   bool
-	self     int // 0 = not given; --self only accepts positive integers
-	parent   string
-	to       int // 0 = not given; --to only accepts positive integers
+	verb   string
+	json   bool
+	dryRun bool
+	self   int // 0 = not given; resolved synthetic number for selfRaw
+	// selfRaw holds an explicit --self task id (plan parents) until the parent
+	// is known and it can be mapped to a synthetic number; "" otherwise.
+	selfRaw string
+	parent  string
+	to      int // 0 = not given; resolved synthetic number for toRaw
+	// toRaw holds a --to/nudge task id (plan parents) until the parent is known
+	// and it can be mapped to a synthetic number; "" otherwise.
+	toRaw    string
 	kind     string
 	ids      []int64
 	all      bool
@@ -305,52 +311,128 @@ func parseMsgFlag(f *msgFlags, allowed map[string]bool, args []string, i int, lg
 	return 0, exitcode.OK
 }
 
-// setNudgeTarget parses nudge's single positional <N> into f.to. Like --to it
-// accepts negative synthetic numbers (manual @manual panes) but rejects zero
-// and non-integers; a second positional is an error — nudge targets exactly
-// one peer. Reusing f.to keeps the recipient field shared with send.
+// setNudgeTarget parses nudge's single positional target into f.to/f.toRaw.
+// Like --to it accepts a non-zero issue number (manual @manual panes use
+// negative synthetic numbers) or a plan task id, but rejects zero and other
+// tokens; a second positional is an error — nudge targets exactly one peer.
+// Reusing f.to/f.toRaw keeps the recipient field shared with send.
 func setNudgeTarget(f *msgFlags, arg string, lg *log.Logger) exitcode.Code {
-	if f.to != 0 {
-		lg.Err("msg nudge: takes exactly one target issue, got extra argument: %s", arg)
+	if f.to != 0 || f.toRaw != "" {
+		lg.Err("msg nudge: takes exactly one target (issue number or plan task id), got extra argument: %s", arg)
 		return exitcode.Invocation
 	}
-	n, err := strconv.Atoi(arg)
-	if err != nil || n == 0 {
-		lg.Err("msg nudge: target must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", arg)
-		return exitcode.Invocation
+	n, raw, code := parseMemberToken(f.verb, "target", arg, lg)
+	if code != exitcode.OK {
+		return code
 	}
-	f.to = n
+	f.to, f.toRaw = n, raw
 	return exitcode.OK
+}
+
+// parseMemberToken parses a peer member token that is either a non-zero issue
+// number (manual panes use negative synthetic numbers) or a lowercase
+// kebab-case plan task id. It is parent-agnostic on purpose: an all-digit token
+// like "123" is BOTH a valid issue number and a valid task id, and only the
+// (not-yet-known) parent decides which. So it returns the raw token verbatim
+// plus its integer value (0 when non-numeric); resolveMemberNum picks the
+// interpretation once the parent is resolved. Returns "" raw only on a hard
+// parse error (a token that is neither a non-zero int nor a task-id shape).
+func parseMemberToken(verb, flag, value string, lg *log.Logger) (int, string, exitcode.Code) {
+	if n, err := strconv.Atoi(value); err == nil {
+		// A bare numeric 0 is neither a valid issue number nor — unless it is
+		// also a task-id shape ("0") — a valid token.
+		if n == 0 && !rePlanTaskID.MatchString(value) {
+			lg.Err("msg %s: %s must be a non-zero issue number or a plan task id, got: %s", verb, flag, value)
+			return 0, "", exitcode.Invocation
+		}
+		return n, value, exitcode.OK
+	}
+	if rePlanTaskID.MatchString(value) {
+		return 0, value, exitcode.OK
+	}
+	lg.Err("msg %s: %s must be a non-zero issue number or a plan task id, got: %s", verb, flag, value)
+	return 0, "", exitcode.Invocation
+}
+
+// normalizeMsgParentRef canonicalizes a --parent value. A plan parent
+// (plan:<slug>) is accepted verbatim so plan panes can scope their own DB;
+// everything else defers to cliflags.NormalizeParentRef (issue number /
+// Projects v2 URL).
+func normalizeMsgParentRef(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if slug, ok := strings.CutPrefix(raw, "plan:"); ok {
+		if rePlanTaskID.MatchString(slug) {
+			return "plan:" + slug, true
+		}
+		return "", false
+	}
+	return cliflags.NormalizeParentRef(raw)
+}
+
+// resolveMemberNum resolves a member token (raw + its parsed int) to the peer
+// number for the now-known parent. Under a plan parent the token is a task id
+// (even an all-digit one), mapped through TaskPeerNum; under an issue/Project
+// parent it must be a non-zero integer. This is the single seam where the
+// int-vs-task-id ambiguity of an all-digit token is decided.
+func resolveMemberNum(verb, flag, raw string, intVal int, parent string, lg *log.Logger) (int, exitcode.Code) {
+	if team.IsPlanParent(parent) {
+		if !rePlanTaskID.MatchString(raw) {
+			lg.Err("msg %s: under a plan parent, %s must be a task id (lowercase kebab-case), got: %s", verb, flag, raw)
+			return 0, exitcode.Invocation
+		}
+		return team.TaskPeerNum(parent, raw), exitcode.OK
+	}
+	if intVal == 0 {
+		// parseMemberToken only yields intVal 0 for a task-id-shaped token, so a
+		// 0 here means a task id was passed under a numeric parent.
+		lg.Err("msg %s: %s %q is a task id, only valid under a plan parent; issue/project peers are addressed by number", verb, flag, raw)
+		return 0, exitcode.Invocation
+	}
+	return intVal, exitcode.OK
+}
+
+// recipientLabel renders the recipient as the user addressed it: the task id
+// under a plan parent, "#<issue>" otherwise. f.to must already be resolved.
+func recipientLabel(f *msgFlags, parent string) string {
+	if team.IsPlanParent(parent) {
+		return f.toRaw
+	}
+	return "#" + strconv.Itoa(f.to)
+}
+
+// recipientFlagLabel names the recipient flag for error messages: nudge's
+// positional "target", send's "--to".
+func recipientFlagLabel(verb string) string {
+	if verb == "nudge" {
+		return "target"
+	}
+	return "--to"
 }
 
 func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.Code {
 	switch flag {
 	case "--self":
-		// Zero is the "not given" sentinel; negative numbers are valid — TUI
-		// manual panes record synthetic issue numbers -1, -2, ... (pane.go
-		// nextSyntheticPaneNumber) and team.Detect returns them verbatim.
-		n, err := strconv.Atoi(value)
-		if err != nil || n == 0 {
-			lg.Err("msg %s: --self must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", f.verb, value)
-			return exitcode.Invocation
+		n, raw, code := parseMemberToken(f.verb, "--self", value, lg)
+		if code != exitcode.OK {
+			return code
 		}
-		f.self = n
+		f.self, f.selfRaw = n, raw
 	case "--parent":
 		// Canonicalize so an explicit ref matches the parent recorded at
-		// pane-launch time: "0068" and "68" must scope the same messages.
-		ref, ok := cliflags.NormalizeParentRef(value)
+		// pane-launch time: "0068" and "68" must scope the same messages, and
+		// plan:<slug> is accepted verbatim for issue-less plan runs.
+		ref, ok := normalizeMsgParentRef(value)
 		if !ok {
-			lg.Err("msg %s: --parent must be an issue number or a GitHub Projects v2 URL, got: %s", f.verb, value)
+			lg.Err("msg %s: --parent must be an issue number, a GitHub Projects v2 URL, or plan:<slug>, got: %s", f.verb, value)
 			return exitcode.Invocation
 		}
 		f.parent = ref
 	case "--to":
-		n, err := strconv.Atoi(value)
-		if err != nil || n == 0 {
-			lg.Err("msg %s: --to must be a non-zero issue number (manual panes use negative synthetic numbers), got: %s", f.verb, value)
-			return exitcode.Invocation
+		n, raw, code := parseMemberToken(f.verb, "--to", value, lg)
+		if code != exitcode.OK {
+			return code
 		}
-		f.to = n
+		f.to, f.toRaw = n, raw
 	case "--kind":
 		if strings.TrimSpace(value) == "" {
 			lg.Err("msg %s: --kind must not be empty", f.verb)
@@ -377,8 +459,8 @@ func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
 	}
 	switch f.verb {
 	case "send":
-		if f.to == 0 {
-			lg.Err("msg send: --to <issue> is required")
+		if f.to == 0 && f.toRaw == "" {
+			lg.Err("msg send: --to <issue|task-id> is required")
 			return exitcode.Invocation
 		}
 		fallthrough
@@ -393,10 +475,10 @@ func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
 			return exitcode.Invocation
 		}
 	case "nudge":
-		// setNudgeTarget already rejected zero/non-integer; a still-zero f.to
-		// means no positional target was supplied at all.
-		if f.to == 0 {
-			lg.Err("msg nudge: target issue <N> is required")
+		// setNudgeTarget already rejected zero/unparseable tokens; a still-empty
+		// recipient means no positional target was supplied at all.
+		if f.to == 0 && f.toRaw == "" {
+			lg.Err("msg nudge: target <issue|task-id> is required")
 			return exitcode.Invocation
 		}
 	}
@@ -413,16 +495,20 @@ func resolveMsgIdentity(f *msgFlags, lg *log.Logger) (int, string, msgstore.Peer
 	// targets a peer, never speaks as self — so it does not require self to be
 	// detectable.
 	needSelf := f.verb != "peers" && f.verb != "nudge"
-	if (needSelf && self == 0) || parent == "" {
+	// An explicit --self task id (selfRaw) is "self given" too; it is resolved
+	// to a synthetic number below once the parent is known.
+	haveSelf := f.self != 0 || f.selfRaw != ""
+	if (needSelf && !haveSelf) || parent == "" {
 		id, err := detectIdentity()
 		if err != nil {
-			lg.Err("msg %s: could not detect this pane (%v); pass %s", f.verb, err, msgMissingIdentityFlags(needSelf && self == 0, parent == ""))
+			lg.Err("msg %s: could not detect this pane (%v); pass %s", f.verb, err, msgMissingIdentityFlags(needSelf && !haveSelf, parent == ""))
 			return 0, "", msgstore.Peer{}, exitcode.Invocation
 		}
-		if self == 0 {
+		if !haveSelf {
 			self = id.Issue
 			pane = msgstore.Peer{
 				Issue:        id.Issue,
+				TaskID:       id.TaskID,
 				PaneID:       id.Pane.PaneID,
 				Slug:         id.Pane.Slug,
 				WorktreePath: id.Pane.WorktreePath,
@@ -438,11 +524,36 @@ func resolveMsgIdentity(f *msgFlags, lg *log.Logger) (int, string, msgstore.Peer
 		lg.Err("msg %s: parent is unknown; pass --parent <ref>", f.verb)
 		return 0, "", msgstore.Peer{}, exitcode.Invocation
 	}
+	// An explicit --self resolves against the now-known parent: a task id under
+	// a plan parent, a non-zero issue number otherwise.
+	if f.selfRaw != "" {
+		n, code := resolveMemberNum(f.verb, "--self", f.selfRaw, f.self, parent, lg)
+		if code != exitcode.OK {
+			return 0, "", msgstore.Peer{}, code
+		}
+		self, pane.Issue = n, n
+		if team.IsPlanParent(parent) {
+			pane.TaskID = f.selfRaw
+		} else {
+			pane.TaskID = ""
+		}
+	}
 	// Negative self is legitimate: manual panes carry synthetic numbers
-	// (-1, -2, ...) under the @manual parent. Only zero means unknown.
+	// (-1, -2, ...) under the @manual parent, and plan tasks carry synthetic
+	// negatives under plan:<slug>. Only zero means unknown.
 	if needSelf && self == 0 {
-		lg.Err("msg %s: self issue is unknown; pass --self <issue>", f.verb)
+		lg.Err("msg %s: self issue is unknown; pass --self <issue|task-id>", f.verb)
 		return 0, "", msgstore.Peer{}, exitcode.Invocation
+	}
+	// Resolve the --to/nudge recipient now that the parent is known: an
+	// all-digit token routes to a task id under a plan parent, an issue number
+	// otherwise.
+	if f.toRaw != "" {
+		n, code := resolveMemberNum(f.verb, recipientFlagLabel(f.verb), f.toRaw, f.to, parent, lg)
+		if code != exitcode.OK {
+			return 0, "", msgstore.Peer{}, code
+		}
+		f.to = n
 	}
 	return self, parent, pane, exitcode.OK
 }
@@ -452,9 +563,9 @@ func resolveMsgIdentity(f *msgFlags, lg *log.Logger) (int, string, msgstore.Peer
 func msgMissingIdentityFlags(needSelf, needParent bool) string {
 	switch {
 	case needSelf && needParent:
-		return "--self <issue> and --parent <ref>"
+		return "--self <issue|task-id> and --parent <ref>"
 	case needSelf:
-		return "--self <issue>"
+		return "--self <issue|task-id>"
 	default:
 		return "--parent <ref>"
 	}
@@ -497,33 +608,33 @@ func runMsgVerb(f *msgFlags, store *msgstore.Store, self int, parent string, pan
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgMessages(f, self, parent, msgs, marked, lg)
+		return writeMsgMessages(f, store, self, parent, msgs, marked, lg)
 	case "board":
 		msgs, err := store.Board(self, f.all)
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgMessages(f, self, parent, msgs, nil, lg)
+		return writeMsgMessages(f, store, self, parent, msgs, nil, lg)
 	case "send":
 		msg, err := store.Send(self, f.to, f.kind, f.body, now)
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgResult(f, msg, fmt.Sprintf("sent #%d to #%d", msg.ID, f.to), lg)
+		return writeMsgResult(f, msgSendView(msg, parent, pane.TaskID, f.toRaw), fmt.Sprintf("sent #%d to %s", msg.ID, recipientLabel(f, parent)), lg)
 	case "post":
 		msg, err := store.Post(self, f.kind, f.body, now)
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgResult(f, msg, fmt.Sprintf("posted #%d to the board", msg.ID), lg)
+		return writeMsgResult(f, msgSendView(msg, parent, pane.TaskID, ""), fmt.Sprintf("posted #%d to the board", msg.ID), lg)
 	case "mark-read":
-		return runMsgMarkRead(f, store, self, now, lg)
+		return runMsgMarkRead(f, store, self, pane.TaskID, now, lg)
 	case "register":
 		peer, err := store.Register(pane, now)
 		if err != nil {
 			return msgBackendErr(f.verb, err, lg)
 		}
-		return writeMsgResult(f, msgRegisterReport{Peer: peer}, fmt.Sprintf("registered peer #%d", peer.Issue), lg)
+		return writeMsgResult(f, msgRegisterReport{Peer: peer}, fmt.Sprintf("registered peer %s", peerDisplayLabel(peer)), lg)
 	}
 	// Unreachable while msgVerbFlags and this switch stay in sync; fail loud
 	// instead of silently exiting so a half-added verb is caught immediately.
@@ -532,11 +643,57 @@ func runMsgVerb(f *msgFlags, store *msgstore.Store, self int, parent string, pan
 }
 
 type msgMessagesReport struct {
-	Self       int                  `json:"self"`
+	Self int `json:"self"`
+	// SelfTask, FromTask, and ToTask are populated only for plan parents, where
+	// the numeric members are negative synthetic peer numbers; they carry the
+	// task ids automation actually addresses by. omitempty keeps issue/Project
+	// JSON byte-identical.
+	SelfTask   string               `json:"selfTask,omitempty"`
 	Parent     string               `json:"parent"`
 	All        bool                 `json:"all"`
-	Messages   []msgstore.Message   `json:"messages"`
+	Messages   []msgMessageView     `json:"messages"`
 	MarkedRead *msgstore.MarkResult `json:"marked_read,omitempty"`
+}
+
+// msgMessageView is a message plus, for plan parents, the task ids of its
+// from/to members. The embedded Message promotes its fields to the top level,
+// so issue-mode JSON (empty FromTask/ToTask) matches the bare Message encoding.
+type msgMessageView struct {
+	msgstore.Message
+	FromTask string `json:"fromTask,omitempty"`
+	ToTask   string `json:"toTask,omitempty"`
+}
+
+// msgSendView is the JSON encoding of a send/post echo: the raw message for
+// issue/Project parents (byte-identical), or a task-id-enriched view for plan
+// parents so a sending automation can reuse fromTask/toTask from the response
+// without reverse-engineering the synthetic numbers. fromTask is the sender's
+// task id (the resolved pane's TaskID); toTask is the recipient's (the raw --to
+// token), unset for board posts (msg.To == nil).
+func msgSendView(msg msgstore.Message, parent, fromTask, toTask string) any {
+	if !team.IsPlanParent(parent) {
+		return msg
+	}
+	v := msgMessageView{Message: msg, FromTask: fromTask}
+	if msg.To != nil {
+		v.ToTask = toTask
+	}
+	return v
+}
+
+// msgMessageViews attaches plan task ids to each message's from/to from labels.
+// With a nil labels map (issue/Project parents) the views carry no task ids.
+func msgMessageViews(msgs []msgstore.Message, labels map[int]string) []msgMessageView {
+	views := make([]msgMessageView, len(msgs))
+	for i, m := range msgs {
+		v := msgMessageView{Message: m}
+		v.FromTask = labels[m.From]
+		if m.To != nil {
+			v.ToTask = labels[*m.To]
+		}
+		views[i] = v
+	}
+	return views
 }
 
 type msgPeersReport struct {
@@ -546,6 +703,7 @@ type msgPeersReport struct {
 
 type msgMarkReadReport struct {
 	Self        int     `json:"self"`
+	SelfTask    string  `json:"selfTask,omitempty"`
 	MarkedIDs   []int64 `json:"marked_ids"`
 	BoardCursor *int64  `json:"board_cursor,omitempty"`
 }
@@ -567,20 +725,75 @@ func runMsgPeers(f *msgFlags, store *msgstore.Store, parent string, lg *log.Logg
 }
 
 // writeMsgMessages is the shared renderer for the inbox and board views.
-// marked is non-nil only for `inbox --mark-read`.
-func writeMsgMessages(f *msgFlags, self int, parent string, msgs []msgstore.Message, marked *msgstore.MarkResult, lg *log.Logger) exitcode.Code {
-	if f.json {
-		return writeMsgJSON(msgMessagesReport{Self: self, Parent: parent, All: f.all, Messages: msgs, MarkedRead: marked}, lg)
+// marked is non-nil only for `inbox --mark-read`. For a plan parent it maps the
+// synthetic peer numbers in From/To back to task ids for a readable table.
+func writeMsgMessages(f *msgFlags, store *msgstore.Store, self int, parent string, msgs []msgstore.Message, marked *msgstore.MarkResult, lg *log.Logger) exitcode.Code {
+	// labels is nil for issue/Project parents (no peers query, no task ids) and
+	// maps synthetic numbers to task ids for plan parents — used by both the
+	// JSON enrichment and the human table.
+	labels, code := msgMemberLabels(store, parent, lg)
+	if code != exitcode.OK {
+		return code
 	}
-	writeMsgMessagesTable(msgs, f.all, lg)
+	if f.json {
+		return writeMsgJSON(msgMessagesReport{
+			Self:       self,
+			SelfTask:   labels[self],
+			Parent:     parent,
+			All:        f.all,
+			Messages:   msgMessageViews(msgs, labels),
+			MarkedRead: marked,
+		}, lg)
+	}
+	writeMsgMessagesTable(msgs, f.all, labels, lg)
 	if marked != nil {
 		lg.Ok("marked %d message(s) read, board cursor at %d", len(marked.MessageIDs), marked.BoardCursor)
 	}
 	return exitcode.OK
 }
 
-func runMsgMarkRead(f *msgFlags, store *msgstore.Store, self int, now string, lg *log.Logger) exitcode.Code {
-	report := msgMarkReadReport{Self: self}
+// msgMemberLabels maps synthetic peer numbers to plan task ids so inbox/board
+// rows render readable FROM/TO. It returns nil for non-plan parents, so numeric
+// issue/Project views keep rendering "#<n>" with no extra DB read.
+func msgMemberLabels(store *msgstore.Store, parent string, lg *log.Logger) (map[int]string, exitcode.Code) {
+	if !team.IsPlanParent(parent) {
+		return nil, exitcode.OK
+	}
+	peers, err := store.Peers()
+	if err != nil {
+		return nil, msgBackendErr("inbox", err, lg)
+	}
+	labels := make(map[int]string, len(peers))
+	for _, p := range peers {
+		if p.TaskID != "" {
+			labels[p.Issue] = p.TaskID
+		}
+	}
+	return labels, exitcode.OK
+}
+
+// memberDisplay renders a peer number as its plan task id when known, else as
+// "#<n>". A nil labels map (issue/Project parents) always yields "#<n>".
+func memberDisplay(num int, labels map[int]string) string {
+	if id, ok := labels[num]; ok {
+		return id
+	}
+	return "#" + strconv.Itoa(num)
+}
+
+// peerDisplayLabel is the human label for a registered peer: the task id for a
+// plan-task peer, "#<issue>" for a numeric issue peer.
+func peerDisplayLabel(p msgstore.Peer) string {
+	if p.TaskID != "" {
+		return p.TaskID
+	}
+	return "#" + strconv.Itoa(p.Issue)
+}
+
+func runMsgMarkRead(f *msgFlags, store *msgstore.Store, self int, selfTask, now string, lg *log.Logger) exitcode.Code {
+	// selfTask is the reader's plan task id ("" for issue/Project parents), so
+	// plan-mode --json surfaces it alongside the synthetic Self number.
+	report := msgMarkReadReport{Self: self, SelfTask: selfTask}
 	if f.all {
 		marked, cursor, err := store.MarkReadAll(self, now)
 		if err != nil {
@@ -620,7 +833,7 @@ func writeMsgJSON(report any, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func writeMsgMessagesTable(msgs []msgstore.Message, all bool, lg *log.Logger) {
+func writeMsgMessagesTable(msgs []msgstore.Message, all bool, labels map[int]string, lg *log.Logger) {
 	out := lg.Stdout()
 	if len(msgs) == 0 {
 		if all {
@@ -635,11 +848,11 @@ func writeMsgMessagesTable(msgs []msgstore.Message, all bool, lg *log.Logger) {
 	for _, m := range msgs {
 		to := "board"
 		if m.To != nil {
-			to = "#" + strconv.Itoa(*m.To)
+			to = memberDisplay(*m.To, labels)
 		}
 		rows = append(rows, []string{
 			strconv.FormatInt(m.ID, 10),
-			"#" + strconv.Itoa(m.From),
+			memberDisplay(m.From, labels),
 			to,
 			m.Kind,
 			m.CreatedAt,
@@ -660,11 +873,11 @@ func writeMsgPeersTable(peers []msgstore.Peer, lg *log.Logger) {
 		fmt.Fprintln(out, "no peers registered")
 		return
 	}
-	headers := []string{"ISSUE", "SLUG", "AGENT", "DISPLAY_NAME", "PANE", "LAST_SEEN"}
+	headers := []string{"PEER", "SLUG", "AGENT", "DISPLAY_NAME", "PANE", "LAST_SEEN"}
 	rows := make([][]string, 0, len(peers))
 	for _, p := range peers {
 		rows = append(rows, []string{
-			"#" + strconv.Itoa(p.Issue),
+			peerDisplayLabel(p),
 			dashIfEmpty(p.Slug),
 			dashIfEmpty(p.Agent),
 			dashIfEmpty(p.DisplayName),
@@ -754,10 +967,16 @@ func msgDryRunLines(f *msgFlags, self int, parent string, pane msgstore.Peer, no
 			"# would UPDATE messages SET read_at = %s WHERE parent = %s AND to_issue = %d AND id IN (%s) AND read_at IS NULL",
 			sqlLiteral(now), sqlLiteral(parent), self, strings.Join(ids, ", "))}
 	case "register":
+		// task_id mirrors the real INSERT: NULL for numeric issue peers, the
+		// quoted task id for plan-task peers.
+		taskIDLiteral := "NULL"
+		if pane.TaskID != "" {
+			taskIDLiteral = sqlLiteral(pane.TaskID)
+		}
 		return []string{fmt.Sprintf(
-			"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen) VALUES (%d, %s, %s, %s, %s, %s, %s, %s)",
+			"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (%d, %s, %s, %s, %s, %s, %s, %s, %s)",
 			self, sqlLiteral(pane.PaneID), sqlLiteral(pane.Slug), sqlLiteral(pane.WorktreePath),
-			sqlLiteral(pane.Agent), sqlLiteral(pane.DisplayName), sqlLiteral(now), sqlLiteral(now))}
+			sqlLiteral(pane.Agent), sqlLiteral(pane.DisplayName), sqlLiteral(now), sqlLiteral(now), taskIDLiteral)}
 	}
 	return nil
 }
@@ -784,6 +1003,7 @@ func msgBackendErr(verb string, err error, lg *log.Logger) exitcode.Code {
 // automation can tell a delivered push from a best-effort no-op.
 type msgNudgeReport struct {
 	Target     int    `json:"target"`
+	TargetTask string `json:"targetTask,omitempty"`
 	PaneID     string `json:"pane_id"`
 	AgentState string `json:"agent_state"`
 	Nudged     bool   `json:"nudged"`
@@ -819,14 +1039,26 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 		lg.Err("msg nudge: %v", err)
 		return exitcode.Invocation
 	}
-	pane, found := st.Find(parent, f.to)
+	// Plan recipients are addressed by task id (state rows carry IssueNum 0),
+	// so look them up by task id under a plan parent; issue/Project recipients
+	// keep the numeric lookup.
+	var pane state.Pane
+	var found bool
+	if team.IsPlanParent(parent) {
+		pane, found = st.FindTask(parent, f.toRaw)
+	} else {
+		pane, found = st.Find(parent, f.to)
+	}
 
 	if f.dryRun {
-		lg.Dim("%s", nudgeDryRunLine(f.to, pane.PaneID, found))
+		lg.Dim("%s", nudgeDryRunLine(recipientLabel(f, parent), pane.PaneID, found))
 		return exitcode.OK
 	}
 
 	report := msgNudgeReport{Target: f.to, PaneID: pane.PaneID}
+	if team.IsPlanParent(parent) {
+		report.TargetTask = f.toRaw
+	}
 	switch {
 	case !found:
 		report.Reason = "recipient is not recorded in fanout state"
@@ -835,7 +1067,7 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 	default:
 		report.AgentState, report.Reason, report.Nudged = deliverNudge(pane)
 	}
-	return writeMsgNudgeResult(f, report, lg)
+	return writeMsgNudgeResult(f, parent, report, lg)
 }
 
 // deliverNudge re-reads the live tmux panes immediately before sending (TOCTOU),
@@ -899,22 +1131,28 @@ func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree string) (tmuxrun.L
 // line, resolved from state.json only (never live tmux) so it is golden
 // stable. An unresolved recipient prints a <unknown> pane id rather than
 // erroring, keeping the dry-run a single informative line.
-func nudgeDryRunLine(target int, paneID string, found bool) string {
+// nudgeDryRunLine renders the would-send-keys preview. target is the human
+// recipient label ("#<issue>" for numeric peers, the task id for plan peers).
+func nudgeDryRunLine(target, paneID string, found bool) string {
 	if !found || paneID == "" {
 		paneID = "<unknown>"
 	}
-	return fmt.Sprintf("# would send-keys -t %s -l %s then Enter (target #%d, only if agent is running)",
+	return fmt.Sprintf("# would send-keys -t %s -l %s then Enter (target %s, only if agent is running)",
 		paneID, sqlLiteral(nudgeText), target)
 }
 
-func writeMsgNudgeResult(f *msgFlags, report msgNudgeReport, lg *log.Logger) exitcode.Code {
+func writeMsgNudgeResult(f *msgFlags, parent string, report msgNudgeReport, lg *log.Logger) exitcode.Code {
 	if f.json {
 		return writeMsgJSON(report, lg)
 	}
+	// Show the recipient as the user addressed it: "#<issue>" for numeric
+	// peers, the task id for plan peers (report.Target holds the synthetic
+	// number, which is not user-facing).
+	label := recipientLabel(f, parent)
 	if report.Nudged {
-		lg.Ok("nudged #%d", report.Target)
+		lg.Ok("nudged %s", label)
 	} else {
-		lg.Warn("did not nudge #%d: %s", report.Target, report.Reason)
+		lg.Warn("did not nudge %s: %s", label, report.Reason)
 	}
 	return exitcode.OK
 }

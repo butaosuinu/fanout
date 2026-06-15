@@ -388,3 +388,60 @@ func TestPeersOrderedByIssue(t *testing.T) {
 		t.Errorf("peer order = %v, want %v", got, want)
 	}
 }
+
+// TestPlanTaskPeerAndMessagingRoundTrip exercises the issue-less plan path:
+// peers carry a synthetic negative number plus a task id, and 1:1 messaging
+// round-trips between two such peers through the unchanged int-keyed schema.
+func TestPlanTaskPeerAndMessagingRoundTrip(t *testing.T) {
+	const parent = "plan:launch-plan"
+	path := filepath.Join(t.TempDir(), "team.db")
+	db, err := team.Open(path)
+	if err != nil {
+		t.Fatalf("team.Open(%q): %v", path, err)
+	}
+	t.Cleanup(func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Errorf("close db: %v", closeErr)
+		}
+	})
+	if schemaErr := team.EnsureSchema(db); schemaErr != nil {
+		t.Fatalf("team.EnsureSchema: %v", schemaErr)
+	}
+	s, err := New(db, parent)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	apiNum := team.TaskPeerNum(parent, "api-client")
+	dbNum := team.TaskPeerNum(parent, "db-layer")
+	if apiNum >= 0 || dbNum >= 0 {
+		t.Fatalf("synthetic numbers must be negative, got api=%d db=%d", apiNum, dbNum)
+	}
+
+	stored, err := s.Register(Peer{Issue: apiNum, TaskID: "api-client", Slug: "launch-plan-api-client"}, testNow)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if stored.Issue != apiNum || stored.TaskID != "api-client" {
+		t.Fatalf("Register stored = %+v, want issue %d task api-client", stored, apiNum)
+	}
+
+	if _, sendErr := s.Send(dbNum, apiNum, "note", "schema ready", testNow); sendErr != nil {
+		t.Fatalf("Send: %v", sendErr)
+	}
+	msgs, _, err := s.Inbox(apiNum, false, false, testNow)
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].From != dbNum || msgs[0].To == nil || *msgs[0].To != apiNum {
+		t.Fatalf("Inbox(api) = %+v, want one db-layer->api-client message", msgs)
+	}
+
+	peers, err := s.Peers()
+	if err != nil {
+		t.Fatalf("Peers: %v", err)
+	}
+	if len(peers) != 1 || peers[0].TaskID != "api-client" {
+		t.Fatalf("Peers = %+v, want one peer with task id api-client", peers)
+	}
+}

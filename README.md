@@ -330,8 +330,9 @@ fanout <parent-issue|project-url>  # batch pane creation; run from inside tmux
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
-       [--unblocked-only] [--base-branch <branch>] [--branch-prefix <prefix>]
-       [--no-refresh] [--session <tmux-session>] [--sleep <seconds>]
+       [--unblocked-only] [--team] [--base-branch <branch>]
+       [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
+       [--sleep <seconds>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
 fanout plan <spec.json|plan-slug> --merge <task-id>
 fanout plan <spec.json|plan-slug> --close <task-id>
@@ -649,7 +650,8 @@ same for `claude` and `codex` panes, and needs no shared model context.
 **What it is.** A per-parent SQLite message bus. Every sibling of the same
 parent reaches the same database, which carries two traffic types: a shared
 **board** (broadcast to all siblings) and **1:1** messages (addressed to one
-issue number). Each message has a free-form `kind` label (default `note`; no
+peer — an issue number, or a plan task id in `fanout plan --team` runs). Each
+message has a free-form `kind` label (default `note`; no
 fixed vocabulary — use whatever your team finds useful, e.g. `blocker`,
 `heads-up`). The database lives at `/tmp/fanout-<repo>-<parent>.db` (override
 with `FANOUT_DB_PATH`).
@@ -671,6 +673,14 @@ panes into the parent's peer registry.
 > minimal Plan-Mode briefing instead, so the coordination section is **not**
 > added to them. They are still seeded into the registry and can use
 > `fanout msg` normally — only the injected briefing section is skipped.
+
+**Issue-less plans (`fanout plan --team`).** The plan lane supports `--team`
+too. It works identically, except peers are addressed by **task id** rather
+than issue number — issue-less plan tasks have no `#N`. From a task pane,
+`fanout msg send --to <task-id> "<body>"` messages a sibling task, and
+`fanout msg peers` lists the live task ids. The plan DB is
+`/tmp/fanout-<repo>-plan-<slug>.db`. `--team` is not combinable with the plan
+read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`).
 
 **Using it (`fanout msg`).** Inside any fanned pane, `fanout msg` auto-detects
 which child you are (from the tmux pane and `.fanout/state.json`) and which

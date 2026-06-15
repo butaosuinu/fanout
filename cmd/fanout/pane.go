@@ -271,7 +271,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	return req
 }
 
-func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec, task planspec.Task, resolvedSettings settings.Settings) paneRequest {
+func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec, task planspec.Task, resolvedSettings settings.Settings, teamCtx *briefing.TeamContext) paneRequest {
 	slug := planTaskSlug(spec.Plan.Slug, task)
 	branchName := task.Branch
 	if branchName == "" {
@@ -299,7 +299,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 			NoRefresh:   cfg.NoRefresh,
 		}),
 	}
-	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings)
+	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
 	return req
 }

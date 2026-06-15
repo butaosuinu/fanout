@@ -164,6 +164,42 @@ func TestParsePlanLifecycleRejectsAgentOverride(t *testing.T) {
 	}
 }
 
+func TestParsePlanTeamFlagSetsConfig(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cfg, code := parsePlanCommand([]string{"launch-plan", "--team"}, log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.OK {
+		t.Fatalf("parsePlanCommand(--team) code = %d, want OK; stderr=%q", code, stderr.String())
+	}
+	if !cfg.Team {
+		t.Fatal("cfg.Team = false, want true")
+	}
+	if !cfg.cliConfig().Team {
+		t.Fatal("cliConfig().Team = false, want true (forwarded to executeTaskPlan)")
+	}
+}
+
+func TestParsePlanTeamRejectedInStatusAndLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"status", []string{"launch-plan", "--status", "--team"}, "--status cannot be combined with --team"},
+		{"lifecycle", []string{"launch-plan", "--cleanup", "--team"}, "--close/--merge/--cleanup cannot be combined with --team"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			_, code := parsePlanCommand(tc.args, log.NewWith(&stdout, &stderr, false))
+			if code != exitcode.Invocation {
+				t.Fatalf("parsePlanCommand(%v) code = %d, want %d", tc.args, code, exitcode.Invocation)
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.want) {
+				t.Fatalf("stderr = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
 	cfg := planCommandConfig{StatusMode: true, Format: "json", BranchPrefix: "custom/"}
 

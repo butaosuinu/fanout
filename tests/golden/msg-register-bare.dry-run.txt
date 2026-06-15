@@ -1,1 +1,1 @@
-# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen) VALUES (70, '', '', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z')
+# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '', '', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', NULL)

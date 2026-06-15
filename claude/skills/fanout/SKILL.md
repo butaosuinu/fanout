@@ -163,6 +163,7 @@ fanned panes are separate agent sessions (not Agent Teams teammates — that is 
   - `fanout msg register` — (re-)register this pane in the roster.
 - Common options: `--json` (machine-readable), `--self <N>` / `--parent <ref>` (override pane detection), `--dry-run` (write verbs only — prints `# would ...` and writes nothing; not combinable with `--json`). `kind` is a free-form label (default `note`; no fixed vocabulary). Exit codes: `0` ok, `2` bad invocation, `4` SQLite backend failure.
 - Coordination is **pull-based**: messages persist and a sibling reads them at its own checkpoints; `fanout msg` never interrupts a busy pane. The merged CLI has no "nudge". A good rhythm is to check `fanout msg inbox` once after reading the briefing, post a one-line heads-up before editing shared files, and check the inbox once more before opening the PR.
+- **Plan mode** — `fanout plan --team` uses the same `fanout msg` surface, but peers are addressed by **task id** (`fanout msg send --to <task-id>`) instead of issue number, because issue-less plan tasks have no `#N`. See the fanout-plan skill.
 - **Security**: the DB is a plaintext SQLite file under `/tmp` (`0600`, owner-only). Never put secrets, tokens, or credentials in messages.
 
 ## Project mode notes

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/atomicfs"
+	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -54,6 +55,7 @@ type planCommandConfig struct {
 	DryRun             bool
 	Debug              bool
 	UnblockedOnly      bool
+	Team               bool
 	StatusMode         bool
 	Format             string
 	CloseTaskID        string
@@ -232,12 +234,29 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		printTaskDryRunPlan(plan, lg, c)
 	}
 
-	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, recorder, c, commandName)
+	var teamCtx *briefing.TeamContext
+	if cfg.Team {
+		teamCtx = buildTaskTeamContext(rt.info.ProjectRoot, parentRef, plan.Targets)
+	}
+
+	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
 	if !cfg.DryRun && result.Created > 0 {
 		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
 	}
+
+	// Seed the peers registry for --team runs, fail-fast partial successes
+	// included. Best-effort: this runs outside the executeTaskPlan loop and a
+	// failure only warns, never changes the exit code.
+	if cfg.Team && len(result.CreatedIDs) > 0 {
+		if cfg.DryRun {
+			fmt.Fprintf(lg.Stdout(), "%s# would seed team registry: %d peer(s) -> %s%s\n", c.Dim, len(result.CreatedIDs), teamCtx.DBPath, c.Reset)
+		} else {
+			seedTaskTeamRegistry(lg, teamCtx.DBPath, recorder.Store, parentRef, result.CreatedIDs)
+		}
+	}
+
 	if result.Failed > 0 {
 		return exitcode.Env
 	}
@@ -270,6 +289,7 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		"--debug":                   func() { cfg.Debug = true },
 		"--no-refresh":              func() { cfg.NoRefresh = true },
 		"--unblocked-only":          func() { cfg.UnblockedOnly = true },
+		"--team":                    func() { cfg.Team = true },
 		"--status":                  func() { cfg.StatusMode = true },
 		"--cleanup":                 func() { cfg.CleanupMode = true },
 		"--auto-pr":                 func() { cfg.AutoPullRequest = new(true) },
@@ -431,6 +451,8 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, h
 			return planStatusConflict(lg, "--dry-run")
 		case cfg.UnblockedOnly:
 			return planStatusConflict(lg, "--unblocked-only")
+		case cfg.Team:
+			return planStatusConflict(lg, "--team")
 		case cfg.NoRefresh:
 			return planStatusConflict(lg, "--no-refresh")
 		case cfg.AutoPullRequest != nil:
@@ -474,6 +496,8 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, h
 			return planLifecycleConflict(lg, "--dry-run")
 		case cfg.UnblockedOnly:
 			return planLifecycleConflict(lg, "--unblocked-only")
+		case cfg.Team:
+			return planLifecycleConflict(lg, "--team")
 		case cfg.NoRefresh:
 			return planLifecycleConflict(lg, "--no-refresh")
 		case cfg.AutoPullRequest != nil:
@@ -545,6 +569,7 @@ func (cfg planCommandConfig) cliConfig() *cliflags.Config {
 		DryRun:             cfg.DryRun,
 		Debug:              cfg.Debug,
 		UnblockedOnly:      cfg.UnblockedOnly,
+		Team:               cfg.Team,
 		AutoPullRequest:    cfg.AutoPullRequest,
 		PRReviewGate:       cfg.PRReviewGate,
 		BriefingCodeReview: cfg.BriefingCodeReview,
@@ -1277,10 +1302,10 @@ func applyTaskLimit(tasks []planspec.Task, limit int) (targets, deferred []plans
 	return tasks, nil
 }
 
-func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, recorder paneStateRecorder, c log.Palette, commandName string) taskExecutionResult {
+func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
 	var result taskExecutionResult
 	for i, task := range targets {
-		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings)
+		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, teamCtx)
 		if !createPane(cfg, lg, info, req, recorder, c, commandName) {
 			result.Failed++
 			break
@@ -1381,11 +1406,12 @@ func printTaskSummary(plan taskPlan, result taskExecutionResult, cfg planCommand
 	ids := taskIDCSV(plan.LimitDeferred)
 	fmt.Fprintf(lg.Stdout(), "  %s\n", strings.Join(taskIDs(plan.LimitDeferred), " "))
 	cliCfg := cfg.cliConfig()
-	fmt.Fprintf(lg.Stdout(), "  %s plan %s --only %s%s%s%s%s%s%s\n",
+	fmt.Fprintf(lg.Stdout(), "  %s plan %s --only %s%s%s%s%s%s%s%s\n",
 		shellQuote(commandName),
 		shellQuote(cfg.SpecArg),
 		shellQuote(ids),
 		boolFlag(" --unblocked-only", cfg.UnblockedOnly),
+		boolFlag(" --team", cfg.Team),
 		settingsFlags(cliCfg),
 		worktreeFlags(cliCfg),
 		agentFlagsForTasks(cfg.Agent, cfg.AgentOverrides, plan.LimitDeferred),
@@ -1427,6 +1453,7 @@ Options:
   --only <task-id[,id...]>    Restrict to task IDs
   --skip <task-id[,id...]>    Exclude task IDs
   --unblocked-only            Defer tasks whose blocked_by dependencies are incomplete
+  --team                      Seed sibling-task peer messaging (fanout msg, addressed by task id)
   --base-branch <branch>      Override spec plan.base_branch
   --branch-prefix <prefix>    Prefix generated branch names
   --no-refresh                Do not fetch/fast-forward the base branch
