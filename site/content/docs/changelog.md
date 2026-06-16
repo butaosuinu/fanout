@@ -9,6 +9,10 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## Unreleased
+
+- **Cleaner dry-run semantics.** Issue / Project and `fanout plan` dry-runs remain the safety previews for pane creation, but issue / Project dry-runs no longer write `/tmp` briefing files. The unused `fanout msg --dry-run` surface was removed.
+
 ## v0.6.0 — 2026-06-15
 
 - **Peer messaging for issue-less plans (`fanout plan --team`).** The plan lane now accepts `--team`, wiring the same sibling-pane coordination the issue / Project lanes use into `fanout plan`. Issue-less plan tasks have no GitHub issue number, so peers are addressed by **task id** — `fanout msg send --to <task-id>`, and `fanout msg peers` lists the live task ids. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. See [Workflow]({{< relref "/docs/workflow" >}}).

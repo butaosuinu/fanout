@@ -94,7 +94,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
 | `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out. Off by default. |
-| `--dry-run` | — | Print the git worktree, tmux split-window and agent launch commands without executing them. |
+| `--dry-run` | — | Print the git worktree, tmux split-window, and agent launch commands without executing them. It creates no worktrees, panes, state rows, or briefing files. |
 | `--debug` | — | Enable extra diagnostic logging. |
 
 ```bash

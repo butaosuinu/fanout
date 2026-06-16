@@ -9,6 +9,10 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含む [GitHub release](https://github.com/butaosuinu/fanout/releases) があります。バージョンは git タグから ldflags 経由で埋め込まれます — `fanout --check-update` で自分の版を確認できます。
 
+## Unreleased
+
+- **dry-run の整理。** issue / Project と `fanout plan` の dry-run は pane 作成前の安全な preview として残しつつ、issue / Project dry-run は `/tmp` briefing file を書かなくなりました。未使用だった `fanout msg --dry-run` surface は削除されました。
+
 ## v0.6.0 — 2026-06-15
 
 - **issue-less plan の peer messaging（`fanout plan --team`）。** plan レーンが `--team` に対応し、issue / Project レーンと同じ兄弟ペイン協調を `fanout plan` に組み込みました。issue-less な plan task には GitHub issue 番号が無いため、peer は **task id** で指定します —— `fanout msg send --to <task-id>`、`fanout msg peers` が現在の task id 一覧を表示します。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db` に置かれます。[Workflow]({{< relref "/docs/workflow" >}}) を参照。

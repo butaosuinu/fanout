@@ -18,10 +18,10 @@ Start (or attach) a tmux session in the target repository, then pick the agent u
 export FANOUT_AGENT=claude
 ```
 
-Preview the plan first. `--dry-run` prints the git worktree + tmux commands without executing them — it creates no worktrees and no panes:
+Preview the plan first. `--dry-run` prints the git worktree + tmux commands without executing them. It creates no worktrees, panes, state rows, or `/tmp` briefing files:
 
 ```bash
-# Preview the git worktree + tmux commands without executing them
+# Preview commands without creating worktrees, panes, state, or briefings
 fanout 123 --dry-run
 ```
 
@@ -64,6 +64,8 @@ A live run walks these steps:
 7. Prints a summary of created / skipped / deferred / failed counts.
 
 > The pane launch prompt stays short on purpose: the full issue body lives in the briefing file at `/tmp/fanout-<repo>-<NUM>.md`, and the agent is told to read it from there. `deferred` only appears with `--unblocked-only`, which holds back children that still have an OPEN blocker.
+
+> In `--dry-run`, fanout prints the future briefing path and size for review, but writes the file only during the live run.
 
 ## Safe to rerun (idempotency)
 
