@@ -55,7 +55,7 @@ tmux セッション内で、作業対象のリポジトリにて:
 # 子の agent を一度だけ指定(各 run で --agent claude / --agent codex を渡してもよい)
 export FANOUT_AGENT=claude
 
-fanout 123 --dry-run    # 何も変更せず worktree / ペインをプレビュー
+fanout 123 --dry-run    # コマンドをプレビューし、worktree / ペイン / state / briefing は作らない
 fanout 123              # issue #123 の OPEN な子をすべて個別ペインへファンアウト
 fanout 123 --status     # ファンアウトした子の PR review + CI 状態を確認
 ```
@@ -88,7 +88,7 @@ fanout 123 --status     # ファンアウトした子の PR review + CI 状態�
 |---|---|
 | `fanout 123 --agent claude` | 親の OPEN な子を並列ペインへファンアウト |
 | `fanout 123 --unblocked-only` | ブロッカーが closed の子だけをファンアウト — 次の wave |
-| `fanout 123 --dry-run` | git も tmux も触らず計画だけ表示 |
+| `fanout 123 --dry-run` | git / tmux / state / briefing file を変更せず計画だけ表示 |
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
 | `fanout` | 常駐 TUI コンソールを起動(focus・peek・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |

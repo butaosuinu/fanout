@@ -226,7 +226,7 @@ fanout 123 --cleanup
 |---|---|
 | `--session <name>` | Target a named tmux session instead of the invoking pane. |
 | `--sleep <seconds>` | Rate limit between successful child launches (default 4 seconds). It is not a retry/backoff knob. |
-| `--dry-run` | Preview the git worktree + tmux commands without executing them. |
+| `--dry-run` | Preview the git worktree + tmux commands without creating worktrees, panes, state rows, or briefing files. |
 | `--debug` | Print extra diagnostic logging. |
 
 ```bash

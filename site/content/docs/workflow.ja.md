@@ -225,7 +225,7 @@ fanout 123 --cleanup
 |---|---|
 | `--session <name>` | 起動元 pane ではなく、名前付き tmux session を target にする。 |
 | `--sleep <seconds>` | 成功した子起動の間のレート制限(既定 4 秒)。retry/backoff の knob ではない。 |
-| `--dry-run` | git worktree + tmux のコマンド列を実行せずにプレビューする。 |
+| `--dry-run` | git worktree + tmux のコマンド列を、worktree・pane・state row・briefing file を作らずにプレビューする。 |
 | `--debug` | 追加の診断ログを出力する。 |
 
 ```bash

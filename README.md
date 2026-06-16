@@ -53,7 +53,7 @@ From inside a tmux session, in the repository you want to work in:
 # pick the child agent once (or pass --agent claude / --agent codex per run)
 export FANOUT_AGENT=claude
 
-fanout 123 --dry-run    # preview the worktrees / panes without touching anything
+fanout 123 --dry-run    # preview commands; create no worktrees, panes, state, or briefings
 fanout 123              # fan every OPEN child of issue #123 out into its own pane
 fanout 123 --status     # PR review + CI state for the fanned children
 ```
@@ -84,7 +84,7 @@ detailed in the [workflow docs](https://butaosuinu.github.io/fanout/docs/workflo
 |---|---|
 | `fanout 123 --agent claude` | Fan the parent's OPEN children out into parallel panes |
 | `fanout 123 --unblocked-only` | Fan out only children whose blockers are closed — the next wave |
-| `fanout 123 --dry-run` | Print the plan without touching git or tmux |
+| `fanout 123 --dry-run` | Print the plan without modifying git, tmux, state, or briefing files |
 | `fanout plan spec.json --agent claude` | Fan out a local plan spec instead of GitHub child issues |
 | `fanout` | Start the persistent TUI console (focus, peek, lifecycle keys) |
 | `fanout 123 --status` | Pane, PR review, and CI state as JSON or a table |

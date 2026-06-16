@@ -239,8 +239,9 @@ dry-run, generated pane names, or confirmation.
 7. Dry-run with `fanout <target> --dry-run <flags>`, summarize the mode
    banner (issue / project), targets, briefing paths, generated names,
    skipped/deferred rows, and warnings (including "cross-repo item skipped"
-   in project mode). Summarize the command plan; do not paste every raw
-   command unless the user asks for debug detail.
+   in project mode). Treat briefing paths in dry-run output as preview paths;
+   fanout writes the files only during the live run. Summarize the command
+   plan; do not paste every raw command unless the user asks for debug detail.
 8. After confirmation, run `fanout <target> <flags>` and relay the
    created/skipped/deferred/failed summary.
 

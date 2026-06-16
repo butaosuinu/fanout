@@ -18,10 +18,10 @@ fanout は、GitHub の親 issue に紐づく OPEN のサブ issue を、子ご�
 export FANOUT_AGENT=claude
 ```
 
-まずは計画をプレビューします。`--dry-run` は git worktree + tmux コマンド列を実行せずに表示するだけで、worktree もペインも一切作りません:
+まずは計画をプレビューします。`--dry-run` は git worktree + tmux コマンド列を実行せずに表示するだけで、worktree・pane・state row・`/tmp` briefing file は作りません:
 
 ```bash
-# Preview the git worktree + tmux commands without executing them
+# Preview commands without creating worktrees, panes, state, or briefings
 fanout 123 --dry-run
 ```
 
@@ -64,6 +64,8 @@ live 実行は次のステップで進みます:
 7. created / skipped / deferred / failed の件数サマリを表示する。
 
 > pane 起動 prompt が短いのは意図的です。完全な issue 本文は `/tmp/fanout-<repo>-<NUM>.md` の briefing にあり、agent はそれを読むよう指示されます。`deferred` は `--unblocked-only` 指定時のみ現れ、OPEN な blocker が残る子を保留します。
+
+> `--dry-run` では、確認用に将来の briefing path と size を表示するだけで、file を書くのは live 実行時のみです。
 
 ## 再実行しても安全（冪等性）
 
