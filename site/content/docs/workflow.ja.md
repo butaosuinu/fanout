@@ -147,6 +147,12 @@ fanout したペイン内では、`fanout msg` が自分が今どの子（また
 [CLI リファレンス]({{< relref "/docs/cli" >}}) または `fanout msg --help` を
 参照してください。
 
+> **セキュリティ。** バスは `/tmp` 配下の**平文** SQLite ファイルです。fanout は
+> `0600`（所有者のみ）で作成し、group/world-readable や別ユーザー所有のファイルは
+> 開くのを拒否しますが、`/tmp` は共有のスクラッチ領域です — **秘密情報・トークン・
+> 認証情報をメッセージに載せないでください。** DB は使い捨てなので、終わったら
+> `/tmp/fanout-<repo>-<parent>.db*` を削除してください。
+
 ## 命名とブランチ
 
 既定では、各子の worktree slug は `slugify(title)-<issueNum>`、branch は `fanout/<slug>` です。これを 3 つの flag で上書きできます:
