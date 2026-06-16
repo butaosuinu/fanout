@@ -151,6 +151,52 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
+func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
+	projectRoot := t.TempDir()
+	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
+	req := newPaneRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), false, nil)
+
+	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
+}
+
+func TestCreatePaneTaskDryRunDoesNotWriteBriefing(t *testing.T) {
+	projectRoot := t.TempDir()
+	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
+	req := newTaskPaneRequest(cfg, projectRoot, spec, task, settings.Defaults(), nil)
+
+	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
+}
+
+func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Config, projectRoot string, req paneRequest) {
+	t.Helper()
+	if !cfg.DryRun {
+		t.Fatal("test helper requires cfg.DryRun")
+	}
+	if req.BriefingPath == "" || req.BriefingBody == "" {
+		t.Fatalf("briefing path/body must be populated: path %q body len %d", req.BriefingPath, len(req.BriefingBody))
+	}
+	_ = os.Remove(req.BriefingPath)
+	t.Cleanup(func() { _ = os.Remove(req.BriefingPath) })
+
+	var stdout, stderr bytes.Buffer
+	lg := log.NewWith(&stdout, &stderr, false)
+	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: projectRoot}
+	if !createPane(cfg, lg, info, req, nil, log.Palette{}, "fanout") {
+		t.Fatalf("createPane() = false, stderr:\n%s", stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "briefing size") {
+		t.Fatalf("dry-run output missing briefing size:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(req.BriefingPath); !os.IsNotExist(err) {
+		t.Fatalf("dry-run wrote briefing file %s: %v", req.BriefingPath, err)
+	}
+}
+
 func TestManualPaneSlugBoundsPromptDerivedSlug(t *testing.T) {
 	got := manualPaneSlug(strings.Repeat("a", naming.MaxSlugLength+50), -12)
 
@@ -224,6 +270,55 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 	if strings.Contains(got.BriefingBody, "Optional: Agent Teams") {
 		t.Fatalf("codex briefing contains Claude-only Agent Teams guidance:\n%s", got.BriefingBody)
+	}
+}
+
+func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T) {
+	cfg := &cliflags.Config{
+		ParentRef:  "100",
+		Agent:      "claude",
+		BaseBranch: "main",
+		AgentOverrides: []cliflags.AgentOverride{
+			{Target: "501", Name: "codex"},
+		},
+	}
+	resolvedSettings := settings.Defaults()
+	resolvedSettings.AutoPullRequest = false
+	issue := ghissue.Issue{Number: 501, Title: "First child", Body: "body"}
+	teamCtx := buildTeamContext("/repo/project_root", "100", []ghissue.Issue{
+		issue,
+		{Number: 502, Title: "Second child"},
+	})
+
+	got := newPaneRequest(cfg, "/repo/project_root", issue, resolvedSettings, false, teamCtx)
+
+	if got.Agent != "codex" {
+		t.Fatalf("Agent = %q, want codex from issue override", got.Agent)
+	}
+	for _, want := range []string{
+		"## Coordinating with your sibling panes",
+		"You are the pane for issue #501 (parent #100)",
+		"- #501: First child (you)",
+		"- #502: Second child",
+		"/tmp/fanout-project_root-100.db",
+		"codex review --uncommitted",
+		"Only after the review loop is clean should you commit and push the branch",
+	} {
+		if !strings.Contains(got.BriefingBody, want) {
+			t.Fatalf("briefing missing %q:\n%s", want, got.BriefingBody)
+		}
+	}
+	for _, unwanted := range []string{
+		`Open a pull request with "Closes #501"`,
+		"structure the PR body",
+		"Diagram gate",
+		"Optional: Agent Teams",
+		"run the `/code-review` slash command",
+		"open the PR",
+	} {
+		if strings.Contains(got.BriefingBody, unwanted) {
+			t.Fatalf("briefing contains %q despite resolved settings/agent:\n%s", unwanted, got.BriefingBody)
+		}
 	}
 }
 
