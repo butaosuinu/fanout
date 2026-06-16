@@ -156,6 +156,12 @@ messaging coordinates separate fanout panes. See the
 [CLI Reference]({{< relref "/docs/cli" >}}) or `fanout msg --help` for the full
 surface.
 
+> **Security.** The bus is a **plaintext** SQLite file under `/tmp`. fanout
+> creates it `0600` (owner-only) and refuses one that is group/world-readable or
+> owned by another user, but `/tmp` is shared scratch space — **do not put
+> secrets, tokens, or credentials in messages.** The DB is throwaway; delete
+> `/tmp/fanout-<repo>-<parent>.db*` when you are done.
+
 ## Naming and branches
 
 By default each child gets the worktree slug `slugify(title)-<issueNum>` and the branch `fanout/<slug>`. Three flags override this:
