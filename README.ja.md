@@ -114,6 +114,10 @@ flag を生成します。詳しくは
 ## 前提条件
 
 - **git**、**tmux**、認証済みの **GitHub CLI(`gh`)**(`gh auth status`)。
+- 子を起動する agent CLI — **`claude`**(Claude Code)や **`codex`** — を、live
+  実行では `PATH` に入れておくこと。インストールが配置するのは fanout 側の
+  skill/command だけで、agent 本体はインストールしません(`--dry-run` や
+  read-only コマンドには不要)。
 - 一括ファンアウト(`fanout <parent>`)は tmux 内から実行する必要があります。
   引数なしの TUI コンソールは素の shell から起動できます。
 - Project モードは `read:project` の gh スコープが必要です
