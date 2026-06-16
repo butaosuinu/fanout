@@ -41,7 +41,6 @@ type paneRequest struct {
 	Wave                string
 	BriefingPath        string
 	BriefingBody        string
-	WriteBriefingDryRun bool
 	ShortTitle          string
 	Slug                string
 	DisplayNameOverride string
@@ -86,7 +85,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		return false
 	}
 
-	if req.BriefingPath != "" && (!cfg.DryRun || req.WriteBriefingDryRun) {
+	if req.BriefingPath != "" && !cfg.DryRun {
 		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 			lg.Err("%s: write briefing: %v", paneLogLabel(req), err)
 			return false
@@ -231,18 +230,16 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	branchOverride := ""
 	agentName := cfg.EffectiveAgentForIssue(issue.Number)
 	req := paneRequest{
-		ParentRef:    cfg.ParentRef,
-		Number:       issue.Number,
-		Title:        issue.Title,
-		Body:         issue.Body,
-		Wave:         issue.Wave,
-		BriefingPath: briefing.Path(projectRoot, issue.Number),
-		// Existing issue dry-runs write briefings; Tier 1 tests depend on that.
-		WriteBriefingDryRun: true,
-		ShortTitle:          shortIssueTitle(issue.Title),
-		Slug:                slug,
-		Agent:               agentName,
-		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
+		ParentRef:     cfg.ParentRef,
+		Number:        issue.Number,
+		Title:         issue.Title,
+		Body:          issue.Body,
+		Wave:          issue.Wave,
+		BriefingPath:  briefing.Path(projectRoot, issue.Number),
+		ShortTitle:    shortIssueTitle(issue.Title),
+		Slug:          slug,
+		Agent:         agentName,
+		CodexPlanMode: cfg.CodexPlanModeEnabled(),
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
