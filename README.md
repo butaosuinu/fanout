@@ -6,10 +6,11 @@
 [![Latest release](https://img.shields.io/github/v/release/butaosuinu/fanout)](https://github.com/butaosuinu/fanout/releases)
 [![Docs](https://img.shields.io/badge/docs-butaosuinu.github.io%2Ffanout-2b7a78)](https://butaosuinu.github.io/fanout/)
 
-**Parallel issue orchestrator for tmux.** Fan a GitHub parent issue's OPEN
-sub-issues out into parallel tmux panes — one git worktree, one agent CLI
-(Claude Code / Codex) per child, each launched from a per-issue briefing. Run it
-again and no child gets a second pane: `.fanout/state.json` remembers.
+**Parallel agent orchestrator for tmux.** Point fanout at a GitHub parent
+issue's OPEN sub-issues — or a local plan spec — and it fans each child or task
+out into its own tmux pane, git worktree and agent CLI (Claude Code / Codex),
+launched from a per-task briefing. Run it again and nothing gets a second pane:
+`.fanout/state.json` remembers.
 
 📖 **Full documentation:** <https://butaosuinu.github.io/fanout/> — installation,
 quickstart, the complete CLI reference, settings, and troubleshooting, in
@@ -65,14 +66,15 @@ for a guided first run.
 
 ## How it works
 
-Three acts — **grow → open → gather**:
+Three moves — **prepare → fan out → fold away**:
 
-1. **Grow the tree.** Create a parent issue and its OPEN child issues. The
-   bundled `fanout-issues` skill encodes blocker waves for you.
-2. **Open the fan.** One sweep of `fanout 123`: one child = one worktree = one
-   tmux pane = one agent.
-3. **Gather the fruit.** Watch progress through the TUI or `--status`, then fold
-   panes away with `--merge` / `--cleanup`, and open the next wave.
+1. **Prepare the work.** Create a parent issue and its OPEN child issues (the
+   bundled `fanout-issues` skill encodes blocker waves for you), or write a local
+   plan spec for `fanout plan` — no issues required.
+2. **Fan it out.** One run of `fanout 123` or `fanout plan spec.json`: one child
+   or task = one worktree = one tmux pane = one agent.
+3. **Merge and fold away.** Watch progress through the TUI or `--status`, then
+   `--merge` and `--cleanup` finished work, and open the next wave.
 
 `fanout plan <spec>` fans out a local plan spec instead of GitHub child issues,
 and `--team` + `fanout msg` give sibling panes lightweight peer messaging — both

@@ -6,11 +6,11 @@
 [![Latest release](https://img.shields.io/github/v/release/butaosuinu/fanout)](https://github.com/butaosuinu/fanout/releases)
 [![Docs](https://img.shields.io/badge/docs-butaosuinu.github.io%2Ffanout-2b7a78)](https://butaosuinu.github.io/fanout/ja/)
 
-**tmux 向けの並列 issue オーケストレーター。** GitHub の親 issue の OPEN な
-サブ issue を、並列の tmux ペインへファンアウトします — 子ごとに 1 つの git
-worktree、1 つの agent CLI(Claude Code / Codex)、issue 単位の briefing から
-起動。再実行しても同じ子に 2 つ目のペインは作られません(`.fanout/state.json`
-が記憶します)。
+**tmux 向けの並列エージェントオーケストレーター。** GitHub の親 issue の OPEN な
+サブ issue、あるいはローカルの plan spec を渡すと、子 issue / タスクごとに tmux
+ペイン・git worktree・agent CLI(Claude Code / Codex)を立ち上げ、タスク単位の
+briefing から起動します。再実行しても同じ対象に 2 つ目のペインは作られません
+(`.fanout/state.json` が記憶します)。
 
 📖 **ドキュメント:** <https://butaosuinu.github.io/fanout/ja/> — インストール、
 クイックスタート、完全な CLI リファレンス、設定、トラブルシューティング(英語 /
@@ -67,14 +67,15 @@ fanout 123 --status     # ファンアウトした子の PR review + CI 状態�
 
 ## 仕組み
 
-3 幕構成 — **育てる → 開く → 収穫する**:
+3 手 — **用意 → 展開 → 片づけ**:
 
-1. **木を育てる。** 親 issue と OPEN な子 issue を作成します。同梱の
-   `fanout-issues` skill がブロッカーの wave を組み立ててくれます。
-2. **扇を開く。** `fanout 123` を一振り: 子 1 つ = worktree 1 つ = tmux ペイン
-   1 つ = agent 1 つ。
-3. **果実を収穫する。** TUI または `--status` で進捗を見守り、`--merge` /
-   `--cleanup` でペインを畳んで、次の wave を開きます。
+1. **用意する。** 親 issue と OPEN な子 issue を作る(同梱の `fanout-issues`
+   skill がブロッカーの wave を組み立ててくれます)か、issue を介さず plan spec
+   を書いて `fanout plan` に渡します。
+2. **展開する。** `fanout 123`(または `fanout plan spec.json`)を一回: 子 / タスク
+   1 つ = worktree 1 つ = tmux ペイン 1 つ = agent 1 つ。
+3. **片づける。** TUI または `--status` で進捗を見て、`--merge` / `--cleanup` で
+   ペインを畳み、次の wave を開きます。
 
 `fanout plan <spec>` は GitHub の子 issue ではなくローカルの plan spec を
 ファンアウトし、`--team` + `fanout msg` は兄弟ペインに軽量な peer messaging を

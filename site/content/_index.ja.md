@@ -1,25 +1,25 @@
 ---
 title: fanout
-description: "GitHub 親 issue の OPEN なサブ issue を、子ごとに git worktree + tmux ペイン + エージェント CLI(Claude Code / Codex)へ扇状に並列展開するオーケストレーター。"
+description: "GitHub 親 issue の OPEN なサブ issue、あるいはローカルの plan spec を、子 issue / タスクごとに git worktree + tmux ペイン + エージェント CLI(Claude Code / Codex)へ並列展開するオーケストレーター。"
 hero:
-  kicker: "Parallel issue orchestrator for tmux"
-  tagline: "ひとつの親 issue を、<em>扇</em>のように。"
-  subcopy: "Fan a GitHub parent issue&rsquo;s OPEN sub-issues out into parallel tmux panes &mdash; one git worktree, one agent per child."
+  kicker: "Parallel agent orchestrator for tmux"
+  tagline: "issue でも <em>plan</em> でも、並列に展開する。"
+  subcopy: "GitHub の親 issue か、ローカルの plan spec を渡すだけ。子 issue / タスクごとに git worktree・tmux ペイン・エージェントが立ち上がる。"
   ctaNote: "tmux と git と GitHub CLI の上で動く、Go 製シングルバイナリ。Claude Code / Codex の skill も同梱。"
   ctaQuickstart: "クイックスタート"
   ctaInstall: "インストール"
 quickstart:
   title: "開くのは、一行。"
-  lede: "tmux の中で一度だけ。親 issue の OPEN な子 issue が、それぞれの worktree・pane・agent に展開される。"
+  lede: "tmux の中で一度だけ。親 issue の OPEN な子 issue が、それぞれの worktree・pane・agent で動き出す。"
   caption: "もう一度実行しても、同じ子に二度目のペインは作られない —— <code class=\"in\">.fanout/state.json</code> が覚えている。"
 features:
-  title: "静かな並列のための、六つの骨。"
-  lede: "扇がきれいに開くのは、骨が通っているから。fanout の機能はどれも「並列の手を止めない」ために通っている。"
+  title: "並列を止めないための、六つの機能。"
+  lede: "issue でも、ローカルの plan でも —— どの機能も並列の手を止めないために働く。"
   items:
     - no: "i"
       icon: "seal"
       title: "冪等なファンアウト"
-      body: "<code>.fanout/state.json</code> が (parent, issue) ごとにペインを記録。再実行しても重複しない。"
+      body: "<code>.fanout/state.json</code> が子 issue も plan タスクもペイン単位で記録。再実行しても重複しない。"
       link: "/docs/workflow"
     - no: "ii"
       icon: "waves"
@@ -47,20 +47,20 @@ features:
       body: "Claude Code / Codex の <code>/fanout</code> スラッシュコマンドと skill を同梱インストール。"
       link: "/docs/agents"
 workflow:
-  title: "育てて、開いて、収める。"
-  lede: "仕事は三幕。あとは風まかせ —— wave が終わるたび、また開けばいい。"
+  title: "用意して、展開して、片づける。"
+  lede: "基本はこの三手。wave が終わるたび、繰り返すだけ。"
   steps:
     - num: "一"
-      title: "木を育てる"
-      body: "fanout-issues skill で、親 issue と OPEN の子 issue ツリーを作る。blocker を書き込めば、wave の順番まで設計できる。"
-      chip: "fanout-issues skill"
+      title: "用意する"
+      body: "fanout-issues skill で親 issue と子 issue ツリーを作るか、issue を介さず plan spec を書いて <code>fanout plan</code> に渡す。blocker を書けば wave の順番も決まる。"
+      chip: "fanout-issues · fanout plan"
     - num: "二"
       title: "扇を開く"
-      body: "<code>fanout 123</code> の一振りで、1 子 = 1 worktree = 1 ペイン = 1 agent。何度振っても、開く骨は同じ。"
+      body: "<code>fanout 123</code>(または <code>fanout plan spec.json</code>)の一回で、1 子 / タスク = 1 worktree = 1 ペイン = 1 agent。何度実行しても、同じペインが開くだけで重複しない。"
       chip: "fanout 123 --agent claude"
     - num: "三"
-      title: "実を収める"
-      body: "TUI や <code>--status</code> で見届けて、<code>--merge</code> / <code>--cleanup</code> で畳む。次の wave へ。"
+      title: "片づける"
+      body: "TUI や <code>--status</code> で進捗を見て、<code>--merge</code> / <code>--cleanup</code> で畳む。そして次の wave へ。"
       chip: "--status → --merge → --cleanup"
 cli:
   title: "覚えるのは、これだけ。"
@@ -84,6 +84,6 @@ cli:
     - cmd: "fanout 123 --merge 4"
       desc: "子ブランチを ff-only でマージ。<code>--close</code> / <code>--cleanup</code> で静かに畳む"
 coda:
-  title: "次の親 issue を、開いてみる。"
+  title: "次の wave を、開いてみる。"
   docsLink: "ドキュメントを読む"
 ---
