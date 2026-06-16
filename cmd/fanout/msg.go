@@ -47,8 +47,6 @@ Options:
   --json           Emit JSON instead of the human-readable view.
   --self <N>       Act as child issue N (overrides pane detection).
   --parent <ref>   Parent issue number or Projects URL (overrides pane detection).
-  --dry-run        Write/notify verbs only: print '# would ...' lines describing
-                   the writes, touch nothing. Not combinable with --json.
   --to <N>         send: recipient child issue number.
   --kind <K>       send/post: message kind (default: note).
   --id <N>         mark-read: message id (repeatable).
@@ -73,8 +71,7 @@ const nudgeText = "[fanout] peer message in your inbox — run: fanout msg inbox
 
 // listLivePanes and sendLiteralLine are the tmux seams nudge drives, declared
 // as vars so unit tests can swap them without a live tmux server (same pattern
-// as detectIdentity). The dry-run path uses neither — it must stay tmux-free
-// so its golden is deterministic.
+// as detectIdentity).
 var (
 	listLivePanes   = tmuxrun.ListLivePanes
 	sendLiteralLine = tmuxrun.SendLiteralLine
@@ -105,10 +102,9 @@ var (
 )
 
 type msgFlags struct {
-	verb   string
-	json   bool
-	dryRun bool
-	self   int // 0 = not given; resolved synthetic number for selfRaw
+	verb string
+	json bool
+	self int // 0 = not given; resolved synthetic number for selfRaw
 	// selfRaw holds an explicit --self task id (plan parents) until the parent
 	// is known and it can be mapped to a synthetic number; "" otherwise.
 	selfRaw string
@@ -125,20 +121,20 @@ type msgFlags struct {
 }
 
 // msgVerbFlags is the per-verb flag allowlist. msgUniversalFlags are accepted
-// by every verb; --dry-run is write-verb only per the #70 contract. The known
-// flag set is derived from these two tables (msgFlagKnown), so adding a flag
-// here is the single registration point for parsing.
+// by every verb. The known flag set is derived from these two tables
+// (msgFlagKnown), so adding a flag here is the single registration point for
+// parsing.
 var msgVerbFlags = map[string]map[string]bool{
 	"peers":     {},
 	"inbox":     {"--all": true, "--mark-read": true},
 	"board":     {"--all": true},
-	"send":      {"--dry-run": true, "--to": true, "--kind": true},
-	"post":      {"--dry-run": true, "--kind": true},
-	"mark-read": {"--dry-run": true, "--id": true, "--all": true},
-	"register":  {"--dry-run": true},
-	// nudge's target is a positional <N>, not --to; --dry-run is its only
-	// verb-specific flag (universal --json/--self/--parent still apply).
-	"nudge": {"--dry-run": true},
+	"send":      {"--to": true, "--kind": true},
+	"post":      {"--kind": true},
+	"mark-read": {"--id": true, "--all": true},
+	"register":  {},
+	// nudge's target is a positional <N>, not --to; universal
+	// --json/--self/--parent still apply.
+	"nudge": {},
 }
 
 var msgUniversalFlags = map[string]bool{"--json": true, "--self": true, "--parent": true}
@@ -174,15 +170,11 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 		return code
 	}
 
-	// nudge reads neither the messages DB nor the generic dry-run printer: it
-	// resolves the recipient from state.json and pushes via tmux, so short it
-	// out before openMsgDB (and before the DB-oriented dry-run path).
+	// nudge reads neither the messages DB nor store identity: it resolves the
+	// recipient from state.json and pushes via tmux, so short it out before
+	// openMsgDB.
 	if flags.verb == "nudge" {
 		return runMsgNudge(flags, parent, lg)
-	}
-
-	if flags.dryRun {
-		return printMsgDryRun(flags, self, parent, pane, lg)
 	}
 
 	db, code := openMsgDB(flags.verb, parent, lg)
@@ -282,8 +274,6 @@ func parseMsgFlag(f *msgFlags, allowed map[string]bool, args []string, i int, lg
 	switch a {
 	case "--json":
 		f.json = true
-	case "--dry-run":
-		f.dryRun = true
 	case "--all":
 		f.all = true
 	case "--mark-read":
@@ -451,12 +441,6 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 }
 
 func validateMsgFlags(f *msgFlags, lg *log.Logger) exitcode.Code {
-	// Dry-run output is the "# would ..." line contract, not JSON; reject the
-	// combination instead of silently handing automation non-JSON output.
-	if f.dryRun && f.json {
-		lg.Err("msg %s: --dry-run cannot be combined with --json (dry-run prints '# would ...' lines)", f.verb)
-		return exitcode.Invocation
-	}
 	switch f.verb {
 	case "send":
 		if f.to == 0 && f.toRaw == "" {
@@ -922,75 +906,6 @@ func msgTableBody(s string) string {
 	return s
 }
 
-// --- dry-run -----------------------------------------------------------
-
-// printMsgDryRun prints the would-be writes without opening the DB, in the
-// pane.go printPaneDryRun "# would ..." idiom. Ids and cursor positions are
-// unknown by design (no DB access), so --all renders a symbolic MAX().
-func printMsgDryRun(f *msgFlags, self int, parent string, pane msgstore.Peer, lg *log.Logger) exitcode.Code {
-	lines := msgDryRunLines(f, self, parent, pane, team.Now())
-	if len(lines) == 0 {
-		// Unreachable while msgVerbFlags' --dry-run set and msgDryRunLines
-		// stay in sync; fail loud so a half-added verb can't fake success.
-		lg.Err("msg: internal error: no dry-run rendering for verb %s", f.verb)
-		return exitcode.Invocation
-	}
-	for _, line := range lines {
-		lg.Dim("%s", line)
-	}
-	return exitcode.OK
-}
-
-func msgDryRunLines(f *msgFlags, self int, parent string, pane msgstore.Peer, now string) []string {
-	switch f.verb {
-	case "send":
-		return []string{fmt.Sprintf(
-			"# would INSERT INTO messages(parent, from_issue, to_issue, kind, body, created_at) VALUES (%s, %d, %d, %s, %s, %s)",
-			sqlLiteral(parent), self, f.to, sqlLiteral(f.kind), sqlLiteral(f.body), sqlLiteral(now))}
-	case "post":
-		return []string{fmt.Sprintf(
-			"# would INSERT INTO messages(parent, from_issue, to_issue, kind, body, created_at) VALUES (%s, %d, NULL, %s, %s, %s)",
-			sqlLiteral(parent), self, sqlLiteral(f.kind), sqlLiteral(f.body), sqlLiteral(now))}
-	case "mark-read":
-		if f.all {
-			return []string{
-				fmt.Sprintf("# would UPDATE messages SET read_at = %s WHERE parent = %s AND to_issue = %d AND read_at IS NULL",
-					sqlLiteral(now), sqlLiteral(parent), self),
-				fmt.Sprintf("# would UPSERT board_cursors(issue=%d, last_read_id=MAX(id) of board posts)", self),
-			}
-		}
-		ids := make([]string, len(f.ids))
-		for i, id := range f.ids {
-			ids[i] = strconv.FormatInt(id, 10)
-		}
-		return []string{fmt.Sprintf(
-			"# would UPDATE messages SET read_at = %s WHERE parent = %s AND to_issue = %d AND id IN (%s) AND read_at IS NULL",
-			sqlLiteral(now), sqlLiteral(parent), self, strings.Join(ids, ", "))}
-	case "register":
-		// task_id mirrors the real INSERT: NULL for numeric issue peers, the
-		// quoted task id for plan-task peers.
-		taskIDLiteral := "NULL"
-		if pane.TaskID != "" {
-			taskIDLiteral = sqlLiteral(pane.TaskID)
-		}
-		return []string{fmt.Sprintf(
-			"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (%d, %s, %s, %s, %s, %s, %s, %s, %s)",
-			self, sqlLiteral(pane.PaneID), sqlLiteral(pane.Slug), sqlLiteral(pane.WorktreePath),
-			sqlLiteral(pane.Agent), sqlLiteral(pane.DisplayName), sqlLiteral(now), sqlLiteral(now), taskIDLiteral)}
-	}
-	return nil
-}
-
-// sqlLiteral renders s as a single-quoted SQL string literal for dry-run
-// display only — real statements always bind placeholders. Newlines become
-// \n so a dry-run line stays a single golden-friendly line.
-func sqlLiteral(s string) string {
-	s = strings.ReplaceAll(s, "'", "''")
-	s = strings.ReplaceAll(s, "\r", `\r`)
-	s = strings.ReplaceAll(s, "\n", `\n`)
-	return "'" + s + "'"
-}
-
 func msgBackendErr(verb string, err error, lg *log.Logger) exitcode.Code {
 	lg.Err("msg %s: %v", verb, err)
 	return exitcode.Backend
@@ -1027,12 +942,12 @@ func shouldNudge(agentState string) bool {
 	return agentState == "running"
 }
 
-// runMsgNudge resolves peer f.to's recorded pane from state.json and, unless
-// --dry-run, pushes the inbox hint when its agent is running. Every
-// operational miss (recipient absent, no pane id, pane gone, agent not
-// running, send-keys failure) is a no-op SUCCESS with a warning/reason: the
-// message is already persisted by send, so a failed nudge must never break
-// messaging. Only invocation errors (handled earlier) exit non-zero.
+// runMsgNudge resolves peer f.to's recorded pane from state.json and pushes the
+// inbox hint when its agent is running. Every operational miss (recipient
+// absent, no pane id, pane gone, agent not running, send-keys failure) is a
+// no-op SUCCESS with a warning/reason: the message is already persisted by
+// send, so a failed nudge must never break messaging. Only invocation errors
+// (handled earlier) exit non-zero.
 func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 	st, err := loadStateStore()
 	if err != nil {
@@ -1048,11 +963,6 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 		pane, found = st.FindTask(parent, f.toRaw)
 	} else {
 		pane, found = st.Find(parent, f.to)
-	}
-
-	if f.dryRun {
-		lg.Dim("%s", nudgeDryRunLine(recipientLabel(f, parent), pane.PaneID, found))
-		return exitcode.OK
 	}
 
 	report := msgNudgeReport{Target: f.to, PaneID: pane.PaneID}
@@ -1125,20 +1035,6 @@ func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree string) (tmuxrun.L
 		return tmuxrun.LivePane{}, false
 	}
 	return tmuxrun.LivePane{}, false
-}
-
-// nudgeDryRunLine renders the would-be tmux push as a single deterministic
-// line, resolved from state.json only (never live tmux) so it is golden
-// stable. An unresolved recipient prints a <unknown> pane id rather than
-// erroring, keeping the dry-run a single informative line.
-// nudgeDryRunLine renders the would-send-keys preview. target is the human
-// recipient label ("#<issue>" for numeric peers, the task id for plan peers).
-func nudgeDryRunLine(target, paneID string, found bool) string {
-	if !found || paneID == "" {
-		paneID = "<unknown>"
-	}
-	return fmt.Sprintf("# would send-keys -t %s -l %s then Enter (target %s, only if agent is running)",
-		paneID, sqlLiteral(nudgeText), target)
 }
 
 func writeMsgNudgeResult(f *msgFlags, parent string, report msgNudgeReport, lg *log.Logger) exitcode.Code {

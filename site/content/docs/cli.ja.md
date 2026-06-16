@@ -290,7 +290,7 @@ parent ごとの SQLite メッセージバス上での兄弟協調です。fanou
 | `register` | このペインを peers テーブルに upsert する（`--team` が自動で行う。再 join に使う）。 |
 | `nudge` | `<N>` —— best-effort: peer `#N` の agent が running のときだけ、tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。対象の agent が running でない（ペイン消失 / 状態不明 / done）ときは何もせず success（no-op）。 |
 
-verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）、`--dry-run`（write / notify verb のみ —— `# would ...` の書き込み内容を表示し何も触らない。`--json` とは併用不可）。
+verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）。
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
