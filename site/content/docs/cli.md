@@ -291,7 +291,7 @@ Sibling coordination over a per-parent SQLite message bus. Run from inside a fan
 | `register` | Upsert this pane into the peers table (auto-done by `--team`; use it to (re-)join). |
 | `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent is running. A notify verb, not a message: it never touches the DB and is a no-op success when the peer's agent is not running (pane gone, state unknown, or done). |
 
-Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection), and `--dry-run` (write/notify verbs only — prints the `# would ...` writes and touches nothing; not combinable with `--json`).
+Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection).
 
 Under a [`fanout plan --team`](#plan-fan-out-issue-less) run, peers are addressed by **task ID** rather than issue number: `send --to <task-id>`, and `peers` lists the live task IDs. The `--json` output of plan-mode panes adds `selfTask` / `fromTask` / `toTask` fields so automation can resolve task IDs from the synthetic peer numbers; issue / Project JSON is unchanged.
 

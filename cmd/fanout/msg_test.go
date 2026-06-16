@@ -68,8 +68,6 @@ func TestParseMsgFlags(t *testing.T) {
 			}
 		}},
 		{name: "inbox rejects positional", args: []string{"inbox", "hello"}, code: exitcode.Invocation},
-		{name: "inbox rejects dry-run", args: []string{"inbox", "--dry-run"}, code: exitcode.Invocation},
-		{name: "dry-run rejects json", args: []string{"send", "--dry-run", "--json", "--to", "71", "--self", "70", "--parent", "68", "hi"}, code: exitcode.Invocation},
 		{name: "board rejects mark-read", args: []string{"board", "--mark-read"}, code: exitcode.Invocation},
 		{name: "peers rejects --to", args: []string{"peers", "--to", "5"}, code: exitcode.Invocation},
 		{name: "unknown option", args: []string{"peers", "--bogus"}, code: exitcode.Invocation},
@@ -107,12 +105,6 @@ func TestParseMsgFlags(t *testing.T) {
 				t.Errorf("parent = %q, want %q (leading zeros must collapse)", f.parent, "68")
 			}
 		}},
-		{name: "register dry-run", args: []string{"register", "--dry-run", "--self", "70", "--parent", "68"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
-			t.Helper()
-			if !f.dryRun {
-				t.Errorf("parsed = %+v", f)
-			}
-		}},
 		{name: "help as verb", args: []string{"-h"}, code: exitcode.OK},
 		{name: "long help flag mid-args", args: []string{"inbox", "--help"}, code: exitcode.OK},
 		{name: "short help before body", args: []string{"send", "-h"}, code: exitcode.OK},
@@ -142,12 +134,6 @@ func TestParseMsgFlags(t *testing.T) {
 				t.Errorf("to = %d, want -2", f.to)
 			}
 		}},
-		{name: "nudge dry-run with target", args: []string{"nudge", "--dry-run", "71"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
-			t.Helper()
-			if !f.dryRun || f.to != 71 {
-				t.Errorf("parsed = %+v", f)
-			}
-		}},
 		{name: "nudge without a target exits invalid", args: []string{"nudge"}, code: exitcode.Invocation},
 		{name: "numeric-zero nudge target parses as a task-id shape (rejected later under a numeric parent)", args: []string{"nudge", "0"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
 			t.Helper()
@@ -164,7 +150,6 @@ func TestParseMsgFlags(t *testing.T) {
 		}},
 		{name: "nudge rejects a second target", args: []string{"nudge", "71", "72"}, code: exitcode.Invocation},
 		{name: "nudge does not accept --to", args: []string{"nudge", "--to", "71"}, code: exitcode.Invocation},
-		{name: "nudge dry-run rejects json", args: []string{"nudge", "--dry-run", "--json", "71"}, code: exitcode.Invocation},
 		{name: "nudge accepts but does not require --self", args: []string{"nudge", "71", "--self", "5"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
 			t.Helper()
 			if f.to != 71 || f.self != 5 {
@@ -282,81 +267,6 @@ func TestResolveMsgIdentity(t *testing.T) {
 	}
 }
 
-func TestMsgDryRunLines(t *testing.T) {
-	const now = "2026-06-13T00:00:00Z"
-	for _, tc := range []struct {
-		name  string
-		flags msgFlags
-		pane  msgstore.Peer
-		want  []string
-	}{
-		{
-			name:  "send",
-			flags: msgFlags{verb: "send", to: 71, kind: "note", body: "hello world"},
-			want: []string{
-				"# would INSERT INTO messages(parent, from_issue, to_issue, kind, body, created_at) VALUES ('68', 70, 71, 'note', 'hello world', '2026-06-13T00:00:00Z')",
-			},
-		},
-		{
-			name:  "post escapes quotes and newlines",
-			flags: msgFlags{verb: "post", kind: "blocker", body: "it's\nbroken"},
-			want: []string{
-				`# would INSERT INTO messages(parent, from_issue, to_issue, kind, body, created_at) VALUES ('68', 70, NULL, 'blocker', 'it''s\nbroken', '2026-06-13T00:00:00Z')`,
-			},
-		},
-		{
-			name:  "mark-read ids",
-			flags: msgFlags{verb: "mark-read", ids: []int64{3, 5}},
-			want: []string{
-				"# would UPDATE messages SET read_at = '2026-06-13T00:00:00Z' WHERE parent = '68' AND to_issue = 70 AND id IN (3, 5) AND read_at IS NULL",
-			},
-		},
-		{
-			name:  "mark-read all",
-			flags: msgFlags{verb: "mark-read", all: true},
-			want: []string{
-				"# would UPDATE messages SET read_at = '2026-06-13T00:00:00Z' WHERE parent = '68' AND to_issue = 70 AND read_at IS NULL",
-				"# would UPSERT board_cursors(issue=70, last_read_id=MAX(id) of board posts)",
-			},
-		},
-		{
-			name:  "register with pane",
-			flags: msgFlags{verb: "register"},
-			pane:  msgstore.Peer{Issue: 70, PaneID: "%1", Slug: "s-70", WorktreePath: "/tmp/wt", Agent: "claude", DisplayName: "name"},
-			want: []string{
-				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '%1', 's-70', '/tmp/wt', 'claude', 'name', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', NULL)",
-			},
-		},
-		{
-			name:  "register without pane",
-			flags: msgFlags{verb: "register"},
-			want: []string{
-				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '', '', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', NULL)",
-			},
-		},
-		{
-			name:  "register a plan task pane records the task id",
-			flags: msgFlags{verb: "register"},
-			pane:  msgstore.Peer{Issue: -42, TaskID: "api-client", Slug: "launch-plan-api-client"},
-			want: []string{
-				"# would UPSERT INTO peers(issue, pane_id, slug, worktree_path, agent, display_name, joined_at, last_seen, task_id) VALUES (70, '', 'launch-plan-api-client', '', '', '', '2026-06-13T00:00:00Z', '2026-06-13T00:00:00Z', 'api-client')",
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := msgDryRunLines(&tc.flags, 70, "68", tc.pane, now)
-			if len(got) != len(tc.want) {
-				t.Fatalf("lines = %q, want %q", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("line %d = %q, want %q", i, got[i], tc.want[i])
-				}
-			}
-		})
-	}
-}
-
 func TestWriteMsgMessagesTable(t *testing.T) {
 	to := 70
 	read := "2026-06-13T00:00:00Z"
@@ -411,20 +321,6 @@ func TestWriteMsgMessagesTablePlanLabels(t *testing.T) {
 	}
 }
 
-func TestSQLLiteral(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"plain", "'plain'"},
-		{"it's", "'it''s'"},
-		{"a\nb", `'a\nb'`},
-		{"a\r\nb", `'a\r\nb'`},
-		{"", "''"},
-	} {
-		if got := sqlLiteral(tc.in); got != tc.want {
-			t.Errorf("sqlLiteral(%q) = %s, want %s", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestShouldNudge(t *testing.T) {
 	for _, tc := range []struct {
 		state string
@@ -439,39 +335,6 @@ func TestShouldNudge(t *testing.T) {
 		if got := shouldNudge(tc.state); got != tc.want {
 			t.Errorf("shouldNudge(%q) = %v, want %v", tc.state, got, tc.want)
 		}
-	}
-}
-
-func TestNudgeDryRunLine(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		target string
-		paneID string
-		found  bool
-		want   string
-	}{
-		{
-			name: "resolved pane", target: "#70", paneID: "%1", found: true,
-			want: "# would send-keys -t %1 -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #70, only if agent is running)",
-		},
-		{
-			name: "unresolved recipient", target: "#99", paneID: "", found: false,
-			want: "# would send-keys -t <unknown> -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #99, only if agent is running)",
-		},
-		{
-			name: "found row but empty pane id", target: "#72", paneID: "", found: true,
-			want: "# would send-keys -t <unknown> -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target #72, only if agent is running)",
-		},
-		{
-			name: "plan task recipient renders the task id", target: "api-client", paneID: "%3", found: true,
-			want: "# would send-keys -t %3 -l '[fanout] peer message in your inbox — run: fanout msg inbox' then Enter (target api-client, only if agent is running)",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := nudgeDryRunLine(tc.target, tc.paneID, tc.found); got != tc.want {
-				t.Errorf("nudgeDryRunLine() = %q, want %q", got, tc.want)
-			}
-		})
 	}
 }
 
@@ -551,14 +414,6 @@ func TestRunMsgNudge(t *testing.T) {
 		{
 			name: "recipient without a recorded pane is a no-op success", flags: msgFlags{verb: "nudge", to: 72}, store: noPaneID,
 			wantCode: exitcode.OK, wantStderr: "no recorded pane",
-		},
-		{
-			name: "dry-run prints the would-line and touches no tmux", flags: msgFlags{verb: "nudge", to: 71, dryRun: true}, store: withWorktree,
-			wantCode: exitcode.OK, wantStdout: "# would send-keys -t %5",
-		},
-		{
-			name: "dry-run for an unrecorded recipient prints <unknown> and touches no tmux", flags: msgFlags{verb: "nudge", to: 99, dryRun: true}, store: withWorktree,
-			wantCode: exitcode.OK, wantStdout: "# would send-keys -t <unknown>",
 		},
 		{
 			name: "state load failure is an invocation error", flags: msgFlags{verb: "nudge", to: 71}, storeErr: errors.New("bad path"),

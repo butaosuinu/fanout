@@ -1,1 +1,0 @@
-# would INSERT INTO messages(parent, from_issue, to_issue, kind, body, created_at) VALUES ('68', 70, NULL, 'blocker', 'schema is not ready', '2026-06-13T00:00:00Z')

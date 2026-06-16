@@ -97,20 +97,6 @@ msg_env() {
   [[ "$output" == *"pass either --id <n> (repeatable) or --all"* ]]
 }
 
-@test "msg inbox rejects --dry-run (read verb): exit 2" {
-  msg_env
-  run_fanout msg inbox --dry-run --self 70 --parent 68
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--dry-run is not supported"* ]]
-}
-
-@test "msg send rejects --dry-run with --json: exit 2" {
-  msg_env
-  run_fanout msg send --dry-run --json --to 71 --self 70 --parent 68 hello
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--dry-run cannot be combined with --json"* ]]
-}
-
 @test "msg peers rejects a verb-foreign flag: exit 2" {
   msg_env
   run_fanout msg peers --to 5 --parent 68
@@ -152,14 +138,6 @@ msg_env() {
   assert_success
   [[ "$output" == *"sent #1 to #71"* ]]
   [ -f "$BATS_TEST_TMPDIR/team.db" ]
-}
-
-@test "msg dry-run touches no DB file" {
-  msg_env
-  run_fanout msg send --dry-run --to 71 --self 70 --parent 68 hello
-  assert_success
-  [[ "$output" == *"# would INSERT INTO messages"* ]]
-  [ ! -e "$BATS_TEST_TMPDIR/team.db" ]
 }
 
 @test "msg send body may contain -h after the first body word (no silent help)" {
@@ -215,17 +193,6 @@ msg_env() {
   assert_success
   [[ "$output" == *'"nudged": false'* ]]
   [[ "$output" == *"not recorded"* ]]
-  [ ! -e "$BATS_TEST_TMPDIR/team.db" ]
-}
-
-@test "msg nudge --dry-run prints the would-line and touches no DB" {
-  msg_env
-  printf '%s\n' '{"schemaVersion":1,"panes":[{"parent":"68","issueNum":70,"slug":"s","branchName":"b","paneId":"%1","agent":"claude","displayName":"d","worktreePath":"","prompt":"[fanout #70 of #68] s","createdAt":"2026-06-13T00:00:00Z"}]}' \
-    > "$BATS_TEST_TMPDIR/state.json"
-  export FANOUT_STATE_PATH="$BATS_TEST_TMPDIR/state.json"
-  run_fanout msg nudge 70 --dry-run --parent 68
-  assert_success
-  [[ "$output" == *"# would send-keys -t %1 -l "* ]]
   [ ! -e "$BATS_TEST_TMPDIR/team.db" ]
 }
 

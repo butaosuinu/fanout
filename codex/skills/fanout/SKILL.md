@@ -474,8 +474,7 @@ single-session) and works the same for `codex` and `claude` panes.
   board), `board [--all]`, `send --to <N> [--kind K] "<body>"`,
   `post [--kind K] "<body>"`, `mark-read [--id N ...|--all]`, `register`.
 - Common options: `--json`, `--self <N>` / `--parent <ref>` (override
-  detection), `--dry-run` (write verbs only; prints `# would ...`, not
-  combinable with `--json`). `kind` is a free-form label (default `note`).
+  detection). `kind` is a free-form label (default `note`).
   Exit codes: `0` ok, `2` bad invocation, `4` SQLite backend failure.
 - Coordination is pull-based — messages persist and siblings read them at their
   own checkpoints; there is no nudge. The DB is a plaintext SQLite file under
