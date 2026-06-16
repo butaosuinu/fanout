@@ -16,6 +16,16 @@
       {{ with site.GetPage . }}<li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>{{ end }}
       {{ end }}
       <li class="keep">
+        <button type="button" class="nav-search" data-search-open aria-label="{{ i18n "search" }}">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="m11 11 3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="nav-search-label">{{ i18n "search" }}</span>
+          <kbd class="nav-search-hint" aria-hidden="true">⌘K</kbd>
+        </button>
+      </li>
+      <li class="keep">
         <span class="lang-switch" aria-label="language">
           {{ $curLang := .Language.Lang -}}
           {{ range .AllTranslations -}}

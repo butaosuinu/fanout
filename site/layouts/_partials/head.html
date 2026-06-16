@@ -24,3 +24,7 @@
 {{ with resources.Get "css/main.css" | minify | fingerprint }}
 <link rel="stylesheet" href="{{ .RelPermalink }}" integrity="{{ .Data.Integrity }}">
 {{ end }}
+{{/* Pagefind static search — assets are generated into /pagefind/ at build time
+     (see .github/workflows/pages.yml). relURL keeps the /fanout/ subpath correct. */}}
+<link rel="stylesheet" href="{{ "pagefind/pagefind-ui.css" | relURL }}">
+<script src="{{ "pagefind/pagefind-ui.js" | relURL }}" defer></script>
