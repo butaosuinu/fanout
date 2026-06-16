@@ -18,3 +18,12 @@ other = "ひとつの親 issue を、扇のように。"
 
 [on_this_section]
 other = "ガイド"
+
+[search]
+other = "検索"
+
+[search_placeholder]
+other = "ドキュメントを検索…"
+
+[search_close]
+other = "検索を閉じる"

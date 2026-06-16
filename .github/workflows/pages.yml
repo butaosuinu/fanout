@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HUGO_VERSION: 0.163.0
+      PAGEFIND_VERSION: 1.5.2
     steps:
       - uses: actions/checkout@v4
       - name: Install Hugo CLI
@@ -40,6 +41,10 @@ jobs:
         env:
           HUGO_ENVIRONMENT: production
         run: hugo --minify --gc -s site --baseURL "${{ steps.pages.outputs.base_url || 'https://butaosuinu.github.io/fanout' }}/"
+      - name: Index with Pagefind
+        run: |
+          curl -fsSL "https://github.com/Pagefind/pagefind/releases/download/v${PAGEFIND_VERSION}/pagefind_extended-v${PAGEFIND_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz
+          ./pagefind_extended --site site/public
       - name: Upload artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3

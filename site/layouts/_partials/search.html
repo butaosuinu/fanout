@@ -1,0 +1,99 @@
+{{/* Static search modal — Pagefind default UI (PagefindUI), themed in main.css.
+     Triggered from the nav button ([data-search-open]) and ⌘K / Ctrl+K / "/".
+     The Pagefind assets are produced at build time; in a plain `hugo server`
+     they are absent, so the modal opens but returns no results — use
+     `pagefind --serve` to preview search locally. */}}
+<div id="search-modal" class="search-modal" hidden role="dialog" aria-modal="true" aria-label="{{ i18n "search" }}">
+  <div class="search-panel" role="document">
+    <button type="button" class="search-close" data-search-close aria-label="{{ i18n "search_close" }}">&times;</button>
+    <div id="search"></div>
+  </div>
+</div>
+<script>
+  (function () {
+    var modal = document.getElementById('search-modal');
+    if (!modal) return;
+    var ui, lastFocus, polling;
+
+    function focusInput() {
+      var input = modal.querySelector('input');
+      if (input) input.focus();
+    }
+
+    function initUI() {
+      ui = new PagefindUI({
+        element: "#search",
+        {{/* Go html/template JS-context auto-escaping emits these as quoted,
+             escaped JS string literals — do NOT add jsonify (double-encodes). */}}
+        bundlePath: {{ "pagefind/" | relURL }},
+        showSubResults: true,
+        showImages: false,
+        {{/* Pagefind records site-root-relative URLs (/docs/…); this site is
+             served from the /fanout/ subpath, so prefix result links with it. */}}
+        processResult: function (result) {
+          var base = {{ (urls.Parse site.BaseURL).Path }};
+          if (base && base !== "/") {
+            var prefix = base.replace(/\/$/, "");
+            var fix = function (u) {
+              return (u && u.charAt(0) === '/' && u.indexOf(prefix + '/') !== 0) ? prefix + u : u;
+            };
+            result.url = fix(result.url);
+            if (result.sub_results) {
+              result.sub_results.forEach(function (s) { s.url = fix(s.url); });
+            }
+          }
+          return result;
+        },
+        translations: { placeholder: {{ i18n "search_placeholder" }} }
+      });
+      {{/* If the modal was opened before the deferred script loaded, focus now. */}}
+      if (!modal.hidden) focusInput();
+    }
+
+    {{/* pagefind-ui.js is loaded with `defer`, so window.PagefindUI may not exist
+         yet when the user opens search early. Init immediately if ready, otherwise
+         poll briefly until the deferred script defines it, then mount into the
+         (already open) modal so the first dialog is never left blank. */}}
+    function ensureUI() {
+      if (ui || polling) return;
+      if (window.PagefindUI) { initUI(); return; }
+      polling = true;
+      var tries = 0;
+      var timer = setInterval(function () {
+        if (window.PagefindUI) { clearInterval(timer); polling = false; initUI(); }
+        else if (++tries > 100) { clearInterval(timer); polling = false; }
+      }, 100);
+    }
+
+    function open() {
+      lastFocus = document.activeElement;
+      modal.hidden = false;
+      document.documentElement.classList.add('search-open');
+      ensureUI();
+      focusInput();
+    }
+
+    function close() {
+      modal.hidden = true;
+      document.documentElement.classList.remove('search-open');
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+    }
+
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('[data-search-open]')) { e.preventDefault(); open(); }
+      else if (e.target.closest('[data-search-close]') || e.target === modal) { close(); }
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var tag = (document.activeElement && document.activeElement.tagName) || '';
+      var typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault(); open();
+      } else if (e.key === '/' && !typing && modal.hidden) {
+        e.preventDefault(); open();
+      } else if (e.key === 'Escape' && !modal.hidden) {
+        e.preventDefault(); close();
+      }
+    });
+  })();
+</script>

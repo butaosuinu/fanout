@@ -18,3 +18,12 @@ other = "Fan a parent issue out into parallel panes — quietly."
 
 [on_this_section]
 other = "Guide"
+
+[search]
+other = "Search"
+
+[search_placeholder]
+other = "Search the docs…"
+
+[search_close]
+other = "Close search"

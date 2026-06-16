@@ -9,7 +9,7 @@
   </div>
   {{ end }}
 
-  <article class="docs-main">
+  <article class="docs-main" data-pagefind-body>
     <header class="doc-head">
       <p class="kicker">{{ i18n "docs_section" }}</p>
       <h1>{{ .Title }}</h1>
@@ -21,7 +21,7 @@
     </div>
 
     {{ if or .PrevInSection .NextInSection }}
-    <nav class="doc-nav" aria-label="pagination">
+    <nav class="doc-nav" aria-label="pagination" data-pagefind-ignore>
       {{ with .PrevInSection }}
       <a class="prev" href="{{ .RelPermalink }}">
         <span class="dir">&larr; {{ i18n "prev_page" }}</span>

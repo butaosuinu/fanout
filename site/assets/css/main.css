@@ -806,6 +806,85 @@ code.in{
 }
 
 /* ============================================================
+   検索(Pagefind モーダル)
+   ============================================================ */
+/* ナビのトリガー — GitHub ピル・言語スイッチャーと同じ佇まい */
+.nav-search{
+  display:inline-flex; align-items:center; gap:8px;
+  border:1px solid var(--suna); border-radius:999px;
+  padding:7px 14px; font-size:13px; font-weight:500;
+  font-family:inherit; color:var(--ai); background:var(--paper);
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, transform .25s ease;
+}
+.nav-search:hover{ border-color:var(--asagi); color:var(--asagi); transform:translateY(-1px); }
+.nav-search svg{ display:block; }
+.nav-search-hint{
+  font-family:var(--f-code); font-size:11px; line-height:1;
+  color:var(--ink-60);
+  border:1px solid var(--suna); border-radius:5px;
+  padding:2px 5px; background:var(--washi);
+}
+
+/* オーバーレイ + パネル */
+.search-modal{
+  position:fixed; inset:0; z-index:90;
+  display:flex; justify-content:center; align-items:flex-start;
+  padding:84px 20px 20px;
+  background:rgba(42,46,51,.34);
+  -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+  animation:searchFade .2s ease both;
+}
+.search-modal[hidden]{ display:none; }
+html.search-open{ overflow:hidden; }
+@keyframes searchFade{ from{ opacity:0; } }
+
+.search-panel{
+  position:relative;
+  width:min(620px, 100%);
+  max-height:calc(100vh - 120px);
+  overflow:auto;
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:14px;
+  box-shadow:0 24px 60px -24px rgba(42,46,51,.42);
+  padding:18px 18px 8px;
+  animation:riseIn .34s var(--ease-fan) both;
+}
+.search-close{
+  position:absolute; top:10px; right:12px; z-index:1;
+  width:30px; height:30px; line-height:1;
+  font-size:22px; color:var(--ink-60);
+  background:none; border:none; border-radius:8px; cursor:pointer;
+  transition:color .2s ease, background .2s ease;
+}
+.search-close:hover{ color:var(--ai); background:var(--washi); }
+
+/* Pagefind 既定 UI を PAPER BREEZE に寄せる(.search-panel スコープで既定値より優先) */
+.search-panel .pagefind-ui{
+  --pagefind-ui-primary:var(--ai);
+  --pagefind-ui-text:var(--sumi);
+  --pagefind-ui-background:var(--paper);
+  --pagefind-ui-border:var(--suna);
+  --pagefind-ui-tag:var(--washi);
+  --pagefind-ui-border-width:1px;
+  --pagefind-ui-border-radius:10px;
+  --pagefind-ui-font:var(--f-body);
+}
+.search-panel .pagefind-ui__result-title a{ color:var(--ai); }
+.search-panel .pagefind-ui__result-title a:hover{ color:var(--asagi); }
+
+/* EN keeps all five text links until 820px; collapse the search pill to an
+   icon well before then so the added control never overflows the nav (which
+   the body's overflow-x:hidden would otherwise clip) at tablet/small-laptop widths. */
+@media (max-width:1080px){
+  .nav-search{ padding:7px 10px; gap:6px; }
+  .nav-search-label, .nav-search-hint{ display:none; }
+}
+@media (max-width:480px){
+  .search-modal{ padding:64px 12px 12px; }
+}
+
+/* ============================================================
    モーション停止
    ============================================================ */
 @media (prefers-reduced-motion: reduce){
