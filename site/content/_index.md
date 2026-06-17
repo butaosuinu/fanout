@@ -1,25 +1,25 @@
 ---
 title: fanout
-description: "Fan a GitHub parent issue's OPEN sub-issues out into parallel tmux panes — one git worktree, one agent CLI (Claude Code / Codex) per child, launched with a per-issue briefing."
+description: "Fan a GitHub parent issue's OPEN sub-issues — or a local plan spec — out into parallel tmux panes, one git worktree and agent CLI (Claude Code / Codex) per child or task."
 hero:
-  kicker: "Parallel issue orchestrator for tmux"
-  tagline: "One parent issue, opened like a <em>fan</em>."
-  subcopy: "Fan a GitHub parent issue&rsquo;s OPEN sub-issues out into parallel tmux panes &mdash; one git worktree, one agent per child."
+  kicker: "Parallel agent orchestrator for tmux"
+  tagline: "Issues or a plan, <em>fanned</em> out in parallel."
+  subcopy: "Point fanout at a GitHub parent issue or a local plan spec; each child or task gets its own git worktree, tmux pane and agent."
   ctaNote: "Runs on tmux + git + GitHub CLI. A single Go binary, with Claude Code / Codex skills bundled."
   ctaQuickstart: "Quickstart"
   ctaInstall: "Installation"
 quickstart:
   title: "One line to open."
-  lede: "Run it once inside tmux. Every OPEN child of the parent issue unfolds into its own worktree, pane and agent."
+  lede: "Run it once inside tmux. Every OPEN child of the parent issue gets its own worktree, pane and agent."
   caption: "Run it again and no child gets a second pane &mdash; <code class=\"in\">.fanout/state.json</code> remembers."
 features:
-  title: "Six ribs for quiet parallelism."
-  lede: "A fan opens cleanly because its ribs are true. Every fanout feature exists to keep parallel work moving."
+  title: "Six features that keep parallel work moving."
+  lede: "Whether you fan out GitHub issues or a local plan, every feature keeps parallel work moving."
   items:
     - no: "i"
       icon: "seal"
       title: "Idempotent fan-out"
-      body: "<code>.fanout/state.json</code> keys every (parent, issue) pane. Reruns never duplicate work."
+      body: "<code>.fanout/state.json</code> keys every pane &mdash; issue children or plan tasks alike. Reruns never duplicate work."
       link: "/docs/workflow"
     - no: "ii"
       icon: "waves"
@@ -47,20 +47,20 @@ features:
       body: "The <code>/fanout</code> slash command and skills for Claude Code &amp; Codex, bundled with the install."
       link: "/docs/agents"
 workflow:
-  title: "Grow, open, gather."
-  lede: "Three acts &mdash; then let the breeze do the rest. When a wave ends, just open again."
+  title: "Prepare, fan out, fold away."
+  lede: "Prepare the work, fan it out, fold finished panes away &mdash; then rerun for the next wave."
   steps:
     - num: "一"
-      title: "Grow the tree"
-      body: "Create the parent and its OPEN child issues with the fanout-issues skill. Write blockers in, and the waves are already designed."
-      chip: "fanout-issues skill"
+      title: "Prepare the work"
+      body: "Decompose into GitHub child issues with the fanout-issues skill, or write a local plan spec for <code>fanout plan</code> &mdash; no issues required. Note blockers and the waves fall out for you."
+      chip: "fanout-issues · fanout plan"
     - num: "二"
-      title: "Open the fan"
-      body: "One sweep of <code>fanout 123</code>: one child = one worktree = one pane = one agent. However often you swing it, the same ribs open."
+      title: "Fan it out"
+      body: "One run of <code>fanout 123</code> or <code>fanout plan spec.json</code>: one child or task = one worktree = one pane = one agent. Rerun anytime &mdash; the same panes open, never duplicated."
       chip: "fanout 123 --agent claude"
     - num: "三"
-      title: "Gather the fruit"
-      body: "Watch through the TUI or <code>--status</code>, then fold up with <code>--merge</code> / <code>--cleanup</code>. On to the next wave."
+      title: "Merge and fold away"
+      body: "Watch through the TUI or <code>--status</code>, then <code>--merge</code> and <code>--cleanup</code> finished work. On to the next wave."
       chip: "--status → --merge → --cleanup"
 cli:
   title: "All you need to remember."
@@ -84,6 +84,6 @@ cli:
     - cmd: "fanout 123 --merge 4"
       desc: "Fast-forward merge a child branch; <code>--close</code> / <code>--cleanup</code> fold panes away"
 coda:
-  title: "Open the next parent issue."
+  title: "Open the next wave."
   docsLink: "Read the docs"
 ---

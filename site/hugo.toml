@@ -11,13 +11,13 @@ disableKinds = ["taxonomy", "term"]
     label = "English"
     weight = 1
     [languages.en.params]
-      tagline = "Fan a parent issue out into parallel panes — quietly."
+      tagline = "Fan GitHub issues or a local plan out into parallel panes — quietly."
   [languages.ja]
     locale = "ja"
     label = "日本語"
     weight = 2
     [languages.ja.params]
-      tagline = "ひとつの親 issue を、扇のように。"
+      tagline = "issue でも plan でも、並列に展開する。"
 
 [params]
   github = "https://github.com/butaosuinu/fanout"
