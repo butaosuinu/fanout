@@ -128,3 +128,36 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   race-safe replacement for `(parent, issueNum)` idempotency.
 - When changing dry-run output, update Tier 2 goldens with
   `FANOUT_GOLDEN_UPDATE=1 make test-tier2` and review the diff.
+
+## Documentation Writing
+
+When writing or updating user-facing docs (`README*.md`, `site/content/docs/**`,
+`RELEASE.md`, `docs/**` — not code comments or briefing text), suppress
+AI-tell phrasing and verbosity. Full ruleset (EN banned-word tables + Japanese
+AI-tell catalog + self-checks): `docs/doc-style.ja.md`. Core rules:
+
+- **Match the house style.** Terse, imperative, active voice; define a term once
+  and reuse it (no synonym cycling). Sentence case for subheadings. Read the
+  neighboring doc and mirror its tone before writing.
+- **Lead with the conclusion.** No warm-up openers ("In today's…", "まず最初に")
+  and no restating the request. State the thing, then the detail.
+- **Cut filler and hedging.** Drop "it's worth noting" / "note that" / 「重要な点
+  として」/ 「なお、」連発. EN: `in order to`→`to`, `due to the fact that`→
+  `because`, `utilize`/`leverage`→`use`. JA: 「〜することができます」→「〜できます」,
+  「〜を行う」→動詞化, 「〜となっています」→「〜です」.
+- **Avoid AI-tell vocabulary** (replace with plain words): delve, seamless,
+  comprehensive*, game-changer, harness, foster, streamline, robust*, ecosystem*,
+  embark, underscore … (*technically-precise uses are fine — the `docs`
+  tolerance). JA tells: 機械翻訳調, 過剰な体言止め, 「魅力的な」「シームレスな」
+  「〜していきましょう」.
+- **No compulsive rule of three.** Use the real count; avoid triads of words.
+- **Don't pad.** One bold phrase per section at most. Use `is`/`has`/「です」
+  instead of `serves as`/`features`/「〜となっています」. Show specifics — numbers,
+  examples, commands.
+- **em-dash only as a deliberate aside** (per `README.ja.md`'s `—` usage); never
+  as connective filler, and never forced to zero.
+- **Keep pairs in sync.** Edit `README.md` → update `README.ja.md`; edit a
+  `site/content/docs/*.md` → update its `*.ja.md` counterpart.
+- **Self-check before finishing.** Ask whether each paragraph adds one new fact;
+  cut the ones that don't (treadmill test). Read it aloud — if it sounds
+  uniformly machine-even, vary sentence length. See `docs/doc-style.ja.md`.
