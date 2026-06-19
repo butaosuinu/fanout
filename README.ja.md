@@ -25,7 +25,8 @@ worktree、1 つの agent CLI(Claude Code / Codex)、issue 単位の briefing �
 - **Wave 進行** — `--unblocked-only` がブロッカーを読み取り、unblock 済みの子
   だけをファンアウト。PR が merge されたら再実行すれば次の wave が開きます。
 - **常駐 TUI コンソール** — 引数なしの `fanout` で、ペイン / issue / PR を
-  ライブ表示し、focus・peek・lifecycle キーを備えたコンソールを開きます。
+  ライブ表示し、コンパクトな Session ナビゲータと focus・peek・lifecycle キーを
+  備えたコンソールを開きます。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
   更新)。どのペインからでも `prefix + D` でポップできます。
 - **状態確認とレポート** — `--status` の JSON / table で PR review・CI 状態を
@@ -90,7 +91,7 @@ fanout 123 --status     # ファンアウトした子の PR review + CI 状態�
 | `fanout 123 --unblocked-only` | ブロッカーが closed の子だけをファンアウト — 次の wave |
 | `fanout 123 --dry-run` | git も tmux も触らず計画だけ表示 |
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
-| `fanout` | 常駐 TUI コンソールを起動(focus・peek・lifecycle キー) |
+| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
 | `fanout dashboard --web` | localhost で read-only Web ダッシュボードを配信 |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |
