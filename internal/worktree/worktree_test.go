@@ -101,6 +101,70 @@ func TestPrepareSupportsOriginQualifiedBase(t *testing.T) {
 	}
 }
 
+func TestPrepareAllowsMissingOriginFromCurrentBranch(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	baseHead := gitOutput(t, repo, "rev-parse", "HEAD")
+
+	res, err := Prepare(Options{
+		ProjectRoot:        repo,
+		Slug:               "local-task",
+		BranchName:         "fanout/local-task",
+		AllowMissingOrigin: true,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() failed without origin: %v", err)
+	}
+	if res.Refresh {
+		t.Fatal("Prepare() plan refresh = true, want false without origin")
+	}
+	if !strings.Contains(res.RefreshSkippedReason, "origin remote is not configured") {
+		t.Fatalf("RefreshSkippedReason = %q, want origin skip message", res.RefreshSkippedReason)
+	}
+	if res.BaseBranch != "main" {
+		t.Fatalf("BaseBranch = %q, want current branch main", res.BaseBranch)
+	}
+	if got := gitOutput(t, res.WorktreePath, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("worktree HEAD = %s, want local base %s", got, baseHead)
+	}
+}
+
+func TestPrepareAllowsMissingOriginWithExplicitLocalBase(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	baseHead := gitOutput(t, repo, "rev-parse", "main")
+
+	res, err := Prepare(Options{
+		ProjectRoot:        repo,
+		Slug:               "local-base-task",
+		BranchName:         "fanout/local-base-task",
+		BaseBranch:         "main",
+		AllowMissingOrigin: true,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() failed with explicit local base and no origin: %v", err)
+	}
+	if res.Refresh {
+		t.Fatal("Prepare() plan refresh = true, want false without origin")
+	}
+	if got := gitOutput(t, res.WorktreePath, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("worktree HEAD = %s, want local base %s", got, baseHead)
+	}
+}
+
+func TestPrepareRejectsOriginQualifiedBaseWithoutOrigin(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+
+	_, err := Prepare(Options{
+		ProjectRoot:        repo,
+		Slug:               "remote-base-task",
+		BranchName:         "fanout/remote-base-task",
+		BaseBranch:         "origin/main",
+		AllowMissingOrigin: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), `base branch "origin/main" requires origin remote`) {
+		t.Fatalf("Prepare() error = %v, want origin-required error", err)
+	}
+}
+
 func TestPrepareSkipsExistingWorktreePath(t *testing.T) {
 	dir := t.TempDir()
 	gitTest(t, dir, "init")
@@ -403,4 +467,16 @@ func writeFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newCommittedRepoWithoutOrigin(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitTest(t, "", "init", "-b", "main", repo)
+	gitTest(t, repo, "config", "user.name", "Fanout Test")
+	gitTest(t, repo, "config", "user.email", "fanout@example.test")
+	writeFile(t, filepath.Join(repo, "file.txt"), "base\n")
+	gitTest(t, repo, "add", "file.txt")
+	gitTest(t, repo, "commit", "-m", "base")
+	return repo
 }

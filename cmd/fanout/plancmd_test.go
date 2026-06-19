@@ -81,6 +81,41 @@ func TestResolvePlanBaseBranchValidatesSpecBranchOnlyWhenUsed(t *testing.T) {
 	}
 }
 
+func TestResolvePlanBaseBranchUsesCurrentBranchWithoutOrigin(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "trunk")
+	gitCmdTest(t, repo, "config", "user.email", "fanout@example.test")
+	gitCmdTest(t, repo, "config", "user.name", "Fanout Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "README.md")
+	gitCmdTest(t, repo, "commit", "-m", "base")
+
+	got, err := resolvePlanBaseBranch(planCommandConfig{}, planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}, repo)
+	if err != nil {
+		t.Fatalf("resolvePlanBaseBranch() error = %v", err)
+	}
+	if got != "trunk" {
+		t.Fatalf("resolvePlanBaseBranch() = %q, want current branch trunk", got)
+	}
+}
+
+func TestCheckPlanDepsDoesNotRequireGhForUnblockedOnly(t *testing.T) {
+	binDir := t.TempDir()
+	for _, name := range []string{"git", "tmux"} {
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir)
+
+	if missing := checkPlanDeps(); len(missing) != 0 {
+		t.Fatalf("checkPlanDeps() missing = %v, want no gh requirement", missing)
+	}
+}
+
 func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}
 

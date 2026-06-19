@@ -69,8 +69,7 @@ Schema:
   "plan": {
     "slug": "launch-plan",
     "title": "Launch plan",
-    "source": "path-or-conversation-label",
-    "base_branch": "main"
+    "source": "path-or-conversation-label"
   },
   "tasks": [
     {
@@ -90,17 +89,18 @@ Schema:
 `source`, `base_branch`, `slug`, `display_name`, `branch`, `wave`, and
 `blocked_by` are optional except when the dependency graph requires
 `blocked_by`. Prefer `plan.base_branch` when the source plan names a base;
-otherwise let fanout resolve the repository default branch or let the user pass
-`--base-branch`.
+otherwise let fanout resolve the repository default branch, use the current
+local branch in repos without `origin`, or let the user pass `--base-branch`.
 Do not add an agent field to the JSON schema; per-task agent assignment belongs
 only in repeatable CLI flags such as `--agent base-types=claude`.
 
 ## CLI Surface
 
 Run from the target repository worktree. Task creation and dry-run modes need
-`git` and `tmux`; `gh` is additionally needed for `--unblocked-only` blocker
-completion checks. Read/lifecycle action modes need `git` but not tmux;
-`--status` and `--cleanup` also need `gh`. Use `--agent codex` unless the user
+`git` and `tmux`; `gh` is optional for `--unblocked-only` blocker completion
+checks, and unavailable PR lookups are treated as incomplete dependencies.
+Read/lifecycle action modes need `git` but not tmux; `--status` and `--cleanup`
+also need `gh`. Use `--agent codex` unless the user
 supplied `--agent` or `FANOUT_AGENT`; repeat `--agent task-id=name` for
 per-task overrides.
 

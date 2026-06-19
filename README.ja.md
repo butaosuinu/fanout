@@ -114,7 +114,9 @@ flag を生成します。詳しくは
 
 ## 前提条件
 
-- **git**、**tmux**、認証済みの **GitHub CLI(`gh`)**(`gh auth status`)。
+- **git** と **tmux**。GitHub issue / Project workflow、PR status、
+  cleanup/status view では認証済みの **GitHub CLI(`gh`)**(`gh auth status`)も
+  必要です。ローカルの `fanout plan` 実行や TUI の手動 pane では不要です。
 - 子を起動する agent CLI — **`claude`**(Claude Code)や **`codex`** — を、live
   実行では `PATH` に入れておくこと。インストールが配置するのは fanout 側の
   skill/command だけで、agent 本体はインストールしません(`--dry-run` や
