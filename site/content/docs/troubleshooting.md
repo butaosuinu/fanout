@@ -102,7 +102,7 @@ The "why does it work that way" answers behind state, locking and pane creation.
 
 ### The `state.json` schema
 
-`.fanout/state.json` stores `schemaVersion` plus one row per pane, each carrying `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. `--status` and the lifecycle commands operate on these rows.
+`.fanout/state.json` stores `schemaVersion` plus one row per pane, each carrying `parent`, `issueNum`, optional `taskId` / `kind`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. TUI shell terminals use `kind: "shell"` so close can kill only the tmux pane and state row. `--status` and lifecycle commands operate on these rows.
 
 ### Atomic writes and locking
 

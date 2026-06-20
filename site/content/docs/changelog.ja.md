@@ -11,6 +11,7 @@ yomi: changelog
 
 ## Unreleased
 
+- **TUI shell terminal。** 常駐コンソールで、選択行の worktree に `A`、project root に `t` で plain shell を開けます。shell 行は focus / peek 用に manual entry として記録され、close は tmux pane と state 行だけを消します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 - **dry-run の整理。** issue / Project と `fanout plan` の dry-run は pane 作成前の安全な preview として残しつつ、issue / Project dry-run は `/tmp` briefing file を書かなくなりました。未使用だった `fanout msg --dry-run` surface は削除されました。
 
 ## v0.6.0 — 2026-06-15

@@ -227,6 +227,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
 				TaskID:       p.TaskID,
+				Kind:         p.Kind,
 				Slug:         p.Slug,
 				DisplayName:  p.DisplayName,
 				Agent:        p.Agent,
@@ -317,7 +318,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			if countsInRollup(pv) {
+			if countsInRollup(pv) || pv.Kind == state.PaneKindShell {
 				accumulate(&snap.Rollup, pv)
 			}
 		}
@@ -557,6 +558,9 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 // に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
 // 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
 func countsInRollup(pv PaneView) bool {
+	if pv.Kind == state.PaneKindShell {
+		return false
+	}
 	if !pv.NotStarted {
 		return true
 	}
@@ -571,6 +575,12 @@ func countsInRollup(pv PaneView) bool {
 }
 
 func accumulate(r *Rollup, pv PaneView) {
+	if pv.Kind == state.PaneKindShell {
+		if pv.Alive {
+			r.Live++
+		}
+		return
+	}
 	r.Total++
 	if pv.HasMergedPR {
 		r.Merged++
@@ -639,6 +649,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	filterText := strings.ToLower(strings.Join([]string{
 		parent,
 		pv.TaskID,
+		pv.Kind,
 		"#" + strconv.Itoa(pv.IssueNum),
 		strconv.Itoa(pv.IssueNum),
 		name,

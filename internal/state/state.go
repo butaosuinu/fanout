@@ -14,6 +14,8 @@ import (
 
 const SchemaVersion = 1
 
+const PaneKindShell = "shell"
+
 type Store struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	Panes         []Pane `json:"panes"`
@@ -28,6 +30,7 @@ type Pane struct {
 	Parent     string `json:"parent"`
 	IssueNum   int    `json:"issueNum"`
 	TaskID     string `json:"taskId,omitempty"`
+	Kind       string `json:"kind,omitempty"`
 	Slug       string `json:"slug"`
 	BranchName string `json:"branchName"`
 	// BaseBranch is the resolved base branch the worktree branched from
@@ -49,6 +52,10 @@ type Pane struct {
 	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
 	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
 	AgentStatus string `json:"agentStatus,omitempty"`
+}
+
+func (p Pane) IsShell() bool {
+	return p.Kind == PaneKindShell
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.

@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ type Options struct {
 	DefaultAgent      string
 	Hooks             hooks.Config
 	LaunchPane        LaunchFunc
+	LaunchShell       ShellLaunchFunc
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
 	CapturePaneOutput func(string, int) (string, error)
@@ -76,6 +78,16 @@ type LaunchRequest struct {
 
 // LaunchFunc creates a manual fanout pane for a TUI request.
 type LaunchFunc func(LaunchRequest) error
+
+// ShellLaunchRequest describes one shell terminal launch requested from the TUI.
+type ShellLaunchRequest struct {
+	TargetPath string
+	Root       bool
+	Source     string
+}
+
+// ShellLaunchFunc creates a shell terminal pane for a TUI request.
+type ShellLaunchFunc func(ShellLaunchRequest) error
 
 type issueStatus struct {
 	Title           string
@@ -110,6 +122,7 @@ type paneView struct {
 	Parent       string
 	IssueNum     int
 	TaskID       string
+	Kind         string
 	Name         string
 	PaneID       string
 	TmuxState    string
@@ -129,6 +142,7 @@ type paneView struct {
 	WorktreeErr  string
 	BranchName   string
 	WorktreePath string
+	worktreeAbs  string
 	Agent        string
 	CreatedAt    string
 	Prompt       string
@@ -296,6 +310,10 @@ type (
 	stateTickMsg  time.Time
 	ghTickMsg     time.Time
 	launchPaneMsg struct {
+		err error
+	}
+	launchShellMsg struct {
+		req ShellLaunchRequest
 		err error
 	}
 )
@@ -534,6 +552,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "n":
 			m.openNewPaneForm()
 			return m, nil
+		case "A":
+			return m, m.openSelectedWorktreeShellCmd()
+		case "t":
+			return m, m.openProjectRootShellCmd()
 		case "enter", "o":
 			cmd := m.focusSelectedCmd()
 			return m, cmd
@@ -636,6 +658,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.mode = modeMonitor
 		m.notice = "created new agent pane"
+		return m, m.loadStateCmd(false)
+	case launchShellMsg:
+		if msg.err != nil {
+			m.notice = fmt.Sprintf("terminal: %v", msg.err)
+			return m, nil
+		}
+		switch {
+		case msg.req.Root:
+			m.notice = "opened project root terminal"
+		case msg.req.Source != "":
+			m.notice = fmt.Sprintf("opened terminal for %s", msg.req.Source)
+		default:
+			m.notice = "opened worktree terminal"
+		}
 		return m, m.loadStateCmd(false)
 	case paneFocusedMsg:
 		if msg.keyboardPaused {
@@ -1041,6 +1077,10 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = "no pane selected"
 		return m, nil
 	}
+	if pane.isShell() && action != actionClose {
+		m.actionMessage = fmt.Sprintf("%s unavailable for shell terminal", action)
+		return m, nil
+	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
 	m.actionMessage = confirmMessage(action, pane)
 	return m, nil
@@ -1362,7 +1402,7 @@ func (m model) detailContent() string {
 	}
 	lines := []string{
 		fmt.Sprintf("%s %s  %s", pane.Parent, pane.itemLabel(), pane.Name),
-		fmt.Sprintf("pane=%s tmux=%s title=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Agent)),
+		fmt.Sprintf("pane=%s tmux=%s title=%s kind=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Kind), dash(pane.Agent)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
 		fmt.Sprintf("worktree=%s diff=%s dirty=%s", dash(pane.WorktreePath), dash(pane.DiffSummary), dash(pane.DirtyState)),
@@ -1388,6 +1428,60 @@ func (m model) selectedPane() (paneView, bool) {
 		idx = 0
 	}
 	return m.panes[idx], true
+}
+
+func (m *model) openSelectedWorktreeShellCmd() tea.Cmd {
+	pane, ok := m.selectedPane()
+	if !ok {
+		m.notice = "no pane selected"
+		return nil
+	}
+	targetPath := pane.absoluteWorktreePath(m.opts.ProjectRoot)
+	if targetPath == "" {
+		m.notice = fmt.Sprintf("terminal skipped for %s: no worktree path", pane.identityLabel())
+		return nil
+	}
+	return m.launchShellCmd(ShellLaunchRequest{
+		TargetPath: targetPath,
+		Source:     pane.identityLabel(),
+	})
+}
+
+func (m *model) openProjectRootShellCmd() tea.Cmd {
+	projectRoot := strings.TrimSpace(m.opts.ProjectRoot)
+	if projectRoot == "" {
+		m.notice = "terminal skipped: project root is unknown"
+		return nil
+	}
+	return m.launchShellCmd(ShellLaunchRequest{
+		TargetPath: projectRoot,
+		Root:       true,
+		Source:     "project root",
+	})
+}
+
+func (m *model) launchShellCmd(req ShellLaunchRequest) tea.Cmd {
+	req.TargetPath = strings.TrimSpace(req.TargetPath)
+	if req.TargetPath == "" {
+		m.notice = "terminal skipped: target path is empty"
+		return nil
+	}
+	if m.opts.LaunchShell == nil {
+		m.notice = "terminal launcher is not configured"
+		return nil
+	}
+	switch {
+	case req.Root:
+		m.notice = "opening project root terminal..."
+	case req.Source != "":
+		m.notice = fmt.Sprintf("opening terminal for %s...", req.Source)
+	default:
+		m.notice = "opening worktree terminal..."
+	}
+	launch := m.opts.LaunchShell
+	return func() tea.Msg {
+		return launchShellMsg{req: req, err: launch(req)}
+	}
 }
 
 func (m *model) focusSelectedCmd() tea.Cmd {
@@ -2013,6 +2107,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				Parent:       parent,
 				IssueNum:     pv.IssueNum,
 				TaskID:       pv.TaskID,
+				Kind:         pv.Kind,
 				Name:         derived.Name,
 				PaneID:       pv.PaneID,
 				TmuxState:    pv.TmuxState,
@@ -2032,6 +2127,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				WorktreeErr:  pv.WorktreeErr,
 				BranchName:   pv.BranchName,
 				WorktreePath: firstNonEmpty(derived.WorktreeRelative, sessionview.RelativePath(projectRoot, pv.WorktreePath)),
+				worktreeAbs:  pv.WorktreePath,
 				Agent:        pv.Agent,
 				CreatedAt:    pv.CreatedAt,
 				Prompt:       pv.Prompt,
@@ -2096,6 +2192,7 @@ func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, bloc
 	return sessionview.DerivePane(projectRoot, view.Parent, sessionview.PaneView{
 		IssueNum:     view.IssueNum,
 		TaskID:       view.TaskID,
+		Kind:         view.Kind,
 		DisplayName:  view.Name,
 		Agent:        view.Agent,
 		BranchName:   view.BranchName,
@@ -2173,6 +2270,25 @@ func (p paneView) canPeek() bool {
 	return p.canFocus()
 }
 
+func (p paneView) isShell() bool {
+	return p.Kind == state.PaneKindShell
+}
+
+func (p paneView) absoluteWorktreePath(projectRoot string) string {
+	path := strings.TrimSpace(firstNonEmpty(p.worktreeAbs, p.WorktreePath))
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	projectRoot = strings.TrimSpace(projectRoot)
+	if projectRoot == "" {
+		return path
+	}
+	return filepath.Join(projectRoot, path)
+}
+
 func columnsForWidth(width int) []table.Column {
 	nameWidth := clampInt(width/7, 12, 20)
 	blockerWidth := clampInt(width/8, 10, 16)
@@ -2196,7 +2312,7 @@ func columnsForWidth(width int) []table.Column {
 }
 
 func (m model) footerText() string {
-	parts := []string{"q quit", "n new", "j/k move", "[/] session", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
+	parts := []string{"q quit", "n new", "A terminal", "t root", "j/k move", "[/] session", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
 	if m.filterEditing {
 		parts = append(parts, "typing")
 	}
@@ -2337,6 +2453,7 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 	searchText := strings.ToLower(strings.Join([]string{
 		p.Parent,
 		p.TaskID,
+		p.Kind,
 		p.itemLabel(),
 		"#" + strconv.Itoa(p.IssueNum),
 		strconv.Itoa(p.IssueNum),
@@ -2459,6 +2576,15 @@ func (p paneView) identityLabel() string {
 	if p.isTask() {
 		return p.TaskID
 	}
+	if p.isShell() {
+		if label := strings.TrimSpace(firstNonEmpty(p.Name, p.Derived.Name, p.TmuxTitle)); label != "" && label != "-" {
+			return label
+		}
+		if slug := strings.TrimSpace(p.Derived.Name); slug != "" && slug != "-" {
+			return slug
+		}
+		return "shell"
+	}
 	return "#" + strconv.Itoa(p.IssueNum)
 }
 
@@ -2513,6 +2639,9 @@ func (p paneView) itemLabel() string {
 	if strings.TrimSpace(p.TaskID) != "" {
 		return p.TaskID
 	}
+	if p.isShell() {
+		return "shell"
+	}
 	return "#" + strconv.Itoa(p.IssueNum)
 }
 
@@ -2537,8 +2666,12 @@ func cloneIssueStatuses(in map[issueKey]issueStatus) map[issueKey]issueStatus {
 }
 
 func summarizeHUD(panes []paneView) hudSummary {
-	summary := hudSummary{Total: len(panes)}
+	summary := hudSummary{}
 	for _, pane := range panes {
+		if pane.isShell() {
+			continue
+		}
+		summary.Total++
 		if pane.HasMergedPR {
 			summary.Merged++
 		}

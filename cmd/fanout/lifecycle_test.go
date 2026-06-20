@@ -103,6 +103,51 @@ printf '\n' >> "$TMUX_LOG"
 	}
 }
 
+func TestCmdCloseShellPaneSkipsGitWorktreeRemoval(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	gitLog := installLifecycleScript(t, "git", `#!/bin/sh
+printf '%s ' "$@" >> "$GIT_LOG"
+printf '\n' >> "$GIT_LOG"
+exit 99
+`)
+	t.Setenv("GIT_LOG", gitLog)
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		Slug:         "terminal-root-1",
+		PaneID:       "%77",
+		Agent:        "shell",
+		DisplayName:  "root terminal",
+		WorktreePath: repo,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "@manual", CloseNum: -1}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose shell code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+	if body, err := os.ReadFile(tmuxLog); err != nil || !strings.Contains(string(body), "kill-pane -t %77") {
+		t.Fatalf("tmux log = %q err=%v, want kill-pane for %%77", body, err)
+	}
+	if body, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(body)) != "" {
+		t.Fatalf("git was called for shell close:\n%s", body)
+	}
+}
+
 func TestCmdMergeFastForwardsRecordedBranch(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")

@@ -2,11 +2,13 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/hooks"
+	"github.com/butaosuinu/fanout/internal/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
@@ -102,4 +104,78 @@ func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(statErr) {
 		t.Fatalf(".fanout state was touched before agent validation: %v", statErr)
 	}
+}
+
+func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	installTUITmuxShim(t, "%77")
+
+	err := launchShellPaneFromTUI(repo, "fanout-test", fanouttui.ShellLaunchRequest{
+		TargetPath: repo,
+		Root:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("state panes = %+v, want one shell pane", store.Panes)
+	}
+	got := store.Panes[0]
+	if got.Kind != state.PaneKindShell || got.Agent != "shell" || got.PaneID != "%77" {
+		t.Fatalf("shell state = %+v, want shell kind/agent/pane", got)
+	}
+	if got.Parent != manualPaneParentRef || got.IssueNum != -1 {
+		t.Fatalf("shell identity = %s/%d, want @manual/-1", got.Parent, got.IssueNum)
+	}
+	if got.WorktreePath != repo || got.DisplayName != "root terminal" || got.Slug != "terminal-root-1" {
+		t.Fatalf("shell path/name/slug = %q/%q/%q", got.WorktreePath, got.DisplayName, got.Slug)
+	}
+
+	body, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pattern := range []string{".fanout/state.json", ".fanout/state.json.lock"} {
+		if !strings.Contains(string(body), pattern) {
+			t.Fatalf("git exclude missing %q:\n%s", pattern, body)
+		}
+	}
+}
+
+func initTUITestGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+}
+
+func installTUITmuxShim(t *testing.T, paneID string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  split-window)
+    printf '%s\n' "$TMUX_SHIM_PANE_ID"
+    ;;
+  select-pane|set-option|select-layout|kill-pane)
+    ;;
+  *)
+    ;;
+esac
+`
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_SHIM_PANE_ID", paneID)
 }
