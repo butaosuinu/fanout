@@ -235,6 +235,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				Agent:        p.Agent,
 				BranchName:   p.BranchName,
 				PaneID:       p.PaneID,
+				ShellKey:     p.ShellKey,
 				WorktreePath: p.WorktreePath,
 				CreatedAt:    p.CreatedAt,
 				Alive:        alive,

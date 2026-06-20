@@ -111,10 +111,7 @@ printf '\n' >> "$GIT_LOG"
 exit 99
 `)
 	t.Setenv("GIT_LOG", gitLog)
-	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
-printf '%s ' "$@" >> "$TMUX_LOG"
-printf '\n' >> "$TMUX_LOG"
-`)
+	tmuxLog := installLifecycleLivePaneTmuxScript(t, "%77", repo, "root terminal", "shell-root")
 	t.Setenv("TMUX_LOG", tmuxLog)
 	writeLifecycleState(t, repo, state.Pane{
 		Parent:       "@manual",
@@ -122,6 +119,7 @@ printf '\n' >> "$TMUX_LOG"
 		Kind:         state.PaneKindShell,
 		Slug:         "terminal-root-1",
 		PaneID:       "%77",
+		ShellKey:     "shell-root",
 		Agent:        "shell",
 		DisplayName:  "root terminal",
 		WorktreePath: repo,
@@ -142,6 +140,56 @@ printf '\n' >> "$TMUX_LOG"
 	}
 	if body, err := os.ReadFile(tmuxLog); err != nil || !strings.Contains(string(body), "kill-pane -t %77") {
 		t.Fatalf("tmux log = %q err=%v, want kill-pane for %%77", body, err)
+	}
+	if body, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(body)) != "" {
+		t.Fatalf("git was called for shell close:\n%s", body)
+	}
+}
+
+func TestCmdCloseShellPaneSkipsKillWhenShellKeyDiffers(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	gitLog := installLifecycleScript(t, "git", `#!/bin/sh
+printf '%s ' "$@" >> "$GIT_LOG"
+printf '\n' >> "$GIT_LOG"
+exit 99
+`)
+	t.Setenv("GIT_LOG", gitLog)
+	tmuxLog := installLifecycleLivePaneTmuxScript(t, "%77", repo, "reused pane", "other-shell")
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		Slug:         "terminal-root-1",
+		PaneID:       "%77",
+		ShellKey:     "shell-root",
+		Agent:        "shell",
+		DisplayName:  "root terminal",
+		WorktreePath: repo,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "@manual", CloseNum: -1}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose shell code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "kill-pane -t %77") {
+		t.Fatalf("tmux log = %q, did not want kill-pane for reused %%77", body)
+	}
+	if !strings.Contains(string(body), "list-panes -a -F") {
+		t.Fatalf("tmux log = %q, want live pane revalidation", body)
 	}
 	if body, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(body)) != "" {
 		t.Fatalf("git was called for shell close:\n%s", body)
@@ -624,6 +672,37 @@ func installLifecycleScript(t *testing.T, name, script string) string {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	logPath := filepath.Join(t.TempDir(), name+".log")
+	return logPath
+}
+
+func installLifecycleLivePaneTmuxScript(t *testing.T, paneID, path, title, shellKey string) string {
+	t.Helper()
+	logPath := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+case "$1 $2 $3" in
+"list-panes -a -F")
+	case "$4" in
+	*pane_current_path*)
+		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_PATH"
+		;;
+	*pane_title*)
+		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_TITLE"
+		;;
+	*fanout_agent_state*)
+		printf '%s\t\n' "$TMUX_LIVE_PANE_ID"
+		;;
+	*fanout_shell_key*)
+		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_SHELL_KEY"
+		;;
+	esac
+	;;
+esac
+`)
+	t.Setenv("TMUX_LIVE_PANE_ID", paneID)
+	t.Setenv("TMUX_LIVE_PATH", path)
+	t.Setenv("TMUX_LIVE_TITLE", title)
+	t.Setenv("TMUX_LIVE_SHELL_KEY", shellKey)
 	return logPath
 }
 

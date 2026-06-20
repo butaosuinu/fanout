@@ -186,7 +186,7 @@ func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
 			}
 		}
 	}
-	if shell.Kind != state.PaneKindShell || !shell.Alive || shell.Derived.Name != "root terminal" {
+	if shell.Kind != state.PaneKindShell || shell.ShellKey != "shell-root" || !shell.Alive || shell.Derived.Name != "root terminal" {
 		t.Fatalf("shell pane = %+v, want live shell row", shell)
 	}
 }

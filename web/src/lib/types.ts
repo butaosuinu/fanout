@@ -29,6 +29,7 @@ export interface PaneView {
   agent: string;
   branchName: string;
   paneId: string;
+  shellKey?: string;
   worktreePath: string;
   createdAt: string;
   alive: boolean;

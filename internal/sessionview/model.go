@@ -52,6 +52,7 @@ type PaneView struct {
 	Agent        string          `json:"agent"`
 	BranchName   string          `json:"branchName"`
 	PaneID       string          `json:"paneId"`
+	ShellKey     string          `json:"shellKey,omitempty"`
 	WorktreePath string          `json:"worktreePath"`
 	CreatedAt    string          `json:"createdAt"`
 	Alive        bool            `json:"alive"`      // PaneID is among the live tmux panes

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
@@ -47,10 +48,11 @@ type Options struct {
 	// plus alternate screen, wrapped lines joined). nil defaults to
 	// tmuxrun.CapturePlanSource; tests inject a fake.
 	CapturePlan func(paneID string, lines int) (string, error)
-	// VerifyPane re-checks, at request time, that paneID is still a live tmux
-	// pane sitting at/under the recorded worktree. nil defaults to a
+	// VerifyPane re-checks, at request time, that the snapshot pane is still
+	// the same live tmux pane. Agent panes verify paneID + worktree path; shell
+	// panes verify paneID + shellKey. nil defaults to a
 	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
-	VerifyPane func(paneID, worktree string) error
+	VerifyPane func(sessionview.PaneView) error
 }
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
@@ -66,7 +68,7 @@ type Server struct {
 	serveErr    chan error
 	capturePane func(paneID string, lines int) (string, error)
 	capturePlan func(paneID string, lines int) (string, error)
-	verifyPane  func(paneID, worktree string) error
+	verifyPane  func(sessionview.PaneView) error
 }
 
 // New binds the loopback listener and assembles the handler. The returned

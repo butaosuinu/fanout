@@ -393,7 +393,7 @@ func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
 	for _, pane := range panes {
 		if pane.IsShell() {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			killPaneBestEffort(pane, lg)
+			killShellPaneBestEffort(pane, lg)
 			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
 		}
@@ -464,6 +464,35 @@ func killPaneBestEffort(pane state.Pane, lg Logger) {
 	if err := tmuxrun.KillPane(pane.PaneID); err != nil {
 		lg.Warn("%s: tmux kill-pane %s failed; treating pane as stale: %v", paneLabel(pane), pane.PaneID, err)
 	}
+}
+
+func killShellPaneBestEffort(pane state.Pane, lg Logger) {
+	if strings.TrimSpace(pane.PaneID) == "" {
+		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
+		return
+	}
+	shellKey := strings.TrimSpace(pane.ShellKey)
+	if shellKey == "" {
+		lg.Warn("%s: no shellKey recorded; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane))
+		return
+	}
+	live, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		lg.Warn("%s: tmux list-panes failed; skipping shell pane kill: %v", paneLabel(pane), err)
+		return
+	}
+	for _, cur := range live {
+		if cur.ID != pane.PaneID {
+			continue
+		}
+		if cur.ShellKey != shellKey {
+			lg.Warn("%s: shell pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
+			return
+		}
+		killPaneBestEffort(pane, lg)
+		return
+	}
+	lg.Warn("%s: shell pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
 }
 
 func pruneWorktrees(projectRoot string, lg Logger) bool {
