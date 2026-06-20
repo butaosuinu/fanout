@@ -86,9 +86,10 @@ type IO struct {
 
 // Engine keeps process-local launch failure state between cycles.
 type Engine struct {
-	cfg      Config
-	io       IO
-	failures map[int]failureState
+	cfg           Config
+	io            IO
+	failures      map[int]failureState
+	parentRetries map[int]ghissue.Issue
 }
 
 type failureState struct {
@@ -100,9 +101,10 @@ type failureState struct {
 // NewEngine returns a watcher engine with process-local failure memory.
 func NewEngine(cfg Config, io IO) *Engine {
 	return &Engine{
-		cfg:      cfg,
-		io:       io,
-		failures: map[int]failureState{},
+		cfg:           cfg,
+		io:            io,
+		failures:      map[int]failureState{},
+		parentRetries: map[int]ghissue.Issue{},
 	}
 }
 
@@ -118,6 +120,9 @@ type Action struct {
 	Issue        ghissue.Issue
 	Kind         LaunchKind
 	OpenChildren int
+	// RetryRunningParent means a deferred parent is already on the running label
+	// after a failed requeue swap, so RunCycle should not acquire it again.
+	RetryRunningParent bool
 	// Limit is non-zero only when MaxSessions is finite and this is a parent
 	// fan-out. The caller should pass it through as fanout's --limit value.
 	Limit int
@@ -180,6 +185,13 @@ func (e *Engine) PlanCycle() (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.TriggerLabel, err)
 	}
+	var runningCandidates []ghissue.Issue
+	if len(e.parentRetries) > 0 {
+		runningCandidates, err = e.io.ListLabeled(cfg.RunningLabel)
+		if err != nil {
+			return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.RunningLabel, err)
+		}
+	}
 	store, err := e.io.LoadState()
 	if err != nil {
 		return Report{}, fmt.Errorf("load fanout state: %w", err)
@@ -193,20 +205,25 @@ func (e *Engine) PlanCycle() (Report, error) {
 	if cfg.MaxSessions > 0 {
 		remaining = max(cfg.MaxSessions-running, 0)
 	}
+	plannedCandidates := e.planCandidates(candidates, runningCandidates)
 	report := Report{
-		Candidates:        len(candidates),
+		Candidates:        len(plannedCandidates),
 		RunningSessions:   running,
 		MaxSessions:       cfg.MaxSessions,
 		RemainingSessions: reportRemaining(remaining),
 	}
 	now := cfg.Now()
 
-	for _, issue := range candidates {
+	for _, candidate := range plannedCandidates {
+		issue := candidate.issue
 		if strings.ToUpper(strings.TrimSpace(issue.State)) != "OPEN" {
+			if candidate.retryParent {
+				delete(e.parentRetries, issue.Number)
+			}
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipClosed})
 			continue
 		}
-		if hasLabel(issue, cfg.RunningLabel) {
+		if hasLabel(issue, cfg.RunningLabel) && !candidate.retryParent {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 			continue
 		}
@@ -235,9 +252,14 @@ func (e *Engine) PlanCycle() (Report, error) {
 		if openChildren < 0 {
 			openChildren = 0
 		}
-		action := Action{Issue: issue, Kind: LaunchStandalone, OpenChildren: openChildren}
+		action := Action{
+			Issue:              issue,
+			Kind:               LaunchStandalone,
+			OpenChildren:       openChildren,
+			RetryRunningParent: candidate.retryRunningParent,
+		}
 		consumes := 1
-		if openChildren > 0 {
+		if openChildren > 0 || candidate.retryParent {
 			action.Kind = LaunchParent
 			consumes = openChildren
 		}
@@ -274,9 +296,11 @@ func (e *Engine) RunCycle() (Report, error) {
 	}
 
 	for _, action := range report.Actions {
-		if err := e.io.SwapLabels(action.Issue, cfg.TriggerLabel, cfg.RunningLabel); err != nil {
-			report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
-			continue
+		if !action.RetryRunningParent {
+			if err := e.io.SwapLabels(action.Issue, cfg.TriggerLabel, cfg.RunningLabel); err != nil {
+				report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
+				continue
+			}
 		}
 
 		var launchErr error
@@ -289,6 +313,11 @@ func (e *Engine) RunCycle() (Report, error) {
 		}
 		if launchErr != nil {
 			revertErr := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel)
+			if action.Kind == LaunchParent && revertErr != nil {
+				e.parentRetries[action.Issue.Number] = action.Issue
+			} else {
+				delete(e.parentRetries, action.Issue.Number)
+			}
 			failure := e.recordLaunchFailure(action.Issue.Number, cfg.Now())
 			report.Failures = append(report.Failures, Failure{
 				Issue:       action.Issue,
@@ -304,13 +333,50 @@ func (e *Engine) RunCycle() (Report, error) {
 		if action.Kind == LaunchParent && parentResult.Deferred {
 			report.Deferred = append(report.Deferred, Deferred{Issue: action.Issue, Reason: DeferMaxSessions})
 			if err := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel); err != nil {
+				e.parentRetries[action.Issue.Number] = action.Issue
 				report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
+			} else {
+				delete(e.parentRetries, action.Issue.Number)
 			}
+		} else {
+			delete(e.parentRetries, action.Issue.Number)
 		}
 		delete(e.failures, action.Issue.Number)
 		report.Launched = append(report.Launched, action)
 	}
 	return report, nil
+}
+
+type planCandidate struct {
+	issue              ghissue.Issue
+	retryParent        bool
+	retryRunningParent bool
+}
+
+func (e *Engine) planCandidates(triggered, running []ghissue.Issue) []planCandidate {
+	candidates := make([]planCandidate, 0, len(triggered)+len(running))
+	seen := map[int]bool{}
+	for _, issue := range triggered {
+		_, retry := e.parentRetries[issue.Number]
+		candidates = append(candidates, planCandidate{issue: issue, retryParent: retry})
+		seen[issue.Number] = true
+	}
+	for _, issue := range running {
+		if _, retry := e.parentRetries[issue.Number]; retry && !seen[issue.Number] {
+			candidates = append(candidates, planCandidate{
+				issue:              issue,
+				retryParent:        true,
+				retryRunningParent: true,
+			})
+			seen[issue.Number] = true
+		}
+	}
+	for num := range e.parentRetries {
+		if !seen[num] {
+			delete(e.parentRetries, num)
+		}
+	}
+	return candidates
 }
 
 func normalizeConfig(cfg Config) Config {

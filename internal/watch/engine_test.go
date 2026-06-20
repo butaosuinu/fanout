@@ -28,10 +28,11 @@ func (c *fakeClock) Advance(d time.Duration) {
 }
 
 type fakeWatchIO struct {
-	issues       []ghissue.Issue
-	store        state.Store
-	openChildren map[int]int
-	alive        map[string]bool
+	issues        []ghissue.Issue
+	runningIssues []ghissue.Issue
+	store         state.Store
+	openChildren  map[int]int
+	alive         map[string]bool
 
 	swapErr        map[swapKey]error
 	standaloneErr  map[int]error
@@ -64,10 +65,14 @@ type parentLaunch struct {
 func (f *fakeWatchIO) IO() IO {
 	return IO{
 		ListLabeled: func(label string) ([]ghissue.Issue, error) {
-			if label != triggerLabel {
+			switch label {
+			case triggerLabel:
+				return slices.Clone(f.issues), nil
+			case runningLabel:
+				return slices.Clone(f.runningIssues), nil
+			default:
 				return nil, errors.New("unexpected label")
 			}
-			return slices.Clone(f.issues), nil
 		},
 		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
 			f.countCalls = append(f.countCalls, issue.Number)
@@ -275,6 +280,191 @@ func TestRunCycleTableDriven(t *testing.T) {
 			}
 			tt.check(t, report, tt.fake)
 		})
+	}
+}
+
+func TestRunCycleRetriesDeferredParentWhenRequeueSwapFails(t *testing.T) {
+	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	fake := &fakeWatchIO{
+		issues:         []ghissue.Issue{issue(301)},
+		openChildren:   map[int]int{301: 3},
+		parentDeferred: map[int]bool{301: true},
+		swapErr: map[swapKey]error{
+			{num: 301, remove: runningLabel, add: triggerLabel}: errors.New("requeue failed"),
+		},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: baseNow}).Now,
+	}, fake.IO())
+
+	first, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("first RunCycle error = %v", err)
+	}
+	assertSwaps(t, fake.swaps, []swapCall{
+		{num: 301, remove: triggerLabel, add: runningLabel},
+		{num: 301, remove: runningLabel, add: triggerLabel},
+	})
+	if len(first.Deferred) != 1 || first.Deferred[0].Reason != DeferMaxSessions {
+		t.Fatalf("first deferred = %#v, want max_sessions", first.Deferred)
+	}
+	assertFailure(t, first, 301, FailureSwapLabels, 0, false)
+
+	fake.issues = nil
+	fake.runningIssues = []ghissue.Issue{issue(301, runningLabel)}
+	fake.openChildren[301] = 1
+	fake.parentDeferred[301] = false
+	fake.swapErr = nil
+	fake.countCalls = nil
+	fake.swaps = nil
+	fake.parents = nil
+
+	second, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("second RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls on retry", fake.countCalls, []int{301})
+	assertSwaps(t, fake.swaps, nil)
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent retry launches = %#v, want %#v", got, want)
+	}
+	if len(second.Actions) != 1 || !second.Actions[0].RetryRunningParent {
+		t.Fatalf("second actions = %#v, want running-label retry", second.Actions)
+	}
+	if len(second.Failures) != 0 || len(second.Deferred) != 0 || len(second.Launched) != 1 {
+		t.Fatalf("second report = %#v, want one clean launch", second)
+	}
+
+	fake.countCalls = nil
+	fake.parents = nil
+
+	third, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("third RunCycle error = %v", err)
+	}
+	if len(third.Actions) != 0 || len(fake.parents) != 0 {
+		t.Fatalf("third retry persisted: report=%#v parents=%#v", third, fake.parents)
+	}
+}
+
+func TestRunCycleAcquiresTriggerLabeledParentRetry(t *testing.T) {
+	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	fake := &fakeWatchIO{
+		issues:         []ghissue.Issue{issue(301)},
+		openChildren:   map[int]int{301: 3},
+		parentDeferred: map[int]bool{301: true},
+		swapErr: map[swapKey]error{
+			{num: 301, remove: runningLabel, add: triggerLabel}: errors.New("requeue failed"),
+		},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: baseNow}).Now,
+	}, fake.IO())
+
+	if _, err := engine.RunCycle(); err != nil {
+		t.Fatalf("first RunCycle error = %v", err)
+	}
+
+	fake.issues = []ghissue.Issue{issue(301)}
+	fake.openChildren[301] = 1
+	fake.parentDeferred[301] = false
+	fake.swapErr = nil
+	fake.swaps = nil
+	fake.parents = nil
+
+	second, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("second RunCycle error = %v", err)
+	}
+	assertSwaps(t, fake.swaps, []swapCall{{num: 301, remove: triggerLabel, add: runningLabel}})
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent retry launches = %#v, want %#v", got, want)
+	}
+	if len(second.Actions) != 1 || second.Actions[0].RetryRunningParent {
+		t.Fatalf("second actions = %#v, want normal trigger acquisition", second.Actions)
+	}
+}
+
+func TestRunCycleAcquiresBothLabeledParentRetry(t *testing.T) {
+	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	fake := &fakeWatchIO{
+		issues:         []ghissue.Issue{issue(301)},
+		openChildren:   map[int]int{301: 3},
+		parentDeferred: map[int]bool{301: true},
+		swapErr: map[swapKey]error{
+			{num: 301, remove: runningLabel, add: triggerLabel}: errors.New("requeue failed"),
+		},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: baseNow}).Now,
+	}, fake.IO())
+
+	if _, err := engine.RunCycle(); err != nil {
+		t.Fatalf("first RunCycle error = %v", err)
+	}
+
+	fake.issues = []ghissue.Issue{issue(301, runningLabel)}
+	fake.openChildren[301] = 1
+	fake.parentDeferred[301] = false
+	fake.swapErr = nil
+	fake.swaps = nil
+	fake.parents = nil
+
+	second, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("second RunCycle error = %v", err)
+	}
+	assertSwaps(t, fake.swaps, []swapCall{{num: 301, remove: triggerLabel, add: runningLabel}})
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent retry launches = %#v, want %#v", got, want)
+	}
+	if len(second.Skipped) != 0 || len(second.Actions) != 1 || second.Actions[0].RetryRunningParent {
+		t.Fatalf("second report = %#v, want normal acquisition retry", second)
+	}
+}
+
+func TestRunCycleIgnoresStaleHiddenParentRetry(t *testing.T) {
+	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	fake := &fakeWatchIO{
+		issues:         []ghissue.Issue{issue(301)},
+		openChildren:   map[int]int{301: 3},
+		parentDeferred: map[int]bool{301: true},
+		swapErr: map[swapKey]error{
+			{num: 301, remove: runningLabel, add: triggerLabel}: errors.New("requeue failed"),
+		},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: baseNow}).Now,
+	}, fake.IO())
+
+	if _, err := engine.RunCycle(); err != nil {
+		t.Fatalf("first RunCycle error = %v", err)
+	}
+
+	fake.issues = nil
+	fake.runningIssues = nil
+	fake.openChildren[301] = 1
+	fake.parentDeferred[301] = false
+	fake.swapErr = nil
+	fake.countCalls = nil
+	fake.swaps = nil
+	fake.parents = nil
+
+	second, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("second RunCycle error = %v", err)
+	}
+	if len(second.Actions) != 0 || len(fake.parents) != 0 || len(fake.countCalls) != 0 || len(fake.swaps) != 0 {
+		t.Fatalf("second report = %#v calls=%#v swaps=%#v parents=%#v, want stale retry ignored",
+			second, fake.countCalls, fake.swaps, fake.parents)
 	}
 }
 
