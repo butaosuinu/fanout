@@ -57,6 +57,7 @@ type Options struct {
 	LaunchShell       ShellLaunchFunc
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
+	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
 	Notifier          transitionNotifier
 	lifecycle         lifecycleRunner
@@ -125,6 +126,7 @@ type paneView struct {
 	Kind         string
 	Name         string
 	PaneID       string
+	ShellKey     string
 	TmuxState    string
 	TmuxTitle    string
 	AgentState   string
@@ -450,6 +452,9 @@ func normalizeOptions(opts Options) Options {
 	if opts.PaneAlive == nil {
 		opts.PaneAlive = tmuxrun.IsPaneAlive
 	}
+	if opts.ShellPaneAlive == nil {
+		opts.ShellPaneAlive = shellPaneAliveByKey
+	}
 	if opts.CapturePaneOutput == nil {
 		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
 	}
@@ -693,6 +698,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.peek = panePeek{PaneID: msg.paneID, At: msg.at, Err: msg.err.Error()}
+			if errors.Is(msg.err, errPaneNotAlive) {
+				m.markPaneStale(msg.paneID)
+				m.refreshRows()
+			}
 		} else {
 			m.peek = panePeek{PaneID: msg.paneID, Output: msg.output, At: msg.at}
 		}
@@ -1497,11 +1506,12 @@ func (m *model) focusSelectedCmd() tea.Cmd {
 
 	paneID := pane.PaneID
 	alive := m.opts.PaneAlive
+	shellAlive := m.opts.ShellPaneAlive
 	focus := m.opts.FocusPane
 	keyboard := m.opts.keyboard
 	m.notice = fmt.Sprintf("focusing %s...", paneID)
 	return func() tea.Msg {
-		if !alive(paneID) {
+		if !paneAliveForAction(pane, alive, shellAlive) {
 			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive}
 		}
 		keyboard.Disable()
@@ -1536,9 +1546,13 @@ func (m *model) peekSelectedCmd(force bool) tea.Cmd {
 	}
 
 	paneID := pane.PaneID
+	shellAlive := m.opts.ShellPaneAlive
 	capture := m.opts.CapturePaneOutput
 	m.peek = panePeek{PaneID: paneID, Loading: true}
 	return func() tea.Msg {
+		if pane.isShell() && !shellAlive(pane.PaneID, pane.ShellKey) {
+			return panePeekLoadedMsg{paneID: paneID, at: time.Now(), err: errPaneNotAlive}
+		}
 		out, err := capture(paneID, peekLines)
 		return panePeekLoadedMsg{paneID: paneID, output: out, at: time.Now(), err: err}
 	}
@@ -2094,6 +2108,31 @@ func errFromString(s string) error {
 	return errors.New(s)
 }
 
+func paneAliveForAction(pane paneView, paneAlive func(string) bool, shellPaneAlive func(string, string) bool) bool {
+	if pane.isShell() {
+		return shellPaneAlive(pane.PaneID, pane.ShellKey)
+	}
+	return paneAlive(pane.PaneID)
+}
+
+func shellPaneAliveByKey(paneID, shellKey string) bool {
+	paneID = strings.TrimSpace(paneID)
+	shellKey = strings.TrimSpace(shellKey)
+	if paneID == "" || shellKey == "" {
+		return false
+	}
+	panes, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		return false
+	}
+	for _, pane := range panes {
+		if pane.ID == paneID && pane.ShellKey == shellKey {
+			return true
+		}
+	}
+	return false
+}
+
 func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []paneView {
 	out := []paneView{}
 	for _, session := range snap.Sessions {
@@ -2110,6 +2149,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				Kind:         pv.Kind,
 				Name:         derived.Name,
 				PaneID:       pv.PaneID,
+				ShellKey:     pv.ShellKey,
 				TmuxState:    pv.TmuxState,
 				TmuxTitle:    pv.TmuxTitle,
 				AgentState:   pv.AgentState,
@@ -2197,6 +2237,7 @@ func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, bloc
 		Agent:        view.Agent,
 		BranchName:   view.BranchName,
 		PaneID:       view.PaneID,
+		ShellKey:     view.ShellKey,
 		WorktreePath: view.WorktreePath,
 		CreatedAt:    view.CreatedAt,
 		Alive:        view.TmuxState == "live",
