@@ -167,6 +167,72 @@ func TestCmdMergeReportsNonFastForwardOnly(t *testing.T) {
 	}
 }
 
+func TestCmdMergePreMergeHookBlocksFastForward(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "-c", "fanout/hooked-child-101")
+	if err := os.WriteFile(filepath.Join(repo, "hooked.txt"), []byte("child\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "hooked.txt")
+	gitCmdTest(t, repo, "commit", "-m", "hooked")
+	gitCmdTest(t, repo, "switch", "main")
+	writeLifecycleState(t, repo, state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/hooked-child-101"})
+	writeLifecycleHook(t, "pre_merge", `echo pre merge blocked; exit 9`)
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdMerge(&cliflags.Config{ParentRef: "84", MergeNum: 101}, lg)
+
+	if code != exitcode.Env {
+		t.Fatalf("cmdMerge code = %d, want %d", code, exitcode.Env)
+	}
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("main HEAD changed to %s, want unchanged %s", got, baseHead)
+	}
+	if !strings.Contains(stderr.String(), "pre merge blocked") {
+		t.Fatalf("stderr = %q, want hook output", stderr.String())
+	}
+}
+
+func TestCmdCloseBeforeWorktreeRemoveHookBlocksStateRemoval(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "hooked-child-101")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/hooked-child-101", worktreePath, "HEAD")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		Slug:         "hooked-child-101",
+		BranchName:   "fanout/hooked-child-101",
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+	writeLifecycleHook(t, "before_worktree_remove", `echo remove blocked for "$FANOUT_WORKTREE_PATH"; exit 5`)
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdClose(&cliflags.Config{ParentRef: "84", CloseNum: 101}, lg)
+
+	if code != exitcode.Env {
+		t.Fatalf("cmdClose code = %d, want %d", code, exitcode.Env)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree should remain after blocked hook: %v", err)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Find("84", 101); !ok {
+		t.Fatalf("state row removed despite blocked hook: %+v", loaded.Panes)
+	}
+	if !strings.Contains(stderr.String(), "remove blocked for "+worktreePath) {
+		t.Fatalf("stderr = %q, want hook output", stderr.String())
+	}
+}
+
 func TestLifecycleCloseTaskRemovesWorktreeKillsPaneAndState(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "api-client")
@@ -514,6 +580,34 @@ func installLifecycleScript(t *testing.T, name, script string) string {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	logPath := filepath.Join(t.TempDir(), name+".log")
 	return logPath
+}
+
+func writeLifecycleHook(t *testing.T, name, command string) string {
+	t.Helper()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	path := filepath.Join(xdg, "fanout", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{
+		"hooks": map[string]any{
+			name: []map[string]any{
+				{
+					"hooks": []map[string]any{
+						{"type": "command", "command": command, "timeout": 5},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func writePlanLifecycleSpec(t *testing.T, repo string) string {

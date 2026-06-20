@@ -31,6 +31,8 @@ English and 日本語.
   from any pane with `prefix + D`.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
   plus an optional dashboard comment on the parent issue.
+- **Lifecycle hooks** — user-configured shell commands around worktree, pane,
+  and merge events.
 - **Agent integrations** — the `/fanout` slash command and skills for Claude
   Code & Codex, bundled with the install.
 

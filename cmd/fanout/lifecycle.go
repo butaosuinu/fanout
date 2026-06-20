@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/log"
 )
@@ -36,5 +37,9 @@ func lifecycleOptions(mode string, lg *log.Logger) (lifecycle.Options, exitcode.
 	if code != exitcode.OK {
 		return lifecycle.Options{}, code
 	}
-	return lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, exitcode.OK
+	return lifecycle.Options{
+		ProjectRoot: rt.projectRoot,
+		StatePath:   rt.statePath,
+		Hooks:       hooks.LoadUserConfig(lg),
+	}, exitcode.OK
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
@@ -149,6 +150,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
 	}, lg.Warn)
+	hookConfig := hooks.LoadUserConfig(lg)
 
 	cfg.SpecPath = resolvePlanSpecPath(rt.info.ProjectRoot, cfg.SpecArg)
 	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
@@ -239,7 +241,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		teamCtx = buildTaskTeamContext(rt.info.ProjectRoot, parentRef, plan.Targets)
 	}
 
-	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, recorder, c, commandName, teamCtx)
+	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
 	if !cfg.DryRun && result.Created > 0 {
@@ -748,15 +750,22 @@ func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	}
 	parentRef := planParentRef(spec.Plan.Slug)
 
-	switch {
-	case cfg.StatusMode:
+	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
+	}
+	lifecycleOpts := lifecycle.Options{
+		ProjectRoot: rt.projectRoot,
+		StatePath:   rt.statePath,
+		Hooks:       hooks.LoadUserConfig(lg),
+	}
+
+	switch {
 	case cfg.CloseTaskID != "":
-		return lifecycle.CloseTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.CloseTaskID, lg)
+		return lifecycle.CloseTask(lifecycleOpts, parentRef, cfg.CloseTaskID, lg)
 	case cfg.MergeTaskID != "":
-		return lifecycle.MergeTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.MergeTaskID, lg)
+		return lifecycle.MergeTask(lifecycleOpts, parentRef, cfg.MergeTaskID, lg)
 	case cfg.CleanupMode:
-		return lifecycle.CleanupPlan(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, lg)
+		return lifecycle.CleanupPlan(lifecycleOpts, parentRef, lg)
 	default:
 		return exitcode.Invocation
 	}
@@ -1299,10 +1308,10 @@ func applyTaskLimit(tasks []planspec.Task, limit int) (targets, deferred []plans
 	return tasks, nil
 }
 
-func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
+func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
 	var result taskExecutionResult
 	for i, task := range targets {
-		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, teamCtx)
+		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, hookConfig, teamCtx)
 		if !createPane(cfg, lg, info, req, recorder, c, commandName) {
 			result.Failed++
 			break

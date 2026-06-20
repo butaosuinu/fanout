@@ -11,6 +11,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
 	"github.com/butaosuinu/fanout/internal/planspec"
@@ -105,11 +106,11 @@ func TestStatePaneCapturesTaskID(t *testing.T) {
 
 func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true}
-	if got := newManualPaneRequest(cfg, "/repo", state.Store{}, manualPaneOptions{Title: "First Manual"}); got.Number != -1 {
+	if got := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "First Manual"}); got.Number != -1 {
 		t.Fatalf("first manual number = %d, want -1", got.Number)
 	}
 	store := state.Store{Panes: []state.Pane{{Parent: manualPaneParentRef, IssueNum: -1}}}
-	req := newManualPaneRequest(cfg, "/repo", store, manualPaneOptions{
+	req := newManualPaneRequest(cfg, "/repo", store, hooks.EmptyConfig(), manualPaneOptions{
 		Title:  "Manual Diagnostics",
 		Body:   "extra context",
 		Slug:   "manual-diagnostics",
@@ -156,12 +157,12 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
 
-	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
 	}
 
-	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, manualPaneOptions{Title: "Manual diagnostics"})
+	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "Manual diagnostics"})
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")
 	}
@@ -170,7 +171,7 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
 	projectRoot := t.TempDir()
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
-	req := newPaneRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), false, nil)
+	req := newPaneRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
@@ -180,7 +181,7 @@ func TestCreatePaneTaskDryRunDoesNotWriteBriefing(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
-	req := newTaskPaneRequest(cfg, projectRoot, spec, task, settings.Defaults(), nil)
+	req := newTaskPaneRequest(cfg, projectRoot, spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
@@ -231,7 +232,7 @@ func TestNewPaneRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Shared child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), true, nil)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), true, nil)
 
 	if got.Slug != "shared-child-parent-200-501" {
 		t.Fatalf("slug = %q, want shared-child-parent-200-501", got.Slug)
@@ -248,7 +249,7 @@ func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
 	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
@@ -259,7 +260,7 @@ func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Wave child", Body: "body", Wave: "wave5"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if got.Wave != "wave5" {
 		t.Fatalf("Wave = %q, want wave5", got.Wave)
@@ -276,7 +277,7 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 501, Title: "Codex child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
@@ -306,7 +307,7 @@ func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T
 		{Number: 502, Title: "Second child"},
 	})
 
-	got := newPaneRequest(cfg, "/repo/project_root", issue, resolvedSettings, false, teamCtx)
+	got := newPaneRequest(cfg, "/repo/project_root", issue, resolvedSettings, hooks.EmptyConfig(), false, teamCtx)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex from issue override", got.Agent)
@@ -342,7 +343,7 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), false, nil)
+	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
@@ -373,7 +374,7 @@ func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 		Wave:        "2",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if got.ParentRef != "plan:launch-plan" || got.TaskID != "api-client" || got.Number != 0 {
 		t.Fatalf("task identity = parent %q task %q issue %d", got.ParentRef, got.TaskID, got.Number)
@@ -406,7 +407,7 @@ func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
@@ -425,7 +426,7 @@ func TestNewTaskPaneRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
 		Briefing: "## Goal\nExtract it",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if strings.ContainsAny(got.Prompt, "\n\t") {
 		t.Fatalf("prompt contains embedded newline/tab: %q", got.Prompt)
@@ -439,16 +440,16 @@ func TestNewTaskPaneRequestQualifiesDefaultSlugByPlan(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), nil)
-	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), nil)
+	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if first.Slug == second.Slug || first.BranchName == second.BranchName {
 		t.Fatalf("default task slugs must be plan-qualified, got %q/%q and %q/%q", first.Slug, first.BranchName, second.Slug, second.BranchName)
 	}
 
 	task.Slug = "shared-api-client"
-	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), nil)
-	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), nil)
+	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 	if first.Slug != "shared-api-client" || second.Slug != "shared-api-client" {
 		t.Fatalf("explicit slug should be shared exactly, got %q and %q", first.Slug, second.Slug)
 	}

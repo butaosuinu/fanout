@@ -53,8 +53,7 @@ type overrides struct {
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
 type WarnFunc func(format string, a ...any)
 
-// Defaults returns the built-in settings. All switches default to true for
-// backwards compatibility.
+// Defaults returns the built-in settings.
 func Defaults() Settings {
 	return Settings{
 		AutoPullRequest:    true,

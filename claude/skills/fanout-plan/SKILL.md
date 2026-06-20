@@ -147,6 +147,8 @@ Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
 `--team` is supported in plan mode (see "Sibling coordination" below); it is
 not one of the forbidden issue/project-only flags.
 
+Lifecycle hooks are always on and come from user `hooks.json`.
+
 Use read/lifecycle flags only when the user explicitly asks for plan task
 status or cleanup, not during initial plan generation:
 

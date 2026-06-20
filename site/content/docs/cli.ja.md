@@ -35,9 +35,9 @@ fanout plan <spec.json|plan-slug> --close <task-id>
 fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
-fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
-fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout <parent-issue> --merge <NUM> # fast-forward merge
+fanout <parent-issue> --close <NUM> # remove child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging
 fanout --check-update               # Compare this binary with the latest release
@@ -250,6 +250,54 @@ fanout 123 --merge 4
 fanout 123 --close 4
 fanout 123 --cleanup
 ```
+
+Hook は常に有効です。user hook config が無い場合、または event に command が無い
+場合、その event は no-op です。fanout は `$XDG_CONFIG_HOME/fanout/hooks.json`、
+または `XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/hooks.json` を読みます。
+ファイルは Codex 風の `hooks` object です:
+
+```json
+{
+  "hooks": {
+    "worktree_created": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo worktree=$FANOUT_WORKTREE_PATH",
+            "timeout": 10,
+            "statusMessage": "Preparing child worktree"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+対応する `type` は `"command"` だけです。command は project root から
+`/bin/sh -c` で実行します。`timeout` は秒数で、省略時は 60 秒です。同じ event
+の command はファイル順に実行します。
+
+対応 event:
+
+| Hook | 実行タイミング |
+|---|---|
+| `worktree_created` | Blocking。`git worktree add` 後、pane 作成前。 |
+| `before_pane_create` | Background。worktree 作成後、`tmux split-window` 前。 |
+| `before_worktree_remove` | Blocking。`--close` / `--cleanup` の `git worktree remove` 前。 |
+| `worktree_removed` | Background。記録済み worktree の削除後。 |
+| `before_pane_close` | Background。記録済み pane を閉じる前。 |
+| `pane_closed` | Background。pane close 試行後。 |
+| `pre_merge` | Blocking。`git merge --ff-only` 前。 |
+| `post_merge` | Background。fast-forward merge 成功後。 |
+
+Blocking hook が失敗すると操作を止め、hook の出力を表示します。Hook には
+`FANOUT_ROOT`、`FANOUT_PARENT`、`FANOUT_ISSUE_NUM`、`FANOUT_TASK_ID`、
+`FANOUT_SLUG`、`FANOUT_PROMPT`、`FANOUT_AGENT`、`FANOUT_TMUX_PANE_ID`、
+`FANOUT_WORKTREE_PATH`、`FANOUT_BRANCH`、`FANOUT_BASE_BRANCH`、
+`FANOUT_TARGET_BRANCH` を渡します。fanout に対応する値がある項目は、互換用の
+`DMUX_*` 変数にも入ります。
 
 ## サブコマンド
 

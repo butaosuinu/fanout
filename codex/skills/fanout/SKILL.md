@@ -26,9 +26,9 @@ fanout <parent-issue|project-url>
        [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
-fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
-fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout <parent-issue> --merge <NUM>
+fanout <parent-issue> --close <NUM>
+fanout <parent-issue> --cleanup
 fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
 fanout plan <spec.json|plan-slug>   # issue-less local plan task fan-out (see fanout-plan)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see Notes)
@@ -350,8 +350,8 @@ API + parent body. Key points:
   directive; `--agent-teams-hint` / `--no-agent-teams-hint` include or omit
   the Claude-only Agent Teams hint; `--pr-visualization` /
   `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
-  guidance in auto-PR child briefings. Defaults are all on, and these settings
-  are Go-implementation only.
+  guidance in auto-PR child briefings. These briefing settings default on.
+- Lifecycle hooks are always on and come from user `hooks.json`.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode

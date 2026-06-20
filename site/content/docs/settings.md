@@ -7,7 +7,7 @@ kanji: 整
 yomi: settings
 ---
 
-fanout can turn six opinionated behaviors on or off — five briefing toggles plus the dashboard tmux keybinding — and select TUI notification channels. Boolean defaults are all `true` to preserve existing behavior; notifications default to `bell`.
+fanout can turn six opinionated behaviors on or off — five briefing toggles and the dashboard tmux keybinding — and select TUI notification channels. Boolean defaults are `true`. Notifications default to `bell`.
 
 ## Resolution order
 
@@ -59,6 +59,8 @@ Boolean environment values accept `1/true/yes/on` and `0/false/no/off` (case-ins
 ## Forward compatibility
 
 Invalid boolean env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
+
+Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [CLI Reference]({{< relref "/docs/cli" >}}).
 
 ## prVisualization in detail
 

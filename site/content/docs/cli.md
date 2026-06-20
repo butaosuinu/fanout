@@ -35,9 +35,9 @@ fanout plan <spec.json|plan-slug> --close <task-id>
 fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
-fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
-fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout <parent-issue> --merge <NUM> # fast-forward merge
+fanout <parent-issue> --close <NUM> # remove child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes
 fanout --check-update               # Compare this binary with the latest release
@@ -251,6 +251,54 @@ fanout 123 --merge 4
 fanout 123 --close 4
 fanout 123 --cleanup
 ```
+
+Hooks are always enabled. If the user hook config is missing, or an event has no
+commands, the event is a no-op. fanout reads hooks from
+`$XDG_CONFIG_HOME/fanout/hooks.json`, or `~/.config/fanout/hooks.json` when
+`XDG_CONFIG_HOME` is unset. The file uses a Codex-style `hooks` object:
+
+```json
+{
+  "hooks": {
+    "worktree_created": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo worktree=$FANOUT_WORKTREE_PATH",
+            "timeout": 10,
+            "statusMessage": "Preparing child worktree"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Only `type: "command"` is supported. Commands run through `/bin/sh -c` from the
+project root. `timeout` is seconds; omit it to use 60 seconds. Commands for the
+same event run in file order.
+
+Supported events:
+
+| Hook | When it runs |
+|---|---|
+| `worktree_created` | Blocking, after `git worktree add` and before pane creation. |
+| `before_pane_create` | Background, after worktree creation and before `tmux split-window`. |
+| `before_worktree_remove` | Blocking, before `git worktree remove` during `--close` / `--cleanup`. |
+| `worktree_removed` | Background, after a recorded worktree is removed. |
+| `before_pane_close` | Background, before a recorded pane is closed. |
+| `pane_closed` | Background, after the pane close attempt. |
+| `pre_merge` | Blocking, before `git merge --ff-only`. |
+| `post_merge` | Background, after a successful fast-forward merge. |
+
+Blocking hook failure stops the operation and prints captured output. Hooks
+receive `FANOUT_ROOT`, `FANOUT_PARENT`, `FANOUT_ISSUE_NUM`, `FANOUT_TASK_ID`,
+`FANOUT_SLUG`, `FANOUT_PROMPT`, `FANOUT_AGENT`, `FANOUT_TMUX_PANE_ID`,
+`FANOUT_WORKTREE_PATH`, `FANOUT_BRANCH`, `FANOUT_BASE_BRANCH`, and
+`FANOUT_TARGET_BRANCH`; matching `DMUX_*` compatibility variables are also set
+where fanout has equivalent data.
 
 ## Subcommands
 

@@ -25,6 +25,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/blockers"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/sessionview"
@@ -50,6 +51,7 @@ type Options struct {
 	StateInterval     time.Duration
 	GHInterval        time.Duration
 	DefaultAgent      string
+	Hooks             hooks.Config
 	LaunchPane        LaunchFunc
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
@@ -1048,6 +1050,7 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 	opts := lifecycle.Options{
 		ProjectRoot: m.opts.ProjectRoot,
 		StatePath:   state.Path(m.opts.ProjectRoot),
+		Hooks:       m.opts.Hooks,
 	}
 	runner := m.opts.lifecycle
 	return func() tea.Msg {

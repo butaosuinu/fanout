@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
@@ -44,6 +45,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	hookConfig := hooks.LoadUserConfig(lg)
 	notifier, err := fanoutnotify.New(fanoutnotify.Config{
 		Channels:        resolvedSettings.Notifications,
 		TmuxTarget:      session,
@@ -63,7 +65,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		StateInterval: 2 * time.Second,
 		GHInterval:    20 * time.Second,
 		DefaultAgent:  defaultTUIAgent(),
-		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName),
+		Hooks:         hookConfig,
+		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
 		Notifier:      notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
@@ -72,13 +75,13 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func newTUILaunchPaneFunc(projectRoot, session, commandName string) fanouttui.LaunchFunc {
+func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {
 	return func(req fanouttui.LaunchRequest) error {
-		return launchManualPaneFromTUI(projectRoot, session, commandName, req)
+		return launchManualPaneFromTUI(projectRoot, session, commandName, hookConfig, req)
 	}
 }
 
-func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanouttui.LaunchRequest) error {
+func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) error {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
 		return fmt.Errorf("prompt is required")
@@ -116,7 +119,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanou
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	paneReq := newManualPaneRequest(cfg, projectRoot, store, manualPaneOptionsForTUI(prompt, slug, agentName))
+	paneReq := newManualPaneRequest(cfg, projectRoot, store, hookConfig, manualPaneOptionsForTUI(prompt, slug, agentName))
 	if !createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
 		return bufferedLaunchError(stdout, stderr, "create pane")
 	}

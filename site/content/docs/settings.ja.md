@@ -7,7 +7,7 @@ kanji: 整
 yomi: settings
 ---
 
-fanout は opinionated な 6 つの挙動(briefing の 5 トグル+ダッシュボードの tmux キーバインド)をオン/オフでき、TUI 通知 channel も選択できます。後方互換のため、bool の既定値はすべて `true`、通知の既定値は `bell` です。
+fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシュボードの tmux キーバインド)をオン/オフでき、TUI 通知 channel も選択できます。bool 既定値は `true` です。通知の既定値は `bell` です。
 
 ## 解決順序
 
@@ -59,6 +59,8 @@ bool の環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けま�
 ## 前方互換
 
 不正な bool env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
+
+Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は [CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
 
 ## prVisualization の詳細
 
