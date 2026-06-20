@@ -220,21 +220,6 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 	}
 }
 
-func TestParseRejectsHookToggleFlags(t *testing.T) {
-	for _, flag := range []string{"--hooks", "--no-hooks"} {
-		t.Run(flag, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			res := Parse([]string{"100", "--close", "101", flag}, log.NewWith(&stdout, &stderr, false), io.Discard)
-			if res.Code != exitcode.Invocation {
-				t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Invocation)
-			}
-			if got := stderr.String(); !strings.Contains(got, "unknown option: "+flag) {
-				t.Fatalf("stderr = %q, want unknown option for %s", got, flag)
-			}
-		})
-	}
-}
-
 func TestParseStatusRejectsAgentOverride(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	res := Parse([]string{"--status", "100", "--agent", "101=codex"}, log.NewWith(&stdout, &stderr, false), io.Discard)

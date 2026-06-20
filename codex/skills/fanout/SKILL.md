@@ -351,8 +351,7 @@ API + parent body. Key points:
   the Claude-only Agent Teams hint; `--pr-visualization` /
   `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
   guidance in auto-PR child briefings. These briefing settings default on.
-- Lifecycle hooks are always on and come from user `hooks.json`. Do not forward
-  `--hooks` or `--no-hooks`; they are not fanout flags.
+- Lifecycle hooks are always on and come from user `hooks.json`.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode

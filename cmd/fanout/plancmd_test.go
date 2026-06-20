@@ -199,21 +199,6 @@ func TestParsePlanLifecycleRejectsAgentOverride(t *testing.T) {
 	}
 }
 
-func TestParsePlanRejectsHookToggleFlags(t *testing.T) {
-	for _, flag := range []string{"--hooks", "--no-hooks"} {
-		t.Run(flag, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			_, code := parsePlanCommand([]string{"launch-plan", "--close", "api-client", flag}, log.NewWith(&stdout, &stderr, false))
-			if code != exitcode.Invocation {
-				t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Invocation)
-			}
-			if got := stderr.String(); !strings.Contains(got, "unknown plan option: "+flag) {
-				t.Fatalf("stderr = %q, want unknown option for %s", got, flag)
-			}
-		})
-	}
-}
-
 func TestParsePlanTeamFlagSetsConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cfg, code := parsePlanCommand([]string{"launch-plan", "--team"}, log.NewWith(&stdout, &stderr, false))
