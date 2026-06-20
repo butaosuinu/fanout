@@ -380,13 +380,19 @@ fanout check-update
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | ダッシュボード `prefix + D` tmux キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER` | watcher opt-in（`watcher`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER_TRIGGER_LABEL` | watcher trigger label（`watcherTriggerLabel`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER_RUNNING_LABEL` | watcher running label（`watcherRunningLabel`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER_INTERVAL_SECONDS` | watcher interval（`watcherIntervalSeconds`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER_AGENT` | watcher child agent（`watcherAgent`）の環境変数レイヤ。 |
+| `FANOUT_WATCHER_MAX_SESSIONS` | watcher session 上限（`watcherMaxSessions`）の環境変数レイヤ。 |
 | `FANOUT_NOTIFICATIONS` | TUI 遷移通知チャネル（`notifications`）の環境変数レイヤ。[設定]({{< relref "/docs/settings" >}})を参照。 |
 | `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
 | `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |
 | `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite パスを上書きする。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
 | `FANOUT_SKIP_PR_REVIEW` | PR レビューゲート hook の 1 回限りのバイパス: `gh pr create` の先頭に `FANOUT_SKIP_PR_REVIEW=1` を付ける。[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照。 |
 
-bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。不正な値は warn して無視されます。settings の解決順序では CLI flag と設定ファイルの間に位置します。
+bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。integer の watcher 変数は 10 進整数を受け付けます。不正な値は warn して無視されます。settings の解決順序では CLI flag と設定ファイルの間に位置します。
 
 ## Exit codes
 
