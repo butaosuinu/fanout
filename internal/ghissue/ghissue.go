@@ -224,11 +224,77 @@ func (r Runner) IssueDetail(num int) (Issue, error) {
 	if err := json.Unmarshal(out, &d); err != nil {
 		return Issue{}, fmt.Errorf("parse gh issue view %d: %w", num, err)
 	}
-	d.State = strings.ToUpper(d.State)
-	if d.Labels == nil {
-		d.Labels = []Label{}
-	}
+	normalizeIssue(&d)
 	return d, nil
+}
+
+// ListOpenIssuesWithLabel returns up to 100 OPEN issues that carry the
+// requested label. `gh issue list` lists issues, not pull requests; watcher
+// label scans rely on that command boundary so same-label PRs do not enter the
+// issue work queue.
+func (r Runner) ListOpenIssuesWithLabel(label string) ([]Issue, error) {
+	out, err := r.gh(
+		"issue", "list",
+		"--state", "open",
+		"--label", label,
+		"--limit", "100",
+		"--json", "number,title,state,body,labels",
+	)
+	if err != nil {
+		return nil, err
+	}
+	issues, err := parseIssueList(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse gh issue list --label %q: %w", label, err)
+	}
+	return issues, nil
+}
+
+// SwapIssueLabels moves one issue from remove to add with one `gh issue edit`
+// call so GitHub observes a single label mutation round.
+func (r Runner) SwapIssueLabels(num int, remove, add string) error {
+	_, err := r.gh("issue", "edit", strconv.Itoa(num), "--remove-label", remove, "--add-label", add)
+	return err
+}
+
+// EnsureLabel creates name when it is absent from the repository labels.
+func (r Runner) EnsureLabel(name string) error {
+	out, err := r.gh("label", "list", "--search", name, "--limit", "100", "--json", "name")
+	if err != nil {
+		return err
+	}
+	var labels []Label
+	if unmarshalErr := json.Unmarshal(out, &labels); unmarshalErr != nil {
+		return fmt.Errorf("parse gh label list --search %q: %w", name, unmarshalErr)
+	}
+	for _, label := range labels {
+		if strings.EqualFold(strings.TrimSpace(label.Name), strings.TrimSpace(name)) {
+			return nil
+		}
+	}
+	_, err = r.gh("label", "create", name)
+	return err
+}
+
+func parseIssueList(out []byte) ([]Issue, error) {
+	var issues []Issue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, err
+	}
+	if issues == nil {
+		return []Issue{}, nil
+	}
+	for i := range issues {
+		normalizeIssue(&issues[i])
+	}
+	return issues, nil
+}
+
+func normalizeIssue(issue *Issue) {
+	issue.State = strings.ToUpper(issue.State)
+	if issue.Labels == nil {
+		issue.Labels = []Label{}
+	}
 }
 
 // IssueState fetches just `.state` for blocker resolution.
