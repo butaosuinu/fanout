@@ -126,7 +126,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		return cmdPlanLifecycle(cfg, lg)
 	}
 
-	if missing := checkPlanDeps(cfg); len(missing) > 0 {
+	if missing := checkPlanDeps(); len(missing) > 0 {
 		lg.Err("missing dependencies:")
 		for _, d := range missing {
 			fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
@@ -619,7 +619,7 @@ func parsePlanAgentArg(cfg *planCommandConfig, raw string) error {
 	return nil
 }
 
-func checkPlanDeps(cfg planCommandConfig) []string {
+func checkPlanDeps() []string {
 	var missing []string
 	check := func(cmd, hint string) {
 		if _, err := exec.LookPath(cmd); err != nil {
@@ -628,9 +628,6 @@ func checkPlanDeps(cfg planCommandConfig) []string {
 	}
 	check("git", "git")
 	check("tmux", "tmux (brew install tmux)")
-	if cfg.UnblockedOnly {
-		check("gh", "gh (brew install gh)")
-	}
 	return missing
 }
 
@@ -658,7 +655,7 @@ func resolvePlanBaseBranch(cfg planCommandConfig, spec planspec.Spec, projectRoo
 		}
 		return spec.Plan.BaseBranch, nil
 	}
-	return worktree.ResolveDefaultBranch(projectRoot), nil
+	return worktree.ResolveDefaultBranchAllowMissingOrigin(projectRoot), nil
 }
 
 func validatePlanBaseBranch(label, value string) error {

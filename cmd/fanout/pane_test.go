@@ -151,6 +151,22 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
+func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "claude"}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
+
+	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	if !taskReq.Worktree.AllowMissingOrigin {
+		t.Fatal("task pane AllowMissingOrigin = false, want true")
+	}
+
+	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, manualPaneOptions{Title: "Manual diagnostics"})
+	if !manualReq.Worktree.AllowMissingOrigin {
+		t.Fatal("manual pane AllowMissingOrigin = false, want true")
+	}
+}
+
 func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
 	projectRoot := t.TempDir()
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}

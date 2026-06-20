@@ -117,8 +117,7 @@ Spec format:
   "plan": {
     "slug": "launch-plan",
     "title": "Launch plan",
-    "source": "docs/launch.md",
-    "base_branch": "main"
+    "source": "docs/launch.md"
   },
   "tasks": [
     {
@@ -151,7 +150,7 @@ generated branches use `fanout/<slug>` unless the task supplies `branch`.
 | `--skip` | `<task-id[,id...]>` | Exclude task IDs. Cannot be combined with `--only`. |
 | `--limit` | `<N>` | Create at most N task panes and print a task-ID rerun hint for the rest. |
 | `--unblocked-only` | — | Defer tasks whose `blocked_by` dependencies do not yet have a merged PR on their explicit or generated branch. |
-| `--base-branch` | `<branch>` | Override `plan.base_branch`; if neither is set, fanout resolves the repository default branch. |
+| `--base-branch` | `<branch>` | Override `plan.base_branch`; if neither is set, fanout resolves the repository default branch, or uses the current local branch/`HEAD` when no `origin` remote is configured. |
 | `--branch-prefix` | `<prefix>` | Prefix generated task branch names. |
 | `--no-refresh` | — | Skip base-branch refresh before creating task worktrees. |
 | `--team` | — | Opt the plan run into sibling coordination, exactly like issue mode — except peers are addressed by **task ID** (issue-less plan tasks have no `#N`). Seeds the plan's per-parent peer registry and appends the roster section to each task briefing. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. Not combinable with the plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`). Off by default. |

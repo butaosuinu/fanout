@@ -169,7 +169,7 @@ By default each child gets the worktree slug `slugify(title)-<issueNum>` and the
 - `--name <NUM>=<slug>[|<display>[|<branch>]]` — name one child's worktree slug stem, pane title, and branch directly. The three pipe-separated segments may each be empty, but at least one must be non-empty. fanout appends `-<NUM>` to slug stems that do not already carry it; the third segment overrides the generated branch name. Repeatable — one per target.
 - `--branch-prefix <prefix>` — change generated branch names for the whole run.
 - `--base-branch <branch>` — override the base branch the children branch from. Bare local branch names and `origin/<branch>` are both supported.
-- `--no-refresh` — skip the base-branch refresh. By default fanout refreshes the base with `git fetch --quiet --no-tags` plus a fast-forward update before branching.
+- `--no-refresh` — skip the base-branch refresh. By default fanout refreshes the base with `git fetch --quiet --no-tags` plus a fast-forward update before branching; local plan/manual panes automatically skip refresh and use the current local branch/`HEAD` when no `origin` remote exists.
 
 ```bash
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'

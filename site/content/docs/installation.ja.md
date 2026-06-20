@@ -9,7 +9,7 @@ yomi: install
 
 ## 前提ツール
 
-既定の fanout 作成フローでは、次のツールが `PATH` 上に必要です:
+既定の GitHub issue / Project fanout 作成フローでは、次のツールが `PATH` 上に必要です:
 
 | ツール | 用途 |
 |---|---|
@@ -18,6 +18,7 @@ yomi: install
 | `tmux` | 子ペイン |
 
 fanout は選択されたモードに必要な依存を起動時にチェックし、失敗時にはインストールのヒントを表示します。`--status` と `--cleanup` は `gh`/`git`、`--merge` と `--close` は `git` を使います。
+ローカルの `fanout plan` 実行と TUI から起動する手動 pane は、`git`/`tmux` と選択した agent があれば、`origin` remote や `gh` 認証が無い repository でも動作します。
 
 > **Project モード時のみ**: Project items を取得する GraphQL クエリのため、`gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project` で付与してください。issue モード(`fanout <N>`)では不要です。
 

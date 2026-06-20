@@ -110,8 +110,9 @@ context. See the
 
 ## Prerequisites
 
-- **git**, **tmux**, and the **GitHub CLI (`gh`)**, authenticated
-  (`gh auth status`).
+- **git** and **tmux**. GitHub issue / Project workflows, PR status, and
+  cleanup/status views also need the **GitHub CLI (`gh`)**, authenticated
+  (`gh auth status`); local `fanout plan` runs and manual TUI panes do not.
 - The agent CLI you launch children with — **`claude`** (Claude Code) and/or
   **`codex`** — on your `PATH` for live runs. The install only bundles fanout's
   skills/commands for them; it does not install the agents themselves.

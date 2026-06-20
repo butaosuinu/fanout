@@ -168,7 +168,7 @@ read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）
 - `--name <NUM>=<slug>[|<display>[|<branch>]]` — 特定の子の worktree slug stem、pane タイトル、branch を直接指定する。pipe 区切りの 3 セグメントはそれぞれ空でよいが、最低 1 つは非空であること。slug stem に issue 番号 suffix が無ければ fanout が `-<NUM>` を付け、3 つ目のセグメントは生成 branch 名を上書きする。繰り返し指定可 — 対象ごとに 1 つ。
 - `--branch-prefix <prefix>` — run 全体の生成 branch 名の prefix を変える。
 - `--base-branch <branch>` — 子が分岐する base branch を上書きする。bare な local branch 名と `origin/<branch>` の両方に対応。
-- `--no-refresh` — base branch の refresh をスキップする。既定では、分岐前に `git fetch --quiet --no-tags` と fast-forward 更新で base を fresh 化する。
+- `--no-refresh` — base branch の refresh をスキップする。既定では、分岐前に `git fetch --quiet --no-tags` と fast-forward 更新で base を fresh 化する。ローカル plan / 手動 pane では `origin` remote が無い場合、自動的に refresh をスキップして現在の local branch / `HEAD` を使う。
 
 ```bash
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'

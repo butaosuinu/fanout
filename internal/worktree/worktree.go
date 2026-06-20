@@ -25,21 +25,24 @@ var localExcludePatterns = []string{
 }
 
 type Options struct {
-	ProjectRoot string
-	Slug        string
-	BranchName  string
-	BaseBranch  string
-	NoRefresh   bool
+	ProjectRoot        string
+	Slug               string
+	BranchName         string
+	BaseBranch         string
+	NoRefresh          bool
+	AllowMissingOrigin bool
 }
 
 type Plan struct {
-	ProjectRoot    string
-	WorktreePath   string
-	BranchName     string
-	BaseBranch     string
-	Refresh        bool
-	RefreshDetails RefreshDetails
-	RefreshError   error
+	ProjectRoot          string
+	WorktreePath         string
+	BranchName           string
+	BaseBranch           string
+	AllowMissingOrigin   bool
+	Refresh              bool
+	RefreshDetails       RefreshDetails
+	RefreshError         error
+	RefreshSkippedReason string
 }
 
 type Result struct {
@@ -50,19 +53,32 @@ type Result struct {
 
 // BuildPlan resolves deterministic worktree paths and the base branch.
 func BuildPlan(opts Options) Plan {
-	base := opts.BaseBranch
-	if base == "" {
-		base = ResolveDefaultBranch(opts.ProjectRoot)
+	base, missingOrigin := resolveBaseBranch(opts)
+	refresh := !opts.NoRefresh
+	refreshSkippedReason := ""
+	var refreshDetails RefreshDetails
+	var refreshErr error
+	if missingOrigin {
+		if originQualifiedBase(base) {
+			refreshErr = fmt.Errorf("base branch %q requires origin remote, but origin is not configured", base)
+			refresh = true
+		} else {
+			refresh = false
+			refreshSkippedReason = "origin remote is not configured; using local base without refresh"
+		}
+	} else {
+		refreshDetails, refreshErr = RefreshDetailsFor(base)
 	}
-	refreshDetails, refreshErr := RefreshDetailsFor(base)
 	return Plan{
-		ProjectRoot:    opts.ProjectRoot,
-		WorktreePath:   filepath.Join(opts.ProjectRoot, ".fanout", "worktrees", opts.Slug),
-		BranchName:     opts.BranchName,
-		BaseBranch:     base,
-		Refresh:        !opts.NoRefresh,
-		RefreshDetails: refreshDetails,
-		RefreshError:   refreshErr,
+		ProjectRoot:          opts.ProjectRoot,
+		WorktreePath:         filepath.Join(opts.ProjectRoot, ".fanout", "worktrees", opts.Slug),
+		BranchName:           opts.BranchName,
+		BaseBranch:           base,
+		AllowMissingOrigin:   opts.AllowMissingOrigin,
+		Refresh:              refresh,
+		RefreshDetails:       refreshDetails,
+		RefreshError:         refreshErr,
+		RefreshSkippedReason: refreshSkippedReason,
 	}
 }
 
@@ -80,6 +96,9 @@ func Prepare(opts Options) (Result, error) {
 		return Result{Plan: plan, AlreadyExists: true}, nil
 	}
 	if plan.Refresh {
+		if plan.RefreshError != nil {
+			return Result{Plan: plan}, plan.RefreshError
+		}
 		if err := RefreshBase(plan.ProjectRoot, plan.BaseBranch); err != nil {
 			return Result{Plan: plan}, err
 		}
@@ -187,6 +206,19 @@ func missingExcludePatterns(body []byte) []string {
 
 // ResolveDefaultBranch follows fanout's default branch fallback order.
 func ResolveDefaultBranch(root string) string {
+	return resolveDefaultBranch(root, false)
+}
+
+// ResolveDefaultBranchAllowMissingOrigin returns the current local branch when
+// no origin remote exists, for local-only plan/manual pane runs.
+func ResolveDefaultBranchAllowMissingOrigin(root string) string {
+	return resolveDefaultBranch(root, true)
+}
+
+func resolveDefaultBranch(root string, allowMissingOrigin bool) string {
+	if allowMissingOrigin && !hasOriginRemote(root) {
+		return localBaseRef(root)
+	}
 	cmd := exec.Command("gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 	cmd.Dir = root
 	if out, err := cmd.Output(); err == nil {
@@ -202,6 +234,34 @@ func ResolveDefaultBranch(root string) string {
 		}
 	}
 	return "main"
+}
+
+func resolveBaseBranch(opts Options) (string, bool) {
+	missingOrigin := opts.AllowMissingOrigin && !hasOriginRemote(opts.ProjectRoot)
+	base := opts.BaseBranch
+	if base == "" {
+		if missingOrigin {
+			return localBaseRef(opts.ProjectRoot), true
+		}
+		return ResolveDefaultBranch(opts.ProjectRoot), false
+	}
+	return base, missingOrigin
+}
+
+func hasOriginRemote(root string) bool {
+	_, err := git(root, "remote", "get-url", "origin")
+	return err == nil
+}
+
+func localBaseRef(root string) string {
+	if branch, err := gitTrim(root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && branch != "" {
+		return branch
+	}
+	return "HEAD"
+}
+
+func originQualifiedBase(base string) bool {
+	return strings.HasPrefix(base, "origin/") || strings.HasPrefix(base, "refs/remotes/origin/")
 }
 
 type RefreshDetails struct {

@@ -9,7 +9,7 @@ yomi: install
 
 ## Prerequisites
 
-The default pane-creation flow needs these tools on your `PATH`:
+The default GitHub issue / Project pane-creation flow needs these tools on your `PATH`:
 
 | Tool | Used for |
 |---|---|
@@ -18,6 +18,7 @@ The default pane-creation flow needs these tools on your `PATH`:
 | `tmux` | child panes |
 
 fanout checks the dependencies needed for the selected mode at startup and prints install hints on failure. `--status` and `--cleanup` use `gh`/`git`; `--merge` and `--close` use `git`.
+Local `fanout plan` runs and manual panes launched from the TUI need `git`/`tmux` and the selected agent, but they can run in repositories without an `origin` remote or `gh` authentication.
 
 > **Project mode only:** the `gh` CLI must have the `read:project` scope so the GraphQL query that lists Project items can succeed. Add it with `gh auth refresh -s read:project`. Issue mode (`fanout <N>`) does not need this scope.
 

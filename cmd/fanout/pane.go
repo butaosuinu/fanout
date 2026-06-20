@@ -100,11 +100,12 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	}
 
 	prepared, err := worktree.Prepare(worktree.Options{
-		ProjectRoot: info.ProjectRoot,
-		Slug:        req.Slug,
-		BranchName:  req.BranchName,
-		BaseBranch:  req.Worktree.BaseBranch,
-		NoRefresh:   cfg.NoRefresh,
+		ProjectRoot:        info.ProjectRoot,
+		Slug:               req.Slug,
+		BranchName:         req.BranchName,
+		BaseBranch:         req.Worktree.BaseBranch,
+		NoRefresh:          cfg.NoRefresh,
+		AllowMissingOrigin: req.Worktree.AllowMissingOrigin,
 	})
 	if err != nil {
 		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), err)
@@ -289,11 +290,12 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 		BranchName:          branchName,
 		Agent:               agentName,
 		Worktree: worktree.BuildPlan(worktree.Options{
-			ProjectRoot: projectRoot,
-			Slug:        slug,
-			BranchName:  branchName,
-			BaseBranch:  cfg.BaseBranch,
-			NoRefresh:   cfg.NoRefresh,
+			ProjectRoot:        projectRoot,
+			Slug:               slug,
+			BranchName:         branchName,
+			BaseBranch:         cfg.BaseBranch,
+			NoRefresh:          cfg.NoRefresh,
+			AllowMissingOrigin: true,
 		}),
 	}
 	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
@@ -339,7 +341,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		Agent:        agentName,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
-		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh}),
+		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true}),
 	}
 }
 
@@ -499,6 +501,9 @@ func logPaneRequest(req paneRequest, lg *log.Logger) {
 	lg.Dim("  worktree -> %s", req.Worktree.WorktreePath)
 	lg.Dim("  branch -> %s", req.BranchName)
 	lg.Dim("  base -> %s", req.Worktree.BaseBranch)
+	if req.Worktree.RefreshSkippedReason != "" {
+		lg.Dim("  refresh -> skipped (%s)", req.Worktree.RefreshSkippedReason)
+	}
 	if req.DisplayNameOverride != "" {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
@@ -522,6 +527,8 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 			fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s branch -f %s %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.LocalBranch), shellQuote(details.OriginRef), c.Reset)
 			fmt.Fprintf(lg.Stdout(), "    %s# if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree%s\n", c.Dim, c.Reset)
 		}
+	} else if req.Worktree.RefreshSkippedReason != "" {
+		fmt.Fprintf(lg.Stdout(), "    %s# skip base refresh: %s%s\n", c.Dim, req.Worktree.RefreshSkippedReason, c.Reset)
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s worktree add -b %s %s %s%s\n",
 		c.Dim,
