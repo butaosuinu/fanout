@@ -38,6 +38,7 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 		"--agent-teams-hint", "--no-agent-teams-hint",
 		"--codex-plan-mode", "--no-codex-plan-mode",
 		"--no-pr-visualization", "--pr-visualization",
+		"--no-hooks", "--hooks",
 	)
 
 	assertBoolPtr(t, "AutoPullRequest", cfg.AutoPullRequest, true)
@@ -46,6 +47,7 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
 	assertBoolPtr(t, "CodexPlanMode", cfg.CodexPlanMode, false)
 	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
+	assertBoolPtr(t, "HooksEnabled", cfg.HooksEnabled, true)
 }
 
 func TestParseCodexPlanModeFlag(t *testing.T) {
@@ -205,6 +207,8 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 		{"--no-codex-plan-mode", "--status cannot be combined with --no-codex-plan-mode"},
 		{"--pr-visualization", "--status cannot be combined with --pr-visualization"},
 		{"--no-pr-visualization", "--status cannot be combined with --no-pr-visualization"},
+		{"--hooks", "--status cannot be combined with --hooks"},
+		{"--no-hooks", "--status cannot be combined with --no-hooks"},
 		{"--team", "--status cannot be combined with --team"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
@@ -218,6 +222,15 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseLifecycleAllowsHooksOverride(t *testing.T) {
+	cfg := parseOK(t, "100", "--close", "101", "--no-hooks")
+
+	if cfg.CloseNum != 101 {
+		t.Fatalf("CloseNum = %d, want 101", cfg.CloseNum)
+	}
+	assertBoolPtr(t, "HooksEnabled", cfg.HooksEnabled, false)
 }
 
 func TestParseStatusRejectsAgentOverride(t *testing.T) {

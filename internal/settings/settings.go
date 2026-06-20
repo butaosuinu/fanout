@@ -22,6 +22,7 @@ type Settings struct {
 	AgentTeamsHint     bool
 	PRVisualization    bool
 	DashboardKeybind   bool
+	HooksEnabled       bool
 	Notifications      string
 	NtfyURL            string
 	SlackWebhookURL    string
@@ -36,6 +37,7 @@ type CLIOverrides struct {
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
+	HooksEnabled       *bool
 }
 
 type overrides struct {
@@ -45,6 +47,7 @@ type overrides struct {
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
+	HooksEnabled       *bool
 	Notifications      *string
 	NtfyURL            *string
 	SlackWebhookURL    *string
@@ -53,8 +56,7 @@ type overrides struct {
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
 type WarnFunc func(format string, a ...any)
 
-// Defaults returns the built-in settings. All switches default to true for
-// backwards compatibility.
+// Defaults returns the built-in settings.
 func Defaults() Settings {
 	return Settings{
 		AutoPullRequest:    true,
@@ -63,6 +65,7 @@ func Defaults() Settings {
 		AgentTeamsHint:     true,
 		PRVisualization:    true,
 		DashboardKeybind:   true,
+		HooksEnabled:       false,
 		Notifications:      "bell",
 	}
 }
@@ -117,6 +120,9 @@ func apply(s *Settings, o overrides) {
 	if o.DashboardKeybind != nil {
 		s.DashboardKeybind = *o.DashboardKeybind
 	}
+	if o.HooksEnabled != nil {
+		s.HooksEnabled = *o.HooksEnabled
+	}
 	if o.Notifications != nil {
 		s.Notifications = *o.Notifications
 	}
@@ -136,6 +142,7 @@ func cliOverrides(cli CLIOverrides) overrides {
 		AgentTeamsHint:     cli.AgentTeamsHint,
 		PRVisualization:    cli.PRVisualization,
 		DashboardKeybind:   cli.DashboardKeybind,
+		HooksEnabled:       cli.HooksEnabled,
 	}
 }
 
@@ -151,6 +158,10 @@ func repoOverrides(path string, warnf WarnFunc) overrides {
 	}
 	if out.Notifications != nil {
 		out.Notifications = repoSafeNotifications(path, *out.Notifications, warnf)
+	}
+	if out.HooksEnabled != nil && *out.HooksEnabled {
+		warn(warnf, "settings %s: hooksEnabled=true is ignored in repo config; use user config, FANOUT_HOOKS, or --hooks", path)
+		out.HooksEnabled = nil
 	}
 	return out
 }
@@ -216,6 +227,7 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
 		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
+		"hooksEnabled":       func(v *bool) { out.HooksEnabled = v },
 	}
 	stringKeys := map[string]func(*string){
 		"notifications":   func(v *string) { out.Notifications = v },
@@ -274,6 +286,7 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
+	read("FANOUT_HOOKS", func(v *bool) { out.HooksEnabled = v })
 	readString := func(name string, set func(*string)) {
 		raw, ok := os.LookupEnv(name)
 		if !ok {

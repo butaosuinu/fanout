@@ -50,6 +50,7 @@ type Options struct {
 	StateInterval     time.Duration
 	GHInterval        time.Duration
 	DefaultAgent      string
+	HooksEnabled      bool
 	LaunchPane        LaunchFunc
 	FocusPane         func(string) error
 	PaneAlive         func(string) bool
@@ -1046,8 +1047,9 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 
 func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 	opts := lifecycle.Options{
-		ProjectRoot: m.opts.ProjectRoot,
-		StatePath:   state.Path(m.opts.ProjectRoot),
+		ProjectRoot:  m.opts.ProjectRoot,
+		StatePath:    state.Path(m.opts.ProjectRoot),
+		HooksEnabled: m.opts.HooksEnabled,
 	}
 	runner := m.opts.lifecycle
 	return func() tea.Msg {

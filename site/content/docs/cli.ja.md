@@ -23,21 +23,22 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--hooks|--no-hooks]
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
-       [--sleep <seconds>]
+       [--sleep <seconds>] [--hooks|--no-hooks]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
-fanout plan <spec.json|plan-slug> --merge <task-id>
-fanout plan <spec.json|plan-slug> --close <task-id>
-fanout plan <spec.json|plan-slug> --cleanup
+fanout plan <spec.json|plan-slug> --merge <task-id> [--hooks|--no-hooks]
+fanout plan <spec.json|plan-slug> --close <task-id> [--hooks|--no-hooks]
+fanout plan <spec.json|plan-slug> --cleanup [--hooks|--no-hooks]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> # fast-forward merge a recorded child branch
-fanout <parent-issue> --close <NUM> # remove a recorded child worktree/pane
-fanout <parent-issue> --cleanup     # remove merged/closed recorded children
+fanout <parent-issue> --merge <NUM> [--hooks|--no-hooks] # fast-forward merge
+fanout <parent-issue> --close <NUM> [--hooks|--no-hooks] # remove child worktree/pane
+fanout <parent-issue> --cleanup [--hooks|--no-hooks]     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging
 fanout --check-update               # Compare this binary with the latest release
@@ -216,6 +217,7 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 | `--codex-plan-mode` / `--no-codex-plan-mode` | — | `--agent codex` のとき、positional の `codex "<prompt>"` ではなく Codex app-server 経由で initial Plan turn を開始し、interactive Codex TUI を attach する。既定: off。詳細は[エージェント連携]({{< relref "/docs/agents" >}})。 |
 | `--pr-visualization` / `--no-pr-visualization` | — | auto-PR の子 briefing に構造化 PR 本文とゲート付き Mermaid の指示を含めるか外すか。既定: on。 |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `prefix + D` キーバインドを登録する（またはスキップする）。どのペインからでも読み取り専用 Web ダッシュボードを開けるようにする。既定: on。 |
+| `--hooks` / `--no-hooks` | — | pane 作成、close、cleanup、merge の lifecycle hook を実行するかスキップする。既定: off。 |
 
 ## 読み取り・ライフサイクル
 
@@ -235,7 +237,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`）と排他です。
+`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--hooks`、`--no-hooks`）と排他です。
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -250,6 +252,31 @@ fanout 123 --merge 4
 fanout 123 --close 4
 fanout 123 --cleanup
 ```
+
+Hook は event 名と同じ名前の実行可能ファイルです。fanout は
+`<project-root>/.fanout-hooks/`、`<project-root>/.fanout/hooks/`、
+`$XDG_CONFIG_HOME/fanout/hooks/` または `~/.config/fanout/hooks/` の順に探します。
+実行権限の無い一致は warn して無視します。
+
+対応 event:
+
+| Hook | 実行タイミング |
+|---|---|
+| `worktree_created` | Blocking。`git worktree add` 後、pane 作成前。 |
+| `before_pane_create` | Background。worktree 作成後、`tmux split-window` 前。 |
+| `before_worktree_remove` | Blocking。`--close` / `--cleanup` の `git worktree remove` 前。 |
+| `worktree_removed` | Background。記録済み worktree の削除後。 |
+| `before_pane_close` | Background。記録済み pane を閉じる前。 |
+| `pane_closed` | Background。pane close 試行後。 |
+| `pre_merge` | Blocking。`git merge --ff-only` 前。 |
+| `post_merge` | Background。fast-forward merge 成功後。 |
+
+Blocking hook が失敗すると操作を止め、hook の出力を表示します。Hook には
+`FANOUT_ROOT`、`FANOUT_PARENT`、`FANOUT_ISSUE_NUM`、`FANOUT_TASK_ID`、
+`FANOUT_SLUG`、`FANOUT_PROMPT`、`FANOUT_AGENT`、`FANOUT_TMUX_PANE_ID`、
+`FANOUT_WORKTREE_PATH`、`FANOUT_BRANCH`、`FANOUT_BASE_BRANCH`、
+`FANOUT_TARGET_BRANCH` を渡します。fanout に対応する値がある項目は、互換用の
+`DMUX_*` 変数にも入ります。
 
 ## サブコマンド
 
@@ -332,6 +359,7 @@ fanout check-update
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | ダッシュボード `prefix + D` tmux キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_HOOKS` | Lifecycle hook（`hooksEnabled`）の環境変数レイヤ。 |
 | `FANOUT_NOTIFICATIONS` | TUI 遷移通知チャネル（`notifications`）の環境変数レイヤ。[設定]({{< relref "/docs/settings" >}})を参照。 |
 | `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
 | `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |

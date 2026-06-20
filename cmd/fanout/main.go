@@ -132,6 +132,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
+		HooksEnabled:       cfg.HooksEnabled,
 	}, lg.Warn)
 
 	loaded, code := loadChildren(cfg, rt.gh, lg)

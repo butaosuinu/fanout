@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/displayname"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
 	"github.com/butaosuinu/fanout/internal/planspec"
@@ -50,6 +51,7 @@ type paneRequest struct {
 	AgentCommand        string
 	CodexPlanMode       bool
 	CodexPlanStatusPath string
+	HooksEnabled        bool
 	Worktree            worktree.Plan
 }
 
@@ -115,6 +117,14 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		lg.Err("%s: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", paneLogLabel(req), prepared.WorktreePath)
 		return false
 	}
+
+	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.HooksEnabled, lg); !result.OK() {
+		lg.Err("%s: %v", paneLogLabel(req), result.Err)
+		printPaneHookOutput(result, lg)
+		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
+		return false
+	}
+	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.HooksEnabled, lg)
 
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
@@ -241,6 +251,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		Slug:          slug,
 		Agent:         agentName,
 		CodexPlanMode: cfg.CodexPlanModeEnabled(),
+		HooksEnabled:  resolvedSettings.HooksEnabled,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -289,6 +300,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 		DisplayNameOverride: task.DisplayName,
 		BranchName:          branchName,
 		Agent:               agentName,
+		HooksEnabled:        resolvedSettings.HooksEnabled,
 		Worktree: worktree.BuildPlan(worktree.Options{
 			ProjectRoot:        projectRoot,
 			Slug:               slug,
@@ -339,6 +351,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		BranchName:   branchName,
 		Prompt:       prompt,
 		Agent:        agentName,
+		HooksEnabled: cfg.HooksEnabled != nil && *cfg.HooksEnabled,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
 		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true}),
@@ -556,7 +569,47 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
+	printPaneHookDryRun(req, req.Worktree.ProjectRoot, lg, c)
 	lg.Ok("%s: dry-run complete", paneLogLabel(req))
+}
+
+func printPaneHookDryRun(req paneRequest, projectRoot string, lg *log.Logger, c log.Palette) {
+	if !req.HooksEnabled {
+		return
+	}
+	for _, hook := range []hooks.Type{hooks.WorktreeCreated, hooks.BeforePaneCreate} {
+		path, ok := hooks.FindQuiet(projectRoot, hook)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(lg.Stdout(), "    %s# hook %s: %s%s\n", c.Dim, hook, shellQuote(path), c.Reset)
+	}
+}
+
+func paneHookContext(req paneRequest, projectRoot, worktreePath, paneID string) hooks.Context {
+	if worktreePath == "" {
+		worktreePath = req.Worktree.WorktreePath
+	}
+	return hooks.Context{
+		ProjectRoot:  projectRoot,
+		Parent:       req.ParentRef,
+		IssueNum:     req.Number,
+		TaskID:       req.TaskID,
+		Slug:         req.Slug,
+		Prompt:       req.Prompt,
+		Agent:        req.Agent,
+		TmuxPaneID:   paneID,
+		WorktreePath: worktreePath,
+		Branch:       req.BranchName,
+		BaseBranch:   req.Worktree.BaseBranch,
+		TargetBranch: req.Worktree.BaseBranch,
+	}
+}
+
+func printPaneHookOutput(result hooks.Result, lg *log.Logger) {
+	if s := strings.TrimSpace(string(result.Output)); s != "" {
+		fmt.Fprintln(lg.Stderr(), s)
+	}
 }
 
 func paneTitle(req paneRequest) string {

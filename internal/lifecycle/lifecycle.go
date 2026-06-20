@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
@@ -19,8 +20,9 @@ import (
 
 // Options points lifecycle operations at a concrete fanout state file.
 type Options struct {
-	ProjectRoot string
-	StatePath   string
+	ProjectRoot  string
+	StatePath    string
+	HooksEnabled bool
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -52,7 +54,7 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if !cleanupPaneRecords(opts.ProjectRoot, panes, lg) {
+	if !cleanupPaneRecords(opts, panes, lg) {
 		return exitcode.Env
 	}
 	if err := locked.RemovePane(parent, issueNum); err != nil {
@@ -80,7 +82,7 @@ func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if !cleanupPaneRecords(opts.ProjectRoot, panes, lg) {
+	if !cleanupPaneRecords(opts, panes, lg) {
 		return exitcode.Env
 	}
 	if err := locked.RemoveTaskPane(parent, taskID); err != nil {
@@ -109,6 +111,10 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--merge: #%d has no branchName recorded in %s", issueNum, opts.StatePath)
 		return exitcode.Invocation
 	}
+	targetBranch := currentBranch(opts.ProjectRoot)
+	if !runBlockingHook(hooks.PreMerge, opts, pane, targetBranch, lg) {
+		return exitcode.Env
+	}
 	out, err := gitLifecycle(opts.ProjectRoot, "merge", "--ff-only", pane.BranchName)
 	if err != nil {
 		lg.Err("--merge: git merge --ff-only %s failed for #%d; no conflict resolution was attempted", pane.BranchName, pane.IssueNum)
@@ -117,6 +123,7 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		}
 		return exitcode.Env
 	}
+	runBackgroundHook(hooks.PostMerge, opts, pane, targetBranch, lg)
 	lg.Ok("#%d: merged %s with --ff-only", pane.IssueNum, pane.BranchName)
 	return exitcode.OK
 }
@@ -136,6 +143,10 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--merge: task %s has no branchName recorded in %s", taskID, opts.StatePath)
 		return exitcode.Invocation
 	}
+	targetBranch := currentBranch(opts.ProjectRoot)
+	if !runBlockingHook(hooks.PreMerge, opts, pane, targetBranch, lg) {
+		return exitcode.Env
+	}
 	out, err := gitLifecycle(opts.ProjectRoot, "merge", "--ff-only", pane.BranchName)
 	if err != nil {
 		lg.Err("--merge: git merge --ff-only %s failed for task %s; no conflict resolution was attempted", pane.BranchName, taskID)
@@ -144,6 +155,7 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		}
 		return exitcode.Env
 	}
+	runBackgroundHook(hooks.PostMerge, opts, pane, targetBranch, lg)
 	lg.Ok("%s: merged %s with --ff-only", taskID, pane.BranchName)
 	return exitcode.OK
 }
@@ -189,7 +201,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			continue
 		}
 		issuePanes := panesForIssue(panes, issueNum)
-		if !cleanupPaneRecords(opts.ProjectRoot, issuePanes, lg) {
+		if !cleanupPaneRecords(opts, issuePanes, lg) {
 			failed++
 			continue
 		}
@@ -258,7 +270,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	failed := 0
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesForTask(panes, taskID)
-		if !cleanupPaneRecords(opts.ProjectRoot, taskPanes, lg) {
+		if !cleanupPaneRecords(opts, taskPanes, lg) {
 			failed++
 			continue
 		}
@@ -348,14 +360,24 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 	return children, exitcode.OK
 }
 
-func cleanupPaneRecords(projectRoot string, panes []state.Pane, lg Logger) bool {
+func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
 	ok := true
 	for _, pane := range panes {
-		if !removeWorktree(projectRoot, pane, lg) {
+		hadWorktree := recordedWorktreeExists(pane)
+		if hadWorktree && !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
 			ok = false
 			continue
 		}
+		if !removeWorktree(opts.ProjectRoot, pane, lg) {
+			ok = false
+			continue
+		}
+		if hadWorktree {
+			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+		}
+		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		killPaneBestEffort(pane, lg)
+		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
 	return ok
 }
@@ -406,6 +428,55 @@ func gitLifecycle(projectRoot string, args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"-C", projectRoot}, args...)
 	cmd := exec.Command("git", cmdArgs...)
 	return cmd.CombinedOutput()
+}
+
+func currentBranch(projectRoot string) string {
+	out, err := gitLifecycle(projectRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func runBlockingHook(hook hooks.Type, opts Options, pane state.Pane, targetBranch string, lg Logger) bool {
+	result := hooks.RunBlocking(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.HooksEnabled, lg)
+	if result.OK() {
+		return true
+	}
+	lg.Err("%s: %v", paneLabel(pane), result.Err)
+	printHookOutput(result, lg)
+	return false
+}
+
+func runBackgroundHook(hook hooks.Type, opts Options, pane state.Pane, targetBranch string, lg Logger) {
+	hooks.RunBackground(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.HooksEnabled, lg)
+}
+
+func hookContext(projectRoot string, pane state.Pane, targetBranch string) hooks.Context {
+	return hooks.Context{
+		ProjectRoot:  projectRoot,
+		Parent:       pane.Parent,
+		IssueNum:     pane.IssueNum,
+		TaskID:       pane.TaskID,
+		Slug:         pane.Slug,
+		Prompt:       pane.Prompt,
+		Agent:        pane.Agent,
+		TmuxPaneID:   pane.PaneID,
+		WorktreePath: pane.WorktreePath,
+		Branch:       pane.BranchName,
+		BaseBranch:   pane.BaseBranch,
+		TargetBranch: targetBranch,
+	}
+}
+
+func printHookOutput(result hooks.Result, lg Logger) {
+	if s := strings.TrimSpace(string(result.Output)); s != "" {
+		fmt.Fprintln(lg.Stderr(), s)
+	}
+}
+
+func recordedWorktreeExists(pane state.Pane) bool {
+	return strings.TrimSpace(pane.WorktreePath) != "" && dirExists(pane.WorktreePath)
 }
 
 func sortedUnique(nums []int) []int {

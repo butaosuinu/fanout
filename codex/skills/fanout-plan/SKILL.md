@@ -125,6 +125,7 @@ Forward only the flags supported by the current `fanout plan` implementation:
 - `--agent-teams-hint` / `--no-agent-teams-hint`
 - `--pr-visualization` / `--no-pr-visualization`
 - `--dashboard-keybind` / `--no-dashboard-keybind`
+- `--hooks` / `--no-hooks`
 
 Use `--dry-run` for preview. Strip wrapper-only `--go` before calling the CLI;
 it means "skip confirmation", not a fanout flag.
@@ -148,6 +149,9 @@ Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
 
 `--team` is supported in plan mode (see "Sibling coordination" below); it is
 not one of the forbidden issue/project-only flags.
+
+`--hooks` / `--no-hooks` run or skip lifecycle hooks for plan task creation,
+cleanup, and merge. Default: off.
 
 Use read/lifecycle flags only when the user explicitly asks for plan task
 status or cleanup, not during initial plan generation:

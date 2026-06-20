@@ -29,6 +29,7 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
   "briefingCodeReview": false,
   "agentTeamsHint": false,
   "prVisualization": true,
+  "hooksEnabled": true,
   "notifications": "tmux",
   "ntfyURL": "https://ntfy-user.example/topic"
 }`)
@@ -37,17 +38,20 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
   "prReviewGate": true,
   "agentTeamsHint": true,
   "prVisualization": false,
+  "hooksEnabled": false,
   "notifications": "bell"
 }`)
 	t.Setenv("FANOUT_AUTO_PR", "off")
 	t.Setenv("FANOUT_PR_REVIEW_GATE", "0")
 	t.Setenv("FANOUT_PR_VISUALIZATION", "yes")
+	t.Setenv("FANOUT_HOOKS", "off")
 	t.Setenv("FANOUT_NOTIFICATIONS", "bell,ntfy")
 	t.Setenv("FANOUT_SLACK_WEBHOOK_URL", "https://hooks.example/slack")
 
 	got := Resolve(repo, CLIOverrides{
 		AutoPullRequest: new(true),
 		PRVisualization: new(false),
+		HooksEnabled:    new(true),
 	}, t.Fatalf)
 
 	want := Settings{
@@ -57,6 +61,7 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 		AgentTeamsHint:     true,
 		PRVisualization:    false,
 		DashboardKeybind:   true,
+		HooksEnabled:       true,
 		Notifications:      "bell,ntfy",
 		NtfyURL:            "https://ntfy-user.example/topic",
 		SlackWebhookURL:    "https://hooks.example/slack",
@@ -69,9 +74,15 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 	if !got.PRVisualization {
 		t.Fatalf("PRVisualization = false, want true from CLI-free env override")
 	}
+	if got.HooksEnabled {
+		t.Fatalf("HooksEnabled = true, want false from CLI-free env override")
+	}
 
 	if err := os.Unsetenv("FANOUT_PR_VISUALIZATION"); err != nil {
 		t.Fatalf("Unsetenv(FANOUT_PR_VISUALIZATION): %v", err)
+	}
+	if err := os.Unsetenv("FANOUT_HOOKS"); err != nil {
+		t.Fatalf("Unsetenv(FANOUT_HOOKS): %v", err)
 	}
 	if err := os.Unsetenv("FANOUT_NOTIFICATIONS"); err != nil {
 		t.Fatalf("Unsetenv(FANOUT_NOTIFICATIONS): %v", err)
@@ -80,11 +91,41 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 	if got.PRVisualization {
 		t.Fatalf("PRVisualization = true, want false from repo override")
 	}
+	if got.HooksEnabled {
+		t.Fatalf("HooksEnabled = true, want false from repo override")
+	}
 	if got.Notifications != "bell" {
 		t.Fatalf("Notifications = %q, want repo override", got.Notifications)
 	}
 	if got.NtfyURL != "https://ntfy-user.example/topic" {
 		t.Fatalf("NtfyURL = %q, want user override", got.NtfyURL)
+	}
+}
+
+func TestRepoConfigCannotReenableHooksDisabledByUser(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{
+  "hooksEnabled": false
+}`)
+	writeConfig(t, RepoConfigPath(repo), `{
+  "hooksEnabled": true
+}`)
+
+	var warnings []string
+	got := Resolve(repo, CLIOverrides{}, func(format string, a ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, a...))
+	})
+
+	if got.HooksEnabled {
+		t.Fatal("HooksEnabled = true, want user opt-out preserved")
+	}
+	assertWarningContains(t, warnings, "hooksEnabled=true is ignored in repo config")
+
+	got = Resolve(repo, CLIOverrides{HooksEnabled: new(true)}, func(format string, a ...any) {})
+	if !got.HooksEnabled {
+		t.Fatal("HooksEnabled = false, want CLI to re-enable hooks")
 	}
 }
 
@@ -149,6 +190,7 @@ func TestResolveWarnsAndIgnoresInvalidInputs(t *testing.T) {
   "autoPullRequest": "nope",
   "prReviewGate": null,
   "prVisualization": 42,
+  "hooksEnabled": "bad",
   "notifications": false,
   "ntfyURL": null,
   "unknownKey": true
@@ -166,6 +208,7 @@ func TestResolveWarnsAndIgnoresInvalidInputs(t *testing.T) {
 	assertWarningContains(t, warnings, "autoPullRequest must be a boolean")
 	assertWarningContains(t, warnings, "prReviewGate must be a boolean")
 	assertWarningContains(t, warnings, "prVisualization must be a boolean")
+	assertWarningContains(t, warnings, "hooksEnabled must be a boolean")
 	assertWarningContains(t, warnings, "notifications must be a string")
 	assertWarningContains(t, warnings, "ntfyURL must be a string")
 	assertWarningContains(t, warnings, "unknown key \"unknownKey\"")
@@ -198,6 +241,7 @@ func clearEnv(t *testing.T) {
 		"FANOUT_AGENT_TEAMS_HINT",
 		"FANOUT_PR_VISUALIZATION",
 		"FANOUT_DASHBOARD_KEYBIND",
+		"FANOUT_HOOKS",
 		"FANOUT_NOTIFICATIONS",
 		"FANOUT_NTFY_URL",
 		"FANOUT_SLACK_WEBHOOK_URL",

@@ -112,6 +112,9 @@ Options:
                       Register (or skip) a tmux 'prefix + D' keybinding after a
                       live fan-out so the read-only web dashboard can be opened
                       from any pane. Default: on.
+  --hooks / --no-hooks
+                      Run or skip lifecycle hooks from .fanout-hooks/,
+                      .fanout/hooks/, and ~/.config/fanout/hooks/. Default: off.
   --team              Opt in to sibling-pane messaging for this run: add a
                       "Coordinating with your sibling panes" section (roster +
                       shared SQLite DB path) to every child briefing and seed

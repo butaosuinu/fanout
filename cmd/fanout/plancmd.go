@@ -68,6 +68,7 @@ type planCommandConfig struct {
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
+	HooksEnabled       *bool
 }
 
 type taskPlan struct {
@@ -148,6 +149,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
+		HooksEnabled:       cfg.HooksEnabled,
 	}, lg.Warn)
 
 	cfg.SpecPath = resolvePlanSpecPath(rt.info.ProjectRoot, cfg.SpecArg)
@@ -304,6 +306,8 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		"--no-pr-visualization":     func() { cfg.PRVisualization = new(false) },
 		"--dashboard-keybind":       func() { cfg.DashboardKeybind = new(true) },
 		"--no-dashboard-keybind":    func() { cfg.DashboardKeybind = new(false) },
+		"--hooks":                   func() { cfg.HooksEnabled = new(true) },
+		"--no-hooks":                func() { cfg.HooksEnabled = new(false) },
 	}
 
 	for i := 0; i < len(args); {
@@ -467,6 +471,8 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, h
 			return planStatusConflict(lg, planBoolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
 			return planStatusConflict(lg, planBoolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
+		case cfg.HooksEnabled != nil:
+			return planStatusConflict(lg, planBoolSettingFlag("--hooks", "--no-hooks", cfg.HooksEnabled))
 		case sleepRaw != "":
 			return planStatusConflict(lg, "--sleep")
 		}
@@ -576,6 +582,7 @@ func (cfg planCommandConfig) cliConfig() *cliflags.Config {
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
+		HooksEnabled:       cfg.HooksEnabled,
 	}
 }
 
@@ -748,15 +755,23 @@ func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	}
 	parentRef := planParentRef(spec.Plan.Slug)
 
-	switch {
-	case cfg.StatusMode:
+	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
+	}
+	resolved := settings.Resolve(rt.projectRoot, settings.CLIOverrides{HooksEnabled: cfg.HooksEnabled}, lg.Warn)
+	lifecycleOpts := lifecycle.Options{
+		ProjectRoot:  rt.projectRoot,
+		StatePath:    rt.statePath,
+		HooksEnabled: resolved.HooksEnabled,
+	}
+
+	switch {
 	case cfg.CloseTaskID != "":
-		return lifecycle.CloseTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.CloseTaskID, lg)
+		return lifecycle.CloseTask(lifecycleOpts, parentRef, cfg.CloseTaskID, lg)
 	case cfg.MergeTaskID != "":
-		return lifecycle.MergeTask(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, cfg.MergeTaskID, lg)
+		return lifecycle.MergeTask(lifecycleOpts, parentRef, cfg.MergeTaskID, lg)
 	case cfg.CleanupMode:
-		return lifecycle.CleanupPlan(lifecycle.Options{ProjectRoot: rt.projectRoot, StatePath: rt.statePath}, parentRef, lg)
+		return lifecycle.CleanupPlan(lifecycleOpts, parentRef, lg)
 	default:
 		return exitcode.Invocation
 	}
@@ -1454,6 +1469,7 @@ Options:
   --base-branch <branch>      Override spec plan.base_branch
   --branch-prefix <prefix>    Prefix generated branch names
   --no-refresh                Do not fetch/fast-forward the base branch
+  --hooks / --no-hooks        Run or skip lifecycle hooks (default: off)
   --session <tmux-session>    Target a tmux session instead of the invoking pane
   --sleep <seconds>           Delay between pane launches
   --debug                     Print debug diagnostics

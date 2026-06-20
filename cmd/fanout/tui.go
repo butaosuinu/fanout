@@ -63,7 +63,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		StateInterval: 2 * time.Second,
 		GHInterval:    20 * time.Second,
 		DefaultAgent:  defaultTUIAgent(),
-		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName),
+		HooksEnabled:  resolvedSettings.HooksEnabled,
+		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName, resolvedSettings.HooksEnabled),
 		Notifier:      notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
@@ -72,13 +73,13 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func newTUILaunchPaneFunc(projectRoot, session, commandName string) fanouttui.LaunchFunc {
+func newTUILaunchPaneFunc(projectRoot, session, commandName string, hooksEnabled bool) fanouttui.LaunchFunc {
 	return func(req fanouttui.LaunchRequest) error {
-		return launchManualPaneFromTUI(projectRoot, session, commandName, req)
+		return launchManualPaneFromTUI(projectRoot, session, commandName, hooksEnabled, req)
 	}
 }
 
-func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanouttui.LaunchRequest) error {
+func launchManualPaneFromTUI(projectRoot, session, commandName string, hooksEnabled bool, req fanouttui.LaunchRequest) error {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
 		return fmt.Errorf("prompt is required")
@@ -100,7 +101,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, req fanou
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := &cliflags.Config{Agent: agentName}
+	cfg := &cliflags.Config{Agent: agentName, HooksEnabled: &hooksEnabled}
 	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return bufferedLaunchError(stdout, stderr, "load fanout state")
