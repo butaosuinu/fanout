@@ -322,6 +322,32 @@ func TestSessionJumpKeysMoveBetweenParentGroups(t *testing.T) {
 	}
 }
 
+func TestSessionJumpScrollsTargetRowIntoView(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 90
+	m.height = 24
+	m.resize()
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "one"},
+		{Parent: "100", IssueNum: 102, Name: "two"},
+		{Parent: "100", IssueNum: 103, Name: "three"},
+		{Parent: "100", IssueNum: 104, Name: "four"},
+		{Parent: "100", IssueNum: 105, Name: "five"},
+		{Parent: "200", IssueNum: 201, Name: "target-session"},
+	}
+	m.refreshRows()
+
+	updated, _ := m.Update(keyRunes("]"))
+	m = updated.(model)
+
+	if got := m.table.Cursor(); got != 5 {
+		t.Fatalf("cursor after ] = %d, want target session row", got)
+	}
+	if view := m.table.View(); !strings.Contains(view, "#201") {
+		t.Fatalf("table view after session jump did not include target row:\n%s", view)
+	}
+}
+
 func TestSessionJumpUsesFilteredVisibleRows(t *testing.T) {
 	m := newModel(Options{})
 	m.allPanes = []paneView{
@@ -342,6 +368,21 @@ func TestSessionJumpUsesFilteredVisibleRows(t *testing.T) {
 	}
 	if got := buildSessionSummaries(m.panes, m.table.Cursor()); len(got) != 1 || got[0].Parent != "200" {
 		t.Fatalf("visible sessions = %#v, want only parent 200", got)
+	}
+}
+
+func TestNarrowShortLayoutCollapsesTopStrip(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 90
+	m.height = detailHeight + 5 + 4
+
+	layout := m.monitorLayout()
+
+	if layout.TopStripHeight != 0 {
+		t.Fatalf("TopStripHeight = %d, want collapsed strip", layout.TopStripHeight)
+	}
+	if layout.TableRows != 4 {
+		t.Fatalf("TableRows = %d, want minimum table height without extra strip", layout.TableRows)
 	}
 }
 
@@ -719,6 +760,26 @@ func TestViewRendersHUDCounts(t *testing.T) {
 	got := m.View()
 	if !strings.Contains(got, "total=3 merged=1 pending=2 blocked=1") {
 		t.Fatalf("View() = %q, want HUD counts", got)
+	}
+}
+
+func TestTopSessionTextKeepsActiveSessionVisible(t *testing.T) {
+	panes := []paneView{
+		{Parent: "100", IssueNum: 101},
+		{Parent: "200", IssueNum: 201},
+		{Parent: "300", IssueNum: 301},
+		{Parent: "400", IssueNum: 401},
+		{Parent: "500", IssueNum: 501},
+	}
+	sessions := buildSessionSummaries(panes, 4)
+
+	got := topSessionText(sessions, 100)
+
+	if !strings.Contains(got, "> 500") {
+		t.Fatalf("top session strip = %q, want active final session visible", got)
+	}
+	if len([]rune(got)) > 100 {
+		t.Fatalf("top session strip length = %d, want <= 100: %q", len([]rune(got)), got)
 	}
 }
 

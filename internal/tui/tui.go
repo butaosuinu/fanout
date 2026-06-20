@@ -152,10 +152,11 @@ type sessionSummary struct {
 }
 
 type monitorLayout struct {
-	Sidebar    bool
-	MainWidth  int
-	TableRows  int
-	PanelWidth int
+	Sidebar        bool
+	MainWidth      int
+	TableRows      int
+	PanelWidth     int
+	TopStripHeight int
 }
 
 type viewMode int
@@ -678,9 +679,21 @@ func (m model) jumpSession(delta int) (tea.Model, tea.Cmd) {
 	}
 	active := max(activeSessionIndex(sessions), 0)
 	next := (active + delta + len(sessions)) % len(sessions)
-	m.table.SetCursor(sessions[next].Start)
+	m.moveTableCursorTo(sessions[next].Start)
 	m.refreshDetail()
 	return m, m.peekSelectedCmd(false)
+}
+
+func (m *model) moveTableCursorTo(target int) {
+	current := m.table.Cursor()
+	switch {
+	case target > current:
+		m.table.MoveDown(target - current)
+	case target < current:
+		m.table.MoveUp(current - target)
+	default:
+		m.table.SetCursor(target)
+	}
 }
 
 func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -739,8 +752,8 @@ func (m model) View() string {
 	if layout.Sidebar {
 		sessions := m.sessionSidebar(layout.PanelWidth, lipgloss.Height(body))
 		body = lipgloss.JoinHorizontal(lipgloss.Top, sessions, " ", body)
-	} else {
-		body = lipgloss.JoinVertical(lipgloss.Left, m.sessionTopStrip(layout.PanelWidth), body)
+	} else if layout.TopStripHeight > 0 {
+		body = lipgloss.JoinVertical(lipgloss.Left, m.sessionTopStrip(layout.PanelWidth, layout.TopStripHeight), body)
 	}
 	base := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if m.mode == modeNewPane {
@@ -769,10 +782,10 @@ func (m *model) resize() {
 
 func (m model) monitorLayout() monitorLayout {
 	width := max(1, m.width)
-	rows := max(m.height-detailHeight-5, 4)
+	rowBudget := m.height - detailHeight - 5
 	layout := monitorLayout{
 		MainWidth:  width,
-		TableRows:  rows,
+		TableRows:  max(rowBudget, 4),
 		PanelWidth: width,
 	}
 	if width >= sessionSidebarAt {
@@ -781,7 +794,10 @@ func (m model) monitorLayout() monitorLayout {
 		layout.MainWidth = max(40, width-sessionSidebarWidth-1)
 		return layout
 	}
-	layout.TableRows = max(rows-sessionTopHeight, 4)
+	if rowBudget >= sessionTopHeight+4 {
+		layout.TopStripHeight = sessionTopHeight
+		layout.TableRows = max(rowBudget-sessionTopHeight, 4)
+	}
 	return layout
 }
 
@@ -824,14 +840,14 @@ func (m model) sessionSidebar(width, height int) string {
 	return renderSessionBlock(lines, width, height, true)
 }
 
-func (m model) sessionTopStrip(width int) string {
+func (m model) sessionTopStrip(width, height int) string {
 	sessions := buildSessionSummaries(m.panes, m.table.Cursor())
 	lines := []sessionRenderLine{
 		{Text: fmt.Sprintf("Sessions %d  [/] session", len(sessions)), Header: true},
 		{Text: topSessionText(sessions, width)},
 		{Text: strings.Repeat("-", max(width, 0))},
 	}
-	return renderSessionBlock(lines, width, sessionTopHeight, false)
+	return renderSessionBlock(lines, width, height, false)
 }
 
 func renderSessionBlock(lines []sessionRenderLine, width, height int, divider bool) string {
@@ -866,22 +882,21 @@ func topSessionText(sessions []sessionSummary, width int) string {
 	if len(sessions) == 0 {
 		return "(none)"
 	}
-	parts := make([]string, 0, len(sessions))
-	for _, row := range sessionRows(sessions, topSessionBudget(width)) {
+	for limit := len(sessions); limit >= 1; limit-- {
+		text := joinSessionRows(sessionRows(sessions, limit))
+		if len([]rune(text)) <= width {
+			return text
+		}
+	}
+	return joinSessionRows(sessionRows(sessions, 1))
+}
+
+func joinSessionRows(rows []sessionRenderLine) string {
+	parts := make([]string, 0, len(rows))
+	for _, row := range rows {
 		parts = append(parts, row.Text)
 	}
 	return strings.Join(parts, "  ")
-}
-
-func topSessionBudget(width int) int {
-	switch {
-	case width >= 100:
-		return 5
-	case width >= 72:
-		return 3
-	default:
-		return 1
-	}
 }
 
 func sessionRows(sessions []sessionSummary, limit int) []sessionRenderLine {
