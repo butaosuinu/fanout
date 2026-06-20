@@ -106,13 +106,18 @@ printf '%%43\n'
 	}
 }
 
-// installLivePanesShim installs a tmux shim that answers the three
+// installLivePanesShim installs a tmux shim that answers the four
 // `list-panes -a -F <format>` calls ListLivePanes makes, dispatching on the
 // format argument ($4): pathBody for livePanePathFormat, titleBody for
-// livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat. Each argv
-// is appended to the args file separated by "---" lines.
-func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string) string {
+// livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat, and an
+// optional shellKeyBody for livePaneShellKeyFormat. Each argv is appended to
+// the args file separated by "---" lines.
+func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string, shellKeyBody ...string) string {
 	t.Helper()
+	shellBody := `printf ''`
+	if len(shellKeyBody) > 0 {
+		shellBody = shellKeyBody[0]
+	}
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 case "$4" in
@@ -121,6 +126,9 @@ case "$4" in
 	;;
 *fanout_agent_state*)
 	` + agentStateBody + `
+	;;
+*fanout_shell_key*)
+	` + shellBody + `
 	;;
 *pane_title*)
 	` + titleBody + `
@@ -138,14 +146,15 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 	argsPath := installLivePanesShim(t,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n%%11\t/wt/eleven\n\n'`,
 		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`,
-		`printf '%%9\trunning\n%%10\tdone\n'`)
+		`printf '%%9\trunning\n%%10\tdone\n'`,
+		`printf '%%9\tshell-nine\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running"},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine"},
 		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done"},
 		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: ""},
 	}
@@ -157,6 +166,7 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_agent_state}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_shell_key}", "---",
 	})
 }
 
@@ -424,6 +434,19 @@ func TestSetPaneProjectRoot(t *testing.T) {
 
 	assertTmuxArgs(t, argsPath, []string{
 		"set-option", "-p", "-t", "%42", "@fanout_project_root", "/tmp/My Repo",
+	})
+}
+
+func TestSetPaneShellKey(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneShellKey("%42", "shell-token"); err != nil {
+		t.Fatalf("SetPaneShellKey() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_shell_key", "shell-token",
 	})
 }
 

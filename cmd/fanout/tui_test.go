@@ -130,6 +130,9 @@ func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
 	if got.Kind != state.PaneKindShell || got.Agent != "shell" || got.PaneID != "%77" {
 		t.Fatalf("shell state = %+v, want shell kind/agent/pane", got)
 	}
+	if !strings.HasPrefix(got.ShellKey, "shell-") {
+		t.Fatalf("shell key = %q, want generated shell key", got.ShellKey)
+	}
 	if got.Parent != manualPaneParentRef || got.IssueNum != -1 {
 		t.Fatalf("shell identity = %s/%d, want @manual/-1", got.Parent, got.IssueNum)
 	}

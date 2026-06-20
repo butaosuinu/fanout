@@ -153,6 +153,7 @@ func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
 		Kind:         state.PaneKindShell,
 		Slug:         "terminal-root-1",
 		PaneID:       "%2",
+		ShellKey:     "shell-root",
 		Agent:        "shell",
 		DisplayName:  "root terminal",
 		WorktreePath: "/repo",
@@ -163,7 +164,7 @@ func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
 		LoadState: storeOf(agentPane, shellPane),
 		LivePanes: livePanesWith(map[string]LivePaneInfo{
 			"%1": {Path: "/wt/%1"},
-			"%2": {Path: "/repo", Title: "root terminal"},
+			"%2": {Path: "/repo", Title: "root terminal", ShellKey: "shell-root"},
 		}),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
 			return "OPEN", nil, nil
@@ -187,6 +188,40 @@ func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
 	}
 	if shell.Kind != state.PaneKindShell || !shell.Alive || shell.Derived.Name != "root terminal" {
 		t.Fatalf("shell pane = %+v, want live shell row", shell)
+	}
+}
+
+func TestBuildShellPaneRequiresShellKeyForLiveness(t *testing.T) {
+	shellPane := state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		Slug:         "terminal-root-1",
+		PaneID:       "%2",
+		ShellKey:     "shell-root",
+		Agent:        "shell",
+		DisplayName:  "root terminal",
+		WorktreePath: "/repo",
+		CreatedAt:    "2026-06-04T00:00:00Z",
+	}
+	snap := Build("owner/name", "/repo", Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(shellPane),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%2": {Path: "/repo/subdir", Title: "reused id", ShellKey: "other-shell"},
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			return "OPEN", nil, nil
+		},
+		Waves: wavesNone,
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+		},
+	})
+
+	got := snap.Sessions[0].Panes[0]
+	if got.Alive || got.TmuxState != "stale" {
+		t.Fatalf("shell pane alive=%v tmux=%q, want stale when shell key differs", got.Alive, got.TmuxState)
 	}
 }
 

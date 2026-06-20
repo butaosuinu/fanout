@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -166,8 +167,16 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 	number := nextSyntheticPaneNumber(recorder.Store, manualPaneParentRef)
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
+	shellKey, err := newShellPaneKey()
+	if err != nil {
+		return err
+	}
 	paneID, err := tmuxrun.SplitPane(tuiLaunchTarget(session), targetPath)
 	if err != nil {
+		return err
+	}
+	if err := tmuxrun.SetPaneShellKey(paneID, shellKey); err != nil {
+		_ = tmuxrun.KillPane(paneID)
 		return err
 	}
 	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
@@ -181,6 +190,7 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 		Kind:         state.PaneKindShell,
 		Slug:         slug,
 		PaneID:       paneID,
+		ShellKey:     shellKey,
 		Agent:        state.PaneKindShell,
 		DisplayName:  title,
 		WorktreePath: targetPath,
@@ -190,6 +200,14 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 		return fmt.Errorf("write fanout state: %w", err)
 	}
 	return nil
+}
+
+func newShellPaneKey() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate terminal identity: %w", err)
+	}
+	return "shell-" + hex.EncodeToString(b[:]), nil
 }
 
 func shellPaneSlug(targetPath string, root bool, number int) string {

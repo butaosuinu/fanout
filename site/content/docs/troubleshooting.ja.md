@@ -102,7 +102,7 @@ state・ロック・pane 作成について「なぜそうなっているのか�
 
 ### `state.json` のスキーマ
 
-`.fanout/state.json` には `schemaVersion` と、pane ごとに 1 行 — `parent` / `issueNum` / 任意の `taskId` / `kind` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を持つ行 — を保存します。TUI の shell terminal は `kind: "shell"` を使うため、close は tmux pane と state 行だけを消します。`--status` と lifecycle コマンドはこの行を対象に動作します。
+`.fanout/state.json` には `schemaVersion` と、pane ごとに 1 行 — `parent` / `issueNum` / 任意の `taskId` / `kind` / `shellKey` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を持つ行 — を保存します。TUI の shell terminal は `kind: "shell"` を使うため、close は tmux pane と state 行だけを消します。`shellKey` は、その行と live tmux pane を結びつけます。`--status` と lifecycle コマンドはこの行を対象に動作します。
 
 ### atomic 書き込みとロック
 
