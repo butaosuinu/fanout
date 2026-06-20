@@ -290,6 +290,57 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 }
 
+func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
+	codexPlanMode := true
+	cfg := &cliflags.Config{
+		ParentRef:     "220",
+		Agent:         "codex",
+		BaseBranch:    "main",
+		BranchPrefix:  "watch/",
+		CodexPlanMode: &codexPlanMode,
+	}
+	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
+
+	got := newWatchPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig())
+
+	if got.ParentRef != watchPaneParentRef || got.Number != 223 || got.TaskID != "" {
+		t.Fatalf("watch identity = parent %q number %d task %q, want %q/223 with no task", got.ParentRef, got.Number, got.TaskID, watchPaneParentRef)
+	}
+	if got.Slug != "watch-runtime-helper-223" || got.BranchName != "watch/watch-runtime-helper-223" {
+		t.Fatalf("slug/branch = %q/%q", got.Slug, got.BranchName)
+	}
+	if got.Worktree.WorktreePath != "/repo/.fanout/worktrees/watch-runtime-helper-223" {
+		t.Fatalf("worktree path = %q", got.Worktree.WorktreePath)
+	}
+	if got.BriefingPath != "/tmp/fanout-repo-223.md" {
+		t.Fatalf("briefing path = %q", got.BriefingPath)
+	}
+	wantPrompt := "[fanout #223 of #@watch] watch-runtime-helper-223: Watch runtime helper. read /tmp/fanout-repo-223.md and begin."
+	if got.Prompt != wantPrompt {
+		t.Fatalf("prompt = %q, want %q", got.Prompt, wantPrompt)
+	}
+	if got.CodexPlanMode || got.CodexPlanStatusPath != "" {
+		t.Fatalf("codex plan mode = %t status %q, want disabled for watch work pane", got.CodexPlanMode, got.CodexPlanStatusPath)
+	}
+	for _, want := range []string{
+		"You are assigned GitHub issue #223",
+		`Open a pull request with "Closes #223"`,
+		"Closes #223",
+	} {
+		if !strings.Contains(got.BriefingBody, want) {
+			t.Fatalf("briefing missing %q:\n%s", want, got.BriefingBody)
+		}
+	}
+	if strings.Contains(got.BriefingBody, "<proposed_plan>") {
+		t.Fatalf("watch briefing used Codex Plan Mode body:\n%s", got.BriefingBody)
+	}
+
+	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC))
+	if pane.Parent != watchPaneParentRef || pane.IssueNum != 223 {
+		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, watchPaneParentRef)
+	}
+}
+
 func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:  "100",
