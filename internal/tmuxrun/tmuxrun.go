@@ -24,8 +24,10 @@ const (
 	// tmux 3.6a/macOS; Linux resolves the foreground pgrp leader the same way).
 	// Pane user options die with the pane, matching the liveness boundary.
 	agentStateOption         = "@fanout_agent_state"
+	shellKeyOption           = "@fanout_shell_key"
 	projectRootOption        = "@fanout_project_root"
 	livePaneAgentStateFormat = "#{pane_id}\t#{" + agentStateOption + "}"
+	livePaneShellKeyFormat   = "#{pane_id}\t#{" + shellKeyOption + "}"
 	paneAlternateFormat      = "#{alternate_on}"
 )
 
@@ -112,6 +114,9 @@ type LivePane struct {
 	// "done" を設定する。旧版 fanout やラッパー外で起動した pane では未設定で
 	// ""。listing が失敗したとき・join 済み id に対応する行が無いときも空。
 	AgentState string
+	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
+	// shell rows without trusting broad repo-root WorktreePath prefixes.
+	ShellKey string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
@@ -121,10 +126,11 @@ type LivePane struct {
 // row live when an unrelated new pane reuses the same %N. An error (e.g. tmux
 // absent) lets callers degrade.
 //
-// It issues three list-panes calls (livePanePathFormat, livePaneTitleFormat,
-// then livePaneAgentStateFormat) so each variable-content field is last on its
-// line and survives strings.Cut with embedded tabs intact — both pane paths
-// and pane titles may legally contain tabs.
+// It issues four list-panes calls (livePanePathFormat, livePaneTitleFormat,
+// livePaneAgentStateFormat, then livePaneShellKeyFormat) so each
+// variable-content field is last on its line and survives strings.Cut with
+// embedded tabs intact — both pane paths and pane titles may legally contain
+// tabs.
 //
 // Injection defense: pane_current_path is just a directory name, so a crafted
 // path containing a newline can forge whole extra lines in the path listing.
@@ -163,6 +169,10 @@ func ListLivePanes() ([]LivePane, error) {
 	if stateOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneAgentStateFormat).Output(); err == nil {
 		agentStates = parseLivePaneField(string(stateOut))
 	}
+	shellKeys := map[string]string{}
+	if shellKeyOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneShellKeyFormat).Output(); err == nil {
+		shellKeys = parseLivePaneField(string(shellKeyOut))
+	}
 	// A real tmux listing emits each pane id exactly once; a duplicate means a
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
@@ -184,6 +194,7 @@ func ListLivePanes() ([]LivePane, error) {
 		}
 		pane.Title = title
 		pane.AgentState = agentStates[pane.ID]
+		pane.ShellKey = shellKeys[pane.ID]
 		joined = append(joined, pane)
 	}
 	return joined, nil
@@ -298,6 +309,20 @@ func SetPaneProjectRoot(paneID, projectRoot string) error {
 	}
 	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, projectRootOption, projectRoot).Run(); err != nil {
 		return fmt.Errorf("tmux set-option %s: %w", projectRootOption, err)
+	}
+	return nil
+}
+
+// SetPaneShellKey records a shell-pane liveness token on a tmux pane.
+func SetPaneShellKey(paneID, shellKey string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if strings.TrimSpace(shellKey) == "" {
+		return fmt.Errorf("shell key is required")
+	}
+	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, shellKeyOption, shellKey).Run(); err != nil {
+		return fmt.Errorf("tmux set-option %s: %w", shellKeyOption, err)
 	}
 	return nil
 }

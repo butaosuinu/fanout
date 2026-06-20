@@ -31,7 +31,7 @@ func LivePanes() func() (map[string]LivePaneInfo, error) {
 		}
 		m := make(map[string]LivePaneInfo, len(panes))
 		for _, p := range panes {
-			m[p.ID] = LivePaneInfo{Path: p.CurrentPath, Title: p.Title, AgentState: p.AgentState}
+			m[p.ID] = LivePaneInfo{Path: p.CurrentPath, Title: p.Title, AgentState: p.AgentState, ShellKey: p.ShellKey}
 		}
 		return m, nil
 	}

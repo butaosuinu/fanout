@@ -43,7 +43,7 @@ type statusChild struct {
 // Close removes the recorded worktree(s), best-effort kills tmux pane(s), and
 // removes all state rows matching parent and issueNum.
 func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
-	locked, code := lockState("--close", opts, lg)
+	locked, code := lockStateOnly("--close", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -54,6 +54,12 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
+	if hasManagedWorktree(panes) {
+		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
+			lg.Err("--close: prepare local git exclude: %v", err)
+			return exitcode.Env
+		}
+	}
 	if !cleanupPaneRecords(opts, panes, lg) {
 		return exitcode.Env
 	}
@@ -61,17 +67,21 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("#%d: remove fanout state: %v", issueNum, err)
 		return exitcode.Env
 	}
-	if !pruneWorktrees(opts.ProjectRoot, lg) {
+	if hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
-	lg.Ok("#%d: closed fanout worktree and removed state", issueNum)
+	if hasManagedWorktree(panes) {
+		lg.Ok("#%d: closed fanout worktree and removed state", issueNum)
+	} else {
+		lg.Ok("#%d: closed shell terminal and removed state", issueNum)
+	}
 	return exitcode.OK
 }
 
 // CloseTask removes the recorded worktree(s), best-effort kills tmux pane(s),
 // and removes all task state rows matching parent and taskID.
 func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
-	locked, code := lockState("--close", opts, lg)
+	locked, code := lockStateOnly("--close", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -82,6 +92,12 @@ func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
+	if hasManagedWorktree(panes) {
+		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
+			lg.Err("--close: prepare local git exclude: %v", err)
+			return exitcode.Env
+		}
+	}
 	if !cleanupPaneRecords(opts, panes, lg) {
 		return exitcode.Env
 	}
@@ -89,10 +105,14 @@ func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("%s: remove fanout state: %v", taskID, err)
 		return exitcode.Env
 	}
-	if !pruneWorktrees(opts.ProjectRoot, lg) {
+	if hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
-	lg.Ok("%s: closed fanout worktree and removed state", taskID)
+	if hasManagedWorktree(panes) {
+		lg.Ok("%s: closed fanout worktree and removed state", taskID)
+	} else {
+		lg.Ok("%s: closed shell terminal and removed state", taskID)
+	}
 	return exitcode.OK
 }
 
@@ -169,7 +189,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	defer unlockState("--cleanup", locked, lg)
 
-	panes := locked.PanesForParent(parent)
+	panes := cleanupIssuePanes(locked.PanesForParent(parent))
 	if len(panes) == 0 {
 		lg.Info("--cleanup: no recorded panes for parent %s", parent)
 		return exitcode.OK
@@ -314,6 +334,14 @@ func lockState(mode string, opts Options, lg Logger) (*state.LockedStore, exitco
 		lg.Err("%s: prepare local git exclude: %v", mode, err)
 		return nil, exitcode.Env
 	}
+	return lockStateOnly(mode, opts, lg)
+}
+
+func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, exitcode.Code) {
+	if opts.ProjectRoot == "" || !dirExists(opts.ProjectRoot) {
+		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
+		return nil, exitcode.Invocation
+	}
 	locked, err := state.Lock(opts.StatePath)
 	if err != nil {
 		lg.Err("%s: %v", mode, err)
@@ -363,6 +391,12 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
 	ok := true
 	for _, pane := range panes {
+		if pane.IsShell() {
+			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+			killShellPaneBestEffort(pane, lg)
+			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+			continue
+		}
 		hadWorktree := recordedWorktreeExists(pane)
 		if hadWorktree && !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
 			ok = false
@@ -380,6 +414,26 @@ func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
 	return ok
+}
+
+func hasManagedWorktree(panes []state.Pane) bool {
+	for _, pane := range panes {
+		if !pane.IsShell() {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanupIssuePanes(panes []state.Pane) []state.Pane {
+	var out []state.Pane
+	for _, pane := range panes {
+		if pane.IsShell() || pane.IssueNum <= 0 {
+			continue
+		}
+		out = append(out, pane)
+	}
+	return out
 }
 
 func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {
@@ -410,6 +464,35 @@ func killPaneBestEffort(pane state.Pane, lg Logger) {
 	if err := tmuxrun.KillPane(pane.PaneID); err != nil {
 		lg.Warn("%s: tmux kill-pane %s failed; treating pane as stale: %v", paneLabel(pane), pane.PaneID, err)
 	}
+}
+
+func killShellPaneBestEffort(pane state.Pane, lg Logger) {
+	if strings.TrimSpace(pane.PaneID) == "" {
+		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
+		return
+	}
+	shellKey := strings.TrimSpace(pane.ShellKey)
+	if shellKey == "" {
+		lg.Warn("%s: no shellKey recorded; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane))
+		return
+	}
+	live, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		lg.Warn("%s: tmux list-panes failed; skipping shell pane kill: %v", paneLabel(pane), err)
+		return
+	}
+	for _, cur := range live {
+		if cur.ID != pane.PaneID {
+			continue
+		}
+		if cur.ShellKey != shellKey {
+			lg.Warn("%s: shell pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
+			return
+		}
+		killPaneBestEffort(pane, lg)
+		return
+	}
+	lg.Warn("%s: shell pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
 }
 
 func pruneWorktrees(projectRoot string, lg Logger) bool {

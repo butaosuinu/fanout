@@ -145,6 +145,86 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 	}
 }
 
+func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
+	agentPane := pane("100", 101, "%1")
+	shellPane := state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		Slug:         "terminal-root-1",
+		PaneID:       "%2",
+		ShellKey:     "shell-root",
+		Agent:        "shell",
+		DisplayName:  "root terminal",
+		WorktreePath: "/repo",
+		CreatedAt:    "2026-06-04T00:00:00Z",
+	}
+	snap := Build("owner/name", "/repo", Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(agentPane, shellPane),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%1": {Path: "/wt/%1"},
+			"%2": {Path: "/repo", Title: "root terminal", ShellKey: "shell-root"},
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			return "OPEN", nil, nil
+		},
+		Waves: wavesNone,
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+		},
+	})
+
+	if snap.Rollup.Total != 1 || snap.Rollup.Pending != 1 || snap.Rollup.Live != 2 {
+		t.Fatalf("repo rollup = %+v, want progress total 1 and live 2", snap.Rollup)
+	}
+	var shell PaneView
+	for _, session := range snap.Sessions {
+		for _, pane := range session.Panes {
+			if pane.Kind == state.PaneKindShell {
+				shell = pane
+			}
+		}
+	}
+	if shell.Kind != state.PaneKindShell || shell.ShellKey != "shell-root" || !shell.Alive || shell.Derived.Name != "root terminal" {
+		t.Fatalf("shell pane = %+v, want live shell row", shell)
+	}
+}
+
+func TestBuildShellPaneRequiresShellKeyForLiveness(t *testing.T) {
+	shellPane := state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		Slug:         "terminal-root-1",
+		PaneID:       "%2",
+		ShellKey:     "shell-root",
+		Agent:        "shell",
+		DisplayName:  "root terminal",
+		WorktreePath: "/repo",
+		CreatedAt:    "2026-06-04T00:00:00Z",
+	}
+	snap := Build("owner/name", "/repo", Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(shellPane),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%2": {Path: "/repo/subdir", Title: "reused id", ShellKey: "other-shell"},
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			return "OPEN", nil, nil
+		},
+		Waves: wavesNone,
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+		},
+	})
+
+	got := snap.Sessions[0].Panes[0]
+	if got.Alive || got.TmuxState != "stale" {
+		t.Fatalf("shell pane alive=%v tmux=%q, want stale when shell key differs", got.Alive, got.TmuxState)
+	}
+}
+
 func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

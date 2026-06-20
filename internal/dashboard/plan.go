@@ -46,7 +46,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a codex plan-mode pane", paneID))
 		return
 	}
-	if !s.beginPaneCapture(w, r, paneID, pv.WorktreePath) {
+	if !s.beginPaneCapture(w, r, pv) {
 		return
 	}
 	out, err := s.capturePlan(paneID, planCaptureLines)

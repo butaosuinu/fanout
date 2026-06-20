@@ -11,6 +11,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 
 ## Unreleased
 
+- **TUI shell terminals.** The persistent console can now open a plain shell in the selected row's worktree with `A`, or at the project root with `t`. Shell rows are recorded as manual entries for focus / peek, and close removes only the tmux pane and state row. See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Cleaner dry-run semantics.** Issue / Project and `fanout plan` dry-runs remain the safety previews for pane creation, but issue / Project dry-runs no longer write `/tmp` briefing files. The unused `fanout msg --dry-run` surface was removed.
 
 ## v0.6.0 — 2026-06-15

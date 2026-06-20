@@ -38,7 +38,7 @@ func newPlanServer(t *testing.T, token string, capture *fakeCapture) *Server {
 		// Request-time revalidation is exercised by
 		// TestPlanVerifyFailureIs404AndSkipsCapture; everywhere else a no-op
 		// keeps the fixture's liveness authoritative.
-		VerifyPane: func(string, string) error { return nil },
+		VerifyPane: func(sessionview.PaneView) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -183,11 +183,11 @@ func TestPlanVerifyFailureIs404AndSkipsCapture(t *testing.T) {
 		Token:       "",
 		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
 		CapturePlan: fake.capture,
-		VerifyPane: func(paneID, worktree string) error {
-			if worktree != "/wt/child" {
-				t.Errorf("VerifyPane worktree = %q, want recorded /wt/child", worktree)
+		VerifyPane: func(pv sessionview.PaneView) error {
+			if pv.WorktreePath != "/wt/child" {
+				t.Errorf("VerifyPane worktree = %q, want recorded /wt/child", pv.WorktreePath)
 			}
-			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
+			return fmt.Errorf("pane %s is no longer at its recorded worktree", pv.PaneID)
 		},
 	})
 	if err != nil {

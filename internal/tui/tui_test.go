@@ -997,6 +997,57 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 	}
 }
 
+func TestFocusSelectedShellPaneRevalidatesShellKey(t *testing.T) {
+	focusCalled := false
+	paneAliveCalled := false
+	var gotPaneID, gotShellKey string
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			focusCalled = true
+			return nil
+		},
+		PaneAlive: func(string) bool {
+			paneAliveCalled = true
+			return true
+		},
+		ShellPaneAlive: func(paneID, shellKey string) bool {
+			gotPaneID = paneID
+			gotShellKey = shellKey
+			return false
+		},
+	})
+	m.allPanes = []paneView{{
+		IssueNum:  -1,
+		Kind:      state.PaneKindShell,
+		Name:      "root terminal",
+		PaneID:    "%1",
+		ShellKey:  "shell-root",
+		TmuxState: "live",
+	}}
+	m.refreshRows()
+
+	cmd := m.focusSelectedCmd()
+	if cmd == nil {
+		t.Fatalf("focusSelectedCmd() returned nil, want shell identity check command")
+	}
+	msg := cmd()
+	next, _ := m.Update(msg)
+	m = next.(model)
+
+	if gotPaneID != "%1" || gotShellKey != "shell-root" {
+		t.Fatalf("ShellPaneAlive saw (%q, %q), want (%%1, shell-root)", gotPaneID, gotShellKey)
+	}
+	if focusCalled {
+		t.Fatal("FocusPane was called after shell key revalidation failed")
+	}
+	if paneAliveCalled {
+		t.Fatal("PaneAlive was called for a shell row; want shell-key revalidation")
+	}
+	if m.panes[0].TmuxState != "stale" {
+		t.Fatalf("TmuxState = %q, want stale", m.panes[0].TmuxState)
+	}
+}
+
 type fakeKeyboardProtocols struct {
 	enableCount  int
 	disableCount int
@@ -1048,6 +1099,68 @@ func TestPeekSelectedPaneLoadsOutputIntoDetail(t *testing.T) {
 	}
 }
 
+func TestPeekSelectedShellPaneRevalidatesShellKey(t *testing.T) {
+	captureCalled := false
+	paneAliveCalled := false
+	var gotPaneID, gotShellKey string
+	m := newModel(Options{
+		CapturePaneOutput: func(string, int) (string, error) {
+			captureCalled = true
+			return "wrong pane output", nil
+		},
+		PaneAlive: func(string) bool {
+			paneAliveCalled = true
+			return true
+		},
+		ShellPaneAlive: func(paneID, shellKey string) bool {
+			gotPaneID = paneID
+			gotShellKey = shellKey
+			return false
+		},
+	})
+	m.detail.Width = 80
+	m.detail.Height = 9
+	m.allPanes = []paneView{{
+		IssueNum:  -1,
+		Kind:      state.PaneKindShell,
+		Name:      "root terminal",
+		PaneID:    "%1",
+		ShellKey:  "shell-root",
+		TmuxState: "live",
+	}}
+	m.refreshRows()
+
+	cmd := m.peekSelectedCmd(true)
+	if cmd == nil {
+		t.Fatalf("peekSelectedCmd() returned nil, want shell identity check command")
+	}
+	msg, ok := cmd().(panePeekLoadedMsg)
+	if !ok {
+		t.Fatalf("peekSelectedCmd() msg = %T, want panePeekLoadedMsg", msg)
+	}
+	if !errors.Is(msg.err, errPaneNotAlive) {
+		t.Fatalf("peek err = %v, want errPaneNotAlive", msg.err)
+	}
+	next, _ := m.Update(msg)
+	m = next.(model)
+
+	if gotPaneID != "%1" || gotShellKey != "shell-root" {
+		t.Fatalf("ShellPaneAlive saw (%q, %q), want (%%1, shell-root)", gotPaneID, gotShellKey)
+	}
+	if captureCalled {
+		t.Fatal("CapturePaneOutput was called after shell key revalidation failed")
+	}
+	if paneAliveCalled {
+		t.Fatal("PaneAlive was called for a shell row; want shell-key revalidation")
+	}
+	if m.panes[0].TmuxState != "stale" {
+		t.Fatalf("TmuxState = %q, want stale", m.panes[0].TmuxState)
+	}
+	if !strings.Contains(m.peek.Err, errPaneNotAlive.Error()) {
+		t.Fatalf("peek err = %q, want errPaneNotAlive", m.peek.Err)
+	}
+}
+
 func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 	var capturedPane string
 	m := newModel(Options{
@@ -1073,6 +1186,33 @@ func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 	}
 	if capturedPane != "%2" {
 		t.Fatalf("captured pane = %q, want %%2", capturedPane)
+	}
+}
+
+func TestPaneViewsFromSnapshotCarriesShellKey(t *testing.T) {
+	snap := sessionview.Snapshot{
+		Sessions: []sessionview.Session{{
+			Parent: "@manual",
+			Panes: []sessionview.PaneView{{
+				Kind:         state.PaneKindShell,
+				DisplayName:  "root terminal",
+				Agent:        "shell",
+				PaneID:       "%9",
+				ShellKey:     "shell-root",
+				WorktreePath: "/repo",
+				TmuxState:    "live",
+				Derived:      sessionview.PaneDerived{Name: "root terminal"},
+			}},
+		}},
+	}
+
+	got := paneViewsFromSnapshot("/repo", snap)
+
+	if len(got) != 1 {
+		t.Fatalf("paneViewsFromSnapshot len = %d, want 1", len(got))
+	}
+	if got[0].ShellKey != "shell-root" {
+		t.Fatalf("ShellKey = %q, want shell-root", got[0].ShellKey)
 	}
 }
 
@@ -1383,6 +1523,32 @@ func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 	}
 }
 
+func TestLifecycleMergeAndCleanupSkipShellRows(t *testing.T) {
+	for _, key := range []string{"m", "x"} {
+		t.Run(key, func(t *testing.T) {
+			runner := &fakeLifecycleRunner{code: exitcode.OK}
+			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m.allPanes = []paneView{{Parent: "@manual", IssueNum: -1, Kind: state.PaneKindShell, Name: "root terminal"}}
+			m.refreshRows()
+
+			updated, cmd := m.Update(keyRunes(key))
+			m = updated.(model)
+			if cmd != nil {
+				t.Fatalf("Update(%q) returned command for shell row, want nil", key)
+			}
+			if m.pendingAction != nil {
+				t.Fatalf("pendingAction = %#v, want nil", m.pendingAction)
+			}
+			if !strings.Contains(m.actionMessage, "unavailable for shell terminal") {
+				t.Fatalf("actionMessage = %q, want shell unavailable", m.actionMessage)
+			}
+			if runner.mergeTaskID != "" || runner.cleanupParent != "" || runner.cleanupPlanParent != "" {
+				t.Fatalf("lifecycle runner was called: %+v", runner)
+			}
+		})
+	}
+}
+
 func TestLifecycleCleanupUsesSelectedParent(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
 	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
@@ -1579,6 +1745,88 @@ func TestNewPaneKeyOpensForm(t *testing.T) {
 	}
 	if got.newPane.agent != "codex" {
 		t.Fatalf("default agent = %q, want codex", got.newPane.agent)
+	}
+}
+
+func TestShellTerminalKeysLaunchRootAndSelectedWorktree(t *testing.T) {
+	var got []ShellLaunchRequest
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		LaunchShell: func(req ShellLaunchRequest) error {
+			got = append(got, req)
+			return nil
+		},
+	})
+	m.allPanes = []paneView{{
+		Parent:       "100",
+		IssueNum:     101,
+		Name:         "child",
+		WorktreePath: ".fanout/worktrees/child",
+		worktreeAbs:  "/repo/.fanout/worktrees/child",
+	}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("A"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("A returned nil command, want shell launch")
+	}
+	msg, ok := cmd().(launchShellMsg)
+	if !ok {
+		t.Fatalf("A command returned %T, want launchShellMsg", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("A launch error = %v", msg.err)
+	}
+	if len(got) != 1 || got[0].TargetPath != "/repo/.fanout/worktrees/child" || got[0].Root || got[0].Source != "#101" {
+		t.Fatalf("worktree shell request = %#v", got)
+	}
+
+	updated, cmd = m.Update(msg)
+	m = updated.(model)
+	if !strings.Contains(m.notice, "opened terminal for #101") {
+		t.Fatalf("notice after worktree shell = %q", m.notice)
+	}
+	if cmd == nil {
+		t.Fatal("shell success returned nil command, want state reload")
+	}
+
+	updated, cmd = m.Update(keyRunes("t"))
+	if cmd == nil {
+		t.Fatal("t returned nil command, want shell launch")
+	}
+	m = updated.(model)
+	msg, ok = cmd().(launchShellMsg)
+	if !ok {
+		t.Fatalf("t command returned %T, want launchShellMsg", msg)
+	}
+	if len(got) != 2 || got[1].TargetPath != "/repo" || !got[1].Root {
+		t.Fatalf("root shell request = %#v", got)
+	}
+}
+
+func TestShellTerminalKeyRequiresSelectedWorktree(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		LaunchShell: func(ShellLaunchRequest) error {
+			called = true
+			return nil
+		},
+	})
+	m.allPanes = []paneView{{Parent: "100", IssueNum: 101, Name: "queued"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("A"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("A returned command for row without worktree, want nil")
+	}
+	if called {
+		t.Fatal("LaunchShell was called for row without worktree")
+	}
+	if !strings.Contains(m.notice, "no worktree path") {
+		t.Fatalf("notice = %q, want no worktree path", m.notice)
 	}
 }
 

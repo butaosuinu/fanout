@@ -92,6 +92,13 @@ func TestIdentifyPane(t *testing.T) {
 		WorktreePath: "/repo/.fanout/worktrees/msg-cli-70",
 		Prompt:       "[fanout #70 of #68] msg-cli-70: t. read /tmp/y.md and begin.",
 	}
+	shellInWorktree := state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		PaneID:       "%shell",
+		WorktreePath: "/repo/.fanout/worktrees/msg-cli-70",
+	}
 
 	tests := []struct {
 		name       string
@@ -152,6 +159,22 @@ func TestIdentifyPane(t *testing.T) {
 			store:      state.Store{Panes: []state.Pane{recorded, inWorktree}},
 			wantIssue:  70,
 			wantParent: "68",
+		},
+		{
+			name:       "shell row does not shadow managed worktree identity",
+			paneID:     "%2",
+			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
+			store:      state.Store{Panes: []state.Pane{inWorktree, shellInWorktree}},
+			wantIssue:  70,
+			wantParent: "68",
+		},
+		{
+			name:       "shell pane id still identifies shell without managed worktree row",
+			paneID:     "%shell",
+			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
+			store:      state.Store{Panes: []state.Pane{shellInWorktree}},
+			wantIssue:  -1,
+			wantParent: "@manual",
 		},
 		{
 			name:       "worktree alone identifies without pane id",

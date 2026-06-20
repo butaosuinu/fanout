@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/sessionview"
+	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
@@ -49,11 +50,10 @@ func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
 
 // requireLivePane is the request-validation chain GET /api/peek and
 // GET /api/plan share: pane-id shape (400), snapshot liveness via livePaneView
-// (404), and recorded-worktree presence (404 — legacy/hand-written rows
-// without a worktree are alive on an id-only basis, which cannot survive tmux
-// pane-id reuse; without a path to verify against, capture could read an
-// unrelated pane, so refuse). On ok=false the JSON error response has already
-// been written.
+// (404), and a recorded identity usable for request-time verification. Agent
+// rows need a worktree path; shell rows need a shellKey because their
+// WorktreePath can be the broad project root. On ok=false the JSON error
+// response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
 	if !paneIDRe.MatchString(paneID) {
 		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
@@ -63,6 +63,13 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 	if !ok {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
 		return sessionview.PaneView{}, false
+	}
+	if pv.Kind == state.PaneKindShell {
+		if strings.TrimSpace(pv.ShellKey) == "" {
+			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded shell key to verify against", paneID))
+			return sessionview.PaneView{}, false
+		}
+		return pv, true
 	}
 	if pv.WorktreePath == "" {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has no recorded worktree to verify against", paneID))
@@ -75,20 +82,20 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 // GET /api/plan: response headers, the HEAD early-return (getOnly permits
 // HEAD; answer it before running tmux — mirrors handleStream's HEAD
 // early-return — so a probe never triggers a capture), and the request-time
-// tmux revalidation. The snapshot check in requireLivePane can be a
-// cheap-tick stale, which is enough for a tmux restart to hand the id to an
-// unrelated pane; verifying id+path right before reading shrinks that reuse
+// tmux revalidation. The snapshot check in requireLivePane can be a cheap-tick
+// stale, which is enough for a tmux restart to hand the id to an unrelated
+// pane; verifying the row identity right before reading shrinks that reuse
 // window to the instant before capture. A false return means the response is
-// complete (HEAD answered, or verify failed with 404) and the handler must
-// not capture.
-func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, paneID, worktree string) bool {
+// complete (HEAD answered, or verify failed with 404) and the handler must not
+// capture.
+func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, pv sessionview.PaneView) bool {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		return false
 	}
-	if err := s.verifyPane(paneID, worktree); err != nil {
+	if err := s.verifyPane(pv); err != nil {
 		peekError(w, http.StatusNotFound, err.Error())
 		return false
 	}
@@ -96,27 +103,42 @@ func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, paneID
 }
 
 // verifyLivePane is the default Options.VerifyPane: it re-resolves the pane id
-// against tmux at request time and requires the pane's current path to sit
-// at/under the recorded worktree (same rule as sessionview's paneAlive). The
-// snapshot's Alive flag can be up to one cheap-tick stale, which is enough for
-// a tmux restart to hand %N to an unrelated pane; this check shrinks that
-// reuse window from seconds to the instant before capture.
-func verifyLivePane(paneID, worktree string) error {
+// against tmux at request time. Agent panes require the pane's current path to
+// sit at/under the recorded worktree; shell panes require the recorded
+// @fanout_shell_key. The snapshot's Alive flag can be up to one cheap-tick
+// stale, which is enough for a tmux restart to hand %N to an unrelated pane;
+// this check shrinks that reuse window from seconds to the instant before
+// capture.
+func verifyLivePane(pv sessionview.PaneView) error {
 	panes, err := tmuxrun.ListLivePanes()
 	if err != nil {
 		return fmt.Errorf("tmux list-panes: %w", err)
 	}
+	return verifyPaneAgainstLive(pv, panes)
+}
+
+func verifyPaneAgainstLive(pv sessionview.PaneView, panes []tmuxrun.LivePane) error {
 	for _, pane := range panes {
-		if pane.ID != paneID {
+		if pane.ID != pv.PaneID {
 			continue
 		}
+		if pv.Kind == state.PaneKindShell {
+			if strings.TrimSpace(pv.ShellKey) == "" {
+				return fmt.Errorf("pane %s has no recorded shell key", pv.PaneID)
+			}
+			if pane.ShellKey != pv.ShellKey {
+				return fmt.Errorf("pane %s is no longer the recorded shell terminal", pv.PaneID)
+			}
+			return nil
+		}
+		worktree := pv.WorktreePath
 		if worktree == "" || (pane.CurrentPath != worktree &&
 			!strings.HasPrefix(pane.CurrentPath, worktree+string(filepath.Separator))) {
-			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
+			return fmt.Errorf("pane %s is no longer at its recorded worktree", pv.PaneID)
 		}
 		return nil
 	}
-	return fmt.Errorf("pane %s is gone", paneID)
+	return fmt.Errorf("pane %s is gone", pv.PaneID)
 }
 
 // peekResponse is the GET /api/peek wire contract the SPA consumes.
@@ -146,7 +168,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = min(max(n, 1), peekMaxLines)
 	}
-	if !s.beginPaneCapture(w, r, paneID, pv.WorktreePath) {
+	if !s.beginPaneCapture(w, r, pv) {
 		return
 	}
 	out, err := s.capturePane(paneID, lines)

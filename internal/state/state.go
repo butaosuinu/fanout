@@ -14,6 +14,8 @@ import (
 
 const SchemaVersion = 1
 
+const PaneKindShell = "shell"
+
 type Store struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	Panes         []Pane `json:"panes"`
@@ -28,13 +30,18 @@ type Pane struct {
 	Parent     string `json:"parent"`
 	IssueNum   int    `json:"issueNum"`
 	TaskID     string `json:"taskId,omitempty"`
+	Kind       string `json:"kind,omitempty"`
 	Slug       string `json:"slug"`
 	BranchName string `json:"branchName"`
 	// BaseBranch is the resolved base branch the worktree branched from
 	// (e.g. "main"). Legacy rows recorded before this field load as "".
 	BaseBranch string `json:"baseBranch,omitempty"`
 	PaneID     string `json:"paneId"`
-	Agent      string `json:"agent"`
+	// ShellKey is a tmux pane user-option token for TUI shell terminals. Shell
+	// panes can share WorktreePath with the repo root or an agent worktree, so
+	// liveness uses this marker instead of path-prefix matching.
+	ShellKey string `json:"shellKey,omitempty"`
+	Agent    string `json:"agent"`
 	// CodexPlanMode は --codex-plan-mode(app-server Plan turn + 対話 Codex TUI)
 	// で起動したペインかどうか。ダッシュボードの GET /api/plan が plan 抽出の
 	// 対象ペインを限定するために参照する。additive なフィールドなので
@@ -49,6 +56,10 @@ type Pane struct {
 	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
 	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
 	AgentStatus string `json:"agentStatus,omitempty"`
+}
+
+func (p Pane) IsShell() bool {
+	return p.Kind == PaneKindShell
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.

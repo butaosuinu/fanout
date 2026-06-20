@@ -65,6 +65,7 @@ export function blockersAllClosed(p: PaneView): boolean {
 }
 
 export function paneLabel(p: PaneView): string {
+  if (p.kind === "shell") return "shell";
   return p.taskId || `#${p.issueNum}`;
 }
 

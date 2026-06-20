@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/sessionview"
+	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 // errPaneGone simulates capture-pane failing on a stale pane / dead tmux server.
@@ -90,7 +92,7 @@ func newPeekServer(t *testing.T, token string, capture *fakeCapture) *Server {
 		CapturePane: capture.capture,
 		// Request-time revalidation is exercised by TestPeekVerifyFailureIs404;
 		// everywhere else a no-op keeps the fixture's liveness authoritative.
-		VerifyPane: func(string, string) error { return nil },
+		VerifyPane: func(sessionview.PaneView) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -329,11 +331,11 @@ func TestPeekVerifyFailureIs404AndSkipsCapture(t *testing.T) {
 		Token:       "",
 		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
 		CapturePane: fake.capture,
-		VerifyPane: func(paneID, worktree string) error {
-			if worktree != "/wt/child" {
-				t.Errorf("VerifyPane worktree = %q, want recorded /wt/child", worktree)
+		VerifyPane: func(pv sessionview.PaneView) error {
+			if pv.WorktreePath != "/wt/child" {
+				t.Errorf("VerifyPane worktree = %q, want recorded /wt/child", pv.WorktreePath)
 			}
-			return fmt.Errorf("pane %s is no longer at its recorded worktree", paneID)
+			return fmt.Errorf("pane %s is no longer at its recorded worktree", pv.PaneID)
 		},
 	})
 	if err != nil {
@@ -367,5 +369,66 @@ func TestPeekRowWithoutWorktreeIs404(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture calls = %d, want 0 (no worktree to verify against)", calls)
+	}
+}
+
+func TestPeekShellPanePassesShellIdentityToVerifier(t *testing.T) {
+	t.Parallel()
+	fake := &fakeCapture{out: "shell output"}
+	seen := make(chan sessionview.PaneView, 1)
+	srv, err := New(Options{
+		ProjectRoot: t.TempDir(),
+		Port:        0,
+		Token:       "",
+		ResolveGH:   func() (string, GHProvider, error) { return "o/n", fakeGH{}, nil },
+		CapturePane: fake.capture,
+		VerifyPane: func(pv sessionview.PaneView) error {
+			seen <- pv
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	snap := peekSnapshot(true)
+	pv := &snap.Sessions[0].Panes[0]
+	pv.Kind = state.PaneKindShell
+	pv.Agent = "shell"
+	pv.ShellKey = "shell-root"
+	pv.WorktreePath = ""
+	publishSnapshot(srv, snap)
+	go func() { _ = srv.httpServer.Serve(srv.listener) }()
+	t.Cleanup(func() { _ = srv.httpServer.Close() })
+	waitReady(t, srv.base)
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", status, body)
+	}
+	got := <-seen
+	if got.Kind != state.PaneKindShell || got.ShellKey != "shell-root" || got.WorktreePath != "" {
+		t.Fatalf("VerifyPane saw %+v, want shell identity without requiring worktree", got)
+	}
+}
+
+func TestVerifyPaneAgainstLiveUsesShellKeyForShellRows(t *testing.T) {
+	shell := sessionview.PaneView{
+		Kind:         state.PaneKindShell,
+		PaneID:       "%5",
+		ShellKey:     "shell-root",
+		WorktreePath: "/repo",
+	}
+	live := []tmuxrun.LivePane{{
+		ID:          "%5",
+		CurrentPath: "/elsewhere",
+		ShellKey:    "shell-root",
+	}}
+	if err := verifyPaneAgainstLive(shell, live); err != nil {
+		t.Fatalf("matching shell key with changed cwd failed: %v", err)
+	}
+
+	shell.ShellKey = "shell-stale"
+	if err := verifyPaneAgainstLive(shell, live); err == nil || !strings.Contains(err.Error(), "recorded shell terminal") {
+		t.Fatalf("mismatched shell key err = %v, want recorded shell terminal error", err)
 	}
 }

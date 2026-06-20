@@ -26,6 +26,8 @@ type LivePaneInfo struct {
 	// "done")。fanout の起動ラッパーが agent 実行前後に設定する。未設定
 	// (旧版 fanout やラッパー外で起動した pane)や取得失敗時は ""。
 	AgentState string
+	// ShellKey is @fanout_shell_key for TUI shell panes.
+	ShellKey string
 }
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
@@ -222,16 +224,18 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		for _, p := range panes {
 			issueState, prs := fetchPanePRs(p)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
-			alive := paneAlive(live, p.PaneID, p.WorktreePath)
+			alive := paneAlive(live, p)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:     p.IssueNum,
 				TaskID:       p.TaskID,
+				Kind:         p.Kind,
 				Slug:         p.Slug,
 				DisplayName:  p.DisplayName,
 				Agent:        p.Agent,
 				BranchName:   p.BranchName,
 				PaneID:       p.PaneID,
+				ShellKey:     p.ShellKey,
 				WorktreePath: p.WorktreePath,
 				CreatedAt:    p.CreatedAt,
 				Alive:        alive,
@@ -317,7 +321,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			if countsInRollup(pv) {
+			if countsInRollup(pv) || pv.Kind == state.PaneKindShell {
 				accumulate(&snap.Rollup, pv)
 			}
 		}
@@ -467,19 +471,22 @@ func SyntheticTmuxState(issueState string, blocked bool) string {
 	}
 }
 
-// paneAlive reports whether a recorded pane is live: a tmux pane with its id
-// must exist AND be sitting at/under the recorded worktree. Requiring the path
-// match defends against tmux reusing a %N id for an unrelated pane after a
-// server restart. A row without a recorded worktree (legacy) falls back to an
-// id-only match.
-func paneAlive(live map[string]LivePaneInfo, paneID, worktree string) bool {
-	if paneID == "" {
+// paneAlive reports whether a recorded pane is live. Agent panes match on both
+// pane id and cwd at/under their recorded worktree. Shell panes match on pane
+// id plus @fanout_shell_key instead: root terminals record the repo root as
+// WorktreePath, which is too broad to protect against tmux pane id reuse.
+func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
+	if pane.PaneID == "" {
 		return false
 	}
-	cur, ok := live[paneID]
+	cur, ok := live[pane.PaneID]
 	if !ok {
 		return false
 	}
+	if pane.IsShell() {
+		return pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+	}
+	worktree := pane.WorktreePath
 	if strings.TrimSpace(worktree) == "" {
 		return true
 	}
@@ -557,6 +564,9 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 // に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
 // 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
 func countsInRollup(pv PaneView) bool {
+	if pv.Kind == state.PaneKindShell {
+		return false
+	}
 	if !pv.NotStarted {
 		return true
 	}
@@ -571,6 +581,12 @@ func countsInRollup(pv PaneView) bool {
 }
 
 func accumulate(r *Rollup, pv PaneView) {
+	if pv.Kind == state.PaneKindShell {
+		if pv.Alive {
+			r.Live++
+		}
+		return
+	}
 	r.Total++
 	if pv.HasMergedPR {
 		r.Merged++
@@ -639,6 +655,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	filterText := strings.ToLower(strings.Join([]string{
 		parent,
 		pv.TaskID,
+		pv.Kind,
 		"#" + strconv.Itoa(pv.IssueNum),
 		strconv.Itoa(pv.IssueNum),
 		name,

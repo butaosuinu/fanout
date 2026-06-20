@@ -23,11 +23,13 @@ export interface Session {
 export interface PaneView {
   issueNum: number;
   taskId?: string;
+  kind?: string;
   slug: string;
   displayName: string;
   agent: string;
   branchName: string;
   paneId: string;
+  shellKey?: string;
   worktreePath: string;
   createdAt: string;
   alive: boolean;
