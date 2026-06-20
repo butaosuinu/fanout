@@ -38,6 +38,9 @@ const (
 	detailHeight         = 13
 	peekLines            = 80
 	defaultLaunchAgent   = "claude"
+	sessionSidebarAt     = 120
+	sessionSidebarWidth  = 26
+	sessionTopHeight     = 3
 )
 
 // Options configures the TUI monitor.
@@ -135,6 +138,25 @@ type hudSummary struct {
 	Merged  int
 	Pending int
 	Blocked int
+}
+
+type sessionSummary struct {
+	Parent  string
+	Start   int
+	Total   int
+	Merged  int
+	Pending int
+	Blocked int
+	Live    int
+	Active  bool
+}
+
+type monitorLayout struct {
+	Sidebar        bool
+	MainWidth      int
+	TableRows      int
+	PanelWidth     int
+	TopStripHeight int
 }
 
 type viewMode int
@@ -503,6 +525,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshRows()
 			}
 			return m, nil
+		case "[":
+			return m.jumpSession(-1)
+		case "]":
+			return m.jumpSession(1)
 		case "n":
 			m.openNewPaneForm()
 			return m, nil
@@ -645,6 +671,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) jumpSession(delta int) (tea.Model, tea.Cmd) {
+	sessions := buildSessionSummaries(m.panes, m.table.Cursor())
+	if len(sessions) == 0 {
+		m.notice = "no sessions to jump to"
+		return m, nil
+	}
+	active := max(activeSessionIndex(sessions), 0)
+	next := (active + delta + len(sessions)) % len(sessions)
+	m.moveTableCursorTo(sessions[next].Start)
+	m.refreshDetail()
+	return m, m.peekSelectedCmd(false)
+}
+
+func (m *model) moveTableCursorTo(target int) {
+	current := m.table.Cursor()
+	switch {
+	case target > current:
+		m.table.MoveDown(target - current)
+	case target < current:
+		m.table.MoveUp(current - target)
+	default:
+		m.table.SetCursor(target)
+	}
+}
+
 func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -696,15 +747,15 @@ func (m model) View() string {
 		footer += "\n" + warnStyle.Render("notify: "+m.notifyErr)
 	}
 
-	detail := m.detail
-	detail.SetContent(m.detailContent())
-	base := lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		m.table.View(),
-		panelStyle.Width(max(0, m.width)).Render(detail.View()),
-		footer,
-	)
+	layout := m.monitorLayout()
+	body := m.monitorBody(layout)
+	if layout.Sidebar {
+		sessions := m.sessionSidebar(layout.PanelWidth, lipgloss.Height(body))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, sessions, " ", body)
+	} else if layout.TopStripHeight > 0 {
+		body = lipgloss.JoinVertical(lipgloss.Left, m.sessionTopStrip(layout.PanelWidth, layout.TopStripHeight), body)
+	}
+	base := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 	if m.mode == modeNewPane {
 		return overlayCentered(base, m.newPaneView(), m.width, m.height)
 	}
@@ -720,13 +771,250 @@ func (m *model) resize() {
 		m.newPane.prompt.SetWidth(inputWidth)
 		m.newPane.slug.Width = inputWidth
 	}
-	tableHeight := max(m.height-detailHeight-5, 4)
-	m.table.SetWidth(m.width)
-	m.table.SetHeight(tableHeight)
-	m.table.SetColumns(columnsForWidth(m.width))
-	m.detail.Width = m.width
+	layout := m.monitorLayout()
+	m.table.SetWidth(layout.MainWidth)
+	m.table.SetHeight(layout.TableRows)
+	m.table.SetColumns(columnsForWidth(layout.MainWidth))
+	m.detail.Width = layout.MainWidth
 	m.detail.Height = detailHeight
 	m.refreshRows()
+}
+
+func (m model) monitorLayout() monitorLayout {
+	width := max(1, m.width)
+	rowBudget := m.height - detailHeight - 5
+	layout := monitorLayout{
+		MainWidth:  width,
+		TableRows:  max(rowBudget, 4),
+		PanelWidth: width,
+	}
+	if width >= sessionSidebarAt {
+		layout.Sidebar = true
+		layout.PanelWidth = sessionSidebarWidth
+		layout.MainWidth = max(40, width-sessionSidebarWidth-1)
+		return layout
+	}
+	if rowBudget >= sessionTopHeight+4 {
+		layout.TopStripHeight = sessionTopHeight
+		layout.TableRows = max(rowBudget-sessionTopHeight, 4)
+	}
+	return layout
+}
+
+func (m model) monitorBody(layout monitorLayout) string {
+	tableView := m.table
+	tableView.SetWidth(layout.MainWidth)
+	tableView.SetHeight(layout.TableRows)
+	tableView.SetColumns(columnsForWidth(layout.MainWidth))
+
+	detail := m.detail
+	detail.Width = layout.MainWidth
+	detail.Height = detailHeight
+	detail.SetContent(m.detailContent())
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		tableView.View(),
+		panelStyle.Width(max(0, layout.MainWidth)).Render(detail.View()),
+	)
+}
+
+type sessionRenderLine struct {
+	Text   string
+	Active bool
+	Header bool
+}
+
+func (m model) sessionSidebar(width, height int) string {
+	sessions := buildSessionSummaries(m.panes, m.table.Cursor())
+	lines := []sessionRenderLine{{Text: fmt.Sprintf("Sessions %d", len(sessions)), Header: true}}
+	rowBudget := max(height-2, 0)
+	if len(sessions) == 0 {
+		lines = append(lines, sessionRenderLine{Text: "(none)"})
+	} else {
+		lines = append(lines, sessionRows(sessions, rowBudget)...)
+	}
+	if len(lines) < height {
+		lines = append(lines, sessionRenderLine{Text: "[/] session"})
+	}
+	return renderSessionBlock(lines, width, height, true)
+}
+
+func (m model) sessionTopStrip(width, height int) string {
+	sessions := buildSessionSummaries(m.panes, m.table.Cursor())
+	lines := []sessionRenderLine{
+		{Text: fmt.Sprintf("Sessions %d  [/] session", len(sessions)), Header: true},
+		{Text: topSessionText(sessions, width)},
+		{Text: strings.Repeat("-", max(width, 0))},
+	}
+	return renderSessionBlock(lines, width, height, false)
+}
+
+func renderSessionBlock(lines []sessionRenderLine, width, height int, divider bool) string {
+	width = max(width, 1)
+	height = max(height, 1)
+	contentWidth := width
+	if divider {
+		contentWidth = max(width-1, 1)
+	}
+	rendered := make([]string, 0, height)
+	for i := range height {
+		line := sessionRenderLine{}
+		if i < len(lines) {
+			line = lines[i]
+		}
+		text := fixedLine(line.Text, contentWidth)
+		if divider {
+			text += "|"
+		}
+		switch {
+		case line.Active:
+			text = titleStyle.Render(text)
+		case line.Header:
+			text = dimStyle.Render(text)
+		}
+		rendered = append(rendered, text)
+	}
+	return strings.Join(rendered, "\n")
+}
+
+func topSessionText(sessions []sessionSummary, width int) string {
+	if len(sessions) == 0 {
+		return "(none)"
+	}
+	for limit := len(sessions); limit >= 1; limit-- {
+		text := joinSessionRows(sessionRows(sessions, limit))
+		if len([]rune(text)) <= width {
+			return text
+		}
+	}
+	return joinSessionRows(sessionRows(sessions, 1))
+}
+
+func joinSessionRows(rows []sessionRenderLine) string {
+	parts := make([]string, 0, len(rows))
+	for _, row := range rows {
+		parts = append(parts, row.Text)
+	}
+	return strings.Join(parts, "  ")
+}
+
+func sessionRows(sessions []sessionSummary, limit int) []sessionRenderLine {
+	if len(sessions) == 0 || limit <= 0 {
+		return nil
+	}
+	active := max(activeSessionIndex(sessions), 0)
+	if len(sessions) <= limit {
+		return sessionSummaryLines(sessions)
+	}
+	if limit < 3 {
+		return sessionSummaryLines(sessions[active : active+1])
+	}
+
+	slots := limit
+	start := clampInt(active-slots/2, 0, len(sessions)-slots)
+	end := start + slots
+	if start > 0 {
+		slots--
+	}
+	if end < len(sessions) {
+		slots--
+	}
+	slots = max(slots, 1)
+	start = clampInt(active-slots/2, 0, len(sessions)-slots)
+	end = start + slots
+
+	rows := []sessionRenderLine{}
+	if start > 0 {
+		rows = append(rows, sessionRenderLine{Text: "..."})
+	}
+	rows = append(rows, sessionSummaryLines(sessions[start:end])...)
+	if end < len(sessions) {
+		rows = append(rows, sessionRenderLine{Text: "..."})
+	}
+	return rows
+}
+
+func sessionSummaryLines(sessions []sessionSummary) []sessionRenderLine {
+	lines := make([]sessionRenderLine, 0, len(sessions))
+	for _, session := range sessions {
+		lines = append(lines, sessionRenderLine{
+			Text:   sessionSummaryText(session),
+			Active: session.Active,
+		})
+	}
+	return lines
+}
+
+func sessionSummaryText(session sessionSummary) string {
+	marker := " "
+	if session.Active {
+		marker = ">"
+	}
+	return fmt.Sprintf(
+		"%s %s t%d m%d p%d b%d l%d",
+		marker,
+		compactParent(session.Parent),
+		session.Total,
+		session.Merged,
+		session.Pending,
+		session.Blocked,
+		session.Live,
+	)
+}
+
+func buildSessionSummaries(panes []paneView, cursor int) []sessionSummary {
+	if len(panes) == 0 {
+		return nil
+	}
+	if cursor < 0 || cursor >= len(panes) {
+		cursor = 0
+	}
+	activeParent := strings.TrimSpace(panes[cursor].Parent)
+	if activeParent == "" {
+		activeParent = "-"
+	}
+	indexByParent := map[string]int{}
+	sessions := []sessionSummary{}
+	for i, pane := range panes {
+		parent := strings.TrimSpace(pane.Parent)
+		if parent == "" {
+			parent = "-"
+		}
+		idx, ok := indexByParent[parent]
+		if !ok {
+			idx = len(sessions)
+			indexByParent[parent] = idx
+			sessions = append(sessions, sessionSummary{
+				Parent: parent,
+				Start:  i,
+				Active: parent == activeParent,
+			})
+		}
+		sessions[idx].Total++
+		if pane.HasMergedPR {
+			sessions[idx].Merged++
+		}
+		if pane.Blocked {
+			sessions[idx].Blocked++
+		}
+		if pane.TmuxState == "live" {
+			sessions[idx].Live++
+		}
+	}
+	for i := range sessions {
+		sessions[i].Pending = sessions[i].Total - sessions[i].Merged
+	}
+	return sessions
+}
+
+func activeSessionIndex(sessions []sessionSummary) int {
+	for i, session := range sessions {
+		if session.Active {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1905,7 +2193,7 @@ func columnsForWidth(width int) []table.Column {
 }
 
 func (m model) footerText() string {
-	parts := []string{"q quit", "n new", "j/k move", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
+	parts := []string{"q quit", "n new", "j/k move", "[/] session", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
 	if m.filterEditing {
 		parts = append(parts, "typing")
 	}
@@ -2277,6 +2565,17 @@ func truncate(s string, maxLen int) string {
 
 func truncatePreserveSpace(s string, maxLen int) string {
 	return truncateRunes(s, maxLen)
+}
+
+func fixedLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = truncateRunes(s, width)
+	if pad := width - len([]rune(s)); pad > 0 {
+		s += strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 func truncateRunes(s string, maxLen int) string {

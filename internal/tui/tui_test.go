@@ -270,6 +270,122 @@ func TestRefreshRowsClampsCursorWhenRowsShrink(t *testing.T) {
 	}
 }
 
+func TestBuildSessionSummariesGroupsVisibleRows(t *testing.T) {
+	panes := []paneView{
+		{Parent: "100", IssueNum: 101, HasMergedPR: true, TmuxState: "live"},
+		{Parent: "100", IssueNum: 102, Blocked: true, TmuxState: "stale"},
+		{Parent: "200", IssueNum: 201, TmuxState: "live"},
+	}
+
+	got := buildSessionSummaries(panes, 2)
+	want := []sessionSummary{
+		{Parent: "100", Start: 0, Total: 2, Merged: 1, Pending: 1, Blocked: 1, Live: 1},
+		{Parent: "200", Start: 2, Total: 1, Pending: 1, Live: 1, Active: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSessionSummaries = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionJumpKeysMoveBetweenParentGroups(t *testing.T) {
+	m := newModel(Options{})
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "first"},
+		{Parent: "100", IssueNum: 102, Name: "second"},
+		{Parent: "200", IssueNum: 201, Name: "third"},
+		{Parent: "300", IssueNum: 301, Name: "fourth"},
+	}
+	m.refreshRows()
+
+	updated, _ := m.Update(keyRunes("]"))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 2 {
+		t.Fatalf("cursor after ] = %d, want first row of parent 200", got)
+	}
+
+	updated, _ = m.Update(keyRunes("]"))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 3 {
+		t.Fatalf("cursor after second ] = %d, want first row of parent 300", got)
+	}
+
+	updated, _ = m.Update(keyRunes("]"))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 0 {
+		t.Fatalf("cursor after wrap ] = %d, want first row of parent 100", got)
+	}
+
+	updated, _ = m.Update(keyRunes("["))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 3 {
+		t.Fatalf("cursor after wrap [ = %d, want first row of parent 300", got)
+	}
+}
+
+func TestSessionJumpScrollsTargetRowIntoView(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 90
+	m.height = 24
+	m.resize()
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "one"},
+		{Parent: "100", IssueNum: 102, Name: "two"},
+		{Parent: "100", IssueNum: 103, Name: "three"},
+		{Parent: "100", IssueNum: 104, Name: "four"},
+		{Parent: "100", IssueNum: 105, Name: "five"},
+		{Parent: "200", IssueNum: 201, Name: "target-session"},
+	}
+	m.refreshRows()
+
+	updated, _ := m.Update(keyRunes("]"))
+	m = updated.(model)
+
+	if got := m.table.Cursor(); got != 5 {
+		t.Fatalf("cursor after ] = %d, want target session row", got)
+	}
+	if view := m.table.View(); !strings.Contains(view, "#201") {
+		t.Fatalf("table view after session jump did not include target row:\n%s", view)
+	}
+}
+
+func TestSessionJumpUsesFilteredVisibleRows(t *testing.T) {
+	m := newModel(Options{})
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "hidden"},
+		{Parent: "200", IssueNum: 201, Name: "visible"},
+		{Parent: "200", IssueNum: 202, Name: "also visible"},
+	}
+	m.filterQuery = "200"
+	m.refreshRows()
+
+	if got := len(m.panes); got != 2 {
+		t.Fatalf("filtered panes = %d, want 2", got)
+	}
+	updated, _ := m.Update(keyRunes("]"))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 0 {
+		t.Fatalf("cursor after single visible session jump = %d, want 0", got)
+	}
+	if got := buildSessionSummaries(m.panes, m.table.Cursor()); len(got) != 1 || got[0].Parent != "200" {
+		t.Fatalf("visible sessions = %#v, want only parent 200", got)
+	}
+}
+
+func TestNarrowShortLayoutCollapsesTopStrip(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 90
+	m.height = detailHeight + 5 + 4
+
+	layout := m.monitorLayout()
+
+	if layout.TopStripHeight != 0 {
+		t.Fatalf("TopStripHeight = %d, want collapsed strip", layout.TopStripHeight)
+	}
+	if layout.TableRows != 4 {
+		t.Fatalf("TableRows = %d, want minimum table height without extra strip", layout.TableRows)
+	}
+}
+
 func TestUpdateKeepsPartialGHResultsOnError(t *testing.T) {
 	m := newModel(Options{})
 	issues := map[issueKey]issueStatus{
@@ -644,6 +760,53 @@ func TestViewRendersHUDCounts(t *testing.T) {
 	got := m.View()
 	if !strings.Contains(got, "total=3 merged=1 pending=2 blocked=1") {
 		t.Fatalf("View() = %q, want HUD counts", got)
+	}
+}
+
+func TestTopSessionTextKeepsActiveSessionVisible(t *testing.T) {
+	panes := []paneView{
+		{Parent: "100", IssueNum: 101},
+		{Parent: "200", IssueNum: 201},
+		{Parent: "300", IssueNum: 301},
+		{Parent: "400", IssueNum: 401},
+		{Parent: "500", IssueNum: 501},
+	}
+	sessions := buildSessionSummaries(panes, 4)
+
+	got := topSessionText(sessions, 100)
+
+	if !strings.Contains(got, "> 500") {
+		t.Fatalf("top session strip = %q, want active final session visible", got)
+	}
+	if len([]rune(got)) > 100 {
+		t.Fatalf("top session strip length = %d, want <= 100: %q", len([]rune(got)), got)
+	}
+}
+
+func TestViewRendersAdaptiveSessionList(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo"})
+	m.width = 130
+	m.height = 30
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "first", HasMergedPR: true, TmuxState: "live"},
+		{Parent: "200", IssueNum: 201, Name: "second", Blocked: true},
+	}
+	m.resize()
+
+	wide := m.View()
+	for _, want := range []string{"Sessions 2", "> 100 t1 m1 p0 b0 l1", "|", "PARENT"} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide view missing %q:\n%s", want, wide)
+		}
+	}
+
+	m.width = 90
+	m.resize()
+	narrow := m.View()
+	for _, want := range []string{"Sessions 2  [/] session", "> 100 t1 m1 p0 b0 l1", "PARENT"} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("narrow view missing %q:\n%s", want, narrow)
+		}
 	}
 }
 
