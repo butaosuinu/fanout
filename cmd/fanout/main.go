@@ -129,6 +129,10 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 	if code != exitcode.OK {
 		return code
 	}
+	return runWithRuntime(cfg, lg, rt, commandName)
+}
+
+func runWithRuntime(cfg *cliflags.Config, lg *log.Logger, rt *runtimeInfo, commandName string) exitcode.Code {
 	resolvedSettings := settings.Resolve(rt.info.ProjectRoot, settings.CLIOverrides{
 		AutoPullRequest:    cfg.AutoPullRequest,
 		PRReviewGate:       cfg.PRReviewGate,

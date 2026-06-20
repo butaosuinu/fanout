@@ -27,6 +27,7 @@ import (
 
 const (
 	manualPaneParentRef        = "@manual"
+	watchPaneParentRef         = "@watch"
 	codexPlanTUIStartupTimeout = 30 * time.Second
 	codexPlanTUIStartupPoll    = 200 * time.Millisecond
 )
@@ -278,6 +279,13 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, issue.Number, cfg.DryRun)
 	}
 	return req
+}
+
+func newWatchPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config) paneRequest {
+	watchCfg := *cfg
+	watchCfg.ParentRef = watchPaneParentRef
+	watchCfg.CodexPlanMode = nil
+	return newPaneRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
 }
 
 func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec, task planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, teamCtx *briefing.TeamContext) paneRequest {
