@@ -199,28 +199,18 @@ func TestParsePlanLifecycleRejectsAgentOverride(t *testing.T) {
 	}
 }
 
-func TestParsePlanStatusRejectsHooksOverride(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	_, code := parsePlanCommand([]string{"launch-plan", "--status", "--no-hooks"}, log.NewWith(&stdout, &stderr, false))
-	if code != exitcode.Invocation {
-		t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Invocation)
-	}
-	if got := stderr.String(); !strings.Contains(got, "--status cannot be combined with --no-hooks") {
-		t.Fatalf("stderr = %q, want --status/--no-hooks conflict", got)
-	}
-}
-
-func TestParsePlanLifecycleAllowsHooksOverride(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	cfg, code := parsePlanCommand([]string{"launch-plan", "--close", "api-client", "--no-hooks"}, log.NewWith(&stdout, &stderr, false))
-	if code != exitcode.OK {
-		t.Fatalf("parsePlanCommand() code = %d, want OK; stderr=%q", code, stderr.String())
-	}
-	if cfg.HooksEnabled == nil || *cfg.HooksEnabled {
-		t.Fatalf("HooksEnabled = %v, want false", cfg.HooksEnabled)
-	}
-	if got := cfg.cliConfig().HooksEnabled; got == nil || *got {
-		t.Fatalf("cliConfig().HooksEnabled = %v, want false", got)
+func TestParsePlanRejectsHookToggleFlags(t *testing.T) {
+	for _, flag := range []string{"--hooks", "--no-hooks"} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			_, code := parsePlanCommand([]string{"launch-plan", "--close", "api-client", flag}, log.NewWith(&stdout, &stderr, false))
+			if code != exitcode.Invocation {
+				t.Fatalf("parsePlanCommand() code = %d, want %d", code, exitcode.Invocation)
+			}
+			if got := stderr.String(); !strings.Contains(got, "unknown plan option: "+flag) {
+				t.Fatalf("stderr = %q, want unknown option for %s", got, flag)
+			}
+		})
 	}
 }
 

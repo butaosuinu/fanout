@@ -7,7 +7,7 @@ kanji: 整
 yomi: settings
 ---
 
-fanout は opinionated な 7 つの挙動(briefing の 5 トグル、ダッシュボードの tmux キーバインド、lifecycle hook)をオン/オフでき、TUI 通知 channel も選択できます。Lifecycle hook の既定値は `false`、それ以外の bool 既定値は `true` です。通知の既定値は `bell` です。
+fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシュボードの tmux キーバインド)をオン/オフでき、TUI 通知 channel も選択できます。bool 既定値は `true` です。通知の既定値は `bell` です。
 
 ## 解決順序
 
@@ -26,7 +26,6 @@ fanout は opinionated な 7 つの挙動(briefing の 5 トグル、ダッシ�
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
-| Lifecycle hook | `hooksEnabled` | `FANOUT_HOOKS` | `--hooks` / `--no-hooks` | `false` |
 | TUI 状態遷移通知 | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | 未設定 |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
@@ -45,7 +44,6 @@ fanout は opinionated な 7 つの挙動(briefing の 5 トグル、ダッシ�
   "agentTeamsHint": false,
   "prVisualization": true,
   "dashboardKeybind": true,
-  "hooksEnabled": false,
   "notifications": "bell",
   "ntfyURL": "https://ntfy.sh/my-topic",
   "slackWebhookURL": "https://hooks.slack.com/services/..."
@@ -62,9 +60,7 @@ bool の環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けま�
 
 不正な bool env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
 
-## repo config の hooksEnabled
-
-Repo config は `hooksEnabled=false` でその repository の hook を無効化できます。`hooksEnabled=true` は repo config では無視されるため、checkout 側から repository hook の実行を既定化できません。有効化する場合は user config、`FANOUT_HOOKS=1`、または `--hooks` を使います。
+Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は [CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
 
 ## prVisualization の詳細
 

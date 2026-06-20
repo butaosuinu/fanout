@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
@@ -44,7 +45,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
 	}
 
-	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), nil, nil, log.Palette{}, "fanout", nil)
+	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
 
 	if result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)
@@ -81,7 +82,7 @@ func TestCreatePaneForIssueFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Duplicate Title", State: "OPEN", Body: "body"}
 
-	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), nil, false, log.Palette{}, "fanout", nil) {
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), hooks.EmptyConfig(), nil, false, log.Palette{}, "fanout", nil) {
 		t.Fatal("createPaneForIssue() = true, want false for launch-time worktree collision")
 	}
 	if got := stderr.String(); !strings.Contains(got, "worktree path already exists during launch") {
@@ -106,7 +107,7 @@ func TestCreatePaneForIssueRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Bad Base", State: "OPEN", Body: "body"}
 
-	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), nil, false, log.Palette{}, "fanout", nil) {
+	if createPaneForIssue(cfg, lg, info, issue, settings.Defaults(), hooks.EmptyConfig(), nil, false, log.Palette{}, "fanout", nil) {
 		t.Fatal("createPaneForIssue() = true, want false for unsupported refresh base")
 	}
 	if got := stderr.String(); !strings.Contains(got, `base branch "refs/heads/main" is not refreshable`) {

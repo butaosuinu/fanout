@@ -19,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
@@ -68,7 +69,6 @@ type planCommandConfig struct {
 	AgentTeamsHint     *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
-	HooksEnabled       *bool
 }
 
 type taskPlan struct {
@@ -149,8 +149,8 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
-		HooksEnabled:       cfg.HooksEnabled,
 	}, lg.Warn)
+	hookConfig := hooks.LoadUserConfig(lg)
 
 	cfg.SpecPath = resolvePlanSpecPath(rt.info.ProjectRoot, cfg.SpecArg)
 	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
@@ -241,7 +241,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		teamCtx = buildTaskTeamContext(rt.info.ProjectRoot, parentRef, plan.Targets)
 	}
 
-	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, recorder, c, commandName, teamCtx)
+	result := executeTaskPlan(cliCfg, lg, rt.info, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
 	if !cfg.DryRun && result.Created > 0 {
@@ -306,8 +306,6 @@ func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcod
 		"--no-pr-visualization":     func() { cfg.PRVisualization = new(false) },
 		"--dashboard-keybind":       func() { cfg.DashboardKeybind = new(true) },
 		"--no-dashboard-keybind":    func() { cfg.DashboardKeybind = new(false) },
-		"--hooks":                   func() { cfg.HooksEnabled = new(true) },
-		"--no-hooks":                func() { cfg.HooksEnabled = new(false) },
 	}
 
 	for i := 0; i < len(args); {
@@ -471,8 +469,6 @@ func validatePlanActionFlags(cfg planCommandConfig, limitRaw, sleepRaw string, h
 			return planStatusConflict(lg, planBoolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
 			return planStatusConflict(lg, planBoolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
-		case cfg.HooksEnabled != nil:
-			return planStatusConflict(lg, planBoolSettingFlag("--hooks", "--no-hooks", cfg.HooksEnabled))
 		case sleepRaw != "":
 			return planStatusConflict(lg, "--sleep")
 		}
@@ -582,7 +578,6 @@ func (cfg planCommandConfig) cliConfig() *cliflags.Config {
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
-		HooksEnabled:       cfg.HooksEnabled,
 	}
 }
 
@@ -758,11 +753,10 @@ func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
 	}
-	resolved := settings.Resolve(rt.projectRoot, settings.CLIOverrides{HooksEnabled: cfg.HooksEnabled}, lg.Warn)
 	lifecycleOpts := lifecycle.Options{
-		ProjectRoot:  rt.projectRoot,
-		StatePath:    rt.statePath,
-		HooksEnabled: resolved.HooksEnabled,
+		ProjectRoot: rt.projectRoot,
+		StatePath:   rt.statePath,
+		Hooks:       hooks.LoadUserConfig(lg),
 	}
 
 	switch {
@@ -1314,10 +1308,10 @@ func applyTaskLimit(tasks []planspec.Task, limit int) (targets, deferred []plans
 	return tasks, nil
 }
 
-func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
+func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
 	var result taskExecutionResult
 	for i, task := range targets {
-		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, teamCtx)
+		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, hookConfig, teamCtx)
 		if !createPane(cfg, lg, info, req, recorder, c, commandName) {
 			result.Failed++
 			break
@@ -1469,7 +1463,6 @@ Options:
   --base-branch <branch>      Override spec plan.base_branch
   --branch-prefix <prefix>    Prefix generated branch names
   --no-refresh                Do not fetch/fast-forward the base branch
-  --hooks / --no-hooks        Run or skip lifecycle hooks (default: off)
   --session <tmux-session>    Target a tmux session instead of the invoking pane
   --sleep <seconds>           Delay between pane launches
   --debug                     Print debug diagnostics

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/hooks"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
@@ -90,7 +91,7 @@ func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
 
-	err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", true, fanouttui.LaunchRequest{
+	err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agent:  "claude",
 	})

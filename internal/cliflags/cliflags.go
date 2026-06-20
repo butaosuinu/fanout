@@ -66,7 +66,6 @@ type Config struct {
 	CodexPlanMode      *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
-	HooksEnabled       *bool
 	Format             string
 }
 
@@ -250,8 +249,6 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = new(false) },
 		"--dashboard-keybind":       func(cfg *Config) { cfg.DashboardKeybind = new(true) },
 		"--no-dashboard-keybind":    func(cfg *Config) { cfg.DashboardKeybind = new(false) },
-		"--hooks":                   func(cfg *Config) { cfg.HooksEnabled = new(true) },
-		"--no-hooks":                func(cfg *Config) { cfg.HooksEnabled = new(false) },
 	}
 
 	requireValue := func(flag string, i int) (string, bool) {
@@ -432,8 +429,6 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
 			return statusConflict(lg, boolSettingFlag("--dashboard-keybind", "--no-dashboard-keybind", cfg.DashboardKeybind))
-		case cfg.HooksEnabled != nil:
-			return statusConflict(lg, boolSettingFlag("--hooks", "--no-hooks", cfg.HooksEnabled))
 		case cfg.Team:
 			return statusConflict(lg, "--team")
 		case state.sleepExplicit:

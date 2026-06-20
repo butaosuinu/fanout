@@ -178,12 +178,8 @@ func TestCmdMergePreMergeHookBlocksFastForward(t *testing.T) {
 	gitCmdTest(t, repo, "commit", "-m", "hooked")
 	gitCmdTest(t, repo, "switch", "main")
 	writeLifecycleState(t, repo, state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/hooked-child-101"})
-	writeLifecycleHook(t, repo, "pre_merge", `#!/bin/sh
-echo pre merge blocked
-exit 9
-`)
+	writeLifecycleHook(t, "pre_merge", `echo pre merge blocked; exit 9`)
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
-	t.Setenv("FANOUT_HOOKS", "on")
 	var stderr bytes.Buffer
 	lg := log.NewWith(io.Discard, &stderr, false)
 
@@ -212,12 +208,8 @@ func TestCmdCloseBeforeWorktreeRemoveHookBlocksStateRemoval(t *testing.T) {
 		PaneID:       "%42",
 		WorktreePath: worktreePath,
 	})
-	writeLifecycleHook(t, repo, "before_worktree_remove", `#!/bin/sh
-echo remove blocked for "$FANOUT_WORKTREE_PATH"
-exit 5
-`)
+	writeLifecycleHook(t, "before_worktree_remove", `echo remove blocked for "$FANOUT_WORKTREE_PATH"; exit 5`)
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
-	t.Setenv("FANOUT_HOOKS", "on")
 	var stderr bytes.Buffer
 	lg := log.NewWith(io.Discard, &stderr, false)
 
@@ -590,13 +582,29 @@ func installLifecycleScript(t *testing.T, name, script string) string {
 	return logPath
 }
 
-func writeLifecycleHook(t *testing.T, repo, name, script string) string {
+func writeLifecycleHook(t *testing.T, name, command string) string {
 	t.Helper()
-	path := filepath.Join(repo, ".fanout-hooks", name)
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	path := filepath.Join(xdg, "fanout", "hooks.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	data, err := json.Marshal(map[string]any{
+		"hooks": map[string]any{
+			name: []map[string]any{
+				{
+					"hooks": []map[string]any{
+						{"type": "command", "command": command, "timeout": 5},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path

@@ -20,9 +20,9 @@ import (
 
 // Options points lifecycle operations at a concrete fanout state file.
 type Options struct {
-	ProjectRoot  string
-	StatePath    string
-	HooksEnabled bool
+	ProjectRoot string
+	StatePath   string
+	Hooks       hooks.Config
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -439,7 +439,7 @@ func currentBranch(projectRoot string) string {
 }
 
 func runBlockingHook(hook hooks.Type, opts Options, pane state.Pane, targetBranch string, lg Logger) bool {
-	result := hooks.RunBlocking(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.HooksEnabled, lg)
+	result := hooks.RunBlocking(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.Hooks, lg)
 	if result.OK() {
 		return true
 	}
@@ -449,7 +449,7 @@ func runBlockingHook(hook hooks.Type, opts Options, pane state.Pane, targetBranc
 }
 
 func runBackgroundHook(hook hooks.Type, opts Options, pane state.Pane, targetBranch string, lg Logger) {
-	hooks.RunBackground(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.HooksEnabled, lg)
+	hooks.RunBackground(hook, hookContext(opts.ProjectRoot, pane, targetBranch), opts.Hooks, lg)
 }
 
 func hookContext(projectRoot string, pane state.Pane, targetBranch string) hooks.Context {

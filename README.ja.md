@@ -31,8 +31,8 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   更新)。どのペインからでも `prefix + D` でポップできます。
 - **状態確認とレポート** — `--status` の JSON / table で PR review・CI 状態を
   確認でき、任意で親 issue にダッシュボードコメントを投稿します。
-- **Lifecycle hook** — repo または user の実行可能 hook を worktree、pane、merge
-  event の前後で実行できます。
+- **Lifecycle hook** — user config に書いた shell command を worktree、pane、
+  merge event の前後で実行できます。
 - **エージェント連携** — `/fanout` slash command と Claude Code & Codex 向けの
   skill をインストール時に同梱します。
 

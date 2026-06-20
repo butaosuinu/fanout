@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
@@ -34,6 +35,9 @@ func main() {
 	lg := log.New(false)
 	commandName := invokedCommandName(os.Args)
 
+	if hooks.IsBackgroundRunnerRequest(os.Args[1:]) {
+		os.Exit(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr))
+	}
 	if isVersionRequest(os.Args[1:]) {
 		fmt.Fprintln(os.Stdout, versionLine())
 		os.Exit(int(exitcode.OK))
@@ -132,8 +136,8 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		AgentTeamsHint:     cfg.AgentTeamsHint,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
-		HooksEnabled:       cfg.HooksEnabled,
 	}, lg.Warn)
+	hookConfig := hooks.LoadUserConfig(lg)
 
 	loaded, code := loadChildren(cfg, rt.gh, lg)
 	if code != exitcode.OK {
@@ -217,7 +221,7 @@ func run(cfg *cliflags.Config, lg *log.Logger, commandName string) exitcode.Code
 		teamCtx = buildTeamContext(rt.info.ProjectRoot, cfg.ParentRef, plan.Targets)
 	}
 
-	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, recorder, otherParentFanned, c, commandName, teamCtx)
+	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register the tmux keybinding so the user can pop the read-only dashboard
@@ -498,7 +502,7 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -509,7 +513,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			}
 		}
 		// Fail fast: stop after the first failed child launch.
-		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, recorder, sharedAcrossParents[issue.Number], c, commandName, teamCtx) {
+		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, hookConfig, recorder, sharedAcrossParents[issue.Number], c, commandName, teamCtx) {
 			result.Failed++
 			break
 		}

@@ -23,22 +23,21 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
-       [--hooks|--no-hooks]
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
-       [--sleep <seconds>] [--hooks|--no-hooks]
+       [--sleep <seconds>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
-fanout plan <spec.json|plan-slug> --merge <task-id> [--hooks|--no-hooks]
-fanout plan <spec.json|plan-slug> --close <task-id> [--hooks|--no-hooks]
-fanout plan <spec.json|plan-slug> --cleanup [--hooks|--no-hooks]
+fanout plan <spec.json|plan-slug> --merge <task-id>
+fanout plan <spec.json|plan-slug> --close <task-id>
+fanout plan <spec.json|plan-slug> --cleanup
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> [--hooks|--no-hooks] # fast-forward merge
-fanout <parent-issue> --close <NUM> [--hooks|--no-hooks] # remove child worktree/pane
-fanout <parent-issue> --cleanup [--hooks|--no-hooks]     # remove merged/closed children
+fanout <parent-issue> --merge <NUM> # fast-forward merge
+fanout <parent-issue> --close <NUM> # remove child worktree/pane
+fanout <parent-issue> --cleanup     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes
 fanout --check-update               # Compare this binary with the latest release
@@ -218,7 +217,6 @@ These paired switches toggle fanout's opinionated behaviors for one run; a CLI f
 | `--codex-plan-mode` / `--no-codex-plan-mode` | — | For `--agent codex`, start the initial Plan turn through Codex app-server and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. Default: off. Details in [Agent Integrations]({{< relref "/docs/agents" >}}). |
 | `--pr-visualization` / `--no-pr-visualization` | — | Include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. Default: on. |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `prefix + D` keybinding after a live fan-out, so the read-only web dashboard can be opened from any pane. Default: on. |
-| `--hooks` / `--no-hooks` | — | Run or skip lifecycle hooks for pane creation, close, cleanup, and merge. Default: off. |
 
 ## Read and lifecycle modes
 
@@ -238,7 +236,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`, `--hooks`, `--no-hooks`).
+`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`).
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -254,10 +252,33 @@ fanout 123 --close 4
 fanout 123 --cleanup
 ```
 
-Hooks are executable files named after the event. fanout searches in order:
-`<project-root>/.fanout-hooks/`, `<project-root>/.fanout/hooks/`, then
-`$XDG_CONFIG_HOME/fanout/hooks/` or `~/.config/fanout/hooks/`. Non-executable
-matches are warned and ignored.
+Hooks are always enabled. If the user hook config is missing, or an event has no
+commands, the event is a no-op. fanout reads hooks from
+`$XDG_CONFIG_HOME/fanout/hooks.json`, or `~/.config/fanout/hooks.json` when
+`XDG_CONFIG_HOME` is unset. The file uses a Codex-style `hooks` object:
+
+```json
+{
+  "hooks": {
+    "worktree_created": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo worktree=$FANOUT_WORKTREE_PATH",
+            "timeout": 10,
+            "statusMessage": "Preparing child worktree"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Only `type: "command"` is supported. Commands run through `/bin/sh -c` from the
+project root. `timeout` is seconds; omit it to use 60 seconds. Commands for the
+same event run in file order.
 
 Supported events:
 
@@ -360,7 +381,6 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard `prefix + D` tmux keybinding (`dashboardKeybind`). |
-| `FANOUT_HOOKS` | Environment layer for lifecycle hooks (`hooksEnabled`). |
 | `FANOUT_NOTIFICATIONS` | Environment layer for the TUI transition notification channels (`notifications`); see [Settings]({{< relref "/docs/settings" >}}). |
 | `FANOUT_NTFY_URL` | Environment layer for the ntfy POST URL (`ntfyURL`). |
 | `FANOUT_SLACK_WEBHOOK_URL` | Environment layer for the Slack webhook POST URL (`slackWebhookURL`). |

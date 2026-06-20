@@ -23,12 +23,12 @@ fanout <parent-issue|project-url>
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
-       [--hooks|--no-hooks] [--team]
+       [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
                                       # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM> [--hooks|--no-hooks]
-fanout <parent-issue> --close <NUM> [--hooks|--no-hooks]
-fanout <parent-issue> --cleanup [--hooks|--no-hooks]
+fanout <parent-issue> --merge <NUM>
+fanout <parent-issue> --close <NUM>
+fanout <parent-issue> --cleanup
 fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
 fanout plan <spec.json|plan-slug>   # issue-less local plan task fan-out (see fanout-plan)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see Notes)
@@ -198,7 +198,7 @@ dry-run, generated pane names, or confirmation.
    `--briefing-code-review`, `--no-briefing-code-review`,
    `--agent-teams-hint`, `--no-agent-teams-hint`,
    `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`,
-   `--no-pr-visualization`, `--hooks`, `--no-hooks`, and `--team`.
+   `--no-pr-visualization`, and `--team`.
    If neither the user nor the environment supplies an agent, add
    `--agent codex` because the direct tmux runtime requires an explicit
    agent name.
@@ -287,8 +287,7 @@ exclusive with all action-bearing flags
 `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`,
 `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`,
 `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`,
-`--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`,
-`--hooks`, `--no-hooks`). Set
+`--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`). Set
 `FANOUT_STATE_PATH` to
 read a specific state file outside the repository checkout.
 
@@ -352,8 +351,8 @@ API + parent body. Key points:
   the Claude-only Agent Teams hint; `--pr-visualization` /
   `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid
   guidance in auto-PR child briefings. These briefing settings default on.
-- `--hooks` / `--no-hooks` run or skip lifecycle hooks for pane creation,
-  close, cleanup, and merge. Default: off.
+- Lifecycle hooks are always on and come from user `hooks.json`. Do not forward
+  `--hooks` or `--no-hooks`; they are not fanout flags.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode

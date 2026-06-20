@@ -7,7 +7,7 @@ kanji: 整
 yomi: settings
 ---
 
-fanout can turn seven opinionated behaviors on or off — five briefing toggles, the dashboard tmux keybinding, and lifecycle hooks — and select TUI notification channels. Lifecycle hooks default to `false`; the other boolean defaults are `true`. Notifications default to `bell`.
+fanout can turn six opinionated behaviors on or off — five briefing toggles and the dashboard tmux keybinding — and select TUI notification channels. Boolean defaults are `true`. Notifications default to `bell`.
 
 ## Resolution order
 
@@ -26,7 +26,6 @@ Each setting resolves as: **CLI flag > environment variable > repo config file >
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard `prefix + D` tmux keybinding | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
-| Lifecycle hooks | `hooksEnabled` | `FANOUT_HOOKS` | `--hooks` / `--no-hooks` | `false` |
 | TUI transition notifications | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | unset |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | unset |
@@ -45,7 +44,6 @@ Both config files share the same shape — a flat JSON object of boolean toggles
   "agentTeamsHint": false,
   "prVisualization": true,
   "dashboardKeybind": true,
-  "hooksEnabled": false,
   "notifications": "bell",
   "ntfyURL": "https://ntfy.sh/my-topic",
   "slackWebhookURL": "https://hooks.slack.com/services/..."
@@ -62,9 +60,7 @@ Boolean environment values accept `1/true/yes/on` and `0/false/no/off` (case-ins
 
 Invalid boolean env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
 
-## hooksEnabled in repo config
-
-Repo config may set `hooksEnabled=false` to disable hooks for that repository. `hooksEnabled=true` is ignored in repo config, so a checkout cannot make users run repository hooks by default. Use user config, `FANOUT_HOOKS=1`, or `--hooks` to opt in.
+Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [CLI Reference]({{< relref "/docs/cli" >}}).
 
 ## prVisualization in detail
 

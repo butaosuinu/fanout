@@ -51,7 +51,7 @@ type paneRequest struct {
 	AgentCommand        string
 	CodexPlanMode       bool
 	CodexPlanStatusPath string
-	HooksEnabled        bool
+	Hooks               hooks.Config
 	Worktree            worktree.Plan
 }
 
@@ -70,8 +70,8 @@ type paneStateRecorder interface {
 	RemoveTaskPane(parent, taskID string) error
 }
 
-func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) bool {
-	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, sharedAcrossParents, teamCtx)
+func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, sharedAcrossParents bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) bool {
+	req := newPaneRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents, teamCtx)
 	return createPane(cfg, lg, info, req, recorder, c, commandName)
 }
 
@@ -118,13 +118,13 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		return false
 	}
 
-	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.HooksEnabled, lg); !result.OK() {
+	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg); !result.OK() {
 		lg.Err("%s: %v", paneLogLabel(req), result.Err)
 		printPaneHookOutput(result, lg)
 		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
 		return false
 	}
-	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.HooksEnabled, lg)
+	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg)
 
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
@@ -235,7 +235,7 @@ func buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, prompt, statusPath st
 	return strings.Join(quoted, " ")
 }
 
-func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, sharedAcrossParents bool, teamCtx *briefing.TeamContext) paneRequest {
+func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, sharedAcrossParents bool, teamCtx *briefing.TeamContext) paneRequest {
 	slug := naming.Slug(issue.Title, issue.Number)
 	slugOverridden := false
 	branchOverride := ""
@@ -251,7 +251,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 		Slug:          slug,
 		Agent:         agentName,
 		CodexPlanMode: cfg.CodexPlanModeEnabled(),
-		HooksEnabled:  resolvedSettings.HooksEnabled,
+		Hooks:         hookConfig,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -280,7 +280,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	return req
 }
 
-func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec, task planspec.Task, resolvedSettings settings.Settings, teamCtx *briefing.TeamContext) paneRequest {
+func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec, task planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, teamCtx *briefing.TeamContext) paneRequest {
 	slug := planTaskSlug(spec.Plan.Slug, task)
 	branchName := task.Branch
 	if branchName == "" {
@@ -300,7 +300,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 		DisplayNameOverride: task.DisplayName,
 		BranchName:          branchName,
 		Agent:               agentName,
-		HooksEnabled:        resolvedSettings.HooksEnabled,
+		Hooks:               hookConfig,
 		Worktree: worktree.BuildPlan(worktree.Options{
 			ProjectRoot:        projectRoot,
 			Slug:               slug,
@@ -315,7 +315,7 @@ func newTaskPaneRequest(cfg *cliflags.Config, projectRoot string, spec planspec.
 	return req
 }
 
-func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.Store, opts manualPaneOptions) paneRequest {
+func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.Store, hookConfig hooks.Config, opts manualPaneOptions) paneRequest {
 	number := nextSyntheticPaneNumber(store, manualPaneParentRef)
 	title := opts.Title
 	if title == "" {
@@ -351,7 +351,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		BranchName:   branchName,
 		Prompt:       prompt,
 		Agent:        agentName,
-		HooksEnabled: cfg.HooksEnabled != nil && *cfg.HooksEnabled,
+		Hooks:        hookConfig,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
 		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true}),
@@ -569,20 +569,15 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
-	printPaneHookDryRun(req, req.Worktree.ProjectRoot, lg, c)
+	printPaneHookDryRun(req, lg, c)
 	lg.Ok("%s: dry-run complete", paneLogLabel(req))
 }
 
-func printPaneHookDryRun(req paneRequest, projectRoot string, lg *log.Logger, c log.Palette) {
-	if !req.HooksEnabled {
-		return
-	}
+func printPaneHookDryRun(req paneRequest, lg *log.Logger, c log.Palette) {
 	for _, hook := range []hooks.Type{hooks.WorktreeCreated, hooks.BeforePaneCreate} {
-		path, ok := hooks.FindQuiet(projectRoot, hook)
-		if !ok {
-			continue
+		for _, hookCmd := range req.Hooks.Events[hook] {
+			fmt.Fprintf(lg.Stdout(), "    %s# hook %s: /bin/sh -c %s%s\n", c.Dim, hook, shellQuote(hookCmd.Command), c.Reset)
 		}
-		fmt.Fprintf(lg.Stdout(), "    %s# hook %s: %s%s\n", c.Dim, hook, shellQuote(path), c.Reset)
 	}
 }
 
