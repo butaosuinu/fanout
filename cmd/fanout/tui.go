@@ -151,8 +151,8 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 		return fmt.Errorf("terminal path is not a directory: %s", targetPath)
 	}
 
-	if err := worktree.EnsureLocalExclude(projectRoot); err != nil {
-		return fmt.Errorf("prepare local git exclude: %w", err)
+	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
+		return fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	recorder, err := state.LockProject(projectRoot)
