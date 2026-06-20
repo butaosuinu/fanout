@@ -81,7 +81,7 @@ type IO struct {
 	LoadState         func() (state.Store, error)
 	PaneAlive         func(pane state.Pane) (bool, error)
 	LaunchStandalone  func(issue ghissue.Issue) error
-	LaunchParent      func(issue ghissue.Issue, limit int) error
+	LaunchParent      func(issue ghissue.Issue, limit int) (ParentLaunchResult, error)
 }
 
 // Engine keeps process-local launch failure state between cycles.
@@ -104,6 +104,12 @@ func NewEngine(cfg Config, io IO) *Engine {
 		io:       io,
 		failures: map[int]failureState{},
 	}
+}
+
+// ParentLaunchResult reports whether the underlying parent fan-out left more
+// children for a later watcher cycle.
+type ParentLaunchResult struct {
+	Deferred bool
 }
 
 // Action is one launch the watcher should perform after acquiring the running
@@ -204,10 +210,6 @@ func (e *Engine) PlanCycle() (Report, error) {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 			continue
 		}
-		if alreadyFanned(store, issue.Number) {
-			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
-			continue
-		}
 		if failure := e.failures[issue.Number]; failure.Disabled {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipDisabled})
 			continue
@@ -238,10 +240,14 @@ func (e *Engine) PlanCycle() (Report, error) {
 		if openChildren > 0 {
 			action.Kind = LaunchParent
 			consumes = openChildren
-			if remaining > 0 {
-				action.Limit = remaining
-				consumes = min(openChildren, remaining)
-			}
+		}
+		if alreadyFanned(store, action) {
+			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
+			continue
+		}
+		if action.Kind == LaunchParent && remaining > 0 {
+			action.Limit = remaining
+			consumes = min(openChildren, remaining)
 		}
 		report.Actions = append(report.Actions, action)
 		if remaining > 0 {
@@ -274,9 +280,10 @@ func (e *Engine) RunCycle() (Report, error) {
 		}
 
 		var launchErr error
+		var parentResult ParentLaunchResult
 		switch action.Kind {
 		case LaunchParent:
-			launchErr = e.io.LaunchParent(action.Issue, action.Limit)
+			parentResult, launchErr = e.io.LaunchParent(action.Issue, action.Limit)
 		default:
 			launchErr = e.io.LaunchStandalone(action.Issue)
 		}
@@ -293,6 +300,12 @@ func (e *Engine) RunCycle() (Report, error) {
 				Disabled:    failure.Disabled,
 			})
 			continue
+		}
+		if action.Kind == LaunchParent && parentResult.Deferred {
+			report.Deferred = append(report.Deferred, Deferred{Issue: action.Issue, Reason: DeferMaxSessions})
+			if err := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel); err != nil {
+				report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
+			}
 		}
 		delete(e.failures, action.Issue.Number)
 		report.Launched = append(report.Launched, action)
@@ -402,15 +415,18 @@ func reportRemaining(remaining int) int {
 	return remaining
 }
 
-func alreadyFanned(store state.Store, issueNum int) bool {
-	if issueNum <= 0 {
+func alreadyFanned(store state.Store, action Action) bool {
+	if action.Issue.Number <= 0 {
+		return false
+	}
+	if action.Kind == LaunchParent {
 		return false
 	}
 	for _, pane := range store.Panes {
-		if pane.IssueNum == issueNum {
+		if pane.IssueNum == action.Issue.Number {
 			return true
 		}
-		if pane.IssueNum > 0 && paneWorktreeMatchesIssue(pane, issueNum) {
+		if pane.IssueNum > 0 && paneWorktreeMatchesIssue(pane, action.Issue.Number) {
 			return true
 		}
 	}

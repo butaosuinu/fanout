@@ -33,9 +33,10 @@ type fakeWatchIO struct {
 	openChildren map[int]int
 	alive        map[string]bool
 
-	swapErr       map[swapKey]error
-	standaloneErr map[int]error
-	parentErr     map[int]error
+	swapErr        map[swapKey]error
+	standaloneErr  map[int]error
+	parentErr      map[int]error
+	parentDeferred map[int]bool
 
 	countCalls []int
 	swaps      []swapCall
@@ -86,9 +87,9 @@ func (f *fakeWatchIO) IO() IO {
 			f.standalone = append(f.standalone, issue.Number)
 			return f.standaloneErr[issue.Number]
 		},
-		LaunchParent: func(issue ghissue.Issue, limit int) error {
+		LaunchParent: func(issue ghissue.Issue, limit int) (ParentLaunchResult, error) {
 			f.parents = append(f.parents, parentLaunch{num: issue.Number, limit: limit})
-			return f.parentErr[issue.Number]
+			return ParentLaunchResult{Deferred: f.parentDeferred[issue.Number]}, f.parentErr[issue.Number]
 		},
 	}
 }
@@ -140,10 +141,10 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
-			name: "idempotency skips issue number and issue-backed worktree fallback",
+			name: "idempotency skips standalone rows across all parents",
 			fake: &fakeWatchIO{
-				issues:       []ghissue.Issue{issue(101), issue(102), issue(103)},
-				openChildren: map[int]int{103: 0},
+				issues:       []ghissue.Issue{issue(101), issue(102), issue(103), issue(104)},
+				openChildren: map[int]int{101: 0, 102: 0, 103: 0, 104: 0},
 				store: state.Store{Panes: []state.Pane{
 					{Parent: "900", IssueNum: 101, PaneID: "%1"},
 					{Parent: "901", IssueNum: 999, Slug: "api-client-102", WorktreePath: "/repo/.fanout/worktrees/api-client-102"},
@@ -152,9 +153,29 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
 				t.Helper()
-				assertInts(t, "count calls", fake.countCalls, []int{103})
-				assertInts(t, "standalone launches", fake.standalone, []int{103})
+				assertInts(t, "count calls", fake.countCalls, []int{101, 102, 103, 104})
+				assertInts(t, "standalone launches", fake.standalone, []int{103, 104})
 				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned, SkipAlreadyFanned})
+			},
+		},
+		{
+			name: "parent fanout ignores child issue false positive",
+			fake: &fakeWatchIO{
+				issues:       []ghissue.Issue{issue(201), issue(202)},
+				openChildren: map[int]int{201: 2, 202: 2},
+				store: state.Store{Panes: []state.Pane{
+					{Parent: "0201", IssueNum: 301, PaneID: "%1"},
+					{Parent: "201", IssueNum: 302, PaneID: "%2"},
+					{Parent: "900", IssueNum: 202, PaneID: "%3"},
+				}},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, []int{201, 202})
+				if got, want := fake.parents, []parentLaunch{{num: 201, limit: 0}, {num: 202, limit: 0}}; !slices.Equal(got, want) {
+					t.Fatalf("parent launches = %#v, want %#v", got, want)
+				}
+				assertSkipReasons(t, report, nil)
 			},
 		},
 		{
@@ -204,17 +225,46 @@ func TestRunCycleTableDriven(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "parent exceeding remaining budget launches limited batch and keeps trigger label",
+			cfg:  Config{MaxSessions: 3},
+			fake: &fakeWatchIO{
+				issues:         []ghissue.Issue{issue(301)},
+				openChildren:   map[int]int{301: 3},
+				parentDeferred: map[int]bool{301: true},
+				store: state.Store{Panes: []state.Pane{
+					{Parent: "301", IssueNum: 401, PaneID: "%old"},
+					{Parent: "900", IssueNum: 900, PaneID: "%live"},
+				}},
+				alive: map[string]bool{"%live": true},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, []int{301})
+				assertSwaps(t, fake.swaps, []swapCall{
+					{num: 301, remove: triggerLabel, add: runningLabel},
+					{num: 301, remove: runningLabel, add: triggerLabel},
+				})
+				if len(report.Deferred) != 1 || report.Deferred[0].Reason != DeferMaxSessions {
+					t.Fatalf("deferred = %#v, want max_sessions", report.Deferred)
+				}
+				if len(report.Actions) != 1 || report.Actions[0].Limit != 2 {
+					t.Fatalf("actions = %#v, want one parent launch with limit 2", report.Actions)
+				}
+				if got, want := fake.parents, []parentLaunch{{num: 301, limit: 2}}; !slices.Equal(got, want) {
+					t.Fatalf("parent launches = %#v, want %#v", got, want)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clock := &fakeClock{now: baseNow}
-			cfg := Config{
-				TriggerLabel: triggerLabel,
-				RunningLabel: runningLabel,
-				Now:          clock.Now,
-				MaxSessions:  tt.cfg.MaxSessions,
-			}
+			cfg := tt.cfg
+			cfg.TriggerLabel = triggerLabel
+			cfg.RunningLabel = runningLabel
+			cfg.Now = clock.Now
 			engine := NewEngine(cfg, tt.fake.IO())
 			report, err := engine.RunCycle()
 			if tt.wantError && err == nil {
