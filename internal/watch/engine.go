@@ -86,10 +86,10 @@ type IO struct {
 
 // Engine keeps process-local launch failure state between cycles.
 type Engine struct {
-	cfg           Config
-	io            IO
-	failures      map[int]failureState
-	parentRetries map[int]ghissue.Issue
+	cfg            Config
+	io             IO
+	failures       map[int]failureState
+	runningRetries map[int]runningRetry
 }
 
 type failureState struct {
@@ -98,13 +98,17 @@ type failureState struct {
 	Disabled    bool
 }
 
+type runningRetry struct {
+	kind LaunchKind
+}
+
 // NewEngine returns a watcher engine with process-local failure memory.
 func NewEngine(cfg Config, io IO) *Engine {
 	return &Engine{
-		cfg:           cfg,
-		io:            io,
-		failures:      map[int]failureState{},
-		parentRetries: map[int]ghissue.Issue{},
+		cfg:            cfg,
+		io:             io,
+		failures:       map[int]failureState{},
+		runningRetries: map[int]runningRetry{},
 	}
 }
 
@@ -120,9 +124,9 @@ type Action struct {
 	Issue        ghissue.Issue
 	Kind         LaunchKind
 	OpenChildren int
-	// RetryRunningParent means a deferred parent is already on the running label
-	// after a failed requeue swap, so RunCycle should not acquire it again.
-	RetryRunningParent bool
+	// RetryRunning means the issue is already on the running label after a failed
+	// requeue swap, so RunCycle should not acquire it again.
+	RetryRunning bool
 	// Limit is non-zero only when MaxSessions is finite and this is a parent
 	// fan-out. The caller should pass it through as fanout's --limit value.
 	Limit int
@@ -186,7 +190,7 @@ func (e *Engine) PlanCycle() (Report, error) {
 		return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.TriggerLabel, err)
 	}
 	var runningCandidates []ghissue.Issue
-	if len(e.parentRetries) > 0 {
+	if len(e.runningRetries) > 0 {
 		runningCandidates, err = e.io.ListLabeled(cfg.RunningLabel)
 		if err != nil {
 			return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.RunningLabel, err)
@@ -217,13 +221,13 @@ func (e *Engine) PlanCycle() (Report, error) {
 	for _, candidate := range plannedCandidates {
 		issue := candidate.issue
 		if strings.ToUpper(strings.TrimSpace(issue.State)) != "OPEN" {
-			if candidate.retryParent {
-				delete(e.parentRetries, issue.Number)
+			if candidate.retryKind != "" {
+				delete(e.runningRetries, issue.Number)
 			}
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipClosed})
 			continue
 		}
-		if hasLabel(issue, cfg.RunningLabel) && !candidate.retryParent {
+		if hasLabel(issue, cfg.RunningLabel) && candidate.retryKind == "" {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 			continue
 		}
@@ -253,13 +257,13 @@ func (e *Engine) PlanCycle() (Report, error) {
 			openChildren = 0
 		}
 		action := Action{
-			Issue:              issue,
-			Kind:               LaunchStandalone,
-			OpenChildren:       openChildren,
-			RetryRunningParent: candidate.retryRunningParent,
+			Issue:        issue,
+			Kind:         LaunchStandalone,
+			OpenChildren: openChildren,
+			RetryRunning: candidate.retryRunning,
 		}
 		consumes := 1
-		if openChildren > 0 || candidate.retryParent {
+		if openChildren > 0 || candidate.retryKind == LaunchParent {
 			action.Kind = LaunchParent
 			consumes = openChildren
 		}
@@ -296,7 +300,7 @@ func (e *Engine) RunCycle() (Report, error) {
 	}
 
 	for _, action := range report.Actions {
-		if !action.RetryRunningParent {
+		if !action.RetryRunning {
 			if err := e.io.SwapLabels(action.Issue, cfg.TriggerLabel, cfg.RunningLabel); err != nil {
 				report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
 				continue
@@ -313,10 +317,10 @@ func (e *Engine) RunCycle() (Report, error) {
 		}
 		if launchErr != nil {
 			revertErr := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel)
-			if action.Kind == LaunchParent && revertErr != nil {
-				e.parentRetries[action.Issue.Number] = action.Issue
+			if revertErr != nil {
+				e.runningRetries[action.Issue.Number] = runningRetry{kind: action.Kind}
 			} else {
-				delete(e.parentRetries, action.Issue.Number)
+				delete(e.runningRetries, action.Issue.Number)
 			}
 			failure := e.recordLaunchFailure(action.Issue.Number, cfg.Now())
 			report.Failures = append(report.Failures, Failure{
@@ -333,13 +337,13 @@ func (e *Engine) RunCycle() (Report, error) {
 		if action.Kind == LaunchParent && parentResult.Deferred {
 			report.Deferred = append(report.Deferred, Deferred{Issue: action.Issue, Reason: DeferMaxSessions})
 			if err := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel); err != nil {
-				e.parentRetries[action.Issue.Number] = action.Issue
+				e.runningRetries[action.Issue.Number] = runningRetry{kind: LaunchParent}
 				report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
 			} else {
-				delete(e.parentRetries, action.Issue.Number)
+				delete(e.runningRetries, action.Issue.Number)
 			}
 		} else {
-			delete(e.parentRetries, action.Issue.Number)
+			delete(e.runningRetries, action.Issue.Number)
 		}
 		delete(e.failures, action.Issue.Number)
 		report.Launched = append(report.Launched, action)
@@ -348,32 +352,32 @@ func (e *Engine) RunCycle() (Report, error) {
 }
 
 type planCandidate struct {
-	issue              ghissue.Issue
-	retryParent        bool
-	retryRunningParent bool
+	issue        ghissue.Issue
+	retryKind    LaunchKind
+	retryRunning bool
 }
 
 func (e *Engine) planCandidates(triggered, running []ghissue.Issue) []planCandidate {
 	candidates := make([]planCandidate, 0, len(triggered)+len(running))
 	seen := map[int]bool{}
 	for _, issue := range triggered {
-		_, retry := e.parentRetries[issue.Number]
-		candidates = append(candidates, planCandidate{issue: issue, retryParent: retry})
+		retry := e.runningRetries[issue.Number]
+		candidates = append(candidates, planCandidate{issue: issue, retryKind: retry.kind})
 		seen[issue.Number] = true
 	}
 	for _, issue := range running {
-		if _, retry := e.parentRetries[issue.Number]; retry && !seen[issue.Number] {
+		if retry, ok := e.runningRetries[issue.Number]; ok && !seen[issue.Number] {
 			candidates = append(candidates, planCandidate{
-				issue:              issue,
-				retryParent:        true,
-				retryRunningParent: true,
+				issue:        issue,
+				retryKind:    retry.kind,
+				retryRunning: true,
 			})
 			seen[issue.Number] = true
 		}
 	}
-	for num := range e.parentRetries {
+	for num := range e.runningRetries {
 		if !seen[num] {
-			delete(e.parentRetries, num)
+			delete(e.runningRetries, num)
 		}
 	}
 	return candidates
@@ -439,6 +443,9 @@ func validateRunIO(io IO) error {
 func countLivePanes(store state.Store, alive func(state.Pane) (bool, error)) (int, error) {
 	count := 0
 	for _, pane := range store.Panes {
+		if pane.Kind == state.PaneKindShell {
+			continue
+		}
 		ok, err := alive(pane)
 		if err != nil {
 			return 0, fmt.Errorf("check pane %s alive: %w", pane.PaneID, err)
