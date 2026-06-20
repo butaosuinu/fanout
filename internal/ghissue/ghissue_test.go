@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,185 @@ func TestSummarizeCI(t *testing.T) {
 				t.Fatalf("SummarizeCI(%#v) = %q, want %q", tc.prs, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseIssueListFixture(t *testing.T) {
+	fixture := `[
+  {
+    "number": 221,
+    "title": "label watcher API",
+    "state": "open",
+    "body": "body",
+    "labels": [{"name": "fanout:queued"}]
+  },
+  {
+    "number": 222,
+    "title": "missing labels normalizes empty",
+    "state": "OPEN",
+    "body": "",
+    "labels": null
+  }
+]`
+
+	got, err := parseIssueList([]byte(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Issue{
+		{Number: 221, Title: "label watcher API", State: "OPEN", Body: "body", Labels: []Label{{Name: "fanout:queued"}}},
+		{Number: 222, Title: "missing labels normalizes empty", State: "OPEN", Body: "", Labels: []Label{}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseIssueList() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseIssueListRejectsInvalidJSON(t *testing.T) {
+	got, err := parseIssueList([]byte(`{"number":221}`))
+	if err == nil {
+		t.Fatalf("parseIssueList() = %#v, want error", got)
+	}
+}
+
+func TestListOpenIssuesWithLabelRunsGHIssueList(t *testing.T) {
+	argsPath := installFakeGH(t, `[{"number":221,"title":"queued","state":"OPEN","body":"body","labels":[{"name":"fanout:queued"}]}]`)
+
+	got, err := (Runner{}).ListOpenIssuesWithLabel("fanout:queued")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Issue{{Number: 221, Title: "queued", State: "OPEN", Body: "body", Labels: []Label{{Name: "fanout:queued"}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListOpenIssuesWithLabel() = %#v, want %#v", got, want)
+	}
+	assertFakeGHArgs(t, argsPath, []string{
+		"issue", "list",
+		"--state", "open",
+		"--label", "fanout:queued",
+		"--limit", "100",
+		"--json", "number,title,state,body,labels",
+	})
+}
+
+func TestListOpenIssuesWithLabelReturnsParseError(t *testing.T) {
+	installFakeGH(t, `not-json`)
+
+	got, err := (Runner{}).ListOpenIssuesWithLabel("fanout:queued")
+	if err == nil {
+		t.Fatalf("ListOpenIssuesWithLabel() = %#v, want error", got)
+	}
+	if !strings.Contains(err.Error(), `parse gh issue list --label "fanout:queued"`) {
+		t.Fatalf("ListOpenIssuesWithLabel() error = %v", err)
+	}
+}
+
+func TestSwapIssueLabelsRunsSingleEdit(t *testing.T) {
+	argsPath := installFakeGH(t, ``)
+
+	if err := (Runner{}).SwapIssueLabels(221, "fanout:queued", "fanout:running"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFakeGHArgs(t, argsPath, []string{
+		"issue", "edit", "221",
+		"--remove-label", "fanout:queued",
+		"--add-label", "fanout:running",
+	})
+}
+
+func TestSwapIssueLabelsReturnsGHError(t *testing.T) {
+	installFakeGHWithResult(t, ``, `missing label`, 1)
+
+	err := (Runner{}).SwapIssueLabels(221, "fanout:queued", "fanout:running")
+	if err == nil {
+		t.Fatal("SwapIssueLabels() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "missing label") {
+		t.Fatalf("SwapIssueLabels() error = %v", err)
+	}
+}
+
+func TestEnsureLabelSkipsCreateWhenPresent(t *testing.T) {
+	argsPath := installFakeGH(t, `[{"name":"fanout:running"}]`)
+
+	if err := (Runner{}).EnsureLabel("fanout:running"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFakeGHArgs(t, argsPath, []string{
+		"label", "list",
+		"--search", "fanout:running",
+		"--limit", "100",
+		"--json", "name",
+	})
+}
+
+func TestEnsureLabelCreatesMissingLabel(t *testing.T) {
+	argsPath := installFakeGHScript(t, `
+args="$*"
+printf '%s\n' "$args" >> "$GH_FAKE_ARGS"
+case "$args" in
+"label list --search fanout:running --limit 100 --json name")
+  printf '[{"name":"fanout:queued"}]'
+  ;;
+"label create fanout:running")
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	if err := (Runner{}).EnsureLabel("fanout:running"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFakeGHCommandLines(t, argsPath, []string{
+		"label list --search fanout:running --limit 100 --json name",
+		"label create fanout:running",
+	})
+}
+
+func TestEnsureLabelReturnsParseError(t *testing.T) {
+	installFakeGH(t, `not-json`)
+
+	err := (Runner{}).EnsureLabel("fanout:running")
+	if err == nil {
+		t.Fatal("EnsureLabel() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), `parse gh label list --search "fanout:running"`) {
+		t.Fatalf("EnsureLabel() error = %v", err)
+	}
+}
+
+func TestEnsureLabelReturnsCreateError(t *testing.T) {
+	installFakeGHScript(t, `
+args="$*"
+case "$args" in
+"label list --search fanout:running --limit 100 --json name")
+  printf '[]'
+  ;;
+"label create fanout:running")
+  printf 'create failed' >&2
+  exit 1
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	err := (Runner{}).EnsureLabel("fanout:running")
+	if err == nil {
+		t.Fatal("EnsureLabel() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "create failed") {
+		t.Fatalf("EnsureLabel() error = %v", err)
 	}
 }
 
@@ -181,12 +361,21 @@ func TestNormalizeCIStatus(t *testing.T) {
 
 func installFakeGH(t *testing.T, output string) string {
 	t.Helper()
+	return installFakeGHWithResult(t, output, "", 0)
+}
+
+func installFakeGHWithResult(t *testing.T, output, stderr string, exitCode int) string {
+	t.Helper()
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args")
 	script := filepath.Join(dir, "gh")
 	body := `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$@" > "$GH_FAKE_ARGS"
+if [[ "$GH_FAKE_EXIT" != "0" ]]; then
+  printf '%s' "$GH_FAKE_STDERR" >&2
+  exit "$GH_FAKE_EXIT"
+fi
 printf '%s' "$GH_FAKE_OUTPUT"
 `
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
@@ -194,6 +383,22 @@ printf '%s' "$GH_FAKE_OUTPUT"
 	}
 	t.Setenv("GH_FAKE_ARGS", argsPath)
 	t.Setenv("GH_FAKE_OUTPUT", output)
+	t.Setenv("GH_FAKE_STDERR", stderr)
+	t.Setenv("GH_FAKE_EXIT", strconv.Itoa(exitCode))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
+
+func installFakeGHScript(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "gh")
+	fullBody := "#!/usr/bin/env bash\nset -euo pipefail\n" + body
+	if err := os.WriteFile(script, []byte(fullBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_FAKE_ARGS", argsPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsPath
 }
@@ -207,6 +412,18 @@ func assertFakeGHArgs(t *testing.T, argsPath string, want []string) {
 	got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("gh args = %#v, want %#v", got, want)
+	}
+}
+
+func assertFakeGHCommandLines(t *testing.T, argsPath string, want []string) {
+	t.Helper()
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("gh command lines = %#v, want %#v", got, want)
 	}
 }
 
