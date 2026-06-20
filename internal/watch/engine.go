@@ -189,12 +189,9 @@ func (e *Engine) PlanCycle() (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.TriggerLabel, err)
 	}
-	var runningCandidates []ghissue.Issue
-	if len(e.runningRetries) > 0 {
-		runningCandidates, err = e.io.ListLabeled(cfg.RunningLabel)
-		if err != nil {
-			return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.RunningLabel, err)
-		}
+	runningCandidates, err := e.io.ListLabeled(cfg.RunningLabel)
+	if err != nil {
+		return Report{}, fmt.Errorf("list labeled issues %q: %w", cfg.RunningLabel, err)
 	}
 	store, err := e.io.LoadState()
 	if err != nil {
@@ -227,7 +224,7 @@ func (e *Engine) PlanCycle() (Report, error) {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipClosed})
 			continue
 		}
-		if hasLabel(issue, cfg.RunningLabel) && candidate.retryKind == "" {
+		if hasLabel(issue, cfg.RunningLabel) && candidate.retryKind == "" && !candidate.recoverRunning {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 			continue
 		}
@@ -256,6 +253,20 @@ func (e *Engine) PlanCycle() (Report, error) {
 		if openChildren < 0 {
 			openChildren = 0
 		}
+		if candidate.recoverRunning && openChildren == 0 && hasPaneForParent(store, issue.Number) {
+			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
+			continue
+		}
+		if candidate.recoverRunning && openChildren > 0 {
+			liveParent, err := hasLivePaneForParent(store, issue.Number, e.io.PaneAlive)
+			if err != nil {
+				return Report{}, err
+			}
+			if liveParent {
+				report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
+				continue
+			}
+		}
 		action := Action{
 			Issue:        issue,
 			Kind:         LaunchStandalone,
@@ -272,8 +283,8 @@ func (e *Engine) PlanCycle() (Report, error) {
 			continue
 		}
 		if action.Kind == LaunchParent && remaining > 0 {
-			action.Limit = remaining
 			consumes = min(openChildren, remaining)
+			action.Limit = consumes
 		}
 		report.Actions = append(report.Actions, action)
 		if remaining > 0 {
@@ -352,28 +363,37 @@ func (e *Engine) RunCycle() (Report, error) {
 }
 
 type planCandidate struct {
-	issue        ghissue.Issue
-	retryKind    LaunchKind
-	retryRunning bool
+	issue          ghissue.Issue
+	retryKind      LaunchKind
+	retryRunning   bool
+	recoverRunning bool
 }
 
 func (e *Engine) planCandidates(triggered, running []ghissue.Issue) []planCandidate {
 	candidates := make([]planCandidate, 0, len(triggered)+len(running))
 	seen := map[int]bool{}
+	index := map[int]int{}
 	for _, issue := range triggered {
 		retry := e.runningRetries[issue.Number]
 		candidates = append(candidates, planCandidate{issue: issue, retryKind: retry.kind})
 		seen[issue.Number] = true
+		index[issue.Number] = len(candidates) - 1
 	}
 	for _, issue := range running {
-		if retry, ok := e.runningRetries[issue.Number]; ok && !seen[issue.Number] {
-			candidates = append(candidates, planCandidate{
-				issue:        issue,
-				retryKind:    retry.kind,
-				retryRunning: true,
-			})
-			seen[issue.Number] = true
+		if seen[issue.Number] {
+			if _, retrying := e.runningRetries[issue.Number]; !retrying {
+				candidates[index[issue.Number]].recoverRunning = true
+			}
+			continue
 		}
+		retry, retrying := e.runningRetries[issue.Number]
+		candidates = append(candidates, planCandidate{
+			issue:          issue,
+			retryKind:      retry.kind,
+			retryRunning:   true,
+			recoverRunning: !retrying,
+		})
+		seen[issue.Number] = true
 	}
 	for num := range e.runningRetries {
 		if !seen[num] {
@@ -504,6 +524,26 @@ func alreadyFanned(store state.Store, action Action) bool {
 		}
 	}
 	return false
+}
+
+func hasPaneForParent(store state.Store, issueNum int) bool {
+	return len(store.PanesForParent(strconv.Itoa(issueNum))) > 0
+}
+
+func hasLivePaneForParent(store state.Store, issueNum int, alive func(state.Pane) (bool, error)) (bool, error) {
+	for _, pane := range store.PanesForParent(strconv.Itoa(issueNum)) {
+		if pane.Kind == state.PaneKindShell {
+			continue
+		}
+		ok, err := alive(pane)
+		if err != nil {
+			return false, fmt.Errorf("check pane %s alive: %w", pane.PaneID, err)
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func paneWorktreeMatchesIssue(pane state.Pane, issueNum int) bool {

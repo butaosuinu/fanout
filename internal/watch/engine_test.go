@@ -232,7 +232,7 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
-			name: "parent fanout gets remaining budget as limit",
+			name: "parent fanout gets reserved budget as limit",
 			cfg:  Config{MaxSessions: 5},
 			fake: &fakeWatchIO{
 				issues:       []ghissue.Issue{issue(201)},
@@ -242,10 +242,10 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
 				t.Helper()
-				if len(report.Actions) != 1 || report.Actions[0].Kind != LaunchParent || report.Actions[0].Limit != 4 {
-					t.Fatalf("actions = %#v, want parent with limit 4", report.Actions)
+				if len(report.Actions) != 1 || report.Actions[0].Kind != LaunchParent || report.Actions[0].Limit != 3 {
+					t.Fatalf("actions = %#v, want parent with limit 3", report.Actions)
 				}
-				if got, want := fake.parents, []parentLaunch{{num: 201, limit: 4}}; !slices.Equal(got, want) {
+				if got, want := fake.parents, []parentLaunch{{num: 201, limit: 3}}; !slices.Equal(got, want) {
 					t.Fatalf("parent launches = %#v, want %#v", got, want)
 				}
 			},
@@ -303,6 +303,130 @@ func TestRunCycleTableDriven(t *testing.T) {
 	}
 }
 
+func TestRunCycleRecoversStandaloneRunningRetryAfterRestart(t *testing.T) {
+	fake := &fakeWatchIO{
+		runningIssues: []ghissue.Issue{issue(101, runningLabel)},
+		openChildren:  map[int]int{101: 0},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{101})
+	assertSwaps(t, fake.swaps, nil)
+	assertInts(t, "standalone launches", fake.standalone, []int{101})
+	if len(report.Actions) != 1 || !report.Actions[0].RetryRunning {
+		t.Fatalf("actions = %#v, want recovered running-label standalone", report.Actions)
+	}
+}
+
+func TestRunCycleRecoversParentRunningRetryAfterRestart(t *testing.T) {
+	fake := &fakeWatchIO{
+		runningIssues: []ghissue.Issue{issue(301, runningLabel)},
+		openChildren:  map[int]int{301: 1},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{301})
+	assertSwaps(t, fake.swaps, nil)
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent launches = %#v, want %#v", got, want)
+	}
+	if len(report.Actions) != 1 || !report.Actions[0].RetryRunning || report.Actions[0].Kind != LaunchParent {
+		t.Fatalf("actions = %#v, want recovered running-label parent", report.Actions)
+	}
+}
+
+func TestRunCycleSkipsRecoveredRunningParentWithLiveChildren(t *testing.T) {
+	fake := &fakeWatchIO{
+		runningIssues: []ghissue.Issue{issue(301, runningLabel)},
+		openChildren:  map[int]int{301: 2},
+		store: state.Store{Panes: []state.Pane{
+			{Parent: "301", IssueNum: 401, PaneID: "%child"},
+		}},
+		alive: map[string]bool{"%child": true},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{301})
+	if len(fake.parents) != 0 || len(report.Actions) != 0 {
+		t.Fatalf("report=%#v parents=%#v, want live parent skipped", report, fake.parents)
+	}
+	assertSkipReasons(t, report, []SkipReason{SkipAlreadyRunning})
+}
+
+func TestRunCycleRecoversBothLabeledRunningRetryAfterRestart(t *testing.T) {
+	fake := &fakeWatchIO{
+		issues:        []ghissue.Issue{issue(101, runningLabel)},
+		runningIssues: []ghissue.Issue{issue(101, runningLabel)},
+		openChildren:  map[int]int{101: 0},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{101})
+	assertSwaps(t, fake.swaps, []swapCall{{num: 101, remove: triggerLabel, add: runningLabel}})
+	assertInts(t, "standalone launches", fake.standalone, []int{101})
+	if len(report.Actions) != 1 || report.Actions[0].RetryRunning {
+		t.Fatalf("actions = %#v, want recovered trigger acquisition", report.Actions)
+	}
+}
+
+func TestRunCycleSkipsRecoveredRunningParentWithoutOpenChildren(t *testing.T) {
+	fake := &fakeWatchIO{
+		runningIssues: []ghissue.Issue{issue(301, runningLabel)},
+		openChildren:  map[int]int{301: 0},
+		store: state.Store{Panes: []state.Pane{
+			{Parent: "301", IssueNum: 401, PaneID: "%child"},
+		}},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{301})
+	assertInts(t, "standalone launches", fake.standalone, nil)
+	if len(fake.parents) != 0 || len(report.Actions) != 0 {
+		t.Fatalf("report=%#v parents=%#v, want recovered parent skipped", report, fake.parents)
+	}
+	assertSkipReasons(t, report, []SkipReason{SkipAlreadyRunning})
+}
+
 func TestRunCycleRetriesStandaloneWhenRequeueSwapFails(t *testing.T) {
 	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{now: baseNow}
@@ -356,15 +480,17 @@ func TestRunCycleRetriesStandaloneWhenRequeueSwapFails(t *testing.T) {
 
 	fake.countCalls = nil
 	fake.standalone = nil
+	fake.store = state.Store{Panes: []state.Pane{{IssueNum: 101, PaneID: "%new"}}}
 
 	third, err := engine.RunCycle()
 	if err != nil {
 		t.Fatalf("third RunCycle error = %v", err)
 	}
-	if len(third.Actions) != 0 || len(fake.standalone) != 0 || len(fake.countCalls) != 0 {
-		t.Fatalf("third retry persisted: report=%#v standalone=%#v countCalls=%#v",
-			third, fake.standalone, fake.countCalls)
+	if len(third.Actions) != 0 || len(fake.standalone) != 0 {
+		t.Fatalf("third retry persisted: report=%#v standalone=%#v", third, fake.standalone)
 	}
+	assertInts(t, "count calls after state record", fake.countCalls, []int{101})
+	assertSkipReasons(t, third, []SkipReason{SkipAlreadyFanned})
 }
 
 func TestRunCycleRetriesDeferredParentWhenRequeueSwapFails(t *testing.T) {
@@ -423,6 +549,8 @@ func TestRunCycleRetriesDeferredParentWhenRequeueSwapFails(t *testing.T) {
 
 	fake.countCalls = nil
 	fake.parents = nil
+	fake.openChildren[301] = 0
+	fake.store = state.Store{Panes: []state.Pane{{Parent: "301", IssueNum: 401, PaneID: "%new"}}}
 
 	third, err := engine.RunCycle()
 	if err != nil {
