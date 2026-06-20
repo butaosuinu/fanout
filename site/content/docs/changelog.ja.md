@@ -9,10 +9,15 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含む [GitHub release](https://github.com/butaosuinu/fanout/releases) があります。バージョンは git タグから ldflags 経由で埋め込まれます — `fanout --check-update` で自分の版を確認できます。
 
-## Unreleased
+## v0.7.0 — 2026-06-21
 
+- **ライフサイクルフック。** worktree・pane・merge イベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`(Codex 形式の `hooks` オブジェクト)で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
 - **TUI shell terminal。** 常駐コンソールで、選択行の worktree に `A`、project root に `t` で plain shell を開けます。shell 行は focus / peek 用に manual entry として記録され、close は tmux pane と state 行だけを消します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **コンパクトな Session ナビゲーター。** 常駐コンソールに、セッション間を移動するためのコンパクトな Session ナビゲーターが加わりました(既存の focus / peek / lifecycle キーはそのままです)。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **`origin` なしの `fanout plan`。** plan 実行に `origin` remote が不要になりました。base branch 解決は現在のローカルブランチや `HEAD` にフォールバックするため、ローカルだけのリポジトリでも plan を fan out できます。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
 - **dry-run の整理。** issue / Project と `fanout plan` の dry-run は pane 作成前の安全な preview として残しつつ、issue / Project dry-run は `/tmp` briefing file を書かなくなりました。未使用だった `fanout msg --dry-run` surface は削除されました。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.7.0)
 
 ## v0.6.0 — 2026-06-15
 

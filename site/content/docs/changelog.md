@@ -9,10 +9,15 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
-## Unreleased
+## v0.7.0 — 2026-06-21
 
+- **Lifecycle hooks.** fanout now runs user shell hooks around worktree, pane, and merge events. Configure them in `$XDG_CONFIG_HOME/fanout/hooks.json` (a Codex-style `hooks` object); they are always enabled, and a missing file or an event with no commands is a no-op. See [CLI Reference]({{< relref "/docs/cli" >}}).
 - **TUI shell terminals.** The persistent console can now open a plain shell in the selected row's worktree with `A`, or at the project root with `t`. Shell rows are recorded as manual entries for focus / peek, and close removes only the tmux pane and state row. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Compact Session navigator.** The persistent console gained a compact Session navigator for jumping between sessions, alongside the existing focus / peek / lifecycle keys. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **`fanout plan` without `origin`.** Plan runs no longer require an `origin` remote — base branch resolution falls back to the current local branch or `HEAD`, so a local-only repo can still fan out a plan. See [CLI Reference]({{< relref "/docs/cli" >}}).
 - **Cleaner dry-run semantics.** Issue / Project and `fanout plan` dry-runs remain the safety previews for pane creation, but issue / Project dry-runs no longer write `/tmp` briefing files. The unused `fanout msg --dry-run` surface was removed.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.7.0)
 
 ## v0.6.0 — 2026-06-15
 
