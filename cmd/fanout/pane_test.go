@@ -157,12 +157,12 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
 
-	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), nil)
+	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
 	}
 
-	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, manualPaneOptions{Title: "Manual diagnostics"})
+	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "Manual diagnostics"})
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")
 	}
