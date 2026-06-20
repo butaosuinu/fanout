@@ -381,13 +381,19 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard `prefix + D` tmux keybinding (`dashboardKeybind`). |
+| `FANOUT_WATCHER` | Environment layer for watcher opt-in (`watcher`). |
+| `FANOUT_WATCHER_TRIGGER_LABEL` | Environment layer for the watcher trigger label (`watcherTriggerLabel`). |
+| `FANOUT_WATCHER_RUNNING_LABEL` | Environment layer for the watcher running label (`watcherRunningLabel`). |
+| `FANOUT_WATCHER_INTERVAL_SECONDS` | Environment layer for the watcher interval (`watcherIntervalSeconds`). |
+| `FANOUT_WATCHER_AGENT` | Environment layer for the watcher child agent (`watcherAgent`). |
+| `FANOUT_WATCHER_MAX_SESSIONS` | Environment layer for the watcher session cap (`watcherMaxSessions`). |
 | `FANOUT_NOTIFICATIONS` | Environment layer for the TUI transition notification channels (`notifications`); see [Settings]({{< relref "/docs/settings" >}}). |
 | `FANOUT_NTFY_URL` | Environment layer for the ntfy POST URL (`ntfyURL`). |
 | `FANOUT_SLACK_WEBHOOK_URL` | Environment layer for the Slack webhook POST URL (`slackWebhookURL`). |
 | `FANOUT_DB_PATH` | Override the per-parent peer-messaging SQLite path used by `--team` and `fanout msg`. Default: `/tmp/fanout-<repo>-<parent>.db`. |
 | `FANOUT_SKIP_PR_REVIEW` | One-shot bypass of the PR review-gate hook: prefix `gh pr create` with `FANOUT_SKIP_PR_REVIEW=1`. See [Troubleshooting]({{< relref "/docs/troubleshooting" >}}). |
 
-The boolean settings variables accept `1/true/yes/on` and `0/false/no/off`, case-insensitive. Invalid values are warned and ignored. They sit between CLI flags and the config files in the settings resolution order.
+The boolean settings variables accept `1/true/yes/on` and `0/false/no/off`, case-insensitive. Integer watcher variables accept base-10 integers. Invalid values are warned and ignored. They sit between CLI flags and the config files in the settings resolution order.
 
 ## Exit codes
 

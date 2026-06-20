@@ -1,13 +1,13 @@
 ---
 title: 設定
 linkTitle: 設定
-description: "オン/オフできる opinionated な挙動トグルと TUI 通知 channel、そしてその背後にある flag > env > repo > user > default の解決順序。"
+description: "オン/オフできる opinionated な挙動トグル、watcher 制御、TUI 通知 channel、そして flag > env > repo > user > default の解決順序。"
 weight: 60
 kanji: 整
 yomi: settings
 ---
 
-fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシュボードの tmux キーバインド)をオン/オフでき、TUI 通知 channel も選択できます。bool 既定値は `true` です。通知の既定値は `bell` です。
+fanout は briefing トグル、ダッシュボードの tmux キーバインド、watcher 制御、TUI 通知 channel を同じ設定スタックで解決します。briefing/dashboard の bool 既定値は `true`、watcher は既定で off、通知の既定値は `bell` です。
 
 ## 解決順序
 
@@ -26,15 +26,21 @@ fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシ�
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
+| watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
+| watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |
+| watcher interval 秒 | `watcherIntervalSeconds` | `FANOUT_WATCHER_INTERVAL_SECONDS` | n/a | `60` |
+| watcher child agent | `watcherAgent` | `FANOUT_WATCHER_AGENT` | n/a | 未設定 |
+| watcher 最大 session 数 | `watcherMaxSessions` | `FANOUT_WATCHER_MAX_SESSIONS` | n/a | `4` |
 | TUI 状態遷移通知 | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | 未設定 |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
 
-これらの flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています（CLI リファレンスには、設定ではなく起動フラグである `--codex-plan-mode` も含まれます）。通知設定に CLI flag はありません。
+これらの flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています（CLI リファレンスには、設定ではなく起動フラグである `--codex-plan-mode` も含まれます）。watcher と通知設定に CLI flag はありません。
 
 ## config.json サンプル
 
-リポジトリ設定とユーザー設定はどちらも同じ形で、bool のトグルに加えて 3 つの string な通知キーを持つフラットな JSON オブジェクトです:
+リポジトリ設定とユーザー設定はどちらも同じ形で、bool、string、integer のキーを持つフラットな JSON オブジェクトです:
 
 ```json
 {
@@ -44,6 +50,12 @@ fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシ�
   "agentTeamsHint": false,
   "prVisualization": true,
   "dashboardKeybind": true,
+  "watcher": false,
+  "watcherTriggerLabel": "fanout:auto",
+  "watcherRunningLabel": "fanout:running",
+  "watcherIntervalSeconds": 60,
+  "watcherAgent": "codex",
+  "watcherMaxSessions": 4,
   "notifications": "bell",
   "ntfyURL": "https://ntfy.sh/my-topic",
   "slackWebhookURL": "https://hooks.slack.com/services/..."
@@ -51,14 +63,19 @@ fanout は opinionated な 6 つの挙動(briefing の 5 トグル、ダッシ�
 ```
 
 bool の環境変数は `1/true/yes/on` と `0/false/no/off` を受け付けます(大小文字は無視)。
+integer の環境変数は 10 進整数を受け付けます。`watcherIntervalSeconds` は最低 `20` に解決され、`watcherMaxSessions=0` は無制限を意味します。
 
 ## 通知 channel
 
 `notifications` は comma または空白区切りの selector です。指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。どちらの HTTP channel も outbound POST のみで、inbound socket は開きません。repository-controlled な外部送信を避けるため、repo config で選択できるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、`ntfyURL`、`slackWebhookURL` は user config または環境変数からだけ有効になります。
 
+## watcher の安全制約
+
+repo config では watcher を opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定している場合、fanout は警告してそのキーを無視します。user config または `FANOUT_WATCHER` を使ってください。repo config では `watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は設定できます。
+
 ## 前方互換
 
-不正な bool env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
+不正な bool / integer env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
 
 Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は [CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
 

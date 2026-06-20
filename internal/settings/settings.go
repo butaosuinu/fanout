@@ -1,11 +1,12 @@
-// Package settings resolves fanout's opinionated-behavior switches from
-// layered defaults, config files, environment variables, and CLI overrides.
+// Package settings resolves fanout settings from layered defaults, config
+// files, environment variables, and CLI overrides.
 package settings
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -14,17 +15,23 @@ const (
 	userConfigRelPath = "fanout/config.json"
 )
 
-// Settings contains the fully resolved behavior switches.
+// Settings contains the fully resolved settings.
 type Settings struct {
-	AutoPullRequest    bool
-	PRReviewGate       bool
-	BriefingCodeReview bool
-	AgentTeamsHint     bool
-	PRVisualization    bool
-	DashboardKeybind   bool
-	Notifications      string
-	NtfyURL            string
-	SlackWebhookURL    string
+	AutoPullRequest        bool
+	PRReviewGate           bool
+	BriefingCodeReview     bool
+	AgentTeamsHint         bool
+	PRVisualization        bool
+	DashboardKeybind       bool
+	Watcher                bool
+	WatcherTriggerLabel    string
+	WatcherRunningLabel    string
+	WatcherIntervalSeconds int
+	WatcherAgent           string
+	WatcherMaxSessions     int
+	Notifications          string
+	NtfyURL                string
+	SlackWebhookURL        string
 }
 
 // CLIOverrides holds tri-state command-line overrides. nil means the flag was
@@ -39,15 +46,21 @@ type CLIOverrides struct {
 }
 
 type overrides struct {
-	AutoPullRequest    *bool
-	PRReviewGate       *bool
-	BriefingCodeReview *bool
-	AgentTeamsHint     *bool
-	PRVisualization    *bool
-	DashboardKeybind   *bool
-	Notifications      *string
-	NtfyURL            *string
-	SlackWebhookURL    *string
+	AutoPullRequest        *bool
+	PRReviewGate           *bool
+	BriefingCodeReview     *bool
+	AgentTeamsHint         *bool
+	PRVisualization        *bool
+	DashboardKeybind       *bool
+	Watcher                *bool
+	WatcherTriggerLabel    *string
+	WatcherRunningLabel    *string
+	WatcherIntervalSeconds *int
+	WatcherAgent           *string
+	WatcherMaxSessions     *int
+	Notifications          *string
+	NtfyURL                *string
+	SlackWebhookURL        *string
 }
 
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
@@ -56,13 +69,17 @@ type WarnFunc func(format string, a ...any)
 // Defaults returns the built-in settings.
 func Defaults() Settings {
 	return Settings{
-		AutoPullRequest:    true,
-		PRReviewGate:       true,
-		BriefingCodeReview: true,
-		AgentTeamsHint:     true,
-		PRVisualization:    true,
-		DashboardKeybind:   true,
-		Notifications:      "bell",
+		AutoPullRequest:        true,
+		PRReviewGate:           true,
+		BriefingCodeReview:     true,
+		AgentTeamsHint:         true,
+		PRVisualization:        true,
+		DashboardKeybind:       true,
+		WatcherTriggerLabel:    "fanout:auto",
+		WatcherRunningLabel:    "fanout:running",
+		WatcherIntervalSeconds: 60,
+		WatcherMaxSessions:     4,
+		Notifications:          "bell",
 	}
 }
 
@@ -116,6 +133,24 @@ func apply(s *Settings, o overrides) {
 	if o.DashboardKeybind != nil {
 		s.DashboardKeybind = *o.DashboardKeybind
 	}
+	if o.Watcher != nil {
+		s.Watcher = *o.Watcher
+	}
+	if o.WatcherTriggerLabel != nil {
+		s.WatcherTriggerLabel = *o.WatcherTriggerLabel
+	}
+	if o.WatcherRunningLabel != nil {
+		s.WatcherRunningLabel = *o.WatcherRunningLabel
+	}
+	if o.WatcherIntervalSeconds != nil {
+		s.WatcherIntervalSeconds = clampWatcherIntervalSeconds(*o.WatcherIntervalSeconds)
+	}
+	if o.WatcherAgent != nil {
+		s.WatcherAgent = *o.WatcherAgent
+	}
+	if o.WatcherMaxSessions != nil {
+		s.WatcherMaxSessions = *o.WatcherMaxSessions
+	}
 	if o.Notifications != nil {
 		s.Notifications = *o.Notifications
 	}
@@ -140,6 +175,10 @@ func cliOverrides(cli CLIOverrides) overrides {
 
 func repoOverrides(path string, warnf WarnFunc) overrides {
 	out := loadFile(path, warnf)
+	if out.Watcher != nil {
+		warn(warnf, "settings %s: watcher is ignored in repo config; use user config or FANOUT_WATCHER", path)
+		out.Watcher = nil
+	}
 	if out.NtfyURL != nil {
 		warn(warnf, "settings %s: ntfyURL is ignored in repo config; use user config or FANOUT_NTFY_URL", path)
 		out.NtfyURL = nil
@@ -215,11 +254,19 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
 		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
+		"watcher":            func(v *bool) { out.Watcher = v },
 	}
 	stringKeys := map[string]func(*string){
-		"notifications":   func(v *string) { out.Notifications = v },
-		"ntfyURL":         func(v *string) { out.NtfyURL = v },
-		"slackWebhookURL": func(v *string) { out.SlackWebhookURL = v },
+		"watcherTriggerLabel": func(v *string) { out.WatcherTriggerLabel = v },
+		"watcherRunningLabel": func(v *string) { out.WatcherRunningLabel = v },
+		"watcherAgent":        func(v *string) { out.WatcherAgent = v },
+		"notifications":       func(v *string) { out.Notifications = v },
+		"ntfyURL":             func(v *string) { out.NtfyURL = v },
+		"slackWebhookURL":     func(v *string) { out.SlackWebhookURL = v },
+	}
+	intKeys := map[string]func(*int){
+		"watcherIntervalSeconds": func(v *int) { out.WatcherIntervalSeconds = v },
+		"watcherMaxSessions":     func(v *int) { out.WatcherMaxSessions = v },
 	}
 	for key, raw := range root {
 		if set, ok := boolKeys[key]; ok {
@@ -243,6 +290,19 @@ func loadFile(path string, warnf WarnFunc) overrides {
 			var v string
 			if err := json.Unmarshal(raw, &v); err != nil {
 				warn(warnf, "settings %s: %s must be a string (ignored)", path, key)
+				continue
+			}
+			set(&v)
+			continue
+		}
+		if set, ok := intKeys[key]; ok {
+			if strings.TrimSpace(string(raw)) == "null" {
+				warn(warnf, "settings %s: %s must be an integer (ignored)", path, key)
+				continue
+			}
+			var v int
+			if err := json.Unmarshal(raw, &v); err != nil {
+				warn(warnf, "settings %s: %s must be an integer (ignored)", path, key)
 				continue
 			}
 			set(&v)
@@ -273,6 +333,7 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
+	read("FANOUT_WATCHER", func(v *bool) { out.Watcher = v })
 	readString := func(name string, set func(*string)) {
 		raw, ok := os.LookupEnv(name)
 		if !ok {
@@ -280,9 +341,26 @@ func envOverrides(warnf WarnFunc) overrides {
 		}
 		set(&raw)
 	}
+	readString("FANOUT_WATCHER_TRIGGER_LABEL", func(v *string) { out.WatcherTriggerLabel = v })
+	readString("FANOUT_WATCHER_RUNNING_LABEL", func(v *string) { out.WatcherRunningLabel = v })
+	readString("FANOUT_WATCHER_AGENT", func(v *string) { out.WatcherAgent = v })
 	readString("FANOUT_NOTIFICATIONS", func(v *string) { out.Notifications = v })
 	readString("FANOUT_NTFY_URL", func(v *string) { out.NtfyURL = v })
 	readString("FANOUT_SLACK_WEBHOOK_URL", func(v *string) { out.SlackWebhookURL = v })
+	readInt := func(name string, set func(*int)) {
+		raw, ok := os.LookupEnv(name)
+		if !ok {
+			return
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			warn(warnf, "settings env %s: invalid integer %q (ignored)", name, raw)
+			return
+		}
+		set(&v)
+	}
+	readInt("FANOUT_WATCHER_INTERVAL_SECONDS", func(v *int) { out.WatcherIntervalSeconds = v })
+	readInt("FANOUT_WATCHER_MAX_SESSIONS", func(v *int) { out.WatcherMaxSessions = v })
 	return out
 }
 
@@ -295,6 +373,13 @@ func parseBool(raw string) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+func clampWatcherIntervalSeconds(v int) int {
+	if v < 20 {
+		return 20
+	}
+	return v
 }
 
 func warn(warnf WarnFunc, format string, a ...any) {

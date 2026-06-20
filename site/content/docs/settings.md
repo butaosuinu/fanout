@@ -1,13 +1,13 @@
 ---
 title: Settings
 linkTitle: Settings
-description: "Opinionated behavior toggles plus TUI notification channels — and the flag > env > repo > user > default resolution order behind them."
+description: "Opinionated behavior toggles, watcher controls, TUI notification channels, and the flag > env > repo > user > default resolution order behind them."
 weight: 60
 kanji: 整
 yomi: settings
 ---
 
-fanout can turn six opinionated behaviors on or off — five briefing toggles and the dashboard tmux keybinding — and select TUI notification channels. Boolean defaults are `true`. Notifications default to `bell`.
+fanout resolves briefing toggles, the dashboard tmux keybinding, watcher controls, and TUI notification channels from the same settings stack. The briefing/dashboard booleans default to `true`, the watcher defaults to off, and notifications default to `bell`.
 
 ## Resolution order
 
@@ -26,15 +26,21 @@ Each setting resolves as: **CLI flag > environment variable > repo config file >
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard `prefix + D` tmux keybinding | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| Watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
+| Watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
+| Watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |
+| Watcher interval seconds | `watcherIntervalSeconds` | `FANOUT_WATCHER_INTERVAL_SECONDS` | n/a | `60` |
+| Watcher child agent | `watcherAgent` | `FANOUT_WATCHER_AGENT` | n/a | unset |
+| Watcher max sessions | `watcherMaxSessions` | `FANOUT_WATCHER_MAX_SESSIONS` | n/a | `4` |
 | TUI transition notifications | `notifications` | `FANOUT_NOTIFICATIONS` | n/a | `bell` |
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | unset |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | unset |
 
-These flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}) (which also covers `--codex-plan-mode`, a launch flag rather than a resolved setting); the notification settings have no CLI flag.
+These flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}) (which also covers `--codex-plan-mode`, a launch flag rather than a resolved setting); the watcher and notification settings have no CLI flag.
 
 ## Sample config.json
 
-Both config files share the same shape — a flat JSON object of boolean toggles plus the three string notification keys:
+Both config files share the same shape: a flat JSON object of booleans, strings, and integer keys:
 
 ```json
 {
@@ -44,6 +50,12 @@ Both config files share the same shape — a flat JSON object of boolean toggles
   "agentTeamsHint": false,
   "prVisualization": true,
   "dashboardKeybind": true,
+  "watcher": false,
+  "watcherTriggerLabel": "fanout:auto",
+  "watcherRunningLabel": "fanout:running",
+  "watcherIntervalSeconds": 60,
+  "watcherAgent": "codex",
+  "watcherMaxSessions": 4,
   "notifications": "bell",
   "ntfyURL": "https://ntfy.sh/my-topic",
   "slackWebhookURL": "https://hooks.slack.com/services/..."
@@ -51,14 +63,19 @@ Both config files share the same shape — a flat JSON object of boolean toggles
 ```
 
 Boolean environment values accept `1/true/yes/on` and `0/false/no/off` (case-insensitive).
+Integer environment values accept base-10 integers. `watcherIntervalSeconds` resolves to at least `20`; `watcherMaxSessions=0` means unlimited.
 
 ## Notification channels
 
 `notifications` is a comma- or space-separated selector. Supported values are `bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`; `slack` requires `slackWebhookURL`. Both HTTP channels only send outbound POST requests and never open inbound sockets. To avoid repository-controlled exfiltration, repo config may only select `bell`, `tmux`, or `none`; `ntfy`, `slack`, `ntfyURL`, and `slackWebhookURL` are honored only from user config or environment variables.
 
+## Watcher safety
+
+Repo config cannot opt into the watcher. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; use user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
+
 ## Forward compatibility
 
-Invalid boolean env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
+Invalid boolean or integer env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
 
 Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [CLI Reference]({{< relref "/docs/cli" >}}).
 
