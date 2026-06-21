@@ -19,9 +19,21 @@ import (
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/watch"
 )
 
 var errBoom = errors.New("boom")
+
+type fakeWatcherRunner struct {
+	report watch.Report
+	err    error
+	calls  int
+}
+
+func (f *fakeWatcherRunner) RunCycle() (watch.Report, error) {
+	f.calls++
+	return f.report, f.err
+}
 
 func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	panes := []state.Pane{
@@ -760,6 +772,111 @@ func TestViewRendersHUDCounts(t *testing.T) {
 	got := m.View()
 	if !strings.Contains(got, "total=3 merged=1 pending=2 blocked=1") {
 		t.Fatalf("View() = %q, want HUD counts", got)
+	}
+}
+
+func TestWatchTickRunsCycleAndRefreshesStateAndGH(t *testing.T) {
+	runner := &fakeWatcherRunner{
+		report: watch.Report{
+			Launched: []watch.Action{{Issue: ghissue.Issue{Number: 101}}},
+		},
+	}
+	m := newModel(Options{
+		ProjectRoot:    "/repo",
+		Watcher:        runner,
+		WatchInterval:  time.Minute,
+		WatchLabel:     "fanout:auto",
+		StateInterval:  time.Second,
+		GHInterval:     time.Second,
+		DefaultAgent:   "codex",
+		FocusPane:      func(string) error { return nil },
+		PaneAlive:      func(string) bool { return true },
+		LaunchPane:     func(LaunchRequest) error { return nil },
+		LaunchShell:    func(ShellLaunchRequest) error { return nil },
+		Notifier:       nil,
+		lifecycle:      &fakeLifecycleRunner{},
+		keyboard:       noopKeyboardProtocols{},
+		ShellPaneAlive: func(string, string) bool { return true },
+	})
+
+	updated, cmd := m.Update(watchTickMsg(time.Unix(1, 0)))
+	m = updated.(model)
+	if !m.watchRunning {
+		t.Fatal("watchRunning = false, want true while RunCycle command is outstanding")
+	}
+	if cmd == nil {
+		t.Fatal("watch tick returned nil command, want RunCycle + next tick batch")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("watch tick command = %T len=%d, want two-command BatchMsg", batch, len(batch))
+	}
+
+	msg, ok := batch[0]().(watchDoneMsg)
+	if !ok {
+		t.Fatalf("watch RunCycle command returned %T, want watchDoneMsg", msg)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("RunCycle calls = %d, want 1", runner.calls)
+	}
+
+	updated, cmd = m.Update(msg)
+	m = updated.(model)
+	if m.watchRunning {
+		t.Fatal("watchRunning = true after watchDoneMsg, want false")
+	}
+	if m.watchLaunched != 1 || m.watchErr != "" {
+		t.Fatalf("watch status launched=%d err=%q, want 1 and empty", m.watchLaunched, m.watchErr)
+	}
+	if cmd == nil {
+		t.Fatal("watchDoneMsg returned nil command, want state+GH reload batch")
+	}
+	reloadBatch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(reloadBatch) != 2 {
+		t.Fatalf("watch done command = %T len=%d, want state+GH reload BatchMsg", reloadBatch, len(reloadBatch))
+	}
+}
+
+func TestWatchLaunchFailureRendersFooter(t *testing.T) {
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		Watcher:     &fakeWatcherRunner{},
+		WatchLabel:  "fanout:auto",
+	})
+	m.width = 100
+	m.height = 30
+	report := watch.Report{
+		Failures: []watch.Failure{
+			{
+				Issue:    ghissue.Issue{Number: 101},
+				Stage:    watch.FailureLaunch,
+				Err:      errBoom,
+				Attempts: 3,
+				Disabled: true,
+			},
+		},
+	}
+
+	updated, _ := m.Update(watchDoneMsg{report: report, at: time.Date(2026, 6, 20, 12, 34, 56, 0, time.UTC)})
+	m = updated.(model)
+	view := m.View()
+
+	for _, want := range []string{"watch: disabled label=fanout:auto", "last=12:34:56", "launched=0", "err=#101 launch: boom; disabled"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("watch footer missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestWatchTickIgnoredWhenWatcherDisabled(t *testing.T) {
+	m := newModel(Options{})
+
+	updated, cmd := m.Update(watchTickMsg(time.Unix(1, 0)))
+	if cmd != nil {
+		t.Fatal("watch tick without watcher returned command, want nil")
+	}
+	if updated.(model).watchRunning {
+		t.Fatal("watchRunning = true without watcher, want false")
 	}
 }
 

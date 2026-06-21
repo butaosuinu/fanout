@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
+	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
@@ -22,6 +24,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	"github.com/butaosuinu/fanout/internal/watch"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
@@ -49,6 +52,11 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 	hookConfig := hooks.LoadUserConfig(lg)
+	watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
+	if err != nil {
+		lg.Err("watcher: %v", err)
+		return exitcode.Env
+	}
 	notifier, err := fanoutnotify.New(fanoutnotify.Config{
 		Channels:        resolvedSettings.Notifications,
 		TmuxTarget:      session,
@@ -67,6 +75,9 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		Session:             session,
 		StateInterval:       2 * time.Second,
 		GHInterval:          20 * time.Second,
+		Watcher:             watcher,
+		WatchInterval:       watchInterval,
+		WatchLabel:          watchLabel,
 		DefaultAgent:        defaultTUIAgent(),
 		WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 		Hooks:               hookConfig,
@@ -78,6 +89,200 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config) (fanouttui.WatcherRunner, time.Duration, string, error) {
+	if !resolvedSettings.Watcher {
+		return nil, 0, "", nil
+	}
+	gh := ghissue.Runner{Cwd: projectRoot}
+	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
+		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
+	}
+	io := watch.IO{
+		ListLabeled: gh.ListOpenIssuesWithLabel,
+		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
+			return countOpenChildTargets(gh, issue.Number)
+		},
+		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
+			return gh.SwapIssueLabels(issue.Number, removeLabel, addLabel)
+		},
+		LoadState: func() (state.Store, error) {
+			return state.LoadProject(projectRoot)
+		},
+		PaneAlive: watchPaneAlive,
+		LaunchStandalone: func(issue ghissue.Issue) error {
+			return launchWatchStandalone(projectRoot, session, commandName, resolvedSettings, hookConfig, issue)
+		},
+		LaunchParent: func(issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
+			return launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
+		},
+	}
+	cfg := watch.Config{
+		TriggerLabel: resolvedSettings.WatcherTriggerLabel,
+		RunningLabel: resolvedSettings.WatcherRunningLabel,
+		MaxSessions:  resolvedSettings.WatcherMaxSessions,
+	}
+	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
+	return watch.NewEngine(cfg, io), interval, resolvedSettings.WatcherTriggerLabel, nil
+}
+
+func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
+	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
+	_, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
+	if code != exitcode.OK {
+		return bufferedLaunchError(stdout, stderr, "load fanout state")
+	}
+	if recorder != nil {
+		defer func() {
+			_ = recorder.Unlock()
+		}()
+	}
+	info := &fanoutruntime.Info{
+		Session:     session,
+		Target:      tuiLaunchTarget(session),
+		ProjectRoot: projectRoot,
+	}
+	req := newWatchPaneRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
+	if !createPane(cfg, launchLogger, info, req, recorder, log.Palette{}, commandName) {
+		return bufferedLaunchError(stdout, stderr, "create watch pane")
+	}
+	return nil
+}
+
+func launchWatchParent(projectRoot, session, commandName string, resolvedSettings settings.Settings, issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
+	gh := ghissue.Runner{Cwd: projectRoot}
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
+	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
+	rt := &runtimeInfo{
+		info: &fanoutruntime.Info{
+			Session:     session,
+			Target:      tuiLaunchTarget(session),
+			ProjectRoot: projectRoot,
+		},
+		gh: gh,
+	}
+	if code := runWithRuntime(cfg, launchLogger, rt, commandName); code != exitcode.OK {
+		return watch.ParentLaunchResult{}, bufferedLaunchError(stdout, stderr, "launch parent")
+	}
+	deferred, err := watchParentHasRemainingTargets(projectRoot, cfg, gh)
+	if err != nil {
+		return watch.ParentLaunchResult{}, err
+	}
+	return watch.ParentLaunchResult{Deferred: deferred}, nil
+}
+
+func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {
+	return &cliflags.Config{
+		Parent:          parent,
+		ParentRef:       strconv.Itoa(parent),
+		ParentMode:      cliflags.ModeIssue,
+		Agent:           watcherAgent(resolvedSettings),
+		Limit:           limit,
+		SleepBetween:    cliflags.DefaultSleepBetween,
+		PopupTimeoutSec: cliflags.DefaultPopupTimeout,
+		ProjectStatus:   cliflags.DefaultProjectStatus,
+		Format:          cliflags.DefaultFormat,
+		UnblockedOnly:   true,
+	}
+}
+
+func watcherAgent(resolvedSettings settings.Settings) string {
+	if agentName := strings.TrimSpace(resolvedSettings.WatcherAgent); agentName != "" {
+		return agentName
+	}
+	return defaultTUIAgent()
+}
+
+func countOpenChildTargets(gh ghissue.Runner, parent int) (int, error) {
+	loaded, err := loadWatchParentChildren(gh, parent)
+	if err != nil {
+		return 0, err
+	}
+	return len(openIssues(loaded.Children)), nil
+}
+
+func watchPaneAlive(pane state.Pane) (bool, error) {
+	if strings.TrimSpace(pane.PaneID) == "" {
+		return false, nil
+	}
+	panes, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		return false, err
+	}
+	for _, live := range panes {
+		if watchPaneMatchesLive(pane, live) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func watchPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) bool {
+	if pane.PaneID != live.ID {
+		return false
+	}
+	if pane.IsShell() {
+		return pane.ShellKey != "" && pane.ShellKey == live.ShellKey
+	}
+	worktree := strings.TrimSpace(pane.WorktreePath)
+	if worktree == "" {
+		return true
+	}
+	wt := filepath.Clean(worktree)
+	cp := filepath.Clean(live.CurrentPath)
+	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (bool, error) {
+	if cfg.Limit <= 0 {
+		return false, nil
+	}
+	loaded, err := loadWatchParentChildren(gh, cfg.Parent)
+	if err != nil {
+		return false, err
+	}
+	store, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return false, fmt.Errorf("load fanout state: %w", err)
+	}
+	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
+	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
+	worktreeFallbackFanned := existingWorktreeFanned(cfg, projectRoot, loaded.Children, otherParentFanned)
+	plan := buildPlan(
+		cfg,
+		loaded.Children,
+		mergeFanned(sameParentFanned, worktreeFallbackFanned),
+		loaded.ParentBody,
+		func(issue *ghissue.Issue) {
+			// Match runWithRuntime: a hydration failure degrades blocker checks
+			// for this recomputation but should not make a completed launch fail.
+			_ = gh.HydrateBodyLabels(issue)
+		},
+		func(num int) string {
+			stateName, _ := gh.IssueState(num)
+			return stateName
+		},
+	)
+	return len(plan.Targets) > 0 || len(plan.LimitDeferred) > 0, nil
+}
+
+func loadWatchParentChildren(gh ghissue.Runner, parent int) (childLoadResult, error) {
+	var stdout, stderr bytes.Buffer
+	lg := log.NewWith(&stdout, &stderr, false)
+	cfg := &cliflags.Config{
+		Parent:     parent,
+		ParentRef:  strconv.Itoa(parent),
+		ParentMode: cliflags.ModeIssue,
+	}
+	loaded, code := loadIssueChildren(cfg, gh, lg)
+	if code != exitcode.OK {
+		return childLoadResult{}, bufferedLaunchError(stdout, stderr, "load child issues")
+	}
+	return loaded, nil
 }
 
 func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {
