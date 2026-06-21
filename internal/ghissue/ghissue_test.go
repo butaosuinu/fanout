@@ -175,6 +175,31 @@ func TestSwapIssueLabelsReturnsGHError(t *testing.T) {
 	}
 }
 
+func TestRemoveIssueLabelRunsSingleEdit(t *testing.T) {
+	argsPath := installFakeGH(t, ``)
+
+	if err := (Runner{}).RemoveIssueLabel(226, "fanout:running"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFakeGHArgs(t, argsPath, []string{
+		"issue", "edit", "226",
+		"--remove-label", "fanout:running",
+	})
+}
+
+func TestRemoveIssueLabelReturnsGHError(t *testing.T) {
+	installFakeGHWithResult(t, ``, `missing label`, 1)
+
+	err := (Runner{}).RemoveIssueLabel(226, "fanout:running")
+	if err == nil {
+		t.Fatal("RemoveIssueLabel() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "missing label") {
+		t.Fatalf("RemoveIssueLabel() error = %v", err)
+	}
+}
+
 func TestEnsureLabelSkipsCreateWhenPresent(t *testing.T) {
 	argsPath := installFakeGH(t, `[{"name":"fanout:running"}]`)
 

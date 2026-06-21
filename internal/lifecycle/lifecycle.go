@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
@@ -20,9 +21,11 @@ import (
 
 // Options points lifecycle operations at a concrete fanout state file.
 type Options struct {
-	ProjectRoot string
-	StatePath   string
-	Hooks       hooks.Config
+	ProjectRoot         string
+	StatePath           string
+	Hooks               hooks.Config
+	WatcherRunningLabel string
+	RemoveIssueLabel    func(issueNum int, label string) error
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -39,6 +42,8 @@ type statusChild struct {
 	State       string
 	HasMergedPR bool
 }
+
+const watcherStandaloneParent = "@watch"
 
 // Close removes the recorded worktree(s), best-effort kills tmux pane(s), and
 // removes all state rows matching parent and issueNum.
@@ -67,6 +72,7 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("#%d: remove fanout state: %v", issueNum, err)
 		return exitcode.Env
 	}
+	removeWatcherRunningLabelBestEffort(opts, parent, issueNum, locked.PanesForParent(parent), lg)
 	if hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
@@ -145,6 +151,7 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	}
 	runBackgroundHook(hooks.PostMerge, opts, pane, targetBranch, lg)
 	lg.Ok("#%d: merged %s with --ff-only", pane.IssueNum, pane.BranchName)
+	removeWatcherRunningLabelBestEffort(opts, parent, pane.IssueNum, remainingIssuePanesAfter(store.PanesForParent(parent), pane.IssueNum), lg)
 	return exitcode.OK
 }
 
@@ -231,6 +238,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			continue
 		}
 		closed++
+		removeWatcherRunningLabelBestEffort(opts, parent, issueNum, locked.PanesForParent(parent), lg)
 	}
 	if !pruneWorktrees(opts.ProjectRoot, lg) {
 		failed++
@@ -609,6 +617,58 @@ func taskPanesForParent(panes []state.Pane) []state.Pane {
 func branchHasMergedPR(prs []ghissue.PRRef) bool {
 	for _, pr := range prs {
 		if strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func removeWatcherRunningLabelBestEffort(opts Options, parent string, issueNum int, remainingParentPanes []state.Pane, lg Logger) {
+	issueNum, ok := watcherRunningLabelTarget(parent, issueNum, remainingParentPanes)
+	if !ok {
+		return
+	}
+	label := strings.TrimSpace(opts.WatcherRunningLabel)
+	remove := opts.RemoveIssueLabel
+	if label == "" || remove == nil {
+		return
+	}
+	if err := remove(issueNum, label); err != nil {
+		lg.Warn("#%d: remove watcher running label %q: %v", issueNum, label, err)
+	}
+}
+
+func watcherRunningLabelTarget(parent string, issueNum int, remainingParentPanes []state.Pane) (int, bool) {
+	if issueNum <= 0 {
+		return 0, false
+	}
+	if strings.TrimSpace(parent) == watcherStandaloneParent {
+		return issueNum, true
+	}
+	parentNum, err := strconv.Atoi(strings.TrimSpace(parent))
+	if err != nil || parentNum <= 0 {
+		return 0, false
+	}
+	if hasIssuePanes(remainingParentPanes) {
+		return 0, false
+	}
+	return parentNum, true
+}
+
+func remainingIssuePanesAfter(panes []state.Pane, issueNum int) []state.Pane {
+	remaining := make([]state.Pane, 0, len(panes))
+	for _, pane := range panes {
+		if pane.IssueNum == issueNum {
+			continue
+		}
+		remaining = append(remaining, pane)
+	}
+	return remaining
+}
+
+func hasIssuePanes(panes []state.Pane) bool {
+	for _, pane := range panes {
+		if pane.IssueNum > 0 {
 			return true
 		}
 	}

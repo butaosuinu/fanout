@@ -63,15 +63,16 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	restoreTitle := markTUIRunning(projectRoot)
 	defer restoreTitle()
 	if err := fanouttui.Run(fanouttui.Options{
-		ProjectRoot:   projectRoot,
-		Session:       session,
-		StateInterval: 2 * time.Second,
-		GHInterval:    20 * time.Second,
-		DefaultAgent:  defaultTUIAgent(),
-		Hooks:         hookConfig,
-		LaunchPane:    newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
-		LaunchShell:   newTUILaunchShellFunc(projectRoot, session),
-		Notifier:      notifier,
+		ProjectRoot:         projectRoot,
+		Session:             session,
+		StateInterval:       2 * time.Second,
+		GHInterval:          20 * time.Second,
+		DefaultAgent:        defaultTUIAgent(),
+		WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
+		Hooks:               hookConfig,
+		LaunchPane:          newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
+		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
+		Notifier:            notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
 		return exitcode.Env
