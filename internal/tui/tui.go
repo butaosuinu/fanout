@@ -47,21 +47,22 @@ const (
 
 // Options configures the TUI monitor.
 type Options struct {
-	ProjectRoot       string
-	Session           string
-	StateInterval     time.Duration
-	GHInterval        time.Duration
-	DefaultAgent      string
-	Hooks             hooks.Config
-	LaunchPane        LaunchFunc
-	LaunchShell       ShellLaunchFunc
-	FocusPane         func(string) error
-	PaneAlive         func(string) bool
-	ShellPaneAlive    func(paneID, shellKey string) bool
-	CapturePaneOutput func(string, int) (string, error)
-	Notifier          transitionNotifier
-	lifecycle         lifecycleRunner
-	keyboard          keyboardProtocols
+	ProjectRoot         string
+	Session             string
+	StateInterval       time.Duration
+	GHInterval          time.Duration
+	DefaultAgent        string
+	WatcherRunningLabel string
+	Hooks               hooks.Config
+	LaunchPane          LaunchFunc
+	LaunchShell         ShellLaunchFunc
+	FocusPane           func(string) error
+	PaneAlive           func(string) bool
+	ShellPaneAlive      func(paneID, shellKey string) bool
+	CapturePaneOutput   func(string, int) (string, error)
+	Notifier            transitionNotifier
+	lifecycle           lifecycleRunner
+	keyboard            keyboardProtocols
 }
 
 type issueKey struct {
@@ -1097,9 +1098,11 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 
 func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 	opts := lifecycle.Options{
-		ProjectRoot: m.opts.ProjectRoot,
-		StatePath:   state.Path(m.opts.ProjectRoot),
-		Hooks:       m.opts.Hooks,
+		ProjectRoot:         m.opts.ProjectRoot,
+		StatePath:           state.Path(m.opts.ProjectRoot),
+		Hooks:               m.opts.Hooks,
+		WatcherRunningLabel: m.opts.WatcherRunningLabel,
+		RemoveIssueLabel:    ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel,
 	}
 	runner := m.opts.lifecycle
 	return func() tea.Msg {

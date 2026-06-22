@@ -257,6 +257,12 @@ func (r Runner) SwapIssueLabels(num int, remove, add string) error {
 	return err
 }
 
+// RemoveIssueLabel removes label from one issue.
+func (r Runner) RemoveIssueLabel(num int, label string) error {
+	_, err := r.gh("issue", "edit", strconv.Itoa(num), "--remove-label", label)
+	return err
+}
+
 // EnsureLabel creates name when it is absent from the repository labels.
 func (r Runner) EnsureLabel(name string) error {
 	out, err := r.gh("label", "list", "--search", name, "--limit", "100", "--json", "name")

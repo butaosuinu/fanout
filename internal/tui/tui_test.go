@@ -1397,7 +1397,7 @@ func paneByIssue(t *testing.T, panes []paneView, issueNum int) paneView {
 
 func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
-	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	m := newModel(Options{ProjectRoot: "/repo", WatcherRunningLabel: "fanout:test-running", lifecycle: runner})
 	m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
 	m.refreshRows()
 
@@ -1432,6 +1432,9 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	}
 	if runner.projectRoot != "/repo" || runner.statePath != state.Path("/repo") {
 		t.Fatalf("Close opts = %q/%q, want project root and state path", runner.projectRoot, runner.statePath)
+	}
+	if runner.watcherRunningLabel != "fanout:test-running" {
+		t.Fatalf("Close watcherRunningLabel = %q, want fanout:test-running", runner.watcherRunningLabel)
 	}
 
 	updated, cmd = m.Update(msg)
@@ -1637,17 +1640,18 @@ func TestLifecycleRunningDefersQuitKeysUntilDone(t *testing.T) {
 }
 
 type fakeLifecycleRunner struct {
-	code              exitcode.Code
-	projectRoot       string
-	statePath         string
-	closeParent       string
-	closeIssue        int
-	closeTaskParent   string
-	closeTaskID       string
-	mergeTaskParent   string
-	mergeTaskID       string
-	cleanupParent     string
-	cleanupPlanParent string
+	code                exitcode.Code
+	projectRoot         string
+	statePath           string
+	closeParent         string
+	closeIssue          int
+	closeTaskParent     string
+	closeTaskID         string
+	mergeTaskParent     string
+	mergeTaskID         string
+	cleanupParent       string
+	cleanupPlanParent   string
+	watcherRunningLabel string
 }
 
 type fakeTransitionNotifier struct {
@@ -1663,6 +1667,7 @@ func (f *fakeTransitionNotifier) Notify(events []fanoutnotify.Event) error {
 func (f *fakeLifecycleRunner) Close(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
 	f.projectRoot = opts.ProjectRoot
 	f.statePath = opts.StatePath
+	f.watcherRunningLabel = opts.WatcherRunningLabel
 	f.closeParent = parent
 	f.closeIssue = issueNum
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close\n")

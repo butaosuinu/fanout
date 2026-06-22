@@ -103,6 +103,162 @@ printf '\n' >> "$TMUX_LOG"
 	}
 }
 
+func TestCmdCloseWarnsButKeepsOKWhenRunningLabelRemovalFails(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/close-child-101", worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghLog := installFailingLabelRemovalGH(t)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		Slug:         "close-child-101",
+		BranchName:   "fanout/close-child-101",
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdClose(&cliflags.Config{ParentRef: "84", CloseNum: 101}, lg)
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose code = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	assertLifecycleGHLog(t, ghLog, "issue edit 84 --remove-label fanout:test-running")
+	if !strings.Contains(stderr.String(), `remove watcher running label "fanout:test-running"`) {
+		t.Fatalf("stderr = %q, want running label removal warning", stderr.String())
+	}
+}
+
+func TestCmdCloseWatcherStandaloneRemovesChildRunningLabel(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/close-child-101", worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghLog := installFailingLabelRemovalGH(t)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "@watch",
+		IssueNum:     101,
+		Slug:         "close-child-101",
+		BranchName:   "fanout/close-child-101",
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdClose(&cliflags.Config{ParentRef: "@watch", CloseNum: 101}, lg)
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose code = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	assertLifecycleGHLog(t, ghLog, "issue edit 101 --remove-label fanout:test-running")
+	if !strings.Contains(stderr.String(), `remove watcher running label "fanout:test-running"`) {
+		t.Fatalf("stderr = %q, want running label removal warning", stderr.String())
+	}
+}
+
+func TestCmdCloseKeepsParentRunningLabelWhenSiblingPaneRemains(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	closedPath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")
+	openPath := filepath.Join(repo, ".fanout", "worktrees", "open-child-102")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/close-child-101", closedPath, "HEAD")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/open-child-102", openPath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghLog := installLifecycleScript(t, "gh", `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+printf 'unexpected gh command: %s\n' "$*" >&2
+exit 64
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo,
+		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/close-child-101", PaneID: "%101", WorktreePath: closedPath},
+		state.Pane{Parent: "84", IssueNum: 102, BranchName: "fanout/open-child-102", PaneID: "%102", WorktreePath: openPath},
+	)
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "84", CloseNum: 101}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose code = %d, want %d", code, exitcode.OK)
+	}
+	if body, err := os.ReadFile(ghLog); err == nil && strings.TrimSpace(string(body)) != "" {
+		t.Fatalf("gh log = %q, want no label removal while sibling remains", body)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read gh log: %v", err)
+	}
+}
+
+func TestCmdCloseRemovesRunningLabelWhenPruneFails(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	gitLog := installLifecycleScript(t, "git", `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_LOG"
+if [ "$1" = "-C" ]; then
+  shift 2
+fi
+case "$1 $2" in
+  "rev-parse --git-path")
+    printf '.git/info/exclude\n'
+    ;;
+  "worktree prune")
+    printf 'prune failed\n' >&2
+    exit 9
+    ;;
+  *)
+    printf 'unexpected git command: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`)
+	ghLog := installLifecycleScript(t, "gh", `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+`)
+	t.Setenv("GIT_LOG", gitLog)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:     "84",
+		IssueNum:   101,
+		Slug:       "close-child-101",
+		BranchName: "fanout/close-child-101",
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "84", CloseNum: 101}, discardLogger())
+
+	if code != exitcode.Env {
+		t.Fatalf("cmdClose code = %d, want %d", code, exitcode.Env)
+	}
+	assertLifecycleGHLog(t, ghLog, "issue edit 84 --remove-label fanout:test-running")
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Find("84", 101); ok {
+		t.Fatalf("closed issue #101 still present in state: %+v", loaded.Panes)
+	}
+}
+
 func TestCmdCloseShellPaneSkipsGitWorktreeRemoval(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	gitLog := installLifecycleScript(t, "git", `#!/bin/sh
@@ -286,6 +442,42 @@ func TestCmdMergePreMergeHookBlocksFastForward(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "pre merge blocked") {
 		t.Fatalf("stderr = %q, want hook output", stderr.String())
+	}
+}
+
+func TestCmdMergeWarnsButKeepsOKWhenRunningLabelRemovalFails(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "-c", "fanout/merge-child-101")
+	if err := os.WriteFile(filepath.Join(repo, "child.txt"), []byte("child\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "child.txt")
+	gitCmdTest(t, repo, "commit", "-m", "child")
+	childHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
+	gitCmdTest(t, repo, "switch", "main")
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != baseHead {
+		t.Fatalf("main HEAD before merge = %s, want base %s", got, baseHead)
+	}
+	ghLog := installFailingLabelRemovalGH(t)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo, state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/merge-child-101"})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdMerge(&cliflags.Config{ParentRef: "84", MergeNum: 101}, lg)
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdMerge code = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	if got := gitTrimTest(t, repo, "rev-parse", "HEAD"); got != childHead {
+		t.Fatalf("main HEAD after merge = %s, want child %s", got, childHead)
+	}
+	assertLifecycleGHLog(t, ghLog, "issue edit 84 --remove-label fanout:test-running")
+	if !strings.Contains(stderr.String(), `remove watcher running label "fanout:test-running"`) {
+		t.Fatalf("stderr = %q, want running label removal warning", stderr.String())
 	}
 }
 
@@ -555,6 +747,58 @@ esac
 	}
 }
 
+func TestCmdCleanupWarnsButKeepsOKWhenRunningLabelRemovalFails(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	closedPath := filepath.Join(repo, ".fanout", "worktrees", "closed-child-101")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/closed-child-101", closedPath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghLog := installLifecycleScript(t, "gh", `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+case "$1 $2" in
+  "repo view")
+    printf 'butaosuinu/fanout\n'
+    ;;
+  "api graphql")
+    printf '{"state":"OPEN","closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"state":"MERGED"}]}}\n'
+    ;;
+  "issue edit")
+    printf 'label removal failed\n' >&2
+    exit 7
+    ;;
+  *)
+    printf 'unexpected gh command: %s\n' "$*" >&2
+    exit 64
+    ;;
+esac
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	t.Setenv("GH_LOG", ghLog)
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "fanout:test-running")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		BranchName:   "fanout/closed-child-101",
+		PaneID:       "%101",
+		WorktreePath: closedPath,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+
+	code := cmdCleanup(&cliflags.Config{ParentRef: "84", CleanupMode: true}, lg)
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdCleanup code = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	assertLifecycleGHLog(t, ghLog, "issue edit 84 --remove-label fanout:test-running")
+	if !strings.Contains(stderr.String(), `remove watcher running label "fanout:test-running"`) {
+		t.Fatalf("stderr = %q, want running label removal warning", stderr.String())
+	}
+}
+
 func TestLifecycleCleanupPlanClosesOnlyTasksWithMergedBranchPR(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	mergedPath := filepath.Join(repo, ".fanout", "worktrees", "api-client")
@@ -623,6 +867,7 @@ exit 1
 
 func initLifecycleRepo(t *testing.T) string {
 	t.Helper()
+	t.Setenv("FANOUT_WATCHER_RUNNING_LABEL", "")
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
 	gitCmdTest(t, repo, "config", "user.email", "fanout@example.invalid")
@@ -673,6 +918,30 @@ func installLifecycleScript(t *testing.T, name, script string) string {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	logPath := filepath.Join(t.TempDir(), name+".log")
 	return logPath
+}
+
+func installFailingLabelRemovalGH(t *testing.T) string {
+	t.Helper()
+	return installLifecycleScript(t, "gh", `#!/bin/sh
+printf '%s\n' "$*" >> "$GH_LOG"
+if [ "$1 $2" = "issue edit" ]; then
+  printf 'label removal failed\n' >&2
+  exit 7
+fi
+printf 'unexpected gh command: %s\n' "$*" >&2
+exit 64
+`)
+}
+
+func assertLifecycleGHLog(t *testing.T, path, want string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("gh log = %q, want %q", body, want)
+	}
 }
 
 func installLifecycleLivePaneTmuxScript(t *testing.T, paneID, path, title, shellKey string) string {
