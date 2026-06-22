@@ -163,6 +163,9 @@ export FANOUT_WATCHER_AGENT=codex
 fanout
 ```
 
+Keep the TUI open and skip the rest of this workflow. Watcher mode does not need
+parent resolution, batch tmux pre-flight, dry-run, pane naming, or confirmation.
+
 1. Resolve the parent target from the user's request or recent context. Two
    shapes are accepted; identify which one matches and pass the normalized
    form to the CLI as the positional argument:
@@ -318,15 +321,19 @@ not a scheduler, webhook, or the #107 known-parent skill loop.
    default TUI agent is not the desired child agent.
 2. Run `fanout` with no arguments and keep the TUI open. The watcher stops
    when the TUI exits.
-3. Apply `fanout:auto` only to issues the user trusts. The issue body is copied
-   into the child briefing, so the label is a prompt-injection boundary.
+3. Apply `fanout:auto` only when the user trusts the labeled issue and any OPEN
+   children it can launch. Those issue bodies become agent briefings, so the
+   label is a prompt-injection boundary.
 4. On each cycle fanout swaps `fanout:auto` to `fanout:running`. Issues with no
    OPEN children launch as standalone panes under parent `@watch`; issues with
    OPEN children launch as normal parent fan-outs with `--unblocked-only` and
-   the `watcherMaxSessions` budget.
-5. After launched work is merged or closed, `--merge`, `--close`, and
-   `--cleanup` remove `fanout:running` best-effort. To run the same parent
-   again after cleanup, add `fanout:auto` again.
+   the `watcherMaxSessions` budget. Deferred parent fan-outs are requeued by
+   swapping `fanout:running` back to `fanout:auto`.
+5. For parent fan-outs, `--merge`, `--close`, and `--cleanup` remove
+   `fanout:running` best-effort. For standalone `@watch` panes, use the TUI
+   lifecycle keys; the public CLI parent argument cannot target `@watch` rows.
+   To run a completed standalone pane or fully cleaned parent again, add
+   `fanout:auto` again.
 
 #107 remains the known-parent loop: a skill or `/loop` keeps revisiting one
 parent's children, ready labels, and blocker wave progress. Do not describe the

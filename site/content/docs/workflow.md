@@ -93,12 +93,17 @@ Add `fanout:auto` to a trusted issue to queue it. On the next cycle fanout
 swaps that label to `fanout:running`, then launches either a standalone pane
 for an issue with no OPEN children or a normal parent fan-out for an issue with
 OPEN children. Parent fan-outs use `--unblocked-only`; every watcher launch
-counts against `watcherMaxSessions`.
+counts against `watcherMaxSessions`. If blocked children or the session cap
+leaves work for later, fanout swaps `fanout:running` back to `fanout:auto` so a
+later cycle retries the parent automatically.
 
-When the launched work is merged or closed, `--merge`, `--close`, and
-`--cleanup` remove `fanout:running` best-effort. To put the same parent back
-into the watcher after cleanup, add `fanout:auto` again. Do not apply the
-trigger label to untrusted issues: the issue body becomes the agent briefing.
+For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and
+`--cleanup` remove `fanout:running` best-effort. For standalone watcher panes,
+use the TUI lifecycle keys (`m`, `c`, `x`); the public CLI parent argument does
+not target reserved `@watch` rows. To queue a fresh run after a standalone pane
+or fully cleaned parent, add `fanout:auto` again. Do not apply the trigger label
+to untrusted issues: the labeled issue and any OPEN children it launches become
+agent briefings.
 
 This watcher is separate from [#107](https://github.com/butaosuinu/fanout/issues/107):
 it discovers labeled issues across the repository and starts one-shot sessions.
