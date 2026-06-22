@@ -70,10 +70,13 @@ export function paneLabel(p: PaneView): string {
 }
 
 /* 行の安定キー。tmux 再起動後は pane id (%N) が別 issue の古い行と重複しうる
- * ので、選択は parent + issueNum/taskId で識別し、paneId は capture 対象にだけ使う。 */
+ * ので、選択は parent + issueNum/taskId で識別し、paneId は capture 対象にだけ使う。
+ * plan タスクや @manual のような worktree-local な行は別 worktree 間で
+ * (parent,issueNum)/(parent,taskId) が衝突しうるので、sourceKey があれば付けて区別する。 */
 export function rowKey(parent: string, p: PaneView): string {
-  if (p.taskId) return `${parent}@${p.taskId}`;
-  return `${parent}#${p.issueNum}`;
+  const suffix = p.sourceKey ? `~${p.sourceKey}` : "";
+  if (p.taskId) return `${parent}@${p.taskId}${suffix}`;
+  return `${parent}#${p.issueNum}${suffix}`;
 }
 
 export function findPane(snap: Snapshot | null, key: string | null): PaneView | null {

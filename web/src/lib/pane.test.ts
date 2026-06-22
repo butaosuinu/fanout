@@ -16,4 +16,17 @@ describe("pane identity helpers", () => {
     expect(rowKey("plan:launch-plan", pane)).toBe("plan:launch-plan@api-client");
     expect(paneLabel(pane)).toBe("api-client");
   });
+
+  it("disambiguates worktree-local rows by sourceKey", () => {
+    const a = makePane({ issueNum: 0, taskId: "api", sourceKey: "aaaa" });
+    const b = makePane({ issueNum: 0, taskId: "api", sourceKey: "bbbb" });
+
+    // Same plan task in two worktrees must not collide on the row key.
+    expect(rowKey("plan:launch", a)).toBe("plan:launch@api~aaaa");
+    expect(rowKey("plan:launch", b)).toBe("plan:launch@api~bbbb");
+    expect(rowKey("plan:launch", a)).not.toBe(rowKey("plan:launch", b));
+
+    // GitHub issue rows carry no sourceKey, so the key is unchanged.
+    expect(rowKey("100", makePane({ issueNum: 42 }))).toBe("100#42");
+  });
 });

@@ -448,6 +448,28 @@ func TestListRootsIncludesSiblingsAndExcludesFanoutChildren(t *testing.T) {
 	}
 }
 
+func TestListRootsSkipsPrunableWorktrees(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	top := gitOutput(t, repo, "rev-parse", "--show-toplevel")
+
+	stale := filepath.Join(t.TempDir(), "stale")
+	gitTest(t, repo, "worktree", "add", "-b", "feat-stale", stale)
+	// Removing the directory makes git annotate the entry `prunable`.
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	roots, err := ListRoots(top)
+	if err != nil {
+		t.Fatalf("ListRoots: %v", err)
+	}
+	for _, r := range roots {
+		if strings.Contains(r, "stale") {
+			t.Fatalf("prunable worktree must be skipped, got %q in %v", r, roots)
+		}
+	}
+}
+
 func TestListRootsFallsBackOutsideGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	roots, err := ListRoots(dir)

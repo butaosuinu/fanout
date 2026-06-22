@@ -76,6 +76,12 @@ type issueKey struct {
 	Parent string
 	Num    int
 	TaskID string
+	// Source is the owning worktree root for locally-scoped rows (plan tasks and
+	// @manual panes), so the same (Parent, TaskID)/(Parent, Num) recorded in two
+	// worktrees keys to distinct status — their branches and PR/CI state differ.
+	// Empty for globally-stable GitHub issue rows, which aggregate across
+	// worktrees (one status per issue number regardless of where it ran).
+	Source string
 }
 
 // LaunchRequest describes one manual pane launch requested from the TUI.
@@ -1191,11 +1197,21 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 	if len(closeRoots) == 0 {
 		closeRoots = []string{paneRoot}
 	}
-	// Cleanup is parent-scoped: once Sessions are aggregated a parent's children
-	// can be recorded across several worktrees' state.json, so clean every source
-	// root the parent appears in, not just the selected pane's — otherwise rows
-	// in sibling stores survive and reappear on the next refresh.
-	cleanupRoots := m.sourceRootsForParent(pending.pane.Parent)
+	// Cleanup is parent-scoped. For a globally-stable parent (a GitHub issue or
+	// Project) the same parent in two worktrees is the same Session, so clean
+	// every source root it spans — otherwise sibling rows survive and reappear on
+	// the next refresh. But a locally-scoped parent (plan:<slug>, @manual) is only
+	// meaningful within its worktree: two worktrees can hold unrelated plans under
+	// the same slug, so cleanup must stay within the selected pane's own root(s).
+	var cleanupRoots []string
+	if isLocalParent(pending.pane.Parent) {
+		cleanupRoots = pending.pane.sourceProjectRoots
+		if len(cleanupRoots) == 0 {
+			cleanupRoots = []string{paneRoot}
+		}
+	} else {
+		cleanupRoots = m.sourceRootsForParent(pending.pane.Parent)
+	}
 	runner := m.opts.lifecycle
 	return func() tea.Msg {
 		var buf bytes.Buffer
@@ -1247,6 +1263,16 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 			output: strings.TrimSpace(buf.String()),
 		}
 	}
+}
+
+// isLocalParent reports whether a parent ref is only meaningful within one
+// worktree — a plan slug (plan:<slug>) or a synthetic manual ref (@manual) — as
+// opposed to a globally-stable GitHub issue number or Project URL. Locally
+// scoped parents can collide across worktrees with unrelated work, so
+// parent-scoped lifecycle actions must not fan across worktrees for them.
+func isLocalParent(parent string) bool {
+	parent = strings.TrimSpace(parent)
+	return strings.HasPrefix(parent, "plan:") || strings.HasPrefix(parent, "@")
 }
 
 // sourceRootsForParent returns the distinct worktree roots whose state.json
@@ -2189,7 +2215,7 @@ func recordedTaskRows(panes []state.Pane) []taskStatusRow {
 		if pane.Parent == "" || pane.IssueNum > 0 || taskID == "" || branch == "" {
 			continue
 		}
-		key := keyForTask(pane.Parent, taskID)
+		key := keyForTask(pane.Parent, taskID, pane.SourceProjectRoot)
 		if seen[key] {
 			continue
 		}
@@ -2203,6 +2229,9 @@ func recordedTaskRows(panes []state.Pane) []taskStatusRow {
 		if c := cmp.Compare(a.key.TaskID, b.key.TaskID); c != 0 {
 			return c
 		}
+		if c := cmp.Compare(a.key.Source, b.key.Source); c != 0 {
+			return c
+		}
 		return cmp.Compare(a.BranchName, b.BranchName)
 	})
 	return rows
@@ -2213,14 +2242,22 @@ func keyForIssue(parent string, num int) issueKey {
 }
 
 func keyForPaneView(pane paneView) issueKey {
-	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
-		return keyForTask(pane.Parent, pane.TaskID)
+	taskID := strings.TrimSpace(pane.TaskID)
+	switch {
+	case pane.IssueNum > 0:
+		// GitHub issue: globally stable, aggregates across worktrees.
+		return keyForIssue(pane.Parent, pane.IssueNum)
+	case taskID != "":
+		return keyForTask(pane.Parent, taskID, pane.sourceProjectRoot)
+	default:
+		// Manual/synthetic (@manual, non-positive issueNum): worktree-local, so
+		// scope by source to keep two worktrees' rows distinct.
+		return issueKey{Parent: normalizedParent(pane.Parent), Num: pane.IssueNum, Source: pane.sourceProjectRoot}
 	}
-	return keyForIssue(pane.Parent, pane.IssueNum)
 }
 
-func keyForTask(parent, taskID string) issueKey {
-	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID)}
+func keyForTask(parent, taskID, source string) issueKey {
+	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID), Source: source}
 }
 
 func normalizedParent(parent string) string {

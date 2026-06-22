@@ -126,7 +126,9 @@ func TestBuildPaneViewsMarksTmuxUnknownWhenListFails(t *testing.T) {
 func TestBuildPaneViewsTaskIDDisplayFallback(t *testing.T) {
 	mergedAt := "2026-06-13T00:00:00Z"
 	issues := map[issueKey]issueStatus{
-		keyForTask("plan:alpha", "task-a"): {
+		// buildPaneViews injects state directly (no MergedStateLoader), so panes
+		// carry no source root and the task key's Source is empty.
+		keyForTask("plan:alpha", "task-a", ""): {
 			State: "UNKNOWN",
 			PRs: []ghissue.PRRef{{
 				Number:   42,
@@ -161,6 +163,38 @@ func TestBuildPaneViewsTaskIDDisplayFallback(t *testing.T) {
 	}
 }
 
+func TestBuildPaneViewsKeysTaskStatusBySourceRoot(t *testing.T) {
+	// Same plan:<slug>/<taskId> in two worktrees with different branches: each row
+	// must receive its own branch's status, not have the first applied to both.
+	mergedAt := "2026-06-13T00:00:00Z"
+	issues := map[issueKey]issueStatus{
+		keyForTask("plan:launch", "api", "/wt-a"): {
+			State: "UNKNOWN",
+			PRs:   []ghissue.PRRef{{Number: 11, State: "MERGED", MergedAt: &mergedAt}},
+		},
+		keyForTask("plan:launch", "api", "/wt-b"): {
+			State: "UNKNOWN",
+			PRs:   []ghissue.PRRef{{Number: 22, State: "OPEN"}},
+		},
+	}
+	panes := []paneView{
+		{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%1", sourceProjectRoot: "/wt-a"},
+		{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%2", sourceProjectRoot: "/wt-b"},
+	}
+	out := applyIssueStatuses("/repo", panes, issues)
+
+	bySrc := map[string]paneView{}
+	for _, p := range out {
+		bySrc[p.sourceProjectRoot] = p
+	}
+	if got := bySrc["/wt-a"]; !got.HasMergedPR || got.PRSummary != "#11 merged" {
+		t.Fatalf("/wt-a status = pr:%q merged:%v, want #11 merged", got.PRSummary, got.HasMergedPR)
+	}
+	if got := bySrc["/wt-b"]; got.HasMergedPR || got.PRSummary != "#22 open" {
+		t.Fatalf("/wt-b status = pr:%q merged:%v, want #22 open (not the /wt-a status)", got.PRSummary, got.HasMergedPR)
+	}
+}
+
 func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
@@ -184,7 +218,9 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, ok := statuses[keyForTask("plan:alpha", "task-a")]
+	// loadIssueStatuses reads through MergedStateLoader; outside a git repo it
+	// falls back to {root}, tagging the task row's source with root.
+	status, ok := statuses[keyForTask("plan:alpha", "task-a", root)]
 	if !ok {
 		t.Fatalf("missing task status in %#v", statuses)
 	}
@@ -1656,6 +1692,25 @@ func TestLifecycleCleanupRunsAcrossAllSourceRootsForParent(t *testing.T) {
 		if !got[w] {
 			t.Fatalf("cleanup roots = %v, missing %s", runner.cleanupRoots, w)
 		}
+	}
+}
+
+func TestLifecycleCleanupPlanStaysWithinSelectedWorktree(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	// Two worktrees hold an unrelated plan:launch (slug is worktree-local); a
+	// cleanup on the /wt-a pane must only touch /wt-a, never the sibling plan.
+	m.allPanes = []paneView{
+		{Parent: "plan:launch", IssueNum: 0, TaskID: "api", Name: "a", sourceProjectRoot: "/wt-a", sourceProjectRoots: []string{"/wt-a"}},
+		{Parent: "plan:launch", IssueNum: 0, TaskID: "api", Name: "b", sourceProjectRoot: "/wt-b", sourceProjectRoots: []string{"/wt-b"}},
+	}
+
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionCleanup, pane: m.allPanes[0]})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	if len(runner.cleanupRoots) != 1 || runner.cleanupRoots[0] != "/wt-a" {
+		t.Fatalf("plan cleanup roots = %v, want only /wt-a (selected worktree)", runner.cleanupRoots)
 	}
 }
 

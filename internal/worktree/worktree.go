@@ -362,9 +362,12 @@ func RefreshBase(root, base string) error {
 // .fanout/state.json each worktree records independently. It excludes fanout's
 // own child worktrees (those under a ".fanout/worktrees/" segment, whose state
 // is recorded in the owner, not the child) and always includes projectRoot
-// itself. The bare main repository, having no working tree, is skipped. On a
-// `git worktree list` failure it returns {projectRoot} alongside the error so
-// callers degrade to a single-root load.
+// itself. Worktrees git no longer treats as valid working trees are skipped:
+// the bare main repository (no working tree) and prunable entries (the directory
+// is gone or stale), so the dashboard/TUI never resurrect panes from a worktree
+// that lifecycle actions could not safely target. On a `git worktree list`
+// failure it returns {projectRoot} alongside the error so callers degrade to a
+// single-root load.
 func ListRoots(projectRoot string) ([]string, error) {
 	out, err := git(projectRoot, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -373,13 +376,13 @@ func ListRoots(projectRoot string) ([]string, error) {
 	roots := []string{projectRoot}
 	seen := map[string]bool{projectRoot: true}
 	var current string
-	bare := false
+	skip := false
 	childMarker := string(filepath.Separator) + filepath.FromSlash(localExcludePattern)
 	flush := func() {
 		path := current
-		isBare := bare
-		current, bare = "", false
-		if path == "" || isBare {
+		drop := skip
+		current, skip = "", false
+		if path == "" || drop {
 			return
 		}
 		if seen[path] || strings.Contains(path, childMarker) {
@@ -396,8 +399,10 @@ func ListRoots(projectRoot string) ([]string, error) {
 			current = after
 			continue
 		}
-		if line == "bare" {
-			bare = true
+		// `bare` and `prunable [<reason>]` are stanza attribute lines; either
+		// means the worktree has no usable working tree to read state from.
+		if line == "bare" || line == "prunable" || strings.HasPrefix(line, "prunable ") {
+			skip = true
 		}
 	}
 	flush()

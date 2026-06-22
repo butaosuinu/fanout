@@ -64,15 +64,20 @@ type PaneView struct {
 	// SourceProjectRoots は同一 identity が複数 worktree に記録されていた場合の
 	// 全所有 root(通常は [SourceProjectRoot])。TUI の close/cleanup が
 	// de-duplicate された sibling ストアも漏れなく対象にするために使う。json:"-"。
-	SourceProjectRoots []string        `json:"-"`
-	CreatedAt          string          `json:"createdAt"`
-	Alive              bool            `json:"alive"`      // PaneID is among the live tmux panes
-	IssueState         string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
-	PRs                []ghissue.PRRef `json:"prs"`
-	HasMergedPR        bool            `json:"hasMergedPr"`
-	DiffSummary        string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted)
-	DirtyState         string          `json:"dirtyState"`            // dirty / clean / unknown
-	WorktreeErr        string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
+	SourceProjectRoots []string `json:"-"`
+	// SourceKey は worktree-local な行(plan タスク・@manual)を識別する公開トークン
+	// (SourceProjectRoot の安定ハッシュ。絶対パスは出さない)。別 worktree の同一
+	// (parent,issueNum)/(parent,taskId) 行が SPA の行キーで衝突するのを防ぐ。
+	// グローバル安定な GitHub issue 行(issueNum>0)では空。
+	SourceKey   string          `json:"sourceKey,omitempty"`
+	CreatedAt   string          `json:"createdAt"`
+	Alive       bool            `json:"alive"`      // PaneID is among the live tmux panes
+	IssueState  string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
+	PRs         []ghissue.PRRef `json:"prs"`
+	HasMergedPR bool            `json:"hasMergedPr"`
+	DiffSummary string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted)
+	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown
+	WorktreeErr string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 
 	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
 	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
