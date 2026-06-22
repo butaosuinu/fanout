@@ -31,6 +31,11 @@ type Options struct {
 	BaseBranch         string
 	NoRefresh          bool
 	AllowMissingOrigin bool
+	// RefreshBestEffort downgrades a failed base-branch refresh from a fatal
+	// error to a skipped step, so the worktree is still created from the
+	// un-refreshed local base. Manual TUI panes set this; issue/plan children
+	// keep the strict fail-on-dirty-base behavior.
+	RefreshBestEffort bool
 }
 
 type Plan struct {
@@ -40,6 +45,7 @@ type Plan struct {
 	BaseBranch           string
 	AllowMissingOrigin   bool
 	Refresh              bool
+	RefreshBestEffort    bool
 	RefreshDetails       RefreshDetails
 	RefreshError         error
 	RefreshSkippedReason string
@@ -49,6 +55,9 @@ type Result struct {
 	Plan
 	AlreadyExists bool
 	BranchCreated bool
+	// RefreshWarning holds the refresh error that was tolerated because
+	// RefreshBestEffort was set; nil when refresh succeeded or was not run.
+	RefreshWarning error
 }
 
 // BuildPlan resolves deterministic worktree paths and the base branch.
@@ -76,6 +85,7 @@ func BuildPlan(opts Options) Plan {
 		BaseBranch:           base,
 		AllowMissingOrigin:   opts.AllowMissingOrigin,
 		Refresh:              refresh,
+		RefreshBestEffort:    opts.RefreshBestEffort,
 		RefreshDetails:       refreshDetails,
 		RefreshError:         refreshErr,
 		RefreshSkippedReason: refreshSkippedReason,
@@ -95,16 +105,27 @@ func Prepare(opts Options) (Result, error) {
 	if exists {
 		return Result{Plan: plan, AlreadyExists: true}, nil
 	}
+	var refreshWarning error
 	if plan.Refresh {
-		if plan.RefreshError != nil {
-			return Result{Plan: plan}, plan.RefreshError
+		refreshErr := plan.RefreshError
+		if refreshErr == nil {
+			refreshErr = RefreshBase(plan.ProjectRoot, plan.BaseBranch)
 		}
-		if err := RefreshBase(plan.ProjectRoot, plan.BaseBranch); err != nil {
-			return Result{Plan: plan}, err
+		if refreshErr != nil {
+			// Best-effort downgrades a failed refresh to a warning so a manual
+			// pane is still created off the un-refreshed local base. Only tolerate
+			// it when the base is still usable for branching: a failure that left
+			// the base unresolvable (e.g. a fetch failure before the local base
+			// branch existed) must surface the clearer refresh error instead of a
+			// confusing 'git worktree add' failure later.
+			if !plan.RefreshBestEffort || !baseResolvable(plan.ProjectRoot, plan.BaseBranch) {
+				return Result{Plan: plan}, refreshErr
+			}
+			refreshWarning = refreshErr
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(plan.WorktreePath), 0o755); err != nil {
-		return Result{Plan: plan}, fmt.Errorf("create worktree parent: %w", err)
+		return Result{Plan: plan, RefreshWarning: refreshWarning}, fmt.Errorf("create worktree parent: %w", err)
 	}
 	_, _ = git(plan.ProjectRoot, "worktree", "prune")
 	branchWasPresent := branchExists(plan.ProjectRoot, plan.BranchName)
@@ -119,9 +140,9 @@ func Prepare(opts Options) (Result, error) {
 		if !branchWasPresent {
 			_, _ = git(plan.ProjectRoot, "branch", "-D", plan.BranchName)
 		}
-		return Result{Plan: plan}, fmt.Errorf("git worktree add: %w", err)
+		return Result{Plan: plan, RefreshWarning: refreshWarning}, fmt.Errorf("git worktree add: %w", err)
 	}
-	return Result{Plan: plan, BranchCreated: !branchWasPresent}, nil
+	return Result{Plan: plan, BranchCreated: !branchWasPresent, RefreshWarning: refreshWarning}, nil
 }
 
 // EnsureLocalExclude keeps generated fanout runtime files out of the user's git status.
@@ -419,5 +440,16 @@ func branchExists(root, branch string) bool {
 		return false
 	}
 	_, err := gitTrim(root, "rev-parse", "--verify", "refs/heads/"+branch)
+	return err == nil
+}
+
+// baseResolvable reports whether base names a commit git can branch from, so a
+// best-effort refresh failure is only tolerated when the resulting worktree add
+// can still succeed.
+func baseResolvable(root, base string) bool {
+	if base == "" {
+		return false
+	}
+	_, err := gitTrim(root, "rev-parse", "--verify", "--quiet", base+"^{commit}")
 	return err == nil
 }
