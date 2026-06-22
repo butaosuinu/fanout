@@ -446,6 +446,10 @@ var (
 	errStyle   = lipgloss.NewStyle().Foreground(colorBeni)
 	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
 	modalStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
+	// inputBoxStyle / inputBoxFocusStyle frame the modal's text inputs so the
+	// field bounds are visible; the border color also doubles as a focus cue.
+	inputBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorSuna)
+	inputBoxFocusStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorAsagi)
 )
 
 // Run starts the Bubble Tea TUI.
@@ -890,9 +894,9 @@ func (m *model) resize() {
 		return
 	}
 	if m.mode == modeNewPane {
-		inputWidth := m.formInputWidth()
+		inputWidth := m.inputContentWidth()
 		m.newPane.prompt.SetWidth(inputWidth)
-		m.newPane.slug.Width = inputWidth
+		m.newPane.slug.Width = textinputWidth(inputWidth, m.newPane.slug.Prompt)
 	}
 	layout := m.monitorLayout()
 	m.table.SetWidth(layout.MainWidth)
@@ -1360,7 +1364,7 @@ func (m model) renderActionMessage() string {
 func (m *model) openNewPaneForm() {
 	m.mode = modeNewPane
 	m.notice = ""
-	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.formInputWidth())
+	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
 }
 
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
@@ -1381,7 +1385,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	slug.Placeholder = "optional-slug"
 	slug.Prompt = "> "
 	slug.CharLimit = 80
-	slug.Width = width
+	slug.Width = textinputWidth(width, slug.Prompt)
 	slug.Blur()
 
 	if defaultAgent != "codex" {
@@ -1492,9 +1496,9 @@ func (m *model) submitNewPane() tea.Cmd {
 func (m model) newPaneView() string {
 	lines := []string{
 		titleStyle.Render("New agent pane"),
-		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View()),
-		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView()),
-		m.newPaneFieldView(newPaneFieldSlug, "Slug", m.newPane.slug.View()),
+		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View(), true),
+		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
+		m.newPaneFieldView(newPaneFieldSlug, "Slug", m.newPane.slug.View(), true),
 	}
 	if m.newPane.launching {
 		lines = append(lines, dimStyle.Render("creating pane..."))
@@ -1506,10 +1510,18 @@ func (m model) newPaneView() string {
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 
-func (m model) newPaneFieldView(field newPaneField, label, value string) string {
+func (m model) newPaneFieldView(field newPaneField, label, value string, boxed bool) string {
+	focused := m.newPane.focus == field
 	marker := "  "
-	if m.newPane.focus == field {
+	if focused {
 		marker = "> "
+	}
+	if boxed {
+		style := inputBoxStyle
+		if focused {
+			style = inputBoxFocusStyle
+		}
+		value = style.Render(value)
 	}
 	return marker + label + "\n" + value
 }
@@ -1531,6 +1543,22 @@ func (m model) formInputWidth() int {
 		return 72
 	}
 	return clampInt(m.modalWidth()-8, 24, 92)
+}
+
+// inputContentWidth is the rendered width each framed text input should occupy.
+// It leaves room for the input box's left/right border so the framed field
+// keeps the same footprint as formInputWidth.
+func (m model) inputContentWidth() int {
+	return m.formInputWidth() - 2
+}
+
+// textinputWidth converts a desired total rendered width into the bubbles
+// textinput Width setting. Unlike textarea (whose SetWidth is the full rendered
+// width, prompt included), a textinput renders its prompt plus one trailing
+// cursor cell outside of Width, so the two must be offset to frame to the same
+// width.
+func textinputWidth(rendered int, prompt string) int {
+	return rendered - lipgloss.Width(prompt) - 1
 }
 
 func (m model) modalWidth() int {

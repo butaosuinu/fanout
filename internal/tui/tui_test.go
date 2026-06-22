@@ -2251,7 +2251,9 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 100
-	m.height = 30
+	// Tall enough that the centered modal does not cover the monitor's header
+	// and pane rows behind it (the framed inputs make the modal ~22 lines).
+	m.height = 48
 	m.allPanes = []paneView{{Parent: "100", IssueNum: 1, Name: "existing", TmuxState: "live"}}
 	m.refreshRows()
 	m.openNewPaneForm()
@@ -2261,6 +2263,40 @@ func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestNewPaneViewFramesTextInputs(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	// One border for the modal itself plus one around each text input
+	// (Prompt and Slug); the Agent toggle stays unframed, so exactly three
+	// top-left corners must appear.
+	if got := strings.Count(view, "┌"); got != 3 {
+		t.Fatalf("framed input boxes: got %d top-left corners, want 3:\n%s", got, view)
+	}
+
+	// Collect each "┌...┐" top border. Order: modal outer frame, then the
+	// Prompt box, then the Slug box. The two input boxes must frame to the same
+	// width — textarea and textinput need different Width settings to line up.
+	var boxTops []string
+	for ln := range strings.SplitSeq(view, "\n") {
+		i := strings.Index(ln, "┌")
+		j := strings.Index(ln, "┐")
+		if i < 0 || j < 0 || j < i {
+			continue
+		}
+		boxTops = append(boxTops, ln[i:j+len("┐")])
+	}
+	if len(boxTops) != 3 {
+		t.Fatalf("box top borders: got %d, want 3:\n%s", len(boxTops), view)
+	}
+	if prompt, slug := len([]rune(boxTops[1])), len([]rune(boxTops[2])); prompt != slug {
+		t.Fatalf("Prompt box width %d != Slug box width %d:\n%s", prompt, slug, view)
 	}
 }
 
