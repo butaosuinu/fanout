@@ -357,39 +357,57 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 	}
 	briefingPath := ""
 	briefingBody := ""
-	if opts.Body != "" {
+	codexPlanMode := cfg.CodexPlanModeEnabled()
+	if codexPlanMode {
+		briefingPath = briefing.Path(projectRoot, number)
+		body := opts.Body
+		if strings.TrimSpace(body) == "" {
+			body = prompt
+		}
+		briefingBody = briefing.RenderManualPlan(title, body)
+		prompt = manualPromptWithBriefingAction(prompt, briefingPath, "propose a plan")
+	} else if opts.Body != "" {
 		briefingPath = briefing.Path(projectRoot, number)
 		briefingBody = opts.Body
 		prompt = manualPromptWithBriefing(prompt, briefingPath)
 	}
 	branchName := naming.BranchName(opts.BranchName, cfg.BranchPrefix, slug)
-	return paneRequest{
-		ParentRef:    manualPaneParentRef,
-		Number:       number,
-		Title:        title,
-		Body:         opts.Body,
-		ShortTitle:   shortIssueTitle(title),
-		Slug:         slug,
-		BranchName:   branchName,
-		Prompt:       prompt,
-		Agent:        agentName,
-		Hooks:        hookConfig,
-		BriefingPath: briefingPath,
-		BriefingBody: briefingBody,
-		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
+	req := paneRequest{
+		ParentRef:     manualPaneParentRef,
+		Number:        number,
+		Title:         title,
+		Body:          opts.Body,
+		ShortTitle:    shortIssueTitle(title),
+		Slug:          slug,
+		BranchName:    branchName,
+		Prompt:        prompt,
+		Agent:         agentName,
+		Hooks:         hookConfig,
+		BriefingPath:  briefingPath,
+		BriefingBody:  briefingBody,
+		CodexPlanMode: codexPlanMode,
+		Worktree:      worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
 	}
+	if req.CodexPlanMode {
+		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
 }
 
 func manualPromptWithBriefing(prompt, briefingPath string) string {
+	return manualPromptWithBriefingAction(prompt, briefingPath, "begin")
+}
+
+func manualPromptWithBriefingAction(prompt, briefingPath, action string) string {
 	prompt = strings.TrimSpace(prompt)
 	if strings.Contains(prompt, briefingPath) {
 		return prompt
 	}
 	prompt = strings.TrimRight(prompt, ".")
 	if prompt == "" {
-		return fmt.Sprintf("read %s and begin.", briefingPath)
+		return fmt.Sprintf("read %s and %s.", briefingPath, action)
 	}
-	return fmt.Sprintf("%s. read %s for additional context and begin.", prompt, briefingPath)
+	return fmt.Sprintf("%s. read %s for additional context and %s.", prompt, briefingPath, action)
 }
 
 func nextSyntheticPaneNumber(store state.Store, parentRef string) int {

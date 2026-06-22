@@ -237,6 +237,30 @@ func TestTeamSectionAbsentInCodexPlanBriefing(t *testing.T) {
 	}
 }
 
+func TestRenderManualPlanUsesManualPlanBriefing(t *testing.T) {
+	got := RenderManualPlan("Manual prompt", "Manual prompt\nMore context")
+	for _, want := range []string{
+		"manual fanout Codex Plan Mode session",
+		"Title: Manual prompt",
+		"Body:\nManual prompt\nMore context",
+		"<proposed_plan>...</proposed_plan>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderManualPlan missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"You are assigned GitHub issue",
+		"commit and push",
+		"Open a pull request",
+		"codex review --uncommitted",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderManualPlan contains %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func testTaskTeamContext() *TeamContext {
 	return &TeamContext{
 		ParentLabel: "plan:launch-plan",
