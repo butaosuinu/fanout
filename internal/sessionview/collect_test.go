@@ -104,13 +104,13 @@ func TestMergedStateLoaderDedupesBySameIdentityHomeWins(t *testing.T) {
 	sibTop := gitTopIn(t, sibling)
 
 	// Same logical child (#84/#101) recorded in two worktrees with different pane
-	// ids: identity dedup collapses to one row, home wins.
+	// ids: identity dedup collapses to one row. With neither pane live, home wins.
 	recordPaneAt(t, top, state.Pane{Parent: "84", IssueNum: 101, PaneID: "%1", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "84", IssueNum: 101, PaneID: "%2", Agent: "codex"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := mergedStateLoader(top, noLivePanes)()
 	if err != nil {
-		t.Fatalf("MergedStateLoader: %v", err)
+		t.Fatalf("mergedStateLoader: %v", err)
 	}
 	count := 0
 	var winner state.Pane
@@ -133,6 +133,50 @@ func TestMergedStateLoaderDedupesBySameIdentityHomeWins(t *testing.T) {
 	}
 	if len(winner.SourceProjectRoots) != 2 || !gotRoots[top] || !gotRoots[sibTop] {
 		t.Fatalf("winner.SourceProjectRoots = %v, want both %s and %s", winner.SourceProjectRoots, top, sibTop)
+	}
+}
+
+func noLivePanes() map[string]bool { return nil }
+
+func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	// Same GitHub child (#220/#221) in two worktrees: the home pane is dead, the
+	// sibling pane is live. The surfaced row must be the live sibling so Build can
+	// mark it alive and peek it — not the stale home row.
+	recordPaneAt(t, top, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%dead", Agent: "claude"})
+	recordPaneAt(t, sibTop, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%live", Agent: "claude"})
+	live := func() map[string]bool { return map[string]bool{"%live": true} }
+
+	store, err := mergedStateLoader(top, live)()
+	if err != nil {
+		t.Fatalf("mergedStateLoader: %v", err)
+	}
+	var row *state.Pane
+	count := 0
+	for i := range store.Panes {
+		if store.Panes[i].Parent == "220" && store.Panes[i].IssueNum == 221 {
+			count++
+			row = &store.Panes[i]
+		}
+	}
+	if count != 1 {
+		t.Fatalf("(#220,#221) appears %d times, want 1 collapsed row: %+v", count, store.Panes)
+	}
+	if row.PaneID != "%live" || row.SourceProjectRoot != sibTop {
+		t.Fatalf("surfaced row = pane %q @ %q, want the live sibling %%live @ %s", row.PaneID, row.SourceProjectRoot, sibTop)
+	}
+	// Both owning roots are still retained for lifecycle routing.
+	gotRoots := map[string]bool{}
+	for _, r := range row.SourceProjectRoots {
+		gotRoots[r] = true
+	}
+	if !gotRoots[top] || !gotRoots[sibTop] {
+		t.Fatalf("SourceProjectRoots = %v, want both %s and %s", row.SourceProjectRoots, top, sibTop)
 	}
 }
 

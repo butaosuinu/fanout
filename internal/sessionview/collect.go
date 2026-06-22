@@ -44,21 +44,61 @@ func StateLoader(projectRoot string) func() (state.Store, error) {
 // the home worktree wins identity collisions. Rows with no stable identity (a
 // shell pane lacking a shell key) are always kept.
 //
-// When one identity is recorded in several worktrees, only the winning row is
-// surfaced (SourceProjectRoot), but every owning root is accumulated on its
-// SourceProjectRoots so a close/cleanup reaches the de-duplicated sibling stores
-// too instead of leaving rows that reappear on the next refresh.
+// When one identity is recorded in several worktrees, only one row is surfaced,
+// but every owning root is accumulated on its SourceProjectRoots so a
+// close/cleanup reaches the de-duplicated sibling stores too instead of leaving
+// rows that reappear on the next refresh. The surfaced row prefers a candidate
+// whose pane is currently live over a stale one, so a dead home row never
+// shadows a live sibling before Build's worktree-path liveness check (which
+// would otherwise show the child stale and make its live pane un-peekable). When
+// none or several candidates are live, the first-read (home) wins. Liveness is
+// resolved lazily — only when a duplicate is actually found — so the common
+// no-duplicate load issues no tmux call.
 //
 // Roots are de-duplicated by their symlink-resolved path so the home worktree is
 // not read twice when projectRoot is a non-canonical path (a symlinked checkout,
 // or a FANOUT_STATE_PATH-inferred root) that differs from git's canonical
 // `worktree list` output but points at the same .fanout/state.json.
 func MergedStateLoader(projectRoot string) func() (state.Store, error) {
+	return mergedStateLoader(projectRoot, liveTmuxPaneIDs)
+}
+
+// liveTmuxPaneIDs returns the set of currently-live tmux pane ids, best effort
+// (empty when tmux is unavailable). Used only to break duplicate-identity ties.
+func liveTmuxPaneIDs() map[string]bool {
+	panes, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		return nil
+	}
+	ids := make(map[string]bool, len(panes))
+	for _, p := range panes {
+		ids[p.ID] = true
+	}
+	return ids
+}
+
+func mergedStateLoader(projectRoot string, liveIDs func() map[string]bool) func() (state.Store, error) {
 	return func() (state.Store, error) {
 		roots, _ := worktree.ListRoots(projectRoot) // always returns at least {projectRoot}
 		merged := state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{}}
 		seenIdx := map[string]int{}
 		seenRoot := map[string]bool{}
+
+		var live map[string]bool
+		liveLoaded := false
+		isLive := func(p state.Pane) bool {
+			if p.PaneID == "" {
+				return false
+			}
+			if !liveLoaded {
+				liveLoaded = true
+				if liveIDs != nil {
+					live = liveIDs()
+				}
+			}
+			return live[p.PaneID]
+		}
+
 		for _, root := range roots {
 			rk := resolvePath(root)
 			if seenRoot[rk] {
@@ -76,16 +116,27 @@ func MergedStateLoader(projectRoot string) func() (state.Store, error) {
 				continue
 			}
 			for _, p := range st.Panes {
-				if key := paneIdentityKey(p); key != "" {
-					if idx, ok := seenIdx[key]; ok {
-						// Same identity in another store: keep the winner for
-						// display but record this root for lifecycle routing.
-						merged.Panes[idx].SourceProjectRoots = append(merged.Panes[idx].SourceProjectRoots, root)
-						continue
-					}
-					seenIdx[key] = len(merged.Panes)
-				}
 				p.SourceProjectRoot = root
+				key := paneIdentityKey(p)
+				if key == "" {
+					p.SourceProjectRoots = []string{root}
+					merged.Panes = append(merged.Panes, p)
+					continue
+				}
+				if idx, ok := seenIdx[key]; ok {
+					// Same identity in another store. Accumulate this root for
+					// lifecycle routing first (PaneID is untouched, so the
+					// liveness check below is unaffected), then promote this
+					// candidate to the surfaced row when it is live and the kept
+					// one is not.
+					merged.Panes[idx].SourceProjectRoots = append(merged.Panes[idx].SourceProjectRoots, root)
+					if isLive(p) && !isLive(merged.Panes[idx]) {
+						p.SourceProjectRoots = merged.Panes[idx].SourceProjectRoots
+						merged.Panes[idx] = p
+					}
+					continue
+				}
+				seenIdx[key] = len(merged.Panes)
 				p.SourceProjectRoots = []string{root}
 				merged.Panes = append(merged.Panes, p)
 			}
