@@ -257,7 +257,10 @@ func (p *poller) refreshGH() {
 	if gh == nil {
 		return
 	}
-	store, err := state.LoadProject(p.projectRoot)
+	// Load the merged store so PR/wave refresh covers issues recorded in sibling
+	// worktrees too; otherwise build() surfaces their panes but refreshGH never
+	// fetches their issue/PR/wave state, leaving them permanently UNKNOWN.
+	store, err := sessionview.MergedStateLoader(p.projectRoot)()
 	if err != nil {
 		return
 	}
@@ -458,7 +461,7 @@ func mergeDegradedWaveInfos(previous, current map[int]sessionview.WaveInfo) map[
 func (p *poller) build() sessionview.Snapshot {
 	repo, _, _ := p.ghIdentity()
 	return sessionview.Build(repo, p.projectRoot, sessionview.Collectors{
-		LoadState:    sessionview.StateLoader(p.projectRoot),
+		LoadState:    sessionview.MergedStateLoader(p.projectRoot),
 		LivePanes:    sessionview.LivePanes(),
 		IssuePRs:     p.issuePRsFromCache,
 		BranchPRs:    p.branchPRsFromCache,

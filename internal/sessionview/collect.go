@@ -2,12 +2,15 @@ package sessionview
 
 import (
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/gitstat"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 // StateLoader returns a LoadState collector reading .fanout/state.json under
@@ -17,6 +20,107 @@ func StateLoader(projectRoot string) func() (state.Store, error) {
 	return func() (state.Store, error) {
 		return state.LoadProject(projectRoot)
 	}
+}
+
+// MergedStateLoader returns a LoadState collector that unions the
+// .fanout/state.json of every git worktree sharing projectRoot's repository, so
+// the dashboard and TUI surface Sessions regardless of which worktree fanout
+// was launched from. Each worktree records its own state.json; without this
+// merge a Session fanned out from a sibling worktree is invisible from the one
+// the dashboard runs in.
+//
+// Provenance is preserved on each pane (SourceProjectRoot) so the TUI can route
+// close/merge/cleanup back to the owning worktree's state.json. A
+// `git worktree list` failure degrades to a single-root load. The read stays
+// lockless and mutation-free, like StateLoader.
+//
+// Panes are de-duplicated by their stable store identity — the same key the
+// per-worktree state lock enforces within one store: (parent, taskId) for task
+// rows, the shell key for shell terminals, else (parent, issueNum). Pane id is
+// deliberately NOT the dedup key: tmux reuses ids like %1 across server
+// restarts, so a stale row in one store could otherwise shadow a live row with
+// the reused id in another before Build runs its worktree-path liveness check,
+// hiding a valid Session with no way to close it. projectRoot is read first, so
+// the home worktree wins identity collisions. Rows with no stable identity (a
+// shell pane lacking a shell key) are always kept.
+//
+// When one identity is recorded in several worktrees, only the winning row is
+// surfaced (SourceProjectRoot), but every owning root is accumulated on its
+// SourceProjectRoots so a close/cleanup reaches the de-duplicated sibling stores
+// too instead of leaving rows that reappear on the next refresh.
+//
+// Roots are de-duplicated by their symlink-resolved path so the home worktree is
+// not read twice when projectRoot is a non-canonical path (a symlinked checkout,
+// or a FANOUT_STATE_PATH-inferred root) that differs from git's canonical
+// `worktree list` output but points at the same .fanout/state.json.
+func MergedStateLoader(projectRoot string) func() (state.Store, error) {
+	return func() (state.Store, error) {
+		roots, _ := worktree.ListRoots(projectRoot) // always returns at least {projectRoot}
+		merged := state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{}}
+		seenIdx := map[string]int{}
+		seenRoot := map[string]bool{}
+		for _, root := range roots {
+			rk := resolvePath(root)
+			if seenRoot[rk] {
+				continue
+			}
+			seenRoot[rk] = true
+			st, err := state.Load(state.Path(root))
+			if err != nil {
+				// The home root's failure is authoritative (a corrupt own
+				// state.json should surface); a sibling's is skipped so one bad
+				// store can't blank the whole view.
+				if root == projectRoot {
+					return state.Store{}, err
+				}
+				continue
+			}
+			for _, p := range st.Panes {
+				if key := paneIdentityKey(p); key != "" {
+					if idx, ok := seenIdx[key]; ok {
+						// Same identity in another store: keep the winner for
+						// display but record this root for lifecycle routing.
+						merged.Panes[idx].SourceProjectRoots = append(merged.Panes[idx].SourceProjectRoots, root)
+						continue
+					}
+					seenIdx[key] = len(merged.Panes)
+				}
+				p.SourceProjectRoot = root
+				p.SourceProjectRoots = []string{root}
+				merged.Panes = append(merged.Panes, p)
+			}
+		}
+		return merged, nil
+	}
+}
+
+// paneIdentityKey returns a pane's stable cross-store identity, mirroring the
+// (parent, issueNum)/(parent, taskId) idempotency the state lock enforces within
+// one store. Shell terminals share (parent, issueNum) so they key on their shell
+// key instead. An empty key means "no stable identity" — never de-duplicated.
+func paneIdentityKey(p state.Pane) string {
+	parent := NormalizeParent(p.Parent)
+	switch {
+	case strings.TrimSpace(p.TaskID) != "":
+		return "task\x00" + parent + "\x00" + p.TaskID
+	case p.IsShell():
+		if k := strings.TrimSpace(p.ShellKey); k != "" {
+			return "shell\x00" + k
+		}
+		return ""
+	default:
+		return "issue\x00" + parent + "\x00" + strconv.Itoa(p.IssueNum)
+	}
+}
+
+// resolvePath returns path with symlinks resolved, falling back to the cleaned
+// path when the target does not exist or cannot be resolved. Used to detect when
+// two worktree roots are the same physical directory.
+func resolvePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
 }
 
 // LivePanes returns a LivePanes collector that maps each live tmux pane id to

@@ -357,6 +357,53 @@ func RefreshBase(root, base string) error {
 	return nil
 }
 
+// ListRoots returns the absolute paths of every git worktree sharing
+// projectRoot's repository, so dashboard-style surfaces can aggregate the
+// .fanout/state.json each worktree records independently. It excludes fanout's
+// own child worktrees (those under a ".fanout/worktrees/" segment, whose state
+// is recorded in the owner, not the child) and always includes projectRoot
+// itself. The bare main repository, having no working tree, is skipped. On a
+// `git worktree list` failure it returns {projectRoot} alongside the error so
+// callers degrade to a single-root load.
+func ListRoots(projectRoot string) ([]string, error) {
+	out, err := git(projectRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return []string{projectRoot}, err
+	}
+	roots := []string{projectRoot}
+	seen := map[string]bool{projectRoot: true}
+	var current string
+	bare := false
+	childMarker := string(filepath.Separator) + filepath.FromSlash(localExcludePattern)
+	flush := func() {
+		path := current
+		isBare := bare
+		current, bare = "", false
+		if path == "" || isBare {
+			return
+		}
+		if seen[path] || strings.Contains(path, childMarker) {
+			return
+		}
+		seen[path] = true
+		roots = append(roots, path)
+	}
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		line := sc.Text()
+		if after, ok := strings.CutPrefix(line, "worktree "); ok {
+			flush()
+			current = after
+			continue
+		}
+		if line == "bare" {
+			bare = true
+		}
+	}
+	flush()
+	return roots, nil
+}
+
 func checkedOutWorktree(root, branch string) string {
 	out, err := git(root, "worktree", "list", "--porcelain")
 	if err != nil {

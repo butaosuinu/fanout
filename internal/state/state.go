@@ -56,6 +56,18 @@ type Pane struct {
 	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
 	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
 	AgentStatus string `json:"agentStatus,omitempty"`
+	// SourceProjectRoot はこの pane を読み込んだ worktree の root
+	// (<root>/.fanout/state.json の <root>)。非永続(json:"-")で、複数 worktree を
+	// またいで集約する MergedStateLoader だけが設定する。表示面が write
+	// (close/merge/cleanup) を所有元の state.json へルーティングするために使う。
+	// 単一 root のロードでは常に空。
+	SourceProjectRoot string `json:"-"`
+	// SourceProjectRoots は同一 identity((parent,issueNum)/(parent,taskId))が
+	// 複数 worktree の state.json に記録されていた場合の、その全 root。
+	// MergedStateLoader は表示上は 1 行に畳むが、close/cleanup が取りこぼした
+	// sibling ストアを残さないよう全 root をここに集約する。非永続(json:"-")で、
+	// 通常は [SourceProjectRoot] の 1 要素。
+	SourceProjectRoots []string `json:"-"`
 }
 
 func (p Pane) IsShell() bool {

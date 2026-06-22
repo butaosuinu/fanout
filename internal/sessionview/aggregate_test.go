@@ -276,6 +276,24 @@ func TestBuildPerSessionAllMerged(t *testing.T) {
 	}
 }
 
+func TestBuildCopiesSourceProjectRootToPaneView(t *testing.T) {
+	tagged := pane("7", 8, "%1")
+	tagged.SourceProjectRoot = "/other/worktree"
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(tagged),
+		LivePanes: livePanesAt("%1"),
+		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+	}
+	snap := Build("o/n", "/root", c)
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 1 {
+		t.Fatalf("sessions = %+v", snap.Sessions)
+	}
+	if got := snap.Sessions[0].Panes[0].SourceProjectRoot; got != "/other/worktree" {
+		t.Fatalf("SourceProjectRoot = %q, want /other/worktree", got)
+	}
+}
+
 func TestBuildCarriesTaskIDRowsWithoutIssueFetch(t *testing.T) {
 	issueCalls := 0
 	waveCalls := 0

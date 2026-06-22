@@ -226,6 +226,38 @@ func TestAgentStatusRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestSourceProjectRootNeverPersists(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	// SourceProjectRoot は MergedStateLoader だけが設定する非永続フィールド。
+	// RecordPane 経由で値が入っても state.json には書き出されず、ロードしても空に戻る。
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, SourceProjectRoot: "/somewhere/else"}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "sourceProjectRoot") || strings.Contains(string(data), "/somewhere/else") {
+		t.Fatalf("SourceProjectRoot leaked into persisted state:\n%s", data)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.Find("81", 83)
+	if !ok || got.SourceProjectRoot != "" {
+		t.Fatalf("SourceProjectRoot = %q (found=%v), want empty after load", got.SourceProjectRoot, ok)
+	}
+}
+
 func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)

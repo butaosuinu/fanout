@@ -1567,6 +1567,121 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	}
 }
 
+func TestLifecycleCmdRoutesToPaneSourceProjectRoot(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+
+	// A pane recorded in a sibling worktree must be closed against that
+	// worktree's state.json, not m.opts.ProjectRoot's (which may be empty).
+	pane := paneView{Parent: "84", IssueNum: 101, Name: "child", sourceProjectRoot: "/sibling"}
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionClose, pane: pane})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	if runner.projectRoot != "/sibling" || runner.statePath != state.Path("/sibling") {
+		t.Fatalf("Close opts = %q/%q, want sibling root /sibling", runner.projectRoot, runner.statePath)
+	}
+}
+
+func TestLifecycleCloseRunsAcrossAllOwningRoots(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+
+	// The same logical child collapsed from two worktrees: close must remove it
+	// from both stores, not just the winning one.
+	pane := paneView{
+		Parent:             "84",
+		IssueNum:           101,
+		Name:               "child",
+		sourceProjectRoot:  "/wt-a",
+		sourceProjectRoots: []string{"/wt-a", "/wt-b"},
+	}
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionClose, pane: pane})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	if len(runner.closeRoots) != 2 {
+		t.Fatalf("close ran on roots %v, want both /wt-a and /wt-b", runner.closeRoots)
+	}
+	got := map[string]bool{}
+	for _, r := range runner.closeRoots {
+		got[r] = true
+	}
+	if !got["/wt-a"] || !got["/wt-b"] {
+		t.Fatalf("close roots = %v, want /wt-a and /wt-b", runner.closeRoots)
+	}
+}
+
+func TestLifecycleCmdFallsBackToProjectRootWhenSourceEmpty(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+
+	pane := paneView{Parent: "84", IssueNum: 101, Name: "child"} // no sourceProjectRoot
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionClose, pane: pane})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	if runner.projectRoot != "/repo" || runner.statePath != state.Path("/repo") {
+		t.Fatalf("Close opts = %q/%q, want /repo fallback", runner.projectRoot, runner.statePath)
+	}
+}
+
+func TestLifecycleCleanupRunsAcrossAllSourceRootsForParent(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	// Parent #84 spread across worktrees: pane "a" was recorded in two worktrees
+	// and collapsed by the loader (sourceProjectRoots has both), "b" in one, "d"
+	// under a numeric alias ("0084") that must still match, plus a synthetic
+	// not-started row (no source root) that must add no spurious target.
+	m.allPanes = []paneView{
+		{Parent: "84", IssueNum: 101, Name: "a", sourceProjectRoot: "/wt-a", sourceProjectRoots: []string{"/wt-a", "/wt-x"}},
+		{Parent: "84", IssueNum: 102, Name: "b", sourceProjectRoot: "/wt-b", sourceProjectRoots: []string{"/wt-b"}},
+		{Parent: "0084", IssueNum: 104, Name: "d", sourceProjectRoot: "/wt-c", sourceProjectRoots: []string{"/wt-c"}},
+		{Parent: "84", IssueNum: 103, Name: "c"},
+	}
+
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionCleanup, pane: m.allPanes[0]})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	got := map[string]bool{}
+	for _, r := range runner.cleanupRoots {
+		got[r] = true
+	}
+	want := []string{"/wt-a", "/wt-x", "/wt-b", "/wt-c"}
+	if len(runner.cleanupRoots) != len(want) {
+		t.Fatalf("cleanup ran on roots %v, want %v (collapsed + alias included)", runner.cleanupRoots, want)
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Fatalf("cleanup roots = %v, missing %s", runner.cleanupRoots, w)
+		}
+	}
+}
+
+func TestPaneViewsFromSnapshotCarriesSourceProjectRoot(t *testing.T) {
+	snap := sessionview.Snapshot{Sessions: []sessionview.Session{{
+		Parent: "100",
+		Panes: []sessionview.PaneView{{
+			IssueNum:           101,
+			PaneID:             "%1",
+			SourceProjectRoot:  "/sibling",
+			SourceProjectRoots: []string{"/sibling", "/sibling2"},
+			WorktreePath:       "/sibling/.fanout/worktrees/x",
+		}},
+	}}}
+	out := paneViewsFromSnapshot("/repo", snap)
+	if len(out) != 1 {
+		t.Fatalf("want 1 pane, got %d", len(out))
+	}
+	if out[0].sourceProjectRoot != "/sibling" {
+		t.Fatalf("sourceProjectRoot = %q, want /sibling", out[0].sourceProjectRoot)
+	}
+	if len(out[0].sourceProjectRoots) != 2 {
+		t.Fatalf("sourceProjectRoots = %v, want both owning roots carried", out[0].sourceProjectRoots)
+	}
+}
+
 func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 	tests := []struct {
 		key    string
@@ -1769,6 +1884,8 @@ type fakeLifecycleRunner struct {
 	cleanupParent       string
 	cleanupPlanParent   string
 	watcherRunningLabel string
+	cleanupRoots        []string
+	closeRoots          []string
 }
 
 type fakeTransitionNotifier struct {
@@ -1787,6 +1904,7 @@ func (f *fakeLifecycleRunner) Close(opts lifecycle.Options, parent string, issue
 	f.watcherRunningLabel = opts.WatcherRunningLabel
 	f.closeParent = parent
 	f.closeIssue = issueNum
+	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close\n")
 	return f.code
 }
@@ -1796,6 +1914,7 @@ func (f *fakeLifecycleRunner) CloseTask(opts lifecycle.Options, parent, taskID s
 	f.statePath = opts.StatePath
 	f.closeTaskParent = parent
 	f.closeTaskID = taskID
+	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close task\n")
 	return f.code
 }
@@ -1814,12 +1933,14 @@ func (f *fakeLifecycleRunner) MergeTask(opts lifecycle.Options, parent, taskID s
 
 func (f *fakeLifecycleRunner) Cleanup(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
 	f.cleanupParent = parent
+	f.cleanupRoots = append(f.cleanupRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake cleanup\n")
 	return f.code
 }
 
 func (f *fakeLifecycleRunner) CleanupPlan(opts lifecycle.Options, parent string, lg lifecycle.Logger) exitcode.Code {
 	f.cleanupPlanParent = parent
+	f.cleanupRoots = append(f.cleanupRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake cleanup plan\n")
 	return f.code
 }
