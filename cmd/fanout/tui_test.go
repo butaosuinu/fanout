@@ -218,6 +218,81 @@ func TestWatchPaneMatchesLiveRequiresShellKeyForShellRows(t *testing.T) {
 	}
 }
 
+func TestWatchLivePaneCacheReusesListingUntilReset(t *testing.T) {
+	calls := 0
+	cache := &watchLivePaneCache{
+		list: func() ([]tmuxrun.LivePane, error) {
+			calls++
+			return []tmuxrun.LivePane{
+				{ID: "%1", CurrentPath: "/repo/.fanout/worktrees/one-501"},
+				{ID: "%2", CurrentPath: "/repo/.fanout/worktrees/two-502"},
+			}, nil
+		},
+	}
+
+	ok, err := cache.Alive(state.Pane{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok || calls != 0 {
+		t.Fatalf("empty pane alive/calls = %v/%d, want false/0", ok, calls)
+	}
+
+	ok, err = cache.Alive(state.Pane{PaneID: "%1", WorktreePath: "/repo/.fanout/worktrees/one-501"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("Alive() = false, want true for first live pane")
+	}
+	ok, err = cache.Alive(state.Pane{PaneID: "%2", WorktreePath: "/repo/.fanout/worktrees/two-502"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("Alive() = false, want true for second live pane")
+	}
+	if calls != 1 {
+		t.Fatalf("list calls = %d, want one cached call", calls)
+	}
+
+	cache.Reset()
+	ok, err = cache.Alive(state.Pane{PaneID: "%1", WorktreePath: "/repo/.fanout/worktrees/one-501"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || calls != 2 {
+		t.Fatalf("after reset alive/calls = %v/%d, want true/2", ok, calls)
+	}
+}
+
+func TestWatchParentResultAfterLaunchRequeuesOnFollowupError(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf 'temporary gh failure\n' >&2
+  exit 1
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	cfg := &cliflags.Config{
+		Parent:        500,
+		ParentRef:     "500",
+		ParentMode:    cliflags.ModeIssue,
+		Limit:         1,
+		UnblockedOnly: true,
+	}
+
+	got := watchParentResultAfterLaunch(t.TempDir(), cfg, ghissue.Runner{})
+	if !got.Deferred {
+		t.Fatal("watchParentResultAfterLaunch() Deferred = false, want true when post-launch check fails")
+	}
+}
+
 func TestWatchParentHasRemainingTargetsUsesPostLaunchPlan(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in
@@ -305,6 +380,58 @@ esac
 	}
 	if !deferred {
 		t.Fatal("watchParentHasRemainingTargets() = false, want true while an unfanned child remains")
+	}
+}
+
+func TestWatchParentHasRemainingTargetsRequeuesBlockedRows(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[{"number":501,"title":"one","state":"open"},{"number":502,"title":"blocked","state":"open"}]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf '%s\n' '- [ ] #501 one' '- [ ] #502 blocked (blocked by #600)'
+  ;;
+"issue view 501 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 502 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 600 --json state -q .state")
+  printf 'OPEN\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	repo := t.TempDir()
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 501, Slug: "one-501", PaneID: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &cliflags.Config{
+		Parent:        500,
+		ParentRef:     "500",
+		ParentMode:    cliflags.ModeIssue,
+		Limit:         1,
+		UnblockedOnly: true,
+	}
+
+	deferred, err := watchParentHasRemainingTargets(repo, cfg, ghissue.Runner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deferred {
+		t.Fatal("watchParentHasRemainingTargets() = false, want true while blocked children remain")
 	}
 }
 

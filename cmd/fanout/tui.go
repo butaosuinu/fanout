@@ -99,6 +99,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
+	livePanes := &watchLivePaneCache{}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
 		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
@@ -110,7 +111,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		LoadState: func() (state.Store, error) {
 			return state.LoadProject(projectRoot)
 		},
-		PaneAlive: watchPaneAlive,
+		PaneAlive: livePanes.Alive,
 		LaunchStandalone: func(issue ghissue.Issue) error {
 			return launchWatchStandalone(projectRoot, session, commandName, resolvedSettings, hookConfig, issue)
 		},
@@ -124,7 +125,20 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		MaxSessions:  resolvedSettings.WatcherMaxSessions,
 	}
 	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
-	return watch.NewEngine(cfg, io), interval, resolvedSettings.WatcherTriggerLabel, nil
+	return &tuiWatcher{engine: watch.NewEngine(cfg, io), livePanes: livePanes}, interval, resolvedSettings.WatcherTriggerLabel, nil
+}
+
+type tuiWatcher struct {
+	engine    *watch.Engine
+	livePanes *watchLivePaneCache
+}
+
+func (w *tuiWatcher) RunCycle() (watch.Report, error) {
+	if w == nil || w.engine == nil {
+		return watch.Report{}, fmt.Errorf("watcher is nil")
+	}
+	w.livePanes.Reset()
+	return w.engine.RunCycle()
 }
 
 func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
@@ -168,11 +182,7 @@ func launchWatchParent(projectRoot, session, commandName string, resolvedSetting
 	if code := runWithRuntime(cfg, launchLogger, rt, commandName); code != exitcode.OK {
 		return watch.ParentLaunchResult{}, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
-	deferred, err := watchParentHasRemainingTargets(projectRoot, cfg, gh)
-	if err != nil {
-		return watch.ParentLaunchResult{}, err
-	}
-	return watch.ParentLaunchResult{Deferred: deferred}, nil
+	return watchParentResultAfterLaunch(projectRoot, cfg, gh), nil
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {
@@ -205,11 +215,27 @@ func countOpenChildTargets(gh ghissue.Runner, parent int) (int, error) {
 	return len(openIssues(loaded.Children)), nil
 }
 
-func watchPaneAlive(pane state.Pane) (bool, error) {
+type watchLivePaneCache struct {
+	list   func() ([]tmuxrun.LivePane, error)
+	loaded bool
+	panes  []tmuxrun.LivePane
+	err    error
+}
+
+func (c *watchLivePaneCache) Reset() {
+	if c == nil {
+		return
+	}
+	c.loaded = false
+	c.panes = nil
+	c.err = nil
+}
+
+func (c *watchLivePaneCache) Alive(pane state.Pane) (bool, error) {
 	if strings.TrimSpace(pane.PaneID) == "" {
 		return false, nil
 	}
-	panes, err := tmuxrun.ListLivePanes()
+	panes, err := c.load()
 	if err != nil {
 		return false, err
 	}
@@ -219,6 +245,21 @@ func watchPaneAlive(pane state.Pane) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func (c *watchLivePaneCache) load() ([]tmuxrun.LivePane, error) {
+	if c == nil {
+		return tmuxrun.ListLivePanes()
+	}
+	if !c.loaded {
+		list := c.list
+		if list == nil {
+			list = tmuxrun.ListLivePanes
+		}
+		c.panes, c.err = list()
+		c.loaded = true
+	}
+	return c.panes, c.err
 }
 
 func watchPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) bool {
@@ -235,6 +276,16 @@ func watchPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) bool {
 	wt := filepath.Clean(worktree)
 	cp := filepath.Clean(live.CurrentPath)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+func watchParentResultAfterLaunch(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) watch.ParentLaunchResult {
+	deferred, err := watchParentHasRemainingTargets(projectRoot, cfg, gh)
+	if err != nil {
+		// The parent fan-out already completed. Keep the parent retriable instead
+		// of reporting the completed launch as failed.
+		return watch.ParentLaunchResult{Deferred: true}
+	}
+	return watch.ParentLaunchResult{Deferred: deferred}
 }
 
 func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (bool, error) {
@@ -267,7 +318,7 @@ func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh
 			return stateName
 		},
 	)
-	return len(plan.Targets) > 0 || len(plan.LimitDeferred) > 0, nil
+	return len(plan.Targets) > 0 || len(plan.BlockedRows) > 0 || len(plan.LimitDeferred) > 0, nil
 }
 
 func loadWatchParentChildren(gh ghissue.Runner, parent int) (childLoadResult, error) {
