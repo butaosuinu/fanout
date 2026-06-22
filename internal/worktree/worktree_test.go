@@ -101,6 +101,118 @@ func TestPrepareSupportsOriginQualifiedBase(t *testing.T) {
 	}
 }
 
+func TestPrepareBestEffortToleratesDirtyCheckedOutBase(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin.git")
+	seed := filepath.Join(dir, "seed")
+	repo := filepath.Join(dir, "repo")
+
+	gitTest(t, "", "init", "--bare", origin)
+	gitTest(t, "", "init", seed)
+	gitTest(t, seed, "checkout", "-b", "main")
+	writeFile(t, filepath.Join(seed, "file.txt"), "one\n")
+	gitTest(t, seed, "add", "file.txt")
+	gitTest(t, seed, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "one")
+	gitTest(t, seed, "remote", "add", "origin", origin)
+	gitTest(t, seed, "push", "-u", "origin", "main")
+
+	gitTest(t, "", "clone", origin, repo)
+	gitTest(t, repo, "checkout", "main")
+	localHead := gitOutput(t, repo, "rev-parse", "main")
+
+	// Advance origin so a refresh would try to fast-forward the local main.
+	writeFile(t, filepath.Join(seed, "file.txt"), "two\n")
+	gitTest(t, seed, "add", "file.txt")
+	gitTest(t, seed, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "two")
+	gitTest(t, seed, "push", "origin", "main")
+
+	// Make the checked-out main dirty so the fast-forward refuses (the TUI `n` repro).
+	writeFile(t, filepath.Join(repo, "file.txt"), "local edit\n")
+
+	// Strict refresh still refuses on a dirty checked-out base.
+	if _, err := Prepare(Options{
+		ProjectRoot: repo,
+		Slug:        "strict",
+		BranchName:  "fanout/strict",
+		BaseBranch:  "main",
+	}); err == nil {
+		t.Fatal("Prepare() strict = nil error, want refusal on dirty checked-out base")
+	}
+
+	// Best-effort tolerates the failed refresh and branches off local main as-is.
+	res, err := Prepare(Options{
+		ProjectRoot:       repo,
+		Slug:              "best-effort",
+		BranchName:        "fanout/best-effort",
+		BaseBranch:        "main",
+		RefreshBestEffort: true,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() best-effort failed: %v", err)
+	}
+	if res.RefreshWarning == nil {
+		t.Fatal("Prepare() best-effort RefreshWarning = nil, want the skipped refresh error")
+	}
+	if got := gitOutput(t, res.WorktreePath, "rev-parse", "HEAD"); got != localHead {
+		t.Fatalf("worktree HEAD = %s, want local main %s", got, localHead)
+	}
+	if got := gitOutput(t, repo, "rev-parse", "main"); got != localHead {
+		t.Fatalf("local main = %s, want unchanged %s", got, localHead)
+	}
+	if got := gitOutput(t, repo, "status", "--short"); got == "" {
+		t.Fatal("local edit was lost; repo status is clean")
+	}
+}
+
+func TestPrepareBestEffortBranchesOffLocalCommitsWhenDiverged(t *testing.T) {
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin.git")
+	seed := filepath.Join(dir, "seed")
+	repo := filepath.Join(dir, "repo")
+
+	gitTest(t, "", "init", "--bare", origin)
+	gitTest(t, "", "init", seed)
+	gitTest(t, seed, "checkout", "-b", "main")
+	writeFile(t, filepath.Join(seed, "file.txt"), "one\n")
+	gitTest(t, seed, "add", "file.txt")
+	gitTest(t, seed, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "one")
+	gitTest(t, seed, "remote", "add", "origin", origin)
+	gitTest(t, seed, "push", "-u", "origin", "main")
+
+	gitTest(t, "", "clone", origin, repo)
+	gitTest(t, repo, "checkout", "main")
+
+	// A committed local-only change leaves main ahead of origin; a strict refresh
+	// would refuse to fast-forward, but the user opted to keep these commits.
+	writeFile(t, filepath.Join(repo, "local.txt"), "local only\n")
+	gitTest(t, repo, "add", "local.txt")
+	gitTest(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "local only")
+	localHead := gitOutput(t, repo, "rev-parse", "main")
+
+	res, err := Prepare(Options{
+		ProjectRoot:       repo,
+		Slug:              "ahead",
+		BranchName:        "fanout/ahead",
+		BaseBranch:        "main",
+		RefreshBestEffort: true,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() best-effort failed: %v", err)
+	}
+	if res.RefreshWarning == nil {
+		t.Fatal("Prepare() best-effort RefreshWarning = nil, want the tolerated divergence error")
+	}
+	if got := gitOutput(t, res.WorktreePath, "rev-parse", "HEAD"); got != localHead {
+		t.Fatalf("worktree HEAD = %s, want local main %s (local commits must be included)", got, localHead)
+	}
+	if _, err := os.Stat(filepath.Join(res.WorktreePath, "local.txt")); err != nil {
+		t.Fatalf("worktree missing local-only commit content: %v", err)
+	}
+	if got := gitOutput(t, repo, "rev-parse", "main"); got != localHead {
+		t.Fatalf("local main = %s, want unchanged %s", got, localHead)
+	}
+}
+
 func TestPrepareAllowsMissingOriginFromCurrentBranch(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	baseHead := gitOutput(t, repo, "rev-parse", "HEAD")

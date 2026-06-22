@@ -85,8 +85,9 @@ type LaunchRequest struct {
 	Slug   string
 }
 
-// LaunchFunc creates a manual fanout pane for a TUI request.
-type LaunchFunc func(LaunchRequest) error
+// LaunchFunc creates a manual fanout pane for a TUI request. It returns an
+// optional notice (e.g. a tolerated base-refresh skip) to surface on success.
+type LaunchFunc func(LaunchRequest) (notice string, err error)
 
 // WatcherRunner runs one watcher cycle.
 type WatcherRunner interface {
@@ -331,7 +332,8 @@ type (
 	ghTickMsg     time.Time
 	watchTickMsg  time.Time
 	launchPaneMsg struct {
-		err error
+		notice string
+		err    error
 	}
 	launchShellMsg struct {
 		req ShellLaunchRequest
@@ -718,7 +720,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mode = modeMonitor
-		m.notice = "created new agent pane"
+		if msg.notice != "" {
+			m.notice = msg.notice
+		} else {
+			m.notice = "created new agent pane"
+		}
 		return m, m.loadStateCmd(false)
 	case launchShellMsg:
 		if msg.err != nil {
@@ -1361,7 +1367,8 @@ func (m *model) submitNewPane() tea.Cmd {
 	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
-		return launchPaneMsg{err: launch(req)}
+		notice, err := launch(req)
+		return launchPaneMsg{notice: notice, err: err}
 	}
 }
 

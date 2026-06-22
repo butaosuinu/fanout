@@ -412,29 +412,29 @@ func hasRecordedIssuePane(store state.Store, issueNum int) bool {
 }
 
 func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {
-	return func(req fanouttui.LaunchRequest) error {
+	return func(req fanouttui.LaunchRequest) (string, error) {
 		return launchManualPaneFromTUI(projectRoot, session, commandName, hookConfig, req)
 	}
 }
 
-func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) error {
+func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
-		return fmt.Errorf("prompt is required")
+		return "", fmt.Errorf("prompt is required")
 	}
 	agentName := strings.TrimSpace(req.Agent)
 	if agentName == "" {
 		agentName = defaultTUIAgent()
 	}
 	if err := agent.ValidateKnown(agentName); err != nil {
-		return err
+		return "", err
 	}
 	if err := agent.ValidateInstalled(agentName); err != nil {
-		return err
+		return "", err
 	}
 	slug, err := normalizeTUISlug(req.Slug)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -442,7 +442,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	cfg := &cliflags.Config{Agent: agentName}
 	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
-		return bufferedLaunchError(stdout, stderr, "load fanout state")
+		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
 	if recorder != nil {
 		defer func() {
@@ -457,9 +457,20 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	paneReq := newManualPaneRequest(cfg, projectRoot, store, hookConfig, manualPaneOptionsForTUI(prompt, slug, agentName))
 	if !createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
-		return bufferedLaunchError(stdout, stderr, "create pane")
+		return "", bufferedLaunchError(stdout, stderr, "create pane")
 	}
-	return nil
+	return bufferedLaunchNotice(stderr), nil
+}
+
+// bufferedLaunchNotice extracts the tolerated base-refresh skip line, if any,
+// from a successful launch's buffered log so the TUI can show it on success.
+func bufferedLaunchNotice(stderr bytes.Buffer) string {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
+		if i := strings.Index(line, baseRefreshSkippedNotice); i >= 0 {
+			return strings.TrimSpace(line[i:])
+		}
+	}
+	return ""
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

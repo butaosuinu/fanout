@@ -161,10 +161,16 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
 	}
+	if taskReq.Worktree.RefreshBestEffort {
+		t.Fatal("task pane RefreshBestEffort = true, want false (plan tasks keep strict refresh)")
+	}
 
 	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "Manual diagnostics"})
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")
+	}
+	if !manualReq.Worktree.RefreshBestEffort {
+		t.Fatal("manual pane RefreshBestEffort = false, want true (TUI new sessions tolerate a dirty local base)")
 	}
 }
 

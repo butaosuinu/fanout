@@ -99,7 +99,7 @@ func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
 
-	err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+	_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agent:  "claude",
 	})

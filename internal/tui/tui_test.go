@@ -791,7 +791,7 @@ func TestWatchTickRunsCycleAndRefreshesStateAndGH(t *testing.T) {
 		DefaultAgent:   "codex",
 		FocusPane:      func(string) error { return nil },
 		PaneAlive:      func(string) bool { return true },
-		LaunchPane:     func(LaunchRequest) error { return nil },
+		LaunchPane:     func(LaunchRequest) (string, error) { return "", nil },
 		LaunchShell:    func(ShellLaunchRequest) error { return nil },
 		Notifier:       nil,
 		lifecycle:      &fakeLifecycleRunner{},
@@ -1953,9 +1953,9 @@ func TestShellTerminalKeyRequiresSelectedWorktree(t *testing.T) {
 }
 
 func TestNewPaneFormRequiresPrompt(t *testing.T) {
-	m := newModel(Options{LaunchPane: func(LaunchRequest) error {
+	m := newModel(Options{LaunchPane: func(LaunchRequest) (string, error) {
 		t.Fatal("LaunchPane should not be called without a prompt")
-		return nil
+		return "", nil
 	}})
 	m.openNewPaneForm()
 
@@ -1972,10 +1972,10 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	called := false
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) error {
+		LaunchPane: func(req LaunchRequest) (string, error) {
 			called = true
 			got = req
-			return nil
+			return "", nil
 		},
 	})
 	m.openNewPaneForm()
@@ -2005,9 +2005,9 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 func TestNewPaneFormPromptNewlineKeysDoNotSubmit(t *testing.T) {
 	called := false
 	m := newModel(Options{
-		LaunchPane: func(LaunchRequest) error {
+		LaunchPane: func(LaunchRequest) (string, error) {
 			called = true
-			return nil
+			return "", nil
 		},
 	})
 	m.openNewPaneForm()
@@ -2028,9 +2028,9 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) error {
+		LaunchPane: func(req LaunchRequest) (string, error) {
 			got = req
-			return nil
+			return "", nil
 		},
 	})
 	m.openNewPaneForm()
@@ -2080,6 +2080,22 @@ func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("launch success did not request a state reload")
+	}
+}
+
+func TestNewPaneLaunchSuccessSurfacesNotice(t *testing.T) {
+	m := newModel(Options{})
+	m.openNewPaneForm()
+
+	skip := "base branch refresh skipped: local branch main is checked out"
+	updated, _ := m.Update(launchPaneMsg{notice: skip})
+	got := updated.(model)
+
+	if got.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor", got.mode)
+	}
+	if got.notice != skip {
+		t.Fatalf("notice = %q, want the launch notice %q", got.notice, skip)
 	}
 }
 

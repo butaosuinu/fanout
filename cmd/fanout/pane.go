@@ -32,6 +32,11 @@ const (
 	codexPlanTUIStartupPoll    = 200 * time.Millisecond
 )
 
+// baseRefreshSkippedNotice prefixes the warning logged when a best-effort base
+// refresh is tolerated. launchManualPaneFromTUI scrapes it from buffered launch
+// output so the TUI can surface the skip in its success notice.
+const baseRefreshSkippedNotice = "base branch refresh skipped"
+
 var errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex Plan TUI startup")
 
 type paneRequest struct {
@@ -83,7 +88,10 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		return false
 	}
 	req.AgentCommand = agentCmd
-	if req.Worktree.Refresh && req.Worktree.RefreshError != nil {
+	// Strict children (issue/plan) fail fast on a known refresh error. Best-effort
+	// manual panes fall through; the skip is surfaced once via Prepare's
+	// RefreshWarning below so it is not logged twice.
+	if req.Worktree.Refresh && req.Worktree.RefreshError != nil && !req.Worktree.RefreshBestEffort {
 		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), req.Worktree.RefreshError)
 		return false
 	}
@@ -109,7 +117,13 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		BaseBranch:         req.Worktree.BaseBranch,
 		NoRefresh:          cfg.NoRefresh,
 		AllowMissingOrigin: req.Worktree.AllowMissingOrigin,
+		RefreshBestEffort:  req.Worktree.RefreshBestEffort,
 	})
+	// Surface a tolerated refresh skip before the error check so the diagnostic
+	// is not lost when a later worktree step fails.
+	if prepared.RefreshWarning != nil {
+		lg.Warn("%s: %s: %v", paneLogLabel(req), baseRefreshSkippedNotice, prepared.RefreshWarning)
+	}
 	if err != nil {
 		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), err)
 		return false
@@ -362,7 +376,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		Hooks:        hookConfig,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
-		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true}),
+		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
 	}
 }
 
