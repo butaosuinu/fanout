@@ -76,6 +76,12 @@ type issueKey struct {
 	Parent string
 	Num    int
 	TaskID string
+	// Source is the owning worktree root for locally-scoped rows (plan tasks and
+	// @manual panes), so the same (Parent, TaskID)/(Parent, Num) recorded in two
+	// worktrees keys to distinct status — their branches and PR/CI state differ.
+	// Empty for globally-stable GitHub issue rows, which aggregate across
+	// worktrees (one status per issue number regardless of where it ran).
+	Source string
 }
 
 // LaunchRequest describes one manual pane launch requested from the TUI.
@@ -159,10 +165,18 @@ type paneView struct {
 	BranchName   string
 	WorktreePath string
 	worktreeAbs  string
-	Agent        string
-	CreatedAt    string
-	Prompt       string
-	Derived      sessionview.PaneDerived
+	// sourceProjectRoot は複数 worktree をまたいで集約した場合に、この pane を
+	// 記録した worktree の root。close/merge/cleanup をその所有元 state.json へ
+	// 向けるために使う。単一 worktree のときは空(= m.opts.ProjectRoot を使う)。
+	sourceProjectRoot string
+	// sourceProjectRoots は同一 identity が複数 worktree に記録されていた場合の
+	// 全所有 root(通常は [sourceProjectRoot])。close/cleanup が de-duplicate
+	// された sibling ストアも漏れなく対象にするために使う。
+	sourceProjectRoots []string
+	Agent              string
+	CreatedAt          string
+	Prompt             string
+	Derived            sessionview.PaneDerived
 }
 
 type hudSummary struct {
@@ -1158,12 +1172,51 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 }
 
 func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
-	opts := lifecycle.Options{
-		ProjectRoot:         m.opts.ProjectRoot,
-		StatePath:           state.Path(m.opts.ProjectRoot),
-		Hooks:               m.opts.Hooks,
-		WatcherRunningLabel: m.opts.WatcherRunningLabel,
-		RemoveIssueLabel:    ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel,
+	// Close/merge act on one recorded pane, so route to the worktree that
+	// recorded it. With cross-worktree aggregation that row may live in a sibling
+	// worktree's state.json; using m.opts.ProjectRoot unconditionally would
+	// target the wrong (often empty) store and fail with "not recorded".
+	paneRoot := strings.TrimSpace(pending.pane.sourceProjectRoot)
+	if paneRoot == "" {
+		paneRoot = m.opts.ProjectRoot
+	}
+	// The watcher "running" label is removed from the GitHub issue on
+	// close/merge/cleanup; it is repo-scoped, so the gh runner stays rooted at the
+	// home checkout while state ops route to each owning worktree.
+	watcherLabel := m.opts.WatcherRunningLabel
+	removeLabel := ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel
+	lifecycleOpts := func(root string) lifecycle.Options {
+		return lifecycle.Options{
+			ProjectRoot:         root,
+			StatePath:           state.Path(root),
+			Hooks:               m.opts.Hooks,
+			WatcherRunningLabel: watcherLabel,
+			RemoveIssueLabel:    removeLabel,
+		}
+	}
+	paneOpts := lifecycleOpts(paneRoot)
+	// Close removes the row from its owning store(s). When the same logical child
+	// was recorded in several worktrees the loader collapses it to one displayed
+	// row but keeps every owning root here, so close each — otherwise the
+	// de-duplicated sibling row survives and reappears on the next refresh.
+	closeRoots := pending.pane.sourceProjectRoots
+	if len(closeRoots) == 0 {
+		closeRoots = []string{paneRoot}
+	}
+	// Cleanup is parent-scoped. For a globally-stable parent (a GitHub issue or
+	// Project) the same parent in two worktrees is the same Session, so clean
+	// every source root it spans — otherwise sibling rows survive and reappear on
+	// the next refresh. But a locally-scoped parent (plan:<slug>, @manual) is only
+	// meaningful within its worktree: two worktrees can hold unrelated plans under
+	// the same slug, so cleanup must stay within the selected pane's own root(s).
+	var cleanupRoots []string
+	if isLocalParent(pending.pane.Parent) {
+		cleanupRoots = pending.pane.sourceProjectRoots
+		if len(cleanupRoots) == 0 {
+			cleanupRoots = []string{paneRoot}
+		}
+	} else {
+		cleanupRoots = m.sourceRootsForParent(pending.pane.Parent)
 	}
 	runner := m.opts.lifecycle
 	return func() tea.Msg {
@@ -1172,22 +1225,38 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 		var code exitcode.Code
 		switch pending.action {
 		case actionClose:
-			if pending.pane.isTask() {
-				code = runner.CloseTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
-			} else {
-				code = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+			code = exitcode.OK
+			for _, r := range closeRoots {
+				opts := lifecycleOpts(r)
+				var c exitcode.Code
+				if pending.pane.isTask() {
+					c = runner.CloseTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
+				} else {
+					c = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+				}
+				if c != exitcode.OK {
+					code = c
+				}
 			}
 		case actionMerge:
 			if pending.pane.isTask() {
-				code = runner.MergeTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
+				code = runner.MergeTask(paneOpts, pending.pane.Parent, pending.pane.TaskID, lg)
 			} else {
-				code = runner.Merge(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+				code = runner.Merge(paneOpts, pending.pane.Parent, pending.pane.IssueNum, lg)
 			}
 		case actionCleanup:
-			if pending.pane.isTask() {
-				code = runner.CleanupPlan(opts, pending.pane.Parent, lg)
-			} else {
-				code = runner.Cleanup(opts, pending.pane.Parent, lg)
+			code = exitcode.OK
+			for _, r := range cleanupRoots {
+				opts := lifecycleOpts(r)
+				var c exitcode.Code
+				if pending.pane.isTask() {
+					c = runner.CleanupPlan(opts, pending.pane.Parent, lg)
+				} else {
+					c = runner.Cleanup(opts, pending.pane.Parent, lg)
+				}
+				if c != exitcode.OK {
+					code = c
+				}
 			}
 		default:
 			code = exitcode.Invocation
@@ -1200,6 +1269,54 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 			output: strings.TrimSpace(buf.String()),
 		}
 	}
+}
+
+// isLocalParent reports whether a parent ref is only meaningful within one
+// worktree — a plan slug (plan:<slug>) or the synthetic manual ref (@manual) — as
+// opposed to a globally-stable parent: a GitHub issue number, a Project URL, or
+// @watch (repo-wide watcher panes keyed by real GitHub issue numbers). Locally
+// scoped parents can collide across worktrees with unrelated work, so
+// parent-scoped lifecycle actions must not fan across worktrees for them. Note
+// not every @-prefixed ref is local — @watch is repo-wide — so this matches
+// @manual exactly rather than the @ prefix.
+func isLocalParent(parent string) bool {
+	parent = strings.TrimSpace(parent)
+	return strings.HasPrefix(parent, "plan:") || parent == "@manual"
+}
+
+// sourceRootsForParent returns the distinct worktree roots whose state.json
+// recorded a pane under parent, so a parent-scoped cleanup reaches every store
+// the aggregated Session spans. Synthetic not-started rows (no sourceProjectRoot)
+// are skipped; if none of the parent's panes carry a source root the home root
+// is used.
+func (m model) sourceRootsForParent(parent string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	// Normalize so numeric parent aliases ("100" vs "0100") recorded in
+	// different worktrees match, mirroring lifecycle.Cleanup's parentMatches —
+	// otherwise an exact compare would skip an eligible sibling root.
+	want := sessionview.NormalizeParent(parent)
+	for _, p := range m.allPanes {
+		if sessionview.NormalizeParent(p.Parent) != want {
+			continue
+		}
+		// Union every owning root, including those of identities the loader
+		// collapsed into this row (sourceProjectRoots), so cleanup reaches the
+		// de-duplicated sibling stores too. Synthetic not-started rows carry none.
+		for _, root := range p.sourceProjectRoots {
+			if root = strings.TrimSpace(root); root == "" {
+				continue
+			}
+			if !seen[root] {
+				seen[root] = true
+				roots = append(roots, root)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		roots = []string{m.opts.ProjectRoot}
+	}
+	return roots
 }
 
 func confirmMessage(action lifecycleAction, pane paneView) string {
@@ -1719,8 +1836,9 @@ func (m model) notifyEventsCmd(events []fanoutnotify.Event) tea.Cmd {
 
 func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneView, error) {
 	var stateErr error
+	mergedState := sessionview.MergedStateLoader(projectRoot)
 	loadState := func() (state.Store, error) {
-		store, err := state.LoadProject(projectRoot)
+		store, err := mergedState()
 		stateErr = err
 		return store, err
 	}
@@ -1743,7 +1861,9 @@ func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneV
 }
 
 func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
-	store, err := state.LoadProject(projectRoot)
+	// Merge sibling worktrees so issue/PR/wave status is fetched for Sessions
+	// fanned out from another worktree too, matching loadPaneViews.
+	store, err := sessionview.MergedStateLoader(projectRoot)()
 	if err != nil {
 		return nil, err
 	}
@@ -1776,7 +1896,11 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			if !ok {
 				stateName, prs, err := gh.IssueWithPRs(owner, repo, issue.Number)
 				if err != nil {
-					return nil, fmt.Errorf("#%d: %w", issue.Number, err)
+					// Accumulate and skip, like the branch/wave paths: a single
+					// sibling-worktree issue that was deleted/made private or hit a
+					// transient gh error must not blank every other row's status.
+					loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
+					continue
 				}
 				cached = issueStatus{State: stateName, PRs: prs}
 				prCache[issue.Number] = cached
@@ -2105,7 +2229,7 @@ func recordedTaskRows(panes []state.Pane) []taskStatusRow {
 		if pane.Parent == "" || pane.IssueNum > 0 || taskID == "" || branch == "" {
 			continue
 		}
-		key := keyForTask(pane.Parent, taskID)
+		key := keyForTask(pane.Parent, taskID, pane.SourceProjectRoot)
 		if seen[key] {
 			continue
 		}
@@ -2119,6 +2243,9 @@ func recordedTaskRows(panes []state.Pane) []taskStatusRow {
 		if c := cmp.Compare(a.key.TaskID, b.key.TaskID); c != 0 {
 			return c
 		}
+		if c := cmp.Compare(a.key.Source, b.key.Source); c != 0 {
+			return c
+		}
 		return cmp.Compare(a.BranchName, b.BranchName)
 	})
 	return rows
@@ -2129,14 +2256,22 @@ func keyForIssue(parent string, num int) issueKey {
 }
 
 func keyForPaneView(pane paneView) issueKey {
-	if pane.IssueNum <= 0 && strings.TrimSpace(pane.TaskID) != "" {
-		return keyForTask(pane.Parent, pane.TaskID)
+	taskID := strings.TrimSpace(pane.TaskID)
+	switch {
+	case pane.IssueNum > 0:
+		// GitHub issue: globally stable, aggregates across worktrees.
+		return keyForIssue(pane.Parent, pane.IssueNum)
+	case taskID != "":
+		return keyForTask(pane.Parent, taskID, pane.sourceProjectRoot)
+	default:
+		// Manual/synthetic (@manual, non-positive issueNum): worktree-local, so
+		// scope by source to keep two worktrees' rows distinct.
+		return issueKey{Parent: normalizedParent(pane.Parent), Num: pane.IssueNum, Source: pane.sourceProjectRoot}
 	}
-	return keyForIssue(pane.Parent, pane.IssueNum)
 }
 
-func keyForTask(parent, taskID string) issueKey {
-	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID)}
+func keyForTask(parent, taskID, source string) issueKey {
+	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID), Source: source}
 }
 
 func normalizedParent(parent string) string {
@@ -2227,35 +2362,37 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				derived = sessionview.DerivePane(projectRoot, parent, pv)
 			}
 			out = append(out, paneView{
-				Parent:       parent,
-				IssueNum:     pv.IssueNum,
-				TaskID:       pv.TaskID,
-				Kind:         pv.Kind,
-				Name:         derived.Name,
-				PaneID:       pv.PaneID,
-				ShellKey:     pv.ShellKey,
-				TmuxState:    pv.TmuxState,
-				TmuxTitle:    pv.TmuxTitle,
-				AgentState:   pv.AgentState,
-				IssueState:   dash(pv.IssueState),
-				PRSummary:    dash(derived.PRSummary),
-				HasMergedPR:  pv.HasMergedPR,
-				Wave:         pv.Wave,
-				WaveLabel:    pv.WaveLabel,
-				WaveBadge:    derived.WaveBadge,
-				Blockers:     dash(derived.BlockersText),
-				Blocked:      pv.Blocked,
-				CIStatus:     dash(pv.CIStatus),
-				DiffSummary:  pv.DiffSummary,
-				DirtyState:   pv.DirtyState,
-				WorktreeErr:  pv.WorktreeErr,
-				BranchName:   pv.BranchName,
-				WorktreePath: firstNonEmpty(derived.WorktreeRelative, sessionview.RelativePath(projectRoot, pv.WorktreePath)),
-				worktreeAbs:  pv.WorktreePath,
-				Agent:        pv.Agent,
-				CreatedAt:    pv.CreatedAt,
-				Prompt:       pv.Prompt,
-				Derived:      derived,
+				Parent:             parent,
+				IssueNum:           pv.IssueNum,
+				TaskID:             pv.TaskID,
+				Kind:               pv.Kind,
+				Name:               derived.Name,
+				PaneID:             pv.PaneID,
+				ShellKey:           pv.ShellKey,
+				TmuxState:          pv.TmuxState,
+				TmuxTitle:          pv.TmuxTitle,
+				AgentState:         pv.AgentState,
+				IssueState:         dash(pv.IssueState),
+				PRSummary:          dash(derived.PRSummary),
+				HasMergedPR:        pv.HasMergedPR,
+				Wave:               pv.Wave,
+				WaveLabel:          pv.WaveLabel,
+				WaveBadge:          derived.WaveBadge,
+				Blockers:           dash(derived.BlockersText),
+				Blocked:            pv.Blocked,
+				CIStatus:           dash(pv.CIStatus),
+				DiffSummary:        pv.DiffSummary,
+				DirtyState:         pv.DirtyState,
+				WorktreeErr:        pv.WorktreeErr,
+				BranchName:         pv.BranchName,
+				WorktreePath:       firstNonEmpty(derived.WorktreeRelative, sessionview.RelativePath(projectRoot, pv.WorktreePath)),
+				worktreeAbs:        pv.WorktreePath,
+				sourceProjectRoot:  pv.SourceProjectRoot,
+				sourceProjectRoots: pv.SourceProjectRoots,
+				Agent:              pv.Agent,
+				CreatedAt:          pv.CreatedAt,
+				Prompt:             pv.Prompt,
+				Derived:            derived,
 			})
 		}
 	}

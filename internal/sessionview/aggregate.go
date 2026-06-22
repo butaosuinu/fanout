@@ -3,6 +3,7 @@ package sessionview
 import (
 	"cmp"
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -227,32 +228,35 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			alive := paneAlive(live, p)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
-				IssueNum:     p.IssueNum,
-				TaskID:       p.TaskID,
-				Kind:         p.Kind,
-				Slug:         p.Slug,
-				DisplayName:  p.DisplayName,
-				Agent:        p.Agent,
-				BranchName:   p.BranchName,
-				PaneID:       p.PaneID,
-				ShellKey:     p.ShellKey,
-				WorktreePath: p.WorktreePath,
-				CreatedAt:    p.CreatedAt,
-				Alive:        alive,
-				IssueState:   issueState,
-				PRs:          prs,
-				HasMergedPR:  hasMergedPR(prs),
-				DiffSummary:  worktreeStat.DiffSummary,
-				DirtyState:   worktreeStat.DirtyState,
-				WorktreeErr:  worktreeErr,
-				TmuxState:    tmuxStateOf(p.PaneID, snap.Degraded.Tmux, alive),
-				PlanMode:     p.CodexPlanMode,
-				Prompt:       p.Prompt,
-				CIStatus:     strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
-				Wave:         wi.Wave,
-				WaveLabel:    firstNonEmpty(p.Wave, wi.WaveLabel),
-				Blockers:     normalizeBlockers(wi.Blockers),
-				Blocked:      wi.Blocked,
+				IssueNum:           p.IssueNum,
+				TaskID:             p.TaskID,
+				Kind:               p.Kind,
+				Slug:               p.Slug,
+				DisplayName:        p.DisplayName,
+				Agent:              p.Agent,
+				BranchName:         p.BranchName,
+				PaneID:             p.PaneID,
+				ShellKey:           p.ShellKey,
+				WorktreePath:       p.WorktreePath,
+				SourceProjectRoot:  p.SourceProjectRoot,
+				SourceProjectRoots: p.SourceProjectRoots,
+				SourceKey:          localSourceKey(p),
+				CreatedAt:          p.CreatedAt,
+				Alive:              alive,
+				IssueState:         issueState,
+				PRs:                prs,
+				HasMergedPR:        hasMergedPR(prs),
+				DiffSummary:        worktreeStat.DiffSummary,
+				DirtyState:         worktreeStat.DirtyState,
+				WorktreeErr:        worktreeErr,
+				TmuxState:          tmuxStateOf(p.PaneID, snap.Degraded.Tmux, alive),
+				PlanMode:           p.CodexPlanMode,
+				Prompt:             p.Prompt,
+				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
+				Wave:               wi.Wave,
+				WaveLabel:          firstNonEmpty(p.Wave, wi.WaveLabel),
+				Blockers:           normalizeBlockers(wi.Blockers),
+				Blocked:            wi.Blocked,
 			}
 			if alive {
 				pv.TmuxTitle = live[p.PaneID].Title
@@ -417,6 +421,26 @@ func NormalizeParent(parent string) string {
 		return strconv.Itoa(n)
 	}
 	return parent
+}
+
+// localSourceKey returns a stable public token distinguishing a worktree-local
+// row (a plan task or @manual pane, IssueNum <= 0) across worktree stores, so
+// two siblings sharing the same (parent, issueNum)/(parent, taskId) don't collide
+// on the SPA's row key. It hashes the source root rather than exposing the
+// absolute path. Globally-stable GitHub issue rows (IssueNum > 0) need no
+// disambiguator and return "" (a stable parent#issueNum key is preferred over one
+// that shifts with whichever worktree happens to win aggregation).
+func localSourceKey(p state.Pane) string {
+	if p.IssueNum > 0 {
+		return ""
+	}
+	root := strings.TrimSpace(p.SourceProjectRoot)
+	if root == "" {
+		return ""
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(root))
+	return strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 // recordedNumsByNormalizedParent は normalize した親キーごとの記録済み issue

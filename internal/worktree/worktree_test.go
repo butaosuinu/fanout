@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -527,6 +528,68 @@ func TestCleanupCreatedPreservesReusedBranch(t *testing.T) {
 	}
 	if got := gitOutput(t, dir, "status", "--short"); got != "" {
 		t.Fatalf("parent repo status after cleanup = %q, want clean", got)
+	}
+}
+
+func TestListRootsIncludesSiblingsAndExcludesFanoutChildren(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	top := gitOutput(t, repo, "rev-parse", "--show-toplevel")
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	siblingTop := gitOutput(t, sibling, "rev-parse", "--show-toplevel")
+
+	child := filepath.Join(repo, ".fanout", "worktrees", "child-1")
+	gitTest(t, repo, "worktree", "add", "-b", "fanout/child-1", child)
+
+	roots, err := ListRoots(top)
+	if err != nil {
+		t.Fatalf("ListRoots: %v", err)
+	}
+	if !slices.Contains(roots, top) {
+		t.Fatalf("roots missing projectRoot %q: %v", top, roots)
+	}
+	if !slices.Contains(roots, siblingTop) {
+		t.Fatalf("roots missing sibling worktree %q: %v", siblingTop, roots)
+	}
+	childMarker := string(filepath.Separator) + filepath.Join(".fanout", "worktrees") + string(filepath.Separator)
+	for _, r := range roots {
+		if strings.Contains(r, childMarker) {
+			t.Fatalf("roots must exclude fanout child worktrees, got %q in %v", r, roots)
+		}
+	}
+}
+
+func TestListRootsSkipsPrunableWorktrees(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	top := gitOutput(t, repo, "rev-parse", "--show-toplevel")
+
+	stale := filepath.Join(t.TempDir(), "stale")
+	gitTest(t, repo, "worktree", "add", "-b", "feat-stale", stale)
+	// Removing the directory makes git annotate the entry `prunable`.
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	roots, err := ListRoots(top)
+	if err != nil {
+		t.Fatalf("ListRoots: %v", err)
+	}
+	for _, r := range roots {
+		if strings.Contains(r, "stale") {
+			t.Fatalf("prunable worktree must be skipped, got %q in %v", r, roots)
+		}
+	}
+}
+
+func TestListRootsFallsBackOutsideGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	roots, err := ListRoots(dir)
+	if err == nil {
+		t.Fatal("expected an error when projectRoot is not a git work tree")
+	}
+	if len(roots) != 1 || roots[0] != dir {
+		t.Fatalf("fallback roots = %v, want [%s]", roots, dir)
 	}
 }
 

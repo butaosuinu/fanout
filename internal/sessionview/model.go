@@ -44,24 +44,40 @@ type WorktreeStat struct {
 // PaneView is one recorded pane augmented with tmux liveness, gh state, and git
 // worktree status.
 type PaneView struct {
-	IssueNum     int             `json:"issueNum"`
-	TaskID       string          `json:"taskId,omitempty"`
-	Kind         string          `json:"kind,omitempty"`
-	Slug         string          `json:"slug"`
-	DisplayName  string          `json:"displayName"`
-	Agent        string          `json:"agent"`
-	BranchName   string          `json:"branchName"`
-	PaneID       string          `json:"paneId"`
-	ShellKey     string          `json:"shellKey,omitempty"`
-	WorktreePath string          `json:"worktreePath"`
-	CreatedAt    string          `json:"createdAt"`
-	Alive        bool            `json:"alive"`      // PaneID is among the live tmux panes
-	IssueState   string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
-	PRs          []ghissue.PRRef `json:"prs"`
-	HasMergedPR  bool            `json:"hasMergedPr"`
-	DiffSummary  string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted)
-	DirtyState   string          `json:"dirtyState"`            // dirty / clean / unknown
-	WorktreeErr  string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
+	IssueNum     int    `json:"issueNum"`
+	TaskID       string `json:"taskId,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Slug         string `json:"slug"`
+	DisplayName  string `json:"displayName"`
+	Agent        string `json:"agent"`
+	BranchName   string `json:"branchName"`
+	PaneID       string `json:"paneId"`
+	ShellKey     string `json:"shellKey,omitempty"`
+	WorktreePath string `json:"worktreePath"`
+	// SourceProjectRoot はこの pane を記録した worktree の root。複数 worktree を
+	// またいで集約した場合のみ非空(MergedStateLoader が設定し state row から
+	// passthrough)で、TUI が write(close/merge/cleanup)を所有元 state.json へ
+	// 向けるために使う。単一 root 集約では空。json:"-": 値はホストの絶対パスなので
+	// dashboard API には出さない(read-only な web UI は使わず、TUI は Build を
+	// プロセス内で呼んでこの構造体フィールドを直接読む)。
+	SourceProjectRoot string `json:"-"`
+	// SourceProjectRoots は同一 identity が複数 worktree に記録されていた場合の
+	// 全所有 root(通常は [SourceProjectRoot])。TUI の close/cleanup が
+	// de-duplicate された sibling ストアも漏れなく対象にするために使う。json:"-"。
+	SourceProjectRoots []string `json:"-"`
+	// SourceKey は worktree-local な行(plan タスク・@manual)を識別する公開トークン
+	// (SourceProjectRoot の安定ハッシュ。絶対パスは出さない)。別 worktree の同一
+	// (parent,issueNum)/(parent,taskId) 行が SPA の行キーで衝突するのを防ぐ。
+	// グローバル安定な GitHub issue 行(issueNum>0)では空。
+	SourceKey   string          `json:"sourceKey,omitempty"`
+	CreatedAt   string          `json:"createdAt"`
+	Alive       bool            `json:"alive"`      // PaneID is among the live tmux panes
+	IssueState  string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
+	PRs         []ghissue.PRRef `json:"prs"`
+	HasMergedPR bool            `json:"hasMergedPr"`
+	DiffSummary string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted)
+	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown
+	WorktreeErr string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 
 	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
 	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead

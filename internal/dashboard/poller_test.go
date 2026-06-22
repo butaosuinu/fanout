@@ -2,9 +2,11 @@ package dashboard
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +69,82 @@ func writeState(t *testing.T, root, body string) {
 	}
 	if err := os.WriteFile(filepath.Join(root, ".fanout", "state.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func gitDash(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func gitTopDash(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --show-toplevel in %s: %v", dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func newCommittedRepoDash(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitDash(t, "", "init", "-b", "main", repo)
+	gitDash(t, repo, "config", "user.name", "Fanout Test")
+	gitDash(t, repo, "config", "user.email", "fanout@example.test")
+	if err := os.WriteFile(filepath.Join(repo, "file.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitDash(t, repo, "add", "file.txt")
+	gitDash(t, repo, "commit", "-m", "base")
+	return repo
+}
+
+// TestPollerMergesSiblingWorktreesForBuildAndRefreshGH guards the cross-worktree
+// fix: a Session fanned out from a sibling worktree must appear in build() AND
+// have its issue state fetched by refreshGH (not left permanently UNKNOWN).
+func TestPollerMergesSiblingWorktreesForBuildAndRefreshGH(t *testing.T) {
+	repo := newCommittedRepoDash(t)
+	homeTop := gitTopDash(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitDash(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopDash(t, sibling)
+
+	writeState(t, homeTop, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1","agent":"claude"}
+	]}`)
+	writeState(t, sibTop, `{"schemaVersion":1,"panes":[
+	  {"parent":"200","issueNum":202,"slug":"b","paneId":"%2","agent":"codex"}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", homeTop, gh, nil, newHub())
+	p.refreshGH()
+	snap := p.build()
+
+	// refreshGH fetched the sibling's issue, not just the home worktree's.
+	if gh.calls[101] != 1 || gh.calls[202] != 1 {
+		t.Fatalf("IssuePRs calls = %v, want both 101 and 202 fetched once", gh.calls)
+	}
+	// build() surfaces both sessions, with provenance tagged per pane.
+	parents := map[string]string{} // parent -> source root of its pane
+	for _, s := range snap.Sessions {
+		if len(s.Panes) != 1 {
+			t.Fatalf("session %s panes = %+v, want 1", s.Parent, s.Panes)
+		}
+		parents[s.Parent] = s.Panes[0].SourceProjectRoot
+	}
+	if parents["100"] != homeTop {
+		t.Fatalf("session 100 source = %q, want home %q", parents["100"], homeTop)
+	}
+	if parents["200"] != sibTop {
+		t.Fatalf("session 200 source = %q, want sibling %q", parents["200"], sibTop)
 	}
 }
 
