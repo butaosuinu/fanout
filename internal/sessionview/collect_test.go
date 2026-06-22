@@ -158,6 +158,38 @@ func TestMergedStateLoaderKeepsReusedPaneIDForDifferentIdentity(t *testing.T) {
 	}
 }
 
+func TestMergedStateLoaderKeepsManualPanesDistinctAcrossWorktrees(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	// Manual TUI panes carry a per-store synthetic issue number (negative), so
+	// @manual/-1 in two worktrees are unrelated panes and must both survive — not
+	// collapse into one with a shared SourceProjectRoots (which would let a close
+	// remove the sibling's pane too).
+	recordPaneAt(t, top, state.Pane{Parent: "@manual", IssueNum: -1, PaneID: "%1", Agent: "claude"})
+	recordPaneAt(t, sibTop, state.Pane{Parent: "@manual", IssueNum: -1, PaneID: "%2", Agent: "codex"})
+
+	store, err := MergedStateLoader(top)()
+	if err != nil {
+		t.Fatalf("MergedStateLoader: %v", err)
+	}
+	manual := 0
+	for _, p := range store.Panes {
+		if p.Parent == "@manual" {
+			manual++
+			if len(p.SourceProjectRoots) != 1 {
+				t.Fatalf("manual pane %s has SourceProjectRoots %v, want exactly its own root", p.PaneID, p.SourceProjectRoots)
+			}
+		}
+	}
+	if manual != 2 {
+		t.Fatalf("distinct manual panes across worktrees collapsed: got %d, want 2 (%+v)", manual, store.Panes)
+	}
+}
+
 func TestMergedStateLoaderKeepsDistinctIdentities(t *testing.T) {
 	root := t.TempDir() // not a git repo: single-root fallback
 	recordPaneAt(t, root, state.Pane{Parent: "1", IssueNum: 2, PaneID: ""})

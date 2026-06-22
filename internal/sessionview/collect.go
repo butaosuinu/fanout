@@ -96,8 +96,15 @@ func MergedStateLoader(projectRoot string) func() (state.Store, error) {
 
 // paneIdentityKey returns a pane's stable cross-store identity, mirroring the
 // (parent, issueNum)/(parent, taskId) idempotency the state lock enforces within
-// one store. Shell terminals share (parent, issueNum) so they key on their shell
-// key instead. An empty key means "no stable identity" — never de-duplicated.
+// one store. An empty key means "no stable identity" — never de-duplicated:
+//   - Shell terminals share (parent, issueNum), so they key on their shell key;
+//     without one they have no stable identity.
+//   - Manual/synthetic panes carry a non-GitHub issue number assigned per store
+//     by nextSyntheticPaneNumber (negative: @manual/-1, @manual/-2, …), so the
+//     same number means different panes in different worktrees. Only positive
+//     (real GitHub) issue numbers are stable across stores; non-positive ones get
+//     no cross-store identity so distinct manual panes are never collapsed (and
+//     never have a sibling row closed out from under them).
 func paneIdentityKey(p state.Pane) string {
 	parent := NormalizeParent(p.Parent)
 	switch {
@@ -108,8 +115,10 @@ func paneIdentityKey(p state.Pane) string {
 			return "shell\x00" + k
 		}
 		return ""
-	default:
+	case p.IssueNum > 0:
 		return "issue\x00" + parent + "\x00" + strconv.Itoa(p.IssueNum)
+	default:
+		return ""
 	}
 }
 
