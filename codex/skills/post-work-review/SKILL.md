@@ -48,8 +48,11 @@ PR 全体相当の branch diff をレビューする。`--commit HEAD` だけで
 ## Review Loop
 
 1. レビュー対象とコマンドを 1 文でユーザーに伝える。
-2. `codex review ...` を実行する。
-3. 出力を findings として読む。重大度、ファイル、行、指摘内容を保持する。
+2. `codex review ...` を 1 つの blocking shell command として実行する。完了まで
+   一切何もしない。途中 stdout、Review Session、`/codex:status`、tmux pane、
+   `exec_command` の `session_id` などを見に行かない。command が終了してから
+   final output を 1 回だけ読む。
+3. final output を findings として読む。重大度、ファイル、行、指摘内容を保持する。
 4. actionable な指摘だけ修正する。明らかな bug、規約違反、セキュリティ問題、
    テスト不整合を優先する。単なる好みの提案は理由を添えて見送ってよい。
 5. 修正したら、必要な focused test や formatting check を実行する。
