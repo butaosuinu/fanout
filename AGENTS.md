@@ -26,6 +26,17 @@ versions and rerun `make install` or `make link`.
 The user-facing surface is documented in `README.md` and `README.ja.md`. Read
 the README before changing CLI behavior.
 
+## Codex PR Language
+
+When Codex creates a PR in this repository, write the PR description/body in
+Japanese. Keep machine-readable tokens such as `TL;DR`, `Review effort: <0-5>`,
+file paths, commands, code identifiers, and required footer lines like
+`Closes #N` unchanged.
+
+When Codex runs or posts automatic review comments for a PR in this repository,
+write those review comments in Japanese. Keep file paths, line numbers, symbol
+names, command names, and quoted code unchanged.
+
 ## Working With fanout
 
 `fanout` is a standalone git worktree + tmux pane + agent launcher. Build with
