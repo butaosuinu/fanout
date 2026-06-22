@@ -27,6 +27,8 @@ English and 日本語.
 - **Persistent TUI console** — run `fanout` with no arguments for a live
   pane / issue / PR view with a compact Session navigator plus focus, peek,
   terminal, and lifecycle keys.
+- **Label watcher** — opt in to a TUI-resident watcher that turns trusted
+  `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it
   from any pane with `prefix + D`.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
@@ -82,6 +84,34 @@ Three moves — **prepare → fan out → fold away**:
 `fanout plan <spec>` fans out a local plan spec instead of GitHub child issues,
 and `--team` + `fanout msg` give sibling panes lightweight peer messaging — both
 detailed in the [workflow docs](https://butaosuinu.github.io/fanout/docs/workflow/).
+
+## Watcher mode
+
+The watcher runs only while the no-argument TUI console is open. It is off by
+default, and only user config or environment variables can enable it; repo
+config cannot opt a checkout into background launches.
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+Add `fanout:auto` to a trusted issue to queue it. On the next cycle fanout
+swaps that label to `fanout:running`, then launches either a standalone pane
+for an issue with no OPEN children or a normal parent fan-out for an issue with
+OPEN children. Parent fan-outs use `--unblocked-only`; every watcher launch
+counts against `watcherMaxSessions`.
+
+When the launched work is merged or closed, `--merge`, `--close`, and
+`--cleanup` remove `fanout:running` best-effort. To put the same parent back
+into the watcher after cleanup, add `fanout:auto` again. Do not apply the
+trigger label to untrusted issues: the issue body becomes the agent briefing.
+
+This watcher is separate from [#107](https://github.com/butaosuinu/fanout/issues/107):
+it discovers labeled issues across the repository and starts one-shot sessions.
+#107 remains the skill-led loop for revisiting children under a known parent.
 
 ## Daily commands
 

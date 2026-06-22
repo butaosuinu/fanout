@@ -89,7 +89,9 @@ Build the binary with `make build-go` and validate with `make test`.
   after a live `executePlan`).
 - `cmd/fanout/tui.go` implements the no-argument persistent TUI console. Plain
   shells are relaunched into a deterministic fanout-managed tmux session;
-  invocations already inside tmux use the current pane.
+  invocations already inside tmux use the current pane. It also wires the
+  opt-in label watcher into the TUI runtime; no other command path starts the
+  watcher.
 - `internal/runtime` resolves the git repository root and the tmux target.
   Batch pane-creation mode must be invoked from inside tmux. By default fanout
   targets the invoking pane; `--session` targets a named tmux session.
@@ -160,6 +162,14 @@ Build the binary with `make build-go` and validate with `make test`.
   merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
   set by the launch wrapper in `internal/tmuxrun`) idle-nudge accelerator is a
   separate, still-unmerged issue (#72) — do not assume an idle gate exists.
+- `internal/watch` owns one repository watcher cycle. It is pure at the package
+  boundary: production wires GitHub labels, `.fanout/state.json`, tmux liveness,
+  and launch helpers through `watch.IO`, while unit tests inject fakes. The
+  engine lists `watcherTriggerLabel` issues, swaps them to
+  `watcherRunningLabel` before launch, classifies issues with OPEN children as
+  parent fan-outs and issues without OPEN children as standalone panes, applies
+  the live-pane budget/backoff, and leaves lifecycle label cleanup to
+  `internal/lifecycle`.
 - `internal/ghissue`, `internal/blockers`, `internal/briefing`,
   `internal/settings`, `internal/displayname`, `internal/atomicfs`,
   `internal/log`, `internal/tty`, and `internal/exitcode` hold the remaining
@@ -199,6 +209,14 @@ Build the binary with `make build-go` and validate with `make test`.
   decision to dashboard #117, which this implements standalone (no TUI
   dependency — the future TUI just reuses `internal/sessionview`). Keep it
   read-only: do not add mutation endpoints.
+- The label watcher is a TUI-resident, opt-in launcher, not a cron/webhook
+  service and not the #107 skill loop. Only user config or environment
+  variables may enable `watcher`; repo config may set labels, interval, agent,
+  and max sessions but cannot opt a checkout into launching. Its scope is
+  repository-wide label discovery (`fanout:auto` -> `fanout:running`) and
+  one-shot session launch. #107 remains the skill-led loop for revisiting
+  children under a known parent. Because issue bodies become child briefings,
+  trigger labels are a prompt-injection boundary.
 - `.fanout/worktrees/<slug>/` directories without a state row are treated as an
   action-mode migration fallback and skipped when their slug matches the child
   this run would create.

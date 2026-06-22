@@ -73,6 +73,9 @@ Integer environment values accept base-10 integers. `watcherIntervalSeconds` res
 
 Repo config cannot opt into the watcher. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; use user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
+The trigger label starts agent work from issue text, so treat it as an execution
+request. Apply it only to issues you trust.
+
 ## Forward compatibility
 
 Invalid boolean or integer env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.

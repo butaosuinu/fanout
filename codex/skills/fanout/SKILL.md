@@ -73,6 +73,10 @@ confirmation.
 The TUI also compares consecutive GitHub snapshots and notifies once per
 transition when a child becomes merged, CI turns failing, or a child becomes
 waiting on an open blocker; channels are configured through fanout settings.
+When `watcher` is enabled from user config or the environment, this same TUI
+runs the label watcher: it looks for trusted `fanout:auto` issues, swaps them
+to `fanout:running`, and starts one-shot standalone or parent fan-out sessions.
+Repo config cannot enable the watcher.
 
 The positional argument selects the mode: a bare integer means **issue mode**;
 a URL of the form
@@ -99,6 +103,7 @@ user asks to update fanout itself, run `fanout update` immediately.
 If the user asks to start the fanout console / TUI, run `fanout` with no
 arguments directly from the target repository worktree; skip parent resolution,
 dry-run, pane naming, and agent selection.
+If the user asks for the label watcher, use the TUI-only watcher recipe below.
 If the user asks to fan out an implementation plan, run `$fanout-plan` instead
 of the issue/Project workflow below.
 Do not invoke fanout just because an issue has sub-issues; pane creation is
@@ -147,6 +152,16 @@ If the user's intent is to start the persistent TUI console, run `fanout` with
 no arguments from the target repository worktree and skip the rest of this
 workflow. TUI mode does not need a parent issue, Project URL, `--agent`,
 dry-run, generated pane names, or confirmation.
+
+If the user's intent is repo-wide automatic launch from labels, enable the
+watcher only through user config or environment variables, then run the
+no-argument TUI. Do not use `.fanout/config.json` to opt in. A one-shell setup:
+
+```bash
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
 
 1. Resolve the parent target from the user's request or recent context. Two
    shapes are accepted; identify which one matches and pass the normalized
@@ -290,6 +305,33 @@ exclusive with all action-bearing flags
 `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`). Set
 `FANOUT_STATE_PATH` to
 read a specific state file outside the repository checkout.
+
+## Label watcher recipe
+
+Use this only when the user asks for watcher behavior: repository-wide label
+discovery and one-shot session launch while the TUI is running. The watcher is
+not a scheduler, webhook, or the #107 known-parent skill loop.
+
+1. Enable it from user config (`~/.config/fanout/config.json` or
+   `$XDG_CONFIG_HOME/fanout/config.json`) or from the current shell with
+   `FANOUT_WATCHER=1`. Use `FANOUT_WATCHER_AGENT` or `watcherAgent` when the
+   default TUI agent is not the desired child agent.
+2. Run `fanout` with no arguments and keep the TUI open. The watcher stops
+   when the TUI exits.
+3. Apply `fanout:auto` only to issues the user trusts. The issue body is copied
+   into the child briefing, so the label is a prompt-injection boundary.
+4. On each cycle fanout swaps `fanout:auto` to `fanout:running`. Issues with no
+   OPEN children launch as standalone panes under parent `@watch`; issues with
+   OPEN children launch as normal parent fan-outs with `--unblocked-only` and
+   the `watcherMaxSessions` budget.
+5. After launched work is merged or closed, `--merge`, `--close`, and
+   `--cleanup` remove `fanout:running` best-effort. To run the same parent
+   again after cleanup, add `fanout:auto` again.
+
+#107 remains the known-parent loop: a skill or `/loop` keeps revisiting one
+parent's children, ready labels, and blocker wave progress. Do not describe the
+label watcher as that flow; it discovers labeled issues across the repository
+and starts sessions once.
 
 ## Implicit Child Scan
 
