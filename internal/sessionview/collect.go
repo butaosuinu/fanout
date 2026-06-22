@@ -60,31 +60,28 @@ func StateLoader(projectRoot string) func() (state.Store, error) {
 // or a FANOUT_STATE_PATH-inferred root) that differs from git's canonical
 // `worktree list` output but points at the same .fanout/state.json.
 func MergedStateLoader(projectRoot string) func() (state.Store, error) {
-	return mergedStateLoader(projectRoot, liveTmuxPaneIDs)
+	return mergedStateLoader(projectRoot, liveTmuxPanes)
 }
 
-// liveTmuxPaneIDs returns the set of currently-live tmux pane ids, best effort
-// (empty when tmux is unavailable). Used only to break duplicate-identity ties.
-func liveTmuxPaneIDs() map[string]bool {
-	panes, err := tmuxrun.ListLivePanes()
+// liveTmuxPanes returns the live tmux panes keyed by id (path/shell-key included),
+// best effort (nil when tmux is unavailable). Used only to break
+// duplicate-identity ties, with the same path/shell-key-aware check Build uses.
+func liveTmuxPanes() map[string]LivePaneInfo {
+	live, err := LivePanes()()
 	if err != nil {
 		return nil
 	}
-	ids := make(map[string]bool, len(panes))
-	for _, p := range panes {
-		ids[p.ID] = true
-	}
-	return ids
+	return live
 }
 
-func mergedStateLoader(projectRoot string, liveIDs func() map[string]bool) func() (state.Store, error) {
+func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneInfo) func() (state.Store, error) {
 	return func() (state.Store, error) {
 		roots, _ := worktree.ListRoots(projectRoot) // always returns at least {projectRoot}
 		merged := state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{}}
 		seenIdx := map[string]int{}
 		seenRoot := map[string]bool{}
 
-		var live map[string]bool
+		var live map[string]LivePaneInfo
 		liveLoaded := false
 		isLive := func(p state.Pane) bool {
 			if p.PaneID == "" {
@@ -92,11 +89,14 @@ func mergedStateLoader(projectRoot string, liveIDs func() map[string]bool) func(
 			}
 			if !liveLoaded {
 				liveLoaded = true
-				if liveIDs != nil {
-					live = liveIDs()
+				if livePanes != nil {
+					live = livePanes()
 				}
 			}
-			return live[p.PaneID]
+			// Same path/shell-key-aware check as Build: a bare pane-id match would
+			// keep a stale home row whose %N was reused by an unrelated live pane,
+			// blocking promotion of the genuinely-live sibling.
+			return paneAlive(live, p)
 		}
 
 		for _, root := range roots {

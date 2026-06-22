@@ -136,7 +136,7 @@ func TestMergedStateLoaderDedupesBySameIdentityHomeWins(t *testing.T) {
 	}
 }
 
-func noLivePanes() map[string]bool { return nil }
+func noLivePanes() map[string]LivePaneInfo { return nil }
 
 func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	repo := newCommittedRepo(t)
@@ -145,12 +145,19 @@ func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
 	sibTop := gitTopIn(t, sibling)
 
-	// Same GitHub child (#220/#221) in two worktrees: the home pane is dead, the
-	// sibling pane is live. The surfaced row must be the live sibling so Build can
-	// mark it alive and peek it — not the stale home row.
-	recordPaneAt(t, top, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%dead", Agent: "claude"})
-	recordPaneAt(t, sibTop, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%live", Agent: "claude"})
-	live := func() map[string]bool { return map[string]bool{"%live": true} }
+	// Same GitHub child (#220/#221) in two worktrees. The home pane's id (%reused)
+	// was taken over by an unrelated live pane after a tmux restart — its live cwd
+	// is NOT under the home worktree — while the sibling pane (%live) is genuinely
+	// at its worktree. Path-aware liveness must promote the sibling, not keep the
+	// stale home row a bare pane-id match would consider "live".
+	recordPaneAt(t, top, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%reused", WorktreePath: "/home/wt", Agent: "claude"})
+	recordPaneAt(t, sibTop, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%live", WorktreePath: "/sib/wt", Agent: "claude"})
+	live := func() map[string]LivePaneInfo {
+		return map[string]LivePaneInfo{
+			"%reused": {Path: "/unrelated/elsewhere"},
+			"%live":   {Path: "/sib/wt"},
+		}
+	}
 
 	store, err := mergedStateLoader(top, live)()
 	if err != nil {
