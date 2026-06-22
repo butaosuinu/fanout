@@ -73,6 +73,10 @@ integer の環境変数は 10 進整数を受け付けます。`watcherIntervalS
 
 repo config では watcher を opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定している場合、fanout は警告してそのキーを無視します。user config または `FANOUT_WATCHER` を使ってください。repo config では `watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は設定できます。
 
+trigger label は label 付き issue と、parent fan-out で起動される OPEN child から
+agent 作業を始める合図です。それらの本文は agent briefing になります。label は
+実行依頼として扱い、その issue と起動対象 child を信頼できる場合だけ付けてください。
+
 ## 前方互換
 
 不正な bool / integer env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。

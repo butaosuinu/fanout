@@ -76,6 +76,39 @@ fanout 123 --unblocked-only --limit 3
 
 2 つ目の形は、fanout に次の unblocked バッチを選ばせつつ、各 wave の件数を制限します。
 
+## ラベル watcher
+
+watcher は引数なしの TUI コンソールが開いている間だけ動きます。既定は off で、
+有効化できるのは user config か環境変数だけです。repo config で checkout を
+自動起動の対象にすることはできません。
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+信頼できる issue に `fanout:auto` を付けると投入予約されます。次の cycle で
+fanout はそのラベルを `fanout:running` に付け替え、OPEN 子が無い issue は standalone
+pane として、OPEN 子がある issue は通常の parent fan-out として起動します。parent
+fan-out は `--unblocked-only` を使います。watcher からの起動はすべて
+`watcherMaxSessions` の対象になります。blocked child や session 上限により残りが
+ある場合、fanout は `fanout:running` を `fanout:auto` に戻し、後続 cycle でその
+parent を自動再試行します。
+
+parent fan-out では、`fanout <parent> --merge <child>`、`--close`、`--cleanup` が
+`fanout:running` を best-effort で外します。standalone watcher pane は TUI の
+lifecycle key（`m`、`c`、`x`）で処理してください。公開 CLI の parent 引数では
+予約 parent `@watch` の row を指定できません。standalone pane または完全 cleanup
+済み parent を新しく投入するには、`fanout:auto` を付け直してください。label 付き
+issue と、起動される OPEN child の本文は agent briefing になります。信頼できない
+issue に trigger label を付けないでください。
+
+この watcher は [#107](https://github.com/butaosuinu/fanout/issues/107) とは別レーンです。
+watcher は repo 全体から label 付き issue を探し、one-shot session を起動します。
+#107 は既知の親 issue 配下の子を skill 主体で継続巡回するループです。
+
 ## issue-less plan fan-out
 
 作業がローカルで既に分解されていて、GitHub child issue を作りたくない場合は

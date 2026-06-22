@@ -76,6 +76,39 @@ fanout 123 --unblocked-only --limit 3
 
 The second form caps each wave while letting fanout pick the next unblocked batch.
 
+## Label watcher
+
+The watcher runs only while the no-argument TUI console is open. It is off by
+default, and only user config or environment variables can enable it; repo
+config cannot opt a checkout into background launches.
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+Add `fanout:auto` to a trusted issue to queue it. On the next cycle fanout
+swaps that label to `fanout:running`, then launches either a standalone pane
+for an issue with no OPEN children or a normal parent fan-out for an issue with
+OPEN children. Parent fan-outs use `--unblocked-only`; every watcher launch
+counts against `watcherMaxSessions`. If blocked children or the session cap
+leaves work for later, fanout swaps `fanout:running` back to `fanout:auto` so a
+later cycle retries the parent automatically.
+
+For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and
+`--cleanup` remove `fanout:running` best-effort. For standalone watcher panes,
+use the TUI lifecycle keys (`m`, `c`, `x`); the public CLI parent argument does
+not target reserved `@watch` rows. To queue a fresh run after a standalone pane
+or fully cleaned parent, add `fanout:auto` again. Do not apply the trigger label
+to untrusted issues: the labeled issue and any OPEN children it launches become
+agent briefings.
+
+This watcher is separate from [#107](https://github.com/butaosuinu/fanout/issues/107):
+it discovers labeled issues across the repository and starts one-shot sessions.
+#107 remains the skill-led loop for revisiting children under a known parent.
+
 ## Issue-less plan fan-out
 
 Use `fanout plan` when the work is already decomposed locally and you do not

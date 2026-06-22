@@ -46,7 +46,7 @@ does not call an LLM and does not infer tasks from prose.
 
 `fanout <parent-issue-or-project-url>` enumerates either a GitHub parent issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and for each child creates a new tmux pane with its own git worktree under `.fanout/worktrees/` and an agent CLI started with a briefing that points at `/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` / `blocked` header rollup, and a compact Session navigator that stays fixed on the side or top depending on terminal width; `[` / `]` jump the pane table to the previous / next Session. It lets the user press `n` to open a modal and launch a manual prompt-based `claude` / `codex` pane (multi-line prompt input uses `Shift+Enter` for newline, with `Ctrl+J` as a terminal fallback; `Enter` creates the pane), and exits on `q` without killing the session or child panes. On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded branch, and `x` cleans up merged/closed siblings for the same parent after confirmation. It also compares consecutive GitHub snapshots and notifies once per transition when a child becomes merged, CI turns failing, or a child becomes waiting on an open blocker; channels are configured through fanout settings.
+`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` / `blocked` header rollup, and a compact Session navigator that stays fixed on the side or top depending on terminal width; `[` / `]` jump the pane table to the previous / next Session. It lets the user press `n` to open a modal and launch a manual prompt-based `claude` / `codex` pane (multi-line prompt input uses `Shift+Enter` for newline, with `Ctrl+J` as a terminal fallback; `Enter` creates the pane), and exits on `q` without killing the session or child panes. On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded branch, and `x` cleans up merged/closed siblings for the same parent after confirmation. It also compares consecutive GitHub snapshots and notifies once per transition when a child becomes merged, CI turns failing, or a child becomes waiting on an open blocker; channels are configured through fanout settings. When `watcher` is enabled from user config or the environment, this same TUI runs the label watcher: it looks for trusted `fanout:auto` issues, swaps them to `fanout:running`, and starts one-shot standalone or parent fan-out sessions. Repo config cannot enable the watcher.
 
 The positional argument selects the mode: a bare integer means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. User-facing issue refs like `#N` are accepted by this skill, but strip the leading `#` before invoking the CLI. The two modes share everything downstream of child enumeration — briefing generation, filters, deterministic naming, direct git worktree creation, and tmux pane launch — only the children come from a different source.
 
@@ -62,6 +62,7 @@ Good fits:
 - The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
 - The user asks to update fanout itself; in that case run `fanout update` immediately.
 - The user asks to start the fanout console / TUI; in that case run `fanout` with no arguments directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
+- The user asks for the label watcher; in that case use the TUI-only watcher recipe below.
 - The user asks to fan out an implementation plan or invokes `/fanout plan`; use the `fanout-plan` skill instead of the issue/Project workflow below.
 - The user types `/fanout` or mentions "fan out" / "並列展開".
 
@@ -115,6 +116,37 @@ Before running the real command:
 8. **Dry-run** — run `fanout <N-or-URL> --dry-run <forwarded-flags>` (including any `--include` from step 5 and `--name` from step 7) and show the user: the mode banner (issue / project) the CLI prints, how many children, their titles, the briefing paths, generated names, worktree paths, and warnings. Treat briefing paths in dry-run output as preview paths; fanout writes the files only during the live run. In project mode also surface any "cross-repo item skipped" warnings — those items are intentionally excluded from fan-out. This is the confirmation step for the targets themselves (not the names).
 
 Run fanout from the target repository worktree so `git rev-parse --show-toplevel` resolves the intended project root. For batch pane creation, run it from inside tmux; for the no-argument TUI, a plain shell is fine.
+
+## Label watcher recipe
+
+Use this only when the user asks for watcher behavior: repository-wide label
+discovery and one-shot session launch while the TUI is running. The watcher is
+not a scheduler, webhook, or the #107 known-parent skill loop.
+
+1. Enable it from user config (`~/.config/fanout/config.json` or
+   `$XDG_CONFIG_HOME/fanout/config.json`) or from the current shell with
+   `FANOUT_WATCHER=1`. Use `FANOUT_WATCHER_AGENT` or `watcherAgent` when the
+   default TUI agent is not the desired child agent.
+2. Run `fanout` with no arguments and keep the TUI open. The watcher stops
+   when the TUI exits.
+3. Apply `fanout:auto` only when the user trusts the labeled issue and any OPEN
+   children it can launch. Those issue bodies become agent briefings, so the
+   label is a prompt-injection boundary.
+4. On each cycle fanout swaps `fanout:auto` to `fanout:running`. Issues with no
+   OPEN children launch as standalone panes under parent `@watch`; issues with
+   OPEN children launch as normal parent fan-outs with `--unblocked-only` and
+   the `watcherMaxSessions` budget. Deferred parent fan-outs are requeued by
+   swapping `fanout:running` back to `fanout:auto`.
+5. For parent fan-outs, `--merge`, `--close`, and `--cleanup` remove
+   `fanout:running` best-effort. For standalone `@watch` panes, use the TUI
+   lifecycle keys; the public CLI parent argument cannot target `@watch` rows.
+   To run a completed standalone pane or fully cleaned parent again, add
+   `fanout:auto` again.
+
+#107 remains the known-parent loop: a skill or `/loop` keeps revisiting one
+parent's children, ready labels, and blocker wave progress. Do not describe the
+label watcher as that flow; it discovers labeled issues across the repository
+and starts sessions once.
 
 ## Running
 

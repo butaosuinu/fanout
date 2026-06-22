@@ -68,7 +68,7 @@ The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
 orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
 `internal/` holds `agent`,
 `cliflags`, `ghissue`, `runtime`, `worktree`, `tmuxrun`, `state`, `naming`,
-`blockers`, `displayname`, `briefing`, `team`, `msgstore`, plus
+`blockers`, `displayname`, `briefing`, `watch`, `team`, `msgstore`, plus
 `atomicfs`/`log`/`tty`/`exitcode`.
 
 - Runtime discovery (`internal/runtime`) resolves the git repo root with
@@ -102,6 +102,14 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
 - `--status`, `--close`, `--merge`, and `--cleanup` operate from
   `.fanout/state.json`; set `FANOUT_STATE_PATH` to point at a specific state
   file outside the repository checkout.
+- `internal/watch` owns one repository watcher cycle behind the no-argument
+  TUI. It lists `watcherTriggerLabel` issues, swaps them to
+  `watcherRunningLabel`, launches standalone panes for issues without OPEN
+  children, and launches normal parent fan-outs for issues with OPEN children.
+  The watcher is opt-in from user config or `FANOUT_WATCHER` only; repo config
+  cannot enable it. Keep this separate from #107's skill-led loop for
+  revisiting children under a known parent, and treat trigger labels as a
+  prompt-injection boundary because issue bodies become briefings.
 - `--team` (`cmd/fanout/team.go`) and the `fanout msg` subcommand
   (`cmd/fanout/msg.go`) are sibling-pane peer messaging over a per-parent
   SQLite bus. `internal/team` owns the DB (`modernc.org/sqlite`, pure-Go — no
