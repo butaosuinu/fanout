@@ -1266,13 +1266,16 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 }
 
 // isLocalParent reports whether a parent ref is only meaningful within one
-// worktree — a plan slug (plan:<slug>) or a synthetic manual ref (@manual) — as
-// opposed to a globally-stable GitHub issue number or Project URL. Locally
+// worktree — a plan slug (plan:<slug>) or the synthetic manual ref (@manual) — as
+// opposed to a globally-stable parent: a GitHub issue number, a Project URL, or
+// @watch (repo-wide watcher panes keyed by real GitHub issue numbers). Locally
 // scoped parents can collide across worktrees with unrelated work, so
-// parent-scoped lifecycle actions must not fan across worktrees for them.
+// parent-scoped lifecycle actions must not fan across worktrees for them. Note
+// not every @-prefixed ref is local — @watch is repo-wide — so this matches
+// @manual exactly rather than the @ prefix.
 func isLocalParent(parent string) bool {
 	parent = strings.TrimSpace(parent)
-	return strings.HasPrefix(parent, "plan:") || strings.HasPrefix(parent, "@")
+	return strings.HasPrefix(parent, "plan:") || parent == "@manual"
 }
 
 // sourceRootsForParent returns the distinct worktree roots whose state.json
@@ -1886,7 +1889,11 @@ func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
 			if !ok {
 				stateName, prs, err := gh.IssueWithPRs(owner, repo, issue.Number)
 				if err != nil {
-					return nil, fmt.Errorf("#%d: %w", issue.Number, err)
+					// Accumulate and skip, like the branch/wave paths: a single
+					// sibling-worktree issue that was deleted/made private or hit a
+					// transient gh error must not blank every other row's status.
+					loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
+					continue
 				}
 				cached = issueStatus{State: stateName, PRs: prs}
 				prCache[issue.Number] = cached

@@ -1714,6 +1714,29 @@ func TestLifecycleCleanupPlanStaysWithinSelectedWorktree(t *testing.T) {
 	}
 }
 
+func TestLifecycleCleanupWatchFansAcrossWorktrees(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	// @watch is repo-wide (watcher panes keyed by real GitHub issue numbers), so
+	// cleanup must fan across every worktree the parent spans — unlike @manual.
+	m.allPanes = []paneView{
+		{Parent: "@watch", IssueNum: 501, Name: "a", sourceProjectRoot: "/wt-a", sourceProjectRoots: []string{"/wt-a"}},
+		{Parent: "@watch", IssueNum: 502, Name: "b", sourceProjectRoot: "/wt-b", sourceProjectRoots: []string{"/wt-b"}},
+	}
+
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionCleanup, pane: m.allPanes[0]})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	got := map[string]bool{}
+	for _, r := range runner.cleanupRoots {
+		got[r] = true
+	}
+	if len(runner.cleanupRoots) != 2 || !got["/wt-a"] || !got["/wt-b"] {
+		t.Fatalf("@watch cleanup roots = %v, want both /wt-a and /wt-b (repo-wide)", runner.cleanupRoots)
+	}
+}
+
 func TestPaneViewsFromSnapshotCarriesSourceProjectRoot(t *testing.T) {
 	snap := sessionview.Snapshot{Sessions: []sessionview.Session{{
 		Parent: "100",
