@@ -94,29 +94,35 @@ func MergedStateLoader(projectRoot string) func() (state.Store, error) {
 	}
 }
 
-// paneIdentityKey returns a pane's stable cross-store identity, mirroring the
-// (parent, issueNum)/(parent, taskId) idempotency the state lock enforces within
-// one store. An empty key means "no stable identity" — never de-duplicated:
-//   - Shell terminals share (parent, issueNum), so they key on their shell key;
-//     without one they have no stable identity.
-//   - Manual/synthetic panes carry a non-GitHub issue number assigned per store
-//     by nextSyntheticPaneNumber (negative: @manual/-1, @manual/-2, …), so the
-//     same number means different panes in different worktrees. Only positive
-//     (real GitHub) issue numbers are stable across stores; non-positive ones get
-//     no cross-store identity so distinct manual panes are never collapsed (and
-//     never have a sibling row closed out from under them).
+// paneIdentityKey returns a pane's identity for cross-worktree de-duplication,
+// or "" when the pane has no identity that is stable across separate
+// .fanout/state.json stores (and so must never be collapsed). Only two kinds of
+// identity are globally stable within a repo:
+//   - A positive GitHub issue number: assigned by GitHub, unique repo-wide, so
+//     the same (parent, issueNum) in two worktrees is the same child.
+//   - A shell terminal's shell key: a random 16-byte token (newShellPaneKey),
+//     unique per pane, so it never collides across stores.
+//
+// Everything else is assigned locally and can legitimately repeat across
+// worktrees, so it is kept distinct (key ""):
+//   - Plan task rows: plan:<slug>/<taskId> is scoped to a spec, so two worktrees
+//     running different specs can reuse the same slug+taskId for unrelated work.
+//   - Manual panes: nextSyntheticPaneNumber assigns negative numbers per store
+//     (@manual/-1, @manual/-2, …), so the same number means different panes.
+//
+// De-duplicating a locally-assigned identity would hide one worktree's live pane
+// before Build's liveness check and let a close/cleanup of the shown row remove
+// the hidden sibling's row too (via SourceProjectRoots). Pane id is also not used
+// as a key: tmux reuses ids like %1 across server restarts.
 func paneIdentityKey(p state.Pane) string {
-	parent := NormalizeParent(p.Parent)
 	switch {
-	case strings.TrimSpace(p.TaskID) != "":
-		return "task\x00" + parent + "\x00" + p.TaskID
 	case p.IsShell():
 		if k := strings.TrimSpace(p.ShellKey); k != "" {
 			return "shell\x00" + k
 		}
 		return ""
 	case p.IssueNum > 0:
-		return "issue\x00" + parent + "\x00" + strconv.Itoa(p.IssueNum)
+		return "issue\x00" + NormalizeParent(p.Parent) + "\x00" + strconv.Itoa(p.IssueNum)
 	default:
 		return ""
 	}

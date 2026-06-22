@@ -190,6 +190,37 @@ func TestMergedStateLoaderKeepsManualPanesDistinctAcrossWorktrees(t *testing.T) 
 	}
 }
 
+func TestMergedStateLoaderKeepsPlanTasksDistinctAcrossWorktrees(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	// plan:<slug>/<taskId> is scoped to a spec, not globally stable: two worktrees
+	// can carry the same slug+taskId for unrelated work, so they must stay
+	// distinct (not collapse into one row whose close removes both stores' rows).
+	recordPaneAt(t, top, state.Pane{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%1", Agent: "claude"})
+	recordPaneAt(t, sibTop, state.Pane{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%2", Agent: "codex"})
+
+	store, err := MergedStateLoader(top)()
+	if err != nil {
+		t.Fatalf("MergedStateLoader: %v", err)
+	}
+	tasks := 0
+	for _, p := range store.Panes {
+		if p.TaskID == "api" {
+			tasks++
+			if len(p.SourceProjectRoots) != 1 {
+				t.Fatalf("plan task %s has SourceProjectRoots %v, want exactly its own root", p.PaneID, p.SourceProjectRoots)
+			}
+		}
+	}
+	if tasks != 2 {
+		t.Fatalf("distinct plan tasks across worktrees collapsed: got %d, want 2 (%+v)", tasks, store.Panes)
+	}
+}
+
 func TestMergedStateLoaderKeepsDistinctIdentities(t *testing.T) {
 	root := t.TempDir() // not a git repo: single-root fallback
 	recordPaneAt(t, root, state.Pane{Parent: "1", IssueNum: 2, PaneID: ""})
