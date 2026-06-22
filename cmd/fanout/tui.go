@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -422,15 +423,14 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
-	agentName := strings.TrimSpace(req.Agent)
-	if agentName == "" {
-		agentName = defaultTUIAgent()
-	}
-	if err := agent.ValidateKnown(agentName); err != nil {
-		return "", err
-	}
-	if err := agent.ValidateInstalled(agentName); err != nil {
-		return "", err
+	agentNames := normalizeTUIAgents(req.Agents)
+	for _, agentName := range agentNames {
+		if err := agent.ValidateKnown(agentName); err != nil {
+			return "", err
+		}
+		if err := agent.ValidateInstalled(agentName); err != nil {
+			return "", err
+		}
 	}
 	slug, err := normalizeTUISlug(req.Slug)
 	if err != nil {
@@ -439,8 +439,8 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := manualPaneConfigForTUIAgent(agentName)
-	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
+	cfg := manualPaneConfigForTUIAgent(agentNames[0])
+	_, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
@@ -455,11 +455,43 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	paneReq := newManualPaneRequest(cfg, projectRoot, store, hookConfig, manualPaneOptionsForTUI(prompt, slug, agentName))
-	if !createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
+	createdCount := 0
+	for i, agentName := range agentNames {
+		cfg = manualPaneConfigForTUIAgent(agentName)
+		paneSlug := manualPaneSlugForAgent(slug, agentName, i, agentNames)
+		paneReq := newManualPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, manualPaneOptionsForTUI(prompt, paneSlug, agentName))
+		if createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
+			createdCount++
+			continue
+		}
+		if createdCount > 0 {
+			return partialManualLaunchNotice(createdCount, stderr), nil
+		}
 		return "", bufferedLaunchError(stdout, stderr, "create pane")
 	}
 	return bufferedLaunchNotice(stderr), nil
+}
+
+func partialManualLaunchNotice(createdCount int, stderr bytes.Buffer) string {
+	notice := fmt.Sprintf("created %d new agent pane(s); stopped after a later pane failed", createdCount)
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		return notice + ": " + compactLaunchError(s)
+	}
+	return notice
+}
+
+func compactLaunchError(s string) string {
+	lines := strings.Split(s, "\n")
+	for _, raw := range slices.Backward(lines) {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[err ]") {
+			return line
+		}
+	}
+	if len(s) > 180 {
+		return s[:180] + "..."
+	}
+	return s
 }
 
 // bufferedLaunchNotice extracts the tolerated base-refresh skip line, if any,
@@ -600,6 +632,55 @@ func manualPaneOptionsForTUI(prompt, slug, agentName string) manualPaneOptions {
 		opts.Body = prompt
 	}
 	return opts
+}
+
+func normalizeTUIAgents(raw []string) []string {
+	var agents []string
+	for _, agentName := range raw {
+		agentName = strings.TrimSpace(agentName)
+		if agentName != "" {
+			agents = append(agents, agentName)
+		}
+	}
+	if len(agents) == 0 {
+		return []string{defaultTUIAgent()}
+	}
+	return agents
+}
+
+func manualPaneSlugForAgent(slug, agentName string, index int, agents []string) string {
+	if slug == "" || len(agents) == 1 {
+		return slug
+	}
+	suffix := agentName
+	seen := 0
+	totalForAgent := 0
+	for i, name := range agents {
+		if name != agentName {
+			continue
+		}
+		totalForAgent++
+		if i <= index {
+			seen++
+		}
+	}
+	if totalForAgent > 1 {
+		suffix = fmt.Sprintf("%s-%s", agentName, launchOrdinal(seen))
+	}
+	return strings.TrimRight(slug, "-") + "-" + suffix
+}
+
+func launchOrdinal(n int) string {
+	switch n {
+	case 1:
+		return "one"
+	case 2:
+		return "two"
+	case 3:
+		return "three"
+	default:
+		return fmt.Sprintf("run%d", n)
+	}
 }
 
 func normalizeTUIPrompt(raw string) string {

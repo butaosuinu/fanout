@@ -87,7 +87,7 @@ type issueKey struct {
 // LaunchRequest describes one manual pane launch requested from the TUI.
 type LaunchRequest struct {
 	Prompt string
-	Agent  string
+	Agents []string
 	Slug   string
 }
 
@@ -222,12 +222,13 @@ const (
 )
 
 type newPaneForm struct {
-	prompt    textarea.Model
-	slug      textinput.Model
-	agent     string
-	focus     newPaneField
-	launching bool
-	err       string
+	prompt     textarea.Model
+	slug       textinput.Model
+	agentCount map[string]int
+	agentIndex int
+	focus      newPaneField
+	launching  bool
+	err        string
 }
 
 type model struct {
@@ -347,6 +348,7 @@ type (
 	watchTickMsg  time.Time
 	launchPaneMsg struct {
 		notice string
+		count  int
 		err    error
 	}
 	launchShellMsg struct {
@@ -734,9 +736,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.mode = modeMonitor
-		if msg.notice != "" {
+		switch {
+		case msg.notice != "":
 			m.notice = msg.notice
-		} else {
+		case msg.count > 1:
+			m.notice = fmt.Sprintf("created %d new agent panes", msg.count)
+		default:
 			m.notice = "created new agent pane"
 		}
 		return m, m.loadStateCmd(false)
@@ -1388,10 +1393,11 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
-		prompt: prompt,
-		slug:   slug,
-		agent:  defaultAgent,
-		focus:  newPaneFieldPrompt,
+		prompt:     prompt,
+		slug:       slug,
+		agentCount: defaultAgentCounts(defaultAgent),
+		agentIndex: defaultAgentIndex(defaultAgent),
+		focus:      newPaneFieldPrompt,
 	}
 }
 
@@ -1414,12 +1420,16 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "left", "right", " ":
 		if m.newPane.focus == newPaneFieldAgent {
-			m.toggleNewPaneAgent()
+			m.adjustNewPaneAgent(msg.String())
 			return m, nil
 		}
 	case "up", "down":
 		if m.newPane.focus != newPaneFieldPrompt {
-			m.moveNewPaneFocus(msg.String())
+			if m.newPane.focus == newPaneFieldAgent {
+				m.moveNewPaneAgent(msg.String())
+			} else {
+				m.moveNewPaneFocus(msg.String())
+			}
 			return m, nil
 		}
 	case "enter":
@@ -1457,18 +1467,45 @@ func (m *model) moveNewPaneFocus(key string) {
 	}
 }
 
-func (m *model) toggleNewPaneAgent() {
-	if m.newPane.agent == "claude" {
-		m.newPane.agent = "codex"
-		return
+func (m *model) moveNewPaneAgent(key string) {
+	switch key {
+	case "up":
+		m.newPane.agentIndex = (m.newPane.agentIndex + len(launchAgents) - 1) % len(launchAgents)
+	default:
+		m.newPane.agentIndex = (m.newPane.agentIndex + 1) % len(launchAgents)
 	}
-	m.newPane.agent = "claude"
+}
+
+func (m *model) adjustNewPaneAgent(key string) {
+	agentName := launchAgents[m.newPane.agentIndex]
+	current := m.newPane.agentCount[agentName]
+	switch key {
+	case "left":
+		if current > 0 {
+			m.newPane.agentCount[agentName] = current - 1
+		}
+	case "right":
+		if current < maxAgentLaunchCount {
+			m.newPane.agentCount[agentName] = current + 1
+		}
+	default:
+		if current > 0 {
+			m.newPane.agentCount[agentName] = 0
+		} else {
+			m.newPane.agentCount[agentName] = 1
+		}
+	}
 }
 
 func (m *model) submitNewPane() tea.Cmd {
 	prompt := strings.TrimSpace(m.newPane.prompt.Value())
 	if prompt == "" {
 		m.newPane.err = "prompt is required"
+		return nil
+	}
+	agents := m.selectedNewPaneAgents()
+	if len(agents) == 0 {
+		m.newPane.err = "select at least one agent"
 		return nil
 	}
 	if m.opts.LaunchPane == nil {
@@ -1479,13 +1516,13 @@ func (m *model) submitNewPane() tea.Cmd {
 	m.newPane.launching = true
 	req := LaunchRequest{
 		Prompt: prompt,
-		Agent:  m.newPane.agent,
+		Agents: agents,
 		Slug:   strings.TrimSpace(m.newPane.slug.Value()),
 	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
 		notice, err := launch(req)
-		return launchPaneMsg{notice: notice, err: err}
+		return launchPaneMsg{notice: notice, count: len(agents), err: err}
 	}
 }
 
@@ -1502,7 +1539,7 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render("enter create  shift+enter newline  ctrl+j newline  tab field  arrows/space agent  esc cancel"))
+	lines = append(lines, dimStyle.Render("enter create  shift+enter newline  ctrl+j newline  tab field  up/down agent  left/right count  space toggle  esc cancel"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 
@@ -1515,15 +1552,58 @@ func (m model) newPaneFieldView(field newPaneField, label, value string) string 
 }
 
 func (m model) agentSelectorView() string {
-	var claude, codex string
-	if m.newPane.agent == "claude" {
-		claude = titleStyle.Render("[claude]")
-		codex = dimStyle.Render(" codex ")
-	} else {
-		claude = dimStyle.Render(" claude ")
-		codex = titleStyle.Render("[codex]")
+	lines := make([]string, 0, len(launchAgents))
+	for i, agentName := range launchAgents {
+		count := m.newPane.agentCount[agentName]
+		marker := "  "
+		if m.newPane.focus == newPaneFieldAgent && m.newPane.agentIndex == i {
+			marker = "> "
+		}
+		token := fmt.Sprintf("[%d] %s", count, agentName)
+		if count > 0 {
+			token = titleStyle.Render(token)
+		} else {
+			token = dimStyle.Render(token)
+		}
+		lines = append(lines, marker+token)
 	}
-	return claude + "  " + codex
+	return strings.Join(lines, "\n")
+}
+
+const maxAgentLaunchCount = 3
+
+var launchAgents = []string{"claude", "codex"}
+
+func defaultAgentCounts(defaultAgent string) map[string]int {
+	counts := make(map[string]int, len(launchAgents))
+	if !slices.Contains(launchAgents, defaultAgent) {
+		defaultAgent = defaultLaunchAgent
+	}
+	for _, agentName := range launchAgents {
+		counts[agentName] = 0
+	}
+	counts[defaultAgent] = 1
+	return counts
+}
+
+func defaultAgentIndex(defaultAgent string) int {
+	for i, agentName := range launchAgents {
+		if agentName == defaultAgent {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m model) selectedNewPaneAgents() []string {
+	var agents []string
+	for _, agentName := range launchAgents {
+		count := clampInt(m.newPane.agentCount[agentName], 0, maxAgentLaunchCount)
+		for range count {
+			agents = append(agents, agentName)
+		}
+	}
+	return agents
 }
 
 func (m model) formInputWidth() int {

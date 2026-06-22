@@ -61,6 +61,12 @@ type paneRequest struct {
 	Worktree            worktree.Plan
 }
 
+type createdPane struct {
+	req      paneRequest
+	paneID   string
+	prepared worktree.Result
+}
+
 type manualPaneOptions struct {
 	Title      string
 	Body       string
@@ -82,10 +88,15 @@ func createPaneForIssue(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 }
 
 func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, recorder paneStateRecorder, c log.Palette, commandName string) bool {
+	_, ok := createPaneDetailed(cfg, lg, info, req, recorder, c, commandName)
+	return ok
+}
+
+func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, recorder paneStateRecorder, c log.Palette, commandName string) (createdPane, bool) {
 	agentCmd, err := buildAgentCommand(cfg, req, commandName)
 	if err != nil {
 		lg.Err("%s: %v", paneLogLabel(req), err)
-		return false
+		return createdPane{}, false
 	}
 	req.AgentCommand = agentCmd
 	// Strict children (issue/plan) fail fast on a known refresh error. Best-effort
@@ -93,13 +104,13 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	// RefreshWarning below so it is not logged twice.
 	if req.Worktree.Refresh && req.Worktree.RefreshError != nil && !req.Worktree.RefreshBestEffort {
 		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), req.Worktree.RefreshError)
-		return false
+		return createdPane{}, false
 	}
 
 	if req.BriefingPath != "" && !cfg.DryRun {
 		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 			lg.Err("%s: write briefing: %v", paneLogLabel(req), err)
-			return false
+			return createdPane{}, false
 		}
 	}
 
@@ -107,7 +118,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 
 	if cfg.DryRun {
 		printPaneDryRun(req, info.Target, lg, c)
-		return true
+		return createdPane{}, true
 	}
 
 	prepared, err := worktree.Prepare(worktree.Options{
@@ -126,18 +137,18 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	}
 	if err != nil {
 		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), err)
-		return false
+		return createdPane{}, false
 	}
 	if prepared.AlreadyExists {
 		lg.Err("%s: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", paneLogLabel(req), prepared.WorktreePath)
-		return false
+		return createdPane{}, false
 	}
 
 	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg); !result.OK() {
 		lg.Err("%s: %v", paneLogLabel(req), result.Err)
 		printPaneHookOutput(result, lg)
 		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
-		return false
+		return createdPane{}, false
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg)
 
@@ -145,7 +156,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 	if err != nil {
 		lg.Err("%s: %v", paneLogLabel(req), err)
 		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
-		return false
+		return createdPane{}, false
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
@@ -160,7 +171,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
 			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
 			cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
-			return false
+			return createdPane{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
@@ -169,7 +180,7 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		if err := recorder.RecordPane(entry); err != nil {
 			lg.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
-			return false
+			return createdPane{}, false
 		}
 	}
 	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
@@ -182,10 +193,10 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 		lg.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		rollbackState(recorder, req, lg)
 		cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
-		return false
+		return createdPane{}, false
 	}
 	lg.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
-	return true
+	return createdPane{req: req, paneID: paneID, prepared: prepared}, true
 }
 
 func statePane(req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {

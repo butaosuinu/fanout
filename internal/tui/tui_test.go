@@ -2064,8 +2064,8 @@ func TestNewPaneKeyOpensForm(t *testing.T) {
 	if got.mode != modeNewPane {
 		t.Fatalf("mode = %v, want new pane form", got.mode)
 	}
-	if got.newPane.agent != "codex" {
-		t.Fatalf("default agent = %q, want codex", got.newPane.agent)
+	if agents := got.selectedNewPaneAgents(); len(agents) != 1 || agents[0] != "codex" {
+		t.Fatalf("default agents = %#v, want [codex]", agents)
 	}
 }
 
@@ -2166,6 +2166,25 @@ func TestNewPaneFormRequiresPrompt(t *testing.T) {
 	}
 }
 
+func TestNewPaneFormRequiresAgentSelection(t *testing.T) {
+	m := newModel(Options{LaunchPane: func(LaunchRequest) (string, error) {
+		t.Fatal("LaunchPane should not be called without a selected agent")
+		return "", nil
+	}})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("Inspect the HTTP API")
+	for _, agentName := range launchAgents {
+		m.newPane.agentCount[agentName] = 0
+	}
+
+	if cmd := m.submitNewPane(); cmd != nil {
+		t.Fatal("submitNewPane returned a command without a selected agent")
+	}
+	if m.newPane.err != "select at least one agent" {
+		t.Fatalf("form error = %q, want select at least one agent", m.newPane.err)
+	}
+}
+
 func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	var got LaunchRequest
 	called := false
@@ -2195,8 +2214,34 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	if !called {
 		t.Fatal("LaunchPane was not called")
 	}
-	want := LaunchRequest{Prompt: "Inspect the HTTP API", Agent: "codex", Slug: "inspect-http-api"}
-	if got != want {
+	want := LaunchRequest{Prompt: "Inspect the HTTP API", Agents: []string{"codex"}, Slug: "inspect-http-api"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch request = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewPaneFormSubmitsMultipleAgents(t *testing.T) {
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) (string, error) {
+			got = req
+			return "", nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("Compare implementations")
+	m.newPane.agentCount["claude"] = 1
+	m.newPane.agentCount["codex"] = 2
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+
+	want := LaunchRequest{Prompt: "Compare implementations", Agents: []string{"claude", "codex", "codex"}}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
 	}
 }
@@ -2242,8 +2287,8 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	}
 	_ = cmd()
 
-	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agent: "codex", Slug: "inspect-api"}
-	if got != want {
+	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agents: []string{"codex"}, Slug: "inspect-api"}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
 	}
 }
@@ -2257,7 +2302,7 @@ func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.View()
-	for _, want := range []string{"PARENT", "existing", "New agent pane", "shift+enter newline"} {
+	for _, want := range []string{"PARENT", "New agent pane", "shift+enter newline", "left/right count"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal view missing %q:\n%s", want, view)
 		}
@@ -2279,6 +2324,18 @@ func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("launch success did not request a state reload")
+	}
+}
+
+func TestNewPaneLaunchSuccessReportsMultiplePanes(t *testing.T) {
+	m := newModel(Options{})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(launchPaneMsg{count: 3})
+	got := updated.(model)
+
+	if got.notice != "created 3 new agent panes" {
+		t.Fatalf("notice = %q, want multiple pane count", got.notice)
 	}
 }
 

@@ -27,7 +27,7 @@ fanout   # start the persistent tmux console
 
 | キー | 動作 |
 |---|---|
-| `n` | modal を開き、複数行の必須 prompt、`claude` / `codex` の agent 選択、任意 slug を指定して manual agent pane を作成する。`codex` は Codex Plan Mode で起動し、`claude` は通常起動する。prompt 欄では `Shift+Enter` で改行（`Shift+Enter` を区別できない terminal 向けの fallback として `Ctrl+J` も使える）、`Enter` で pane を作成する。manual pane は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
+| `n` | modal を開き、複数行の必須 prompt、`claude` / `codex` の起動数、任意 slug を指定して manual agent pane を作成する。`codex` は Codex Plan Mode で起動し、`claude` は通常起動する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。prompt 欄では `Shift+Enter` で改行（`Shift+Enter` を区別できない terminal 向けの fallback として `Ctrl+J` も使える）、`Enter` で選択した pane を作成する。manual pane は synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus / peek できるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux pane と state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行の pane にフォーカスする。 |
