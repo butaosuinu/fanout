@@ -10,6 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/hooks"
+	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
@@ -182,6 +183,125 @@ esac
 	}
 	if got != 1 {
 		t.Fatalf("countOpenChildTargets() = %d, want one OPEN task-list child", got)
+	}
+}
+
+func TestCountOpenChildTargetsFailsWhenParentBodyReadFails(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf 'temporary gh failure\n' >&2
+  exit 1
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	if _, err := countOpenChildTargets(ghissue.Runner{}, 500); err == nil {
+		t.Fatal("countOpenChildTargets() error = nil, want parent body failure")
+	}
+}
+
+func TestCountWatchChildTargetsCountsOnlyLaunchableChildren(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[{"number":501,"title":"ready","state":"open"},{"number":502,"title":"blocked","state":"open"}]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf '%s\n' '- [ ] #501 ready' '- [ ] #502 blocked (blocked by #600)'
+  ;;
+"issue view 501 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 502 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 600 --json state -q .state")
+  printf 'OPEN\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	counts, err := countWatchChildTargets(t.TempDir(), ghissue.Runner{}, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Open != 2 || counts.Launchable != 1 || counts.Unfanned != 2 {
+		t.Fatalf("countWatchChildTargets() = %+v, want open=2 launchable=1 unfanned=2", counts)
+	}
+}
+
+func TestCountWatchChildTargetsSkipsUnresolvableTaskListRefs(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[{"number":501,"title":"ready","state":"open"}]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf '%s\n' '- [ ] #501 ready' '- [ ] #599 stale'
+  ;;
+"issue view 501 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 599 --json number,title,state,body,labels")
+  printf 'not found\n' >&2
+  exit 1
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	counts, err := countWatchChildTargets(t.TempDir(), ghissue.Runner{}, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts.Open != 1 || counts.Launchable != 1 || counts.Unfanned != 1 {
+		t.Fatalf("countWatchChildTargets() = %+v, want open=1 launchable=1 unfanned=1", counts)
+	}
+}
+
+func TestLaunchWatchStandaloneSkipsIssueRecordedUnderLock(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(state.Pane{Parent: "700", IssueNum: 501, Slug: "existing-501", PaneID: "%1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	err = launchWatchStandalone(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), ghissue.Issue{
+		Number: 501,
+		Title:  "existing",
+		State:  "OPEN",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 || store.Panes[0].PaneID != "%1" {
+		t.Fatalf("state panes = %+v, want existing pane only", store.Panes)
 	}
 }
 

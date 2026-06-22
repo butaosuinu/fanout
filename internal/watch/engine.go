@@ -45,6 +45,7 @@ type DeferReason string
 const (
 	DeferBackoff     DeferReason = "backoff"
 	DeferMaxSessions DeferReason = "max_sessions"
+	DeferBlocked     DeferReason = "blocked_children"
 )
 
 // FailureStage identifies the effect that failed during a cycle.
@@ -77,11 +78,22 @@ type Config struct {
 type IO struct {
 	ListLabeled       func(label string) ([]ghissue.Issue, error)
 	CountOpenChildren func(issue ghissue.Issue) (int, error)
+	CountChildren     func(issue ghissue.Issue) (ChildCounts, error)
 	SwapLabels        func(issue ghissue.Issue, removeLabel, addLabel string) error
 	LoadState         func() (state.Store, error)
 	PaneAlive         func(pane state.Pane) (bool, error)
 	LaunchStandalone  func(issue ghissue.Issue) error
 	LaunchParent      func(issue ghissue.Issue, limit int) (ParentLaunchResult, error)
+}
+
+// ChildCounts separates parent classification from launch-capacity accounting.
+// Open is every OPEN child. Launchable is the subset that can create panes now.
+// Unfanned is every OPEN child that does not already have a pane, including
+// blocked children.
+type ChildCounts struct {
+	Open       int
+	Launchable int
+	Unfanned   int
 }
 
 // Engine keeps process-local launch failure state between cycles.
@@ -124,6 +136,8 @@ type Action struct {
 	Issue        ghissue.Issue
 	Kind         LaunchKind
 	OpenChildren int
+	// LaunchableChildren is the parent-child count that consumes session budget.
+	LaunchableChildren int
 	// RetryRunning means the issue is already on the running label after a failed
 	// requeue swap, so RunCycle should not acquire it again.
 	RetryRunning bool
@@ -245,14 +259,17 @@ func (e *Engine) PlanCycle() (Report, error) {
 			continue
 		}
 
-		openChildren, err := e.io.CountOpenChildren(issue)
+		childCounts, err := countChildren(e.io, issue)
 		if err != nil {
 			report.Failures = append(report.Failures, Failure{Issue: issue, Stage: FailureCountChildren, Err: err})
 			continue
 		}
-		if openChildren < 0 {
-			openChildren = 0
-		}
+		openChildren := childCounts.Open
+		openChildren = max(openChildren, 0)
+		launchableChildren := childCounts.Launchable
+		launchableChildren = max(launchableChildren, 0)
+		unfannedChildren := childCounts.Unfanned
+		unfannedChildren = max(unfannedChildren, 0)
 		if candidate.recoverRunning && openChildren == 0 && hasPaneForParent(store, issue.Number) {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 			continue
@@ -268,22 +285,31 @@ func (e *Engine) PlanCycle() (Report, error) {
 			}
 		}
 		action := Action{
-			Issue:        issue,
-			Kind:         LaunchStandalone,
-			OpenChildren: openChildren,
-			RetryRunning: candidate.retryRunning,
+			Issue:              issue,
+			Kind:               LaunchStandalone,
+			OpenChildren:       openChildren,
+			LaunchableChildren: launchableChildren,
+			RetryRunning:       candidate.retryRunning,
 		}
 		consumes := 1
 		if openChildren > 0 || candidate.retryKind == LaunchParent {
 			action.Kind = LaunchParent
-			consumes = openChildren
+			consumes = launchableChildren
 		}
 		if alreadyFanned(store, action) {
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
 			continue
 		}
+		if action.Kind == LaunchParent && launchableChildren == 0 {
+			if unfannedChildren == 0 {
+				report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
+			} else {
+				report.Deferred = append(report.Deferred, Deferred{Issue: issue, Reason: DeferBlocked})
+			}
+			continue
+		}
 		if action.Kind == LaunchParent && remaining > 0 {
-			consumes = min(openChildren, remaining)
+			consumes = min(launchableChildren, remaining)
 			action.Limit = consumes
 		}
 		report.Actions = append(report.Actions, action)
@@ -433,8 +459,8 @@ func validatePlanIO(io IO) error {
 	switch {
 	case io.ListLabeled == nil:
 		return errors.New("watch IO ListLabeled is required")
-	case io.CountOpenChildren == nil:
-		return errors.New("watch IO CountOpenChildren is required")
+	case io.CountChildren == nil && io.CountOpenChildren == nil:
+		return errors.New("watch IO CountChildren is required")
 	case io.LoadState == nil:
 		return errors.New("watch IO LoadState is required")
 	case io.PaneAlive == nil:
@@ -458,6 +484,17 @@ func validateRunIO(io IO) error {
 	default:
 		return nil
 	}
+}
+
+func countChildren(io IO, issue ghissue.Issue) (ChildCounts, error) {
+	if io.CountChildren != nil {
+		return io.CountChildren(issue)
+	}
+	open, err := io.CountOpenChildren(issue)
+	if err != nil {
+		return ChildCounts{}, err
+	}
+	return ChildCounts{Open: open, Launchable: open, Unfanned: open}, nil
 }
 
 func countLivePanes(store state.Store, alive func(state.Pane) (bool, error)) (int, error) {

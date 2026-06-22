@@ -32,6 +32,7 @@ type fakeWatchIO struct {
 	runningIssues []ghissue.Issue
 	store         state.Store
 	openChildren  map[int]int
+	childCounts   map[int]ChildCounts
 	alive         map[string]bool
 
 	swapErr        map[swapKey]error
@@ -77,6 +78,15 @@ func (f *fakeWatchIO) IO() IO {
 		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
 			f.countCalls = append(f.countCalls, issue.Number)
 			return f.openChildren[issue.Number], nil
+		},
+		CountChildren: func(issue ghissue.Issue) (ChildCounts, error) {
+			if f.childCounts == nil {
+				f.countCalls = append(f.countCalls, issue.Number)
+				open := f.openChildren[issue.Number]
+				return ChildCounts{Open: open, Launchable: open, Unfanned: open}, nil
+			}
+			f.countCalls = append(f.countCalls, issue.Number)
+			return f.childCounts[issue.Number], nil
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			f.swaps = append(f.swaps, swapCall{num: issue.Number, remove: removeLabel, add: addLabel})
@@ -247,6 +257,28 @@ func TestRunCycleTableDriven(t *testing.T) {
 				}
 				if got, want := fake.parents, []parentLaunch{{num: 201, limit: 3}}; !slices.Equal(got, want) {
 					t.Fatalf("parent launches = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "blocked-only parent does not consume capacity",
+			cfg:  Config{MaxSessions: 1},
+			fake: &fakeWatchIO{
+				issues: []ghissue.Issue{issue(301), issue(101)},
+				childCounts: map[int]ChildCounts{
+					301: {Open: 2, Launchable: 0, Unfanned: 2},
+					101: {Open: 0, Launchable: 0, Unfanned: 0},
+				},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, []int{301, 101})
+				if got, want := fake.parents, []parentLaunch(nil); !slices.Equal(got, want) {
+					t.Fatalf("parent launches = %#v, want none", got)
+				}
+				assertInts(t, "standalone launches", fake.standalone, []int{101})
+				if len(report.Deferred) != 1 || report.Deferred[0].Issue.Number != 301 || report.Deferred[0].Reason != DeferBlocked {
+					t.Fatalf("deferred = %#v, want #301 blocked", report.Deferred)
 				}
 			},
 		},

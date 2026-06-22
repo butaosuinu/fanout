@@ -102,8 +102,8 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	livePanes := &watchLivePaneCache{}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
-		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
-			return countOpenChildTargets(gh, issue.Number)
+		CountChildren: func(issue ghissue.Issue) (watch.ChildCounts, error) {
+			return countWatchChildTargets(projectRoot, gh, issue.Number)
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			return gh.SwapIssueLabels(issue.Number, removeLabel, addLabel)
@@ -145,7 +145,7 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
-	_, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
+	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
@@ -153,6 +153,9 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 		defer func() {
 			_ = recorder.Unlock()
 		}()
+	}
+	if hasRecordedIssuePane(store, issue.Number) {
+		return nil
 	}
 	info := &fanoutruntime.Info{
 		Session:     session,
@@ -213,6 +216,19 @@ func countOpenChildTargets(gh ghissue.Runner, parent int) (int, error) {
 		return 0, err
 	}
 	return len(openIssues(loaded.Children)), nil
+}
+
+func countWatchChildTargets(projectRoot string, gh ghissue.Runner, parent int) (watch.ChildCounts, error) {
+	cfg := newWatchPlanConfig(parent, 0)
+	plan, err := buildWatchParentPlan(projectRoot, cfg, gh)
+	if err != nil {
+		return watch.ChildCounts{}, err
+	}
+	return watch.ChildCounts{
+		Open:       plan.OpenCount,
+		Launchable: len(plan.Targets),
+		Unfanned:   plan.UnfannedCount,
+	}, nil
 }
 
 type watchLivePaneCache struct {
@@ -292,18 +308,26 @@ func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh
 	if cfg.Limit <= 0 {
 		return false, nil
 	}
-	loaded, err := loadWatchParentChildren(gh, cfg.Parent)
+	plan, err := buildWatchParentPlan(projectRoot, cfg, gh)
 	if err != nil {
 		return false, err
 	}
+	return len(plan.Targets) > 0 || len(plan.BlockedRows) > 0 || len(plan.LimitDeferred) > 0, nil
+}
+
+func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (Plan, error) {
+	loaded, err := loadWatchParentChildren(gh, cfg.Parent)
+	if err != nil {
+		return Plan{}, err
+	}
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
-		return false, fmt.Errorf("load fanout state: %w", err)
+		return Plan{}, fmt.Errorf("load fanout state: %w", err)
 	}
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
 	worktreeFallbackFanned := existingWorktreeFanned(cfg, projectRoot, loaded.Children, otherParentFanned)
-	plan := buildPlan(
+	return buildPlan(
 		cfg,
 		loaded.Children,
 		mergeFanned(sameParentFanned, worktreeFallbackFanned),
@@ -317,23 +341,77 @@ func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh
 			stateName, _ := gh.IssueState(num)
 			return stateName
 		},
-	)
-	return len(plan.Targets) > 0 || len(plan.BlockedRows) > 0 || len(plan.LimitDeferred) > 0, nil
+	), nil
 }
 
 func loadWatchParentChildren(gh ghissue.Runner, parent int) (childLoadResult, error) {
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
-	cfg := &cliflags.Config{
-		Parent:     parent,
-		ParentRef:  strconv.Itoa(parent),
-		ParentMode: cliflags.ModeIssue,
-	}
-	loaded, code := loadIssueChildren(cfg, gh, lg)
-	if code != exitcode.OK {
+	cfg := newWatchPlanConfig(parent, 0)
+	lg.Info("fetching sub-issues of #%d", cfg.Parent)
+	subIssues, err := gh.SubIssueList(cfg.Parent)
+	if err != nil {
+		lg.Err("sub-issues fetch failed: %v", err)
 		return childLoadResult{}, bufferedLaunchError(stdout, stderr, "load child issues")
 	}
-	return loaded, nil
+	parentBody, err := gh.ParentBody(cfg.Parent)
+	if err != nil {
+		lg.Err("parent body fetch failed: %v", err)
+		return childLoadResult{}, bufferedLaunchError(stdout, stderr, "load child issues")
+	}
+	bodyNums := ghissue.TaskListNumbers(parentBody)
+	loaded, added := mergeWatchExtraChildren(cfg, gh, subIssues, bodyNums, lg)
+	assignTaskListWaves(loaded, ghissue.TaskListWaves(parentBody))
+	if added > 0 {
+		lg.Info("parent body added %d extra child reference(s) not in sub-issue API", added)
+	}
+	return childLoadResult{
+		Children:       loaded,
+		ParentBody:     parentBody,
+		StrongChildren: issueSet(subIssues),
+		ChildNoun:      "sub-issues",
+	}, nil
+}
+
+func newWatchPlanConfig(parent, limit int) *cliflags.Config {
+	return &cliflags.Config{
+		Parent:        parent,
+		ParentRef:     strconv.Itoa(parent),
+		ParentMode:    cliflags.ModeIssue,
+		Limit:         limit,
+		UnblockedOnly: true,
+	}
+}
+
+func mergeWatchExtraChildren(cfg *cliflags.Config, gh ghissue.Runner, base []ghissue.Issue, bodyNums []int, lg *log.Logger) ([]ghissue.Issue, int) {
+	existing := map[int]bool{cfg.Parent: true}
+	for _, s := range base {
+		existing[s.Number] = true
+	}
+
+	var extra []ghissue.Issue
+	for _, num := range bodyNums {
+		if existing[num] {
+			continue
+		}
+		detail, err := gh.IssueDetail(num)
+		if err != nil {
+			lg.Warn("parent body references #%d but issue lookup failed; skipping", num)
+			continue
+		}
+		extra = append(extra, detail)
+		existing[num] = true
+	}
+	return ghissue.MergeExtra(base, extra), len(extra)
+}
+
+func hasRecordedIssuePane(store state.Store, issueNum int) bool {
+	for _, pane := range store.Panes {
+		if pane.IssueNum == issueNum {
+			return true
+		}
+	}
+	return false
 }
 
 func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {
