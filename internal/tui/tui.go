@@ -32,11 +32,15 @@ import (
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/watch"
 )
 
 const (
 	defaultStateInterval = 2 * time.Second
 	defaultGHInterval    = 20 * time.Second
+	defaultWatchInterval = 60 * time.Second
+	minWatchInterval     = 20 * time.Second
+	defaultWatchLabel    = "fanout:auto"
 	detailHeight         = 13
 	peekLines            = 80
 	defaultLaunchAgent   = "claude"
@@ -51,6 +55,9 @@ type Options struct {
 	Session             string
 	StateInterval       time.Duration
 	GHInterval          time.Duration
+	Watcher             WatcherRunner
+	WatchInterval       time.Duration
+	WatchLabel          string
 	DefaultAgent        string
 	WatcherRunningLabel string
 	Hooks               hooks.Config
@@ -80,6 +87,11 @@ type LaunchRequest struct {
 
 // LaunchFunc creates a manual fanout pane for a TUI request.
 type LaunchFunc func(LaunchRequest) error
+
+// WatcherRunner runs one watcher cycle.
+type WatcherRunner interface {
+	RunCycle() (watch.Report, error)
+}
 
 // ShellLaunchRequest describes one shell terminal launch requested from the TUI.
 type ShellLaunchRequest struct {
@@ -220,6 +232,11 @@ type model struct {
 	stateErr        string
 	ghErr           string
 	notifyErr       string
+	watchRunning    bool
+	lastWatch       time.Time
+	watchLaunched   int
+	watchErr        string
+	watchDisabled   bool
 	notice          string
 	newPane         newPaneForm
 	peek            panePeek
@@ -312,6 +329,7 @@ type panePeek struct {
 type (
 	stateTickMsg  time.Time
 	ghTickMsg     time.Time
+	watchTickMsg  time.Time
 	launchPaneMsg struct {
 		err error
 	}
@@ -320,6 +338,12 @@ type (
 		err error
 	}
 )
+
+type watchDoneMsg struct {
+	report watch.Report
+	at     time.Time
+	err    error
+}
 
 type transitionNotifiedMsg struct {
 	count int
@@ -441,6 +465,17 @@ func normalizeOptions(opts Options) Options {
 	if opts.GHInterval <= 0 {
 		opts.GHInterval = defaultGHInterval
 	}
+	if opts.Watcher != nil {
+		if opts.WatchInterval <= 0 {
+			opts.WatchInterval = defaultWatchInterval
+		}
+		if opts.WatchInterval < minWatchInterval {
+			opts.WatchInterval = minWatchInterval
+		}
+		if strings.TrimSpace(opts.WatchLabel) == "" {
+			opts.WatchLabel = defaultWatchLabel
+		}
+	}
 	if opts.lifecycle == nil {
 		opts.lifecycle = defaultLifecycleRunner{}
 	}
@@ -489,9 +524,13 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
+	loads := tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
+	if m.opts.Watcher == nil {
+		return tea.Sequence(m.enableKeyboardProtocolsCmd(), loads)
+	}
 	return tea.Sequence(
 		m.enableKeyboardProtocolsCmd(),
-		tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true)),
+		tea.Batch(loads, m.watchTickCmd()),
 	)
 }
 
@@ -656,6 +695,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadStateCmd(true)
 	case ghTickMsg:
 		return m, m.loadGHCmd(true)
+	case watchTickMsg:
+		if m.opts.Watcher == nil {
+			return m, nil
+		}
+		if m.watchRunning {
+			return m, m.watchTickCmd()
+		}
+		m.watchRunning = true
+		return m, tea.Batch(m.runWatchCmd(), m.watchTickCmd())
+	case watchDoneMsg:
+		m.watchRunning = false
+		m.lastWatch = msg.at
+		m.watchLaunched = len(msg.report.Launched)
+		m.watchDisabled = watchReportDisabled(msg.report)
+		m.watchErr = summarizeWatchError(msg.report, msg.err)
+		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case launchPaneMsg:
 		m.newPane.launching = false
 		if msg.err != nil {
@@ -1625,6 +1680,25 @@ func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
 	}
 }
 
+func (m model) watchTickCmd() tea.Cmd {
+	if m.opts.Watcher == nil {
+		return nil
+	}
+	interval := m.opts.WatchInterval
+	return tea.Tick(interval, func(t time.Time) tea.Msg { return watchTickMsg(t) })
+}
+
+func (m model) runWatchCmd() tea.Cmd {
+	runner := m.opts.Watcher
+	if runner == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		report, err := runner.RunCycle()
+		return watchDoneMsg{report: report, at: time.Now(), err: err}
+	}
+}
+
 func (m model) notifyEventsCmd(events []fanoutnotify.Event) tea.Cmd {
 	if len(events) == 0 || m.opts.Notifier == nil {
 		return nil
@@ -2363,8 +2437,79 @@ func (m model) footerText() string {
 	if m.filterEditing || strings.TrimSpace(m.filterQuery) != "" {
 		parts = append(parts, fmt.Sprintf("filter=%q %d/%d", m.filterQuery, len(m.panes), len(m.allPanes)))
 	}
+	if watchText := m.watchFooterText(); watchText != "" {
+		parts = append(parts, watchText)
+	}
 	parts = append(parts, "state "+formatClock(m.lastState), "gh "+formatClock(m.lastGH))
 	return strings.Join(parts, "  ")
+}
+
+func (m model) watchFooterText() string {
+	if m.opts.Watcher == nil {
+		return ""
+	}
+	status := "on"
+	if m.watchDisabled {
+		status = "disabled"
+	}
+	parts := []string{
+		"watch: " + status,
+		"label=" + m.opts.WatchLabel,
+	}
+	if m.watchRunning {
+		parts = append(parts, "running")
+	}
+	parts = append(parts,
+		"last="+formatClock(m.lastWatch),
+		fmt.Sprintf("launched=%d", m.watchLaunched),
+		"err="+dash(truncate(m.watchErr, 120)),
+	)
+	return strings.Join(parts, " ")
+}
+
+func watchReportDisabled(report watch.Report) bool {
+	for _, failure := range report.Failures {
+		if failure.Disabled {
+			return true
+		}
+	}
+	for _, skip := range report.Skipped {
+		if skip.Reason == watch.SkipDisabled {
+			return true
+		}
+	}
+	return false
+}
+
+func summarizeWatchError(report watch.Report, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	for _, failure := range slices.Backward(report.Failures) {
+		if failure.Err == nil && failure.RevertErr == nil {
+			continue
+		}
+		stage := strings.TrimSpace(string(failure.Stage))
+		if stage == "" {
+			stage = "watch"
+		}
+		prefix := stage
+		if failure.Issue.Number > 0 {
+			prefix = fmt.Sprintf("#%d %s", failure.Issue.Number, stage)
+		}
+		parts := []string{}
+		if failure.Err != nil {
+			parts = append(parts, failure.Err.Error())
+		}
+		if failure.RevertErr != nil {
+			parts = append(parts, "revert: "+failure.RevertErr.Error())
+		}
+		if failure.Disabled {
+			parts = append(parts, "disabled")
+		}
+		return prefix + ": " + strings.Join(parts, "; ")
+	}
+	return ""
 }
 
 func filterPaneViews(panes []paneView, query string) []paneView {

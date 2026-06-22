@@ -32,6 +32,7 @@ type fakeWatchIO struct {
 	runningIssues []ghissue.Issue
 	store         state.Store
 	openChildren  map[int]int
+	childCounts   map[int]ChildCounts
 	alive         map[string]bool
 
 	swapErr        map[swapKey]error
@@ -77,6 +78,15 @@ func (f *fakeWatchIO) IO() IO {
 		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
 			f.countCalls = append(f.countCalls, issue.Number)
 			return f.openChildren[issue.Number], nil
+		},
+		CountChildren: func(issue ghissue.Issue) (ChildCounts, error) {
+			if f.childCounts == nil {
+				f.countCalls = append(f.countCalls, issue.Number)
+				open := f.openChildren[issue.Number]
+				return ChildCounts{Open: open, Launchable: open, Unfanned: open}, nil
+			}
+			f.countCalls = append(f.countCalls, issue.Number)
+			return f.childCounts[issue.Number], nil
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			f.swaps = append(f.swaps, swapCall{num: issue.Number, remove: removeLabel, add: addLabel})
@@ -164,6 +174,26 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
+			name: "standalone already fanned during launch requeues trigger label",
+			fake: &fakeWatchIO{
+				issues:        []ghissue.Issue{issue(101)},
+				openChildren:  map[int]int{101: 0},
+				standaloneErr: map[int]error{101: ErrAlreadyFanned},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "standalone launches", fake.standalone, []int{101})
+				assertSwaps(t, fake.swaps, []swapCall{
+					{num: 101, remove: triggerLabel, add: runningLabel},
+					{num: 101, remove: runningLabel, add: triggerLabel},
+				})
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned})
+				if len(report.Launched) != 0 || len(report.Failures) != 0 {
+					t.Fatalf("report = %#v, want requeued skip without launched/failure", report)
+				}
+			},
+		},
+		{
 			name: "parent fanout ignores child issue false positive",
 			fake: &fakeWatchIO{
 				issues:       []ghissue.Issue{issue(201), issue(202)},
@@ -247,6 +277,28 @@ func TestRunCycleTableDriven(t *testing.T) {
 				}
 				if got, want := fake.parents, []parentLaunch{{num: 201, limit: 3}}; !slices.Equal(got, want) {
 					t.Fatalf("parent launches = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "blocked-only parent does not consume capacity",
+			cfg:  Config{MaxSessions: 1},
+			fake: &fakeWatchIO{
+				issues: []ghissue.Issue{issue(301), issue(101)},
+				childCounts: map[int]ChildCounts{
+					301: {Open: 2, Launchable: 0, Unfanned: 2},
+					101: {Open: 0, Launchable: 0, Unfanned: 0},
+				},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, []int{301, 101})
+				if got, want := fake.parents, []parentLaunch(nil); !slices.Equal(got, want) {
+					t.Fatalf("parent launches = %#v, want none", got)
+				}
+				assertInts(t, "standalone launches", fake.standalone, []int{101})
+				if len(report.Deferred) != 1 || report.Deferred[0].Issue.Number != 301 || report.Deferred[0].Reason != DeferBlocked {
+					t.Fatalf("deferred = %#v, want #301 blocked", report.Deferred)
 				}
 			},
 		},
@@ -491,6 +543,55 @@ func TestRunCycleRetriesStandaloneWhenRequeueSwapFails(t *testing.T) {
 	}
 	assertInts(t, "count calls after state record", fake.countCalls, []int{101})
 	assertSkipReasons(t, third, []SkipReason{SkipAlreadyFanned})
+}
+
+func TestRunCycleRetriesBlockedOnlyParentWhenRequeueSwapFails(t *testing.T) {
+	baseNow := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	fake := &fakeWatchIO{
+		issues:         []ghissue.Issue{issue(301)},
+		openChildren:   map[int]int{301: 3},
+		parentDeferred: map[int]bool{301: true},
+		swapErr: map[swapKey]error{
+			{num: 301, remove: runningLabel, add: triggerLabel}: errors.New("requeue failed"),
+		},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: baseNow}).Now,
+	}, fake.IO())
+
+	first, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("first RunCycle error = %v", err)
+	}
+	assertFailure(t, first, 301, FailureSwapLabels, 0, false)
+
+	fake.issues = nil
+	fake.runningIssues = []ghissue.Issue{issue(301, runningLabel)}
+	fake.childCounts = map[int]ChildCounts{
+		301: {Open: 2, Launchable: 0, Unfanned: 2},
+	}
+	fake.swapErr = nil
+	fake.countCalls = nil
+	fake.swaps = nil
+	fake.parents = nil
+
+	second, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("second RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls on retry", fake.countCalls, []int{301})
+	assertSwaps(t, fake.swaps, []swapCall{{num: 301, remove: runningLabel, add: triggerLabel}})
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent retry launches = %#v, want %#v", got, want)
+	}
+	if len(second.Deferred) != 1 || second.Deferred[0].Reason != DeferMaxSessions {
+		t.Fatalf("second deferred = %#v, want requeued parent", second.Deferred)
+	}
+	if len(second.Failures) != 0 || len(second.Launched) != 1 {
+		t.Fatalf("second report = %#v, want clean requeue after retry", second)
+	}
 }
 
 func TestRunCycleRetriesDeferredParentWhenRequeueSwapFails(t *testing.T) {
