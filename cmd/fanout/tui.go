@@ -155,7 +155,7 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 		}()
 	}
 	if hasRecordedIssuePane(store, issue.Number) {
-		return nil
+		return watch.ErrAlreadyFanned
 	}
 	info := &fanoutruntime.Info{
 		Session:     session,
@@ -305,9 +305,6 @@ func watchParentResultAfterLaunch(projectRoot string, cfg *cliflags.Config, gh g
 }
 
 func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (bool, error) {
-	if cfg.Limit <= 0 {
-		return false, nil
-	}
 	plan, err := buildWatchParentPlan(projectRoot, cfg, gh)
 	if err != nil {
 		return false, err

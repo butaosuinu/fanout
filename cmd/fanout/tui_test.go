@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	"github.com/butaosuinu/fanout/internal/watch"
 )
 
 func TestTUIAgentOrDefault(t *testing.T) {
@@ -292,8 +294,8 @@ func TestLaunchWatchStandaloneSkipsIssueRecordedUnderLock(t *testing.T) {
 		Title:  "existing",
 		State:  "OPEN",
 	})
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, watch.ErrAlreadyFanned) {
+		t.Fatalf("launchWatchStandalone() error = %v, want ErrAlreadyFanned", err)
 	}
 
 	store, err := state.LoadProject(repo)
@@ -503,7 +505,7 @@ esac
 	}
 }
 
-func TestWatchParentHasRemainingTargetsRequeuesBlockedRows(t *testing.T) {
+func TestWatchParentHasRemainingTargetsRequeuesBlockedRowsWithoutLimit(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in
 "api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
@@ -542,7 +544,6 @@ esac
 		Parent:        500,
 		ParentRef:     "500",
 		ParentMode:    cliflags.ModeIssue,
-		Limit:         1,
 		UnblockedOnly: true,
 	}
 

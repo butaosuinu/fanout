@@ -20,6 +20,10 @@ const (
 	defaultDisableAfterFailures = 3
 )
 
+// ErrAlreadyFanned reports that a launch target became recorded after planning
+// but before launch.
+var ErrAlreadyFanned = errors.New("already fanned")
+
 // LaunchKind classifies the launch fanout should perform for one labeled issue.
 type LaunchKind string
 
@@ -297,10 +301,17 @@ func (e *Engine) PlanCycle() (Report, error) {
 			consumes = launchableChildren
 		}
 		if alreadyFanned(store, action) {
+			if candidate.retryKind != "" {
+				delete(e.runningRetries, issue.Number)
+			}
 			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
 			continue
 		}
 		if action.Kind == LaunchParent && launchableChildren == 0 {
+			if candidate.retryKind == LaunchParent {
+				report.Actions = append(report.Actions, action)
+				continue
+			}
 			if unfannedChildren == 0 {
 				report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
 			} else {
@@ -353,6 +364,16 @@ func (e *Engine) RunCycle() (Report, error) {
 			launchErr = e.io.LaunchStandalone(action.Issue)
 		}
 		if launchErr != nil {
+			if errors.Is(launchErr, ErrAlreadyFanned) {
+				report.Skipped = append(report.Skipped, Skip{Issue: action.Issue, Reason: SkipAlreadyFanned})
+				if err := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel); err != nil {
+					e.runningRetries[action.Issue.Number] = runningRetry{kind: action.Kind}
+					report.Failures = append(report.Failures, Failure{Issue: action.Issue, Stage: FailureSwapLabels, Err: err})
+				} else {
+					delete(e.runningRetries, action.Issue.Number)
+				}
+				continue
+			}
 			revertErr := e.io.SwapLabels(action.Issue, cfg.RunningLabel, cfg.TriggerLabel)
 			if revertErr != nil {
 				e.runningRetries[action.Issue.Number] = runningRetry{kind: action.Kind}
