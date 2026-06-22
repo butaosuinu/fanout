@@ -95,6 +95,18 @@ func TestManualPaneOptionsForTUIMultilinePromptUsesBriefingBody(t *testing.T) {
 	}
 }
 
+func TestManualPaneConfigForTUIAgentEnablesCodexPlanMode(t *testing.T) {
+	codex := manualPaneConfigForTUIAgent("codex")
+	if codex.Agent != "codex" || !codex.CodexPlanModeEnabled() {
+		t.Fatalf("codex config = %+v, want codex Plan Mode", codex)
+	}
+
+	claude := manualPaneConfigForTUIAgent("claude")
+	if claude.Agent != "claude" || claude.CodexPlanMode != nil {
+		t.Fatalf("claude config = %+v, want no Codex Plan Mode override", claude)
+	}
+}
+
 func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	repo := t.TempDir()
 	t.Setenv("PATH", t.TempDir())

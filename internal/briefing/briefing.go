@@ -80,6 +80,17 @@ func Render(num int, title, body, agentName, baseBranch string, s settings.Setti
 	})
 }
 
+// RenderManualPlan produces the brief for a TUI-created manual Codex Plan Mode
+// pane. It intentionally avoids GitHub issue and PR-close language.
+func RenderManualPlan(title, body string) string {
+	return renderCodexPlanBriefingWithHeader(
+		"You are starting a manual fanout Codex Plan Mode session in this repository.",
+		title,
+		body,
+		"- Inspect the prompt and repository only as needed to produce an implementation plan.",
+	)
+}
+
 // RenderTask produces an issue-less task brief. The task variant deliberately
 // avoids GitHub issue closing references because there is no issue to close.
 // team is nil unless the run opted in with --team.
@@ -172,8 +183,17 @@ func baseRequirementLines(header, title, body, scopeRequirement string) []string
 }
 
 func renderCodexPlanBriefing(num int, title, body string) string {
-	lines := []string{
+	return renderCodexPlanBriefingWithHeader(
 		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
+		title,
+		body,
+		"- Inspect the issue and repository only as needed to produce an implementation plan.",
+	)
+}
+
+func renderCodexPlanBriefingWithHeader(header, title, body, inspectRequirement string) string {
+	lines := []string{
+		header,
 		"",
 		fmt.Sprintf("Title: %s", title),
 		"",
@@ -182,7 +202,7 @@ func renderCodexPlanBriefing(num int, title, body string) string {
 		"",
 		"Requirements:",
 		"- You are starting in interactive Codex Plan Mode through fanout.",
-		"- Inspect the issue and repository only as needed to produce an implementation plan.",
+		inspectRequirement,
 		"- Do not modify files, create commits, push branches, or open pull requests in this turn.",
 		"- Your first response must be an implementation plan wrapped in <proposed_plan>...</proposed_plan>.",
 		"- Wait for the user to leave Plan Mode or explicitly ask you to implement before making changes.",

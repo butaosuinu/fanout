@@ -439,7 +439,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := &cliflags.Config{Agent: agentName}
+	cfg := manualPaneConfigForTUIAgent(agentName)
 	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -471,6 +471,15 @@ func bufferedLaunchNotice(stderr bytes.Buffer) string {
 		}
 	}
 	return ""
+}
+
+func manualPaneConfigForTUIAgent(agentName string) *cliflags.Config {
+	cfg := &cliflags.Config{Agent: agentName}
+	if agentName == "codex" {
+		codexPlanMode := true
+		cfg.CodexPlanMode = &codexPlanMode
+	}
+	return cfg
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

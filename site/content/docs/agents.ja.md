@@ -67,7 +67,7 @@ GitHub child issue を作らずローカル実装計画を fan out したい場�
 
 ## Codex Plan Mode
 
-`--codex-plan-mode` は（per-target `--agent` 上書きを適用した後に）`codex` に解決される子向けの opt-in 起動モードです。選択した全ての子が `codex` に解決される必要があり、`claude` の子が混ざっていると起動前に拒否されます:
+batch の子起動では、`--codex-plan-mode` で Plan Mode を有効にします。これは（per-target `--agent` 上書きを適用した後に）`codex` に解決される子向けの opt-in 起動モードです。選択した全ての子が `codex` に解決される必要があり、`claude` の子が混ざっていると起動前に拒否されます:
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
@@ -75,7 +75,7 @@ fanout 123 --agent codex --codex-plan-mode
 
 通常の positional `codex "<prompt>"` ではなく、fanout は子ごとに Codex app-server を起動し、collaboration mode `plan` の thread を作成し、fanout プロンプトを app-server 経由で初回 turn として開始してから、その remote セッションに interactive Codex TUI を attach します。
 
-子 briefing も Plan Mode 向けに差し替わります: `<proposed_plan>` に包んだ実装計画を出すこと、最初の turn ではファイル編集・commit・push・PR 作成をしないことを明示します。
+子 briefing も Plan Mode 向けに差し替わります: `<proposed_plan>` に包んだ実装計画を出すこと、最初の turn ではファイル編集・commit・push・PR 作成をしないことを明示します。TUI の manual pane modal で `codex` を起動する場合も、同じ Plan Mode 経路を自動で使います。
 
 この経路では tmux 経由で `/plan` やプロンプトのテキストを送信しません。pane は interactive Codex TUI セッションのまま残るため、その Plan Mode の会話から続行できます。app-server の Plan turn セットアップまたは TUI attach に失敗した場合は、state 記録前に launch を失敗扱いにし、pane / worktree を後始末するため、同じ子を再実行できます。
 

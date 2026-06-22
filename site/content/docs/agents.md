@@ -65,7 +65,7 @@ Use `$pr-watch` after opening a PR when you want Codex to inspect mergeability, 
 
 ## Codex Plan Mode
 
-`--codex-plan-mode` is an opt-in launch mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
+Batch child launches enable Plan Mode with `--codex-plan-mode`, an opt-in mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
@@ -73,7 +73,7 @@ fanout 123 --agent codex --codex-plan-mode
 
 Instead of running positional `codex "<prompt>"`, fanout starts a Codex app-server for each child, creates a `plan` collaboration-mode thread, starts the initial turn with the fanout prompt through that app-server, and attaches an interactive Codex TUI to the remote session.
 
-The child briefing is also rewritten for Plan Mode: it asks for an implementation plan wrapped in `<proposed_plan>` and explicitly forbids file edits, commits, pushes, and PR creation in that first turn.
+The child briefing is also rewritten for Plan Mode: it asks for an implementation plan wrapped in `<proposed_plan>` and explicitly forbids file edits, commits, pushes, and PR creation in that first turn. The TUI manual pane modal uses the same Plan Mode path automatically when it launches `codex`.
 
 This path never sends `/plan` or prompt text through tmux. The pane remains an interactive Codex TUI session, so you can continue from the Plan Mode conversation. If the app-server Plan turn setup or the TUI attach fails, the launch fails before state is recorded and fanout cleans up the pane/worktree so the child can be retried.
 

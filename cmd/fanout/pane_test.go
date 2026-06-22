@@ -152,6 +152,85 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
+func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testing.T) {
+	codexPlanMode := true
+	cfg := &cliflags.Config{
+		Agent:         "codex",
+		DryRun:        true,
+		NoRefresh:     true,
+		CodexPlanMode: &codexPlanMode,
+	}
+	req := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{
+		Title:  "Inspect API",
+		Agent:  "codex",
+		Prompt: "Inspect API",
+	})
+
+	if !req.CodexPlanMode {
+		t.Fatal("CodexPlanMode = false, want true")
+	}
+	if req.BriefingPath != "/tmp/fanout-repo--1.md" {
+		t.Fatalf("briefing path = %q, want manual briefing path", req.BriefingPath)
+	}
+	if req.CodexPlanStatusPath != "/tmp/fanout-codex-plan-repo--1.json" {
+		t.Fatalf("codex plan status path = %q", req.CodexPlanStatusPath)
+	}
+	if !strings.Contains(req.Prompt, "read /tmp/fanout-repo--1.md for additional context and propose a plan.") {
+		t.Fatalf("prompt = %q, want Plan Mode briefing reference", req.Prompt)
+	}
+	for _, want := range []string{
+		"manual fanout Codex Plan Mode session",
+		"Body:\nInspect API",
+		"<proposed_plan>...</proposed_plan>",
+	} {
+		if !strings.Contains(req.BriefingBody, want) {
+			t.Fatalf("manual plan briefing missing %q:\n%s", want, req.BriefingBody)
+		}
+	}
+	for _, unexpected := range []string{
+		"You are assigned GitHub issue",
+		"commit and push",
+		"Open a pull request",
+		"codex review --uncommitted",
+	} {
+		if strings.Contains(req.BriefingBody, unexpected) {
+			t.Fatalf("manual plan briefing contains %q:\n%s", unexpected, req.BriefingBody)
+		}
+	}
+
+	cmd, err := buildAgentCommand(cfg, req, "fanout-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"fanout-go __codex-plan-tui --codex codex",
+		"--prompt 'Inspect API. read /tmp/fanout-repo--1.md for additional context and propose a plan.'",
+		"--status-file /tmp/fanout-codex-plan-repo--1.json",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("agent command missing %q:\n%s", want, cmd)
+		}
+	}
+}
+
+func TestNewManualPaneRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
+	codexPlanMode := true
+	cfg := &cliflags.Config{Agent: "codex", CodexPlanMode: &codexPlanMode}
+	req := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{
+		Title:  "Inspect API",
+		Body:   "Inspect API\n\nCheck handlers",
+		Agent:  "codex",
+		Prompt: "Inspect API",
+	})
+
+	if !strings.Contains(req.BriefingBody, "Body:\nInspect API\n\nCheck handlers") {
+		t.Fatalf("manual plan briefing did not preserve multiline prompt:\n%s", req.BriefingBody)
+	}
+	if !strings.Contains(req.Prompt, "propose a plan") {
+		t.Fatalf("manual plan prompt = %q, want plan action", req.Prompt)
+	}
+}
+
 func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude"}
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
