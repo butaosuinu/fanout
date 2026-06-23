@@ -8,6 +8,7 @@
 .cache/
 tests/tmp/
 /fanout-go
+/fanout
 # Local dmux/cmux session artifacts (machine-local hook output; never committed)
 .claude/dmux/
 .claude/hooks/dmux-stop-hook.cjs
