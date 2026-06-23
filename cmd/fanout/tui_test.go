@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -113,7 +114,7 @@ func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 
 	_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
-		Agent:  "claude",
+		Agents: []string{"claude"},
 	})
 
 	if err == nil || !strings.Contains(err.Error(), `agent "claude" is not installed`) {
@@ -121,6 +122,88 @@ func TestLaunchManualPaneFromTUIChecksAgentBeforeState(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(statErr) {
 		t.Fatalf(".fanout state was touched before agent validation: %v", statErr)
+	}
+}
+
+func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%77")
+
+	_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+		Prompt: "inspect workspace",
+		Agents: []string{"claude", "claude"},
+		Slug:   "inspect-workspace",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 2 {
+		t.Fatalf("state panes = %+v, want two manual panes", store.Panes)
+	}
+	if store.Panes[0].Slug != "inspect-workspace-claude-one" || store.Panes[1].Slug != "inspect-workspace-claude-two" {
+		t.Fatalf("slugs = %q/%q, want per-agent derived slugs", store.Panes[0].Slug, store.Panes[1].Slug)
+	}
+	if store.Panes[0].IssueNum != -1 || store.Panes[1].IssueNum != -2 {
+		t.Fatalf("issue nums = %d/%d, want unique synthetic ids", store.Panes[0].IssueNum, store.Panes[1].IssueNum)
+	}
+}
+
+func TestManualPaneSlugForAgentDerivesMixedAgentSlugs(t *testing.T) {
+	agents := []string{"claude", "codex", "codex"}
+
+	got := []string{
+		manualPaneSlugForAgent("inspect-api", "claude", 0, agents),
+		manualPaneSlugForAgent("inspect-api", "codex", 1, agents),
+		manualPaneSlugForAgent("inspect-api", "codex", 2, agents),
+	}
+	want := []string{"inspect-api-claude", "inspect-api-codex-one", "inspect-api-codex-two"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("derived slugs = %#v, want %#v", got, want)
+	}
+}
+
+func TestLaunchManualPaneFromTUIReportsPartialMultipleLaunch(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%77")
+	counter := filepath.Join(t.TempDir(), "hook-count")
+	hookConfig := hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.WorktreeCreated: {{
+			Command: "count=$(cat " + counter + " 2>/dev/null || printf 0); count=$((count + 1)); printf '%s' \"$count\" > " + counter + "; test \"$count\" -eq 1",
+		}},
+	}}
+
+	notice, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hookConfig, fanouttui.LaunchRequest{
+		Prompt: "inspect workspace",
+		Agents: []string{"claude", "claude"},
+		Slug:   "inspect-workspace",
+	})
+	if err != nil {
+		t.Fatalf("launchManualPaneFromTUI() error = %v, want partial success notice", err)
+	}
+	if !strings.Contains(notice, "created 1 new agent pane(s); stopped after a later pane failed") {
+		t.Fatalf("notice = %q, want partial success", notice)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("state panes = %+v, want first pane to remain recorded", store.Panes)
+	}
+	if entries, err := os.ReadDir(filepath.Join(repo, ".fanout", "worktrees")); err != nil || len(entries) != 1 {
+		t.Fatalf("worktree entries after partial success = %d/%v, want one", len(entries), err)
 	}
 }
 
@@ -574,6 +657,28 @@ func initTUITestGitRepo(t *testing.T, dir string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+}
+
+func commitTUITestGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "README.md")
+	add.Dir = dir
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v\n%s", err, out)
+	}
+	commit := exec.Command("git", "-c", "user.name=fanout-test", "-c", "user.email=fanout@example.invalid", "commit", "-m", "init")
+	commit.Dir = dir
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v\n%s", err, out)
+	}
+	branch := exec.Command("git", "branch", "-M", "main")
+	branch.Dir = dir
+	if out, err := branch.CombinedOutput(); err != nil {
+		t.Fatalf("git branch failed: %v\n%s", err, out)
 	}
 }
 
