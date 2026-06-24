@@ -58,7 +58,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt.SetHeight(6)
 	prompt.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j"),
-		key.WithHelp("shift+enter", "newline"),
+		key.WithHelp("ctrl+j", "newline"),
 	)
 	prompt.Focus()
 
@@ -219,7 +219,7 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render("enter create  shift+enter newline  ctrl+j newline  tab field  up/down agent  left/right count  space toggle  esc cancel"))
+	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  shift+enter newline if enabled  tab field  up/down agent  left/right count  space toggle  esc cancel"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 

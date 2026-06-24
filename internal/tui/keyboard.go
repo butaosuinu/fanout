@@ -16,6 +16,7 @@ import (
 const (
 	enableShiftEnterInput  = "\x1b[>29u\x1b[>4;2m"
 	disableShiftEnterInput = "\x1b[<1u\x1b[>4;m"
+	EnhancedKeysEnv        = "FANOUT_TUI_ENHANCED_KEYS"
 )
 
 var shiftEnterInputSequences = [][]byte{
@@ -126,8 +127,8 @@ func (r *shiftEnterInput) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func newShiftEnterProtocols(output *os.File) keyboardProtocols {
-	if output == nil || !term.IsTerminal(output.Fd()) {
+func newShiftEnterProtocols(output *os.File, enabled bool) keyboardProtocols {
+	if !enabled || output == nil || !term.IsTerminal(output.Fd()) {
 		return noopKeyboardProtocols{}
 	}
 	return &shiftEnterProtocols{output: output}

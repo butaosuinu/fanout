@@ -36,7 +36,7 @@ yomi: changelog
 ## v0.5.0 (2026-06-14)
 
 - **Per-target agent overrides（ターゲット別 agent 上書き）。** 素の `--agent <name>` は引き続き全ての子の既定を設定しますが、繰り返し可能な `--agent <NUM>=<name>`（issue / Project の子）や `--agent <task-id>=<name>`（`fanout plan`）で 1 回の run の中に agent を混在させられるようになりました。各ターゲットはまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決し、検証は実際に選択された agent のみに行います。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
-- **複数行対応の TUI セッション modal。** 常駐コンソールで `n` を押すと modal が開き、複数行の prompt、`claude` / `codex` の選択、任意 slug を入力できます。`Shift+Enter` で改行（区別できない terminal 向けの fallback として `Ctrl+J`）、`Enter` でペインを作成します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **複数行対応の TUI セッション modal。** 常駐コンソールで `n` を押すと modal が開き、複数行の prompt、`claude` / `codex` の選択、任意 slug を入力できます。改行は `Ctrl+J` で入力し、`Shift+Enter` は enhanced keyboard input 有効時だけ使えます。`Enter` でペインを作成します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.5.0)
 

@@ -231,5 +231,9 @@ func tuiLaunchCommand(commandName, projectRoot string) string {
 	if err != nil || strings.TrimSpace(exe) == "" {
 		exe = commandName
 	}
-	return "cd " + shellQuote(projectRoot) + " && " + shellQuote(exe)
+	prefix := ""
+	if os.Getenv(fanouttui.EnhancedKeysEnv) == "1" {
+		prefix = fanouttui.EnhancedKeysEnv + "=1 "
+	}
+	return "cd " + shellQuote(projectRoot) + " && " + prefix + shellQuote(exe)
 }
