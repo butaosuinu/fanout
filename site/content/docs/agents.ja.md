@@ -1,5 +1,5 @@
 ---
-title: Claude Code と Codex の連携
+title: エージェント連携
 linkTitle: エージェント連携
 description: "Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、Codex Plan Mode。"
 weight: 70

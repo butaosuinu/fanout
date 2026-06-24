@@ -21,8 +21,8 @@ When the same setting is given on both the CLI and a config file, which one wins
 The behavior toggles are instructions that ship on by default but a team may want off. Here is the purpose of each key, one line apiece.
 
 - `autoPullRequest`: tells children to open a PR once their work is done. Turn it off if your team opens PRs by hand.
-- `prReviewGate`: adds a fallback note to the child briefing for when the PR-creation hook blocks (see below).
-- `briefingCodeReview`: instructs Claude children to run a `/post-work-review`-style review.
+- `prReviewGate`: on by default, it keeps the PR-review-gate expectation. Turn it off and the Claude child briefing instead gets a note permitting `FANOUT_SKIP_PR_REVIEW=1 gh pr create` when the creation hook blocks (see below).
+- `briefingCodeReview`: tells Claude children to run the `/code-review` slash command on their changes before committing.
 - `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
 - `dashboardKeybind`: registers the `prefix + D` tmux keybinding that opens the dashboard.

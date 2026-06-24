@@ -21,8 +21,8 @@ fanout の挙動はチームの好みで変えたくなる箇所がいくつか�
 挙動トグルは「既定で入っているが、チームの事情で外したくなる」指示の集合です。各キーの目的を 1 行ずつ示します。
 
 - `autoPullRequest`: 子に作業完了後の PR 自動作成を指示します。PR を人手で作るチームなら外します。
-- `prReviewGate`: PR 作成 hook に止められたときの逃げ道を子 briefing に書き添えます（後述）。
-- `briefingCodeReview`: Claude の子に `/post-work-review` 相当のレビューを走らせる指示を入れます。
+- `prReviewGate`: 既定の on では PR レビューゲートの前提を保ちます。off にすると、PR 作成 hook に止められたときに `FANOUT_SKIP_PR_REVIEW=1 gh pr create` を許可する注記が Claude の子 briefing に入ります（後述）。
+- `briefingCodeReview`: Claude の子に、コミット前に変更へ `/code-review` スラッシュコマンドを走らせるよう指示します。
 - `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
 - `dashboardKeybind`: tmux に `prefix + D` でダッシュボードを開くキーバインドを登録します。

@@ -7,7 +7,7 @@ kanji: 見
 yomi: monitoring
 ---
 
-子 issue を 5 つファンアウトすると、tmux には 5 枚のペインが並び、それぞれ別のエージェントが別の worktree で動き出します。次に知りたいのは「どのペインが PR まで進んだか」「どこで止まっているか」「未 commit の作業を抱えたまま放置されているペインはないか」です。fanout はこれを 3 つの窓で見ます。手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**。どれも `.fanout/state.json` と tmux と GitHub を読むだけで、リポジトリや GitHub の状態は変えません。
+子 issue を 5 つファンアウトすると、tmux には 5 枚のペインが並び、それぞれ別のエージェントが別の worktree で動き出します。次に知りたいのは「どのペインが PR まで進んだか」「どこで止まっているか」「未 commit の作業を抱えたまま放置されているペインはないか」です。fanout はこれを 3 つの窓で見ます。手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**。`--status` と Web ダッシュボードは読み取り専用で、`.fanout/state.json` と tmux と GitHub を読むだけです。TUI も同じように眺めるための窓ですが、キーバインドから merge、close、cleanup も実行できます（`--merge` / `--close` / `--cleanup` と同じ経路）。
 
 ## 常駐 TUI コンソール
 

@@ -7,7 +7,7 @@ kanji: 見
 yomi: monitoring
 ---
 
-Fan out five children and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, where one is stuck, and whether any pane is sitting on uncommitted work. fanout answers that through three windows: the **persistent TUI console** for watching from your terminal, `--status` **JSON** for feeding automation, and the read-only **web dashboard** for sharing with a team or a browser. All three only read `.fanout/state.json`, tmux, and GitHub — they never change repository or GitHub state.
+Fan out five children and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, where one is stuck, and whether any pane is sitting on uncommitted work. fanout answers that through three windows: the **persistent TUI console** for watching from your terminal, `--status` **JSON** for feeding automation, and the read-only **web dashboard** for sharing with a team or a browser. `--status` and the web dashboard are strictly read-only — they only read `.fanout/state.json`, tmux, and GitHub. The TUI watches the same way, but its key bindings can also merge, close, and clean up panes (the same paths as `--merge` / `--close` / `--cleanup`).
 
 ## Persistent TUI console
 
