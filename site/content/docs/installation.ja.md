@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # 配置先や Release tag を指定
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.2.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.8.0 sh
 ```
 
 `install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release(または `FANOUT_VERSION` で指定した tag)から `fanout_<os>_<arch>.tar.gz` を取得します。`sha256sum` または `shasum` があれば `SHA256SUMS` で検証し、再実行時は同じパスへ上書きします。シェル rc は自動編集しません。
