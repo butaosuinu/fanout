@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 const (
@@ -46,6 +47,7 @@ type Options struct {
 	PaneAlive           func(string) bool
 	ShellPaneAlive      func(paneID, shellKey string) bool
 	CapturePaneOutput   func(string, int) (string, error)
+	ListRepoFiles       func(root string) ([]string, error)
 	Notifier            transitionNotifier
 	lifecycle           lifecycleRunner
 	keyboard            keyboardProtocols
@@ -59,37 +61,42 @@ const (
 )
 
 type model struct {
-	opts            Options
-	mode            viewMode
-	table           table.Model
-	detail          viewport.Model
-	width           int
-	height          int
-	allPanes        []paneView
-	panes           []paneView
-	filterQuery     string
-	filterEditing   bool
-	issues          map[issueKey]issueStatus
-	lastState       time.Time
-	lastGH          time.Time
-	stateErr        string
-	ghErr           string
-	notifyErr       string
-	watchRunning    bool
-	lastWatch       time.Time
-	watchLaunched   int
-	watchErr        string
-	watchDisabled   bool
-	notice          string
-	newPane         newPaneForm
-	peek            panePeek
-	pendingAction   *pendingLifecycleAction
-	actionRunning   bool
-	quitAfterAction bool
-	actionMessage   string
-	notifications   map[issueKey]issueTransitionSnapshot
-	notifyPrimed    bool
-	keyboardPaused  bool
+	opts             Options
+	mode             viewMode
+	table            table.Model
+	detail           viewport.Model
+	width            int
+	height           int
+	allPanes         []paneView
+	panes            []paneView
+	filterQuery      string
+	filterEditing    bool
+	issues           map[issueKey]issueStatus
+	lastState        time.Time
+	lastGH           time.Time
+	stateErr         string
+	ghErr            string
+	notifyErr        string
+	watchRunning     bool
+	lastWatch        time.Time
+	watchLaunched    int
+	watchErr         string
+	watchDisabled    bool
+	notice           string
+	newPane          newPaneForm
+	repoFiles        []string
+	repoFileIndex    []fileEntry
+	repoFilesLoaded  bool
+	repoFilesLoading bool
+	repoFilesErr     string
+	peek             panePeek
+	pendingAction    *pendingLifecycleAction
+	actionRunning    bool
+	quitAfterAction  bool
+	actionMessage    string
+	notifications    map[issueKey]issueTransitionSnapshot
+	notifyPrimed     bool
+	keyboardPaused   bool
 }
 
 type keyboardProtocolsEnabledMsg struct{}
@@ -174,6 +181,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.CapturePaneOutput == nil {
 		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
+	}
+	if opts.ListRepoFiles == nil {
+		opts.ListRepoFiles = worktree.ListFiles
 	}
 	if opts.keyboard == nil {
 		opts.keyboard = noopKeyboardProtocols{}

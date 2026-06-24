@@ -40,6 +40,16 @@ type newPaneForm struct {
 	focus      newPaneField
 	launching  bool
 	err        string
+
+	// @-mention file completion state, active only while focus is on the
+	// prompt field. compQuery is the text typed after '@' (the '@' itself is
+	// left in the textarea); compResults holds the ranked, display-capped
+	// matches and compTotal the full match count for the "+N more" hint.
+	completing  bool
+	compQuery   string
+	compResults []string
+	compIndex   int
+	compTotal   int
 }
 
 func (m *model) openNewPaneForm() {
@@ -88,9 +98,23 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	switch msg.String() {
-	case "ctrl+c":
+	// Keep ctrl+c a global quit, above the completion router, so the popup
+	// never traps it.
+	if msg.String() == "ctrl+c" {
 		return m.quit()
+	}
+	// While the @-completion popup is open it owns navigation/confirm/cancel
+	// keys; anything it does not handle (printable chars, backspace, cursor
+	// moves) falls through to normal editing with the updated completion state
+	// carried forward.
+	if m.newPane.focus == newPaneFieldPrompt && m.newPane.completing {
+		next, handled := m.updatePromptCompletion(msg)
+		if handled {
+			return next, nil
+		}
+		m = next
+	}
+	switch msg.String() {
 	case "esc":
 		m.mode = modeMonitor
 		m.newPane = newPaneForm{}
@@ -120,6 +144,12 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.newPane.focus {
 	case newPaneFieldPrompt:
 		m.newPane.prompt, cmd = m.newPane.prompt.Update(msg)
+		// Open completion when '@' is typed at a word boundary. Inspecting the
+		// textarea after the insert keeps this robust to soft-wrapping.
+		if !m.newPane.completing && msg.Type == tea.KeyRunes && string(msg.Runes) == "@" &&
+			m.atWordBoundaryBeforeCursor() {
+			m.beginCompletion()
+		}
 	case newPaneFieldSlug:
 		m.newPane.slug, cmd = m.newPane.slug.Update(msg)
 	default:
@@ -210,16 +240,21 @@ func (m model) newPaneView() string {
 	lines := []string{
 		titleStyle.Render("New agent pane"),
 		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View(), true),
+	}
+	if m.newPane.focus == newPaneFieldPrompt && m.newPane.completing {
+		lines = append(lines, m.completionPopupView())
+	}
+	lines = append(lines,
 		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
 		m.newPaneFieldView(newPaneFieldSlug, "Slug", m.newPane.slug.View(), true),
-	}
+	)
 	if m.newPane.launching {
 		lines = append(lines, dimStyle.Render("creating pane..."))
 	}
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  shift+enter newline if enabled  tab field  up/down agent  left/right count  space toggle  esc cancel"))
+	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  shift+enter newline if enabled  tab field  up/down agent  left/right count  space toggle  esc cancel  @ file mention"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 

@@ -430,6 +430,32 @@ func ListRoots(projectRoot string) ([]string, error) {
 	return roots, nil
 }
 
+// ListFiles returns repository-relative paths that are tracked or untracked but
+// not gitignored, via `git ls-files --cached --others --exclude-standard -z`.
+// The NUL-delimited (-z) form avoids git's path quoting so callers receive raw
+// relative paths even when they contain spaces or other special characters. It
+// reads stdout only (not the shared CombinedOutput git helper) so a stderr
+// advice/warning line on a zero exit cannot fuse into a path entry.
+func ListFiles(root string) ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(out), "\x00")
+	files := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		files = append(files, p)
+	}
+	return files, nil
+}
+
 func checkedOutWorktree(root, branch string) string {
 	out, err := git(root, "worktree", "list", "--porcelain")
 	if err != nil {

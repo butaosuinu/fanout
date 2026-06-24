@@ -637,6 +637,32 @@ func gitOutputAllowError(t *testing.T, dir string, args ...string) gitOutputResu
 	return gitOutputResult{value: string(out), ok: true}
 }
 
+func TestListFilesIncludesTrackedAndUntrackedExcludesIgnored(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+
+	writeFile(t, filepath.Join(repo, "untracked.txt"), "new\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "ignored.txt\n")
+	writeFile(t, filepath.Join(repo, "ignored.txt"), "nope\n")
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "sub", "nested.go"), "package sub\n")
+	gitTest(t, repo, "add", "sub/nested.go")
+
+	files, err := ListFiles(repo)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	for _, want := range []string{"file.txt", "sub/nested.go", "untracked.txt"} {
+		if !slices.Contains(files, want) {
+			t.Fatalf("ListFiles missing %q: %v", want, files)
+		}
+	}
+	if slices.Contains(files, "ignored.txt") {
+		t.Fatalf("ListFiles must exclude gitignored file: %v", files)
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
