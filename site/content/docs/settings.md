@@ -7,14 +7,27 @@ kanji: 整
 yomi: settings
 ---
 
-fanout resolves briefing toggles, the dashboard tmux keybinding, watcher controls, and TUI notification channels from the same settings stack. The briefing/dashboard booleans default to `true`, the watcher defaults to off, and notifications default to `bell`.
+A few of fanout's behaviors are ones a team will want to change: whether children open PRs automatically, whether to prompt Claude for a review, whether to run the watcher, and where to send state transitions. These live as briefing toggles, the dashboard tmux keybinding, watcher controls, and TUI notification channels — all resolved from the same settings stack. The briefing and dashboard booleans default to `true`, the watcher defaults to off, and notifications default to `bell`.
 
 ## Resolution order
 
-Each setting resolves as: **CLI flag > environment variable > repo config file > user config file > built-in default**. fanout applies the layers in the reverse order once per run, after it resolves the git repository root.
+When the same setting is given on both the CLI and a config file, which one wins? The order is **CLI flag > environment variable > repo config file > user config file > built-in default**. fanout applies the layers from lowest to highest once per run, after it resolves the git repository root.
 
 - Repo config: `<project_root>/.fanout/config.json`, where `project_root` is the parent repository root, not the child worktree.
 - User config: `$XDG_CONFIG_HOME/fanout/config.json`, or `~/.config/fanout/config.json` when `XDG_CONFIG_HOME` is unset.
+
+## What each toggle is for
+
+The behavior toggles are instructions that ship on by default but a team may want off. Here is the purpose of each key, one line apiece.
+
+- `autoPullRequest`: tells children to open a PR once their work is done. Turn it off if your team opens PRs by hand.
+- `prReviewGate`: adds a fallback note to the child briefing for when the PR-creation hook blocks (see below).
+- `briefingCodeReview`: instructs Claude children to run a `/post-work-review`-style review.
+- `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
+- `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
+- `dashboardKeybind`: registers the `prefix + D` tmux keybinding that opens the dashboard.
+
+The watcher and notification channels are a separate track: the watcher gates opt-in label-driven launches, and notification channels pick where TUI state transitions go.
 
 ## The toggles and notification channels
 
@@ -67,11 +80,13 @@ Integer environment values accept base-10 integers. `watcherIntervalSeconds` res
 
 ## Notification channels
 
-`notifications` is a comma- or space-separated selector. Supported values are `bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`; `slack` requires `slackWebhookURL`. Both HTTP channels only send outbound POST requests and never open inbound sockets. To avoid repository-controlled exfiltration, repo config may only select `bell`, `tmux`, or `none`; `ntfy`, `slack`, `ntfyURL`, and `slackWebhookURL` are honored only from user config or environment variables.
+When you step away from the terminal and still want to know when a child changes state, pick where the notice goes. `notifications` is a comma- or space-separated selector. Supported values are `bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`; `slack` requires `slackWebhookURL`.
+
+Both HTTP channels only send outbound POST requests and never open inbound sockets. To stop a repo's config from sending anywhere on its own, repo config may only select `bell`, `tmux`, or `none`; `ntfy`, `slack`, `ntfyURL`, and `slackWebhookURL` are honored only from user config or environment variables.
 
 ## Watcher safety
 
-Repo config cannot opt into the watcher. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; use user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
+The watcher should never start just because someone checked out the repo, so repo config cannot opt into it. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; enable it from user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
 The trigger label starts agent work from the labeled issue and, for parent
 fan-outs, any OPEN children it launches. Their bodies become agent briefings, so

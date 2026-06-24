@@ -1,7 +1,7 @@
 ---
 title: CLI リファレンス
 linkTitle: CLI リファレンス
-description: "コマンド形式、フラグ、環境変数、exit code まで — fanout の全サーフェスを 1 ページに。"
+description: "fanout のコマンド形式、フラグ、環境変数、exit code を 1 ページに集めたリファレンス。"
 weight: 50
 kanji: 引
 yomi: reference
@@ -47,7 +47,7 @@ fanout --help
 
 ## 位置引数
 
-第 1 引数は GitHub issue 番号（Sub-issues + タスクリストモード）または Projects v2 URL（Project モード）のいずれかです — `https://github.com/users/<owner>/projects/<n>` または `https://github.com/orgs/<org>/projects/<n>` 形式で、正規形の `/views/<id>` サフィックスやトレイリングのクエリ文字列付き URL も受け付けるので、ブラウザのアドレスバーからそのままコピペできます。
+第 1 引数は GitHub issue 番号（Sub-issues + タスクリストモード）または Projects v2 URL（Project モード）のいずれかです。URL は `https://github.com/users/<owner>/projects/<n>` か `https://github.com/orgs/<org>/projects/<n>` の形式です。正規形の `/views/<id>` サフィックスやトレイリングのクエリ文字列付き URL も受け付けるため、ブラウザのアドレスバーからそのままコピペできます。
 
 `--project-status` は Project モード専用で、issue モードでは無視されます。
 
@@ -70,7 +70,7 @@ fanout 123 --include 4,7
 fanout 123 --unblocked-only --limit 3
 ```
 
-## 命名・ブランチフラグ
+## 命名とブランチのフラグ
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
@@ -91,10 +91,10 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | フラグ | 引数 | 説明 |
 |---|---|---|
 | `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
-| `--session` | `<tmux-session>` | 起動元 pane ではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
+| `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
 | `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない。既定: off。 |
-| `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。worktree、pane、state row、briefing file は作らない。 |
+| `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。worktree、ペイン、state row、briefing file は作らない。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
 
 ```bash
@@ -105,7 +105,7 @@ fanout 123 --agent codex --agent 456=claude   # 既定は codex、#456 だけ cl
 ## Plan fan-out (issue-less)
 
 `fanout plan <spec.json|plan-slug>` は、GitHub child issue ではなくローカル JSON
-spec から task pane を起動します。path または `*.json` 引数はそのまま読み、
+spec から task ペインを起動します。path または `*.json` 引数はそのまま読み、
 bare slug は `<git-root>/.fanout/plans/<slug>.json` を読みます。live run は元 spec
 をそこへコピーするため、以後は短い slug で再実行できます。
 
@@ -148,7 +148,7 @@ spec フォーマット:
 |---|---|---|
 | `--only` | `<task-id[,id...]>` | 対象を task ID に絞る。存在しない ID は警告して無視する。`--skip` とは併用不可。 |
 | `--skip` | `<task-id[,id...]>` | 指定 task ID を除外する。`--only` とは併用不可。 |
-| `--limit` | `<N>` | 作成する task pane を N 件までに制限し、残りは task ID の再実行 hint として表示する。 |
+| `--limit` | `<N>` | 作成する task ペインを N 件までに制限し、残りは task ID の再実行 hint として表示する。 |
 | `--unblocked-only` | — | `blocked_by` 依存 task の明示 branch または生成 branch に merge 済み PR がまだ無い task を deferred にする。 |
 | `--base-branch` | `<branch>` | `plan.base_branch` を上書きする。どちらも無い場合は repository default branch を解決し、`origin` remote が無い場合は現在の local branch / `HEAD` を使う。 |
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
@@ -193,8 +193,8 @@ fanout plan launch-plan --cleanup
 ```
 
 `--merge <task-id>` は記録済み task branch を project checkout へ fast-forward
-します。`--close <task-id>` は記録済み task worktree、pane、state row を削除します。
-`--cleanup` は head branch に merge 済み PR がある記録済み plan task pane を閉じます。
+します。`--close <task-id>` は記録済み task worktree、ペイン、state row を削除します。
+`--cleanup` は head branch に merge 済み PR がある記録済み plan task ペインを閉じます。
 これらの mode は `FANOUT_STATE_PATH` を尊重します。
 
 agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Claude Code は
@@ -205,7 +205,7 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 
 ## settings 系フラグ
 
-これらのペアになったスイッチは、fanout の opinionated な挙動をその run だけ切り替えます。CLI flag は常に環境変数・設定ファイルのレイヤより優先されます。各挙動が実際に何を注入するか、および解決順序の全体は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
+これらのペアになったスイッチは、fanout の opinionated な挙動をその run だけ切り替えます。子 briefing に注入する指示やダッシュボードのキーバインドを、その場で on/off するためのフラグです。CLI flag は常に環境変数や設定ファイルのレイヤより優先されます。各挙動が実際に何を注入するか、および解決順序の全体は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
@@ -217,16 +217,16 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 | `--pr-visualization` / `--no-pr-visualization` | — | auto-PR の子 briefing に構造化 PR 本文とゲート付き Mermaid の指示を含めるか外すか。既定: on。 |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `prefix + D` キーバインドを登録する（またはスキップする）。どのペインからでも読み取り専用 Web ダッシュボードを開けるようにする。既定: on。 |
 
-## 読み取り・ライフサイクル
+## 読み取りとライフサイクルのモード
 
 ### `--status`
 
 `fanout <parent> --status` は読み取り専用です。`.fanout/state.json`（または `FANOUT_STATE_PATH`）からその parent の記録済み子を列挙し、各子について `gh api graphql` で issue state と closed-by PR の merge/review/CI 状態を取得して、既定では JSON 1 ドキュメントを stdout に出力します。
 
-- `--format <json|table>` — 出力形式。既定: `json`。table 形式は正規化した PR 状態（`open`、`draft`、`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを追加する。
-- `--post-dashboard` — 親 issue に marker 付き rollup コメントを 1 つ upsert し、各子の PR リンク、PR 状態、CI、差分規模、Conventional-Commit 種別、TL;DR、Review effort score を機械可読な PR データから集約する。`--status` 系で唯一 GitHub に書き込む option。
+- `--format <json|table>`（出力形式。既定: `json`）。table 形式は正規化した PR 状態（`open`、`draft`、`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを追加する。
+- `--post-dashboard`（親 issue に marker 付き rollup コメントを 1 つ upsert する）。各子の PR リンク、PR 状態、CI、差分規模、Conventional-Commit 種別、TL;DR、Review effort score を機械可読な PR データから集約する。`--status` 系で唯一 GitHub に書き込む option。
 
-parent は issue モードのみ — Projects v2 URL を parent にした `--status` は最初に拒否されます。
+parent は issue モードのみです。Projects v2 URL を parent にした `--status` は最初に拒否されます。
 
 ```bash
 fanout 123 --status
@@ -242,7 +242,7 @@ fanout 123 --status --post-dashboard
 Lifecycle コマンドは `.fanout/state.json` の記録済み entry だけを対象にします。任意の worktree を filesystem scan で探すことはしません。`--status` と同じく `FANOUT_STATE_PATH` を尊重します。
 
 - `fanout <parent> --merge <NUM>` は、記録済み branch を `git -C <project-root> merge --ff-only <recorded-branch>` で取り込む。fast-forward できない場合は git エラーを報告するだけで、エディタや conflict 解決フローは起動しない。
-- `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux pane が残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
+- `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux ペインが残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に `MERGED` を含む記録済み子をまとめて後始末する。保留中の子は記録されたまま残る。
 
 ```bash
@@ -283,12 +283,12 @@ Hook は常に有効です。user hook config が無い場合、または event 
 
 | Hook | 実行タイミング |
 |---|---|
-| `worktree_created` | Blocking。`git worktree add` 後、pane 作成前。 |
+| `worktree_created` | Blocking。`git worktree add` 後、ペイン作成前。 |
 | `before_pane_create` | Background。worktree 作成後、`tmux split-window` 前。 |
 | `before_worktree_remove` | Blocking。`--close` / `--cleanup` の `git worktree remove` 前。 |
 | `worktree_removed` | Background。記録済み worktree の削除後。 |
-| `before_pane_close` | Background。記録済み pane を閉じる前。 |
-| `pane_closed` | Background。pane close 試行後。 |
+| `before_pane_close` | Background。記録済みペインを閉じる前。 |
+| `pane_closed` | Background。ペイン close 試行後。 |
 | `pre_merge` | Blocking。`git merge --ff-only` 前。 |
 | `post_merge` | Background。fast-forward merge 成功後。 |
 
@@ -307,7 +307,7 @@ Blocking hook が失敗すると操作を止め、hook の出力を表示しま�
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-読み取り専用の localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバインドし、GET 専用、トークンでゲートされ、fanout の Session（親ごとにまとめた記録済みペイン）をペイン生存・issue 状態・PR マージ状態とともにライブ表示します。
+読み取り専用の localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバインドし、GET 専用、トークンでゲートされます。fanout の Session（親ごとにまとめた記録済みペイン）を、ペインの生存、issue 状態、PR マージ状態とともにライブ表示します。
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
@@ -324,24 +324,24 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 fanout msg <verb> [options] [body...]
 ```
 
-parent ごとの SQLite メッセージバス上での兄弟協調です。fanout したペイン内で実行すると、`fanout msg` は自分がどの子か（tmux pane と `.fanout/state.json` から）・どの親に属すかを自動検出します。ペインは fan-out 時に [`--team`](#実行制御フラグ) で opt-in しますが、後から任意のペインが自分で `register` することもできます。Claude Code の Agent Teams との違い、および協調のワークフローは[ワークフロー]({{< relref "/docs/workflow" >}})を参照してください。
+parent ごとの SQLite メッセージバス上での兄弟協調です。fanout したペイン内で実行すると、`fanout msg` は自分がどの子でどの親に属すかを、tmux ペインと `.fanout/state.json` から自動検出します。ペインは fan-out 時に [`--team`](#実行制御フラグ) で opt-in しますが、後から任意のペインが自分で `register` することもできます。Claude Code の Agent Teams との違いと協調のワークフローは[ワークフロー]({{< relref "/docs/workflow" >}})を参照してください。
 
 | verb | 説明 |
 |---|---|
 | `peers` | この親に登録済みの兄弟を一覧する。 |
-| `inbox` | `[--all] [--mark-read]` —— 未読の 1:1 メッセージと未読の共有ボード投稿。`--all` は既読も含め、`--mark-read` は表示分を drain する。 |
-| `board` | `[--all]` —— 共有ボード（全兄弟へのブロードキャスト）。cursor ベース。`--all` は既読の投稿も含める。 |
-| `send` | `--to <N> [--kind K] <body...>` —— 子 issue `<N>` 宛に 1:1 メッセージを送る。末尾の語が body になる。 |
-| `post` | `[--kind K] <body...>` —— `<body...>` を共有ボードに投稿する。 |
-| `mark-read` | `[--id <N> ... \| --all]` —— 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
+| `inbox` | `[--all] [--mark-read]`: 未読の 1:1 メッセージと未読の共有ボード投稿。`--all` は既読も含め、`--mark-read` は表示分を drain する。 |
+| `board` | `[--all]`: 共有ボード（全兄弟へのブロードキャスト）。cursor ベース。`--all` は既読の投稿も含める。 |
+| `send` | `--to <N> [--kind K] <body...>`: 子 issue `<N>` 宛に 1:1 メッセージを送る。末尾の語が body になる。 |
+| `post` | `[--kind K] <body...>`: `<body...>` を共有ボードに投稿する。 |
+| `mark-read` | `[--id <N> ... \| --all]`: 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
 | `register` | このペインを peers テーブルに upsert する（`--team` が自動で行う。再 join に使う）。 |
-| `nudge` | `<N>` —— best-effort: peer `#N` の agent が running のときだけ、tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。対象の agent が running でない（ペイン消失 / 状態不明 / done）ときは何もせず success（no-op）。 |
+| `nudge` | `<N>`: best-effort で、peer `#N` の agent が running のときだけ tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。対象の agent が running でない（ペイン消失 / 状態不明 / done）ときは何もせず success（no-op）。 |
 
 verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）。
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
-データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。協調は **pull ベース**です: メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます —— `fanout msg` は忙しいペインに割り込みません。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。協調は **pull ベース**です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読むため、`fanout msg` は忙しいペインに割り込みません。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
 
 | Exit code | 意味 |
 |---|---|
@@ -396,13 +396,13 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 
 ## Exit codes
 
-既定の fan-out フローは、成功（「子が無く、何もすることが無い」を含む）で `0`、前提条件 / 環境の問題で `1`、不正な呼び出しで `2` を返します。`fanout plan` の live / dry-run task 作成も同じ lane を使い、成功または何もすることが無い場合 `0`、環境・spec・filter・preflight・launch の失敗で `1`、不正な呼び出しで `2` です。読み取り・lifecycle 系 mode は独立した exit code 体系を持ちます:
+既定の fan-out フローは、成功（「子が無く、何もすることが無い」を含む）で `0`、前提条件 / 環境の問題で `1`、不正な呼び出しで `2` を返します。`fanout plan` の live / dry-run task 作成も同じ lane を使い、成功または何もすることが無い場合は `0`、環境、spec、filter、preflight、launch の失敗で `1`、不正な呼び出しで `2` です。読み取りと lifecycle 系の mode は独立した exit code 体系を持ちます。
 
 ### `--status`
 
 | Exit code | 意味 |
 |---|---|
-| `0` | status を出力した — 実際の状態は JSON mode の `summary.all_merged` で確認する |
+| `0` | status を出力した（実際の状態は JSON mode の `summary.all_merged` で確認する） |
 | `2` | 列挙不能: 不正な呼び出し、読めない / 壊れた state file、使えない project root、Projects v2 URL を parent に指定。state file が無い場合は空の state として扱う |
 | `3` | `gh` API 呼び出しが失敗した（認証、ネットワーク、存在しない issue など） |
 
@@ -410,7 +410,7 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 
 | Exit code | 意味 |
 |---|---|
-| `0` | plan status を出力した — 実際の状態は JSON mode の `summary.all_merged` で確認する |
+| `0` | plan status を出力した（実際の状態は JSON mode の `summary.all_merged` で確認する） |
 | `1` | status preflight で `git` や `gh` などの必須 dependency が見つからない |
 | `2` | 不正な呼び出し、読めない / 壊れた spec/state、または使えない project root |
 | `3` | task PR 状態を解決する `gh pr list --head <branch>` が失敗した |
@@ -420,7 +420,7 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 | Exit code | 意味 |
 |---|---|
 | `0` | lifecycle が完了した。cleanup 対象 row が無い場合も含む |
-| `1` | 環境、git merge、worktree 削除、pane cleanup、state 更新のいずれかが失敗した |
+| `1` | 環境、git merge、worktree 削除、ペイン cleanup、state 更新のいずれかが失敗した |
 | `2` | 指定 task ID がその plan に記録されていない |
 | `3` | cleanup が branch PR 状態を取得できなかった |
 

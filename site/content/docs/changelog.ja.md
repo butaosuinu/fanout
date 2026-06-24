@@ -1,72 +1,72 @@
 ---
 title: 変更履歴
 linkTitle: 変更履歴
-description: "各リリースの変更点 — 新しい順、ドキュメントへのリンク付き。"
+description: "各リリースの変更点。新しい順で、ドキュメントへのリンク付き。"
 weight: 90
 kanji: 録
 yomi: changelog
 ---
 
-リリースのハイライトを新しい順に並べています。各タグには完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含む [GitHub release](https://github.com/butaosuinu/fanout/releases) があります。バージョンは git タグから ldflags 経由で埋め込まれます — `fanout --check-update` で自分の版を確認できます。
+リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
-## v0.8.0 — 2026-06-24
+## v0.8.0 (2026-06-24)
 
-- **ラベル watcher。** opt-in すると、TUI 常駐の watcher が信頼できる `fanout:auto` issue を one-shot の fanout session に変えます。起動前に trigger ラベルを `fanout:running` に付け替え、OPEN な子を持つ issue を親 fan-out として分類し、live-pane の上限を尊重します。有効化できるのは user config か `FANOUT_WATCHER*` 環境変数だけで、repo config はラベル・間隔・子 agent・session 上限を設定できますが checkout を起動側に切り替えることはできません。[Workflow]({{< relref "/docs/workflow" >}}) と [Settings]({{< relref "/docs/settings" >}}) を参照。
+- **ラベル watcher。** 有効化すると、TUI 常駐の watcher が信頼できる `fanout:auto` issue を 1 回限りの fanout session に変えます。起動前に trigger ラベルを `fanout:running` へ付け替え、OPEN な子を持つ issue を親ファンアウトとして分類し、live ペインの上限を尊重します。有効化できるのは user config か `FANOUT_WATCHER*` 環境変数だけです。repo config はラベル、間隔、子 agent、session 上限を設定できますが、checkout を起動側に切り替えることはできません。[Workflow]({{< relref "/docs/workflow" >}}) と [Settings]({{< relref "/docs/settings" >}}) を参照。
 - **全 worktree を横断するダッシュボード。** Web ダッシュボードが、現在の worktree だけでなくリポジトリ内の全 worktree の Session を横断集約するようになりました。ブラウザのタブ 1 つで並列作業すべてを見渡せます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
-- **複数 agent の TUI 起動。** 常駐コンソールの `n` modal が、枠付きテキスト入力で agent ごとの `claude` / `codex` 起動数を指定できるようになり、`codex` pane は Plan Mode で起動します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **複数 agent の TUI 起動。** 常駐コンソールの `n` modal が、枠付きテキスト入力で agent ごとの `claude` / `codex` 起動数を指定できるようになり、`codex` ペインは Plan Mode で起動します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.8.0)
 
-## v0.7.0 — 2026-06-21
+## v0.7.0 (2026-06-21)
 
-- **ライフサイクルフック。** worktree・pane・merge イベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`(Codex 形式の `hooks` オブジェクト)で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
-- **TUI shell terminal。** 常駐コンソールで、選択行の worktree に `A`、project root に `t` で plain shell を開けます。shell 行は focus / peek 用に manual entry として記録され、close は tmux pane と state 行だけを消します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
-- **コンパクトな Session ナビゲーター。** 常駐コンソールに、セッション間を移動するためのコンパクトな Session ナビゲーターが加わりました(既存の focus / peek / lifecycle キーはそのままです)。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
-- **`origin` なしの `fanout plan`。** plan 実行に `origin` remote が不要になりました。base branch 解決は現在のローカルブランチや `HEAD` にフォールバックするため、ローカルだけのリポジトリでも plan を fan out できます。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
-- **dry-run の整理。** issue / Project と `fanout plan` の dry-run は pane 作成前の安全な preview として残しつつ、issue / Project dry-run は `/tmp` briefing file を書かなくなりました。未使用だった `fanout msg --dry-run` surface は削除されました。
+- **ライフサイクルフック。** worktree やペイン、merge のイベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`（Codex 形式の `hooks` オブジェクト）で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
+- **TUI shell terminal。** 常駐コンソールで、選択行の worktree に `A`、project root に `t` で plain shell を開けます。shell 行は focus / peek 用に manual entry として記録され、close は tmux ペインと state 行だけを消します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **コンパクトな Session ナビゲーター。** 常駐コンソールに、セッション間を移動するためのコンパクトな Session ナビゲーターが加わりました（既存の focus / peek / lifecycle キーはそのままです）。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **`origin` なしの `fanout plan`。** plan 実行に `origin` remote が不要になりました。base branch 解決は現在のローカルブランチや `HEAD` にフォールバックするため、ローカルだけのリポジトリでも plan をファンアウトできます。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
+- **dry-run の整理。** issue / Project と `fanout plan` の dry-run はペイン作成前の安全な preview として残しつつ、issue / Project dry-run は `/tmp` briefing file を書かなくなりました。未使用だった `fanout msg --dry-run` surface は削除されました。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.7.0)
 
-## v0.6.0 — 2026-06-15
+## v0.6.0 (2026-06-15)
 
-- **issue-less plan の peer messaging（`fanout plan --team`）。** plan レーンが `--team` に対応し、issue / Project レーンと同じ兄弟ペイン協調を `fanout plan` に組み込みました。issue-less な plan task には GitHub issue 番号が無いため、peer は **task id** で指定します —— `fanout msg send --to <task-id>`、`fanout msg peers` が現在の task id 一覧を表示します。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db` に置かれます。[Workflow]({{< relref "/docs/workflow" >}}) を参照。
+- **issue-less plan の peer messaging（`fanout plan --team`）。** plan レーンが `--team` に対応し、issue / Project レーンと同じ兄弟ペイン協調を `fanout plan` に組み込みました。issue-less な plan task には GitHub issue 番号が無いため、peer は **task id** で指定します。`fanout msg send --to <task-id>` で送り、`fanout msg peers` が現在の task id 一覧を表示します。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db` に置かれます。[Workflow]({{< relref "/docs/workflow" >}}) を参照。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.6.0)
 
-## v0.5.0 — 2026-06-14
+## v0.5.0 (2026-06-14)
 
 - **Per-target agent overrides（ターゲット別 agent 上書き）。** 素の `--agent <name>` は引き続き全ての子の既定を設定しますが、繰り返し可能な `--agent <NUM>=<name>`（issue / Project の子）や `--agent <task-id>=<name>`（`fanout plan`）で 1 回の run の中に agent を混在させられるようになりました。各ターゲットはまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決し、検証は実際に選択された agent のみに行います。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
-- **複数行対応の TUI セッション modal。** 常駐コンソールで `n` を押すと modal が開き、複数行の prompt、`claude` / `codex` の選択、任意 slug を入力できます。`Shift+Enter` で改行（区別できない terminal 向けの fallback として `Ctrl+J`）、`Enter` で pane を作成します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **複数行対応の TUI セッション modal。** 常駐コンソールで `n` を押すと modal が開き、複数行の prompt、`claude` / `codex` の選択、任意 slug を入力できます。`Shift+Enter` で改行（区別できない terminal 向けの fallback として `Ctrl+J`）、`Enter` でペインを作成します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.5.0)
 
-## v0.4.0 — 2026-06-14
+## v0.4.0 (2026-06-14)
 
-fanout を、独自のコンソール・ダッシュボード・計画レーンを備えた単体ツールへと作り変えた大型リリースです。
+fanout が独自のコンソール、ダッシュボード、計画レーンを備え、dmux に依存しない単体の CLI になったリリースです。
 
-- **単体ランタイム + 常駐 TUI コンソール。** dmux 依存を外して `tmux` を直接制御し、引数なし `fanout` のコンソールに pane フォーカス / 出力 peek、ライフサイクル操作、wave & blocker 列、manual agent pane、メモリ内の検索 / フィルタを追加しました。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
-- **読み取り専用 Web ダッシュボード。** `127.0.0.1` バインド・GET 専用・token ゲート付きの Session ビューを、PAPER BREEZE テーマの React + Vite + TypeScript SPA として作り直し、詳細 drawer、plan モードの提案プラン表示、未 fan-out の子の synthetic 行を備えました。`fanout dashboard --web` で起動します。
-- **issue を作らない `fanout plan`。** GitHub の子 issue ではなくローカルの JSON plan spec を fan out します。task ID、`blocked_by` 依存の wave、task ライフサイクル（`--status` / `--merge` / `--close` / `--cleanup`）に対応します。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
-- **Peer messaging（`--team` / `fanout msg`）。** parent ごとの SQLite バスを介した opt-in の兄弟協調と、best-effort の `nudge` を追加しました。[Workflow]({{< relref "/docs/workflow" >}}) を参照。
+- **単体ランタイム + 常駐 TUI コンソール。** dmux 依存を外して `tmux` を直接制御し、引数なし `fanout` のコンソールにペインフォーカス / 出力 peek、ライフサイクル操作、wave & blocker 列、manual agent ペイン、メモリ内の検索 / フィルタを追加しました。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **読み取り専用 Web ダッシュボード。** `127.0.0.1` バインドで GET 専用、token ゲート付きの Session ビューを、PAPER BREEZE テーマの React + Vite + TypeScript SPA として作り直し、詳細 drawer、plan モードの提案プラン表示、未ファンアウトの子の synthetic 行を備えました。`fanout dashboard --web` で起動します。
+- **issue を作らない `fanout plan`。** GitHub の子 issue ではなくローカルの JSON plan spec をファンアウトします。task ID、`blocked_by` 依存の wave、task ライフサイクル（`--status` / `--merge` / `--close` / `--cleanup`）に対応します。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
+- **Peer messaging（`--team` / `fanout msg`）。** parent ごとの SQLite バスを介した、有効化すると使える兄弟協調と、best-effort の `nudge` を追加しました。[Workflow]({{< relref "/docs/workflow" >}}) を参照。
 - **Codex Plan Mode + review skill。** `--codex-plan-mode` で Codex の子を interactive Plan-Mode TUI セッションとして起動できるようになり、両 agent 向けに `post-work-review` / `pr-watch` skill を同梱しました。[Agent Integrations]({{< relref "/docs/agents" >}}) を参照。
-- **ドキュメントサイト・前提の軽量化。** この Hugo サイト（英語 / 日本語）を公開し、`jq` と `gh-sub-issue` の前提を公式 GitHub Sub-issues API へ置き換え、Go ツールチェーンを golangci-lint v2 ベースに刷新しました。
+- **ドキュメントサイトと前提の軽量化。** この Hugo サイト（英語 / 日本語）を公開し、`jq` と `gh-sub-issue` の前提を公式 GitHub Sub-issues API へ置き換え、Go ツールチェーンを golangci-lint v2 ベースに刷新しました。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.4.0)
 
-## v0.3.0 — 2026-06-06
+## v0.3.0 (2026-06-06)
 
 - **自己更新。** `fanout update` は同じ `install.sh` 経路で実行中のバイナリと同梱の Claude / Codex 連携を置き換え、`fanout --check-update` は何も変更せずに最新リリースとバイナリを比較します。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.3.0)
 
-## v0.2.0 — 2026-06-04
+## v0.2.0 (2026-06-04)
 
-- **Settings 機構。** opinionated な子 briefing の挙動を切り替え可能にし、CLI フラグ・`FANOUT_*` 環境変数・config ファイルにまたがって解決するようにしました。[Settings]({{< relref "/docs/settings" >}}) を参照。
+- **Settings 機構。** opinionated な子 briefing の挙動を切り替え可能にし、CLI フラグ、`FANOUT_*` 環境変数、config ファイルにまたがって解決するようにしました。[Settings]({{< relref "/docs/settings" >}}) を参照。
 - **Go 一本化。** レガシーな Bash 実装を削除して Go CLI に統一し、子 briefing に Codex review ゲートを追加、fanout skill が OPEN な issue / Project 候補を提示するようにしました。
 
 [リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.2.0)
 
-## v0.1.0 — 2026-06-04
+## v0.1.0 (2026-06-04)
 
 - **最初の Go リリース。** 並列 Go 移植版を既定のインストール対象とし、ビルド済みリリース配布、`--status` JSON レポーター、Projects v2 モード、`gh pr create` 前にレビューを強制する PreToolUse ゲート、旧 Bash エントリポイントの deprecation 通知を備えました。
 

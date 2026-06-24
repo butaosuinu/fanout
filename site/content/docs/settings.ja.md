@@ -1,20 +1,33 @@
 ---
 title: 設定
 linkTitle: 設定
-description: "オン/オフできる opinionated な挙動トグル、watcher 制御、TUI 通知 channel、そして flag > env > repo > user > default の解決順序。"
+description: "挙動トグル、watcher 制御、TUI 通知 channel と、それらを flag > env > repo > user > default の順で解決する仕組み。"
 weight: 60
 kanji: 整
 yomi: settings
 ---
 
-fanout は briefing トグル、ダッシュボードの tmux キーバインド、watcher 制御、TUI 通知 channel を同じ設定スタックで解決します。briefing/dashboard の bool 既定値は `true`、watcher は既定で off、通知の既定値は `bell` です。
+fanout の挙動はチームの好みで変えたくなる箇所がいくつかあります。子に自動で PR を作らせるか、Claude のレビューを促すか、watcher を回すか、状態遷移をどこへ通知するか。これらは briefing トグル、ダッシュボードの tmux キーバインド、watcher 制御、TUI 通知 channel として同じ設定スタックで解決します。briefing と dashboard の bool 既定値は `true`、watcher は既定で off、通知の既定値は `bell` です。
 
 ## 解決順序
 
-各設定の優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル > ビルトイン既定値** です。fanout は git リポジトリルートを解決した後、run ごとに 1 回だけ逆順に重ねて解決します。
+同じ設定を CLI flag と config ファイルの両方で指定したらどちらが勝つか。優先順位は **CLI flag > 環境変数 > リポジトリ設定ファイル > ユーザー設定ファイル > ビルトイン既定値** です。fanout は git リポジトリルートを解決した後、run ごとに 1 回だけ低い層から順に重ねて解決します。
 
 - リポジトリ設定: `<project_root>/.fanout/config.json`。この `project_root` は親リポジトリルートで、子 worktree ではありません。
 - ユーザー設定: `$XDG_CONFIG_HOME/fanout/config.json`、`XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/config.json`。
+
+## 各トグルの目的
+
+挙動トグルは「既定で入っているが、チームの事情で外したくなる」指示の集合です。各キーの目的を 1 行ずつ示します。
+
+- `autoPullRequest`: 子に作業完了後の PR 自動作成を指示します。PR を人手で作るチームなら外します。
+- `prReviewGate`: PR 作成 hook に止められたときの逃げ道を子 briefing に書き添えます（後述）。
+- `briefingCodeReview`: Claude の子に `/post-work-review` 相当のレビューを走らせる指示を入れます。
+- `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
+- `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
+- `dashboardKeybind`: tmux に `prefix + D` でダッシュボードを開くキーバインドを登録します。
+
+watcher と通知 channel は別系統の設定です。watcher はラベル巡回による自動起動の opt-in 制御、通知 channel は TUI の状態遷移をどこへ知らせるかの選択です。
 
 ## トグルと通知 channel
 
@@ -67,15 +80,15 @@ integer の環境変数は 10 進整数を受け付けます。`watcherIntervalS
 
 ## 通知 channel
 
-`notifications` は comma または空白区切りの selector です。指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。どちらの HTTP channel も outbound POST のみで、inbound socket は開きません。repository-controlled な外部送信を避けるため、repo config で選択できるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、`ntfyURL`、`slackWebhookURL` は user config または環境変数からだけ有効になります。
+ターミナルを離れている間に子の状態遷移を知りたいなら、通知先を選びます。`notifications` は comma または空白区切りの selector で、指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。
+
+どちらの HTTP channel も outbound POST のみで、inbound socket は開きません。repo の設定だけで外部へ勝手に送信されるのを防ぐため、repo config で選べるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、`ntfyURL`、`slackWebhookURL` は user config か環境変数からだけ有効になります。
 
 ## watcher の安全制約
 
-repo config では watcher を opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定している場合、fanout は警告してそのキーを無視します。user config または `FANOUT_WATCHER` を使ってください。repo config では `watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は設定できます。
+watcher は誰かが checkout しただけで自動起動してほしくない機能です。そのため repo config では opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定していると、fanout は警告してそのキーを無視します。有効化は user config か `FANOUT_WATCHER` で行ってください。一方、`watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は repo config でも設定できます。
 
-trigger label は label 付き issue と、parent fan-out で起動される OPEN child から
-agent 作業を始める合図です。それらの本文は agent briefing になります。label は
-実行依頼として扱い、その issue と起動対象 child を信頼できる場合だけ付けてください。
+trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。
 
 ## 前方互換
 
@@ -85,15 +98,15 @@ Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳
 
 ## prVisualization の詳細
 
-`prVisualization=false` は、子 briefing から構造化 PR 本文とゲート付き Mermaid の指示を外します。この指示は子が開く PR の本文に対するものなので、`autoPullRequest` も `true` のときだけ注入されます。1 回の run だけ外すなら `--no-pr-visualization`、shell 単位なら `FANOUT_PR_VISUALIZATION=0` です。
+`prVisualization=false` は、子 briefing から構造化 PR 本文とゲート付き Mermaid の指示を外します。この指示は子が開く PR の本文に向けたものなので、`autoPullRequest` も `true` のときだけ注入されます。1 回の run だけ外すなら `--no-pr-visualization`、shell 単位なら `FANOUT_PR_VISUALIZATION=0` です。
 
 ## prReviewGate の正確な意味
 
-`prReviewGate=false` は、子 Claude Code の hook を強制的に無効化する設定ではありません。代わりに子 briefing へ、`/post-work-review` 前に `PreToolUse` hook が PR 作成を止めた場合は `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` を使ってよい、という注記を入れるだけです。hook 自体の仕組みは[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照してください。
+`prReviewGate=false` は子 Claude Code の hook を強制的に無効化しません。子 briefing に注記を 1 つ足すだけです。`/post-work-review` の前に `PreToolUse` hook が PR 作成を止めた場合、`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` を使ってよい、という注記です。hook 自体の仕組みは[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照してください。
 
 ## ユースケース例
 
-リポジトリ全体で PR 自動作成を止めるには、リポジトリ設定をコミットします:
+リポジトリ全体で PR 自動作成を止めるには、repo config をコミットします:
 
 ```bash
 # <project_root>/.fanout/config.json — applies to every run in this repo

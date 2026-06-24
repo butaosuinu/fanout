@@ -1,15 +1,17 @@
 ---
 title: Monitoring
 linkTitle: Monitoring
-description: "Three windows onto a fan-out — the persistent TUI console, --status JSON / table, and the read-only web dashboard."
+description: "Three windows for surveying every fanned-out pane at once and spotting where it is stuck: the persistent TUI console, --status JSON / table, and the read-only web dashboard."
 weight: 40
 kanji: 見
 yomi: monitoring
 ---
 
+Fan out five children and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, where one is stuck, and whether any pane is sitting on uncommitted work. fanout answers that through three windows: the **persistent TUI console** for watching from your terminal, `--status` **JSON** for feeding automation, and the read-only **web dashboard** for sharing with a team or a browser. All three only read `.fanout/state.json`, tmux, and GitHub — they never change repository or GitHub state.
+
 ## Persistent TUI console
 
-Run `fanout` with no arguments to start the persistent console:
+To watch every pane from your terminal, run `fanout` with no arguments to start the persistent console:
 
 ```bash
 fanout   # start the persistent tmux console
@@ -17,9 +19,9 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console.
 
-The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status`. Each row also shows the pane worktree's total work size as `+X/-Y` — `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`) — and `dirty`/`clean` from `git status --porcelain`, which flags uncommitted work without any agent instrumentation.
+The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance.
 
-Press `/` to filter the loaded rows in memory, with free-text terms or predicates such as `state:open`, `agent:codex`, and `wave:wave5`. Filtering never triggers extra data fetches, and the automatic state / GitHub refresh continues while a filter is active.
+When the list grows, press `/` to filter the loaded rows in memory, with free-text terms or predicates such as `state:open`, `agent:codex`, and `wave:wave5`. Filtering never triggers extra data fetches, and the automatic state / GitHub refresh continues while a filter is active.
 
 For recorded issue parents the console also reloads the parent's child set and shows wave / blocker columns, using the same `## Blocked by` and `(blocked by #N)` sources as `--unblocked-only`. Blocked children that have not been fanned out yet appear as `deferred` rows, and CLOSED blockers are shown as resolved. The header shows `total` / `merged` / `pending` / `blocked` rollup counts.
 
@@ -41,7 +43,7 @@ For recorded issue parents the console also reloads the parent's child set and s
 
 ## --status (JSON)
 
-`fanout <parent> --status` is read-only. It reads `.fanout/state.json` to enumerate the children already fanned out under that specific parent, queries each child through `gh api graphql` against `repository.issue.closedByPullRequestsReferences(first: 100)` — cursor-paginated when a child is closed by more than 100 PRs — so the response carries `state`, `mergedAt`, `reviewDecision`, and the latest commit's CI rollup when present, and prints one JSON document on stdout by default:
+To judge progress from CI or jq, use `fanout <parent> --status`. It is read-only. It reads `.fanout/state.json` to enumerate the children already fanned out under that specific parent, queries each child through `gh api graphql` against `repository.issue.closedByPullRequestsReferences(first: 100)` — cursor-paginated when a child is closed by more than 100 PRs — so the response carries `state`, `mergedAt`, `reviewDecision`, and the latest commit's CI rollup when present, and prints one JSON document on stdout by default:
 
 ```json
 {
@@ -86,19 +88,23 @@ In a state file that has fanned multiple parents, children of other parents are 
 
 ## --status --format table
 
+When you want the same data as a human-readable list, add `--format table`:
+
 ```bash
 fanout 123 --status --format table
 ```
 
-`--format table` prints a human-readable overview that adds a normalized PR state (`open`, `draft`, `review-required`, `approved`, `changes-requested`, `merged`, or `closed`), CI, PR diff bars, changed-file counts, the Conventional-Commit type, and PR links.
+On top of the JSON it adds a normalized PR state (`open`, `draft`, `review-required`, `approved`, `changes-requested`, `merged`, or `closed`), CI, PR diff bars, changed-file counts, the Conventional-Commit type, and PR links.
 
 ## --status --post-dashboard
+
+When you want to share progress on the parent issue itself, use `--post-dashboard`:
 
 ```bash
 fanout 123 --status --post-dashboard
 ```
 
-`--post-dashboard` upserts one marker-based comment on the parent issue, listing for each child PR the sub-issue number, PR link, PR state, CI, diff size, Conventional-Commit type, TL;DR, and a `Review effort` score. The dashboard is built from machine-readable GitHub data and PR bodies; it does not call an LLM.
+It upserts one marker-based comment on the parent issue, listing for each child PR the sub-issue number, PR link, PR state, CI, diff size, Conventional-Commit type, TL;DR, and a `Review effort` score. The comment is built from machine-readable GitHub data and PR bodies; it does not call an LLM.
 
 It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, finds an existing marker comment with the paginated GitHub REST comments endpoint, and updates that exact comment. If no marker comment exists, it creates one with `gh issue comment --body-file -`.
 
@@ -106,7 +112,7 @@ It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, f
 
 ## Web dashboard (fanout dashboard --web)
 
-`fanout dashboard --web` starts a **read-only** web dashboard that visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE: pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty (the same data source as `--status`, reused across every parent in the repo at once). Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
+When you want to share every Session in a browser or with a team, `fanout dashboard --web` starts a **read-only** web dashboard. It visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE. Each row shows pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty. The data source is the same as `--status`, reused across every parent in the repo at once. Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -115,7 +121,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 - **localhost only.** The server binds `127.0.0.1` and exposes GET-only endpoints: `/api/snapshot`, an SSE `/api/stream`, `/api/peek` (a `tmux capture-pane` snapshot of one recorded pane), `/api/plan` (the last complete `<proposed_plan>` block of a `--codex-plan-mode` pane), and the embedded UI. `--port` defaults to `0` (an OS-assigned ephemeral port); the chosen URL is printed.
 - **Token by default.** A random token is generated each start and embedded in the printed/opened URL, gating `/api/*` so other local users or processes cannot read your issue/PR data off the loopback port. Pass `--no-token` on a single-user machine to drop it.
 - **`--open`** opens the URL in your default browser. The dashboard reuses a server that is already running (recorded in `.fanout/dashboard.json`) instead of starting a second one.
-- **Single-page UI.** The embedded React + Vite SPA layers more onto the live Session list than the API alone: a structured filter box (free words ANDed with `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` terms, plus dropdowns and removable chips), a detail drawer (click a row) showing pane metadata, wave / blockers, the worktree, PRs with CI, the original prompt, and a live *peek* of recent output refreshed every 5 s, a *plan* section for `--codex-plan-mode` panes, a top HUD with repo-wide running / blocked counts, and a PAPER BREEZE light/dark theme.
+- **Single-page UI.** The embedded React + Vite SPA layers more onto the live Session list than the API alone. A structured filter box ANDs free words with `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` terms, with dropdowns and removable chips. Click a row to open a detail drawer showing pane metadata, wave / blockers, the worktree, PRs with CI, the original prompt, and a live *peek* of recent output refreshed every 5 s. `--codex-plan-mode` panes get a *plan* section. A top HUD shows repo-wide running / blocked counts. The theme is PAPER BREEZE light/dark.
 
 Run `fanout dashboard --help` for the full flag list.
 
