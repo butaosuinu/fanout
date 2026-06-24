@@ -9,6 +9,14 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含む [GitHub release](https://github.com/butaosuinu/fanout/releases) があります。バージョンは git タグから ldflags 経由で埋め込まれます — `fanout --check-update` で自分の版を確認できます。
 
+## v0.8.0 — 2026-06-24
+
+- **ラベル watcher。** opt-in すると、TUI 常駐の watcher が信頼できる `fanout:auto` issue を one-shot の fanout session に変えます。起動前に trigger ラベルを `fanout:running` に付け替え、OPEN な子を持つ issue を親 fan-out として分類し、live-pane の上限を尊重します。有効化できるのは user config か `FANOUT_WATCHER*` 環境変数だけで、repo config はラベル・間隔・子 agent・session 上限を設定できますが checkout を起動側に切り替えることはできません。[Workflow]({{< relref "/docs/workflow" >}}) と [Settings]({{< relref "/docs/settings" >}}) を参照。
+- **全 worktree を横断するダッシュボード。** Web ダッシュボードが、現在の worktree だけでなくリポジトリ内の全 worktree の Session を横断集約するようになりました。ブラウザのタブ 1 つで並列作業すべてを見渡せます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **複数 agent の TUI 起動。** 常駐コンソールの `n` modal が、枠付きテキスト入力で agent ごとの `claude` / `codex` 起動数を指定できるようになり、`codex` pane は Plan Mode で起動します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.8.0)
+
 ## v0.7.0 — 2026-06-21
 
 - **ライフサイクルフック。** worktree・pane・merge イベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`(Codex 形式の `hooks` オブジェクト)で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。

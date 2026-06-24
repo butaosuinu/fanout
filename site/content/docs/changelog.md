@@ -9,6 +9,14 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.8.0 — 2026-06-24
+
+- **Label watcher.** Opt in to a TUI-resident watcher that turns trusted `fanout:auto` issues into one-shot fanout sessions. It swaps the trigger label to `fanout:running` before launch, classifies issues with OPEN children as parent fan-outs, and honors a live-pane budget. Enable it only through user config or `FANOUT_WATCHER*` environment variables; repo config can set the labels, interval, child agent, and session cap but never opt a checkout into launching. See [Workflow]({{< relref "/docs/workflow" >}}) and [Settings]({{< relref "/docs/settings" >}}).
+- **Dashboard spans every worktree.** The web dashboard now aggregates Sessions across every worktree in the repo, not just the current one, so a single browser tab covers all parallel work. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Multi-agent TUI launches.** The persistent console's `n` modal now takes per-agent `claude` / `codex` launch counts behind framed text inputs, and `codex` panes start in Plan Mode. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.8.0)
+
 ## v0.7.0 — 2026-06-21
 
 - **Lifecycle hooks.** fanout now runs user shell hooks around worktree, pane, and merge events. Configure them in `$XDG_CONFIG_HOME/fanout/hooks.json` (a Codex-style `hooks` object); they are always enabled, and a missing file or an event with no commands is a no-op. See [CLI Reference]({{< relref "/docs/cli" >}}).

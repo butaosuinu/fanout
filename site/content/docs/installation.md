@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # Custom destination or pinned release tag
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.2.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.8.0 sh
 ```
 
 `install.sh` detects macOS/Linux and amd64/arm64, downloads `fanout_<os>_<arch>.tar.gz` from the latest GitHub Release (or `FANOUT_VERSION`), verifies `SHA256SUMS` when `sha256sum` or `shasum` exists, and overwrites the same paths on rerun. It never edits shell rc files.
