@@ -29,13 +29,19 @@ type fileEntry struct {
 }
 
 func buildFileIndex(files []string) []fileEntry {
-	idx := make([]fileEntry, len(files))
-	for i, f := range files {
-		idx[i] = fileEntry{
+	idx := make([]fileEntry, 0, len(files))
+	for _, f := range files {
+		// A whitespace-containing path cannot be a single @file mention (the
+		// mention ends at the first space), so completing it would silently
+		// yield a dead reference. Drop it from the candidates.
+		if strings.ContainsAny(f, " \t") {
+			continue
+		}
+		idx = append(idx, fileEntry{
 			path:      f,
 			lowerPath: strings.ToLower(f),
 			lowerBase: strings.ToLower(path.Base(f)),
-		}
+		})
 	}
 	return idx
 }
@@ -146,8 +152,14 @@ func (m model) updatePromptCompletion(msg tea.KeyMsg) (model, bool) {
 			m.acceptCompletion()
 			return m, true
 		}
-		// With no candidate to accept, dismiss the popup and let the key reach
-		// the form's submit / field-nav handlers in one press.
+		if !m.repoFilesLoaded && m.repoFilesErr == "" {
+			// The file list is still loading (empty results != no match). Consume
+			// the key so a premature Enter does not submit a prompt with an
+			// unexpanded @token; results appear once the load resolves.
+			return m, true
+		}
+		// Loaded with no match (or the load failed): dismiss the popup and let
+		// the key reach the form's submit / field-nav handlers in one press.
 		m.endCompletion()
 		return m, false
 	case "left", "right", " ", "ctrl+j":

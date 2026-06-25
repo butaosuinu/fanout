@@ -311,6 +311,57 @@ func TestAcceptCompletionRefusesWhenOverCharLimit(t *testing.T) {
 	}
 }
 
+func TestPromptCompletionEnterDuringLoadDoesNotSubmit(t *testing.T) {
+	var launched bool
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		LaunchPane:  func(LaunchRequest) (string, error) { launched = true; return "", nil },
+	})
+	m.openNewPaneForm()
+	// repoFilesLoaded stays false (still loading); no index set.
+	for _, r := range []string{"d", "o", " ", "@", "x"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	if !m.newPane.completing {
+		t.Fatal("expected completing during load")
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if launched || cmd != nil {
+		t.Fatal("enter while the file list is loading must not submit")
+	}
+	if !m.newPane.completing {
+		t.Fatal("enter while loading should keep the popup open")
+	}
+}
+
+func TestAcceptCompletionHandlesFullWidthPrefix(t *testing.T) {
+	// A full-width rune before the @token exercises the rune-index path math:
+	// bubbles LineInfo.StartColumn+ColumnOffset is a rune offset, so the token
+	// is found and replaced correctly despite the double-width character.
+	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	for _, r := range []string{"あ", " ", "@", "n", "e", "w"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got, want := m.newPane.prompt.Value(), "あ @internal/tui/newpane.go "; got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
+
+func TestFileIndexExcludesSpacePaths(t *testing.T) {
+	idx := buildFileIndex([]string{"docs/readme.md", "docs/my file.md", "a\tb.go"})
+	for _, e := range idx {
+		if strings.ContainsAny(e.path, " \t") {
+			t.Fatalf("whitespace path should be excluded from candidates: %q", e.path)
+		}
+	}
+	top, total := rankFileEntries(idx, "", 8)
+	if total != 1 || len(top) != 1 || top[0] != "docs/readme.md" {
+		t.Fatalf("only the clean path should remain, got %v (total %d)", top, total)
+	}
+}
+
 func TestNewPaneViewRendersCompletionPopup(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 100
