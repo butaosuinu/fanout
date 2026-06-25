@@ -9,7 +9,7 @@ yomi: workflow
 
 ## The loop at a glance
 
-fanout's day-to-day shape is a loop, not a one-shot command. You grow a parent issue with OPEN children, fan them out into parallel panes, watch the panes work, fold the finished ones away, and rerun for the next batch:
+fanout's day-to-day shape is a loop, not a one-shot command. You grow a parent issue with OPEN children, fan them out into parallel panes, watch the panes work, fold the finished ones away, and rerun for the next batch. Rather than finishing everything at once, you advance the children whose blockers have cleared, batch by batch:
 
 1. **Grow the issue tree.** Create a parent issue plus linked child issues. The bundled `fanout-issues` skill turns a plan into this fanout-ready shape for you — see [Agent Integrations]({{< relref "/docs/agents" >}}).
 2. **Fan out.** `fanout <parent>` creates one tmux pane + git worktree per OPEN child and launches the agent CLI in each.
@@ -64,6 +64,8 @@ fanout 123 --include 4,7
 
 ## Wave progression with `--unblocked-only`
 
+When several children depend on one another, you don't want to hold everyone back until a blocker clears. You want to run the children that can already proceed in parallel and add the next one each time a blocker closes. That staged execution is a wave.
+
 `--unblocked-only` fans out only the children whose blockers are all CLOSED. Children with any OPEN blocker are reported as `deferred (blocked)` and skipped for this run — nothing is created for them, so there is nothing to undo.
 
 Because reruns also skip children already recorded in `.fanout/state.json`, advancing the project is just running the same command again each time a blocker PR merges: Wave 1 → Wave 2 → … with no manual bookkeeping.
@@ -111,9 +113,11 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 
 ## Issue-less plan fan-out
 
-Use `fanout plan` when the work is already decomposed locally and you do not
-want to create GitHub child issues. The workflow is the same loop, but the
-source of truth is a JSON spec instead of an issue tree:
+Sometimes the work is already broken down from a brainstorm or notes, and it
+isn't worth opening GitHub child issues for it. You want to feed that local
+breakdown straight into parallel panes without building an issue tree. That is
+what `fanout plan` is for. The workflow is the same loop, but the source of
+truth is a JSON spec instead of an issue tree:
 
 1. Write or select a plan spec with `version: 1`, `plan.slug`, `plan.title`, and
    `tasks[]` entries (`id`, `title`, `briefing`, optional `wave`,
@@ -150,13 +154,14 @@ before live launch unless confirmation was explicitly skipped.
 
 ## Sibling coordination (peer messaging)
 
-When a parent is fanned out, each child is an independent agent session in its
-own pane — by default the panes cannot see each other. Opt in per run with
-`--team`: fanout (best-effort) injects a "Coordinating with your sibling panes"
-section into each child's standard briefing and seeds a per-parent peer registry
-so the siblings know about one another. (`--codex-plan-mode` children are seeded
-into the registry but receive the minimal Plan-Mode briefing, so the roster
-section is not added to them.)
+When sibling panes touch the same interface in parallel, they often need to
+share progress and decisions. But when a parent is fanned out, each child is an
+independent agent session in its own pane — by default the panes cannot see each
+other. Opt in per run with `--team`: fanout (best-effort) injects a
+"Coordinating with your sibling panes" section into each child's standard
+briefing and seeds a per-parent peer registry so the siblings know about one
+another. (`--codex-plan-mode` children are seeded into the registry but receive
+the minimal Plan-Mode briefing, so the roster section is not added to them.)
 
 Inside any fanned pane, `fanout msg` auto-detects which child (or parent) you
 are and talks over a per-parent SQLite bus at

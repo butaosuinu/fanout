@@ -9,7 +9,9 @@ yomi: agents
 
 ## From inside an agent session
 
-fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates NEW panes for children; the caller's pane is never touched. Pass `--agent` or set `FANOUT_AGENT` so child panes know which agent CLI to launch. To mix agents in one run, add repeatable per-target overrides: `--agent NUM=name` for issue / Project children, or `--agent task-id=name` with `fanout plan`. Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT` — see the [CLI Reference]({{< relref "/docs/cli" >}}).
+Say you are running Claude Code or Codex in one pane and want to fan out to children without leaving it. fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates NEW panes for children; the caller's pane is never touched.
+
+To tell fanout which agent CLI the child panes should launch, pass `--agent` or set `FANOUT_AGENT`. To mix agents in one run, add repeatable per-target overrides: `--agent NUM=name` for issue / Project children, or `--agent task-id=name` with `fanout plan`. Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT` — see the [CLI Reference]({{< relref "/docs/cli" >}}).
 
 The CLI prerequisites still apply: run from inside tmux, and run from the repository whose children should branch from the selected base. The integration files below are bundled in the repo and placed by the [install script]({{< relref "/docs/installation" >}}).
 
@@ -17,7 +19,7 @@ The CLI prerequisites still apply: run from inside tmux, and run from the reposi
 
 ### The `/fanout` slash command
 
-`~/.claude/commands/fanout.md` installs the slash command:
+Say you want to call fanout from a conversation but confirm the targets before the real run. `~/.claude/commands/fanout.md` installs the slash command:
 
 ```text
 /fanout [parent-issue] [--go] [extra fanout flags]
@@ -27,24 +29,29 @@ It runs `fanout <N> --dry-run` first, shows the target list, and only fires the 
 
 ### The `fanout` skill
 
-`~/.claude/skills/fanout/` lets the agent recognize when fanout is applicable and suggest `/fanout` rather than invoking it unprompted. Beyond gating invocation, the skill reads the parent body for **implicit** child references that the CLI itself does not parse — close keywords like `Closes #N`, dependency wording like `Depends on #N`, plain bullets, and Japanese idioms like `#N に関連` — lists the candidates back to you for approval, and forwards the accepted numbers via `--include`.
+Say the parent body scatters child references around and collecting the numbers by hand is tedious. `~/.claude/skills/fanout/` hands that collection to the agent. It lets the agent recognize when fanout is applicable and suggest `/fanout` rather than invoking it unprompted.
 
-The skill also generates the `--name` flags (slug / display name / branch) from the issue title and body. The CLI itself never calls an LLM by design; the naming intelligence lives in the skills.
+Beyond gating invocation, the skill reads the parent body for **implicit** child references that the CLI itself does not parse — close keywords like `Closes #N`, dependency wording like `Depends on #N`, plain bullets, and Japanese idioms like `#N に関連` — lists the candidates back to you for approval, and forwards the accepted numbers via `--include`.
+
+The skill also generates the `--name` flags (slug / display name / branch) from the issue title and body. The CLI itself never calls an LLM by design; the skill makes the naming decisions.
 
 ### The `fanout-issues` skill
 
-`~/.claude/skills/fanout-issues/` guides the agent when turning a plan into a fanout-ready GitHub parent issue plus linked child issues. It creates same-repo children, links them through GitHub Sub-issues, mirrors them in the parent task list, and records blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that `fanout --unblocked-only` understands.
+Say you want to shape a plan into the issue tree fanout can run against. `~/.claude/skills/fanout-issues/` guides the agent through that conversion. It creates same-repo children, links them through GitHub Sub-issues, mirrors them in the parent task list, and records blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that `fanout --unblocked-only` understands.
 
 ### The `fanout-plan` skill
 
-`~/.claude/skills/fanout-plan/` backs `/fanout plan`. It turns an approved or
-local implementation plan into a `fanout plan` JSON spec, runs the dry-run
-preview, summarizes tasks/waves/branches, then launches issue-less task panes
-after confirmation.
+Say you want to fan out a local implementation plan without creating GitHub
+child issues. `~/.claude/skills/fanout-plan/` backs `/fanout plan`. It turns an
+approved or local implementation plan into a `fanout plan` JSON spec, runs the
+dry-run preview, summarizes tasks/waves/branches, then launches issue-less task
+panes after confirmation.
 
 ### Review and PR follow-up skills
 
-`~/.claude/skills/post-work-review/` backs the local PR review gate: it runs a final review loop and records the reviewed HEAD marker. `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/` watch an existing PR after creation and handle safe conflict, CI, and review-comment follow-up.
+Say the implementation is done and you want one more look before committing or opening a PR. `~/.claude/skills/post-work-review/` backs the local PR review gate: it runs a final review loop and records the reviewed HEAD marker.
+
+For follow-up after a PR exists, use a separate skill. `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/` watch an existing PR after creation and handle safe conflict, CI, and review-comment follow-up.
 
 ## Codex CLI
 
@@ -65,7 +72,7 @@ Use `$pr-watch` after opening a PR when you want Codex to inspect mergeability, 
 
 ## Codex Plan Mode
 
-Batch child launches enable Plan Mode with `--codex-plan-mode`, an opt-in mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
+Say you want Codex to propose an implementation plan before any child moves forward. Batch child launches enable Plan Mode with `--codex-plan-mode`, an opt-in mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode

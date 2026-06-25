@@ -1,7 +1,7 @@
 ---
 title: インストール
 linkTitle: インストール
-description: "curl 一行で Go バイナリと Claude Code / Codex 連携が入る。配置されるもの、検証、上書きの挙動、そして更新の保ち方。"
+description: "curl 一行で Go バイナリと Claude Code、Codex の連携が入る。何が配置され、どう検証と上書きが起き、更新をどう保つかをまとめる。"
 weight: 10
 kanji: 始
 yomi: install
@@ -9,16 +9,16 @@ yomi: install
 
 ## 前提ツール
 
-既定の GitHub issue / Project fanout 作成フローでは、次のツールが `PATH` 上に必要です:
+親 issue を子ごとのペインにファンアウトする既定のフローでは、役割の異なる次の 3 つのツールが `PATH` 上に必要です。
 
-| ツール | 用途 |
+| ツール | 何のために要るか |
 |---|---|
-| `gh` | GitHub CLI — issue、PR 状態、GraphQL |
-| `git` | worktree、branch、merge |
-| `tmux` | 子ペイン |
+| `gh` | GitHub CLI。issue の取得、PR 状態の照会、Project の GraphQL クエリに使う |
+| `git` | worktree の作成、branch の分岐、merge に使う |
+| `tmux` | 子ごとのペインを分割するために使う |
 
-fanout は選択されたモードに必要な依存を起動時にチェックし、失敗時にはインストールのヒントを表示します。`--status` と `--cleanup` は `gh`/`git`、`--merge` と `--close` は `git` を使います。
-ローカルの `fanout plan` 実行と TUI から起動する手動 pane は、`git`/`tmux` と選択した agent があれば、`origin` remote や `gh` 認証が無い repository でも動作します。
+fanout は選択したモードに必要な依存だけを起動時にチェックし、足りなければインストールのヒントを表示します。`--status` と `--cleanup` は `gh` と `git` を、`--merge` と `--close` は `git` を使います。
+ローカルの `fanout plan` 実行と、TUI から起動する手動ペインは、`git` と `tmux`、選択した agent があれば動きます。`origin` remote や `gh` 認証が無い repository でも動作します。
 
 > **Project モード時のみ**: Project items を取得する GraphQL クエリのため、`gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project` で付与してください。issue モード(`fanout <N>`)では不要です。
 
@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.8.0 sh
 ```
 
-`install.sh` は macOS/Linux と amd64/arm64 を自動判定し、最新 GitHub Release(または `FANOUT_VERSION` で指定した tag)から `fanout_<os>_<arch>.tar.gz` を取得します。`sha256sum` または `shasum` があれば `SHA256SUMS` で検証し、再実行時は同じパスへ上書きします。シェル rc は自動編集しません。
+`install.sh` はまず macOS/Linux と amd64/arm64 を自動判定します。次に最新 GitHub Release(または `FANOUT_VERSION` で指定した tag)から `fanout_<os>_<arch>.tar.gz` を取得します。`sha256sum` または `shasum` があれば `SHA256SUMS` で検証します。再実行時は同じパスへ上書きします。シェル rc は自動編集しません。
 
 ### 配置パス
 
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CLAUDE_DIR/skills/fanout/`(既定は `~/.claude/skills/fanout/`)
 - `$CLAUDE_DIR/skills/fanout-issues/`(既定は `~/.claude/skills/fanout-issues/`)
 - `$CLAUDE_DIR/skills/fanout-plan/`(既定は `~/.claude/skills/fanout-plan/`)
-- `$CLAUDE_DIR/skills/post-work-review/`(既定は `~/.claude/skills/post-work-review/` — PR レビューゲートを支える skill。同名 skill を上書きするので、自前のものがあればバックアップを)
+- `$CLAUDE_DIR/skills/post-work-review/`(既定は `~/.claude/skills/post-work-review/`。PR レビューゲートを支える skill です。同名 skill を上書きするので、自前のものがあればバックアップしてください)
 - `$CLAUDE_DIR/skills/pr-watch/`(既定は `~/.claude/skills/pr-watch/`)
 - `$CODEX_DIR/skills/fanout/`(既定は `~/.codex/skills/fanout/`)
 - `$CODEX_DIR/skills/fanout-issues/`(既定は `~/.codex/skills/fanout-issues/`)
@@ -100,7 +100,7 @@ CLAUDE_DIR=/path/to/.claude make install # 既定以外の Claude データデ�
 CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディレクトリを指定
 ```
 
-チェックアウトからのビルドには **Go ツールチェイン**(Go 1.26+)に加えて **Node.js 24+ と pnpm 10+** が必要です。`make install`・`make link`・`make build-go` はまずダッシュボード Web UI をビルドし(`make build-web`、`web/` の Vite バンドル)、それを embed して `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので Go も Node も不要です。
+チェックアウトからのビルドには **Go ツールチェイン**(Go 1.26+)に加えて **Node.js 24+ と pnpm 10+** が必要です。`make install`、`make link`、`make build-go` はまずダッシュボード Web UI をビルドし(`make build-web`、`web/` の Vite バンドル)、それを embed して `go build ./cmd/fanout` を実行します。上記の curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 
 ## 更新を保つ
 
@@ -116,12 +116,12 @@ CODEX_DIR=/path/to/.codex make install   # 既定以外の Codex データディ
 
 ### `fanout update`
 
-`fanout update` は、上で説明した `install.sh` の経路をそのまま呼び出して実行中の release バイナリを置き換えます。OS/arch 判定、release ダウンロード、checksum 検証、アーカイブ展開、Claude/Codex skill のインストールが 1 つのスクリプトに集約されたままになります。
+`fanout update` は、上で説明した `install.sh` の経路をそのまま呼び出して実行中の release バイナリを置き換えます。OS/arch 判定、release ダウンロード、checksum 検証、アーカイブ展開、Claude/Codex skill のインストールは、すべて 1 つのスクリプトに集約したままです。
 
 既定では最新 release を解決して埋め込み version と比較し、現在のバイナリパス(`EvalSymlinks` 解決後)を表示してから、すぐにインストーラを実行します。ローカルの dev build は置き換えを拒否します。
 
-- `--version <tag>` — `FANOUT_VERSION=<tag>` を `install.sh` に渡し、指定 tag をインストールする。
-- `--no-skills` — `--no-skills` を `install.sh` に渡し、バイナリのみ更新する。
+- `--version <tag>`: `FANOUT_VERSION=<tag>` を `install.sh` に渡し、指定 tag をインストールする。
+- `--no-skills`: `--no-skills` を `install.sh` に渡し、バイナリのみ更新する。
 
 | Exit code | 意味 |
 |---|---|

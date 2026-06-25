@@ -206,7 +206,7 @@ explicitly skipped.
 
 ## Settings flags
 
-These paired switches toggle fanout's opinionated behaviors for one run; a CLI flag always wins over the environment-variable and config-file layers. What each behavior actually injects — and the full resolution order — is documented in [Settings]({{< relref "/docs/settings" >}}).
+These paired switches toggle fanout's opinionated behaviors for one run — the child-briefing instructions and dashboard keybinding fanout injects, flipped on or off in place. A CLI flag always wins over the environment-variable and config-file layers. What each behavior actually injects — and the full resolution order — is documented in [Settings]({{< relref "/docs/settings" >}}).
 
 | Flag | Argument | Description |
 |---|---|---|
