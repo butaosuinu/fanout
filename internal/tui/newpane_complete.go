@@ -107,10 +107,23 @@ func (m *model) acceptCompletion() {
 		return
 	}
 	selected := m.newPane.compResults[m.newPane.compIndex]
-	for range m.promptTokenRunesBeforeCursor() {
+	insertion := "@" + selected + " "
+	tokenRunes := m.promptTokenRunesBeforeCursor()
+	// The textarea silently truncates inserts at CharLimit, which would leave a
+	// partial @path mention. If the replacement would not fit, keep the popup
+	// open and surface why instead of corrupting the mention.
+	if limit := m.newPane.prompt.CharLimit; limit > 0 {
+		current := len([]rune(m.newPane.prompt.Value()))
+		if current-tokenRunes+len([]rune(insertion)) > limit {
+			m.newPane.err = "prompt too long to insert that path"
+			return
+		}
+	}
+	m.newPane.err = ""
+	for range tokenRunes {
 		m.newPane.prompt, _ = m.newPane.prompt.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	}
-	m.newPane.prompt.InsertString("@" + selected + " ")
+	m.newPane.prompt.InsertString(insertion)
 	m.endCompletion()
 }
 

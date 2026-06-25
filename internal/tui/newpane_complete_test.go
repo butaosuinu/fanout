@@ -286,6 +286,31 @@ func TestAcceptCompletionPreservesPrecedingText(t *testing.T) {
 	}
 }
 
+func TestAcceptCompletionRefusesWhenOverCharLimit(t *testing.T) {
+	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	// Fill the prompt to just under CharLimit, then start an @-token.
+	limit := m.newPane.prompt.CharLimit
+	m.newPane.prompt.SetValue(strings.Repeat("x", limit-3) + " ")
+	for _, r := range []string{"@", "n"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	if len(m.newPane.compResults) == 0 {
+		t.Fatal("expected a candidate for '@n'")
+	}
+
+	before := m.newPane.prompt.Value()
+	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.newPane.prompt.Value() != before {
+		t.Fatalf("over-limit accept must not modify the prompt:\n  before=%q\n  after =%q", before, m.newPane.prompt.Value())
+	}
+	if m.newPane.err == "" {
+		t.Fatal("over-limit accept should surface an error")
+	}
+	if !strings.Contains(m.newPane.prompt.Value(), "@n") {
+		t.Fatal("the typed @-token should remain intact after a refused accept")
+	}
+}
+
 func TestNewPaneViewRendersCompletionPopup(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 100
