@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func openCompletionModel(t *testing.T, files []string) model {
@@ -359,6 +360,65 @@ func TestFileIndexExcludesSpacePaths(t *testing.T) {
 	top, total := rankFileEntries(idx, "", 8)
 	if total != 1 || len(top) != 1 || top[0] != "docs/readme.md" {
 		t.Fatalf("only the clean path should remain, got %v (total %d)", top, total)
+	}
+}
+
+func TestAcceptCompletionRefusesOverCharLimitFullWidth(t *testing.T) {
+	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	// Full-width fill: rune count (499) is far under CharLimit but display width
+	// (~997) is near it, so a rune-count guard would wrongly allow the insert.
+	m.newPane.prompt.SetValue(strings.Repeat("あ", 498) + " ")
+	for _, r := range []string{"@", "n"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	if len(m.newPane.compResults) == 0 {
+		t.Fatal("expected a candidate for '@n'")
+	}
+	before := m.newPane.prompt.Value()
+	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.newPane.prompt.Value() != before {
+		t.Fatal("over-limit (display-width) accept must not modify the prompt")
+	}
+	if m.newPane.err == "" {
+		t.Fatal("expected an over-limit error for a full-width prompt")
+	}
+}
+
+func TestAcceptCompletionFullWidthPrefixWithTrailingText(t *testing.T) {
+	// Full-width rune before the token AND text after the cursor: exercises the
+	// rune-index path math (StartColumn+ColumnOffset is a rune offset).
+	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	for _, r := range []string{"あ", " ", "t", "a", "i", "l"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	for range 4 { // move the cursor back to just after "あ "
+		m = applyMsg(m, tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	for _, r := range []string{"@", "n", "e", "w"} {
+		m = applyMsg(m, keyRunes(r))
+	}
+	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got, want := m.newPane.prompt.Value(), "あ @internal/tui/newpane.go tail"; got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+}
+
+func TestFileIndexExcludesNewlinePaths(t *testing.T) {
+	idx := buildFileIndex([]string{"clean.go", "weird\nname.go", "cr\rfile.go"})
+	if len(idx) != 1 || idx[0].path != "clean.go" {
+		t.Fatalf("only clean.go should survive newline/CR exclusion, got %v", idx)
+	}
+}
+
+func TestTruncatePathTailUsesDisplayWidth(t *testing.T) {
+	// 10 full-width runes = 20 display columns; a 12-column limit must truncate
+	// even though the rune count (10) is under the limit.
+	out := truncatePathTail(strings.Repeat("あ", 10), 12)
+	if w := lipgloss.Width(out); w > 12 {
+		t.Fatalf("truncated display width = %d, want <= 12 (%q)", w, out)
+	}
+	if !strings.HasPrefix(out, "…") {
+		t.Fatalf("expected an ellipsis prefix, got %q", out)
 	}
 }
 

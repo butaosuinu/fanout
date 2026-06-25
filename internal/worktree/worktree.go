@@ -460,16 +460,17 @@ func ListFiles(root string) ([]string, error) {
 	return files, nil
 }
 
-// baseTreeRef resolves the ref whose tree a fresh fanout worktree branches from,
-// matching the base resolution used at launch. It prefers the remote default
-// branch tip (what the worktree refreshes to), resolved locally without a
-// network round-trip; with no origin it falls back to the resolved default
-// branch, which in turn is the current branch a local-only worktree branches off.
+// baseTreeRef resolves the ref whose tree a fresh fanout worktree branches from.
+// It uses the same default-branch resolution as launch (ResolveDefaultBranch,
+// which prefers GitHub's defaultBranchRef) so completion candidates and the
+// created worktree never disagree on the base, then prefers that branch's remote
+// tip (origin/<base>) — what the worktree refreshes to — when present.
 func baseTreeRef(root string) string {
-	if s, err := gitTrim(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && s != "" {
-		return s
+	base := ResolveDefaultBranchAllowMissingOrigin(root)
+	if _, err := git(root, "rev-parse", "--verify", "--quiet", "origin/"+base); err == nil {
+		return "origin/" + base
 	}
-	return ResolveDefaultBranchAllowMissingOrigin(root)
+	return base
 }
 
 func checkedOutWorktree(root, branch string) string {

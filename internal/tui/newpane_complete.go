@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // completionMax caps how many file matches the @-completion popup shows at once.
@@ -32,9 +33,10 @@ func buildFileIndex(files []string) []fileEntry {
 	idx := make([]fileEntry, 0, len(files))
 	for _, f := range files {
 		// A whitespace-containing path cannot be a single @file mention (the
-		// mention ends at the first space), so completing it would silently
-		// yield a dead reference. Drop it from the candidates.
-		if strings.ContainsAny(f, " \t") {
+		// mention ends at the first whitespace), so completing it would silently
+		// yield a dead reference — or, for a newline, corrupt the prompt. Drop
+		// any path with whitespace (space, tab, newline, CR, …).
+		if strings.IndexFunc(f, unicode.IsSpace) >= 0 {
 			continue
 		}
 		idx = append(idx, fileEntry{
@@ -114,13 +116,14 @@ func (m *model) acceptCompletion() {
 	}
 	selected := m.newPane.compResults[m.newPane.compIndex]
 	insertion := "@" + selected + " "
-	tokenRunes := m.promptTokenRunesBeforeCursor()
+	tokenRunes, tokenWidth := m.promptTokenBeforeCursor()
 	// The textarea silently truncates inserts at CharLimit, which would leave a
-	// partial @path mention. If the replacement would not fit, keep the popup
-	// open and surface why instead of corrupting the mention.
+	// partial @path mention. CharLimit is enforced against the display width
+	// (textarea.Length uses uniseg.StringWidth), so measure the replacement in
+	// display columns too — a rune count would under-count full-width prompts.
 	if limit := m.newPane.prompt.CharLimit; limit > 0 {
-		current := len([]rune(m.newPane.prompt.Value()))
-		if current-tokenRunes+len([]rune(insertion)) > limit {
+		newLength := m.newPane.prompt.Length() - tokenWidth + lipgloss.Width(insertion)
+		if newLength > limit {
 			m.newPane.err = "prompt too long to insert that path"
 			return
 		}
@@ -217,20 +220,20 @@ func (m model) atWordBoundaryBeforeCursor() bool {
 	return unicode.IsSpace(runes[idx])
 }
 
-// promptTokenRunesBeforeCursor returns the rune count of the '@'-token (a run of
-// non-space chars ending at the cursor and starting with '@'). It returns 0 when
-// the run does not start with '@', so acceptCompletion never deletes unrelated
-// text.
-func (m model) promptTokenRunesBeforeCursor() int {
+// promptTokenBeforeCursor returns the rune count and display width of the
+// '@'-token (a run of non-space chars ending at the cursor and starting with
+// '@'). It returns 0, 0 when the run does not start with '@', so
+// acceptCompletion never deletes unrelated text.
+func (m model) promptTokenBeforeCursor() (runeCount, width int) {
 	runes, col := m.promptLineRunesBeforeCursor()
 	start := col
 	for start > 0 && !unicode.IsSpace(runes[start-1]) {
 		start--
 	}
 	if start >= col || runes[start] != '@' {
-		return 0
+		return 0, 0
 	}
-	return col - start
+	return col - start, lipgloss.Width(string(runes[start:col]))
 }
 
 func allCompletionRunes(runes []rune) bool {
@@ -336,14 +339,18 @@ func (m model) completionPopupView() string {
 }
 
 // truncatePathTail keeps the tail (basename side) of a path visible, eliding the
-// head with an ellipsis when it would exceed limit columns.
+// head with an ellipsis when it would exceed limit display columns. It measures
+// display width (lipgloss.Width), not rune count, so full-width paths do not
+// overflow the popup and wrap.
 func truncatePathTail(p string, limit int) string {
-	if limit <= 1 {
+	if limit <= 1 || lipgloss.Width(p) <= limit {
 		return p
 	}
+	// Drop leading runes until the remaining tail fits limit-1 columns, leaving
+	// one column for the ellipsis.
 	runes := []rune(p)
-	if len(runes) <= limit {
-		return p
+	for len(runes) > 0 && lipgloss.Width(string(runes)) > limit-1 {
+		runes = runes[1:]
 	}
-	return "…" + string(runes[len(runes)-(limit-1):])
+	return "…" + string(runes)
 }
