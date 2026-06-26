@@ -65,9 +65,10 @@ panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` /
 the side or top depending on terminal width; `[` / `]` jump the pane table to
 the previous / next Session. It lets the user press `n` to open a modal and
 launch one or more manual prompt-based `claude` / `codex` panes from the same
-prompt (multi-line prompt input uses `Shift+Enter` for newline, with `Ctrl+J`
-as a terminal fallback; `Up` / `Down` picks an agent row, `Space` toggles it,
-`Left` / `Right` changes its count, and `Enter` creates the selected panes).
+prompt (multi-line prompt input uses `Ctrl+J` for newline; `Shift+Enter` works
+only when `FANOUT_TUI_ENHANCED_KEYS=1` enables enhanced keyboard input and the
+terminal reports that key distinctly; `Up` / `Down` picks an agent row, `Space`
+toggles it, `Left` / `Right` changes its count, and `Enter` creates the selected panes).
 Manual `codex` panes start in Codex Plan Mode; manual `claude` panes start
 normally. The console exits on `q` without killing the session or child panes.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded

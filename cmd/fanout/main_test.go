@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
+	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
 func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
@@ -287,11 +288,21 @@ func TestFanoutTUISessionNameIsStableAndSanitized(t *testing.T) {
 }
 
 func TestTUILaunchCommandChangesToProjectRoot(t *testing.T) {
+	t.Setenv(fanouttui.EnhancedKeysEnv, "")
 	got := tuiLaunchCommand("fanout", "/tmp/My Repo")
 	if !strings.HasPrefix(got, "cd '/tmp/My Repo' && ") {
 		t.Fatalf("tuiLaunchCommand() = %q, want cd into quoted project root", got)
 	}
 	if strings.HasSuffix(got, " tui") {
 		t.Fatalf("tuiLaunchCommand() = %q, did not expect tui subcommand suffix", got)
+	}
+}
+
+func TestTUILaunchCommandPropagatesEnhancedKeysOptIn(t *testing.T) {
+	t.Setenv(fanouttui.EnhancedKeysEnv, "1")
+
+	got := tuiLaunchCommand("fanout", "/tmp/repo")
+	if !strings.Contains(got, " && "+fanouttui.EnhancedKeysEnv+"=1 ") {
+		t.Fatalf("tuiLaunchCommand() = %q, want enhanced keyboard env prefix", got)
 	}
 }

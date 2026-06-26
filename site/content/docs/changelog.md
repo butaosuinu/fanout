@@ -36,7 +36,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 ## v0.5.0 (2026-06-14)
 
 - **Per-target agent overrides.** A bare `--agent <name>` still sets the default for every child, but you can now mix agents in one run with the repeatable `--agent <NUM>=<name>` form (issue / Project children) or `--agent <task-id>=<name>` (`fanout plan`). Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`; only the agents actually selected are validated. See [CLI Reference]({{< relref "/docs/cli" >}}).
-- **Multi-line TUI session modal.** Pressing `n` in the persistent console now opens a modal that takes a multi-line prompt, a `claude` / `codex` choice, and an optional slug. `Shift+Enter` inserts a newline (`Ctrl+J` is a fallback for terminals that do not distinguish it) and `Enter` creates the pane. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Multi-line TUI session modal.** Pressing `n` in the persistent console now opens a modal that takes a multi-line prompt, a `claude` / `codex` choice, and an optional slug. `Ctrl+J` inserts a newline, `Shift+Enter` is available only with enhanced keyboard input, and `Enter` creates the pane. See [Monitoring]({{< relref "/docs/monitoring" >}}).
 
 [Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.5.0)
 

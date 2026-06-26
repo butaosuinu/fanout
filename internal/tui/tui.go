@@ -112,7 +112,7 @@ type (
 // Run starts the Bubble Tea TUI.
 func Run(opts Options) error {
 	opts = normalizeOptions(opts)
-	keyboard := newShiftEnterProtocols(os.Stdout)
+	keyboard := newShiftEnterProtocols(os.Stdout, enhancedKeyboardKeysEnabled())
 	opts.keyboard = keyboard
 	m := newModel(opts)
 	input, closeInput, err := newShiftEnterProgramInput(os.Stdin)
@@ -133,6 +133,10 @@ func Run(opts Options) error {
 		}),
 	).Run()
 	return err
+}
+
+func enhancedKeyboardKeysEnabled() bool {
+	return os.Getenv(EnhancedKeysEnv) == "1"
 }
 
 func normalizeOptions(opts Options) Options {

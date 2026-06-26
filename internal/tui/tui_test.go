@@ -1078,6 +1078,18 @@ func TestEnableKeyboardProtocolsCmd(t *testing.T) {
 	}
 }
 
+func TestEnhancedKeyboardKeysEnabledRequiresOptIn(t *testing.T) {
+	t.Setenv(EnhancedKeysEnv, "")
+	if enhancedKeyboardKeysEnabled() {
+		t.Fatal("enhancedKeyboardKeysEnabled() = true without opt-in")
+	}
+
+	t.Setenv(EnhancedKeysEnv, "1")
+	if !enhancedKeyboardKeysEnabled() {
+		t.Fatal("enhancedKeyboardKeysEnabled() = false with opt-in")
+	}
+}
+
 func TestQuitDisablesKeyboardProtocols(t *testing.T) {
 	protocols := &fakeKeyboardProtocols{}
 	m := newModel(Options{keyboard: protocols})
@@ -2293,6 +2305,35 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	}
 }
 
+func TestNewPaneFormAcceptsCJKPromptInput(t *testing.T) {
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) (string, error) {
+			got = req
+			return "", nil
+		},
+	})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(keyRunes("日本語入力テスト"))
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = updated.(model)
+	updated, _ = m.Update(keyRunes("中文한글"))
+	m = updated.(model)
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+
+	if got.Prompt != "日本語入力テスト\n中文한글" {
+		t.Fatalf("CJK prompt = %q", got.Prompt)
+	}
+}
+
 func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 100
@@ -2304,10 +2345,26 @@ func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.View()
-	for _, want := range []string{"PARENT", "New agent pane", "shift+enter newline", "left/right count"} {
+	for _, want := range []string{"PARENT", "New agent pane", "ctrl+j newline", "shift+enter newline", "left/right count"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestNewPaneViewRendersCJKPromptInsideFrame(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.openNewPaneForm()
+	m.newPane.prompt.SetValue("日本語入力テスト")
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "日本語入力テスト") {
+		t.Fatalf("modal view missing CJK prompt:\n%s", view)
+	}
+	if got := strings.Count(view, "┌"); got != 3 {
+		t.Fatalf("framed input boxes: got %d top-left corners, want 3:\n%s", got, view)
 	}
 }
 
