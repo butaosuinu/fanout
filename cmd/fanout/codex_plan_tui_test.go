@@ -129,6 +129,9 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 	if shaped.CollaborationMode.Settings.ReasoningEffort != "xhigh" {
 		t.Fatalf("reasoning_effort = %q, want xhigh", shaped.CollaborationMode.Settings.ReasoningEffort)
 	}
+	if len(shaped.Input) != 1 || shaped.Input[0].Type != "text" || shaped.Input[0].Text != "hello plan" {
+		t.Fatalf("input = %#v, want one text prompt", shaped.Input)
+	}
 }
 
 func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
@@ -224,9 +227,6 @@ func TestSupportedReasoningEffortFallsBackToStrongestSupportedEffort(t *testing.
 
 	if got != "ultra" {
 		t.Fatalf("supportedReasoningEffort() = %q, want ultra", got)
-	}
-	if len(shaped.Input) != 1 || shaped.Input[0].Type != "text" || shaped.Input[0].Text != "hello plan" {
-		t.Fatalf("input = %#v, want one text prompt", shaped.Input)
 	}
 }
 

@@ -58,6 +58,7 @@ type viewMode int
 const (
 	modeMonitor viewMode = iota
 	modeNewPane
+	modeHelp
 )
 
 type model struct {
