@@ -171,7 +171,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
-func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testing.T) {
+func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
 		Agent:         "codex",
@@ -188,22 +188,19 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testi
 	if !req.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
 	}
-	if req.BriefingPath != "/tmp/fanout-repo--1.md" {
-		t.Fatalf("briefing path = %q, want manual briefing path", req.BriefingPath)
+	if req.BriefingPath != "" || req.BriefingBody != "" {
+		t.Fatalf("manual Codex Plan Mode should not use briefing file: path %q body %q", req.BriefingPath, req.BriefingBody)
 	}
 	if req.CodexPlanStatusPath != "/tmp/fanout-codex-plan-repo--1.json" {
 		t.Fatalf("codex plan status path = %q", req.CodexPlanStatusPath)
-	}
-	if !strings.Contains(req.Prompt, "read /tmp/fanout-repo--1.md for additional context and propose a plan.") {
-		t.Fatalf("prompt = %q, want Plan Mode briefing reference", req.Prompt)
 	}
 	for _, want := range []string{
 		"manual fanout Codex Plan Mode session",
 		"Body:\nInspect API",
 		"<proposed_plan>...</proposed_plan>",
 	} {
-		if !strings.Contains(req.BriefingBody, want) {
-			t.Fatalf("manual plan briefing missing %q:\n%s", want, req.BriefingBody)
+		if !strings.Contains(req.Prompt, want) {
+			t.Fatalf("manual plan prompt missing %q:\n%s", want, req.Prompt)
 		}
 	}
 	for _, unexpected := range []string{
@@ -211,9 +208,10 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testi
 		"commit and push",
 		"Open a pull request",
 		"codex review --uncommitted",
+		"read /tmp/",
 	} {
-		if strings.Contains(req.BriefingBody, unexpected) {
-			t.Fatalf("manual plan briefing contains %q:\n%s", unexpected, req.BriefingBody)
+		if strings.Contains(req.Prompt, unexpected) {
+			t.Fatalf("manual plan prompt contains %q:\n%s", unexpected, req.Prompt)
 		}
 	}
 
@@ -223,7 +221,8 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testi
 	}
 	for _, want := range []string{
 		"fanout-go __codex-plan-tui --codex codex",
-		"--prompt 'Inspect API. read /tmp/fanout-repo--1.md for additional context and propose a plan.'",
+		"--prompt 'You are starting a manual fanout Codex Plan Mode session in this repository.",
+		"<proposed_plan>...</proposed_plan>",
 		"--status-file /tmp/fanout-codex-plan-repo--1.json",
 	} {
 		if !strings.Contains(cmd, want) {
@@ -234,7 +233,7 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndBriefing(t *testi
 
 func TestNewManualPaneRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
 	codexPlanMode := true
-	cfg := &cliflags.Config{Agent: "codex", CodexPlanMode: &codexPlanMode}
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &codexPlanMode}
 	req := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{
 		Title:  "Inspect API",
 		Body:   "Inspect API\n\nCheck handlers",
@@ -242,11 +241,21 @@ func TestNewManualPaneRequestCodexPlanModePreservesMultilinePrompt(t *testing.T)
 		Prompt: "Inspect API",
 	})
 
-	if !strings.Contains(req.BriefingBody, "Body:\nInspect API\n\nCheck handlers") {
-		t.Fatalf("manual plan briefing did not preserve multiline prompt:\n%s", req.BriefingBody)
+	if req.BriefingPath != "" || req.BriefingBody != "" {
+		t.Fatalf("manual Codex Plan Mode should not use briefing file: path %q body %q", req.BriefingPath, req.BriefingBody)
 	}
-	if !strings.Contains(req.Prompt, "propose a plan") {
+	if !strings.Contains(req.Prompt, "Body:\nInspect API\n\nCheck handlers") {
+		t.Fatalf("manual plan prompt did not preserve multiline prompt:\n%s", req.Prompt)
+	}
+	if !strings.Contains(req.Prompt, "<proposed_plan>...</proposed_plan>") {
 		t.Fatalf("manual plan prompt = %q, want plan action", req.Prompt)
+	}
+	cmd, err := buildAgentCommand(cfg, req, "fanout-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmd, "Body:\nInspect API\n\nCheck handlers") {
+		t.Fatalf("manual plan command did not preserve multiline prompt:\n%s", cmd)
 	}
 }
 
