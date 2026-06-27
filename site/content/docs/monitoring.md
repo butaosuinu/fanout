@@ -34,9 +34,9 @@ For recorded issue parents the console also reloads the parent's child set and s
 | `t` | Open a shell terminal at the project root. Closing it kills the tmux pane and removes the state row; it never removes a git worktree. |
 | `Enter` / `o` | Focus the selected live row's pane. |
 | `p` | Refresh the read-only output snapshot shown in the detail panel. |
-| `c` | Close the selected pane — confirmation prompt, then the same core path as `--close`. |
+| `c` / `x` | Open close options for the selected pane: close only the pane, close the pane and remove the worktree, or also delete the local branch. |
 | `m` | Fast-forward merge the selected pane's branch — confirmation prompt, then the same core path as `--merge`. |
-| `x` | Clean up merged/closed children of the same parent — confirmation prompt, then the same core path as `--cleanup`. |
+| `X` | Clean up merged/closed children of the same parent — confirmation prompt, then the same core path as `--cleanup`. |
 | `q` | Leave the console. The tmux session and child panes are left running. |
 
 > Rows whose recorded pane no longer exists in tmux are marked `stale!` and are skipped by the focus and peek actions.

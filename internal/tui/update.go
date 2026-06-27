@@ -73,6 +73,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "m":
 			return m.startPendingAction(actionMerge)
 		case "x":
+			return m.startPendingAction(actionClose)
+		case "X":
 			return m.startPendingAction(actionCleanup)
 		}
 		oldCursor := m.table.Cursor()

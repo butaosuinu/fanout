@@ -103,6 +103,148 @@ printf '\n' >> "$TMUX_LOG"
 	}
 }
 
+func TestLifecycleClosePaneOnlyKeepsWorktreeAndBranch(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")
+	branch := "fanout/close-child-101"
+	gitCmdTest(t, repo, "worktree", "add", "-b", branch, worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		Slug:         "close-child-101",
+		BranchName:   branch,
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+
+	code := lifecycle.CloseWithMode(
+		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		"84",
+		101,
+		lifecycle.ClosePaneOnly,
+		discardLogger(),
+	)
+
+	if code != exitcode.OK {
+		t.Fatalf("CloseWithMode pane-only code = %d, want %d", code, exitcode.OK)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree path should remain: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).CombinedOutput(); err != nil {
+		t.Fatalf("branch should remain: %v\n%s", err, out)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "kill-pane -t %42") {
+		t.Fatalf("tmux log = %q, want kill-pane for %%42", body)
+	}
+}
+
+func TestLifecycleCloseEverythingDeletesLocalBranch(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")
+	branch := "fanout/close-child-101"
+	gitCmdTest(t, repo, "worktree", "add", "-b", branch, worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		Slug:         "close-child-101",
+		BranchName:   branch,
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+
+	code := lifecycle.CloseWithMode(
+		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		"84",
+		101,
+		lifecycle.CloseEverything,
+		discardLogger(),
+	)
+
+	if code != exitcode.OK {
+		t.Fatalf("CloseWithMode delete-everything code = %d, want %d", code, exitcode.OK)
+	}
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists or stat failed unexpectedly: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).CombinedOutput(); err == nil {
+		t.Fatalf("branch should be deleted; git output:\n%s", out)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+}
+
+func TestLifecycleCloseEverythingPrunesStaleWorktreeBeforeDeletingBranch(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "stale-child-101")
+	branch := "fanout/stale-child-101"
+	gitCmdTest(t, repo, "worktree", "add", "-b", branch, worktreePath, "HEAD")
+	if err := os.RemoveAll(worktreePath); err != nil {
+		t.Fatal(err)
+	}
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		Slug:         "stale-child-101",
+		BranchName:   branch,
+		PaneID:       "%42",
+		WorktreePath: worktreePath,
+	})
+
+	code := lifecycle.CloseWithMode(
+		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		"84",
+		101,
+		lifecycle.CloseEverything,
+		discardLogger(),
+	)
+
+	if code != exitcode.OK {
+		t.Fatalf("CloseWithMode stale worktree code = %d, want %d", code, exitcode.OK)
+	}
+	if out, err := exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).CombinedOutput(); err == nil {
+		t.Fatalf("branch should be deleted; git output:\n%s", out)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+}
+
 func TestCmdCloseWarnsButKeepsOKWhenRunningLabelRemovalFails(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "close-child-101")

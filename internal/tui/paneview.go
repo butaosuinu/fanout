@@ -133,7 +133,7 @@ func columnsForWidth(width int) []table.Column {
 }
 
 func (m model) footerText() string {
-	parts := []string{"q quit", "n new", "A terminal", "t root", "j/k move", "[/] session", "/ filter", "enter/o focus", "p peek", "c close", "m merge", "x cleanup"}
+	parts := []string{"q quit", "n new", "A terminal", "t root", "j/k move", "[/] session", "/ filter", "enter/o focus", "p peek", "c/x close", "m merge", "X cleanup"}
 	if m.filterEditing {
 		parts = append(parts, "typing")
 	}

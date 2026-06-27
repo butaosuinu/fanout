@@ -43,11 +43,32 @@ type statusChild struct {
 	HasMergedPR bool
 }
 
+// CloseMode selects how much repository state a close operation removes.
+type CloseMode int
+
+const (
+	// ClosePaneOnly kills the tmux pane and removes fanout state, leaving the
+	// worktree and branch available outside fanout.
+	ClosePaneOnly CloseMode = iota
+	// CloseWorktree kills the tmux pane, removes the worktree, and leaves the
+	// local branch intact. This is the historical --close behavior.
+	CloseWorktree
+	// CloseEverything also deletes the recorded local branch after removing the
+	// worktree.
+	CloseEverything
+)
+
 const watcherStandaloneParent = "@watch"
 
 // Close removes the recorded worktree(s), best-effort kills tmux pane(s), and
 // removes all state rows matching parent and issueNum.
 func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
+	return CloseWithMode(opts, parent, issueNum, CloseWorktree, lg)
+}
+
+// CloseWithMode closes all recorded panes matching parent and issueNum using
+// mode to decide whether worktree and branch state should also be removed.
+func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg Logger) exitcode.Code {
 	locked, code := lockStateOnly("--close", opts, lg)
 	if code != exitcode.OK {
 		return code
@@ -59,13 +80,13 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if hasManagedWorktree(panes) {
+	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
 			return exitcode.Env
 		}
 	}
-	if !cleanupPaneRecords(opts, panes, lg) {
+	if !closePaneRecords(opts, panes, mode, lg) {
 		return exitcode.Env
 	}
 	if err := locked.RemovePane(parent, issueNum); err != nil {
@@ -73,12 +94,15 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	removeWatcherRunningLabelBestEffort(opts, parent, issueNum, locked.PanesForParent(parent), lg)
-	if hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
+	if mode.removesWorktree() && hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
-	if hasManagedWorktree(panes) {
+	switch {
+	case mode == ClosePaneOnly:
+		lg.Ok("#%d: closed pane and removed state", issueNum)
+	case hasManagedWorktree(panes):
 		lg.Ok("#%d: closed fanout worktree and removed state", issueNum)
-	} else {
+	default:
 		lg.Ok("#%d: closed shell terminal and removed state", issueNum)
 	}
 	return exitcode.OK
@@ -87,6 +111,12 @@ func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 // CloseTask removes the recorded worktree(s), best-effort kills tmux pane(s),
 // and removes all task state rows matching parent and taskID.
 func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
+	return CloseTaskWithMode(opts, parent, taskID, CloseWorktree, lg)
+}
+
+// CloseTaskWithMode closes all recorded task panes matching parent and taskID
+// using mode to decide whether worktree and branch state should also be removed.
+func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg Logger) exitcode.Code {
 	locked, code := lockStateOnly("--close", opts, lg)
 	if code != exitcode.OK {
 		return code
@@ -98,25 +128,28 @@ func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if hasManagedWorktree(panes) {
+	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
 			return exitcode.Env
 		}
 	}
-	if !cleanupPaneRecords(opts, panes, lg) {
+	if !closePaneRecords(opts, panes, mode, lg) {
 		return exitcode.Env
 	}
 	if err := locked.RemoveTaskPane(parent, taskID); err != nil {
 		lg.Err("%s: remove fanout state: %v", taskID, err)
 		return exitcode.Env
 	}
-	if hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
+	if mode.removesWorktree() && hasManagedWorktree(panes) && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
-	if hasManagedWorktree(panes) {
+	switch {
+	case mode == ClosePaneOnly:
+		lg.Ok("%s: closed pane and removed state", taskID)
+	case hasManagedWorktree(panes):
 		lg.Ok("%s: closed fanout worktree and removed state", taskID)
-	} else {
+	default:
 		lg.Ok("%s: closed shell terminal and removed state", taskID)
 	}
 	return exitcode.OK
@@ -397,11 +430,21 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 }
 
 func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
+	return closePaneRecords(opts, panes, CloseWorktree, lg)
+}
+
+func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	ok := true
 	for _, pane := range panes {
 		if pane.IsShell() {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 			killShellPaneBestEffort(pane, lg)
+			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+			continue
+		}
+		if mode == ClosePaneOnly {
+			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+			killPaneBestEffort(pane, lg)
 			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
 		}
@@ -417,11 +460,25 @@ func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
 		if hadWorktree {
 			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
 		}
+		if mode == CloseEverything {
+			if !pruneWorktrees(opts.ProjectRoot, lg) {
+				ok = false
+				continue
+			}
+			if !deleteBranch(opts.ProjectRoot, pane, lg) {
+				ok = false
+				continue
+			}
+		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		killPaneBestEffort(pane, lg)
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
 	return ok
+}
+
+func (m CloseMode) removesWorktree() bool {
+	return m == CloseWorktree || m == CloseEverything
 }
 
 func hasManagedWorktree(panes []state.Pane) bool {
@@ -462,6 +519,32 @@ func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {
 		return false
 	}
 	return true
+}
+
+func deleteBranch(projectRoot string, pane state.Pane, lg Logger) bool {
+	branch := strings.TrimSpace(pane.BranchName)
+	if branch == "" {
+		lg.Err("%s: no branchName recorded; cannot delete local branch", paneLabel(pane))
+		return false
+	}
+	if !localBranchExists(projectRoot, branch) {
+		lg.Warn("%s: local branch already absent: %s", paneLabel(pane), branch)
+		return true
+	}
+	out, err := gitLifecycle(projectRoot, "branch", "-D", branch)
+	if err != nil {
+		lg.Err("%s: git branch -D %s failed", paneLabel(pane), branch)
+		if s := strings.TrimSpace(string(out)); s != "" {
+			fmt.Fprintln(lg.Stderr(), s)
+		}
+		return false
+	}
+	return true
+}
+
+func localBranchExists(projectRoot, branch string) bool {
+	err := exec.Command("git", "-C", projectRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run()
+	return err == nil
 }
 
 func killPaneBestEffort(pane state.Pane, lg Logger) {
