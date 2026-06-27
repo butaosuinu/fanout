@@ -370,13 +370,11 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 	briefingBody := ""
 	codexPlanMode := cfg.CodexPlanModeEnabled()
 	if codexPlanMode {
-		briefingPath = briefing.Path(projectRoot, number)
 		body := opts.Body
 		if strings.TrimSpace(body) == "" {
 			body = prompt
 		}
-		briefingBody = briefing.RenderManualPlan(title, body)
-		prompt = manualPromptWithBriefingAction(prompt, briefingPath, "propose a plan")
+		prompt = briefing.RenderManualPlan(title, body)
 	} else if opts.Body != "" {
 		briefingPath = briefing.Path(projectRoot, number)
 		briefingBody = opts.Body

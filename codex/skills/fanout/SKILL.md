@@ -69,8 +69,9 @@ prompt (multi-line prompt input uses `Ctrl+J` for newline; `Shift+Enter` works
 only when `FANOUT_TUI_ENHANCED_KEYS=1` enables enhanced keyboard input and the
 terminal reports that key distinctly; `Up` / `Down` picks an agent row, `Space`
 toggles it, `Left` / `Right` changes its count, and `Enter` creates the selected panes).
-Manual `codex` panes start in Codex Plan Mode; manual `claude` panes start
-normally. The console exits on `q` without killing the session or child panes.
+Manual `codex` panes start in Codex Plan Mode and receive the modal prompt
+inline; manual `claude` panes start normally. The console exits on `q` without
+killing the session or child panes.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
 branch, and `x` cleans up merged/closed siblings for the same parent after
 confirmation.
@@ -407,7 +408,8 @@ API + parent body. Key points:
 - Lifecycle hooks are always on and come from user `hooks.json`.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
-  Plan Mode path automatically.
+  Plan Mode path automatically but pass the modal prompt inline instead of
+  writing a `/tmp` briefing file.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
   thread, starts the initial Plan turn with the child prompt through app-server,
   and attaches the interactive Codex TUI to that remote session. fanout does not

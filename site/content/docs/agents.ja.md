@@ -73,12 +73,12 @@ fanout 123 --agent codex --codex-plan-mode
 
 通常の positional な `codex "<prompt>"` ではなく、fanout は子ごとに Codex app-server を起動し、collaboration mode `plan` の thread を作成し、fanout プロンプトを app-server 経由で初回 turn として開始してから、その remote セッションに interactive な Codex TUI を attach します。
 
-子 briefing も Plan Mode 向けに差し替わります。`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn ではファイル編集や commit、push、PR 作成をしないことを明示します。TUI の manual ペイン modal で `codex` を起動する場合も、同じ Plan Mode 経路を自動で使います。
+子 briefing も Plan Mode 向けに差し替わります。`<proposed_plan>` に包んだ実装計画を出すこと、最初の turn ではファイル編集や commit、push、PR 作成をしないことを明示します。TUI の manual ペイン modal で `codex` を起動する場合も、同じ Plan Mode 経路を自動で使いますが、modal の prompt と Plan Mode 指示は `/tmp` briefing file ではなく inline prompt として渡します。
 
 この経路では tmux 経由で `/plan` やプロンプトのテキストを送信しません。ペインは interactive な Codex TUI セッションのまま残るため、その Plan Mode の会話から続行できます。app-server の Plan turn セットアップまたは TUI attach に失敗した場合は、state 記録前に launch を失敗扱いにし、ペインと worktree を後始末するため、同じ子を再実行できます。
 
 ## briefing の仕組み
 
-子ペインに送られるのは 1 行のプロンプトだけです。issue の完全な本文と短い Requirements チェックリストは `/tmp/fanout-<repo>-<NUM>.md` に書き出され、起動プロンプトは agent にその briefing ファイルを読むよう短く伝えます。
+issue または plan task の子ペインに送られるのは 1 行のプロンプトだけです。issue や task の完全な本文と短い Requirements チェックリストは `/tmp/fanout-<repo>-<NUM>.md` または task briefing path に書き出され、起動プロンプトは agent にその briefing ファイルを読むよう短く伝えます。
 
 briefing の内容は、解決済みの settings でフィルタされます。対象は `autoPullRequest`、`prReviewGate`、`briefingCodeReview`、`agentTeamsHint`、`prVisualization` です。CLI フラグや環境変数、config ファイルがどう解決されるかは [Settings]({{< relref "/docs/settings" >}}) を参照してください。
