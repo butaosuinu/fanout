@@ -32,6 +32,7 @@ const (
 	codexPlanTUICommand              = "__codex-plan-tui"
 	codexPlanTUIStatusReady          = "ready"
 	codexPlanTUIStatusFailed         = "failed"
+	codexPlanDefaultEffort           = "xhigh"
 	codexRemoteAppConnectTimeout     = 10 * time.Second
 	codexRemoteTUIStartupGrace       = 3 * time.Second
 	codexPlanUserInputFallbackAnswer = "fanout Codex Plan Mode is starting interactively; proceed with the implementation plan using stated assumptions, and call out any ambiguity instead of asking for input."
@@ -59,6 +60,11 @@ type codexThreadInfo struct {
 	Model                    string
 	PlanEffort               string
 	UseTurnCollaborationMode bool
+}
+
+type codexResolvedSettings struct {
+	Model           string
+	ReasoningEffort string
 }
 
 type appServerMessage struct {
@@ -262,17 +268,16 @@ func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, 
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
-	planEffort, err := codexPlanEffort(modeResult)
+	if planModeErr := ensureCodexPlanMode(modeResult); planModeErr != nil {
+		return codexThreadInfo{}, planModeErr
+	}
+
+	settings, err := resolveCodexSettings(client, cwd)
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
 
-	model, err := resolveCodexModel(client, cwd)
-	if err != nil {
-		return codexThreadInfo{}, err
-	}
-
-	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, model))
+	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, settings.Model))
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
@@ -280,10 +285,10 @@ func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, 
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
-	thread.Model = model
-	thread.PlanEffort = planEffort
+	thread.Model = settings.Model
+	thread.PlanEffort = settings.ReasoningEffort
 
-	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, model, planEffort)); err != nil {
+	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, settings.Model, settings.ReasoningEffort)); err != nil {
 		if !isUnsupportedCodexAppServerMethod(err) {
 			return codexThreadInfo{}, err
 		}
@@ -989,17 +994,32 @@ func appServerErrorSummary(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func resolveCodexModel(client *codexAppClient, cwd string) (string, error) {
+func resolveCodexSettings(client *codexAppClient, cwd string) (codexResolvedSettings, error) {
 	configResult, configErr := client.Request("fanout-config", "config/read", map[string]any{
 		"includeLayers": false,
 		"cwd":           cwd,
 	})
+	model := ""
+	effort := codexPlanDefaultEffort
 	if configErr == nil {
-		if model := configModel(configResult); model != "" {
-			return model, nil
+		config := configSettings(configResult)
+		model = config.Model
+		if config.ReasoningEffort != "" {
+			effort = config.ReasoningEffort
 		}
 	}
+	if model != "" {
+		return codexResolvedSettings{Model: model, ReasoningEffort: effort}, nil
+	}
 
+	model, err := resolveCodexModelFallback(client, configErr)
+	if err != nil {
+		return codexResolvedSettings{}, err
+	}
+	return codexResolvedSettings{Model: model, ReasoningEffort: effort}, nil
+}
+
+func resolveCodexModelFallback(client *codexAppClient, configErr error) (string, error) {
 	modelResult, modelErr := client.Request("fanout-models", "model/list", map[string]any{
 		"includeHidden": false,
 	})
@@ -1019,16 +1039,29 @@ func resolveCodexModel(client *codexAppClient, cwd string) (string, error) {
 	return model, nil
 }
 
-func configModel(raw json.RawMessage) string {
+func configSettings(raw json.RawMessage) codexResolvedSettings {
 	var res struct {
 		Config struct {
-			Model string `json:"model"`
+			Model                   string `json:"model"`
+			ReasoningEffort         string `json:"reasoning_effort"`
+			ModelReasoningEffort    string `json:"model_reasoning_effort"`
+			PlanModeReasoningEffort string `json:"plan_mode_reasoning_effort"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return ""
+		return codexResolvedSettings{}
 	}
-	return strings.TrimSpace(res.Config.Model)
+	effort := strings.TrimSpace(res.Config.PlanModeReasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ReasoningEffort)
+	}
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ModelReasoningEffort)
+	}
+	return codexResolvedSettings{
+		Model:           strings.TrimSpace(res.Config.Model),
+		ReasoningEffort: effort,
+	}
 }
 
 func modelListDefault(raw json.RawMessage) (string, error) {
@@ -1069,33 +1102,23 @@ func modelName(model, id string) string {
 	return strings.TrimSpace(id)
 }
 
-func codexPlanEffort(raw json.RawMessage) (string, error) {
+func ensureCodexPlanMode(raw json.RawMessage) error {
 	var res struct {
 		Data []struct {
-			Name            string  `json:"name"`
-			Mode            string  `json:"mode"`
-			ReasoningEffort *string `json:"reasoning_effort"`
-			Settings        *struct {
-				ReasoningEffort *string `json:"reasoning_effort"`
-			} `json:"settings"`
+			Name string `json:"name"`
+			Mode string `json:"mode"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return "", fmt.Errorf("parse collaborationMode/list response: %w", err)
+		return fmt.Errorf("parse collaborationMode/list response: %w", err)
 	}
 	for _, mode := range res.Data {
 		if mode.Mode != "plan" {
 			continue
 		}
-		if mode.ReasoningEffort != nil && *mode.ReasoningEffort != "" {
-			return *mode.ReasoningEffort, nil
-		}
-		if mode.Settings != nil && mode.Settings.ReasoningEffort != nil && *mode.Settings.ReasoningEffort != "" {
-			return *mode.Settings.ReasoningEffort, nil
-		}
-		return "medium", nil
+		return nil
 	}
-	return "", fmt.Errorf("codex app-server does not advertise collaborationMode.mode=plan")
+	return fmt.Errorf("codex app-server does not advertise collaborationMode.mode=plan")
 }
 
 func parseThreadStart(raw json.RawMessage) (codexThreadInfo, error) {

@@ -91,7 +91,7 @@ func TestCodexTurnStartParamsSubmitsPromptThroughAppServer(t *testing.T) {
 }
 
 func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
-	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", codexPlanCollaborationMode("gpt-test", "medium"))
+	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", codexPlanCollaborationMode("gpt-test", "xhigh"))
 
 	body, err := json.Marshal(got)
 	if err != nil {
@@ -115,8 +115,62 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 	if shaped.CollaborationMode.Settings.Model != "gpt-test" {
 		t.Fatalf("model = %q, want gpt-test", shaped.CollaborationMode.Settings.Model)
 	}
-	if shaped.CollaborationMode.Settings.ReasoningEffort != "medium" {
-		t.Fatalf("reasoning_effort = %q, want medium", shaped.CollaborationMode.Settings.ReasoningEffort)
+	if shaped.CollaborationMode.Settings.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning_effort = %q, want xhigh", shaped.CollaborationMode.Settings.ReasoningEffort)
+	}
+}
+
+func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
+	got := configSettings([]byte(`{"config":{"model":" gpt-test ","plan_mode_reasoning_effort":" xhigh "}}`))
+
+	if got.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", got.Model)
+	}
+	if got.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning_effort = %q, want xhigh", got.ReasoningEffort)
+	}
+}
+
+func TestConfigSettingsFallsBackToModelReasoningEffort(t *testing.T) {
+	got := configSettings([]byte(`{"config":{"model":"gpt-test","model_reasoning_effort":"high"}}`))
+
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got.ReasoningEffort)
+	}
+}
+
+func TestConfigSettingsPlanModeReasoningEffortWins(t *testing.T) {
+	got := configSettings([]byte(`{"config":{"model":"gpt-test","reasoning_effort":"low","model_reasoning_effort":"medium","plan_mode_reasoning_effort":"xhigh"}}`))
+
+	if got.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning_effort = %q, want xhigh", got.ReasoningEffort)
+	}
+}
+
+func TestCodexPlanCollaborationModeUsesXHighFallback(t *testing.T) {
+	got := codexPlanCollaborationMode("gpt-test", codexPlanDefaultEffort)
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shaped struct {
+		Settings struct {
+			ReasoningEffort string `json:"reasoning_effort"`
+		} `json:"settings"`
+	}
+	if err := json.Unmarshal(body, &shaped); err != nil {
+		t.Fatal(err)
+	}
+	if shaped.Settings.ReasoningEffort != "xhigh" {
+		t.Fatalf("reasoning_effort = %q, want xhigh", shaped.Settings.ReasoningEffort)
+	}
+}
+
+func TestEnsureCodexPlanModeIgnoresAdvertisedEffort(t *testing.T) {
+	err := ensureCodexPlanMode([]byte(`{"data":[{"mode":"plan","reasoning_effort":"medium","settings":{"reasoning_effort":"medium"}}]}`))
+	if err != nil {
+		t.Fatalf("ensureCodexPlanMode() failed: %v", err)
 	}
 }
 
