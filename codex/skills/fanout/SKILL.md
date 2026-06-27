@@ -133,8 +133,8 @@ use this workflow directly.
    Supported agents are `claude` and `codex`.
 4. `--codex-plan-mode` is valid only when every selected child resolves to
    `codex` after per-issue overrides. It uses Codex app-server to create the
-   child Plan Mode thread, start the initial Plan turn with the fanout prompt,
-   then attach the interactive Codex TUI to that remote session.
+   child Plan Mode thread, then resumes it with the fanout prompt through the
+   interactive Codex TUI.
 
 ## Workflow
 
@@ -411,11 +411,10 @@ API + parent body. Key points:
   Plan Mode path automatically but pass the modal prompt inline instead of
   writing a `/tmp` briefing file.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
-  thread, starts the initial Plan turn with the child prompt through app-server,
-  and attaches the interactive Codex TUI to that remote session. fanout does not
-  send `/plan` or prompt text through tmux. If Plan turn setup or TUI attach
-  fails, fanout fails that launch before recording state and cleans up the
-  pane/worktree so the child can be retried.
+  thread, and resumes it with the child prompt through the interactive Codex
+  TUI. fanout does not send `/plan` or prompt text through tmux. If Plan Mode
+  thread setup or TUI attach fails, fanout fails that launch before recording
+  state and cleans up the pane/worktree so the child can be retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

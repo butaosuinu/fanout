@@ -78,11 +78,11 @@ Say you want Codex to propose an implementation plan before any child moves forw
 fanout 123 --agent codex --codex-plan-mode
 ```
 
-Instead of running positional `codex "<prompt>"`, fanout starts a Codex app-server for each child, creates a `plan` collaboration-mode thread, starts the initial turn with the fanout prompt through that app-server, and attaches an interactive Codex TUI to the remote session.
+Instead of running positional `codex "<prompt>"`, fanout starts a Codex app-server for each child, creates a `plan` collaboration-mode thread, and resumes it with the fanout prompt through an interactive Codex TUI.
 
 The child briefing is also rewritten for Plan Mode: it asks for an implementation plan wrapped in `<proposed_plan>` and explicitly forbids file edits, commits, pushes, and PR creation in that first turn. The TUI manual pane modal uses the same Plan Mode path automatically when it launches `codex`, but sends the modal prompt and Plan Mode instructions inline instead of writing a `/tmp` briefing file.
 
-This path never sends `/plan` or prompt text through tmux. The pane remains an interactive Codex TUI session, so you can continue from the Plan Mode conversation. If the app-server Plan turn setup or the TUI attach fails, the launch fails before state is recorded and fanout cleans up the pane/worktree so the child can be retried.
+This path never sends `/plan` or prompt text through tmux. The pane remains an interactive Codex TUI session, so you can continue from the Plan Mode conversation. If Plan Mode thread setup or the TUI attach fails, the launch fails before state is recorded and fanout cleans up the pane/worktree so the child can be retried.
 
 ## How the briefing works
 

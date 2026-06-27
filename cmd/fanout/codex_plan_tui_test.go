@@ -66,27 +66,30 @@ func TestCodexThreadStartParamsCreatesPersistentStartupThread(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStartParamsSubmitsPromptThroughAppServer(t *testing.T) {
-	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", nil)
+func TestCodexRemoteTUIArgsPassPromptToResume(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "hello plan")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1", "--", "hello plan"}
 
-	if got["threadId"] != "thread-1" {
-		t.Fatalf("threadId = %q, want thread-1", got["threadId"])
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
 	}
-	if got["cwd"] != "/repo" {
-		t.Fatalf("cwd = %q, want /repo", got["cwd"])
+}
+
+func TestCodexRemoteTUIArgsSeparatesDashLeadingPrompt(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "-- investigate")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1", "--", "-- investigate"}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
 	}
-	if got["model"] != "gpt-test" {
-		t.Fatalf("model = %q, want gpt-test", got["model"])
-	}
-	input, ok := got["input"].([]map[string]any)
-	if !ok {
-		t.Fatalf("input has type %T, want []map[string]any", got["input"])
-	}
-	if len(input) != 1 || input[0]["type"] != "text" || input[0]["text"] != "hello plan" {
-		t.Fatalf("input = %#v, want one text prompt", input)
-	}
-	if _, ok := got["collaborationMode"]; ok {
-		t.Fatalf("collaborationMode was included without fallback: %#v", got["collaborationMode"])
+}
+
+func TestCodexRemoteTUIArgsCanResumeWithoutPromptForFallbackTurn(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1"}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
 	}
 }
 
@@ -98,6 +101,7 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var shaped struct {
+		ThreadID          string `json:"threadId"`
 		CollaborationMode struct {
 			Mode     string `json:"mode"`
 			Settings struct {
@@ -105,9 +109,16 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 				ReasoningEffort string `json:"reasoning_effort"`
 			} `json:"settings"`
 		} `json:"collaborationMode"`
+		Input []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"input"`
 	}
 	if err := json.Unmarshal(body, &shaped); err != nil {
 		t.Fatal(err)
+	}
+	if shaped.ThreadID != "thread-1" {
+		t.Fatalf("threadId = %q, want thread-1", shaped.ThreadID)
 	}
 	if shaped.CollaborationMode.Mode != "plan" {
 		t.Fatalf("mode = %q, want plan", shaped.CollaborationMode.Mode)
@@ -117,6 +128,9 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 	}
 	if shaped.CollaborationMode.Settings.ReasoningEffort != "medium" {
 		t.Fatalf("reasoning_effort = %q, want medium", shaped.CollaborationMode.Settings.ReasoningEffort)
+	}
+	if len(shaped.Input) != 1 || shaped.Input[0].Type != "text" || shaped.Input[0].Text != "hello plan" {
+		t.Fatalf("input = %#v, want one text prompt", shaped.Input)
 	}
 }
 
