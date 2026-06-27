@@ -131,11 +131,11 @@ func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestConfigSettingsFallsBackToModelReasoningEffort(t *testing.T) {
+func TestConfigSettingsDoesNotUseModelReasoningEffort(t *testing.T) {
 	got := configSettings([]byte(`{"config":{"model":"gpt-test","model_reasoning_effort":"high"}}`))
 
-	if got.ReasoningEffort != "high" {
-		t.Fatalf("reasoning_effort = %q, want high", got.ReasoningEffort)
+	if got.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want empty", got.ReasoningEffort)
 	}
 }
 
@@ -171,6 +171,35 @@ func TestEnsureCodexPlanModeIgnoresAdvertisedEffort(t *testing.T) {
 	err := ensureCodexPlanMode([]byte(`{"data":[{"mode":"plan","reasoning_effort":"medium","settings":{"reasoning_effort":"medium"}}]}`))
 	if err != nil {
 		t.Fatalf("ensureCodexPlanMode() failed: %v", err)
+	}
+}
+
+func TestModelListSelectionReturnsSupportedReasoningEfforts(t *testing.T) {
+	got, err := modelListSelection([]byte(`{"data":[{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":["low","medium","high"]}]}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", got.Model)
+	}
+	if strings.Join(got.SupportedReasoningEfforts, ",") != "low,medium,high" {
+		t.Fatalf("supported efforts = %#v, want low,medium,high", got.SupportedReasoningEfforts)
+	}
+}
+
+func TestSupportedReasoningEffortKeepsSupportedRequestedEffort(t *testing.T) {
+	got := supportedReasoningEffort("xhigh", []string{"low", "medium", "xhigh"})
+
+	if got != "xhigh" {
+		t.Fatalf("supportedReasoningEffort() = %q, want xhigh", got)
+	}
+}
+
+func TestSupportedReasoningEffortFallsBackToStrongestSupportedEffort(t *testing.T) {
+	got := supportedReasoningEffort("xhigh", []string{"low", "medium", "high"})
+
+	if got != "high" {
+		t.Fatalf("supportedReasoningEffort() = %q, want high", got)
 	}
 }
 
