@@ -56,7 +56,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.jumpSession(1)
 		case "n":
 			m.openNewPaneForm()
-			return m, nil
+			cmd := m.reloadRepoFilesCmd()
+			return m, cmd
 		case "A":
 			return m, m.openSelectedWorktreeShellCmd()
 		case "t":
@@ -187,6 +188,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "created new agent pane"
 		}
 		return m, m.loadStateCmd(false)
+	case filesLoadedMsg:
+		m.repoFilesLoading = false
+		if msg.err != nil {
+			// Leave repoFilesLoaded false so the next form open retries; surface
+			// the reason in the popup instead of a silent "no match".
+			m.repoFilesErr = msg.err.Error()
+		} else {
+			m.repoFiles = msg.files
+			m.repoFileIndex = buildFileIndex(msg.files)
+			m.repoFilesLoaded = true
+			m.repoFilesErr = ""
+		}
+		if m.mode == modeNewPane && m.newPane.completing {
+			m.recomputeCompletion()
+		}
+		return m, nil
 	case launchShellMsg:
 		if msg.err != nil {
 			m.notice = fmt.Sprintf("terminal: %v", msg.err)

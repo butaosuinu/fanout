@@ -430,6 +430,49 @@ func ListRoots(projectRoot string) ([]string, error) {
 	return roots, nil
 }
 
+// ListFiles returns repository-relative paths in the tree of the branch a fresh
+// fanout worktree will be created from (the base branch tree), via
+// `git ls-tree -r --name-only -z <base>`. It deliberately lists the base tree
+// rather than the TUI's current index: a pane runs its agent in a worktree
+// checked out from the base, so files that exist only in the current checkout
+// (a feature branch, staged-but-uncommitted, or untracked) are absent there and
+// completing them would produce dead @file mentions. It reads stdout only (not
+// the shared CombinedOutput git helper) so a stderr advice/warning line on a
+// zero exit cannot fuse into a path entry; the NUL-delimited (-z) form avoids
+// git's path quoting.
+func ListFiles(root string) ([]string, error) {
+	cmd := exec.Command("git", "ls-tree", "-r", "--name-only", "-z", baseTreeRef(root))
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(out), "\x00")
+	files := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, p := range parts {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		files = append(files, p)
+	}
+	return files, nil
+}
+
+// baseTreeRef resolves the ref whose tree a fresh fanout worktree branches from.
+// It uses the same default-branch resolution as launch (ResolveDefaultBranch,
+// which prefers GitHub's defaultBranchRef) so completion candidates and the
+// created worktree never disagree on the base, then prefers that branch's remote
+// tip (origin/<base>) — what the worktree refreshes to — when present.
+func baseTreeRef(root string) string {
+	base := ResolveDefaultBranchAllowMissingOrigin(root)
+	if _, err := git(root, "rev-parse", "--verify", "--quiet", "origin/"+base); err == nil {
+		return "origin/" + base
+	}
+	return base
+}
+
 func checkedOutWorktree(root, branch string) string {
 	out, err := git(root, "worktree", "list", "--porcelain")
 	if err != nil {

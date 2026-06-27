@@ -637,6 +637,37 @@ func gitOutputAllowError(t *testing.T, dir string, args ...string) gitOutputResu
 	return gitOutputResult{value: string(out), ok: true}
 }
 
+func TestListFilesReturnsTrackedFilesOnly(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+
+	// untracked + ignored files exist only in the owner checkout, not in a
+	// fresh worktree off base, so they must not appear as completion candidates.
+	writeFile(t, filepath.Join(repo, "untracked.txt"), "new\n")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "ignored.txt\n")
+	writeFile(t, filepath.Join(repo, "ignored.txt"), "nope\n")
+	if err := os.MkdirAll(filepath.Join(repo, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "sub", "nested.go"), "package sub\n")
+	gitTest(t, repo, "add", "sub/nested.go")
+	gitTest(t, repo, "commit", "-m", "add nested")
+
+	files, err := ListFiles(repo)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	for _, want := range []string{"file.txt", "sub/nested.go"} {
+		if !slices.Contains(files, want) {
+			t.Fatalf("ListFiles missing tracked file %q: %v", want, files)
+		}
+	}
+	for _, unwanted := range []string{"untracked.txt", "ignored.txt", ".gitignore"} {
+		if slices.Contains(files, unwanted) {
+			t.Fatalf("ListFiles must list tracked files only, got %q: %v", unwanted, files)
+		}
+	}
+}
+
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
