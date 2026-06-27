@@ -461,14 +461,8 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
 		}
 		if mode == CloseEverything {
-			if !pruneWorktrees(opts.ProjectRoot, lg) {
-				ok = false
-				continue
-			}
-			if !deleteBranch(opts.ProjectRoot, pane, lg) {
-				ok = false
-				continue
-			}
+			_ = pruneWorktrees(opts.ProjectRoot, lg)
+			deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
 		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		killPaneBestEffort(pane, lg)
@@ -521,25 +515,24 @@ func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {
 	return true
 }
 
-func deleteBranch(projectRoot string, pane state.Pane, lg Logger) bool {
+func deleteBranchBestEffort(projectRoot string, pane state.Pane, lg Logger) {
 	branch := strings.TrimSpace(pane.BranchName)
 	if branch == "" {
-		lg.Err("%s: no branchName recorded; cannot delete local branch", paneLabel(pane))
-		return false
+		lg.Warn("%s: no branchName recorded; skipping local branch delete", paneLabel(pane))
+		return
 	}
 	if !localBranchExists(projectRoot, branch) {
 		lg.Warn("%s: local branch already absent: %s", paneLabel(pane), branch)
-		return true
+		return
 	}
 	out, err := gitLifecycle(projectRoot, "branch", "-D", branch)
 	if err != nil {
-		lg.Err("%s: git branch -D %s failed", paneLabel(pane), branch)
+		lg.Warn("%s: git branch -D %s failed; leaving branch in place", paneLabel(pane), branch)
 		if s := strings.TrimSpace(string(out)); s != "" {
 			fmt.Fprintln(lg.Stderr(), s)
 		}
-		return false
+		return
 	}
-	return true
 }
 
 func localBranchExists(projectRoot, branch string) bool {
