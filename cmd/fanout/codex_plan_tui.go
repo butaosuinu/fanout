@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,6 +72,8 @@ type codexModelSelection struct {
 	Model                     string
 	SupportedReasoningEfforts []string
 }
+
+type supportedReasoningEfforts []string
 
 type appServerMessage struct {
 	ID     json.RawMessage `json:"id,omitempty"`
@@ -1015,7 +1018,7 @@ func resolveCodexSettings(client *codexAppClient, cwd string) (codexResolvedSett
 	}
 
 	modelResult, modelErr := client.Request("fanout-models", "model/list", map[string]any{
-		"includeHidden": false,
+		"includeHidden": true,
 	})
 	if modelErr != nil {
 		if model != "" {
@@ -1051,6 +1054,7 @@ func configSettings(raw json.RawMessage) codexResolvedSettings {
 		Config struct {
 			Model                   string `json:"model"`
 			ReasoningEffort         string `json:"reasoning_effort"`
+			ModelReasoningEffort    string `json:"model_reasoning_effort"`
 			PlanModeReasoningEffort string `json:"plan_mode_reasoning_effort"`
 		} `json:"config"`
 	}
@@ -1061,6 +1065,9 @@ func configSettings(raw json.RawMessage) codexResolvedSettings {
 	if effort == "" {
 		effort = strings.TrimSpace(res.Config.ReasoningEffort)
 	}
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ModelReasoningEffort)
+	}
 	return codexResolvedSettings{
 		Model:           strings.TrimSpace(res.Config.Model),
 		ReasoningEffort: effort,
@@ -1070,12 +1077,12 @@ func configSettings(raw json.RawMessage) codexResolvedSettings {
 func modelListSelection(raw json.RawMessage, preferred string) (codexModelSelection, error) {
 	var res struct {
 		Data []struct {
-			ID                                string   `json:"id"`
-			Model                             string   `json:"model"`
-			Hidden                            bool     `json:"hidden"`
-			IsDefault                         bool     `json:"isDefault"`
-			SupportedReasoningEfforts         []string `json:"supportedReasoningEfforts"`
-			SupportedReasoningEffortsFallback []string `json:"supported_reasoning_efforts"`
+			ID                                string                    `json:"id"`
+			Model                             string                    `json:"model"`
+			Hidden                            bool                      `json:"hidden"`
+			IsDefault                         bool                      `json:"isDefault"`
+			SupportedReasoningEfforts         supportedReasoningEfforts `json:"supportedReasoningEfforts"`
+			SupportedReasoningEffortsFallback supportedReasoningEfforts `json:"supported_reasoning_efforts"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -1084,9 +1091,6 @@ func modelListSelection(raw json.RawMessage, preferred string) (codexModelSelect
 	preferred = strings.TrimSpace(preferred)
 	if preferred != "" {
 		for _, model := range res.Data {
-			if model.Hidden {
-				continue
-			}
 			if modelName(model.Model, model.ID) != preferred && strings.TrimSpace(model.ID) != preferred {
 				continue
 			}
@@ -1121,6 +1125,41 @@ func modelSupportedReasoningEfforts(primary, fallback []string) []string {
 	return fallback
 }
 
+func (e *supportedReasoningEfforts) UnmarshalJSON(raw []byte) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		var effort string
+		if err := json.Unmarshal(item, &effort); err == nil {
+			effort = strings.TrimSpace(effort)
+			if effort != "" {
+				out = append(out, effort)
+			}
+			continue
+		}
+		var shaped struct {
+			ReasoningEffort string `json:"reasoningEffort"`
+			Value           string `json:"value"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+		}
+		if err := json.Unmarshal(item, &shaped); err != nil {
+			return err
+		}
+		for _, candidate := range []string{shaped.ReasoningEffort, shaped.Value, shaped.ID, shaped.Name} {
+			if effort = strings.TrimSpace(candidate); effort != "" {
+				out = append(out, effort)
+				break
+			}
+		}
+	}
+	*e = out
+	return nil
+}
+
 func supportedReasoningEffort(requested string, supported []string) string {
 	requested = strings.TrimSpace(requested)
 	available := map[string]bool{}
@@ -1133,12 +1172,7 @@ func supportedReasoningEffort(requested string, supported []string) string {
 	if len(available) == 0 || available[requested] {
 		return requested
 	}
-	for _, effort := range []string{"xhigh", "high", "medium", "low", "minimal"} {
-		if available[effort] {
-			return effort
-		}
-	}
-	for _, effort := range supported {
+	for _, effort := range slices.Backward(supported) {
 		if effort = strings.TrimSpace(effort); effort != "" {
 			return effort
 		}

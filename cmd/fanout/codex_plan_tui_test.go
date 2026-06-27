@@ -131,11 +131,11 @@ func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
 	}
 }
 
-func TestConfigSettingsDoesNotUseModelReasoningEffort(t *testing.T) {
+func TestConfigSettingsFallsBackToModelReasoningEffort(t *testing.T) {
 	got := configSettings([]byte(`{"config":{"model":"gpt-test","model_reasoning_effort":"high"}}`))
 
-	if got.ReasoningEffort != "" {
-		t.Fatalf("reasoning_effort = %q, want empty", got.ReasoningEffort)
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got.ReasoningEffort)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestEnsureCodexPlanModeIgnoresAdvertisedEffort(t *testing.T) {
 }
 
 func TestModelListSelectionReturnsSupportedReasoningEfforts(t *testing.T) {
-	got, err := modelListSelection([]byte(`{"data":[{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":["low","medium","high"]}]}`), "")
+	got, err := modelListSelection([]byte(`{"data":[{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]}]}`), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +184,19 @@ func TestModelListSelectionReturnsSupportedReasoningEfforts(t *testing.T) {
 	}
 	if strings.Join(got.SupportedReasoningEfforts, ",") != "low,medium,high" {
 		t.Fatalf("supported efforts = %#v, want low,medium,high", got.SupportedReasoningEfforts)
+	}
+}
+
+func TestModelListSelectionUsesPreferredHiddenModel(t *testing.T) {
+	got, err := modelListSelection([]byte(`{"data":[{"id":"gpt-visible","model":"gpt-visible","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"}]},{"id":"gpt-hidden","model":"gpt-hidden","hidden":true,"supportedReasoningEfforts":[{"reasoningEffort":"xhigh"}]}]}`), "gpt-hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-hidden" {
+		t.Fatalf("model = %q, want gpt-hidden", got.Model)
+	}
+	if strings.Join(got.SupportedReasoningEfforts, ",") != "xhigh" {
+		t.Fatalf("supported efforts = %#v, want xhigh", got.SupportedReasoningEfforts)
 	}
 }
 
@@ -196,10 +209,10 @@ func TestSupportedReasoningEffortKeepsSupportedRequestedEffort(t *testing.T) {
 }
 
 func TestSupportedReasoningEffortFallsBackToStrongestSupportedEffort(t *testing.T) {
-	got := supportedReasoningEffort("xhigh", []string{"low", "medium", "high"})
+	got := supportedReasoningEffort("xhigh", []string{"low", "medium", "high", "ultra"})
 
-	if got != "high" {
-		t.Fatalf("supportedReasoningEffort() = %q, want high", got)
+	if got != "ultra" {
+		t.Fatalf("supportedReasoningEffort() = %q, want ultra", got)
 	}
 }
 
