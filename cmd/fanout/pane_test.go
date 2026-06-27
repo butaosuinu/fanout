@@ -21,6 +21,25 @@ import (
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
+func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
+	// A prompt ending in an @-mention must keep a whitespace terminator before
+	// the appended sentence, else "@cmd/main.go" + ". read" merges into the
+	// non-existent path "@cmd/main.go.".
+	got := manualPromptWithBriefingAction("look at @cmd/main.go", "/tmp/b.md", "begin")
+	if strings.Contains(got, "@cmd/main.go.") {
+		t.Fatalf("trailing mention corrupted by the briefing sentence: %q", got)
+	}
+	if !strings.Contains(got, "@cmd/main.go . read /tmp/b.md") {
+		t.Fatalf("mention not space-separated from sentence: %q", got)
+	}
+
+	// A prompt that does not end in a mention keeps the plain ". read" join.
+	plain := manualPromptWithBriefingAction("inspect the API", "/tmp/b.md", "begin")
+	if !strings.Contains(plain, "inspect the API. read /tmp/b.md") {
+		t.Fatalf("non-mention prompt should keep the plain period join: %q", plain)
+	}
+}
+
 func TestShortIssueTitleTruncatesOnRuneBoundary(t *testing.T) {
 	title := strings.Repeat("あ", 61)
 

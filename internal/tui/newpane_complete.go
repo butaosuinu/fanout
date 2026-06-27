@@ -48,15 +48,19 @@ func buildFileIndex(files []string) []fileEntry {
 	return idx
 }
 
-// maybeLoadRepoFilesCmd returns a command that loads the repository file list.
-// It is a no-op once a load has succeeded or is in flight, so reopening the
-// new-pane form never re-runs git; a failed load leaves both gates clear so the
-// next open retries.
-func (m *model) maybeLoadRepoFilesCmd() tea.Cmd {
-	if m.repoFilesLoaded || m.repoFilesLoading || m.opts.ListRepoFiles == nil {
+// reloadRepoFilesCmd refreshes the repository file list each time the new-pane
+// form opens, so a long-lived TUI picks up base-branch changes (files added or
+// removed since process start) instead of serving a stale snapshot. A prior
+// successful load stays cached and visible while the refresh runs in the
+// background; the arriving filesLoadedMsg swaps in the fresh index. It is a
+// no-op while a load is already in flight so repeated opens never stack git
+// calls, and it clears any stale error so a retry reads as loading, not failed.
+func (m *model) reloadRepoFilesCmd() tea.Cmd {
+	if m.repoFilesLoading || m.opts.ListRepoFiles == nil {
 		return nil
 	}
 	m.repoFilesLoading = true
+	m.repoFilesErr = ""
 	return m.loadRepoFilesCmd()
 }
 
@@ -155,10 +159,13 @@ func (m model) updatePromptCompletion(msg tea.KeyMsg) (model, bool) {
 			m.acceptCompletion()
 			return m, true
 		}
-		if !m.repoFilesLoaded && m.repoFilesErr == "" {
-			// The file list is still loading (empty results != no match). Consume
-			// the key so a premature Enter does not submit a prompt with an
-			// unexpanded @token; results appear once the load resolves.
+		if m.repoFilesLoading || (!m.repoFilesLoaded && m.repoFilesErr == "") {
+			// A load (or a reopen-triggered reload) is in flight: empty results
+			// mean "not ready yet", not "no match". Keying off repoFilesLoading
+			// (not just an empty repoFilesErr) keeps a retry after a prior failure
+			// from being mistaken for a settled no-match. Consume the key so a
+			// premature Enter does not submit a prompt with an unexpanded @token;
+			// results appear once the load resolves.
 			return m, true
 		}
 		// Loaded with no match (or the load failed): dismiss the popup and let

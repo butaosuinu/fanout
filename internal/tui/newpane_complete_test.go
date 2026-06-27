@@ -440,7 +440,7 @@ func TestNewPaneViewRendersCompletionPopup(t *testing.T) {
 	}
 }
 
-func TestRepoFilesLoadedOncePerProcess(t *testing.T) {
+func TestRepoFilesReloadOnEachFormOpen(t *testing.T) {
 	calls := 0
 	m := newModel(Options{
 		ProjectRoot: "/repo",
@@ -457,16 +457,46 @@ func TestRepoFilesLoadedOncePerProcess(t *testing.T) {
 	}
 	m = applyMsg(m, cmd()) // runs ListRepoFiles, delivers filesLoadedMsg
 
+	// Reopening refreshes the list so a long-lived TUI sees base-branch changes;
+	// the prior result stays cached and visible while the refresh runs.
 	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEsc}) // close form
+	if !m.repoFilesLoaded || len(m.repoFiles) != 1 {
+		t.Fatalf("cached files lost after close: loaded=%v files=%v", m.repoFilesLoaded, m.repoFiles)
+	}
 	updated, cmd2 := m.Update(keyRunes("n"))
 	m = updated.(model)
-	if cmd2 != nil {
-		t.Fatal("expected no load command on reopen")
+	if cmd2 == nil {
+		t.Fatal("expected a refresh load command on reopen")
 	}
-	if calls != 1 {
-		t.Fatalf("ListRepoFiles called %d times, want 1", calls)
+	m = applyMsg(m, cmd2())
+	if calls != 2 {
+		t.Fatalf("ListRepoFiles called %d times, want 2 (one per form open)", calls)
 	}
 	if !m.repoFilesLoaded || len(m.repoFiles) != 1 {
-		t.Fatalf("repo files not cached: loaded=%v files=%v", m.repoFilesLoaded, m.repoFiles)
+		t.Fatalf("repo files not cached after reload: loaded=%v files=%v", m.repoFilesLoaded, m.repoFiles)
+	}
+}
+
+func TestRepoFilesReloadSkippedWhileLoadInFlight(t *testing.T) {
+	calls := 0
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		ListRepoFiles: func(string) ([]string, error) {
+			calls++
+			return []string{"a.go"}, nil
+		},
+	})
+
+	// First open kicks a load but the filesLoadedMsg has not arrived yet
+	// (repoFilesLoading stays true). Reopening must not stack a second git call.
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("expected a load command on first form open")
+	}
+	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEsc})
+	_, cmd2 := m.Update(keyRunes("n"))
+	if cmd2 != nil {
+		t.Fatal("expected no second load command while one is already in flight")
 	}
 }

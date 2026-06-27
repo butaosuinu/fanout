@@ -418,7 +418,26 @@ func manualPromptWithBriefingAction(prompt, briefingPath, action string) string 
 	if prompt == "" {
 		return fmt.Sprintf("read %s and %s.", briefingPath, action)
 	}
-	return fmt.Sprintf("%s. read %s for additional context and %s.", prompt, briefingPath, action)
+	// A prompt ending in an "@path" file mention needs a whitespace terminator;
+	// gluing ". read ..." straight on yields "@path." — a non-existent path the
+	// agent cannot expand. Keep a separating space before the sentence in that
+	// case (the new-session @-completion makes mention-terminated prompts common).
+	sep := "."
+	if endsWithFileMention(prompt) {
+		sep = " ."
+	}
+	return fmt.Sprintf("%s%s read %s for additional context and %s.", prompt, sep, briefingPath, action)
+}
+
+// endsWithFileMention reports whether prompt's final whitespace-delimited token
+// is an "@path" file mention (more than just the bare "@").
+func endsWithFileMention(prompt string) bool {
+	fields := strings.Fields(prompt)
+	if len(fields) == 0 {
+		return false
+	}
+	last := fields[len(fields)-1]
+	return len(last) > 1 && last[0] == '@'
 }
 
 func nextSyntheticPaneNumber(store state.Store, parentRef string) int {

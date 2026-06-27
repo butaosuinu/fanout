@@ -56,7 +56,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.jumpSession(1)
 		case "n":
 			m.openNewPaneForm()
-			cmd := m.maybeLoadRepoFilesCmd()
+			cmd := m.reloadRepoFilesCmd()
 			return m, cmd
 		case "A":
 			return m, m.openSelectedWorktreeShellCmd()
