@@ -5,8 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
@@ -85,6 +87,114 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	log := readTUITmuxLog(t, argsPath)
 	if strings.Contains(log, "bind-key\n") {
 		t.Fatalf("tmux log should not contain dashboard keybinds when disabled:\n%s", log)
+	}
+}
+
+func TestTUINewPanePopupSizeUsesClientDimensions(t *testing.T) {
+	width, height, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 160, Height: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 90 || height != 40 {
+		t.Fatalf("popup size = %dx%d, want 90x40", width, height)
+	}
+
+	width, height, err = tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 80, Height: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 76 || height != 18 {
+		t.Fatalf("small client popup size = %dx%d, want 76x18", width, height)
+	}
+
+	if _, _, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
+		t.Fatal("tuiNewPanePopupSize() succeeded for too-small client")
+	}
+	if _, _, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 80, Height: 19}); err == nil {
+		t.Fatal("tuiNewPanePopupSize() succeeded without enough prompt height")
+	}
+}
+
+func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "result.json")
+	want := tuiNewPanePopupResult{Prompt: "Inspect API", Agents: []string{"codex"}}
+	if err := writeTUINewPanePopupResult(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTUINewPanePopupResult(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Prompt != want.Prompt || !reflect.DeepEqual(got.Agents, want.Agents) || got.Canceled {
+		t.Fatalf("popup result = %#v, want %#v", got, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("popup result mode = %o, want 600", got)
+	}
+}
+
+func TestNewPopupResultPathsUsesPrivateDirectory(t *testing.T) {
+	resultPath, donePath, cleanup, err := newPopupResultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	dir := filepath.Dir(resultPath)
+	if filepath.Dir(donePath) != dir {
+		t.Fatalf("result dir = %q, done dir = %q, want same private dir", dir, filepath.Dir(donePath))
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("private result dir mode = %o, want 700", got)
+	}
+	if _, err := os.Stat(resultPath); !os.IsNotExist(err) {
+		t.Fatalf("result file stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(donePath); !os.IsNotExist(err) {
+		t.Fatalf("done file stat error = %v, want not exist", err)
+	}
+}
+
+func TestWaitForTUINewPanePopupResultTreatsDoneWithoutResultAsCancel(t *testing.T) {
+	dir := t.TempDir()
+	resultPath := filepath.Join(dir, "result.json")
+	donePath := filepath.Join(dir, "result.done")
+	if err := os.WriteFile(donePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := waitForTUINewPanePopupResult(resultPath, donePath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Canceled {
+		t.Fatalf("popup result = %#v, want canceled", got)
+	}
+}
+
+func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testing.T) {
+	t.Setenv(fanouttui.EnhancedKeysEnv, "1")
+
+	got := tuiNewPanePopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", "codex", 80, 18)
+	for _, want := range []string{
+		"trap ",
+		"EXIT HUP INT TERM",
+		"/tmp/result.done",
+		fanouttui.EnhancedKeysEnv + "=1 ",
+		tuiNewPanePopupCommand,
+		"--result-file /tmp/result.json",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("popup shell command missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -731,6 +841,9 @@ set -euo pipefail
 printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
 printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
 case "${1:-}" in
+  -V)
+    printf 'tmux 3.3\n'
+    ;;
   display-message)
     if [[ "$*" == *session_name* ]]; then
       printf 'fanout-test\n'

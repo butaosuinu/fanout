@@ -15,10 +15,10 @@ yomi: install
 |---|---|
 | `gh` | GitHub CLI。issue の取得、PR 状態の照会、Project の GraphQL クエリに使う |
 | `git` | worktree の作成、branch の分岐、merge に使う |
-| `tmux` | 子ごとのペインを分割するために使う |
+| `tmux 3.3+` | 子ごとのペイン分割と TUI popup の表示に使う |
 
 fanout は選択したモードに必要な依存だけを起動時にチェックし、足りなければインストールのヒントを表示します。`--status` と `--cleanup` は `gh` と `git` を、`--merge` と `--close` は `git` を使います。
-ローカルの `fanout plan` 実行と、TUI から起動する手動ペインは、`git` と `tmux`、選択した agent があれば動きます。`origin` remote や `gh` 認証が無い repository でも動作します。
+ローカルの `fanout plan` 実行と、TUI から起動する手動ペインは、`git` と `tmux 3.3+`、選択した agent があれば動きます。`origin` remote や `gh` 認証が無い repository でも動作します。
 
 > **Project モード時のみ**: Project items を取得する GraphQL クエリのため、`gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project` で付与してください。issue モード(`fanout <N>`)では不要です。
 

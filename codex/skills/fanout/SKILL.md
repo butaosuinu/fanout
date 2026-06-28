@@ -63,7 +63,7 @@ turns the current pane into the console. The console shows `.fanout/state.json`
 panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` /
 `blocked` header rollup, and a compact Session navigator that stays fixed on
 the side or top depending on terminal width; `[` / `]` jump the pane table to
-the previous / next Session. It lets the user press `n` to open a modal and
+the previous / next Session. It lets the user press `n` to open a tmux popup and
 launch one or more manual prompt-based `claude` / `codex` panes from the same
 prompt (multi-line prompt input uses `Shift+Enter` or `Ctrl+J` for newline;
 enhanced keyboard input is on by default — set `FANOUT_TUI_ENHANCED_KEYS=0` to
@@ -71,7 +71,7 @@ opt out — and `Shift+Enter` needs a terminal that reports it distinctly, for
 which fanout turns on tmux `extended-keys`; `Up` / `Down` picks an agent row,
 `Space` toggles it, `Left` / `Right` changes its count, and `Enter` creates the
 selected panes).
-Manual `codex` panes start in Codex Plan Mode and receive the modal prompt
+Manual `codex` panes start in Codex Plan Mode and receive the popup prompt
 inline; manual `claude` panes start normally. The console exits on `q` without
 killing the session or child panes.
 Press `?` in the monitor to open the keyboard shortcut help; `Esc`, `q`, or
@@ -124,7 +124,7 @@ use this workflow directly.
 
 ## Pre-Flight
 
-1. Prerequisites are `gh`, `git`, and `tmux`. The CLI validates these on
+1. Prerequisites are `gh`, `git`, and `tmux 3.3+`. The CLI validates these on
    startup, so rely on its error output.
 2. Choose the launch lane. TUI mode is `fanout` with no arguments; it can start
    from a plain shell because it creates or attaches the repository's
@@ -413,7 +413,7 @@ API + parent body. Key points:
 - Lifecycle hooks are always on and come from user `hooks.json`.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
-  Plan Mode path automatically but pass the modal prompt inline instead of
+  Plan Mode path automatically but pass the popup prompt inline instead of
   writing a `/tmp` briefing file. The inline prompt keeps normal non-mutating
   discovery before the `<proposed_plan>` response.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode

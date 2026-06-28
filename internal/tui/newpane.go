@@ -2,8 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -20,6 +24,27 @@ type LaunchRequest struct {
 // LaunchFunc creates a manual fanout pane for a TUI request. It returns an
 // optional notice (e.g. a tolerated base-refresh skip) to surface on success.
 type LaunchFunc func(LaunchRequest) (notice string, err error)
+
+// NewPanePromptRequest describes a request to collect a manual pane prompt from
+// an external prompt surface, such as a tmux display-popup.
+type NewPanePromptRequest struct {
+	DefaultAgent string
+}
+
+// NewPanePromptFunc collects one manual pane launch request. canceled is true
+// when the user dismissed the prompt without submitting.
+type NewPanePromptFunc func(NewPanePromptRequest) (req LaunchRequest, canceled bool, err error)
+
+// NewPanePromptOptions configures the standalone new-pane prompt program.
+type NewPanePromptOptions struct {
+	ProjectRoot   string
+	DefaultAgent  string
+	Width         int
+	Height        int
+	ListRepoFiles func(root string) ([]string, error)
+}
+
+const newPanePopupOpeningNotice = "opening new pane popup..."
 
 type newPaneField int
 
@@ -52,6 +77,97 @@ func (m *model) openNewPaneForm() {
 	m.mode = modeNewPane
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
+}
+
+// RunNewPanePrompt opens only the new-pane prompt UI and returns the submitted
+// launch request. It is used by the tmux display-popup helper process.
+func RunNewPanePrompt(opts NewPanePromptOptions) (LaunchRequest, bool, error) {
+	width := opts.Width
+	if width <= 0 {
+		width = 90
+	}
+	height := opts.Height
+	if height <= 0 {
+		height = 24
+	}
+	keyboard := newShiftEnterProtocols(os.Stdout, enhancedKeyboardKeysEnabled())
+	m := newModel(Options{
+		ProjectRoot:   opts.ProjectRoot,
+		DefaultAgent:  opts.DefaultAgent,
+		ListRepoFiles: opts.ListRepoFiles,
+		LaunchPane:    func(LaunchRequest) (string, error) { return "", nil },
+		keyboard:      keyboard,
+	})
+	m.promptOnly = true
+	m.width = width
+	m.height = height
+	m.openNewPaneForm()
+	if m.opts.ListRepoFiles != nil {
+		m.repoFilesLoading = true
+	}
+	input, closeInput, err := newShiftEnterProgramInput(os.Stdin)
+	if err != nil {
+		return LaunchRequest{}, false, err
+	}
+	defer closeInput()
+	defer keyboard.Disable()
+	stopSignalCleanup := watchNewPanePromptSignals(keyboard, closeInput, os.Exit)
+	defer stopSignalCleanup()
+	finalModel, err := tea.NewProgram(
+		m,
+		tea.WithAltScreen(),
+		tea.WithInput(input),
+		tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				keyboard.Disable()
+			}
+			return msg
+		}),
+	).Run()
+	if err != nil {
+		return LaunchRequest{}, false, err
+	}
+	final, ok := finalModel.(model)
+	if !ok {
+		return LaunchRequest{}, false, fmt.Errorf("unexpected prompt model %T", finalModel)
+	}
+	if !final.promptDone || final.promptCanceled {
+		return LaunchRequest{}, true, nil
+	}
+	return final.promptResult, false, nil
+}
+
+func watchNewPanePromptSignals(keyboard keyboardProtocols, closeInput func(), exit func(int)) func() {
+	signals := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	var stopOnce sync.Once
+	signal.Notify(signals, os.Interrupt, syscall.SIGHUP, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-signals:
+			cleanupNewPanePromptSignal(sig, keyboard, closeInput, exit)
+		case <-done:
+		}
+	}()
+	return func() {
+		stopOnce.Do(func() {
+			signal.Stop(signals)
+			close(done)
+		})
+	}
+}
+
+func cleanupNewPanePromptSignal(sig os.Signal, keyboard keyboardProtocols, closeInput func(), exit func(int)) {
+	keyboard.Disable()
+	closeInput()
+	exit(signalExitCode(sig))
+}
+
+func signalExitCode(sig os.Signal) int {
+	if code, ok := sig.(syscall.Signal); ok {
+		return 128 + int(code)
+	}
+	return 1
 }
 
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
@@ -104,6 +220,10 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "esc":
+		if m.promptOnly {
+			m.promptCanceled = true
+			return m, tea.Quit
+		}
 		m.mode = modeMonitor
 		m.newPane = newPaneForm{}
 		return m, nil
@@ -209,10 +329,61 @@ func (m *model) submitNewPane() tea.Cmd {
 		Prompt: prompt,
 		Agents: agents,
 	}
+	if m.promptOnly {
+		m.promptResult = req
+		m.promptDone = true
+		return tea.Quit
+	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
 		notice, err := launch(req)
 		return launchPaneMsg{notice: notice, count: len(agents), err: err}
+	}
+}
+
+func (m *model) openNewPanePopupCmd() tea.Cmd {
+	prompt := m.opts.NewPanePrompt
+	if prompt == nil {
+		m.openNewPaneForm()
+		return m.reloadRepoFilesCmd()
+	}
+	m.notice = newPanePopupOpeningNotice
+	m.newPanePopupOpen = true
+	req := NewPanePromptRequest{DefaultAgent: m.opts.DefaultAgent}
+	return func() tea.Msg {
+		launchReq, canceled, err := prompt(req)
+		return newPanePromptMsg{req: launchReq, canceled: canceled, err: err}
+	}
+}
+
+func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	agents := make([]string, 0, len(req.Agents))
+	for _, agentName := range req.Agents {
+		agentName = strings.TrimSpace(agentName)
+		if agentName != "" {
+			agents = append(agents, agentName)
+		}
+	}
+	req.Agents = agents
+	if req.Prompt == "" {
+		m.notice = "new pane: prompt is required"
+		return nil
+	}
+	if len(req.Agents) == 0 {
+		m.notice = "new pane: select at least one agent"
+		return nil
+	}
+	if m.opts.LaunchPane == nil {
+		m.notice = "new pane: launcher is not configured"
+		return nil
+	}
+	m.newPane.launching = true
+	m.notice = "creating new agent pane..."
+	launch := m.opts.LaunchPane
+	return func() tea.Msg {
+		notice, err := launch(req)
+		return launchPaneMsg{notice: notice, count: len(req.Agents), err: err}
 	}
 }
 
@@ -331,6 +502,9 @@ func (m model) inputContentWidth() int {
 func (m model) modalWidth() int {
 	if m.width <= 0 {
 		return 80
+	}
+	if m.promptOnly {
+		return clampInt(m.width-2, 40, 104)
 	}
 	return clampInt(m.width-12, 40, 104)
 }

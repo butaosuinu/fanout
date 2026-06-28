@@ -151,7 +151,7 @@ context. See the
 
 ## Prerequisites
 
-- **git** and **tmux**. GitHub issue / Project workflows, PR status, and
+- **git** and **tmux 3.3+**. GitHub issue / Project workflows, PR status, and
   cleanup/status views also need the **GitHub CLI (`gh`)**, authenticated
   (`gh auth status`); local `fanout plan` runs and manual TUI panes do not.
 - The agent CLI you launch children with — **`claude`** (Claude Code) and/or

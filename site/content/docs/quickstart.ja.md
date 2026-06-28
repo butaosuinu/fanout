@@ -34,7 +34,7 @@ fanout 123
 
 子 issue ごとに、現在の tmux セッション内のペイン、`.fanout/worktrees/<slug>/` 配下の独立した worktree、issue ごとの briefing を指す 1 行プロンプトで起動したエージェントが得られます。
 
-> ペイン作成には `gh`、`git`、`tmux` が `PATH` 上に必要です。fanout は起動時に依存を確認し、欠けていればインストールのヒントを表示します（[インストール]({{< relref "/docs/installation" >}})を参照）。
+> ペイン作成には `gh`、`git`、`tmux 3.3+` が `PATH` 上に必要です。fanout は起動時に依存を確認し、欠けていればインストールのヒントを表示します（[インストール]({{< relref "/docs/installation" >}})を参照）。
 
 ## 子 issue の宣言方法
 
@@ -57,7 +57,7 @@ fanout 123
 
 live 実行は次のステップで進みます。
 
-1. `gh`、`git`、`tmux` がインストールされているかを確認する。
+1. `gh`、`git`、`tmux 3.3+` がインストールされているかを確認する。
 2. リポジトリルート、現在の tmux セッションと起動元ペイン、`--agent` または `FANOUT_AGENT` から使うエージェントを解決する。
 3. Sub-issues と親タスクリスト行の和集合で子を列挙する（OPEN の子のみ処理）。
 4. `.fanout/state.json` を読み、`(parent, issueNum)` ペアが記録済みの子はスキップする。

@@ -2,6 +2,7 @@
 package tmuxrun
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 )
 
 const (
+	MinimumVersion      = "3.3"
 	userShellExpr       = `"${SHELL:-/bin/sh}"`
 	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
 	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
@@ -67,6 +69,153 @@ type PaneInfo struct {
 	Index    int
 	Active   bool
 	Title    string
+}
+
+// ClientSize is the current tmux client's drawable terminal size.
+type ClientSize struct {
+	Width  int
+	Height int
+}
+
+// PopupOptions describes a centered tmux display-popup invocation.
+type PopupOptions struct {
+	Width    int
+	Height   int
+	StartDir string
+	Title    string
+	Command  string
+}
+
+type tmuxVersion struct {
+	Major int
+	Minor int
+}
+
+var tmuxVersionPattern = regexp.MustCompile(`tmux\s+([0-9]+)(?:\.([0-9]+))?`)
+
+// CheckMinimumVersion verifies that tmux is available and new enough for
+// display-popup, which fanout uses for TUI popup input.
+func CheckMinimumVersion() error {
+	out, err := exec.Command("tmux", "-V").Output()
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return fmt.Errorf("tmux %s+ (brew install tmux)", MinimumVersion)
+		}
+		return fmt.Errorf("tmux %s+ (tmux -V failed: %w)", MinimumVersion, err)
+	}
+	return checkMinimumVersionOutput(string(out))
+}
+
+func checkMinimumVersionOutput(out string) error {
+	version, err := parseTmuxVersion(out)
+	if err != nil {
+		return fmt.Errorf("tmux %s+ (could not parse tmux -V output %q)", MinimumVersion, strings.TrimSpace(out))
+	}
+	required, err := parseTmuxVersion("tmux " + MinimumVersion)
+	if err != nil {
+		return err
+	}
+	if compareTmuxVersions(version, required) < 0 {
+		return fmt.Errorf("tmux %s+ (found %s; brew upgrade tmux)", MinimumVersion, version.String())
+	}
+	return nil
+}
+
+func parseTmuxVersion(out string) (tmuxVersion, error) {
+	m := tmuxVersionPattern.FindStringSubmatch(strings.TrimSpace(out))
+	if m == nil {
+		return tmuxVersion{}, fmt.Errorf("missing tmux version")
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return tmuxVersion{}, err
+	}
+	minor := 0
+	if m[2] != "" {
+		minor, err = strconv.Atoi(m[2])
+		if err != nil {
+			return tmuxVersion{}, err
+		}
+	}
+	return tmuxVersion{Major: major, Minor: minor}, nil
+}
+
+func compareTmuxVersions(a, b tmuxVersion) int {
+	if a.Major != b.Major {
+		return a.Major - b.Major
+	}
+	return a.Minor - b.Minor
+}
+
+func (v tmuxVersion) String() string {
+	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
+}
+
+// CurrentClientSize returns the tmux client dimensions, not the current pane
+// dimensions. tmux display-popup is client-scoped, so pane width is irrelevant.
+func CurrentClientSize() (ClientSize, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_width} #{client_height}").Output()
+	if err != nil {
+		return ClientSize{}, fmt.Errorf("tmux display-message client size: %w", err)
+	}
+	size, err := parseClientSize(string(out))
+	if err != nil {
+		return ClientSize{}, fmt.Errorf("parse tmux client size: %w", err)
+	}
+	return size, nil
+}
+
+func parseClientSize(out string) (ClientSize, error) {
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return ClientSize{}, fmt.Errorf("expected 2 fields, got %d", len(fields))
+	}
+	width, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return ClientSize{}, fmt.Errorf("width: %w", err)
+	}
+	height, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return ClientSize{}, fmt.Errorf("height: %w", err)
+	}
+	if width <= 0 || height <= 0 {
+		return ClientSize{}, fmt.Errorf("dimensions must be positive, got %dx%d", width, height)
+	}
+	return ClientSize{Width: width, Height: height}, nil
+}
+
+// DisplayPopup opens command in a centered tmux popup.
+func DisplayPopup(opts PopupOptions) error {
+	args, err := displayPopupArgs(opts)
+	if err != nil {
+		return err
+	}
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux display-popup: %w", err)
+	}
+	return nil
+}
+
+func displayPopupArgs(opts PopupOptions) ([]string, error) {
+	if opts.Width <= 0 {
+		return nil, fmt.Errorf("popup width must be positive")
+	}
+	if opts.Height <= 0 {
+		return nil, fmt.Errorf("popup height must be positive")
+	}
+	if strings.TrimSpace(opts.Command) == "" {
+		return nil, fmt.Errorf("popup command is required")
+	}
+	args := []string{"display-popup", "-E", "-w", strconv.Itoa(opts.Width), "-h", strconv.Itoa(opts.Height)}
+	if strings.TrimSpace(opts.StartDir) != "" {
+		args = append(args, "-d", opts.StartDir)
+	}
+	args = append(args, "-x", "C", "-y", "C")
+	if strings.TrimSpace(opts.Title) != "" {
+		args = append(args, "-T", opts.Title)
+	}
+	args = append(args, opts.Command)
+	return args, nil
 }
 
 // SplitPane splits the target pane/session rooted at worktreePath and returns its pane id.

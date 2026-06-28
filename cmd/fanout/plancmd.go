@@ -27,6 +27,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
@@ -629,7 +630,9 @@ func checkPlanDeps() []string {
 		}
 	}
 	check("git", "git")
-	check("tmux", "tmux (brew install tmux)")
+	if err := tmuxrun.CheckMinimumVersion(); err != nil {
+		missing = append(missing, err.Error())
+	}
 	return missing
 }
 

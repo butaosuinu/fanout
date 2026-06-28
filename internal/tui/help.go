@@ -44,7 +44,7 @@ func (m model) helpView() string {
 			lipgloss.Top,
 			m.helpColumn("Monitor", monitor, columnWidth),
 			"  ",
-			m.helpColumn("New pane modal", newPane, columnWidth),
+			m.helpColumn("New pane popup", newPane, columnWidth),
 		),
 		"",
 		dimStyle.Render("Esc / q / ? close"),

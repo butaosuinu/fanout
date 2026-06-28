@@ -584,7 +584,7 @@ JSON
   run_fanout 20 --agent claude
   [ "$status" -eq 1 ]
   [[ "$output" == *"missing dependencies"* ]]
-  [[ "$output" == *"tmux (brew install tmux)"* ]]
+  [[ "$output" == *"tmux 3.3+ (brew install tmux)"* ]]
 }
 
 @test "missing git: exit 1" {

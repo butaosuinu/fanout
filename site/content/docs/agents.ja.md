@@ -73,7 +73,7 @@ fanout 123 --agent codex --codex-plan-mode
 
 通常の positional な `codex "<prompt>"` ではなく、fanout は子ごとに Codex app-server を起動し、collaboration mode `plan` の thread を作成し、fanout プロンプト付きで interactive な Codex TUI から resume します。
 
-子 briefing も Plan Mode 向けに差し替わります。関連する文脈を調査してから `<proposed_plan>` に包んだ実装計画を出すこと、その turn ではファイル編集や commit、push、PR 作成をしないことを明示します。TUI の manual ペイン modal で `codex` を起動する場合も、同じ Plan Mode 経路を自動で使いますが、modal の prompt と Plan Mode 指示は `/tmp` briefing file ではなく inline prompt として渡します。
+子 briefing も Plan Mode 向けに差し替わります。関連する文脈を調査してから `<proposed_plan>` に包んだ実装計画を出すこと、その turn ではファイル編集や commit、push、PR 作成をしないことを明示します。TUI の manual ペイン popup で `codex` を起動する場合も、同じ Plan Mode 経路を自動で使いますが、popup の prompt と Plan Mode 指示は `/tmp` briefing file ではなく inline prompt として渡します。
 
 この経路では tmux 経由で `/plan` やプロンプトのテキストを送信しません。ペインは interactive な Codex TUI セッションのまま残るため、その Plan Mode の会話から続行できます。Plan Mode thread のセットアップまたは TUI attach に失敗した場合は、state 記録前に launch を失敗扱いにし、ペインと worktree を後始末するため、同じ子を再実行できます。
 
