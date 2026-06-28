@@ -5,7 +5,8 @@ import (
 )
 
 // PAPER BREEZE palette (site/assets/css/main.css; keep the internal/log
-// 256-color approximations in sync). Light = site values (紅 is an addition;
+// 256-color approximations and the internal/tmuxrun pane-border hex in sync).
+// Light = site values (紅 is an addition;
 // the site defines no red), dark = same hue lifted for dark backgrounds.
 var (
 	colorAi     = lipgloss.AdaptiveColor{Light: "#165E83", Dark: "#6FAECE"} // 藍

@@ -55,8 +55,9 @@ func paletteFor(term, colorterm string) Palette {
 		strings.EqualFold(colorterm, "truecolor") || strings.EqualFold(colorterm, "24bit") {
 		// 256-color approximations of the PAPER BREEZE palette
 		// (site/assets/css/main.css; keep in sync with the internal/tui
-		// AdaptiveColor palette): 藍, 青緑, 土, 紅 — mid-brightness values
-		// readable on both light and dark backgrounds.
+		// AdaptiveColor palette and the internal/tmuxrun pane-border hex):
+		// 藍, 青緑, 土, 紅 — mid-brightness values readable on both light
+		// and dark backgrounds.
 		p.Info = "\x1b[38;5;31m"
 		p.Ok = "\x1b[38;5;36m"
 		p.Warn = "\x1b[38;5;136m"

@@ -523,6 +523,8 @@ printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 	want := strings.Join([]string{
 		"set-option", "-w", "-t", "%42", "pane-border-status", "top", "---",
 		"set-option", "-w", "-t", "%42", "pane-border-format", paneBorderFormat, "---",
+		"set-option", "-w", "-t", "%42", "pane-active-border-style", paneActiveBorderStyle, "---",
+		"set-option", "-w", "-t", "%42", "pane-border-style", paneBorderStyle, "---",
 	}, "\n") + "\n"
 	if string(body) != want {
 		t.Fatalf("tmux args body = %q, want %q", string(body), want)

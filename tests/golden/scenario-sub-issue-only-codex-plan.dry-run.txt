@@ -23,6 +23,8 @@
     $ tmux set-option -p -t <pane_id> @fanout_pane_label '#100 · first-child-101'
     $ tmux set-option -w -t <pane_id> pane-border-status top
     $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
+    $ tmux set-option -w -t <pane_id> pane-active-border-style 'fg=#00A3AF'
+    $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
     # fanout waits for Plan Mode thread setup and Codex TUI attach before recording state
@@ -49,6 +51,8 @@
     $ tmux set-option -p -t <pane_id> @fanout_pane_label '#100 · second-child-102'
     $ tmux set-option -w -t <pane_id> pane-border-status top
     $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
+    $ tmux set-option -w -t <pane_id> pane-active-border-style 'fg=#00A3AF'
+    $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
     # fanout waits for Plan Mode thread setup and Codex TUI attach before recording state
