@@ -34,9 +34,9 @@ fanout   # start the persistent tmux console
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
-| `c` | 選択中のペインを close する（確認を挟み、`--close` と同じコア処理を使う）。 |
+| `c` / `x` | 選択中のペインの close option を開く。ペインだけを閉じる、ペインと worktree を閉じる、local branch も削除する、から選ぶ。 |
 | `m` | 選択中のペインの branch を fast-forward merge する（確認を挟み、`--merge` と同じコア処理を使う）。 |
-| `x` | 同じ親の merged/closed な子をまとめて cleanup する（確認を挟み、`--cleanup` と同じコア処理を使う）。 |
+| `X` | 同じ親の merged/closed な子をまとめて cleanup する（確認を挟み、`--cleanup` と同じコア処理を使う）。 |
 | `q` | コンソールを離脱する。tmux session と子ペインはそのまま残る。 |
 
 > 記録はあるものの tmux 上に存在しないペインの行は `stale!` と表示され、フォーカス操作とピーク操作の対象から外れます。

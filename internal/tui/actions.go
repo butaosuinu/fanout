@@ -24,8 +24,10 @@ const (
 )
 
 type pendingLifecycleAction struct {
-	action lifecycleAction
-	pane   paneView
+	action           lifecycleAction
+	pane             paneView
+	closeMode        lifecycle.CloseMode
+	closeOptionIndex int
 }
 
 type lifecycleDoneMsg struct {
@@ -37,7 +39,9 @@ type lifecycleDoneMsg struct {
 
 type lifecycleRunner interface {
 	Close(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
+	CloseWithMode(lifecycle.Options, string, int, lifecycle.CloseMode, lifecycle.Logger) exitcode.Code
 	CloseTask(lifecycle.Options, string, string, lifecycle.Logger) exitcode.Code
+	CloseTaskWithMode(lifecycle.Options, string, string, lifecycle.CloseMode, lifecycle.Logger) exitcode.Code
 	Merge(lifecycle.Options, string, int, lifecycle.Logger) exitcode.Code
 	MergeTask(lifecycle.Options, string, string, lifecycle.Logger) exitcode.Code
 	Cleanup(lifecycle.Options, string, lifecycle.Logger) exitcode.Code
@@ -50,8 +54,16 @@ func (defaultLifecycleRunner) Close(opts lifecycle.Options, parent string, issue
 	return lifecycle.Close(opts, parent, issueNum, lg)
 }
 
+func (defaultLifecycleRunner) CloseWithMode(opts lifecycle.Options, parent string, issueNum int, mode lifecycle.CloseMode, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.CloseWithMode(opts, parent, issueNum, mode, lg)
+}
+
 func (defaultLifecycleRunner) CloseTask(opts lifecycle.Options, parent, taskID string, lg lifecycle.Logger) exitcode.Code {
 	return lifecycle.CloseTask(opts, parent, taskID, lg)
+}
+
+func (defaultLifecycleRunner) CloseTaskWithMode(opts lifecycle.Options, parent, taskID string, mode lifecycle.CloseMode, lg lifecycle.Logger) exitcode.Code {
+	return lifecycle.CloseTaskWithMode(opts, parent, taskID, mode, lg)
 }
 
 func (defaultLifecycleRunner) Merge(opts lifecycle.Options, parent string, issueNum int, lg lifecycle.Logger) exitcode.Code {
@@ -95,6 +107,9 @@ func (l actionLogger) Stderr() io.Writer {
 }
 
 func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.pendingAction.action == actionClose && !m.pendingAction.pane.isShell() {
+		return m.updatePendingCloseChoice(msg)
+	}
 	switch msg.String() {
 	case "y", "enter":
 		pending := *m.pendingAction
@@ -104,6 +119,38 @@ func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.lifecycleCmd(pending)
 	case "n", "esc", "q", "ctrl+c":
 		m.actionMessage = fmt.Sprintf("%s canceled", m.pendingAction.action)
+		m.pendingAction = nil
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) updatePendingCloseChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex - 1)
+		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
+		m.actionMessage = closeChoiceMessage(*m.pendingAction)
+		return m, nil
+	case "down", "j":
+		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex + 1)
+		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
+		m.actionMessage = closeChoiceMessage(*m.pendingAction)
+		return m, nil
+	case "1", "2", "3":
+		idx := int(msg.String()[0] - '1')
+		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(idx)
+		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
+		m.actionMessage = closeChoiceMessage(*m.pendingAction)
+		return m, nil
+	case "y", "enter":
+		pending := *m.pendingAction
+		m.pendingAction = nil
+		m.actionRunning = true
+		m.actionMessage = lifecycleRunningMessage(pending)
+		return m, m.lifecycleCmd(pending)
+	case "n", "esc", "q", "ctrl+c":
+		m.actionMessage = "close canceled"
 		m.pendingAction = nil
 		return m, nil
 	}
@@ -121,6 +168,15 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
+	if action == actionClose {
+		m.pendingAction.closeMode = lifecycle.ClosePaneOnly
+		if !pane.isShell() {
+			m.pendingAction.closeOptionIndex = 0
+			m.pendingAction.closeMode = closeOptions()[0].mode
+			m.actionMessage = closeChoiceMessage(*m.pendingAction)
+			return m, nil
+		}
+	}
 	m.actionMessage = confirmMessage(action, pane)
 	return m, nil
 }
@@ -184,9 +240,9 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 				opts := lifecycleOpts(r)
 				var c exitcode.Code
 				if pending.pane.isTask() {
-					c = runner.CloseTask(opts, pending.pane.Parent, pending.pane.TaskID, lg)
+					c = runner.CloseTaskWithMode(opts, pending.pane.Parent, pending.pane.TaskID, pending.closeMode, lg)
 				} else {
-					c = runner.Close(opts, pending.pane.Parent, pending.pane.IssueNum, lg)
+					c = runner.CloseWithMode(opts, pending.pane.Parent, pending.pane.IssueNum, pending.closeMode, lg)
 				}
 				if c != exitcode.OK {
 					code = c
@@ -275,6 +331,8 @@ func (m model) sourceRootsForParent(parent string) []string {
 
 func confirmMessage(action lifecycleAction, pane paneView) string {
 	switch action {
+	case actionClose:
+		return fmt.Sprintf("confirm close %s? y/n", pane.identityLabel())
 	case actionCleanup:
 		return fmt.Sprintf("confirm cleanup for parent %s? y/n", dash(pane.Parent))
 	default:
@@ -301,6 +359,9 @@ func lifecycleRunningMessage(pending pendingLifecycleAction) string {
 	if pending.action == actionCleanup {
 		return fmt.Sprintf("%s parent %s...", pending.action, dash(pending.pane.Parent))
 	}
+	if pending.action == actionClose {
+		return fmt.Sprintf("%s %s...", closeModeVerb(pending.closeMode), pending.pane.identityLabel())
+	}
 	return fmt.Sprintf("%s %s...", pending.action, pending.pane.identityLabel())
 }
 
@@ -309,4 +370,54 @@ func (m model) renderActionMessage() string {
 		return warnStyle.Render(m.actionMessage)
 	}
 	return dimStyle.Render(m.actionMessage)
+}
+
+type closeOption struct {
+	mode        lifecycle.CloseMode
+	label       string
+	description string
+}
+
+func closeOptions() []closeOption {
+	return []closeOption{
+		{mode: lifecycle.ClosePaneOnly, label: "Just close pane", description: "keep worktree and branch"},
+		{mode: lifecycle.CloseWorktree, label: "Close and remove worktree", description: "keep branch"},
+		{mode: lifecycle.CloseEverything, label: "Close and delete everything", description: "remove worktree and local branch"},
+	}
+}
+
+func clampCloseOptionIndex(idx int) int {
+	opts := closeOptions()
+	if idx < 0 {
+		return 0
+	}
+	if idx >= len(opts) {
+		return len(opts) - 1
+	}
+	return idx
+}
+
+func closeChoiceMessage(pending pendingLifecycleAction) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "close %s?\n", pending.pane.identityLabel())
+	for i, opt := range closeOptions() {
+		prefix := "  "
+		if i == pending.closeOptionIndex {
+			prefix = "> "
+		}
+		fmt.Fprintf(&b, "%s%d. %s - %s\n", prefix, i+1, opt.label, opt.description)
+	}
+	b.WriteString("up/down or 1-3 select, enter confirm, esc cancel")
+	return b.String()
+}
+
+func closeModeVerb(mode lifecycle.CloseMode) string {
+	switch mode {
+	case lifecycle.ClosePaneOnly:
+		return "close pane"
+	case lifecycle.CloseEverything:
+		return "delete"
+	default:
+		return "close"
+	}
 }
