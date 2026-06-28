@@ -135,7 +135,7 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 	}
 }
 
-func TestCodexPlanThreadLeavesInitialTurnForTUIAfterSettingsUpdate(t *testing.T) {
+func TestCodexPlanThreadConfiguresPlanModeBeforeInitialTurn(t *testing.T) {
 	client := &fakeCodexAppClient{}
 
 	thread, err := setupCodexPlanThread(client, "/repo")
@@ -151,11 +151,44 @@ func TestCodexPlanThreadLeavesInitialTurnForTUIAfterSettingsUpdate(t *testing.T)
 		t.Fatalf("request order = %s, want %s", got, want)
 	}
 	if client.hasRequest("turn/start") {
-		t.Fatal("setupCodexPlanThread started a turn; want initial prompt left for the interactive TUI")
+		t.Fatal("setupCodexPlanThread started a turn; want runCodexPlanTUI to start the initial turn")
 	}
 }
 
-func TestCodexPlanThreadStartsInitialTurnWithFallbackCollaborationMode(t *testing.T) {
+func TestCodexPlanThreadStartsInitialTurnAfterSettingsUpdate(t *testing.T) {
+	client := &fakeCodexAppClient{}
+
+	thread, err := setupCodexPlanThread(client, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnStart, err := startCodexPlanTurn(client, thread, "/repo", "hello plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turnStart.Completed {
+		t.Fatal("Completed = true, want false for in-progress turn response")
+	}
+
+	turn := client.lastRequest("turn/start").paramsMap(t)
+	mode, ok := turn["collaborationMode"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn/start missing collaborationMode: %#v", turn)
+	}
+	if mode["mode"] != "plan" {
+		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
+	}
+	settings, ok := mode["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("collaborationMode.settings = %#v, want map", mode["settings"])
+	}
+	if settings["model"] != "gpt-test" || settings["reasoning_effort"] != "xhigh" {
+		t.Fatalf("settings = %#v, want model gpt-test and effort xhigh", settings)
+	}
+	assertTurnStartText(t, turn, "hello plan")
+}
+
+func TestCodexPlanThreadStartsInitialTurnWhenSettingsUpdateIsUnsupported(t *testing.T) {
 	client := &fakeCodexAppClient{
 		methodErrors: map[string]error{
 			"thread/settings/update": errors.New(`unknown method "thread/settings/update"`),
@@ -169,8 +202,12 @@ func TestCodexPlanThreadStartsInitialTurnWithFallbackCollaborationMode(t *testin
 	if !thread.UseTurnCollaborationMode {
 		t.Fatal("UseTurnCollaborationMode = false, want true when thread/settings/update is unsupported")
 	}
-	if err = startCodexPlanTurn(client, thread, "/repo", "hello fallback"); err != nil {
+	turnStart, err := startCodexPlanTurn(client, thread, "/repo", "hello fallback")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if turnStart.Completed {
+		t.Fatal("Completed = true, want false for in-progress turn response")
 	}
 
 	turn := client.lastRequest("turn/start").paramsMap(t)
@@ -189,6 +226,70 @@ func TestCodexPlanThreadStartsInitialTurnWithFallbackCollaborationMode(t *testin
 		t.Fatalf("fallback settings = %#v, want model gpt-test and effort xhigh", settings)
 	}
 	assertTurnStartText(t, turn, "hello fallback")
+}
+
+func TestCodexPlanTurnStartReportsCompletedStatus(t *testing.T) {
+	client := &fakeCodexAppClient{
+		methodResults: map[string]json.RawMessage{
+			"turn/start": json.RawMessage(`{"turn":{"id":"turn-1","status":"completed"}}`),
+		},
+	}
+	thread := codexThreadInfo{ID: "thread-1", Model: "gpt-test", PlanEffort: "xhigh"}
+
+	turnStart, err := startCodexPlanTurn(client, thread, "/repo", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !turnStart.Completed {
+		t.Fatal("Completed = false, want true for completed turn response")
+	}
+	if turnStart.TurnID != "turn-1" {
+		t.Fatalf("TurnID = %q, want turn-1", turnStart.TurnID)
+	}
+}
+
+func TestCodexPlanTurnStartErrorsOnFailedStatus(t *testing.T) {
+	client := &fakeCodexAppClient{
+		methodResults: map[string]json.RawMessage{
+			"turn/start": json.RawMessage(`{"turn":{"id":"turn-1","status":"failed"}}`),
+		},
+	}
+	thread := codexThreadInfo{ID: "thread-1", Model: "gpt-test", PlanEffort: "xhigh"}
+
+	_, err := startCodexPlanTurn(client, thread, "/repo", "hello")
+
+	if err == nil || !strings.Contains(err.Error(), `status "failed"`) {
+		t.Fatalf("error = %v, want failed status error", err)
+	}
+}
+
+func TestSeedCodexPlanThreadForResumeInjectsReadyAssistantItem(t *testing.T) {
+	client := &fakeCodexAppClient{}
+
+	if err := seedCodexPlanThreadForResume(client, "thread-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := client.lastRequest("thread/inject_items")
+	params := req.paramsMap(t)
+	if params["threadId"] != "thread-1" {
+		t.Fatalf("threadId = %q, want thread-1", params["threadId"])
+	}
+	items, ok := params["items"].([]map[string]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %#v, want one injected item", params["items"])
+	}
+	if items[0]["type"] != "message" || items[0]["role"] != "assistant" {
+		t.Fatalf("item = %#v, want assistant message", items[0])
+	}
+	content, ok := items[0]["content"].([]map[string]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("content = %#v, want one output_text item", items[0]["content"])
+	}
+	if content[0]["type"] != "output_text" || content[0]["text"] != codexPlanSeedAssistantText {
+		t.Fatalf("content = %#v, want Ready output_text", content[0])
+	}
 }
 
 func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
@@ -300,7 +401,7 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	drainDone := make(chan error, 1)
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &codexAppClient{})
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -315,13 +416,71 @@ func TestWaitForCodexTUIAfterReadyReturnsDrainError(t *testing.T) {
 	drainDone := make(chan error, 1)
 	drainDone <- errors.New("unsupported request")
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &codexAppClient{})
 
 	if tuiExited {
 		t.Fatal("tuiExited = true, want false")
 	}
 	if err == nil || !strings.Contains(err.Error(), "unsupported request") {
 		t.Fatalf("error = %v, want unsupported request", err)
+	}
+}
+
+func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error, 1)
+	drainDone <- nil
+	tuiDone <- nil
+
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &codexAppClient{})
+
+	if !tuiExited {
+		t.Fatal("tuiExited = false, want true")
+	}
+	if err != nil {
+		t.Fatalf("error = %v, want nil", err)
+	}
+}
+
+func TestCodexTurnCompletedNotificationMatchesThread(t *testing.T) {
+	msg := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"status":"completed"}}`),
+	}
+
+	completion := codexTurnCompletedNotification(msg, "thread-1", "")
+	if !completion.Matched || completion.Status != "completed" {
+		t.Fatalf("completion = %+v, want completed match", completion)
+	}
+	if codexTurnCompletedNotification(msg, "thread-2", "").Matched {
+		t.Fatal("codexTurnCompletedNotification() matched the wrong thread")
+	}
+}
+
+func TestCodexTurnCompletedNotificationMatchesNestedTurn(t *testing.T) {
+	msg := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"id":"turn-1","threadId":"thread-1","status":"completed"}}`),
+	}
+
+	completion := codexTurnCompletedNotification(msg, "thread-1", "turn-1")
+	if !completion.Matched || completion.Status != "completed" {
+		t.Fatalf("completion = %+v, want completed match", completion)
+	}
+	if codexTurnCompletedNotification(msg, "thread-1", "turn-2").Matched {
+		t.Fatal("codexTurnCompletedNotification() matched the wrong turn")
+	}
+}
+
+func TestCodexTurnCompletedNotificationReportsFailedStatus(t *testing.T) {
+	msg := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"id":"turn-1","status":"failed"}}`),
+	}
+
+	completion := codexTurnCompletedNotification(msg, "thread-1", "turn-1")
+	if !completion.Matched || completion.Status != "failed" {
+		t.Fatalf("completion = %+v, want failed match", completion)
 	}
 }
 
@@ -362,6 +521,7 @@ type fakeCodexAppClient struct {
 	calls         []fakeCodexRequest
 	notifications []string
 	methodErrors  map[string]error
+	methodResults map[string]json.RawMessage
 }
 
 type fakeCodexRequest struct {
@@ -375,6 +535,9 @@ func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMes
 	if err := f.methodErrors[method]; err != nil {
 		return nil, err
 	}
+	if result, ok := f.methodResults[method]; ok {
+		return result, nil
+	}
 	switch method {
 	case "collaborationMode/list":
 		return json.RawMessage(`{"data":[{"mode":"plan"}]}`), nil
@@ -384,6 +547,8 @@ func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMes
 		return json.RawMessage(`{"data":[{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]}]}`), nil
 	case "thread/start":
 		return json.RawMessage(`{"thread":{"id":"thread-1","sessionId":"session-1"}}`), nil
+	case "turn/start":
+		return json.RawMessage(`{"turn":{"status":"inProgress"}}`), nil
 	default:
 		return json.RawMessage(`{}`), nil
 	}
