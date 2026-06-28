@@ -10,11 +10,13 @@ import (
 )
 
 type FanoutMetadata struct {
-	Agent        string
-	DisplayName  string
-	BranchName   string
-	Slug         string
-	WorktreePath string
+	Agent          string
+	DisplayName    string
+	BranchName     string
+	Slug           string
+	WorktreePath   string
+	CodexThreadID  string
+	CodexSessionID string
 }
 
 // WriteFanoutMetadata persists the pane name fields beside the generated
@@ -45,6 +47,12 @@ func WriteFanoutMetadata(worktreePath string, meta FanoutMetadata) error {
 	m["branchName"] = meta.BranchName
 	m["slug"] = meta.Slug
 	m["worktreePath"] = meta.WorktreePath
+	if meta.CodexThreadID != "" {
+		m["codexThreadId"] = meta.CodexThreadID
+	}
+	if meta.CodexSessionID != "" {
+		m["codexSessionId"] = meta.CodexSessionID
+	}
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err

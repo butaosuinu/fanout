@@ -47,10 +47,11 @@ type issueStatus struct {
 }
 
 type stateLoadedMsg struct {
-	panes        []paneView
-	at           time.Time
-	err          error
-	scheduleNext bool
+	panes         []paneView
+	at            time.Time
+	err           error
+	restoreNotice string
+	scheduleNext  bool
 }
 
 type ghLoadedMsg struct {
@@ -69,9 +70,15 @@ type worktreeStatView struct {
 func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	issues := cloneIssueStatuses(m.issues)
+	restorePanes := m.opts.RestorePanes
 	return func() tea.Msg {
+		var restoreNotice string
+		var restoreErr error
+		if restorePanes != nil {
+			restoreNotice, restoreErr = restorePanes()
+		}
 		panes, err := loadPaneViews(projectRoot, issues)
-		return stateLoadedMsg{panes: panes, at: time.Now(), err: err, scheduleNext: scheduleNext}
+		return stateLoadedMsg{panes: panes, at: time.Now(), err: errors.Join(restoreErr, err), restoreNotice: restoreNotice, scheduleNext: scheduleNext}
 	}
 }
 

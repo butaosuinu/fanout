@@ -17,7 +17,7 @@ yomi: monitoring
 fanout   # start the persistent tmux console
 ```
 
-素のシェルから起動したときは、現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または attach し、その session 内でコンソールを開始します。tmux 内から起動したときは、現在のペインをそのままコンソール画面にします。
+素のシェルから起動したときは、現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または attach し、その session 内でコンソールを開始します。tmux 内から起動したときは、現在のペインをそのままコンソール画面にします。起動時と state 更新ごとに、コンソールは tmux 上に残っている記録済み worktree ペインへ再バインドし、消えた worktree ペインは agent CLI の resume で作り直します。使うのは `claude --continue`、`codex resume --last`、または Plan ペインに保存した Codex Plan Mode thread です。
 
 コンソールは `<git-root>/.fanout/state.json` を読み、記録済みペイン ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue と closed-by PR の状態を定期更新します。エージェント側に計測の仕込みは要りません。各行にはペインの worktree の総作業量を `+X/-Y` で示します。これは記録した base ブランチとの merge-base に対する `git diff --shortstat` で、コミット済みと未 commit の合計です（base 未記録の旧行は `origin/HEAD` から `HEAD` に fallback します）。あわせて `git status --porcelain` 由来の `dirty` / `clean` を出すので、未 commit の作業を抱えたペインをその場で見分けられます。
 
@@ -42,7 +42,7 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | `X` | 同じ親の merged/closed な子をまとめて cleanup する（確認を挟み、`--cleanup` と同じコア処理を使う）。 |
 | `q` | コンソールを離脱する。tmux session と子ペインはそのまま残る。 |
 
-> 記録はあるものの tmux 上に存在しないペインの行は `stale!` と表示され、フォーカス操作とピーク操作の対象から外れます。
+> worktree 行が `stale!` になるのは、worktree が無い、agent command が無いなど fanout が復元できない場合です。shell terminal は resume できないため、対応する tmux ペインが無ければ TUI が state 行を削除します。
 
 ## --status（JSON）
 

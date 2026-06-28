@@ -79,7 +79,10 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
-	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now)
+	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now, codexPlanTUIStatus{
+		ThreadID:  "thread-1",
+		SessionID: "session-1",
+	})
 
 	if got.Parent != "81" || got.IssueNum != 83 || got.PaneID != "%42" {
 		t.Fatalf("state pane identity = %+v", got)
@@ -102,6 +105,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	if !got.CodexPlanMode {
 		t.Fatal("codexPlanMode = false, want passthrough of req.CodexPlanMode")
 	}
+	if got.CodexThreadID != "thread-1" || got.CodexSessionID != "session-1" {
+		t.Fatalf("codex session ids = %q/%q, want thread-1/session-1", got.CodexThreadID, got.CodexSessionID)
+	}
 }
 
 func TestStatePaneCapturesTaskID(t *testing.T) {
@@ -116,7 +122,7 @@ func TestStatePaneCapturesTaskID(t *testing.T) {
 		Worktree:   worktree.Plan{BaseBranch: "main"},
 	}
 
-	got := statePane(req, "%42", "/repo/.fanout/worktrees/extract-api-client-api-client", now)
+	got := statePane(req, "%42", "/repo/.fanout/worktrees/extract-api-client-api-client", now, codexPlanTUIStatus{})
 
 	if got.Parent != "plan:launch-plan" || got.IssueNum != 0 || got.TaskID != "api-client" {
 		t.Fatalf("task state identity = %+v, want plan parent, issueNum 0, taskID", got)
@@ -467,7 +473,7 @@ func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 		t.Fatalf("watch briefing used Codex Plan Mode body:\n%s", got.BriefingBody)
 	}
 
-	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC))
+	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC), codexPlanTUIStatus{})
 	if pane.Parent != watchPaneParentRef || pane.IssueNum != 223 {
 		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, watchPaneParentRef)
 	}

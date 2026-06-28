@@ -29,7 +29,8 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   だけをファンアウト。PR が merge されたら再実行すれば次の wave が開きます。
 - **常駐 TUI コンソール** — 引数なしの `fanout` で、ペイン / issue / PR を
   ライブ表示し、コンパクトな Session ナビゲータと focus・peek・terminal・
-  複数 agent の手動起動・lifecycle キーを備えたコンソールを開きます。
+  複数 agent の手動起動・lifecycle キー・消えた worktree ペインの自動復元を
+  備えたコンソールを開きます。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
@@ -68,8 +69,9 @@ fanout 123              # issue #123 の OPEN な子をすべて個別ペイン�
 fanout 123 --status     # ファンアウトした子の PR review + CI 状態を確認
 ```
 
-引数なしの `fanout` で、現在のリポジトリの常駐 TUI コンソールを開きます。最初の
-実行は
+引数なしの `fanout` で、現在のリポジトリの常駐 TUI コンソールを開きます。
+再起動すると既存 state を読み、tmux 上に残っているペインへ再バインドし、消えた
+worktree ペインは agent CLI を resume して作り直します。最初の実行は
 [5 分クイックスタート](https://butaosuinu.github.io/fanout/ja/docs/quickstart/)
 を参照してください。
 
@@ -132,7 +134,7 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout 123 --unblocked-only` | ブロッカーが closed の子だけをファンアウト — 次の wave |
 | `fanout 123 --dry-run` | git / tmux / state / briefing file を変更せず計画だけ表示 |
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
-| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・terminal・複数 agent の手動起動・lifecycle キー) |
+| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・terminal・複数 agent の手動起動・復元・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
 | `fanout dashboard --web` | localhost で read-only Web ダッシュボードを配信 |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |

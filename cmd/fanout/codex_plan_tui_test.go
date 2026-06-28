@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/exitcode"
+	"github.com/butaosuinu/fanout/internal/log"
 )
 
 func TestCodexPlanSettingsUpdateParamsUsesPlanMode(t *testing.T) {
@@ -91,6 +95,52 @@ func TestCodexRemoteTUIArgsCanResumeWithoutPromptForFallbackTurn(t *testing.T) {
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCodexRemoteTUIResumeIDPrefersSessionID(t *testing.T) {
+	got := codexRemoteTUIResumeID(codexThreadInfo{ID: "thread-1", SessionID: "session-1"})
+	if got != "session-1" {
+		t.Fatalf("codexRemoteTUIResumeID() = %q, want session-1", got)
+	}
+}
+
+func TestCodexRemoteTUIResumeIDFallsBackToThreadID(t *testing.T) {
+	got := codexRemoteTUIResumeID(codexThreadInfo{ID: "thread-1"})
+	if got != "thread-1" {
+		t.Fatalf("codexRemoteTUIResumeID() = %q, want thread-1", got)
+	}
+}
+
+func TestParseCodexPlanTUIArgsAllowsResumeThreadWithoutPrompt(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cfg, code := parseCodexPlanTUIArgs([]string{
+		"--codex", "/bin/codex",
+		"--resume-thread-id", "thread-1",
+		"--resume-session-id", "session-1",
+		"--status-file", "/tmp/status.json",
+	}, log.NewWith(&stdout, &stderr, false))
+
+	if code != exitcode.OK {
+		t.Fatalf("parseCodexPlanTUIArgs code = %v, stderr = %q", code, stderr.String())
+	}
+	if cfg.ResumeThreadID != "thread-1" || cfg.ResumeSessionID != "session-1" || cfg.Prompt != "" {
+		t.Fatalf("cfg = %+v, want resume thread without prompt", cfg)
+	}
+}
+
+func TestParseCodexPlanTUIArgsStillRequiresPromptOrResumeThread(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	_, code := parseCodexPlanTUIArgs([]string{
+		"--codex", "/bin/codex",
+		"--status-file", "/tmp/status.json",
+	}, log.NewWith(&stdout, &stderr, false))
+
+	if code != exitcode.Env {
+		t.Fatalf("parseCodexPlanTUIArgs code = %v, want Env", code)
+	}
+	if !strings.Contains(stderr.String(), "--prompt is required") {
+		t.Fatalf("stderr = %q, want prompt error", stderr.String())
 	}
 }
 
