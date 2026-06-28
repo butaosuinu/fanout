@@ -146,7 +146,7 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg); !result.OK() {
 		lg.Err("%s: %v", paneLogLabel(req), result.Err)
 		printPaneHookOutput(result, lg)
-		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
+		cleanupFailedLaunch(paneLogLabel(req), info.Target, "", prepared, lg)
 		return createdPane{}, false
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg)
@@ -154,7 +154,7 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
 	if err != nil {
 		lg.Err("%s: %v", paneLogLabel(req), err)
-		cleanupFailedLaunch(paneLogLabel(req), "", prepared, lg)
+		cleanupFailedLaunch(paneLogLabel(req), info.Target, "", prepared, lg)
 		return createdPane{}, false
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
@@ -169,10 +169,17 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
 		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
+	// Re-layout right after the split so the new pane is sized into the grid
+	// immediately — a Codex Plan Mode pane otherwise sits at the ~half-width split
+	// for the whole (up to 30s) startup wait below. A failed launch reconciles any
+	// spacer this created via cleanupFailedLaunch's relayout, so no orphan remains.
+	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
+		lg.Warn("%s: %v", paneLogLabel(req), err)
+	}
 	if req.CodexPlanMode {
 		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
 			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
-			cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
+			cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
 			return createdPane{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
@@ -181,7 +188,7 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC())
 		if err := recorder.RecordPane(entry); err != nil {
 			lg.Err("%s: write fanout state: %v", paneLogLabel(req), err)
-			cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
+			cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
 			return createdPane{}, false
 		}
 	}
@@ -194,15 +201,8 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	}); err != nil {
 		lg.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		rollbackState(recorder, req, lg)
-		cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
+		cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
 		return createdPane{}, false
-	}
-	// Re-layout last, after the fallible steps: an earlier failure runs
-	// cleanupFailedLaunch (which kills this pane), and laying out only on the
-	// success path means a failed launch never leaves an orphaned spacer pane
-	// behind for the grid.
-	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
-		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
 	lg.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
 	return createdPane{req: req, paneID: paneID, prepared: prepared}, true
@@ -745,10 +745,15 @@ func rollbackState(recorder paneStateRecorder, req paneRequest, lg *log.Logger) 
 	}
 }
 
-func cleanupFailedLaunch(label string, paneID string, prepared worktree.Result, lg *log.Logger) {
+func cleanupFailedLaunch(label, relayoutTarget, paneID string, prepared worktree.Result, lg *log.Logger) {
 	if paneID != "" {
 		if err := tmuxrun.KillPane(paneID); err != nil {
 			lg.Warn("%s: cleanup incomplete pane %s: %v", label, paneID, err)
+		}
+		// The failed pane is gone; re-tile so neither it nor a spacer that an
+		// early/concurrent relayout may have created is left dangling in the grid.
+		if err := panelayout.Apply(relayoutTarget, panelayout.Close); err != nil {
+			lg.Warn("%s: relayout after failed launch: %v", label, err)
 		}
 	}
 	if err := worktree.CleanupCreated(prepared); err != nil {
