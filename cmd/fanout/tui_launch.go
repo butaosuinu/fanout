@@ -171,6 +171,8 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
 	// keep the terminal usable when tmux metadata/layout updates fail.
 	_ = tmuxrun.SetPaneTitle(paneID, title)
+	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(manualPaneParentRef, title))
+	_ = tmuxrun.EnablePaneBorderTitles(paneID)
 	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
 	_ = tmuxrun.SelectTiled(tuiLaunchTarget(session))
 	if err := recorder.RecordPane(state.Pane{

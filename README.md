@@ -22,6 +22,9 @@ English and 日本語.
 
 - **Idempotent fan-out** — `.fanout/state.json` keys every `(parent, issue)`
   pane, so reruns never duplicate work.
+- **Pane border labels** — each pane shows its parent and name on its top
+  border (e.g. `#123 · fix-login-bug-123`, `plan:my-feature · task-slug`), so
+  tiled panes are easy to tell apart.
 - **Wave progression** — `--unblocked-only` reads blockers and fans out only
   unblocked children; rerun as PRs merge and the next wave opens.
 - **Persistent TUI console** — run `fanout` with no arguments for a live

@@ -692,3 +692,59 @@ func TestWaitForCodexPlanTUIReadyTimesOutWithoutStatus(t *testing.T) {
 		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want timeout", err)
 	}
 }
+
+func TestParentDisplay(t *testing.T) {
+	cases := []struct {
+		parent string
+		want   string
+	}{
+		{"123", "#123"},
+		{"81", "#81"},
+		{"plan:launch-plan", "plan:launch-plan"},
+		{manualPaneParentRef, "@manual"},
+		{watchPaneParentRef, "@watch"},
+		{"https://github.com/orgs/octo/projects/3", "orgs/octo/projects/3"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := parentDisplay(tc.parent); got != tc.want {
+			t.Errorf("parentDisplay(%q) = %q, want %q", tc.parent, got, tc.want)
+		}
+	}
+}
+
+func TestPaneBorderLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		req  paneRequest
+		want string
+	}{
+		{
+			name: "issue child uses slug",
+			req:  paneRequest{ParentRef: "123", Slug: "fix-login-bug-123"},
+			want: "#123 · fix-login-bug-123",
+		},
+		{
+			name: "display name override wins over slug",
+			req:  paneRequest{ParentRef: "123", Slug: "fix-login-bug-123", DisplayNameOverride: "Login fix"},
+			want: "#123 · Login fix",
+		},
+		{
+			name: "plan parent passes through",
+			req:  paneRequest{ParentRef: "plan:my-feature", Slug: "task-slug"},
+			want: "plan:my-feature · task-slug",
+		},
+		{
+			name: "manual parent passes through",
+			req:  paneRequest{ParentRef: manualPaneParentRef, Slug: "scratch"},
+			want: "@manual · scratch",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paneBorderLabel(tc.req); got != tc.want {
+				t.Errorf("paneBorderLabel() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

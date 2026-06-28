@@ -22,6 +22,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 
 - **冪等なファンアウト** — `.fanout/state.json` が `(parent, issue)` ごとに
   ペインを管理するので、再実行しても作業が重複しません。
+- **ペイン枠線ラベル** — 各ペインの上端枠線に親と名前を表示するので
+  (例 `#123 · fix-login-bug-123`、`plan:my-feature · task-slug`)、tiled で
+  並んでも見分けが付きます。
 - **Wave 進行** — `--unblocked-only` がブロッカーを読み取り、unblock 済みの子
   だけをファンアウト。PR が merge されたら再実行すれば次の wave が開きます。
 - **常駐 TUI コンソール** — 引数なしの `fanout` で、ペイン / issue / PR を

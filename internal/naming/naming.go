@@ -95,7 +95,7 @@ func QualifySlugForParent(slug, parentRef string, issueNum int) string {
 }
 
 func parentToken(parentRef string) string {
-	if allDigits(parentRef) {
+	if AllDigits(parentRef) {
 		return "parent-" + parentRef
 	}
 	token := Slugify(parentRef)
@@ -112,7 +112,10 @@ func parentToken(parentRef string) string {
 	return token + "-" + shortHash(parentRef)
 }
 
-func allDigits(s string) bool {
+// AllDigits reports whether s is non-empty and every rune is an ASCII digit.
+// It preserves leading zeros (it never parses the number), matching the
+// dashboard's `^\d+$` parent classification in web/src/lib/github.ts.
+func AllDigits(s string) bool {
 	if s == "" {
 		return false
 	}

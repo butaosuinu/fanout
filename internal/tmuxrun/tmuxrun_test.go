@@ -450,6 +450,91 @@ func TestSetPaneShellKey(t *testing.T) {
 	})
 }
 
+func TestSetPaneLabel(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneLabel("%42", "#123 · fix-login-bug-123"); err != nil {
+		t.Fatalf("SetPaneLabel() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_pane_label", "#123 · fix-login-bug-123",
+	})
+}
+
+func TestSetPaneLabelRequiresPaneID(t *testing.T) {
+	if err := SetPaneLabel("", "label"); err == nil {
+		t.Fatal("SetPaneLabel(empty pane id) should error")
+	}
+}
+
+func TestNeutralizePaneLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain label is untouched", "#123 · fix-login-bug-123", "#123 · fix-login-bug-123"},
+		{"single style sequence is defused", "#123 · v2 #[fg=red]ship", "#123 · v2 [fg=red]ship"},
+		// A leading extra "#" must not let the style survive: ReplaceAll("#[","[")
+		// would leave "#[fg=red]" here, so the run-stripping form is required.
+		{"overlapping hashes are fully defused", "#123 · ##[fg=red]x", "#123 · [fg=red]x"},
+		{"a run of hashes before a bracket collapses", "###[bold]", "[bold]"},
+		{"a bracket without a leading hash is kept", "name[0]", "name[0]"},
+		{"empty stays empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NeutralizePaneLabel(tc.in); got != tc.want {
+				t.Errorf("NeutralizePaneLabel(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSetPaneLabelNeutralizesStyleSequence(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	// A "#[" from a --name override must not reach the border as a tmux style.
+	if err := SetPaneLabel("%42", "#123 · v2 #[fg=red]ship"); err != nil {
+		t.Fatalf("SetPaneLabel() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_pane_label", "#123 · v2 [fg=red]ship",
+	})
+}
+
+func TestEnablePaneBorderTitles(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+`)
+
+	if err := EnablePaneBorderTitles("%42"); err != nil {
+		t.Fatalf("EnablePaneBorderTitles() failed: %v", err)
+	}
+
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"set-option", "-w", "-t", "%42", "pane-border-status", "top", "---",
+		"set-option", "-w", "-t", "%42", "pane-border-format", paneBorderFormat, "---",
+	}, "\n") + "\n"
+	if string(body) != want {
+		t.Fatalf("tmux args body = %q, want %q", string(body), want)
+	}
+}
+
+func TestEnablePaneBorderTitlesRequiresPaneID(t *testing.T) {
+	if err := EnablePaneBorderTitles(""); err == nil {
+		t.Fatal("EnablePaneBorderTitles(empty pane id) should error")
+	}
+}
+
 func TestBuildPaneLaunchCommandUsesUserShellAndKeepsPaneOpen(t *testing.T) {
 	got := BuildPaneLaunchCommand("PATH='/very/long/path:/usr/bin' /tmp/bin/codex '[fanout #1] prompt'")
 	for _, want := range []string{
