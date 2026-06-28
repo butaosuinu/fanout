@@ -87,6 +87,15 @@ type codexAppClient struct {
 	conn *websocketJSONConn
 }
 
+type codexAppRequester interface {
+	Request(id, method string, params any) (json.RawMessage, error)
+}
+
+type codexAppSessionClient interface {
+	codexAppRequester
+	Notify(method string) error
+}
+
 type codexRemoteAppServer struct {
 	Addr string
 
@@ -208,6 +217,7 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 		return err
 	}
 	drainDone := make(chan error)
+	tuiPrompt := cfg.Prompt
 	if thread.UseTurnCollaborationMode {
 		if err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt); err != nil {
 			client.Close()
@@ -215,15 +225,12 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 		}
 		drainDone = make(chan error, 1)
 		go func() { drainDone <- drainCodexAppServer(client) }()
+		tuiPrompt = ""
 	} else {
 		client.Close()
 	}
 
-	tuiPrompt := cfg.Prompt
-	if thread.UseTurnCollaborationMode {
-		tuiPrompt = ""
-	}
-	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, thread.SessionID, tuiPrompt, stdout, stderr)
+	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, thread.ID, tuiPrompt, stdout, stderr)
 	if err != nil {
 		if thread.UseTurnCollaborationMode {
 			client.Close()
@@ -270,7 +277,7 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	return <-tuiDone
 }
 
-func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, error) {
+func setupCodexPlanThread(client codexAppSessionClient, cwd string) (codexThreadInfo, error) {
 	if _, err := client.Request("fanout-init", "initialize", map[string]any{
 		"clientInfo": map[string]any{
 			"name":    "fanout-codex-plan-tui",
@@ -332,7 +339,7 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 	}
 }
 
-func startCodexPlanTurn(client *codexAppClient, thread codexThreadInfo, cwd, prompt string) error {
+func startCodexPlanTurn(client codexAppRequester, thread codexThreadInfo, cwd, prompt string) error {
 	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, nil)
 	if thread.UseTurnCollaborationMode {
 		params["collaborationMode"] = codexPlanCollaborationMode(thread.Model, thread.PlanEffort)
@@ -379,8 +386,8 @@ func codexPlanCollaborationMode(model, effort string) map[string]any {
 	}
 }
 
-func startCodexRemoteTUI(codexPath, remoteAddr, sessionID, prompt string, stdout, stderr io.Writer) (*exec.Cmd, chan error, error) {
-	cmd := exec.Command(codexPath, codexRemoteTUIArgs(remoteAddr, sessionID, prompt)...)
+func startCodexRemoteTUI(codexPath, remoteAddr, threadID, prompt string, stdout, stderr io.Writer) (*exec.Cmd, chan error, error) {
+	cmd := exec.Command(codexPath, codexRemoteTUIArgs(remoteAddr, threadID, prompt)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -392,8 +399,8 @@ func startCodexRemoteTUI(codexPath, remoteAddr, sessionID, prompt string, stdout
 	return cmd, done, nil
 }
 
-func codexRemoteTUIArgs(remoteAddr, sessionID, prompt string) []string {
-	args := []string{"--remote", remoteAddr, "resume", sessionID}
+func codexRemoteTUIArgs(remoteAddr, threadID, prompt string) []string {
+	args := []string{"--remote", remoteAddr, "resume", threadID}
 	if strings.TrimSpace(prompt) != "" {
 		args = append(args, "--", prompt)
 	}
@@ -1027,7 +1034,7 @@ func appServerErrorSummary(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func resolveCodexSettings(client *codexAppClient, cwd string) (codexResolvedSettings, error) {
+func resolveCodexSettings(client codexAppRequester, cwd string) (codexResolvedSettings, error) {
 	configResult, configErr := client.Request("fanout-config", "config/read", map[string]any{
 		"includeLayers": false,
 		"cwd":           cwd,
