@@ -2257,6 +2257,130 @@ func TestNewPaneKeyOpensForm(t *testing.T) {
 	}
 }
 
+func TestHelpKeyOpensAndClosesModal(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 40
+
+	updated, cmd := m.Update(keyRunes("?"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("? returned command, want nil")
+	}
+	if m.mode != modeHelp {
+		t.Fatalf("mode = %v, want help", m.mode)
+	}
+	view := m.View()
+	for _, want := range []string{"Keyboard shortcuts", "[n]", "New agent pane", "Esc / q / ? close"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help view missing %q:\n%s", want, view)
+		}
+	}
+
+	closeKeys := []tea.KeyMsg{
+		{Type: tea.KeyEsc},
+		keyRunes("q"),
+		keyRunes("?"),
+	}
+	for _, key := range closeKeys {
+		m.mode = modeHelp
+		updated, cmd = m.Update(key)
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatalf("%q returned command, want nil", key.String())
+		}
+		if m.mode != modeMonitor {
+			t.Fatalf("after %q mode = %v, want monitor", key.String(), m.mode)
+		}
+	}
+}
+
+func TestHelpModalFitsStandardTerminalHeight(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 80
+	m.height = 24
+	m.mode = modeHelp
+
+	view := m.View()
+	for _, want := range []string{"[Enter]", "Create panes", "[Esc]", "Cancel", "Esc / q / ? close"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("80x24 help view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestHelpModalRendersCompactKeyLabels(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 80
+	view := m.helpView()
+	for _, want := range []string{"[j/k]", "[ / ]", "[Left/Right]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help view missing compact label %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"[[ / ]]", "j/k,\n", "Left /\n"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("help view contains malformed label %q:\n%s", unwanted, view)
+		}
+	}
+}
+
+func TestHelpModalBlocksBackgroundKeys(t *testing.T) {
+	m := newModel(Options{})
+	m.mode = modeHelp
+
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("background key returned command while help is open")
+	}
+	if m.mode != modeHelp {
+		t.Fatalf("mode = %v, want help", m.mode)
+	}
+	if m.newPane.prompt.Value() != "" {
+		t.Fatalf("new pane form changed behind help: %#v", m.newPane)
+	}
+}
+
+func TestQuestionMarkIsTextWhileEditing(t *testing.T) {
+	m := newModel(Options{})
+
+	updated, _ := m.Update(keyRunes("/"))
+	m = updated.(model)
+	updated, _ = m.Update(keyRunes("?"))
+	m = updated.(model)
+	if m.mode != modeMonitor {
+		t.Fatalf("filter ? changed mode = %v, want monitor", m.mode)
+	}
+	if m.filterQuery != "?" {
+		t.Fatalf("filterQuery = %q, want ?", m.filterQuery)
+	}
+
+	m = newModel(Options{})
+	m.openNewPaneForm()
+	updated, _ = m.Update(keyRunes("?"))
+	m = updated.(model)
+	if m.mode != modeNewPane {
+		t.Fatalf("new pane ? changed mode = %v, want new pane", m.mode)
+	}
+	if got := m.newPane.prompt.Value(); got != "?" {
+		t.Fatalf("prompt = %q, want ?", got)
+	}
+}
+
+func TestFooterPointsToHelpWithoutLongKeyList(t *testing.T) {
+	m := newModel(Options{})
+	got := m.footerText()
+	if !strings.Contains(got, "? help") {
+		t.Fatalf("footer = %q, want ? help", got)
+	}
+	for _, unwanted := range []string{"q quit", "n new", "c close", "x cleanup"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("footer = %q, should not contain %q", got, unwanted)
+		}
+	}
+}
+
 func TestShellTerminalKeysLaunchRootAndSelectedWorktree(t *testing.T) {
 	var got []ShellLaunchRequest
 	m := newModel(Options{
@@ -2521,9 +2645,14 @@ func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.View()
-	for _, want := range []string{"PARENT", "New agent pane", "ctrl+j newline", "shift+enter newline", "left/right count"} {
+	for _, want := range []string{"PARENT", "New agent pane", "ctrl+j newline", "tab field"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal view missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"shift+enter newline", "left/right count"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("modal view should not contain %q:\n%s", unwanted, view)
 		}
 	}
 }

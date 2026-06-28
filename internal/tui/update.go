@@ -30,6 +30,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.mode == modeHelp {
+			switch msg.String() {
+			case "esc", "q", "?":
+				m.mode = modeMonitor
+			case "ctrl+c":
+				return m.quit()
+			}
+			return m, nil
+		}
 		if m.mode == modeNewPane {
 			return m.updateNewPane(msg)
 		}
@@ -40,6 +49,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m.quit()
+		case "?":
+			m.mode = modeHelp
+			return m, nil
 		case "/":
 			m.filterEditing = true
 			m.refreshRows()

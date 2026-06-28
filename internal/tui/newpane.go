@@ -254,7 +254,7 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  shift+enter newline if enabled  tab field  up/down agent  left/right count  space toggle  esc cancel  @ file mention"))
+	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  tab field  esc cancel"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 

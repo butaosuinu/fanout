@@ -72,6 +72,8 @@ toggles it, `Left` / `Right` changes its count, and `Enter` creates the selected
 Manual `codex` panes start in Codex Plan Mode and receive the modal prompt
 inline; manual `claude` panes start normally. The console exits on `q` without
 killing the session or child panes.
+Press `?` in the monitor to open the keyboard shortcut help; `Esc`, `q`, or
+`?` closes it.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded
 branch, and `x` cleans up merged/closed siblings for the same parent after
 confirmation.

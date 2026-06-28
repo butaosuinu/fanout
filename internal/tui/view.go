@@ -54,6 +54,9 @@ func (m model) View() string {
 	if m.mode == modeNewPane {
 		return overlayCentered(base, m.newPaneView(), m.width, m.height)
 	}
+	if m.mode == modeHelp {
+		return overlayCentered(base, m.helpView(), m.width, m.height)
+	}
 	return base
 }
 
