@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
@@ -11,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
@@ -24,6 +26,8 @@ type worktreeActionFlags struct {
 func isWorktreeActionRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "__worktree-action"
 }
+
+var worktreeActionLivePanes = tmuxrun.ListLivePanes
 
 func cmdWorktreeAction(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	flags, code := parseWorktreeActionFlags(args, lg)
@@ -129,12 +133,73 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	if err != nil {
 		return state.Pane{}, err
 	}
+	live, err := worktreeActionLivePanes()
+	if err != nil {
+		return state.Pane{}, fmt.Errorf("list live tmux panes: %w", err)
+	}
+	liveByID := map[string]tmuxrun.LivePane{}
+	for _, pane := range live {
+		liveByID[pane.ID] = pane
+	}
+	found := false
+	mismatch := ""
 	for _, pane := range store.Panes {
-		if pane.PaneID == paneID {
+		if pane.PaneID != paneID {
+			continue
+		}
+		found = true
+		cur, ok := liveByID[paneID]
+		if !ok {
+			mismatch = "pane is not live"
+			continue
+		}
+		matches, reason := recordedPaneMatchesLive(pane, cur)
+		if matches {
 			return pane, nil
 		}
+		mismatch = reason
+	}
+	if found {
+		return state.Pane{}, fmt.Errorf("pane %s no longer matches its recorded fanout worktree: %s", paneID, mismatch)
 	}
 	return state.Pane{}, fmt.Errorf("pane %s is not recorded in fanout state", paneID)
+}
+
+func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) (bool, string) {
+	if pane.IsShell() {
+		shellKey := strings.TrimSpace(pane.ShellKey)
+		if shellKey == "" {
+			return false, "recorded shell pane has no shell identity key"
+		}
+		if live.ShellKey != shellKey {
+			return false, "live shell pane identity changed"
+		}
+		return true, ""
+	}
+	worktreePath := strings.TrimSpace(pane.WorktreePath)
+	if worktreePath == "" {
+		return false, "recorded pane has no worktree path"
+	}
+	if !pathWithin(worktreePath, live.CurrentPath) {
+		return false, fmt.Sprintf("live cwd %q is not under recorded worktree %q", live.CurrentPath, pane.WorktreePath)
+	}
+	return true, ""
+}
+
+func pathWithin(root, path string) bool {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if root == "." || path == "." {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func promptWorktreeAction(reader *bufio.Reader, sourceLabel string) string {

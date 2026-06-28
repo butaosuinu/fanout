@@ -436,6 +436,59 @@ func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
 	}
 }
 
+func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	cfg := manualPaneConfigForTUIAgent("claude")
+	prompt := "inspect this worktree\nthen report"
+
+	first := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "child"),
+		SourceParent:     "100",
+		SourceIssueNum:   101,
+		SourceBranchName: "fanout/child-101",
+		SourceLabel:      "#101",
+	})
+	second := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "child"),
+		SourceParent:     "200",
+		SourceIssueNum:   201,
+		SourceBranchName: "fanout/child-201",
+		SourceLabel:      "#201",
+	})
+	if first.Number != -1 || second.Number != -1 {
+		t.Fatalf("numbers = %d/%d, want same first synthetic number", first.Number, second.Number)
+	}
+	if first.BriefingPath == "" || second.BriefingPath == "" || first.BriefingPath == second.BriefingPath {
+		t.Fatalf("briefing paths = %q/%q, want non-empty parent-scoped paths", first.BriefingPath, second.BriefingPath)
+	}
+	if !strings.Contains(first.Prompt, first.BriefingPath) || !strings.Contains(second.Prompt, second.BriefingPath) {
+		t.Fatalf("prompts do not reference briefing paths:\n%q\n%q", first.Prompt, second.Prompt)
+	}
+	if first.TaskID != "" || first.SourceTaskID != "" {
+		t.Fatalf("task identity = %q source=%q, want no task collision for issue source", first.TaskID, first.SourceTaskID)
+	}
+}
+
+func TestNewAttachedPaneRequestKeepsSourceTaskOutOfStateIdentity(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	cfg := manualPaneConfigForTUIAgent("claude")
+
+	got := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), "inspect", filepath.Join(repo, ".fanout", "worktrees", "task"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "task"),
+		SourceParent:     "plan:launch-plan",
+		SourceTaskID:     "api-client",
+		SourceBranchName: "fanout/api-client",
+		SourceLabel:      "api-client",
+	})
+
+	if got.TaskID != "" {
+		t.Fatalf("TaskID = %q, want empty synthetic identity for attached-agent", got.TaskID)
+	}
+	if got.SourceTaskID != "api-client" {
+		t.Fatalf("SourceTaskID = %q, want api-client", got.SourceTaskID)
+	}
+}
+
 func TestCountOpenChildTargetsIncludesTaskListRefs(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in

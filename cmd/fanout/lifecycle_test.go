@@ -552,6 +552,132 @@ printf '\n' >> "$TMUX_LOG"
 	}
 }
 
+func TestCmdCloseWorktreeClosesAttachedAgentsSharingWorktree(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "child")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/child-101", worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo,
+		state.Pane{Parent: "100", IssueNum: 101, BranchName: "fanout/child-101", PaneID: "%101", WorktreePath: worktreePath},
+		state.Pane{
+			Parent:         "100",
+			IssueNum:       -1,
+			Kind:           state.PaneKindAttachedAgent,
+			Slug:           "child-codex-a1",
+			BranchName:     "fanout/child-101",
+			PaneID:         "%201",
+			SourceParent:   "100",
+			SourceIssueNum: 101,
+			Agent:          "codex",
+			WorktreePath:   worktreePath,
+		},
+	)
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "100", CloseNum: 101}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "kill-pane -t %101") || !strings.Contains(string(body), "kill-pane -t %201") {
+		t.Fatalf("tmux log = %q, want source and attached panes killed", body)
+	}
+}
+
+func TestCmdCleanupClosesAttachedAgentsSharingClosedWorktree(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	closedPath := filepath.Join(repo, ".fanout", "worktrees", "closed-child-101")
+	openPath := filepath.Join(repo, ".fanout", "worktrees", "open-child-102")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/closed-child-101", closedPath, "HEAD")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/open-child-102", openPath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	ghScript := `#!/bin/sh
+case "$1 $2" in
+  "repo view")
+    printf 'butaosuinu/fanout\n'
+    ;;
+  "api graphql")
+    num=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-F" ]; then
+        case "$2" in num=*) num="${2#num=}";; esac
+        shift 2
+      else
+        shift
+      fi
+    done
+    if [ "$num" = "101" ]; then
+      printf '{"state":"CLOSED","closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}\n'
+    else
+      printf '{"state":"OPEN","closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}\n'
+    fi
+    ;;
+esac
+`
+	installLifecycleScript(t, "gh", ghScript)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo,
+		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/closed-child-101", PaneID: "%101", WorktreePath: closedPath},
+		state.Pane{
+			Parent:         "84",
+			IssueNum:       -1,
+			Kind:           state.PaneKindAttachedAgent,
+			BranchName:     "fanout/closed-child-101",
+			PaneID:         "%201",
+			SourceParent:   "84",
+			SourceIssueNum: 101,
+			Agent:          "codex",
+			WorktreePath:   closedPath,
+		},
+		state.Pane{Parent: "84", IssueNum: 102, BranchName: "fanout/open-child-102", PaneID: "%102", WorktreePath: openPath},
+	)
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdCleanup(&cliflags.Config{ParentRef: "84", CleanupMode: true}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdCleanup code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Find("84", 101); ok {
+		t.Fatal("closed issue #101 still present in state")
+	}
+	if _, ok := loaded.Find("84", -1); ok {
+		t.Fatal("attached agent sharing closed worktree still present in state")
+	}
+	if _, ok := loaded.Find("84", 102); !ok {
+		t.Fatal("open issue #102 was removed from state")
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "kill-pane -t %101") || !strings.Contains(string(body), "kill-pane -t %201") || strings.Contains(string(body), "%102") {
+		t.Fatalf("tmux log = %q, want closed source and attached only", body)
+	}
+}
+
 func TestCmdCloseShellPaneSkipsKillWhenShellKeyDiffers(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	gitLog := installLifecycleScript(t, "git", `#!/bin/sh

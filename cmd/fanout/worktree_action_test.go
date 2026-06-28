@@ -1,9 +1,12 @@
 package main
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 func TestParseWorktreeActionFlagsUsesPaneArg(t *testing.T) {
@@ -40,5 +43,59 @@ func TestAttachTargetFromStatePaneCarriesSourceIdentity(t *testing.T) {
 	}
 	if got.SourceBranchName != "fanout/child-101" || got.SourceLabel != "#101" {
 		t.Fatalf("source branch/label = %q/%q", got.SourceBranchName, got.SourceLabel)
+	}
+}
+
+func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T) {
+	repo := t.TempDir()
+	worktree := filepath.Join(repo, ".fanout", "worktrees", "child")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "100",
+		IssueNum:     101,
+		PaneID:       "%42",
+		WorktreePath: worktree,
+	})
+	orig := worktreeActionLivePanes
+	t.Cleanup(func() { worktreeActionLivePanes = orig })
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: filepath.Join(worktree, "subdir")}}, nil
+	}
+
+	got, err := findRecordedPaneByID(repo, "%42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IssueNum != 101 {
+		t.Fatalf("IssueNum = %d, want 101", got.IssueNum)
+	}
+
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: filepath.Join(repo, "other")}}, nil
+	}
+	_, err = findRecordedPaneByID(repo, "%42")
+	if err == nil || !strings.Contains(err.Error(), "is not under recorded worktree") {
+		t.Fatalf("findRecordedPaneByID() error = %v, want path mismatch", err)
+	}
+}
+
+func TestFindRecordedPaneByIDRequiresShellKeyForShellRows(t *testing.T) {
+	repo := t.TempDir()
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		PaneID:       "%77",
+		ShellKey:     "shell-old",
+		WorktreePath: repo,
+	})
+	orig := worktreeActionLivePanes
+	t.Cleanup(func() { worktreeActionLivePanes = orig })
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%77", CurrentPath: repo, ShellKey: "shell-new"}}, nil
+	}
+
+	_, err := findRecordedPaneByID(repo, "%77")
+	if err == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("findRecordedPaneByID() error = %v, want shell identity mismatch", err)
 	}
 }

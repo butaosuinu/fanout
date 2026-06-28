@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -76,10 +77,14 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	}
 	defer unlockState("--close", locked, lg)
 
-	panes := panesForIssue(locked.PanesForParent(parent), issueNum)
+	allParentPanes := locked.PanesForParent(parent)
+	panes := panesForIssue(allParentPanes, issueNum)
 	if len(panes) == 0 {
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
+	}
+	if mode.removesWorktree() {
+		panes = panesSharingManagedWorktrees(allParentPanes, panes)
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -92,7 +97,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	if !closePaneRecords(opts, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
-	if err := locked.RemovePane(parent, issueNum); err != nil {
+	if err := removePaneStateRows(locked, panes); err != nil {
 		lg.Err("#%d: remove fanout state: %v", issueNum, err)
 		return exitcode.Env
 	}
@@ -126,10 +131,14 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	}
 	defer unlockState("--close", locked, lg)
 
-	panes := panesForTask(locked.PanesForParent(parent), taskID)
+	allParentPanes := locked.PanesForParent(parent)
+	panes := panesForTask(allParentPanes, taskID)
 	if len(panes) == 0 {
 		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
+	}
+	if mode.removesWorktree() {
+		panes = panesSharingManagedWorktrees(allParentPanes, panes)
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -142,7 +151,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	if !closePaneRecords(opts, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
-	if err := locked.RemoveTaskPane(parent, taskID); err != nil {
+	if err := removePaneStateRows(locked, panes); err != nil {
 		lg.Err("%s: remove fanout state: %v", taskID, err)
 		return exitcode.Env
 	}
@@ -234,7 +243,8 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	defer unlockState("--cleanup", locked, lg)
 
-	panes := cleanupIssuePanes(locked.PanesForParent(parent))
+	allParentPanes := locked.PanesForParent(parent)
+	panes := cleanupIssuePanes(allParentPanes)
 	if len(panes) == 0 {
 		lg.Info("--cleanup: no recorded panes for parent %s", parent)
 		return exitcode.OK
@@ -267,12 +277,12 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 		if !eligible[issueNum] {
 			continue
 		}
-		issuePanes := panesForIssue(panes, issueNum)
+		issuePanes := panesSharingManagedWorktrees(allParentPanes, panesForIssue(panes, issueNum))
 		if !cleanupPaneRecords(opts, issuePanes, lg, windows) {
 			failed++
 			continue
 		}
-		if err := locked.RemovePane(parent, issueNum); err != nil {
+		if err := removePaneStateRows(locked, issuePanes); err != nil {
 			lg.Err("#%d: remove fanout state: %v", issueNum, err)
 			failed++
 			continue
@@ -300,7 +310,8 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	defer unlockState("--cleanup", locked, lg)
 
-	panes := taskPanesForParent(locked.PanesForParent(parent))
+	allParentPanes := locked.PanesForParent(parent)
+	panes := taskPanesForParent(allParentPanes)
 	if len(panes) == 0 {
 		lg.Info("--cleanup: no recorded plan task panes for parent %s", parent)
 		return exitcode.OK
@@ -339,12 +350,12 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
 	for _, taskID := range sortedTaskIDs(eligible) {
-		taskPanes := panesForTask(panes, taskID)
+		taskPanes := panesSharingManagedWorktrees(allParentPanes, panesForTask(panes, taskID))
 		if !cleanupPaneRecords(opts, taskPanes, lg, windows) {
 			failed++
 			continue
 		}
-		if err := locked.RemoveTaskPane(parent, taskID); err != nil {
+		if err := removePaneStateRows(locked, taskPanes); err != nil {
 			lg.Err("%s: remove fanout state: %v", taskID, err)
 			failed++
 			continue
@@ -529,6 +540,72 @@ func cleanupIssuePanes(panes []state.Pane) []state.Pane {
 		out = append(out, pane)
 	}
 	return out
+}
+
+func panesSharingManagedWorktrees(allPanes, managedPanes []state.Pane) []state.Pane {
+	worktrees := map[string]bool{}
+	out := make([]state.Pane, 0, len(managedPanes))
+	seen := map[string]bool{}
+	for _, pane := range managedPanes {
+		if !pane.IsShell() && !pane.IsAttachedAgent() {
+			if path := normalizedWorktreePath(pane.WorktreePath); path != "" {
+				worktrees[path] = true
+			}
+		}
+		key := paneStateKey(pane)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, pane)
+		}
+	}
+	if len(worktrees) == 0 {
+		return out
+	}
+	for _, pane := range allPanes {
+		if !pane.IsAttachedAgent() || !worktrees[normalizedWorktreePath(pane.WorktreePath)] {
+			continue
+		}
+		key := paneStateKey(pane)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, pane)
+	}
+	return out
+}
+
+func normalizedWorktreePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+func paneStateKey(pane state.Pane) string {
+	return pane.Parent + "\x00" + strconv.Itoa(pane.IssueNum) + "\x00" + pane.TaskID + "\x00" + pane.Kind + "\x00" + pane.PaneID
+}
+
+func removePaneStateRows(locked *state.LockedStore, panes []state.Pane) error {
+	seen := map[string]bool{}
+	for _, pane := range panes {
+		key := paneStateKey(pane)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if strings.TrimSpace(pane.TaskID) != "" && pane.IssueNum == 0 && !pane.IsAttachedAgent() {
+			if err := locked.RemoveTaskPane(pane.Parent, pane.TaskID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {

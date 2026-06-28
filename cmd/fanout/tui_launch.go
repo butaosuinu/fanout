@@ -182,7 +182,7 @@ func newAttachedPaneRequest(cfg *cliflags.Config, projectRoot string, store stat
 	case cfg.CodexPlanModeEnabled():
 		prompt = briefing.RenderManualPlan(title, body)
 	case strings.Contains(prompt, "\n"):
-		briefingPath = briefing.Path(projectRoot, number)
+		briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
 		briefingBody = body
 		prompt = manualPromptWithBriefing(shortPrompt, briefingPath)
 	default:
@@ -212,6 +212,28 @@ func newAttachedPaneRequest(cfg *cliflags.Config, projectRoot string, store stat
 		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
+}
+
+func attachedBriefingPath(projectRoot, parentRef string, target fanouttui.AttachTarget, number int) string {
+	parentSlug := naming.Slugify(parentRef)
+	if parentSlug == "" {
+		parentSlug = "manual"
+	}
+	source := strings.TrimSpace(target.SourceTaskID)
+	if source == "" && target.SourceIssueNum > 0 {
+		source = fmt.Sprintf("issue-%d", target.SourceIssueNum)
+	}
+	if source == "" {
+		source = strings.TrimSpace(target.SourceLabel)
+	}
+	sourceSlug := naming.Slugify(source)
+	if sourceSlug == "" {
+		sourceSlug = "source"
+	}
+	if number < 0 {
+		number = -number
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("fanout-%s-attach-%s-%s-a%d.md", filepath.Base(projectRoot), parentSlug, sourceSlug, number))
 }
 
 func attachedPaneTitle(agentName, sourceLabel, targetPath string) string {
