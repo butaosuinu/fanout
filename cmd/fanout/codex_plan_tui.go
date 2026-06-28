@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ const (
 	codexPlanTUICommand              = "__codex-plan-tui"
 	codexPlanTUIStatusReady          = "ready"
 	codexPlanTUIStatusFailed         = "failed"
+	codexPlanDefaultEffort           = "xhigh"
 	codexRemoteAppConnectTimeout     = 10 * time.Second
 	codexRemoteTUIStartupGrace       = 3 * time.Second
 	codexPlanUserInputFallbackAnswer = "fanout Codex Plan Mode is starting interactively; proceed with the implementation plan using stated assumptions, and call out any ambiguity instead of asking for input."
@@ -60,6 +62,18 @@ type codexThreadInfo struct {
 	PlanEffort               string
 	UseTurnCollaborationMode bool
 }
+
+type codexResolvedSettings struct {
+	Model           string
+	ReasoningEffort string
+}
+
+type codexModelSelection struct {
+	Model                     string
+	SupportedReasoningEfforts []string
+}
+
+type supportedReasoningEfforts []string
 
 type appServerMessage struct {
 	ID     json.RawMessage `json:"id,omitempty"`
@@ -262,17 +276,16 @@ func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, 
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
-	planEffort, err := codexPlanEffort(modeResult)
+	if planModeErr := ensureCodexPlanMode(modeResult); planModeErr != nil {
+		return codexThreadInfo{}, planModeErr
+	}
+
+	settings, err := resolveCodexSettings(client, cwd)
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
 
-	model, err := resolveCodexModel(client, cwd)
-	if err != nil {
-		return codexThreadInfo{}, err
-	}
-
-	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, model))
+	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, settings.Model))
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
@@ -280,10 +293,10 @@ func setupCodexPlanThread(client *codexAppClient, cwd string) (codexThreadInfo, 
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
-	thread.Model = model
-	thread.PlanEffort = planEffort
+	thread.Model = settings.Model
+	thread.PlanEffort = settings.ReasoningEffort
 
-	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, model, planEffort)); err != nil {
+	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, settings.Model, settings.ReasoningEffort)); err != nil {
 		if !isUnsupportedCodexAppServerMethod(err) {
 			return codexThreadInfo{}, err
 		}
@@ -989,66 +1002,109 @@ func appServerErrorSummary(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func resolveCodexModel(client *codexAppClient, cwd string) (string, error) {
+func resolveCodexSettings(client *codexAppClient, cwd string) (codexResolvedSettings, error) {
 	configResult, configErr := client.Request("fanout-config", "config/read", map[string]any{
 		"includeLayers": false,
 		"cwd":           cwd,
 	})
+	model := ""
+	effort := codexPlanDefaultEffort
 	if configErr == nil {
-		if model := configModel(configResult); model != "" {
-			return model, nil
+		config := configSettings(configResult)
+		model = config.Model
+		if config.ReasoningEffort != "" {
+			effort = config.ReasoningEffort
 		}
 	}
 
 	modelResult, modelErr := client.Request("fanout-models", "model/list", map[string]any{
-		"includeHidden": false,
+		"includeHidden": true,
 	})
 	if modelErr != nil {
-		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
+		if model != "" {
+			return codexResolvedSettings{Model: model, ReasoningEffort: effort}, nil
 		}
-		return "", fmt.Errorf("resolve codex model from model/list: %w", modelErr)
+		if configErr != nil {
+			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
+		}
+		return codexResolvedSettings{}, fmt.Errorf("resolve codex model from model/list: %w", modelErr)
 	}
-	model, err := modelListDefault(modelResult)
+
+	selection, err := modelListSelection(modelResult, model)
 	if err != nil {
-		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
+		if model != "" {
+			return codexResolvedSettings{Model: model, ReasoningEffort: effort}, nil
 		}
-		return "", err
+		if configErr != nil {
+			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
+		}
+		return codexResolvedSettings{}, err
 	}
-	return model, nil
+	if model == "" {
+		model = selection.Model
+	}
+	if len(selection.SupportedReasoningEfforts) > 0 {
+		effort = supportedReasoningEffort(effort, selection.SupportedReasoningEfforts)
+	}
+	return codexResolvedSettings{Model: model, ReasoningEffort: effort}, nil
 }
 
-func configModel(raw json.RawMessage) string {
+func configSettings(raw json.RawMessage) codexResolvedSettings {
 	var res struct {
 		Config struct {
-			Model string `json:"model"`
+			Model                   string `json:"model"`
+			ReasoningEffort         string `json:"reasoning_effort"`
+			ModelReasoningEffort    string `json:"model_reasoning_effort"`
+			PlanModeReasoningEffort string `json:"plan_mode_reasoning_effort"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return ""
+		return codexResolvedSettings{}
 	}
-	return strings.TrimSpace(res.Config.Model)
+	effort := strings.TrimSpace(res.Config.PlanModeReasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ReasoningEffort)
+	}
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ModelReasoningEffort)
+	}
+	return codexResolvedSettings{
+		Model:           strings.TrimSpace(res.Config.Model),
+		ReasoningEffort: effort,
+	}
 }
 
-func modelListDefault(raw json.RawMessage) (string, error) {
+func modelListSelection(raw json.RawMessage, preferred string) (codexModelSelection, error) {
 	var res struct {
 		Data []struct {
-			ID        string `json:"id"`
-			Model     string `json:"model"`
-			Hidden    bool   `json:"hidden"`
-			IsDefault bool   `json:"isDefault"`
+			ID                                string                    `json:"id"`
+			Model                             string                    `json:"model"`
+			Hidden                            bool                      `json:"hidden"`
+			IsDefault                         bool                      `json:"isDefault"`
+			SupportedReasoningEfforts         supportedReasoningEfforts `json:"supportedReasoningEfforts"`
+			SupportedReasoningEffortsFallback supportedReasoningEfforts `json:"supported_reasoning_efforts"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return "", fmt.Errorf("parse model/list response: %w", err)
+		return codexModelSelection{}, fmt.Errorf("parse model/list response: %w", err)
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		for _, model := range res.Data {
+			if modelName(model.Model, model.ID) != preferred && strings.TrimSpace(model.ID) != preferred {
+				continue
+			}
+			if name := modelName(model.Model, model.ID); name != "" {
+				return codexModelSelection{Model: name, SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback)}, nil
+			}
+		}
 	}
 	for _, model := range res.Data {
 		if model.Hidden || !model.IsDefault {
 			continue
 		}
 		if name := modelName(model.Model, model.ID); name != "" {
-			return name, nil
+			return codexModelSelection{Model: name, SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback)}, nil
 		}
 	}
 	for _, model := range res.Data {
@@ -1056,10 +1112,72 @@ func modelListDefault(raw json.RawMessage) (string, error) {
 			continue
 		}
 		if name := modelName(model.Model, model.ID); name != "" {
-			return name, nil
+			return codexModelSelection{Model: name, SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback)}, nil
 		}
 	}
-	return "", fmt.Errorf("model/list response did not include an available model")
+	return codexModelSelection{}, fmt.Errorf("model/list response did not include an available model")
+}
+
+func modelSupportedReasoningEfforts(primary, fallback []string) []string {
+	if len(primary) > 0 {
+		return primary
+	}
+	return fallback
+}
+
+func (e *supportedReasoningEfforts) UnmarshalJSON(raw []byte) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		var effort string
+		if err := json.Unmarshal(item, &effort); err == nil {
+			effort = strings.TrimSpace(effort)
+			if effort != "" {
+				out = append(out, effort)
+			}
+			continue
+		}
+		var shaped struct {
+			ReasoningEffort string `json:"reasoningEffort"`
+			Value           string `json:"value"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+		}
+		if err := json.Unmarshal(item, &shaped); err != nil {
+			return err
+		}
+		for _, candidate := range []string{shaped.ReasoningEffort, shaped.Value, shaped.ID, shaped.Name} {
+			if effort = strings.TrimSpace(candidate); effort != "" {
+				out = append(out, effort)
+				break
+			}
+		}
+	}
+	*e = out
+	return nil
+}
+
+func supportedReasoningEffort(requested string, supported []string) string {
+	requested = strings.TrimSpace(requested)
+	available := map[string]bool{}
+	for _, effort := range supported {
+		effort = strings.TrimSpace(effort)
+		if effort != "" {
+			available[effort] = true
+		}
+	}
+	if len(available) == 0 || available[requested] {
+		return requested
+	}
+	for _, effort := range slices.Backward(supported) {
+		if effort = strings.TrimSpace(effort); effort != "" {
+			return effort
+		}
+	}
+	return requested
 }
 
 func modelName(model, id string) string {
@@ -1069,33 +1187,23 @@ func modelName(model, id string) string {
 	return strings.TrimSpace(id)
 }
 
-func codexPlanEffort(raw json.RawMessage) (string, error) {
+func ensureCodexPlanMode(raw json.RawMessage) error {
 	var res struct {
 		Data []struct {
-			Name            string  `json:"name"`
-			Mode            string  `json:"mode"`
-			ReasoningEffort *string `json:"reasoning_effort"`
-			Settings        *struct {
-				ReasoningEffort *string `json:"reasoning_effort"`
-			} `json:"settings"`
+			Name string `json:"name"`
+			Mode string `json:"mode"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return "", fmt.Errorf("parse collaborationMode/list response: %w", err)
+		return fmt.Errorf("parse collaborationMode/list response: %w", err)
 	}
 	for _, mode := range res.Data {
 		if mode.Mode != "plan" {
 			continue
 		}
-		if mode.ReasoningEffort != nil && *mode.ReasoningEffort != "" {
-			return *mode.ReasoningEffort, nil
-		}
-		if mode.Settings != nil && mode.Settings.ReasoningEffort != nil && *mode.Settings.ReasoningEffort != "" {
-			return *mode.Settings.ReasoningEffort, nil
-		}
-		return "medium", nil
+		return nil
 	}
-	return "", fmt.Errorf("codex app-server does not advertise collaborationMode.mode=plan")
+	return fmt.Errorf("codex app-server does not advertise collaborationMode.mode=plan")
 }
 
 func parseThreadStart(raw json.RawMessage) (codexThreadInfo, error) {
