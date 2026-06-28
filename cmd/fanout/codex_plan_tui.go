@@ -37,7 +37,7 @@ const (
 	codexRemoteAppConnectTimeout     = 10 * time.Second
 	codexRemoteTUIStartupGrace       = 3 * time.Second
 	codexPlanSeedAssistantText       = "Ready."
-	codexPlanUserInputFallbackAnswer = "fanout Codex Plan Mode is starting interactively; proceed with the implementation plan using stated assumptions, and call out any ambiguity instead of asking for input."
+	codexPlanUserInputFallbackAnswer = "fanout Codex Plan Mode is starting interactively; continue normal non-mutating discovery before presenting the implementation plan, and call out any remaining ambiguity in the plan."
 	webSocketGUID                    = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 )
 

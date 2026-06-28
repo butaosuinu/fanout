@@ -87,7 +87,7 @@ func RenderManualPlan(title, body string) string {
 		"You are starting a manual fanout Codex Plan Mode session in this repository.",
 		title,
 		body,
-		"- Inspect the prompt and repository only as needed to produce an implementation plan.",
+		"- Before presenting a plan, follow normal Codex planning behavior: inspect the prompt, relevant repository files, docs, and use web/search when the task calls for current external information.",
 	)
 }
 
@@ -187,7 +187,7 @@ func renderCodexPlanBriefing(num int, title, body string) string {
 		fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
 		title,
 		body,
-		"- Inspect the issue and repository only as needed to produce an implementation plan.",
+		"- Before presenting a plan, follow normal Codex planning behavior: inspect the issue, relevant repository files, docs, and use web/search when the task calls for current external information.",
 	)
 }
 
@@ -204,7 +204,7 @@ func renderCodexPlanBriefingWithHeader(header, title, body, inspectRequirement s
 		"- You are starting in interactive Codex Plan Mode through fanout.",
 		inspectRequirement,
 		"- Do not modify files, create commits, push branches, or open pull requests in this turn.",
-		"- Your first response must be an implementation plan wrapped in <proposed_plan>...</proposed_plan>.",
+		"- After that investigation, present the implementation plan wrapped in <proposed_plan>...</proposed_plan>.",
 		"- Wait for the user to leave Plan Mode or explicitly ask you to implement before making changes.",
 		"- If the scope is ambiguous, call out the ambiguity in the plan instead of guessing.",
 	}

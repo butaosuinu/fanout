@@ -243,6 +243,9 @@ func TestRenderManualPlanUsesManualPlanBriefing(t *testing.T) {
 		"manual fanout Codex Plan Mode session",
 		"Title: Manual prompt",
 		"Body:\nManual prompt\nMore context",
+		"Before presenting a plan, follow normal Codex planning behavior",
+		"use web/search when the task calls for current external information",
+		"After that investigation, present the implementation plan",
 		"<proposed_plan>...</proposed_plan>",
 	} {
 		if !strings.Contains(got, want) {
@@ -254,6 +257,7 @@ func TestRenderManualPlanUsesManualPlanBriefing(t *testing.T) {
 		"commit and push",
 		"Open a pull request",
 		"codex review --uncommitted",
+		"Your first response must",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("RenderManualPlan contains %q:\n%s", unwanted, got)
