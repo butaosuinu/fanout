@@ -159,6 +159,12 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
+	if err := tmuxrun.SetPaneLabel(paneID, paneBorderLabel(req)); err != nil {
+		lg.Warn("%s: pane border label: %v", paneLogLabel(req), err)
+	}
+	if err := tmuxrun.EnablePaneBorderTitles(paneID); err != nil {
+		lg.Warn("%s: pane border titles: %v", paneLogLabel(req), err)
+	}
 	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
 		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
@@ -633,6 +639,9 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	if title := paneTitle(req); title != "" {
 		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-pane -t <pane_id> -T %s%s\n", c.Dim, shellQuote(title), c.Reset)
 	}
+	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -p -t <pane_id> @fanout_pane_label %s%s\n", c.Dim, shellQuote(tmuxrun.NeutralizePaneLabel(paneBorderLabel(req))), c.Reset)
+	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-status top%s\n", c.Dim, c.Reset)
+	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-format %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderFormat()), c.Reset)
 	if target != "" {
 		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout -t %s tiled%s\n", c.Dim, shellQuote(target), c.Reset)
 	} else {
@@ -687,6 +696,29 @@ func paneTitle(req paneRequest) string {
 		return req.DisplayNameOverride
 	}
 	return req.Slug
+}
+
+// paneBorderLabel is the text fanout shows on a pane's top border:
+// "<parent> · <pane name>" (e.g. "#123 · fix-login-bug-123").
+func paneBorderLabel(req paneRequest) string {
+	return borderLabel(req.ParentRef, paneTitle(req))
+}
+
+// borderLabel composes the "<parent> · <name>" border label shared by agent
+// panes (paneBorderLabel) and TUI shell panes (launchShellPaneFromTUI).
+func borderLabel(parent, name string) string {
+	return parentDisplay(parent) + " · " + name
+}
+
+// parentDisplay renders a parent ref for display, mirroring the dashboard's
+// parentLabel (web/src/lib/github.ts): numeric issue parents get a "#" prefix,
+// GitHub Projects URLs drop the host prefix, and plan:<slug> / @manual pass
+// through unchanged.
+func parentDisplay(parent string) string {
+	if naming.AllDigits(parent) {
+		return "#" + parent
+	}
+	return strings.TrimPrefix(parent, "https://github.com/")
 }
 
 func paneLogLabel(req paneRequest) string {

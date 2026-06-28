@@ -29,6 +29,18 @@ const (
 	livePaneAgentStateFormat = "#{pane_id}\t#{" + agentStateOption + "}"
 	livePaneShellKeyFormat   = "#{pane_id}\t#{" + shellKeyOption + "}"
 	paneAlternateFormat      = "#{alternate_on}"
+	// paneLabelOption is a tmux pane user option holding the border label fanout
+	// shows on the pane's top border (e.g. "#123 · fix-login-bug-123"). It is set
+	// per pane and referenced from paneBorderFormat. A dedicated user option keeps
+	// the label stable: agents such as claude/codex rewrite the terminal title
+	// (OSC), which clobbers #{pane_title}, but never touch pane user options.
+	paneLabelOption = "@fanout_pane_label"
+	// paneBorderFormat draws @fanout_pane_label (with padding) on each pane's top
+	// border, falling back to #{pane_title} for panes fanout did not label. A
+	// substituted option value is not re-expanded (verified on tmux 3.6a: #{ /
+	// #( / ## stay literal), so the "#<digit>" parent prefix is safe; only "#["
+	// is still interpreted at draw time as a style, which SetPaneLabel neutralizes.
+	paneBorderFormat = " #{?" + paneLabelOption + ",#{" + paneLabelOption + "},#{pane_title}} "
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -323,6 +335,60 @@ func SetPaneShellKey(paneID, shellKey string) error {
 	}
 	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, shellKeyOption, shellKey).Run(); err != nil {
 		return fmt.Errorf("tmux set-option %s: %w", shellKeyOption, err)
+	}
+	return nil
+}
+
+// PaneBorderFormat returns the pane-border-format string EnablePaneBorderTitles
+// applies, single-sourced here so the --dry-run preview matches the live command.
+func PaneBorderFormat() string { return paneBorderFormat }
+
+// SetPaneLabel records the border label fanout displays on a pane's top border.
+// An empty label is allowed (the pane then falls back to #{pane_title}). The
+// label is neutralized first so a "#[...]" sequence in a --name / display
+// override cannot inject a tmux style into the border.
+func SetPaneLabel(paneID, label string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, paneLabelOption, NeutralizePaneLabel(label)).Run(); err != nil {
+		return fmt.Errorf("tmux set-option %s: %w", paneLabelOption, err)
+	}
+	return nil
+}
+
+// paneLabelStyleRE matches a run of one or more "#" immediately before a "[".
+// Stripping the whole run (not a single "#[") is what makes NeutralizePaneLabel
+// overlap-safe: a lone ReplaceAll("#[","[") turns "##[" into "#[" and re-arms
+// the style, but "#+\[" consumes the maximal run greedily so no "#[" survives.
+var paneLabelStyleRE = regexp.MustCompile(`#+\[`)
+
+// NeutralizePaneLabel defuses the only metacharacter the pane-border renderer
+// interprets at draw time: "#[" introduces a tmux style sequence. fanout's own
+// label parts (the "#<digit>" parent prefix, slugs, "·") never contain it, but a
+// --name / display override could, which would recolor or drop part of the
+// border text. Dropping the "#"(s) makes "#[fg=red]" render as the literal
+// "[fg=red]". Other "#" forms ("#{", "#(", "##") are not re-interpreted in a
+// substituted option value (verified on tmux 3.6a), so they need no handling.
+// SetPaneLabel applies it for live panes; the --dry-run preview calls it so the
+// printed command matches what would actually run.
+func NeutralizePaneLabel(label string) string {
+	return paneLabelStyleRE.ReplaceAllString(label, "[")
+}
+
+// EnablePaneBorderTitles turns on top pane-border titles for the window holding
+// paneID and points pane-border-format at @fanout_pane_label. pane-border-status
+// is a window option (its finest granularity), so this affects every pane in the
+// window; non-fanout panes fall back to #{pane_title}. Re-applying is idempotent.
+func EnablePaneBorderTitles(paneID string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if err := exec.Command("tmux", "set-option", "-w", "-t", paneID, "pane-border-status", "top").Run(); err != nil {
+		return fmt.Errorf("tmux set-option pane-border-status: %w", err)
+	}
+	if err := exec.Command("tmux", "set-option", "-w", "-t", paneID, "pane-border-format", paneBorderFormat).Run(); err != nil {
+		return fmt.Errorf("tmux set-option pane-border-format: %w", err)
 	}
 	return nil
 }

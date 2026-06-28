@@ -17,6 +17,9 @@
     $ git -C <REPO>/tests/fixtures/scenario-plan-limit/project_root worktree add -b fanout/launch-plan-define-base-types-base-types <REPO>/tests/fixtures/scenario-plan-limit/project_root/.fanout/worktrees/launch-plan-define-base-types-base-types main
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-plan-limit/project_root/.fanout/worktrees/launch-plan-define-base-types-base-types 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; claude '\''\'\'''\''[fanout base-types of plan:launch-plan] launch-plan-define-base-types-base-types: Define base types. read /tmp/fanout-project_root-launch%2Dplan-base%2Dtypes.md and begin.'\''\'\'''\''; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T launch-plan-define-base-types-base-types
+    $ tmux set-option -p -t <pane_id> @fanout_pane_label 'plan:launch-plan · launch-plan-define-base-types-base-types'
+    $ tmux set-option -w -t <pane_id> pane-border-status top
+    $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
@@ -35,6 +38,9 @@
     $ git -C <REPO>/tests/fixtures/scenario-plan-limit/project_root worktree add -b fanout/launch-plan-extract-api-client-api-client <REPO>/tests/fixtures/scenario-plan-limit/project_root/.fanout/worktrees/launch-plan-extract-api-client-api-client main
     $ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c <REPO>/tests/fixtures/scenario-plan-limit/project_root/.fanout/worktrees/launch-plan-extract-api-client-api-client 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; claude '\''\'\'''\''[fanout api-client of plan:launch-plan] launch-plan-extract-api-client-api-client: Extract API client. read /tmp/fanout-project_root-launch%2Dplan-api%2Dclient.md and begin.'\''\'\'''\''; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''
     $ tmux select-pane -t <pane_id> -T launch-plan-extract-api-client-api-client
+    $ tmux set-option -p -t <pane_id> @fanout_pane_label 'plan:launch-plan · launch-plan-extract-api-client-api-client'
+    $ tmux set-option -w -t <pane_id> pane-border-status top
+    $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
     $ tmux select-layout -t '%1' tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
