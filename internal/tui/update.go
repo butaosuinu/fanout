@@ -16,6 +16,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		// Bump the generation here (not in the return expression) so the mutated
+		// model is the one returned.
+		cmd := m.scheduleRelayout()
+		return m, cmd
+	case relayoutTickMsg:
+		if msg.gen != m.relayoutGen {
+			return m, nil // a newer resize superseded this debounce tick
+		}
+		return m, m.relayoutCmd()
+	case relayoutDoneMsg:
+		// Layout follow is best-effort; the orchestrator already fell back if the
+		// custom layout was rejected, so there is nothing to surface here.
 		return m, nil
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
@@ -270,6 +282,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// scheduleRelayout bumps the resize generation and returns a debounced tick. A
+// later resize bumps the generation again, so only the last tick in a burst
+// actually relayouts. It is a no-op when no Relayout callback is wired (tests).
+func (m *model) scheduleRelayout() tea.Cmd {
+	if m.opts.Relayout == nil {
+		return nil
+	}
+	m.relayoutGen++
+	gen := m.relayoutGen
+	return tea.Tick(relayoutDebounce, func(time.Time) tea.Msg { return relayoutTickMsg{gen: gen} })
+}
+
+func (m model) relayoutCmd() tea.Cmd {
+	relayout := m.opts.Relayout
+	if relayout == nil {
+		return nil
+	}
+	return func() tea.Msg { return relayoutDoneMsg{err: relayout()} }
 }
 
 func (m *model) resumeKeyboardProtocols() {

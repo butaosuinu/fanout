@@ -645,6 +645,18 @@ case "${1:-}" in
   split-window)
     printf '%s\n' "$TMUX_SHIM_PANE_ID"
     ;;
+  display-message)
+    # Answer the auto-layout window-geometry query; stay empty for any other.
+    if [[ "$*" == *window_width* ]]; then
+      printf '@1\t200\t50\n'
+    fi
+    ;;
+  list-panes)
+    # Answer the auto-layout per-window roster (a console sidebar + the new pane).
+    if [[ "$*" == *fanout_role* ]]; then
+      printf '%%0\t0\t1\tconsole\t\n%s\t1\t0\t\t\n' "$TMUX_SHIM_PANE_ID"
+    fi
+    ;;
   select-pane|set-option|select-layout|kill-pane)
     ;;
   *)
