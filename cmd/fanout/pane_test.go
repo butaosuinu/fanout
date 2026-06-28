@@ -132,7 +132,6 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	req := newManualPaneRequest(cfg, "/repo", store, hooks.EmptyConfig(), manualPaneOptions{
 		Title:  "Manual Diagnostics",
 		Body:   "extra context",
-		Slug:   "manual-diagnostics",
 		Agent:  "codex",
 		Prompt: "inspect the workspace",
 	})
@@ -161,13 +160,33 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"#-2: Manual Diagnostics", "slug -> manual-diagnostics", "dry-run complete"} {
+	for _, want := range []string{"#-2: Manual Diagnostics", "slug -> manual-2-manual-diagnostics-pane", "dry-run complete"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}
 	}
 	if _, err := os.Stat(req.BriefingPath); !os.IsNotExist(err) {
 		t.Fatalf("manual dry-run wrote briefing file %s: %v", req.BriefingPath, err)
+	}
+}
+
+func TestNewManualPaneRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true}
+	// Simulate a state-only close: manual-1's worktree dir survives with no state
+	// row, so the fresh same-titled request must skip that slug, not regenerate it.
+	orphan := filepath.Join(repo, ".fanout", "worktrees", "manual-1-inspect-api-pane")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	req := newManualPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "inspect api"})
+
+	if req.Slug != "manual-2-inspect-api-pane" || req.BranchName != "fanout/manual-2-inspect-api-pane" {
+		t.Fatalf("slug/branch = %q/%q, want manual-2-inspect-api-pane (skip orphaned manual-1)", req.Slug, req.BranchName)
+	}
+	if req.Number != -2 {
+		t.Fatalf("number = %d, want -2 (still state-unique after the skip)", req.Number)
 	}
 }
 
