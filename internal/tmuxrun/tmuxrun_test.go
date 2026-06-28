@@ -353,12 +353,13 @@ func TestListLivePanesDropsForgedAgentStateLineForAnotherPane(t *testing.T) {
 	}
 }
 
-func TestBindDashboardKeyRegistersDetachedWindow(t *testing.T) {
+func TestBindDashboardKeysRegistersDetachedWindows(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")
 	tmuxPath := filepath.Join(dir, "tmux")
 	script := `#!/bin/sh
-printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 `
 	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -366,23 +367,36 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	t.Setenv("TMUXRUN_ARGS", argsPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := BindDashboardKey("D", "/abs/path/fanout"); err != nil {
-		t.Fatalf("BindDashboardKey() failed: %v", err)
+	if err := BindDashboardKeys("D", "F12", "/abs/path/fanout"); err != nil {
+		t.Fatalf("BindDashboardKeys() failed: %v", err)
 	}
 	body, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	commands := strings.Split(strings.TrimSuffix(string(body), "\n---\n"), "\n---\n")
+	if len(commands) != 2 {
+		t.Fatalf("tmux command count = %d, want 2\n%s", len(commands), body)
+	}
+	gotPrefix := strings.Split(commands[0], "\n")
+	gotDirect := strings.Split(commands[1], "\n")
 	// Each tmux argv on its own line: bind-key D new-window -d -n
 	// fanout-dashboard -c <root-or-current-path> <launch>.
-	want := []string{
+	wantPrefix := []string{
 		"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard",
 		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
 		"/abs/path/fanout dashboard --web --open",
 	}
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("tmux args = %#v, want %#v", got, want)
+	wantDirect := []string{
+		"bind-key", "-n", "F12", "new-window", "-d", "-n", "fanout-dashboard",
+		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
+		"/abs/path/fanout dashboard --web --open",
+	}
+	if strings.Join(gotPrefix, "\x00") != strings.Join(wantPrefix, "\x00") {
+		t.Fatalf("prefix tmux args = %#v, want %#v", gotPrefix, wantPrefix)
+	}
+	if strings.Join(gotDirect, "\x00") != strings.Join(wantDirect, "\x00") {
+		t.Fatalf("direct tmux args = %#v, want %#v", gotDirect, wantDirect)
 	}
 }
 
@@ -399,8 +413,8 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	t.Setenv("TMUXRUN_ARGS", argsPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	if err := BindDashboardKey("D", "/opt/My Tools/fanout"); err != nil {
-		t.Fatalf("BindDashboardKey() failed: %v", err)
+	if err := BindDashboardKeys("D", "F12", "/opt/My Tools/fanout"); err != nil {
+		t.Fatalf("BindDashboardKeys() failed: %v", err)
 	}
 	body, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -415,12 +429,15 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	}
 }
 
-func TestBindDashboardKeyRejectsEmptyArgs(t *testing.T) {
-	if err := BindDashboardKey("", "/abs/fanout"); err == nil {
-		t.Fatal("BindDashboardKey(empty key) should error")
+func TestBindDashboardKeysRejectsEmptyArgs(t *testing.T) {
+	if err := BindDashboardKeys("", "F12", "/abs/fanout"); err == nil {
+		t.Fatal("BindDashboardKeys(empty prefix key) should error")
 	}
-	if err := BindDashboardKey("D", ""); err == nil {
-		t.Fatal("BindDashboardKey(empty bin) should error")
+	if err := BindDashboardKeys("D", "", "/abs/fanout"); err == nil {
+		t.Fatal("BindDashboardKeys(empty direct key) should error")
+	}
+	if err := BindDashboardKeys("D", "F12", ""); err == nil {
+		t.Fatal("BindDashboardKeys(empty bin) should error")
 	}
 }
 

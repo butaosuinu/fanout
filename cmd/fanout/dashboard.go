@@ -24,8 +24,11 @@ import (
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
-// defaultDashboardKey is the tmux prefix key fanout binds to open the dashboard.
+// defaultDashboardKey is the tmux prefix-table key fanout binds to open the dashboard.
 const defaultDashboardKey = "D"
+
+// defaultDashboardDirectKey opens the dashboard without tmux's prefix key.
+const defaultDashboardDirectKey = "F12"
 
 type dashboardFlags struct {
 	port      int
@@ -68,8 +71,8 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		lg.Debug("dashboard: ensure local exclude: %v", err)
 	}
 
-	// Serialize startup so two near-simultaneous launches (e.g. a double
-	// prefix+D press) reuse one server instead of each binding its own port.
+	// Serialize startup so two near-simultaneous keypress launches reuse one
+	// server instead of each binding its own port.
 	// Best-effort: if the lock can't be taken, proceed unsynchronized.
 	startupLock, lockErr := dashboard.LockStartup(root)
 	if lockErr != nil {
@@ -262,18 +265,18 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 	// (@fanout_project_root when fanout recorded it, otherwise
 	// #{pane_current_path}) and cmdDashboard maps that to the main worktree, so
 	// no repo root needs to be baked in here.
-	if err := tmuxrun.BindDashboardKey(defaultDashboardKey, bin); err != nil {
+	if err := tmuxrun.BindDashboardKeys(defaultDashboardKey, defaultDashboardDirectKey, bin); err != nil {
 		lg.Debug("dashboard keybind: %v (not in tmux?)", err)
 		return
 	}
-	lg.Info("tmux keybind: press prefix + %s to open the dashboard", defaultDashboardKey)
+	lg.Info("tmux keybind: press %s or prefix + %s to open the dashboard", defaultDashboardDirectKey, defaultDashboardKey)
 }
 
 // dashboardProjectRoot resolves the repo root whose .fanout/state.json the
 // dashboard should read. fanout records state at the toplevel of the worktree it
 // ran in, and its fanned child panes live at <root>/.fanout/worktrees/<slug>.
 // So: use the current worktree toplevel when it has state; if instead we are
-// inside a .fanout/worktrees/<slug> child (a fanned pane, e.g. via prefix+D),
+// inside a .fanout/worktrees/<slug> child (a fanned pane, e.g. via a keybind),
 // recover that parent root. Crucially the climb is bounded to that one structure
 // — it never escapes into an unrelated ancestor checkout that merely happens to
 // have its own .fanout/state.json. A never-fanned worktree falls back to itself.
@@ -354,7 +357,8 @@ Options:
   --no-token      Disable the access token (loopback-only, single-user laptops).
                   By default a random token gates /api/* and is embedded in the
                   printed URL.
-  --no-keybind    Do not register the tmux 'prefix + D' keybinding this run.
+  --no-keybind    Do not register the tmux 'F12' / 'prefix + D' keybindings
+                  this run.
   -h, --help      Show this message.
 
 The dashboard reuses a server that is already running (recorded in

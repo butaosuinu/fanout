@@ -270,8 +270,10 @@ func parseLivePaneField(out string) map[string]string {
 	return fields
 }
 
-// BindDashboardKey registers a tmux key binding (under the prefix table) that
-// opens the read-only web dashboard. It binds the key directly to `new-window`
+// BindDashboardKeys registers tmux key bindings that open the read-only web
+// dashboard. The prefix key is bound under the prefix table; the direct key is
+// bound in the root table so it works without tmux's prefix. Both bindings run
+// the same launch command directly through `new-window`
 // (not run-shell), so:
 //
 //   - tmux expands @fanout_project_root (when fanout recorded it on the pane)
@@ -291,20 +293,27 @@ func parseLivePaneField(out string) map[string]string {
 // URL. The binding lives in the running tmux server (it never edits
 // ~/.tmux.conf) and re-registering is idempotent.
 //
-// fanoutBin should be an absolute path (os.Executable) so the binding does not
+// fanoutBin should be an absolute path (os.Executable) so the bindings do not
 // depend on PATH.
-func BindDashboardKey(key, fanoutBin string) error {
-	if strings.TrimSpace(key) == "" || strings.TrimSpace(fanoutBin) == "" {
-		return fmt.Errorf("tmux bind-key: key and fanout binary path are required")
+func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
+	if strings.TrimSpace(prefixKey) == "" || strings.TrimSpace(directKey) == "" || strings.TrimSpace(fanoutBin) == "" {
+		return fmt.Errorf("tmux bind-key: prefix key, direct key, and fanout binary path are required")
 	}
 	launch := shellQuote(fanoutBin) + " dashboard --web --open"
 	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
-	args := []string{
-		"bind-key", key, "new-window", "-d", "-n", "fanout-dashboard",
+	prefixArgs := []string{
+		"bind-key", prefixKey, "new-window", "-d", "-n", "fanout-dashboard",
 		"-c", startDir, launch,
 	}
-	if err := exec.Command("tmux", args...).Run(); err != nil {
-		return fmt.Errorf("tmux bind-key %s: %w", key, err)
+	if err := exec.Command("tmux", prefixArgs...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key %s: %w", prefixKey, err)
+	}
+	directArgs := []string{
+		"bind-key", "-n", directKey, "new-window", "-d", "-n", "fanout-dashboard",
+		"-c", startDir, launch,
+	}
+	if err := exec.Command("tmux", directArgs...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key -n %s: %w", directKey, err)
 	}
 	return nil
 }

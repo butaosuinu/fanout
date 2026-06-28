@@ -152,9 +152,9 @@ func pidAlive(pid int) bool {
 }
 
 // LockStartup takes an exclusive lock that serializes the reuse-check → bind →
-// run-file-write critical section, so two near-simultaneous launches (e.g. a
-// double `prefix + D` press) cannot both pass the "no server running" check and
-// each bind a fresh ephemeral port, leaving duplicate servers. Release it with
+// run-file-write critical section, so two near-simultaneous keypress launches
+// cannot both pass the "no server running" check and each bind a fresh
+// ephemeral port, leaving duplicate servers. Release it with
 // UnlockStartup once the run file is written and the listener is bound.
 func LockStartup(projectRoot string) (*os.File, error) {
 	lockPath := RunFilePath(projectRoot) + ".lock"

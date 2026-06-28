@@ -25,7 +25,7 @@ fanout の挙動はチームの好みで変えたくなる箇所がいくつか�
 - `briefingCodeReview`: Claude の子に、コミット前に変更へ `/code-review` スラッシュコマンドを走らせるよう指示します。
 - `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
-- `dashboardKeybind`: tmux に `prefix + D` でダッシュボードを開くキーバインドを登録します。
+- `dashboardKeybind`: tmux に `F12` / `prefix + D` でダッシュボードを開くキーバインドを登録します。
 
 watcher と通知 channel は別系統の設定です。watcher はラベル巡回による自動起動の opt-in 制御、通知 channel は TUI の状態遷移をどこへ知らせるかの選択です。
 
@@ -38,7 +38,7 @@ watcher と通知 channel は別系統の設定です。watcher はラベル巡�
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
-| ダッシュボード `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| ダッシュボード `F12` / `prefix + D` tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
 | watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |

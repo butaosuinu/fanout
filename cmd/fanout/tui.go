@@ -22,6 +22,8 @@ import (
 
 const tuiPaneTitle = "fanout tui"
 
+var runTUI = fanouttui.Run
+
 func isTUIRequest(args []string) bool {
 	return len(args) == 0
 }
@@ -62,7 +64,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	}
 	restoreTitle := markTUIRunning(projectRoot)
 	defer restoreTitle()
-	if err := fanouttui.Run(fanouttui.Options{
+	bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
+	if err := runTUI(fanouttui.Options{
 		ProjectRoot:         projectRoot,
 		Session:             session,
 		StateInterval:       2 * time.Second,

@@ -33,7 +33,7 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
-  更新)。どのペインからでも `prefix + D` でポップできます。
+  更新)。どのペインからでも `F12` または `prefix + D` でポップできます。
 - **状態確認とレポート** — `--status` の JSON / table で PR review・CI 状態を
   確認でき、任意で親 issue にダッシュボードコメントを投稿します。
 - **Lifecycle hook** — user config に書いた shell command を worktree、pane、

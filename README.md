@@ -33,7 +33,7 @@ English and 日本語.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it
-  from any pane with `prefix + D`.
+  from any pane with `F12` or `prefix + D`.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
   plus an optional dashboard comment on the parent issue.
 - **Lifecycle hooks** — user-configured shell commands around worktree, pane,

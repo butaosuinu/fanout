@@ -115,7 +115,7 @@ fanout 123 --status --post-dashboard
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、`running` / `done` の agent 実行状態バッジ、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つだけです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `prefix + D` tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
+チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、`running` / `done` の agent 実行状態バッジ、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つだけです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `F12` / `prefix + D` tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -128,11 +128,11 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 全フラグは `fanout dashboard --help` を参照してください。
 
-### prefix + D
+### F12 / prefix + D
 
-ライブ fan-out の後（およびダッシュボード自体の起動時）に fanout が tmux キーバインドを自動登録するので、どのペインからでも **`prefix + D`** でダッシュボードを開けます。このキーは detached な `fanout-dashboard` ウィンドウでサーバを起動するため、キー押下後も生き続け、2 回目以降は既存 URL を開き直すだけです。
+TUI 起動時、ライブ fan-out 後、ダッシュボード自体の起動時に fanout が tmux キーバインドを自動登録するので、どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。どちらのキーも detached な `fanout-dashboard` ウィンドウでサーバを起動するため、キー押下後も生き続け、2 回目以降は既存 URL を開き直すだけです。
 
-自動登録は `--no-dashboard-keybind`（fan-out 側）、`--no-keybind`（dashboard 側）、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます（[Settings]({{< relref "/docs/settings" >}}) を参照してください）。
+自動登録は `--no-dashboard-keybind`（fan-out 側）、`--no-keybind`（dashboard 側）、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` でまとめて無効化できます（[Settings]({{< relref "/docs/settings" >}}) を参照してください）。
 
 ### 縮退動作
 

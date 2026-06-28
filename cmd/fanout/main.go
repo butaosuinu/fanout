@@ -228,10 +228,10 @@ func runWithRuntime(cfg *cliflags.Config, lg *log.Logger, rt *runtimeInfo, comma
 	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
-	// Register the tmux keybinding so the user can pop the read-only dashboard
-	// (prefix + D) from any fanout pane. The binding resolves the repo from the
-	// pressing pane at keypress, so it works from child worktree panes and across
-	// repos. Best-effort, live runs only.
+	// Register the tmux keybindings so the user can pop the read-only
+	// dashboard (F12 or prefix + D) from any fanout pane. The binding resolves
+	// the repo from the pressing pane at keypress, so it works from child
+	// worktree panes and across repos. Best-effort, live runs only.
 	if !cfg.DryRun && result.Created > 0 {
 		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
 	}
