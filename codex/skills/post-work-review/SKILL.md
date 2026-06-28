@@ -45,14 +45,41 @@ PR 全体相当の branch diff をレビューする。`--commit HEAD` だけで
 `--commit HEAD` だけを通して marker を書くと、古い commit が未レビューのまま PR gate を
 通す可能性がある。
 
+## Execution Permissions
+
+`codex review ...` は Codex review/app-server/network access を必要とし、managed
+sandbox で権限ブロックされやすい。権限昇格を要求できる環境では、通常 sandbox で
+試してから再実行せず、初回から `exec_command` に
+`sandbox_permissions: "require_escalated"` を付けて実行する。
+
+- justification は
+  `codex review needs Codex review/app-server/network access and is frequently blocked in the managed sandbox`
+  の趣旨にする。
+- `prefix_rule` は付けない。`require_escalated` と `justification` だけを使う。
+- `approval_policy=never` など、現在の実行環境が権限昇格要求そのものを受け付けない
+  場合だけ、同じ `codex review ...` を非昇格の直接コマンドとして 1 回実行してよい。
+  権限昇格できる環境で、通常 sandbox を先に試す fallback には使わない。
+- `codex review --uncommitted`、`codex review --base <default-branch>`、
+  `codex review --commit HEAD` は通常 1 つの直接コマンドとして実行する。pipes、
+  subshell、出力を加工する wrapper は使わない。
+- 長時間実行で `exec_command` が部分出力を返す可能性があり、全出力を最後にまとめて
+  読む必要がある場合だけ、stdout/stderr を一時ファイルへ退避してよい。その場合も
+  `codex review ...` 自体は 1 回だけ実行し、command 終了後に一時ファイルを 1 回読む。
+- 権限昇格が拒否された、または同じ権限ブロックが続く場合は clean 扱いしない。
+  marker も書かない。`--uncommitted` が実行できない場合は PR 上の
+  `@codex review` を代替確認として使わない。clean tree で、既存 PR の head が
+  レビュー対象 commit と一致する場合だけ PR 上の Codex review を代替確認として
+  使ってよい。代替確認できない場合は、実行できなかった exact command と必要な
+  権限を報告して停止する。
+
 ## Review Loop
 
 1. レビュー対象とコマンドを 1 文でユーザーに伝える。
-2. `codex review ...` を 1 つの blocking shell command として実行する。長時間実行で
-   `exec_command` の `session_id` が返る可能性がある場合は、stdout/stderr を一時
-   ファイルへ退避するなどして polling 中に部分出力を流さない。Review Session、
-   `/codex:status`、tmux pane は見に行かず、`session_id` はプロセス終了確認だけに
-   使う。command が終了してから final output を 1 回だけ読む。
+2. `codex review ...` を Execution Permissions に従って 1 つの blocking shell
+   command として実行する。長時間実行で `exec_command` の `session_id` が返る
+   可能性がある場合は、Review Session、`/codex:status`、tmux pane を見に行かず、
+   `session_id` はプロセス終了確認だけに使う。polling 中の部分出力を findings として
+   解釈せず、command が終了してから final output を 1 回だけ読む。
 3. final output を findings として読む。重大度、ファイル、行、指摘内容を保持する。
 4. actionable な指摘だけ修正する。明らかな bug、規約違反、セキュリティ問題、
    テスト不整合を優先する。単なる好みの提案は理由を添えて見送ってよい。
