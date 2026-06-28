@@ -132,7 +132,6 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	req := newManualPaneRequest(cfg, "/repo", store, hooks.EmptyConfig(), manualPaneOptions{
 		Title:  "Manual Diagnostics",
 		Body:   "extra context",
-		Slug:   "manual-diagnostics",
 		Agent:  "codex",
 		Prompt: "inspect the workspace",
 	})
@@ -161,7 +160,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 	out := stdout.String()
-	for _, want := range []string{"#-2: Manual Diagnostics", "slug -> manual-diagnostics", "dry-run complete"} {
+	for _, want := range []string{"#-2: Manual Diagnostics", "slug -> manual-2-manual-diagnostics-pane", "dry-run complete"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, out)
 		}

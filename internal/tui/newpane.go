@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -16,7 +15,6 @@ import (
 type LaunchRequest struct {
 	Prompt string
 	Agents []string
-	Slug   string
 }
 
 // LaunchFunc creates a manual fanout pane for a TUI request. It returns an
@@ -28,13 +26,11 @@ type newPaneField int
 const (
 	newPaneFieldPrompt newPaneField = iota
 	newPaneFieldAgent
-	newPaneFieldSlug
 	newPaneFieldCount
 )
 
 type newPaneForm struct {
 	prompt     textarea.Model
-	slug       textinput.Model
 	agentCount map[string]int
 	agentIndex int
 	focus      newPaneField
@@ -72,19 +68,11 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	)
 	prompt.Focus()
 
-	slug := textinput.New()
-	slug.Placeholder = "optional-slug"
-	slug.Prompt = "> "
-	slug.CharLimit = 80
-	slug.Width = textinputWidth(width, slug.Prompt)
-	slug.Blur()
-
 	if defaultAgent != "codex" {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
 		prompt:     prompt,
-		slug:       slug,
 		agentCount: defaultAgentCounts(defaultAgent),
 		agentIndex: defaultAgentIndex(defaultAgent),
 		focus:      newPaneFieldPrompt,
@@ -150,8 +138,6 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.atWordBoundaryBeforeCursor() {
 			m.beginCompletion()
 		}
-	case newPaneFieldSlug:
-		m.newPane.slug, cmd = m.newPane.slug.Update(msg)
 	default:
 		// The agent field is a toggle, not a text input; no message routing.
 	}
@@ -169,11 +155,6 @@ func (m *model) moveNewPaneFocus(key string) {
 		m.newPane.prompt.Focus()
 	} else {
 		m.newPane.prompt.Blur()
-	}
-	if m.newPane.focus == newPaneFieldSlug {
-		m.newPane.slug.Focus()
-	} else {
-		m.newPane.slug.Blur()
 	}
 }
 
@@ -227,7 +208,6 @@ func (m *model) submitNewPane() tea.Cmd {
 	req := LaunchRequest{
 		Prompt: prompt,
 		Agents: agents,
-		Slug:   strings.TrimSpace(m.newPane.slug.Value()),
 	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
@@ -246,7 +226,6 @@ func (m model) newPaneView() string {
 	}
 	lines = append(lines,
 		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
-		m.newPaneFieldView(newPaneFieldSlug, "Slug", m.newPane.slug.View(), true),
 	)
 	if m.newPane.launching {
 		lines = append(lines, dimStyle.Render("creating pane..."))
@@ -341,15 +320,6 @@ func (m model) formInputWidth() int {
 // keeps the same footprint as formInputWidth.
 func (m model) inputContentWidth() int {
 	return m.formInputWidth() - 2
-}
-
-// textinputWidth converts a desired total rendered width into the bubbles
-// textinput Width setting. Unlike textarea (whose SetWidth is the full rendered
-// width, prompt included), a textinput renders its prompt plus one trailing
-// cursor cell outside of Width, so the two must be offset to frame to the same
-// width.
-func textinputWidth(rendered int, prompt string) int {
-	return rendered - lipgloss.Width(prompt) - 1
 }
 
 func (m model) modalWidth() int {

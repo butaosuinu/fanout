@@ -43,11 +43,6 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 			return "", err
 		}
 	}
-	slug, err := normalizeTUISlug(req.Slug)
-	if err != nil {
-		return "", err
-	}
-
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	cfg := manualPaneConfigForTUIAgent(agentNames[0])
@@ -67,10 +62,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		ProjectRoot: projectRoot,
 	}
 	createdCount := 0
-	for i, agentName := range agentNames {
+	for _, agentName := range agentNames {
 		cfg = manualPaneConfigForTUIAgent(agentName)
-		paneSlug := manualPaneSlugForAgent(slug, agentName, i, agentNames)
-		paneReq := newManualPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, manualPaneOptionsForTUI(prompt, paneSlug, agentName))
+		paneReq := newManualPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
 		if createPane(cfg, launchLogger, info, paneReq, recorder, log.Palette{}, commandName) {
 			createdCount++
 			continue
@@ -231,11 +225,10 @@ func shellPaneTitle(targetPath string, root bool) string {
 	return "terminal " + base
 }
 
-func manualPaneOptionsForTUI(prompt, slug, agentName string) manualPaneOptions {
+func manualPaneOptionsForTUI(prompt, agentName string) manualPaneOptions {
 	title := firstPromptLine(prompt)
 	opts := manualPaneOptions{
 		Title:  title,
-		Slug:   slug,
 		Agent:  agentName,
 		Prompt: title,
 	}
@@ -259,41 +252,6 @@ func normalizeTUIAgents(raw []string) []string {
 	return agents
 }
 
-func manualPaneSlugForAgent(slug, agentName string, index int, agents []string) string {
-	if slug == "" || len(agents) == 1 {
-		return slug
-	}
-	suffix := agentName
-	seen := 0
-	totalForAgent := 0
-	for i, name := range agents {
-		if name != agentName {
-			continue
-		}
-		totalForAgent++
-		if i <= index {
-			seen++
-		}
-	}
-	if totalForAgent > 1 {
-		suffix = fmt.Sprintf("%s-%s", agentName, launchOrdinal(seen))
-	}
-	return strings.TrimRight(slug, "-") + "-" + suffix
-}
-
-func launchOrdinal(n int) string {
-	switch n {
-	case 1:
-		return "one"
-	case 2:
-		return "two"
-	case 3:
-		return "three"
-	default:
-		return fmt.Sprintf("run%d", n)
-	}
-}
-
 func normalizeTUIPrompt(raw string) string {
 	prompt := strings.ReplaceAll(raw, "\r\n", "\n")
 	prompt = strings.ReplaceAll(prompt, "\r", "\n")
@@ -308,43 +266,4 @@ func firstPromptLine(prompt string) string {
 		}
 	}
 	return strings.TrimSpace(prompt)
-}
-
-func normalizeTUISlug(raw string) (string, error) {
-	slug := strings.TrimSpace(raw)
-	if slug == "" {
-		return "", nil
-	}
-	if !isKebabSlug(slug) {
-		return "", fmt.Errorf("slug must be lowercase kebab-case (alnum+hyphens, starting with alnum), got: %q", slug)
-	}
-	if hasIssueLikeNumericSuffix(slug) {
-		return "", fmt.Errorf("manual slug must not end with an issue-like numeric suffix: %q", slug)
-	}
-	return slug, nil
-}
-
-func isKebabSlug(slug string) bool {
-	for i, r := range slug {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-		case r == '-' && i > 0:
-		default:
-			return false
-		}
-	}
-	return slug != ""
-}
-
-func hasIssueLikeNumericSuffix(slug string) bool {
-	i := strings.LastIndex(slug, "-")
-	if i < 0 || i == len(slug)-1 {
-		return false
-	}
-	for _, r := range slug[i+1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }

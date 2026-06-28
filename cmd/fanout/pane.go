@@ -68,12 +68,10 @@ type createdPane struct {
 }
 
 type manualPaneOptions struct {
-	Title      string
-	Body       string
-	Slug       string
-	BranchName string
-	Agent      string
-	Prompt     string
+	Title  string
+	Body   string
+	Agent  string
+	Prompt string
 }
 
 type paneStateRecorder interface {
@@ -354,10 +352,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 	if title == "" {
 		title = "Manual agent"
 	}
-	slug := opts.Slug
-	if slug == "" {
-		slug = manualPaneSlug(title, number)
-	}
+	slug := manualPaneSlug(title, number)
 	agentName := opts.Agent
 	if agentName == "" {
 		agentName = cfg.Agent
@@ -380,7 +375,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		briefingBody = opts.Body
 		prompt = manualPromptWithBriefing(prompt, briefingPath)
 	}
-	branchName := naming.BranchName(opts.BranchName, cfg.BranchPrefix, slug)
+	branchName := naming.BranchName("", cfg.BranchPrefix, slug)
 	req := paneRequest{
 		ParentRef:     manualPaneParentRef,
 		Number:        number,

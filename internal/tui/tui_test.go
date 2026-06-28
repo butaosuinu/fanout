@@ -2510,7 +2510,6 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.prompt.SetValue("Inspect the HTTP API")
-	m.newPane.slug.SetValue("inspect-http-api")
 
 	cmd := m.submitNewPane()
 	if cmd == nil {
@@ -2526,7 +2525,7 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	if !called {
 		t.Fatal("LaunchPane was not called")
 	}
-	want := LaunchRequest{Prompt: "Inspect the HTTP API", Agents: []string{"codex"}, Slug: "inspect-http-api"}
+	want := LaunchRequest{Prompt: "Inspect the HTTP API", Agents: []string{"codex"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
 	}
@@ -2591,7 +2590,6 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.prompt.SetValue("Inspect the API\nCheck handlers")
-	m.newPane.slug.SetValue("inspect-api")
 
 	cmd := m.submitNewPane()
 	if cmd == nil {
@@ -2599,7 +2597,7 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	}
 	_ = cmd()
 
-	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agents: []string{"codex"}, Slug: "inspect-api"}
+	want := LaunchRequest{Prompt: "Inspect the API\nCheck handlers", Agents: []string{"codex"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
 	}
@@ -2668,8 +2666,9 @@ func TestNewPaneViewRendersCJKPromptInsideFrame(t *testing.T) {
 	if !strings.Contains(view, "日本語入力テスト") {
 		t.Fatalf("modal view missing CJK prompt:\n%s", view)
 	}
-	if got := strings.Count(view, "┌"); got != 3 {
-		t.Fatalf("framed input boxes: got %d top-left corners, want 3:\n%s", got, view)
+	// Modal outer frame + the single Prompt box; the Agent toggle is unframed.
+	if got := strings.Count(view, "┌"); got != 2 {
+		t.Fatalf("framed input boxes: got %d top-left corners, want 2:\n%s", got, view)
 	}
 }
 
@@ -2680,16 +2679,14 @@ func TestNewPaneViewFramesTextInputs(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.newPaneView()
-	// One border for the modal itself plus one around each text input
-	// (Prompt and Slug); the Agent toggle stays unframed, so exactly three
-	// top-left corners must appear.
-	if got := strings.Count(view, "┌"); got != 3 {
-		t.Fatalf("framed input boxes: got %d top-left corners, want 3:\n%s", got, view)
+	// One border for the modal itself plus one around the Prompt textarea; the
+	// Agent toggle stays unframed, so exactly two top-left corners must appear.
+	if got := strings.Count(view, "┌"); got != 2 {
+		t.Fatalf("framed input boxes: got %d top-left corners, want 2:\n%s", got, view)
 	}
 
-	// Collect each "┌...┐" top border. Order: modal outer frame, then the
-	// Prompt box, then the Slug box. The two input boxes must frame to the same
-	// width — textarea and textinput need different Width settings to line up.
+	// Collect each "┌...┐" top border. Order: modal outer frame, then the Prompt
+	// box. Both must be well-formed single-line borders.
 	var boxTops []string
 	for ln := range strings.SplitSeq(view, "\n") {
 		i := strings.Index(ln, "┌")
@@ -2699,11 +2696,8 @@ func TestNewPaneViewFramesTextInputs(t *testing.T) {
 		}
 		boxTops = append(boxTops, ln[i:j+len("┐")])
 	}
-	if len(boxTops) != 3 {
-		t.Fatalf("box top borders: got %d, want 3:\n%s", len(boxTops), view)
-	}
-	if prompt, slug := len([]rune(boxTops[1])), len([]rune(boxTops[2])); prompt != slug {
-		t.Fatalf("Prompt box width %d != Slug box width %d:\n%s", prompt, slug, view)
+	if len(boxTops) != 2 {
+		t.Fatalf("box top borders: got %d, want 2:\n%s", len(boxTops), view)
 	}
 }
 

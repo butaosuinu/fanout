@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -38,40 +37,8 @@ func TestTUIAgentOrDefault(t *testing.T) {
 	}
 }
 
-func TestNormalizeTUISlug(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		raw     string
-		want    string
-		wantErr bool
-	}{
-		{name: "empty", raw: "  ", want: ""},
-		{name: "kebab", raw: "  manual-1-pane  ", want: "manual-1-pane"},
-		{name: "trailing hyphen", raw: "manual-", want: "manual-"},
-		{name: "issue-like numeric suffix", raw: "debug-12", wantErr: true},
-		{name: "uppercase", raw: "Manual", wantErr: true},
-		{name: "space", raw: "manual pane", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := normalizeTUISlug(tc.raw)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("normalizeTUISlug(%q) error = nil, want error", tc.raw)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("normalizeTUISlug(%q) error = %v", tc.raw, err)
-			}
-			if got != tc.want {
-				t.Fatalf("normalizeTUISlug(%q) = %q, want %q", tc.raw, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestManualPaneOptionsForTUIKeepsSingleLinePromptInline(t *testing.T) {
-	opts := manualPaneOptionsForTUI("inspect workspace", "inspect-workspace", "codex")
+	opts := manualPaneOptionsForTUI("inspect workspace", "codex")
 
 	if opts.Title != "inspect workspace" || opts.Prompt != "inspect workspace" {
 		t.Fatalf("single-line title/prompt = %q/%q, want original", opts.Title, opts.Prompt)
@@ -79,14 +46,16 @@ func TestManualPaneOptionsForTUIKeepsSingleLinePromptInline(t *testing.T) {
 	if opts.Body != "" {
 		t.Fatalf("single-line body = %q, want empty", opts.Body)
 	}
-	if opts.Slug != "inspect-workspace" || opts.Agent != "codex" {
-		t.Fatalf("slug/agent = %q/%q, want inspect-workspace/codex", opts.Slug, opts.Agent)
+	// manualPaneOptions no longer carries a slug; newManualPaneRequest always
+	// auto-generates a unique synthetic slug from the title and pane number.
+	if opts.Agent != "codex" {
+		t.Fatalf("agent = %q, want codex", opts.Agent)
 	}
 }
 
 func TestManualPaneOptionsForTUIMultilinePromptUsesBriefingBody(t *testing.T) {
 	prompt := normalizeTUIPrompt("\n  inspect workspace\r\n\ncheck handlers\r")
-	opts := manualPaneOptionsForTUI(prompt, "", "claude")
+	opts := manualPaneOptionsForTUI(prompt, "claude")
 
 	if opts.Title != "inspect workspace" || opts.Prompt != "inspect workspace" {
 		t.Fatalf("multiline title/prompt = %q/%q, want first non-empty line", opts.Title, opts.Prompt)
@@ -135,7 +104,6 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agents: []string{"claude", "claude"},
-		Slug:   "inspect-workspace",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -148,25 +116,12 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	if len(store.Panes) != 2 {
 		t.Fatalf("state panes = %+v, want two manual panes", store.Panes)
 	}
-	if store.Panes[0].Slug != "inspect-workspace-claude-one" || store.Panes[1].Slug != "inspect-workspace-claude-two" {
-		t.Fatalf("slugs = %q/%q, want per-agent derived slugs", store.Panes[0].Slug, store.Panes[1].Slug)
+	// Empty slug → auto-generated; the unique synthetic number keeps the two panes distinct.
+	if store.Panes[0].Slug != "manual-1-inspect-workspace-pane" || store.Panes[1].Slug != "manual-2-inspect-workspace-pane" {
+		t.Fatalf("slugs = %q/%q, want auto-generated synthetic slugs", store.Panes[0].Slug, store.Panes[1].Slug)
 	}
 	if store.Panes[0].IssueNum != -1 || store.Panes[1].IssueNum != -2 {
 		t.Fatalf("issue nums = %d/%d, want unique synthetic ids", store.Panes[0].IssueNum, store.Panes[1].IssueNum)
-	}
-}
-
-func TestManualPaneSlugForAgentDerivesMixedAgentSlugs(t *testing.T) {
-	agents := []string{"claude", "codex", "codex"}
-
-	got := []string{
-		manualPaneSlugForAgent("inspect-api", "claude", 0, agents),
-		manualPaneSlugForAgent("inspect-api", "codex", 1, agents),
-		manualPaneSlugForAgent("inspect-api", "codex", 2, agents),
-	}
-	want := []string{"inspect-api-claude", "inspect-api-codex-one", "inspect-api-codex-two"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("derived slugs = %#v, want %#v", got, want)
 	}
 }
 
@@ -186,7 +141,6 @@ func TestLaunchManualPaneFromTUIReportsPartialMultipleLaunch(t *testing.T) {
 	notice, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hookConfig, fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agents: []string{"claude", "claude"},
-		Slug:   "inspect-workspace",
 	})
 	if err != nil {
 		t.Fatalf("launchManualPaneFromTUI() error = %v, want partial success notice", err)

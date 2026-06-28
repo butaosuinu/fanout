@@ -65,9 +65,7 @@ func (m *model) resize() {
 		return
 	}
 	if m.mode == modeNewPane {
-		inputWidth := m.inputContentWidth()
-		m.newPane.prompt.SetWidth(inputWidth)
-		m.newPane.slug.Width = textinputWidth(inputWidth, m.newPane.slug.Prompt)
+		m.newPane.prompt.SetWidth(m.inputContentWidth())
 	}
 	layout := m.monitorLayout()
 	m.table.SetWidth(layout.MainWidth)
