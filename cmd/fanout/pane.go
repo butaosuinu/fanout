@@ -589,7 +589,7 @@ func logPaneRequest(req paneRequest, lg *log.Logger) {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
 	if req.CodexPlanMode {
-		lg.Dim("  codex-plan-mode -> app-server Plan turn + interactive Codex TUI")
+		lg.Dim("  codex-plan-mode -> app-server Plan thread + interactive Codex TUI")
 	}
 }
 
@@ -598,7 +598,7 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
 	if req.CodexPlanMode {
-		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan turn + interactive Codex TUI\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan thread + interactive Codex TUI\n", c.Dim, c.Reset)
 	}
 	if req.Worktree.Refresh {
 		details := req.Worktree.RefreshDetails
@@ -632,7 +632,7 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout tiled%s\n", c.Dim, c.Reset)
 	}
 	if req.CodexPlanMode {
-		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for app-server Plan turn startup and Codex TUI attach before recording state%s\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Plan Mode thread setup and Codex TUI attach before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
