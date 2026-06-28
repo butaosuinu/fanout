@@ -353,6 +353,19 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		title = "Manual agent"
 	}
 	slug := manualPaneSlug(title, number)
+	branchName := naming.BranchName("", cfg.BranchPrefix, slug)
+	// A state-only close (close the pane, or remove the worktree but keep the
+	// branch) can leave an orphaned worktree dir or branch behind.
+	// nextSyntheticPaneNumber only sees state, so re-creating the same-titled
+	// manual pane would otherwise reuse that slug and either fail preparing the
+	// duplicate worktree or silently inherit the old branch. Skip to a lower
+	// (still state-unique) number until the derived worktree dir and branch are
+	// both free.
+	for worktree.SlugInUse(projectRoot, slug, branchName) {
+		number--
+		slug = manualPaneSlug(title, number)
+		branchName = naming.BranchName("", cfg.BranchPrefix, slug)
+	}
 	agentName := opts.Agent
 	if agentName == "" {
 		agentName = cfg.Agent
@@ -375,7 +388,6 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		briefingBody = opts.Body
 		prompt = manualPromptWithBriefing(prompt, briefingPath)
 	}
-	branchName := naming.BranchName("", cfg.BranchPrefix, slug)
 	req := paneRequest{
 		ParentRef:     manualPaneParentRef,
 		Number:        number,

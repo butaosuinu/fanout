@@ -170,6 +170,26 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
+func TestNewManualPaneRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true}
+	// Simulate a state-only close: manual-1's worktree dir survives with no state
+	// row, so the fresh same-titled request must skip that slug, not regenerate it.
+	orphan := filepath.Join(repo, ".fanout", "worktrees", "manual-1-inspect-api-pane")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	req := newManualPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "inspect api"})
+
+	if req.Slug != "manual-2-inspect-api-pane" || req.BranchName != "fanout/manual-2-inspect-api-pane" {
+		t.Fatalf("slug/branch = %q/%q, want manual-2-inspect-api-pane (skip orphaned manual-1)", req.Slug, req.BranchName)
+	}
+	if req.Number != -2 {
+		t.Fatalf("number = %d, want -2 (still state-unique after the skip)", req.Number)
+	}
+}
+
 func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{

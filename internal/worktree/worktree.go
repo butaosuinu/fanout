@@ -538,6 +538,19 @@ func branchExists(root, branch string) bool {
 	return err == nil
 }
 
+// SlugInUse reports whether slug already owns a worktree directory under
+// .fanout/worktrees or branchName already exists as a local branch — the
+// leftovers a state-only close (close the pane, or remove the worktree but keep
+// the branch) can produce. A caller deriving a fresh manual slug skips a number
+// whose slug is in use so it neither fails preparing a duplicate worktree nor
+// silently inherits an orphaned branch.
+func SlugInUse(projectRoot, slug, branchName string) bool {
+	if dirExists(filepath.Join(projectRoot, ".fanout", "worktrees", slug)) {
+		return true
+	}
+	return branchExists(projectRoot, branchName)
+}
+
 // baseResolvable reports whether base names a commit git can branch from, so a
 // best-effort refresh failure is only tolerated when the resulting worktree add
 // can still succeed.
