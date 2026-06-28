@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,8 +68,8 @@ func TestCodexThreadStartParamsCreatesPersistentStartupThread(t *testing.T) {
 }
 
 func TestCodexRemoteTUIArgsPassPromptToResume(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "hello plan")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1", "--", "hello plan"}
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "hello plan")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1", "--", "hello plan"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
@@ -76,8 +77,8 @@ func TestCodexRemoteTUIArgsPassPromptToResume(t *testing.T) {
 }
 
 func TestCodexRemoteTUIArgsSeparatesDashLeadingPrompt(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "-- investigate")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1", "--", "-- investigate"}
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "-- investigate")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1", "--", "-- investigate"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
@@ -85,8 +86,8 @@ func TestCodexRemoteTUIArgsSeparatesDashLeadingPrompt(t *testing.T) {
 }
 
 func TestCodexRemoteTUIArgsCanResumeWithoutPromptForFallbackTurn(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1", "")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1"}
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
@@ -132,6 +133,62 @@ func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
 	if len(shaped.Input) != 1 || shaped.Input[0].Type != "text" || shaped.Input[0].Text != "hello plan" {
 		t.Fatalf("input = %#v, want one text prompt", shaped.Input)
 	}
+}
+
+func TestCodexPlanThreadLeavesInitialTurnForTUIAfterSettingsUpdate(t *testing.T) {
+	client := &fakeCodexAppClient{}
+
+	thread, err := setupCodexPlanThread(client, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.UseTurnCollaborationMode {
+		t.Fatal("UseTurnCollaborationMode = true, want false when thread/settings/update succeeds")
+	}
+
+	want := "initialize,collaborationMode/list,config/read,model/list,thread/start,thread/settings/update"
+	if got := strings.Join(client.requestMethods(), ","); got != want {
+		t.Fatalf("request order = %s, want %s", got, want)
+	}
+	if client.hasRequest("turn/start") {
+		t.Fatal("setupCodexPlanThread started a turn; want initial prompt left for the interactive TUI")
+	}
+}
+
+func TestCodexPlanThreadStartsInitialTurnWithFallbackCollaborationMode(t *testing.T) {
+	client := &fakeCodexAppClient{
+		methodErrors: map[string]error{
+			"thread/settings/update": errors.New(`unknown method "thread/settings/update"`),
+		},
+	}
+
+	thread, err := setupCodexPlanThread(client, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !thread.UseTurnCollaborationMode {
+		t.Fatal("UseTurnCollaborationMode = false, want true when thread/settings/update is unsupported")
+	}
+	if err = startCodexPlanTurn(client, thread, "/repo", "hello fallback"); err != nil {
+		t.Fatal(err)
+	}
+
+	turn := client.lastRequest("turn/start").paramsMap(t)
+	mode, ok := turn["collaborationMode"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn/start missing fallback collaborationMode: %#v", turn)
+	}
+	if mode["mode"] != "plan" {
+		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
+	}
+	settings, ok := mode["settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("collaborationMode.settings = %#v, want map", mode["settings"])
+	}
+	if settings["model"] != "gpt-test" || settings["reasoning_effort"] != "xhigh" {
+		t.Fatalf("fallback settings = %#v, want model gpt-test and effort xhigh", settings)
+	}
+	assertTurnStartText(t, turn, "hello fallback")
 }
 
 func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
@@ -298,5 +355,87 @@ func TestUnsupportedCodexAppServerMethodDetection(t *testing.T) {
 	err := errors.New(`app-server request fanout-plan-mode failed: unknown variant "thread/settings/update"`)
 	if !isUnsupportedCodexAppServerMethod(err) {
 		t.Fatalf("isUnsupportedCodexAppServerMethod() = false, want true")
+	}
+}
+
+type fakeCodexAppClient struct {
+	calls         []fakeCodexRequest
+	notifications []string
+	methodErrors  map[string]error
+}
+
+type fakeCodexRequest struct {
+	id     string
+	method string
+	params any
+}
+
+func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMessage, error) {
+	f.calls = append(f.calls, fakeCodexRequest{id: id, method: method, params: params})
+	if err := f.methodErrors[method]; err != nil {
+		return nil, err
+	}
+	switch method {
+	case "collaborationMode/list":
+		return json.RawMessage(`{"data":[{"mode":"plan"}]}`), nil
+	case "config/read":
+		return json.RawMessage(`{"config":{"model":"gpt-test","plan_mode_reasoning_effort":"xhigh"}}`), nil
+	case "model/list":
+		return json.RawMessage(`{"data":[{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"},{"reasoningEffort":"xhigh"}]}]}`), nil
+	case "thread/start":
+		return json.RawMessage(`{"thread":{"id":"thread-1","sessionId":"session-1"}}`), nil
+	default:
+		return json.RawMessage(`{}`), nil
+	}
+}
+
+func (f *fakeCodexAppClient) Notify(method string) error {
+	f.notifications = append(f.notifications, method)
+	return nil
+}
+
+func (f *fakeCodexAppClient) requestMethods() []string {
+	out := make([]string, 0, len(f.calls))
+	for _, call := range f.calls {
+		out = append(out, call.method)
+	}
+	return out
+}
+
+func (f *fakeCodexAppClient) lastRequest(method string) fakeCodexRequest {
+	for _, call := range slices.Backward(f.calls) {
+		if call.method == method {
+			return call
+		}
+	}
+	return fakeCodexRequest{}
+}
+
+func (f *fakeCodexAppClient) hasRequest(method string) bool {
+	for _, call := range f.calls {
+		if call.method == method {
+			return true
+		}
+	}
+	return false
+}
+
+func (r fakeCodexRequest) paramsMap(t *testing.T) map[string]any {
+	t.Helper()
+	params, ok := r.params.(map[string]any)
+	if !ok {
+		t.Fatalf("%s params = %#v, want map[string]any", r.method, r.params)
+	}
+	return params
+}
+
+func assertTurnStartText(t *testing.T, params map[string]any, want string) {
+	t.Helper()
+	input, ok := params["input"].([]map[string]any)
+	if !ok || len(input) != 1 {
+		t.Fatalf("turn/start input = %#v, want one text item", params["input"])
+	}
+	if input[0]["type"] != "text" || input[0]["text"] != want {
+		t.Fatalf("turn/start input = %#v, want text %q", input[0], want)
 	}
 }
