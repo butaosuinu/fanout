@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -402,9 +403,9 @@ func (f *fakeCodexAppClient) requestMethods() []string {
 }
 
 func (f *fakeCodexAppClient) lastRequest(method string) fakeCodexRequest {
-	for i := len(f.calls) - 1; i >= 0; i-- {
-		if f.calls[i].method == method {
-			return f.calls[i]
+	for _, call := range slices.Backward(f.calls) {
+		if call.method == method {
+			return call
 		}
 	}
 	return fakeCodexRequest{}
