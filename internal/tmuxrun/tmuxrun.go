@@ -41,6 +41,17 @@ const (
 	// #( / ## stay literal), so the "#<digit>" parent prefix is safe; only "#["
 	// is still interpreted at draw time as a style, which SetPaneLabel neutralizes.
 	paneBorderFormat = " #{?" + paneLabelOption + ",#{" + paneLabelOption + "},#{pane_title}} "
+	// paneActiveBorderStyle / paneBorderStyle recolor the pane borders to fanout's
+	// PAPER BREEZE palette: 浅葱 (asagi) for the active border, in place of tmux's
+	// default green, and 藍 (ai) for inactive borders. These are the site/light
+	// values from the palette (site/assets/css/main.css; keep in sync with the
+	// internal/tui AdaptiveColor and internal/log 256-color copies). Like
+	// internal/log, tmux cannot query the terminal background, so it cannot pick
+	// the AdaptiveColor dark variants the TUI uses; 浅葱 reads on both backgrounds
+	// and the 藍 inactive border is intentionally subtle. Truecolor hex; tmux
+	// falls back to the nearest 256-color when the terminal lacks RGB support.
+	paneActiveBorderStyle = "fg=#00A3AF"
+	paneBorderStyle       = "fg=#165E83"
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -343,6 +354,12 @@ func SetPaneShellKey(paneID, shellKey string) error {
 // applies, single-sourced here so the --dry-run preview matches the live command.
 func PaneBorderFormat() string { return paneBorderFormat }
 
+// PaneActiveBorderStyle and PaneBorderStyle return the pane border styles
+// EnablePaneBorderTitles applies, single-sourced here so the --dry-run preview
+// matches the live command.
+func PaneActiveBorderStyle() string { return paneActiveBorderStyle }
+func PaneBorderStyle() string       { return paneBorderStyle }
+
 // SetPaneLabel records the border label fanout displays on a pane's top border.
 // An empty label is allowed (the pane then falls back to #{pane_title}). The
 // label is neutralized first so a "#[...]" sequence in a --name / display
@@ -377,9 +394,16 @@ func NeutralizePaneLabel(label string) string {
 }
 
 // EnablePaneBorderTitles turns on top pane-border titles for the window holding
-// paneID and points pane-border-format at @fanout_pane_label. pane-border-status
-// is a window option (its finest granularity), so this affects every pane in the
-// window; non-fanout panes fall back to #{pane_title}. Re-applying is idempotent.
+// paneID, points pane-border-format at @fanout_pane_label, and recolors the pane
+// borders to fanout's theme (浅葱 active, 藍 inactive). pane-border-status and the
+// two *-border-style options are window options (their finest granularity), so
+// this affects every pane in the window: non-fanout panes fall back to
+// #{pane_title}, and any pane-border-style / pane-active-border-style the user
+// configured is overwritten for the window with no teardown (only the active
+// border defaults to green; the inactive default is the terminal foreground). On
+// the documented "use the current pane" path this restyles the user's existing
+// window — the same window-scope trade-off pane-border-status/-format already
+// make. Re-applying is idempotent.
 func EnablePaneBorderTitles(paneID string) error {
 	if strings.TrimSpace(paneID) == "" {
 		return fmt.Errorf("pane id is required")
@@ -389,6 +413,12 @@ func EnablePaneBorderTitles(paneID string) error {
 	}
 	if err := exec.Command("tmux", "set-option", "-w", "-t", paneID, "pane-border-format", paneBorderFormat).Run(); err != nil {
 		return fmt.Errorf("tmux set-option pane-border-format: %w", err)
+	}
+	if err := exec.Command("tmux", "set-option", "-w", "-t", paneID, "pane-active-border-style", paneActiveBorderStyle).Run(); err != nil {
+		return fmt.Errorf("tmux set-option pane-active-border-style: %w", err)
+	}
+	if err := exec.Command("tmux", "set-option", "-w", "-t", paneID, "pane-border-style", paneBorderStyle).Run(); err != nil {
+		return fmt.Errorf("tmux set-option pane-border-style: %w", err)
 	}
 	return nil
 }
