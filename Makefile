@@ -5,9 +5,11 @@ CODEX_DIR  ?= $(HOME)/.codex
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
+CODEX_TOOL_DIR   := $(CODEX_DIR)/tools
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
+CODEX_TOOLS     := $(notdir $(wildcard codex/tools/*))
 
 BATS       ?= bats
 GO         ?= go
@@ -50,7 +52,7 @@ clean-web:
 	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
 install-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -64,9 +66,12 @@ install-integrations:
 		mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
 		cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
 	done
+	@for tool in $(CODEX_TOOLS); do \
+		install -m 0755 "codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
+	done
 
 link-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -78,11 +83,16 @@ link-integrations:
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
 	done
+	@for tool in $(CODEX_TOOLS); do \
+		rm -f "$(CODEX_TOOL_DIR)/$$tool"; \
+		ln -sf "$(CURDIR)/codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
+	done
 
 uninstall-integrations:
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
+	@for tool in $(CODEX_TOOLS); do rm -f "$(CODEX_TOOL_DIR)/$$tool"; done
 
 install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
@@ -92,6 +102,7 @@ install: build-go install-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
+	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
 
 link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
@@ -101,6 +112,7 @@ link: build-go link-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
+	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool -> $(CURDIR)/codex/tools/$$tool"; done
 
 uninstall: uninstall-integrations
 	rm -f "$(BINDIR)/fanout"
@@ -109,6 +121,7 @@ uninstall: uninstall-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
+	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
 
 # --- test / lint -------------------------------------------------------------
 # `make test`         — build the Go binary, run Go unit tests + web UI tests

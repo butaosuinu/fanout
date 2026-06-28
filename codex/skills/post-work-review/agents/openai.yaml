@@ -1,7 +1,7 @@
 interface:
   display_name: "post-work-review"
-  short_description: "Run a final Codex review loop"
-  default_prompt: "Use $post-work-review to run a final Codex review loop before a PR."
+  short_description: "Run a local Codex review loop"
+  default_prompt: "Use $post-work-review only when I explicitly ask for a Codex review of the current diff. Run the local codex review CLI without escalation; escalate only if writing the final git marker requires it."
 
 policy:
-  allow_implicit_invocation: true
+  allow_implicit_invocation: false

@@ -106,7 +106,7 @@ install_data() {
 # Uninstall runs before the release tarball is fetched/extracted, so the list of
 # integrations to remove cannot be derived from the source the way
 # install_integrations does. Keep this enumeration in sync with whatever
-# claude/commands, claude/skills, and codex/skills the repo ships.
+# claude/commands, claude/skills, codex/skills, and codex/tools the repo ships.
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md"
   rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues" \
@@ -115,6 +115,7 @@ remove_integrations() {
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
     "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
     "$codex_dir/skills/pr-watch"
+  rm -f "$codex_dir/tools/post-work-review.sh"
 }
 
 copy_skill_dirs() {
@@ -132,6 +133,17 @@ copy_skill_dirs() {
   done
 }
 
+copy_tool_files() {
+  src_root="$1"
+  dest_root="$2"
+  [ -d "$src_root" ] || return 0
+  mkdir -p "$dest_root"
+  for src in "$src_root"/*; do
+    [ -f "$src" ] || continue
+    install_exec "$src" "$dest_root/$(basename "$src")"
+  done
+}
+
 install_integrations() {
   [ "$install_skills" -eq 1 ] || return 0
 
@@ -145,6 +157,7 @@ install_integrations() {
 
   copy_skill_dirs "$tmp/extract/claude/skills" "$claude_dir/skills"
   copy_skill_dirs "$tmp/extract/codex/skills" "$codex_dir/skills"
+  copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
 }
 
 normalize_os() {
