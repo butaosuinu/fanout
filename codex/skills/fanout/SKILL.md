@@ -136,7 +136,8 @@ use this workflow directly.
 4. `--codex-plan-mode` is valid only when every selected child resolves to
    `codex` after per-issue overrides. It uses Codex app-server to create the
    child Plan Mode thread, then resumes it with the fanout prompt through the
-   interactive Codex TUI.
+   interactive Codex TUI. The prompt tells Codex to inspect relevant context
+   before presenting a plan.
 
 ## Workflow
 
@@ -411,7 +412,8 @@ API + parent body. Key points:
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
   Plan Mode path automatically but pass the modal prompt inline instead of
-  writing a `/tmp` briefing file.
+  writing a `/tmp` briefing file. The inline prompt keeps normal non-mutating
+  discovery before the `<proposed_plan>` response.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
   thread, and resumes it with the child prompt through the interactive Codex
   TUI. fanout does not send `/plan` or prompt text through tmux. If Plan Mode

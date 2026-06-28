@@ -292,6 +292,32 @@ func TestSeedCodexPlanThreadForResumeInjectsReadyAssistantItem(t *testing.T) {
 	}
 }
 
+func TestRequestUserInputResponseKeepsDiscoveryBeforePlan(t *testing.T) {
+	got := requestUserInputResponse([]byte(`{"questions":[{"id":"scope"}]}`))
+
+	answers, ok := got["answers"].(map[string]map[string][]string)
+	if !ok {
+		t.Fatalf("answers = %#v, want question answers", got["answers"])
+	}
+	scopeAnswers := answers["scope"]["answers"]
+	if len(scopeAnswers) != 1 {
+		t.Fatalf("scope answers = %#v, want one fallback answer", scopeAnswers)
+	}
+	answer := scopeAnswers[0]
+	for _, want := range []string{
+		"continue normal non-mutating discovery",
+		"before presenting the implementation plan",
+		"remaining ambiguity",
+	} {
+		if !strings.Contains(answer, want) {
+			t.Fatalf("fallback answer missing %q: %q", want, answer)
+		}
+	}
+	if strings.Contains(answer, "proceed with the implementation plan") {
+		t.Fatalf("fallback answer still shortcuts to plan: %q", answer)
+	}
+}
+
 func TestConfigSettingsReadsModelAndReasoningEffort(t *testing.T) {
 	got := configSettings([]byte(`{"config":{"model":" gpt-test ","plan_mode_reasoning_effort":" xhigh "}}`))
 

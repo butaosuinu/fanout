@@ -216,6 +216,8 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *t
 	for _, want := range []string{
 		"manual fanout Codex Plan Mode session",
 		"Body:\nInspect API",
+		"Before presenting a plan, follow normal Codex planning behavior",
+		"After that investigation, present the implementation plan",
 		"<proposed_plan>...</proposed_plan>",
 	} {
 		if !strings.Contains(req.Prompt, want) {
@@ -227,6 +229,7 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *t
 		"commit and push",
 		"Open a pull request",
 		"codex review --uncommitted",
+		"Your first response must",
 		"read /tmp/",
 	} {
 		if strings.Contains(req.Prompt, unexpected) {
@@ -531,13 +534,16 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
 	}
-	if !strings.Contains(got.Prompt, "read /tmp/fanout-repo-501.md and propose a plan.") {
+	if !strings.Contains(got.Prompt, "read /tmp/fanout-repo-501.md and investigate, then propose a plan.") {
 		t.Fatalf("prompt = %q, want plan action", got.Prompt)
+	}
+	if !strings.Contains(got.BriefingBody, "Before presenting a plan, follow normal Codex planning behavior") {
+		t.Fatalf("briefing did not require investigation before planning:\n%s", got.BriefingBody)
 	}
 	if !strings.Contains(got.BriefingBody, "<proposed_plan>...</proposed_plan>") {
 		t.Fatalf("briefing did not require proposed_plan wrapper:\n%s", got.BriefingBody)
 	}
-	for _, unexpected := range []string{"commit and push", "Open a pull request"} {
+	for _, unexpected := range []string{"commit and push", "Open a pull request", "Your first response must"} {
 		if strings.Contains(got.BriefingBody, unexpected) {
 			t.Fatalf("plan briefing contains implementation instruction %q:\n%s", unexpected, got.BriefingBody)
 		}

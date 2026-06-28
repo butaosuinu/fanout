@@ -533,7 +533,7 @@ func shortIssueTitle(title string) string {
 func oneLinePrompt(parentRef string, req paneRequest) string {
 	action := "begin"
 	if req.CodexPlanMode {
-		action = "propose a plan"
+		action = "investigate, then propose a plan"
 	}
 	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
 }
