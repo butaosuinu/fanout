@@ -62,7 +62,7 @@ A live run walks these steps:
 3. Enumerates children as the union of Sub-issues and parent task-list rows; only OPEN children are processed.
 4. Reads `.fanout/state.json` and skips children whose `(parent, issueNum)` pair is already recorded.
 5. Writes a briefing for each target with the issue body and a short Requirements checklist.
-6. Creates `.fanout/worktrees/<slug>/` from the refreshed base branch, creates the child pane with `tmux split-window` without selecting it, sets the pane title, applies `tmux select-layout tiled`, then sleeps `--sleep` seconds (default 4) before the next child.
+6. Creates `.fanout/worktrees/<slug>/` from the refreshed base branch, creates the child pane with `tmux split-window` without selecting it, sets the pane title, re-lays out the window into a comfortable-width grid (falling back to `main-vertical` then `tiled`), then sleeps `--sleep` seconds (default 4) before the next child.
 7. Prints a summary of created / skipped / deferred / failed counts.
 
 > The pane launch prompt stays short on purpose: the full issue body lives in the briefing file, and the agent is told to read it from there. `deferred` only appears with `--unblocked-only`, which holds back children that still have an OPEN blocker.

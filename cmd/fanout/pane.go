@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/naming"
+	"github.com/butaosuinu/fanout/internal/panelayout"
 	"github.com/butaosuinu/fanout/internal/planspec"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/settings"
@@ -168,9 +169,6 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
 		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
-	if err := tmuxrun.SelectTiled(info.Target); err != nil {
-		lg.Warn("%s: %v", paneLogLabel(req), err)
-	}
 	if req.CodexPlanMode {
 		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
 			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
@@ -198,6 +196,13 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		rollbackState(recorder, req, lg)
 		cleanupFailedLaunch(paneLogLabel(req), paneID, prepared, lg)
 		return createdPane{}, false
+	}
+	// Re-layout last, after the fallible steps: an earlier failure runs
+	// cleanupFailedLaunch (which kills this pane), and laying out only on the
+	// success path means a failed launch never leaves an orphaned spacer pane
+	// behind for the grid.
+	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
+		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
 	lg.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
 	return createdPane{req: req, paneID: paneID, prepared: prepared}, true
@@ -642,11 +647,8 @@ func printPaneDryRun(req paneRequest, target string, lg *log.Logger, c log.Palet
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -p -t <pane_id> @fanout_pane_label %s%s\n", c.Dim, shellQuote(tmuxrun.NeutralizePaneLabel(paneBorderLabel(req))), c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-status top%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-format %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderFormat()), c.Reset)
-	if target != "" {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout -t %s tiled%s\n", c.Dim, shellQuote(target), c.Reset)
-	} else {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-layout tiled%s\n", c.Dim, c.Reset)
-	}
+	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
+	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
 	if req.CodexPlanMode {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Plan Mode thread setup and Codex TUI attach before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)

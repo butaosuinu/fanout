@@ -21,7 +21,8 @@
     $ tmux set-option -p -t <pane_id> @fanout_pane_label '#200 · shared-child-parent-200-501'
     $ tmux set-option -w -t <pane_id> pane-border-status top
     $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
-    $ tmux select-layout -t '%1' tiled
+    # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
+    #   falling back to main-vertical then tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #501: dry-run complete
@@ -42,7 +43,8 @@
     $ tmux set-option -p -t <pane_id> @fanout_pane_label '#200 · b-only-child-502'
     $ tmux set-option -w -t <pane_id> pane-border-status top
     $ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '
-    $ tmux select-layout -t '%1' tiled
+    # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
+    #   falling back to main-vertical then tiled
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
 [ ok ] #502: dry-run complete

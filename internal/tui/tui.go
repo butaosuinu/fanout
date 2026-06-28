@@ -27,6 +27,9 @@ const (
 	sessionSidebarAt     = 120
 	sessionSidebarWidth  = 26
 	sessionTopHeight     = 3
+	// relayoutDebounce coalesces the burst of resize events tmux emits while a
+	// terminal window is being dragged into a single relayout.
+	relayoutDebounce = 150 * time.Millisecond
 )
 
 // Options configures the TUI monitor.
@@ -43,14 +46,18 @@ type Options struct {
 	Hooks               hooks.Config
 	LaunchPane          LaunchFunc
 	LaunchShell         ShellLaunchFunc
-	FocusPane           func(string) error
-	PaneAlive           func(string) bool
-	ShellPaneAlive      func(paneID, shellKey string) bool
-	CapturePaneOutput   func(string, int) (string, error)
-	ListRepoFiles       func(root string) ([]string, error)
-	Notifier            transitionNotifier
-	lifecycle           lifecycleRunner
-	keyboard            keyboardProtocols
+	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
+	// to panelayout.Apply(target, Resize) in production and left nil in tests
+	// (then resize handling is a no-op).
+	Relayout          func() error
+	FocusPane         func(string) error
+	PaneAlive         func(string) bool
+	ShellPaneAlive    func(paneID, shellKey string) bool
+	CapturePaneOutput func(string, int) (string, error)
+	ListRepoFiles     func(root string) ([]string, error)
+	Notifier          transitionNotifier
+	lifecycle         lifecycleRunner
+	keyboard          keyboardProtocols
 }
 
 type viewMode int
@@ -98,6 +105,7 @@ type model struct {
 	notifications    map[issueKey]issueTransitionSnapshot
 	notifyPrimed     bool
 	keyboardPaused   bool
+	relayoutGen      int
 }
 
 type keyboardProtocolsEnabledMsg struct{}
@@ -115,6 +123,10 @@ type (
 		req ShellLaunchRequest
 		err error
 	}
+	// relayoutTickMsg fires after the debounce window; gen lets a newer resize
+	// supersede a pending tick so only the last one in a burst relayouts.
+	relayoutTickMsg struct{ gen int }
+	relayoutDoneMsg struct{ err error }
 )
 
 // Run starts the Bubble Tea TUI.

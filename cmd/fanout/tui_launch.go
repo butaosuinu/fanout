@@ -16,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/panelayout"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
@@ -174,7 +175,6 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(manualPaneParentRef, title))
 	_ = tmuxrun.EnablePaneBorderTitles(paneID)
 	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
-	_ = tmuxrun.SelectTiled(tuiLaunchTarget(session))
 	if err := recorder.RecordPane(state.Pane{
 		Parent:       manualPaneParentRef,
 		IssueNum:     number,
@@ -190,6 +190,10 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 		_ = tmuxrun.KillPane(paneID)
 		return fmt.Errorf("write fanout state: %w", err)
 	}
+	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
+	// never leaves the window arranged around a pane that no longer exists or an
+	// orphaned spacer behind.
+	_ = panelayout.Apply(tuiLaunchTarget(session), panelayout.Create)
 	return nil
 }
 

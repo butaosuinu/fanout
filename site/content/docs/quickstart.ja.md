@@ -62,7 +62,7 @@ live 実行は次のステップで進みます。
 3. Sub-issues と親タスクリスト行の和集合で子を列挙する（OPEN の子のみ処理）。
 4. `.fanout/state.json` を読み、`(parent, issueNum)` ペアが記録済みの子はスキップする。
 5. 対象 issue ごとに、issue 本文と短い Requirements チェックリストからなる briefing を書き出す。
-6. fresh 化した base branch から `.fanout/worktrees/<slug>/` を作り、`tmux split-window` で子ペインを選択せずに開き、ペインタイトルを設定して `tmux select-layout tiled` を適用し、次の子に進む前に `--sleep` 秒（既定 4）スリープする。
+6. fresh 化した base branch から `.fanout/worktrees/<slug>/` を作り、`tmux split-window` で子ペインを選択せずに開き、ペインタイトルを設定してウィンドウを快適幅グリッドに組み直し（失敗時は `main-vertical` → `tiled` にフォールバック）、次の子に進む前に `--sleep` 秒（既定 4）スリープする。
 7. created / skipped / deferred / failed の件数サマリを表示する。
 
 > ペイン起動プロンプトが短いのは意図的です。完全な issue 本文は briefing ファイルにあり、エージェントはそれを読むよう指示されます。`deferred` は `--unblocked-only` 指定時のみ現れ、OPEN な blocker が残る子を保留します。

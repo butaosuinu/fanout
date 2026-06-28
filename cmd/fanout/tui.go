@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	"github.com/butaosuinu/fanout/internal/panelayout"
 	"github.com/butaosuinu/fanout/internal/settings"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
@@ -74,6 +75,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		Hooks:               hookConfig,
 		LaunchPane:          newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
 		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
+		Relayout:            func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
 		Notifier:            notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
@@ -159,6 +161,8 @@ func markTUIRunning(projectRoot string) func() {
 		return func() {}
 	}
 	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot) // Best-effort dashboard keybinding hint.
+	// Mark this pane as the console so the auto-layout reserves it as a sidebar.
+	_ = tmuxrun.SetPaneRole(paneID, tmuxrun.RoleConsole)
 	originalTitle, err := tmuxrun.PaneTitle(paneID)
 	if err != nil {
 		originalTitle = "fanout"
@@ -166,6 +170,10 @@ func markTUIRunning(projectRoot string) func() {
 	_ = tmuxrun.SetPaneTitle(paneID, tuiPaneTitle)
 	return func() {
 		_ = tmuxrun.SetPaneTitle(paneID, originalTitle)
+		_ = tmuxrun.SetPaneRole(paneID, "") // a post-TUI shell must not look like a sidebar
+		// Re-tile so the ex-console pane is not left stuck at the 40-col sidebar
+		// width beside full-size agent panes.
+		_ = panelayout.Apply(paneID, panelayout.Close)
 	}
 }
 

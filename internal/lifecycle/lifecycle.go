@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/hooks"
+	"github.com/butaosuinu/fanout/internal/panelayout"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
@@ -80,13 +81,15 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 		lg.Err("--close: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
+	windows := map[string]struct{}{}
+	defer relayoutClosedWindows(windows, lg)
 	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
 			return exitcode.Env
 		}
 	}
-	if !closePaneRecords(opts, panes, mode, lg) {
+	if !closePaneRecords(opts, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
 	if err := locked.RemovePane(parent, issueNum); err != nil {
@@ -128,13 +131,15 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 		lg.Err("--close: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
+	windows := map[string]struct{}{}
+	defer relayoutClosedWindows(windows, lg)
 	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
 			return exitcode.Env
 		}
 	}
-	if !closePaneRecords(opts, panes, mode, lg) {
+	if !closePaneRecords(opts, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
 	if err := locked.RemoveTaskPane(parent, taskID); err != nil {
@@ -256,12 +261,14 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 
 	closed := 0
 	failed := 0
+	windows := map[string]struct{}{}
+	defer relayoutClosedWindows(windows, lg)
 	for _, issueNum := range sortedUnique(nums) {
 		if !eligible[issueNum] {
 			continue
 		}
 		issuePanes := panesForIssue(panes, issueNum)
-		if !cleanupPaneRecords(opts, issuePanes, lg) {
+		if !cleanupPaneRecords(opts, issuePanes, lg, windows) {
 			failed++
 			continue
 		}
@@ -329,9 +336,11 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 
 	closed := 0
 	failed := 0
+	windows := map[string]struct{}{}
+	defer relayoutClosedWindows(windows, lg)
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesForTask(panes, taskID)
-		if !cleanupPaneRecords(opts, taskPanes, lg) {
+		if !cleanupPaneRecords(opts, taskPanes, lg, windows) {
 			failed++
 			continue
 		}
@@ -429,21 +438,32 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 	return children, exitcode.OK
 }
 
-func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger) bool {
-	return closePaneRecords(opts, panes, CloseWorktree, lg)
+func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
+	return closePaneRecords(opts, panes, CloseWorktree, lg, windows)
 }
 
-func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
+// relayoutWindow re-lays out a tmux window after a pane is removed. It is a var
+// so tests can stub it without a real tmux.
+var relayoutWindow = panelayout.Apply
+
+// closePaneRecords kills/cleans the given panes and records the window of each
+// pane it actually kills into windows. It does not relayout itself; the caller
+// relayouts the accumulated set once so a multi-pane cleanup re-tiles a shared
+// window a single time instead of once per pane. The window is captured at the
+// kill site (after the shell-pane identity check) so a stale pane id that tmux
+// has reused for an unrelated pane never drags that pane's window into a relayout.
+func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	ok := true
 	for _, pane := range panes {
 		if pane.IsShell() {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			killShellPaneBestEffort(pane, lg)
+			killShellPaneBestEffort(pane, lg, windows)
 			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
 		}
 		if mode == ClosePaneOnly {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+			captureWindow(pane.PaneID, windows)
 			killPaneBestEffort(pane, lg)
 			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
@@ -465,10 +485,21 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 			deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
 		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+		captureWindow(pane.PaneID, windows)
 		killPaneBestEffort(pane, lg)
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
 	return ok
+}
+
+// relayoutClosedWindows re-tiles each affected window into the fanout grid.
+// A window that emptied out (every pane killed) is gone, so Apply no-ops on it.
+func relayoutClosedWindows(windows map[string]struct{}, lg Logger) {
+	for id := range windows {
+		if err := relayoutWindow(id, panelayout.Close); err != nil {
+			lg.Warn("relayout window %s: %v", id, err)
+		}
+	}
 }
 
 func (m CloseMode) removesWorktree() bool {
@@ -550,7 +581,7 @@ func killPaneBestEffort(pane state.Pane, lg Logger) {
 	}
 }
 
-func killShellPaneBestEffort(pane state.Pane, lg Logger) {
+func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]struct{}) {
 	if strings.TrimSpace(pane.PaneID) == "" {
 		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
 		return
@@ -573,10 +604,20 @@ func killShellPaneBestEffort(pane state.Pane, lg Logger) {
 			lg.Warn("%s: shell pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
 			return
 		}
+		// Identity confirmed: capture the window only now, so a reused pane id
+		// never schedules an unrelated window for relayout.
+		captureWindow(pane.PaneID, windows)
 		killPaneBestEffort(pane, lg)
 		return
 	}
 	lg.Warn("%s: shell pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
+}
+
+// captureWindow records the window holding paneID into windows, best-effort.
+func captureWindow(paneID string, windows map[string]struct{}) {
+	if id, err := tmuxrun.WindowOfPane(paneID); err == nil && id != "" {
+		windows[id] = struct{}{}
+	}
 }
 
 func pruneWorktrees(projectRoot string, lg Logger) bool {
