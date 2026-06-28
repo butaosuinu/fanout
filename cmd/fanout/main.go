@@ -63,6 +63,9 @@ func main() {
 	if isDashboardRequest(os.Args[1:]) {
 		os.Exit(int(cmdDashboard(os.Args[2:], lg)))
 	}
+	if isWorktreeActionRequest(os.Args[1:]) {
+		os.Exit(int(cmdWorktreeAction(os.Args[1:], lg, commandName)))
+	}
 	if isMsgRequest(os.Args[1:]) {
 		os.Exit(int(cmdMsg(os.Args[2:], lg)))
 	}
@@ -231,10 +234,11 @@ func runWithRuntime(cfg *cliflags.Config, lg *log.Logger, rt *runtimeInfo, comma
 	result := executePlan(cfg, lg, rt.info, rt.gh, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
-	// Register the tmux keybindings so the user can pop the read-only
-	// dashboard (F12 or prefix + D) from any fanout pane. The binding resolves
-	// the repo from the pressing pane at keypress, so it works from child
-	// worktree panes and across repos. Best-effort, live runs only.
+	// Register tmux keybindings so the user can pop the read-only dashboard
+	// (F12 or prefix + D) and same-worktree action menu (prefix + M) from any
+	// fanout pane. The bindings resolve the repo from the pressing pane at
+	// keypress, so they work from child worktree panes and across repos.
+	// Best-effort, live runs only.
 	if !cfg.DryRun && result.Created > 0 {
 		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
 	}

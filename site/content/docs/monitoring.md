@@ -33,6 +33,7 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 |---|---|
 | `?` | Open the keyboard shortcut help. Press `Esc`, `q`, or `?` again to close it. |
 | `n` | Open a tmux popup to create manual agent panes from a required **multi-line** prompt and `claude` / `codex` launch counts. `codex` starts in Codex Plan Mode and receives the popup prompt inline; `claude` starts normally. Use `Up` / `Down` to pick an agent row, `Space` to toggle it, and `Left` / `Right` to change the count. In the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `Enter` creates the selected panes. Enhanced keyboard input is on by default (set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out); `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch. |
+| `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it kills the tmux pane and removes the state row; it never removes a git worktree. |
 | `Enter` / `o` | Focus the selected live row's pane. |
@@ -115,7 +116,7 @@ It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, f
 
 ## Web dashboard (fanout dashboard --web)
 
-When you want to share every Session in a browser or with a team, `fanout dashboard --web` starts a **read-only** web dashboard. It visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE. Each row shows pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty. The data source is the same as `--status`, reused across every parent in the repo at once. Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `F12` / `prefix + D` tmux keybindings described below (opt out with `--no-keybind`).
+When you want to share every Session in a browser or with a team, `fanout dashboard --web` starts a **read-only** web dashboard. It visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE. Each row shows pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty. The data source is the same as `--status`, reused across every parent in the repo at once. Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the tmux keybindings described below (opt out with `--no-keybind`).
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -130,9 +131,13 @@ Run `fanout dashboard --help` for the full flag list.
 
 ### F12 / prefix + D
 
-When the TUI starts, after a live fan-out, and whenever the dashboard itself starts, fanout registers tmux keybindings so that **`F12`** or **`prefix + D`** pops the dashboard from any pane. Both keys launch the server in a detached `fanout-dashboard` window, so it outlives the keypress; a second press just reopens the existing URL.
+When the TUI starts, after a live fan-out, and whenever the dashboard itself starts, fanout registers tmux keybindings so that **`F12`** or **`prefix + D`** pops the dashboard from any pane. Both keys launch the server in a detached `fanout-dashboard` window, so it outlives the keypress; a second press just reopens the existing URL. It also registers **`prefix + M`** for same-worktree actions from the focused recorded pane.
 
 Disable the auto-bindings with `--no-dashboard-keybind` (fan-out side), `--no-keybind` (dashboard side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` — see [Settings]({{< relref "/docs/settings" >}}).
+
+### prefix + M
+
+The same binding pass also registers **`prefix + M`**. Press it from a recorded fanout pane to open a popup for that pane's worktree: attach another agent to the same worktree, or open a shell there. The popup refuses unrecorded panes and panes without a stored worktree path.
 
 ### Graceful degradation
 

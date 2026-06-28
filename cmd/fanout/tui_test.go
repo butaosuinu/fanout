@@ -383,6 +383,59 @@ func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
 	}
 }
 
+func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	targetPath := filepath.Join(repo, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%88")
+
+	notice, err := launchAttachedAgentFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.AttachLaunchRequest{
+		Prompt: "inspect this worktree",
+		Agents: []string{"claude"},
+		Target: fanouttui.AttachTarget{
+			TargetPath:       targetPath,
+			SourceParent:     "100",
+			SourceIssueNum:   101,
+			SourceBranchName: "fanout/child-101",
+			SourceLabel:      "#101",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notice != "" {
+		t.Fatalf("notice = %q, want empty success notice", notice)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("state panes = %+v, want one attached pane", store.Panes)
+	}
+	got := store.Panes[0]
+	if got.Kind != state.PaneKindAttachedAgent || got.Agent != "claude" || got.PaneID != "%88" {
+		t.Fatalf("attached state = %+v, want attached claude pane", got)
+	}
+	if got.Parent != "100" || got.IssueNum != -1 || got.SourceIssueNum != 101 || got.SourceParent != "100" {
+		t.Fatalf("attached identity = parent %s issue %d source %s/%d", got.Parent, got.IssueNum, got.SourceParent, got.SourceIssueNum)
+	}
+	if got.WorktreePath != targetPath || got.BranchName != "fanout/child-101" {
+		t.Fatalf("attached worktree/branch = %q/%q", got.WorktreePath, got.BranchName)
+	}
+	if got.Slug != "child-claude-a1" || got.DisplayName != "claude for #101" {
+		t.Fatalf("slug/display = %q/%q", got.Slug, got.DisplayName)
+	}
+	if _, err := os.Stat(filepath.Join(targetPath, ".fanout", "worktree-metadata.json")); !os.IsNotExist(err) {
+		t.Fatalf("attached launch wrote worktree metadata or stat failed: %v", err)
+	}
+}
+
 func TestCountOpenChildTargetsIncludesTaskListRefs(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in

@@ -206,7 +206,7 @@ explicitly skipped.
 
 ## Settings flags
 
-These paired switches toggle fanout's opinionated behaviors for one run — the child-briefing instructions and dashboard keybindings fanout injects, flipped on or off in place. A CLI flag always wins over the environment-variable and config-file layers. What each behavior actually injects — and the full resolution order — is documented in [Settings]({{< relref "/docs/settings" >}}).
+These paired switches toggle fanout's opinionated behaviors for one run — the child-briefing instructions and tmux keybindings fanout injects, flipped on or off in place. A CLI flag always wins over the environment-variable and config-file layers. What each behavior actually injects — and the full resolution order — is documented in [Settings]({{< relref "/docs/settings" >}}).
 
 | Flag | Argument | Description |
 |---|---|---|
@@ -216,7 +216,7 @@ These paired switches toggle fanout's opinionated behaviors for one run — the 
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Include or omit the Claude-only Agent Teams hint in child briefings. Default: on. |
 | `--codex-plan-mode` / `--no-codex-plan-mode` | — | For `--agent codex`, create a Codex app-server `plan` thread and resume it with the prompt through an interactive Codex TUI instead of positional `codex "<prompt>"`. Default: off. Details in [Agent Integrations]({{< relref "/docs/agents" >}}). |
 | `--pr-visualization` / `--no-pr-visualization` | — | Include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. Default: on. |
-| `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `F12` / `prefix + D` keybindings after a live fan-out, so the read-only web dashboard can be opened from any pane. Default: on. |
+| `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key after a live fan-out. Default: on. |
 
 ## Read and lifecycle modes
 
@@ -315,7 +315,7 @@ Starts the read-only localhost web dashboard: bound to `127.0.0.1`, GET-only, to
 | `--port` | `N` | Port to bind. Default: `0` (an OS-assigned ephemeral port); the chosen URL is printed. |
 | `--open` | — | Open the URL in the default browser. Reuses a server that is already running (recorded in `.fanout/dashboard.json`) instead of starting a second one. |
 | `--no-token` | — | Drop the random per-start token that gates `/api/*`. For single-user machines. |
-| `--no-keybind` | — | Skip registering the tmux `F12` / `prefix + D` keybindings when the dashboard starts. |
+| `--no-keybind` | — | Skip registering tmux `F12` / `prefix + D` / `prefix + M` keybindings when the dashboard starts. |
 
 Run `fanout dashboard --help` for the full flag list.
 
@@ -380,7 +380,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_BRIEFING_CODE_REVIEW` | Environment layer for the Claude `/code-review` instruction (`briefingCodeReview`). |
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
-| `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard `F12` / `prefix + D` tmux keybindings (`dashboardKeybind`). |
+| `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
 | `FANOUT_WATCHER` | Environment layer for watcher opt-in (`watcher`). |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | Environment layer for the watcher trigger label (`watcherTriggerLabel`). |
 | `FANOUT_WATCHER_RUNNING_LABEL` | Environment layer for the watcher running label (`watcherRunningLabel`). |

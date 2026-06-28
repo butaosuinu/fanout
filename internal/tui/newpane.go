@@ -46,6 +46,27 @@ type NewPanePromptOptions struct {
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
 
+// AttachTarget describes the recorded pane/worktree a new agent should share.
+type AttachTarget struct {
+	TargetPath       string
+	SourceParent     string
+	SourceIssueNum   int
+	SourceTaskID     string
+	SourceBranchName string
+	SourceLabel      string
+}
+
+// AttachLaunchRequest describes one same-worktree agent launch requested from
+// the TUI.
+type AttachLaunchRequest struct {
+	Prompt string
+	Agents []string
+	Target AttachTarget
+}
+
+// AttachLaunchFunc creates an agent pane in an existing worktree.
+type AttachLaunchFunc func(AttachLaunchRequest) (notice string, err error)
+
 type newPaneField int
 
 const (
@@ -61,6 +82,7 @@ type newPaneForm struct {
 	focus      newPaneField
 	launching  bool
 	err        string
+	attach     *AttachTarget
 
 	// @-mention file completion state, active only while focus is on the
 	// prompt field. compQuery is the text typed after '@' (the '@' itself is
@@ -168,6 +190,32 @@ func signalExitCode(sig os.Signal) int {
 		return 128 + int(code)
 	}
 	return 1
+}
+
+func (m *model) openAttachAgentForm() tea.Cmd {
+	pane, ok := m.selectedPane()
+	if !ok {
+		m.notice = "no pane selected"
+		return nil
+	}
+	targetPath := pane.absoluteWorktreePath(m.opts.ProjectRoot)
+	if targetPath == "" {
+		m.notice = fmt.Sprintf("attach skipped for %s: no worktree path", pane.identityLabel())
+		return nil
+	}
+	target := AttachTarget{
+		TargetPath:       targetPath,
+		SourceParent:     pane.Parent,
+		SourceIssueNum:   pane.IssueNum,
+		SourceTaskID:     pane.TaskID,
+		SourceBranchName: pane.BranchName,
+		SourceLabel:      pane.identityLabel(),
+	}
+	m.mode = modeNewPane
+	m.notice = ""
+	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
+	m.newPane.attach = &target
+	return m.reloadRepoFilesCmd()
 }
 
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
@@ -319,12 +367,25 @@ func (m *model) submitNewPane() tea.Cmd {
 		m.newPane.err = "select at least one agent"
 		return nil
 	}
-	if m.opts.LaunchPane == nil {
-		m.newPane.err = "new pane launcher is not configured"
-		return nil
-	}
 	m.newPane.err = ""
 	m.newPane.launching = true
+	if m.newPane.attach != nil {
+		if m.opts.LaunchAttach == nil {
+			m.newPane.err = "attach launcher is not configured"
+			m.newPane.launching = false
+			return nil
+		}
+		req := AttachLaunchRequest{
+			Prompt: prompt,
+			Agents: agents,
+			Target: *m.newPane.attach,
+		}
+		launch := m.opts.LaunchAttach
+		return func() tea.Msg {
+			notice, err := launch(req)
+			return launchPaneMsg{notice: notice, count: len(agents), attached: true, err: err}
+		}
+	}
 	req := LaunchRequest{
 		Prompt: prompt,
 		Agents: agents,
@@ -333,6 +394,11 @@ func (m *model) submitNewPane() tea.Cmd {
 		m.promptResult = req
 		m.promptDone = true
 		return tea.Quit
+	}
+	if m.opts.LaunchPane == nil {
+		m.newPane.err = "new pane launcher is not configured"
+		m.newPane.launching = false
+		return nil
 	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
@@ -388,8 +454,14 @@ func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 }
 
 func (m model) newPaneView() string {
+	title := "New agent pane"
+	verb := "create"
+	if m.newPane.attach != nil {
+		title = "Attach agent to worktree"
+		verb = "attach"
+	}
 	lines := []string{
-		titleStyle.Render("New agent pane"),
+		titleStyle.Render(title),
 		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View(), true),
 	}
 	if m.newPane.focus == newPaneFieldPrompt && m.newPane.completing {
@@ -410,7 +482,7 @@ func (m model) newPaneView() string {
 	if enhancedKeyboardKeysEnabled() {
 		newlineHint = "shift+enter/ctrl+j newline"
 	}
-	lines = append(lines, dimStyle.Render("enter create  "+newlineHint+"  tab field  esc cancel"))
+	lines = append(lines, dimStyle.Render("enter "+verb+"  "+newlineHint+"  tab field  esc cancel"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 

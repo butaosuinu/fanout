@@ -33,6 +33,7 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 |---|---|
 | `?` | キーボードショートカットのヘルプを開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
 | `n` | tmux popup を開き、複数行の必須 prompt、`claude` / `codex` の起動数を指定して manual agent ペインを作成する。`codex` は Codex Plan Mode で起動し、popup の prompt を inline で受け取る。`claude` は通常起動する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`Enter` で選択したペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
+| `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
@@ -115,7 +116,7 @@ fanout 123 --status --post-dashboard
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、`running` / `done` の agent 実行状態バッジ、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つだけです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の `F12` / `prefix + D` tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
+チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、`running` / `done` の agent 実行状態バッジ、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -130,9 +131,13 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 ### F12 / prefix + D
 
-TUI 起動時、ライブ fan-out 後、ダッシュボード自体の起動時に fanout が tmux キーバインドを自動登録するので、どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。どちらのキーも detached な `fanout-dashboard` ウィンドウでサーバを起動するため、キー押下後も生き続け、2 回目以降は既存 URL を開き直すだけです。
+TUI 起動時、ライブ fan-out 後、ダッシュボード自体の起動時に fanout が tmux キーバインドを自動登録するので、どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。どちらのキーも detached な `fanout-dashboard` ウィンドウでサーバを起動するため、キー押下後も生き続け、2 回目以降は既存 URL を開き直すだけです。**`prefix + M`** では記録済みペインから同一 worktree 操作を開けます。
 
 自動登録は `--no-dashboard-keybind`（fan-out 側）、`--no-keybind`（dashboard 側）、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` でまとめて無効化できます（[Settings]({{< relref "/docs/settings" >}}) を参照してください）。
+
+### prefix + M
+
+同じ登録処理で **`prefix + M`** も登録します。記録済みの fanout ペインから押すと、そのペインの worktree 用 popup が開きます。同じ worktree に別 agent を追加するか、その worktree で shell を開けます。未記録ペインや worktree path がないペインは拒否します。
 
 ### 縮退動作
 

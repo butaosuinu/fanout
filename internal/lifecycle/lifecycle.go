@@ -106,7 +106,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	case hasManagedWorktree(panes):
 		lg.Ok("#%d: closed fanout worktree and removed state", issueNum)
 	default:
-		lg.Ok("#%d: closed shell terminal and removed state", issueNum)
+		lg.Ok("#%d: closed pane and removed state", issueNum)
 	}
 	return exitcode.OK
 }
@@ -155,7 +155,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	case hasManagedWorktree(panes):
 		lg.Ok("%s: closed fanout worktree and removed state", taskID)
 	default:
-		lg.Ok("%s: closed shell terminal and removed state", taskID)
+		lg.Ok("%s: closed pane and removed state", taskID)
 	}
 	return exitcode.OK
 }
@@ -455,9 +455,14 @@ var relayoutWindow = panelayout.Apply
 func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	ok := true
 	for _, pane := range panes {
-		if pane.IsShell() {
+		if pane.IsShell() || pane.IsAttachedAgent() {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			killShellPaneBestEffort(pane, lg, windows)
+			if pane.IsShell() {
+				killShellPaneBestEffort(pane, lg, windows)
+			} else {
+				captureWindow(pane.PaneID, windows)
+				killPaneBestEffort(pane, lg)
+			}
 			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
 		}
@@ -508,7 +513,7 @@ func (m CloseMode) removesWorktree() bool {
 
 func hasManagedWorktree(panes []state.Pane) bool {
 	for _, pane := range panes {
-		if !pane.IsShell() {
+		if !pane.IsShell() && !pane.IsAttachedAgent() {
 			return true
 		}
 	}
@@ -518,7 +523,7 @@ func hasManagedWorktree(panes []state.Pane) bool {
 func cleanupIssuePanes(panes []state.Pane) []state.Pane {
 	var out []state.Pane
 	for _, pane := range panes {
-		if pane.IsShell() || pane.IssueNum <= 0 {
+		if pane.IsShell() || pane.IsAttachedAgent() || pane.IssueNum <= 0 {
 			continue
 		}
 		out = append(out, pane)

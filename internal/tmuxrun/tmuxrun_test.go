@@ -502,6 +502,46 @@ func TestBindDashboardKeysRejectsEmptyArgs(t *testing.T) {
 	}
 }
 
+func TestBindWorktreeActionKeyRegistersPopup(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindWorktreeActionKey("M", "/abs/path/fanout"); err != nil {
+		t.Fatalf("BindWorktreeActionKey() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	want := []string{
+		"bind-key", "M", "display-popup", "-E",
+		"-d", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
+		"/abs/path/fanout __worktree-action --pane #{pane_id}",
+	}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("tmux args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBindWorktreeActionKeyRejectsEmptyArgs(t *testing.T) {
+	if err := BindWorktreeActionKey("", "/abs/fanout"); err == nil {
+		t.Fatal("BindWorktreeActionKey(empty key) should error")
+	}
+	if err := BindWorktreeActionKey("M", ""); err == nil {
+		t.Fatal("BindWorktreeActionKey(empty bin) should error")
+	}
+}
+
 func TestSetPaneProjectRoot(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)

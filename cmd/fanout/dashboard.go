@@ -30,6 +30,10 @@ const defaultDashboardKey = "D"
 // defaultDashboardDirectKey opens the dashboard without tmux's prefix key.
 const defaultDashboardDirectKey = "F12"
 
+// defaultWorktreeActionKey is the tmux prefix key fanout binds to open the
+// focused pane's same-worktree action popup.
+const defaultWorktreeActionKey = "M"
+
 type dashboardFlags struct {
 	port      int
 	open      bool
@@ -270,6 +274,15 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 		return
 	}
 	lg.Info("tmux keybind: press %s or prefix + %s to open the dashboard", defaultDashboardDirectKey, defaultDashboardKey)
+	bindWorktreeActionKey(lg, bin)
+}
+
+func bindWorktreeActionKey(lg *log.Logger, bin string) {
+	if err := tmuxrun.BindWorktreeActionKey(defaultWorktreeActionKey, bin); err != nil {
+		lg.Debug("worktree action keybind: %v (tmux too old or not in tmux?)", err)
+		return
+	}
+	lg.Info("tmux keybind: press prefix + %s for worktree actions", defaultWorktreeActionKey)
 }
 
 // dashboardProjectRoot resolves the repo root whose .fanout/state.json the
@@ -357,8 +370,8 @@ Options:
   --no-token      Disable the access token (loopback-only, single-user laptops).
                   By default a random token gates /api/* and is embedded in the
                   printed URL.
-  --no-keybind    Do not register the tmux 'F12' / 'prefix + D' keybindings
-                  this run.
+  --no-keybind    Do not register the tmux 'F12' / 'prefix + D' / 'prefix + M'
+                  keybindings this run.
   -h, --help      Show this message.
 
 The dashboard reuses a server that is already running (recorded in

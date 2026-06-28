@@ -36,7 +36,7 @@ fanout --check-update               # Read-only version comparison
 fanout update                       # Replace fanout via install.sh
 ```
 
-`fanout dashboard --web` is a standalone subcommand (no parent argument): a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it when the user wants to watch/monitor parallel panes, not as part of the fan-out flow. When the TUI starts and after a live fan-out, fanout also binds `F12` and `prefix + D` in tmux to open it; launched panes record their owner project root so the keys still open the right dashboard from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. `--no-dashboard-keybind` suppresses the bindings.
+`fanout dashboard --web` is a standalone subcommand (no parent argument): a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it when the user wants to watch/monitor parallel panes, not as part of the fan-out flow. When the TUI starts and after a live fan-out, fanout also binds `F12` and `prefix + D` in tmux to open it and `prefix + M` for same-worktree actions from the focused recorded pane; launched panes record their owner project root so these keys still resolve the right repo from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. `--no-dashboard-keybind` suppresses the bindings.
 
 `fanout plan <spec.json|plan-slug>` is the issue-less plan-task lane. If the
 user asks to fan out an implementation plan, use the `fanout-plan` skill
@@ -72,8 +72,12 @@ which fanout turns on tmux `extended-keys`; `Up` / `Down` picks an agent row,
 `Space` toggles it, `Left` / `Right` changes its count, and `Enter` creates the
 selected panes).
 Manual `codex` panes start in Codex Plan Mode and receive the popup prompt
-inline; manual `claude` panes start normally. The console exits on `q` without
-killing the session or child panes.
+inline; manual `claude` panes start normally. Press `a` on a recorded row to
+attach one or more new agent panes to that same worktree without creating a new
+git worktree; attached rows can be focused/peeked but do not count toward merge
+progress. Press `A` to open a shell in the selected row's worktree, or `t` for
+the project root. The console exits on `q` without killing the session or child
+panes.
 Press `?` in the monitor to open the keyboard shortcut help; `Esc`, `q`, or
 `?` closes it.
 On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded

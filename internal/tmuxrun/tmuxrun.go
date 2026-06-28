@@ -478,6 +478,24 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 	return nil
 }
 
+// BindWorktreeActionKey registers a tmux prefix-table keybinding that opens a
+// small popup for actions against the currently focused fanout pane's recorded
+// worktree.
+func BindWorktreeActionKey(key, fanoutBin string) error {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(fanoutBin) == "" {
+		return fmt.Errorf("tmux bind-key: key and fanout binary path are required")
+	}
+	launch := shellQuote(fanoutBin) + " __worktree-action --pane #{pane_id}"
+	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
+	args := []string{
+		"bind-key", key, "display-popup", "-E", "-d", startDir, launch,
+	}
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key %s: %w", key, err)
+	}
+	return nil
+}
+
 // SetPaneProjectRoot records the fanout state owner on a pane. The dashboard
 // keybinding prefers this over #{pane_current_path}, which can be stale inside
 // agent TUIs such as Codex that do not update tmux's foreground cwd signal.

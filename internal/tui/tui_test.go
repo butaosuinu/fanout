@@ -2697,6 +2697,66 @@ func TestShellTerminalKeyRequiresSelectedWorktree(t *testing.T) {
 	}
 }
 
+func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo", DefaultAgent: "codex"})
+	m.allPanes = []paneView{{
+		Parent:       "100",
+		IssueNum:     101,
+		Name:         "child",
+		BranchName:   "fanout/child-101",
+		WorktreePath: ".fanout/worktrees/child",
+		worktreeAbs:  "/repo/.fanout/worktrees/child",
+	}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("a"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("a returned nil command, want repo file reload")
+	}
+	if m.mode != modeNewPane || m.newPane.attach == nil {
+		t.Fatalf("mode/attach = %v/%#v, want attach form", m.mode, m.newPane.attach)
+	}
+	want := AttachTarget{
+		TargetPath:       "/repo/.fanout/worktrees/child",
+		SourceParent:     "100",
+		SourceIssueNum:   101,
+		SourceBranchName: "fanout/child-101",
+		SourceLabel:      "#101",
+	}
+	if !reflect.DeepEqual(*m.newPane.attach, want) {
+		t.Fatalf("attach target = %#v, want %#v", *m.newPane.attach, want)
+	}
+	if agents := m.selectedNewPaneAgents(); len(agents) != 1 || agents[0] != "codex" {
+		t.Fatalf("default agents = %#v, want [codex]", agents)
+	}
+}
+
+func TestAttachAgentKeyRequiresSelectedWorktree(t *testing.T) {
+	called := false
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		LaunchAttach: func(AttachLaunchRequest) (string, error) {
+			called = true
+			return "", nil
+		},
+	})
+	m.allPanes = []paneView{{Parent: "100", IssueNum: 101, Name: "queued"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("a"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("a returned command for row without worktree, want nil")
+	}
+	if called {
+		t.Fatal("LaunchAttach was called for row without worktree")
+	}
+	if !strings.Contains(m.notice, "no worktree path") {
+		t.Fatalf("notice = %q, want no worktree path", m.notice)
+	}
+}
+
 func TestNewPaneFormRequiresPrompt(t *testing.T) {
 	m := newModel(Options{LaunchPane: func(LaunchRequest) (string, error) {
 		t.Fatal("LaunchPane should not be called without a prompt")
@@ -2788,6 +2848,48 @@ func TestNewPaneFormSubmitsMultipleAgents(t *testing.T) {
 	want := LaunchRequest{Prompt: "Compare implementations", Agents: []string{"claude", "codex", "codex"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch request = %#v, want %#v", got, want)
+	}
+}
+
+func TestAttachAgentFormSubmitsAttachRequest(t *testing.T) {
+	target := AttachTarget{
+		TargetPath:       "/repo/.fanout/worktrees/child",
+		SourceParent:     "100",
+		SourceIssueNum:   101,
+		SourceBranchName: "fanout/child-101",
+		SourceLabel:      "#101",
+	}
+	var got AttachLaunchRequest
+	called := false
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchAttach: func(req AttachLaunchRequest) (string, error) {
+			called = true
+			got = req
+			return "", nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.attach = &target
+	m.newPane.prompt.SetValue("Inspect the HTTP API")
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	if !m.newPane.launching {
+		t.Fatal("launching = false, want true")
+	}
+	msg := cmd()
+	if launch, ok := msg.(launchPaneMsg); !ok || launch.err != nil || !launch.attached {
+		t.Fatalf("launch message = %#v, want nil-error attached launchPaneMsg", msg)
+	}
+	if !called {
+		t.Fatal("LaunchAttach was not called")
+	}
+	want := AttachLaunchRequest{Prompt: "Inspect the HTTP API", Agents: []string{"codex"}, Target: target}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("attach request = %#v, want %#v", got, want)
 	}
 }
 

@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/agent"
+	"github.com/butaosuinu/fanout/internal/briefing"
 	"github.com/butaosuinu/fanout/internal/cliflags"
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/naming"
 	"github.com/butaosuinu/fanout/internal/panelayout"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
 	"github.com/butaosuinu/fanout/internal/state"
@@ -30,6 +32,12 @@ func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig h
 	}
 }
 
+func newTUIAttachAgentFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.AttachLaunchFunc {
+	return func(req fanouttui.AttachLaunchRequest) (string, error) {
+		return launchAttachedAgentFromTUI(projectRoot, session, commandName, hookConfig, req)
+	}
+}
+
 func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
@@ -37,11 +45,11 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	agentNames := normalizeTUIAgents(req.Agents)
 	for _, agentName := range agentNames {
-		if err := agent.ValidateKnown(agentName); err != nil {
-			return "", err
+		if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
+			return "", validateErr
 		}
-		if err := agent.ValidateInstalled(agentName); err != nil {
-			return "", err
+		if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
+			return "", validateErr
 		}
 	}
 	var stdout, stderr bytes.Buffer
@@ -78,8 +86,241 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	return bufferedLaunchNotice(stderr), nil
 }
 
+func launchAttachedAgentFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
+	return launchAttachedAgent(projectRoot, tuiLaunchTarget(session), commandName, hookConfig, req)
+}
+
+func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
+	prompt := normalizeTUIPrompt(req.Prompt)
+	if prompt == "" {
+		return "", fmt.Errorf("prompt is required")
+	}
+	targetPath, err := existingDirectory(req.Target.TargetPath)
+	if err != nil {
+		return "", err
+	}
+	agentNames := normalizeTUIAgents(req.Agents)
+	for _, agentName := range agentNames {
+		if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
+			return "", validateErr
+		}
+		if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
+			return "", validateErr
+		}
+	}
+	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
+		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+	}
+
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
+	recorder, err := state.LockProject(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = recorder.Unlock()
+	}()
+
+	info := &fanoutruntime.Info{
+		Session:     "",
+		Target:      target,
+		ProjectRoot: projectRoot,
+	}
+	createdCount := 0
+	for _, agentName := range agentNames {
+		cfg := manualPaneConfigForTUIAgent(agentName)
+		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, req.Target)
+		if createAttachedPane(cfg, launchLogger, info, paneReq, targetPath, recorder, commandName) {
+			createdCount++
+			continue
+		}
+		if createdCount > 0 {
+			return partialAttachLaunchNotice(createdCount, stderr), nil
+		}
+		return "", bufferedLaunchError(stdout, stderr, "attach agent pane")
+	}
+	return bufferedLaunchNotice(stderr), nil
+}
+
+func existingDirectory(rawPath string) (string, error) {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return "", fmt.Errorf("target worktree path is required")
+	}
+	targetPath, err := filepath.Abs(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve target worktree path: %w", err)
+	}
+	st, statErr := os.Stat(targetPath)
+	if statErr != nil {
+		return "", fmt.Errorf("target worktree path: %w", statErr)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("target worktree path is not a directory: %s", targetPath)
+	}
+	return targetPath, nil
+}
+
+func newAttachedPaneRequest(cfg *cliflags.Config, projectRoot string, store state.Store, hookConfig hooks.Config, prompt, targetPath string, target fanouttui.AttachTarget) paneRequest {
+	parentRef := strings.TrimSpace(target.SourceParent)
+	if parentRef == "" {
+		parentRef = manualPaneParentRef
+	}
+	number := nextSyntheticPaneNumber(store, parentRef)
+	agentName := cfg.Agent
+	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
+	slug := attachedPaneSlug(targetPath, agentName, number)
+	body := prompt
+	shortPrompt := firstPromptLine(prompt)
+	if shortPrompt == "" {
+		shortPrompt = title
+	}
+	briefingPath := ""
+	briefingBody := ""
+	switch {
+	case cfg.CodexPlanModeEnabled():
+		prompt = briefing.RenderManualPlan(title, body)
+	case strings.Contains(prompt, "\n"):
+		briefingPath = briefing.Path(projectRoot, number)
+		briefingBody = body
+		prompt = manualPromptWithBriefing(shortPrompt, briefingPath)
+	default:
+		prompt = shortPrompt
+	}
+
+	req := paneRequest{
+		ParentRef:           parentRef,
+		Number:              number,
+		Title:               title,
+		Body:                body,
+		ShortTitle:          shortIssueTitle(title),
+		Slug:                slug,
+		DisplayNameOverride: title,
+		BranchName:          strings.TrimSpace(target.SourceBranchName),
+		Prompt:              prompt,
+		SourceParent:        parentRef,
+		SourceIssueNum:      target.SourceIssueNum,
+		SourceTaskID:        strings.TrimSpace(target.SourceTaskID),
+		Agent:               agentName,
+		Hooks:               hookConfig,
+		BriefingPath:        briefingPath,
+		BriefingBody:        briefingBody,
+		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
+	}
+	if req.CodexPlanMode {
+		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
+}
+
+func attachedPaneTitle(agentName, sourceLabel, targetPath string) string {
+	sourceLabel = strings.TrimSpace(sourceLabel)
+	if sourceLabel == "" {
+		sourceLabel = filepath.Base(targetPath)
+	}
+	if sourceLabel == "" || sourceLabel == "." || sourceLabel == string(filepath.Separator) {
+		sourceLabel = "worktree"
+	}
+	return agentName + " for " + sourceLabel
+}
+
+func attachedPaneSlug(targetPath, agentName string, number int) string {
+	base := naming.Slugify(filepath.Base(targetPath))
+	if base == "" {
+		base = "worktree"
+	}
+	suffixNum := number
+	if suffixNum < 0 {
+		suffixNum = -suffixNum
+	}
+	suffix := fmt.Sprintf("-%s-a%d", naming.Slugify(agentName), suffixNum)
+	maxBase := max(naming.MaxSlugLength-len(suffix), 1)
+	if len(base) > maxBase {
+		base = strings.Trim(base[:maxBase], "-")
+		if base == "" {
+			base = "worktree"
+		}
+	}
+	return base + suffix
+}
+
+func createAttachedPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, targetPath string, recorder paneStateRecorder, commandName string) bool {
+	agentCmd, err := buildAgentCommand(cfg, req, commandName)
+	if err != nil {
+		lg.Err("%s: %v", paneLogLabel(req), err)
+		return false
+	}
+	req.AgentCommand = agentCmd
+	if req.BriefingPath != "" {
+		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
+			lg.Err("%s: write briefing: %v", paneLogLabel(req), err)
+			return false
+		}
+	}
+
+	lg.Info("%s: attach %s to %s", paneLogLabel(req), req.Agent, targetPath)
+	lg.Dim("  slug -> %s", req.Slug)
+	lg.Dim("  worktree -> %s", targetPath)
+	if req.CodexPlanMode {
+		lg.Dim("  codex-plan-mode -> app-server Plan thread + interactive Codex TUI")
+	}
+	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, targetPath, ""), req.Hooks, lg)
+
+	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, targetPath, req.AgentCommand)
+	if err != nil {
+		lg.Err("%s: %v", paneLogLabel(req), err)
+		return false
+	}
+	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
+		lg.Warn("%s: %v", paneLogLabel(req), err)
+	}
+	if err := tmuxrun.SetPaneLabel(paneID, paneBorderLabel(req)); err != nil {
+		lg.Warn("%s: pane border label: %v", paneLogLabel(req), err)
+	}
+	if err := tmuxrun.EnablePaneBorderTitles(paneID); err != nil {
+		lg.Warn("%s: pane border titles: %v", paneLogLabel(req), err)
+	}
+	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
+		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
+	}
+	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
+		lg.Warn("%s: %v", paneLogLabel(req), err)
+	}
+	if req.CodexPlanMode {
+		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
+			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
+			cleanupFailedAttachedLaunch(info.Target, paneID)
+			return false
+		}
+		_ = os.Remove(req.CodexPlanStatusPath)
+	}
+	entry := statePane(req, paneID, targetPath, time.Now().UTC())
+	entry.Kind = state.PaneKindAttachedAgent
+	if err := recorder.RecordPane(entry); err != nil {
+		lg.Err("%s: write fanout state: %v", paneLogLabel(req), err)
+		cleanupFailedAttachedLaunch(info.Target, paneID)
+		return false
+	}
+	lg.Ok("%s: pane %s attached to %s", paneLogLabel(req), paneID, targetPath)
+	return true
+}
+
+func cleanupFailedAttachedLaunch(target, paneID string) {
+	_ = tmuxrun.KillPane(paneID)
+	_ = panelayout.Apply(target, panelayout.Close)
+}
+
 func partialManualLaunchNotice(createdCount int, stderr bytes.Buffer) string {
 	notice := fmt.Sprintf("created %d new agent pane(s); stopped after a later pane failed", createdCount)
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		return notice + ": " + compactLaunchError(s)
+	}
+	return notice
+}
+
+func partialAttachLaunchNotice(createdCount int, stderr bytes.Buffer) string {
+	notice := fmt.Sprintf("attached %d new agent pane(s); stopped after a later pane failed", createdCount)
 	if s := strings.TrimSpace(stderr.String()); s != "" {
 		return notice + ": " + compactLaunchError(s)
 	}
@@ -127,6 +368,10 @@ func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFun
 }
 
 func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaunchRequest) error {
+	return launchShellPane(projectRoot, tuiLaunchTarget(session), req)
+}
+
+func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchRequest) error {
 	rawPath := strings.TrimSpace(req.TargetPath)
 	if rawPath == "" {
 		return fmt.Errorf("terminal path is required")
@@ -161,7 +406,7 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 	if err != nil {
 		return err
 	}
-	paneID, err := tmuxrun.SplitPane(tuiLaunchTarget(session), targetPath)
+	paneID, err := tmuxrun.SplitPane(target, targetPath)
 	if err != nil {
 		return err
 	}
@@ -190,13 +435,13 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 		_ = tmuxrun.KillPane(paneID)
 		// Reconcile any spacer a concurrent resize relayout may have created for
 		// this now-killed pane, so no blank pane is left behind.
-		_ = panelayout.Apply(tuiLaunchTarget(session), panelayout.Close)
+		_ = panelayout.Apply(target, panelayout.Close)
 		return fmt.Errorf("write fanout state: %w", err)
 	}
 	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
 	// never leaves the window arranged around a pane that no longer exists or an
 	// orphaned spacer behind.
-	_ = panelayout.Apply(tuiLaunchTarget(session), panelayout.Create)
+	_ = panelayout.Apply(target, panelayout.Create)
 	return nil
 }
 

@@ -14,6 +14,7 @@ type helpEntry struct {
 func (m model) helpView() string {
 	monitor := []helpEntry{
 		{"n", "New agent pane"},
+		{"a", "Attach agent to worktree"},
 		{"A", "Worktree terminal"},
 		{"t", "Project root terminal"},
 		{"j/k", "Move selection"},

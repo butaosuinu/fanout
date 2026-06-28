@@ -237,6 +237,9 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				BranchName:         p.BranchName,
 				PaneID:             p.PaneID,
 				ShellKey:           p.ShellKey,
+				SourceParent:       p.SourceParent,
+				SourceIssueNum:     p.SourceIssueNum,
+				SourceTaskID:       p.SourceTaskID,
 				WorktreePath:       p.WorktreePath,
 				SourceProjectRoot:  p.SourceProjectRoot,
 				SourceProjectRoots: p.SourceProjectRoots,
@@ -325,7 +328,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			if countsInRollup(pv) || pv.Kind == state.PaneKindShell {
+			if countsInRollup(pv) || isPaneOnly(pv) {
 				accumulate(&snap.Rollup, pv)
 			}
 		}
@@ -588,7 +591,7 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 // に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
 // 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
 func countsInRollup(pv PaneView) bool {
-	if pv.Kind == state.PaneKindShell {
+	if isPaneOnly(pv) {
 		return false
 	}
 	if !pv.NotStarted {
@@ -605,7 +608,7 @@ func countsInRollup(pv PaneView) bool {
 }
 
 func accumulate(r *Rollup, pv PaneView) {
-	if pv.Kind == state.PaneKindShell {
+	if isPaneOnly(pv) {
 		if pv.Alive {
 			r.Live++
 		}
@@ -629,6 +632,10 @@ func accumulate(r *Rollup, pv PaneView) {
 		// synthetic 子は Total/Merged には入るがここには数えない。
 		r.NotStarted++
 	}
+}
+
+func isPaneOnly(pv PaneView) bool {
+	return pv.Kind == state.PaneKindShell || pv.Kind == state.PaneKindAttachedAgent
 }
 
 func finalize(r *Rollup) {

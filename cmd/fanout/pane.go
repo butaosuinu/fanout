@@ -54,6 +54,9 @@ type paneRequest struct {
 	DisplayNameOverride string
 	BranchName          string
 	Prompt              string
+	SourceParent        string
+	SourceIssueNum      int
+	SourceTaskID        string
 	Agent               string
 	AgentCommand        string
 	CodexPlanMode       bool
@@ -222,6 +225,9 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time, code
 		BranchName:     req.BranchName,
 		BaseBranch:     req.Worktree.BaseBranch,
 		PaneID:         paneID,
+		SourceParent:   req.SourceParent,
+		SourceIssueNum: req.SourceIssueNum,
+		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
 		CodexPlanMode:  req.CodexPlanMode,
 		CodexThreadID:  codexPlanStatus.ThreadID,

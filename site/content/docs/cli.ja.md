@@ -215,7 +215,7 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Claude 専用の Agent Teams ヒントを子 briefing に含めるか外すか。既定: on。 |
 | `--codex-plan-mode` / `--no-codex-plan-mode` | — | `--agent codex` のとき、positional の `codex "<prompt>"` ではなく Codex app-server の `plan` thread を作成し、prompt 付きの interactive Codex TUI で resume する。既定: off。詳細は[エージェント連携]({{< relref "/docs/agents" >}})。 |
 | `--pr-visualization` / `--no-pr-visualization` | — | auto-PR の子 briefing に構造化 PR 本文とゲート付き Mermaid の指示を含めるか外すか。既定: on。 |
-| `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `F12` / `prefix + D` キーバインドを登録する（またはスキップする）。どのペインからでも読み取り専用 Web ダッシュボードを開けるようにする。既定: on。 |
+| `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `F12` / `prefix + D` ダッシュボードキーと `prefix + M` 同一 worktree 操作キーを登録する（またはスキップする）。既定: on。 |
 
 ## 読み取りとライフサイクルのモード
 
@@ -314,7 +314,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 | `--port` | `N` | バインドする port。既定: `0`（OS 割り当ての ephemeral port）。確定した URL が表示される。 |
 | `--open` | — | 既定ブラウザで URL を開く。既に起動中のサーバ（`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しない。 |
 | `--no-token` | — | `/api/*` をゲートする起動毎のランダムトークンを外す。単一ユーザ端末向け。 |
-| `--no-keybind` | — | ダッシュボード起動時の tmux `F12` / `prefix + D` キーバインド登録をスキップする。 |
+| `--no-keybind` | — | ダッシュボード起動時の tmux `F12` / `prefix + D` / `prefix + M` キーバインド登録をスキップする。 |
 
 全フラグは `fanout dashboard --help` を参照してください。
 
@@ -379,7 +379,7 @@ fanout check-update
 | `FANOUT_BRIEFING_CODE_REVIEW` | Claude `/code-review` 指示（`briefingCodeReview`）の環境変数レイヤ。 |
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
-| `FANOUT_DASHBOARD_KEYBIND` | ダッシュボード `F12` / `prefix + D` tmux キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER` | watcher opt-in（`watcher`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | watcher trigger label（`watcherTriggerLabel`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_RUNNING_LABEL` | watcher running label（`watcherRunningLabel`）の環境変数レイヤ。 |

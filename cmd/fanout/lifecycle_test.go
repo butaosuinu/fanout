@@ -497,6 +497,61 @@ exit 99
 	}
 }
 
+func TestCmdCloseAttachedAgentSkipsGitWorktreeRemoval(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitLog := installLifecycleScript(t, "git", `#!/bin/sh
+printf '%s ' "$@" >> "$GIT_LOG"
+printf '\n' >> "$GIT_LOG"
+exit 99
+`)
+	t.Setenv("GIT_LOG", gitLog)
+	tmuxLog := installLifecycleScript(t, "tmux", `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:         "100",
+		IssueNum:       -1,
+		Kind:           state.PaneKindAttachedAgent,
+		Slug:           "child-codex-a1",
+		BranchName:     "fanout/child-101",
+		PaneID:         "%88",
+		SourceParent:   "100",
+		SourceIssueNum: 101,
+		Agent:          "codex",
+		DisplayName:    "codex for #101",
+		WorktreePath:   worktreePath,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "100", CloseNum: -1}, discardLogger())
+
+	if code != exitcode.OK {
+		t.Fatalf("cmdClose attached-agent code = %d, want %d", code, exitcode.OK)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want empty", loaded.Panes)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("shared worktree was removed or unreadable: %v", err)
+	}
+	if body, err := os.ReadFile(tmuxLog); err != nil || !strings.Contains(string(body), "kill-pane -t %88") {
+		t.Fatalf("tmux log = %q err=%v, want kill-pane for %%88", body, err)
+	}
+	if body, err := os.ReadFile(gitLog); err == nil && strings.TrimSpace(string(body)) != "" {
+		t.Fatalf("git was called for attached-agent close:\n%s", body)
+	}
+}
+
 func TestCmdCloseShellPaneSkipsKillWhenShellKeyDiffers(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	gitLog := installLifecycleScript(t, "git", `#!/bin/sh

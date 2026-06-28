@@ -109,9 +109,9 @@ Options:
                       Include or omit structured PR-body plus gated Mermaid
                       guidance in auto-PR child briefings. Default: on.
   --dashboard-keybind / --no-dashboard-keybind
-                      Register (or skip) tmux 'F12' / 'prefix + D' keybindings
-                      after a live fan-out so the read-only web dashboard can be
-                      opened from any pane. Default: on.
+                      Register (or skip) tmux 'F12' / 'prefix + D' dashboard
+                      keybindings and the 'prefix + M' same-worktree action
+                      keybinding after a live fan-out. Default: on.
   --team              Opt in to sibling-pane messaging for this run: add a
                       "Coordinating with your sibling panes" section (roster +
                       shared SQLite DB path) to every child briefing and seed
