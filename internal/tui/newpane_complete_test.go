@@ -129,34 +129,37 @@ func TestRankRepoFiles(t *testing.T) {
 		"docs/news.md",
 		"cmd/main.go",
 	}
-	cases := []struct {
+	tests := []struct {
+		name  string
 		query string
 		want  []string
 	}{
 		{
-			// all basename-prefix matches -> shorter path first
+			name:  "basename-prefix matches rank by path length",
 			query: "new",
 			want:  []string{"docs/news.md", "cmd/fanout/newpane.go", "internal/tui/newpane.go", "internal/tui/new_test.go"},
 		},
 		{
-			// basename substring (not prefix) -> shorter path first
+			name:  "basename substring matches rank by path length",
 			query: "pane",
 			want:  []string{"cmd/fanout/newpane.go", "internal/tui/newpane.go"},
 		},
 		{
-			// path substring only
+			name:  "path substring matches",
 			query: "tui",
 			want:  []string{"internal/tui/newpane.go", "internal/tui/new_test.go"},
 		},
 	}
-	for _, tc := range cases {
-		got, total := rankRepoFiles(files, tc.query, 8)
-		if !reflect.DeepEqual(got, tc.want) {
-			t.Fatalf("rankRepoFiles(%q) = %v, want %v", tc.query, got, tc.want)
-		}
-		if total != len(tc.want) {
-			t.Fatalf("rankRepoFiles(%q) total = %d, want %d", tc.query, total, len(tc.want))
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, total := rankRepoFiles(files, tt.query, 8)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("rankRepoFiles(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+			if total != len(tt.want) {
+				t.Fatalf("rankRepoFiles(%q) total = %d, want %d", tt.query, total, len(tt.want))
+			}
+		})
 	}
 }
 

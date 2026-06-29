@@ -700,22 +700,24 @@ func TestWaitForCodexPlanTUIReadyTimesOutWithoutStatus(t *testing.T) {
 }
 
 func TestParentDisplay(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
+		name   string
 		parent string
 		want   string
 	}{
-		{"123", "#123"},
-		{"81", "#81"},
-		{"plan:launch-plan", "plan:launch-plan"},
-		{manualPaneParentRef, "@manual"},
-		{watchPaneParentRef, "@watch"},
-		{"https://github.com/orgs/octo/projects/3", "orgs/octo/projects/3"},
-		{"", ""},
+		{name: "numeric issue gets a hash prefix", parent: "123", want: "#123"},
+		{name: "plan parent passes through", parent: "plan:launch-plan", want: "plan:launch-plan"},
+		{name: "manual parent shows @manual", parent: manualPaneParentRef, want: "@manual"},
+		{name: "watch parent shows @watch", parent: watchPaneParentRef, want: "@watch"},
+		{name: "project url is stripped to its path", parent: "https://github.com/orgs/octo/projects/3", want: "orgs/octo/projects/3"},
+		{name: "empty parent stays empty", parent: "", want: ""},
 	}
-	for _, tc := range cases {
-		if got := parentDisplay(tc.parent); got != tc.want {
-			t.Errorf("parentDisplay(%q) = %q, want %q", tc.parent, got, tc.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parentDisplay(tt.parent); got != tt.want {
+				t.Errorf("parentDisplay(%q) = %q, want %q", tt.parent, got, tt.want)
+			}
+		})
 	}
 }
 
