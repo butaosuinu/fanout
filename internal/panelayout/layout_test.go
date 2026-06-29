@@ -21,14 +21,20 @@ func sidebarCfg() Config {
 // layout-probe runs during development); they pin both Checksum and Render to
 // tmux's actual algorithm and geometry, not just to our understanding of it.
 func TestChecksumMatchesRealTmux(t *testing.T) {
-	cases := []struct{ body, want string }{
-		{"200x50,0,0{100x50,0,0,1079,99x50,101,0,1080}", "2cc9"},
-		{"200x50,0,0{40x50,0,0,1093,159x50,41,0{79x50,41,0,1094,79x50,121,0,1095}}", "fab2"},
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "two sibling panes share a row", body: "200x50,0,0{100x50,0,0,1079,99x50,101,0,1080}", want: "2cc9"},
+		{name: "nested split inside the second cell", body: "200x50,0,0{40x50,0,0,1093,159x50,41,0{79x50,41,0,1094,79x50,121,0,1095}}", want: "fab2"},
 	}
-	for _, tc := range cases {
-		if got := Checksum(tc.body); got != tc.want {
-			t.Errorf("Checksum(%q) = %q, want %q", tc.body, got, tc.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Checksum(tt.body); got != tt.want {
+				t.Errorf("Checksum(%q) = %q, want %q", tt.body, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -128,17 +134,22 @@ func TestRenderSpacerRow(t *testing.T) {
 
 func TestRenderErrors(t *testing.T) {
 	cfg := gridCfg()
-	cases := []RenderInput{
-		{Win: Window{200, 50}, ContentPaneIDs: nil, Cols: 1, Cfg: cfg},
-		{Win: Window{200, 50}, ContentPaneIDs: []string{"1"}, Cols: 0, Cfg: cfg},
-		{Win: Window{0, 50}, ContentPaneIDs: []string{"1"}, Cols: 1, Cfg: cfg},
+	tests := []struct {
+		name string
+		in   RenderInput
+	}{
+		{name: "nil pane ids", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: nil, Cols: 1, Cfg: cfg}},
+		{name: "zero cols", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: []string{"1"}, Cols: 0, Cfg: cfg}},
+		{name: "zero-width window", in: RenderInput{Win: Window{0, 50}, ContentPaneIDs: []string{"1"}, Cols: 1, Cfg: cfg}},
 		// 60 grid panes in 1 column can't fit positive height in 50 rows.
-		{Win: Window{200, 50}, ContentPaneIDs: ids(60), Cols: 1, Cfg: cfg},
+		{name: "60 panes cannot fit one column", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: ids(60), Cols: 1, Cfg: cfg}},
 	}
-	for i, in := range cases {
-		if _, err := Render(in); err == nil {
-			t.Errorf("case %d: expected error, got nil", i)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Render(tt.in); err == nil {
+				t.Errorf("Render(%+v) = nil error, want error", tt.in)
+			}
+		})
 	}
 }
 
@@ -155,12 +166,13 @@ func TestDecidePlan(t *testing.T) {
 		spacer  bool
 		spacerW int
 	}{
-		{"1 pane", Window{200, 50}, 1, gridCfg(), 1, 1, []int{1}, true, false, 0},
-		{"2 panes one row", Window{200, 50}, 2, gridCfg(), 2, 1, []int{2}, true, false, 0},
-		{"3 panes one row", Window{200, 50}, 3, gridCfg(), 3, 1, []int{3}, true, false, 0},
-		{"4 panes 2x2", Window{200, 50}, 4, gridCfg(), 2, 2, []int{2, 2}, true, false, 0},
-		{"5 panes spacer", Window{250, 50}, 5, gridCfg(), 3, 2, []int{3, 2}, true, true, 48},
-		{"sidebar 2 panes", Window{200, 50}, 2, sidebarCfg(), 2, 1, []int{2}, true, false, 0},
+		{name: "1 pane", win: Window{200, 50}, n: 1, cfg: gridCfg(), cols: 1, rows: 1, dist: []int{1}, comfort: true},
+		{name: "2 panes one row", win: Window{200, 50}, n: 2, cfg: gridCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
+		{name: "3 panes one row", win: Window{200, 50}, n: 3, cfg: gridCfg(), cols: 3, rows: 1, dist: []int{3}, comfort: true},
+		{name: "4 panes 2x2", win: Window{200, 50}, n: 4, cfg: gridCfg(), cols: 2, rows: 2, dist: []int{2, 2}, comfort: true},
+		// Short last row would stretch past the comfort width, so a 48-wide spacer is appended.
+		{name: "5 panes spacer", win: Window{250, 50}, n: 5, cfg: gridCfg(), cols: 3, rows: 2, dist: []int{3, 2}, comfort: true, spacer: true, spacerW: 48},
+		{name: "sidebar 2 panes", win: Window{200, 50}, n: 2, cfg: sidebarCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,13 +206,21 @@ func TestDecidePlanTieBreakPrefersFewerColumns(t *testing.T) {
 }
 
 func TestDecidePlanZero(t *testing.T) {
-	for _, in := range []struct {
-		w Window
-		n int
-	}{{Window{200, 50}, 0}, {Window{0, 50}, 3}, {Window{200, 0}, 3}} {
-		if got := DecidePlan(in.w, in.n, gridCfg()); got.Cols != 0 || got.Rows != 0 {
-			t.Errorf("DecidePlan(%v,%d) = %+v, want zero", in.w, in.n, got)
-		}
+	tests := []struct {
+		name string
+		w    Window
+		n    int
+	}{
+		{name: "zero panes", w: Window{200, 50}, n: 0},
+		{name: "zero-width window", w: Window{0, 50}, n: 3},
+		{name: "zero-height window", w: Window{200, 0}, n: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DecidePlan(tt.w, tt.n, gridCfg()); got.Cols != 0 || got.Rows != 0 {
+				t.Errorf("DecidePlan(%v, %d) = %+v, want zero cols/rows", tt.w, tt.n, got)
+			}
+		})
 	}
 }
 

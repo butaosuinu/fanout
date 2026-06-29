@@ -7,20 +7,23 @@ import (
 )
 
 func TestIsDashboardRequest(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
+		name string
 		args []string
 		want bool
 	}{
-		{[]string{"dashboard"}, true},
-		{[]string{"dashboard", "--web"}, true},
-		{[]string{"--status", "1"}, false},
-		{[]string{"100"}, false},
-		{nil, false},
+		{name: "bare dashboard verb", args: []string{"dashboard"}, want: true},
+		{name: "dashboard with web flag", args: []string{"dashboard", "--web"}, want: true},
+		{name: "status flag is not dashboard", args: []string{"--status", "1"}, want: false},
+		{name: "issue number is not dashboard", args: []string{"100"}, want: false},
+		{name: "no args is not dashboard", args: nil, want: false},
 	}
-	for _, c := range cases {
-		if got := isDashboardRequest(c.args); got != c.want {
-			t.Errorf("isDashboardRequest(%v) = %v, want %v", c.args, got, c.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDashboardRequest(tt.args); got != tt.want {
+				t.Errorf("isDashboardRequest(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
 	}
 }
 

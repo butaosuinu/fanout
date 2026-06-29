@@ -539,22 +539,30 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 	}
 }
 
+// TestNormalizeAgentState pins normalizeAgentState to the lowercase literals the
+// launch wrapper sets ("running"/"done"); every other input collapses to "".
 func TestNormalizeAgentState(t *testing.T) {
-	cases := map[string]string{
-		"":           "",
-		"running":    "running",
-		"done":       "done",
-		" running ":  "running", // 余分な空白は剥がす
-		"claude":     "",        // ラッパー外の値は不明扱い
-		"bash":       "",
-		"x\ty":       "", // pane 内プロセスが偽装した文字列も不明扱い
-		"RUNNING":    "", // 値はラッパーが設定する小文字リテラルのみ
-		"done extra": "",
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty stays empty", in: "", want: ""},
+		{name: "running passes through", in: "running", want: "running"},
+		{name: "done passes through", in: "done", want: "done"},
+		{name: "surrounding whitespace is trimmed", in: " running ", want: "running"},
+		{name: "value from outside the wrapper is unknown", in: "claude", want: ""},
+		{name: "process name is unknown", in: "bash", want: ""},
+		{name: "string spoofed by an in-pane process is unknown", in: "x\ty", want: ""},
+		{name: "only the lowercase literal is accepted", in: "RUNNING", want: ""},
+		{name: "trailing garbage is rejected", in: "done extra", want: ""},
 	}
-	for raw, want := range cases {
-		if got := normalizeAgentState(raw); got != want {
-			t.Errorf("normalizeAgentState(%q) = %q, want %q", raw, got, want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeAgentState(tt.in); got != tt.want {
+				t.Errorf("normalizeAgentState(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1074,23 +1082,26 @@ func TestBuildSyntheticEmittedOncePerAliasedParent(t *testing.T) {
 }
 
 func TestSyntheticTmuxStateMatchesTUIStrings(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
+		name       string
 		issueState string
 		blocked    bool
 		want       string
 	}{
-		{"CLOSED", false, "closed"},
-		{"closed", true, "closed"}, // closed は blocked より優先(TUI と同順)
-		{"OPEN", true, "deferred"},
-		{"OPEN", false, "queued"},
-		{"open", false, "queued"},
-		{IssueStateUnknown, false, "unknown"},
-		{"", false, "unknown"},
+		{name: "closed issue is closed", issueState: "CLOSED", blocked: false, want: "closed"},
+		{name: "closed wins over blocked", issueState: "closed", blocked: true, want: "closed"}, // closed は blocked より優先(TUI と同順)
+		{name: "open and blocked is deferred", issueState: "OPEN", blocked: true, want: "deferred"},
+		{name: "open and unblocked is queued", issueState: "OPEN", blocked: false, want: "queued"},
+		{name: "lowercase open is queued", issueState: "open", blocked: false, want: "queued"},
+		{name: "unknown issue state is unknown", issueState: IssueStateUnknown, blocked: false, want: "unknown"},
+		{name: "empty issue state is unknown", issueState: "", blocked: false, want: "unknown"},
 	}
-	for _, tc := range cases {
-		if got := SyntheticTmuxState(tc.issueState, tc.blocked); got != tc.want {
-			t.Errorf("SyntheticTmuxState(%q, %v) = %q, want %q", tc.issueState, tc.blocked, got, tc.want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SyntheticTmuxState(tt.issueState, tt.blocked); got != tt.want {
+				t.Errorf("SyntheticTmuxState(%q, %v) = %q, want %q", tt.issueState, tt.blocked, got, tt.want)
+			}
+		})
 	}
 }
 

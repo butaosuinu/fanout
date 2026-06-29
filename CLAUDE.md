@@ -254,6 +254,32 @@ Build the binary with `make build-go` and validate with `make test`.
   `.claude/settings.json`. Run `/post-work-review` before creating a PR, or use
   `FANOUT_SKIP_PR_REVIEW=1` only when the documented escape hatch is intended.
 
+## Test Conventions
+
+Table-driven tests must be readable case-by-case from `go test -v` alone, not
+just from the function name. `internal/team/detect_test.go` is the model.
+
+- Give every case a `name` field and wrap the loop in
+  `t.Run(tt.name, func(t *testing.T) { ... })`. This makes each case a named
+  subtest: `go test -run TestX/case_name` runs one case and failures report
+  which case broke.
+- `name` describes the behavior or the edge being pinned, not the input echoed
+  back — `"trims surrounding whitespace"`, not `"  running  "`.
+- Use field-named struct literals (`{name: ..., in: ..., want: ...}`) once a
+  case struct has more than three or four fields. Positional literals past that
+  are unreadable and break on every field addition.
+- Do not key a case table with `map[...]`: iteration order is undefined and the
+  keys cannot become subtest names. Use a slice with a `name` field.
+- Keep failure messages in the `funcName(input) = got, want` form already used
+  across the suite.
+- Comment a case line only when its purpose is not obvious from the values
+  (boundary, precedence, why this specific input). Do not annotate self-evident
+  cases — the `name` already carries them. Preserve provenance comments on
+  opaque golden values (e.g. `// captured from real tmux 3.6a`) and the one-line
+  comment above a test that states what it guarantees.
+- Leave existing loop-variable naming as-is (`cases`/`tc` and `tests`/`tt` both
+  occur); do not churn files just to unify it. New tables prefer `tests`/`tt`.
+
 ## Documentation Writing
 
 When writing or updating user-facing docs (`README*.md`, `site/content/docs/**`,
