@@ -46,6 +46,28 @@ func TestAttachTargetFromStatePaneCarriesSourceIdentity(t *testing.T) {
 	}
 }
 
+func TestAttachTargetFromAttachedAgentPreservesOriginalSourceIdentity(t *testing.T) {
+	pane := state.Pane{
+		Parent:         "@manual",
+		IssueNum:       -1,
+		Kind:           state.PaneKindAttachedAgent,
+		DisplayName:    "codex for #101",
+		BranchName:     "fanout/child-101",
+		WorktreePath:   "/repo/.fanout/worktrees/child",
+		SourceParent:   "100",
+		SourceIssueNum: 101,
+	}
+
+	got := attachTargetFromStatePane(pane)
+
+	if got.SourceParent != "100" || got.SourceIssueNum != 101 || got.SourceTaskID != "" {
+		t.Fatalf("source identity = parent %q issue %d task %q, want 100/101/no task", got.SourceParent, got.SourceIssueNum, got.SourceTaskID)
+	}
+	if got.SourceLabel != "#101" {
+		t.Fatalf("SourceLabel = %q, want #101", got.SourceLabel)
+	}
+}
+
 func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T) {
 	repo := t.TempDir()
 	worktree := filepath.Join(repo, ".fanout", "worktrees", "child")
@@ -134,6 +156,26 @@ func TestFindRecordedPaneByIDAllowsProjectRootHintWhenCurrentPathIsStale(t *test
 
 	if _, err := findRecordedPaneByID(repo, "%42"); err != nil {
 		t.Fatalf("findRecordedPaneByID() error = %v, want project-root hint fallback", err)
+	}
+}
+
+func TestFindRecordedPaneByIDRejectsProjectRootHintForDuplicatePaneID(t *testing.T) {
+	repo := t.TempDir()
+	first := filepath.Join(repo, ".fanout", "worktrees", "first")
+	second := filepath.Join(repo, ".fanout", "worktrees", "second")
+	writeLifecycleState(t, repo,
+		state.Pane{Parent: "100", IssueNum: 101, PaneID: "%42", WorktreePath: first},
+		state.Pane{Parent: "100", IssueNum: 102, PaneID: "%42", WorktreePath: second},
+	)
+	orig := worktreeActionLivePanes
+	t.Cleanup(func() { worktreeActionLivePanes = orig })
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: repo, ProjectRoot: repo}}, nil
+	}
+
+	_, err := findRecordedPaneByID(repo, "%42")
+	if err == nil || !strings.Contains(err.Error(), "worktree identity is ambiguous") {
+		t.Fatalf("findRecordedPaneByID() error = %v, want ambiguous worktree identity", err)
 	}
 }
 

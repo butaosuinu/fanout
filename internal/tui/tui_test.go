@@ -2798,6 +2798,43 @@ func TestAttachAgentKeyCarriesSourceProjectRoot(t *testing.T) {
 	}
 }
 
+func TestAttachAgentKeyPreservesAttachedAgentSourceIdentity(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo", DefaultAgent: "codex"})
+	m.allPanes = []paneView{{
+		Parent:         "@manual",
+		IssueNum:       -1,
+		Kind:           state.PaneKindAttachedAgent,
+		Name:           "codex for #101",
+		BranchName:     "fanout/child-101",
+		WorktreePath:   ".fanout/worktrees/child",
+		worktreeAbs:    "/repo/.fanout/worktrees/child",
+		SourceParent:   "100",
+		SourceIssueNum: 101,
+	}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("a"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("a returned nil command, want repo file reload")
+	}
+	if m.mode != modeNewPane || m.newPane.attach == nil {
+		t.Fatalf("mode/attach = %v/%#v, want attach form", m.mode, m.newPane.attach)
+	}
+	if got := m.newPane.attach.SourceParent; got != "100" {
+		t.Fatalf("SourceParent = %q, want 100", got)
+	}
+	if got := m.newPane.attach.SourceIssueNum; got != 101 {
+		t.Fatalf("SourceIssueNum = %d, want 101", got)
+	}
+	if got := m.newPane.attach.SourceTaskID; got != "" {
+		t.Fatalf("SourceTaskID = %q, want empty", got)
+	}
+	if got := m.newPane.attach.SourceLabel; got != "#101" {
+		t.Fatalf("SourceLabel = %q, want #101", got)
+	}
+}
+
 func TestAttachAgentKeyRequiresSelectedWorktree(t *testing.T) {
 	called := false
 	m := newModel(Options{

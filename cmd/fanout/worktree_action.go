@@ -146,28 +146,30 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	for _, pane := range live {
 		liveByID[pane.ID] = pane
 	}
-	found := false
-	mismatch := ""
+	var candidates []state.Pane
 	for _, pane := range panes {
 		if pane.PaneID != paneID {
 			continue
 		}
-		found = true
-		cur, ok := liveByID[paneID]
-		if !ok {
-			mismatch = "pane is not live"
-			continue
-		}
-		matches, reason := recordedPaneMatchesLive(pane, cur)
+		candidates = append(candidates, pane)
+	}
+	if len(candidates) == 0 {
+		return state.Pane{}, fmt.Errorf("pane %s is not recorded in fanout state", paneID)
+	}
+	cur, ok := liveByID[paneID]
+	if !ok {
+		return state.Pane{}, fmt.Errorf("pane %s no longer matches its recorded fanout worktree: pane is not live", paneID)
+	}
+	projectRootFallback := len(candidates) == 1
+	mismatch := ""
+	for _, pane := range candidates {
+		matches, reason := recordedPaneMatchesLive(pane, cur, projectRootFallback)
 		if matches {
 			return pane, nil
 		}
 		mismatch = reason
 	}
-	if found {
-		return state.Pane{}, fmt.Errorf("pane %s no longer matches its recorded fanout worktree: %s", paneID, mismatch)
-	}
-	return state.Pane{}, fmt.Errorf("pane %s is not recorded in fanout state", paneID)
+	return state.Pane{}, fmt.Errorf("pane %s no longer matches its recorded fanout worktree: %s", paneID, mismatch)
 }
 
 func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
@@ -198,7 +200,7 @@ func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
 	return panes, nil
 }
 
-func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) (bool, string) {
+func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane, projectRootFallback bool) (bool, string) {
 	if pane.IsShell() {
 		shellKey := strings.TrimSpace(pane.ShellKey)
 		if shellKey == "" {
@@ -220,8 +222,11 @@ func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) (bool, stri
 		return true, ""
 	}
 	if !pathWithin(worktreePath, live.CurrentPath) {
-		if projectRootMatches(pane, live.ProjectRoot) {
+		if projectRootFallback && projectRootMatches(pane, live.ProjectRoot) {
 			return true, ""
+		}
+		if !projectRootFallback && projectRootMatches(pane, live.ProjectRoot) {
+			return false, "worktree identity is ambiguous without a live worktree path"
 		}
 		return false, fmt.Sprintf("live cwd %q is not under recorded worktree %q", live.CurrentPath, pane.WorktreePath)
 	}
@@ -319,15 +324,39 @@ func runWorktreeAttachAction(projectRoot string, flags worktreeActionFlags, read
 }
 
 func attachTargetFromStatePane(pane state.Pane) fanouttui.AttachTarget {
+	sourceParent, sourceIssueNum, sourceTaskID, sourceLabel := attachSourceIdentityFromStatePane(pane)
 	return fanouttui.AttachTarget{
 		TargetPath:        pane.WorktreePath,
 		SourceProjectRoot: pane.SourceProjectRoot,
-		SourceParent:      pane.Parent,
-		SourceIssueNum:    pane.IssueNum,
-		SourceTaskID:      pane.TaskID,
+		SourceParent:      sourceParent,
+		SourceIssueNum:    sourceIssueNum,
+		SourceTaskID:      sourceTaskID,
 		SourceBranchName:  pane.BranchName,
-		SourceLabel:       sourceLabelForStatePane(pane),
+		SourceLabel:       sourceLabel,
 	}
+}
+
+func attachSourceIdentityFromStatePane(pane state.Pane) (parent string, issueNum int, taskID, label string) {
+	if !pane.IsAttachedAgent() {
+		return pane.Parent, pane.IssueNum, pane.TaskID, sourceLabelForStatePane(pane)
+	}
+	parent = strings.TrimSpace(pane.SourceParent)
+	if parent == "" {
+		parent = pane.Parent
+	}
+	if pane.SourceIssueNum > 0 {
+		issueNum = pane.SourceIssueNum
+	}
+	taskID = strings.TrimSpace(pane.SourceTaskID)
+	switch {
+	case taskID != "":
+		label = taskID
+	case issueNum > 0:
+		label = fmt.Sprintf("#%d", issueNum)
+	default:
+		label = sourceLabelForStatePane(pane)
+	}
+	return parent, issueNum, taskID, label
 }
 
 func sourceLabelForStatePane(pane state.Pane) string {

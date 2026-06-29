@@ -84,7 +84,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 		return exitcode.Invocation
 	}
 	if mode.removesWorktree() {
-		panes = panesSharingManagedWorktrees(allParentPanes, panes)
+		panes = panesSharingManagedWorktrees(locked.Panes, panes)
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -138,7 +138,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 		return exitcode.Invocation
 	}
 	if mode.removesWorktree() {
-		panes = panesSharingManagedWorktrees(allParentPanes, panes)
+		panes = panesSharingManagedWorktrees(locked.Panes, panes)
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -277,7 +277,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 		if !eligible[issueNum] {
 			continue
 		}
-		issuePanes := panesSharingManagedWorktrees(allParentPanes, panesForIssue(panes, issueNum))
+		issuePanes := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
 		if !cleanupPaneRecords(opts, issuePanes, lg, windows) {
 			failed++
 			continue
@@ -350,7 +350,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
 	for _, taskID := range sortedTaskIDs(eligible) {
-		taskPanes := panesSharingManagedWorktrees(allParentPanes, panesForTask(panes, taskID))
+		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
 		if !cleanupPaneRecords(opts, taskPanes, lg, windows) {
 			failed++
 			continue

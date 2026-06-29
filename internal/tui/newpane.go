@@ -204,20 +204,44 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 		m.notice = fmt.Sprintf("attach skipped for %s: no worktree path", pane.identityLabel())
 		return nil
 	}
+	sourceParent, sourceIssueNum, sourceTaskID, sourceLabel := attachSourceIdentity(pane)
 	target := AttachTarget{
 		TargetPath:        targetPath,
 		SourceProjectRoot: pane.sourceProjectRoot,
-		SourceParent:      pane.Parent,
-		SourceIssueNum:    pane.IssueNum,
-		SourceTaskID:      pane.TaskID,
+		SourceParent:      sourceParent,
+		SourceIssueNum:    sourceIssueNum,
+		SourceTaskID:      sourceTaskID,
 		SourceBranchName:  pane.BranchName,
-		SourceLabel:       pane.identityLabel(),
+		SourceLabel:       sourceLabel,
 	}
 	m.mode = modeNewPane
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
 	m.newPane.attach = &target
 	return m.reloadRepoFilesCmd()
+}
+
+func attachSourceIdentity(pane paneView) (parent string, issueNum int, taskID, label string) {
+	if !pane.isAttachedAgent() {
+		return pane.Parent, pane.IssueNum, pane.TaskID, pane.identityLabel()
+	}
+	parent = strings.TrimSpace(pane.SourceParent)
+	if parent == "" {
+		parent = pane.Parent
+	}
+	if pane.SourceIssueNum > 0 {
+		issueNum = pane.SourceIssueNum
+	}
+	taskID = strings.TrimSpace(pane.SourceTaskID)
+	switch {
+	case taskID != "":
+		label = taskID
+	case issueNum > 0:
+		label = fmt.Sprintf("#%d", issueNum)
+	default:
+		label = pane.identityLabel()
+	}
+	return parent, issueNum, taskID, label
 }
 
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
