@@ -87,7 +87,8 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 }
 
 func launchAttachedAgentFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
-	return launchAttachedAgent(projectRoot, tuiLaunchTarget(session), commandName, hookConfig, req)
+	ownerRoot := launchOwnerProjectRoot(projectRoot, req.Target.SourceProjectRoot)
+	return launchAttachedAgent(ownerRoot, tuiLaunchTarget(session), commandName, hookConfig, req)
 }
 
 func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
@@ -390,7 +391,11 @@ func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFun
 }
 
 func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaunchRequest) error {
-	return launchShellPane(projectRoot, tuiLaunchTarget(session), req)
+	ownerRoot := projectRoot
+	if !req.Root {
+		ownerRoot = launchOwnerProjectRoot(projectRoot, req.SourceProjectRoot)
+	}
+	return launchShellPane(ownerRoot, tuiLaunchTarget(session), req)
 }
 
 func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchRequest) error {
@@ -465,6 +470,13 @@ func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchReques
 	// orphaned spacer behind.
 	_ = panelayout.Apply(target, panelayout.Create)
 	return nil
+}
+
+func launchOwnerProjectRoot(defaultRoot, sourceProjectRoot string) string {
+	if root := strings.TrimSpace(sourceProjectRoot); root != "" {
+		return root
+	}
+	return defaultRoot
 }
 
 func newShellPaneKey() (string, error) {

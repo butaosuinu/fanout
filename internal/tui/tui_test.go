@@ -2673,6 +2673,42 @@ func TestShellTerminalKeysLaunchRootAndSelectedWorktree(t *testing.T) {
 	}
 }
 
+func TestShellTerminalKeyCarriesSourceProjectRoot(t *testing.T) {
+	var got []ShellLaunchRequest
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		LaunchShell: func(req ShellLaunchRequest) error {
+			got = append(got, req)
+			return nil
+		},
+	})
+	m.allPanes = []paneView{{
+		Parent:            "100",
+		IssueNum:          101,
+		Name:              "child",
+		WorktreePath:      ".fanout/worktrees/child",
+		worktreeAbs:       "/sibling/.fanout/worktrees/child",
+		sourceProjectRoot: "/sibling",
+	}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("A"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("A returned nil command, want shell launch")
+	}
+	msg, ok := cmd().(launchShellMsg)
+	if !ok {
+		t.Fatalf("A command returned %T, want launchShellMsg", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("A launch error = %v", msg.err)
+	}
+	if len(got) != 1 || got[0].TargetPath != "/sibling/.fanout/worktrees/child" || got[0].SourceProjectRoot != "/sibling" {
+		t.Fatalf("worktree shell request = %#v, want sibling target and source root", got)
+	}
+}
+
 func TestShellTerminalKeyRequiresSelectedWorktree(t *testing.T) {
 	called := false
 	m := newModel(Options{
@@ -2730,6 +2766,35 @@ func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
 	}
 	if agents := m.selectedNewPaneAgents(); len(agents) != 1 || agents[0] != "codex" {
 		t.Fatalf("default agents = %#v, want [codex]", agents)
+	}
+}
+
+func TestAttachAgentKeyCarriesSourceProjectRoot(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo", DefaultAgent: "codex"})
+	m.allPanes = []paneView{{
+		Parent:            "100",
+		IssueNum:          101,
+		Name:              "child",
+		BranchName:        "fanout/child-101",
+		WorktreePath:      ".fanout/worktrees/child",
+		worktreeAbs:       "/sibling/.fanout/worktrees/child",
+		sourceProjectRoot: "/sibling",
+	}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("a"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("a returned nil command, want repo file reload")
+	}
+	if m.mode != modeNewPane || m.newPane.attach == nil {
+		t.Fatalf("mode/attach = %v/%#v, want attach form", m.mode, m.newPane.attach)
+	}
+	if got := m.newPane.attach.SourceProjectRoot; got != "/sibling" {
+		t.Fatalf("SourceProjectRoot = %q, want /sibling", got)
+	}
+	if got := m.newPane.attach.TargetPath; got != "/sibling/.fanout/worktrees/child" {
+		t.Fatalf("TargetPath = %q, want sibling worktree", got)
 	}
 }
 

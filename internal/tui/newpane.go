@@ -48,12 +48,13 @@ const newPanePopupOpeningNotice = "opening new pane popup..."
 
 // AttachTarget describes the recorded pane/worktree a new agent should share.
 type AttachTarget struct {
-	TargetPath       string
-	SourceParent     string
-	SourceIssueNum   int
-	SourceTaskID     string
-	SourceBranchName string
-	SourceLabel      string
+	TargetPath        string
+	SourceProjectRoot string
+	SourceParent      string
+	SourceIssueNum    int
+	SourceTaskID      string
+	SourceBranchName  string
+	SourceLabel       string
 }
 
 // AttachLaunchRequest describes one same-worktree agent launch requested from
@@ -204,12 +205,13 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 		return nil
 	}
 	target := AttachTarget{
-		TargetPath:       targetPath,
-		SourceParent:     pane.Parent,
-		SourceIssueNum:   pane.IssueNum,
-		SourceTaskID:     pane.TaskID,
-		SourceBranchName: pane.BranchName,
-		SourceLabel:      pane.identityLabel(),
+		TargetPath:        targetPath,
+		SourceProjectRoot: pane.sourceProjectRoot,
+		SourceParent:      pane.Parent,
+		SourceIssueNum:    pane.IssueNum,
+		SourceTaskID:      pane.TaskID,
+		SourceBranchName:  pane.BranchName,
+		SourceLabel:       pane.identityLabel(),
 	}
 	m.mode = modeNewPane
 	m.notice = ""
