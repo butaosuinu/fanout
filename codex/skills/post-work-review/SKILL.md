@@ -35,8 +35,11 @@ Hard caps:
 ## Resolve driver
 
 ```bash
-codex_dir="${CODEX_DIR:-${CODEX_HOME:-$HOME/.codex}}"
+codex_dir="${CODEX_DIR:-$HOME/.codex}"
 driver="$codex_dir/tools/post-work-review.sh"
+if [ ! -x "$driver" ] && [ -n "${CODEX_HOME:-}" ]; then
+  driver="$CODEX_HOME/tools/post-work-review.sh"
+fi
 if [ ! -x "$driver" ]; then
   echo "post-work-review driver not installed: $driver"
   echo "Run make install-integrations from the fanout repo, then retry."
@@ -50,13 +53,20 @@ writes, rerun only the blocked driver subcommand with a scoped escalation. Do
 not escalate subagent review work and do not use escalation to call
 `codex review`.
 
+If the user request or fanout briefing includes `POST_WORK_REVIEW_BASE=<base>`,
+pass that same environment variable explicitly to every driver command in this
+procedure. Do not assume a shell-like `$post-work-review` prefix reached the
+driver.
+
 ## Procedure
 
 1. Prepare one broad review bundle:
 
    ```bash
-   bash "$driver" prepare
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" prepare
    ```
+
+   Omit `POST_WORK_REVIEW_BASE=...` only when no base override was requested.
 
    Read only the key=value output. Use `review_bundle=` as the sole broad
    review input. Do not split by file.
@@ -66,7 +76,7 @@ not escalate subagent review work and do not use escalation to call
    file outside the repository, then record it:
 
    ```bash
-   bash "$driver" record broad <review-json-file>
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" record broad <review-json-file>
    ```
 
    If `record` rejects the result, stop. Do not repair reviewer JSON yourself.
@@ -74,7 +84,7 @@ not escalate subagent review work and do not use escalation to call
 3. Summarize:
 
    ```bash
-   bash "$driver" summarize
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" summarize
    ```
 
    If `stop_reason=` is non-empty, stop non-clean and do not mark.
@@ -82,7 +92,7 @@ not escalate subagent review work and do not use escalation to call
 4. If `clean=true`, run `mark` only when `marker_eligible=true`:
 
    ```bash
-   bash "$driver" mark
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" mark
    ```
 
 5. If findings remain and no stop reason is set, fix only actionable findings
@@ -90,7 +100,7 @@ not escalate subagent review work and do not use escalation to call
    verifier bundle:
 
    ```bash
-   bash "$driver" prepare-verify
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" prepare-verify
    ```
 
    Give `verify_bundle=` to one fresh isolated `post-work-verifier` subagent.
@@ -100,7 +110,7 @@ not escalate subagent review work and do not use escalation to call
 6. Record the verifier result:
 
    ```bash
-   bash "$driver" record verify <review-json-file>
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" record verify <review-json-file>
    ```
 
    Then run `summarize` again. If still not clean and no stop reason is set,

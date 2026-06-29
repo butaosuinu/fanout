@@ -56,7 +56,7 @@ func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	if strings.Contains(got, "structure the PR body") || strings.Contains(got, "Diagram gate") {
 		t.Fatal("PR visualization section present when AutoPullRequest=false")
 	}
-	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1 $post-work-review") {
+	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to") {
 		t.Fatalf("Render(..., codex, AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Fatalf("Render(...) missing shell-quoted base branch command %q", want)
 	}
-	want = "POST_WORK_REVIEW_BASE='foo;bar' $post-work-review"
+	want = "POST_WORK_REVIEW_BASE='foo;bar'` to"
 	if !strings.Contains(got, want) {
 		t.Fatalf("Render(...) missing shell-quoted post-work-review base branch command %q", want)
 	}
@@ -92,7 +92,8 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"$post-work-review",
 				"post-work-reviewer",
 				"post-work-verifier",
-				"Run `POST_WORK_REVIEW_BASE=release/v1 $post-work-review` again on the committed",
+				"Run `$post-work-review` again on the committed branch state with base",
+				"POST_WORK_REVIEW_BASE=release/v1` to",
 				"Only after the committed branch review is clean and marked should you push and",
 			},
 		},
@@ -142,7 +143,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	if !strings.Contains(got, "clean=true`, `findings=0`, and an empty `stop_reason=") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing bounded clean condition:\n%s", got)
 	}
-	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1 $post-work-review") {
+	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
 	assertIssueLessTaskBriefing(t, got)

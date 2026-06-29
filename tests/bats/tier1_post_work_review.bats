@@ -210,6 +210,22 @@ prepare_branch_review() {
   [[ "$output" == *"hooks-only success is rejected"* ]]
 }
 
+@test "post-work-review record rejects stale review targets" {
+  local repo="$BATS_TEST_TMPDIR/review-stale-record"
+  local json_file="$BATS_TEST_TMPDIR/stale.json"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-stale" false false false "" "$json_file"
+
+  printf 'changed-after-prepare\n' >"$repo/tracked.txt"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"review target changed since prepare: diff_hash"* ]]
+}
+
 @test "post-work-review verifier requires prepared fix rounds and fresh sessions" {
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
@@ -242,6 +258,38 @@ prepare_branch_review() {
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"reviewer_session_id already recorded"* ]]
+}
+
+@test "post-work-review branch verifier bundle includes uncommitted fixes" {
+  local repo="$BATS_TEST_TMPDIR/review-branch-dirty-verify"
+  local broad_json="$BATS_TEST_TMPDIR/broad-dirty-verify.json"
+  local verify_json="$BATS_TEST_TMPDIR/verify-dirty-verify.json"
+  local finding state
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  write_broad_result_json "$repo" "session-dirty-broad" false false false "$finding" "$broad_json"
+  run_review "$repo" record broad "$broad_json"
+  [ "$status" -eq 0 ]
+
+  printf 'fixed-without-commit\n' >"$repo/tracked.txt"
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scope=branch"* ]]
+  [[ "$output" == *"fix_rounds=1"* ]]
+  state="$(state_dir_for "$repo")"
+  grep -Fq "+fixed-without-commit" "$state/verify-bundle.md"
+
+  write_verify_result_json "$repo" "session-dirty-verify" true false "" "$verify_json"
+  run_review "$repo" record verify "$verify_json"
+  [ "$status" -eq 0 ]
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean=true"* ]]
+  [[ "$output" == *"marker_eligible=false"* ]]
 }
 
 @test "post-work-review verifier clean path and repeated finding detection" {

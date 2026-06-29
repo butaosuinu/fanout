@@ -76,7 +76,7 @@ display_path() {
   root="$(repo_root)"
   path="$1"
   case "$path" in
-    "$root"/*) printf '%s\n' "${path#$root/}" ;;
+    "$root"/*) printf '%s\n' "${path#"$root"/}" ;;
     *) printf '%s\n' "$path" ;;
   esac
 }
@@ -111,7 +111,7 @@ is_number() {
 }
 
 resolve_base() {
-  local remote_head candidate
+  local remote_head candidate gh_default
   if [ -n "${POST_WORK_REVIEW_BASE:-}" ]; then
     printf '%s\n' "$POST_WORK_REVIEW_BASE"
     return 0
@@ -129,6 +129,18 @@ resolve_base() {
       return 0
     fi
   done
+
+  if command -v gh >/dev/null 2>&1; then
+    gh_default="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)"
+    if [ -n "$gh_default" ]; then
+      for candidate in "origin/$gh_default" "$gh_default"; do
+        if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
+    fi
+  fi
 
   return 1
 }
@@ -196,6 +208,17 @@ write_branch_files() {
   sort -u "$files_file" -o "$files_file"
 }
 
+append_worktree_files() {
+  local files_file untracked_file
+  files_file="$1"
+  untracked_file="$2"
+  git diff --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
+  git diff --name-only -- >>"$files_file" 2>/dev/null || true
+  git ls-files --others --exclude-standard >"$untracked_file" 2>/dev/null || true
+  cat "$untracked_file" >>"$files_file"
+  sort -u "$files_file" -o "$files_file"
+}
+
 write_commit_files() {
   local files_file
   files_file="$1"
@@ -212,7 +235,10 @@ write_files_for_scope() {
   : >"$untracked_file"
   case "$scope" in
     uncommitted) write_uncommitted_files "$files_file" "$untracked_file" ;;
-    branch) write_branch_files "$base" "$files_file" ;;
+    branch)
+      write_branch_files "$base" "$files_file"
+      append_worktree_files "$files_file" "$untracked_file"
+      ;;
     commit) write_commit_files "$files_file" ;;
     *) die "invalid scope=$scope" ;;
   esac
@@ -261,6 +287,8 @@ write_diff_for_scope() {
         rm -f "$diff_file"
         die "failed to compute branch diff for base=$base"
       fi
+      append_uncommitted_tracked_diffs "$diff_file"
+      append_untracked_diffs "$untracked_file" "$diff_file"
       ;;
     commit)
       git show --format= --binary HEAD >"$diff_file" 2>/dev/null || : >"$diff_file"
@@ -488,7 +516,9 @@ validate_result() {
   provenance="$(json_scalar "$file" reviewer_provenance 2>/dev/null || true)"
   [ "$provenance" = "native-subagent-tool" ] || die "reviewer provenance rejected"
   session="$(json_scalar "$file" reviewer_session_id 2>/dev/null || true)"
-  [ -n "$session" ] && [ "$session" != "null" ] || die "reviewer_session_id is required"
+  if [ -z "$session" ] || [ "$session" = "null" ]; then
+    die "reviewer_session_id is required"
+  fi
 
   same_agent="$(json_scalar "$file" same_agent_review 2>/dev/null || true)"
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
@@ -507,8 +537,12 @@ validate_result() {
   else
     result_head="$(json_scalar "$file" head 2>/dev/null || true)"
     result_diff="$(json_scalar "$file" diff_hash 2>/dev/null || true)"
-    [ -n "$result_head" ] && [ "$result_head" != "null" ] || die "review head is required"
-    [ -n "$result_diff" ] && [ "$result_diff" != "null" ] || die "review diff_hash is required"
+    if [ -z "$result_head" ] || [ "$result_head" = "null" ]; then
+      die "review head is required"
+    fi
+    if [ -z "$result_diff" ] || [ "$result_diff" = "null" ]; then
+      die "review diff_hash is required"
+    fi
   fi
 
   finding_count="$(json_scalar "$file" finding_count 2>/dev/null || true)"
@@ -588,7 +622,7 @@ any_result_truncated() {
 }
 
 summary_values() {
-  local broad_calls verify_calls total_calls broad_path latest_path latest_count clean findings stop marker
+  local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
   local repeated all_fixed new_regressions truncated fix_rounds scope changed_files invalid_count duplicate_sessions i path
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -622,7 +656,6 @@ summary_values() {
   elif [ "$broad_calls" -eq 0 ]; then
     clean="unknown"
   else
-    broad_path="$(result_path broad 1)"
     latest_path="$(latest_result)"
     latest_count="$(json_scalar "$latest_path" finding_count 2>/dev/null || echo 0)"
     findings="$latest_count"
@@ -666,7 +699,7 @@ summary_values() {
   changed_files="$(env_get changed_files 2>/dev/null || echo 0)"
   if [ "$clean" = "true" ] && [ -z "$stop" ] && [ "$broad_calls" -eq 1 ] && \
     [ "$total_calls" -le "$MAX_TOTAL_REVIEWER_CALLS" ] && [ "$scope" = "branch" ] && \
-    [ "$changed_files" != "0" ]; then
+    [ "$changed_files" != "0" ] && ! has_dirty_tree; then
     marker="true"
   fi
 
@@ -677,8 +710,6 @@ summary_values() {
   SUMMARY_BROAD_CALLS="$broad_calls"
   SUMMARY_VERIFY_CALLS="$verify_calls"
   SUMMARY_TOTAL_CALLS="$total_calls"
-  SUMMARY_INVALID_RESULTS="$invalid_count"
-  SUMMARY_DUPLICATE_SESSIONS="$duplicate_sessions"
 }
 
 print_budget_lines() {
@@ -735,7 +766,7 @@ write_review_bundle() {
   {
     printf '# post-work-review broad review bundle\n\n'
     printf 'This bundle is for exactly one fresh isolated broad reviewer call.\n'
-    printf 'The reviewer must be `%s`, read-only, and JSON-only.\n\n' "$REVIEWER_AGENT"
+    printf 'The reviewer must be %s, read-only, and JSON-only.\n\n' "$REVIEWER_AGENT"
     printf '## Review contract\n\n'
     printf -- '- backend: %s\n' "$BACKEND"
     printf -- '- review_type: broad\n'
@@ -820,6 +851,19 @@ compute_current_target() {
   HEAD_SHA="$(git rev-parse HEAD)"
   DIFF_HASH="$(hash_file "$diff_file")"
   CHANGED_FILE_COUNT="$(count_lines "$files_file")"
+}
+
+ensure_current_target_matches_review() {
+  local reviewed_head reviewed_diff_hash
+  reviewed_head="$(env_get head || true)"
+  reviewed_diff_hash="$(env_get diff_hash || true)"
+  compute_current_target
+  if [ "$HEAD_SHA" != "$reviewed_head" ]; then
+    die "review target changed since prepare: head"
+  fi
+  if [ "$DIFF_HASH" != "$reviewed_diff_hash" ]; then
+    die "review target changed since prepare: diff_hash"
+  fi
 }
 
 write_initial_findings_tsv() {
@@ -946,6 +990,7 @@ cmd_record() {
       ;;
   esac
 
+  ensure_current_target_matches_review
   validate_result "$kind" "$review_json"
   session="$(json_scalar "$review_json" reviewer_session_id)"
   if reviewer_session_used "$session"; then

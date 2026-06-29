@@ -274,25 +274,26 @@ func codexReviewSection(autoPullRequest bool, baseBranch string) string {
 	}
 	quotedBase := agent.ShellQuote(baseBranch)
 	if autoPullRequest {
-		return fmt.Sprintf(codexReviewWithPRSectionTemplate, quotedBase)
+		return fmt.Sprintf(codexReviewWithPRSectionTemplate, quotedBase, quotedBase)
 	}
-	return fmt.Sprintf(codexReviewWithoutPRSectionTemplate, quotedBase)
+	return fmt.Sprintf(codexReviewWithoutPRSectionTemplate, quotedBase, quotedBase)
 }
 
 const codexReviewWithPRSectionTemplate = `
-	Before committing your final changes or opening a PR, run ` + "`$post-work-review`" + `
-	on your current diff. Treat it as a required gate:
-	1. Run ` + "`$post-work-review`" + `.
-	2. The skill prepares one git-derived review bundle, runs exactly one fresh
-	   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
-	   ` + "`post-work-verifier`" + ` calls after fixes.
-	3. If review reports findings, fix only the actionable findings and let the
-	   skill verify the fix. Do not start a new broad review.
-	4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
-	   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-	5. Commit the reviewed changes.
-	6. Run ` + "`POST_WORK_REVIEW_BASE=%s $post-work-review`" + ` again on the committed
-	   branch state. This second pass must write ` + "`.git/post-work-review-passed`" + `
+Before committing your final changes or opening a PR, run ` + "`$post-work-review`" + `
+on your current diff. Treat it as a required gate:
+1. Run ` + "`$post-work-review`" + `.
+2. The skill prepares one git-derived review bundle, runs exactly one fresh
+   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
+   ` + "`post-work-verifier`" + ` calls after fixes.
+3. If review reports findings, fix only the actionable findings and let the
+   skill verify the fix. Do not start a new broad review.
+4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
+   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
+5. Commit the reviewed changes.
+6. Run ` + "`$post-work-review`" + ` again on the committed branch state with base
+   ` + "`%s`" + `. The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to the driver
+   commands for this pass. This second pass must write ` + "`.git/post-work-review-passed`" + `
    for the HEAD you will push.
 
 Only after the committed branch review is clean and marked should you push and
@@ -301,18 +302,19 @@ reasons, stop and report that instead of bypassing the gate.
 `
 
 const codexReviewWithoutPRSectionTemplate = `
-	Before committing your final changes, run ` + "`$post-work-review`" + ` on your
-	current diff. Treat it as a required gate:
-	1. Run ` + "`$post-work-review`" + `.
-	2. The skill prepares one git-derived review bundle, runs exactly one fresh
-	   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
-	   ` + "`post-work-verifier`" + ` calls after fixes.
-	3. If review reports findings, fix only the actionable findings and let the
-	   skill verify the fix. Do not start a new broad review.
-	4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
-	   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-	5. For any final branch-scope review before pushing, use
-	   ` + "`POST_WORK_REVIEW_BASE=%s $post-work-review`" + `.
+Before committing your final changes, run ` + "`$post-work-review`" + ` on your
+current diff. Treat it as a required gate:
+1. Run ` + "`$post-work-review`" + `.
+2. The skill prepares one git-derived review bundle, runs exactly one fresh
+   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
+   ` + "`post-work-verifier`" + ` calls after fixes.
+3. If review reports findings, fix only the actionable findings and let the
+   skill verify the fix. Do not start a new broad review.
+4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
+   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
+5. For any final branch-scope review before pushing, run ` + "`$post-work-review`" + `
+   with base ` + "`%s`" + `. The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to
+   the driver commands for that pass.
 
 Only after the review loop is clean should you commit and push the branch.
 If the review gate is unavailable or fails for tooling/auth reasons, stop
