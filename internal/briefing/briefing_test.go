@@ -56,6 +56,9 @@ func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	if strings.Contains(got, "structure the PR body") || strings.Contains(got, "Diagram gate") {
 		t.Fatal("PR visualization section present when AutoPullRequest=false")
 	}
+	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1 $post-work-review") {
+		t.Fatalf("Render(..., codex, AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
+	}
 }
 
 func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
@@ -63,6 +66,10 @@ func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
 	want := "git diff --name-only 'foo;bar'...HEAD"
 	if !strings.Contains(got, want) {
 		t.Fatalf("Render(...) missing shell-quoted base branch command %q", want)
+	}
+	want = "POST_WORK_REVIEW_BASE='foo;bar' $post-work-review"
+	if !strings.Contains(got, want) {
+		t.Fatalf("Render(...) missing shell-quoted post-work-review base branch command %q", want)
 	}
 }
 
@@ -82,8 +89,11 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 		{
 			agent: "codex",
 			wants: []string{
-				"codex review --uncommitted",
-				"Only after the review loop is clean should you commit, push, and open the PR",
+				"$post-work-review",
+				"post-work-reviewer",
+				"post-work-verifier",
+				"Run `POST_WORK_REVIEW_BASE=release/v1 $post-work-review` again on the committed",
+				"Only after the committed branch review is clean and marked should you push and",
 			},
 		},
 	} {
@@ -127,7 +137,13 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 		}
 	}
 	if !strings.Contains(got, "Only after the review loop is clean should you commit and push the branch") {
-		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR codex review gate:\n%s", got)
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR post-work-review gate:\n%s", got)
+	}
+	if !strings.Contains(got, "clean=true`, `findings=0`, and an empty `stop_reason=") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing bounded clean condition:\n%s", got)
+	}
+	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1 $post-work-review") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
 	assertIssueLessTaskBriefing(t, got)
 
@@ -253,6 +269,7 @@ func TestRenderManualPlanUsesManualPlanBriefing(t *testing.T) {
 		"You are assigned GitHub issue",
 		"commit and push",
 		"Open a pull request",
+		"$post-work-review",
 		"codex review --uncommitted",
 	} {
 		if strings.Contains(got, unwanted) {
@@ -317,6 +334,7 @@ func TestCodexPlanModeUsesPlanningBriefing(t *testing.T) {
 		"Open a pull request",
 		"structure the PR body",
 		"Diagram gate",
+		"$post-work-review",
 		"codex review --uncommitted",
 	} {
 		if strings.Contains(got, unwanted) {

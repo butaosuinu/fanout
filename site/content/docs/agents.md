@@ -55,7 +55,7 @@ For follow-up after a PR exists, use a separate skill. `~/.claude/commands/pr-wa
 
 ## Codex CLI
 
-The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. Restart any running Codex session after installing or updating the skills so it picks up the new files.
+The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. The `post-work-reviewer` and `post-work-verifier` native subagent files are installed to `~/.codex/agents/post-work-reviewer.md` and `~/.codex/agents/post-work-verifier.md`. Restart any running Codex session after installing or updating the skills or agents so it picks up the new files.
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as the Claude command — dry-run first, confirm targets, then run the real command — and it also performs the implicit-child scan and `--name` generation.
 
@@ -66,7 +66,7 @@ local implementation plan without creating GitHub child issues. It writes or
 selects the plan spec, previews `fanout plan ... --dry-run`, and runs live
 after confirmation unless confirmation was explicitly skipped.
 
-Use `$post-work-review` when you want Codex to run a final pre-commit or pre-PR review loop. It invokes `codex review` with an explicit scope, fixes actionable findings, reruns until clean, and records the same marker used by the Claude PR gate when HEAD is clean.
+Use `$post-work-review` when you want Codex to run a final pre-commit or pre-PR review loop. It prepares one git-derived review bundle, sends it to one fresh `post-work-reviewer` native subagent, fixes actionable findings, uses at most two `post-work-verifier` calls after fixes, and records the same marker used by the Claude PR gate when HEAD is clean.
 
 Use `$pr-watch` after opening a PR when you want Codex to inspect mergeability, failing CI, and review comments, then safely fix and push the items it can handle. Codex does not run a background scheduler, so the skill reports when it is green, reviewer-waiting, CI-waiting, or blocked.
 

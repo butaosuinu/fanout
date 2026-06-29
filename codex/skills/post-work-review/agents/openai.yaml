@@ -1,7 +1,7 @@
 interface:
   display_name: "post-work-review"
-  short_description: "Run a local Codex review loop"
-  default_prompt: "Use $post-work-review only when I explicitly ask for a Codex review of the current diff. Run the local codex review CLI without escalation; escalate only if writing the final git marker requires it."
+  short_description: "Run a bounded isolated reviewer gate"
+  default_prompt: "Use $post-work-review only when I explicitly ask for an isolated review of the current diff. Prepare one broad review bundle, invoke exactly one post-work-reviewer subagent, then use at most two post-work-verifier calls after fixes. Never split review by file or run codex review in the default path."
 
 policy:
   allow_implicit_invocation: false

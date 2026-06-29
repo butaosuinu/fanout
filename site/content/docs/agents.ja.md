@@ -51,7 +51,7 @@ PR を作ったあとの追従には別の skill を使います。`~/.claude/co
 
 ## Codex CLI
 
-Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/fanout-plan/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。skill のインストールや更新のあと、実行中の Codex セッションがあれば再起動すると新しいファイルを認識します。
+Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/fanout-plan/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。`post-work-reviewer` と `post-work-verifier` の native subagent は `~/.codex/agents/post-work-reviewer.md` と `~/.codex/agents/post-work-verifier.md` に配置されます。skill や agent のインストール、更新のあと、実行中の Codex セッションがあれば再起動すると新しいファイルを認識します。
 
 fanout skill は、Codex に「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。Claude のコマンドと同じ安全フローに従い、まず dry-run、次にターゲットの確認、それから本実行へ進みます。暗黙の子参照のスキャンと `--name` 生成も同様に行います。
 
@@ -59,7 +59,7 @@ fanout skill は、Codex に「#123 を fan out して」のように依頼す�
 
 GitHub の子 issue を作らずローカルの実装計画を fan out したいときは、`$fanout-plan` または `fanout plan` の依頼を使います。spec を作成または選択し、`fanout plan ... --dry-run` を preview してから、確認後に live 実行します(確認スキップが明示された場合を除く)。
 
-`$post-work-review` は、Codex にコミット前や PR 作成前の最終レビュー loop を依頼するときに使います。明示 scope 付きの `codex review` を実行し、actionable な指摘を修正し、clean になるまで再レビューします。HEAD が clean なら Claude の PR gate と同じ marker も記録します。
+`$post-work-review` は、Codex にコミット前や PR 作成前の最終レビュー loop を依頼するときに使います。git から review bundle を 1 つ作り、新しい `post-work-reviewer` native subagent へ 1 回だけ渡します。actionable な指摘を修正したあとは、最大 2 回の `post-work-verifier` で修正確認だけを行います。HEAD が clean なら Claude の PR gate と同じ marker も記録します。
 
 `$pr-watch` は、PR 作成後に mergeability や失敗 CI、レビューコメントを Codex に確認させて修正させたいときに使います。Codex は background scheduler を持たないため、green、reviewer 待ち、CI 待ち、blocked のどの状態かを報告して止まります。
 

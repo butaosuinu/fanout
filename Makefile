@@ -6,10 +6,12 @@ CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
 CODEX_TOOL_DIR   := $(CODEX_DIR)/tools
+CODEX_AGENT_DIR  := $(CODEX_DIR)/agents
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
 CODEX_TOOLS     := $(notdir $(wildcard codex/tools/*))
+CODEX_AGENTS    := $(notdir $(wildcard codex/agents/*))
 
 BATS       ?= bats
 GO         ?= go
@@ -52,7 +54,7 @@ clean-web:
 	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
 install-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -69,9 +71,12 @@ install-integrations:
 	@for tool in $(CODEX_TOOLS); do \
 		install -m 0755 "codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
 	done
+	@for agent in $(CODEX_AGENTS); do \
+		install -m 0644 "codex/agents/$$agent" "$(CODEX_AGENT_DIR)/$$agent"; \
+	done
 
 link-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -87,12 +92,17 @@ link-integrations:
 		rm -f "$(CODEX_TOOL_DIR)/$$tool"; \
 		ln -sf "$(CURDIR)/codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
 	done
+	@for agent in $(CODEX_AGENTS); do \
+		rm -f "$(CODEX_AGENT_DIR)/$$agent"; \
+		ln -sf "$(CURDIR)/codex/agents/$$agent" "$(CODEX_AGENT_DIR)/$$agent"; \
+	done
 
 uninstall-integrations:
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do rm -f "$(CODEX_TOOL_DIR)/$$tool"; done
+	@for agent in $(CODEX_AGENTS); do rm -f "$(CODEX_AGENT_DIR)/$$agent"; done
 
 install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
@@ -103,6 +113,7 @@ install: build-go install-integrations
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
+	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
 
 link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
@@ -113,6 +124,7 @@ link: build-go link-integrations
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool -> $(CURDIR)/codex/tools/$$tool"; done
+	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent -> $(CURDIR)/codex/agents/$$agent"; done
 
 uninstall: uninstall-integrations
 	rm -f "$(BINDIR)/fanout"
@@ -122,6 +134,7 @@ uninstall: uninstall-integrations
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
+	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
 
 # --- test / lint -------------------------------------------------------------
 # `make test`         — build the Go binary, run Go unit tests + web UI tests
@@ -135,7 +148,7 @@ uninstall: uninstall-integrations
 # `make test-tier1`   — flag / prerequisite tests, no live tmux panes.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
 # `make lint`         — pinned golangci-lint v2 (.golangci.yml) plus shellcheck
-#                       of the test shims.
+#                       of shell shims and repo-local review tools.
 # `make fmt`          — gofumpt/goimports formatting via `golangci-lint fmt`.
 # `make fix`          — Go 1.26 revamped `go fix` (modernizer + //go:fix
 #                       inline); run `make test` after applying.
@@ -164,7 +177,7 @@ check-bats:
 test: build-web go-test test-web test-tier1 test-tier2
 
 test-tier1: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_post_work_review.bats
 
 test-tier2: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats tests/bats/tier2_msg.bats
@@ -199,7 +212,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	GOCACHE="$(GOCACHE)" GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	GOCACHE="$(GOCACHE)" GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt
