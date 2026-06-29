@@ -78,7 +78,9 @@ write_broad_result_json() {
   local head diff_hash count
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
-  if [ -n "$findings" ]; then
+  if [ "$#" -ge 8 ]; then
+    count="$8"
+  elif [ -n "$findings" ]; then
     count=1
   else
     count=0
@@ -226,6 +228,29 @@ prepare_branch_review() {
   [[ "$output" == *"review target changed since prepare: diff_hash"* ]]
 }
 
+@test "post-work-review summarize rejects target changes after record" {
+  local repo="$BATS_TEST_TMPDIR/review-stale-summary"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+  record_clean_broad "$repo" "session-summary-target" || return 1
+
+  printf 'changed-after-record\n' >"$repo/tracked.txt"
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean=false"* ]]
+  [[ "$output" == *"findings=0"* ]]
+  [[ "$output" == *"stop_reason=review_target_changed"* ]]
+  [[ "$output" == *"marker_eligible=false"* ]]
+
+  run_review "$repo" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean=false"* ]]
+  [[ "$output" == *"stop_reason=review_target_changed"* ]]
+}
+
 @test "post-work-review verifier requires prepared fix rounds and fresh sessions" {
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
@@ -258,6 +283,38 @@ prepare_branch_review() {
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"reviewer_session_id already recorded"* ]]
+
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fix_rounds=2"* ]]
+  grep -Fq "+fixed" "$(state_dir_for "$repo")/verify-bundle.md"
+}
+
+@test "post-work-review rejects failed verifier results without findings" {
+  local repo="$BATS_TEST_TMPDIR/review-empty-failed-verifier"
+  local broad_json="$BATS_TEST_TMPDIR/broad-empty-failed-verifier.json"
+  local verify_json="$BATS_TEST_TMPDIR/verify-empty-failed-verifier.json"
+  local finding
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  write_broad_result_json "$repo" "session-empty-failed-broad" false false false "$finding" "$broad_json"
+  run_review "$repo" record broad "$broad_json"
+  [ "$status" -eq 0 ]
+
+  printf 'fixed\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "fix"
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+
+  write_verify_result_json "$repo" "session-empty-failed-verify" false false "" "$verify_json"
+  run_review "$repo" record verify "$verify_json"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"failed verifier result requires findings"* ]]
 }
 
 @test "post-work-review branch verifier bundle includes uncommitted fixes" {
@@ -340,6 +397,38 @@ prepare_branch_review() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"clean=false"* ]]
   [[ "$output" == *"stop_reason=same_finding_repeated"* ]]
+}
+
+@test "post-work-review duplicate broad findings do not count as repeated after a clean verifier" {
+  local repo="$BATS_TEST_TMPDIR/review-duplicate-broad"
+  local broad_json="$BATS_TEST_TMPDIR/broad-duplicate.json"
+  local verify_json="$BATS_TEST_TMPDIR/verify-duplicate-clean.json"
+  local finding duplicate_findings
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  duplicate_findings="$finding,$finding"
+  write_broad_result_json "$repo" "session-duplicate-broad" false false false "$duplicate_findings" "$broad_json" 2
+  run_review "$repo" record broad "$broad_json"
+  [ "$status" -eq 0 ]
+
+  printf 'fixed\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "fix"
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+  write_verify_result_json "$repo" "session-duplicate-verify" true false "" "$verify_json"
+  run_review "$repo" record verify "$verify_json"
+  [ "$status" -eq 0 ]
+
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean=true"* ]]
+  [[ "$output" == *"stop_reason="* ]]
+  [[ "$output" != *"stop_reason=same_finding_repeated"* ]]
 }
 
 @test "post-work-review summarize stops on truncated and exhausted verifier budget" {

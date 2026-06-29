@@ -63,6 +63,10 @@ findings_tsv_path() {
   printf '%s/findings.tsv\n' "$(state_dir_abs)"
 }
 
+pending_reviewed_diff_path() {
+  printf '%s/pending-reviewed.diff\n' "$(state_dir_abs)"
+}
+
 marker_path() {
   printf '%s/post-work-review-passed\n' "$(git_dir_abs)"
 }
@@ -560,6 +564,9 @@ validate_result() {
     new_regressions="$(json_scalar "$file" new_regressions 2>/dev/null || true)"
     [ "$all_fixed" = "true" ] || [ "$all_fixed" = "false" ] || die "all_previous_findings_fixed must be true or false"
     [ "$new_regressions" = "true" ] || [ "$new_regressions" = "false" ] || die "new_regressions must be true or false"
+    if { [ "$all_fixed" != "true" ] || [ "$new_regressions" = "true" ]; } && [ "$finding_count" -eq 0 ]; then
+      die "failed verifier result requires findings"
+    fi
   fi
 }
 
@@ -590,7 +597,10 @@ repeated_fingerprint_count() {
   }
   awk -F'\t' '
     NR > 1 && $7 != "" {
-      seen[$7]++
+      key = $1 SUBSEP $7
+      if (!seen_result[key]++) {
+        seen[$7]++
+      }
     }
     END {
       repeated = 0
@@ -621,9 +631,27 @@ any_result_truncated() {
   return 1
 }
 
+review_target_changed_reason() {
+  local reviewed_head reviewed_diff_hash
+  reviewed_head="$(env_get head 2>/dev/null || true)"
+  reviewed_diff_hash="$(env_get diff_hash 2>/dev/null || true)"
+  [ -n "$reviewed_head" ] && [ -n "$reviewed_diff_hash" ] || return 1
+  compute_current_target
+  if [ "$HEAD_SHA" != "$reviewed_head" ]; then
+    printf 'head\n'
+    return 0
+  fi
+  if [ "$DIFF_HASH" != "$reviewed_diff_hash" ]; then
+    printf 'diff_hash\n'
+    return 0
+  fi
+  return 1
+}
+
 summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
   local repeated all_fixed new_regressions truncated fix_rounds scope changed_files invalid_count duplicate_sessions i path
+  local target_changed_reason
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
   total_calls="$(total_reviewer_calls)"
@@ -643,10 +671,19 @@ summary_values() {
     validate_result broad "$path" static >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
   fi
   duplicate_sessions="$(duplicate_reviewer_session_count)"
+  if [ "${SUMMARY_SKIP_TARGET_CHECK:-}" = "1" ]; then
+    target_changed_reason=""
+  else
+    target_changed_reason="$(review_target_changed_reason || true)"
+  fi
 
   if [ "$invalid_count" -gt 0 ] || [ "$duplicate_sessions" -gt 0 ]; then
     clean="false"
     stop="invalid_review_result"
+  elif [ -n "$target_changed_reason" ]; then
+    clean="false"
+    findings=0
+    stop="review_target_changed"
   elif [ "$broad_calls" -gt "$BROAD_REVIEW_MAX" ] || [ "$verify_calls" -gt "$VERIFY_REVIEW_MAX" ] || [ "$total_calls" -gt "$MAX_TOTAL_REVIEWER_CALLS" ]; then
     clean="false"
     stop="review_budget_exhausted"
@@ -866,6 +903,15 @@ ensure_current_target_matches_review() {
   fi
 }
 
+commit_pending_reviewed_diff() {
+  local pending old
+  pending="$(pending_reviewed_diff_path)"
+  old="$(state_dir_abs)/last-reviewed.diff"
+  [ -f "$pending" ] || die "pending verify diff not found"
+  cp "$pending" "$old" || die "failed to store review diff"
+  rm -f "$pending"
+}
+
 write_initial_findings_tsv() {
   printf 'result\tindex\tseverity\tfile\tline\ttitle\tfingerprint\tdescription\trecommendation\n' >"$(findings_tsv_path)"
 }
@@ -907,7 +953,7 @@ cmd_prepare() {
 }
 
 cmd_prepare_verify() {
-  local root state broad_calls verify_calls total_calls fix_rounds old_diff current_diff fix_diff
+  local root state broad_calls verify_calls total_calls fix_rounds old_diff current_diff fix_diff pending_diff
   ensure_repo
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
@@ -939,13 +985,14 @@ cmd_prepare_verify() {
   old_diff="$state/last-reviewed.diff"
   current_diff="$state/current.diff"
   fix_diff="$state/fix.diff"
+  pending_diff="$(pending_reviewed_diff_path)"
   compute_current_target
   if [ -f "$old_diff" ]; then
     diff -u "$old_diff" "$current_diff" >"$fix_diff" 2>/dev/null || true
   else
     cp "$current_diff" "$fix_diff" || die "failed to store fix diff"
   fi
-  cp "$current_diff" "$old_diff" || die "failed to store review diff"
+  cp "$current_diff" "$pending_diff" || die "failed to store pending review diff"
 
   fix_rounds=$((fix_rounds + 1))
   env_set head "$HEAD_SHA"
@@ -984,6 +1031,7 @@ cmd_record() {
       [ "$broad_calls" -eq 1 ] || die "broad review must be recorded before verify"
       [ "$verify_calls" -lt "$VERIFY_REVIEW_MAX" ] || die "verify review budget exhausted"
       [ -f "$(verify_bundle_path)" ] || die "verify bundle not prepared"
+      [ -f "$(pending_reviewed_diff_path)" ] || die "pending verify diff not found"
       fix_rounds="$(env_get fix_rounds 2>/dev/null || echo 0)"
       [ "$fix_rounds" -gt "$verify_calls" ] || die "verify result has no prepared fix round"
       index=$((verify_calls + 1))
@@ -998,6 +1046,9 @@ cmd_record() {
   fi
   dest="$(result_path "$kind" "$index")"
   cp "$review_json" "$dest" || die "failed to store review result"
+  if [ "$kind" = "verify" ]; then
+    commit_pending_reviewed_diff
+  fi
   rewrite_findings_tsv
   summary_values
 
@@ -1078,7 +1129,9 @@ cmd_mark() {
   [ "$backend" = "$BACKEND" ] || mark_reject "backend_not_bounded_isolated_reviewer"
 
   rewrite_findings_tsv
+  SUMMARY_SKIP_TARGET_CHECK=1
   summary_values
+  unset SUMMARY_SKIP_TARGET_CHECK
   [ "$SUMMARY_BROAD_CALLS" -eq 1 ] || mark_reject "broad_review_count_invalid"
   [ "$SUMMARY_TOTAL_CALLS" -le "$MAX_TOTAL_REVIEWER_CALLS" ] || mark_reject "review_budget_exhausted"
   [ "$SUMMARY_CLEAN" = "true" ] || mark_reject "last_review_not_clean"
