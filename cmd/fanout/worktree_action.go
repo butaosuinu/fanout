@@ -10,10 +10,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/state"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 type worktreeActionFlags struct {
@@ -27,7 +27,10 @@ func isWorktreeActionRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "__worktree-action"
 }
 
-var worktreeActionLivePanes = tmuxrun.ListLivePanes
+var (
+	worktreeActionLivePanes = tmuxrun.ListLivePanes
+	worktreeActionListRoots = worktree.ListRoots
+)
 
 func cmdWorktreeAction(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	flags, code := parseWorktreeActionFlags(args, lg)
@@ -49,6 +52,7 @@ func cmdWorktreeAction(args []string, lg *log.Logger, commandName string) exitco
 		lg.Err("worktree action: pane %s has no recorded worktree", flags.paneID)
 		return exitcode.Invocation
 	}
+	ownerRoot := paneOwnerProjectRoot(projectRoot, source)
 
 	reader := bufio.NewReader(os.Stdin)
 	action := strings.TrimSpace(flags.action)
@@ -57,11 +61,12 @@ func cmdWorktreeAction(args []string, lg *log.Logger, commandName string) exitco
 	}
 	switch action {
 	case "1", "attach", "agent":
-		return runWorktreeAttachAction(projectRoot, flags, reader, target, commandName, hooks.LoadUserConfig(lg), lg)
+		return runWorktreeAttachAction(ownerRoot, flags, reader, target, commandName, hooks.LoadUserConfig(lg), lg)
 	case "2", "shell", "terminal":
-		if err := launchShellPane(projectRoot, flags.paneID, fanouttui.ShellLaunchRequest{
-			TargetPath: target.TargetPath,
-			Source:     target.SourceLabel,
+		if err := launchShellPane(ownerRoot, flags.paneID, fanouttui.ShellLaunchRequest{
+			TargetPath:        target.TargetPath,
+			SourceProjectRoot: ownerRoot,
+			Source:            target.SourceLabel,
 		}); err != nil {
 			lg.Err("worktree action: %v", err)
 			return exitcode.Env
@@ -129,7 +134,7 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	if paneID == "" {
 		return state.Pane{}, fmt.Errorf("pane id is required")
 	}
-	store, err := sessionview.MergedStateLoader(projectRoot)()
+	panes, err := rawActionStatePanes(projectRoot)
 	if err != nil {
 		return state.Pane{}, err
 	}
@@ -143,7 +148,7 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	}
 	found := false
 	mismatch := ""
-	for _, pane := range store.Panes {
+	for _, pane := range panes {
 		if pane.PaneID != paneID {
 			continue
 		}
@@ -165,6 +170,34 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	return state.Pane{}, fmt.Errorf("pane %s is not recorded in fanout state", paneID)
 }
 
+func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
+	roots, _ := worktreeActionListRoots(projectRoot)
+	seen := map[string]bool{}
+	var panes []state.Pane
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		st, err := state.Load(state.Path(root))
+		if err != nil {
+			if root == projectRoot {
+				return nil, err
+			}
+			continue
+		}
+		for _, pane := range st.Panes {
+			pane.SourceProjectRoot = root
+			if len(pane.SourceProjectRoots) == 0 {
+				pane.SourceProjectRoots = []string{root}
+			}
+			panes = append(panes, pane)
+		}
+	}
+	return panes, nil
+}
+
 func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) (bool, string) {
 	if pane.IsShell() {
 		shellKey := strings.TrimSpace(pane.ShellKey)
@@ -180,10 +213,48 @@ func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) (bool, stri
 	if worktreePath == "" {
 		return false, "recorded pane has no worktree path"
 	}
+	if liveWorktree := strings.TrimSpace(live.WorktreePath); liveWorktree != "" {
+		if !samePath(worktreePath, liveWorktree) {
+			return false, fmt.Sprintf("live worktree %q does not match recorded worktree %q", live.WorktreePath, pane.WorktreePath)
+		}
+		return true, ""
+	}
 	if !pathWithin(worktreePath, live.CurrentPath) {
+		if projectRootMatches(pane, live.ProjectRoot) {
+			return true, ""
+		}
 		return false, fmt.Sprintf("live cwd %q is not under recorded worktree %q", live.CurrentPath, pane.WorktreePath)
 	}
 	return true, ""
+}
+
+func paneOwnerProjectRoot(defaultRoot string, pane state.Pane) string {
+	if root := strings.TrimSpace(pane.SourceProjectRoot); root != "" {
+		return root
+	}
+	return defaultRoot
+}
+
+func projectRootMatches(pane state.Pane, liveProjectRoot string) bool {
+	liveProjectRoot = strings.TrimSpace(liveProjectRoot)
+	if liveProjectRoot == "" {
+		return false
+	}
+	if root := strings.TrimSpace(pane.SourceProjectRoot); root != "" {
+		return samePath(root, liveProjectRoot)
+	}
+	for _, root := range pane.SourceProjectRoots {
+		if samePath(root, liveProjectRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func samePath(a, b string) bool {
+	a = filepath.Clean(strings.TrimSpace(a))
+	b = filepath.Clean(strings.TrimSpace(b))
+	return a != "." && b != "." && a == b
 }
 
 func pathWithin(root, path string) bool {
@@ -249,12 +320,13 @@ func runWorktreeAttachAction(projectRoot string, flags worktreeActionFlags, read
 
 func attachTargetFromStatePane(pane state.Pane) fanouttui.AttachTarget {
 	return fanouttui.AttachTarget{
-		TargetPath:       pane.WorktreePath,
-		SourceParent:     pane.Parent,
-		SourceIssueNum:   pane.IssueNum,
-		SourceTaskID:     pane.TaskID,
-		SourceBranchName: pane.BranchName,
-		SourceLabel:      sourceLabelForStatePane(pane),
+		TargetPath:        pane.WorktreePath,
+		SourceProjectRoot: pane.SourceProjectRoot,
+		SourceParent:      pane.Parent,
+		SourceIssueNum:    pane.IssueNum,
+		SourceTaskID:      pane.TaskID,
+		SourceBranchName:  pane.BranchName,
+		SourceLabel:       sourceLabelForStatePane(pane),
 	}
 }
 

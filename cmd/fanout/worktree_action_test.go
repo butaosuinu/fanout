@@ -78,6 +78,65 @@ func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T)
 	}
 }
 
+func TestFindRecordedPaneByIDSearchesRawSiblingStores(t *testing.T) {
+	repo := t.TempDir()
+	sibling := t.TempDir()
+	homeWorktree := filepath.Join(repo, ".fanout", "worktrees", "child")
+	siblingWorktree := filepath.Join(sibling, ".fanout", "worktrees", "child")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "100",
+		IssueNum:     101,
+		PaneID:       "%home",
+		WorktreePath: homeWorktree,
+	})
+	writeLifecycleState(t, sibling, state.Pane{
+		Parent:       "100",
+		IssueNum:     101,
+		PaneID:       "%sibling",
+		WorktreePath: siblingWorktree,
+	})
+	origRoots := worktreeActionListRoots
+	origLive := worktreeActionLivePanes
+	t.Cleanup(func() {
+		worktreeActionListRoots = origRoots
+		worktreeActionLivePanes = origLive
+	})
+	worktreeActionListRoots = func(string) ([]string, error) {
+		return []string{repo, sibling}, nil
+	}
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%sibling", CurrentPath: siblingWorktree, WorktreePath: siblingWorktree}}, nil
+	}
+
+	got, err := findRecordedPaneByID(repo, "%sibling")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PaneID != "%sibling" || got.SourceProjectRoot != sibling {
+		t.Fatalf("pane = %+v, want raw sibling pane tagged with source root", got)
+	}
+}
+
+func TestFindRecordedPaneByIDAllowsProjectRootHintWhenCurrentPathIsStale(t *testing.T) {
+	repo := t.TempDir()
+	worktree := filepath.Join(repo, ".fanout", "worktrees", "child")
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "100",
+		IssueNum:     101,
+		PaneID:       "%42",
+		WorktreePath: worktree,
+	})
+	orig := worktreeActionLivePanes
+	t.Cleanup(func() { worktreeActionLivePanes = orig })
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: repo, ProjectRoot: repo}}, nil
+	}
+
+	if _, err := findRecordedPaneByID(repo, "%42"); err != nil {
+		t.Fatalf("findRecordedPaneByID() error = %v, want project-root hint fallback", err)
+	}
+}
+
 func TestFindRecordedPaneByIDRequiresShellKeyForShellRows(t *testing.T) {
 	repo := t.TempDir()
 	writeLifecycleState(t, repo, state.Pane{

@@ -1,4 +1,5 @@
 import type { BlockerStatus, PaneView, PRRef, Snapshot } from "./types";
+import { issueUrl } from "./github";
 
 /* ghissue.PrimaryPR と同じ選択規則(MERGED 優先、なければ先頭)。ciStatus と
  * 同じ PR を指すよう backend とミラーしておかないと、PR 列と ci 列が別の PR を
@@ -66,7 +67,25 @@ export function blockersAllClosed(p: PaneView): boolean {
 
 export function paneLabel(p: PaneView): string {
   if (p.kind === "shell") return "shell";
+  if (p.kind === "attached-agent") {
+    if (p.sourceTaskId) return p.sourceTaskId;
+    if (p.sourceIssueNum && p.sourceIssueNum > 0) return `#${p.sourceIssueNum}`;
+    return "attached agent";
+  }
   return p.taskId || `#${p.issueNum}`;
+}
+
+export function paneIssueNum(p: PaneView): number {
+  if (p.kind === "attached-agent" && p.sourceIssueNum && p.sourceIssueNum > 0) {
+    return p.sourceIssueNum;
+  }
+  return p.issueNum;
+}
+
+export function paneIssueURL(repo: string, p: PaneView): string {
+  if (p.taskId || p.sourceTaskId) return "";
+  const num = paneIssueNum(p);
+  return num > 0 ? issueUrl(repo, num) : "";
 }
 
 /* 行の安定キー。tmux 再起動後は pane id (%N) が別 issue の古い行と重複しうる

@@ -1,5 +1,5 @@
 import type { KeyboardEvent, MouseEvent } from "react";
-import { issueUrl, parentLabel, parentUrl } from "../lib/github";
+import { parentLabel, parentUrl } from "../lib/github";
 import { parseDiff } from "../lib/format";
 import {
   blockersAllClosed,
@@ -7,6 +7,7 @@ import {
   fmtWave,
   openBlockerCount,
   paneCI,
+  paneIssueURL,
   paneLabel,
   prPrimary,
   rowKey,
@@ -63,7 +64,7 @@ function PaneRow({
   return (
     <tr className={cls} tabIndex={0} ref={registerRow} onClick={onClick} onKeyDown={onKeyDown}>
       <td className="c-issue">
-        <GhLink url={pane.taskId ? "" : issueUrl(repo, pane.issueNum)}>{paneLabel(pane)}</GhLink>
+        <GhLink url={paneIssueURL(repo, pane)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
         {pane.derived?.name || pane.displayName || pane.slug || "—"}

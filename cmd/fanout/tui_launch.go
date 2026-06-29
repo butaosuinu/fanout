@@ -307,6 +307,9 @@ func createAttachedPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
 		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
+	if err := tmuxrun.SetPaneWorktreePath(paneID, targetPath); err != nil {
+		lg.Warn("%s: worktree path hint: %v", paneLogLabel(req), err)
+	}
 	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
@@ -447,6 +450,7 @@ func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchReques
 	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(manualPaneParentRef, title))
 	_ = tmuxrun.EnablePaneBorderTitles(paneID)
 	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
+	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
 	if err := recorder.RecordPane(state.Pane{
 		Parent:       manualPaneParentRef,
 		IssueNum:     number,

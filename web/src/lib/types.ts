@@ -30,6 +30,8 @@ export interface PaneView {
   branchName: string;
   paneId: string;
   shellKey?: string;
+  sourceIssueNum?: number;
+  sourceTaskId?: string;
   worktreePath: string;
   /* worktree-local な行(plan タスク・@manual)を識別する安定トークン。別 worktree の
    * 同一 (parent,issueNum)/(parent,taskId) 行が行キーで衝突しないよう rowKey に混ぜる。
