@@ -90,28 +90,39 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	}
 }
 
-func TestTUINewPanePopupSizeUsesClientDimensions(t *testing.T) {
-	width, height, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 160, Height: 50})
+func TestTUINewPanePopupGeometryUsesClientDimensions(t *testing.T) {
+	got, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 160, Height: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if width != 90 || height != 40 {
-		t.Fatalf("popup size = %dx%d, want 90x40", width, height)
+	want := tuiNewPanePopupGeometry{PopupWidth: 90, PopupHeight: 40, PromptWidth: 88, PromptHeight: 38}
+	if got != want {
+		t.Fatalf("popup geometry = %#v, want %#v", got, want)
 	}
 
-	width, height, err = tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 80, Height: 20})
+	got, err = tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 24})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if width != 76 || height != 18 {
-		t.Fatalf("small client popup size = %dx%d, want 76x18", width, height)
+	want = tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 20, PromptWidth: 74, PromptHeight: 18}
+	if got != want {
+		t.Fatalf("80x24 popup geometry = %#v, want %#v", got, want)
 	}
 
-	if _, _, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
-		t.Fatal("tuiNewPanePopupSize() succeeded for too-small client")
+	got, err = tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 20})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := tuiNewPanePopupSize(tmuxrun.ClientSize{Width: 80, Height: 19}); err == nil {
-		t.Fatal("tuiNewPanePopupSize() succeeded without enough prompt height")
+	want = tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 20, PromptWidth: 74, PromptHeight: 18}
+	if got != want {
+		t.Fatalf("small client popup geometry = %#v, want %#v", got, want)
+	}
+
+	if _, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
+		t.Fatal("tuiNewPanePopupGeometryForClient() succeeded for too-small client")
+	}
+	if _, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 19}); err == nil {
+		t.Fatal("tuiNewPanePopupGeometryForClient() succeeded without enough prompt height")
 	}
 }
 

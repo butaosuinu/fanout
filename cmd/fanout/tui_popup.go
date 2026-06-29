@@ -20,10 +20,18 @@ import (
 const (
 	tuiNewPanePopupCommand      = "__tui-new-pane-popup"
 	tuiNewPanePopupMinHeight    = 18
+	tuiNewPanePopupBorderInset  = 2
 	tuiNewPanePopupResultPoll   = 50 * time.Millisecond
 	tuiNewPanePopupResultWait   = 24 * time.Hour
 	tuiNewPanePopupEnhancedKeys = fanouttui.EnhancedKeysEnv + "=1"
 )
+
+type tuiNewPanePopupGeometry struct {
+	PopupWidth   int
+	PopupHeight  int
+	PromptWidth  int
+	PromptHeight int
+}
 
 type tuiNewPanePopupResult struct {
 	Canceled bool     `json:"canceled,omitempty"`
@@ -115,7 +123,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 		if err != nil {
 			return fanouttui.LaunchRequest{}, false, err
 		}
-		width, height, err := tuiNewPanePopupSize(size)
+		geometry, err := tuiNewPanePopupGeometryForClient(size)
 		if err != nil {
 			return fanouttui.LaunchRequest{}, false, err
 		}
@@ -124,10 +132,18 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			return fanouttui.LaunchRequest{}, false, err
 		}
 		defer cleanupPopupResult()
-		command := tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile, req.DefaultAgent, width, height)
+		command := tuiNewPanePopupShellCommand(
+			commandName,
+			projectRoot,
+			resultFile,
+			doneFile,
+			req.DefaultAgent,
+			geometry.PromptWidth,
+			geometry.PromptHeight,
+		)
 		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
-			Width:    width,
-			Height:   height,
+			Width:    geometry.PopupWidth,
+			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
 			Title:    "New agent pane",
 			Command:  command,
@@ -155,14 +171,21 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 	}
 }
 
-func tuiNewPanePopupSize(size tmuxrun.ClientSize) (int, int, error) {
-	if size.Width < 54 || size.Height-2 < tuiNewPanePopupMinHeight {
-		return 0, 0, fmt.Errorf("tmux client is too small for the new pane popup: %dx%d", size.Width, size.Height)
+func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
+	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
+	if size.Width < 54 || size.Height < minPopupHeight {
+		return tuiNewPanePopupGeometry{}, fmt.Errorf("tmux client is too small for the new pane popup: %dx%d", size.Width, size.Height)
 	}
-	width := min(90, size.Width-4)
-	height := min(int(math.Floor(float64(size.Height)*0.8)), size.Height-2)
-	height = max(height, tuiNewPanePopupMinHeight)
-	return width, height, nil
+	popupWidth := min(90, size.Width-4)
+	targetPopupHeight := min(int(math.Floor(float64(size.Height)*0.8)), size.Height-2)
+	popupHeight := max(targetPopupHeight, minPopupHeight)
+	// Bordered tmux display-popup subtracts the frame from the child pty.
+	return tuiNewPanePopupGeometry{
+		PopupWidth:   popupWidth,
+		PopupHeight:  popupHeight,
+		PromptWidth:  popupWidth - tuiNewPanePopupBorderInset,
+		PromptHeight: popupHeight - tuiNewPanePopupBorderInset,
+	}, nil
 }
 
 func newPopupResultPaths() (resultFile, doneFile string, cleanup func(), err error) {
