@@ -233,7 +233,13 @@ func (m model) newPaneView() string {
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render("enter create  ctrl+j newline  tab field  esc cancel"))
+	// Only advertise Shift+Enter when enhanced keyboard input is active; otherwise
+	// it submits the form and the hint would mislead. Ctrl+J always inserts a newline.
+	newlineHint := "ctrl+j newline"
+	if enhancedKeyboardKeysEnabled() {
+		newlineHint = "shift+enter/ctrl+j newline"
+	}
+	lines = append(lines, dimStyle.Render("enter create  "+newlineHint+"  tab field  esc cancel"))
 	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
 }
 

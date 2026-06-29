@@ -42,6 +42,13 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
+	// Forward Shift+Enter (and other modified keys) to the console so the
+	// new-pane prompt can insert newlines instead of submitting on the first one.
+	// Honor the same opt-out the TUI uses, so a user who disabled enhanced keys
+	// does not have their tmux server reconfigured.
+	if !fanouttui.EnhancedKeysDisabled(os.Getenv(fanouttui.EnhancedKeysEnv)) {
+		tmuxrun.EnableExtendedKeys()
+	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 	hookConfig := hooks.LoadUserConfig(lg)
 	watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
@@ -148,6 +155,13 @@ func enterTUISession(projectRoot, commandName string, lg *log.Logger) exitcode.C
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
+	// Advertise extkeys for the outer terminal before the client attaches, so the
+	// fresh attach forwards Shift+Enter without needing a re-attach. The inner
+	// console (running in tmux) cannot see the outer TERM, so resolve it here in
+	// the plain shell. Honor the same opt-out the TUI uses.
+	if !fanouttui.EnhancedKeysDisabled(os.Getenv(fanouttui.EnhancedKeysEnv)) {
+		tmuxrun.EnableExtendedKeysForTerm(os.Getenv("TERM"))
+	}
 	if err := tmuxrun.AttachOrSwitch(session); err != nil {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
@@ -239,9 +253,11 @@ func tuiLaunchCommand(commandName, projectRoot string) string {
 	if err != nil || strings.TrimSpace(exe) == "" {
 		exe = commandName
 	}
-	prefix := ""
-	if os.Getenv(fanouttui.EnhancedKeysEnv) == "1" {
-		prefix = fanouttui.EnhancedKeysEnv + "=1 "
-	}
+	// Enhanced keyboard input is on by default. Always forward the current value
+	// (even empty) so the relaunched console matches this process exactly and
+	// overrides any stale FANOUT_TUI_ENHANCED_KEYS that an earlier run captured in
+	// the tmux session environment — otherwise an old opt-out would persist even
+	// after relaunching from a plain shell with the variable unset.
+	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv)) + " "
 	return "cd " + shellQuote(projectRoot) + " && " + prefix + shellQuote(exe)
 }

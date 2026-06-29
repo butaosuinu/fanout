@@ -32,7 +32,7 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | キー | 動作 |
 |---|---|
 | `?` | キーボードショートカットのヘルプを開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
-| `n` | modal を開き、複数行の必須 prompt、`claude` / `codex` の起動数を指定して manual agent ペインを作成する。`codex` は Codex Plan Mode で起動し、modal の prompt を inline で受け取る。`claude` は通常起動する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。prompt 欄では `Ctrl+J` で改行する。`Shift+Enter` は `FANOUT_TUI_ENHANCED_KEYS=1` で enhanced keyboard input を有効化し、terminal がそのキーを区別して送る場合だけ使える。`Enter` で選択したペインを作成する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
+| `n` | modal を開き、複数行の必須 prompt、`claude` / `codex` の起動数を指定して manual agent ペインを作成する。`codex` は Codex Plan Mode で起動し、modal の prompt を inline で受け取る。`claude` は通常起動する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`Enter` で選択したペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |

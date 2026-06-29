@@ -714,6 +714,81 @@ func NewSession(name, startDir string) error {
 	return nil
 }
 
+// EnableExtendedKeys best-effort configures the tmux server so Shift+Enter (and
+// other modified keys) reach the fanout TUI distinctly instead of collapsing to
+// a bare Enter. It turns on extended-keys forwarding and advertises the extkeys
+// terminal feature for the attached client's terminal. Both are server-scoped
+// tmux options that outlive the console (left intact on exit since other fanout
+// panes may rely on them); the writes are idempotent and non-clobbering so
+// repeated runs do not grow terminal-features or override an explicit
+// on/always. Errors are ignored: on terminals or tmux builds without support
+// the TUI falls back to Ctrl+J for newlines.
+func EnableExtendedKeys() {
+	enableExtendedKeys(clientTermName())
+}
+
+// EnableExtendedKeysForTerm configures extended keys for a known terminal name.
+// Use it before a client has attached (e.g. creating the managed session from a
+// plain shell), where #{client_termname} is not yet resolvable but the outer
+// TERM is. Advertising extkeys before the first attach means the new client
+// picks it up without needing a re-attach.
+func EnableExtendedKeysForTerm(term string) {
+	enableExtendedKeys(term)
+}
+
+func enableExtendedKeys(term string) {
+	if extendedKeysNeedsEnable(tmuxShowOption("-sv", "extended-keys")) {
+		_ = exec.Command("tmux", "set-option", "-s", "extended-keys", "on").Run()
+	}
+	if term = strings.TrimSpace(term); term == "" {
+		return
+	}
+	if !terminalFeaturesHaveExtkeys(tmuxShowOption("-s", "terminal-features"), term) {
+		// Lead with a comma: the portable tmux idiom that guarantees a new
+		// terminal-features array entry rather than concatenating onto the last
+		// one. tmux consumes the comma as a separator, so the stored value stays
+		// "<term>:extkeys" (which the idempotency check above looks for).
+		_ = exec.Command("tmux", "set-option", "-as", "terminal-features", ","+term+":extkeys").Run()
+	}
+}
+
+// extendedKeysNeedsEnable reports whether the server extended-keys value is off
+// (or unknown), so an explicit on/always set by the user is left intact.
+func extendedKeysNeedsEnable(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "always":
+		return false
+	default:
+		return true
+	}
+}
+
+// terminalFeaturesHaveExtkeys reports whether the terminal-features listing
+// already advertises extkeys for term, keeping the append idempotent.
+func terminalFeaturesHaveExtkeys(features, term string) bool {
+	term = strings.TrimSpace(term)
+	return term != "" && strings.Contains(features, term+":extkeys")
+}
+
+// tmuxShowOption returns the trimmed `tmux show-options` output, or "" on error.
+func tmuxShowOption(args ...string) string {
+	out, err := exec.Command("tmux", append([]string{"show-options"}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// clientTermName reports the TERM of the attached tmux client (the outer
+// terminal), or "" if it cannot be resolved.
+func clientTermName() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{client_termname}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // SendKeys sends keys to a tmux target.
 func SendKeys(target string, keys ...string) error {
 	target = strings.TrimSpace(target)
