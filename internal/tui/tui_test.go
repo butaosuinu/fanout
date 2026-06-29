@@ -797,6 +797,7 @@ func TestViewRendersHUDCounts(t *testing.T) {
 		{Parent: "200", IssueNum: 201, Name: "one"},
 		{Parent: "200", IssueNum: 202, Name: "two"},
 		{Parent: "200", IssueNum: 203, Name: "three"},
+		{Parent: "200", IssueNum: -1, Kind: state.PaneKindAttachedAgent, Name: "helper", SourceIssueNum: 202},
 	}
 	m.issues = map[issueKey]issueStatus{
 		{Parent: "200", Num: 201}: {State: "CLOSED", PRs: []ghissue.PRRef{{Number: 11, State: "MERGED"}}},

@@ -296,7 +296,7 @@ func compactParent(parent string) string {
 func summarizeHUD(panes []paneView) hudSummary {
 	summary := hudSummary{}
 	for _, pane := range panes {
-		if pane.isShell() {
+		if pane.isPaneOnly() {
 			continue
 		}
 		summary.Total++
