@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
 	"github.com/butaosuinu/fanout/internal/hooks"
 	"github.com/butaosuinu/fanout/internal/settings"
@@ -34,6 +35,56 @@ func TestTUIAgentOrDefault(t *testing.T) {
 				t.Fatalf("tuiAgentOrDefault(%q) = %q, want %q", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCmdTUIRegistersDashboardKeybinds(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	argsPath := installTUIDashboardTmuxShim(t)
+	restoreRunTUI := stubRunTUI(t)
+	defer restoreRunTUI()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if !tmuxLogHasCommand(log, "bind-key\nD\nnew-window") {
+		t.Fatalf("tmux log missing prefix dashboard keybind:\n%s", log)
+	}
+	if !tmuxLogHasCommand(log, "bind-key\n-n\nF12\nnew-window") {
+		t.Fatalf("tmux log missing direct dashboard keybind:\n%s", log)
+	}
+}
+
+func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
+	argsPath := installTUIDashboardTmuxShim(t)
+	restoreRunTUI := stubRunTUI(t)
+	defer restoreRunTUI()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if strings.Contains(log, "bind-key\n") {
+		t.Fatalf("tmux log should not contain dashboard keybinds when disabled:\n%s", log)
 	}
 }
 
@@ -669,6 +720,84 @@ esac
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_SHIM_PANE_ID", paneID)
+}
+
+func installTUIDashboardTmuxShim(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "tmux-args.txt")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
+printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+case "${1:-}" in
+  display-message)
+    if [[ "$*" == *session_name* ]]; then
+      printf 'fanout-test\n'
+    elif [[ "$*" == *pane_title* ]]; then
+      printf 'old title\n'
+    elif [[ "$*" == *window_width* ]]; then
+      printf '@1\t200\t50\n'
+    elif [[ "$*" == *window_id* ]]; then
+      printf '@1\n'
+    fi
+    ;;
+  list-panes)
+    if [[ "$*" == *fanout_role* ]]; then
+      printf '%%tui\t0\t1\tconsole\t\n'
+    fi
+    ;;
+  bind-key|set-option|select-pane|select-layout|kill-pane)
+    ;;
+  *)
+    ;;
+esac
+`
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_SHIM_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
+
+func stubRunTUI(t *testing.T) func() {
+	t.Helper()
+	original := runTUI
+	runTUI = func(fanouttui.Options) error { return nil }
+	return func() {
+		runTUI = original
+	}
+}
+
+func writeTUITestStateFile(t *testing.T, repo string) {
+	t.Helper()
+	dir := filepath.Join(repo, ".fanout")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"panes":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readTUITmuxLog(t *testing.T, argsPath string) string {
+	t.Helper()
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func tmuxLogHasCommand(log, needle string) bool {
+	for command := range strings.SplitSeq(strings.TrimSuffix(log, "\n---\n"), "\n---\n") {
+		if strings.Contains(command, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func installTUIWatcherGHScript(t *testing.T, body string) string {

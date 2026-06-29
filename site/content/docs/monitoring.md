@@ -115,7 +115,7 @@ It puts `<!-- fanout:dashboard parent=N -->` at the start of the comment body, f
 
 ## Web dashboard (fanout dashboard --web)
 
-When you want to share every Session in a browser or with a team, `fanout dashboard --web` starts a **read-only** web dashboard. It visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE. Each row shows pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty. The data source is the same as `--status`, reused across every parent in the repo at once. Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `prefix + D` tmux keybinding described below (opt out with `--no-keybind`).
+When you want to share every Session in a browser or with a team, `fanout dashboard --web` starts a **read-only** web dashboard. It visualizes fanout **Sessions** — the panes recorded in `.fanout/state.json`, grouped by parent issue — and keeps them live in the browser over SSE. Each row shows pane liveness (from `tmux list-panes`), the live tmux pane title, a `running` / `done` agent-state badge, wave / open-blocker columns (from the parent issue graph), issue state, PR merge status, CI status, and diff/dirty. The data source is the same as `--status`, reused across every parent in the repo at once. Children that have not been fanned out yet appear as synthetic not-started rows. It never mutates GitHub state and only ever *reads* tmux, with two deliberate conveniences: it records the running server in `.fanout/dashboard.json` so a second launch reuses it, and it registers the `F12` / `prefix + D` tmux keybindings described below (opt out with `--no-keybind`).
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -128,11 +128,11 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 Run `fanout dashboard --help` for the full flag list.
 
-### prefix + D
+### F12 / prefix + D
 
-After a live fan-out — and whenever the dashboard itself starts — fanout registers a tmux keybinding so that **`prefix + D`** pops the dashboard from any pane. The key launches the server in a detached `fanout-dashboard` window, so it outlives the keypress; a second press just reopens the existing URL.
+When the TUI starts, after a live fan-out, and whenever the dashboard itself starts, fanout registers tmux keybindings so that **`F12`** or **`prefix + D`** pops the dashboard from any pane. Both keys launch the server in a detached `fanout-dashboard` window, so it outlives the keypress; a second press just reopens the existing URL.
 
-Disable the auto-binding with `--no-dashboard-keybind` (fan-out side), `--no-keybind` (dashboard side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` — see [Settings]({{< relref "/docs/settings" >}}).
+Disable the auto-bindings with `--no-dashboard-keybind` (fan-out side), `--no-keybind` (dashboard side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` — see [Settings]({{< relref "/docs/settings" >}}).
 
 ### Graceful degradation
 
