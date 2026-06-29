@@ -192,14 +192,19 @@ func TestWaitForTUINewPanePopupResultTreatsDoneWithoutResultAsCancel(t *testing.
 }
 
 func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testing.T) {
-	t.Setenv(fanouttui.EnhancedKeysEnv, "1")
+	for _, value := range []string{"", "0", "1"} {
+		t.Setenv(fanouttui.EnhancedKeysEnv, value)
+		got := tuiNewPanePopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", "codex", 80, 18)
+		if !strings.Contains(got, fanouttui.EnhancedKeysEnv+"="+shellQuote(value)+" ") {
+			t.Fatalf("popup shell command = %q with %s=%q, want forwarded env prefix", got, fanouttui.EnhancedKeysEnv, value)
+		}
+	}
 
 	got := tuiNewPanePopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", "codex", 80, 18)
 	for _, want := range []string{
 		"trap ",
 		"EXIT HUP INT TERM",
 		"/tmp/result.done",
-		fanouttui.EnhancedKeysEnv + "=1 ",
 		tuiNewPanePopupCommand,
 		"--result-file /tmp/result.json",
 	} {

@@ -18,12 +18,11 @@ import (
 )
 
 const (
-	tuiNewPanePopupCommand      = "__tui-new-pane-popup"
-	tuiNewPanePopupMinHeight    = 18
-	tuiNewPanePopupBorderInset  = 2
-	tuiNewPanePopupResultPoll   = 50 * time.Millisecond
-	tuiNewPanePopupResultWait   = 24 * time.Hour
-	tuiNewPanePopupEnhancedKeys = fanouttui.EnhancedKeysEnv + "=1"
+	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
+	tuiNewPanePopupMinHeight   = 18
+	tuiNewPanePopupBorderInset = 2
+	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
+	tuiNewPanePopupResultWait  = 24 * time.Hour
 )
 
 type tuiNewPanePopupGeometry struct {
@@ -213,9 +212,10 @@ func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile,
 		"--width", fmt.Sprintf("%d", width),
 		"--height", fmt.Sprintf("%d", height),
 	}
-	if os.Getenv(fanouttui.EnhancedKeysEnv) == "1" {
-		parts = append([]string{tuiNewPanePopupEnhancedKeys}, parts...)
-	}
+	// Enhanced keyboard input is on by default. Always forward the current value,
+	// including opt-out values, so the helper mirrors the parent TUI.
+	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
+	parts = append([]string{prefix}, parts...)
 	command := strings.Join(parts, " ")
 	markDone := "printf '' > " + shellQuote(doneFile)
 	return "trap " + shellQuote(markDone) + " EXIT HUP INT TERM; " + command
