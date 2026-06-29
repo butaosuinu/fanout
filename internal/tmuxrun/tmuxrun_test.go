@@ -1187,3 +1187,34 @@ func TestCapturePlanSourceRejectsBadArgs(t *testing.T) {
 		t.Fatal("CapturePlanSource(lines=-1) = nil error, want lines error")
 	}
 }
+
+func TestExtendedKeysNeedsEnable(t *testing.T) {
+	// An explicit on/always is preserved; everything else (off, unknown, empty)
+	// is treated as "needs enabling".
+	for _, keep := range []string{"on", "always", "ON", " Always "} {
+		if extendedKeysNeedsEnable(keep) {
+			t.Fatalf("extendedKeysNeedsEnable(%q) = true, want false (preserve explicit value)", keep)
+		}
+	}
+	for _, enable := range []string{"off", "", "   ", "garbage"} {
+		if !extendedKeysNeedsEnable(enable) {
+			t.Fatalf("extendedKeysNeedsEnable(%q) = false, want true", enable)
+		}
+	}
+}
+
+func TestTerminalFeaturesHaveExtkeys(t *testing.T) {
+	feats := "terminal-features[0] xterm*:clipboard:title\nterminal-features[4] xterm-256color:extkeys"
+	if !terminalFeaturesHaveExtkeys(feats, "xterm-256color") {
+		t.Fatal("terminalFeaturesHaveExtkeys() = false, want true when the entry is present")
+	}
+	if terminalFeaturesHaveExtkeys(feats, "xterm-ghostty") {
+		t.Fatal("terminalFeaturesHaveExtkeys() = true for a term that is not advertised")
+	}
+	if terminalFeaturesHaveExtkeys("terminal-features[0] xterm*:clipboard", "xterm-256color") {
+		t.Fatal("terminalFeaturesHaveExtkeys() = true when extkeys is absent")
+	}
+	if terminalFeaturesHaveExtkeys("anything:extkeys", "") {
+		t.Fatal("terminalFeaturesHaveExtkeys() = true for an empty term")
+	}
+}

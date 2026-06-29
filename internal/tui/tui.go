@@ -155,8 +155,23 @@ func Run(opts Options) error {
 	return err
 }
 
+// enhancedKeyboardKeysEnabled reports whether the TUI requests the enhanced
+// keyboard protocol (so Shift+Enter inserts a newline in the new-pane prompt
+// instead of submitting). It is on by default; FANOUT_TUI_ENHANCED_KEYS set to
+// a falsey value opts out for terminals that mishandle the protocol.
 func enhancedKeyboardKeysEnabled() bool {
-	return os.Getenv(EnhancedKeysEnv) == "1"
+	return !EnhancedKeysDisabled(os.Getenv(EnhancedKeysEnv))
+}
+
+// EnhancedKeysDisabled reports whether the FANOUT_TUI_ENHANCED_KEYS value is an
+// explicit opt-out. Any other value (including empty) keeps enhanced keys on.
+func EnhancedKeysDisabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "off", "no":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeOptions(opts Options) Options {

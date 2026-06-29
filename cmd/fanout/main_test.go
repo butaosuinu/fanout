@@ -298,11 +298,15 @@ func TestTUILaunchCommandChangesToProjectRoot(t *testing.T) {
 	}
 }
 
-func TestTUILaunchCommandPropagatesEnhancedKeysOptIn(t *testing.T) {
-	t.Setenv(fanouttui.EnhancedKeysEnv, "1")
-
-	got := tuiLaunchCommand("fanout", "/tmp/repo")
-	if !strings.Contains(got, " && "+fanouttui.EnhancedKeysEnv+"=1 ") {
-		t.Fatalf("tuiLaunchCommand() = %q, want enhanced keyboard env prefix", got)
+func TestTUILaunchCommandForwardsEnhancedKeysValue(t *testing.T) {
+	// The current value is always forwarded — including the empty (default-on)
+	// case — so the relaunched console matches this process and overrides any
+	// stale FANOUT_TUI_ENHANCED_KEYS captured in the tmux session environment.
+	for _, value := range []string{"", "0", "1"} {
+		t.Setenv(fanouttui.EnhancedKeysEnv, value)
+		got := tuiLaunchCommand("fanout", "/tmp/repo")
+		if !strings.Contains(got, " && "+fanouttui.EnhancedKeysEnv+"="+shellQuote(value)+" ") {
+			t.Fatalf("tuiLaunchCommand() = %q with %s=%q, want forwarded env prefix", got, fanouttui.EnhancedKeysEnv, value)
+		}
 	}
 }

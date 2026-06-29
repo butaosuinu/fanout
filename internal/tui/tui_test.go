@@ -1078,15 +1078,19 @@ func TestEnableKeyboardProtocolsCmd(t *testing.T) {
 	}
 }
 
-func TestEnhancedKeyboardKeysEnabledRequiresOptIn(t *testing.T) {
-	t.Setenv(EnhancedKeysEnv, "")
-	if enhancedKeyboardKeysEnabled() {
-		t.Fatal("enhancedKeyboardKeysEnabled() = true without opt-in")
+func TestEnhancedKeyboardKeysEnabledByDefault(t *testing.T) {
+	for _, value := range []string{"", "1", "true", "anything"} {
+		t.Setenv(EnhancedKeysEnv, value)
+		if !enhancedKeyboardKeysEnabled() {
+			t.Fatalf("enhancedKeyboardKeysEnabled() = false with %s=%q, want on by default", EnhancedKeysEnv, value)
+		}
 	}
 
-	t.Setenv(EnhancedKeysEnv, "1")
-	if !enhancedKeyboardKeysEnabled() {
-		t.Fatal("enhancedKeyboardKeysEnabled() = false with opt-in")
+	for _, value := range []string{"0", "false", "off", "no", "OFF", " 0 "} {
+		t.Setenv(EnhancedKeysEnv, value)
+		if enhancedKeyboardKeysEnabled() {
+			t.Fatalf("enhancedKeyboardKeysEnabled() = true with %s=%q, want opt-out", EnhancedKeysEnv, value)
+		}
 	}
 }
 
@@ -2633,6 +2637,7 @@ func TestNewPaneFormAcceptsCJKPromptInput(t *testing.T) {
 }
 
 func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
+	t.Setenv(EnhancedKeysEnv, "") // default-on: Shift+Enter is advertised
 	m := newModel(Options{})
 	m.width = 100
 	// Tall enough that the centered modal does not cover the monitor's header
@@ -2643,15 +2648,31 @@ func TestNewPaneViewRendersModalOverMonitor(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.View()
-	for _, want := range []string{"PARENT", "New agent pane", "ctrl+j newline", "tab field"} {
+	for _, want := range []string{"PARENT", "New agent pane", "shift+enter/ctrl+j newline", "tab field"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("modal view missing %q:\n%s", want, view)
 		}
 	}
-	for _, unwanted := range []string{"shift+enter newline", "left/right count"} {
+	for _, unwanted := range []string{"left/right count"} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("modal view should not contain %q:\n%s", unwanted, view)
 		}
+	}
+}
+
+func TestNewPaneViewHidesShiftEnterHintWhenOptedOut(t *testing.T) {
+	t.Setenv(EnhancedKeysEnv, "0") // opt-out: Shift+Enter submits, so don't advertise it
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 48
+	m.openNewPaneForm()
+
+	view := m.View()
+	if !strings.Contains(view, "ctrl+j newline") {
+		t.Fatalf("modal view missing ctrl+j hint:\n%s", view)
+	}
+	if strings.Contains(view, "shift+enter") {
+		t.Fatalf("modal view should not advertise shift+enter when opted out:\n%s", view)
 	}
 }
 
