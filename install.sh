@@ -119,6 +119,7 @@ remove_integrations() {
   rm -f "$codex_dir/tools/post-work-review.sh"
   rm -f "$codex_dir/agents/post-work-reviewer.toml" \
     "$codex_dir/agents/post-work-reviewer.md" \
+    "$codex_dir/agents/post-work-verifier.toml" \
     "$codex_dir/agents/post-work-verifier.md"
 }
 

@@ -266,6 +266,37 @@ prepare_branch_review() {
   grep -Fq "dangling-link" "$state/review-bundle.md"
 }
 
+@test "post-work-review includes quoted untracked path diffs" {
+  local repo="$BATS_TEST_TMPDIR/review-quoted-untracked"
+  local state weird
+  setup_review_repo "$repo"
+  weird="line"$'\n'"break.txt"
+  printf 'strange\n' >"$repo/$weird"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fq 'line\nbreak.txt' "$state/changed-files.txt"
+  grep -Fq "+strange" "$state/current.diff"
+  grep -Fq "line" "$state/review-bundle.md"
+}
+
+@test "post-work-review fences changed files in review bundle" {
+  local repo="$BATS_TEST_TMPDIR/review-changed-files-fence"
+  local state fence_name
+  setup_review_repo "$repo"
+  fence_name='```json'
+  printf 'fence\n' >"$repo/$fence_name"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fq '````text' "$state/review-bundle.md"
+  grep -Fq '```json' "$state/review-bundle.md"
+}
+
 @test "post-work-review ignores textconv filters for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-textconv"
   local state textconv
@@ -364,6 +395,25 @@ prepare_branch_review() {
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
+}
+
+@test "post-work-review prepare clears stale marker files" {
+  local repo="$BATS_TEST_TMPDIR/review-clear-marker"
+  local gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  prepare_branch_review "$repo"
+  run_review "$repo" mark
+  [ "$status" -eq 0 ]
+  gitdir="$(gitdir_for "$repo")"
+  [ -f "$gitdir/post-work-review-passed" ]
+  [ -f "$gitdir/post-work-review-passed.meta" ]
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+  [ ! -e "$gitdir/post-work-review-passed.meta" ]
 }
 
 @test "post-work-review record rejects same-agent and hooks-only results" {

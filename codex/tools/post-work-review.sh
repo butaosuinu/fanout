@@ -197,8 +197,7 @@ write_uncommitted_files() {
   : >"$files_file"
   git diff "${REVIEW_DIFF_OPTS[@]}" --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
   git diff "${REVIEW_DIFF_OPTS[@]}" --name-only -- >>"$files_file" 2>/dev/null || true
-  git ls-files --others --exclude-standard >"$untracked_file" 2>/dev/null || true
-  cat "$untracked_file" >>"$files_file"
+  write_untracked_files "$untracked_file" "$files_file"
   sort -u "$files_file" -o "$files_file"
 }
 
@@ -223,9 +222,27 @@ append_worktree_files() {
   untracked_file="$2"
   git diff "${REVIEW_DIFF_OPTS[@]}" --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
   git diff "${REVIEW_DIFF_OPTS[@]}" --name-only -- >>"$files_file" 2>/dev/null || true
-  git ls-files --others --exclude-standard >"$untracked_file" 2>/dev/null || true
-  cat "$untracked_file" >>"$files_file"
+  write_untracked_files "$untracked_file" "$files_file"
   sort -u "$files_file" -o "$files_file"
+}
+
+escape_path_for_list() {
+  local path
+  path="$1"
+  path="${path//$'\n'/\\n}"
+  printf '%s\n' "$path"
+}
+
+write_untracked_files() {
+  local untracked_file files_file file
+  untracked_file="$1"
+  files_file="$2"
+  : >"$untracked_file"
+  git ls-files -z --others --exclude-standard >"$untracked_file" 2>/dev/null || true
+  while IFS= read -r -d '' file; do
+    [ -n "$file" ] || continue
+    escape_path_for_list "$file" >>"$files_file"
+  done <"$untracked_file"
 }
 
 write_commit_files() {
@@ -258,7 +275,7 @@ append_untracked_diffs() {
   untracked_file="$1"
   diff_file="$2"
   [ -s "$untracked_file" ] || return 0
-  while IFS= read -r file; do
+  while IFS= read -r -d '' file; do
     [ -n "$file" ] || continue
     [ -e "$file" ] || [ -L "$file" ] || continue
     {
@@ -897,9 +914,9 @@ write_review_bundle() {
     printf 'Each finding must include severity, file, line, title, description, and recommendation.\n\n'
     printf '## Changed files\n\n'
     if [ -s "$(changed_files_path)" ]; then
-      sed 's/^/- /' "$(changed_files_path)"
+      write_markdown_fenced_file text "$(changed_files_path)"
     else
-      printf -- '- none\n'
+      printf '```text\nnone\n```\n'
     fi
     printf '\n## Diffstat\n\n'
     write_markdown_fenced_file text "$diffstat_file"
@@ -993,6 +1010,7 @@ cmd_prepare() {
   state="$(state_dir_abs)"
   results="$(results_dir)"
   rm -rf "$state"
+  rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
   mkdir -p "$results" || die "failed to create post-work-review state"
 
   PREPARED_AT="$(now_utc)"
