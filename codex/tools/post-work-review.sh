@@ -85,6 +85,10 @@ display_path() {
   esac
 }
 
+agent_path() {
+  printf '%s\n' "$1"
+}
+
 now_utc() {
   date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
 }
@@ -127,13 +131,6 @@ resolve_base() {
     return 0
   fi
 
-  for candidate in origin/main origin/master main master; do
-    if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-
   if command -v gh >/dev/null 2>&1; then
     gh_default="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)"
     if [ -n "$gh_default" ]; then
@@ -145,6 +142,13 @@ resolve_base() {
       done
     fi
   fi
+
+  for candidate in origin/main origin/master main master; do
+    if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
 
   return 1
 }
@@ -258,7 +262,7 @@ append_untracked_diffs() {
     [ -f "$file" ] || continue
     {
       printf '\n'
-      git diff --no-index --binary -- /dev/null "$file" 2>/dev/null || true
+      git diff --no-ext-diff --no-index --binary -- /dev/null "$file" 2>/dev/null || true
     } >>"$diff_file"
   done <"$untracked_file"
 }
@@ -266,8 +270,8 @@ append_untracked_diffs() {
 append_uncommitted_tracked_diffs() {
   local diff_file
   diff_file="$1"
-  git diff --cached --binary HEAD -- >>"$diff_file" 2>/dev/null || true
-  git diff --binary -- >>"$diff_file" 2>/dev/null || true
+  git diff --no-ext-diff --cached --binary HEAD -- >>"$diff_file" 2>/dev/null || true
+  git diff --no-ext-diff --binary -- >>"$diff_file" 2>/dev/null || true
 }
 
 write_diff_for_scope() {
@@ -283,9 +287,9 @@ write_diff_for_scope() {
       append_untracked_diffs "$untracked_file" "$diff_file"
       ;;
     branch)
-      if git diff --binary "$base"...HEAD -- >"$diff_file" 2>/dev/null; then
+      if git diff --no-ext-diff --binary "$base"...HEAD -- >"$diff_file" 2>/dev/null; then
         :
-      elif git diff --binary "$base" HEAD -- >"$diff_file" 2>/dev/null; then
+      elif git diff --no-ext-diff --binary "$base" HEAD -- >"$diff_file" 2>/dev/null; then
         :
       else
         rm -f "$diff_file"
@@ -295,7 +299,7 @@ write_diff_for_scope() {
       append_untracked_diffs "$untracked_file" "$diff_file"
       ;;
     commit)
-      git show --format= --binary HEAD >"$diff_file" 2>/dev/null || : >"$diff_file"
+      git show --no-ext-diff --format= --binary HEAD >"$diff_file" 2>/dev/null || : >"$diff_file"
       ;;
     *)
       die "invalid scope=$scope"
@@ -699,7 +703,7 @@ review_target_changed_reason() {
 
 summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
-  local repeated all_fixed new_regressions truncated fix_rounds scope changed_files invalid_count duplicate_sessions i path
+  local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions i path
   local target_changed_reason
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -739,6 +743,9 @@ summary_values() {
   elif any_result_truncated; then
     clean="unknown"
     stop="review_truncated"
+  elif [ "$(env_get pending_verify 2>/dev/null || echo 0)" = "1" ]; then
+    clean="false"
+    findings=0
   elif [ "$broad_calls" -eq 0 ]; then
     clean="unknown"
   else
@@ -774,6 +781,7 @@ summary_values() {
   fi
 
   fix_rounds="$(env_get fix_rounds 2>/dev/null || echo 0)"
+  pending_verify="$(env_get pending_verify 2>/dev/null || echo 0)"
   if [ -z "$stop" ] && [ "$clean" != "true" ] && [ "$broad_calls" -eq 1 ] && [ "$verify_calls" -ge "$VERIFY_REVIEW_MAX" ]; then
     stop="review_budget_exhausted"
   fi
@@ -785,7 +793,7 @@ summary_values() {
   changed_files="$(env_get changed_files 2>/dev/null || echo 0)"
   if [ "$clean" = "true" ] && [ -z "$stop" ] && [ "$broad_calls" -eq 1 ] && \
     [ "$total_calls" -le "$MAX_TOTAL_REVIEWER_CALLS" ] && [ "$scope" = "branch" ] && \
-    [ "$changed_files" != "0" ] && ! has_dirty_tree; then
+    [ "$changed_files" != "0" ] && [ "$pending_verify" != "1" ] && ! has_dirty_tree; then
     marker="true"
   fi
 
@@ -816,11 +824,12 @@ print_state_lines() {
   printf 'diff_hash=%s\n' "$(env_get diff_hash 2>/dev/null || echo unknown)"
   printf 'changed_files=%s\n' "$(env_get changed_files 2>/dev/null || echo 0)"
   printf 'fix_rounds=%s\n' "$(env_get fix_rounds 2>/dev/null || echo 0)"
-  printf 'review_bundle=%s\n' "$(display_path "$(review_bundle_path)")"
+  printf 'pending_verify=%s\n' "$(env_get pending_verify 2>/dev/null || echo 0)"
+  printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
   if [ -f "$(verify_bundle_path)" ]; then
-    printf 'verify_bundle=%s\n' "$(display_path "$(verify_bundle_path)")"
+    printf 'verify_bundle=%s\n' "$(agent_path "$(verify_bundle_path)")"
   fi
-  printf 'findings_tsv=%s\n' "$(display_path "$(findings_tsv_path)")"
+  printf 'findings_tsv=%s\n' "$(agent_path "$(findings_tsv_path)")"
   print_budget_lines
   printf 'broad_review_calls=%s\n' "${SUMMARY_BROAD_CALLS:-$(broad_review_calls)}"
   printf 'verify_review_calls=%s\n' "${SUMMARY_VERIFY_CALLS:-$(verify_review_calls)}"
@@ -840,8 +849,9 @@ write_review_env() {
     printf 'diff_hash=%s\n' "$DIFF_HASH"
     printf 'changed_files=%s\n' "$CHANGED_FILE_COUNT"
     printf 'fix_rounds=0\n'
-    printf 'review_bundle=%s\n' "$(display_path "$(review_bundle_path)")"
-    printf 'findings_tsv=%s\n' "$(display_path "$(findings_tsv_path)")"
+    printf 'pending_verify=0\n'
+    printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
+    printf 'findings_tsv=%s\n' "$(agent_path "$(findings_tsv_path)")"
   } >"$file"
 }
 
@@ -1045,7 +1055,8 @@ cmd_prepare_verify() {
   env_set diff_hash "$DIFF_HASH"
   env_set changed_files "$CHANGED_FILE_COUNT"
   env_set fix_rounds "$fix_rounds"
-  env_set verify_bundle "$(display_path "$(verify_bundle_path)")"
+  env_set pending_verify 1
+  env_set verify_bundle "$(agent_path "$(verify_bundle_path)")"
   write_verify_bundle
 
   summary_values
@@ -1094,6 +1105,7 @@ cmd_record() {
   cp "$review_json" "$dest" || die "failed to store review result"
   if [ "$kind" = "verify" ]; then
     commit_pending_reviewed_diff
+    env_set pending_verify 0
   fi
   rewrite_findings_tsv
   summary_values

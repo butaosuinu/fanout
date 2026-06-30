@@ -144,6 +144,9 @@ prepare_branch_review() {
   [[ "$output" == *"verify_review_calls=0"* ]]
   [[ "$output" == *"max_total_reviewer_calls=3"* ]]
   state="$(state_dir_for "$repo")"
+  [[ "$output" == *"pending_verify=0"* ]]
+  [[ "$output" == *"review_bundle=$state/review-bundle.md"* ]]
+  [[ "$output" == *"findings_tsv=$state/findings.tsv"* ]]
   [ -f "$state/review.env" ]
   [ -f "$state/review-bundle.md" ]
   [ -d "$state/results" ]
@@ -156,6 +159,78 @@ prepare_branch_review() {
   grep -Fq "+dirty" "$state/review-bundle.md"
   grep -Fq '````diff' "$state/review-bundle.md"
   grep -Fq "+new" "$state/review-bundle.md"
+}
+
+@test "post-work-review prepare paths are usable from caller subdirectories" {
+  local repo="$BATS_TEST_TMPDIR/review-subdir"
+  local state bundle_path
+  setup_review_repo "$repo"
+  mkdir -p "$repo/subdir"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run bash -c 'cd "$1/subdir" || exit 1; bash "$2" prepare 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER"
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  state="$(cd "$state" && pwd -P)"
+  bundle_path="$(printf '%s\n' "$output" | awk -F= '$1 == "review_bundle" { print $2; exit }')"
+  [ "$bundle_path" = "$state/review-bundle.md" ]
+  [ -f "$bundle_path" ]
+}
+
+@test "post-work-review resolve_base prefers GitHub default before main fallback" {
+  local repo="$BATS_TEST_TMPDIR/review-default-branch"
+  local gh_bin
+  setup_review_repo "$repo"
+  git -C "$repo" checkout -qb develop
+  printf 'develop-base\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "develop base"
+  git -C "$repo" update-ref refs/remotes/origin/main main
+  git -C "$repo" update-ref refs/remotes/origin/develop develop
+  git -C "$repo" checkout -qb feature main
+  printf 'feature\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "feature"
+  gh_bin="$BATS_TEST_TMPDIR/gh-bin"
+  mkdir -p "$gh_bin"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [ "${1:-}" = repo ] && [ "${2:-}" = view ]; then\n'
+    printf '  echo develop\n'
+    printf '  exit 0\n'
+    printf 'fi\n'
+    printf 'exit 1\n'
+  } >"$gh_bin/gh"
+  chmod +x "$gh_bin/gh"
+  export PATH="$gh_bin:$PATH"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"base=origin/develop"* ]]
+}
+
+@test "post-work-review ignores external diff drivers for review bundles" {
+  local repo="$BATS_TEST_TMPDIR/review-no-ext-diff"
+  local state external_diff
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+  external_diff="$BATS_TEST_TMPDIR/external-diff.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo EXTERNAL-DIFF\n'
+  } >"$external_diff"
+  chmod +x "$external_diff"
+  export GIT_EXTERNAL_DIFF="$external_diff"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fq "+dirty" "$state/current.diff"
+  ! grep -Fq "EXTERNAL-DIFF" "$state/current.diff"
+  ! grep -Fq "EXTERNAL-DIFF" "$state/review-bundle.md"
 }
 
 @test "post-work-review records, summarizes, and marks a clean branch review" {
@@ -364,6 +439,30 @@ prepare_branch_review() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"clean=true"* ]]
   [[ "$output" == *"marker_eligible=false"* ]]
+}
+
+@test "post-work-review pending verify bundle prevents clean summarize and mark" {
+  local repo="$BATS_TEST_TMPDIR/review-pending-verify"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  prepare_branch_review "$repo"
+
+  printf 'new-target\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "new target"
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pending_verify=1"* ]]
+
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean=false"* ]]
+  [[ "$output" == *"pending_verify=1"* ]]
+  [[ "$output" == *"marker_eligible=false"* ]]
+
+  run_review "$repo" mark
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"marker_reason=last_review_not_clean"* ]]
 }
 
 @test "post-work-review verifier clean path and repeated finding detection" {
