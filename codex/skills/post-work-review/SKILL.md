@@ -95,6 +95,12 @@ driver.
    POST_WORK_REVIEW_BASE="<base>" bash "$driver" mark
    ```
 
+   If branch scope returns `clean=true` but `marker_eligible=false` because
+   the fix is still in a dirty working tree, do not mark the old gate. Commit
+   the fix first, then restart this procedure from step 1 for the new committed
+   review target. Treat that as a new gate for a new HEAD, not as another broad
+   reviewer call inside the previous gate.
+
 5. If findings remain and no stop reason is set, fix only actionable findings
    from the stored JSON/results and generated `findings.tsv`. Then prepare a
    verifier bundle:

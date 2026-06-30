@@ -382,6 +382,19 @@ json_findings_count() {
     "$file"
 }
 
+json_findings_missing_required_count() {
+  local file
+  file="$1"
+  json_eval \
+    'data=JSON.parse(File.read(ARGV[0])); findings=data["findings"]; exit 1 unless findings.is_a?(Array); required=%w[severity file line title description recommendation]; missing=0; findings.each do |f|; if !f.is_a?(Hash) || required.any? { |k| !f.key?(k) || f[k].nil? || f[k].to_s.strip.empty? }; missing += 1; end; end; puts missing' \
+    'import json,sys; data=json.load(open(sys.argv[1])); findings=data.get("findings"); sys.exit(1) if not isinstance(findings,list) else None; required=["severity","file","line","title","description","recommendation"]; missing=0
+for f in findings:
+    if not isinstance(f,dict) or any(k not in f or f[k] is None or str(f[k]).strip()=="" for k in required):
+        missing += 1
+print(missing)' \
+    "$file"
+}
+
 json_findings_tsv() {
   local file result_name
   file="$1"
@@ -497,9 +510,42 @@ duplicate_reviewer_session_count() {
   rm -f "$tmp"
 }
 
+markdown_fence_for_file() {
+  local file
+  file="$1"
+  awk '
+    BEGIN { max = 2 }
+    {
+      line = $0
+      while (match(line, /`+/)) {
+        if (RLENGTH > max) {
+          max = RLENGTH
+        }
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END {
+      for (i = 0; i < max + 1; i++) {
+        printf "`"
+      }
+      printf "\n"
+    }
+  ' "$file"
+}
+
+write_markdown_fenced_file() {
+  local lang file fence
+  lang="$1"
+  file="$2"
+  fence="$(markdown_fence_for_file "$file")"
+  printf '%s%s\n' "$fence" "$lang"
+  cat "$file"
+  printf '%s\n' "$fence"
+}
+
 validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
-  local head diff_hash result_head result_diff finding_count actual_count truncated all_fixed new_regressions
+  local head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
   kind="$1"
   file="$2"
   check_target="${3:-target}"
@@ -555,6 +601,9 @@ validate_result() {
   is_number "$actual_count" || die "findings must be an array"
   [ "$finding_count" = "$actual_count" ] || die "finding_count does not match findings array"
   [ "$finding_count" -le "$MAX_FINDINGS_PER_ROUND" ] || die "finding_count exceeds max_findings_per_round"
+  missing_required="$(json_findings_missing_required_count "$file" 2>/dev/null || true)"
+  is_number "$missing_required" || die "findings must be an array"
+  [ "$missing_required" -eq 0 ] || die "finding missing required fields"
 
   truncated="$(json_scalar "$file" truncated 2>/dev/null || true)"
   [ "$truncated" = "true" ] || [ "$truncated" = "false" ] || die "truncated must be true or false"
@@ -797,9 +846,11 @@ write_review_env() {
 }
 
 write_review_bundle() {
-  local bundle diff_file
+  local bundle diff_file diffstat_file
   bundle="$(review_bundle_path)"
   diff_file="$(state_dir_abs)/current.diff"
+  diffstat_file="$(state_dir_abs)/current.diffstat"
+  diffstat_for_file "$diff_file" >"$diffstat_file"
   {
     printf '# post-work-review broad review bundle\n\n'
     printf 'This bundle is for exactly one fresh isolated broad reviewer call.\n'
@@ -827,12 +878,10 @@ write_review_bundle() {
     else
       printf -- '- none\n'
     fi
-    printf '\n## Diffstat\n\n```text\n'
-    diffstat_for_file "$diff_file"
-    printf '```\n\n'
-    printf '## Diff\n\n```diff\n'
-    cat "$diff_file"
-    printf '```\n'
+    printf '\n## Diffstat\n\n'
+    write_markdown_fenced_file text "$diffstat_file"
+    printf '\n## Diff\n\n'
+    write_markdown_fenced_file diff "$diff_file"
   } >"$bundle"
 }
 
@@ -863,15 +912,12 @@ write_verify_bundle() {
     printf '```json\n'
     printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
     printf '```\n\n'
-    printf '## Prior findings\n\n```tsv\n'
-    cat "$(findings_tsv_path)"
-    printf '```\n\n'
-    printf '## Current fix diff\n\n```diff\n'
-    cat "$fix_diff"
-    printf '```\n\n'
-    printf '## Current scoped diff\n\n```diff\n'
-    cat "$current_diff"
-    printf '```\n'
+    printf '## Prior findings\n\n'
+    write_markdown_fenced_file tsv "$(findings_tsv_path)"
+    printf '\n## Current fix diff\n\n'
+    write_markdown_fenced_file diff "$fix_diff"
+    printf '\n## Current scoped diff\n\n'
+    write_markdown_fenced_file diff "$current_diff"
   } >"$bundle"
 }
 

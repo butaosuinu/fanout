@@ -131,7 +131,7 @@ prepare_branch_review() {
   local repo="$BATS_TEST_TMPDIR/review-uncommitted"
   local state
   setup_review_repo "$repo"
-  printf 'dirty\n' >"$repo/tracked.txt"
+  printf 'dirty\n```\n' >"$repo/tracked.txt"
   printf 'new\n' >"$repo/notes.md"
 
   run_review "$repo" prepare
@@ -154,6 +154,7 @@ prepare_branch_review() {
   grep -Fxq "tracked.txt" "$state/changed-files.txt"
   grep -Fxq "notes.md" "$state/changed-files.txt"
   grep -Fq "+dirty" "$state/review-bundle.md"
+  grep -Fq '````diff' "$state/review-bundle.md"
   grep -Fq "+new" "$state/review-bundle.md"
 }
 
@@ -210,6 +211,21 @@ prepare_branch_review() {
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
   [[ "$output" == *"hooks-only success is rejected"* ]]
+}
+
+@test "post-work-review record rejects incomplete findings" {
+  local repo="$BATS_TEST_TMPDIR/review-incomplete-finding"
+  local json_file="$BATS_TEST_TMPDIR/incomplete-finding.json"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+
+  write_broad_result_json "$repo" "session-incomplete-finding" false false false "{}" "$json_file"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"finding missing required fields"* ]]
 }
 
 @test "post-work-review record rejects stale review targets" {
@@ -332,13 +348,14 @@ prepare_branch_review() {
   run_review "$repo" record broad "$broad_json"
   [ "$status" -eq 0 ]
 
-  printf 'fixed-without-commit\n' >"$repo/tracked.txt"
+  printf 'fixed-without-commit\n```\n' >"$repo/tracked.txt"
   run_review_base "$repo" prepare-verify
   [ "$status" -eq 0 ]
   [[ "$output" == *"scope=branch"* ]]
   [[ "$output" == *"fix_rounds=1"* ]]
   state="$(state_dir_for "$repo")"
   grep -Fq "+fixed-without-commit" "$state/verify-bundle.md"
+  grep -Fq '````diff' "$state/verify-bundle.md"
 
   write_verify_result_json "$repo" "session-dirty-verify" true false "" "$verify_json"
   run_review "$repo" record verify "$verify_json"
