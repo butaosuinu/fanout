@@ -188,6 +188,7 @@ prepare_branch_review() {
   git -C "$repo" commit -qm "develop base"
   git -C "$repo" update-ref refs/remotes/origin/main main
   git -C "$repo" update-ref refs/remotes/origin/develop develop
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
   git -C "$repo" checkout -qb feature main
   printf 'feature\n' >"$repo/tracked.txt"
   git -C "$repo" add tracked.txt
@@ -627,6 +628,31 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
+@test "post-work-review prepare does not reset an unresolved broad review" {
+  local repo="$BATS_TEST_TMPDIR/review-prepare-budget-guard"
+  local broad_json="$BATS_TEST_TMPDIR/broad-prepare-budget.json"
+  local finding state
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  write_broad_result_json "$repo" "session-prepare-budget" false false false "$finding" "$broad_json"
+  run_review "$repo" record broad "$broad_json"
+  [ "$status" -eq 0 ]
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"broad_review_calls=1"* ]]
+  [[ "$output" == *"clean=false"* ]]
+  [[ "$output" == *"findings=1"* ]]
+  [[ "$output" == *"stop_reason=review_budget_exhausted"* ]]
+  state="$(state_dir_for "$repo")"
+  [ -f "$state/results/broad-001.json" ]
+}
+
 @test "post-work-review pending verify bundle prevents clean summarize and mark" {
   local repo="$BATS_TEST_TMPDIR/review-pending-verify"
   local broad_json="$BATS_TEST_TMPDIR/broad-pending-verify.json"
@@ -760,6 +786,10 @@ prepare_branch_review() {
   run_review "$trunc_repo" summarize
   [ "$status" -eq 0 ]
   [[ "$output" == *"clean=unknown"* ]]
+  [[ "$output" == *"stop_reason=review_truncated"* ]]
+  run_review_base "$trunc_repo" prepare-verify
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"clean=false"* ]]
   [[ "$output" == *"stop_reason=review_truncated"* ]]
 
   setup_review_repo "$budget_repo"

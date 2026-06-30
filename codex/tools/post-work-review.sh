@@ -141,12 +141,6 @@ resolve_base() {
     return 0
   fi
 
-  remote_head="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-  if [ -n "$remote_head" ]; then
-    printf '%s\n' "$remote_head"
-    return 0
-  fi
-
   if command -v gh >/dev/null 2>&1; then
     gh_default="$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || true)"
     if [ -n "$gh_default" ]; then
@@ -157,6 +151,12 @@ resolve_base() {
         fi
       done
     fi
+  fi
+
+  remote_head="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [ -n "$remote_head" ]; then
+    printf '%s\n' "$remote_head"
+    return 0
   fi
 
   for candidate in origin/main origin/master main master; do
@@ -897,6 +897,18 @@ print_state_lines() {
   printf 'total_reviewer_calls=%s\n' "${SUMMARY_TOTAL_CALLS:-$(total_reviewer_calls)}"
 }
 
+stop_existing_review_state() {
+  local findings reason
+  findings="$1"
+  reason="$2"
+  print_state_lines
+  printf 'clean=false\n'
+  printf 'findings=%s\n' "$findings"
+  printf 'stop_reason=%s\n' "$reason"
+  printf 'marker_eligible=false\n'
+  exit 1
+}
+
 write_review_env() {
   local file
   file="$(review_env_path)"
@@ -1034,12 +1046,22 @@ write_initial_findings_tsv() {
 }
 
 cmd_prepare() {
-  local root state results scope_pair untracked_file diff_file
+  local root state results scope_pair untracked_file diff_file latest_findings pending_verify
   ensure_repo
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
   state="$(state_dir_abs)"
   results="$(results_dir)"
+  if [ -f "$(review_env_path)" ] && [ "$(broad_review_calls)" -ge "$BROAD_REVIEW_MAX" ]; then
+    latest_findings="$(latest_finding_count)"
+    if any_result_truncated; then
+      stop_existing_review_state "$latest_findings" "review_truncated"
+    fi
+    pending_verify="$(env_get pending_verify 2>/dev/null || echo 0)"
+    if [ "$latest_findings" -gt 0 ] || [ "$pending_verify" = "1" ]; then
+      stop_existing_review_state "$latest_findings" "review_budget_exhausted"
+    fi
+  fi
   rm -rf "$state"
   rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
   mkdir -p "$results" || die "failed to create post-work-review state"
@@ -1078,6 +1100,10 @@ cmd_prepare_verify() {
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
   broad_calls="$(broad_review_calls)"
   [ "$broad_calls" -eq 1 ] || die "broad review result not found"
+  if any_result_truncated; then
+    rewrite_findings_tsv
+    stop_existing_review_state "$(latest_finding_count)" "review_truncated"
+  fi
   verify_calls="$(verify_review_calls)"
   total_calls="$(total_reviewer_calls)"
   if [ "$verify_calls" -ge "$VERIFY_REVIEW_MAX" ] || [ "$total_calls" -ge "$MAX_TOTAL_REVIEWER_CALLS" ]; then
