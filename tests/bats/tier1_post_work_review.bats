@@ -86,7 +86,7 @@ write_broad_result_json() {
     count=0
   fi
   cat >"$out_file" <<EOF
-{"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
+{"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
 EOF
 }
 
@@ -106,7 +106,7 @@ write_verify_result_json() {
     count=0
   fi
   cat >"$out_file" <<EOF
-{"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
+{"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
 EOF
 }
 
@@ -176,6 +176,17 @@ prepare_branch_review() {
   bundle_path="$(printf '%s\n' "$output" | awk -F= '$1 == "review_bundle" { print $2; exit }')"
   [ "$bundle_path" = "$state/review-bundle.md" ]
   [ -f "$bundle_path" ]
+}
+
+@test "post-work-review rejects no-sandbox Codex overrides" {
+  local repo="$BATS_TEST_TMPDIR/review-no-sandbox"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run bash -c 'cd "$1" || exit 1; CODEX_SANDBOX=none bash "$2" prepare 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"isolated reviewer requires an enforceable read-only subagent sandbox"* ]]
 }
 
 @test "post-work-review resolve_base prefers GitHub default before main fallback" {

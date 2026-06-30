@@ -55,6 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CODEX_DIR/skills/fanout-plan/`(既定は `~/.codex/skills/fanout-plan/`)
 - `$CODEX_DIR/skills/post-work-review/`(既定は `~/.codex/skills/post-work-review/`)
 - `$CODEX_DIR/skills/pr-watch/`(既定は `~/.codex/skills/pr-watch/`)
+- `$CODEX_DIR/agents/post-work-reviewer.toml`(既定は `~/.codex/agents/post-work-reviewer.toml`)
+- `$CODEX_DIR/agents/post-work-verifier.toml`(既定は `~/.codex/agents/post-work-verifier.toml`)
 - `$CODEX_DIR/agents/post-work-reviewer.md`(既定は `~/.codex/agents/post-work-reviewer.md`)
 - `$CODEX_DIR/agents/post-work-verifier.md`(既定は `~/.codex/agents/post-work-verifier.md`)
 

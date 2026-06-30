@@ -45,6 +45,7 @@ Return one object with this shape:
   "reviewer_session_id": "<fresh subagent id>",
   "same_agent_review": false,
   "reviewer_isolated": true,
+  "reviewer_sandbox_mode": "read-only",
   "hooks_only_success": false,
   "head": "<head from review bundle>",
   "diff_hash": "<diff_hash from review bundle>",

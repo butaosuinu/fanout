@@ -51,7 +51,7 @@ PR を作ったあとの追従には別の skill を使います。`~/.claude/co
 
 ## Codex CLI
 
-Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/fanout-plan/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。`post-work-reviewer` と `post-work-verifier` の native subagent は `~/.codex/agents/post-work-reviewer.md` と `~/.codex/agents/post-work-verifier.md` に配置されます。skill や agent のインストール、更新のあと、実行中の Codex セッションがあれば再起動すると新しいファイルを認識します。
+Codex 版の skill は `~/.codex/skills/fanout/`、`~/.codex/skills/fanout-issues/`、`~/.codex/skills/fanout-plan/`、`~/.codex/skills/post-work-review/`、`~/.codex/skills/pr-watch/` に配置されます。native subagent の TOML は `~/.codex/agents/post-work-reviewer.toml` と `~/.codex/agents/post-work-verifier.toml` に配置され、対応する `.md` は読める契約文として同梱されます。skill や agent のインストール、更新のあと、実行中の Codex セッションがあれば再起動すると新しいファイルを認識します。
 
 fanout skill は、Codex に「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。Claude のコマンドと同じ安全フローに従い、まず dry-run、次にターゲットの確認、それから本実行へ進みます。暗黙の子参照のスキャンと `--name` 生成も同様に行います。
 

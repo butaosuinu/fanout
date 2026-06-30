@@ -102,6 +102,19 @@ hash_file() {
   git hash-object "$1" 2>/dev/null || wc -c "$1" | awk '{print $1}'
 }
 
+ensure_read_only_subagent_sandbox_available() {
+  case "${CODEX_SANDBOX:-}" in
+    danger-full-access|full-access|none|disabled|off|yolo)
+      die "isolated reviewer requires an enforceable read-only subagent sandbox; CODEX_SANDBOX=${CODEX_SANDBOX}"
+      ;;
+  esac
+  case "${CODEX_UNSAFE_ALLOW_NO_SANDBOX:-}${CODEX_YOLO:-}" in
+    *1*|*true*|*TRUE*)
+      die "isolated reviewer requires read-only subagents; sandbox override is active"
+      ;;
+  esac
+}
+
 diff_path_label() {
   local path escaped
   path="$1"
@@ -610,7 +623,7 @@ write_markdown_fenced_file() {
 
 validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
-  local head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
+  local sandbox_mode head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
   kind="$1"
   file="$2"
   check_target="${3:-target}"
@@ -639,6 +652,8 @@ validate_result() {
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
   isolated="$(json_scalar "$file" reviewer_isolated 2>/dev/null || true)"
   [ "$isolated" = "true" ] || die "non-isolated reviewer is rejected"
+  sandbox_mode="$(json_scalar "$file" reviewer_sandbox_mode 2>/dev/null || true)"
+  [ "$sandbox_mode" = "read-only" ] || die "reviewer_sandbox_mode must be read-only"
   hooks_only="$(json_scalar "$file" hooks_only_success 2>/dev/null || true)"
   [ "$hooks_only" = "false" ] || die "hooks-only success is rejected"
 
@@ -952,7 +967,7 @@ write_review_bundle() {
     printf -- '- Do not run tests, linters, formatters, typecheck, project checks, local LLMs, or codex review.\n\n'
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"hooks_only_success":false,"head":"%s","diff_hash":"%s","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
+    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
     printf '```\n\n'
     printf 'Each finding must include severity, file, line, title, description, and recommendation.\n\n'
     printf '## Changed files\n\n'
@@ -993,7 +1008,7 @@ write_verify_bundle() {
     printf -- '- Set truncated=true if more than %s in-scope findings are present.\n\n' "$MAX_FINDINGS_PER_ROUND"
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
+    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
     printf '```\n\n'
     printf '## Prior findings\n\n'
     write_markdown_fenced_file tsv "$(findings_tsv_path)"
@@ -1048,6 +1063,7 @@ write_initial_findings_tsv() {
 cmd_prepare() {
   local root state results scope_pair untracked_file diff_file latest_findings pending_verify
   ensure_repo
+  ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
   state="$(state_dir_abs)"
@@ -1095,6 +1111,7 @@ cmd_prepare() {
 cmd_prepare_verify() {
   local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff
   ensure_repo
+  ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
@@ -1167,6 +1184,7 @@ cmd_record() {
   [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "record kind must be broad or verify"
   [ -n "$review_json" ] || die "review-json-file is required"
   ensure_repo
+  ensure_read_only_subagent_sandbox_available
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
   mkdir -p "$(results_dir)" || die "failed to create results dir"

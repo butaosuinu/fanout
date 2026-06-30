@@ -55,7 +55,7 @@ For follow-up after a PR exists, use a separate skill. `~/.claude/commands/pr-wa
 
 ## Codex CLI
 
-The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. The `post-work-reviewer` and `post-work-verifier` native subagent files are installed to `~/.codex/agents/post-work-reviewer.md` and `~/.codex/agents/post-work-verifier.md`. Restart any running Codex session after installing or updating the skills or agents so it picks up the new files.
+The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. The native subagent TOML files are installed to `~/.codex/agents/post-work-reviewer.toml` and `~/.codex/agents/post-work-verifier.toml`; matching `.md` files are installed as readable contracts. Restart any running Codex session after installing or updating the skills or agents so it picks up the new files.
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as the Claude command — dry-run first, confirm targets, then run the real command — and it also performs the implicit-child scan and `--name` generation.
 

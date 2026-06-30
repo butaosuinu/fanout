@@ -15,6 +15,10 @@ subagents. The main agent must not review its own code.
 - Default backend is `bounded-isolated-reviewer`.
 - Do not call `codex review` in the default path.
 - Do not use local LLMs.
+- Do not start this gate from a Codex session whose runtime override disables or
+  weakens agent sandbox settings, such as `--yolo`, `danger-full-access`, or an
+  equivalent no-sandbox mode. Stop non-clean before `prepare` if the
+  `sandbox_mode = "read-only"` TOML setting cannot be enforced for subagents.
 - The driver and reviewer/verifier subagents must not run tests, linters,
   formatters, typecheck, tsc, or project-specific checks.
 - Do not accept same-agent review, hooks-only success, or manual self-review as
@@ -80,6 +84,7 @@ driver.
    ```
 
    If `record` rejects the result, stop. Do not repair reviewer JSON yourself.
+   The JSON must report `reviewer_sandbox_mode: "read-only"`.
 
 3. Summarize:
 
