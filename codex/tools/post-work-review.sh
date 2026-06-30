@@ -11,6 +11,7 @@ MAX_TOTAL_REVIEWER_CALLS=3
 MAX_FIX_ROUNDS=2
 MAX_FINDINGS_PER_ROUND=20
 BUDGET="broad_review_max=1,verify_review_max=2,max_total_reviewer_calls=3,max_fix_rounds=2,max_findings_per_round=20"
+REVIEW_DIFF_OPTS=(--no-ext-diff --no-textconv --ignore-submodules=none)
 
 die() {
   echo "error=$*" >&2
@@ -184,8 +185,8 @@ verify_branch_base() {
   local base
   base="$1"
   git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 || die "branch base is not a commit: $base"
-  git diff --name-only "$base"...HEAD -- >/dev/null 2>&1 || \
-    git diff --name-only "$base" HEAD -- >/dev/null 2>&1 || \
+  git diff "${REVIEW_DIFF_OPTS[@]}" --name-only "$base"...HEAD -- >/dev/null 2>&1 || \
+    git diff "${REVIEW_DIFF_OPTS[@]}" --name-only "$base" HEAD -- >/dev/null 2>&1 || \
     die "failed to compute branch diff for base=$base"
 }
 
@@ -194,8 +195,8 @@ write_uncommitted_files() {
   files_file="$1"
   untracked_file="$2"
   : >"$files_file"
-  git diff --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
-  git diff --name-only -- >>"$files_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --name-only -- >>"$files_file" 2>/dev/null || true
   git ls-files --others --exclude-standard >"$untracked_file" 2>/dev/null || true
   cat "$untracked_file" >>"$files_file"
   sort -u "$files_file" -o "$files_file"
@@ -205,9 +206,9 @@ write_branch_files() {
   local base files_file
   base="$1"
   files_file="$2"
-  if git diff --name-only "$base"...HEAD -- >"$files_file" 2>/dev/null; then
+  if git diff "${REVIEW_DIFF_OPTS[@]}" --name-only "$base"...HEAD -- >"$files_file" 2>/dev/null; then
     :
-  elif git diff --name-only "$base" HEAD -- >"$files_file" 2>/dev/null; then
+  elif git diff "${REVIEW_DIFF_OPTS[@]}" --name-only "$base" HEAD -- >"$files_file" 2>/dev/null; then
     :
   else
     rm -f "$files_file"
@@ -220,8 +221,8 @@ append_worktree_files() {
   local files_file untracked_file
   files_file="$1"
   untracked_file="$2"
-  git diff --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
-  git diff --name-only -- >>"$files_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --cached --name-only HEAD -- >>"$files_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --name-only -- >>"$files_file" 2>/dev/null || true
   git ls-files --others --exclude-standard >"$untracked_file" 2>/dev/null || true
   cat "$untracked_file" >>"$files_file"
   sort -u "$files_file" -o "$files_file"
@@ -262,7 +263,7 @@ append_untracked_diffs() {
     [ -f "$file" ] || continue
     {
       printf '\n'
-      git diff --no-ext-diff --no-index --binary -- /dev/null "$file" 2>/dev/null || true
+      git diff "${REVIEW_DIFF_OPTS[@]}" --no-index --binary -- /dev/null "$file" 2>/dev/null || true
     } >>"$diff_file"
   done <"$untracked_file"
 }
@@ -270,8 +271,8 @@ append_untracked_diffs() {
 append_uncommitted_tracked_diffs() {
   local diff_file
   diff_file="$1"
-  git diff --no-ext-diff --cached --binary HEAD -- >>"$diff_file" 2>/dev/null || true
-  git diff --no-ext-diff --binary -- >>"$diff_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --cached --binary HEAD -- >>"$diff_file" 2>/dev/null || true
+  git diff "${REVIEW_DIFF_OPTS[@]}" --binary -- >>"$diff_file" 2>/dev/null || true
 }
 
 write_diff_for_scope() {
@@ -287,9 +288,9 @@ write_diff_for_scope() {
       append_untracked_diffs "$untracked_file" "$diff_file"
       ;;
     branch)
-      if git diff --no-ext-diff --binary "$base"...HEAD -- >"$diff_file" 2>/dev/null; then
+      if git diff "${REVIEW_DIFF_OPTS[@]}" --binary "$base"...HEAD -- >"$diff_file" 2>/dev/null; then
         :
-      elif git diff --no-ext-diff --binary "$base" HEAD -- >"$diff_file" 2>/dev/null; then
+      elif git diff "${REVIEW_DIFF_OPTS[@]}" --binary "$base" HEAD -- >"$diff_file" 2>/dev/null; then
         :
       else
         rm -f "$diff_file"
@@ -299,7 +300,7 @@ write_diff_for_scope() {
       append_untracked_diffs "$untracked_file" "$diff_file"
       ;;
     commit)
-      git show --no-ext-diff --format= --binary HEAD >"$diff_file" 2>/dev/null || : >"$diff_file"
+      git show "${REVIEW_DIFF_OPTS[@]}" --format= --binary HEAD >"$diff_file" 2>/dev/null || : >"$diff_file"
       ;;
     *)
       die "invalid scope=$scope"
@@ -463,6 +464,18 @@ latest_result() {
   else
     result_path broad 1
   fi
+}
+
+latest_finding_count() {
+  local path count
+  path="$(latest_result)"
+  [ -f "$path" ] || {
+    echo 0
+    return 0
+  }
+  count="$(json_scalar "$path" finding_count 2>/dev/null || echo 0)"
+  is_number "$count" || count=0
+  echo "$count"
 }
 
 reviewer_session_used() {
@@ -1009,7 +1022,7 @@ cmd_prepare() {
 }
 
 cmd_prepare_verify() {
-  local root state broad_calls verify_calls total_calls fix_rounds old_diff current_diff fix_diff pending_diff
+  local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff
   ensure_repo
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
@@ -1037,6 +1050,15 @@ cmd_prepare_verify() {
   fi
 
   rewrite_findings_tsv
+  latest_findings="$(latest_finding_count)"
+  if [ "$latest_findings" -eq 0 ]; then
+    printf 'clean=false\n'
+    printf 'findings=0\n'
+    printf 'stop_reason=no_prior_findings_to_verify\n'
+    printf 'marker_eligible=false\n'
+    exit 1
+  fi
+
   state="$(state_dir_abs)"
   old_diff="$state/last-reviewed.diff"
   current_diff="$state/current.diff"

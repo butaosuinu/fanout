@@ -233,6 +233,71 @@ prepare_branch_review() {
   ! grep -Fq "EXTERNAL-DIFF" "$state/review-bundle.md"
 }
 
+@test "post-work-review ignores textconv filters for review bundles" {
+  local repo="$BATS_TEST_TMPDIR/review-no-textconv"
+  local state textconv
+  setup_review_repo "$repo"
+  printf '*.foo diff=foo\n' >"$repo/.gitattributes"
+  printf 'base\n' >"$repo/sample.foo"
+  git -C "$repo" add .gitattributes sample.foo
+  git -C "$repo" commit -qm "add textconv sample"
+  git -C "$repo" checkout -qb feature
+  printf 'changed\n' >"$repo/sample.foo"
+  git -C "$repo" add sample.foo
+  git -C "$repo" commit -qm "change textconv sample"
+  textconv="$BATS_TEST_TMPDIR/textconv.sh"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo TEXTCONV\n'
+  } >"$textconv"
+  chmod +x "$textconv"
+  git -C "$repo" config diff.foo.textconv "$textconv"
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fq "+changed" "$state/current.diff"
+  ! grep -Fq "TEXTCONV" "$state/current.diff"
+  ! grep -Fq "TEXTCONV" "$state/review-bundle.md"
+}
+
+@test "post-work-review includes submodule changes ignored by repo config" {
+  local repo="$BATS_TEST_TMPDIR/review-submodule-ignore"
+  local sub="$BATS_TEST_TMPDIR/review-submodule-source"
+  local state next_sub_head
+  setup_review_repo "$repo"
+  mkdir -p "$sub"
+  git -C "$sub" init -q
+  git -C "$sub" config user.email "fanout-test@example.com"
+  git -C "$sub" config user.name "fanout test"
+  printf 'base\n' >"$sub/lib.txt"
+  git -C "$sub" add lib.txt
+  git -C "$sub" commit -qm "submodule base"
+  git -C "$repo" -c protocol.file.allow=always submodule add "$sub" deps/sub >/dev/null
+  git -C "$repo" config -f .gitmodules submodule.deps/sub.ignore all
+  git -C "$repo" add .gitmodules deps/sub
+  git -C "$repo" commit -qm "add ignored submodule"
+
+  printf 'next\n' >"$sub/lib.txt"
+  git -C "$sub" add lib.txt
+  git -C "$sub" commit -qm "submodule next"
+  next_sub_head="$(git -C "$sub" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  git -C "$repo/deps/sub" -c protocol.file.allow=always fetch origin >/dev/null
+  git -C "$repo/deps/sub" checkout -q "$next_sub_head"
+  git -C "$repo" add deps/sub
+  git -C "$repo" commit -qm "bump submodule"
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fxq "deps/sub" "$state/changed-files.txt"
+  grep -Fq "Subproject commit" "$state/current.diff"
+  grep -Fq "deps/sub" "$state/review-bundle.md"
+}
+
 @test "post-work-review records, summarizes, and marks a clean branch review" {
   local repo="$BATS_TEST_TMPDIR/review-branch"
   local gitdir
@@ -441,11 +506,37 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
-@test "post-work-review pending verify bundle prevents clean summarize and mark" {
-  local repo="$BATS_TEST_TMPDIR/review-pending-verify"
+@test "post-work-review rejects prepare-verify after a clean broad result" {
+  local repo="$BATS_TEST_TMPDIR/review-clean-prepare-verify"
   setup_review_repo "$repo"
   make_branch_change "$repo"
   prepare_branch_review "$repo"
+
+  printf 'new-target\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "new target"
+
+  run_review_base "$repo" prepare-verify
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"clean=false"* ]]
+  [[ "$output" == *"findings=0"* ]]
+  [[ "$output" == *"stop_reason=no_prior_findings_to_verify"* ]]
+  [[ "$output" == *"marker_eligible=false"* ]]
+}
+
+@test "post-work-review pending verify bundle prevents clean summarize and mark" {
+  local repo="$BATS_TEST_TMPDIR/review-pending-verify"
+  local broad_json="$BATS_TEST_TMPDIR/broad-pending-verify.json"
+  local finding
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  write_broad_result_json "$repo" "session-pending-broad" false false false "$finding" "$broad_json"
+  run_review "$repo" record broad "$broad_json"
+  [ "$status" -eq 0 ]
 
   printf 'new-target\n' >"$repo/tracked.txt"
   git -C "$repo" add tracked.txt
