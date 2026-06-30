@@ -286,7 +286,7 @@ prepare_branch_review() {
   git -C "$repo" checkout -qb feature
   git -C "$repo/deps/sub" -c protocol.file.allow=always fetch origin >/dev/null
   git -C "$repo/deps/sub" checkout -q "$next_sub_head"
-  git -C "$repo" add deps/sub
+  git -C "$repo" add -f deps/sub
   git -C "$repo" commit -qm "bump submodule"
 
   run_review_base "$repo" prepare
