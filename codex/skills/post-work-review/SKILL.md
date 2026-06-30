@@ -15,8 +15,8 @@ subagents. The main agent must not review its own code.
 - Default backend is `bounded-isolated-reviewer`.
 - Do not call `codex review` in the default path.
 - Do not use local LLMs.
-- Do not run tests, linters, formatters, typecheck, tsc, or project-specific
-  checks from this skill.
+- The driver and reviewer/verifier subagents must not run tests, linters,
+  formatters, typecheck, tsc, or project-specific checks.
 - Do not accept same-agent review, hooks-only success, or manual self-review as
   clean.
 - Do not create per-file or per-packet reviewer fanout.
@@ -103,7 +103,9 @@ driver.
 
 5. If findings remain and no stop reason is set, fix only actionable findings
    from the stored JSON/results and generated `findings.tsv`. Then prepare a
-   verifier bundle:
+   verifier bundle. If you changed files, run the normal focused validation for
+   those edits before invoking the verifier; that validation is outside the
+   isolated reviewer/verifier calls and never replaces the verifier JSON.
 
    ```bash
    POST_WORK_REVIEW_BASE="<base>" bash "$driver" prepare-verify

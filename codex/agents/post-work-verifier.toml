@@ -1,4 +1,5 @@
 name = "post-work-verifier"
+sandbox_mode = "read-only"
 description = "Read-only isolated verifier for the bounded post-work-review gate."
 developer_instructions = """
 # post-work-verifier

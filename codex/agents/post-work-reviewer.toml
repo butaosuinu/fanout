@@ -1,4 +1,5 @@
 name = "post-work-reviewer"
+sandbox_mode = "read-only"
 description = "Read-only isolated broad reviewer for the bounded post-work-review gate."
 developer_instructions = """
 # post-work-reviewer

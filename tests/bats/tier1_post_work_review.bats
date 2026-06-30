@@ -266,6 +266,23 @@ prepare_branch_review() {
   grep -Fq "dangling-link" "$state/review-bundle.md"
 }
 
+@test "post-work-review includes directory symlink diffs" {
+  local repo="$BATS_TEST_TMPDIR/review-directory-symlink"
+  local state
+  setup_review_repo "$repo"
+  mkdir -p "$repo/target-dir"
+  ln -s target-dir "$repo/linkdir"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fxq "linkdir" "$state/changed-files.txt"
+  grep -Fq "new file mode 120000" "$state/current.diff"
+  grep -Fq "+target-dir" "$state/current.diff"
+  grep -Fq "linkdir" "$state/review-bundle.md"
+}
+
 @test "post-work-review includes quoted untracked path diffs" {
   local repo="$BATS_TEST_TMPDIR/review-quoted-untracked"
   local state weird

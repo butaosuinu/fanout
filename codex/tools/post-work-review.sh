@@ -102,6 +102,21 @@ hash_file() {
   git hash-object "$1" 2>/dev/null || wc -c "$1" | awk '{print $1}'
 }
 
+diff_path_label() {
+  local path escaped
+  path="$1"
+  case "$path" in
+    *[!A-Za-z0-9._/@%+=:,~-]*)
+      escaped="${path//\\/\\\\}"
+      escaped="${escaped//$'\t'/\\t}"
+      escaped="${escaped//$'\n'/\\n}"
+      escaped="${escaped//\"/\\\"}"
+      printf '"%s"\n' "$escaped"
+      ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
 count_lines() {
   local file
   file="$1"
@@ -271,13 +286,29 @@ write_files_for_scope() {
 }
 
 append_untracked_diffs() {
-  local untracked_file diff_file file
+  local untracked_file diff_file file target old_path new_path
   untracked_file="$1"
   diff_file="$2"
   [ -s "$untracked_file" ] || return 0
   while IFS= read -r -d '' file; do
     [ -n "$file" ] || continue
     [ -e "$file" ] || [ -L "$file" ] || continue
+    if [ -L "$file" ]; then
+      target="$(readlink "$file")" || die "failed to read symlink target: $file"
+      old_path="$(diff_path_label "a/$file")"
+      new_path="$(diff_path_label "b/$file")"
+      {
+        printf '\n'
+        printf 'diff --git %s %s\n' "$old_path" "$new_path"
+        printf 'new file mode 120000\n'
+        printf '--- /dev/null\n'
+        printf '+++ %s\n' "$new_path"
+        printf '@@ -0,0 +1 @@\n'
+        printf '+%s\n' "$target"
+        printf '\\ No newline at end of file\n'
+      } >>"$diff_file"
+      continue
+    fi
     {
       printf '\n'
       git diff "${REVIEW_DIFF_OPTS[@]}" --no-index --binary -- /dev/null "$file" 2>/dev/null || true
