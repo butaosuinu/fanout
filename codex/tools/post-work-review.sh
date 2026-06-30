@@ -916,7 +916,7 @@ write_review_bundle() {
     if [ -s "$(changed_files_path)" ]; then
       write_markdown_fenced_file text "$(changed_files_path)"
     else
-      printf '```text\nnone\n```\n'
+      printf '%s\nnone\n%s\n' "\`\`\`text" "\`\`\`"
     fi
     printf '\n## Diffstat\n\n'
     write_markdown_fenced_file text "$diffstat_file"
