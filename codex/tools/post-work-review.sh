@@ -11,7 +11,7 @@ MAX_TOTAL_REVIEWER_CALLS=3
 MAX_FIX_ROUNDS=2
 MAX_FINDINGS_PER_ROUND=20
 BUDGET="broad_review_max=1,verify_review_max=2,max_total_reviewer_calls=3,max_fix_rounds=2,max_findings_per_round=20"
-REVIEW_DIFF_OPTS=(--no-ext-diff --no-textconv --ignore-submodules=none)
+REVIEW_DIFF_OPTS=(--no-ext-diff --no-textconv --ignore-submodules=none --no-color)
 
 die() {
   echo "error=$*" >&2
@@ -260,7 +260,7 @@ append_untracked_diffs() {
   [ -s "$untracked_file" ] || return 0
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    [ -f "$file" ] || continue
+    [ -e "$file" ] || [ -L "$file" ] || continue
     {
       printf '\n'
       git diff "${REVIEW_DIFF_OPTS[@]}" --no-index --binary -- /dev/null "$file" 2>/dev/null || true
@@ -921,7 +921,7 @@ write_verify_bundle() {
     printf '## Verification contract\n\n'
     printf -- '- backend: %s\n' "$BACKEND"
     printf -- '- review_type: verify\n'
-    printf -- '- verifier_agent: %s\n' "$VERIFIER_AGENT"
+    printf -- '- reviewer_agent: %s\n' "$VERIFIER_AGENT"
     printf -- '- scope: %s\n' "$(env_get scope)"
     printf -- '- base: %s\n' "$(env_get base)"
     printf -- '- head: %s\n' "$(env_get head)"

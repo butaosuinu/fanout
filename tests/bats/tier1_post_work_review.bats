@@ -233,6 +233,39 @@ prepare_branch_review() {
   ! grep -Fq "EXTERNAL-DIFF" "$state/review-bundle.md"
 }
 
+@test "post-work-review disables color for review bundles" {
+  local repo="$BATS_TEST_TMPDIR/review-no-color"
+  local state
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+  git -C "$repo" config color.ui always
+  git -C "$repo" config color.diff always
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fq "+dirty" "$state/current.diff"
+  ! LC_ALL=C grep -q "$(printf '\033')" "$state/current.diff"
+  ! LC_ALL=C grep -q "$(printf '\033')" "$state/review-bundle.md"
+}
+
+@test "post-work-review includes dangling symlink diffs" {
+  local repo="$BATS_TEST_TMPDIR/review-dangling-symlink"
+  local state
+  setup_review_repo "$repo"
+  ln -s missing-target "$repo/dangling-link"
+
+  run_review "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  state="$(state_dir_for "$repo")"
+  grep -Fxq "dangling-link" "$state/changed-files.txt"
+  grep -Fq "new file mode 120000" "$state/current.diff"
+  grep -Fq "+missing-target" "$state/current.diff"
+  grep -Fq "dangling-link" "$state/review-bundle.md"
+}
+
 @test "post-work-review ignores textconv filters for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-textconv"
   local state textconv
@@ -434,6 +467,8 @@ prepare_branch_review() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"verify_bundle="* ]]
   [[ "$output" == *"fix_rounds=1"* ]]
+  grep -Fq -- "- reviewer_agent: post-work-verifier" "$(state_dir_for "$repo")/verify-bundle.md"
+  ! grep -Fq "verifier_agent" "$(state_dir_for "$repo")/verify-bundle.md"
 
   write_verify_result_json "$repo" "session-broad" true false "" "$verify_json"
   run_review "$repo" record verify "$verify_json"
