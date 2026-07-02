@@ -504,12 +504,10 @@ the likely next action:
 - Use repeatable `--agent NUM=name` for per-child overrides; do not emit
   `gemini` because this build supports only `claude` and `codex`.
 - When a created pane runs `codex`, the per-issue briefing requires the agent
-  to run `codex review --uncommitted` after implementation/tests and repeat
-  review -> fix -> retest -> review until no findings remain before it commits,
-  pushes, or opens the PR. The review command should be treated as one
-  blocking shell command: while it is running, do not open, resume, or inspect
-  any Review Session and do not run `/codex:status` or other polling commands;
-  wait for the command to exit, then read the final output once.
+  to run `$post-work-review` after implementation and its required checks. That
+  review gate uses one fresh `post-work-reviewer` broad review, then at most two
+  `post-work-verifier` calls after fixes; it never fans review out by file
+  before the agent commits, pushes, or opens the PR.
 - The action path creates git worktrees itself, then uses detached
   `tmux split-window -t <invoking-pane> -d` with a shell launch command to start
   the selected agent CLI without moving focus away from the caller pane. The

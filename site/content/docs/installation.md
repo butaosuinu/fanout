@@ -55,6 +55,10 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$CODEX_DIR/skills/fanout-plan/` (default `~/.codex/skills/fanout-plan/`)
 - `$CODEX_DIR/skills/post-work-review/` (default `~/.codex/skills/post-work-review/`)
 - `$CODEX_DIR/skills/pr-watch/` (default `~/.codex/skills/pr-watch/`)
+- `$CODEX_DIR/agents/post-work-reviewer.toml` (default `~/.codex/agents/post-work-reviewer.toml`)
+- `$CODEX_DIR/agents/post-work-verifier.toml` (default `~/.codex/agents/post-work-verifier.toml`)
+- `$CODEX_DIR/agents/post-work-reviewer.md` (default `~/.codex/agents/post-work-reviewer.md`)
+- `$CODEX_DIR/agents/post-work-verifier.md` (default `~/.codex/agents/post-work-verifier.md`)
 
 Confirm `~/.local/bin` is on your `PATH`:
 

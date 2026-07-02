@@ -228,6 +228,7 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *t
 		"You are assigned GitHub issue",
 		"commit and push",
 		"Open a pull request",
+		"$post-work-review",
 		"codex review --uncommitted",
 		"Your first response must",
 		"read /tmp/",
@@ -417,7 +418,7 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
 	}
-	if !strings.Contains(got.BriefingBody, "codex review --uncommitted") {
+	if !strings.Contains(got.BriefingBody, "$post-work-review") {
 		t.Fatalf("briefing did not use codex-specific guidance:\n%s", got.BriefingBody)
 	}
 	if strings.Contains(got.BriefingBody, "Optional: Agent Teams") {
@@ -504,7 +505,7 @@ func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T
 		"- #501: First child (you)",
 		"- #502: Second child",
 		"/tmp/fanout-project_root-100.db",
-		"codex review --uncommitted",
+		"$post-work-review",
 		"Only after the review loop is clean should you commit and push the branch",
 	} {
 		if !strings.Contains(got.BriefingBody, want) {
@@ -601,7 +602,7 @@ func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
 	}
-	if !strings.Contains(got.BriefingBody, "codex review --uncommitted") {
+	if !strings.Contains(got.BriefingBody, "$post-work-review") {
 		t.Fatalf("task briefing did not use codex-specific guidance:\n%s", got.BriefingBody)
 	}
 }

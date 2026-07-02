@@ -1,146 +1,146 @@
 ---
 name: post-work-review
-description: "Use from Codex CLI to run a finish-review loop on current git work before commit or PR: inspect the diff, run codex review with an explicit scope, fix actionable findings, rerun until clean, and record the review marker when the reviewed commit is clean. Use when the user says review して仕上げて, post-review, finalize, コミット前に確認, 二重チェック, codex review もかけて, or asks for a final pre-PR review pass."
+description: "Use from Codex CLI to run a bounded isolated reviewer gate on current git work before commit or PR. Use when the user says review して仕上げて, post-review, finalize, コミット前確認, 二重チェック, or post-work-review."
 metadata:
-  short-description: Run a final Codex review loop before PR
+  short-description: Bounded isolated reviewer gate
 ---
 
 # post-work-review
 
-Codex で実装後の差分を仕上げるためのレビュー・修正ループ。
+Run the installed bash driver and delegate review work to fresh isolated
+subagents. The main agent must not review its own code.
 
-Claude 版の `post-work-review` は Claude の `code-review` plugin と Codex
-companion を組み合わせるが、Codex 版ではそれらを使わない。Codex CLI の
-native review を明示スコープ付きで実行し、指摘を修正して、指摘なしになるまで
-同じ作業ツリーで回す。
+## Hard rules
 
-## Scope
+- Default backend is `bounded-isolated-reviewer`.
+- Do not call `codex review` in the default path.
+- Do not use local LLMs.
+- Do not start this gate from a Codex session whose runtime override disables or
+  weakens agent sandbox settings, such as `--yolo`, `danger-full-access`, or an
+  equivalent no-sandbox mode. Stop non-clean before `prepare` if the
+  `sandbox_mode = "read-only"` TOML setting cannot be enforced for subagents.
+- The driver and reviewer/verifier subagents must not run tests, linters,
+  formatters, typecheck, tsc, or project-specific checks.
+- Do not accept same-agent review, hooks-only success, or manual self-review as
+  clean.
+- Do not create per-file or per-packet reviewer fanout.
+- Use exactly one broad reviewer call, then at most two verifier calls.
+- After fixes, never start a new broad review. Use verifiers only.
+- Stop immediately if any driver command prints a non-empty `stop_reason=`.
 
-- 対象は現在の git リポジトリの作業ツリー、HEAD、または現在ブランチの差分。
-- git リポジトリ外なら、`post-work-review` は使えないと伝えて終了する。
-- レビュー対象が空なら、レビュー対象がないと伝えて終了する。
-- PR 作成、push、merge はこの skill の責任外。ユーザーが別途明示したときだけ行う。
+Hard caps:
 
-## Preflight
+- `broad_review_max=1`
+- `verify_review_max=2`
+- `max_total_reviewer_calls=3`
+- `max_fix_rounds=2`
+- `max_findings_per_round=20`
 
-1. `git rev-parse --is-inside-work-tree` で git リポジトリ内か確認する。
-2. `git status --porcelain` と `git diff --stat` を確認する。
-3. clean tree で branch diff を見る必要があるときは default branch を解決する。
-   まず `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` を使い、
-   失敗したら `origin/HEAD`、最後に `main` を候補にする。
-
-## Review Target
-
-`codex review` は必ず明示スコープ付きで呼ぶ。裸の `codex review` は使わない。
-
-- 未コミット変更をレビューする: `codex review --uncommitted`
-- clean tree の現在コミットだけを見る: `codex review --commit HEAD`
-- clean tree のブランチ差分を見る: `codex review --base <default-branch>`
-
-未コミット変更があるときは、まず `--uncommitted` を使う。clean tree で、直前に
-レビュー済みとして marker を書く目的なら、原則として `--base <default-branch>` を使い、
-PR 全体相当の branch diff をレビューする。`--commit HEAD` だけで marker を書いてよい
-のは、HEAD が base からの唯一の未レビュー commit だと確認できる場合、またはユーザーが
-単一 commit の再レビューだけを明示した場合に限る。複数 commit の feature branch で
-`--commit HEAD` だけを通して marker を書くと、古い commit が未レビューのまま PR gate を
-通す可能性がある。
-
-## Execution Permissions
-
-`codex review ...` は Codex review/app-server/network access を必要とし、managed
-sandbox で権限ブロックされやすい。権限昇格を要求できる環境では、通常 sandbox で
-試してから再実行せず、初回から `exec_command` に
-`sandbox_permissions: "require_escalated"` を付けて実行する。
-
-- justification は
-  `codex review needs Codex review/app-server/network access and is frequently blocked in the managed sandbox`
-  の趣旨にする。
-- `prefix_rule` は付けない。`require_escalated` と `justification` だけを使う。
-- `approval_policy=never` など、現在の実行環境が権限昇格要求そのものを受け付けない
-  場合だけ、同じ `codex review ...` を非昇格の直接コマンドとして 1 回実行してよい。
-  権限昇格できる環境で、通常 sandbox を先に試す fallback には使わない。
-- `codex review --uncommitted`、`codex review --base <default-branch>`、
-  `codex review --commit HEAD` は通常 1 つの直接コマンドとして実行する。pipes、
-  subshell、出力を加工する wrapper は使わない。
-- 長時間実行で `exec_command` が部分出力を返す可能性があり、全出力を最後にまとめて
-  読む必要がある場合だけ、stdout/stderr を一時ファイルへ退避してよい。その場合も
-  `codex review ...` 自体は 1 回だけ実行し、command 終了後に一時ファイルを 1 回読む。
-- 権限昇格が拒否された、または同じ権限ブロックが続く場合は clean 扱いしない。
-  marker も書かない。`--uncommitted` が実行できない場合は PR 上の
-  `@codex review` を代替確認として使わない。clean tree で、既存 PR の head が
-  レビュー対象 commit と一致する場合だけ PR 上の Codex review を代替確認として
-  使ってよい。代替確認できない場合は、実行できなかった exact command と必要な
-  権限を報告して停止する。
-
-## Review Loop
-
-1. レビュー対象とコマンドを 1 文でユーザーに伝える。
-2. `codex review ...` を Execution Permissions に従って 1 つの blocking shell
-   command として実行する。長時間実行で `exec_command` の `session_id` が返る
-   可能性がある場合は、Review Session、`/codex:status`、tmux pane を見に行かず、
-   `session_id` はプロセス終了確認だけに使う。polling 中の部分出力を findings として
-   解釈せず、command が終了してから final output を 1 回だけ読む。
-3. final output を findings として読む。重大度、ファイル、行、指摘内容を保持する。
-4. actionable な指摘だけ修正する。明らかな bug、規約違反、セキュリティ問題、
-   テスト不整合を優先する。単なる好みの提案は理由を添えて見送ってよい。
-5. 修正したら、必要な focused test や formatting check を実行する。
-6. 同じスコープで `codex review ...` を再実行する。
-7. clean 判定まで 2-6 を繰り返す。
-
-### Clean 判定
-
-次の両方を満たすときだけ clean と見なす。
-
-- 肯定的な verdict がある: `approved`, `looks good`, `no issues`,
-  `no findings`, `0 findings`, `指摘なし`, `問題なし`, `修正不要` など。
-- 否定表現や残 findings がない: `not approved`, `cannot approve`,
-  `request changes`, `要修正`, `approve できない` などがあれば clean ではない。
-
-肯定語と否定語が混在する、findings があるのに approve 風の文面がある、などの
-曖昧な出力なら勝手に終了せず、ユーザーに clean と扱ってよいか確認する。
-
-### Oscillation Safety
-
-同じ指摘集合が 2 回連続で返ったら、自動修正を続けない。各 finding を
-`path:line:summary` に正規化して比較し、同一なら次を短く報告してユーザー判断を
-仰ぐ。
-
-- 繰り返している指摘
-- 直した内容
-- まだ残っている理由の仮説
-
-同一ではなくても、3 回連続で同じファイル群に同種の指摘が出る場合も停止して
-相談する。
-
-## Marker
-
-レビュー済み marker は、レビューが実質的に成功し、かつ working tree が clean
-なときだけ書く。dirty tree では書かない。未コミットの修正が PR に乗らないのに
-HEAD だけをレビュー済み扱いにするのを防ぐため。さらに、marker 前の成功レビューは
-PR 全体相当の branch/base scope であることを確認する。`--commit HEAD` の成功だけを
-根拠に marker を書くのは、base からの差分がその commit だけだと確認できる場合に限る。
+## Resolve driver
 
 ```bash
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "git repository not found: marker not written"
-elif [ -n "$(git status --porcelain)" ]; then
-  echo "working tree is dirty: marker not written"
-else
-  git rev-parse HEAD > "$(git rev-parse --git-dir)/post-work-review-passed"
-  echo "marker recorded: $(git rev-parse HEAD)"
+codex_dir="${CODEX_DIR:-$HOME/.codex}"
+driver="$codex_dir/tools/post-work-review.sh"
+if [ ! -x "$driver" ] && [ -n "${CODEX_HOME:-}" ]; then
+  driver="$CODEX_HOME/tools/post-work-review.sh"
+fi
+if [ ! -x "$driver" ]; then
+  echo "post-work-review driver not installed: $driver"
+  echo "Run make install-integrations from the fanout repo, then retry."
+  exit 1
 fi
 ```
 
-この marker はこのリポジトリの Claude PR gate も読む。Codex 自体は
-`.claude/hooks` を実行しないが、同じ worktree を Claude Code から PR 作成に使う
-場合に一貫した signal になる。
+The driver writes review bookkeeping under the worktree git metadata directory.
+If the sandbox blocks `.git/post-work-review` or `.git/post-work-review-passed`
+writes, rerun only the blocked driver subcommand with a scoped escalation. Do
+not escalate subagent review work and do not use escalation to call
+`codex review`.
 
-## Finish Report
+If the user request or fanout briefing includes `POST_WORK_REVIEW_BASE=<base>`,
+pass that same environment variable explicitly to every driver command in this
+procedure. Do not assume a shell-like `$post-work-review` prefix reached the
+driver.
 
-最後に 2-4 文で報告する。
+## Procedure
 
-- どの scope をレビューしたか
-- 何回 `codex review` を回し、何件修正したか
-- 実行したテストやチェック
-- clean 判定で終えたか、ユーザー判断で止めたか
-- marker を書いたか、書かなかった場合は理由
+1. Prepare one broad review bundle:
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" prepare
+   ```
+
+   Omit `POST_WORK_REVIEW_BASE=...` only when no base override was requested.
+
+   Read only the key=value output. Use `review_bundle=` as the sole broad
+   review input. Do not split by file.
+
+2. Spawn exactly one fresh isolated `post-work-reviewer` subagent. Give it only
+   `review_bundle=` and require JSON only. Store the exact JSON in a temporary
+   file outside the repository, then record it:
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" record broad <review-json-file>
+   ```
+
+   If `record` rejects the result, stop. Do not repair reviewer JSON yourself.
+   The JSON must report `reviewer_sandbox_mode: "read-only"`.
+
+3. Summarize:
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" summarize
+   ```
+
+   If `stop_reason=` is non-empty, stop non-clean and do not mark.
+
+4. If `clean=true`, run `mark` only when `marker_eligible=true`:
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" mark
+   ```
+
+   If branch scope returns `clean=true` but `marker_eligible=false` because
+   the fix is still in a dirty working tree, do not mark the old gate. Commit
+   the fix first, then restart this procedure from step 1 for the new committed
+   review target. Treat that as a new gate for a new HEAD, not as another broad
+   reviewer call inside the previous gate.
+
+5. If findings remain and no stop reason is set, fix only actionable findings
+   from the stored JSON/results and generated `findings.tsv`. Then prepare a
+   verifier bundle. If you changed files, run the normal focused validation for
+   those edits before invoking the verifier; that validation is outside the
+   isolated reviewer/verifier calls and never replaces the verifier JSON.
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" prepare-verify
+   ```
+
+   Give `verify_bundle=` to one fresh isolated `post-work-verifier` subagent.
+   It is not a broad reviewer. It may check only prior findings and obvious
+   regressions introduced by the fix. It must not hunt for unrelated issues.
+
+6. Record the verifier result:
+
+   ```bash
+   POST_WORK_REVIEW_BASE="<base>" bash "$driver" record verify <review-json-file>
+   ```
+
+   Then run `summarize` again. If still not clean and no stop reason is set,
+   perform one more fix round and one more verifier call. Never exceed two
+   verifier calls.
+
+7. Stop non-clean if any cap is exhausted, `truncated=true`, a repeated finding
+   fingerprint appears after a fix round, or the driver reports any
+   `stop_reason=`.
+
+## Finish report
+
+Report:
+
+- reviewed scope
+- broad and verifier call counts
+- actionable fixes made
+- final `clean=`
+- final `stop_reason=`
+- whether `.git/post-work-review-passed` was written
