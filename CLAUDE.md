@@ -250,9 +250,17 @@ Build the binary with `make build-go` and validate with `make test`.
   `--unblocked-only`. If branch generation, task `branch` overrides, or
   `--branch-prefix` behavior changes, update the plan status fixtures and
   docs together.
+- Run `make lint` and `make test` before creating a PR (`make lint-web` too
+  when `web/` changed) — the top CI failures, Tier 2 golden drift and
+  golangci-lint findings, all reproduce locally. Then walk
+  `docs/review-checklist.ja.md`; the same review findings recur.
 - `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
-  `.claude/settings.json`. Run `/post-work-review` before creating a PR, or use
-  `FANOUT_SKIP_PR_REVIEW=1` only when the documented escape hatch is intended.
+  `.claude/settings.json`. Retrying a denied command with nothing changed
+  never succeeds — fix the stated cause, then re-run it: complete
+  `/post-work-review` (the marker must match HEAD), issue `gh pr create` as a
+  standalone command with no `cd`/`pushd`/`env --chdir` chained in (any cwd
+  inside the target worktree works), and keep the PR base at the default
+  branch. `FANOUT_SKIP_PR_REVIEW=1` is only for the documented escape hatch.
 
 ## Test Conventions
 
