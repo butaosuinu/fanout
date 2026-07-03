@@ -25,13 +25,15 @@ type PlanTaskItem struct {
 }
 
 // assignState is the step-2 per-target agent assignment. target identifies
-// the pending selection ("#123" or a slug) so a stale load cannot populate a
-// newer selection's rows.
+// the pending selection ("#123" or a slug) and gen its load generation, so a
+// stale load — even one for the same target after an esc + re-enter — cannot
+// populate a newer selection's rows or finalize with outdated data.
 type assignState struct {
 	loading bool
 	err     string
 	target  string
 	title   string
+	gen     int
 	rows    []assignRow
 	index   int
 }
@@ -46,6 +48,7 @@ type assignRow struct {
 type newPaneAssignLoadedMsg struct {
 	mode     newPaneMode
 	target   string
+	gen      int
 	children []ChildTarget
 	tasks    []PlanTaskItem
 	err      error
@@ -92,8 +95,10 @@ func (m *model) submitNewPanePicker() tea.Cmd {
 }
 
 func (m *model) beginAssignStep(target, title string) tea.Cmd {
+	m.newPane.assignGen++
+	gen := m.newPane.assignGen
 	m.newPane.step = newPaneStepAssign
-	m.newPane.assign = assignState{loading: true, target: target, title: title}
+	m.newPane.assign = assignState{loading: true, target: target, title: title, gen: gen}
 	mode := m.newPane.mode
 	switch mode {
 	case newPaneModeIssue:
@@ -101,14 +106,14 @@ func (m *model) beginAssignStep(target, title string) tea.Cmd {
 		num := m.newPane.selIssue
 		return func() tea.Msg {
 			children, err := list(num)
-			return newPaneAssignLoadedMsg{mode: mode, target: target, children: children, err: err}
+			return newPaneAssignLoadedMsg{mode: mode, target: target, gen: gen, children: children, err: err}
 		}
 	case newPaneModePlan:
 		list := m.opts.ListPlanTasks
 		slug := m.newPane.selPlan
 		return func() tea.Msg {
 			tasks, err := list(slug)
-			return newPaneAssignLoadedMsg{mode: mode, target: target, tasks: tasks, err: err}
+			return newPaneAssignLoadedMsg{mode: mode, target: target, gen: gen, tasks: tasks, err: err}
 		}
 	default:
 		return nil

@@ -281,8 +281,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputePicker(p)
 		return m, nil
 	case newPaneAssignLoadedMsg:
-		if m.mode != modeNewPane || m.newPane.step != newPaneStepAssign || m.newPane.assign.target != msg.target {
-			return m, nil // a stale load must not populate a newer selection
+		// The generation check also drops a stale load for the SAME target
+		// (esc while loading, then re-enter), which could otherwise finalize
+		// or overwrite the newer attempt.
+		if m.mode != modeNewPane || m.newPane.step != newPaneStepAssign ||
+			m.newPane.assign.target != msg.target || m.newPane.assign.gen != msg.gen {
+			return m, nil
 		}
 		m.newPane.assign.loading = false
 		if msg.err != nil {

@@ -458,6 +458,49 @@ func TestNewPaneViewRendersPickerStates(t *testing.T) {
 	}
 }
 
+// TestNewPaneAssignDropsStaleSameTargetLoad pins the esc-while-loading race:
+// re-entering the same issue must ignore the first, superseded load even
+// though both carry the same target.
+func TestNewPaneAssignDropsStaleSameTargetLoad(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return []IssueListItem{{Number: 42, Title: "Fix UI"}}, nil
+		},
+		ListIssueChildren: func(int) ([]ChildTarget, error) {
+			return []ChildTarget{{Number: 43, Title: "Child"}}, nil
+		},
+	})
+	m.promptOnly = true
+	m.openNewPaneForm()
+	m.newPane.focus = newPaneFieldMode
+
+	step := func(key tea.KeyMsg) tea.Cmd {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		return cmd
+	}
+
+	loadCmd := step(tea.KeyMsg{Type: tea.KeyRight})
+	updated, _ := m.Update(loadCmd())
+	m = updated.(model)
+
+	staleCmd := step(tea.KeyMsg{Type: tea.KeyEnter}) // first attempt: load in flight
+	staleMsg := staleCmd()
+	step(tea.KeyMsg{Type: tea.KeyEsc})               // back to the picker mid-load
+	freshCmd := step(tea.KeyMsg{Type: tea.KeyEnter}) // second attempt, same target
+	updated, finalize := m.Update(staleMsg)          // stale load resolves late
+	m = updated.(model)
+	if finalize != nil || len(m.newPane.assign.rows) != 0 || !m.newPane.assign.loading {
+		t.Fatalf("stale load accepted: rows = %#v loading = %v", m.newPane.assign.rows, m.newPane.assign.loading)
+	}
+
+	updated, _ = m.Update(freshCmd())
+	m = updated.(model)
+	if len(m.newPane.assign.rows) != 1 {
+		t.Fatalf("fresh load rows = %#v, want one child", m.newPane.assign.rows)
+	}
+}
+
 // TestNewPanePickerFilterAcceptsSpaces pins multi-word title queries: a lone
 // space arrives as tea.KeySpace (not KeyRunes) and must extend the filter.
 func TestNewPanePickerFilterAcceptsSpaces(t *testing.T) {

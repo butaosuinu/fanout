@@ -144,6 +144,7 @@ type newPaneForm struct {
 	planPicker  pickerState
 	agentChoice int
 	assign      assignState
+	assignGen   int // monotonic load generation; survives esc so stale loads drop
 	selIssue    int
 	selPlan     string
 
