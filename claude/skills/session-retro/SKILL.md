@@ -39,19 +39,20 @@ for f in ~/.claude/projects/"$slug"/*.jsonl \
          ~/.claude/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
   [ -e "$f" ] || continue
   mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
-  if [ "$mtime" -ge "$since_epoch" ] && [ "$mtime" -le "$until_epoch" ]; then
-    printf '%s\n' "$f" >> "$candidates"
-  fi
+  [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> "$candidates"
 done
 ```
 
-`UNTIL` で上限も閉じるのは、Step 3/4 と同じ理由: 下限だけだと `UNTIL` より後に更新されたセッション (実行中の retro セッション自身や並行セッション) が今回の集計に混ざり、次回も `SINCE=今回のUNTIL` で同じファイルが再び対象になって二重計上になる。
+候補選定は **下限のみ** で絞る (上限は付けない)。並行/長時間セッションが window 内にエラー行を書いた後、収集前にさらに別の行を書いて mtime が `UNTIL` を超えると、上限フィルタがあるとそのファイルごと候補から落ち、window 内の有効な行まで欠落する。二重計上を防ぐ役目は後述の行単位フィルタ (`(SINCE, UNTIL]`) が正確に担うので、ファイル選定側は粗い下限フィルタで十分。
 
-候補ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込んでから渡す:
+候補ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込み、**この時点で自セッションを除外する** (集計後に除外しても `total` は既に膨らんでいるので手遅れ — 実行中セッションの transcript がこの skill の解析コマンドやプロンプト文字列を引用しているため、含めると誤検出する):
 
 ```bash
 files=()
-while IFS= read -r f; do files+=("$f"); done < "$candidates"
+while IFS= read -r f; do
+  case "$f" in *"$CLAUDE_SESSION_ID"*) continue ;; esac
+  files+=("$f")
+done < "$candidates"
 ```
 
 **対象ファイルが 0 件なら以降のマイニングを実行せず `tool_errors.total=0` として次へ進む**。`files` が空配列のまま `rg -- "${files[@]}"` を呼ぶと path 引数 0 個になり、rg はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。
@@ -76,7 +77,7 @@ fi
 echo "tool_errors.total=$total"
 ```
 
-ミリ秒付きの transcript timestamp とミリ秒無しの `SINCE`/`UNTIL` を文字列のまま比較しない — `"...00:00:00Z" < "...00:00:00.001Z"` は Python で確認すると `False` になる (ピリオド `.` の ASCII コードが `Z` より小さいため、辞書順では後者が「小さい」と誤判定される)。両者を同じ秒精度の epoch に変換してから数値比較する。
+ミリ秒付きの transcript timestamp とミリ秒無しの `SINCE`/`UNTIL` を文字列のまま比較しない — `"...00:00:00Z" < "...00:00:00.001Z"` は Python で確認すると `False` になる (ピリオド `.` の ASCII コードが `Z` より小さいため、辞書順では後者が「小さい」と誤判定される)。両者を同じ秒精度の epoch に変換してから数値比較する。**既知の限界**: 秒精度に丸めるため、ある window の `UNTIL` とちょうど同じ秒に書かれた行 (ミリ秒だけ後) は次の window の `SINCE` との比較で境界からこぼれることがある。この skill は傾向を追う定期集計であり監査ログではないので、この程度の秒境界の誤差は許容する (ナノ秒精度が要る場合は `date` のサブ秒サポートに依存せず言語処理系で扱うこと)。
 
 `rg` は複数ファイルを渡すと既定で各行に `<path>:` を前置する (`-H`/`--with-filename` が複数ファイル時の既定値)。前置されたままだと行が JSON として不正になり `jq` が全行パースエラーになる (実機で再現・確認済み — 候補が 38 ファイルある状態で `total=0` になり原因を特定した)。`-I`/`--no-filename` を必ず付けて素の JSON 行のまま渡す。
 
@@ -84,20 +85,23 @@ echo "tool_errors.total=$total"
 
 件数を取ってからマッチ行を選択的に読み、エラー本文で分類する。既知カテゴリ: stale-read Edit / PR ゲート deny / 権限・AskUserQuestion 摩擦 / ブラウザ MCP / sleep ブロック / zsh 構文 / gh api・rate limit / インライン python / 誤パス / jq。新カテゴリは追加してよい (新カテゴリは Step 6 の提案候補)。
 
-**自セッションを除外する**: 実行中セッションの transcript (この skill の解析コマンドやプロンプトが `is_error` 文字列を引用している) は誤検出になるので集計から外す。自セッションの ID はカレント transcript のファイル名か `CLAUDE_SESSION_ID` で特定する。
-
 ## Step 3 — CI 失敗
 
 `gh run list --status` は 1 回の呼び出しに 1 値しか渡せない。`failure` だけでは `startup_failure` (セットアップ自体の失敗) や `timed_out` を見落とすので、値ごとに分けて呼び、結果をまとめる (`--status` を外して全 run を撮ると、`--limit` の枠を success な run が消費してしまい、window の古い方の失敗が切り捨てられる — 実測で 9 件 → 3 件に減ることを確認済み。1 呼び出し 1 status を維持する):
 
 ```bash
+runs=$(mktemp)
+trap 'rm -f "$runs"' EXIT
 for st in failure startup_failure timed_out; do
-  gh run list --status "$st" --created "${SINCE}..${UNTIL}" --limit 100 \
-    --json databaseId,workflowName,displayTitle,headBranch,createdAt,conclusion
-done | jq -s "add | [.[] | select(.createdAt > \"${SINCE}\" and .createdAt <= \"${UNTIL}\")]"
+  if ! gh run list --status "$st" --created "${SINCE}..${UNTIL}" --limit 100 \
+      --json databaseId,workflowName,displayTitle,headBranch,createdAt,conclusion >> "$runs"; then
+    echo "警告: gh run list --status $st が失敗した。ci 集計は不完全な可能性がある (ci.truncated=true として記録する)" >&2
+  fi
+done
+jq -s "add | [.[] | select(.createdAt > \"${SINCE}\" and .createdAt <= \"${UNTIL}\")]" "$runs"
 ```
 
-GitHub の `created` 範囲構文 `A..B` は両端を含む (`n..*`=`>=n`、`*..n`=`<=n` の組み合わせ)。前回 `window.until` をそのまま今回 `SINCE` に使う設計上、ちょうど境界時刻に作られた run が前回・今回の両方でヒットし再発扱いになるため、取得後に `createdAt` で `(SINCE, UNTIL]` に絞り直す (Step 4 の review comment と同じ考え方)。`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci.truncated=true` を記録する** (成功扱いで黙って進めない)。GitHub の `created` 範囲構文 `A..B` は両端を含む (`n..*`=`>=n`、`*..n`=`<=n` の組み合わせ)。前回 `window.until` をそのまま今回 `SINCE` に使う設計上、ちょうど境界時刻に作られた run が前回・今回の両方でヒットし再発扱いになるため、取得後に `createdAt` で `(SINCE, UNTIL]` に絞り直す (Step 4 の review comment と同じ考え方)。`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
