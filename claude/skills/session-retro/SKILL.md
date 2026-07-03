@@ -19,7 +19,7 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 
 - main repo root を解決する: `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`。素の `--git-common-dir` は main worktree では相対 `.git` を返すので絶対化が必須。
 - root の絶対パス中の **英数字以外の文字を全て** `-` に置換した slug を作る (Claude Code の project ディレクトリ命名規則。`/` や `.` だけでなく空白・`_`・`+` 等も対象)。
-- 対象ディレクトリは **`~/.claude/projects/<slug>`(完全一致)と `~/.claude/projects/<slug>--*-worktrees-*`(fanout worktree セッション)の 2 パターンだけ** を glob する。緩い prefix glob `<slug>*` は使わない — `<slug>2` や `<slug>-old` のような別リポジトリまで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
+- 対象ディレクトリは **`~/.claude/projects/<slug>`(完全一致)と `~/.claude/projects/<slug>--dmux-worktrees-*`・`~/.claude/projects/<slug>--fanout-worktrees-*`(worktree セッション。旧 dmux 時代と現行 fanout の両方の命名を明示的に列挙する)の 3 パターンだけ** を glob する。`<slug>*` のような緩い prefix glob や `<slug>--*-worktrees-*` のようなワイルドカード区間は使わない — 前者は `<slug>2` や `<slug>-old` のような別リポジトリ、後者は無関係な別ツール由来の `<slug>--other-worktrees-*` まで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
 - スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `~/.claude/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
 - 期間の下限 `SINCE`: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。
 - 期間の上限 `UNTIL`: **Step 2〜4 のデータ収集を始める前に** `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` で固定する。収集後に「いま」を書くと、クエリ実行〜スナップショット書き込みの間に発生したイベント (例: gh run list 実行直後に落ちた CI) が今回にも次回にも入らず永久に欠落する。Step 5 で書く `window.until` はこの固定値をそのまま使う。
@@ -27,42 +27,60 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 
 ## Step 2 — ツールエラーのマイニング
 
-まず Step 1 の `SINCE` 以降に更新されたセッションだけに絞る。`find -newermt` は環境によって書式非互換で失敗する (BSD/macOS の `find` は ISO8601 の `T`/`Z` 付き文字列を解釈できないことがある) ので、mtime を epoch 秒に変換して比較する:
+まず Step 1 の `SINCE`/`UNTIL` で候補ファイルを絞る (ファイル単位の粗いフィルタ。厳密な判定は後述の行単位で行う)。`find -newermt` は環境によって書式非互換で失敗する (BSD/macOS の `find` は ISO8601 の `T`/`Z` 付き文字列を解釈できないことがある) ので、mtime を epoch 秒に変換して比較する。一時ファイルは同じユーザーで別 repo の `/session-retro` を並行実行しても衝突しないよう `mktemp` で作り、使い終わったら消す:
 
 ```bash
 since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SINCE" "+%s")
 until_epoch=$(date -u -d "$UNTIL" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UNTIL" "+%s")
-: > /tmp/session-retro-in-window.txt
-for f in ~/.claude/projects/"$slug"/*.jsonl ~/.claude/projects/"$slug"--*-worktrees-*/*.jsonl; do
+candidates=$(mktemp)
+trap 'rm -f "$candidates"' EXIT
+for f in ~/.claude/projects/"$slug"/*.jsonl \
+         ~/.claude/projects/"$slug"--dmux-worktrees-*/*.jsonl \
+         ~/.claude/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
   [ -e "$f" ] || continue
   mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
   if [ "$mtime" -ge "$since_epoch" ] && [ "$mtime" -le "$until_epoch" ]; then
-    printf '%s\n' "$f" >> /tmp/session-retro-in-window.txt
+    printf '%s\n' "$f" >> "$candidates"
   fi
 done
 ```
 
-`UNTIL` で上限も閉じるのは、Step 3/4 と同じ理由: 下限だけだと `UNTIL` より後に更新されたセッション (実行中の retro セッション自身や並行セッション) が今回の集計に混ざり、次回も `SINCE=今回のUNTIL` で同じファイルが再び対象になって二重計上になる。window を適用せずに全 jsonl を毎回数えると、2 回目以降の実行で既報告のエラーを再集計してしまう (mtime はセッション最終更新時刻の近似であり、window をまたぐセッションは丸ごと今回側に入る — 大きくは外れない前提の近似として扱う)。
+`UNTIL` で上限も閉じるのは、Step 3/4 と同じ理由: 下限だけだと `UNTIL` より後に更新されたセッション (実行中の retro セッション自身や並行セッション) が今回の集計に混ざり、次回も `SINCE=今回のUNTIL` で同じファイルが再び対象になって二重計上になる。
 
-対象ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込んでから渡す:
+候補ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込んでから渡す:
 
 ```bash
 files=()
-while IFS= read -r f; do files+=("$f"); done < /tmp/session-retro-in-window.txt
+while IFS= read -r f; do files+=("$f"); done < "$candidates"
 ```
 
-**対象ファイルが 0 件なら rg を実行せず `tool_errors.total=0` として次へ進む**。`files` が空配列のまま `rg -- "${files[@]}"` を呼ぶと path 引数 0 個になり、rg はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。要素があることを確認してから実行する:
+**対象ファイルが 0 件なら以降のマイニングを実行せず `tool_errors.total=0` として次へ進む**。`files` が空配列のまま `rg -- "${files[@]}"` を呼ぶと path 引数 0 個になり、rg はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。
+
+tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須)。エスケープ形 `\"is_error\":true` で検索してはいけない — それはこの文字列を引用しているセッション (過去の retro 実行など) だけに当たるノイズで、実測 (2026-07) では素の形 302 ファイル / 660 行に対しエスケープ形は 14 ファイル / 74 行だった。
+
+候補ファイルの mtime は「セッション最終更新時刻」でしかなく、SINCE より前から続く同一セッションが今回 window 内に 1 行でも書き込むとファイル全体が候補に入る。そのままファイル単位で `rg -c` すると、既に前回報告済みの古い行まで再集計してしまう。**行ごとの `timestamp` フィールドで window に絞ってから数える**:
 
 ```bash
+total=0
 if [ "${#files[@]}" -gt 0 ]; then
-  rg -l -F '"is_error":true' -- "${files[@]}"   # 該当セッション
-  rg -c -F '"is_error":true' -- "${files[@]}"   # セッション別行数
+  while IFS= read -r line; do
+    ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+    [ -z "$ts" ] && continue
+    norm="${ts:0:19}Z"   # transcript は ".mmmZ" 付き。SINCE/UNTIL と同じ秒精度に丸めてから比較する
+    line_epoch=$(date -u -d "$norm" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$norm" "+%s")
+    if [ "$line_epoch" -gt "$since_epoch" ] && [ "$line_epoch" -le "$until_epoch" ]; then
+      total=$((total + 1))
+    fi
+  done < <(rg -I -F '"is_error":true' -- "${files[@]}" 2>/dev/null || true)
 fi
+echo "tool_errors.total=$total"
 ```
 
-対象を絞ったら、tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須)。
+ミリ秒付きの transcript timestamp とミリ秒無しの `SINCE`/`UNTIL` を文字列のまま比較しない — `"...00:00:00Z" < "...00:00:00.001Z"` は Python で確認すると `False` になる (ピリオド `.` の ASCII コードが `Z` より小さいため、辞書順では後者が「小さい」と誤判定される)。両者を同じ秒精度の epoch に変換してから数値比較する。
 
-エスケープ形 `\"is_error\":true` で検索してはいけない — それはこの文字列を引用しているセッション (過去の retro 実行など) だけに当たるノイズで、実測 (2026-07) では素の形 302 ファイル / 660 行に対しエスケープ形は 14 ファイル / 74 行だった。`rg -c` は行数を数える (1 行に複数エラーがあり得る) ことにも注意。
+`rg` は複数ファイルを渡すと既定で各行に `<path>:` を前置する (`-H`/`--with-filename` が複数ファイル時の既定値)。前置されたままだと行が JSON として不正になり `jq` が全行パースエラーになる (実機で再現・確認済み — 候補が 38 ファイルある状態で `total=0` になり原因を特定した)。`-I`/`--no-filename` を必ず付けて素の JSON 行のまま渡す。
+
+**`rg` はマッチが 0 件のとき終了コード 1 を返す** (エラーではない — ripgrep のドキュメント通り 0=マッチあり、1=マッチなし、2=実行時エラー)。`set -e` 環境やパイプラインの失敗判定を壊さないよう `|| true` を必ず付ける。
 
 件数を取ってからマッチ行を選択的に読み、エラー本文で分類する。既知カテゴリ: stale-read Edit / PR ゲート deny / 権限・AskUserQuestion 摩擦 / ブラウザ MCP / sleep ブロック / zsh 構文 / gh api・rate limit / インライン python / 誤パス / jq。新カテゴリは追加してよい (新カテゴリは Step 6 の提案候補)。
 
@@ -76,10 +94,10 @@ fi
 for st in failure startup_failure timed_out; do
   gh run list --status "$st" --created "${SINCE}..${UNTIL}" --limit 100 \
     --json databaseId,workflowName,displayTitle,headBranch,createdAt,conclusion
-done | jq -s 'add'
+done | jq -s "add | [.[] | select(.createdAt > \"${SINCE}\" and .createdAt <= \"${UNTIL}\")]"
 ```
 
-`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+GitHub の `created` 範囲構文 `A..B` は両端を含む (`n..*`=`>=n`、`*..n`=`<=n` の組み合わせ)。前回 `window.until` をそのまま今回 `SINCE` に使う設計上、ちょうど境界時刻に作られた run が前回・今回の両方でヒットし再発扱いになるため、取得後に `createdAt` で `(SINCE, UNTIL]` に絞り直す (Step 4 の review comment と同じ考え方)。`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
