@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,6 +65,67 @@ func TestValidatePlanExecutionNamesRejectsFinalDuplicates(t *testing.T) {
 				t.Fatalf("validatePlanExecutionNames() error = %v, want %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestListPlanSlugs guarantees the TUI plan picker sees exactly the bare
+// slugs stored under .fanout/plans, in sorted order.
+func TestListPlanSlugs(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		dirs  []string
+		want  []string
+	}{
+		{
+			name:  "sorts json slugs and skips other entries",
+			files: []string{"zeta.json", "alpha.json", "note.txt", ".json"},
+			dirs:  []string{"nested.json"},
+			want:  []string{"alpha", "zeta"},
+		},
+		{
+			name:  "empty directory yields no slugs",
+			files: nil,
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			plansDir := filepath.Join(root, ".fanout", "plans")
+			if err := os.MkdirAll(plansDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range tt.files {
+				if err := os.WriteFile(filepath.Join(plansDir, name), []byte("{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range tt.dirs {
+				if err := os.MkdirAll(filepath.Join(plansDir, name), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got, err := listPlanSlugs(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("listPlanSlugs(%s) = %v, want %v", root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListPlanSlugsMissingDirectoryIsNotAnError(t *testing.T) {
+	got, err := listPlanSlugs(t.TempDir())
+	if err != nil {
+		t.Fatalf("listPlanSlugs() error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Fatalf("listPlanSlugs() = %v, want nil", got)
 	}
 }
 

@@ -72,9 +72,16 @@ func (w *tuiWatcher) RunCycle() (watch.Report, error) {
 }
 
 func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
+	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
+	return launchStandaloneIssuePane(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, issue)
+}
+
+// launchStandaloneIssuePane creates one pane for a single issue with no OPEN
+// children. The watcher and the TUI issue launcher share it; cfg carries the
+// caller's agent selection.
+func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
 	store, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -100,10 +107,17 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 }
 
 func launchWatchParent(projectRoot, session, commandName string, resolvedSettings settings.Settings, issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
+	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
+	return launchParentIssueFanout(projectRoot, session, commandName, cfg)
+}
+
+// launchParentIssueFanout runs the full issue-mode fan-out for cfg.Parent
+// against a synthesized runtime targeting the TUI session. The watcher and
+// the TUI issue launcher share it.
+func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
 	gh := ghissue.Runner{Cwd: projectRoot}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
 	rt := &runtimeInfo{
 		info: &fanoutruntime.Info{
 			Session:     session,

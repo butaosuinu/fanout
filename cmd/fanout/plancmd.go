@@ -143,6 +143,14 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 	cfg.Agent = cliCfg.Agent
 
+	_, code = runPlanWithRuntime(cfg, rt, lg, commandName)
+	return code
+}
+
+// runPlanWithRuntime runs the live/dry-run plan lane against an already
+// resolved runtime. cmdPlan owns parsing, dependency checks, and runtime
+// resolution; the TUI plan launcher reuses this with a synthesized runtime.
+func runPlanWithRuntime(cfg planCommandConfig, rt *runtimeInfo, lg *log.Logger, commandName string) (taskExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.info.ProjectRoot, settings.CLIOverrides{
 		AutoPullRequest:    cfg.AutoPullRequest,
 		PRReviewGate:       cfg.PRReviewGate,
@@ -157,22 +165,22 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
 	if err != nil {
 		lg.Err("%v", err)
-		return exitcode.Env
+		return taskExecutionResult{}, exitcode.Env
 	}
 	cfg.BaseBranch, err = resolvePlanBaseBranch(cfg, spec, rt.info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
-		return exitcode.Env
+		return taskExecutionResult{}, exitcode.Env
 	}
 	if err := validatePlanExecutionNames(spec, cfg); err != nil {
 		lg.Err("validate plan execution names %s: %v", cfg.SpecPath, err)
-		return exitcode.Env
+		return taskExecutionResult{}, exitcode.Env
 	}
-	cliCfg = cfg.cliConfig()
+	cliCfg := cfg.cliConfig()
 
 	store, recorder, code := loadPlanState(cfg, rt.info.ProjectRoot, lg)
 	if code != exitcode.OK {
-		return code
+		return taskExecutionResult{}, code
 	}
 	if recorder != nil {
 		defer func() {
@@ -202,28 +210,28 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 
 	if plan.AfterFilter == 0 {
 		if code := copyLivePlanSpec(); code != exitcode.OK {
-			return code
+			return taskExecutionResult{}, code
 		}
 		lg.Info("all plan tasks filtered out by --only/--skip. nothing to do.")
-		return exitcode.OK
+		return taskExecutionResult{}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
 		if code := copyLivePlanSpec(); code != exitcode.OK {
-			return code
+			return taskExecutionResult{}, code
 		}
 		if len(plan.AlreadyComplete) == 0 {
 			lg.Ok("all %d plan task(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		} else {
 			lg.Ok("all %d selected plan task(s) already have a fanout pane or are complete. nothing to do.", plan.AfterFilter)
 		}
-		return exitcode.OK
+		return taskExecutionResult{}, exitcode.OK
 	}
 	if err := validateTaskAgents(cliCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
-		return exitcode.Env
+		return taskExecutionResult{}, exitcode.Env
 	}
 	if code := copyLivePlanSpec(); code != exitcode.OK {
-		return code
+		return taskExecutionResult{}, code
 	}
 
 	logAlreadyFannedTasks(plan.AlreadyFanned, lg)
@@ -261,9 +269,9 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 
 	if result.Failed > 0 {
-		return exitcode.Env
+		return result, exitcode.Env
 	}
-	return exitcode.OK
+	return result, exitcode.OK
 }
 
 func parsePlanCommand(args []string, lg *log.Logger) (planCommandConfig, exitcode.Code) {
@@ -682,6 +690,32 @@ func resolvePlanSpecPath(projectRoot, arg string) string {
 		return arg
 	}
 	return filepath.Join(projectRoot, ".fanout", "plans", arg+".json")
+}
+
+// listPlanSlugs enumerates .fanout/plans/*.json as bare slugs, sorted. A
+// missing directory is not an error: a repository that never ran fanout plan
+// simply has no plans to offer.
+func listPlanSlugs(projectRoot string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(projectRoot, ".fanout", "plans"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var slugs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || name == "" {
+			continue
+		}
+		slugs = append(slugs, name)
+	}
+	slices.Sort(slugs)
+	return slugs, nil
 }
 
 func loadPlanState(cfg planCommandConfig, projectRoot string, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {
