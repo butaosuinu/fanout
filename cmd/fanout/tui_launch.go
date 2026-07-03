@@ -313,15 +313,18 @@ func createAttachedPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
+	codexPlanStatus := codexPlanTUIStatus{}
 	if req.CodexPlanMode {
-		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
-			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
+		var planErr error
+		codexPlanStatus, planErr = waitForCodexPlanTUIReadyStatus(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
+		if planErr != nil {
+			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			cleanupFailedAttachedLaunch(info.Target, paneID)
 			return false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
-	entry := statePane(req, paneID, targetPath, time.Now().UTC())
+	entry := statePane(req, paneID, targetPath, time.Now().UTC(), codexPlanStatus)
 	entry.Kind = state.PaneKindAttachedAgent
 	if err := recorder.RecordPane(entry); err != nil {
 		lg.Err("%s: write fanout state: %v", paneLogLabel(req), err)

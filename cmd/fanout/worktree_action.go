@@ -221,7 +221,7 @@ func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane, projectRoot
 		}
 		return true, ""
 	}
-	if !pathWithin(worktreePath, live.CurrentPath) {
+	if !pathWithinRoot(worktreePath, live.CurrentPath) {
 		if projectRootFallback && projectRootMatches(pane, live.ProjectRoot) {
 			return true, ""
 		}
@@ -262,7 +262,7 @@ func samePath(a, b string) bool {
 	return a != "." && b != "." && a == b
 }
 
-func pathWithin(root, path string) bool {
+func pathWithinRoot(root, path string) bool {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if root == "." || path == "." {

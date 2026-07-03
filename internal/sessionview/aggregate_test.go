@@ -502,6 +502,24 @@ func TestBuildAliveWhenPaneInWorktreeSubdir(t *testing.T) {
 	}
 }
 
+func TestBuildAliveWhenPaneWorktreeOptionMatches(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")), // worktree /wt/%1
+		LivePanes: func() (map[string]LivePaneInfo, error) {
+			return map[string]LivePaneInfo{"%1": {
+				Path:         "/repo",
+				WorktreePath: "/wt/%1",
+			}}, nil
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+	}
+	snap := Build("o/n", "/root", c)
+	if !snap.Sessions[0].Panes[0].Alive {
+		t.Fatal("a pane with matching @fanout_worktree_path should be alive even when cwd is stale")
+	}
+}
+
 func TestBuildEmptyStateYieldsEmptySnapshot(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

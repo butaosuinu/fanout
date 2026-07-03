@@ -16,11 +16,14 @@ import (
 )
 
 // LivePaneInfo is what Build needs to know about one live tmux pane: the cwd
-// of its foreground process (for the worktree-path liveness check) and its
-// pane title (surfaced as PaneView.TmuxTitle when the pane is alive).
+// of its foreground process, the recorded worktree path option, and its pane
+// title (surfaced as PaneView.TmuxTitle when the pane is alive).
 type LivePaneInfo struct {
 	// Path is the pane's current working directory.
 	Path string
+	// WorktreePath is @fanout_worktree_path, set by fanout for panes whose
+	// foreground process may leave pane_current_path stale.
+	WorktreePath string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
 	// AgentState は pane user option @fanout_agent_state の値("running" /
@@ -45,10 +48,11 @@ type LivePaneInfo struct {
 //     unresolved); the pane shows UNKNOWN and Degraded.GitHub is set.
 type Collectors struct {
 	LoadState func() (state.Store, error)
-	// LivePanes maps each live tmux pane id to its current working path and
-	// title. A pane counts as alive only when its id is present AND the live
-	// path is at/under its recorded worktree — pane ids are reused across tmux
-	// server restarts, so id-only matching would falsely revive stale rows.
+	// LivePanes maps each live tmux pane id to its current working path,
+	// recorded worktree path option, and title. A pane counts as alive only
+	// when its id is present AND the live/current or option path is at/under
+	// its recorded worktree — pane ids are reused across tmux server restarts,
+	// so id-only matching would falsely revive stale rows.
 	LivePanes func() (map[string]LivePaneInfo, error)
 	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
 	// BranchPRs mirrors IssuePRs for issue-less task rows keyed by head branch:
@@ -518,6 +522,10 @@ func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
 		return true
 	}
 	wt := filepath.Clean(worktree)
+	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
+		opt := filepath.Clean(optionPath)
+		return opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+	}
 	cp := filepath.Clean(cur.Path)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
 }
