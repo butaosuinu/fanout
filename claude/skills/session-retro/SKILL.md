@@ -21,7 +21,9 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 - root の絶対パス中の **英数字以外の文字を全て** `-` に置換した slug を作る (Claude Code の project ディレクトリ命名規則。`/` や `.` だけでなく空白・`_`・`+` 等も対象)。
 - 対象ディレクトリは **`~/.claude/projects/<slug>`(完全一致)と `~/.claude/projects/<slug>--*-worktrees-*`(fanout worktree セッション)の 2 パターンだけ** を glob する。緩い prefix glob `<slug>*` は使わない — `<slug>2` や `<slug>-old` のような別リポジトリまで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
 - スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `~/.claude/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
-- 期間: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。以降 `SINCE` と書いたらこの ISO8601 文字列を指す。
+- 期間の下限 `SINCE`: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。
+- 期間の上限 `UNTIL`: **Step 2〜4 のデータ収集を始める前に** `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` で固定する。収集後に「いま」を書くと、クエリ実行〜スナップショット書き込みの間に発生したイベント (例: gh run list 実行直後に落ちた CI) が今回にも次回にも入らず永久に欠落する。Step 5 で書く `window.until` はこの固定値をそのまま使う。
+- タイムスタンプは常に `date -u +%Y-%m-%dT%H:%M:%SZ` 形式 (末尾リテラル `Z`、offset 表記 `+00:00` や小数秒を使わない) で統一する。Step 2 の macOS フォールバック (`date -j -u -f "%Y-%m-%dT%H:%M:%SZ" ...`) はこの形式限定でしか解釈できないため、`SINCE`/`UNTIL` どちらもこの関数で生成・保存する。
 
 ## Step 2 — ツールエラーのマイニング
 
@@ -39,12 +41,16 @@ done
 
 window を適用せずに全 jsonl を毎回数えると、2 回目以降の実行で既報告のエラーを再集計してしまう (mtime はセッション最終更新時刻の近似であり、window をまたぐセッションは丸ごと今回側に入る — 大きくは外れない前提の近似として扱う)。
 
-対象を絞ったら、tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須):
+**対象ファイルが 0 件なら rg を実行せず `tool_errors.total=0` として次へ進む**。`/tmp/session-retro-in-window.txt` が空のまま `$(cat …)` を rg の引数に展開すると、path 引数 0 個の `rg` はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。ファイルが 1 件以上あることを確認してから実行する:
 
 ```bash
-rg -l -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # 該当セッション
-rg -c -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # セッション別行数
+if [ -s /tmp/session-retro-in-window.txt ]; then
+  rg -l -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # 該当セッション
+  rg -c -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # セッション別行数
+fi
 ```
+
+対象を絞ったら、tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須)。
 
 エスケープ形 `\"is_error\":true` で検索してはいけない — それはこの文字列を引用しているセッション (過去の retro 実行など) だけに当たるノイズで、実測 (2026-07) では素の形 302 ファイル / 660 行に対しエスケープ形は 14 ファイル / 74 行だった。`rg -c` は行数を数える (1 行に複数エラーがあり得る) ことにも注意。
 
@@ -55,11 +61,11 @@ rg -c -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # セッ
 ## Step 3 — CI 失敗
 
 ```bash
-gh run list --status failure --created ">${SINCE}" --limit 100 \
+gh run list --status failure --created "${SINCE}..${UNTIL}" --limit 100 \
   --json databaseId,workflowName,displayTitle,headBranch,createdAt
 ```
 
-`--limit` は取得上限も兼ねるため、返り値がちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `--created "SINCE..MID"` / `"MID..UNTIL"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、返り値がちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
@@ -75,11 +81,21 @@ gh api --paginate \
 
 集計はページ横断で安全な**行ストリーム**にする。`--paginate` は **ページごとに** jq を適用するため、`group_by` のような配列集計を `--jq` に書くと 100 件超の期間で同じ login がページをまたいで別々に数えられる (`--slurp` は gh の `--jq` と併用不可)。
 
+**`since=` は `updated_at` 基準であって `created_at` 基準ではない**。期間より前に投稿されたコメントが期間内に編集・minimize 等で更新されると取得結果に混ざり、既報告の指摘を新規扱いしてしまう。実際に分類対象にするコメントは `created_at` で window に絞り込む:
+
+```bash
+gh api --paginate \
+  "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
+  --jq ".[] | select(.created_at > \"${SINCE}\" and .created_at <= \"${UNTIL}\")"
+```
+
+(`gh api --jq` は `--arg` を受け付けないため、`$SINCE`/`$UNTIL` はシェル展開でクエリ文字列に埋め込む。)
+
 そのうえでレビュー bot (fanout では `chatgpt-codex-connector[bot]`) のコメントに絞って分類する。bot の login はサフィックス `[bot]` 付き (素の名前で filter すると 0 件になる)。人間の `in_reply_to` 付き返信 (「対応しました」) は指摘ではないので数えない。`docs/review-checklist.ja.md` の頻出パターンに分類し、パターン外の新種を抽出する (新種はチェックリスト更新の提案候補)。チェックリストが無い repo では Step 2 の既知カテゴリだけで分類する。
 
 ## Step 5 — スナップショットと差分報告
 
-Step 1 で決めたスナップショットディレクトリに `session-<YYYY-MM-DD>.json` を書く (前回分の読み取りと同じ場所。ディレクトリは無ければ作成)。ignore されない repo で作業ツリーに書かないのは、`git status` を汚さず「収集は read-only」を保つため。スキーマ:
+Step 1 で決めたスナップショットディレクトリに `session-<YYYY-MM-DD>.json` を書く (前回分の読み取りと同じ場所。ディレクトリは無ければ作成)。ignore されない repo で作業ツリーに書かないのは、`git status` を汚さず「収集は read-only」を保つため。`window.until` には Step 1 で収集前に固定した `UNTIL` をそのまま書く (Step 5 実行時の現在時刻ではない — ズレると収集後〜書き込み前のイベントを恒久的に取りこぼす)。スキーマ:
 
 ```json
 {"schema": 1, "generated_at": "<ISO8601>",
