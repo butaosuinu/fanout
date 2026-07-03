@@ -32,7 +32,7 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 | Key | Action |
 |---|---|
 | `?` | Open the keyboard shortcut help. Press `Esc`, `q`, or `?` again to close it. |
-| `n` | Open a tmux popup to create manual agent panes from a required **multi-line** prompt and `claude` / `codex` launch counts. `codex` starts in Codex Plan Mode and receives the popup prompt inline; `claude` starts normally. Use `Up` / `Down` to pick an agent row, `Space` to toggle it, and `Left` / `Right` to change the count. In the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `Enter` creates the selected panes. Enhanced keyboard input is on by default (set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out); `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch. |
+| `n` | Open the new-session tmux popup. Its Mode row switches between Prompt, Issue, and Plan; see [New session modes](#new-session-modes). |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it kills the tmux pane and removes the state row; it never removes a git worktree. |
@@ -44,6 +44,14 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 | `q` | Leave the console. The tmux session and child panes are left running. |
 
 > Worktree rows become `stale!` only when fanout cannot restore them, such as a missing worktree or unavailable agent command. Recorded shell terminals are not resumable; if their tmux pane is gone, the TUI removes the state row.
+
+### New session modes
+
+`n` opens a tmux popup with a Mode row. `Left` / `Right` on that row switches the mode, `Tab` moves between fields, and `Esc` cancels (or steps back from the assignment screen).
+
+- **Prompt** — the classic manual pane: a required **multi-line** prompt plus `claude` / `codex` launch counts. Use `Up` / `Down` to pick an agent row, `Space` to toggle it, and `Left` / `Right` to change the count. `codex` starts in Codex Plan Mode and receives the popup prompt inline; `claude` starts normally. In the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `Enter` creates the selected panes. Enhanced keyboard input is on by default (set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out); `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch.
+- **Issue** — lists the repository's OPEN issues (up to 100). Typing narrows by number, title, or label; rows that already have a recorded pane show `(has session)` but stay selectable. `Enter` opens a per-child agent assignment screen where `Left` / `Right` flips one row's agent — the equivalent of repeatable `--agent NUM=name` flags — and `Enter` launches. An issue with OPEN children fans out like `fanout <issue> --unblocked-only`: blocked children stay deferred, so re-select the issue after their blockers close (or use the CLI to launch every child at once). An issue without children starts a single pane recorded under `@watch`.
+- **Plan** — lists stored `.fanout/plans/*.json` slugs and runs the selection like `fanout plan <slug>`, with the same per-task agent assignment (`--agent task-id=name`).
 
 ## --status (JSON)
 

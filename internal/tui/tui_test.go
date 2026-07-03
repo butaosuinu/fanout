@@ -2537,7 +2537,7 @@ func TestHelpModalFitsStandardTerminalHeight(t *testing.T) {
 	m.mode = modeHelp
 
 	view := m.View()
-	for _, want := range []string{"[Enter]", "Create panes", "[Esc]", "Cancel", "Esc / q / ? close"} {
+	for _, want := range []string{"[Enter]", "Create / next", "[Esc]", "Cancel / back", "Esc / q / ? close"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("80x24 help view missing %q:\n%s", want, view)
 		}

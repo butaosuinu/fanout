@@ -33,10 +33,15 @@ type tuiNewPanePopupGeometry struct {
 }
 
 type tuiNewPanePopupResult struct {
-	Canceled bool     `json:"canceled,omitempty"`
-	Prompt   string   `json:"prompt,omitempty"`
-	Agents   []string `json:"agents,omitempty"`
-	Error    string   `json:"error,omitempty"`
+	Canceled       bool              `json:"canceled,omitempty"`
+	Mode           string            `json:"mode,omitempty"` // "" (prompt) | "issue" | "plan"
+	Prompt         string            `json:"prompt,omitempty"`
+	Issue          int               `json:"issue,omitempty"`
+	Plan           string            `json:"plan,omitempty"`
+	Agents         []string          `json:"agents,omitempty"`
+	DefaultAgent   string            `json:"defaultAgent,omitempty"`
+	AgentOverrides map[string]string `json:"agentOverrides,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 func isTUINewPanePopupRequest(args []string) bool {
@@ -59,13 +64,26 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 		return exitcode.Invocation
 	}
 	req, canceled, err := fanouttui.RunNewPanePrompt(fanouttui.NewPanePromptOptions{
-		ProjectRoot:   *projectRoot,
-		DefaultAgent:  *defaultAgent,
-		Width:         *width,
-		Height:        *height,
-		ListRepoFiles: worktree.ListFiles,
+		ProjectRoot:       *projectRoot,
+		DefaultAgent:      *defaultAgent,
+		Width:             *width,
+		Height:            *height,
+		ListRepoFiles:     worktree.ListFiles,
+		ListOpenIssues:    newTUIListOpenIssuesFunc(*projectRoot),
+		ListPlanSlugs:     newTUIListPlanSlugsFunc(*projectRoot),
+		ListIssueChildren: newTUIListIssueChildrenFunc(*projectRoot),
+		ListPlanTasks:     newTUIListPlanTasksFunc(*projectRoot),
 	})
-	result := tuiNewPanePopupResult{Canceled: canceled, Prompt: req.Prompt, Agents: req.Agents}
+	result := tuiNewPanePopupResult{
+		Canceled:       canceled,
+		Mode:           string(req.Mode),
+		Prompt:         req.Prompt,
+		Issue:          req.Issue,
+		Plan:           req.Plan,
+		Agents:         req.Agents,
+		DefaultAgent:   req.DefaultAgent,
+		AgentOverrides: req.AgentOverrides,
+	}
 	code := exitcode.OK
 	if err != nil {
 		result = tuiNewPanePopupResult{Error: err.Error()}
@@ -166,7 +184,15 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 		if displayErr != nil {
 			return fanouttui.LaunchRequest{}, false, displayErr
 		}
-		return fanouttui.LaunchRequest{Prompt: result.Prompt, Agents: result.Agents}, false, nil
+		return fanouttui.LaunchRequest{
+			Mode:           fanouttui.LaunchMode(result.Mode),
+			Prompt:         result.Prompt,
+			Issue:          result.Issue,
+			Plan:           result.Plan,
+			Agents:         result.Agents,
+			DefaultAgent:   result.DefaultAgent,
+			AgentOverrides: result.AgentOverrides,
+		}, false, nil
 	}
 }
 

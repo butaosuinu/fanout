@@ -241,6 +241,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchNewPaneRequest(msg.req)
+	case newPaneIssuesLoadedMsg:
+		p := &m.newPane.issuePicker
+		p.loading = false
+		if msg.err != nil {
+			// Leave loaded false so re-entering the mode retries the fetch.
+			p.err = msg.err.Error()
+			return m, nil
+		}
+		p.err = ""
+		p.loaded = true
+		p.items = issuePickerItems(msg.items)
+		m.recomputePicker(p)
+		return m, nil
+	case newPanePlansLoadedMsg:
+		p := &m.newPane.planPicker
+		p.loading = false
+		if msg.err != nil {
+			p.err = msg.err.Error()
+			return m, nil
+		}
+		p.err = ""
+		p.loaded = true
+		p.items = planPickerItems(msg.slugs)
+		m.recomputePicker(p)
+		return m, nil
+	case newPaneAssignLoadedMsg:
+		if m.mode != modeNewPane || m.newPane.step != newPaneStepAssign || m.newPane.assign.target != msg.target {
+			return m, nil // a stale load must not populate a newer selection
+		}
+		m.newPane.assign.loading = false
+		if msg.err != nil {
+			m.newPane.assign.err = msg.err.Error()
+			return m, nil
+		}
+		m.newPane.assign.err = ""
+		rows := buildAssignRows(msg, m.newPane.agentChoice)
+		if len(rows) == 0 {
+			// A childless issue launches as a single pane; an empty plan defers
+			// its error to the launch lane. Either way there is nothing to assign.
+			return m, m.finalizeNewPaneModeSubmit()
+		}
+		m.newPane.assign.rows = rows
+		m.newPane.assign.index = 0
+		return m, nil
 	case filesLoadedMsg:
 		m.repoFilesLoading = false
 		if msg.err != nil {
