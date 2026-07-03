@@ -85,6 +85,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		Hooks:               hookConfig,
 		LaunchPane:          newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
 		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
+		RestorePanes:        newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:            func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
 		Notifier:            notifier,
 	}); err != nil {

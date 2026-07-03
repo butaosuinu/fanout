@@ -92,9 +92,9 @@ func createPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, 
 }
 
 func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, req paneRequest, recorder paneStateRecorder, c log.Palette, commandName string) (createdPane, bool) {
-	agentCmd, err := buildAgentCommand(cfg, req, commandName)
-	if err != nil {
-		lg.Err("%s: %v", paneLogLabel(req), err)
+	agentCmd, cmdErr := buildAgentCommand(cfg, req, commandName)
+	if cmdErr != nil {
+		lg.Err("%s: %v", paneLogLabel(req), cmdErr)
 		return createdPane{}, false
 	}
 	req.AgentCommand = agentCmd
@@ -107,8 +107,8 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	}
 
 	if req.BriefingPath != "" && !cfg.DryRun {
-		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
-			lg.Err("%s: write briefing: %v", paneLogLabel(req), err)
+		if writeErr := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); writeErr != nil {
+			lg.Err("%s: write briefing: %v", paneLogLabel(req), writeErr)
 			return createdPane{}, false
 		}
 	}
@@ -120,7 +120,7 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		return createdPane{}, true
 	}
 
-	prepared, err := worktree.Prepare(worktree.Options{
+	prepared, prepErr := worktree.Prepare(worktree.Options{
 		ProjectRoot:        info.ProjectRoot,
 		Slug:               req.Slug,
 		BranchName:         req.BranchName,
@@ -134,8 +134,8 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if prepared.RefreshWarning != nil {
 		lg.Warn("%s: %s: %v", paneLogLabel(req), baseRefreshSkippedNotice, prepared.RefreshWarning)
 	}
-	if err != nil {
-		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), err)
+	if prepErr != nil {
+		lg.Err("%s: prepare worktree: %v", paneLogLabel(req), prepErr)
 		return createdPane{}, false
 	}
 	if prepared.AlreadyExists {
@@ -151,9 +151,9 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, lg)
 
-	paneID, err := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
-	if err != nil {
-		lg.Err("%s: %v", paneLogLabel(req), err)
+	paneID, splitErr := tmuxrun.SplitPaneWithAgentCommand(info.Target, prepared.WorktreePath, req.AgentCommand)
+	if splitErr != nil {
+		lg.Err("%s: %v", paneLogLabel(req), splitErr)
 		cleanupFailedLaunch(paneLogLabel(req), info.Target, "", prepared, lg)
 		return createdPane{}, false
 	}
@@ -176,16 +176,19 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
+	var codexPlanStatus codexPlanTUIStatus
 	if req.CodexPlanMode {
-		if err := waitForCodexPlanTUIReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout); err != nil {
-			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
+		var planErr error
+		codexPlanStatus, planErr = waitForCodexPlanTUIReadyStatus(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
+		if planErr != nil {
+			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
 			return createdPane{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
 	if recorder != nil {
-		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC())
+		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC(), codexPlanStatus)
 		if err := recorder.RecordPane(entry); err != nil {
 			lg.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
@@ -193,11 +196,13 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 		}
 	}
 	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
-		Agent:        req.Agent,
-		DisplayName:  paneTitle(req),
-		BranchName:   req.BranchName,
-		Slug:         req.Slug,
-		WorktreePath: prepared.WorktreePath,
+		Agent:          req.Agent,
+		DisplayName:    paneTitle(req),
+		BranchName:     req.BranchName,
+		Slug:           req.Slug,
+		WorktreePath:   prepared.WorktreePath,
+		CodexThreadID:  codexPlanStatus.ThreadID,
+		CodexSessionID: codexPlanStatus.SessionID,
 	}); err != nil {
 		lg.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		rollbackState(recorder, req, lg)
@@ -208,23 +213,25 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	return createdPane{req: req, paneID: paneID, prepared: prepared}, true
 }
 
-func statePane(req paneRequest, paneID, worktreePath string, now time.Time) state.Pane {
+func statePane(req paneRequest, paneID, worktreePath string, now time.Time, codexPlanStatus codexPlanTUIStatus) state.Pane {
 	return state.Pane{
-		Parent:        req.ParentRef,
-		IssueNum:      req.Number,
-		TaskID:        req.TaskID,
-		Slug:          req.Slug,
-		BranchName:    req.BranchName,
-		BaseBranch:    req.Worktree.BaseBranch,
-		PaneID:        paneID,
-		Agent:         req.Agent,
-		CodexPlanMode: req.CodexPlanMode,
-		DisplayName:   paneTitle(req),
-		WorktreePath:  worktreePath,
-		Prompt:        req.Prompt,
-		Wave:          req.Wave,
-		CreatedAt:     now.Format(time.RFC3339),
-		AgentStatus:   "running",
+		Parent:         req.ParentRef,
+		IssueNum:       req.Number,
+		TaskID:         req.TaskID,
+		Slug:           req.Slug,
+		BranchName:     req.BranchName,
+		BaseBranch:     req.Worktree.BaseBranch,
+		PaneID:         paneID,
+		Agent:          req.Agent,
+		CodexPlanMode:  req.CodexPlanMode,
+		CodexThreadID:  codexPlanStatus.ThreadID,
+		CodexSessionID: codexPlanStatus.SessionID,
+		DisplayName:    paneTitle(req),
+		WorktreePath:   worktreePath,
+		Prompt:         req.Prompt,
+		Wave:           req.Wave,
+		CreatedAt:      now.Format(time.RFC3339),
+		AgentStatus:    "running",
 	}
 }
 
@@ -263,6 +270,27 @@ func buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, prompt, statusPath st
 		"--prompt", prompt,
 		"--status-file", statusPath,
 	}
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = agent.ShellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+func buildCodexPlanTUIResumeLaunchCommand(fanoutPath, codexPath, threadID, sessionID, statusPath string) string {
+	if strings.TrimSpace(fanoutPath) == "" {
+		fanoutPath = "fanout"
+	}
+	args := []string{
+		fanoutPath,
+		"__codex-plan-tui",
+		"--codex", codexPath,
+		"--resume-thread-id", threadID,
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		args = append(args, "--resume-session-id", sessionID)
+	}
+	args = append(args, "--status-file", statusPath)
 	quoted := make([]string, len(args))
 	for i, arg := range args {
 		quoted[i] = agent.ShellQuote(arg)
@@ -547,8 +575,13 @@ func oneLineText(s string) string {
 }
 
 func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
+	_, err := waitForCodexPlanTUIReadyStatus(statusPath, timeout)
+	return err
+}
+
+func waitForCodexPlanTUIReadyStatus(statusPath string, timeout time.Duration) (codexPlanTUIStatus, error) {
 	if strings.TrimSpace(statusPath) == "" {
-		return fmt.Errorf("missing Codex Plan TUI status path")
+		return codexPlanTUIStatus{}, fmt.Errorf("missing Codex Plan TUI status path")
 	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -557,12 +590,12 @@ func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
 		if err == nil {
 			switch status.Status {
 			case codexPlanTUIStatusReady:
-				return nil
+				return status, nil
 			case codexPlanTUIStatusFailed:
 				if status.Error == "" {
-					return fmt.Errorf("Codex Plan TUI setup failed") //nolint:staticcheck // ST1005: "Codex Plan TUI" is a proper noun
+					return codexPlanTUIStatus{}, fmt.Errorf("Codex Plan TUI setup failed") //nolint:staticcheck // ST1005: "Codex Plan TUI" is a proper noun
 				}
-				return errors.New(status.Error)
+				return codexPlanTUIStatus{}, errors.New(status.Error)
 			default:
 				lastErr = fmt.Errorf("unexpected Codex Plan TUI status %q", status.Status)
 			}
@@ -571,9 +604,9 @@ func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("%w after %s; last status error: %w", errCodexPlanStartupTimeout, timeout, lastErr)
+				return codexPlanTUIStatus{}, fmt.Errorf("%w after %s; last status error: %w", errCodexPlanStartupTimeout, timeout, lastErr)
 			}
-			return fmt.Errorf("%w after %s; no status file at %s", errCodexPlanStartupTimeout, timeout, statusPath)
+			return codexPlanTUIStatus{}, fmt.Errorf("%w after %s; no status file at %s", errCodexPlanStartupTimeout, timeout, statusPath)
 		}
 		time.Sleep(codexPlanTUIStartupPoll)
 	}

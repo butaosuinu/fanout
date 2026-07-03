@@ -118,6 +118,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.allPanes = msg.panes
 		m.lastState = msg.at
+		if msg.restoreNotice != "" {
+			m.notice = msg.restoreNotice
+		}
 		m.refreshRows()
 		peekCmd := m.peekSelectedCmd(false)
 		if msg.scheduleNext {

@@ -29,7 +29,8 @@ English and 日本語.
   unblocked children; rerun as PRs merge and the next wave opens.
 - **Persistent TUI console** — run `fanout` with no arguments for a live
   pane / issue / PR view with a compact Session navigator plus focus, peek,
-  terminal, multi-agent manual launch, and lifecycle keys.
+  terminal, multi-agent manual launch, lifecycle keys, and automatic restore
+  of missing worktree panes.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it
@@ -68,7 +69,9 @@ fanout 123 --status     # PR review + CI state for the fanned children
 ```
 
 Run `fanout` with no arguments to open the persistent TUI console for the
-current repository. See the
+current repository. Restarting it reuses existing state, rebinds panes still
+alive in tmux, and recreates missing worktree panes by resuming their agent
+CLI. See the
 [five-minute quickstart](https://butaosuinu.github.io/fanout/docs/quickstart/)
 for a guided first run.
 
@@ -129,7 +132,7 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 | `fanout 123 --unblocked-only` | Fan out only children whose blockers are closed — the next wave |
 | `fanout 123 --dry-run` | Print the plan without modifying git, tmux, state, or briefing files |
 | `fanout plan spec.json --agent claude` | Fan out a local plan spec instead of GitHub child issues |
-| `fanout` | Start the persistent TUI console (Session jump, focus, peek, terminal, multi-agent manual launch, lifecycle keys) |
+| `fanout` | Start the persistent TUI console (Session jump, focus, peek, terminal, multi-agent manual launch, restore, lifecycle keys) |
 | `fanout 123 --status` | Pane, PR review, and CI state as JSON or a table |
 | `fanout dashboard --web` | Serve the read-only web dashboard on localhost |
 | `fanout 123 --merge 4` | Fast-forward merge a child branch (`--close` / `--cleanup` fold panes away) |

@@ -46,6 +46,7 @@ type Options struct {
 	Hooks               hooks.Config
 	LaunchPane          LaunchFunc
 	LaunchShell         ShellLaunchFunc
+	RestorePanes        func() (string, error)
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
 	// to panelayout.Apply(target, Resize) in production and left nil in tests
 	// (then resize handling is a no-op).

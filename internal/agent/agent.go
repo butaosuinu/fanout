@@ -11,13 +11,14 @@ import (
 )
 
 type Definition struct {
-	Name    string
-	Command string
+	Name       string
+	Command    string
+	ResumeArgs []string
 }
 
 var registry = map[string]Definition{
-	"claude": {Name: "claude", Command: "claude"},
-	"codex":  {Name: "codex", Command: "codex"},
+	"claude": {Name: "claude", Command: "claude", ResumeArgs: []string{"--continue"}},
+	"codex":  {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
 }
 
 // ValidateKnown returns an error if name is not in fanout's MVP registry.
@@ -74,12 +75,43 @@ func BuildResolvedCommand(name, prompt string) (string, error) {
 	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + BuildCommandWithExecutable(path, prompt), nil
 }
 
+// BuildResumeCommand returns the generic resume command for a supported agent.
+func BuildResumeCommand(name string) (string, error) {
+	def, ok := registry[name]
+	if !ok {
+		return "", ValidateKnown(name)
+	}
+	return buildCommandWithArgs(def.Command, def.ResumeArgs), nil
+}
+
+// BuildResolvedResumeCommand returns the live resume command using the resolved
+// executable path from the caller's environment.
+func BuildResolvedResumeCommand(name string) (string, error) {
+	path, err := ResolveExecutable(name)
+	if err != nil {
+		return "", err
+	}
+	def, ok := registry[name]
+	if !ok {
+		return "", ValidateKnown(name)
+	}
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommandWithArgs(path, def.ResumeArgs), nil
+}
+
 // BuildCommandWithExecutable builds a shell command for a known executable path.
 func BuildCommandWithExecutable(executable, prompt string) string {
 	if strings.TrimSpace(prompt) == "" {
 		return ShellQuote(executable)
 	}
 	return ShellQuote(executable) + " " + ShellQuote(prompt)
+}
+
+func buildCommandWithArgs(executable string, args []string) string {
+	parts := []string{ShellQuote(executable)}
+	for _, arg := range args {
+		parts = append(parts, ShellQuote(arg))
+	}
+	return strings.Join(parts, " ")
 }
 
 func Supported() []string {

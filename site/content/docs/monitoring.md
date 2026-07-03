@@ -17,7 +17,7 @@ To watch every pane from your terminal, run `fanout` with no arguments to start 
 fanout   # start the persistent tmux console
 ```
 
-From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console.
+From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console. On startup and each state refresh, the console rebinds recorded worktree panes that still exist in tmux and recreates missing worktree panes by resuming their agent CLI: `claude --continue`, `codex resume --last`, or the saved Codex Plan Mode thread for Plan panes.
 
 The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance.
 
@@ -42,7 +42,7 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 | `X` | Clean up merged/closed children of the same parent — confirmation prompt, then the same core path as `--cleanup`. |
 | `q` | Leave the console. The tmux session and child panes are left running. |
 
-> Rows whose recorded pane no longer exists in tmux are marked `stale!` and are skipped by the focus and peek actions.
+> Worktree rows become `stale!` only when fanout cannot restore them, such as a missing worktree or unavailable agent command. Recorded shell terminals are not resumable; if their tmux pane is gone, the TUI removes the state row.
 
 ## --status (JSON)
 

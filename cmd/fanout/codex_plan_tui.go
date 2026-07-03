@@ -42,10 +42,12 @@ const (
 )
 
 type codexPlanTUIConfig struct {
-	CodexPath  string
-	Prompt     string
-	StatusFile string
-	Help       bool
+	CodexPath       string
+	Prompt          string
+	ResumeThreadID  string
+	ResumeSessionID string
+	StatusFile      string
+	Help            bool
 }
 
 type codexPlanTUIStatus struct {
@@ -153,7 +155,7 @@ func parseCodexPlanTUIArgs(args []string, lg *log.Logger) (codexPlanTUIConfig, e
 	for i := 0; i < len(args); {
 		switch args[i] {
 		case "--help", "-h":
-			fmt.Fprint(lg.Stdout(), "Usage: fanout __codex-plan-tui --codex <path> --prompt <prompt> --status-file <path>\n")
+			fmt.Fprint(lg.Stdout(), "Usage: fanout __codex-plan-tui --codex <path> (--prompt <prompt>|--resume-thread-id <thread>) --status-file <path>\n")
 			cfg.Help = true
 			return cfg, exitcode.OK
 		case "--codex":
@@ -177,12 +179,26 @@ func parseCodexPlanTUIArgs(args []string, lg *log.Logger) (codexPlanTUIConfig, e
 			}
 			cfg.StatusFile = args[i+1]
 			i += 2
+		case "--resume-thread-id":
+			if i+1 >= len(args) {
+				lg.Err("--resume-thread-id requires an argument")
+				return codexPlanTUIConfig{}, exitcode.Env
+			}
+			cfg.ResumeThreadID = args[i+1]
+			i += 2
+		case "--resume-session-id":
+			if i+1 >= len(args) {
+				lg.Err("--resume-session-id requires an argument")
+				return codexPlanTUIConfig{}, exitcode.Env
+			}
+			cfg.ResumeSessionID = args[i+1]
+			i += 2
 		default:
 			lg.Err("unknown codex plan TUI option: %s", args[i])
 			return codexPlanTUIConfig{}, exitcode.Invocation
 		}
 	}
-	if strings.TrimSpace(cfg.Prompt) == "" {
+	if strings.TrimSpace(cfg.Prompt) == "" && strings.TrimSpace(cfg.ResumeThreadID) == "" {
 		lg.Err("--prompt is required")
 		return codexPlanTUIConfig{}, exitcode.Env
 	}
@@ -222,34 +238,42 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	if err != nil {
 		return fmt.Errorf("resolve current directory: %w", err)
 	}
-	thread, err := setupCodexPlanThread(client, cwd)
-	if err != nil {
-		return err
+	thread := codexThreadInfo{ID: strings.TrimSpace(cfg.ResumeThreadID), SessionID: strings.TrimSpace(cfg.ResumeSessionID)}
+	if thread.ID != "" && thread.SessionID == "" {
+		thread.SessionID = thread.ID
 	}
 	var drainDone chan error
 	tuiPrompt := ""
-	if thread.UseTurnCollaborationMode {
-		var turnStart codexPlanTurnStartResult
-		turnStart, err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt)
+	if thread.ID == "" {
+		thread, err = setupCodexPlanThread(client, cwd)
 		if err != nil {
 			return err
 		}
-		if turnStart.Completed {
-			client.Close()
+		if thread.UseTurnCollaborationMode {
+			var turnStart codexPlanTurnStartResult
+			turnStart, err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt)
+			if err != nil {
+				return err
+			}
+			if turnStart.Completed {
+				client.Close()
+			} else {
+				drainDone = make(chan error, 1)
+				go func() { drainDone <- drainCodexAppServerUntilTurnComplete(client, thread.ID, turnStart.TurnID) }()
+			}
 		} else {
-			drainDone = make(chan error, 1)
-			go func() { drainDone <- drainCodexAppServerUntilTurnComplete(client, thread.ID, turnStart.TurnID) }()
+			err = seedCodexPlanThreadForResume(client, thread.ID)
+			if err != nil {
+				return err
+			}
+			client.Close()
+			tuiPrompt = cfg.Prompt
 		}
 	} else {
-		err = seedCodexPlanThreadForResume(client, thread.ID)
-		if err != nil {
-			return err
-		}
 		client.Close()
-		tuiPrompt = cfg.Prompt
 	}
 
-	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, thread.ID, tuiPrompt, stdout, stderr)
+	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), tuiPrompt, stdout, stderr)
 	if err != nil {
 		return err
 	}
@@ -437,8 +461,8 @@ func codexPlanCollaborationMode(model, effort string) map[string]any {
 	}
 }
 
-func startCodexRemoteTUI(codexPath, remoteAddr, threadID, prompt string, stdout, stderr io.Writer) (*exec.Cmd, chan error, error) {
-	cmd := exec.Command(codexPath, codexRemoteTUIArgs(remoteAddr, threadID, prompt)...)
+func startCodexRemoteTUI(codexPath, remoteAddr, resumeID, prompt string, stdout, stderr io.Writer) (*exec.Cmd, chan error, error) {
+	cmd := exec.Command(codexPath, codexRemoteTUIArgs(remoteAddr, resumeID, prompt)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -450,12 +474,19 @@ func startCodexRemoteTUI(codexPath, remoteAddr, threadID, prompt string, stdout,
 	return cmd, done, nil
 }
 
-func codexRemoteTUIArgs(remoteAddr, threadID, prompt string) []string {
-	args := []string{"--remote", remoteAddr, "resume", threadID}
+func codexRemoteTUIArgs(remoteAddr, resumeID, prompt string) []string {
+	args := []string{"--remote", remoteAddr, "resume", resumeID}
 	if strings.TrimSpace(prompt) != "" {
 		args = append(args, "--", prompt)
 	}
 	return args
+}
+
+func codexRemoteTUIResumeID(thread codexThreadInfo) string {
+	if strings.TrimSpace(thread.SessionID) != "" {
+		return thread.SessionID
+	}
+	return thread.ID
 }
 
 func startCodexRemoteAppServer(codexPath string) (*codexRemoteAppServer, error) {

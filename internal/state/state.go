@@ -46,12 +46,17 @@ type Pane struct {
 	// で起動したペインかどうか。ダッシュボードの GET /api/plan が plan 抽出の
 	// 対象ペインを限定するために参照する。additive なフィールドなので
 	// SchemaVersion は据え置き(旧版 fanout は未知キーとして無視して読める)。
-	CodexPlanMode bool   `json:"codexPlanMode,omitempty"`
-	Wave          string `json:"wave,omitempty"`
-	DisplayName   string `json:"displayName"`
-	WorktreePath  string `json:"worktreePath"`
-	Prompt        string `json:"prompt"`
-	CreatedAt     string `json:"createdAt"`
+	CodexPlanMode bool `json:"codexPlanMode,omitempty"`
+	// CodexThreadID/CodexSessionID preserve the app-server-backed Codex thread
+	// created for Plan Mode panes so a recreated pane can resume the exact same
+	// agent session instead of falling back to codex resume --last.
+	CodexThreadID  string `json:"codexThreadId,omitempty"`
+	CodexSessionID string `json:"codexSessionId,omitempty"`
+	Wave           string `json:"wave,omitempty"`
+	DisplayName    string `json:"displayName"`
+	WorktreePath   string `json:"worktreePath"`
+	Prompt         string `json:"prompt"`
+	CreatedAt      string `json:"createdAt"`
 	// AgentStatus は起動時に "running" を記録する。終了検知デーモンは無いので
 	// 表示側は tmux の動的判定(起動ラッパーが設定する pane user option
 	// @fanout_agent_state)を優先し、tmux 不通時のみこの記録値に fallback する。
@@ -165,6 +170,11 @@ func (l *LockedStore) RemoveTaskPane(parent, taskID string) error {
 	if !l.removeTask(parent, taskID) {
 		return nil
 	}
+	return save(l.path, l.Store)
+}
+
+// Save writes the currently locked store back to disk.
+func (l *LockedStore) Save() error {
 	return save(l.path, l.Store)
 }
 
