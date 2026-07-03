@@ -51,6 +51,9 @@ func main() {
 	if isTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdTUI(commandName, lg)))
 	}
+	if isTUINewPanePopupRequest(os.Args[1:]) {
+		os.Exit(int(cmdTUINewPanePopup(os.Args[2:], lg)))
+	}
 	if isCodexPlanTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
 	}
@@ -545,6 +548,11 @@ func checkDeps(cfg *cliflags.Config) []string {
 			missing = append(missing, hint)
 		}
 	}
+	checkTmux := func() {
+		if err := tmuxrun.CheckMinimumVersion(); err != nil {
+			missing = append(missing, err.Error())
+		}
+	}
 	check("git", "git")
 
 	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
@@ -553,7 +561,7 @@ func checkDeps(cfg *cliflags.Config) []string {
 	}
 
 	if !cfg.StatusMode && !lifecycle {
-		check("tmux", "tmux (brew install tmux)")
+		checkTmux()
 	}
 	return missing
 }

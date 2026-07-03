@@ -15,10 +15,10 @@ Fanning a parent issue out into one pane per child needs three tools on your `PA
 |---|---|
 | `gh` | GitHub CLI — fetching issues, querying PR state, running the Project GraphQL query |
 | `git` | creating worktrees, branching, merging |
-| `tmux` | splitting one pane per child |
+| `tmux 3.3+` | splitting one pane per child and showing TUI popups |
 
 fanout checks only the dependencies needed for the selected mode at startup and prints install hints when one is missing. `--status` and `--cleanup` use `gh` and `git`; `--merge` and `--close` use `git`.
-Local `fanout plan` runs and manual panes launched from the TUI need `git`, `tmux`, and the selected agent. They run even in repositories without an `origin` remote or `gh` authentication.
+Local `fanout plan` runs and manual panes launched from the TUI need `git`, `tmux 3.3+`, and the selected agent. They run even in repositories without an `origin` remote or `gh` authentication.
 
 > **Project mode only:** the `gh` CLI must have the `read:project` scope so the GraphQL query that lists Project items can succeed. Add it with `gh auth refresh -s read:project`. Issue mode (`fanout <N>`) does not need this scope.
 

@@ -31,6 +31,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
+		if (m.newPanePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+			return m, nil
+		}
 		if m.pendingAction != nil {
 			return m.updatePendingAction(msg)
 		}
@@ -79,9 +82,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "]":
 			return m.jumpSession(1)
 		case "n":
-			m.openNewPaneForm()
-			cmd := m.reloadRepoFilesCmd()
-			return m, cmd
+			return m, m.openNewPanePopupCmd()
 		case "A":
 			return m, m.openSelectedWorktreeShellCmd()
 		case "t":
@@ -204,7 +205,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case launchPaneMsg:
 		m.newPane.launching = false
 		if msg.err != nil {
-			m.newPane.err = msg.err.Error()
+			if m.mode == modeNewPane {
+				m.newPane.err = msg.err.Error()
+			} else {
+				m.notice = "new pane: " + msg.err.Error()
+			}
 			return m, nil
 		}
 		m.mode = modeMonitor
@@ -217,6 +222,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "created new agent pane"
 		}
 		return m, m.loadStateCmd(false)
+	case newPanePromptMsg:
+		m.newPanePopupOpen = false
+		if msg.err != nil {
+			m.notice = "new pane popup: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.canceled {
+			if m.notice == newPanePopupOpeningNotice {
+				m.notice = ""
+			}
+			return m, nil
+		}
+		return m, m.launchNewPaneRequest(msg.req)
 	case filesLoadedMsg:
 		m.repoFilesLoading = false
 		if msg.err != nil {

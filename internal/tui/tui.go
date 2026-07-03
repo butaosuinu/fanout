@@ -45,6 +45,7 @@ type Options struct {
 	WatcherRunningLabel string
 	Hooks               hooks.Config
 	LaunchPane          LaunchFunc
+	NewPanePrompt       NewPanePromptFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
@@ -93,6 +94,7 @@ type model struct {
 	watchDisabled    bool
 	notice           string
 	newPane          newPaneForm
+	newPanePopupOpen bool
 	repoFiles        []string
 	repoFileIndex    []fileEntry
 	repoFilesLoaded  bool
@@ -107,6 +109,10 @@ type model struct {
 	notifyPrimed     bool
 	keyboardPaused   bool
 	relayoutGen      int
+	promptOnly       bool
+	promptDone       bool
+	promptCanceled   bool
+	promptResult     LaunchRequest
 }
 
 type keyboardProtocolsEnabledMsg struct{}
@@ -119,6 +125,11 @@ type (
 		notice string
 		count  int
 		err    error
+	}
+	newPanePromptMsg struct {
+		req      LaunchRequest
+		canceled bool
+		err      error
 	}
 	launchShellMsg struct {
 		req ShellLaunchRequest
@@ -244,6 +255,13 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.promptOnly {
+		loadFiles := m.loadRepoFilesCmd()
+		if loadFiles == nil {
+			return m.enableKeyboardProtocolsCmd()
+		}
+		return tea.Sequence(m.enableKeyboardProtocolsCmd(), loadFiles)
+	}
 	loads := tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
 	if m.opts.Watcher == nil {
 		return tea.Sequence(m.enableKeyboardProtocolsCmd(), loads)

@@ -105,7 +105,11 @@ func TestCheckPlanDepsDoesNotRequireGhForUnblockedOnly(t *testing.T) {
 	binDir := t.TempDir()
 	for _, name := range []string{"git", "tmux"} {
 		path := filepath.Join(binDir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		body := "#!/bin/sh\nexit 0\n"
+		if name == "tmux" {
+			body = "#!/bin/sh\nprintf 'tmux 3.6a\\n'\n"
+		}
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

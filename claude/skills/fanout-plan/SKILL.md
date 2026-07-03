@@ -95,7 +95,7 @@ only in repeatable CLI flags such as `--agent base-types=codex`.
 ## CLI Surface
 
 Run from the target repository worktree. Task creation and dry-run modes need
-`git` and `tmux`; `gh` is optional for `--unblocked-only` blocker completion
+`git` and `tmux 3.3+`; `gh` is optional for `--unblocked-only` blocker completion
 checks, and unavailable PR lookups are treated as incomplete dependencies.
 Read/lifecycle action modes need `git` but not tmux; `--status` and `--cleanup`
 also need `gh`. Use `--agent claude` unless the user

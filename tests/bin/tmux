@@ -25,10 +25,16 @@ set -euo pipefail
 fixture="${FIXTURE_DIR:-}"
 
 case "${1:-}" in
+  -V)
+    printf 'tmux 3.6a\n'
+    exit 0
+    ;;
   display-message)
     if [[ "${2:-}" == "-p" ]]; then
       if [[ "${3:-}" == "#{pane_id}" ]]; then
         printf '%%1\n'
+      elif [[ "${3:-}" == "#{client_width} #{client_height}" ]]; then
+        printf '120 40\n'
       elif [[ -n "$fixture" && -f "$fixture/tmux-sessions.txt" ]]; then
         head -n 1 "$fixture/tmux-sessions.txt"
       else
@@ -48,6 +54,9 @@ case "${1:-}" in
     ;;
   split-window)
     printf '%%99\n'
+    exit 0
+    ;;
+  display-popup)
     exit 0
     ;;
   select-layout|select-pane)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1078,6 +1079,25 @@ func TestEnableKeyboardProtocolsCmd(t *testing.T) {
 	}
 }
 
+func TestPromptOnlyInitEnablesKeyboardProtocols(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	m := newModel(Options{keyboard: protocols})
+	m.promptOnly = true
+	m.opts.ListRepoFiles = nil
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("prompt-only Init() returned nil command, want keyboard protocol enable")
+	}
+	msg := cmd()
+	if _, ok := msg.(keyboardProtocolsEnabledMsg); !ok {
+		t.Fatalf("prompt-only Init() msg = %T, want keyboardProtocolsEnabledMsg", msg)
+	}
+	if protocols.enableCount != 1 || protocols.disableCount != 0 {
+		t.Fatalf("protocol calls = enable %d disable %d, want enable 1 disable 0", protocols.enableCount, protocols.disableCount)
+	}
+}
+
 func TestEnhancedKeyboardKeysEnabledByDefault(t *testing.T) {
 	for _, value := range []string{"", "1", "true", "anything"} {
 		t.Setenv(EnhancedKeysEnv, value)
@@ -1109,6 +1129,28 @@ func TestQuitDisablesKeyboardProtocols(t *testing.T) {
 	}
 	if m.keyboardPaused {
 		t.Fatal("keyboardPaused = true after quit, want false")
+	}
+}
+
+func TestNewPanePromptSignalCleanupDisablesKeyboardBeforeExit(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	inputClosed := false
+	exitCode := 0
+
+	cleanupNewPanePromptSignal(syscall.SIGTERM, protocols, func() {
+		inputClosed = true
+	}, func(code int) {
+		exitCode = code
+	})
+
+	if protocols.disableCount != 1 {
+		t.Fatalf("disableCount = %d, want 1", protocols.disableCount)
+	}
+	if !inputClosed {
+		t.Fatal("inputClosed = false, want true")
+	}
+	if exitCode != 143 {
+		t.Fatalf("exitCode = %d, want 143", exitCode)
 	}
 }
 
@@ -2258,6 +2300,194 @@ func TestNewPaneKeyOpensForm(t *testing.T) {
 	}
 	if agents := got.selectedNewPaneAgents(); len(agents) != 1 || agents[0] != "codex" {
 		t.Fatalf("default agents = %#v, want [codex]", agents)
+	}
+}
+
+func TestNewPaneKeyUsesPopupPromptWhenConfigured(t *testing.T) {
+	var prompted NewPanePromptRequest
+	var launched LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		NewPanePrompt: func(req NewPanePromptRequest) (LaunchRequest, bool, error) {
+			prompted = req
+			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
+		},
+		LaunchPane: func(req LaunchRequest) (string, error) {
+			launched = req
+			return "", nil
+		},
+	})
+
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("n returned nil command, want popup prompt command")
+	}
+	if m.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor while popup owns input", m.mode)
+	}
+	if !m.newPanePopupOpen {
+		t.Fatal("newPanePopupOpen = false, want true")
+	}
+	if prompted.DefaultAgent != "" {
+		t.Fatalf("prompt was called before command execution: %#v", prompted)
+	}
+
+	updated, cmd = m.Update(cmd())
+	m = updated.(model)
+	if prompted.DefaultAgent != "codex" {
+		t.Fatalf("prompt request = %#v, want default codex", prompted)
+	}
+	if cmd == nil {
+		t.Fatal("popup result returned nil command, want launch command")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+
+	want := LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}
+	if !reflect.DeepEqual(launched, want) {
+		t.Fatalf("launch request = %#v, want %#v", launched, want)
+	}
+	if m.notice != "created new agent pane" {
+		t.Fatalf("notice = %q, want created new agent pane", m.notice)
+	}
+}
+
+func TestNewPanePopupOpenBlocksMonitorKeys(t *testing.T) {
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
+			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
+		},
+		LaunchPane: func(LaunchRequest) (string, error) {
+			return "", nil
+		},
+	})
+
+	updated, promptCmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if promptCmd == nil {
+		t.Fatal("n returned nil command, want popup prompt command")
+	}
+	if !m.newPanePopupOpen {
+		t.Fatal("newPanePopupOpen = false, want true")
+	}
+
+	for _, key := range []tea.KeyMsg{keyRunes("q"), keyRunes("n"), {Type: tea.KeyCtrlC}} {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatalf("%q returned command while popup is open", key.String())
+		}
+		if m.mode != modeMonitor {
+			t.Fatalf("%q changed mode = %v, want monitor", key.String(), m.mode)
+		}
+		if !m.newPanePopupOpen {
+			t.Fatalf("%q cleared popup-open flag", key.String())
+		}
+	}
+}
+
+func TestNewPanePopupLaunchBlocksMonitorKeysWhileRunning(t *testing.T) {
+	launchCalls := 0
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
+			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
+		},
+		LaunchPane: func(LaunchRequest) (string, error) {
+			launchCalls++
+			return "", nil
+		},
+	})
+
+	updated, promptCmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if promptCmd == nil {
+		t.Fatal("n returned nil command, want popup prompt command")
+	}
+	updated, launchCmd := m.Update(promptCmd())
+	m = updated.(model)
+	if launchCmd == nil {
+		t.Fatal("popup submit returned nil command, want launch command")
+	}
+	if !m.newPane.launching {
+		t.Fatal("launching = false, want true")
+	}
+	if m.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor during popup launch", m.mode)
+	}
+
+	for _, key := range []tea.KeyMsg{keyRunes("q"), keyRunes("n"), {Type: tea.KeyCtrlC}} {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatalf("%q returned command while popup launch is running", key.String())
+		}
+		if m.mode != modeMonitor {
+			t.Fatalf("%q changed mode = %v, want monitor", key.String(), m.mode)
+		}
+		if !m.newPane.launching {
+			t.Fatalf("%q cleared launching flag", key.String())
+		}
+		if m.newPanePopupOpen {
+			t.Fatalf("%q opened another popup while launch is running", key.String())
+		}
+	}
+	if launchCalls != 0 {
+		t.Fatalf("LaunchPane calls before launch command execution = %d, want 0", launchCalls)
+	}
+}
+
+func TestNewPanePopupCancelDoesNotLaunch(t *testing.T) {
+	launched := false
+	m := newModel(Options{
+		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
+			return LaunchRequest{}, true, nil
+		},
+		LaunchPane: func(LaunchRequest) (string, error) {
+			launched = true
+			return "", nil
+		},
+	})
+
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	updated, next := m.Update(cmd())
+	m = updated.(model)
+
+	if next != nil {
+		t.Fatal("canceled popup returned launch command")
+	}
+	if launched {
+		t.Fatal("LaunchPane called for canceled popup")
+	}
+	if m.newPanePopupOpen {
+		t.Fatal("newPanePopupOpen = true after cancel")
+	}
+}
+
+func TestNewPanePopupCancelPreservesNewerNotice(t *testing.T) {
+	m := newModel(Options{
+		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
+			return LaunchRequest{}, true, nil
+		},
+		LaunchPane: func(LaunchRequest) (string, error) {
+			return "", nil
+		},
+	})
+
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	m.notice = "child #123 merged"
+	updated, next := m.Update(cmd())
+	m = updated.(model)
+
+	if next != nil {
+		t.Fatal("canceled popup returned launch command")
+	}
+	if m.notice != "child #123 merged" {
+		t.Fatalf("notice = %q, want newer notice preserved", m.notice)
 	}
 }
 

@@ -34,6 +34,11 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
+	if versionErr := tmuxrun.CheckMinimumVersion(); versionErr != nil {
+		lg.Err("missing dependencies:")
+		fmt.Fprintf(lg.Stderr(), "  - %s\n", versionErr)
+		return exitcode.Env
+	}
 
 	if !tmuxrun.InsideTmux() {
 		return enterTUISession(projectRoot, commandName, lg)
@@ -84,6 +89,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 		Hooks:               hookConfig,
 		LaunchPane:          newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
+		NewPanePrompt:       newTUINewPanePromptFunc(projectRoot, commandName),
 		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:        newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:            func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },

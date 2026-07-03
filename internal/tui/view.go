@@ -16,6 +16,9 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "fanout TUI"
 	}
+	if m.promptOnly {
+		return m.newPaneView()
+	}
 	header := titleStyle.Render("fanout")
 	if m.opts.Session != "" {
 		header += " " + dimStyle.Render("session="+m.opts.Session)

@@ -38,6 +38,67 @@ func assertTmuxArgs(t *testing.T, argsPath string, want []string) {
 	}
 }
 
+func TestCheckMinimumVersionOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		out     string
+		wantErr string
+	}{
+		{name: "3.3 exact", out: "tmux 3.3\n"},
+		{name: "suffix", out: "tmux 3.6a\n"},
+		{name: "new major", out: "tmux 4.0\n"},
+		{name: "old", out: "tmux 3.2\n", wantErr: "tmux 3.3+ (found 3.2; brew upgrade tmux)"},
+		{name: "unparseable", out: "tmux next\n", wantErr: "could not parse"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkMinimumVersionOutput(tc.out)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkMinimumVersionOutput() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("checkMinimumVersionOutput() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCurrentClientSize(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '132 41\n'
+`)
+
+	got, err := CurrentClientSize()
+	if err != nil {
+		t.Fatalf("CurrentClientSize() failed: %v", err)
+	}
+	if got != (ClientSize{Width: 132, Height: 41}) {
+		t.Fatalf("CurrentClientSize() = %#v, want 132x41", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "#{client_width} #{client_height}"})
+}
+
+func TestDisplayPopupBuildsCenteredArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	err := DisplayPopup(PopupOptions{
+		Width:    90,
+		Height:   32,
+		StartDir: "/tmp/work tree",
+		Title:    "New agent pane",
+		Command:  "/tmp/fanout __tui-new-pane-popup",
+	})
+	if err != nil {
+		t.Fatalf("DisplayPopup() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{
+		"display-popup", "-E", "-w", "90", "-h", "32", "-d", "/tmp/work tree", "-x", "C", "-y", "C", "-T", "New agent pane", "/tmp/fanout __tui-new-pane-popup",
+	})
+}
+
 func TestSplitPaneTargetsSession(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")

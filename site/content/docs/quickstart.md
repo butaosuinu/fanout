@@ -34,7 +34,7 @@ fanout 123
 
 Each child gets a pane in the current tmux session, an isolated worktree under `.fanout/worktrees/<slug>/`, and the selected agent started with a one-line prompt that points at the per-issue briefing.
 
-> The pane-creation flow needs `gh`, `git`, and `tmux` on your `PATH`. fanout checks the dependencies at startup and prints install hints when one is missing — see [Installation]({{< relref "/docs/installation" >}}).
+> The pane-creation flow needs `gh`, `git`, and `tmux 3.3+` on your `PATH`. fanout checks the dependencies at startup and prints install hints when one is missing — see [Installation]({{< relref "/docs/installation" >}}).
 
 ## How child issues are declared
 
@@ -57,7 +57,7 @@ So you can hang five sub-issues off the parent, write a five-line task list in t
 
 A live run walks these steps:
 
-1. Verifies `gh`, `git`, and `tmux` are installed.
+1. Verifies `gh`, `git`, and `tmux 3.3+` are installed.
 2. Resolves the repository root, the current tmux session and invoking pane, and the agent from `--agent` or `FANOUT_AGENT`.
 3. Enumerates children as the union of Sub-issues and parent task-list rows; only OPEN children are processed.
 4. Reads `.fanout/state.json` and skips children whose `(parent, issueNum)` pair is already recorded.

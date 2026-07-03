@@ -169,7 +169,7 @@ Options:
   -h, --help          Show this message.
 
 Prerequisites:
-  * gh, git, tmux installed.
+  * gh, git, tmux 3.3+ installed.
   * fanout pane-creation mode is invoked from inside a tmux session. TUI mode
     can be started from a plain shell; it creates or attaches its tmux session.
   * --agent is given, FANOUT_AGENT is set, or every selected target has a
