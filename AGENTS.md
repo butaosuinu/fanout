@@ -147,6 +147,16 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   race-safe replacement for `(parent, issueNum)` idempotency.
 - When changing dry-run output, update Tier 2 goldens with
   `FANOUT_GOLDEN_UPDATE=1 make test-tier2` and review the diff.
+- Walk `docs/review-checklist.ja.md` before creating a PR — the top CI
+  failures and review findings all recur (`make lint` / `make test` as
+  described above).
+- `go:embed` snapshots whatever is on disk at build time: after editing
+  `web/src`, build via `make build-go`, not raw `go build`, or the binary
+  ships a stale bundle.
+- Preserve fail-fast in `executePlan`: stop after the first failed child
+  launch.
+- Complete the post-work-review gate (the installed driver, invoked per
+  `codex/skills/post-work-review`) before commit-and-PR.
 
 ## Documentation Writing
 

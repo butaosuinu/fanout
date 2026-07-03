@@ -1,4 +1,30 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git worktree list:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(make lint)",
+      "Bash(make lint-web)",
+      "Bash(make test)",
+      "Bash(make test-web)",
+      "Bash(make test-tier1)",
+      "Bash(make test-tier2)",
+      "Bash(make build-go)",
+      "Bash(make build-web)",
+      "Bash(make fmt)",
+      "Bash(make fmt-web)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
