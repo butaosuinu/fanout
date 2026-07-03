@@ -129,10 +129,15 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	}
 	before := recordedPaneCountForParent(projectRoot, cfg.ParentRef)
 	result, err := launchParentIssueFanout(projectRoot, session, commandName, cfg)
+	created := recordedPaneCountForParent(projectRoot, cfg.ParentRef) - before
 	if err != nil {
+		if created > 0 {
+			// The fail-fast loop may have created panes before the failure;
+			// they are running agents, so a pure failure report would mislead.
+			return "", fmt.Errorf("created %d pane(s), then failed: %w", created, err)
+		}
 		return "", err
 	}
-	created := recordedPaneCountForParent(projectRoot, cfg.ParentRef) - before
 	notice := fmt.Sprintf("fanned out #%d: created %d pane(s)", issueNum, created)
 	if created <= 0 {
 		notice = fmt.Sprintf("#%d: no new panes (children already have one)", issueNum)
