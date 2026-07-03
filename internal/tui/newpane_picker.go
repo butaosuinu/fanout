@@ -140,8 +140,23 @@ func (m *model) activePicker() *pickerState {
 }
 
 func (m *model) recomputePicker(p *pickerState) {
-	p.results, p.total = rankPickerItems(p.items, p.query, pickerMaxRows)
+	p.results, p.total = rankPickerItems(p.items, p.query, m.pickerVisibleRows())
 	p.index = 0
+}
+
+// pickerFormOverhead is the non-list height of the picker form: title, mode
+// row, field labels, the list box frame, filter and "+N more" lines, the
+// agent row, the hint line, and the modal frame.
+const pickerFormOverhead = 14
+
+// pickerVisibleRows adapts the result cap to the available height so the
+// form never renders taller than the popup pty — bubbletea keeps only the
+// last lines, which would clip the modal top.
+func (m model) pickerVisibleRows() int {
+	if m.height <= 0 {
+		return pickerMaxRows
+	}
+	return clampInt(m.height-pickerFormOverhead, 3, pickerMaxRows)
 }
 
 func (m *model) moveActivePicker(delta int) {
@@ -182,6 +197,13 @@ func (m *model) updateActivePickerFilter(msg tea.KeyMsg) {
 			m.recomputePicker(p)
 		}
 	default:
+		// A lone space arrives as tea.KeySpace, not KeyRunes; without it
+		// multi-word title queries ("fix ui") are impossible.
+		if msg.Type == tea.KeySpace {
+			p.query += " "
+			m.recomputePicker(p)
+			return
+		}
 		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
 			p.query += string(msg.Runes)
 			m.recomputePicker(p)
@@ -231,10 +253,16 @@ func pickerMatchRank(item pickerItem, q string) int {
 	if q == "" {
 		return 0
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimPrefix(item.key, "#")), q) {
+	key := strings.ToLower(strings.TrimPrefix(item.key, "#"))
+	if strings.HasPrefix(key, q) {
 		return 0
 	}
 	if item.title != "" && strings.Contains(strings.ToLower(item.title), q) {
+		return 1
+	}
+	// Key substring keeps title-less items (plan slugs) filterable by any
+	// fragment, not just a prefix.
+	if strings.Contains(key, q) {
 		return 1
 	}
 	for _, label := range item.labels {

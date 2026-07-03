@@ -297,6 +297,26 @@ func (m *model) launchPlanSessionRequest(req LaunchRequest) tea.Cmd {
 	return nil
 }
 
+// assignViewOverhead is the non-row height of the assign view: title,
+// subtitle, hint, an error line, scroll markers, and the modal frame.
+const assignViewOverhead = 8
+
+// assignRowWindow returns the visible row range, sliding so the selected row
+// stays in view; a taller-than-pty list would be top-clipped by the renderer.
+func (m model) assignRowWindow() (start, end int) {
+	rows := len(m.newPane.assign.rows)
+	visible := pickerMaxRows
+	if m.height > 0 {
+		visible = clampInt(m.height-assignViewOverhead, 3, pickerMaxRows)
+	}
+	if rows <= visible {
+		return 0, rows
+	}
+	start = clampInt(m.newPane.assign.index-visible+1, 0, rows-visible)
+	start = min(start, m.newPane.assign.index)
+	return start, start + visible
+}
+
 func (m model) newPaneAssignView() string {
 	a := m.newPane.assign
 	lines := []string{
@@ -310,7 +330,12 @@ func (m model) newPaneAssignView() string {
 		lines = append(lines, errStyle.Render("error: "+a.err))
 	default:
 		width := m.inputContentWidth()
-		for i, row := range a.rows {
+		start, end := m.assignRowWindow()
+		if start > 0 {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		}
+		for i := start; i < end; i++ {
+			row := a.rows[i]
 			marker := "  "
 			if i == a.index {
 				marker = "> "
@@ -327,6 +352,9 @@ func (m model) newPaneAssignView() string {
 				label += " (wave " + row.wave + ")"
 			}
 			lines = append(lines, marker+token+" "+truncateToWidth(label, width-10))
+		}
+		if end < len(a.rows) {
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(a.rows)-end)))
 		}
 	}
 	if m.newPane.launching {

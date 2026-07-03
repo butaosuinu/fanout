@@ -74,7 +74,13 @@ func launchPlanFromTUI(projectRoot, session, commandName, slug, defaultAgent str
 	}
 	result, code := runPlanWithRuntime(cfg, rt, launchLogger, commandName)
 	if code != exitcode.OK {
-		return "", bufferedLaunchError(stdout, stderr, "launch plan")
+		launchErr := bufferedLaunchError(stdout, stderr, "launch plan")
+		if result.Created > 0 {
+			// The fail-fast loop may have created panes before the failure;
+			// they are running agents, so a pure failure report would mislead.
+			return "", fmt.Errorf("created %d pane(s), then failed: %w", result.Created, launchErr)
+		}
+		return "", launchErr
 	}
 	if result.Created == 0 {
 		return fmt.Sprintf("plan %s: nothing to do (all tasks already have a pane or are complete)", slug), nil

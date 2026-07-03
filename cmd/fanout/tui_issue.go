@@ -127,36 +127,52 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		}
 		return fmt.Sprintf("started session for #%d", issueNum), nil
 	}
+	before := recordedPaneCountForParent(projectRoot, cfg.ParentRef)
 	result, err := launchParentIssueFanout(projectRoot, session, commandName, cfg)
 	if err != nil {
 		return "", err
 	}
-	notice := fmt.Sprintf("fanned out #%d", issueNum)
+	created := recordedPaneCountForParent(projectRoot, cfg.ParentRef) - before
+	notice := fmt.Sprintf("fanned out #%d: created %d pane(s)", issueNum, created)
+	if created <= 0 {
+		notice = fmt.Sprintf("#%d: no new panes (children already have one)", issueNum)
+	}
 	if result.Deferred {
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
 	return notice, nil
 }
 
-// validateTUIAgentSelection checks the default agent plus every override
-// value before any launch work starts, so a bad selection surfaces as one
-// clear error instead of a mid-fan-out failure.
-func validateTUIAgentSelection(defaultAgent string, overrides map[string]string) error {
-	names := make([]string, 0, len(overrides)+1)
-	names = append(names, defaultAgent)
-	for _, name := range overrides {
-		names = append(names, name)
+// recordedPaneCountForParent counts state rows under one fan-out parent; the
+// before/after difference is the created-pane count runWithRuntime does not
+// return. A read failure degrades to 0 rather than failing the launch report.
+func recordedPaneCountForParent(projectRoot, parentRef string) int {
+	store, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return 0
 	}
-	seen := map[string]bool{}
-	for _, name := range names {
+	return len(store.FannedNumbersForParent(parentRef))
+}
+
+// validateTUIAgentSelection rejects unknown agent names up front so a typo
+// surfaces as one clear error. Installation is checked only for the default
+// agent: an override may sit on a blocked/deferred target the launch skips,
+// and the launch lanes (validateIssueAgents / validateTaskAgents) already
+// install-check the agents of the targets they actually launch.
+func validateTUIAgentSelection(defaultAgent string, overrides map[string]string) error {
+	if err := agent.ValidateKnown(defaultAgent); err != nil {
+		return err
+	}
+	if err := agent.ValidateInstalled(defaultAgent); err != nil {
+		return err
+	}
+	seen := map[string]bool{defaultAgent: true}
+	for _, name := range overrides {
 		if seen[name] {
 			continue
 		}
 		seen[name] = true
 		if err := agent.ValidateKnown(name); err != nil {
-			return err
-		}
-		if err := agent.ValidateInstalled(name); err != nil {
 			return err
 		}
 	}

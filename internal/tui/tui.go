@@ -117,6 +117,7 @@ type model struct {
 	notifications    map[issueKey]issueTransitionSnapshot
 	notifyPrimed     bool
 	keyboardPaused   bool
+	quitAfterLaunch  bool
 	relayoutGen      int
 	promptOnly       bool
 	promptDone       bool

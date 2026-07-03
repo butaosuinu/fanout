@@ -84,6 +84,13 @@ func TestListPlanSlugs(t *testing.T) {
 			want:  []string{"alpha", "zeta"},
 		},
 		{
+			// "x.json.json" would list as slug "x.json", which
+			// resolvePlanSpecPath treats as a spec path, not a slug.
+			name:  "skips slugs that cannot round-trip through resolvePlanSpecPath",
+			files: []string{"x.json.json", "ok.json"},
+			want:  []string{"ok"},
+		},
+		{
 			name:  "empty directory yields no slugs",
 			files: nil,
 			want:  nil,

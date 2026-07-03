@@ -32,6 +32,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
 		if (m.newPanePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+			// Issue/plan launches can run a whole fan-out (seconds per child), so
+			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
+			// queue a quit instead of appearing hung.
+			if m.newPane.launching {
+				switch msg.String() {
+				case "q", "ctrl+c":
+					m.quitAfterLaunch = true
+					m.notice = "will quit after the launch finishes"
+				}
+			}
 			return m, nil
 		}
 		if m.pendingAction != nil {
@@ -206,6 +216,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case launchPaneMsg:
 		m.newPane.launching = false
+		if m.quitAfterLaunch {
+			m.quitAfterLaunch = false
+			return m.quit()
+		}
 		if msg.err != nil {
 			if m.mode == modeNewPane {
 				m.newPane.err = msg.err.Error()
@@ -276,6 +290,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.newPane.assign.err = ""
+		m.newPane.err = "" // clear a "targets are still loading" line once they arrive
 		rows := buildAssignRows(msg, m.newPane.agentChoice)
 		if len(rows) == 0 {
 			// A childless issue launches as a single pane; an empty plan defers

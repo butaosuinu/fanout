@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -369,7 +370,7 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 			opts := Options{}
 			if tt.wired {
 				opts.LaunchIssue = func(num int, agent string, overrides map[string]string) (string, error) {
-					got = &call{kind: "issue", target: "42", agent: agent, overrides: overrides}
+					got = &call{kind: "issue", target: strconv.Itoa(num), agent: agent, overrides: overrides}
 					return "", nil
 				}
 				opts.LaunchPlan = func(slug, agent string, overrides map[string]string) (string, error) {
@@ -457,7 +458,92 @@ func TestNewPaneViewRendersPickerStates(t *testing.T) {
 	}
 }
 
-// TestNewPaneViewHidesModeRowWithoutProviders pins the compatibility path:
+// TestNewPanePickerFilterAcceptsSpaces pins multi-word title queries: a lone
+// space arrives as tea.KeySpace (not KeyRunes) and must extend the filter.
+func TestNewPanePickerFilterAcceptsSpaces(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return []IssueListItem{
+				{Number: 41, Title: "Add API client"},
+				{Number: 42, Title: "Fix UI overflow"},
+			}, nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+
+	updated, _ := m.Update(newPaneIssuesLoadedMsg{items: []IssueListItem{
+		{Number: 41, Title: "Add API client"},
+		{Number: 42, Title: "Fix UI overflow"},
+	}})
+	m = updated.(model)
+	for _, key := range []tea.KeyMsg{keyRunes("ui"), {Type: tea.KeySpace}, keyRunes("over")} {
+		updated, _ = m.Update(key)
+		m = updated.(model)
+	}
+
+	if got := m.newPane.issuePicker.query; got != "ui over" {
+		t.Fatalf("filter query = %q, want %q", got, "ui over")
+	}
+	if results := m.newPane.issuePicker.results; len(results) != 1 || m.newPane.issuePicker.items[results[0]].number != 42 {
+		t.Fatalf("filtered results = %v, want only #42", results)
+	}
+}
+
+// TestLaunchingGateQueuesQuit pins the fan-out escape hatch: while a launch
+// runs, q queues a quit instead of being silently swallowed.
+func TestLaunchingGateQueuesQuit(t *testing.T) {
+	m := newModel(Options{})
+	m.newPane.launching = true
+
+	updated, cmd := m.Update(keyRunes("q"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("q during launch returned a command, want deferred quit")
+	}
+	if !m.quitAfterLaunch {
+		t.Fatal("quitAfterLaunch = false, want queued quit")
+	}
+
+	updated, cmd = m.Update(launchPaneMsg{notice: "done", count: 1})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("launchPaneMsg with queued quit returned nil command, want quit")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Fatalf("cmd() = %#v, want tea.QuitMsg", msg)
+	}
+}
+
+// TestAssignRowWindowFollowsSelection pins the sliding window: a long target
+// list never renders taller than the popup and the cursor stays visible.
+func TestAssignRowWindowFollowsSelection(t *testing.T) {
+	m := newModel(Options{})
+	m.openNewPaneForm()
+	m.height = 18 // minimum popup pty: 18-8 overhead = 10 -> capped at 8
+	rows := make([]assignRow, 15)
+	for i := range rows {
+		rows[i] = assignRow{target: strconv.Itoa(i), label: "row"}
+	}
+	m.newPane.assign.rows = rows
+
+	if start, end := m.assignRowWindow(); start != 0 || end != 8 {
+		t.Fatalf("window at top = [%d,%d), want [0,8)", start, end)
+	}
+	m.newPane.assign.index = 12
+	start, end := m.assignRowWindow()
+	if m.newPane.assign.index < start || m.newPane.assign.index >= end {
+		t.Fatalf("window [%d,%d) does not contain selected row %d", start, end, m.newPane.assign.index)
+	}
+
+	m.newPane.mode = newPaneModeIssue
+	m.newPane.step = newPaneStepAssign
+	view := m.newPaneAssignView()
+	if !strings.Contains(view, "more") {
+		t.Fatalf("windowed assign view missing scroll marker:\n%s", view)
+	}
+}
+
 // with no list providers wired the form keeps its classic prompt-only shape.
 func TestNewPaneViewHidesModeRowWithoutProviders(t *testing.T) {
 	m := newModel(Options{})

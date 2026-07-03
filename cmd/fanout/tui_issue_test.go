@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -141,9 +143,30 @@ esac
 }
 
 func TestLaunchIssueSessionFromTUIRejectsUnknownAgent(t *testing.T) {
+	installFakeExecutable(t, "claude")
 	_, err := launchIssueSessionFromTUI(t.TempDir(), "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 501, "claude", map[string]string{"502": "gemini"})
 	if err == nil || !strings.Contains(err.Error(), "gemini") {
 		t.Fatalf("launchIssueSessionFromTUI() error = %v, want unknown-agent rejection", err)
+	}
+}
+
+// TestValidateTUIAgentSelectionSkipsInstallCheckForOverrides pins the CLI
+// parity: an override may target a deferred child, so only the default agent
+// must be installed here — launch-lane validation covers actual targets.
+func TestValidateTUIAgentSelectionSkipsInstallCheckForOverrides(t *testing.T) {
+	// An exclusive PATH with only a fake claude, so a codex CLI on the host
+	// cannot mask the uninstalled-agent paths.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	if err := validateTUIAgentSelection("claude", map[string]string{"502": "codex"}); err != nil {
+		t.Fatalf("validateTUIAgentSelection() error = %v, want uninstalled override tolerated", err)
+	}
+	if err := validateTUIAgentSelection("codex", nil); err == nil {
+		t.Fatal("validateTUIAgentSelection() = nil, want uninstalled default agent rejected")
 	}
 }
 

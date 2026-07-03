@@ -709,7 +709,9 @@ func listPlanSlugs(projectRoot string) ([]string, error) {
 			continue
 		}
 		name, ok := strings.CutSuffix(entry.Name(), ".json")
-		if !ok || name == "" {
+		// A remaining .json suffix cannot round-trip: resolvePlanSpecPath
+		// would treat the bare slug as a spec path.
+		if !ok || name == "" || strings.HasSuffix(name, ".json") {
 			continue
 		}
 		slugs = append(slugs, name)
