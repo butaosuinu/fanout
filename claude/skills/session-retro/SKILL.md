@@ -50,10 +50,14 @@ done
 ```bash
 files=()
 while IFS= read -r f; do
-  case "$f" in *"$CLAUDE_SESSION_ID"*) continue ;; esac
+  if [ -n "$CLAUDE_CODE_SESSION_ID" ]; then
+    case "$f" in *"$CLAUDE_CODE_SESSION_ID"*) continue ;; esac
+  fi
   files+=("$f")
 done < "$candidates"
 ```
+
+env var は **`CLAUDE_CODE_SESSION_ID`** (`CLAUDE_SESSION_ID` ではない — Claude Code の env vars ドキュメント通り、こちらは通常未設定)。**`[ -n ... ]` のガードが必須**: 変数が空文字列のまま `case "$f" in *""*)` を評価すると `**` として全パスにマッチし、候補が丸ごと除外されて `tool_errors.total` が常に 0 になる致命的な退行になる (実機で再現・確認済み)。
 
 **対象ファイルが 0 件なら以降のマイニングを実行せず `tool_errors.total=0` として次へ進む**。`files` が空配列のまま `rg -- "${files[@]}"` を呼ぶと path 引数 0 個になり、rg はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。
 
