@@ -31,22 +31,32 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 
 ```bash
 since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SINCE" "+%s")
+until_epoch=$(date -u -d "$UNTIL" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UNTIL" "+%s")
 : > /tmp/session-retro-in-window.txt
 for f in ~/.claude/projects/"$slug"/*.jsonl ~/.claude/projects/"$slug"--*-worktrees-*/*.jsonl; do
   [ -e "$f" ] || continue
   mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
-  [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> /tmp/session-retro-in-window.txt
+  if [ "$mtime" -ge "$since_epoch" ] && [ "$mtime" -le "$until_epoch" ]; then
+    printf '%s\n' "$f" >> /tmp/session-retro-in-window.txt
+  fi
 done
 ```
 
-window を適用せずに全 jsonl を毎回数えると、2 回目以降の実行で既報告のエラーを再集計してしまう (mtime はセッション最終更新時刻の近似であり、window をまたぐセッションは丸ごと今回側に入る — 大きくは外れない前提の近似として扱う)。
+`UNTIL` で上限も閉じるのは、Step 3/4 と同じ理由: 下限だけだと `UNTIL` より後に更新されたセッション (実行中の retro セッション自身や並行セッション) が今回の集計に混ざり、次回も `SINCE=今回のUNTIL` で同じファイルが再び対象になって二重計上になる。window を適用せずに全 jsonl を毎回数えると、2 回目以降の実行で既報告のエラーを再集計してしまう (mtime はセッション最終更新時刻の近似であり、window をまたぐセッションは丸ごと今回側に入る — 大きくは外れない前提の近似として扱う)。
 
-**対象ファイルが 0 件なら rg を実行せず `tool_errors.total=0` として次へ進む**。`/tmp/session-retro-in-window.txt` が空のまま `$(cat …)` を rg の引数に展開すると、path 引数 0 個の `rg` はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。ファイルが 1 件以上あることを確認してから実行する:
+対象ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込んでから渡す:
 
 ```bash
-if [ -s /tmp/session-retro-in-window.txt ]; then
-  rg -l -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # 該当セッション
-  rg -c -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # セッション別行数
+files=()
+while IFS= read -r f; do files+=("$f"); done < /tmp/session-retro-in-window.txt
+```
+
+**対象ファイルが 0 件なら rg を実行せず `tool_errors.total=0` として次へ進む**。`files` が空配列のまま `rg -- "${files[@]}"` を呼ぶと path 引数 0 個になり、rg はカレントディレクトリを再帰検索してしまう (この repo なら SKILL.md 自身が引用する `"is_error":true` まで拾って誤集計になる)。要素があることを確認してから実行する:
+
+```bash
+if [ "${#files[@]}" -gt 0 ]; then
+  rg -l -F '"is_error":true' -- "${files[@]}"   # 該当セッション
+  rg -c -F '"is_error":true' -- "${files[@]}"   # セッション別行数
 fi
 ```
 
@@ -60,12 +70,16 @@ fi
 
 ## Step 3 — CI 失敗
 
+`gh run list --status` は 1 回の呼び出しに 1 値しか渡せない。`failure` だけでは `startup_failure` (セットアップ自体の失敗) や `timed_out` を見落とすので、値ごとに分けて呼び、結果をまとめる (`--status` を外して全 run を撮ると、`--limit` の枠を success な run が消費してしまい、window の古い方の失敗が切り捨てられる — 実測で 9 件 → 3 件に減ることを確認済み。1 呼び出し 1 status を維持する):
+
 ```bash
-gh run list --status failure --created "${SINCE}..${UNTIL}" --limit 100 \
-  --json databaseId,workflowName,displayTitle,headBranch,createdAt
+for st in failure startup_failure timed_out; do
+  gh run list --status "$st" --created "${SINCE}..${UNTIL}" --limit 100 \
+    --json databaseId,workflowName,displayTitle,headBranch,createdAt,conclusion
+done | jq -s 'add'
 ```
 
-`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、返り値がちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
