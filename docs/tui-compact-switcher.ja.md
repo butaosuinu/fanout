@@ -69,7 +69,7 @@ pane id をバインドに焼き込む方式は、コンソール再起動で st
 
 ### focus-console の対象探索と信頼境界
 
-新サブコマンド `fanout focus-console` は console ペインを探して `SelectPane`(switch-client)で復帰する。探索は新規 listing を作らず、`ListLivePanes` に第 5・第 6 の listing(`@fanout_role` と `@fanout_project_root`)を足して `LivePane` に Role / ProjectRoot フィールドを持たせる。root の照合は呼び出しペインと候補 console の双方に fanout が起動時に記録した `@fanout_project_root` どうしの比較で行い、cwd は使わない(wrapper や `FANOUT_STATE_PATH` で cwd と表示対象 root がずれる構成でも成立させるため)。偽造行対策(id 形式チェック、duplicate-id drop、タイトル listing とのクロスチェック)を実装済みの経路をそのまま通すためで、並行実装の `ListConsolePanes` は防御の二重管理になるから作らない。
+新サブコマンド `fanout focus-console` は console ペインを探して `SelectPane`(switch-client)で復帰する。探索は新規 listing を作らず、`ListLivePanes` に第 5〜第 7 の listing(`@fanout_role` / `@fanout_project_root` / `#{session_id}`)を足して `LivePane` に Role / ProjectRoot / SessionID フィールドを持たせる。root の照合は呼び出しペインと候補 console の双方に fanout が起動時に記録した `@fanout_project_root` どうしの比較で行い、cwd は使わない(wrapper や `FANOUT_STATE_PATH` で cwd と表示対象 root がずれる構成でも成立させるため)。session の照合も同じ listing の `#{session_id}` どうしで行う(`--from` ペインの行を引けば呼び出し側の session も分かる。tmux が生成する値なのでペイン内プロセスによる偽造の対象外)。偽造行対策(id 形式チェック、duplicate-id drop、タイトル listing とのクロスチェック)を実装済みの経路をそのまま通すためで、並行実装の `ListConsolePanes` は防御の二重管理になるから作らない。
 
 候補は Role が console で、かつペインタイトルが TUI の固定タイトル(`fanout tui`。`findTUIPane` と同じ照合)であるペインに絞り、①呼び出しペインの `@fanout_project_root` と一致(同率なら同一 session を優先)→ ②同一 session → ③最初の候補、の順で選ぶ。root 一致を session より先に照合するのは、同一 tmux session に複数リポジトリの console が同居しうるためで、session を先にするとグローバルキーが multi-repo safe にならない。呼び出しペインに root の記録が無いときだけ session 照合に落ちる。選択は純関数 `pickConsolePane`(`cmd/fanout/focusconsole.go`)に切り出してテストする。console 不在時は `tmux display-message` で知らせて正常終了する。
 
