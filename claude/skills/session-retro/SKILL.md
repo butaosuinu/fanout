@@ -18,17 +18,32 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 ## Step 1 — 対象と期間
 
 - main repo root を解決する: `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`。素の `--git-common-dir` は main worktree では相対 `.git` を返すので絶対化が必須。
-- root の絶対パスの `/` と `.` を `-` に置換した slug で `~/.claude/projects/<slug>*` を glob する。fanout worktree のセッションは `<slug>--fanout-worktrees-…` という別ディレクトリに分かれるため、prefix glob で拾う。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
+- root の絶対パス中の **英数字以外の文字を全て** `-` に置換した slug を作る (Claude Code の project ディレクトリ命名規則。`/` や `.` だけでなく空白・`_`・`+` 等も対象)。
+- 対象ディレクトリは **`~/.claude/projects/<slug>`(完全一致)と `~/.claude/projects/<slug>--*-worktrees-*`(fanout worktree セッション)の 2 パターンだけ** を glob する。緩い prefix glob `<slug>*` は使わない — `<slug>2` や `<slug>-old` のような別リポジトリまで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
 - スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `~/.claude/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
-- 期間: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until` 以降。初回は直近 14 日 (jsonl の mtime でフィルタ)。以降の手順の `SINCE` は **`YYYY-MM-DD` に正規化した日付** (`window.until` が ISO8601 ならその日付部分) を指す。
+- 期間: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。以降 `SINCE` と書いたらこの ISO8601 文字列を指す。
 
 ## Step 2 — ツールエラーのマイニング
 
-tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須):
+まず Step 1 の `SINCE` 以降に更新されたセッションだけに絞る。`find -newermt` は環境によって書式非互換で失敗する (BSD/macOS の `find` は ISO8601 の `T`/`Z` 付き文字列を解釈できないことがある) ので、mtime を epoch 秒に変換して比較する:
 
 ```bash
-rg -l -F '"is_error":true' -- <projects-glob>/*.jsonl   # 該当セッション
-rg -c -F '"is_error":true' -- <files>                    # セッション別行数
+since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SINCE" "+%s")
+: > /tmp/session-retro-in-window.txt
+for f in ~/.claude/projects/"$slug"/*.jsonl ~/.claude/projects/"$slug"--*-worktrees-*/*.jsonl; do
+  [ -e "$f" ] || continue
+  mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
+  [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> /tmp/session-retro-in-window.txt
+done
+```
+
+window を適用せずに全 jsonl を毎回数えると、2 回目以降の実行で既報告のエラーを再集計してしまう (mtime はセッション最終更新時刻の近似であり、window をまたぐセッションは丸ごと今回側に入る — 大きくは外れない前提の近似として扱う)。
+
+対象を絞ったら、tool_result のエラーは transcript の JSON にトップレベルで **素の `"is_error":true`** として入っている。fixed-string 検索を使う (zsh では単引用符必須):
+
+```bash
+rg -l -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # 該当セッション
+rg -c -F '"is_error":true' -- $(cat /tmp/session-retro-in-window.txt)   # セッション別行数
 ```
 
 エスケープ形 `\"is_error\":true` で検索してはいけない — それはこの文字列を引用しているセッション (過去の retro 実行など) だけに当たるノイズで、実測 (2026-07) では素の形 302 ファイル / 660 行に対しエスケープ形は 14 ファイル / 74 行だった。`rg -c` は行数を数える (1 行に複数エラーがあり得る) ことにも注意。
@@ -44,7 +59,7 @@ gh run list --status failure --created ">${SINCE}" --limit 100 \
   --json databaseId,workflowName,displayTitle,headBranch,createdAt
 ```
 
-workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+`--limit` は取得上限も兼ねるため、返り値がちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `--created "SINCE..MID"` / `"MID..UNTIL"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
@@ -52,9 +67,11 @@ workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed
 
 ```bash
 gh api --paginate \
-  "repos/{owner}/{repo}/pulls/comments?since=${SINCE}T00:00:00Z&per_page=100" \
+  "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
   --jq '.[].user.login' | sort | uniq -c | sort -rn
 ```
+
+`SINCE` は Step 1 で決めたフルの ISO8601 文字列をそのまま使う (`T00:00:00Z` 等を追加で連結しない — 連結すると `...ZT00:00:00Z` のような不正な文字列になる)。
 
 集計はページ横断で安全な**行ストリーム**にする。`--paginate` は **ページごとに** jq を適用するため、`group_by` のような配列集計を `--jq` に書くと 100 件超の期間で同じ login がページをまたいで別々に数えられる (`--slurp` は gh の `--jq` と併用不可)。
 
@@ -68,7 +85,7 @@ Step 1 で決めたスナップショットディレクトリに `session-<YYYY-
 {"schema": 1, "generated_at": "<ISO8601>",
  "window": {"since": "<ISO8601>", "until": "<ISO8601>"},
  "tool_errors": {"total": 0, "by_category": {}},
- "ci": {"failed_runs": 0, "by_workflow": {}},
+ "ci": {"failed_runs": 0, "by_workflow": {}, "truncated": false},
  "review": {"comments": 0, "by_pattern": {}}}
 ```
 
