@@ -71,7 +71,7 @@ pane id をバインドに焼き込む方式は、コンソール再起動で st
 
 新サブコマンド `fanout focus-console` は console ペインを探して `SelectPane`(switch-client)で復帰する。探索は新規 listing を作らず、`ListLivePanes` に第 5 の listing(`@fanout_role`)を足して `LivePane` に Role フィールドを持たせる。偽造行対策(id 形式チェック、duplicate-id drop、タイトル listing とのクロスチェック)を実装済みの経路をそのまま通すためで、並行実装の `ListConsolePanes` は防御の二重管理になるから作らない。
 
-候補は Role が console で、かつペインタイトルが TUI の固定タイトル(`fanout tui`。`findTUIPane` と同じ照合)であるペインに絞り、①呼び出しペインと同一 session → ②`@fanout_project_root` 一致 → ③最初の候補、の順で選ぶ。選択は純関数 `pickConsolePane`(`cmd/fanout/focusconsole.go`)に切り出してテストする。console 不在時は `tmux display-message` で知らせて正常終了する。
+候補は Role が console で、かつペインタイトルが TUI の固定タイトル(`fanout tui`。`findTUIPane` と同じ照合)であるペインに絞り、①呼び出しペインの `@fanout_project_root` と一致(同率なら同一 session を優先)→ ②同一 session → ③最初の候補、の順で選ぶ。root 一致を session より先に照合するのは、同一 tmux session に複数リポジトリの console が同居しうるためで、session を先にするとグローバルキーが multi-repo safe にならない。呼び出しペインに root の記録が無いときだけ session 照合に落ちる。選択は純関数 `pickConsolePane`(`cmd/fanout/focusconsole.go`)に切り出してテストする。console 不在時は `tmux display-message` で知らせて正常終了する。
 
 信頼境界を明記しておく。pane user option はペイン内のプロセスが任意に設定できる(`parseLivePaneField` のコメントに記録済みの前提)ので、悪意ある agent ペインが自分へ `@fanout_role=console` を stamp し、タイトルも偽装すれば、F11 はそのペインへ誘導される。focus-console はセキュリティ境界ではなく表示フォーカスを移すだけの UX プリミティブで、最悪の影響は「ユーザーの見るペインが自分の tmux 内で切り替わる」に留まる(読み書きは発生しない)。role + タイトルの二重照合は偽装の防止ではなく、誤設定と事故(次段の stale role)の排除が目的という位置づけ。
 
