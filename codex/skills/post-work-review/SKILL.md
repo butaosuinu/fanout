@@ -62,6 +62,21 @@ pass that same environment variable explicitly to every driver command in this
 procedure. Do not assume a shell-like `$post-work-review` prefix reached the
 driver.
 
+## Project validation before the gate
+
+Before `prepare`, resolve the project's lint and test commands (AGENTS.md,
+CLAUDE.md, Makefile) and run them yourself. Fix failures caused by the change
+under review; report pre-existing or environment-caused failures (such as a
+missing toolchain) in one line and continue instead of editing out-of-scope
+code. When gating a committed branch (the tree was clean before validation),
+commit the fixes this validation produces before running `prepare` — a tree
+left dirty makes the driver narrow its scope to `uncommitted|HEAD` and `mark`
+later rejects with `non_branch_review_scope`. When reviewing uncommitted work
+(the tree was already dirty), leave the fixes uncommitted; the
+`uncommitted|HEAD` bundle includes them together with the work under review.
+Skip with a one-line note when the project has none. This validation runs
+outside the isolated reviewer/verifier calls and never replaces them.
+
 ## Procedure
 
 1. Prepare one broad review bundle:
