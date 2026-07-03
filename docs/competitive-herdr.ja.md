@@ -49,8 +49,9 @@ herdr が上位互換な 3 点を、tmux の上のレイヤーという形のま
 
 `@fanout_agent_state` を running / working / idle / blocked / done の 5 値 + 空に拡張する。キーも書き込み先(tmux pane user option)も変えない。running(起動済みだが粒度不明)と done(プロセス終了)は現行の起動ラッパーがそのまま書くので、hooks 非対応エージェントや旧版 fanout が起動したペインは自然に 2 値に留まり、後方互換は値のセマンティクスだけで成立する。
 
-- Claude Code: 起動コマンドに `--settings`(インライン JSON)で hooks を注入する。`UserPromptSubmit` / `PreToolUse` → working、`Notification` → blocked、`Stop` → idle。hook 実体は `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state <state> 2>/dev/null || true` の 1 行シェルで、fanout バイナリを経由しない
-- Codex: `-c notify=[...]` の注入で idle 遷移のみ検出できる。blocked / working は検出不能とドキュメントに明示する
+- Claude Code: 起動コマンドに `--settings`(インライン JSON)で hooks を注入する。`UserPromptSubmit` / `PreToolUse` / `PostToolUse` → working、`Notification` → blocked、`Stop` → idle。`PreToolUse` は許可判定の前に発火するため、許可待ち(blocked)からの復帰はそれでは拾えず、次の `PostToolUse` か `Stop` で解除する。hook 実体は `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state <state> 2>/dev/null || true` の 1 行シェルで、fanout バイナリを経由しない
+- Codex: hooks が既定有効で(`~/.codex/hooks.json` / `config.toml`、https://developers.openai.com/codex/hooks)、`PermissionRequest` → blocked に置き換えるほかは Claude と同じマッピングを組める。起動時注入の経路(`-c` での hooks 定義可否)と非管理 hooks の信頼確認ダイアログの挙動は spike で検証する
+- hook 信号は lifecycle 全体を覆う authority ではなく、表示・nudge・wait 向けの近似テレメトリと位置づける(herdr も Claude Code / Codex は session identity 統合で、状態検出には画面検出を併用している)。取りこぼしは `Stop` → idle と `--timeout` で回収し、状態値を正確性のクリティカルパスに置かない
 - herdr の「user 設定に hooks を書き込む」インストール方式(`integration install`)は採らない。起動時注入なら fanout が起動したペインにだけ効き、ユーザーの他セッションを汚さない
 
 波及先は `internal/sessionview` の `normalizeAgentState`(許可リスト拡張)、`cmd/fanout/msg.go` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
@@ -69,9 +70,9 @@ skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh
 ### C. session resume(規模 M、独立)
 
 - Claude Code: 起動時に fanout が UUID を生成して `claude --session-id <uuid>` で起動し、`state.Pane` に `SessionID`(additive フィールド)として記録する。hooks もログ走査も不要で決定論。記録が stale な場合のみ `~/.claude/projects/<worktree のエスケープ名>/` の最新 jsonl にフォールバックする
-- Codex: 起動時の id 事前指定ができないため、resume 時に `~/.codex/sessions/**/rollout-*.jsonl` の先頭行 `session_meta.payload.cwd` が worktree に一致する最新ファイルから id を発見する
+- Codex: 起動時の id 事前指定ができないため、resume は worktree で `codex resume --last` を使う(`--last` は cwd スコープが公式仕様: https://developers.openai.com/codex/cli/reference)。`~/.codex/sessions/**/rollout-*.jsonl` の走査は内部レイアウト(非公式仕様)依存なので、`--last` で足りないケースの明示的フォールバックに留める
 - `fanout resume <N>`: agent がまだ動いていれば no-op。`@fanout_agent_state` が done(起動ラッパーは agent 終了後もシェルを exec してペインを生かすため、ペイン生存では判定しない)またはペイン消滅なら、同じ worktree で `claude --resume <id>` / `codex resume <id>` を新ペインとして起動する(既存の起動ラッパーと split 後デコレーションを再利用)。`CodexPlanMode` 行はペイン内 app-server の thread に紐づく別プロトコルで、ペインが死ぬと thread への経路も失われるため、v1 では明示的に拒否する
-- dry-run コマンドには `--session-id` を付けず、Tier 2 golden を無風に保つ
+- dry-run にも live と同じ `--session-id` の形を出す(`--dry-run` は実際の launch command を表示する契約で、live だけに付けると注入の破損を dry-run / golden で検出できない)。UUID は dry-run では決定論プレースホルダにし、Tier 2 golden を更新する
 
 tmux server 再起動やペイン事故からの復帰手段で、#59 の多波・長時間運用と組み合わさって効く。A / B と依存が無く並行実装できる。
 
