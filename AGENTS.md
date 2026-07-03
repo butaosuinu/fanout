@@ -155,8 +155,10 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   ships a stale bundle.
 - Preserve fail-fast in `executePlan`: stop after the first failed child
   launch.
-- Complete the post-work-review gate (the installed driver, invoked per
-  `codex/skills/post-work-review`) before commit-and-PR.
+- Commit all fixes first, then run the post-work-review gate (the installed
+  driver, invoked per `codex/skills/post-work-review`) against that final
+  HEAD before `gh pr create` — the marker is tied to the exact commit
+  reviewed, so committing anything afterward invalidates it.
 
 ## Documentation Writing
 

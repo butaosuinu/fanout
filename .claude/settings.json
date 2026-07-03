@@ -13,16 +13,7 @@
       "Bash(gh run view:*)",
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
-      "Bash(make lint)",
-      "Bash(make lint-web)",
-      "Bash(make test)",
-      "Bash(make test-web)",
-      "Bash(make test-tier1)",
-      "Bash(make test-tier2)",
-      "Bash(make build-go)",
-      "Bash(make build-web)",
-      "Bash(make fmt)",
-      "Bash(make fmt-web)"
+      "Bash(make lint-shell)"
     ]
   },
   "hooks": {
