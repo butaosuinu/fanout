@@ -53,22 +53,22 @@ var (
 // against an already-loaded state store. worktree, when non-empty, is the
 // fanout child worktree the caller runs in and is the primary key: a
 // WorktreePath match identifies the managed issue/task pane even after tmux
-// restarts. Shell terminal rows can share the same worktree, so the worktree
-// match skips them and lets pane id fallback identify the shell only when no
-// managed row owns that worktree. Rows whose recorded WorktreePath conflicts
-// with the live worktree are skipped because tmux reuses pane ids across
-// server restarts and such a row belongs to a dead pane. Rows are scanned
-// newest-first (state appends in launch order). The matched row's recorded
-// IssueNum/Parent are authoritative; the prompt-tag parse only fills fields
-// a degenerate row is missing. A missing state file yields ErrPaneNotFound
-// because state.Load returns an empty store for absent files.
+// restarts. Shell terminal and attached-agent rows can share the same worktree,
+// so the worktree match skips them and lets pane id fallback identify those
+// rows only when no managed source pane owns that worktree. Rows whose recorded
+// WorktreePath conflicts with the live worktree are skipped because tmux reuses
+// pane ids across server restarts and such a row belongs to a dead pane. Rows
+// are scanned newest-first (state appends in launch order). The matched row's
+// recorded IssueNum/Parent are authoritative; the prompt-tag parse only fills
+// fields a degenerate row is missing. A missing state file yields
+// ErrPaneNotFound because state.Load returns an empty store for absent files.
 func IdentifyPane(paneID, worktree string, st state.Store) (Identity, error) {
 	if paneID == "" && worktree == "" {
 		return Identity{}, ErrNotInTmux
 	}
 	if worktree != "" {
 		for _, pane := range slices.Backward(st.Panes) {
-			if pane.WorktreePath == worktree && !pane.IsShell() {
+			if pane.WorktreePath == worktree && !pane.IsShell() && !pane.IsAttachedAgent() {
 				return paneIdentity(pane), nil
 			}
 		}

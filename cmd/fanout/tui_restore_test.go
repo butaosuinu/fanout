@@ -299,6 +299,9 @@ func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testi
 	if !strings.Contains(string(logBody), "split-window") || !strings.Contains(string(logBody), "--continue") {
 		t.Fatalf("tmux log = %q, want split-window with claude --continue", string(logBody))
 	}
+	if !strings.Contains(string(logBody), "@fanout_worktree_path "+wt) {
+		t.Fatalf("tmux log = %q, want restored pane worktree option %q", string(logBody), wt)
+	}
 }
 
 func TestRestoreAgentCommandUsesSavedCodexPlanThread(t *testing.T) {
