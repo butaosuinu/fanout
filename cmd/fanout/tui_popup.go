@@ -241,6 +241,14 @@ func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile,
 	// Enhanced keyboard input is on by default. Always forward the current value,
 	// including opt-out values, so the helper mirrors the parent TUI.
 	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
+	// display-popup runs under the tmux server's environment, not the parent
+	// fanout process's. Forward PATH so the issue/plan pickers find `gh` (and
+	// git) wherever the parent did. Secrets (GH_TOKEN etc.) are deliberately
+	// not inlined: the command line is visible via ps; token-less setups rely
+	// on gh's config-file auth, which needs only HOME.
+	if path := os.Getenv("PATH"); path != "" {
+		prefix = "PATH=" + shellQuote(path) + " " + prefix
+	}
 	parts = append([]string{prefix}, parts...)
 	command := strings.Join(parts, " ")
 	markDone := "printf '' > " + shellQuote(doneFile)

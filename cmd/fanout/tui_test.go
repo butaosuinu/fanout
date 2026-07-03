@@ -233,6 +233,9 @@ func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testin
 		"/tmp/result.done",
 		tuiNewPanePopupCommand,
 		"--result-file /tmp/result.json",
+		// The popup runs under the tmux server env; PATH must come from the
+		// parent so the issue/plan pickers can exec gh.
+		"PATH=" + shellQuote(os.Getenv("PATH")),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("popup shell command missing %q:\n%s", want, got)
