@@ -91,12 +91,15 @@ Build the binary with `make build-go` and validate with `make test`.
   shells are relaunched into a deterministic fanout-managed tmux session;
   invocations already inside tmux use the current pane. It also wires the
   opt-in label watcher into the TUI runtime; no other command path starts the
-  watcher. The `n` new-session popup has three modes: free prompt (manual
-  pane), issue (OPEN issue picker; children fan out via the watch launch
-  helpers with `UnblockedOnly`, childless issues become `@watch` panes), and
-  plan (`.fanout/plans` slug picker via `runPlanWithRuntime`), with a
-  per-child/task agent assignment step (`cmd/fanout/tui_issue.go`,
-  `cmd/fanout/tui_plan.go`, `internal/tui/newpane_picker.go`,
+  watcher. The `n` new-session popup has two modes: free prompt (manual pane)
+  and issue (OPEN issue picker; children fan out via the watch launch helpers
+  with `UnblockedOnly`, childless issues become `@watch` panes), with a
+  per-child agent assignment step. A prompt-mode plan fan-out checkbox instead
+  launches one coordinator pane at the project root that runs the fanout-plan
+  skill on the raw prompt (`launchPlanPromptFromTUI`; `/fanout plan` for
+  `claude`, `$fanout-plan` for `codex`, never Codex Plan Mode) so `fanout
+  plan`'s git root stays at the repo, not a worktree (`cmd/fanout/tui_issue.go`,
+  `cmd/fanout/tui_launch.go`, `internal/tui/newpane_picker.go`,
   `internal/tui/newpane_assign.go`).
 - `internal/runtime` resolves the git repository root and the tmux target.
   Batch pane-creation mode must be invoked from inside tmux. By default fanout

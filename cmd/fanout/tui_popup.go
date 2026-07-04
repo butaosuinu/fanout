@@ -34,10 +34,10 @@ type tuiNewPanePopupGeometry struct {
 
 type tuiNewPanePopupResult struct {
 	Canceled       bool              `json:"canceled,omitempty"`
-	Mode           string            `json:"mode,omitempty"` // "" (prompt) | "issue" | "plan"
+	Mode           string            `json:"mode,omitempty"` // "" (prompt) | "issue"
 	Prompt         string            `json:"prompt,omitempty"`
 	Issue          int               `json:"issue,omitempty"`
-	Plan           string            `json:"plan,omitempty"`
+	PlanFanout     bool              `json:"planFanout,omitempty"`
 	Agents         []string          `json:"agents,omitempty"`
 	DefaultAgent   string            `json:"defaultAgent,omitempty"`
 	AgentOverrides map[string]string `json:"agentOverrides,omitempty"`
@@ -70,16 +70,14 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 		Height:            *height,
 		ListRepoFiles:     worktree.ListFiles,
 		ListOpenIssues:    newTUIListOpenIssuesFunc(*projectRoot),
-		ListPlanSlugs:     newTUIListPlanSlugsFunc(*projectRoot),
 		ListIssueChildren: newTUIListIssueChildrenFunc(*projectRoot),
-		ListPlanTasks:     newTUIListPlanTasksFunc(*projectRoot),
 	})
 	result := tuiNewPanePopupResult{
 		Canceled:       canceled,
 		Mode:           string(req.Mode),
 		Prompt:         req.Prompt,
 		Issue:          req.Issue,
-		Plan:           req.Plan,
+		PlanFanout:     req.PlanFanout,
 		Agents:         req.Agents,
 		DefaultAgent:   req.DefaultAgent,
 		AgentOverrides: req.AgentOverrides,
@@ -188,7 +186,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			Mode:           fanouttui.LaunchMode(result.Mode),
 			Prompt:         result.Prompt,
 			Issue:          result.Issue,
-			Plan:           result.Plan,
+			PlanFanout:     result.PlanFanout,
 			Agents:         result.Agents,
 			DefaultAgent:   result.DefaultAgent,
 			AgentOverrides: result.AgentOverrides,
@@ -242,8 +240,8 @@ func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile,
 	// including opt-out values, so the helper mirrors the parent TUI.
 	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
 	// display-popup runs under the tmux server's environment, not the parent
-	// fanout process's. Forward PATH so the issue/plan pickers find `gh` (and
-	// git) wherever the parent did. Secrets (GH_TOKEN etc.) are deliberately
+	// fanout process's. Forward PATH so the issue picker finds `gh` (and git)
+	// wherever the parent did. Secrets (GH_TOKEN etc.) are deliberately
 	// not inlined: the command line is visible via ps; token-less setups rely
 	// on gh's config-file auth, which needs only HOME.
 	if path := os.Getenv("PATH"); path != "" {

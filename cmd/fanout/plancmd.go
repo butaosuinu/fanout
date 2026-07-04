@@ -149,7 +149,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 
 // runPlanWithRuntime runs the live/dry-run plan lane against an already
 // resolved runtime. cmdPlan owns parsing, dependency checks, and runtime
-// resolution; the TUI plan launcher reuses this with a synthesized runtime.
+// resolution before calling this.
 func runPlanWithRuntime(cfg planCommandConfig, rt *runtimeInfo, lg *log.Logger, commandName string) (taskExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.info.ProjectRoot, settings.CLIOverrides{
 		AutoPullRequest:    cfg.AutoPullRequest,
@@ -690,34 +690,6 @@ func resolvePlanSpecPath(projectRoot, arg string) string {
 		return arg
 	}
 	return filepath.Join(projectRoot, ".fanout", "plans", arg+".json")
-}
-
-// listPlanSlugs enumerates .fanout/plans/*.json as bare slugs, sorted. A
-// missing directory is not an error: a repository that never ran fanout plan
-// simply has no plans to offer.
-func listPlanSlugs(projectRoot string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(projectRoot, ".fanout", "plans"))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var slugs []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name, ok := strings.CutSuffix(entry.Name(), ".json")
-		// A remaining .json suffix cannot round-trip: resolvePlanSpecPath
-		// would treat the bare slug as a spec path.
-		if !ok || name == "" || strings.HasSuffix(name, ".json") {
-			continue
-		}
-		slugs = append(slugs, name)
-	}
-	slices.Sort(slugs)
-	return slugs, nil
 }
 
 func loadPlanState(cfg planCommandConfig, projectRoot string, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {

@@ -273,6 +273,64 @@ func TestBuildShellPaneRequiresShellKeyForLiveness(t *testing.T) {
 	}
 }
 
+// TestBuildCoordinatorPaneRequiresShellKeyForLiveness pins the plan fan-out
+// coordinator's liveness: an attached-agent row recorded with the repo root as
+// WorktreePath matches on @fanout_shell_key, so a reused pane id — which
+// always runs somewhere under the repo root — reads as stale, not live.
+func TestBuildCoordinatorPaneRequiresShellKeyForLiveness(t *testing.T) {
+	coordinator := state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindAttachedAgent,
+		Slug:         "plan-prompt-1",
+		PaneID:       "%2",
+		ShellKey:     "shell-coordinator",
+		Agent:        "claude",
+		DisplayName:  "plan: build search",
+		WorktreePath: "/repo",
+		CreatedAt:    "2026-06-04T00:00:00Z",
+	}
+	tests := []struct {
+		name      string
+		live      map[string]LivePaneInfo
+		wantAlive bool
+		wantTmux  string
+	}{
+		{
+			name:      "matching key is live",
+			live:      map[string]LivePaneInfo{"%2": {Path: "/repo", Title: "plan: build search", ShellKey: "shell-coordinator"}},
+			wantAlive: true,
+			wantTmux:  "live",
+		},
+		{
+			name:      "reused pane id under the repo root is stale",
+			live:      map[string]LivePaneInfo{"%2": {Path: "/repo/.fanout/worktrees/other", Title: "reused id"}},
+			wantAlive: false,
+			wantTmux:  "stale",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snap := Build("owner/name", "/repo", Collectors{
+				Now:       fixedNow,
+				LoadState: storeOf(coordinator),
+				LivePanes: livePanesWith(tt.live),
+				IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+					return "OPEN", nil, nil
+				},
+				Waves: wavesNone,
+				WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+					return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+				},
+			})
+			got := snap.Sessions[0].Panes[0]
+			if got.Alive != tt.wantAlive || got.TmuxState != tt.wantTmux {
+				t.Fatalf("Build() coordinator alive=%v tmux=%q, want alive=%v tmux=%q", got.Alive, got.TmuxState, tt.wantAlive, tt.wantTmux)
+			}
+		})
+	}
+}
+
 func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,

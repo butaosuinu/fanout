@@ -206,55 +206,6 @@ func TestNewPaneIssueWithoutChildrenSkipsAssign(t *testing.T) {
 	}
 }
 
-func TestNewPanePlanAssignSubmit(t *testing.T) {
-	m := newModel(Options{
-		ListPlanSlugs: func() ([]string, error) { return []string{"alpha", "beta"}, nil },
-		ListPlanTasks: func(slug string) ([]PlanTaskItem, error) {
-			if slug != "beta" {
-				return nil, errors.New("unexpected slug")
-			}
-			return []PlanTaskItem{
-				{ID: "front", Title: "Frontend", Wave: "1"},
-				{ID: "back", Title: "Backend", Wave: "2"},
-			}, nil
-		},
-	})
-	m.promptOnly = true
-	m.openNewPaneForm()
-	m.newPane.focus = newPaneFieldMode
-
-	step := func(key tea.KeyMsg) tea.Cmd {
-		updated, cmd := m.Update(key)
-		m = updated.(model)
-		return cmd
-	}
-	deliver := func(cmd tea.Cmd) {
-		t.Helper()
-		if cmd == nil {
-			t.Fatal("expected a command")
-		}
-		updated, _ := m.Update(cmd())
-		m = updated.(model)
-	}
-
-	deliver(step(tea.KeyMsg{Type: tea.KeyRight})) // prompt -> plan (issue mode not wired)
-	step(tea.KeyMsg{Type: tea.KeyTab})
-	step(keyRunes("bet"))
-	deliver(step(tea.KeyMsg{Type: tea.KeyEnter}))
-	step(tea.KeyMsg{Type: tea.KeyRight}) // first task claude -> codex
-	step(tea.KeyMsg{Type: tea.KeyEnter})
-
-	want := LaunchRequest{
-		Mode:           LaunchModePlan,
-		Plan:           "beta",
-		DefaultAgent:   "claude",
-		AgentOverrides: map[string]string{"front": "codex"},
-	}
-	if !reflect.DeepEqual(m.promptResult, want) {
-		t.Fatalf("promptResult = %#v, want %#v", m.promptResult, want)
-	}
-}
-
 func TestNewPaneAssignEscReturnsToPicker(t *testing.T) {
 	m := newModel(Options{
 		ListOpenIssues: func() ([]IssueListItem, error) {
@@ -338,12 +289,6 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 			wantCall: &call{kind: "issue", target: "42", agent: "claude", overrides: map[string]string{"43": "codex"}},
 		},
 		{
-			name:     "plan mode calls LaunchPlan",
-			req:      LaunchRequest{Mode: LaunchModePlan, Plan: "beta", DefaultAgent: "codex"},
-			wired:    true,
-			wantCall: &call{kind: "plan", target: "beta", agent: "codex"},
-		},
-		{
 			name:     "prompt mode keeps calling LaunchPane",
 			req:      LaunchRequest{Prompt: "do it", Agents: []string{"claude"}},
 			wired:    true,
@@ -354,11 +299,6 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 			req:        LaunchRequest{Mode: LaunchModeIssue, Issue: 42, DefaultAgent: "claude"},
 			wantNotice: "new session: issue launcher is not configured",
 		},
-		{
-			name:       "unwired plan launcher surfaces a notice",
-			req:        LaunchRequest{Mode: LaunchModePlan, Plan: "beta", DefaultAgent: "claude"},
-			wantNotice: "new session: plan launcher is not configured",
-		},
 	}
 
 	for _, tt := range tests {
@@ -368,10 +308,6 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 			if tt.wired {
 				opts.LaunchIssue = func(num int, agent string, overrides map[string]string) (string, error) {
 					got = &call{kind: "issue", target: strconv.Itoa(num), agent: agent, overrides: overrides}
-					return "", nil
-				}
-				opts.LaunchPlan = func(slug, agent string, overrides map[string]string) (string, error) {
-					got = &call{kind: "plan", target: slug, agent: agent, overrides: overrides}
 					return "", nil
 				}
 				opts.LaunchPane = func(req LaunchRequest) (string, error) {
@@ -425,7 +361,6 @@ func TestSingleAgentSelectorCycles(t *testing.T) {
 func TestNewPaneViewRendersPickerStates(t *testing.T) {
 	m := newModel(Options{
 		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
-		ListPlanSlugs:  func() ([]string, error) { return nil, nil },
 	})
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
@@ -628,7 +563,8 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	}
 }
 
-// with no list providers wired the form keeps its classic prompt-only shape.
+// with no list providers wired the form hides the Mode row, leaving the
+// prompt, the plan fan-out checkbox, and the agent selector.
 func TestNewPaneViewHidesModeRowWithoutProviders(t *testing.T) {
 	m := newModel(Options{})
 	m.openNewPaneForm()
@@ -636,7 +572,8 @@ func TestNewPaneViewHidesModeRowWithoutProviders(t *testing.T) {
 	if view := m.newPaneView(); strings.Contains(view, "Mode") {
 		t.Fatalf("mode row rendered without providers:\n%s", view)
 	}
-	if order := m.newPaneFocusOrder(); len(order) != 2 {
-		t.Fatalf("focus order = %v, want two fields", order)
+	want := []newPaneField{newPaneFieldMain, newPaneFieldPlan, newPaneFieldAgent}
+	if order := m.newPaneFocusOrder(); !reflect.DeepEqual(order, want) {
+		t.Fatalf("newPaneFocusOrder() = %v, want %v", order, want)
 	}
 }

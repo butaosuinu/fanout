@@ -61,8 +61,13 @@ type paneRequest struct {
 	AgentCommand        string
 	CodexPlanMode       bool
 	CodexPlanStatusPath string
-	Hooks               hooks.Config
-	Worktree            worktree.Plan
+	// ShellKey is a @fanout_shell_key liveness token for panes recorded with
+	// the repo root as their worktree path (the plan fan-out coordinator):
+	// the root contains every fanout pane, so the path-containment liveness
+	// check cannot protect such rows against tmux pane id reuse.
+	ShellKey string
+	Hooks    hooks.Config
+	Worktree worktree.Plan
 }
 
 type createdPane struct {
@@ -232,6 +237,7 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time, code
 		SourceIssueNum: req.SourceIssueNum,
 		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
+		ShellKey:       req.ShellKey,
 		CodexPlanMode:  req.CodexPlanMode,
 		CodexThreadID:  codexPlanStatus.ThreadID,
 		CodexSessionID: codexPlanStatus.SessionID,

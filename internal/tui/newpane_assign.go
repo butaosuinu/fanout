@@ -16,18 +16,10 @@ type ChildTarget struct {
 	Wave   string
 }
 
-// PlanTaskItem is one plan-spec task offered by the plan-mode agent
-// assignment step.
-type PlanTaskItem struct {
-	ID    string
-	Title string
-	Wave  string
-}
-
 // assignState is the step-2 per-target agent assignment. target identifies
-// the pending selection ("#123" or a slug) and gen its load generation, so a
-// stale load — even one for the same target after an esc + re-enter — cannot
-// populate a newer selection's rows or finalize with outdated data.
+// the pending selection ("#123") and gen its load generation, so a stale load
+// — even one for the same target after an esc + re-enter — cannot populate a
+// newer selection's rows or finalize with outdated data.
 type assignState struct {
 	loading bool
 	err     string
@@ -39,7 +31,7 @@ type assignState struct {
 }
 
 type assignRow struct {
-	target   string // child issue number ("123") or plan task id
+	target   string // child issue number ("123")
 	label    string
 	wave     string
 	agentIdx int // launchAgents index
@@ -50,13 +42,12 @@ type newPaneAssignLoadedMsg struct {
 	target   string
 	gen      int
 	children []ChildTarget
-	tasks    []PlanTaskItem
 	err      error
 }
 
-// submitNewPanePicker handles enter on the issue/plan picker: it validates
-// the list state, then either opens the agent assignment step or (when no
-// target lister is wired) submits with the default agent alone.
+// submitNewPanePicker handles enter on the issue picker: it validates the list
+// state, then either opens the agent assignment step or (when no target lister
+// is wired) submits with the default agent alone.
 func (m *model) submitNewPanePicker() tea.Cmd {
 	p := m.activePicker()
 	if p == nil {
@@ -83,12 +74,6 @@ func (m *model) submitNewPanePicker() tea.Cmd {
 			return m.finalizeNewPaneModeSubmit()
 		}
 		return m.beginAssignStep(item.key, item.key+" "+item.title)
-	case newPaneModePlan:
-		m.newPane.selPlan = item.key
-		if m.opts.ListPlanTasks == nil {
-			return m.finalizeNewPaneModeSubmit()
-		}
-		return m.beginAssignStep(item.key, "plan "+item.key)
 	default:
 		return nil
 	}
@@ -108,13 +93,6 @@ func (m *model) beginAssignStep(target, title string) tea.Cmd {
 			children, err := list(num)
 			return newPaneAssignLoadedMsg{mode: mode, target: target, gen: gen, children: children, err: err}
 		}
-	case newPaneModePlan:
-		list := m.opts.ListPlanTasks
-		slug := m.newPane.selPlan
-		return func() tea.Msg {
-			tasks, err := list(slug)
-			return newPaneAssignLoadedMsg{mode: mode, target: target, gen: gen, tasks: tasks, err: err}
-		}
 	default:
 		return nil
 	}
@@ -129,21 +107,6 @@ func buildAssignRows(msg newPaneAssignLoadedMsg, defaultAgentIdx int) []assignRo
 				target:   strconv.Itoa(child.Number),
 				label:    fmt.Sprintf("#%d %s", child.Number, child.Title),
 				wave:     child.Wave,
-				agentIdx: defaultAgentIdx,
-			})
-		}
-		return rows
-	case newPaneModePlan:
-		rows := make([]assignRow, 0, len(msg.tasks))
-		for _, task := range msg.tasks {
-			label := task.ID
-			if task.Title != "" {
-				label += "  " + task.Title
-			}
-			rows = append(rows, assignRow{
-				target:   task.ID,
-				label:    label,
-				wave:     task.Wave,
 				agentIdx: defaultAgentIdx,
 			})
 		}
@@ -220,8 +183,8 @@ func (m model) assignOverrides() map[string]string {
 	return overrides
 }
 
-// finalizeNewPaneModeSubmit builds the issue/plan LaunchRequest and hands it
-// to the prompt result (popup) or the launch dispatch (in-process form).
+// finalizeNewPaneModeSubmit builds the issue LaunchRequest and hands it to the
+// prompt result (popup) or the launch dispatch (in-process form).
 func (m *model) finalizeNewPaneModeSubmit() tea.Cmd {
 	req := LaunchRequest{
 		DefaultAgent:   launchAgents[clampInt(m.newPane.agentChoice, 0, len(launchAgents)-1)],
@@ -231,19 +194,12 @@ func (m *model) finalizeNewPaneModeSubmit() tea.Cmd {
 	case newPaneModeIssue:
 		req.Mode = LaunchModeIssue
 		req.Issue = m.newPane.selIssue
-	case newPaneModePlan:
-		req.Mode = LaunchModePlan
-		req.Plan = m.newPane.selPlan
 	default:
 		return nil
 	}
 	if !m.promptOnly {
 		if req.Mode == LaunchModeIssue && m.opts.LaunchIssue == nil {
 			m.newPane.err = "issue launcher is not configured"
-			return nil
-		}
-		if req.Mode == LaunchModePlan && m.opts.LaunchPlan == nil {
-			m.newPane.err = "plan launcher is not configured"
 			return nil
 		}
 	}
@@ -273,29 +229,6 @@ func (m *model) launchIssueSessionRequest(req LaunchRequest) tea.Cmd {
 		num, overrides := req.Issue, req.AgentOverrides
 		return func() tea.Msg {
 			notice, err := launch(num, agentName, overrides)
-			return launchPaneMsg{notice: notice, count: 1, err: err}
-		}
-	}
-	return nil
-}
-
-func (m *model) launchPlanSessionRequest(req LaunchRequest) tea.Cmd {
-	agentName := strings.TrimSpace(req.DefaultAgent)
-	slug := strings.TrimSpace(req.Plan)
-	switch {
-	case slug == "":
-		m.notice = "new session: plan slug is required"
-	case agentName == "":
-		m.notice = "new session: select an agent"
-	case m.opts.LaunchPlan == nil:
-		m.notice = "new session: plan launcher is not configured"
-	default:
-		m.newPane.launching = true
-		m.notice = fmt.Sprintf("starting plan %s...", slug)
-		launch := m.opts.LaunchPlan
-		overrides := req.AgentOverrides
-		return func() tea.Msg {
-			notice, err := launch(slug, agentName, overrides)
 			return launchPaneMsg{notice: notice, count: 1, err: err}
 		}
 	}

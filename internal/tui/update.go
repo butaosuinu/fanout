@@ -32,7 +32,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
 		if (m.newPanePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
-			// Issue/plan launches can run a whole fan-out (seconds per child), so
+			// An issue launch can run a whole fan-out (seconds per child), so
 			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
 			// queue a quit instead of appearing hung.
 			if m.newPane.launching {
@@ -273,18 +273,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.items = issuePickerItems(msg.items)
 		m.recomputePicker(p)
 		return m, nil
-	case newPanePlansLoadedMsg:
-		p := &m.newPane.planPicker
-		p.loading = false
-		if msg.err != nil {
-			p.err = msg.err.Error()
-			return m, nil
-		}
-		p.err = ""
-		p.loaded = true
-		p.items = planPickerItems(msg.slugs)
-		m.recomputePicker(p)
-		return m, nil
 	case newPaneAssignLoadedMsg:
 		// The generation check also drops a stale load for the SAME target
 		// (esc while loading, then re-enter), which could otherwise finalize
@@ -302,8 +290,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.newPane.err = "" // clear a "targets are still loading" line once they arrive
 		rows := buildAssignRows(msg, m.newPane.agentChoice)
 		if len(rows) == 0 {
-			// A childless issue launches as a single pane; an empty plan defers
-			// its error to the launch lane. Either way there is nothing to assign.
+			// A childless issue launches as a single pane; there is nothing to
+			// assign.
 			return m, m.finalizeNewPaneModeSubmit()
 		}
 		m.newPane.assign.rows = rows

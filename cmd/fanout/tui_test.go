@@ -231,8 +231,8 @@ func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name:   "plan mode carries the slug",
-			result: tuiNewPanePopupResult{Mode: "plan", Plan: "launch-plan", DefaultAgent: "codex"},
+			name:   "prompt mode carries the plan fan-out flag",
+			result: tuiNewPanePopupResult{Prompt: "Ship search", PlanFanout: true, Agents: []string{"claude"}},
 		},
 	}
 

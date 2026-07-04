@@ -200,3 +200,41 @@ func TestFindRecordedPaneByIDRequiresShellKeyForShellRows(t *testing.T) {
 		t.Fatalf("findRecordedPaneByID() error = %v, want shell identity mismatch", err)
 	}
 }
+
+// TestFindRecordedPaneByIDRequiresLivenessKeyForKeyedCoordinator pins the
+// prefix+M identity check for the plan fan-out coordinator: recorded at the
+// repo root, a reused pane id always passes the path checks, so a row with a
+// ShellKey must match the live pane's @fanout_shell_key regardless of kind.
+func TestFindRecordedPaneByIDRequiresLivenessKeyForKeyedCoordinator(t *testing.T) {
+	repo := t.TempDir()
+	writeLifecycleState(t, repo, state.Pane{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindAttachedAgent,
+		PaneID:       "%88",
+		ShellKey:     "shell-coordinator",
+		Agent:        "claude",
+		WorktreePath: repo,
+	})
+	orig := worktreeActionLivePanes
+	t.Cleanup(func() { worktreeActionLivePanes = orig })
+
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%88", CurrentPath: filepath.Join(repo, "subdir"), ShellKey: ""}}, nil
+	}
+	_, err := findRecordedPaneByID(repo, "%88")
+	if err == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("findRecordedPaneByID() error = %v, want keyed identity mismatch", err)
+	}
+
+	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
+		return []tmuxrun.LivePane{{ID: "%88", CurrentPath: repo, ShellKey: "shell-coordinator"}}, nil
+	}
+	got, err := findRecordedPaneByID(repo, "%88")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ShellKey != "shell-coordinator" {
+		t.Fatalf("ShellKey = %q, want the recorded coordinator row", got.ShellKey)
+	}
+}
