@@ -130,9 +130,9 @@ func (m *model) recomputePicker(p *pickerState) {
 
 // pickerFormOverhead is the non-list height of the picker form: title, mode
 // row, field labels, the list box frame, filter line, the marker legend line,
-// both ↑/↓ scroll marker lines, the agent row, the hint line, and the modal
-// frame.
-const pickerFormOverhead = 17
+// both ↑/↓ scroll marker lines, the two count-selector agent rows, the hint
+// line, and the modal frame.
+const pickerFormOverhead = 18
 
 // pickerVisibleRows adapts the result cap to the available height so the
 // form never renders taller than the popup pty — bubbletea keeps only the
