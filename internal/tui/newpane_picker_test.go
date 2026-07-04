@@ -820,3 +820,66 @@ func TestNewPaneViewIssueAgentSelectorIsCountStyle(t *testing.T) {
 		t.Fatalf("issue agent selector still shows radio marker:\n%s", view)
 	}
 }
+
+// TestModeSwitchRoundTripPreservesPromptAgentCounts pins that peeking at issue
+// mode (or toggling the plan fan-out checkbox) never changes how many panes a
+// prompt submit launches: the multi-count selection is stashed while a
+// single-agent context collapses the shared counts, and restored on return.
+func TestModeSwitchRoundTripPreservesPromptAgentCounts(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return []IssueListItem{{Number: 1, Title: "x"}}, nil },
+	})
+	m.openNewPaneForm()
+	m.newPane.agentCount["claude"] = 1
+	m.newPane.agentCount["codex"] = 2
+
+	step := func(key tea.KeyMsg) {
+		updated, _ := m.Update(key)
+		m = updated.(model)
+	}
+
+	m.newPane.focus = newPaneFieldMode
+	step(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue
+	if total := m.newPane.agentCount["claude"] + m.newPane.agentCount["codex"]; total != 1 {
+		t.Fatalf("issue-mode agent counts sum = %d, want 1 (collapsed)", total)
+	}
+
+	step(tea.KeyMsg{Type: tea.KeyRight}) // issue -> prompt
+	if m.newPane.agentCount["claude"] != 1 || m.newPane.agentCount["codex"] != 2 {
+		t.Fatalf("restored counts = %v, want claude 1 / codex 2", m.newPane.agentCount)
+	}
+	if m.newPane.promptAgentCount != nil {
+		t.Fatal("stash not cleared after returning to prompt mode")
+	}
+}
+
+// The plan fan-out checkbox is the other single-agent context: toggling it on
+// and off must also round-trip the prompt-mode counts.
+func TestPlanFanoutToggleRoundTripPreservesPromptAgentCounts(t *testing.T) {
+	m := newModel(Options{})
+	m.openNewPaneForm()
+	m.newPane.agentCount["claude"] = 1
+	m.newPane.agentCount["codex"] = 2
+
+	step := func(key tea.KeyMsg) {
+		updated, _ := m.Update(key)
+		m = updated.(model)
+	}
+
+	m.newPane.focus = newPaneFieldPlan
+	step(tea.KeyMsg{Type: tea.KeySpace}) // checkbox on
+	if !m.newPane.planFanout {
+		t.Fatal("checkbox did not toggle on")
+	}
+	if total := m.newPane.agentCount["claude"] + m.newPane.agentCount["codex"]; total != 1 {
+		t.Fatalf("checked agent counts sum = %d, want 1 (collapsed)", total)
+	}
+
+	step(tea.KeyMsg{Type: tea.KeySpace}) // checkbox off
+	if m.newPane.planFanout {
+		t.Fatal("checkbox did not toggle off")
+	}
+	if m.newPane.agentCount["claude"] != 1 || m.newPane.agentCount["codex"] != 2 {
+		t.Fatalf("restored counts = %v, want claude 1 / codex 2", m.newPane.agentCount)
+	}
+}

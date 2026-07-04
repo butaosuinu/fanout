@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/signal"
 	"slices"
@@ -125,11 +126,16 @@ const (
 type newPaneForm struct {
 	prompt     textarea.Model
 	agentCount map[string]int
-	agentIndex int
-	focus      newPaneField
-	launching  bool
-	err        string
-	attach     *AttachTarget
+	// promptAgentCount stashes the prompt-mode launch counts while a
+	// single-agent context (issue mode, plan fan-out) collapses agentCount to
+	// one selection; returning to plain prompt mode restores it. nil when
+	// nothing is stashed.
+	promptAgentCount map[string]int
+	agentIndex       int
+	focus            newPaneField
+	launching        bool
+	err              string
+	attach           *AttachTarget
 
 	// planFanout is the prompt-mode checkbox: decompose the prompt via the
 	// fanout-plan skill instead of launching a plain agent pane.
@@ -372,12 +378,11 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.newPane.focus {
 		case newPaneFieldMode:
 			cmd := m.cycleNewPaneMode(msg.String())
-			// Entering a single-agent mode must not inherit a stale prompt-mode
-			// count; collapse to one selection so the launch matches the selector.
-			m.normalizeSingleAgentSelection()
+			m.syncAgentSelectionForMode()
 			return m, cmd
 		case newPaneFieldPlan:
 			m.newPane.planFanout = !m.newPane.planFanout
+			m.syncAgentSelectionForMode()
 			return m, nil
 		case newPaneFieldAgent:
 			m.adjustNewPaneAgent(msg.String())
@@ -487,6 +492,26 @@ func (m *model) selectSingleNewPaneAgent() {
 		} else {
 			m.newPane.agentCount[agentName] = 0
 		}
+	}
+}
+
+// syncAgentSelectionForMode reconciles the shared agent counts with the
+// current selection context. Entering a single-agent context (issue mode, plan
+// fan-out checkbox) stashes the prompt-mode launch counts before collapsing
+// them, and returning to plain prompt mode restores the stash — so peeking at
+// issue mode or toggling the checkbox never changes how many panes a prompt
+// submit launches.
+func (m *model) syncAgentSelectionForMode() {
+	if m.newPaneSingleAgentMode() {
+		if m.newPane.promptAgentCount == nil {
+			m.newPane.promptAgentCount = maps.Clone(m.newPane.agentCount)
+		}
+		m.normalizeSingleAgentSelection()
+		return
+	}
+	if m.newPane.promptAgentCount != nil {
+		m.newPane.agentCount = m.newPane.promptAgentCount
+		m.newPane.promptAgentCount = nil
 	}
 }
 
