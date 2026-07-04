@@ -9,7 +9,7 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 
 ## ガードレール
 
-- 収集は read-only。書いてよいのはスナップショット (`.fanout/retro/session-<date>.json`、ignore されない repo では `~/.claude/fanout-retro/<repo-slug>/`) のみ。
+- 収集は read-only。書いてよいのはスナップショット (`.fanout/retro/session-<date>.json`、ignore されない repo では `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/fanout-retro/<repo-slug>/`) のみ。
 - 改善は提案止まり。repo ファイル (CLAUDE.md / AGENTS.md / docs / skills) への適用はユーザー承認後にブランチ + PR。briefing テンプレ (`internal/briefing`) と settings の自動書き換えは禁止 (#373 のガードレール)。
 - GitHub への書き込み (issue / PR コメント投稿) はしない。提案はチャットに出す。
 - memory feedback だけは repo 外なので、ユーザー承認後に直接追記してよい。
@@ -19,8 +19,10 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 
 - main repo root を解決する: `dirname "$(git rev-parse --path-format=absolute --git-common-dir)"`。素の `--git-common-dir` は main worktree では相対 `.git` を返すので絶対化が必須。
 - root の絶対パス中の **英数字以外の文字を全て** `-` に置換した slug を作る (Claude Code の project ディレクトリ命名規則。`/` や `.` だけでなく空白・`_`・`+` 等も対象)。
-- 対象ディレクトリは **`~/.claude/projects/<slug>`(完全一致)と `~/.claude/projects/<slug>--dmux-worktrees-*`・`~/.claude/projects/<slug>--fanout-worktrees-*`(worktree セッション。旧 dmux 時代と現行 fanout の両方の命名を明示的に列挙する)の 3 パターンだけ** を glob する。`<slug>*` のような緩い prefix glob や `<slug>--*-worktrees-*` のようなワイルドカード区間は使わない — 前者は `<slug>2` や `<slug>-old` のような別リポジトリ、後者は無関係な別ツール由来の `<slug>--other-worktrees-*` まで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
-- スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `~/.claude/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
+- Claude project ディレクトリのルートは `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects`。`CLAUDE_CONFIG_DIR` を設定している環境では `~/.claude` を直書きすると transcript を 1 件も見つけられない。
+- 対象ディレクトリは **`<projects_root>/<slug>`(完全一致)と `<projects_root>/<slug>--dmux-worktrees-*`・`<projects_root>/<slug>--fanout-worktrees-*`(worktree セッション。旧 dmux 時代と現行 fanout の両方の命名を明示的に列挙する)の 3 パターンだけ** を glob する。`<slug>*` のような緩い prefix glob や `<slug>--*-worktrees-*` のようなワイルドカード区間は使わない — 前者は `<slug>2` や `<slug>-old` のような別リポジトリ、後者は無関係な別ツール由来の `<slug>--other-worktrees-*` まで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
+- **既知の限界**: この 3 パターンは git repo のルートで開始したセッションのみを対象にする。`$root/cmd/fanout` のようなサブディレクトリで開始したセッションは Claude Code 側で別の project ディレクトリに保存されるため、この skill では拾わない (対応するには全 project ディレクトリを横断して各 transcript の `cwd` を照合する必要があり、この skill のスコープを超える — 別課題として扱う)。
+- スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `"$claude_home"/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
 - 期間の下限 `SINCE`: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。
 - 期間の上限 `UNTIL`: **Step 2〜4 のデータ収集を始める前に** `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` で固定する。収集後に「いま」を書くと、クエリ実行〜スナップショット書き込みの間に発生したイベント (例: gh run list 実行直後に落ちた CI) が今回にも次回にも入らず永久に欠落する。Step 5 で書く `window.until` はこの固定値をそのまま使う。
 - タイムスタンプは常に `date -u +%Y-%m-%dT%H:%M:%SZ` 形式 (末尾リテラル `Z`、offset 表記 `+00:00` や小数秒を使わない) で統一する。Step 2 の macOS フォールバック (`date -j -u -f "%Y-%m-%dT%H:%M:%SZ" ...`) はこの形式限定でしか解釈できないため、`SINCE`/`UNTIL` どちらもこの関数で生成・保存する。
@@ -30,13 +32,13 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 まず Step 1 の `SINCE`/`UNTIL` で候補ファイルを絞る (ファイル単位の粗いフィルタ。厳密な判定は後述の行単位で行う)。`find -newermt` は環境によって書式非互換で失敗する (BSD/macOS の `find` は ISO8601 の `T`/`Z` 付き文字列を解釈できないことがある) ので、mtime を epoch 秒に変換して比較する。一時ファイルは同じユーザーで別 repo の `/session-retro` を並行実行しても衝突しないよう `mktemp` で作り、使い終わったら消す:
 
 ```bash
+claude_home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SINCE" "+%s")
 until_epoch=$(date -u -d "$UNTIL" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UNTIL" "+%s")
 candidates=$(mktemp)
-trap 'rm -f "$candidates"' EXIT
-for f in ~/.claude/projects/"$slug"/*.jsonl \
-         ~/.claude/projects/"$slug"--dmux-worktrees-*/*.jsonl \
-         ~/.claude/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
+for f in "$claude_home"/projects/"$slug"/*.jsonl \
+         "$claude_home"/projects/"$slug"--dmux-worktrees-*/*.jsonl \
+         "$claude_home"/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
   [ -e "$f" ] || continue
   mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
   [ "$mtime" -ge "$since_epoch" ] && printf '%s\n' "$f" >> "$candidates"
@@ -66,26 +68,39 @@ tool_result のエラーは transcript の JSON にトップレベルで **素�
 候補ファイルの mtime は「セッション最終更新時刻」でしかなく、SINCE より前から続く同一セッションが今回 window 内に 1 行でも書き込むとファイル全体が候補に入る。そのままファイル単位で `rg -c` すると、既に前回報告済みの古い行まで再集計してしまう。**行ごとの `timestamp` フィールドで window に絞ってから数える**:
 
 ```bash
+matches=$(mktemp)
+trap 'rm -f "$candidates" "$matches"' EXIT
 total=0
 if [ "${#files[@]}" -gt 0 ]; then
+  if rg -I -F '"is_error":true' -- "${files[@]}" > "$matches" 2>/dev/null; then
+    rg_exit=0
+  else
+    rg_exit=$?
+  fi
+  if [ "$rg_exit" -ge 2 ]; then
+    echo "警告: rg が実行時エラーを返した (権限/読み取り不能なパス等)。tool_errors は過少の可能性がある" >&2
+  fi
   while IFS= read -r line; do
     ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null)
     [ -z "$ts" ] && continue
     norm="${ts:0:19}Z"   # transcript は ".mmmZ" 付き。SINCE/UNTIL と同じ秒精度に丸めてから比較する
     line_epoch=$(date -u -d "$norm" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$norm" "+%s")
     if [ "$line_epoch" -gt "$since_epoch" ] && [ "$line_epoch" -le "$until_epoch" ]; then
-      total=$((total + 1))
+      n=$(printf '%s' "$line" | jq '[.message.content[]? | select(.is_error == true)] | length' 2>/dev/null)
+      total=$((total + ${n:-1}))
     fi
-  done < <(rg -I -F '"is_error":true' -- "${files[@]}" 2>/dev/null || true)
+  done < "$matches"
 fi
 echo "tool_errors.total=$total"
 ```
+
+`rg` は no-match (終了コード 1) と実行時エラー (終了コード 2、権限や壊れたパス等) を区別する。`2>/dev/null || true` だけだと両方とも「0 件」として握りつぶし `tool_errors.total` を過少にするので、終了コードを保存して 2 以上なら警告を出す。1 行に複数 tool call が失敗すると同じ JSONL 行に `is_error:true` が複数入るが、行単位の `rg` マッチは 1 行 1 カウントにしかならない。行を `jq` で構造的にパースし、`.message.content[]` 内で `is_error == true` の要素数を数えてから加算する (jq 解析に失敗した行は `${n:-1}` で 1 件として保守的に数える)。
 
 ミリ秒付きの transcript timestamp とミリ秒無しの `SINCE`/`UNTIL` を文字列のまま比較しない — `"...00:00:00Z" < "...00:00:00.001Z"` は Python で確認すると `False` になる (ピリオド `.` の ASCII コードが `Z` より小さいため、辞書順では後者が「小さい」と誤判定される)。両者を同じ秒精度の epoch に変換してから数値比較する。**既知の限界**: 秒精度に丸めるため、ある window の `UNTIL` とちょうど同じ秒に書かれた行 (ミリ秒だけ後) は次の window の `SINCE` との比較で境界からこぼれることがある。この skill は傾向を追う定期集計であり監査ログではないので、この程度の秒境界の誤差は許容する (ナノ秒精度が要る場合は `date` のサブ秒サポートに依存せず言語処理系で扱うこと)。
 
 `rg` は複数ファイルを渡すと既定で各行に `<path>:` を前置する (`-H`/`--with-filename` が複数ファイル時の既定値)。前置されたままだと行が JSON として不正になり `jq` が全行パースエラーになる (実機で再現・確認済み — 候補が 38 ファイルある状態で `total=0` になり原因を特定した)。`-I`/`--no-filename` を必ず付けて素の JSON 行のまま渡す。
 
-**`rg` はマッチが 0 件のとき終了コード 1 を返す** (エラーではない — ripgrep のドキュメント通り 0=マッチあり、1=マッチなし、2=実行時エラー)。`set -e` 環境やパイプラインの失敗判定を壊さないよう `|| true` を必ず付ける。
+`rg` の exit code を `rg_exit=$?` で直接受けず `if rg …; then rg_exit=0; else rg_exit=$?; fi` の形にするのは、`set -e` が効いている呼び出し元で `rg` が非 0 (no-match の 1 を含む) を返した瞬間にスクリプトが打ち切られ、次の行の `$?` 捕捉に到達できなくなるのを防ぐため。
 
 件数を取ってからマッチ行を選択的に読み、エラー本文で分類する。既知カテゴリ: stale-read Edit / PR ゲート deny / 権限・AskUserQuestion 摩擦 / ブラウザ MCP / sleep ブロック / zsh 構文 / gh api・rate limit / インライン python / 誤パス / jq。新カテゴリは追加してよい (新カテゴリは Step 6 の提案候補)。
 
@@ -97,15 +112,17 @@ echo "tool_errors.total=$total"
 runs=$(mktemp)
 trap 'rm -f "$runs"' EXIT
 for st in failure startup_failure timed_out; do
-  if ! gh run list --status "$st" --created "${SINCE}..${UNTIL}" --limit 100 \
-      --json databaseId,workflowName,displayTitle,headBranch,createdAt,conclusion >> "$runs"; then
+  if ! gh run list --status "$st" --created "*..${UNTIL}" --limit 100 \
+      --json databaseId,workflowName,displayTitle,headBranch,createdAt,updatedAt,conclusion >> "$runs"; then
     echo "警告: gh run list --status $st が失敗した。ci 集計は不完全な可能性がある (ci.truncated=true として記録する)" >&2
   fi
 done
-jq -s "add | [.[] | select(.createdAt > \"${SINCE}\" and .createdAt <= \"${UNTIL}\")]" "$runs"
+jq -s "add | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \"${UNTIL}\")]" "$runs"
 ```
 
-3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci.truncated=true` を記録する** (成功扱いで黙って進めない)。GitHub の `created` 範囲構文 `A..B` は両端を含む (`n..*`=`>=n`、`*..n`=`<=n` の組み合わせ)。前回 `window.until` をそのまま今回 `SINCE` に使う設計上、ちょうど境界時刻に作られた run が前回・今回の両方でヒットし再発扱いになるため、取得後に `createdAt` で `(SINCE, UNTIL]` に絞り直す (Step 4 の review comment と同じ考え方)。`UNTIL` で上限を閉じるのは、Step 1 で固定した値を使い切って次回の `SINCE` と隙間なく繋げるため (開区間 `>${SINCE}` のまま素朴に投げると、収集後に発生した failed run が今回・次回のどちらにも入らず欠落する)。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"${SINCE}..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci.truncated=true` を記録する** (成功扱いで黙って進めない)。
+
+window の判定は `createdAt` ではなく **`updatedAt`(完了時刻)** で行う。前回 window の直前に開始・queue され、前回収集時点ではまだ `failure` 未確定で、今回 window 内に失敗完了した run は `createdAt` が `SINCE` 以前になるため `createdAt` 基準だと永久に取得できない。`updatedAt` は completed run では完了時刻を指すので、これで window 判定すれば取りこぼさない。そのため取得クエリの下限は開けて `--created "*..${UNTIL}"`(**`*` は省略できない** — 空文字列で下限を省略しようとすると gh は空配列を返す。実機で確認済み)とし、`--status` ごとに直近 100 件を取ってから `updatedAt` で `(SINCE, UNTIL]` に絞り込む。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"*..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
