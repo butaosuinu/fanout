@@ -137,8 +137,8 @@ Possible reaction targets are:
 
 - the PR issue itself
 - the latest Codex/watch status comment, if this skill posted one
-- configured comment IDs saved in the local git metadata path returned by
-  `git rev-parse --git-path pr-watch-state/<pr-number>.json`
+- configured comment IDs saved in the repo-scoped local git metadata path under
+  `git rev-parse --git-path pr-watch-state`
 
 If `PR_WATCH_PLUS1_ACTOR_RE` is set, count only reactions whose actor login
 matches it. If no actor policy is configured, report non-self `:+1:` reactions
@@ -414,13 +414,20 @@ it is shell-owned.
 
 ## Local Watcher Implementation Sketch
 
-The watcher may create a local state file under the git metadata path returned
-by `git rev-parse --git-path pr-watch-state/<pr-number>.json`. This file is
-local and must not be committed. Do not assume `.git` is a directory; linked
-worktrees often use a `.git` file that points at the real gitdir.
+The watcher may create a repo-scoped local state file under the git metadata
+path returned by `git rev-parse --git-path pr-watch-state`. Include the target
+`owner/repo` and PR number in the filename so watching `#123` in another
+repository cannot reuse this repository's `#123` state. This file is local and
+must not be committed. Do not assume `.git` is a directory; linked worktrees
+often use a `.git` file that points at the real gitdir.
 When configured `:+1:` targets are used, the state JSON may include
 `approval_reaction_targets` entries with `kind` values `issue`, `issue_comment`,
 or `review_comment`.
+
+Use `PR_WATCH_CONTINUE=1` only when the model is continuing the same cheap wait.
+A fresh user-invoked watch should clear stored `deadline_ts` / `last_digest` and
+issue a new foreground deadline. If a stored deadline is already expired, clear
+it before polling so a later explicit watch does not immediately timeout.
 
 The shell loop should emit output to the model only when:
 
@@ -437,32 +444,51 @@ Example skeleton:
 ```bash
 state_dir="$(git rev-parse --git-path pr-watch-state)"
 mkdir -p "$state_dir"
-state_file="$state_dir/$num.json"
+repo_key="$(printf '%s\n' "$owner/$repo" | tr '/:' '--')"
+state_file="$state_dir/$repo_key-$num.json"
 state_json="{}"
 if [ -f "$state_file" ]; then
   state_json="$(cat "$state_file")"
 fi
-last_digest="$(printf '%s\n' "$state_json" | jq -c '.last_digest // empty')"
+
+now_ts="$(date +%s)"
+max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
 deadline_ts="$(printf '%s\n' "$state_json" | jq -r '.deadline_ts // empty')"
-if [ -z "$deadline_ts" ]; then
-  max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
-  deadline_ts=$(($(date +%s) + max_seconds))
+if [ "${PR_WATCH_CONTINUE:-0}" != "1" ] ||
+   [ -z "$deadline_ts" ] ||
+   [ "$deadline_ts" -le "$now_ts" ]; then
+  state_json="$(printf '%s\n' "$state_json" | jq 'del(.deadline_ts, .last_digest)')"
+  deadline_ts=$((now_ts + max_seconds))
 fi
+last_digest="$(printf '%s\n' "$state_json" | jq -c '.last_digest // empty')"
 
 while :; do
-  pr_json="$(
-    gh pr view "$num" \
-      --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups \
-      --jq '{number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups}'
-  )"
+  pr_tmp="$(mktemp)"
+  gh pr view -R "$owner/$repo" "$num" \
+    --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups \
+    --jq '{number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups}' > "$pr_tmp"
+  pr_status=$?
+  pr_json="$(cat "$pr_tmp")"
+  rm -f "$pr_tmp"
+  if [ "$pr_status" -ne 0 ] || [ -z "$pr_json" ]; then
+    jq -cn --argjson status "$pr_status" \
+      '{event:"blocked", reason:"pr_snapshot_failed", status:$status}'
+    break
+  fi
 
-  checks_json="$(
-    gh pr checks "$num" \
-      --json name,bucket,state,workflow,link \
-      --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' \
-      || :
-  )"
+  checks_tmp="$(mktemp)"
+  gh pr checks -R "$owner/$repo" "$num" \
+    --json name,bucket,state,workflow,link \
+    --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' > "$checks_tmp"
+  checks_status=$?
+  checks_json="$(cat "$checks_tmp")"
+  rm -f "$checks_tmp"
   if [ -z "$checks_json" ]; then
+    if [ "$checks_status" -ne 0 ]; then
+      jq -cn --argjson status "$checks_status" \
+        '{event:"blocked", reason:"checks_snapshot_failed", status:$status}'
+      break
+    fi
     checks_json="[]"
   fi
 
@@ -513,6 +539,8 @@ while :; do
 
   if [ "$(date +%s)" -ge "$deadline_ts" ]; then
     jq -cn --argjson digest "$digest" '{event:"timeout", digest:$digest}'
+    printf '%s\n' "$state_json" |
+      jq 'del(.deadline_ts, .last_digest)' > "$state_file"
     break
   fi
 
