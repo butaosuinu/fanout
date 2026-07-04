@@ -31,10 +31,12 @@ func TestPlanSkillPromptPerAgent(t *testing.T) {
 
 // TestNewPlanPromptPaneRequestWritesSkillInvocation pins the coordinator pane
 // request: a plain (non-Codex-Plan-Mode) agent whose one-line prompt invokes
-// the fanout-plan skill on the full prompt written to the briefing file.
+// the fanout-plan skill on the full prompt written to the briefing file, and
+// whose liveness key survives into the request (the repo-root WorktreePath is
+// too broad for path-based liveness, so the key is the row's identity).
 func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	const prompt = "Build a full-text search over issues.\nInclude ranking and filters."
-	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, "claude")
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, "claude", "shell-coordinator-key")
 
 	if !strings.HasPrefix(req.Prompt, "/fanout plan ") {
 		t.Fatalf("req.Prompt = %q, want a /fanout plan invocation", req.Prompt)
@@ -53,6 +55,9 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	}
 	if req.ParentRef != manualPaneParentRef {
 		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, manualPaneParentRef)
+	}
+	if req.ShellKey != "shell-coordinator-key" {
+		t.Fatalf("req.ShellKey = %q, want the liveness key passed through", req.ShellKey)
 	}
 }
 

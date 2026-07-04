@@ -503,9 +503,10 @@ func SyntheticTmuxState(issueState string, blocked bool) string {
 }
 
 // paneAlive reports whether a recorded pane is live. Agent panes match on both
-// pane id and cwd at/under their recorded worktree. Shell panes match on pane
-// id plus @fanout_shell_key instead: root terminals record the repo root as
-// WorktreePath, which is too broad to protect against tmux pane id reuse.
+// pane id and cwd at/under their recorded worktree. Panes recorded with a
+// ShellKey match on pane id plus @fanout_shell_key instead: root terminals and
+// the plan fan-out coordinator record the repo root as WorktreePath, which is
+// too broad to protect against tmux pane id reuse.
 func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
 	if pane.PaneID == "" {
 		return false
@@ -514,7 +515,7 @@ func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
 	if !ok {
 		return false
 	}
-	if pane.IsShell() {
+	if pane.IsShell() || pane.ShellKey != "" {
 		return pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
 	}
 	worktree := pane.WorktreePath

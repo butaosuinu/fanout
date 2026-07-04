@@ -212,8 +212,12 @@ func (m *model) markPaneStale(paneID string) {
 	}
 }
 
+// paneAliveForAction gates focus/close style actions. Any pane recorded with a
+// ShellKey (shell terminals, the plan fan-out coordinator at the repo root)
+// must match the live pane's @fanout_shell_key: a bare pane id check would let
+// the action target an unrelated pane after tmux reuses the id.
 func paneAliveForAction(pane paneView, paneAlive func(string) bool, shellPaneAlive func(string, string) bool) bool {
-	if pane.isShell() {
+	if pane.isShell() || pane.ShellKey != "" {
 		return shellPaneAlive(pane.PaneID, pane.ShellKey)
 	}
 	return paneAlive(pane.PaneID)

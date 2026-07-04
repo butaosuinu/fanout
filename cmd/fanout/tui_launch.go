@@ -133,7 +133,11 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName)
+	livenessKey, err := newShellPaneKey()
+	if err != nil {
+		return "", err
+	}
+	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName, livenessKey)
 	if !createAttachedPane(cfg, launchLogger, info, paneReq, projectRoot, recorder, commandName) {
 		return "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
@@ -142,8 +146,10 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
 // a project-root pane (no worktree) whose prompt invokes the fanout-plan skill
-// on the raw prompt written to BriefingPath.
-func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt, agentName string) paneRequest {
+// on the raw prompt written to BriefingPath. livenessKey becomes the pane's
+// @fanout_shell_key: with the repo root as WorktreePath, path containment is
+// too broad to detect tmux pane id reuse, so liveness matches on the key.
+func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt, agentName, livenessKey string) paneRequest {
 	number := nextSyntheticPaneNumber(store, manualPaneParentRef)
 	title := "plan: " + firstPromptLine(prompt)
 	briefingPath := planPromptPath(projectRoot, number)
@@ -157,6 +163,7 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(agentName, briefingPath),
 		Agent:               agentName,
+		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        prompt,
@@ -397,6 +404,15 @@ func createAttachedPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err != nil {
 		lg.Err("%s: %v", paneLogLabel(req), err)
 		return false
+	}
+	// The liveness key is not best-effort: a recorded key that never reaches
+	// the tmux pane would leave the row permanently stale.
+	if req.ShellKey != "" {
+		if err := tmuxrun.SetPaneShellKey(paneID, req.ShellKey); err != nil {
+			lg.Err("%s: set pane liveness key: %v", paneLogLabel(req), err)
+			cleanupFailedAttachedLaunch(info.Target, paneID)
+			return false
+		}
 	}
 	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
