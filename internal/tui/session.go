@@ -31,6 +31,19 @@ func (m model) jumpSession(delta int) (tea.Model, tea.Cmd) {
 	return m, m.peekSelectedCmd(false)
 }
 
+func (m model) jumpToOrdinal(n int) (tea.Model, tea.Cmd) {
+	if n > len(m.panes) {
+		m.notice = fmt.Sprintf("no pane %d in the current list", n)
+		return m, nil
+	}
+	m.moveTableCursorTo(n - 1)
+	m.refreshDetail()
+	// Schedule a peek alongside the focus, like every other cursor move, so
+	// the detail panel is fresh when the focus is skipped or fails.
+	focusCmd := m.focusSelectedCmd()
+	return m, tea.Batch(focusCmd, m.peekSelectedCmd(false))
+}
+
 func (m *model) moveTableCursorTo(target int) {
 	current := m.table.Cursor()
 	switch {

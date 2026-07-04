@@ -858,6 +858,28 @@ func SelectPane(paneID string) error {
 	return nil
 }
 
+// ZoomPane zooms paneID's window onto it via resize-pane -Z. The tmux flag is
+// a toggle, so an already-zoomed window is left zoomed instead of being
+// toggled back to the split layout; callers focus the pane first, which makes
+// paneID the zoomed pane in that case.
+func ZoomPane(paneID string) error {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{window_zoomed_flag}").Output()
+	if err != nil {
+		return fmt.Errorf("tmux display-message: %w", err)
+	}
+	if strings.TrimSpace(string(out)) == "1" {
+		return nil
+	}
+	if err := exec.Command("tmux", "resize-pane", "-Z", "-t", paneID).Run(); err != nil {
+		return fmt.Errorf("tmux resize-pane -Z: %w", err)
+	}
+	return nil
+}
+
 // FocusPane makes pane active in its window and selects that window in the session.
 func FocusPane(pane PaneInfo) error {
 	if strings.TrimSpace(pane.ID) == "" {

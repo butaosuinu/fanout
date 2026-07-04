@@ -62,6 +62,7 @@ type Options struct {
 	// (then resize handling is a no-op).
 	Relayout          func() error
 	FocusPane         func(string) error
+	ZoomPane          func(string) error
 	PaneAlive         func(string) bool
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
@@ -223,6 +224,9 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.FocusPane == nil {
 		opts.FocusPane = tmuxrun.SelectPane
+	}
+	if opts.ZoomPane == nil {
+		opts.ZoomPane = tmuxrun.ZoomPane
 	}
 	if opts.PaneAlive == nil {
 		opts.PaneAlive = tmuxrun.IsPaneAlive

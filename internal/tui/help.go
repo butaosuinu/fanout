@@ -19,12 +19,14 @@ func (m model) helpView() string {
 		{"t", "Project root terminal"},
 		{"j/k", "Move selection"},
 		{"[ / ]", "Prev / next Session"},
+		{"1-9", "Jump to Nth pane"},
 		{"/", "Filter rows"},
 		{"Enter/o", "Focus pane"},
+		{"Z", "Focus + zoom pane"},
 		{"p", "Peek output"},
-		{"c", "Close pane"},
+		{"c/x", "Close pane"},
 		{"m", "Merge branch"},
-		{"x", "Cleanup parent"},
+		{"X", "Cleanup parent"},
 		{"q", "Quit TUI"},
 	}
 	newPane := []helpEntry{

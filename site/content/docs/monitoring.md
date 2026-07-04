@@ -37,6 +37,8 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it kills the tmux pane and removes the state row; it never removes a git worktree. |
 | `Enter` / `o` | Focus the selected live row's pane. |
+| `1`-`9` | Jump to the Nth row of the current list and focus its pane. Out-of-range numbers show a notice. |
+| `Z` | Focus the selected pane and zoom it (`resize-pane -Z`). The next relayout — a pane created or closed, or the tmux window resized — unzooms it; press `Z` again to re-zoom. |
 | `p` | Refresh the read-only output snapshot shown in the detail panel. |
 | `c` / `x` | Open close options for the selected pane: close only the pane, close the pane and remove the worktree, or also delete the local branch. |
 | `m` | Fast-forward merge the selected pane's branch — confirmation prompt, then the same core path as `--merge`. |
