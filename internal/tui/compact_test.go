@@ -498,6 +498,25 @@ func TestCompactViewRendersSwitcher(t *testing.T) {
 	}
 }
 
+// Guards that a long repository basename cannot wrap the one-line compact
+// header monitorLayout budgets for.
+func TestCompactHeaderTruncatesLongRepoBasename(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/tmp/very-long-repository-basename-that-overflows-forty-columns"})
+	m.width = 40
+	m.height = 20
+	m.allPanes = []paneView{{Parent: "100", IssueNum: 101, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.resize()
+
+	view := m.View()
+	headerLine, _, _ := strings.Cut(view, "\n")
+	if got := cellWidth(headerLine); got > 40 {
+		t.Fatalf("compact header width = %d cells, want <= 40:\n%q", got, headerLine)
+	}
+	if !strings.Contains(headerLine, "very-long-repository-basename-...") {
+		t.Fatalf("compact header did not truncate the basename:\n%q", headerLine)
+	}
+}
+
 // Guards that cycling to full restores the table even below compactWidthAt.
 func TestViewOverrideFullForcesTableWhenNarrow(t *testing.T) {
 	m := newModel(Options{})

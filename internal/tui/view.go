@@ -81,7 +81,11 @@ func (m model) View() string {
 		// session header lines (a t/m/p/b HUD here would contradict them —
 		// summarizeHUD skips shell/attached rows, session counters do not).
 		if root := strings.TrimSpace(m.opts.ProjectRoot); root != "" {
-			header += " " + dimStyle.Render(filepath.Base(root))
+			// Truncate by display cells so a long basename cannot wrap the
+			// one-line header monitorLayout budgets for. 7 = "fanout" + space.
+			if base := truncateCells(filepath.Base(root), max(m.width-7, 0)); base != "" {
+				header += " " + dimStyle.Render(base)
+			}
 		}
 	} else {
 		if m.opts.Session != "" {
