@@ -44,6 +44,7 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 since_epoch=$(date -u -d "$SINCE" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$SINCE" "+%s")
 until_epoch=$(date -u -d "$UNTIL" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UNTIL" "+%s")
 candidates="$tmpdir/candidates"
+: > "$candidates"
 for f in "$claude_home"/projects/"$slug"/*.jsonl \
          "$claude_home"/projects/"$slug"--dmux-worktrees-*/*.jsonl \
          "$claude_home"/projects/"$slug"--fanout-worktrees-*/*.jsonl; do
@@ -56,6 +57,8 @@ done
 **既知の限界**: この glob はトップレベルの `*.jsonl` だけを見る。Agent/Task ツールで起動したサブエージェントの tool 実行履歴は `<sessionId>/subagents/agent-*.jsonl`(workflow 経由なら `subagents/workflows/<runId>/agent-*.jsonl`)という別ファイルに記録されるため、サブエージェントに委譲した作業中の tool error はこの集計に含まれない (フォローアップ #393)。
 
 候補選定は **下限のみ** で絞る (上限は付けない)。並行/長時間セッションが window 内にエラー行を書いた後、収集前にさらに別の行を書いて mtime が `UNTIL` を超えると、上限フィルタがあるとそのファイルごと候補から落ち、window 内の有効な行まで欠落する。二重計上を防ぐ役目は後述の行単位フィルタ (`(SINCE, UNTIL]`) が正確に担うので、ファイル選定側は粗い下限フィルタで十分。
+
+`candidates="$tmpdir/candidates"` の直後に `: > "$candidates"` で空ファイルを作っておく。対象 repo に transcript が 1 件も無い、または `SINCE` 以降に更新されたものが無い場合、`for` ループが 1 度もマッチせず `printf ... >> "$candidates"` が実行されないため、この初期化が無いと `$candidates` 自体が作られない。その状態で後段の `while read < "$candidates"` を実行すると「No such file or directory」になる (実機で再現・確認済み)。
 
 候補ファイルのリストは `$(cat …)` で rg にそのまま渡さない。シェルの単語分割にかかるため、`$HOME` やリポジトリパスに空白を含む環境ではパスが途中で分割されて存在しないパス扱いになる (実機で再現・確認済み)。1 行 1 パスとして配列に読み込み、**この時点で自セッションを除外する** (集計後に除外しても `total` は既に膨らんでいるので手遅れ — 実行中セッションの transcript がこの skill の解析コマンドやプロンプト文字列を引用しているため、含めると誤検出する):
 
@@ -124,10 +127,18 @@ runs="$tmpdir/runs"
 : > "$runs"
 ci_truncated=false
 for st in failure startup_failure timed_out; do
-  if ! gh run list --all --status "$st" --created "*..${UNTIL}" --limit 100 \
-      --json databaseId,workflowName,displayTitle,headBranch,createdAt,updatedAt,conclusion >> "$runs"; then
+  out=$(gh run list --all --status "$st" --created "*..${UNTIL}" --limit 100 \
+      --json databaseId,workflowName,displayTitle,headBranch,createdAt,updatedAt,conclusion) || out=""
+  if [ -z "$out" ]; then
     ci_truncated=true
     echo "警告: gh run list --status $st が失敗した。ci 集計は不完全な可能性がある (snapshot に truncated=true を記録する)" >&2
+    continue
+  fi
+  printf '%s\n' "$out" >> "$runs"
+  n=$(printf '%s' "$out" | jq 'length' 2>/dev/null) || n=0
+  if [ "${n:-0}" -ge 100 ]; then
+    ci_truncated=true
+    echo "警告: --status $st が --limit 100 に到達した。打ち切られている可能性がある (snapshot に truncated=true を記録する)" >&2
   fi
 done
 jq -s "(add // []) | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \"${UNTIL}\")]" "$runs"
@@ -135,31 +146,27 @@ jq -s "(add // []) | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \
 
 3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci_truncated=true` を立てて Step 5 の `ci.truncated` に反映する** (echo で警告するだけでは schema に残らず、次回比較が過少な値のまま進んでしまう)。3 回**全て**失敗すると `$runs` が空のままになり、`jq -s` の `add` は空配列の reduce で `null` になって後続の `.[]` がエラー終了する (実機で再現・確認済み)。`add // []` で null を空配列にフォールバックし、この場合も `ci.failed_runs=0, ci.truncated=true` として snapshot 作成まで進める。
 
-window の判定は `createdAt` ではなく **`updatedAt`(完了時刻)** で行う。前回 window の直前に開始・queue され、前回収集時点ではまだ `failure` 未確定で、今回 window 内に失敗完了した run は `createdAt` が `SINCE` 以前になるため `createdAt` 基準だと永久に取得できない。`updatedAt` は completed run では完了時刻を指すので、これで window 判定すれば取りこぼさない。そのため取得クエリの下限は開けて `--created "*..${UNTIL}"`(**`*` は省略できない** — 空文字列で下限を省略しようとすると gh は空配列を返す。実機で確認済み)とし、`--status` ごとに直近 100 件を取ってから `updatedAt` で `(SINCE, UNTIL]` に絞り込む。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"*..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
+window の判定は `createdAt` ではなく **`updatedAt`(完了時刻)** で行う。前回 window の直前に開始・queue され、前回収集時点ではまだ `failure` 未確定で、今回 window 内に失敗完了した run は `createdAt` が `SINCE` 以前になるため `createdAt` 基準だと永久に取得できない。`updatedAt` は completed run では完了時刻を指すので、これで window 判定すれば取りこぼさない。そのため取得クエリの下限は開けて `--created "*..${UNTIL}"`(**`*` は省略できない** — 空文字列で下限を省略しようとすると gh は空配列を返す。実機で確認済み)とし、`--status` ごとに直近 100 件を取ってから `updatedAt` で `(SINCE, UNTIL]` に絞り込む。`--limit` は取得上限も兼ねるため、返り値の件数を `jq 'length'` で数えて 100 に達していれば打ち切られている疑いがある (`--limit` を超えた分は取得できないので、返り値そのものからは判別できない — 件数一致で判定する)。その場合は期間を `"*..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci_truncated=true` を立てる。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
 ## Step 4 — レビュー指摘
 
-まず期間内のコメントを login 別に集計してレビュアーを特定する:
+**`since=` は `updated_at` 基準であって `created_at` 基準ではない**。期間より前に投稿されたコメントが期間内に編集・minimize 等で更新されると取得結果に混ざり、既報告の指摘を新規扱いしてしまう。実際に分類対象にするコメントは `created_at` で window に絞り込む。取得は一時ファイルに保存して終了コードを確認してから使う (パイプの末尾に `--jq`/`sort` 等を繋ぐと、`gh api` 自身が認証切れ・rate limit で失敗してもパイプ全体の終了ステータスは最後のコマンドのものになり失敗を検知できない — `pipefail` 無しでは黙って 0 件扱いになる):
 
 ```bash
-gh api --paginate \
-  "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
-  --jq '.[].user.login' | sort | uniq -c | sort -rn
-```
-
-`SINCE` は Step 1 で決めたフルの ISO8601 文字列をそのまま使う (`T00:00:00Z` 等を追加で連結しない — 連結すると `...ZT00:00:00Z` のような不正な文字列になる)。
-
-集計はページ横断で安全な**行ストリーム**にする。`--paginate` は **ページごとに** jq を適用するため、`group_by` のような配列集計を `--jq` に書くと 100 件超の期間で同じ login がページをまたいで別々に数えられる (`--slurp` は gh の `--jq` と併用不可)。
-
-**`since=` は `updated_at` 基準であって `created_at` 基準ではない**。期間より前に投稿されたコメントが期間内に編集・minimize 等で更新されると取得結果に混ざり、既報告の指摘を新規扱いしてしまう。実際に分類対象にするコメントは `created_at` で window に絞り込む:
-
-```bash
-gh api --paginate \
-  "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
-  --jq ".[] | select(.created_at > \"${SINCE}\" and .created_at <= \"${UNTIL}\")"
+comments="$tmpdir/comments"
+if gh api --paginate \
+    "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
+    --jq ".[] | select(.created_at > \"${SINCE}\" and .created_at <= \"${UNTIL}\")" > "$comments"; then
+  review_truncated=false
+else
+  review_truncated=true
+  echo "警告: gh api pulls/comments が失敗した。review 集計は不完全な可能性がある (snapshot に truncated=true を記録する)" >&2
+fi
 ```
 
 (`gh api --jq` は `--arg` を受け付けないため、`$SINCE`/`$UNTIL` はシェル展開でクエリ文字列に埋め込む。)
+
+`SINCE` は Step 1 で決めたフルの ISO8601 文字列をそのまま使う (`T00:00:00Z` 等を追加で連結しない — 連結すると `...ZT00:00:00Z` のような不正な文字列になる)。login 別の内訳を見たいときは `jq -r '.user.login' "$comments" | sort | uniq -c | sort -rn` で `$comments` から集計する (`gh api` を 2 回叩き直さない)。
 
 そのうえでレビュー bot (fanout では `chatgpt-codex-connector[bot]`) のコメントに絞って分類する。bot の login はサフィックス `[bot]` 付き (素の名前で filter すると 0 件になる)。人間の返信 (「対応しました」等) は指摘ではないので数えない — 返信判定は **`in_reply_to_id` が非 null** かどうかで行う (GitHub REST API のフィールド名はこれで、`in_reply_to` ではない)。`docs/review-checklist.ja.md` の頻出パターンに分類し、パターン外の新種を抽出する (新種はチェックリスト更新の提案候補)。チェックリストが無い repo では Step 2 の既知カテゴリだけで分類する。
 
@@ -174,12 +181,12 @@ gh api --paginate \
  "window": {"since": "<ISO8601>", "until": "<ISO8601>"},
  "tool_errors": {"total": 0, "by_category": {}, "truncated": false},
  "ci": {"failed_runs": 0, "by_workflow": {}, "truncated": false},
- "review": {"comments": 0, "by_pattern": {}}}
+ "review": {"comments": 0, "by_pattern": {}, "truncated": false}}
 ```
 
-`tool_errors.truncated` は Step 2 の `$tool_errors_truncated`、`ci.truncated` は Step 3 の `$ci_truncated` をそのまま書く (警告を echo するだけでは schema に残らず、次回比較が過少な値のまま進んでしまう)。
+`tool_errors.truncated` は Step 2 の `$tool_errors_truncated`、`ci.truncated` は Step 3 の `$ci_truncated`、`review.truncated` は Step 4 の `$review_truncated` をそのまま書く (警告を echo するだけでは schema に残らず、次回比較が過少な値のまま進んでしまう)。
 
-退避しておいた前回スナップショットと比較し、チャットに 3 区分で報告する: **新規** (前回に無いカテゴリ) / **再発** (前回も今回も非ゼロ) / **改善** (減少・ゼロ化)。初回 (退避できる前回分が無い) はスナップショット作成と今回分の集計のみ報告する。
+退避しておいた前回スナップショットと比較し、チャットに 3 区分で報告する: **新規** (前回に無いカテゴリ) / **再発** (前回も今回も非ゼロ) / **改善** (減少・ゼロ化)。初回 (退避できる前回分が無い) はスナップショット作成と今回分の集計のみ報告する。**今回または前回のスナップショットで該当メトリクスの `truncated=true` なら、そのメトリクスは改善/再発の判定に使わず「不完全 (truncated) につき比較対象外」として別扱いする** — 部分集計の減少を品質改善として報告すると誤りになる。
 
 ## Step 6 — 改善提案
 
