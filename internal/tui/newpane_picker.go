@@ -22,6 +22,13 @@ type IssueListItem struct {
 	// row stays selectable — re-selecting a parent launches its remaining
 	// children — but renders dimmed with a note.
 	HasSession bool
+	// HasParent and HasOpenChildren classify the row from the GitHub Sub-issues
+	// graph so the picker can mark parents, children, and standalone issues.
+	// The classification is Sub-issues-link based: a parent whose children are
+	// only listed as body task-list rows (- [ ] #N) shows standalone here, yet
+	// launch still fans it out (countOpenChildTargets is the source of truth).
+	HasParent       bool
+	HasOpenChildren bool
 }
 
 // pickerState is the incremental-filter list one non-prompt mode owns.
@@ -41,6 +48,7 @@ type pickerItem struct {
 	title  string
 	labels []string
 	note   string
+	marker string // "▸" fan-out parent, "└" child, "·" standalone; "" for non-issue pickers
 }
 
 type newPaneIssuesLoadedMsg struct {
@@ -121,9 +129,10 @@ func (m *model) recomputePicker(p *pickerState) {
 }
 
 // pickerFormOverhead is the non-list height of the picker form: title, mode
-// row, field labels, the list box frame, filter line, both ↑/↓ scroll marker
-// lines, the agent row, the hint line, and the modal frame.
-const pickerFormOverhead = 16
+// row, field labels, the list box frame, filter line, the marker legend line,
+// both ↑/↓ scroll marker lines, the agent row, the hint line, and the modal
+// frame.
+const pickerFormOverhead = 17
 
 // pickerVisibleRows adapts the result cap to the available height so the
 // form never renders taller than the popup pty — bubbletea keeps only the
@@ -272,9 +281,35 @@ func issuePickerItems(items []IssueListItem) []pickerItem {
 			title:  item.Title,
 			labels: item.Labels,
 			note:   note,
+			marker: issueMarker(item),
 		})
 	}
 	return out
+}
+
+// issueMarker classifies a picker row: a fan-out parent (open children) wins
+// over a child (has a parent), and an issue with neither link is standalone.
+// A child that itself has open children still reads as a parent here.
+func issueMarker(item IssueListItem) string {
+	switch {
+	case item.HasOpenChildren:
+		return "▸"
+	case item.HasParent:
+		return "└"
+	default:
+		return "·"
+	}
+}
+
+// pickerHasMarkers reports whether any row carries a classification marker, so
+// only the issue picker (not future marker-less pickers) renders the legend.
+func pickerHasMarkers(items []pickerItem) bool {
+	for _, item := range items {
+		if item.marker != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) newPaneModeTabsView() string {
@@ -309,6 +344,9 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 		filter = dimStyle.Render("filter: (type to narrow)")
 	}
 	lines := []string{filter}
+	if pickerHasMarkers(p.items) {
+		lines = append(lines, dimStyle.Render("▸ fan-out (open children)  └ child  · standalone"))
+	}
 	if len(p.results) == 0 {
 		lines = append(lines, dimStyle.Render("  no match"))
 	}
@@ -319,6 +357,11 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 	for i := start; i < end; i++ {
 		item := p.items[p.results[i]]
 		text := item.key
+		if item.marker != "" {
+			// The marker leads the row so the line-level selected/dim style
+			// carries it; it is not colored per-marker.
+			text = item.marker + " " + item.key
+		}
 		if item.title != "" {
 			text += " " + item.title
 		}

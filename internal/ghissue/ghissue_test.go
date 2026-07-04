@@ -261,6 +261,83 @@ func TestListOpenIssuesReturnsParseError(t *testing.T) {
 	}
 }
 
+// TestListOpenIssuesClassifiesSubIssueGraph pins the Sub-issues classification
+// the picker markers rely on: a parent surfaces its OPEN child count, a child
+// carries its parent number, a standalone issue has neither link, and a parent
+// whose children are all CLOSED reports zero OPEN children. It also confirms the
+// query asks for the two new fields.
+func TestListOpenIssuesClassifiesSubIssueGraph(t *testing.T) {
+	tests := []struct {
+		name              string
+		node              string
+		wantParent        int
+		wantOpenSubIssues int
+	}{
+		{
+			name:              "parent surfaces open child count",
+			node:              `{"number":10,"title":"parent","labels":{"nodes":[]},"parent":null,"subIssuesSummary":{"total":3,"completed":1}}`,
+			wantOpenSubIssues: 2,
+		},
+		{
+			name:              "child carries parent number",
+			node:              `{"number":11,"title":"child","labels":{"nodes":[]},"parent":{"number":10},"subIssuesSummary":{"total":0,"completed":0}}`,
+			wantParent:        10,
+			wantOpenSubIssues: 0,
+		},
+		{
+			name:              "standalone has neither link",
+			node:              `{"number":12,"title":"standalone","labels":{"nodes":[]},"parent":null,"subIssuesSummary":{"total":0,"completed":0}}`,
+			wantOpenSubIssues: 0,
+		},
+		{
+			// completed == total means every child is CLOSED: no OPEN fan-out target.
+			name:              "all children closed reports zero open",
+			node:              `{"number":13,"title":"done parent","labels":{"nodes":[]},"parent":null,"subIssuesSummary":{"total":2,"completed":2}}`,
+			wantOpenSubIssues: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argsPath := installFakeGHScript(t, `
+args="$*"
+printf '%s\n' "$args" >> "$GH_FAKE_ARGS"
+case "$args" in
+*"api graphql"*)
+  printf '{"data":{"repository":{"issues":{"nodes":[`+tt.node+`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+			got, err := (Runner{}).ListOpenIssues()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("ListOpenIssues() = %#v, want one issue", got)
+			}
+			if got[0].ParentNumber != tt.wantParent || got[0].OpenSubIssueCount != tt.wantOpenSubIssues {
+				t.Fatalf("ListOpenIssues() parent/openSubIssues = %d/%d, want %d/%d",
+					got[0].ParentNumber, got[0].OpenSubIssueCount, tt.wantParent, tt.wantOpenSubIssues)
+			}
+
+			data, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"parent", "subIssuesSummary"} {
+				if !strings.Contains(string(data), field) {
+					t.Fatalf("ListOpenIssues() query missing %q:\n%s", field, data)
+				}
+			}
+		})
+	}
+}
+
 func TestSwapIssueLabelsRunsSingleEdit(t *testing.T) {
 	argsPath := installFakeGH(t, ``)
 

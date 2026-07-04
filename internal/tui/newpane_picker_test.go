@@ -379,14 +379,49 @@ func TestNewPaneViewRendersPickerStates(t *testing.T) {
 	m.newPane.issuePicker.err = ""
 	m.newPane.issuePicker.loaded = true
 	m.newPane.issuePicker.items = issuePickerItems([]IssueListItem{
-		{Number: 42, Title: "Fix UI", HasSession: true},
+		{Number: 42, Title: "Fix UI", HasSession: true, HasOpenChildren: true},
 	})
 	m.recomputePicker(&m.newPane.issuePicker)
 	view := m.newPaneView()
-	for _, want := range []string{"#42 Fix UI", "(has session)", "[Issue]"} {
+	// The fan-out marker leads the row and the legend renders, both coexisting
+	// with the has-session note.
+	for _, want := range []string{"▸ #42 Fix UI", "(has session)", "[Issue]", "▸ fan-out (open children)  └ child  · standalone"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+// TestIssuePickerItemsMarkers pins the Sub-issues classification markers: a
+// fan-out parent (open children) wins over child, a child shows the branch
+// glyph, and an issue with neither link is standalone.
+func TestIssuePickerItemsMarkers(t *testing.T) {
+	tests := []struct {
+		name            string
+		hasParent       bool
+		hasOpenChildren bool
+		want            string
+	}{
+		{name: "standalone has neither link", want: "·"},
+		{name: "child has a parent", hasParent: true, want: "└"},
+		{name: "parent has open children", hasOpenChildren: true, want: "▸"},
+		// A child that itself has open children still reads as a parent.
+		{name: "parent wins over child", hasParent: true, hasOpenChildren: true, want: "▸"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := issuePickerItems([]IssueListItem{
+				{Number: 7, Title: "row", HasParent: tt.hasParent, HasOpenChildren: tt.hasOpenChildren},
+			})
+			if len(got) != 1 {
+				t.Fatalf("issuePickerItems() = %#v, want one item", got)
+			}
+			if got[0].marker != tt.want {
+				t.Fatalf("issuePickerItems(hasParent=%v, hasOpenChildren=%v).marker = %q, want %q",
+					tt.hasParent, tt.hasOpenChildren, got[0].marker, tt.want)
+			}
+		})
 	}
 }
 
@@ -528,7 +563,7 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
-	m.height = 24 // 24-16 overhead = 8 visible rows
+	m.height = 25 // 25-17 overhead = 8 visible rows
 
 	items := make([]IssueListItem, 15)
 	for i := range items {
