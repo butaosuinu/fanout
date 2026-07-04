@@ -24,6 +24,10 @@ var (
 	errStyle   = lipgloss.NewStyle().Foreground(colorBeni)
 	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
 	modalStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
+	// popupContentStyle drops the modal border when the popup runs inside a tmux
+	// display-popup: the popup frame is the only border, so the content only
+	// keeps a 1-column left/right gutter.
+	popupContentStyle = lipgloss.NewStyle().Padding(0, 1)
 	// inputBoxStyle / inputBoxFocusStyle frame the modal's text inputs so the
 	// field bounds are visible; the border color also doubles as a focus cue.
 	inputBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorSuna)
