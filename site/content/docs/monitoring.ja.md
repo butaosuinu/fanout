@@ -40,12 +40,17 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | `1`-`9` | 表示リストの N 行目へジャンプして、そのペインにフォーカスする。範囲外の数字は notice を表示する。 |
 | `Z` | 選択中のペインにフォーカスして zoom する（`resize-pane -Z`）。次の relayout（ペインの作成・削除、tmux window のリサイズ）で zoom は解除されるので、必要ならもう一度 `Z` を押す。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
+| `v` | 表示の手動切替を auto → compact → full でサイクルする。auto は幅 80 桁未満で[コンパクト表示](#コンパクト表示)を選ぶ。compact は広い画面でも switcher を強制し、full は狭くてもテーブルを強制する。永続化はしない。 |
 | `c` / `x` | 選択中のペインの close option を開く。ペインだけを閉じる、ペインと worktree を閉じる、local branch も削除する、から選ぶ。 |
 | `m` | 選択中のペインの branch を fast-forward merge する（確認を挟み、`--merge` と同じコア処理を使う）。 |
 | `X` | 同じ親の merged/closed な子をまとめて cleanup する（確認を挟み、`--cleanup` と同じコア処理を使う）。 |
 | `q` | コンソールを離脱する。tmux session と子ペインはそのまま残る。 |
 
 > worktree 行が `stale!` になるのは、worktree が無い、agent command が無いなど fanout が復元できない場合です。shell terminal は resume できないため、対応する tmux ペインが無ければ TUI が state 行を削除します。
+
+### コンパクト表示
+
+幅 80 桁未満 — auto-layout がコンソールに割り当てる 40 桁サイドバーがこの帯です — では、テーブル + detail panel が 1 ペイン 1 行の switcher に切り替わります。各行は `1`-`9` ジャンプに対応する序数、agent 状態グリフ、issue / task ラベル、名前、右寄せのペイン ID を表示し、幅が足りないときは名前だけを削ります。Session ヘッダ行には Session リストと同じ `t`/`m`/`p`/`b`/`l` カウントが付きます。選択中の行だけが branch + PR、ci / wave / blockers / dirty、peek の末尾 1 行に展開されます。キー操作はすべてそのまま効きます。`v` は自動判定の手動上書きで、現在のコンソール限りです。
 
 ### F11 / prefix + T
 

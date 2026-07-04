@@ -70,6 +70,7 @@ func (m model) helpView() string {
 		{"Enter/o", "Focus pane"},
 		{"Z", "Focus + zoom pane"},
 		{"p", "Peek output"},
+		{"v", "Auto/compact/full view"},
 		{"c/x", "Close pane"},
 		{"m", "Merge branch"},
 		{"X", "Cleanup parent"},

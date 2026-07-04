@@ -20,10 +20,13 @@ var (
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAi)
 	dimStyle   = lipgloss.NewStyle().Foreground(colorInk)
-	warnStyle  = lipgloss.NewStyle().Foreground(colorTsuchi)
-	errStyle   = lipgloss.NewStyle().Foreground(colorBeni)
-	panelStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
-	modalStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
+	// compactSelectedStyle mirrors the table's selected-row look (tui.go
+	// styles.Selected) for the compact switcher's selected pane block.
+	compactSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAsagi)
+	warnStyle            = lipgloss.NewStyle().Foreground(colorTsuchi)
+	errStyle             = lipgloss.NewStyle().Foreground(colorBeni)
+	panelStyle           = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
+	modalStyle           = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
 	// popupContentStyle drops the modal border when the popup runs inside a tmux
 	// display-popup: the popup frame is the only border, so the content only
 	// keeps a 1-column left/right gutter.

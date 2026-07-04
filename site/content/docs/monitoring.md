@@ -40,12 +40,17 @@ The footer stays short; press `?` in the monitor to open the full shortcut help 
 | `1`-`9` | Jump to the Nth row of the current list and focus its pane. Out-of-range numbers show a notice. |
 | `Z` | Focus the selected pane and zoom it (`resize-pane -Z`). The next relayout — a pane created or closed, or the tmux window resized — unzooms it; press `Z` again to re-zoom. |
 | `p` | Refresh the read-only output snapshot shown in the detail panel. |
+| `v` | Cycle the view override: auto → compact → full. Auto picks the [compact switcher](#compact-view) below 80 columns; compact forces it on a wide terminal, full forces the table when narrow. Not persisted. |
 | `c` / `x` | Open close options for the selected pane: close only the pane, close the pane and remove the worktree, or also delete the local branch. |
 | `m` | Fast-forward merge the selected pane's branch — confirmation prompt, then the same core path as `--merge`. |
 | `X` | Clean up merged/closed children of the same parent — confirmation prompt, then the same core path as `--cleanup`. |
 | `q` | Leave the console. The tmux session and child panes are left running. |
 
 > Worktree rows become `stale!` only when fanout cannot restore them, such as a missing worktree or unavailable agent command. Recorded shell terminals are not resumable; if their tmux pane is gone, the TUI removes the state row.
+
+### Compact view
+
+Below 80 columns — the 40-column sidebar the auto-layout gives the console — the table and detail panel become a one-line-per-pane switcher. Each row shows the ordinal matching the `1`-`9` jump, the agent-state glyph, the issue / task label, the name, and the pane ID right-aligned; when space runs out only the name shrinks. Session header rows carry the same `t`/`m`/`p`/`b`/`l` counts as the Session list. The selected row alone expands with branch + PR, ci / wave / blockers / dirty, and the last line of the output peek. Every key works unchanged. `v` overrides the automatic choice for the current console only.
 
 ### F11 / prefix + T
 

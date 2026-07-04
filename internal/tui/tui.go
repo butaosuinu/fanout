@@ -27,6 +27,7 @@ const (
 	sessionSidebarAt     = 120
 	sessionSidebarWidth  = 26
 	sessionTopHeight     = 3
+	compactWidthAt       = 80
 	// relayoutDebounce coalesces the burst of resize events tmux emits while a
 	// terminal window is being dragged into a single relayout.
 	relayoutDebounce = 150 * time.Millisecond
@@ -89,6 +90,7 @@ type model struct {
 	panes            []paneView
 	filterQuery      string
 	filterEditing    bool
+	viewOverride     viewOverride
 	issues           map[issueKey]issueStatus
 	lastState        time.Time
 	lastGH           time.Time
