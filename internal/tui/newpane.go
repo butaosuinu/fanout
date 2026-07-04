@@ -22,7 +22,6 @@ type LaunchMode string
 const (
 	LaunchModePrompt LaunchMode = ""
 	LaunchModeIssue  LaunchMode = "issue"
-	LaunchModePlan   LaunchMode = "plan"
 )
 
 // LaunchRequest describes one launch requested from the TUI new-session form.
@@ -30,13 +29,14 @@ type LaunchRequest struct {
 	Mode   LaunchMode
 	Prompt string // Mode == prompt
 	Issue  int    // Mode == issue: the selected issue number
-	Plan   string // Mode == plan: the selected plan slug
+	// PlanFanout is prompt mode only: decompose the prompt via the fanout-plan
+	// skill instead of launching a plain agent pane.
+	PlanFanout bool
 	// Agents holds the prompt-mode launch list (one pane per entry).
 	Agents []string
-	// DefaultAgent and AgentOverrides carry the issue/plan-mode agent
-	// selection. Overrides are keyed by child issue number ("123") or plan
-	// task id and hold only rows that differ from DefaultAgent, mirroring
-	// repeatable --agent target=name flags.
+	// DefaultAgent and AgentOverrides carry the issue-mode agent selection.
+	// Overrides are keyed by child issue number ("123") and hold only rows that
+	// differ from DefaultAgent, mirroring repeatable --agent target=name flags.
 	DefaultAgent   string
 	AgentOverrides map[string]string
 }
@@ -48,9 +48,6 @@ type LaunchFunc func(LaunchRequest) (notice string, err error)
 // IssueLaunchFunc starts a session for one GitHub issue: a fan-out when the
 // issue has OPEN children, a single pane otherwise.
 type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (notice string, err error)
-
-// PlanLaunchFunc runs `fanout plan <slug>` semantics for a stored plan spec.
-type PlanLaunchFunc func(slug string, defaultAgent string, overrides map[string]string) (notice string, err error)
 
 // NewPanePromptRequest describes a request to collect a manual pane prompt from
 // an external prompt surface, such as a tmux display-popup.
@@ -69,11 +66,9 @@ type NewPanePromptOptions struct {
 	Width         int
 	Height        int
 	ListRepoFiles func(root string) ([]string, error)
-	// List providers for the issue/plan modes; a nil provider hides its mode.
+	// List providers for the issue mode; a nil provider hides its mode.
 	ListOpenIssues    func() ([]IssueListItem, error)
-	ListPlanSlugs     func() ([]string, error)
 	ListIssueChildren func(parent int) ([]ChildTarget, error)
-	ListPlanTasks     func(slug string) ([]PlanTaskItem, error)
 }
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
@@ -105,21 +100,21 @@ type newPaneField int
 const (
 	newPaneFieldMode newPaneField = iota
 	newPaneFieldMain
+	newPaneFieldPlan
 	newPaneFieldAgent
 )
 
-// newPaneMode is the form's input lane: the classic free prompt, the OPEN
-// issue picker, or the stored plan picker.
+// newPaneMode is the form's input lane: the classic free prompt or the OPEN
+// issue picker.
 type newPaneMode int
 
 const (
 	newPaneModePrompt newPaneMode = iota
 	newPaneModeIssue
-	newPaneModePlan
 )
 
 // newPaneStep is the wizard position: the mode form (step 1) or the
-// per-target agent assignment that issue/plan submissions open (step 2).
+// per-child agent assignment that issue submissions open (step 2).
 type newPaneStep int
 
 const (
@@ -136,17 +131,19 @@ type newPaneForm struct {
 	err        string
 	attach     *AttachTarget
 
-	// Issue/plan mode state. agentChoice is the single default-agent
-	// selection those modes use instead of the prompt-mode count selector.
+	// planFanout is the prompt-mode checkbox: decompose the prompt via the
+	// fanout-plan skill instead of launching a plain agent pane.
+	planFanout bool
+
+	// Issue mode state. agentChoice is the single default-agent selection that
+	// mode uses instead of the prompt-mode count selector.
 	mode        newPaneMode
 	step        newPaneStep
 	issuePicker pickerState
-	planPicker  pickerState
 	agentChoice int
 	assign      assignState
 	assignGen   int // monotonic load generation; survives esc so stale loads drop
 	selIssue    int
-	selPlan     string
 
 	// @-mention file completion state, active only while focus is on the
 	// prompt field. compQuery is the text typed after '@' (the '@' itself is
@@ -182,9 +179,7 @@ func RunNewPanePrompt(opts NewPanePromptOptions) (LaunchRequest, bool, error) {
 		DefaultAgent:      opts.DefaultAgent,
 		ListRepoFiles:     opts.ListRepoFiles,
 		ListOpenIssues:    opts.ListOpenIssues,
-		ListPlanSlugs:     opts.ListPlanSlugs,
 		ListIssueChildren: opts.ListIssueChildren,
-		ListPlanTasks:     opts.ListPlanTasks,
 		LaunchPane:        func(LaunchRequest) (string, error) { return "", nil },
 		keyboard:          keyboard,
 	})
@@ -379,6 +374,9 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.newPane.focus {
 		case newPaneFieldMode:
 			return m, m.cycleNewPaneMode(msg.String())
+		case newPaneFieldPlan:
+			m.newPane.planFanout = !m.newPane.planFanout
+			return m, nil
 		case newPaneFieldAgent:
 			if m.newPane.mode == newPaneModePrompt {
 				m.adjustNewPaneAgent(msg.String())
@@ -448,12 +446,18 @@ func (m *model) moveNewPaneFocus(key string) {
 }
 
 // newPaneFocusOrder hides the Mode row when only the classic prompt mode is
-// wired, so the original two-field form keeps its focus cycle.
+// wired, and offers the plan fan-out checkbox only in a non-attach prompt form.
 func (m model) newPaneFocusOrder() []newPaneField {
+	order := make([]newPaneField, 0, 4)
 	if len(m.availableNewPaneModes()) > 1 {
-		return []newPaneField{newPaneFieldMode, newPaneFieldMain, newPaneFieldAgent}
+		order = append(order, newPaneFieldMode)
 	}
-	return []newPaneField{newPaneFieldMain, newPaneFieldAgent}
+	order = append(order, newPaneFieldMain)
+	if m.newPane.mode == newPaneModePrompt && m.newPane.attach == nil {
+		order = append(order, newPaneFieldPlan)
+	}
+	order = append(order, newPaneFieldAgent)
+	return order
 }
 
 func (m *model) moveNewPaneAgent(key string) {
@@ -500,6 +504,10 @@ func (m *model) submitNewPane() tea.Cmd {
 		m.newPane.err = "select at least one agent"
 		return nil
 	}
+	if m.newPane.planFanout && len(agents) != 1 {
+		m.newPane.err = "plan fan-out launches one coordinator agent; select exactly one"
+		return nil
+	}
 	m.newPane.err = ""
 	m.newPane.launching = true
 	if m.newPane.attach != nil {
@@ -520,8 +528,9 @@ func (m *model) submitNewPane() tea.Cmd {
 		}
 	}
 	req := LaunchRequest{
-		Prompt: prompt,
-		Agents: agents,
+		Prompt:     prompt,
+		Agents:     agents,
+		PlanFanout: m.newPane.planFanout,
 	}
 	if m.promptOnly {
 		m.promptResult = req
@@ -559,8 +568,6 @@ func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 	switch req.Mode {
 	case LaunchModeIssue:
 		return m.launchIssueSessionRequest(req)
-	case LaunchModePlan:
-		return m.launchPlanSessionRequest(req)
 	default:
 		// Prompt mode continues below.
 	}
@@ -617,15 +624,13 @@ func (m model) newPaneView() string {
 			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
 			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.singleAgentSelectorView(), false),
 		)
-	case newPaneModePlan:
-		lines = append(lines,
-			m.newPaneFieldView(newPaneFieldMain, "Plan", m.pickerView(m.newPane.planPicker, "no plans found in .fanout/plans"), true),
-			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.singleAgentSelectorView(), false),
-		)
 	default:
 		lines = append(lines, m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true))
 		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
 			lines = append(lines, m.completionPopupView())
+		}
+		if m.newPane.attach == nil {
+			lines = append(lines, m.planFanoutCheckboxView())
 		}
 		lines = append(lines, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
 	}
@@ -682,6 +687,27 @@ func (m model) newPaneFieldView(field newPaneField, label, value string, boxed b
 	return marker + label + "\n" + value
 }
 
+// planFanoutCheckboxView renders the prompt-mode plan fan-out toggle. When on,
+// the launch hands the prompt to the fanout-plan skill instead of starting a
+// plain agent pane.
+func (m model) planFanoutCheckboxView() string {
+	marker := "  "
+	if m.newPane.focus == newPaneFieldPlan {
+		marker = "> "
+	}
+	box := "[ ]"
+	if m.newPane.planFanout {
+		box = "[x]"
+	}
+	text := box + " decompose via /fanout plan"
+	if m.newPane.planFanout {
+		text = titleStyle.Render(text)
+	} else {
+		text = dimStyle.Render(text)
+	}
+	return marker + text
+}
+
 func (m model) agentSelectorView() string {
 	lines := make([]string, 0, len(launchAgents))
 	for i, agentName := range launchAgents {
@@ -701,9 +727,9 @@ func (m model) agentSelectorView() string {
 	return strings.Join(lines, "\n")
 }
 
-// singleAgentSelectorView renders the issue/plan-mode default-agent choice: a
+// singleAgentSelectorView renders the issue-mode default-agent choice: a
 // one-of selector, unlike the prompt-mode per-agent counts (a fan-out shares
-// one default agent across children; per-target overrides live in step 2).
+// one default agent across children; per-child overrides live in step 2).
 func (m model) singleAgentSelectorView() string {
 	parts := make([]string, 0, len(launchAgents))
 	for i, agentName := range launchAgents {

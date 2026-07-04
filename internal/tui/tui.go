@@ -49,14 +49,11 @@ type Options struct {
 	LaunchAttach        AttachLaunchFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
-	// New-session issue/plan mode wiring. A nil list provider hides its mode
-	// from the form; a nil launcher turns its submissions into a notice.
+	// New-session issue mode wiring. A nil list provider hides the mode from
+	// the form; a nil launcher turns its submissions into a notice.
 	ListOpenIssues    func() ([]IssueListItem, error)
-	ListPlanSlugs     func() ([]string, error)
 	ListIssueChildren func(parent int) ([]ChildTarget, error)
-	ListPlanTasks     func(slug string) ([]PlanTaskItem, error)
 	LaunchIssue       IssueLaunchFunc
-	LaunchPlan        PlanLaunchFunc
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
 	// to panelayout.Apply(target, Resize) in production and left nil in tests
 	// (then resize handling is a no-op).

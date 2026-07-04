@@ -95,11 +95,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		// List providers also feed the in-process fallback form (NewPanePrompt
 		// unavailable); the popup process wires its own copies.
 		ListOpenIssues:    newTUIListOpenIssuesFunc(projectRoot),
-		ListPlanSlugs:     newTUIListPlanSlugsFunc(projectRoot),
 		ListIssueChildren: newTUIListIssueChildrenFunc(projectRoot),
-		ListPlanTasks:     newTUIListPlanTasksFunc(projectRoot),
 		LaunchIssue:       newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
-		LaunchPlan:        newTUIPlanLaunchFunc(projectRoot, session, commandName),
 		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },

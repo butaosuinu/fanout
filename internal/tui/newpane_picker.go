@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// pickerMaxRows caps how many list rows the issue/plan picker shows at once.
+// pickerMaxRows caps how many list rows the issue picker shows at once.
 const pickerMaxRows = 8
 
 // IssueListItem is one OPEN repository issue offered by the issue picker.
@@ -36,28 +36,22 @@ type pickerState struct {
 }
 
 type pickerItem struct {
-	key    string // display and match key: "#123" or a plan slug
-	number int    // issue number; 0 for plan slugs
+	key    string // display and match key, e.g. "#123"
+	number int    // issue number
 	title  string
 	labels []string
 	note   string
 }
 
-type (
-	newPaneIssuesLoadedMsg struct {
-		items []IssueListItem
-		err   error
-	}
-	newPanePlansLoadedMsg struct {
-		slugs []string
-		err   error
-	}
-)
+type newPaneIssuesLoadedMsg struct {
+	items []IssueListItem
+	err   error
+}
 
 // availableNewPaneModes lists the form modes the wiring supports. Prompt is
-// always first; issue/plan appear only when their list providers are wired.
-// Attach binds the launch to a specific worktree from a free prompt, so
-// issue/plan modes never apply there — offer prompt only.
+// always first; issue appears only when its list provider is wired. Attach
+// binds the launch to a specific worktree from a free prompt, so issue mode
+// never applies there — offer prompt only.
 func (m model) availableNewPaneModes() []newPaneMode {
 	if m.newPane.attach != nil {
 		return []newPaneMode{newPaneModePrompt}
@@ -65,9 +59,6 @@ func (m model) availableNewPaneModes() []newPaneMode {
 	modes := []newPaneMode{newPaneModePrompt}
 	if m.opts.ListOpenIssues != nil {
 		modes = append(modes, newPaneModeIssue)
-	}
-	if m.opts.ListPlanSlugs != nil {
-		modes = append(modes, newPaneModePlan)
 	}
 	return modes
 }
@@ -110,18 +101,6 @@ func (m *model) ensureModeListLoaded() tea.Cmd {
 			items, err := list()
 			return newPaneIssuesLoadedMsg{items: items, err: err}
 		}
-	case newPaneModePlan:
-		p := &m.newPane.planPicker
-		if p.loading || p.loaded || m.opts.ListPlanSlugs == nil {
-			return nil
-		}
-		p.loading = true
-		p.err = ""
-		list := m.opts.ListPlanSlugs
-		return func() tea.Msg {
-			slugs, err := list()
-			return newPanePlansLoadedMsg{slugs: slugs, err: err}
-		}
 	default:
 		return nil
 	}
@@ -131,8 +110,6 @@ func (m *model) activePicker() *pickerState {
 	switch m.newPane.mode {
 	case newPaneModeIssue:
 		return &m.newPane.issuePicker
-	case newPaneModePlan:
-		return &m.newPane.planPicker
 	default:
 		return nil
 	}
@@ -218,10 +195,10 @@ func (p pickerState) selectedItem() (pickerItem, bool) {
 }
 
 // rankPickerItems returns the indices of every matching item, ranked. Rank 0:
-// the key (issue number or slug) prefix-matches; 1: the title contains the
-// query; 2: a label contains it. Source order is preserved within a rank: gh
-// returns issues newest-first and plan slugs arrive sorted. The result is
-// uncapped; the view scrolls a window over it so every match stays reachable.
+// the key (issue number) prefix-matches; 1: the title contains the query; 2:
+// a label contains it. Source order is preserved within a rank: gh returns
+// issues newest-first. The result is uncapped; the view scrolls a window over
+// it so every match stays reachable.
 func rankPickerItems(items []pickerItem, query string) []int {
 	q := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(query)), "#")
 	type scored struct {
@@ -269,8 +246,8 @@ func pickerMatchRank(item pickerItem, q string) int {
 	if item.title != "" && strings.Contains(strings.ToLower(item.title), q) {
 		return 1
 	}
-	// Key substring keeps title-less items (plan slugs) filterable by any
-	// fragment, not just a prefix.
+	// Key substring keeps items filterable by any key fragment, not just a
+	// prefix.
 	if strings.Contains(key, q) {
 		return 1
 	}
@@ -300,21 +277,12 @@ func issuePickerItems(items []IssueListItem) []pickerItem {
 	return out
 }
 
-func planPickerItems(slugs []string) []pickerItem {
-	out := make([]pickerItem, 0, len(slugs))
-	for _, slug := range slugs {
-		out = append(out, pickerItem{key: slug})
-	}
-	return out
-}
-
 func (m model) newPaneModeTabsView() string {
 	names := map[newPaneMode]string{
 		newPaneModePrompt: "Prompt",
 		newPaneModeIssue:  "Issue",
-		newPaneModePlan:   "Plan",
 	}
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 2)
 	for _, mode := range m.availableNewPaneModes() {
 		if mode == m.newPane.mode {
 			parts = append(parts, titleStyle.Render("["+names[mode]+"]"))

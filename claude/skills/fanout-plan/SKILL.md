@@ -19,7 +19,11 @@ Find the source plan in this order:
    `.fanout/plans/<arg>.json` exists in the target repository; if it does, use
    `<arg>` as the saved plan slug and skip spec authoring. If the explicit
    argument resolves to neither a file nor a saved plan slug, stop and report
-   the missing path/slug instead of rediscovering another source plan.
+   the missing path/slug instead of rediscovering another source plan. The
+   file may be a finished implementation plan or a raw request prompt — the
+   fanout TUI's plan fan-out checkbox writes the prompt to a file verbatim.
+   Decompose either the same way; ask a clarifying question only when the
+   request is too vague to split into tasks.
 2. The newest `~/.claude/plans/*.md` file by modification time.
 3. The current conversation's approved implementation plan.
 

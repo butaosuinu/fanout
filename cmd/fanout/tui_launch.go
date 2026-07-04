@@ -39,6 +39,9 @@ func newTUIAttachAgentFunc(projectRoot, session, commandName string, hookConfig 
 }
 
 func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
+	if req.PlanFanout {
+		return launchPlanPromptFromTUI(projectRoot, session, commandName, hookConfig, req)
+	}
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
@@ -84,6 +87,106 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		return "", bufferedLaunchError(stdout, stderr, "create pane")
 	}
 	return bufferedLaunchNotice(stderr), nil
+}
+
+// launchPlanPromptFromTUI launches one coordinator pane at the project root
+// that runs the fanout-plan skill against the raw prompt. The coordinator
+// decomposes the prompt into parallel tasks and fans them out itself, so it
+// runs as a normal agent (never Codex Plan Mode) directly on the project root:
+// running `fanout plan` inside a worktree would resolve the git root there and
+// nest state under the coordinator's worktree.
+func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
+	prompt := normalizeTUIPrompt(req.Prompt)
+	if prompt == "" {
+		return "", fmt.Errorf("prompt is required")
+	}
+	agentNames := normalizeTUIAgents(req.Agents)
+	if len(agentNames) != 1 {
+		return "", fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
+	}
+	agentName := agentNames[0]
+	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
+		return "", validateErr
+	}
+	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
+		return "", validateErr
+	}
+	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
+		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+	}
+
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
+	recorder, err := state.LockProject(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = recorder.Unlock()
+	}()
+
+	// A plain agent config: the coordinator runs fanout plan itself, so it must
+	// not launch in Codex Plan Mode even when the agent is codex.
+	cfg := &cliflags.Config{Agent: agentName}
+	info := &fanoutruntime.Info{
+		Session:     "",
+		Target:      tuiLaunchTarget(session),
+		ProjectRoot: projectRoot,
+	}
+	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName)
+	if !createAttachedPane(cfg, launchLogger, info, paneReq, projectRoot, recorder, commandName) {
+		return "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+	}
+	return fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt), nil
+}
+
+// newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
+// a project-root pane (no worktree) whose prompt invokes the fanout-plan skill
+// on the raw prompt written to BriefingPath.
+func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt, agentName string) paneRequest {
+	number := nextSyntheticPaneNumber(store, manualPaneParentRef)
+	title := "plan: " + firstPromptLine(prompt)
+	briefingPath := planPromptPath(projectRoot, number)
+	return paneRequest{
+		ParentRef:           manualPaneParentRef,
+		Number:              number,
+		Title:               title,
+		Body:                prompt,
+		ShortTitle:          shortIssueTitle(title),
+		Slug:                planPromptSlug(number),
+		DisplayNameOverride: title,
+		Prompt:              planSkillPrompt(agentName, briefingPath),
+		Agent:               agentName,
+		Hooks:               hookConfig,
+		BriefingPath:        briefingPath,
+		BriefingBody:        prompt,
+	}
+}
+
+// planSkillPrompt points the coordinator agent at the raw prompt file and
+// invokes the fanout-plan skill to decompose it. Codex uses the `$fanout-plan`
+// invocation; claude uses the `/fanout plan` slash command.
+func planSkillPrompt(agentName, path string) string {
+	if agentName == "codex" {
+		return "$fanout-plan " + path
+	}
+	return "/fanout plan " + path
+}
+
+// planPromptPath mirrors briefing.Path for the coordinator's prompt file:
+// /tmp/fanout-<repo>-plan-prompt-<N>.md.
+func planPromptPath(projectRoot string, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("/tmp/fanout-%s-plan-prompt-%d.md", filepath.Base(projectRoot), number)
+}
+
+func planPromptSlug(number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("plan-prompt-%d", number)
 }
 
 func launchAttachedAgentFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
