@@ -22,7 +22,7 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 - Claude project ディレクトリのルートは `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects`。`CLAUDE_CONFIG_DIR` を設定している環境では `~/.claude` を直書きすると transcript を 1 件も見つけられない。
 - 対象ディレクトリは **`<projects_root>/<slug>`(完全一致)と `<projects_root>/<slug>--dmux-worktrees-*`・`<projects_root>/<slug>--fanout-worktrees-*`(worktree セッション。旧 dmux 時代と現行 fanout の両方の命名を明示的に列挙する)の 3 パターンだけ** を glob する。`<slug>*` のような緩い prefix glob や `<slug>--*-worktrees-*` のようなワイルドカード区間は使わない — 前者は `<slug>2` や `<slug>-old` のような別リポジトリ、後者は無関係な別ツール由来の `<slug>--other-worktrees-*` まで拾ってしまう。ディレクトリ名は `-` 始まりなので、rg / ls に渡すときは `--` 区切りを入れる (無いとフラグ解釈されて 0 件になる)。
 - **既知の限界**: この 3 パターンは git repo のルートで開始したセッションのみを対象にする。`$root/cmd/fanout` のようなサブディレクトリで開始したセッションは Claude Code 側で別の project ディレクトリに保存されるため、この skill では拾わない (対応するには全 project ディレクトリを横断して各 transcript の `cwd` を照合する必要があり、この skill のスコープを超える — フォローアップ #392)。
-- スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro` が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `"$claude_home"/fanout-retro/<repo-slug>/`。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
+- スナップショットディレクトリを決める: `git -C "$root" check-ignore .fanout/retro/`(**末尾スラッシュ必須**)が ignore を返す repo (fanout 自身など) は `<root>/.fanout/retro/`、そうでない repo は `"$claude_home"/fanout-retro/<repo-slug>/`。`.fanout/retro/` がまだ存在しない初回実行時、末尾スラッシュを付けずに `git check-ignore .fanout/retro` を呼ぶと、git は「ファイルかディレクトリか判別できないパス」として扱い、ディレクトリ限定の ignore ルール (`.fanout/retro/` のような末尾スラッシュ付きパターン) にマッチしなくなる (実機で再現・確認済み — 既存ディレクトリでは両方マッチするが、未作成だと末尾スラッシュ無しだけ失敗する)。cwd が linked worktree のままだと root 側のパスは `outside repository` になるので、check-ignore は必ず `git -C "$root"` で実行する。
 - 期間の下限 `SINCE`: 上で決めたスナップショットディレクトリの最新 `session-*.json` の `window.until`。**フルの ISO8601 のまま使う (日付に丸めない)** — 丸めると同じ日の中で既に報告済みのイベントを次回の window が再集計してしまう。初回はスナップショットが無いので、直近 14 日前の ISO8601 UTC 時刻を `SINCE` とする。
 - 期間の上限 `UNTIL`: **Step 2〜4 のデータ収集を始める前に** `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` で固定する。収集後に「いま」を書くと、クエリ実行〜スナップショット書き込みの間に発生したイベント (例: gh run list 実行直後に落ちた CI) が今回にも次回にも入らず永久に欠落する。Step 5 で書く `window.until` はこの固定値をそのまま使う。
 - タイムスタンプは常に `date -u +%Y-%m-%dT%H:%M:%SZ` 形式 (末尾リテラル `Z`、offset 表記 `+00:00` や小数秒を使わない) で統一する。Step 2 の macOS フォールバック (`date -j -u -f "%Y-%m-%dT%H:%M:%SZ" ...`) はこの形式限定でしか解釈できないため、`SINCE`/`UNTIL` どちらもこの関数で生成・保存する。
@@ -71,6 +71,7 @@ tool_result のエラーは transcript の JSON にトップレベルで **素�
 matches=$(mktemp)
 trap 'rm -f "$candidates" "$matches"' EXIT
 total=0
+tool_errors_truncated=false
 if [ "${#files[@]}" -gt 0 ]; then
   if rg -I -F '"is_error":true' -- "${files[@]}" > "$matches" 2>/dev/null; then
     rg_exit=0
@@ -78,7 +79,8 @@ if [ "${#files[@]}" -gt 0 ]; then
     rg_exit=$?
   fi
   if [ "$rg_exit" -ge 2 ]; then
-    echo "警告: rg が実行時エラーを返した (権限/読み取り不能なパス等)。tool_errors は過少の可能性がある" >&2
+    tool_errors_truncated=true
+    echo "警告: rg が実行時エラーを返した (権限/読み取り不能なパス等)。tool_errors は過少の可能性がある (snapshot に truncated=true を記録する)" >&2
   fi
   while IFS= read -r line; do
     ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null) || ts=""
@@ -91,7 +93,7 @@ if [ "${#files[@]}" -gt 0 ]; then
     fi
   done < "$matches"
 fi
-echo "tool_errors.total=$total"
+echo "tool_errors.total=$total tool_errors_truncated=$tool_errors_truncated"
 ```
 
 `rg` は no-match (終了コード 1) と実行時エラー (終了コード 2、権限や壊れたパス等) を区別する。`2>/dev/null || true` だけだと両方とも「0 件」として握りつぶし `tool_errors.total` を過少にするので、終了コードを保存して 2 以上なら警告を出す。1 行に複数 tool call が失敗すると同じ JSONL 行に `is_error:true` が複数入るが、行単位の `rg` マッチは 1 行 1 カウントにしかならない。行を `jq` で構造的にパースし、`.message.content[]` 内で `is_error == true` の要素数を数えてから加算する (jq 解析に失敗した行は `${n:-1}` で 1 件として保守的に数える)。
@@ -117,10 +119,10 @@ for st in failure startup_failure timed_out; do
     echo "警告: gh run list --status $st が失敗した。ci 集計は不完全な可能性がある (ci.truncated=true として記録する)" >&2
   fi
 done
-jq -s "add | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \"${UNTIL}\")]" "$runs"
+jq -s "(add // []) | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \"${UNTIL}\")]" "$runs"
 ```
 
-3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci.truncated=true` を記録する** (成功扱いで黙って進めない)。
+3 回のうちどれか 1 回でも `gh run list` が失敗すると (認証切れ・rate limit・一時障害)、成功した他の呼び出しの JSON だけで `jq -s` がそのまま完走してしまい、失敗した status 分が黙って欠けたまま `ci.failed_runs` が過少になる。**個々の呼び出しの終了コードを確認し、1 つでも失敗したら `ci.truncated=true` を記録する** (成功扱いで黙って進めない)。3 回**全て**失敗すると `$runs` が空のままになり、`jq -s` の `add` は空配列の reduce で `null` になって後続の `.[]` がエラー終了する (実機で再現・確認済み)。`add // []` で null を空配列にフォールバックし、この場合も `ci.failed_runs=0, ci.truncated=true` として snapshot 作成まで進める。
 
 window の判定は `createdAt` ではなく **`updatedAt`(完了時刻)** で行う。前回 window の直前に開始・queue され、前回収集時点ではまだ `failure` 未確定で、今回 window 内に失敗完了した run は `createdAt` が `SINCE` 以前になるため `createdAt` 基準だと永久に取得できない。`updatedAt` は completed run では完了時刻を指すので、これで window 判定すれば取りこぼさない。そのため取得クエリの下限は開けて `--created "*..${UNTIL}"`(**`*` は省略できない** — 空文字列で下限を省略しようとすると gh は空配列を返す。実機で確認済み)とし、`--status` ごとに直近 100 件を取ってから `updatedAt` で `(SINCE, UNTIL]` に絞り込む。`--limit` は取得上限も兼ねるため、3 つのうちどれかがちょうど 100 件なら打ち切られている疑いがある。その場合は期間を `"*..MID"` / `"MID..${UNTIL}"` のように分割して 2 回に分けて取得するか、それが難しければ黙って切り詰めず `ci.truncated=true` をスナップショットと報告に記録する。workflow 別に集計する。上位 workflow は `gh run view <id> --log-failed` の先頭から代表原因を 1 つ拾う。
 
@@ -148,7 +150,7 @@ gh api --paginate \
 
 (`gh api --jq` は `--arg` を受け付けないため、`$SINCE`/`$UNTIL` はシェル展開でクエリ文字列に埋め込む。)
 
-そのうえでレビュー bot (fanout では `chatgpt-codex-connector[bot]`) のコメントに絞って分類する。bot の login はサフィックス `[bot]` 付き (素の名前で filter すると 0 件になる)。人間の `in_reply_to` 付き返信 (「対応しました」) は指摘ではないので数えない。`docs/review-checklist.ja.md` の頻出パターンに分類し、パターン外の新種を抽出する (新種はチェックリスト更新の提案候補)。チェックリストが無い repo では Step 2 の既知カテゴリだけで分類する。
+そのうえでレビュー bot (fanout では `chatgpt-codex-connector[bot]`) のコメントに絞って分類する。bot の login はサフィックス `[bot]` 付き (素の名前で filter すると 0 件になる)。人間の返信 (「対応しました」等) は指摘ではないので数えない — 返信判定は **`in_reply_to_id` が非 null** かどうかで行う (GitHub REST API のフィールド名はこれで、`in_reply_to` ではない)。`docs/review-checklist.ja.md` の頻出パターンに分類し、パターン外の新種を抽出する (新種はチェックリスト更新の提案候補)。チェックリストが無い repo では Step 2 の既知カテゴリだけで分類する。
 
 ## Step 5 — スナップショットと差分報告
 
@@ -157,7 +159,7 @@ Step 1 で決めたスナップショットディレクトリに `session-<YYYY-
 ```json
 {"schema": 1, "generated_at": "<ISO8601>",
  "window": {"since": "<ISO8601>", "until": "<ISO8601>"},
- "tool_errors": {"total": 0, "by_category": {}},
+ "tool_errors": {"total": 0, "by_category": {}, "truncated": false},
  "ci": {"failed_runs": 0, "by_workflow": {}, "truncated": false},
  "review": {"comments": 0, "by_pattern": {}}}
 ```
