@@ -57,8 +57,8 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 			WorktreePath: "/repo/.fanout/worktrees/first",
 		},
 	}
-	tmuxPanes := []tmuxrun.PaneInfo{
-		{ID: "%2", Title: "running title"},
+	tmuxPanes := []tmuxrun.LivePane{
+		{ID: "%2", Title: "running title", AgentState: "running"},
 	}
 	issues := map[issueKey]issueStatus{
 		{Parent: "200", Num: 2}: {
@@ -90,6 +90,9 @@ func TestBuildPaneViewsMergesStateTmuxAndIssueStatuses(t *testing.T) {
 	}
 	if second.TmuxState != "live" || second.TmuxTitle != "running title" {
 		t.Fatalf("tmux = %q/%q, want live/running title", second.TmuxState, second.TmuxTitle)
+	}
+	if second.AgentState != "running" {
+		t.Fatalf("AgentState = %q, want running forwarded from live pane", second.AgentState)
 	}
 	if second.IssueState != "CLOSED" || second.PRSummary != "#12 merged" || second.CIStatus != "pass" {
 		t.Fatalf("issue/pr/ci = %q/%q/%q, want CLOSED/#12 merged/pass", second.IssueState, second.PRSummary, second.CIStatus)
@@ -1187,7 +1190,7 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 		},
 		PaneAlive: func(string) bool { return false },
 	})
-	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live", AgentState: "running"}}
 	m.refreshRows()
 
 	cmd := m.focusSelectedCmd()
@@ -1204,8 +1207,24 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 	if m.panes[0].TmuxState != "stale" {
 		t.Fatalf("TmuxState = %q, want stale", m.panes[0].TmuxState)
 	}
-	if got := m.table.Rows()[0][6]; got != "stale!" {
+	if m.panes[0].AgentState != "" {
+		t.Fatalf("AgentState = %q, want cleared on stale", m.panes[0].AgentState)
+	}
+	if got := m.table.Rows()[0][columnIndex(t, "TMUX")]; got != "stale!" {
 		t.Fatalf("table tmux cell = %q, want stale!", got)
+	}
+	if got := m.table.Rows()[0][columnIndex(t, "RUN")]; got != "✗" {
+		t.Fatalf("table run cell = %q, want ✗", got)
+	}
+}
+
+func TestDetailContentShowsAgentState(t *testing.T) {
+	m := newModel(Options{})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live", AgentState: "running"}}
+	m.refreshRows()
+
+	if got := m.detailContent(); !strings.Contains(got, "run=running") {
+		t.Fatalf("detailContent() = %q, want run=running", got)
 	}
 }
 

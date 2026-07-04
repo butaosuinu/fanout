@@ -64,7 +64,7 @@ func (m model) detailContent() string {
 	}
 	lines := []string{
 		fmt.Sprintf("%s %s  %s", pane.Parent, pane.itemLabel(), pane.Name),
-		fmt.Sprintf("pane=%s tmux=%s title=%s kind=%s agent=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Kind), dash(pane.Agent)),
+		fmt.Sprintf("pane=%s tmux=%s title=%s kind=%s agent=%s run=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Kind), dash(pane.Agent), dash(pane.AgentState)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
 		fmt.Sprintf("worktree=%s diff=%s dirty=%s", dash(pane.WorktreePath), dash(pane.DiffSummary), dash(pane.DirtyState)),
@@ -185,12 +185,14 @@ func (m *model) markPaneStale(paneID string) {
 	for i := range m.allPanes {
 		if m.allPanes[i].PaneID == paneID {
 			m.allPanes[i].TmuxState = "stale"
+			m.allPanes[i].AgentState = ""
 			break
 		}
 	}
 	for i := range m.panes {
 		if m.panes[i].PaneID == paneID {
 			m.panes[i].TmuxState = "stale"
+			m.panes[i].AgentState = ""
 			return
 		}
 	}

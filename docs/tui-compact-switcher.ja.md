@@ -4,7 +4,7 @@
 
 ## 問題: 40 桁サイドバーで一覧が読めない
 
-agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/panelayout/layout.go` の `SidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 14 列で、列幅の合計は最小でも約 124 桁ある(`internal/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
+agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/panelayout/layout.go` の `SidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 15 列で、列幅の合計は最小でも約 129 桁ある(`internal/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
 
 レイアウト分岐(`internal/tui/view.go` の `monitorLayout`)は、幅 120 以上で Session サイドバー、それ未満はトップストリップ、高さが足りないときはストリップ自体を落とす、の 3 通りある。ただしどの分岐でもテーブル + 固定 13 行の詳細という形は変わらず、狭い幅で表示形態そのものを切り替える仕組みがない。
 
