@@ -29,7 +29,7 @@ func TestNewTUIListOpenIssuesFuncMarksRecordedSessions(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in
 *"api graphql"*)
-  printf '{"data":{"repository":{"issues":{"nodes":[{"number":501,"title":"recorded child","labels":{"nodes":[{"name":"bug"}]}},{"number":502,"title":"fresh","labels":{"nodes":[]}},{"number":700,"title":"fanned parent","labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+  printf '{"data":{"repository":{"issues":{"nodes":[{"number":501,"title":"recorded child","labels":{"nodes":[{"name":"bug"}]},"parent":{"number":700},"subIssuesSummary":{"total":0,"completed":0}},{"number":502,"title":"fresh","labels":{"nodes":[]},"parent":null,"subIssuesSummary":{"total":0,"completed":0}},{"number":700,"title":"fanned parent","labels":{"nodes":[]},"parent":null,"subIssuesSummary":{"total":3,"completed":1}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
   ;;
 *)
   printf 'unexpected gh args: %s\n' "$args" >&2
@@ -43,10 +43,13 @@ esac
 		t.Fatal(err)
 	}
 
+	// #501 is a child (parent #700), #502 standalone, #700 a fan-out parent
+	// with two OPEN children (total 3 - completed 1); recorded panes mark #501
+	// and its parent #700 with HasSession.
 	want := []fanouttui.IssueListItem{
-		{Number: 501, Title: "recorded child", Labels: []string{"bug"}, HasSession: true},
+		{Number: 501, Title: "recorded child", Labels: []string{"bug"}, HasSession: true, HasParent: true},
 		{Number: 502, Title: "fresh", Labels: []string{}},
-		{Number: 700, Title: "fanned parent", Labels: []string{}, HasSession: true},
+		{Number: 700, Title: "fanned parent", Labels: []string{}, HasSession: true, HasOpenChildren: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("newTUIListOpenIssuesFunc() = %#v, want %#v", got, want)

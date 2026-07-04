@@ -29,6 +29,12 @@ type Issue struct {
 	Body   string  `json:"body"`
 	Wave   string  `json:"wave,omitempty"`
 	Labels []Label `json:"labels"`
+	// ParentNumber and OpenSubIssueCount classify an issue's place in the
+	// GitHub Sub-issues graph for the picker. Only the GraphQL ListOpenIssues
+	// path sets them; the Sub-issues REST path (SubIssueList) and issue view
+	// (IssueDetail) leave them at zero value.
+	ParentNumber      int // 0 = no parent
+	OpenSubIssueCount int // max(0, subIssuesSummary.total - completed): OPEN children, matching launch's countOpenChildTargets > 0 fan-out test
 }
 
 type PRRef struct {
@@ -270,6 +276,8 @@ query($owner: String!, $name: String!, $first: Int!, $after: String) {
         number
         title
         labels(first: 100) { nodes { name } }
+        parent { number }
+        subIssuesSummary { total completed }
       }
       pageInfo { hasNextPage endCursor }
     }
@@ -332,6 +340,13 @@ func parseOpenIssuesPage(out []byte) (openIssuesPage, error) {
 						Labels struct {
 							Nodes []Label `json:"nodes"`
 						} `json:"labels"`
+						Parent *struct {
+							Number int `json:"number"`
+						} `json:"parent"`
+						SubIssuesSummary struct {
+							Total     int `json:"total"`
+							Completed int `json:"completed"`
+						} `json:"subIssuesSummary"`
 					} `json:"nodes"`
 					PageInfo pageInfo `json:"pageInfo"`
 				} `json:"issues"`
@@ -351,11 +366,17 @@ func parseOpenIssuesPage(out []byte) (openIssuesPage, error) {
 		for _, l := range n.Labels.Nodes {
 			labels = append(labels, Label{Name: l.Name})
 		}
+		parentNumber := 0
+		if n.Parent != nil {
+			parentNumber = n.Parent.Number
+		}
 		issues = append(issues, Issue{
-			Number: n.Number,
-			Title:  n.Title,
-			State:  "OPEN",
-			Labels: labels,
+			Number:            n.Number,
+			Title:             n.Title,
+			State:             "OPEN",
+			Labels:            labels,
+			ParentNumber:      parentNumber,
+			OpenSubIssueCount: max(0, n.SubIssuesSummary.Total-n.SubIssuesSummary.Completed),
 		})
 	}
 	return openIssuesPage{Issues: issues, PageInfo: root.Data.Repository.Issues.PageInfo}, nil

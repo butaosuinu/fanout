@@ -32,10 +32,12 @@ func newTUIListOpenIssuesFunc(projectRoot string) func() ([]fanouttui.IssueListI
 				labels = append(labels, label.Name)
 			}
 			items = append(items, fanouttui.IssueListItem{
-				Number:     issue.Number,
-				Title:      issue.Title,
-				Labels:     labels,
-				HasSession: recorded[issue.Number],
+				Number:          issue.Number,
+				Title:           issue.Title,
+				Labels:          labels,
+				HasSession:      recorded[issue.Number],
+				HasParent:       issue.ParentNumber > 0,
+				HasOpenChildren: issue.OpenSubIssueCount > 0,
 			})
 		}
 		return items, nil
