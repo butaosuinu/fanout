@@ -137,7 +137,7 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout 123 --unblocked-only` | ブロッカーが closed の子だけをファンアウト — 次の wave |
 | `fanout 123 --dry-run` | git / tmux / state / briefing file を変更せず計画だけ表示 |
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
-| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・terminal・prompt / issue / plan からの Session 起動・同一 worktree への追加・復元・lifecycle キー) |
+| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・数字ジャンプ 1-9・focus・zoom・peek・terminal・prompt / issue / plan からの Session 起動・同一 worktree への追加・復元・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
 | `fanout dashboard --web` | localhost で read-only Web ダッシュボードを配信 |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |

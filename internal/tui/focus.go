@@ -15,6 +15,7 @@ import (
 type paneFocusedMsg struct {
 	paneID         string
 	err            error
+	zoomErr        error
 	keyboardPaused bool
 }
 
@@ -93,6 +94,14 @@ func (m model) selectedPane() (paneView, bool) {
 }
 
 func (m *model) focusSelectedCmd() tea.Cmd {
+	return m.focusSelected(false)
+}
+
+func (m *model) zoomSelectedCmd() tea.Cmd {
+	return m.focusSelected(true)
+}
+
+func (m *model) focusSelected(zoom bool) tea.Cmd {
 	pane, ok := m.selectedPane()
 	if !ok {
 		m.notice = "no pane selected"
@@ -107,6 +116,7 @@ func (m *model) focusSelectedCmd() tea.Cmd {
 	alive := m.opts.PaneAlive
 	shellAlive := m.opts.ShellPaneAlive
 	focus := m.opts.FocusPane
+	zoomPane := m.opts.ZoomPane
 	keyboard := m.opts.keyboard
 	m.notice = fmt.Sprintf("focusing %s...", paneID)
 	return func() tea.Msg {
@@ -118,7 +128,11 @@ func (m *model) focusSelectedCmd() tea.Cmd {
 			keyboard.Enable()
 			return paneFocusedMsg{paneID: paneID, err: err}
 		}
-		return paneFocusedMsg{paneID: paneID, keyboardPaused: true}
+		msg := paneFocusedMsg{paneID: paneID, keyboardPaused: true}
+		if zoom {
+			msg.zoomErr = zoomPane(paneID)
+		}
+		return msg
 	}
 }
 

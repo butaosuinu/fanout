@@ -102,6 +102,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", "o":
 			cmd := m.focusSelectedCmd()
 			return m, cmd
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			return m.jumpToOrdinal(int(msg.String()[0] - '0'))
+		case "Z":
+			cmd := m.zoomSelectedCmd()
+			return m, cmd
 		case "p":
 			cmd := m.peekSelectedCmd(true)
 			return m, cmd
@@ -345,7 +350,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshRows()
 			}
 		} else {
-			m.notice = fmt.Sprintf("focused %s; return to the fanout tui pane to continue", msg.paneID)
+			zoomNote := ""
+			if msg.zoomErr != nil {
+				zoomNote = fmt.Sprintf(" (zoom failed: %v)", msg.zoomErr)
+			}
+			m.notice = fmt.Sprintf("focused %s%s; return to the fanout tui pane to continue", msg.paneID, zoomNote)
 		}
 		return m, nil
 	case panePeekLoadedMsg:

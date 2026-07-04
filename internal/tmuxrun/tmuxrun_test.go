@@ -958,6 +958,44 @@ func TestSelectPaneSwitchesClientToPaneTarget(t *testing.T) {
 	assertTmuxArgs(t, argsPath, []string{"switch-client", "-t", "%9"})
 }
 
+func TestZoomPaneZoomsWhenWindowNotZoomed(t *testing.T) {
+	argsPath := installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '0\n'
+	exit 0
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := ZoomPane("%9"); err != nil {
+		t.Fatalf("ZoomPane() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{"resize-pane", "-Z", "-t", "%9"})
+}
+
+// Guards that ZoomPane never toggles an already-zoomed window back to the
+// split layout: the shim fails any command other than the zoom-flag query.
+func TestZoomPaneSkipsToggleWhenWindowAlreadyZoomed(t *testing.T) {
+	installTmuxShim(t, `if [ "$1" = "display-message" ]; then
+	printf '1\n'
+	exit 0
+fi
+exit 1
+`)
+
+	if err := ZoomPane("%9"); err != nil {
+		t.Fatalf("ZoomPane() on zoomed window failed: %v", err)
+	}
+}
+
+func TestZoomPaneRejectsEmptyPaneID(t *testing.T) {
+	installTmuxShim(t, `exit 0
+`)
+
+	if err := ZoomPane("  "); err == nil {
+		t.Fatal("ZoomPane(\"  \") = nil, want error")
+	}
+}
+
 func TestIsPaneAliveBuildsArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)

@@ -1070,6 +1070,382 @@ func TestFocusSelectedPaneRestoresKeyboardProtocolsOnFocusError(t *testing.T) {
 	}
 }
 
+// runCmd executes cmd, flattening one level of tea.Batch, and returns the
+// produced messages.
+func runCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	msgs := make([]tea.Msg, 0, len(batch))
+	for _, sub := range batch {
+		if sub != nil {
+			msgs = append(msgs, sub())
+		}
+	}
+	return msgs
+}
+
+func findPaneFocusedMsg(t *testing.T, msgs []tea.Msg) paneFocusedMsg {
+	t.Helper()
+	for _, msg := range msgs {
+		if focused, ok := msg.(paneFocusedMsg); ok {
+			return focused
+		}
+	}
+	t.Fatalf("no paneFocusedMsg in %#v", msgs)
+	return paneFocusedMsg{}
+}
+
+func TestNumericJumpSelectsAndFocusesNthPane(t *testing.T) {
+	var focused string
+	m := newModel(Options{
+		FocusPane: func(paneID string) error {
+			focused = paneID
+			return nil
+		},
+		PaneAlive:         func(string) bool { return true },
+		CapturePaneOutput: func(string, int) (string, error) { return "", nil },
+	})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
+		{IssueNum: 3, Name: "three", PaneID: "%3", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("3"))
+	m = updated.(model)
+	if got := m.table.Cursor(); got != 2 {
+		t.Fatalf("cursor after 3 = %d, want 2", got)
+	}
+	if cmd == nil {
+		t.Fatal("numeric jump returned nil command, want focus command")
+	}
+	if msg := findPaneFocusedMsg(t, runCmd(cmd)); msg.err != nil {
+		t.Fatalf("focus msg err = %v, want nil", msg.err)
+	}
+	if focused != "%3" {
+		t.Fatalf("focused pane = %q, want %%3", focused)
+	}
+}
+
+// Guards that the numeric jump indexes the filtered list, not all panes.
+func TestNumericJumpIndexesFilteredList(t *testing.T) {
+	var focused string
+	m := newModel(Options{
+		FocusPane: func(paneID string) error {
+			focused = paneID
+			return nil
+		},
+		PaneAlive:         func(string) bool { return true },
+		CapturePaneOutput: func(string, int) (string, error) { return "", nil },
+	})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "alpha", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "bravo", PaneID: "%2", TmuxState: "live"},
+		{IssueNum: 3, Name: "charlie", PaneID: "%3", TmuxState: "live"},
+	}
+	m.filterQuery = "bravo"
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("1"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("numeric jump returned nil command, want focus command")
+	}
+	if msg := findPaneFocusedMsg(t, runCmd(cmd)); msg.err != nil {
+		t.Fatalf("focus msg err = %v, want nil", msg.err)
+	}
+	if focused != "%2" {
+		t.Fatalf("focused pane = %q, want %%2 (first filtered row)", focused)
+	}
+
+	focused = ""
+	updated, cmd = m.Update(keyRunes("2"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("jump past the filtered list returned command, want nil")
+	}
+	if !strings.Contains(m.notice, "no pane 2") {
+		t.Fatalf("notice = %q, want out-of-range message", m.notice)
+	}
+	if focused != "" {
+		t.Fatalf("focused pane = %q, want no focus", focused)
+	}
+}
+
+// Guards that the numeric jump refreshes the detail-panel peek like every
+// other cursor move, so a skipped or failed focus does not leave it stale.
+func TestNumericJumpSchedulesPeekAlongsideFocus(t *testing.T) {
+	m := newModel(Options{
+		FocusPane:         func(string) error { return nil },
+		PaneAlive:         func(string) bool { return true },
+		CapturePaneOutput: func(string, int) (string, error) { return "captured", nil },
+	})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("2"))
+	m = updated.(model)
+	if !m.peek.Loading || m.peek.PaneID != "%2" {
+		t.Fatalf("peek after jump = %#v, want loading for %%2", m.peek)
+	}
+	peeked := false
+	for _, msg := range runCmd(cmd) {
+		if loaded, ok := msg.(panePeekLoadedMsg); ok && loaded.paneID == "%2" {
+			peeked = true
+		}
+	}
+	if !peeked {
+		t.Fatal("numeric jump scheduled no peek for the target pane")
+	}
+}
+
+func TestNumericJumpOutOfRangeShowsNotice(t *testing.T) {
+	focusCalls := 0
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			focusCalls++
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("9"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("out-of-range jump returned command, want nil")
+	}
+	if !strings.Contains(m.notice, "no pane 9") {
+		t.Fatalf("notice = %q, want out-of-range message", m.notice)
+	}
+	if got := m.table.Cursor(); got != 0 {
+		t.Fatalf("cursor after out-of-range jump = %d, want 0", got)
+	}
+	if focusCalls != 0 {
+		t.Fatalf("FocusPane calls = %d, want 0", focusCalls)
+	}
+}
+
+// Guards that the close menu's 1-3 option choices win over the numeric jump.
+func TestNumericKeysDuringCloseMenuSelectOptionsNotJump(t *testing.T) {
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		lifecycle:   &fakeLifecycleRunner{code: exitcode.OK},
+		FocusPane: func(string) error {
+			focusCalls++
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{
+		{Parent: "84", IssueNum: 101, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{Parent: "84", IssueNum: 102, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, _ := m.Update(keyRunes("c"))
+	m = updated.(model)
+	updated, cmd := m.Update(keyRunes("2"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("close choice returned command, want nil")
+	}
+	if m.pendingAction == nil || m.pendingAction.closeMode != lifecycle.CloseWorktree {
+		t.Fatalf("pendingAction = %#v, want close-worktree choice", m.pendingAction)
+	}
+	if got := m.table.Cursor(); got != 0 {
+		t.Fatalf("cursor after close-menu 2 = %d, want 0", got)
+	}
+	if focusCalls != 0 {
+		t.Fatalf("FocusPane calls = %d, want 0", focusCalls)
+	}
+}
+
+// Guards that filter editing captures digits instead of the numeric jump.
+func TestNumericKeysDuringFilterEditingTypeIntoQuery(t *testing.T) {
+	focusCalls := 0
+	m := newModel(Options{
+		FocusPane: func(string) error {
+			focusCalls++
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{
+		{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{IssueNum: 2, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, _ := m.Update(keyRunes("/"))
+	m = updated.(model)
+	updated, cmd := m.Update(keyRunes("2"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("filter digit returned command, want nil")
+	}
+	if m.filterQuery != "2" {
+		t.Fatalf("filterQuery = %q, want \"2\"", m.filterQuery)
+	}
+	if focusCalls != 0 {
+		t.Fatalf("FocusPane calls = %d, want 0", focusCalls)
+	}
+}
+
+func TestZoomKeyFocusesThenZoomsSelectedPane(t *testing.T) {
+	var calls []string
+	m := newModel(Options{
+		FocusPane: func(paneID string) error {
+			calls = append(calls, "focus:"+paneID)
+			return nil
+		},
+		ZoomPane: func(paneID string) error {
+			calls = append(calls, "zoom:"+paneID)
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("Z"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("Z returned nil command, want focus+zoom command")
+	}
+	raw := cmd()
+	msg, ok := raw.(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("Z msg = %T, want paneFocusedMsg", raw)
+	}
+	if want := []string{"focus:%1", "zoom:%1"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	next, _ := m.Update(msg)
+	m = next.(model)
+	if !strings.Contains(m.notice, "focused %1") {
+		t.Fatalf("notice = %q, want focused message", m.notice)
+	}
+}
+
+func TestZoomKeySkipsZoomWhenFocusFails(t *testing.T) {
+	zoomCalls := 0
+	m := newModel(Options{
+		FocusPane: func(string) error { return errors.New("focus failed") },
+		ZoomPane: func(string) error {
+			zoomCalls++
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("Z"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("Z returned nil command, want focus+zoom command")
+	}
+	raw := cmd()
+	msg, ok := raw.(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("Z msg = %T, want paneFocusedMsg", raw)
+	}
+	if msg.err == nil {
+		t.Fatal("msg.err = nil, want focus error")
+	}
+	if zoomCalls != 0 {
+		t.Fatalf("ZoomPane calls after failed focus = %d, want 0", zoomCalls)
+	}
+}
+
+func TestZoomFailureKeepsFocusAndShowsNotice(t *testing.T) {
+	m := newModel(Options{
+		FocusPane: func(string) error { return nil },
+		ZoomPane:  func(string) error { return errors.New("zoom failed") },
+		PaneAlive: func(string) bool { return true },
+	})
+	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("Z"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("Z returned nil command, want focus+zoom command")
+	}
+	raw := cmd()
+	msg, ok := raw.(paneFocusedMsg)
+	if !ok {
+		t.Fatalf("Z msg = %T, want paneFocusedMsg", raw)
+	}
+	if msg.err != nil {
+		t.Fatalf("msg.err = %v, want nil when only zoom fails", msg.err)
+	}
+	next, _ := m.Update(msg)
+	m = next.(model)
+	if !m.keyboardPaused {
+		t.Fatal("keyboardPaused = false, want true when focus succeeded")
+	}
+	if !strings.Contains(m.notice, "zoom failed") {
+		t.Fatalf("notice = %q, want zoom failure message", m.notice)
+	}
+}
+
+// Guards that enter / o keep plain focus behavior and never zoom.
+func TestEnterAndOFocusKeysDoNotZoom(t *testing.T) {
+	for _, key := range []string{"enter", "o"} {
+		t.Run(key, func(t *testing.T) {
+			zoomCalls := 0
+			var focused string
+			m := newModel(Options{
+				FocusPane: func(paneID string) error {
+					focused = paneID
+					return nil
+				},
+				ZoomPane: func(string) error {
+					zoomCalls++
+					return nil
+				},
+				PaneAlive: func(string) bool { return true },
+			})
+			m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live"}}
+			m.refreshRows()
+
+			updated, cmd := m.Update(keyRunes(key))
+			m = updated.(model)
+			if cmd == nil {
+				t.Fatalf("%s returned nil command, want focus command", key)
+			}
+			if raw := cmd(); raw == nil {
+				t.Fatalf("%s msg = nil, want paneFocusedMsg", key)
+			} else if _, ok := raw.(paneFocusedMsg); !ok {
+				t.Fatalf("%s msg = %T, want paneFocusedMsg", key, raw)
+			}
+			if focused != "%1" {
+				t.Fatalf("focused pane = %q, want %%1", focused)
+			}
+			if zoomCalls != 0 {
+				t.Fatalf("ZoomPane calls = %d, want 0", zoomCalls)
+			}
+		})
+	}
+}
+
 func TestEnableKeyboardProtocolsCmd(t *testing.T) {
 	protocols := &fakeKeyboardProtocols{}
 	m := newModel(Options{keyboard: protocols})

@@ -37,6 +37,8 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
+| `1`-`9` | 表示リストの N 行目へジャンプして、そのペインにフォーカスする。範囲外の数字は notice を表示する。 |
+| `Z` | 選択中のペインにフォーカスして zoom する（`resize-pane -Z`）。次の relayout（ペインの作成・削除、tmux window のリサイズ）で zoom は解除されるので、必要ならもう一度 `Z` を押す。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
 | `c` / `x` | 選択中のペインの close option を開く。ペインだけを閉じる、ペインと worktree を閉じる、local branch も削除する、から選ぶ。 |
 | `m` | 選択中のペインの branch を fast-forward merge する（確認を挟み、`--merge` と同じコア処理を使う）。 |
