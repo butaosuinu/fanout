@@ -91,6 +91,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		Hooks:               hookConfig,
 		LaunchPane:          newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig),
 		NewPanePrompt:       newTUINewPanePromptFunc(projectRoot, commandName),
+		HelpPopup:           newTUIHelpPopupFunc(projectRoot, commandName),
 		LaunchAttach:        newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig),
 		// List providers also feed the in-process fallback form (NewPanePrompt
 		// unavailable); the popup process wires its own copies.

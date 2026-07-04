@@ -27,11 +27,11 @@ fanout   # start the persistent tmux console
 
 ### キー操作
 
-footer は短く保ちます。通常画面で `?` を押すと、全ショートカットのヘルプが開きます。
+footer は短く保ちます。通常画面で `?` を押すと、全ショートカットのヘルプが tmux popup で開きます。
 
 | キー | 動作 |
 |---|---|
-| `?` | キーボードショートカットのヘルプを開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
+| `?` | キーボードショートカットのヘルプを tmux popup で開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |

@@ -2888,6 +2888,103 @@ func TestNewPanePopupCancelPreservesNewerNotice(t *testing.T) {
 	}
 }
 
+func TestHelpKeyUsesPopupWhenConfigured(t *testing.T) {
+	calls := 0
+	m := newModel(Options{
+		HelpPopup: func() error {
+			calls++
+			return nil
+		},
+	})
+
+	updated, cmd := m.Update(keyRunes("?"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("? returned nil command, want help popup command")
+	}
+	if calls != 0 {
+		t.Fatalf("help popup calls before command execution = %d, want 0", calls)
+	}
+	if m.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor while popup owns input", m.mode)
+	}
+	if !m.helpPopupOpen {
+		t.Fatal("helpPopupOpen = false, want true")
+	}
+	if m.notice != helpPopupOpeningNotice {
+		t.Fatalf("notice = %q, want %q", m.notice, helpPopupOpeningNotice)
+	}
+
+	updated, next := m.Update(cmd())
+	m = updated.(model)
+	if next != nil {
+		t.Fatal("help popup completion returned command")
+	}
+	if calls != 1 {
+		t.Fatalf("help popup calls = %d, want 1", calls)
+	}
+	if m.helpPopupOpen {
+		t.Fatal("helpPopupOpen = true after popup completion")
+	}
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want cleared", m.notice)
+	}
+}
+
+func TestHelpPopupOpenBlocksMonitorKeys(t *testing.T) {
+	m := newModel(Options{
+		HelpPopup: func() error {
+			return nil
+		},
+	})
+
+	updated, popupCmd := m.Update(keyRunes("?"))
+	m = updated.(model)
+	if popupCmd == nil {
+		t.Fatal("? returned nil command, want help popup command")
+	}
+	if !m.helpPopupOpen {
+		t.Fatal("helpPopupOpen = false, want true")
+	}
+
+	for _, key := range []tea.KeyMsg{keyRunes("q"), keyRunes("n"), {Type: tea.KeyCtrlC}} {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatalf("%q returned command while help popup is open", key.String())
+		}
+		if m.mode != modeMonitor {
+			t.Fatalf("%q changed mode = %v, want monitor", key.String(), m.mode)
+		}
+		if !m.helpPopupOpen {
+			t.Fatalf("%q cleared helpPopupOpen", key.String())
+		}
+	}
+}
+
+func TestHelpPopupFailureSurfacesNotice(t *testing.T) {
+	m := newModel(Options{
+		HelpPopup: func() error {
+			return errBoom
+		},
+	})
+
+	updated, cmd := m.Update(keyRunes("?"))
+	m = updated.(model)
+	updated, next := m.Update(cmd())
+	m = updated.(model)
+
+	if next != nil {
+		t.Fatal("help popup failure returned command")
+	}
+	if m.helpPopupOpen {
+		t.Fatal("helpPopupOpen = true after popup failure")
+	}
+	if m.notice != "help popup: boom" {
+		t.Fatalf("notice = %q, want help popup error", m.notice)
+	}
+}
+
 func TestHelpKeyOpensAndClosesModal(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 100

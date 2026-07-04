@@ -54,6 +54,9 @@ func main() {
 	if isTUINewPanePopupRequest(os.Args[1:]) {
 		os.Exit(int(cmdTUINewPanePopup(os.Args[2:], lg)))
 	}
+	if isTUIHelpPopupRequest(os.Args[1:]) {
+		os.Exit(int(cmdTUIHelpPopup(os.Args[2:], lg)))
+	}
 	if isCodexPlanTUIRequest(os.Args[1:]) {
 		os.Exit(int(cmdCodexPlanTUI(os.Args[2:], lg)))
 	}

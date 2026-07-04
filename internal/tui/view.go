@@ -13,6 +13,12 @@ type monitorLayout struct {
 }
 
 func (m model) View() string {
+	if m.helpOnly {
+		if m.width == 0 {
+			return "Keyboard shortcuts"
+		}
+		return m.helpView()
+	}
 	if m.width == 0 {
 		return "fanout TUI"
 	}

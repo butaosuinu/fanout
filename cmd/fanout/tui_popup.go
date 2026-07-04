@@ -18,12 +18,21 @@ import (
 )
 
 const (
+	tuiHelpPopupCommand        = "__tui-help-popup"
+	tuiHelpPopupMinHeight      = 18
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
 	tuiNewPanePopupMinHeight   = 18
 	tuiNewPanePopupBorderInset = 2
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
 	tuiNewPanePopupResultWait  = 24 * time.Hour
 )
+
+type tuiHelpPopupGeometry struct {
+	PopupWidth    int
+	PopupHeight   int
+	ContentWidth  int
+	ContentHeight int
+}
 
 type tuiNewPanePopupGeometry struct {
 	PopupWidth   int
@@ -46,6 +55,28 @@ type tuiNewPanePopupResult struct {
 
 func isTUINewPanePopupRequest(args []string) bool {
 	return len(args) > 0 && args[0] == tuiNewPanePopupCommand
+}
+
+func isTUIHelpPopupRequest(args []string) bool {
+	return len(args) > 0 && args[0] == tuiHelpPopupCommand
+}
+
+func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
+	fs := flag.NewFlagSet(tuiHelpPopupCommand, flag.ContinueOnError)
+	fs.SetOutput(lg.Stderr())
+	width := fs.Int("width", 76, "help width")
+	height := fs.Int("height", 18, "help height")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Invocation
+	}
+	if err := fanouttui.RunHelpPopup(fanouttui.HelpPopupOptions{
+		Width:  *width,
+		Height: *height,
+	}); err != nil {
+		lg.Err("help popup: %v", err)
+		return exitcode.Env
+	}
+	return exitcode.OK
 }
 
 func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
@@ -132,6 +163,26 @@ func writeTUINewPanePopupResult(path string, result tuiNewPanePopupResult) error
 	return nil
 }
 
+func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFunc {
+	return func() error {
+		size, err := tmuxrun.CurrentClientSize()
+		if err != nil {
+			return err
+		}
+		geometry, err := tuiHelpPopupGeometryForClient(size)
+		if err != nil {
+			return err
+		}
+		return tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+			Width:    geometry.PopupWidth,
+			Height:   geometry.PopupHeight,
+			StartDir: projectRoot,
+			Title:    "Keyboard shortcuts",
+			Command:  tuiHelpPopupShellCommand(commandName, geometry.ContentWidth, geometry.ContentHeight),
+		})
+	}
+}
+
 func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPanePromptFunc {
 	return func(req fanouttui.NewPanePromptRequest) (fanouttui.LaunchRequest, bool, error) {
 		size, err := tmuxrun.CurrentClientSize()
@@ -194,6 +245,23 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 	}
 }
 
+func tuiHelpPopupGeometryForClient(size tmuxrun.ClientSize) (tuiHelpPopupGeometry, error) {
+	minPopupHeight := tuiHelpPopupMinHeight + tuiNewPanePopupBorderInset
+	if size.Width < 54 || size.Height < minPopupHeight {
+		return tuiHelpPopupGeometry{}, fmt.Errorf("tmux client is too small for the help popup: %dx%d", size.Width, size.Height)
+	}
+	popupWidth := min(90, size.Width-4)
+	targetPopupHeight := min(int(math.Floor(float64(size.Height)*0.8)), size.Height-2)
+	popupHeight := max(targetPopupHeight, minPopupHeight)
+	// Bordered tmux display-popup subtracts the frame from the child pty.
+	return tuiHelpPopupGeometry{
+		PopupWidth:    popupWidth,
+		PopupHeight:   popupHeight,
+		ContentWidth:  popupWidth - tuiNewPanePopupBorderInset,
+		ContentHeight: popupHeight - tuiNewPanePopupBorderInset,
+	}, nil
+}
+
 func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
 	if size.Width < 54 || size.Height < minPopupHeight {
@@ -220,6 +288,25 @@ func newPopupResultPaths() (resultFile, doneFile string, cleanup func(), err err
 		_ = os.RemoveAll(dir)
 	}
 	return filepath.Join(dir, "result.json"), filepath.Join(dir, "done"), cleanup, nil
+}
+
+func tuiHelpPopupShellCommand(commandName string, width, height int) string {
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
+		exe = commandName
+	}
+	parts := []string{
+		shellQuote(exe),
+		tuiHelpPopupCommand,
+		"--width", fmt.Sprintf("%d", width),
+		"--height", fmt.Sprintf("%d", height),
+	}
+	// display-popup runs under the tmux server's environment. Forward PATH so a
+	// fallback command name resolves the same way as the parent fanout process.
+	if path := os.Getenv("PATH"); path != "" {
+		parts = append([]string{"PATH=" + shellQuote(path)}, parts...)
+	}
+	return strings.Join(parts, " ")
 }
 
 func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile, defaultAgent string, width, height int) string {

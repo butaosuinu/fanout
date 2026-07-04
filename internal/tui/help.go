@@ -3,12 +3,58 @@ package tui
 import (
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+const helpPopupOpeningNotice = "opening help popup..."
 
 type helpEntry struct {
 	Key         string
 	Description string
+}
+
+// HelpPopupFunc opens the keyboard shortcut help in an external surface, such as
+// a tmux display-popup.
+type HelpPopupFunc func() error
+
+// HelpPopupOptions configures the standalone help popup program.
+type HelpPopupOptions struct {
+	Width  int
+	Height int
+}
+
+// RunHelpPopup opens only the keyboard shortcut help and exits when the user
+// presses Esc, q, ?, or Ctrl+C.
+func RunHelpPopup(opts HelpPopupOptions) error {
+	width := opts.Width
+	if width <= 0 {
+		width = 76
+	}
+	height := opts.Height
+	if height <= 0 {
+		height = 18
+	}
+	m := newModel(Options{})
+	m.helpOnly = true
+	m.mode = modeHelp
+	m.width = width
+	m.height = height
+	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	return err
+}
+
+func (m *model) openHelpPopupCmd() tea.Cmd {
+	popup := m.opts.HelpPopup
+	if popup == nil {
+		m.mode = modeHelp
+		return nil
+	}
+	m.notice = helpPopupOpeningNotice
+	m.helpPopupOpen = true
+	return func() tea.Msg {
+		return helpPopupDoneMsg{err: popup()}
+	}
 }
 
 func (m model) helpView() string {
@@ -40,9 +86,11 @@ func (m model) helpView() string {
 		{"Esc", "Cancel / back"},
 	}
 	columnWidth := m.helpColumnWidth()
-	lines := []string{
-		titleStyle.Render("Keyboard shortcuts"),
-		"",
+	lines := make([]string, 0, 5)
+	if !m.helpOnly {
+		lines = append(lines, titleStyle.Render("Keyboard shortcuts"), "")
+	}
+	lines = append(lines,
 		lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			m.helpColumn("Monitor", monitor, columnWidth),
@@ -51,8 +99,12 @@ func (m model) helpView() string {
 		),
 		"",
 		dimStyle.Render("Esc / q / ? close"),
+	)
+	content := strings.Join(lines, "\n")
+	if m.helpOnly {
+		return popupContentStyle.Width(m.helpModalWidth()).Render(content)
 	}
-	return modalStyle.Width(m.helpModalWidth()).Render(strings.Join(lines, "\n"))
+	return modalStyle.Width(m.helpModalWidth()).Render(content)
 }
 
 func (m model) helpColumn(title string, entries []helpEntry, width int) string {
@@ -76,6 +128,9 @@ func (m model) helpRow(key, description string, width int) string {
 func (m model) helpModalWidth() int {
 	if m.width <= 0 {
 		return 76
+	}
+	if m.helpOnly {
+		return clampInt(m.width, 48, 88)
 	}
 	return clampInt(m.width-4, 48, 76)
 }
