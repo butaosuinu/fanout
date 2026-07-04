@@ -254,6 +254,14 @@ func recreateRecordedPane(pane state.Pane, root, session, commandName string) (s
 	if err != nil {
 		return pane, err
 	}
+	// Not best-effort: liveness for keyed rows matches on @fanout_shell_key, so
+	// a restored pane without the key would read as stale forever.
+	if key := strings.TrimSpace(pane.ShellKey); key != "" {
+		if err := tmuxrun.SetPaneShellKey(paneID, key); err != nil {
+			_ = tmuxrun.KillPane(paneID)
+			return pane, fmt.Errorf("restore pane liveness key on %s: %w", paneID, err)
+		}
+	}
 	_ = tmuxrun.SetPaneTitle(paneID, restorePaneTitle(pane))                           // cosmetic; pane is still usable if tmux rejects title updates
 	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(pane.Parent, restorePaneTitle(pane))) // cosmetic pane-border label
 	_ = tmuxrun.EnablePaneBorderTitles(paneID)                                         // cosmetic pane-border label
@@ -304,13 +312,22 @@ func restorePaneAlive(live map[string]tmuxrun.LivePane, pane state.Pane) bool {
 	if !ok {
 		return false
 	}
-	if pane.IsShell() {
+	// Rows recorded with a ShellKey (shell terminals, the plan fan-out
+	// coordinator at the repo root) match on @fanout_shell_key: their
+	// WorktreePath contains every fanout pane, so the path check below cannot
+	// detect pane id reuse.
+	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
 		return strings.TrimSpace(pane.ShellKey) != "" && cur.ShellKey == pane.ShellKey
 	}
 	return pathWithin(cur.CurrentPath, pane.WorktreePath)
 }
 
 func restorePaneIDStillBelongsToRecord(livePane tmuxrun.LivePane, pane state.Pane) bool {
+	// A keyed row is identified by its liveness key, not its title: a reused
+	// pane id whose title happens to match must not keep the record bound.
+	if key := strings.TrimSpace(pane.ShellKey); key != "" && livePane.ShellKey != key {
+		return false
+	}
 	return slices.Contains(restorePaneTitleCandidates(pane), livePane.Title)
 }
 

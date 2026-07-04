@@ -110,3 +110,27 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 		t.Fatalf("relayout calls = %+v, want one on @7", *calls)
 	}
 }
+
+// A keyed attached agent (the plan fan-out coordinator) must take the
+// identity-checked kill: when no live pane carries its liveness key, the close
+// skips both the kill and the relayout instead of killing by pane id.
+func TestClosePaneRecordsKeyVerifiesKeyedAttachedAgent(t *testing.T) {
+	installFakeTmux(t, "@1", false)
+	calls := stubRelayout(t)
+
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, ShellKey: "shell-coordinator"}})
+	if len(*calls) != 0 {
+		t.Fatalf("relayout calls = %+v, want none when the liveness key cannot be confirmed", *calls)
+	}
+}
+
+// An attached agent without a liveness key keeps the direct pane-id kill.
+func TestClosePaneRecordsKillsUnkeyedAttachedAgentByPaneID(t *testing.T) {
+	installFakeTmux(t, "@1", false)
+	calls := stubRelayout(t)
+
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent}})
+	if len(*calls) != 1 {
+		t.Fatalf("relayout calls = %+v, want one for an unkeyed attached agent", *calls)
+	}
+}

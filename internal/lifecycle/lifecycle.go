@@ -468,7 +468,10 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 	for _, pane := range panes {
 		if pane.IsShell() || pane.IsAttachedAgent() {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			if pane.IsShell() {
+			// Keyed attached agents (the plan fan-out coordinator, recorded at
+			// the repo root) take the identity-checked kill like shell panes: a
+			// bare pane-id kill could hit an unrelated pane after id reuse.
+			if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
 				killShellPaneBestEffort(pane, lg, windows)
 			} else {
 				captureWindow(pane.PaneID, windows)
@@ -663,6 +666,9 @@ func killPaneBestEffort(pane state.Pane, lg Logger) {
 	}
 }
 
+// killShellPaneBestEffort kills a pane only after confirming the live pane
+// still carries the recorded @fanout_shell_key. Shell terminals and keyed
+// attached agents (the plan fan-out coordinator) route here.
 func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]struct{}) {
 	if strings.TrimSpace(pane.PaneID) == "" {
 		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
@@ -675,7 +681,7 @@ func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]stru
 	}
 	live, err := tmuxrun.ListLivePanes()
 	if err != nil {
-		lg.Warn("%s: tmux list-panes failed; skipping shell pane kill: %v", paneLabel(pane), err)
+		lg.Warn("%s: tmux list-panes failed; skipping keyed pane kill: %v", paneLabel(pane), err)
 		return
 	}
 	for _, cur := range live {
@@ -683,7 +689,7 @@ func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]stru
 			continue
 		}
 		if cur.ShellKey != shellKey {
-			lg.Warn("%s: shell pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
+			lg.Warn("%s: pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
 			return
 		}
 		// Identity confirmed: capture the window only now, so a reused pane id
@@ -692,7 +698,7 @@ func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]stru
 		killPaneBestEffort(pane, lg)
 		return
 	}
-	lg.Warn("%s: shell pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
+	lg.Warn("%s: pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
 }
 
 // captureWindow records the window holding paneID into windows, best-effort.

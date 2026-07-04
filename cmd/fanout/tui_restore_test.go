@@ -402,3 +402,103 @@ func installRestoreAgentScript(t *testing.T, agentName string) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+// TestRestorePaneAliveKeyedPaneRequiresKeyMatch pins liveness for rows recorded
+// with a ShellKey (shell terminals, the plan fan-out coordinator): the repo
+// root as WorktreePath makes path containment useless against pane id reuse,
+// so only a matching @fanout_shell_key counts as alive.
+func TestRestorePaneAliveKeyedPaneRequiresKeyMatch(t *testing.T) {
+	tests := []struct {
+		name string
+		pane state.Pane
+		live tmuxrun.LivePane
+		want bool
+	}{
+		{
+			name: "keyed coordinator with matching key is alive",
+			pane: state.Pane{PaneID: "%1", Kind: state.PaneKindAttachedAgent, ShellKey: "shell-a", WorktreePath: "/repo"},
+			live: tmuxrun.LivePane{ID: "%1", CurrentPath: "/repo", ShellKey: "shell-a"},
+			want: true,
+		},
+		{
+			name: "reused pane id under the repo root is dead without the key",
+			pane: state.Pane{PaneID: "%1", Kind: state.PaneKindAttachedAgent, ShellKey: "shell-a", WorktreePath: "/repo"},
+			live: tmuxrun.LivePane{ID: "%1", CurrentPath: "/repo/.fanout/worktrees/other"},
+			want: false,
+		},
+		{
+			name: "unkeyed agent pane keeps the path containment check",
+			pane: state.Pane{PaneID: "%1", WorktreePath: "/repo/.fanout/worktrees/child"},
+			live: tmuxrun.LivePane{ID: "%1", CurrentPath: "/repo/.fanout/worktrees/child"},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := restorePaneAlive(map[string]tmuxrun.LivePane{tt.live.ID: tt.live}, tt.pane); got != tt.want {
+				t.Fatalf("restorePaneAlive(%+v) = %v, want %v", tt.pane, got, tt.want)
+			}
+		})
+	}
+}
+
+// A keyed row never stays bound to a reused pane id on a title coincidence.
+func TestRestorePaneIDStillBelongsToRecordChecksLivenessKey(t *testing.T) {
+	pane := state.Pane{PaneID: "%1", Kind: state.PaneKindAttachedAgent, ShellKey: "shell-a", DisplayName: "plan: build search", WorktreePath: "/repo"}
+	title := restorePaneTitleCandidates(pane)[0]
+	tests := []struct {
+		name string
+		live tmuxrun.LivePane
+		want bool
+	}{
+		{name: "matching title with the matching key stays bound", live: tmuxrun.LivePane{ID: "%1", Title: title, ShellKey: "shell-a"}, want: true},
+		{name: "matching title without the key is released", live: tmuxrun.LivePane{ID: "%1", Title: title}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := restorePaneIDStillBelongsToRecord(tt.live, pane); got != tt.want {
+				t.Fatalf("restorePaneIDStillBelongsToRecord(%+v) = %v, want %v", tt.live, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRestoreRecordedPanesRecreatesCoordinatorWithLivenessKey pins that the
+// plan fan-out coordinator's @fanout_shell_key survives an automatic restore:
+// without it the recreated pane would read as stale forever.
+func TestRestoreRecordedPanesRecreatesCoordinatorWithLivenessKey(t *testing.T) {
+	root := t.TempDir()
+	logPath := installRestoreTmuxAndAgentScripts(t, "claude")
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:       "@manual",
+		IssueNum:     -1,
+		Kind:         state.PaneKindAttachedAgent,
+		Slug:         "plan-prompt-1",
+		DisplayName:  "plan: build search",
+		PaneID:       "%old",
+		ShellKey:     "shell-coordinator",
+		Agent:        "claude",
+		WorktreePath: root,
+	}})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Restored != 1 {
+		t.Fatalf("Restored = %d, want 1", report.Restored)
+	}
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 1 || got.Panes[0].PaneID != "%restored" || got.Panes[0].ShellKey != "shell-coordinator" {
+		t.Fatalf("state panes = %+v, want restored pane keeping its liveness key", got.Panes)
+	}
+	logBody, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logBody), "@fanout_shell_key shell-coordinator") {
+		t.Fatalf("tmux log = %q, want @fanout_shell_key set on the restored pane", string(logBody))
+	}
+}
