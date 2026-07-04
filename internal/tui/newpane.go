@@ -131,11 +131,15 @@ type newPaneForm struct {
 	// one selection; returning to plain prompt mode restores it. nil when
 	// nothing is stashed.
 	promptAgentCount map[string]int
-	agentIndex       int
-	focus            newPaneField
-	launching        bool
-	err              string
-	attach           *AttachTarget
+	// singleAgent remembers the single-select choice (issue mode, plan
+	// fan-out) so a mode round trip re-selects it instead of re-deriving the
+	// default from the restored prompt counts. "" until a selection is made.
+	singleAgent string
+	agentIndex  int
+	focus       newPaneField
+	launching   bool
+	err         string
+	attach      *AttachTarget
 
 	// planFanout is the prompt-mode checkbox: decompose the prompt via the
 	// fanout-plan skill instead of launching a plain agent pane.
@@ -484,6 +488,7 @@ func (m model) newPaneSingleAgentMode() bool {
 
 // selectSingleNewPaneAgent sets the focused agent's count to 1 and zeros the
 // others. Never toggles to zero, so the selection always sums to exactly 1.
+// The choice is remembered in singleAgent so it survives a mode round trip.
 func (m *model) selectSingleNewPaneAgent() {
 	focused := launchAgents[m.newPane.agentIndex]
 	for _, agentName := range launchAgents {
@@ -493,6 +498,7 @@ func (m *model) selectSingleNewPaneAgent() {
 			m.newPane.agentCount[agentName] = 0
 		}
 	}
+	m.newPane.singleAgent = focused
 }
 
 // syncAgentSelectionForMode reconciles the shared agent counts with the
@@ -500,11 +506,17 @@ func (m *model) selectSingleNewPaneAgent() {
 // fan-out checkbox) stashes the prompt-mode launch counts before collapsing
 // them, and returning to plain prompt mode restores the stash — so peeking at
 // issue mode or toggling the checkbox never changes how many panes a prompt
-// submit launches.
+// submit launches. The single-select choice survives the same round trip via
+// singleAgent, so re-entering issue mode keeps the agent the user picked there.
 func (m *model) syncAgentSelectionForMode() {
 	if m.newPaneSingleAgentMode() {
 		if m.newPane.promptAgentCount == nil {
 			m.newPane.promptAgentCount = maps.Clone(m.newPane.agentCount)
+		}
+		if idx := slices.Index(launchAgents, m.newPane.singleAgent); idx >= 0 {
+			m.newPane.agentIndex = idx
+			m.selectSingleNewPaneAgent()
+			return
 		}
 		m.normalizeSingleAgentSelection()
 		return

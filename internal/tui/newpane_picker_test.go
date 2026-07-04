@@ -883,3 +883,39 @@ func TestPlanFanoutToggleRoundTripPreservesPromptAgentCounts(t *testing.T) {
 		t.Fatalf("restored counts = %v, want claude 1 / codex 2", m.newPane.agentCount)
 	}
 }
+
+// TestIssueDefaultAgentSurvivesModeRoundTrip pins the symmetric half of the
+// stash/restore: the default agent picked in issue mode is remembered when the
+// user peeks at prompt mode and returns, instead of being re-derived from the
+// restored prompt counts.
+func TestIssueDefaultAgentSurvivesModeRoundTrip(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return []IssueListItem{{Number: 1, Title: "x"}}, nil },
+	})
+	m.openNewPaneForm()
+
+	step := func(key tea.KeyMsg) {
+		updated, _ := m.Update(key)
+		m = updated.(model)
+	}
+
+	m.newPane.focus = newPaneFieldMode
+	step(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue
+
+	m.newPane.focus = newPaneFieldAgent
+	step(tea.KeyMsg{Type: tea.KeyDown})  // claude -> codex row
+	step(tea.KeyMsg{Type: tea.KeySpace}) // select codex
+	if got := m.selectedDefaultAgent(); got != "codex" {
+		t.Fatalf("selectedDefaultAgent() = %q, want codex after selection", got)
+	}
+
+	m.newPane.focus = newPaneFieldMode
+	step(tea.KeyMsg{Type: tea.KeyRight}) // issue -> prompt (counts restored)
+	step(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue again
+	if got := m.selectedDefaultAgent(); got != "codex" {
+		t.Fatalf("selectedDefaultAgent() = %q, want codex to survive the round trip", got)
+	}
+	if total := m.newPane.agentCount["claude"] + m.newPane.agentCount["codex"]; total != 1 {
+		t.Fatalf("issue-mode agent counts sum = %d, want 1", total)
+	}
+}
