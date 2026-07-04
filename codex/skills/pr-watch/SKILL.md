@@ -14,8 +14,8 @@ Claude 版の `pr-watch` は `/loop` と `ScheduleWakeup` を前提にする。C
 バックグラウンド監視を装わないが、PR 作成後または「あとはよろしく」では、Claude
 Code `/autofix-pr` のローカル版として foreground watch を行う。デフォルトでは、
 修正可能な CI 失敗・レビューコメント・コンフリクトに対応し、PR が green /
-mergeable になった後も `reviewDecision=APPROVED` または設定済み `:+1:` approval
-signal まで待つ。
+mergeable になった後、レビュー必須なら `reviewDecision=APPROVED` または設定済み
+`:+1:` approval signal まで待つ。レビュー不要ならそこで完了する。
 
 ただし、approval / reaction 待ちでは full One Pass を繰り返さず、shell-owned な
 cheap polling だけを行う。Codex セッションを終了すると監視は続かない。
@@ -35,7 +35,8 @@ Completion requires:
 - mergeable or not blocked by conflicts
 - required CI is pass/skipping
 - no known actionable unresolved review work remains
-- `reviewDecision=APPROVED` or a configured `:+1:` approval signal is observed
+- review is not required, `reviewDecision=APPROVED`, or a configured `:+1:`
+  approval signal is observed
 
 The watch is foreground and local. It must not claim to keep watching after the
 Codex session exits.
@@ -81,7 +82,7 @@ A cheap snapshot may fetch only compact PR status:
 
 ```bash
 gh pr view ${pr:+"$pr"} \
-  --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,updatedAt,headRefOid,url,headRefName,baseRefName,reactionGroups \
+  --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,headRefName,baseRefName,reactionGroups \
   --jq '{
     number,
     state,
@@ -89,6 +90,7 @@ gh pr view ${pr:+"$pr"} \
     mergeable,
     mergeStateStatus,
     reviewDecision,
+    reviewRequests,
     updatedAt,
     headRefOid,
     url,
@@ -105,7 +107,11 @@ gh pr checks ${pr:+"$pr"} \
   --json name,bucket,state,workflow,link \
   --jq '
     group_by(.bucket)
-    | map({bucket: .[0].bucket, count: length, names: map(.name) | sort})
+    | map({
+        bucket: .[0].bucket,
+        count: length,
+        checks: map({name, state, workflow, link}) | sort_by(.name, .workflow, .link, .state)
+      })
   ' || true
 ```
 
@@ -117,10 +123,13 @@ poll again.
 
 The PR is considered approved when either:
 
-1. `reviewDecision=APPROVED`, or
-2. a configured `:+1:` approval signal is observed.
+1. review is not required (`reviewDecision` is empty/null and there are no
+   pending `reviewRequests`),
+2. `reviewDecision=APPROVED`, or
+3. a configured `:+1:` approval signal is observed.
 
-`reviewDecision=APPROVED` is the primary signal.
+`reviewDecision=APPROVED` is the primary signal when repository rules require
+review.
 
 `:+1:` is a configurable soft approval signal, not a generic reaction shortcut.
 Count it as approval only when both the target and actor policy are configured.
@@ -259,10 +268,13 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
 - `state` が `MERGED` または `CLOSED` なら完了。
 - OPEN かつ draft でなく、mergeable、CI が pass/skipping、未対応 review thread と
   actionable top-level 指摘が 0 の場合、自動修正は完了。
-- 自動修正が完了していて `reviewDecision=APPROVED` または configured `:+1:`
+- 自動修正が完了していて review が不要（`reviewDecision` が空/null で
+  `reviewRequests` も空）なら完了。
+- review が必要な PR は、`reviewDecision=APPROVED` または configured `:+1:`
   approval signal が観測済みなら完了。
-- 自動修正が完了しているが approval signal が未観測なら、default で cheap approval
-  watch に入る。approval/reaction 待ちだけでは full comment/thread/log を再取得しない。
+- 自動修正が完了しているが必要な approval signal が未観測なら、default で cheap
+  approval watch に入る。approval/reaction 待ちだけでは full comment/thread/log を
+  再取得しない。
 - `mergeable=UNKNOWN` は GitHub 計算中として cheap polling の候補にする。
 - draft、仕様判断待ち、権限不足、外部 CI にアクセスできない状態は blocked として報告する。
 
@@ -365,7 +377,7 @@ Continue watching while:
 
 - CI is pending
 - mergeability is `UNKNOWN`
-- PR is green/mergeable but waiting for `reviewDecision=APPROVED`
+- PR is green/mergeable but waiting for a required `reviewDecision=APPROVED`
 - PR is green/mergeable but waiting for configured `:+1:`
 - a push made by this skill is still being checked
 
@@ -440,14 +452,14 @@ fi
 while :; do
   pr_json="$(
     gh pr view "$num" \
-      --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,updatedAt,headRefOid,url,reactionGroups \
-      --jq '{number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,updatedAt,headRefOid,url,reactionGroups}'
+      --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups \
+      --jq '{number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups}'
   )"
 
   checks_json="$(
     gh pr checks "$num" \
       --json name,bucket,state,workflow,link \
-      --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, names: map(.name) | sort})' \
+      --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' \
       || :
   )"
   if [ -z "$checks_json" ]; then
@@ -490,6 +502,7 @@ while :; do
         mergeable: $pr.mergeable,
         mergeStateStatus: $pr.mergeStateStatus,
         reviewDecision: $pr.reviewDecision,
+        reviewRequests: ($pr.reviewRequests // []),
         headRefOid: $pr.headRefOid,
         updatedAt: $pr.updatedAt,
         reactionGroups: ($pr.reactionGroups // []),
@@ -498,11 +511,12 @@ while :; do
       }'
   )"
 
+  if [ "$(date +%s)" -ge "$deadline_ts" ]; then
+    jq -cn --argjson digest "$digest" '{event:"timeout", digest:$digest}'
+    break
+  fi
+
   if [ "$digest" = "$last_digest" ]; then
-    if [ "$(date +%s)" -ge "$deadline_ts" ]; then
-      jq -cn --argjson digest "$digest" '{event:"timeout", digest:$digest}'
-      break
-    fi
     sleep "${PR_WATCH_INTERVAL:-45}"
     continue
   fi
