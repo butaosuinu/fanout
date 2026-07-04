@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	MinimumVersion      = "3.3"
-	userShellExpr       = `"${SHELL:-/bin/sh}"`
-	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
-	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
-	livePaneTitleFormat = "#{pane_id}\t#{pane_title}"
+	MinimumVersion           = "3.3"
+	DashboardNotifyTargetEnv = "FANOUT_DASHBOARD_NOTIFY_TARGET"
+	userShellExpr            = `"${SHELL:-/bin/sh}"`
+	paneListFormat           = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+	livePanePathFormat       = "#{pane_id}\t#{pane_current_path}"
+	livePaneTitleFormat      = "#{pane_id}\t#{pane_title}"
 	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
 	// wrapper sets to "running" before the agent starts and "done" after it
 	// exits. It is the dashboard's agent-state signal: #{pane_current_command}
@@ -510,7 +511,7 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 	if strings.TrimSpace(prefixKey) == "" || strings.TrimSpace(directKey) == "" || strings.TrimSpace(fanoutBin) == "" {
 		return fmt.Errorf("tmux bind-key: prefix key, direct key, and fanout binary path are required")
 	}
-	launch := shellQuote(fanoutBin) + " dashboard --web --open"
+	launch := DashboardNotifyTargetEnv + "=#{pane_id} " + shellQuote(fanoutBin) + " dashboard --web --open"
 	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
 	prefixArgs := []string{
 		"bind-key", prefixKey, "new-window", "-d", "-n", "fanout-dashboard",

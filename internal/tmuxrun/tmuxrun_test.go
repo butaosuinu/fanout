@@ -482,12 +482,12 @@ printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 	wantPrefix := []string{
 		"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard",
 		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
-		"/abs/path/fanout dashboard --web --open",
+		"FANOUT_DASHBOARD_NOTIFY_TARGET=#{pane_id} /abs/path/fanout dashboard --web --open",
 	}
 	wantDirect := []string{
 		"bind-key", "-n", "F12", "new-window", "-d", "-n", "fanout-dashboard",
 		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
-		"/abs/path/fanout dashboard --web --open",
+		"FANOUT_DASHBOARD_NOTIFY_TARGET=#{pane_id} /abs/path/fanout dashboard --web --open",
 	}
 	if strings.Join(gotPrefix, "\x00") != strings.Join(wantPrefix, "\x00") {
 		t.Fatalf("prefix tmux args = %#v, want %#v", gotPrefix, wantPrefix)
@@ -521,7 +521,7 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	// new-window runs the launch arg through one shell, so the binary path is
 	// single-quoted to survive word-splitting on "My Tools".
 	launch := got[len(got)-1]
-	if launch != "'/opt/My Tools/fanout' dashboard --web --open" {
+	if launch != "FANOUT_DASHBOARD_NOTIFY_TARGET=#{pane_id} '/opt/My Tools/fanout' dashboard --web --open" {
 		t.Fatalf("launch arg = %q, want the binary path single-quoted", launch)
 	}
 }

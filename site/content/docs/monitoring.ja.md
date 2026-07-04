@@ -149,6 +149,8 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 TUI 起動時、ライブ fan-out 後、ダッシュボード自体の起動時に fanout が tmux キーバインドを自動登録するので、どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。どちらのキーも detached な `fanout-dashboard` ウィンドウでサーバを起動するため、キー押下後も生き続け、2 回目以降は既存 URL を開き直すだけです。**`prefix + M`** では記録済みペインから同一 worktree 操作を開けます。
 
+ブラウザ opener が失敗した場合、fanout は tmux status line に dashboard URL を表示します。
+
 自動登録は `--no-dashboard-keybind`（fan-out 側）、`--no-keybind`（dashboard 側）、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` でまとめて無効化できます（[Settings]({{< relref "/docs/settings" >}}) を参照してください）。
 
 ### prefix + M

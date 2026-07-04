@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/log"
@@ -72,6 +74,32 @@ func TestNoKeybindOverride(t *testing.T) {
 	}
 	if v := noKeybindOverride(true); v == nil || *v != false {
 		t.Fatalf("--no-keybind -> *false, got %v", v)
+	}
+}
+
+func TestOpenBrowserBestEffortShowsDashboardURL(t *testing.T) {
+	browser, status := stubDashboardOpenHooks(t, nil)
+
+	openBrowserBestEffort("http://127.0.0.1:1234/?token=abc", discardLogger())
+
+	if browser.openedURL != "http://127.0.0.1:1234/?token=abc" {
+		t.Fatalf("opened URL = %q", browser.openedURL)
+	}
+	if got := status.message; !strings.Contains(got, "fanout dashboard: http://127.0.0.1:1234/?token=abc") {
+		t.Fatalf("status message = %q", got)
+	}
+}
+
+func TestOpenBrowserBestEffortShowsOpenFailure(t *testing.T) {
+	browser, status := stubDashboardOpenHooks(t, errors.New("launcher unavailable"))
+
+	openBrowserBestEffort("http://127.0.0.1:4321/?token=def", discardLogger())
+
+	if browser.openedURL != "http://127.0.0.1:4321/?token=def" {
+		t.Fatalf("opened URL = %q", browser.openedURL)
+	}
+	if got := status.message; !strings.Contains(got, "browser open failed") || !strings.Contains(got, "http://127.0.0.1:4321/?token=def") {
+		t.Fatalf("status message = %q", got)
 	}
 }
 
@@ -155,4 +183,33 @@ func TestRandomTokenIsHexAndUnique(t *testing.T) {
 	if len(a) != 32 || a == b {
 		t.Fatalf("token a=%q b=%q (want 32 hex chars, unique)", a, b)
 	}
+}
+
+type dashboardBrowserStub struct {
+	openedURL string
+}
+
+type dashboardStatusStub struct {
+	message string
+}
+
+func stubDashboardOpenHooks(t *testing.T, browserErr error) (*dashboardBrowserStub, *dashboardStatusStub) {
+	t.Helper()
+	oldBrowser := openDashboardBrowser
+	oldStatus := showDashboardStatus
+	browser := &dashboardBrowserStub{}
+	status := &dashboardStatusStub{}
+	openDashboardBrowser = func(url string) error {
+		browser.openedURL = url
+		return browserErr
+	}
+	showDashboardStatus = func(msg string) error {
+		status.message = msg
+		return nil
+	}
+	t.Cleanup(func() {
+		openDashboardBrowser = oldBrowser
+		showDashboardStatus = oldStatus
+	})
+	return browser, status
 }

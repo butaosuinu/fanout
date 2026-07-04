@@ -149,6 +149,8 @@ Run `fanout dashboard --help` for the full flag list.
 
 When the TUI starts, after a live fan-out, and whenever the dashboard itself starts, fanout registers tmux keybindings so that **`F12`** or **`prefix + D`** pops the dashboard from any pane. Both keys launch the server in a detached `fanout-dashboard` window, so it outlives the keypress; a second press just reopens the existing URL. It also registers **`prefix + M`** for same-worktree actions from the focused recorded pane.
 
+If the browser opener fails, fanout prints the dashboard URL in the tmux status line.
+
 Disable the auto-bindings with `--no-dashboard-keybind` (fan-out side), `--no-keybind` (dashboard side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` — see [Settings]({{< relref "/docs/settings" >}}).
 
 ### prefix + M
