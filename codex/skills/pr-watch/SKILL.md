@@ -122,8 +122,9 @@ The PR is considered approved when either:
 
 `reviewDecision=APPROVED` is the primary signal.
 
-`:+1:` is a configurable soft approval signal. By default, accept non-self `:+1:`
-on:
+`:+1:` is a configurable soft approval signal, not a generic reaction shortcut.
+Count it as approval only when both the target and actor policy are configured.
+Possible reaction targets are:
 
 - the PR issue itself
 - the latest Codex/watch status comment, if this skill posted one
@@ -131,7 +132,8 @@ on:
   `git rev-parse --git-path pr-watch-state/<pr-number>.json`
 
 If `PR_WATCH_PLUS1_ACTOR_RE` is set, count only reactions whose actor login
-matches it. If it is unset, count any non-self `:+1:` and report the actor.
+matches it. If no actor policy is configured, report non-self `:+1:` reactions
+as status but do not finish the PR as approved from them.
 
 Reaction polling must be cheap. Do not fetch full PR comments or review threads
 just to check for `:+1:`.
@@ -422,6 +424,11 @@ state_dir="$(git rev-parse --git-path pr-watch-state)"
 mkdir -p "$state_dir"
 state_file="$state_dir/$num.json"
 last_digest=""
+if [ -f "$state_file" ]; then
+  last_digest="$(cat "$state_file")"
+fi
+max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
+deadline_ts=$(($(date +%s) + max_seconds))
 
 while :; do
   pr_json="$(
@@ -434,16 +441,27 @@ while :; do
     gh pr checks "$num" \
       --json name,bucket,state,workflow,link \
       --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, names: map(.name) | sort})' \
-      || printf '[]'
+      || :
   )"
   if [ -z "$checks_json" ]; then
     checks_json="[]"
+  fi
+
+  approval_reactions="$(
+    gh api \
+      "/repos/$owner/$repo/issues/$num/reactions?content=%2B1&per_page=100" \
+      --jq '[.[] | {login: .user.login, created_at}]' \
+      || :
+  )"
+  if [ -z "$approval_reactions" ]; then
+    approval_reactions="[]"
   fi
 
   digest="$(
     jq -cn \
       --argjson pr "$pr_json" \
       --argjson checks "$checks_json" \
+      --argjson approvalReactions "$approval_reactions" \
       '{
         state: $pr.state,
         draft: $pr.isDraft,
@@ -452,11 +470,17 @@ while :; do
         reviewDecision: $pr.reviewDecision,
         headRefOid: $pr.headRefOid,
         updatedAt: $pr.updatedAt,
+        reactionGroups: ($pr.reactionGroups // []),
+        approvalReactions: $approvalReactions,
         checks: $checks
       }'
   )"
 
   if [ "$digest" = "$last_digest" ]; then
+    if [ "$(date +%s)" -ge "$deadline_ts" ]; then
+      jq -cn --argjson digest "$digest" '{event:"timeout", digest:$digest}'
+      break
+    fi
     sleep "${PR_WATCH_INTERVAL:-45}"
     continue
   fi
