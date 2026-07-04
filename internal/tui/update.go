@@ -288,7 +288,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.newPane.assign.err = ""
 		m.newPane.err = "" // clear a "targets are still loading" line once they arrive
-		rows := buildAssignRows(msg, m.newPane.agentChoice)
+		rows := buildAssignRows(msg, defaultAgentIndex(m.selectedDefaultAgent()))
 		if len(rows) == 0 {
 			// A childless issue launches as a single pane; there is nothing to
 			// assign.

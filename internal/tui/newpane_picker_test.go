@@ -340,24 +340,6 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 	}
 }
 
-func TestSingleAgentSelectorCycles(t *testing.T) {
-	m := newModel(Options{})
-	m.openNewPaneForm()
-
-	m.cycleNewPaneAgentChoice("right")
-	if got := launchAgents[m.newPane.agentChoice]; got != "codex" {
-		t.Fatalf("after right agent = %q, want codex", got)
-	}
-	m.cycleNewPaneAgentChoice("right")
-	if got := launchAgents[m.newPane.agentChoice]; got != "claude" {
-		t.Fatalf("after wrap agent = %q, want claude", got)
-	}
-	m.cycleNewPaneAgentChoice("left")
-	if got := launchAgents[m.newPane.agentChoice]; got != "codex" {
-		t.Fatalf("after left agent = %q, want codex", got)
-	}
-}
-
 func TestNewPaneViewRendersPickerStates(t *testing.T) {
 	m := newModel(Options{
 		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
@@ -610,5 +592,174 @@ func TestNewPaneViewHidesModeRowWithoutProviders(t *testing.T) {
 	want := []newPaneField{newPaneFieldMain, newPaneFieldPlan, newPaneFieldAgent}
 	if order := m.newPaneFocusOrder(); !reflect.DeepEqual(order, want) {
 		t.Fatalf("newPaneFocusOrder() = %v, want %v", order, want)
+	}
+}
+
+// TestIssueModeAgentSelectorSingleSelect pins the issue-mode count selector's
+// single-agent semantics: left/right/space all select the focused agent and
+// zero the rest, so the counts always sum to exactly one.
+func TestIssueModeAgentSelectorSingleSelect(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(m *model)
+		keys       []tea.KeyMsg
+		wantAgent  string
+		wantCounts map[string]int
+	}{
+		{
+			name:       "space selects the focused agent",
+			keys:       []tea.KeyMsg{{Type: tea.KeySpace}},
+			wantAgent:  "claude",
+			wantCounts: map[string]int{"claude": 1, "codex": 0},
+		},
+		{
+			name:       "re-pressing the selected row keeps the sum at one",
+			keys:       []tea.KeyMsg{{Type: tea.KeySpace}, {Type: tea.KeySpace}},
+			wantAgent:  "claude",
+			wantCounts: map[string]int{"claude": 1, "codex": 0},
+		},
+		{
+			name:       "down then space selects codex",
+			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace}},
+			wantAgent:  "codex",
+			wantCounts: map[string]int{"claude": 0, "codex": 1},
+		},
+		{
+			name:       "right selects instead of incrementing the count",
+			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyRight}},
+			wantAgent:  "codex",
+			wantCounts: map[string]int{"claude": 0, "codex": 1},
+		},
+		{
+			name:       "left selects instead of decrementing the count",
+			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyLeft}},
+			wantAgent:  "codex",
+			wantCounts: map[string]int{"claude": 0, "codex": 1},
+		},
+		{
+			name: "selecting collapses a carried-over multi-count selection",
+			// A prompt-mode count of 2/1 must snap back to a single agent.
+			setup:      func(m *model) { m.newPane.agentCount["claude"] = 2; m.newPane.agentCount["codex"] = 1 },
+			keys:       []tea.KeyMsg{{Type: tea.KeySpace}},
+			wantAgent:  "claude",
+			wantCounts: map[string]int{"claude": 1, "codex": 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(Options{
+				ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+			})
+			m.openNewPaneForm()
+			m.newPane.mode = newPaneModeIssue
+			m.newPane.focus = newPaneFieldAgent
+			if tt.setup != nil {
+				tt.setup(&m)
+			}
+			for _, key := range tt.keys {
+				updated, _ := m.Update(key)
+				m = updated.(model)
+			}
+			if got := m.selectedDefaultAgent(); got != tt.wantAgent {
+				t.Fatalf("selectedDefaultAgent() = %q, want %q", got, tt.wantAgent)
+			}
+			if got := m.newPane.agentCount; !reflect.DeepEqual(got, tt.wantCounts) {
+				t.Fatalf("agentCount = %v, want %v", got, tt.wantCounts)
+			}
+		})
+	}
+}
+
+// TestNewPaneIssuePickerCodexDefaultToAssignFlow drives the promptOnly wizard
+// with a codex default chosen on the count selector, then flips one child back
+// to claude: the submit must carry DefaultAgent codex plus a claude override.
+func TestNewPaneIssuePickerCodexDefaultToAssignFlow(t *testing.T) {
+	m := newModel(Options{
+		DefaultAgent: "claude",
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return []IssueListItem{{Number: 42, Title: "Fix UI"}}, nil
+		},
+		ListIssueChildren: func(parent int) ([]ChildTarget, error) {
+			if parent != 42 {
+				return nil, errors.New("unexpected parent")
+			}
+			return []ChildTarget{
+				{Number: 43, Title: "Frontend", Wave: "1"},
+				{Number: 44, Title: "Backend", Wave: "1"},
+			}, nil
+		},
+	})
+	m.promptOnly = true
+	m.openNewPaneForm()
+	m.newPane.focus = newPaneFieldMode
+
+	step := func(key tea.KeyMsg) tea.Cmd {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		return cmd
+	}
+	deliver := func(cmd tea.Cmd) {
+		t.Helper()
+		if cmd == nil {
+			t.Fatal("expected a command")
+		}
+		updated, _ := m.Update(cmd())
+		m = updated.(model)
+	}
+
+	deliver(step(tea.KeyMsg{Type: tea.KeyRight})) // switch to issue mode + load
+	step(tea.KeyMsg{Type: tea.KeyTab})            // mode -> issue picker
+	step(tea.KeyMsg{Type: tea.KeyTab})            // issue picker -> agent row
+	step(tea.KeyMsg{Type: tea.KeyDown})           // claude -> codex row
+	step(tea.KeyMsg{Type: tea.KeySpace})          // select codex as the default
+	if got := m.selectedDefaultAgent(); got != "codex" {
+		t.Fatalf("selectedDefaultAgent() = %q, want codex", got)
+	}
+
+	deliver(step(tea.KeyMsg{Type: tea.KeyEnter})) // submit picker + load children
+	if m.newPane.step != newPaneStepAssign {
+		t.Fatalf("step = %v, want assign", m.newPane.step)
+	}
+	if len(m.newPane.assign.rows) != 2 {
+		t.Fatalf("assign rows = %#v, want two children", m.newPane.assign.rows)
+	}
+
+	step(tea.KeyMsg{Type: tea.KeyLeft})  // flip #43 codex -> claude
+	step(tea.KeyMsg{Type: tea.KeyEnter}) // submit
+
+	if !m.promptDone || m.promptCanceled {
+		t.Fatalf("promptDone = %v promptCanceled = %v, want done", m.promptDone, m.promptCanceled)
+	}
+	want := LaunchRequest{
+		Mode:           LaunchModeIssue,
+		Issue:          42,
+		DefaultAgent:   "codex",
+		AgentOverrides: map[string]string{"43": "claude"},
+	}
+	if !reflect.DeepEqual(m.promptResult, want) {
+		t.Fatalf("promptResult = %#v, want %#v", m.promptResult, want)
+	}
+}
+
+// TestNewPaneViewIssueAgentSelectorIsCountStyle pins the unified selector: the
+// issue-mode Agent row renders count tokens ("[1] claude") like Prompt mode,
+// never the old radio "(x)" form.
+func TestNewPaneViewIssueAgentSelectorIsCountStyle(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+	})
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "[1] claude") {
+		t.Fatalf("issue agent selector missing count token:\n%s", view)
+	}
+	if !strings.Contains(view, "[0] codex") {
+		t.Fatalf("issue agent selector missing zero-count token:\n%s", view)
+	}
+	if strings.Contains(view, "(x)") {
+		t.Fatalf("issue agent selector still shows radio marker:\n%s", view)
 	}
 }

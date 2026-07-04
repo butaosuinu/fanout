@@ -135,12 +135,11 @@ type newPaneForm struct {
 	// fanout-plan skill instead of launching a plain agent pane.
 	planFanout bool
 
-	// Issue mode state. agentChoice is the single default-agent selection that
-	// mode uses instead of the prompt-mode count selector.
+	// Issue mode state. The default-agent choice reuses the prompt-mode count
+	// selector (agentCount/agentIndex), constrained to a single-agent selection.
 	mode        newPaneMode
 	step        newPaneStep
 	issuePicker pickerState
-	agentChoice int
 	assign      assignState
 	assignGen   int // monotonic load generation; survives esc so stale loads drop
 	selIssue    int
@@ -324,11 +323,10 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
-		prompt:      prompt,
-		agentCount:  defaultAgentCounts(defaultAgent),
-		agentIndex:  defaultAgentIndex(defaultAgent),
-		agentChoice: defaultAgentIndex(defaultAgent),
-		focus:       newPaneFieldMain,
+		prompt:     prompt,
+		agentCount: defaultAgentCounts(defaultAgent),
+		agentIndex: defaultAgentIndex(defaultAgent),
+		focus:      newPaneFieldMain,
 	}
 }
 
@@ -378,11 +376,7 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.newPane.planFanout = !m.newPane.planFanout
 			return m, nil
 		case newPaneFieldAgent:
-			if m.newPane.mode == newPaneModePrompt {
-				m.adjustNewPaneAgent(msg.String())
-			} else {
-				m.cycleNewPaneAgentChoice(msg.String())
-			}
+			m.adjustNewPaneAgent(msg.String())
 			return m, nil
 		default:
 			// Main field: the key falls through to the text/filter routing below.
@@ -393,7 +387,7 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if (msg.String() == "up" || msg.String() == "down") && m.newPane.focus != newPaneFieldMain {
-			if m.newPane.focus == newPaneFieldAgent && m.newPane.mode == newPaneModePrompt {
+			if m.newPane.focus == newPaneFieldAgent {
 				m.moveNewPaneAgent(msg.String())
 			} else {
 				m.moveNewPaneFocus(msg.String())
@@ -469,7 +463,36 @@ func (m *model) moveNewPaneAgent(key string) {
 	}
 }
 
+// newPaneSingleAgentMode reports whether the agent selector enforces a
+// single-agent (sum == 1) selection: issue mode always, prompt mode when the
+// plan fan-out checkbox is on.
+func (m model) newPaneSingleAgentMode() bool {
+	if m.newPane.mode == newPaneModeIssue {
+		return true
+	}
+	return m.newPane.planFanout
+}
+
+// selectSingleNewPaneAgent sets the focused agent's count to 1 and zeros the
+// others. Never toggles to zero, so the selection always sums to exactly 1.
+func (m *model) selectSingleNewPaneAgent() {
+	focused := launchAgents[m.newPane.agentIndex]
+	for _, agentName := range launchAgents {
+		if agentName == focused {
+			m.newPane.agentCount[agentName] = 1
+		} else {
+			m.newPane.agentCount[agentName] = 0
+		}
+	}
+}
+
 func (m *model) adjustNewPaneAgent(key string) {
+	if m.newPaneSingleAgentMode() {
+		// left/right/space all collapse to selecting the focused agent; a
+		// re-press on the already-selected row is a no-op (still sums to 1).
+		m.selectSingleNewPaneAgent()
+		return
+	}
 	agentName := launchAgents[m.newPane.agentIndex]
 	current := m.newPane.agentCount[agentName]
 	switch key {
@@ -622,7 +645,7 @@ func (m model) newPaneView() string {
 	case newPaneModeIssue:
 		lines = append(lines,
 			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
-			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.singleAgentSelectorView(), false),
+			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
 		)
 	default:
 		lines = append(lines, m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true))
@@ -727,33 +750,6 @@ func (m model) agentSelectorView() string {
 	return strings.Join(lines, "\n")
 }
 
-// singleAgentSelectorView renders the issue-mode default-agent choice: a
-// one-of selector, unlike the prompt-mode per-agent counts (a fan-out shares
-// one default agent across children; per-child overrides live in step 2).
-func (m model) singleAgentSelectorView() string {
-	parts := make([]string, 0, len(launchAgents))
-	for i, agentName := range launchAgents {
-		token := "( ) " + agentName
-		if i == m.newPane.agentChoice {
-			token = titleStyle.Render("(x) " + agentName)
-		} else {
-			token = dimStyle.Render(token)
-		}
-		parts = append(parts, token)
-	}
-	return strings.Join(parts, "  ")
-}
-
-func (m *model) cycleNewPaneAgentChoice(key string) {
-	n := len(launchAgents)
-	switch key {
-	case "left":
-		m.newPane.agentChoice = (m.newPane.agentChoice + n - 1) % n
-	default:
-		m.newPane.agentChoice = (m.newPane.agentChoice + 1) % n
-	}
-}
-
 const maxAgentLaunchCount = 3
 
 var launchAgents = []string{"claude", "codex"}
@@ -777,6 +773,18 @@ func defaultAgentIndex(defaultAgent string) int {
 		}
 	}
 	return 0
+}
+
+// selectedDefaultAgent returns the single-agent selection's agent name: the one
+// agent left at a non-zero count. The single-agent selector keeps the counts
+// summing to exactly one; the fallback to defaultLaunchAgent is defensive.
+func (m model) selectedDefaultAgent() string {
+	for _, agentName := range launchAgents {
+		if m.newPane.agentCount[agentName] > 0 {
+			return agentName
+		}
+	}
+	return defaultLaunchAgent
 }
 
 func (m model) selectedNewPaneAgents() []string {
