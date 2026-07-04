@@ -81,12 +81,12 @@ if [ "${#files[@]}" -gt 0 ]; then
     echo "警告: rg が実行時エラーを返した (権限/読み取り不能なパス等)。tool_errors は過少の可能性がある" >&2
   fi
   while IFS= read -r line; do
-    ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null)
+    ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null) || ts=""
     [ -z "$ts" ] && continue
     norm="${ts:0:19}Z"   # transcript は ".mmmZ" 付き。SINCE/UNTIL と同じ秒精度に丸めてから比較する
     line_epoch=$(date -u -d "$norm" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$norm" "+%s")
     if [ "$line_epoch" -gt "$since_epoch" ] && [ "$line_epoch" -le "$until_epoch" ]; then
-      n=$(printf '%s' "$line" | jq '[.message.content[]? | select(.is_error == true)] | length' 2>/dev/null)
+      n=$(printf '%s' "$line" | jq '[.message.content[]? | select(.is_error == true)] | length' 2>/dev/null) || n=""
       total=$((total + ${n:-1}))
     fi
   done < "$matches"
@@ -100,19 +100,19 @@ echo "tool_errors.total=$total"
 
 `rg` は複数ファイルを渡すと既定で各行に `<path>:` を前置する (`-H`/`--with-filename` が複数ファイル時の既定値)。前置されたままだと行が JSON として不正になり `jq` が全行パースエラーになる (実機で再現・確認済み — 候補が 38 ファイルある状態で `total=0` になり原因を特定した)。`-I`/`--no-filename` を必ず付けて素の JSON 行のまま渡す。
 
-`rg` の exit code を `rg_exit=$?` で直接受けず `if rg …; then rg_exit=0; else rg_exit=$?; fi` の形にするのは、`set -e` が効いている呼び出し元で `rg` が非 0 (no-match の 1 を含む) を返した瞬間にスクリプトが打ち切られ、次の行の `$?` 捕捉に到達できなくなるのを防ぐため。
+`rg` の exit code を `rg_exit=$?` で直接受けず `if rg …; then rg_exit=0; else rg_exit=$?; fi` の形にするのは、`set -e` が効いている呼び出し元で `rg` が非 0 (no-match の 1 を含む) を返した瞬間にスクリプトが打ち切られ、次の行の `$?` 捕捉に到達できなくなるのを防ぐため。ループ内の 2 つの `jq` 呼び出し (`ts=$(...)` / `n=$(...)`) も同じ理由で `|| ts=""` / `|| n=""` を付ける — 壊れた/書き込み中の transcript 行で `jq` がパースエラー (非 0) を返すと、`2>/dev/null` は標準エラー出力を消すだけで終了コードは変えないため、`set -e` 環境ではその行で集計全体が止まってしまう。
 
 件数を取ってからマッチ行を選択的に読み、エラー本文で分類する。既知カテゴリ: stale-read Edit / PR ゲート deny / 権限・AskUserQuestion 摩擦 / ブラウザ MCP / sleep ブロック / zsh 構文 / gh api・rate limit / インライン python / 誤パス / jq。新カテゴリは追加してよい (新カテゴリは Step 6 の提案候補)。
 
 ## Step 3 — CI 失敗
 
-`gh run list --status` は 1 回の呼び出しに 1 値しか渡せない。`failure` だけでは `startup_failure` (セットアップ自体の失敗) や `timed_out` を見落とすので、値ごとに分けて呼び、結果をまとめる (`--status` を外して全 run を撮ると、`--limit` の枠を success な run が消費してしまい、window の古い方の失敗が切り捨てられる — 実測で 9 件 → 3 件に減ることを確認済み。1 呼び出し 1 status を維持する):
+`gh run list --status` は 1 回の呼び出しに 1 値しか渡せない。`failure` だけでは `startup_failure` (セットアップ自体の失敗) や `timed_out` を見落とすので、値ごとに分けて呼び、結果をまとめる (`--status` を外して全 run を撮ると、`--limit` の枠を success な run が消費してしまい、window の古い方の失敗が切り捨てられる — 実測で 9 件 → 3 件に減ることを確認済み。1 呼び出し 1 status を維持する)。`--all` を付けて disabled/rename された workflow の過去 run も含める (`gh run list` の manual どおり、既定では disabled workflow の run が除外される):
 
 ```bash
 runs=$(mktemp)
 trap 'rm -f "$runs"' EXIT
 for st in failure startup_failure timed_out; do
-  if ! gh run list --status "$st" --created "*..${UNTIL}" --limit 100 \
+  if ! gh run list --all --status "$st" --created "*..${UNTIL}" --limit 100 \
       --json databaseId,workflowName,displayTitle,headBranch,createdAt,updatedAt,conclusion >> "$runs"; then
     echo "警告: gh run list --status $st が失敗した。ci 集計は不完全な可能性がある (ci.truncated=true として記録する)" >&2
   fi
