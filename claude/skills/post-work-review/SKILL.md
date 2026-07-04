@@ -23,6 +23,9 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 [ユーザー: /post-work-review or 「review して仕上げて」]
         │
         ▼
+[Pass 0] プロジェクト検証 (lint / test) ── 検証手段が無ければ skip
+        │
+        ▼
 [Pass 1] code-review プラグイン  ── 指摘を集める → 修正
         │
         ▼
@@ -46,12 +49,21 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 [Step 5] レビュー済みコミットを marker に記録 (PR ゲートの signal)
 ```
 
+## Pass 0 — プロジェクト検証 (lint / test)
+
+レビューに入る前にプロジェクト標準の検証を回し、機械的な失敗を先に潰す。壊れたコードへの二系統レビューはトークンの浪費で、CI 失敗の大半 (golden 不一致・lint 指摘) はローカルで再現できる。
+
+1. 検証コマンドを解決する: repo の CLAUDE.md / AGENTS.md / Makefile から lint・test 相当のターゲットを探す。見つからなければ Pass 0 を skip し、その旨を 1 行報告して Pass 1 へ。
+2. 実行し、**今回の diff に起因する失敗**を直してから先へ進む。base 由来の既存失敗や環境起因の失敗 (ツールチェーン欠如など) は 1 行報告して先へ進み、スコープ外のコードは直さない。golden / スナップショットの意図的な更新が要る失敗は、repo に regen 手順があればそれに従い、regen 差分を目視してから commit 対象に含める。
+3. web / フロントエンドを触った diff は対応する web 系 lint も回す。
+
 ## Pass 1 — code-review プラグインで掃除
 
 1. ユーザーに「Pass 1 として code-review を回します」と 1 文で宣言する。長い前置きは不要。
 2. **Skill ツール経由で `code-review` を呼ぶ**: `Skill(skill="code-review")`。引数は付けない (デフォルトの effort で十分。`--comment` は付けない — PR が無いローカル作業中にも使う skill なので、コメント posting は本質ではない。レビュー本文の収集だけが目的)。
 3. 返ってきた指摘を読み、修正すべき項目を選別する。**全ての指摘を機械的に直すのではなく**、明らかな bug / 規約違反 / セキュリティ問題を優先する。スタイル提案レベルは Pass 2 のあとに一括判断してよい (codex で同じことが再度挙がるなら直す価値がある)。
-4. 修正する項目をユーザーに 1〜2 文で宣言してから Edit に入る (例:「null チェック漏れ 2 箇所と未使用 import を直します」)。修正後は短く完了報告。
+4. repo にレビューチェックリスト (fanout では `docs/review-checklist.ja.md`) があれば、diff に対して各項目を自己チェックし、取りこぼしを修正対象に加える。無ければ飛ばす。
+5. 修正する項目をユーザーに 1〜2 文で宣言してから Edit に入る (例:「null チェック漏れ 2 箇所と未使用 import を直します」)。修正後は短く完了報告。
 
 ### code-review-strict との区別 (重要)
 
@@ -146,6 +158,7 @@ Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知
 
 1. **最低 1 つのレビューパスが成功している**: Pass 1 (code-review) が正常完了したか、Pass 2 (codex) が少なくとも 1 反復回って結果を返している。Pass 1 がエラーで、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューが 0 件なので **marker を書かず**、レビュー未完了である旨をユーザーに伝えて終了する(ゲートは閉じたまま)。
 2. **working tree が clean**: Pass 1/Pass 2 の修正が全て commit 済みであること。dirty なまま marker を書くと、未コミットの修正は PR (= push 済みコミット) に乗らないのに HEAD が「レビュー済み」とマークされ、ゲートが unreviewed なコードの PR 作成を通してしまう。
+3. **Pass 0 を実行した場合、今回の diff に起因する検証失敗が残っていない**: Pass 1 / Pass 2 の修正でコードを変えたら、変更範囲に対応する検証 (最低限 lint、テスト対象を触ったら test) を再実行してから marker を書く。Pass 0 で 1 行報告して先へ進んだ base 由来・環境起因の失敗は marker をブロックしない。Pass 0 を skip した repo ではこの前提は課さない。
 
 ```bash
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -166,6 +179,7 @@ fi
 
 ループ終了時 (clean 判定 / ユーザー停止指示 / oscillation 検知のいずれか) に、以下を 2〜3 文で報告する:
 
+- Pass 0 の検証結果 (検証手段が無く skip した場合はその旨)
 - Pass 1 で何件直したか
 - Pass 2 が何反復回って終わったか (codex 未検出で skip した場合はその旨)
 - 最終的に codex が approve したか、それともユーザー判断で停止したか

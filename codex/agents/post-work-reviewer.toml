@@ -32,6 +32,26 @@ reviewer contract and the direct review bundle contract.
   present.
 - Return JSON only. Do not wrap it in Markdown.
 
+## High-yield checks
+
+Recurring defect patterns from past reviews — check each against the diff:
+
+- Failure paths treated as success: requeue / cleanup / state transitions must
+  survive errors; early returns must not skip teardown.
+- Identity used without matching recorded state: tmux panes / worktrees must
+  be checked against `.fanout/state.json` rows, not trusted by name or
+  position.
+- git diff edge cases: untracked files, symlinks, C-quoted paths, textconv.
+- Counter and budget accounting: double counting, exhaustion behavior, reset
+  conditions.
+- Deciding before pagination completes: do not branch on partial
+  `gh api --paginate` results.
+- Display width: measure multibyte / full-width text by display width, not
+  byte length (TUI and formatted output).
+- Language-paired docs: when the repo maintains paired documents (such as
+  `README.md`/`README.ja.md` or `site/content/docs/**` `.md`/`.ja.md`), an
+  edit to one side must update its pair. Skip in repos without such pairs.
+
 ## JSON output
 
 Return one object with this shape:
