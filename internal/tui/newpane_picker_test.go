@@ -593,7 +593,7 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
-	m.height = 23 // 23-15 overhead = 8 visible rows
+	m.height = 24 // 24-16 overhead = 8 visible rows
 
 	items := make([]IssueListItem, 15)
 	for i := range items {

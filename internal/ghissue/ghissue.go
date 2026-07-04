@@ -269,7 +269,7 @@ query($owner: String!, $name: String!, $first: Int!, $after: String) {
       nodes {
         number
         title
-        labels(first: 20) { nodes { name } }
+        labels(first: 100) { nodes { name } }
       }
       pageInfo { hasNextPage endCursor }
     }
