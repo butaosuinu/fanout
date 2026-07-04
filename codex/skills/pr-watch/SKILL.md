@@ -406,6 +406,9 @@ The watcher may create a local state file under the git metadata path returned
 by `git rev-parse --git-path pr-watch-state/<pr-number>.json`. This file is
 local and must not be committed. Do not assume `.git` is a directory; linked
 worktrees often use a `.git` file that points at the real gitdir.
+When configured `:+1:` targets are used, the state JSON may include
+`approval_reaction_targets` entries with `kind` values `issue`, `issue_comment`,
+or `review_comment`.
 
 The shell loop should emit output to the model only when:
 
@@ -423,12 +426,16 @@ Example skeleton:
 state_dir="$(git rev-parse --git-path pr-watch-state)"
 mkdir -p "$state_dir"
 state_file="$state_dir/$num.json"
-last_digest=""
+state_json="{}"
 if [ -f "$state_file" ]; then
-  last_digest="$(cat "$state_file")"
+  state_json="$(cat "$state_file")"
 fi
-max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
-deadline_ts=$(($(date +%s) + max_seconds))
+last_digest="$(printf '%s\n' "$state_json" | jq -c '.last_digest // empty')"
+deadline_ts="$(printf '%s\n' "$state_json" | jq -r '.deadline_ts // empty')"
+if [ -z "$deadline_ts" ]; then
+  max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
+  deadline_ts=$(($(date +%s) + max_seconds))
+fi
 
 while :; do
   pr_json="$(
@@ -447,11 +454,26 @@ while :; do
     checks_json="[]"
   fi
 
+  reaction_targets="$(
+    printf '%s\n' "$state_json" |
+      jq -c '.approval_reaction_targets // []'
+  )"
   approval_reactions="$(
-    gh api \
-      "/repos/$owner/$repo/issues/$num/reactions?content=%2B1&per_page=100" \
-      --jq '[.[] | {login: .user.login, created_at}]' \
-      || :
+    printf '%s\n' "$reaction_targets" | jq -c '.[]' |
+      while IFS= read -r target; do
+        kind="$(printf '%s\n' "$target" | jq -r '.kind')"
+        id="$(printf '%s\n' "$target" | jq -r '.id // empty')"
+        case "$kind" in
+          issue) path="/repos/$owner/$repo/issues/$num/reactions?content=%2B1&per_page=100" ;;
+          issue_comment) path="/repos/$owner/$repo/issues/comments/$id/reactions?content=%2B1&per_page=100" ;;
+          review_comment) path="/repos/$owner/$repo/pulls/comments/$id/reactions?content=%2B1&per_page=100" ;;
+          *) continue ;;
+        esac
+        gh api "$path" |
+          jq --arg kind "$kind" --arg id "$id" \
+            '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}'
+      done |
+      jq -s '.'
   )"
   if [ -z "$approval_reactions" ]; then
     approval_reactions="[]"
@@ -485,7 +507,11 @@ while :; do
     continue
   fi
 
-  printf '%s\n' "$digest" > "$state_file"
+  jq -cn \
+    --argjson state "$state_json" \
+    --argjson digest "$digest" \
+    --argjson deadline "$deadline_ts" \
+    '$state + {last_digest: $digest, deadline_ts: $deadline}' > "$state_file"
   last_digest="$digest"
 
   # Emit only changed digest. The model decides whether to finish,
