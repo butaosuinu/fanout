@@ -494,14 +494,32 @@ func (m *model) selectSingleNewPaneAgent() {
 // selection whenever the current mode enforces one. Prompt mode shares the
 // count map, so a stale multi-count (or all-zero) selection could otherwise
 // carry into issue mode and launch a default agent that differs from what the
-// selector shows. It keeps the primary agent (the first non-zero, else the
-// default) and points the cursor at it.
+// selector shows. It keeps an existing single selection; when zero or more than
+// one agent is selected it falls back to the cursor, which starts on the form's
+// configured default agent (so a codex default is not silently reset to claude).
 func (m *model) normalizeSingleAgentSelection() {
 	if !m.newPaneSingleAgentMode() {
 		return
 	}
-	m.newPane.agentIndex = defaultAgentIndex(m.selectedDefaultAgent())
+	if sel := m.singleSelectedAgentIndex(); sel >= 0 {
+		m.newPane.agentIndex = sel
+	}
 	m.selectSingleNewPaneAgent()
+}
+
+// singleSelectedAgentIndex returns the index of the sole agent at a non-zero
+// count, or -1 when zero or more than one agent is selected.
+func (m model) singleSelectedAgentIndex() int {
+	idx := -1
+	for i, agentName := range launchAgents {
+		if m.newPane.agentCount[agentName] > 0 {
+			if idx >= 0 {
+				return -1 // more than one agent selected
+			}
+			idx = i
+		}
+	}
+	return idx
 }
 
 func (m *model) adjustNewPaneAgent(key string) {

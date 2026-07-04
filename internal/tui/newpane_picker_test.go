@@ -700,6 +700,34 @@ func TestIssueModeNormalizesCarriedOverAgentCounts(t *testing.T) {
 	}
 }
 
+// TestIssueModeSwitchKeepsConfiguredDefaultOnEmptySelection pins the codex
+// default: zeroing every prompt-mode count (sum 0) then switching to issue must
+// fall back to the form's configured agent (via the cursor), not a hard-coded
+// claude — otherwise a codex default silently becomes claude.
+func TestIssueModeSwitchKeepsConfiguredDefaultOnEmptySelection(t *testing.T) {
+	m := newModel(Options{
+		DefaultAgent:   "codex",
+		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+	})
+	m.openNewPaneForm()
+	m.newPane.focus = newPaneFieldMode
+	// The user cleared every prompt-mode count before switching.
+	for _, agentName := range launchAgents {
+		m.newPane.agentCount[agentName] = 0
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue
+	m = updated.(model)
+
+	if got := m.selectedDefaultAgent(); got != "codex" {
+		t.Fatalf("selectedDefaultAgent() after empty switch = %q, want codex", got)
+	}
+	wantCounts := map[string]int{"claude": 0, "codex": 1}
+	if got := m.newPane.agentCount; !reflect.DeepEqual(got, wantCounts) {
+		t.Fatalf("agentCount = %v, want %v", got, wantCounts)
+	}
+}
+
 // TestNewPaneIssuePickerCodexDefaultToAssignFlow drives the promptOnly wizard
 // with a codex default chosen on the count selector, then flips one child back
 // to claude: the submit must carry DefaultAgent codex plus a claude override.
