@@ -602,7 +602,12 @@ func (m model) newPaneView() string {
 	if m.newPane.attach != nil {
 		title = "Attach agent to worktree"
 	}
-	lines := []string{titleStyle.Render(title)}
+	// In the tmux popup the -T frame already shows the title, so drop the
+	// duplicate in-content heading; the in-process fallback keeps it.
+	var lines []string
+	if !m.promptOnly {
+		lines = append(lines, titleStyle.Render(title))
+	}
 	if len(m.availableNewPaneModes()) > 1 {
 		lines = append(lines, m.newPaneFieldView(newPaneFieldMode, "Mode", m.newPaneModeTabsView(), false))
 	}
@@ -631,7 +636,17 @@ func (m model) newPaneView() string {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
 	lines = append(lines, dimStyle.Render(m.newPaneHint()))
-	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
+	return m.renderNewPaneModal(strings.Join(lines, "\n"))
+}
+
+// renderNewPaneModal frames the new-pane content. The tmux popup already draws
+// a border, so promptOnly renders borderless (popupContentStyle) to avoid a
+// double frame; the in-process overlay keeps the modal border.
+func (m model) renderNewPaneModal(content string) string {
+	if m.promptOnly {
+		return popupContentStyle.Width(m.modalWidth()).Render(content)
+	}
+	return modalStyle.Width(m.modalWidth()).Render(content)
 }
 
 func (m model) newPaneHint() string {
@@ -768,7 +783,9 @@ func (m model) modalWidth() int {
 		return 80
 	}
 	if m.promptOnly {
-		return clampInt(m.width-2, 40, 104)
+		// No modal border in the popup, so the content may use the full pty width
+		// (lipgloss Width excludes the border the popup frame already draws).
+		return clampInt(m.width, 40, 106)
 	}
 	return clampInt(m.width-12, 40, 104)
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/ghissue"
@@ -3218,5 +3219,52 @@ func TestMergeDegradedIssueStatusKeepsWaveOfUnblockedPrevious(t *testing.T) {
 	want := issueStatus{Title: "child", State: "OPEN", Wave: 2, WaveLabel: "wave2", Blockers: "-", WaveDegraded: true}
 	if !reflect.DeepEqual(got[key], want) {
 		t.Fatalf("merged = %#v, want %#v", got[key], want)
+	}
+}
+
+// The tmux display-popup already frames the prompt-only popup, so its content
+// must drop the modal border and the duplicate "New agent pane" heading and use
+// the full pty width.
+func TestNewPanePromptOnlyViewFillsPopupWithoutModalFrame(t *testing.T) {
+	m := newModel(Options{})
+	m.promptOnly = true
+	m.width = 88
+	m.height = 18
+	m.openNewPaneForm()
+
+	view := m.View()
+	// Only the Prompt input box is framed; the modal outer border is gone.
+	if got := strings.Count(view, "┌"); got != 1 {
+		t.Fatalf("framed input boxes: got %d top-left corners, want 1:\n%s", got, view)
+	}
+	if strings.Contains(view, "New agent pane") {
+		t.Fatalf("popup view should not repeat the tmux -T title:\n%s", view)
+	}
+	if got := lipgloss.Width(view); got != 88 {
+		t.Fatalf("lipgloss.Width(view) = %d, want 88:\n%s", got, view)
+	}
+}
+
+// The assign step of the prompt-only popup must also drop the modal border while
+// keeping its "Assign agents" heading (that heading is step-2 information, not
+// the popup title).
+func TestNewPanePromptOnlyAssignViewDropsModalFrame(t *testing.T) {
+	m := newModel(Options{})
+	m.promptOnly = true
+	m.width = 88
+	m.height = 18
+	m.openNewPaneForm()
+	m.newPane.step = newPaneStepAssign
+	m.newPane.assign = assignState{
+		title: "#100 parent",
+		rows:  []assignRow{{target: "101", label: "#101 child", agentIdx: 0}},
+	}
+
+	view := m.View()
+	if got := strings.Count(view, "┌"); got != 0 {
+		t.Fatalf("assign view should be borderless in the popup: got %d top-left corners:\n%s", got, view)
+	}
+	if !strings.Contains(view, "Assign agents") {
+		t.Fatalf("assign view missing its heading:\n%s", view)
 	}
 }

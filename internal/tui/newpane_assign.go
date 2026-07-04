@@ -374,5 +374,5 @@ func (m model) newPaneAssignView() string {
 	case !a.loading:
 		lines = append(lines, dimStyle.Render("enter launch  ←/→ agent  ↑/↓ row  esc back"))
 	}
-	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
+	return m.renderNewPaneModal(strings.Join(lines, "\n"))
 }
