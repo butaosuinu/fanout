@@ -32,7 +32,8 @@ English and 日本語.
   terminal, same-worktree agent attach, lifecycle keys, and automatic restore
   of missing worktree panes. The new-session popup starts work from a free
   prompt, an OPEN issue picked from a list, or a stored plan — with a per-child
-  agent choice (claude for one task, codex for another).
+  agent choice (claude for one task, codex for another). Return to the console
+  from any pane with `F11` or `prefix + T`.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it

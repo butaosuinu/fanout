@@ -63,6 +63,9 @@ func main() {
 	if isDashboardRequest(os.Args[1:]) {
 		os.Exit(int(cmdDashboard(os.Args[2:], lg)))
 	}
+	if isFocusConsoleRequest(os.Args[1:]) {
+		os.Exit(int(cmdFocusConsole(os.Args[2:], lg)))
+	}
 	if isWorktreeActionRequest(os.Args[1:]) {
 		os.Exit(int(cmdWorktreeAction(os.Args[1:], lg, commandName)))
 	}

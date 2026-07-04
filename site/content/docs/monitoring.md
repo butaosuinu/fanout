@@ -47,6 +47,12 @@ The footer stays short; press `?` in the monitor to open the full shortcut help.
 
 > Worktree rows become `stale!` only when fanout cannot restore them, such as a missing worktree or unavailable agent command. Recorded shell terminals are not resumable; if their tmux pane is gone, the TUI removes the state row.
 
+### F11 / prefix + T
+
+When the console starts, fanout registers tmux keybindings so that **`F11`** or **`prefix + T`** returns to the console from any pane — the counterpart of the dashboard's `F12` / `prefix + D`. Both keys run `fanout focus-console`, which prefers the live console recorded for the pressing pane's repository (several repositories can keep consoles in one tmux server), falls back to a console in the same session, and switches the client there. With no live console, a status-line message points at `fanout` instead.
+
+Disable the registration with the `consoleKeybind` config key or `FANOUT_CONSOLE_KEYBIND=0` — see [Settings]({{< relref "/docs/settings" >}}).
+
 ### New session modes
 
 `n` opens a tmux popup with a Mode row. `Left` / `Right` on that row switches the mode, `Tab` moves between fields, and `Esc` cancels (or steps back from the assignment screen).

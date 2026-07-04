@@ -57,6 +57,7 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 		AgentTeamsHint:         true,
 		PRVisualization:        false,
 		DashboardKeybind:       true,
+		ConsoleKeybind:         true,
 		WatcherTriggerLabel:    "fanout:auto",
 		WatcherRunningLabel:    "fanout:running",
 		WatcherIntervalSeconds: 60,
@@ -294,6 +295,29 @@ func TestResolveWarnsAndIgnoresInvalidWatcherInts(t *testing.T) {
 	assertWarningContains(t, warnings, "settings env FANOUT_WATCHER_MAX_SESSIONS: invalid integer \"many\"")
 }
 
+func TestResolveConsoleKeybindPriority(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{
+  "consoleKeybind": true
+}`)
+	writeConfig(t, RepoConfigPath(repo), `{
+  "consoleKeybind": false
+}`)
+
+	got := Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if got.ConsoleKeybind {
+		t.Fatal("ConsoleKeybind = true, want repo config override false")
+	}
+
+	t.Setenv("FANOUT_CONSOLE_KEYBIND", "on")
+	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if !got.ConsoleKeybind {
+		t.Fatal("ConsoleKeybind = false, want env override true")
+	}
+}
+
 func TestResolveClampsWatcherIntervalSeconds(t *testing.T) {
 	repo := t.TempDir()
 	setEmptyUserConfig(t)
@@ -333,6 +357,7 @@ func clearEnv(t *testing.T) {
 		"FANOUT_AGENT_TEAMS_HINT",
 		"FANOUT_PR_VISUALIZATION",
 		"FANOUT_DASHBOARD_KEYBIND",
+		"FANOUT_CONSOLE_KEYBIND",
 		"FANOUT_WATCHER",
 		"FANOUT_WATCHER_TRIGGER_LABEL",
 		"FANOUT_WATCHER_RUNNING_LABEL",

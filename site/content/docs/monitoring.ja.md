@@ -47,6 +47,12 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 
 > worktree 行が `stale!` になるのは、worktree が無い、agent command が無いなど fanout が復元できない場合です。shell terminal は resume できないため、対応する tmux ペインが無ければ TUI が state 行を削除します。
 
+### F11 / prefix + T
+
+コンソール起動時に fanout が tmux キーバインドを登録するので、どのペインからでも **`F11`** または **`prefix + T`** でコンソールに戻れます。ダッシュボードの `F12` / `prefix + D` と対になる復帰キーです。どちらのキーも `fanout focus-console` を実行します。押したペインのリポジトリに記録された live コンソールを優先し（1 つの tmux サーバに複数リポジトリのコンソールが同居しても正しく着地します）、無ければ同一セッションのコンソールに切り替えます。live なコンソールが無いときはステータスラインに通知して終わります。
+
+登録は設定キー `consoleKeybind` または `FANOUT_CONSOLE_KEYBIND=0` で無効化できます（[Settings]({{< relref "/docs/settings" >}}) を参照してください）。
+
 ### 新規 Session のモード
 
 `n` は Mode 行つきの tmux popup を開きます。Mode 行で `Left` / `Right` を押すとモードが切り替わり、`Tab` でフィールドを移動し、`Esc` でキャンセルします（agent 割り当て画面では 1 つ前に戻る）。

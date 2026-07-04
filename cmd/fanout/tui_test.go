@@ -66,7 +66,61 @@ func TestCmdTUIRegistersDashboardKeybinds(t *testing.T) {
 	}
 }
 
+func TestCmdTUIRegistersConsoleKeybinds(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	argsPath := installTUIDashboardTmuxShim(t)
+	restoreRunTUI := stubRunTUI(t)
+	defer restoreRunTUI()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if !tmuxLogHasCommand(log, "bind-key\nT\nrun-shell") {
+		t.Fatalf("tmux log missing prefix console keybind:\n%s", log)
+	}
+	if !tmuxLogHasCommand(log, "bind-key\n-n\nF11\nrun-shell") {
+		t.Fatalf("tmux log missing direct console keybind:\n%s", log)
+	}
+}
+
 func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
+	t.Setenv("FANOUT_CONSOLE_KEYBIND", "0")
+	argsPath := installTUIDashboardTmuxShim(t)
+	restoreRunTUI := stubRunTUI(t)
+	defer restoreRunTUI()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if strings.Contains(log, "bind-key\n") {
+		t.Fatalf("tmux log should not contain keybinds when both are disabled:\n%s", log)
+	}
+}
+
+func TestCmdTUINoDashboardKeybindKeepsConsoleKeybind(t *testing.T) {
+	// The other direction of toggle independence: disabling the dashboard
+	// keybind alone must suppress the new-window dashboard binds without
+	// taking the console-return registration down with it.
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
@@ -85,8 +139,40 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	}
 
 	log := readTUITmuxLog(t, argsPath)
-	if strings.Contains(log, "bind-key\n") {
+	if tmuxLogHasCommand(log, "new-window") {
 		t.Fatalf("tmux log should not contain dashboard keybinds when disabled:\n%s", log)
+	}
+	if !tmuxLogHasCommand(log, "bind-key\n-n\nF11\nrun-shell") {
+		t.Fatalf("tmux log missing console keybind (must stay registered):\n%s", log)
+	}
+}
+
+func TestCmdTUINoConsoleKeybindHonorsEnv(t *testing.T) {
+	// Console and dashboard keybinds are independently switchable: disabling
+	// the console one must not take the dashboard registration down with it.
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	t.Setenv("FANOUT_CONSOLE_KEYBIND", "0")
+	argsPath := installTUIDashboardTmuxShim(t)
+	restoreRunTUI := stubRunTUI(t)
+	defer restoreRunTUI()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if tmuxLogHasCommand(log, "run-shell") {
+		t.Fatalf("tmux log should not contain console keybinds when disabled:\n%s", log)
+	}
+	if !tmuxLogHasCommand(log, "bind-key\nD\nnew-window") {
+		t.Fatalf("tmux log missing dashboard keybind (must stay registered):\n%s", log)
 	}
 }
 

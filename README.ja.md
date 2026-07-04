@@ -32,7 +32,8 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   同一 worktree への agent 追加・lifecycle キー・消えた worktree ペインの
   自動復元を備えたコンソールを開きます。新規 Session popup は自由記述 prompt
   のほか、一覧から選んだ OPEN issue や保存済み plan からも開始でき、子ごとに
-  agent を選べます(あるタスクは claude、別のタスクは codex、のように)。
+  agent を選べます(あるタスクは claude、別のタスクは codex、のように)。どの
+  ペインからでも `F11` または `prefix + T` でコンソールに戻れます。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
