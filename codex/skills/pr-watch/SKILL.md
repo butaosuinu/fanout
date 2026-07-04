@@ -1,6 +1,6 @@
 ---
 name: pr-watch
-description: "Use from Codex CLI after PR creation or for an existing PR as a local /autofix-pr style foreground watcher. Autonomously fix merge conflicts, failing CI, and actionable review comments, then keep a token-aware local watch until the PR is mergeable, green, and approved or a configured :+1: approval signal appears. During approval/reaction wait, do not repeatedly read full review threads, comments, diffs, or CI logs; use compact shell polling and re-enter full repair only on actionable state changes. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /autofix-pr, or after PR creation says あとよろしく."
+description: "Use from Codex CLI after PR creation or for an existing PR as a local /autofix-pr style foreground watcher. Autonomously fix merge conflicts, failing CI, and actionable review comments, then keep a token-aware local watch until the PR is mergeable, green, and GitHub review requirements are satisfied. A configured :+1: can be a soft approval signal only when GitHub review is not required. During approval/reaction wait, do not repeatedly read full review threads, comments, diffs, or CI logs; use compact shell polling and re-enter full repair only on actionable state changes. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /autofix-pr, or after PR creation says あとよろしく."
 metadata:
   short-description: Watch and repair an existing PR
 ---
@@ -14,8 +14,9 @@ Claude 版の `pr-watch` は `/loop` と `ScheduleWakeup` を前提にする。C
 バックグラウンド監視を装わないが、PR 作成後または「あとはよろしく」では、Claude
 Code `/autofix-pr` のローカル版として foreground watch を行う。デフォルトでは、
 修正可能な CI 失敗・レビューコメント・コンフリクトに対応し、PR が green /
-mergeable になった後、レビュー必須なら `reviewDecision=APPROVED` または設定済み
-`:+1:` approval signal まで待つ。レビュー不要ならそこで完了する。
+mergeable になった後、レビュー必須なら `reviewDecision=APPROVED` まで待つ。
+レビュー不要ならそこで完了する。設定済み `:+1:` は soft approval signal として
+報告できるが、必須 GitHub review の代替にはしない。
 
 ただし、approval / reaction 待ちでは full One Pass を繰り返さず、shell-owned な
 cheap polling だけを行う。Codex セッションを終了すると監視は続かない。
@@ -35,8 +36,8 @@ Completion requires:
 - mergeable or not blocked by conflicts
 - required CI is pass/skipping
 - no known actionable unresolved review work remains
-- review is not required, `reviewDecision=APPROVED`, or a configured `:+1:`
-  approval signal is observed
+- review is not required or `reviewDecision=APPROVED`; a configured `:+1:`
+  can only be a soft approval signal for review-not-required PRs
 
 The watch is foreground and local. It must not claim to keep watching after the
 Codex session exits.
@@ -125,14 +126,16 @@ The PR is considered approved when either:
 
 1. review is not required (`reviewDecision` is empty/null and there are no
    pending `reviewRequests`),
-2. `reviewDecision=APPROVED`, or
-3. a configured `:+1:` approval signal is observed.
+2. `reviewDecision=APPROVED`.
 
 `reviewDecision=APPROVED` is the primary signal when repository rules require
 review.
 
 `:+1:` is a configurable soft approval signal, not a generic reaction shortcut.
 Count it as approval only when both the target and actor policy are configured.
+Do not use `:+1:` to satisfy required GitHub review: if `reviewDecision` is
+`REVIEW_REQUIRED` or `CHANGES_REQUESTED`, keep waiting for an approving review
+or enter the repair loop.
 Possible reaction targets are:
 
 - the PR issue itself
@@ -153,16 +156,19 @@ Examples:
 # PR issue itself
 gh api \
   "/repos/$owner/$repo/issues/$num/reactions?content=%2B1&per_page=100" \
+  --paginate \
   --jq '[.[] | {login: .user.login, created_at}]'
 
 # issue comment
 gh api \
   "/repos/$owner/$repo/issues/comments/$comment_id/reactions?content=%2B1&per_page=100" \
+  --paginate \
   --jq '[.[] | {login: .user.login, created_at}]'
 
 # pull request review comment
 gh api \
   "/repos/$owner/$repo/pulls/comments/$comment_id/reactions?content=%2B1&per_page=100" \
+  --paginate \
   --jq '[.[] | {login: .user.login, created_at}]'
 ```
 
@@ -270,8 +276,8 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
   actionable top-level 指摘が 0 の場合、自動修正は完了。
 - 自動修正が完了していて review が不要（`reviewDecision` が空/null で
   `reviewRequests` も空）なら完了。
-- review が必要な PR は、`reviewDecision=APPROVED` または configured `:+1:`
-  approval signal が観測済みなら完了。
+- review が必要な PR は、`reviewDecision=APPROVED` なら完了。configured `:+1:`
+  だけでは必須 review を満たした扱いにしない。
 - 自動修正が完了しているが必要な approval signal が未観測なら、default で cheap
   approval watch に入る。approval/reaction 待ちだけでは full comment/thread/log を
   再取得しない。
@@ -378,7 +384,8 @@ Continue watching while:
 - CI is pending
 - mergeability is `UNKNOWN`
 - PR is green/mergeable but waiting for a required `reviewDecision=APPROVED`
-- PR is green/mergeable but waiting for configured `:+1:`
+- PR is green/mergeable, review is not required, and it is waiting for configured
+  `:+1:`
 - a push made by this skill is still being checked
 
 Re-enter full repair only on Expensive Repair Triggers.
@@ -386,7 +393,7 @@ Re-enter full repair only on Expensive Repair Triggers.
 Stop when:
 
 - PR is MERGED or CLOSED
-- approval signal is observed and PR is green/mergeable
+- GitHub review requirements are satisfied and PR is green/mergeable
 - maximum repair pass limit is reached
 - maximum watch duration is reached
 - the same actionable failure repeats without progress
@@ -477,19 +484,26 @@ while :; do
   fi
 
   checks_tmp="$(mktemp)"
+  checks_err="$(mktemp)"
   gh pr checks -R "$owner/$repo" "$num" \
     --json name,bucket,state,workflow,link \
-    --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' > "$checks_tmp"
+    --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' > "$checks_tmp" 2> "$checks_err"
   checks_status=$?
   checks_json="$(cat "$checks_tmp")"
-  rm -f "$checks_tmp"
+  checks_error="$(cat "$checks_err")"
+  rm -f "$checks_tmp" "$checks_err"
   if [ -z "$checks_json" ]; then
     if [ "$checks_status" -ne 0 ]; then
-      jq -cn --argjson status "$checks_status" \
-        '{event:"blocked", reason:"checks_snapshot_failed", status:$status}'
-      break
+      if printf '%s\n' "$checks_error" | grep -qi 'no checks reported'; then
+        checks_json='[{"bucket":"pending","count":0,"checks":[],"reason":"checks_not_reported_yet"}]'
+      else
+        jq -cn --argjson status "$checks_status" --arg error "$checks_error" \
+          '{event:"blocked", reason:"checks_snapshot_failed", status:$status, error:$error}'
+        break
+      fi
+    else
+      checks_json="[]"
     fi
-    checks_json="[]"
   fi
 
   reaction_targets="$(
@@ -507,7 +521,7 @@ while :; do
           review_comment) path="/repos/$owner/$repo/pulls/comments/$id/reactions?content=%2B1&per_page=100" ;;
           *) continue ;;
         esac
-        gh api "$path" |
+        gh api --paginate "$path" |
           jq --arg kind "$kind" --arg id "$id" \
             '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}'
       done |
