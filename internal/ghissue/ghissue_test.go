@@ -149,6 +149,38 @@ func TestListOpenIssuesWithLabelReturnsParseError(t *testing.T) {
 	}
 }
 
+func TestListOpenIssuesRunsGHIssueListWithoutBody(t *testing.T) {
+	argsPath := installFakeGH(t, `[{"number":12,"title":"tui picker","state":"open","labels":[{"name":"enhancement"}]}]`)
+
+	got, err := (Runner{}).ListOpenIssues()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Issue{{Number: 12, Title: "tui picker", State: "OPEN", Labels: []Label{{Name: "enhancement"}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListOpenIssues() = %#v, want %#v", got, want)
+	}
+	assertFakeGHArgs(t, argsPath, []string{
+		"issue", "list",
+		"--state", "open",
+		"--limit", "100",
+		"--json", "number,title,state,labels",
+	})
+}
+
+func TestListOpenIssuesReturnsParseError(t *testing.T) {
+	installFakeGH(t, `not-json`)
+
+	got, err := (Runner{}).ListOpenIssues()
+	if err == nil {
+		t.Fatalf("ListOpenIssues() = %#v, want error", got)
+	}
+	if !strings.Contains(err.Error(), "parse gh issue list") {
+		t.Fatalf("ListOpenIssues() error = %v", err)
+	}
+}
+
 func TestSwapIssueLabelsRunsSingleEdit(t *testing.T) {
 	argsPath := installFakeGH(t, ``)
 

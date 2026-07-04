@@ -127,24 +127,50 @@ func TestTUINewPanePopupGeometryUsesClientDimensions(t *testing.T) {
 }
 
 func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "result.json")
-	want := tuiNewPanePopupResult{Prompt: "Inspect API", Agents: []string{"codex"}}
-	if err := writeTUINewPanePopupResult(path, want); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name   string
+		result tuiNewPanePopupResult
+	}{
+		{
+			name:   "prompt mode keeps the legacy fields",
+			result: tuiNewPanePopupResult{Prompt: "Inspect API", Agents: []string{"codex"}},
+		},
+		{
+			name: "issue mode carries number and agent overrides",
+			result: tuiNewPanePopupResult{
+				Mode:           "issue",
+				Issue:          42,
+				DefaultAgent:   "claude",
+				AgentOverrides: map[string]string{"43": "codex"},
+			},
+		},
+		{
+			name:   "plan mode carries the slug",
+			result: tuiNewPanePopupResult{Mode: "plan", Plan: "launch-plan", DefaultAgent: "codex"},
+		},
 	}
-	got, err := readTUINewPanePopupResult(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Prompt != want.Prompt || !reflect.DeepEqual(got.Agents, want.Agents) || got.Canceled {
-		t.Fatalf("popup result = %#v, want %#v", got, want)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("popup result mode = %o, want 600", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "result.json")
+			if err := writeTUINewPanePopupResult(path, tt.result); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readTUINewPanePopupResult(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.result) {
+				t.Fatalf("popup result = %#v, want %#v", got, tt.result)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("popup result mode = %o, want 600", got)
+			}
+		})
 	}
 }
 
@@ -207,6 +233,9 @@ func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testin
 		"/tmp/result.done",
 		tuiNewPanePopupCommand,
 		"--result-file /tmp/result.json",
+		// The popup runs under the tmux server env; PATH must come from the
+		// parent so the issue/plan pickers can exec gh.
+		"PATH=" + shellQuote(os.Getenv("PATH")),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("popup shell command missing %q:\n%s", want, got)

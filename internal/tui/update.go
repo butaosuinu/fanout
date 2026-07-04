@@ -32,6 +32,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
 		if (m.newPanePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+			// Issue/plan launches can run a whole fan-out (seconds per child), so
+			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
+			// queue a quit instead of appearing hung.
+			if m.newPane.launching {
+				switch msg.String() {
+				case "q", "ctrl+c":
+					m.quitAfterLaunch = true
+					m.notice = "will quit after the launch finishes"
+				}
+			}
 			return m, nil
 		}
 		if m.pendingAction != nil {
@@ -206,6 +216,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case launchPaneMsg:
 		m.newPane.launching = false
+		if m.quitAfterLaunch {
+			m.quitAfterLaunch = false
+			return m.quit()
+		}
 		if msg.err != nil {
 			if m.mode == modeNewPane {
 				m.newPane.err = msg.err.Error()
@@ -241,6 +255,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchNewPaneRequest(msg.req)
+	case newPaneIssuesLoadedMsg:
+		p := &m.newPane.issuePicker
+		p.loading = false
+		if msg.err != nil {
+			// Leave loaded false so re-entering the mode retries the fetch.
+			p.err = msg.err.Error()
+			return m, nil
+		}
+		p.err = ""
+		p.loaded = true
+		p.items = issuePickerItems(msg.items)
+		m.recomputePicker(p)
+		return m, nil
+	case newPanePlansLoadedMsg:
+		p := &m.newPane.planPicker
+		p.loading = false
+		if msg.err != nil {
+			p.err = msg.err.Error()
+			return m, nil
+		}
+		p.err = ""
+		p.loaded = true
+		p.items = planPickerItems(msg.slugs)
+		m.recomputePicker(p)
+		return m, nil
+	case newPaneAssignLoadedMsg:
+		// The generation check also drops a stale load for the SAME target
+		// (esc while loading, then re-enter), which could otherwise finalize
+		// or overwrite the newer attempt.
+		if m.mode != modeNewPane || m.newPane.step != newPaneStepAssign ||
+			m.newPane.assign.target != msg.target || m.newPane.assign.gen != msg.gen {
+			return m, nil
+		}
+		m.newPane.assign.loading = false
+		if msg.err != nil {
+			m.newPane.assign.err = msg.err.Error()
+			return m, nil
+		}
+		m.newPane.assign.err = ""
+		m.newPane.err = "" // clear a "targets are still loading" line once they arrive
+		rows := buildAssignRows(msg, m.newPane.agentChoice)
+		if len(rows) == 0 {
+			// A childless issue launches as a single pane; an empty plan defers
+			// its error to the launch lane. Either way there is nothing to assign.
+			return m, m.finalizeNewPaneModeSubmit()
+		}
+		m.newPane.assign.rows = rows
+		m.newPane.assign.index = 0
+		return m, nil
 	case filesLoadedMsg:
 		m.repoFilesLoading = false
 		if msg.err != nil {

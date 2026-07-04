@@ -32,7 +32,7 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | キー | 動作 |
 |---|---|
 | `?` | キーボードショートカットのヘルプを開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
-| `n` | tmux popup を開き、複数行の必須 prompt、`claude` / `codex` の起動数を指定して manual agent ペインを作成する。`codex` は Codex Plan Mode で起動し、popup の prompt を inline で受け取る。`claude` は通常起動する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`Enter` で選択したペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。 |
+| `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue / Plan を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
@@ -44,6 +44,14 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | `q` | コンソールを離脱する。tmux session と子ペインはそのまま残る。 |
 
 > worktree 行が `stale!` になるのは、worktree が無い、agent command が無いなど fanout が復元できない場合です。shell terminal は resume できないため、対応する tmux ペインが無ければ TUI が state 行を削除します。
+
+### 新規 Session のモード
+
+`n` は Mode 行つきの tmux popup を開きます。Mode 行で `Left` / `Right` を押すとモードが切り替わり、`Tab` でフィールドを移動し、`Esc` でキャンセルします（agent 割り当て画面では 1 つ前に戻る）。
+
+- **Prompt** — 従来の manual ペイン。複数行の必須 prompt と `claude` / `codex` の起動数を指定する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。`codex` は Codex Plan Mode で起動し popup の prompt を inline で受け取る。`claude` は通常起動する。prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`Enter` でペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。
+- **Issue** — リポジトリの OPEN issue を一覧する（上限 100 件）。文字入力で番号・タイトル・ラベルで絞り込む。すでにペインが記録されている行は `(has session)` と表示されるが選択はできる。`Enter` で子 issue ごとの agent 割り当て画面が開き、`Left` / `Right` で行の agent を切り替え — 繰り返し指定の `--agent NUM=name` と同じ — もう一度 `Enter` で起動する。OPEN な子を持つ issue は `fanout <issue> --unblocked-only` 相当でファンアウトする。blocked な子は deferred のまま残るので、ブロッカーが閉じたら同じ issue を選び直す（全子を一度に起動したい場合は CLI を使う）。子のない issue は `@watch` 配下に記録される単独ペインを起動する。
+- **Plan** — `.fanout/plans/*.json` の slug を一覧し、選択した plan を `fanout plan <slug>` 相当で実行する。タスクごとの agent 割り当ても同様（`--agent task-id=name`）。
 
 ## --status（JSON）
 

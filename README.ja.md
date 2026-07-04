@@ -29,8 +29,10 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   だけをファンアウト。PR が merge されたら再実行すれば次の wave が開きます。
 - **常駐 TUI コンソール** — 引数なしの `fanout` で、ペイン / issue / PR を
   ライブ表示し、コンパクトな Session ナビゲータと focus・peek・terminal・
-  複数 agent の手動起動・同一 worktree への agent 追加・lifecycle キー・消えた
-  worktree ペインの自動復元を備えたコンソールを開きます。
+  同一 worktree への agent 追加・lifecycle キー・消えた worktree ペインの
+  自動復元を備えたコンソールを開きます。新規 Session popup は自由記述 prompt
+  のほか、一覧から選んだ OPEN issue や保存済み plan からも開始でき、子ごとに
+  agent を選べます(あるタスクは claude、別のタスクは codex、のように)。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
@@ -135,7 +137,7 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout 123 --unblocked-only` | ブロッカーが closed の子だけをファンアウト — 次の wave |
 | `fanout 123 --dry-run` | git / tmux / state / briefing file を変更せず計画だけ表示 |
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
-| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・terminal・複数 agent の手動起動・同一 worktree への追加・復元・lifecycle キー) |
+| `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・focus・peek・terminal・prompt / issue / plan からの Session 起動・同一 worktree への追加・復元・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
 | `fanout dashboard --web` | localhost で read-only Web ダッシュボードを配信 |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |

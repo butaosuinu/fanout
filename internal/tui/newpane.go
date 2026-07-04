@@ -15,15 +15,42 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// LaunchRequest describes one manual pane launch requested from the TUI.
+// LaunchMode selects the new-session lane. The zero value is the classic
+// free-prompt manual pane so pre-mode requests keep their meaning.
+type LaunchMode string
+
+const (
+	LaunchModePrompt LaunchMode = ""
+	LaunchModeIssue  LaunchMode = "issue"
+	LaunchModePlan   LaunchMode = "plan"
+)
+
+// LaunchRequest describes one launch requested from the TUI new-session form.
 type LaunchRequest struct {
-	Prompt string
+	Mode   LaunchMode
+	Prompt string // Mode == prompt
+	Issue  int    // Mode == issue: the selected issue number
+	Plan   string // Mode == plan: the selected plan slug
+	// Agents holds the prompt-mode launch list (one pane per entry).
 	Agents []string
+	// DefaultAgent and AgentOverrides carry the issue/plan-mode agent
+	// selection. Overrides are keyed by child issue number ("123") or plan
+	// task id and hold only rows that differ from DefaultAgent, mirroring
+	// repeatable --agent target=name flags.
+	DefaultAgent   string
+	AgentOverrides map[string]string
 }
 
 // LaunchFunc creates a manual fanout pane for a TUI request. It returns an
 // optional notice (e.g. a tolerated base-refresh skip) to surface on success.
 type LaunchFunc func(LaunchRequest) (notice string, err error)
+
+// IssueLaunchFunc starts a session for one GitHub issue: a fan-out when the
+// issue has OPEN children, a single pane otherwise.
+type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (notice string, err error)
+
+// PlanLaunchFunc runs `fanout plan <slug>` semantics for a stored plan spec.
+type PlanLaunchFunc func(slug string, defaultAgent string, overrides map[string]string) (notice string, err error)
 
 // NewPanePromptRequest describes a request to collect a manual pane prompt from
 // an external prompt surface, such as a tmux display-popup.
@@ -42,6 +69,11 @@ type NewPanePromptOptions struct {
 	Width         int
 	Height        int
 	ListRepoFiles func(root string) ([]string, error)
+	// List providers for the issue/plan modes; a nil provider hides its mode.
+	ListOpenIssues    func() ([]IssueListItem, error)
+	ListPlanSlugs     func() ([]string, error)
+	ListIssueChildren func(parent int) ([]ChildTarget, error)
+	ListPlanTasks     func(slug string) ([]PlanTaskItem, error)
 }
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
@@ -71,9 +103,28 @@ type AttachLaunchFunc func(AttachLaunchRequest) (notice string, err error)
 type newPaneField int
 
 const (
-	newPaneFieldPrompt newPaneField = iota
+	newPaneFieldMode newPaneField = iota
+	newPaneFieldMain
 	newPaneFieldAgent
-	newPaneFieldCount
+)
+
+// newPaneMode is the form's input lane: the classic free prompt, the OPEN
+// issue picker, or the stored plan picker.
+type newPaneMode int
+
+const (
+	newPaneModePrompt newPaneMode = iota
+	newPaneModeIssue
+	newPaneModePlan
+)
+
+// newPaneStep is the wizard position: the mode form (step 1) or the
+// per-target agent assignment that issue/plan submissions open (step 2).
+type newPaneStep int
+
+const (
+	newPaneStepForm newPaneStep = iota
+	newPaneStepAssign
 )
 
 type newPaneForm struct {
@@ -84,6 +135,18 @@ type newPaneForm struct {
 	launching  bool
 	err        string
 	attach     *AttachTarget
+
+	// Issue/plan mode state. agentChoice is the single default-agent
+	// selection those modes use instead of the prompt-mode count selector.
+	mode        newPaneMode
+	step        newPaneStep
+	issuePicker pickerState
+	planPicker  pickerState
+	agentChoice int
+	assign      assignState
+	assignGen   int // monotonic load generation; survives esc so stale loads drop
+	selIssue    int
+	selPlan     string
 
 	// @-mention file completion state, active only while focus is on the
 	// prompt field. compQuery is the text typed after '@' (the '@' itself is
@@ -115,11 +178,15 @@ func RunNewPanePrompt(opts NewPanePromptOptions) (LaunchRequest, bool, error) {
 	}
 	keyboard := newShiftEnterProtocols(os.Stdout, enhancedKeyboardKeysEnabled())
 	m := newModel(Options{
-		ProjectRoot:   opts.ProjectRoot,
-		DefaultAgent:  opts.DefaultAgent,
-		ListRepoFiles: opts.ListRepoFiles,
-		LaunchPane:    func(LaunchRequest) (string, error) { return "", nil },
-		keyboard:      keyboard,
+		ProjectRoot:       opts.ProjectRoot,
+		DefaultAgent:      opts.DefaultAgent,
+		ListRepoFiles:     opts.ListRepoFiles,
+		ListOpenIssues:    opts.ListOpenIssues,
+		ListPlanSlugs:     opts.ListPlanSlugs,
+		ListIssueChildren: opts.ListIssueChildren,
+		ListPlanTasks:     opts.ListPlanTasks,
+		LaunchPane:        func(LaunchRequest) (string, error) { return "", nil },
+		keyboard:          keyboard,
 	})
 	m.promptOnly = true
 	m.width = width
@@ -262,10 +329,11 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
-		prompt:     prompt,
-		agentCount: defaultAgentCounts(defaultAgent),
-		agentIndex: defaultAgentIndex(defaultAgent),
-		focus:      newPaneFieldPrompt,
+		prompt:      prompt,
+		agentCount:  defaultAgentCounts(defaultAgent),
+		agentIndex:  defaultAgentIndex(defaultAgent),
+		agentChoice: defaultAgentIndex(defaultAgent),
+		focus:       newPaneFieldMain,
 	}
 }
 
@@ -281,11 +349,14 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m.quit()
 	}
+	if m.newPane.step == newPaneStepAssign {
+		return m.updateNewPaneAssign(msg)
+	}
 	// While the @-completion popup is open it owns navigation/confirm/cancel
 	// keys; anything it does not handle (printable chars, backspace, cursor
 	// moves) falls through to normal editing with the updated completion state
 	// carried forward.
-	if m.newPane.focus == newPaneFieldPrompt && m.newPane.completing {
+	if m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt && m.newPane.completing {
 		next, handled := m.updatePromptCompletion(msg)
 		if handled {
 			return next, nil
@@ -305,13 +376,26 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveNewPaneFocus(msg.String())
 		return m, nil
 	case "left", "right", " ":
-		if m.newPane.focus == newPaneFieldAgent {
-			m.adjustNewPaneAgent(msg.String())
+		switch m.newPane.focus {
+		case newPaneFieldMode:
+			return m, m.cycleNewPaneMode(msg.String())
+		case newPaneFieldAgent:
+			if m.newPane.mode == newPaneModePrompt {
+				m.adjustNewPaneAgent(msg.String())
+			} else {
+				m.cycleNewPaneAgentChoice(msg.String())
+			}
+			return m, nil
+		default:
+			// Main field: the key falls through to the text/filter routing below.
+		}
+	case "up", "down", "ctrl+p", "ctrl+n":
+		if m.newPane.focus == newPaneFieldMain && m.newPane.mode != newPaneModePrompt {
+			m.moveActivePicker(pickerMoveDelta(msg.String()))
 			return m, nil
 		}
-	case "up", "down":
-		if m.newPane.focus != newPaneFieldPrompt {
-			if m.newPane.focus == newPaneFieldAgent {
+		if (msg.String() == "up" || msg.String() == "down") && m.newPane.focus != newPaneFieldMain {
+			if m.newPane.focus == newPaneFieldAgent && m.newPane.mode == newPaneModePrompt {
 				m.moveNewPaneAgent(msg.String())
 			} else {
 				m.moveNewPaneFocus(msg.String())
@@ -323,8 +407,8 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	switch m.newPane.focus {
-	case newPaneFieldPrompt:
+	switch {
+	case m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt:
 		m.newPane.prompt, cmd = m.newPane.prompt.Update(msg)
 		// Open completion when '@' is typed at a word boundary. Inspecting the
 		// textarea after the insert keeps this robust to soft-wrapping.
@@ -332,24 +416,44 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.atWordBoundaryBeforeCursor() {
 			m.beginCompletion()
 		}
+	case m.newPane.focus == newPaneFieldMain:
+		m.updateActivePickerFilter(msg)
 	default:
-		// The agent field is a toggle, not a text input; no message routing.
+		// The mode and agent rows are toggles, not text inputs; no message routing.
 	}
 	return m, cmd
 }
 
 func (m *model) moveNewPaneFocus(key string) {
+	order := m.newPaneFocusOrder()
+	idx := 0
+	for i, field := range order {
+		if field == m.newPane.focus {
+			idx = i
+			break
+		}
+	}
 	switch key {
 	case "shift+tab", "up":
-		m.newPane.focus = (m.newPane.focus + newPaneFieldCount - 1) % newPaneFieldCount
+		idx = (idx + len(order) - 1) % len(order)
 	default:
-		m.newPane.focus = (m.newPane.focus + 1) % newPaneFieldCount
+		idx = (idx + 1) % len(order)
 	}
-	if m.newPane.focus == newPaneFieldPrompt {
+	m.newPane.focus = order[idx]
+	if m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt {
 		m.newPane.prompt.Focus()
 	} else {
 		m.newPane.prompt.Blur()
 	}
+}
+
+// newPaneFocusOrder hides the Mode row when only the classic prompt mode is
+// wired, so the original two-field form keeps its focus cycle.
+func (m model) newPaneFocusOrder() []newPaneField {
+	if len(m.availableNewPaneModes()) > 1 {
+		return []newPaneField{newPaneFieldMode, newPaneFieldMain, newPaneFieldAgent}
+	}
+	return []newPaneField{newPaneFieldMain, newPaneFieldAgent}
 }
 
 func (m *model) moveNewPaneAgent(key string) {
@@ -383,6 +487,9 @@ func (m *model) adjustNewPaneAgent(key string) {
 }
 
 func (m *model) submitNewPane() tea.Cmd {
+	if m.newPane.mode != newPaneModePrompt {
+		return m.submitNewPanePicker()
+	}
 	prompt := strings.TrimSpace(m.newPane.prompt.Value())
 	if prompt == "" {
 		m.newPane.err = "prompt is required"
@@ -449,6 +556,14 @@ func (m *model) openNewPanePopupCmd() tea.Cmd {
 }
 
 func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
+	switch req.Mode {
+	case LaunchModeIssue:
+		return m.launchIssueSessionRequest(req)
+	case LaunchModePlan:
+		return m.launchPlanSessionRequest(req)
+	default:
+		// Prompt mode continues below.
+	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	agents := make([]string, 0, len(req.Agents))
 	for _, agentName := range req.Agents {
@@ -480,27 +595,48 @@ func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 }
 
 func (m model) newPaneView() string {
+	if m.newPane.step == newPaneStepAssign {
+		return m.newPaneAssignView()
+	}
 	title := "New agent pane"
-	verb := "create"
 	if m.newPane.attach != nil {
 		title = "Attach agent to worktree"
-		verb = "attach"
 	}
-	lines := []string{
-		titleStyle.Render(title),
-		m.newPaneFieldView(newPaneFieldPrompt, "Prompt", m.newPane.prompt.View(), true),
+	lines := []string{titleStyle.Render(title)}
+	if len(m.availableNewPaneModes()) > 1 {
+		lines = append(lines, m.newPaneFieldView(newPaneFieldMode, "Mode", m.newPaneModeTabsView(), false))
 	}
-	if m.newPane.focus == newPaneFieldPrompt && m.newPane.completing {
-		lines = append(lines, m.completionPopupView())
+	switch m.newPane.mode {
+	case newPaneModeIssue:
+		lines = append(lines,
+			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
+			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.singleAgentSelectorView(), false),
+		)
+	case newPaneModePlan:
+		lines = append(lines,
+			m.newPaneFieldView(newPaneFieldMain, "Plan", m.pickerView(m.newPane.planPicker, "no plans found in .fanout/plans"), true),
+			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.singleAgentSelectorView(), false),
+		)
+	default:
+		lines = append(lines, m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true))
+		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
+			lines = append(lines, m.completionPopupView())
+		}
+		lines = append(lines, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
 	}
-	lines = append(lines,
-		m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
-	)
 	if m.newPane.launching {
 		lines = append(lines, dimStyle.Render("creating pane..."))
 	}
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
+	}
+	lines = append(lines, dimStyle.Render(m.newPaneHint()))
+	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
+}
+
+func (m model) newPaneHint() string {
+	if m.newPane.mode != newPaneModePrompt {
+		return "enter next  type to filter  tab field  esc cancel"
 	}
 	// Only advertise Shift+Enter when enhanced keyboard input is active; otherwise
 	// it submits the form and the hint would mislead. Ctrl+J always inserts a newline.
@@ -508,8 +644,11 @@ func (m model) newPaneView() string {
 	if enhancedKeyboardKeysEnabled() {
 		newlineHint = "shift+enter/ctrl+j newline"
 	}
-	lines = append(lines, dimStyle.Render("enter "+verb+"  "+newlineHint+"  tab field  esc cancel"))
-	return modalStyle.Width(m.modalWidth()).Render(strings.Join(lines, "\n"))
+	verb := "create"
+	if m.newPane.attach != nil {
+		verb = "attach"
+	}
+	return "enter " + verb + "  " + newlineHint + "  tab field  esc cancel"
 }
 
 func (m model) newPaneFieldView(field newPaneField, label, value string, boxed bool) string {
@@ -545,6 +684,33 @@ func (m model) agentSelectorView() string {
 		lines = append(lines, marker+token)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// singleAgentSelectorView renders the issue/plan-mode default-agent choice: a
+// one-of selector, unlike the prompt-mode per-agent counts (a fan-out shares
+// one default agent across children; per-target overrides live in step 2).
+func (m model) singleAgentSelectorView() string {
+	parts := make([]string, 0, len(launchAgents))
+	for i, agentName := range launchAgents {
+		token := "( ) " + agentName
+		if i == m.newPane.agentChoice {
+			token = titleStyle.Render("(x) " + agentName)
+		} else {
+			token = dimStyle.Render(token)
+		}
+		parts = append(parts, token)
+	}
+	return strings.Join(parts, "  ")
+}
+
+func (m *model) cycleNewPaneAgentChoice(key string) {
+	n := len(launchAgents)
+	switch key {
+	case "left":
+		m.newPane.agentChoice = (m.newPane.agentChoice + n - 1) % n
+	default:
+		m.newPane.agentChoice = (m.newPane.agentChoice + 1) % n
+	}
 }
 
 const maxAgentLaunchCount = 3

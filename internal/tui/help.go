@@ -30,12 +30,12 @@ func (m model) helpView() string {
 	newPane := []helpEntry{
 		{"Ctrl+J", "Prompt newline"},
 		{"Tab", "Move fields"},
-		{"Up/Down", "Pick agent"},
+		{"Up/Down", "Pick agent / row"},
 		{"Space", "Toggle agent"},
-		{"Left/Right", "Change count"},
+		{"Left/Right", "Mode / agent"},
 		{"@", "File completion"},
-		{"Enter", "Create panes"},
-		{"Esc", "Cancel"},
+		{"Enter", "Create / next"},
+		{"Esc", "Cancel / back"},
 	}
 	columnWidth := m.helpColumnWidth()
 	lines := []string{

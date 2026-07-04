@@ -250,6 +250,27 @@ func (r Runner) ListOpenIssuesWithLabel(label string) ([]Issue, error) {
 	return issues, nil
 }
 
+// ListOpenIssues returns up to 100 OPEN issues for interactive pickers. Bodies
+// are omitted: pickers render number/title/labels only, and launch paths
+// re-fetch details (IssueDetail) at launch time so a stale list entry cannot
+// carry a stale briefing body.
+func (r Runner) ListOpenIssues() ([]Issue, error) {
+	out, err := r.gh(
+		"issue", "list",
+		"--state", "open",
+		"--limit", "100",
+		"--json", "number,title,state,labels",
+	)
+	if err != nil {
+		return nil, err
+	}
+	issues, err := parseIssueList(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse gh issue list: %w", err)
+	}
+	return issues, nil
+}
+
 // SwapIssueLabels moves one issue from remove to add with one `gh issue edit`
 // call so GitHub observes a single label mutation round.
 func (r Runner) SwapIssueLabels(num int, remove, add string) error {
