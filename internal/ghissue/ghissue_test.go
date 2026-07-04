@@ -149,8 +149,72 @@ func TestListOpenIssuesWithLabelReturnsParseError(t *testing.T) {
 	}
 }
 
-func TestListOpenIssuesRunsGHIssueListWithoutBody(t *testing.T) {
-	argsPath := installFakeGH(t, `[{"number":12,"title":"tui picker","state":"open","labels":[{"name":"enhancement"}]}]`)
+// TestListOpenIssuesPaginatesGraphQL guarantees ListOpenIssues walks every
+// cursor page: page 1 reports hasNextPage with endCursor "C1", page 2 closes
+// the walk, and the two pages concatenate in source order with State/Labels
+// normalized. The second request must carry after=C1.
+func TestListOpenIssuesPaginatesGraphQL(t *testing.T) {
+	argsPath := installFakeGHScript(t, `
+args="$*"
+printf '%s\n' "$args" >> "$GH_FAKE_ARGS"
+case "$args" in
+*"-F after=C1"*)
+  printf '{"data":{"repository":{"issues":{"nodes":[{"number":9,"title":"third","labels":{"nodes":[{"name":"bug"}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+  ;;
+*"api graphql"*)
+  printf '{"data":{"repository":{"issues":{"nodes":[{"number":12,"title":"tui picker","labels":{"nodes":[{"name":"enhancement"}]}},{"number":11,"title":"second","labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":true,"endCursor":"C1"}}}}}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	got, err := (Runner{}).ListOpenIssues()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Issue{
+		{Number: 12, Title: "tui picker", State: "OPEN", Labels: []Label{{Name: "enhancement"}}},
+		{Number: 11, Title: "second", State: "OPEN", Labels: []Label{}},
+		{Number: 9, Title: "third", State: "OPEN", Labels: []Label{{Name: "bug"}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListOpenIssues() = %#v, want %#v", got, want)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each gh invocation records exactly one "-F owner={owner}" (the query text
+	// uses $owner), so the count pins the number of requests.
+	if calls := strings.Count(string(data), "-F owner={owner}"); calls != 2 {
+		t.Fatalf("ListOpenIssues() made %d gh calls, want 2", calls)
+	}
+	if !strings.Contains(string(data), "-F after=C1") {
+		t.Fatalf("ListOpenIssues() second page did not send after=C1:\n%s", data)
+	}
+}
+
+// TestListOpenIssuesSinglePage guarantees a hasNextPage:false first page ends
+// the walk after one request.
+func TestListOpenIssuesSinglePage(t *testing.T) {
+	argsPath := installFakeGHScript(t, `
+args="$*"
+printf '%s\n' "$args" >> "$GH_FAKE_ARGS"
+case "$args" in
+*"api graphql"*)
+  printf '{"data":{"repository":{"issues":{"nodes":[{"number":12,"title":"tui picker","labels":{"nodes":[{"name":"enhancement"}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
 
 	got, err := (Runner{}).ListOpenIssues()
 	if err != nil {
@@ -161,12 +225,28 @@ func TestListOpenIssuesRunsGHIssueListWithoutBody(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListOpenIssues() = %#v, want %#v", got, want)
 	}
-	assertFakeGHArgs(t, argsPath, []string{
-		"issue", "list",
-		"--state", "open",
-		"--limit", "100",
-		"--json", "number,title,state,labels",
-	})
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := strings.Count(string(data), "-F owner={owner}"); calls != 1 {
+		t.Fatalf("ListOpenIssues() made %d gh calls, want 1", calls)
+	}
+}
+
+// TestListOpenIssuesReportsMissingRepository guarantees a null repository (bad
+// token scope or repo) becomes an error rather than an empty list.
+func TestListOpenIssuesReportsMissingRepository(t *testing.T) {
+	installFakeGH(t, `{"data":{"repository":null}}`)
+
+	got, err := (Runner{}).ListOpenIssues()
+	if err == nil {
+		t.Fatalf("ListOpenIssues() = %#v, want error", got)
+	}
+	if !strings.Contains(err.Error(), "repository not found") {
+		t.Fatalf("ListOpenIssues() error = %v", err)
+	}
 }
 
 func TestListOpenIssuesReturnsParseError(t *testing.T) {
@@ -176,7 +256,7 @@ func TestListOpenIssuesReturnsParseError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ListOpenIssues() = %#v, want error", got)
 	}
-	if !strings.Contains(err.Error(), "parse gh issue list") {
+	if !strings.Contains(err.Error(), "parse gh api graphql (open issues)") {
 		t.Fatalf("ListOpenIssues() error = %v", err)
 	}
 }

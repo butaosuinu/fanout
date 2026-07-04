@@ -250,25 +250,115 @@ func (r Runner) ListOpenIssuesWithLabel(label string) ([]Issue, error) {
 	return issues, nil
 }
 
-// ListOpenIssues returns up to 100 OPEN issues for interactive pickers. Bodies
-// are omitted: pickers render number/title/labels only, and launch paths
-// re-fetch details (IssueDetail) at launch time so a stale list entry cannot
-// carry a stale briefing body.
+// openIssuesPageSize is the per-page node count for the ListOpenIssues cursor
+// walk.
+const openIssuesPageSize = 100
+
+// ListOpenIssues returns every OPEN issue for interactive pickers, walking
+// GraphQL cursor pages so repositories with more than one page of issues stay
+// fully reachable. Bodies are omitted: pickers render number/title/labels
+// only, and launch paths re-fetch details (IssueDetail) at launch time so a
+// stale list entry cannot carry a stale briefing body.
 func (r Runner) ListOpenIssues() ([]Issue, error) {
-	out, err := r.gh(
-		"issue", "list",
-		"--state", "open",
-		"--limit", "100",
-		"--json", "number,title,state,labels",
-	)
-	if err != nil {
-		return nil, err
+	// orderBy CREATED_AT DESC keeps gh's newest-first ordering, which the
+	// picker ranker (rankPickerItems) relies on for stable source order.
+	const query = `
+query($owner: String!, $name: String!, $first: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(states: OPEN, first: $first, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        labels(first: 100) { nodes { name } }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+`
+	var issues []Issue
+	cursor := ""
+	for {
+		args := []string{
+			"api", "graphql",
+			"-f", "query=" + query,
+			"-F", "owner={owner}",
+			"-F", "name={repo}",
+			"-F", "first=" + strconv.Itoa(openIssuesPageSize),
+		}
+		if cursor != "" {
+			args = append(args, "-F", "after="+cursor)
+		}
+		out, err := r.gh(args...)
+		if err != nil {
+			return nil, fmt.Errorf("gh api graphql (open issues) failed: %w", err)
+		}
+		page, err := parseOpenIssuesPage(out)
+		if err != nil {
+			return nil, err
+		}
+		issues = append(issues, page.Issues...)
+		if !page.PageInfo.HasNextPage {
+			break
+		}
+		next := page.PageInfo.EndCursor
+		if next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
-	issues, err := parseIssueList(out)
-	if err != nil {
-		return nil, fmt.Errorf("parse gh issue list: %w", err)
+	if issues == nil {
+		return []Issue{}, nil
 	}
 	return issues, nil
+}
+
+// openIssuesPage is one GraphQL page of the ListOpenIssues cursor walk. It is a
+// dedicated local type (not reusing the Project path's shapes) so later PRs can
+// extend the issue node fields here without touching ProjectItems.
+type openIssuesPage struct {
+	Issues   []Issue
+	PageInfo pageInfo
+}
+
+func parseOpenIssuesPage(out []byte) (openIssuesPage, error) {
+	var root struct {
+		Data struct {
+			Repository *struct {
+				Issues struct {
+					Nodes []struct {
+						Number int    `json:"number"`
+						Title  string `json:"title"`
+						Labels struct {
+							Nodes []Label `json:"nodes"`
+						} `json:"labels"`
+					} `json:"nodes"`
+					PageInfo pageInfo `json:"pageInfo"`
+				} `json:"issues"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &root); err != nil {
+		return openIssuesPage{}, fmt.Errorf("parse gh api graphql (open issues): %w", err)
+	}
+	if root.Data.Repository == nil {
+		return openIssuesPage{}, fmt.Errorf("gh api graphql (open issues): repository not found in response")
+	}
+	nodes := root.Data.Repository.Issues.Nodes
+	issues := make([]Issue, 0, len(nodes))
+	for _, n := range nodes {
+		labels := make([]Label, 0, len(n.Labels.Nodes))
+		for _, l := range n.Labels.Nodes {
+			labels = append(labels, Label{Name: l.Name})
+		}
+		issues = append(issues, Issue{
+			Number: n.Number,
+			Title:  n.Title,
+			State:  "OPEN",
+			Labels: labels,
+		})
+	}
+	return openIssuesPage{Issues: issues, PageInfo: root.Data.Repository.Issues.PageInfo}, nil
 }
 
 // SwapIssueLabels moves one issue from remove to add with one `gh issue edit`

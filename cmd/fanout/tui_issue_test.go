@@ -28,8 +28,8 @@ func TestNewTUIListOpenIssuesFuncMarksRecordedSessions(t *testing.T) {
 	}
 	installTUIWatcherGHScript(t, `
 case "$args" in
-"issue list --state open --limit 100 --json number,title,state,labels")
-  printf '[{"number":501,"title":"recorded child","state":"open","labels":[{"name":"bug"}]},{"number":502,"title":"fresh","state":"open","labels":[]},{"number":700,"title":"fanned parent","state":"open","labels":[]}]'
+*"api graphql"*)
+  printf '{"data":{"repository":{"issues":{"nodes":[{"number":501,"title":"recorded child","labels":{"nodes":[{"name":"bug"}]}},{"number":502,"title":"fresh","labels":{"nodes":[]}},{"number":700,"title":"fanned parent","labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
   ;;
 *)
   printf 'unexpected gh args: %s\n' "$args" >&2
