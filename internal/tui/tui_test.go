@@ -3035,6 +3035,9 @@ func TestHelpModalFitsStandardTerminalHeight(t *testing.T) {
 			t.Fatalf("80x24 help view missing %q:\n%s", want, view)
 		}
 	}
+	if got := lipgloss.Height(m.helpView()); got > 24 {
+		t.Fatalf("help modal height = %d lines, want <= 24 (bottom border clips otherwise)", got)
+	}
 }
 
 func TestHelpModalRendersCompactKeyLabels(t *testing.T) {
