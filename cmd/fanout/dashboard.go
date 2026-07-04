@@ -38,7 +38,7 @@ const defaultWorktreeActionKey = "M"
 var (
 	openDashboardBrowser = openBrowser
 	showDashboardStatus  = func(msg string) error {
-		return tmuxctl.DisplayMessage(os.Getenv(tmuxrun.DashboardNotifyTargetEnv), msg)
+		return tmuxctl.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
 	}
 	openBrowserWaitPeriod = 2 * time.Second
 )
