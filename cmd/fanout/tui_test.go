@@ -58,10 +58,10 @@ func TestCmdTUIRegistersDashboardKeybinds(t *testing.T) {
 	}
 
 	log := readTUITmuxLog(t, argsPath)
-	if !tmuxLogHasCommand(log, "bind-key\nD\nnew-window") {
+	if !tmuxLogHasCommand(log, "bind-key\nD\nrun-shell") {
 		t.Fatalf("tmux log missing prefix dashboard keybind:\n%s", log)
 	}
-	if !tmuxLogHasCommand(log, "bind-key\n-n\nF12\nnew-window") {
+	if !tmuxLogHasCommand(log, "bind-key\n-n\nF12\nrun-shell") {
 		t.Fatalf("tmux log missing direct dashboard keybind:\n%s", log)
 	}
 }
@@ -119,7 +119,7 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 
 func TestCmdTUINoDashboardKeybindKeepsConsoleKeybind(t *testing.T) {
 	// The other direction of toggle independence: disabling the dashboard
-	// keybind alone must suppress the new-window dashboard binds without
+	// keybind alone must suppress the fanout-dashboard binds without
 	// taking the console-return registration down with it.
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
@@ -139,7 +139,7 @@ func TestCmdTUINoDashboardKeybindKeepsConsoleKeybind(t *testing.T) {
 	}
 
 	log := readTUITmuxLog(t, argsPath)
-	if tmuxLogHasCommand(log, "new-window") {
+	if tmuxLogHasCommand(log, "fanout-dashboard") {
 		t.Fatalf("tmux log should not contain dashboard keybinds when disabled:\n%s", log)
 	}
 	if !tmuxLogHasCommand(log, "bind-key\n-n\nF11\nrun-shell") {
@@ -168,10 +168,12 @@ func TestCmdTUINoConsoleKeybindHonorsEnv(t *testing.T) {
 	}
 
 	log := readTUITmuxLog(t, argsPath)
-	if tmuxLogHasCommand(log, "run-shell") {
+	if tmuxLogHasCommand(log, "focus-console") ||
+		tmuxLogHasCommand(log, "bind-key\nT\nrun-shell") ||
+		tmuxLogHasCommand(log, "bind-key\n-n\nF11\nrun-shell") {
 		t.Fatalf("tmux log should not contain console keybinds when disabled:\n%s", log)
 	}
-	if !tmuxLogHasCommand(log, "bind-key\nD\nnew-window") {
+	if !tmuxLogHasCommand(log, "bind-key\nD\nrun-shell") {
 		t.Fatalf("tmux log missing dashboard keybind (must stay registered):\n%s", log)
 	}
 }

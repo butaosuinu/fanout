@@ -450,7 +450,7 @@ func TestListLivePanesDropsForgedAgentStateLineForAnotherPane(t *testing.T) {
 	}
 }
 
-func TestBindDashboardKeysRegistersDetachedWindows(t *testing.T) {
+func TestBindDashboardKeysRegistersRunShellWrappers(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")
 	tmuxPath := filepath.Join(dir, "tmux")
@@ -477,17 +477,12 @@ printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 	}
 	gotPrefix := strings.Split(commands[0], "\n")
 	gotDirect := strings.Split(commands[1], "\n")
-	// Each tmux argv on its own line: bind-key D new-window -d -n
-	// fanout-dashboard -c <root-or-current-path> <launch>.
+	launch := `__fanout_start_dir=#{?@fanout_project_root,#{q:@fanout_project_root},#{q:pane_current_path}}; __fanout_start_dir=$(printf '%s' "$__fanout_start_dir" | sed 's/#/####/g'); tmux -S #{q:socket_path} new-window -d -n fanout-dashboard -t #{q:session_id}: -c "$__fanout_start_dir" -e 'FANOUT_DASHBOARD_NOTIFY_CLIENT=#{client_tty}' '/abs/path/fanout dashboard --web --open'`
 	wantPrefix := []string{
-		"bind-key", "D", "new-window", "-d", "-n", "fanout-dashboard",
-		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
-		"/abs/path/fanout dashboard --web --open",
+		"bind-key", "D", "run-shell", "-b", launch,
 	}
 	wantDirect := []string{
-		"bind-key", "-n", "F12", "new-window", "-d", "-n", "fanout-dashboard",
-		"-c", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
-		"/abs/path/fanout dashboard --web --open",
+		"bind-key", "-n", "F12", "run-shell", "-b", launch,
 	}
 	if strings.Join(gotPrefix, "\x00") != strings.Join(wantPrefix, "\x00") {
 		t.Fatalf("prefix tmux args = %#v, want %#v", gotPrefix, wantPrefix)
@@ -497,32 +492,64 @@ printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 	}
 }
 
-func TestBindDashboardKeyQuotesBinaryPathWithSpaces(t *testing.T) {
-	dir := t.TempDir()
-	argsPath := filepath.Join(dir, "args.txt")
-	tmuxPath := filepath.Join(dir, "tmux")
-	script := `#!/bin/sh
-printf '%s\n' "$@" > "$TMUXRUN_ARGS"
-`
-	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+func TestDashboardRunShellCommandCarriesExpandedClientAndStartDir(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "work tree")
+	if err := os.Mkdir(workDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TMUXRUN_ARGS", argsPath)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	command := dashboardNewWindowShellCommand("/opt/My Tools/fanout", shellQuote(workDir))
+	command = strings.ReplaceAll(command, "#{client_tty}", "/dev/ttys123")
+	wantLaunch := shellQuote(shellQuote("/opt/My Tools/fanout") + " dashboard --web --open")
 
-	if err := BindDashboardKeys("D", "F12", "/opt/My Tools/fanout"); err != nil {
-		t.Fatalf("BindDashboardKeys() failed: %v", err)
+	wantParts := []string{
+		"__fanout_start_dir=" + shellQuote(workDir),
+		`__fanout_start_dir=$(printf '%s' "$__fanout_start_dir" | sed 's/#/####/g')`,
+		"tmux -S #{q:socket_path} new-window -d -n fanout-dashboard",
+		"-t #{q:session_id}:",
+		`-c "$__fanout_start_dir"`,
+		"-e 'FANOUT_DASHBOARD_NOTIFY_CLIENT=/dev/ttys123'",
+		wantLaunch,
 	}
-	body, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatal(err)
+	for _, part := range wantParts {
+		if !strings.Contains(command, part) {
+			t.Fatalf("dashboard command %q missing %q", command, part)
+		}
 	}
-	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	// new-window runs the launch arg through one shell, so the binary path is
-	// single-quoted to survive word-splitting on "My Tools".
-	launch := got[len(got)-1]
-	if launch != "'/opt/My Tools/fanout' dashboard --web --open" {
-		t.Fatalf("launch arg = %q, want the binary path single-quoted", launch)
+	if strings.Contains(command, "#{client_tty}") || !strings.Contains(command, "#{q:socket_path}") {
+		t.Fatalf("dashboard command should carry expanded client and socket target: %q", command)
+	}
+}
+
+func TestDashboardRunShellCommandEscapesHashForTmuxFormatLayer(t *testing.T) {
+	command := dashboardNewWindowShellCommand("/opt/proj#2/fanout", "/repo")
+	wantLaunch := shellQuote(shellQuote("/opt/proj##2/fanout") + " dashboard --web --open")
+	if !strings.Contains(command, wantLaunch) {
+		t.Fatalf("dashboard command = %q, want escaped launch %q", command, wantLaunch)
+	}
+	if strings.Contains(command, "/opt/proj#2/fanout") {
+		t.Fatalf("dashboard command = %q, want literal '#' doubled for run-shell format expansion", command)
+	}
+	if !strings.Contains(command, "#{q:socket_path}") || !strings.Contains(command, "#{client_tty}") {
+		t.Fatalf("dashboard command = %q, want intentional tmux formats preserved", command)
+	}
+}
+
+func TestDashboardRunShellCommandEscapesStartDirHashForNestedTmux(t *testing.T) {
+	startDir := shellQuote("/tmp/project #(demo)")
+	command := dashboardNewWindowShellCommand("/opt/fanout", startDir)
+
+	wantParts := []string{
+		"__fanout_start_dir=" + startDir,
+		`__fanout_start_dir=$(printf '%s' "$__fanout_start_dir" | sed 's/#/####/g')`,
+		`-c "$__fanout_start_dir"`,
+	}
+	for _, part := range wantParts {
+		if !strings.Contains(command, part) {
+			t.Fatalf("dashboard command %q missing %q", command, part)
+		}
+	}
+	if strings.Contains(command, "-c "+startDir) {
+		t.Fatalf("dashboard command = %q, want start dir passed through escaped variable", command)
 	}
 }
 

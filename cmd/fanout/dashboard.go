@@ -20,6 +20,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/tmuxctl"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
@@ -33,6 +34,14 @@ const defaultDashboardDirectKey = "F12"
 // defaultWorktreeActionKey is the tmux prefix key fanout binds to open the
 // focused pane's same-worktree action popup.
 const defaultWorktreeActionKey = "M"
+
+var (
+	openDashboardBrowser = openBrowser
+	showDashboardStatus  = func(msg string) error {
+		return tmuxctl.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
+	}
+	openBrowserWaitPeriod = 2 * time.Second
+)
 
 type dashboardFlags struct {
 	port      int
@@ -316,8 +325,17 @@ func fileExists(path string) bool {
 }
 
 func openBrowserBestEffort(url string, lg *log.Logger) {
-	if err := openBrowser(url); err != nil {
+	if err := openDashboardBrowser(url); err != nil {
 		lg.Warn("dashboard: could not open browser (%v); visit %s manually", err, url)
+		showDashboardStatusBestEffort("fanout dashboard: browser open failed; visit "+url, lg)
+		return
+	}
+	showDashboardStatusBestEffort("fanout dashboard: "+url, lg)
+}
+
+func showDashboardStatusBestEffort(msg string, lg *log.Logger) {
+	if err := showDashboardStatus(msg); err != nil {
+		lg.Debug("dashboard status line: %v", err)
 	}
 }
 
@@ -334,10 +352,14 @@ func openBrowser(url string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// Reap the opener: it exits almost immediately, but without Wait it would
-	// linger as a zombie for the (long) lifetime of the dashboard process.
-	go func() { _ = cmd.Wait() }()
-	return nil
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(openBrowserWaitPeriod):
+		return nil
+	}
 }
 
 func randomToken() (string, error) {

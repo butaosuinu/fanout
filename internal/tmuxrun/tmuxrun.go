@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	MinimumVersion      = "3.3"
-	userShellExpr       = `"${SHELL:-/bin/sh}"`
-	paneListFormat      = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
-	livePanePathFormat  = "#{pane_id}\t#{pane_current_path}"
-	livePaneTitleFormat = "#{pane_id}\t#{pane_title}"
+	MinimumVersion           = "3.3"
+	DashboardNotifyClientEnv = "FANOUT_DASHBOARD_NOTIFY_CLIENT"
+	userShellExpr            = `"${SHELL:-/bin/sh}"`
+	paneListFormat           = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
+	livePanePathFormat       = "#{pane_id}\t#{pane_current_path}"
+	livePaneTitleFormat      = "#{pane_id}\t#{pane_title}"
 	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
 	// wrapper sets to "running" before the agent starts and "done" after it
 	// exits. It is the dashboard's agent-state signal: #{pane_current_command}
@@ -484,20 +485,27 @@ func parseLivePaneField(out string) map[string]string {
 // BindDashboardKeys registers tmux key bindings that open the read-only web
 // dashboard. The prefix key is bound under the prefix table; the direct key is
 // bound in the root table so it works without tmux's prefix. Both bindings run
-// the same launch command directly through `new-window`
-// (not run-shell), so:
+// the same `run-shell` wrapper, so:
 //
-//   - tmux expands @fanout_project_root (when fanout recorded it on the pane)
-//     or `#{pane_current_path}` at keypress time, making a single global key
-//     open the dashboard for whichever repo the pressing pane belongs to
-//     (multi-repo / multi-session safe). The explicit pane option covers agent
-//     TUIs such as Codex where tmux's current-path signal can remain stuck on
-//     the parent shell's cwd. cmdDashboard then resolves that cwd to the main
-//     working tree, so pressing from a child worktree pane still reads the
-//     parent `.fanout/state.json`.
-//   - The command runs through exactly one shell (new-window's), so the binary
-//     path needs a single level of quoting — handling install paths with spaces
-//     without the fragile double-quoting a run-shell wrapper would require.
+//   - the wrapper uses @fanout_project_root (when fanout recorded it on the
+//     pane) or `#{pane_current_path}` at keypress time, shell-quoted in each
+//     conditional branch for new-window's -c argument. That makes a single
+//     global key open the dashboard for whichever repo the pressing pane
+//     belongs to (multi-repo / multi-session safe). The explicit pane option
+//     covers agent TUIs such as Codex where tmux's current-path signal can
+//     remain stuck on the parent shell's cwd. cmdDashboard then resolves that
+//     cwd to the main working tree, so pressing from a child worktree pane still
+//     reads the parent `.fanout/state.json`.
+//   - The new window receives the pressing tmux client's tty in an environment
+//     variable. cmdDashboard uses that as a target-client when reporting the URL
+//     back to tmux's status line; pane targets are only a format context for
+//     display-message, not the display destination.
+//   - run-shell expands the socket path, session id, and client tty before
+//     invoking the tmux client. The nested client uses `-S #{socket_path}` and
+//     `-t #{session_id}:`, so non-default sockets and multi-session servers
+//     still open the detached window beside the pressed pane. The wrapper
+//     avoids run-shell -c because fanout supports tmux 3.3, where that option
+//     does not exist.
 //
 // The detached `fanout-dashboard` window keeps the server alive past the
 // keypress; reuse-if-running makes repeated presses just reopen the existing
@@ -510,23 +518,28 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 	if strings.TrimSpace(prefixKey) == "" || strings.TrimSpace(directKey) == "" || strings.TrimSpace(fanoutBin) == "" {
 		return fmt.Errorf("tmux bind-key: prefix key, direct key, and fanout binary path are required")
 	}
-	launch := shellQuote(fanoutBin) + " dashboard --web --open"
-	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
+	startDir := "#{?@fanout_project_root,#{q:@fanout_project_root},#{q:pane_current_path}}"
+	launch := dashboardNewWindowShellCommand(fanoutBin, startDir)
 	prefixArgs := []string{
-		"bind-key", prefixKey, "new-window", "-d", "-n", "fanout-dashboard",
-		"-c", startDir, launch,
+		"bind-key", prefixKey, "run-shell", "-b", launch,
 	}
 	if err := exec.Command("tmux", prefixArgs...).Run(); err != nil {
 		return fmt.Errorf("tmux bind-key %s: %w", prefixKey, err)
 	}
 	directArgs := []string{
-		"bind-key", "-n", directKey, "new-window", "-d", "-n", "fanout-dashboard",
-		"-c", startDir, launch,
+		"bind-key", "-n", directKey, "run-shell", "-b", launch,
 	}
 	if err := exec.Command("tmux", directArgs...).Run(); err != nil {
 		return fmt.Errorf("tmux bind-key -n %s: %w", directKey, err)
 	}
 	return nil
+}
+
+func dashboardNewWindowShellCommand(fanoutBin, startDir string) string {
+	launch := strings.ReplaceAll(shellQuote(fanoutBin), "#", "##") + " dashboard --web --open"
+	notifyClientEnv := DashboardNotifyClientEnv + "=#{client_tty}"
+	return "__fanout_start_dir=" + startDir + `; __fanout_start_dir=$(printf '%s' "$__fanout_start_dir" | sed 's/#/####/g'); ` +
+		"tmux -S #{q:socket_path} new-window -d -n fanout-dashboard -t #{q:session_id}: -c \"$__fanout_start_dir\" -e " + shellQuote(notifyClientEnv) + " " + shellQuote(launch)
 }
 
 // BindConsoleKeys registers tmux key bindings that return focus to the fanout

@@ -63,7 +63,7 @@ bubbles table は捨てず、compact 時は `View()` の分岐でレンダリン
 
 ### コンソール復帰キー(F11 / prefix T)
 
-dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は `new-window` にコマンドを直接渡し、シェル 1 段・クォート 1 段で済ませている(`BindDashboardKeys` のコメントが run-shell ラッパーの二重クォートを退けた判断を記録している)が、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する(`TestBindDashboardKeyQuotesBinaryPathWithSpaces` が雛形)。
+dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は tmux 3.3 互換の `run-shell` で押下時の tmux format を展開し、`tmux -S #{q:socket_path} new-window -t #{q:session_id}:` で押下元の socket/session に detached window を作る。project root/current path の各分岐は `#{q:...}` で shell quote して `new-window -c` へ、`#{client_tty}` は `new-window -e` へ渡す。一方、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する。
 
 pane id をバインドに焼き込む方式は、コンソール再起動で stale になり複数リポジトリの登録が上書き合戦になるため採らない。バイナリ経由なら押下のたびに探索するので、コンソールが作り直されてもバインドは古びない。
 
