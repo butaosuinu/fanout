@@ -371,7 +371,11 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "left", "right", " ":
 		switch m.newPane.focus {
 		case newPaneFieldMode:
-			return m, m.cycleNewPaneMode(msg.String())
+			cmd := m.cycleNewPaneMode(msg.String())
+			// Entering a single-agent mode must not inherit a stale prompt-mode
+			// count; collapse to one selection so the launch matches the selector.
+			m.normalizeSingleAgentSelection()
+			return m, cmd
 		case newPaneFieldPlan:
 			m.newPane.planFanout = !m.newPane.planFanout
 			return m, nil
@@ -484,6 +488,20 @@ func (m *model) selectSingleNewPaneAgent() {
 			m.newPane.agentCount[agentName] = 0
 		}
 	}
+}
+
+// normalizeSingleAgentSelection collapses the agent counts to a single
+// selection whenever the current mode enforces one. Prompt mode shares the
+// count map, so a stale multi-count (or all-zero) selection could otherwise
+// carry into issue mode and launch a default agent that differs from what the
+// selector shows. It keeps the primary agent (the first non-zero, else the
+// default) and points the cursor at it.
+func (m *model) normalizeSingleAgentSelection() {
+	if !m.newPaneSingleAgentMode() {
+		return
+	}
+	m.newPane.agentIndex = defaultAgentIndex(m.selectedDefaultAgent())
+	m.selectSingleNewPaneAgent()
 }
 
 func (m *model) adjustNewPaneAgent(key string) {

@@ -671,6 +671,35 @@ func TestIssueModeAgentSelectorSingleSelect(t *testing.T) {
 	}
 }
 
+// TestIssueModeNormalizesCarriedOverAgentCounts pins the mode-switch guard:
+// prompt-mode counts must not leak into issue mode, where the selector is
+// single-agent. Switching collapses a two-agent count back to one selection so
+// the derived default matches what the selector renders.
+func TestIssueModeNormalizesCarriedOverAgentCounts(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+	})
+	m.openNewPaneForm()
+	m.newPane.focus = newPaneFieldMode
+	// A prompt-mode selection with two agents at non-zero counts.
+	m.newPane.agentCount["claude"] = 2
+	m.newPane.agentCount["codex"] = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue
+	m = updated.(model)
+
+	if m.newPane.mode != newPaneModeIssue {
+		t.Fatalf("mode after switch = %v, want issue", m.newPane.mode)
+	}
+	wantCounts := map[string]int{"claude": 1, "codex": 0}
+	if got := m.newPane.agentCount; !reflect.DeepEqual(got, wantCounts) {
+		t.Fatalf("agentCount after switch = %v, want %v", got, wantCounts)
+	}
+	if got := m.selectedDefaultAgent(); got != "claude" {
+		t.Fatalf("selectedDefaultAgent() = %q, want claude", got)
+	}
+}
+
 // TestNewPaneIssuePickerCodexDefaultToAssignFlow drives the promptOnly wizard
 // with a codex default chosen on the count selector, then flips one child back
 // to claude: the submit must carry DefaultAgent codex plus a claude override.
