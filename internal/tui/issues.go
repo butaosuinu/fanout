@@ -373,11 +373,11 @@ func normalizedParent(parent string) string {
 	return strconv.Itoa(parentNum)
 }
 
-func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.PaneInfo, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
+func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.LivePane, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
 	const projectRoot = "/repo"
 	live := map[string]sessionview.LivePaneInfo{}
 	for _, pane := range tmuxPanes {
-		live[pane.ID] = sessionview.LivePaneInfo{Path: matchingWorktreePath(pane.ID, panes), Title: pane.Title}
+		live[pane.ID] = sessionview.LivePaneInfo{Path: matchingWorktreePath(pane.ID, panes), Title: pane.Title, AgentState: pane.AgentState}
 	}
 	liveCollector := func() (map[string]sessionview.LivePaneInfo, error) {
 		if !tmuxKnown {

@@ -63,6 +63,38 @@ type hudSummary struct {
 	Blocked int
 }
 
+// agentStateGlyphs は @fanout_agent_state の値ごとの表示グリフ。5 値化
+// (docs/competitive-herdr.ja.md 提案 A)に備え working / idle / blocked を
+// 先行定義しており、5 値化時は sessionview の normalizeAgentState の許可リスト
+// 拡張だけで表示側の変更はゼロになる。
+var agentStateGlyphs = map[string]string{
+	"running": "●",
+	"done":    "✓",
+	"working": "◐",
+	"idle":    "○",
+	"blocked": "◆",
+}
+
+// agentStateGlyph はグリフの単一情報源。入力は AgentState と TmuxState のみで、
+// ペイン内容(capture-pane)からの状態推定はしない。stale ペインと pane 記録の
+// ない行の AgentState は残骸なので、map より先に弾く。tmux degraded
+// ("unknown")では state.json の記録値が最善情報としてそのまま出る。
+func agentStateGlyph(p paneView) string {
+	switch p.TmuxState {
+	case "stale":
+		return "✗"
+	case "-":
+		return "-"
+	}
+	if g, ok := agentStateGlyphs[p.AgentState]; ok {
+		return g
+	}
+	if p.TmuxState == "live" {
+		return "·"
+	}
+	return "-"
+}
+
 func (p paneView) tableRow() table.Row {
 	tmuxState := p.TmuxState
 	if tmuxState == "stale" {
@@ -75,6 +107,7 @@ func (p paneView) tableRow() table.Row {
 		truncate(dash(p.Blockers), 22),
 		truncate(p.Name, 28),
 		dash(p.Agent),
+		agentStateGlyph(p),
 		tmuxState,
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 12),
@@ -132,6 +165,7 @@ func columnsForWidth(width int) []table.Column {
 		{Title: "BLOCKERS", Width: blockerWidth},
 		{Title: "NAME", Width: nameWidth},
 		{Title: "AGENT", Width: 7},
+		{Title: "RUN", Width: 5},
 		{Title: "TMUX", Width: 7},
 		{Title: "STATE", Width: 8},
 		{Title: "PR", Width: 12},
