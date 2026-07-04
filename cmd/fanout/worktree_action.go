@@ -201,13 +201,17 @@ func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
 }
 
 func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane, projectRootFallback bool) (bool, string) {
-	if pane.IsShell() {
+	// Any row recorded with a ShellKey (shell terminals, the plan fan-out
+	// coordinator at the repo root) is identified by @fanout_shell_key: its
+	// WorktreePath contains every fanout pane, so the path checks below cannot
+	// detect a reused pane id.
+	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
 		shellKey := strings.TrimSpace(pane.ShellKey)
 		if shellKey == "" {
 			return false, "recorded shell pane has no shell identity key"
 		}
 		if live.ShellKey != shellKey {
-			return false, "live shell pane identity changed"
+			return false, "live pane identity changed"
 		}
 		return true, ""
 	}
