@@ -26,3 +26,6 @@ diff へ自問する。
 - `make lint` と `make test` を回す。`web/` を触ったら `make lint-web` も。
 - dry-run / status 出力を変えたら `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で
   golden を regen して diff を目視する。
+
+パターンが実態と乖離したら `/session-retro` の再発分類が検出するので、この
+文書を更新する。
