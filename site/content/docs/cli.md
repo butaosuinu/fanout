@@ -319,6 +319,19 @@ Starts the read-only localhost web dashboard: bound to `127.0.0.1`, GET-only, to
 
 Run `fanout dashboard --help` for the full flag list.
 
+### `fanout focus-console`
+
+```text
+fanout focus-console [--from <pane-id>] [--client <client-name>]
+```
+
+Switches to the live [TUI console]({{< relref "/docs/monitoring" >}}) pane — the command behind the `F11` / `prefix + T` keys registered at console start. With no live console it shows a status-line notice and exits zero.
+
+| Flag | Argument | Description |
+|---|---|---|
+| `--from` | `pane-id` | Pane whose recorded project root picks among multiple consoles. Default: `$TMUX_PANE`. |
+| `--client` | `client-name` | tmux client to switch. Default: the current client. |
+
 ### `fanout msg`
 
 ```text
@@ -381,6 +394,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
+| `FANOUT_CONSOLE_KEYBIND` | Environment layer for the console-return tmux keybindings (`consoleKeybind`). |
 | `FANOUT_WATCHER` | Environment layer for watcher opt-in (`watcher`). |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | Environment layer for the watcher trigger label (`watcherTriggerLabel`). |
 | `FANOUT_WATCHER_RUNNING_LABEL` | Environment layer for the watcher running label (`watcherRunningLabel`). |

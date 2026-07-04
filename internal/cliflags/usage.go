@@ -155,6 +155,9 @@ Options:
                       live — pane liveness, issue state, PR merge status.
                       127.0.0.1-bound, GET-only, token-gated. See
                       'fanout dashboard --help'.
+  focus-console       Subcommand. Switch back to the live fanout TUI console
+                      pane; the tmux keys F11 / prefix + T run this. See
+                      'fanout focus-console --help'.
   msg                 Subcommand. Peer messaging between fanout panes over a
                       per-parent SQLite DB: send/post/mark-read/register plus
                       peers/inbox/board read views. See 'fanout msg --help'.

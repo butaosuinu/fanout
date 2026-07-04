@@ -23,6 +23,7 @@ type Settings struct {
 	AgentTeamsHint         bool
 	PRVisualization        bool
 	DashboardKeybind       bool
+	ConsoleKeybind         bool
 	Watcher                bool
 	WatcherTriggerLabel    string
 	WatcherRunningLabel    string
@@ -52,6 +53,7 @@ type overrides struct {
 	AgentTeamsHint         *bool
 	PRVisualization        *bool
 	DashboardKeybind       *bool
+	ConsoleKeybind         *bool
 	Watcher                *bool
 	WatcherTriggerLabel    *string
 	WatcherRunningLabel    *string
@@ -75,6 +77,7 @@ func Defaults() Settings {
 		AgentTeamsHint:         true,
 		PRVisualization:        true,
 		DashboardKeybind:       true,
+		ConsoleKeybind:         true,
 		WatcherTriggerLabel:    "fanout:auto",
 		WatcherRunningLabel:    "fanout:running",
 		WatcherIntervalSeconds: 60,
@@ -132,6 +135,9 @@ func apply(s *Settings, o overrides) {
 	}
 	if o.DashboardKeybind != nil {
 		s.DashboardKeybind = *o.DashboardKeybind
+	}
+	if o.ConsoleKeybind != nil {
+		s.ConsoleKeybind = *o.ConsoleKeybind
 	}
 	if o.Watcher != nil {
 		s.Watcher = *o.Watcher
@@ -254,6 +260,7 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
 		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
+		"consoleKeybind":     func(v *bool) { out.ConsoleKeybind = v },
 		"watcher":            func(v *bool) { out.Watcher = v },
 	}
 	stringKeys := map[string]func(*string){
@@ -333,6 +340,7 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
+	read("FANOUT_CONSOLE_KEYBIND", func(v *bool) { out.ConsoleKeybind = v })
 	read("FANOUT_WATCHER", func(v *bool) { out.Watcher = v })
 	readString := func(name string, set func(*string)) {
 		raw, ok := os.LookupEnv(name)

@@ -33,6 +33,8 @@ const (
 	livePaneShellKeyFormat     = "#{pane_id}\t#{" + shellKeyOption + "}"
 	livePaneProjectRootFormat  = "#{pane_id}\t#{" + projectRootOption + "}"
 	livePaneWorktreePathFormat = "#{pane_id}\t#{" + worktreePathOption + "}"
+	livePaneRoleFormat         = "#{pane_id}\t#{" + roleOption + "}"
+	livePaneSessionIDFormat    = "#{pane_id}\t#{session_id}"
 	paneAlternateFormat        = "#{alternate_on}"
 	// paneLabelOption is a tmux pane user option holding the border label fanout
 	// shows on the pane's top border (e.g. "#123 · fix-login-bug-123"). It is set
@@ -300,6 +302,18 @@ type LivePane struct {
 	// pane. It gives action keybindings a stable match that does not depend on
 	// pane_current_path.
 	WorktreePath string
+	// Role is @fanout_role, the auto-layout role fanout stamps on panes it
+	// manages (RoleConsole for the TUI console). Like every pane user option it
+	// is settable by the process inside the pane, so it is a display/UX signal,
+	// not a security boundary. It can also degrade to "": a failed role
+	// listing, or a forged duplicate row reusing this pane's id (see
+	// parseLivePaneField), blanks it — the console-return keys then report no
+	// console until the next keypress re-lists.
+	Role string
+	// SessionID is #{session_id}, the tmux-generated $N id of the session
+	// holding the pane. tmux produces it, so unlike the user options above a
+	// pane's process cannot forge its value.
+	SessionID string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
@@ -311,10 +325,10 @@ type LivePane struct {
 //
 // It issues separate list-panes calls for each field (livePanePathFormat,
 // livePaneTitleFormat, livePaneAgentStateFormat, livePaneShellKeyFormat,
-// livePaneProjectRootFormat, then livePaneWorktreePathFormat) so each
-// variable-content field is last on its line and survives strings.Cut with
-// embedded tabs intact — both pane paths and pane titles may legally contain
-// tabs.
+// livePaneProjectRootFormat, livePaneWorktreePathFormat, livePaneRoleFormat,
+// then livePaneSessionIDFormat) so each variable-content field is last on its
+// line and survives strings.Cut with embedded tabs intact — both pane paths
+// and pane titles may legally contain tabs.
 //
 // Injection defense: pane_current_path is just a directory name, so a crafted
 // path containing a newline can forge whole extra lines in the path listing.
@@ -365,6 +379,14 @@ func ListLivePanes() ([]LivePane, error) {
 	if worktreePathOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneWorktreePathFormat).Output(); err == nil {
 		worktreePaths = parseLivePaneField(string(worktreePathOut))
 	}
+	roles := map[string]string{}
+	if roleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneRoleFormat).Output(); err == nil {
+		roles = parseLivePaneField(string(roleOut))
+	}
+	sessionIDs := map[string]string{}
+	if sessionIDOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneSessionIDFormat).Output(); err == nil {
+		sessionIDs = parseLivePaneField(string(sessionIDOut))
+	}
 	// A real tmux listing emits each pane id exactly once; a duplicate means a
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
@@ -389,6 +411,8 @@ func ListLivePanes() ([]LivePane, error) {
 		pane.ShellKey = shellKeys[pane.ID]
 		pane.ProjectRoot = projectRoots[pane.ID]
 		pane.WorktreePath = worktreePaths[pane.ID]
+		pane.Role = roles[pane.ID]
+		pane.SessionID = sessionIDs[pane.ID]
 		joined = append(joined, pane)
 	}
 	return joined, nil
@@ -429,7 +453,12 @@ func parseLivePanePaths(out string) []LivePane {
 // dropped entirely — the genuine line cannot be told apart from the forgery,
 // so the field conservatively degrades to absent ("" at the join) instead of
 // letting a later forged line overwrite another pane's entry. The residual
-// impact is the attacker mis-reporting its own pane's display-only field.
+// impact is the attacker mis-reporting its own pane's display-only field —
+// or, by forging a duplicate that reuses ANOTHER pane's real id, blanking
+// that pane's field. For @fanout_role that blanks the console's Role and the
+// console-return keys report "no live console": an accepted nuisance in the
+// same trust bucket as role stamping itself (focus-console is a UX primitive,
+// not a security boundary; the sweep re-reads on every keypress).
 func parseLivePaneField(out string) map[string]string {
 	fields := make(map[string]string)
 	dropped := map[string]bool{}
@@ -495,6 +524,49 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 		"-c", startDir, launch,
 	}
 	if err := exec.Command("tmux", directArgs...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key -n %s: %w", directKey, err)
+	}
+	return nil
+}
+
+// BindConsoleKeys registers tmux key bindings that return focus to the fanout
+// TUI console from any pane. The prefix key is bound under the prefix table;
+// the direct key is bound in the root table so it works without tmux's prefix.
+//
+// Unlike BindDashboardKeys the launch command runs through `run-shell`, not
+// `new-window`: returning to the console must not create a window. run-shell
+// is still exactly one shell level, and the binding itself is registered via
+// argv, so the binary path needs a single shellQuote for the shell layer —
+// plus '#' doubling, because run-shell format-expands its argument at
+// keypress time (that is what resolves #{pane_id} / #{client_name}), and
+// format expansion pierces shell quotes, so an unescaped '#' in an install
+// path would be mangled (or a '#(' even command-substituted) before the shell
+// runs. `#{pane_id}` / `#{client_name}` expand to the pressing pane and
+// client, letting `fanout focus-console` prefer the console recorded for that
+// pane's repo and pin the switch to the client that pressed the key. Baking a
+// console pane id into the binding instead would go stale on every console
+// restart and turn multi-repo registrations into an overwrite war; resolving
+// the target at keypress time keeps one global binding correct.
+//
+// Any failure of the spawned command (the recorded binary was rebuilt or
+// deleted, the console died mid-switch) degrades to a status-line notice: the
+// `|| tmux display-message` tail keeps run-shell's exit status zero, because
+// a non-zero exit would pop tmux's copy-mode error view over whatever pane
+// the user was working in.
+//
+// fanoutBin should be an absolute path (os.Executable) so the bindings do not
+// depend on PATH.
+func BindConsoleKeys(prefixKey, directKey, fanoutBin string) error {
+	if strings.TrimSpace(prefixKey) == "" || strings.TrimSpace(directKey) == "" || strings.TrimSpace(fanoutBin) == "" {
+		return fmt.Errorf("tmux bind-key: prefix key, direct key, and fanout binary path are required")
+	}
+	launch := strings.ReplaceAll(shellQuote(fanoutBin), "#", "##") +
+		` focus-console --from "#{pane_id}" --client "#{client_name}" >/dev/null 2>&1` +
+		` || tmux display-message "fanout: focus-console failed; restart fanout to refresh this key"`
+	if err := exec.Command("tmux", "bind-key", prefixKey, "run-shell", launch).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key %s: %w", prefixKey, err)
+	}
+	if err := exec.Command("tmux", "bind-key", "-n", directKey, "run-shell", launch).Run(); err != nil {
 		return fmt.Errorf("tmux bind-key -n %s: %w", directKey, err)
 	}
 	return nil
@@ -876,6 +948,27 @@ func ZoomPane(paneID string) error {
 	}
 	if err := exec.Command("tmux", "resize-pane", "-Z", "-t", paneID).Run(); err != nil {
 		return fmt.Errorf("tmux resize-pane -Z: %w", err)
+	}
+	return nil
+}
+
+// SelectPaneForClient is SelectPane pinned to one client. Keybinding-driven
+// commands run through run-shell with no client context, where a bare
+// switch-client falls back to the most recently active client — with two
+// clients attached to the server that can yank the wrong terminal. clientName
+// comes from #{client_name} expanded at keypress; when empty, this falls back
+// to SelectPane's current-client resolution.
+func SelectPaneForClient(clientName, paneID string) error {
+	clientName = strings.TrimSpace(clientName)
+	if clientName == "" {
+		return SelectPane(paneID)
+	}
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if err := exec.Command("tmux", "switch-client", "-c", clientName, "-t", paneID).Run(); err != nil {
+		return fmt.Errorf("tmux switch-client: %w", err)
 	}
 	return nil
 }

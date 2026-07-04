@@ -26,6 +26,26 @@ func DisplayMessage(target, msg string) error {
 	return nil
 }
 
+// DisplayMessageToClient shows msg on the status line of one client — for
+// keybinding-driven commands, the client that pressed the key (#{client_name}
+// expanded at keypress). An empty client falls back to tmux's current-client
+// resolution, which outside a client context is the most recently active one.
+func DisplayMessageToClient(client, msg string) error {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return fmt.Errorf("message is required")
+	}
+	args := []string{"display-message"}
+	if strings.TrimSpace(client) != "" {
+		args = append(args, "-c", client)
+	}
+	args = append(args, tmuxLiteral(msg))
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux display-message: %w", err)
+	}
+	return nil
+}
+
 func tmuxLiteral(msg string) string {
 	return strings.ReplaceAll(msg, "#", "##")
 }

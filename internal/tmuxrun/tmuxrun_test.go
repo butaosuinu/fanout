@@ -171,8 +171,8 @@ printf '%%43\n'
 // `list-panes -a -F <format>` calls ListLivePanes makes, dispatching on the
 // format argument ($4): pathBody for livePanePathFormat, titleBody for
 // livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat, and
-// optional shell/project/worktree user-option bodies. Each argv is appended to
-// the args file separated by "---" lines.
+// optional shell/project/worktree/role/session bodies. Each argv is appended
+// to the args file separated by "---" lines.
 func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string, optionBodies ...string) string {
 	t.Helper()
 	shellBody := `printf ''`
@@ -186,6 +186,14 @@ func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody stri
 	worktreePathBody := `printf ''`
 	if len(optionBodies) > 2 {
 		worktreePathBody = optionBodies[2]
+	}
+	roleBody := `printf ''`
+	if len(optionBodies) > 3 {
+		roleBody = optionBodies[3]
+	}
+	sessionIDBody := `printf ''`
+	if len(optionBodies) > 4 {
+		sessionIDBody = optionBodies[4]
 	}
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
@@ -204,6 +212,12 @@ case "$4" in
 	;;
 *fanout_worktree_path*)
 	` + worktreePathBody + `
+	;;
+*fanout_role*)
+	` + roleBody + `
+	;;
+*session_id*)
+	` + sessionIDBody + `
 	;;
 *pane_title*)
 	` + titleBody + `
@@ -224,16 +238,18 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		`printf '%%9\trunning\n%%10\tdone\n'`,
 		`printf '%%9\tshell-nine\n'`,
 		`printf '%%9\t/repo\n%%10\t/repo\n'`,
-		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n'`)
+		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n'`,
+		`printf '%%9\tconsole\n'`,
+		`printf '%%9\t$1\n%%10\t$1\n%%11\t$2\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine"},
-		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done", ProjectRoot: "/repo", WorktreePath: "/wt/ten\twith\ttabs"},
-		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: ""},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine", Role: "console", SessionID: "$1"},
+		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done", ProjectRoot: "/repo", WorktreePath: "/wt/ten\twith\ttabs", SessionID: "$1"},
+		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: "", SessionID: "$2"},
 	}
 	if !reflect.DeepEqual(panes, want) {
 		t.Fatalf("ListLivePanes() = %#v, want %#v", panes, want)
@@ -246,6 +262,8 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_shell_key}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_project_root}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_worktree_path}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_role}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{session_id}", "---",
 	})
 }
 
@@ -517,6 +535,120 @@ func TestBindDashboardKeysRejectsEmptyArgs(t *testing.T) {
 	}
 	if err := BindDashboardKeys("D", "F12", ""); err == nil {
 		t.Fatal("BindDashboardKeys(empty bin) should error")
+	}
+}
+
+func TestBindConsoleKeysRegistersRunShellBindings(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindConsoleKeys("T", "F11", "/abs/path/fanout"); err != nil {
+		t.Fatalf("BindConsoleKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := strings.Split(strings.TrimSuffix(string(body), "\n---\n"), "\n---\n")
+	if len(commands) != 2 {
+		t.Fatalf("tmux command count = %d, want 2\n%s", len(commands), body)
+	}
+	gotPrefix := strings.Split(commands[0], "\n")
+	gotDirect := strings.Split(commands[1], "\n")
+	// Each tmux argv on its own line: bind-key T run-shell <launch>, with
+	// #{pane_id} / #{client_name} left for tmux to expand at keypress time and
+	// a display-message tail that keeps a failed keypress out of tmux's error
+	// view.
+	launch := `/abs/path/fanout focus-console --from "#{pane_id}" --client "#{client_name}" >/dev/null 2>&1` +
+		` || tmux display-message "fanout: focus-console failed; restart fanout to refresh this key"`
+	wantPrefix := []string{"bind-key", "T", "run-shell", launch}
+	wantDirect := []string{"bind-key", "-n", "F11", "run-shell", launch}
+	if strings.Join(gotPrefix, "\x00") != strings.Join(wantPrefix, "\x00") {
+		t.Fatalf("prefix tmux args = %#v, want %#v", gotPrefix, wantPrefix)
+	}
+	if strings.Join(gotDirect, "\x00") != strings.Join(wantDirect, "\x00") {
+		t.Fatalf("direct tmux args = %#v, want %#v", gotDirect, wantDirect)
+	}
+}
+
+func TestBindConsoleKeysQuotesBinaryPathWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindConsoleKeys("T", "F11", "/opt/My Tools/fanout"); err != nil {
+		t.Fatalf("BindConsoleKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	// run-shell runs the launch arg through one shell, so the binary path is
+	// single-quoted to survive word-splitting on "My Tools".
+	launch := got[len(got)-1]
+	if !strings.HasPrefix(launch, `'/opt/My Tools/fanout' focus-console --from "#{pane_id}"`) {
+		t.Fatalf("launch arg = %q, want the binary path single-quoted", launch)
+	}
+}
+
+func TestBindConsoleKeysEscapesHashForTmuxFormatLayer(t *testing.T) {
+	// run-shell format-expands the launch string at keypress time; shell
+	// quotes do not stop that layer, so a '#' in the install path must be
+	// doubled or tmux mangles the path before the shell ever runs.
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindConsoleKeys("T", "F11", "/opt/proj#2/fanout"); err != nil {
+		t.Fatalf("BindConsoleKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	launch := got[len(got)-1]
+	if !strings.HasPrefix(launch, `'/opt/proj##2/fanout' focus-console`) {
+		t.Fatalf("launch arg = %q, want '#' doubled for the format layer", launch)
+	}
+}
+
+func TestBindConsoleKeysRejectsEmptyArgs(t *testing.T) {
+	if err := BindConsoleKeys("", "F11", "/abs/fanout"); err == nil {
+		t.Fatal("BindConsoleKeys(empty prefix key) should error")
+	}
+	if err := BindConsoleKeys("T", "", "/abs/fanout"); err == nil {
+		t.Fatal("BindConsoleKeys(empty direct key) should error")
+	}
+	if err := BindConsoleKeys("T", "F11", ""); err == nil {
+		t.Fatal("BindConsoleKeys(empty bin) should error")
 	}
 }
 

@@ -77,6 +77,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	restoreTitle := markTUIRunning(projectRoot)
 	defer restoreTitle()
 	bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
+	bindConsoleKey(lg, resolvedSettings.ConsoleKeybind)
 	if err := runTUI(fanouttui.Options{
 		ProjectRoot:         projectRoot,
 		Session:             session,

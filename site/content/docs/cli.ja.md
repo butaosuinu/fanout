@@ -318,6 +318,19 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 全フラグは `fanout dashboard --help` を参照してください。
 
+### `fanout focus-console`
+
+```text
+fanout focus-console [--from <pane-id>] [--client <client-name>]
+```
+
+live な [TUI コンソール]({{< relref "/docs/monitoring" >}})ペインに切り替えます。コンソール起動時に登録される `F11` / `prefix + T` キーが実行するコマンドです。live なコンソールが無いときはステータスラインに通知して正常終了します。
+
+| flag | 引数 | 説明 |
+|---|---|---|
+| `--from` | `pane-id` | 記録済み project root で複数コンソールから選ぶ基準ペイン。既定: `$TMUX_PANE`。 |
+| `--client` | `client-name` | 切り替える tmux クライアント。既定: 現在のクライアント。 |
+
 ### `fanout msg`
 
 ```text
@@ -380,6 +393,7 @@ fanout check-update
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER` | watcher opt-in（`watcher`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | watcher trigger label（`watcherTriggerLabel`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_RUNNING_LABEL` | watcher running label（`watcherRunningLabel`）の環境変数レイヤ。 |
