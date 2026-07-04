@@ -18,26 +18,23 @@ func TestRankPickerItems(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		query     string
-		max       int
-		want      []int
-		wantTotal int
+		name  string
+		query string
+		want  []int
 	}{
-		{name: "empty query keeps source order", query: "", max: 8, want: []int{0, 1, 2}, wantTotal: 3},
-		{name: "number prefix outranks title match", query: "42", max: 8, want: []int{1, 2}, wantTotal: 2},
-		{name: "leading hash is ignored", query: "#41", max: 8, want: []int{0}, wantTotal: 1},
-		{name: "title substring matches case-insensitively", query: "ui over", max: 8, want: []int{1}, wantTotal: 1},
-		{name: "label substring ranks last", query: "backend", max: 8, want: []int{0}, wantTotal: 1},
-		{name: "no match yields empty results", query: "zzz", max: 8, want: []int{}, wantTotal: 0},
-		{name: "maxResults caps top but total counts all", query: "", max: 2, want: []int{0, 1}, wantTotal: 3},
+		{name: "empty query keeps source order", query: "", want: []int{0, 1, 2}},
+		{name: "number prefix outranks title match", query: "42", want: []int{1, 2}},
+		{name: "leading hash is ignored", query: "#41", want: []int{0}},
+		{name: "title substring matches case-insensitively", query: "ui over", want: []int{1}},
+		{name: "label substring ranks last", query: "backend", want: []int{0}},
+		{name: "no match yields empty results", query: "zzz", want: []int{}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, total := rankPickerItems(items, tt.query, tt.max)
-			if !reflect.DeepEqual(got, tt.want) || total != tt.wantTotal {
-				t.Fatalf("rankPickerItems(%q) = %v, %d, want %v, %d", tt.query, got, total, tt.want, tt.wantTotal)
+			got := rankPickerItems(items, tt.query)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("rankPickerItems(%q) = %v, want %v", tt.query, got, tt.want)
 			}
 		})
 	}
@@ -584,6 +581,50 @@ func TestAssignRowWindowFollowsSelection(t *testing.T) {
 	view := m.newPaneAssignView()
 	if !strings.Contains(view, "more") {
 		t.Fatalf("windowed assign view missing scroll marker:\n%s", view)
+	}
+}
+
+// TestPickerRowWindowFollowsSelection pins the picker's sliding window: an
+// uncapped result list never renders taller than the popup, the cursor stays
+// visible, and every match (including the last) is reachable without filtering.
+func TestPickerRowWindowFollowsSelection(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+	})
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	m.height = 23 // 23-15 overhead = 8 visible rows
+
+	items := make([]IssueListItem, 15)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "row"}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	if len(p.results) != 15 {
+		t.Fatalf("uncapped results = %d, want all 15", len(p.results))
+	}
+	if start, end := m.pickerRowWindow(*p); start != 0 || end != 8 {
+		t.Fatalf("window at top = [%d,%d), want [0,8)", start, end)
+	}
+
+	p.index = 12
+	start, end := m.pickerRowWindow(*p)
+	if p.index < start || p.index >= end {
+		t.Fatalf("window [%d,%d) does not contain selected row %d", start, end, p.index)
+	}
+	if view := m.newPaneView(); !strings.Contains(view, "more") {
+		t.Fatalf("windowed picker view missing scroll marker:\n%s", view)
+	}
+
+	// The last row stays reachable with no filter applied.
+	p.index = 14
+	start, end = m.pickerRowWindow(*p)
+	if p.index < start || p.index >= end {
+		t.Fatalf("window [%d,%d) does not contain last row %d", start, end, p.index)
 	}
 }
 

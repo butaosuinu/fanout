@@ -31,9 +31,8 @@ type pickerState struct {
 	err     string
 	items   []pickerItem
 	query   string
-	results []int // items indices, ranked, capped at pickerMaxRows
+	results []int // items indices, ranked; the view scrolls a window over them
 	index   int   // selection position within results
-	total   int   // full match count for the "+N more" hint
 }
 
 type pickerItem struct {
@@ -140,14 +139,14 @@ func (m *model) activePicker() *pickerState {
 }
 
 func (m *model) recomputePicker(p *pickerState) {
-	p.results, p.total = rankPickerItems(p.items, p.query, m.pickerVisibleRows())
+	p.results = rankPickerItems(p.items, p.query)
 	p.index = 0
 }
 
 // pickerFormOverhead is the non-list height of the picker form: title, mode
-// row, field labels, the list box frame, filter and "+N more" lines, the
-// agent row, the hint line, and the modal frame.
-const pickerFormOverhead = 14
+// row, field labels, the list box frame, filter line, both ↑/↓ scroll marker
+// lines, the agent row, the hint line, and the modal frame.
+const pickerFormOverhead = 15
 
 // pickerVisibleRows adapts the result cap to the available height so the
 // form never renders taller than the popup pty — bubbletea keeps only the
@@ -218,12 +217,12 @@ func (p pickerState) selectedItem() (pickerItem, bool) {
 	return p.items[p.results[p.index]], true
 }
 
-// rankPickerItems returns indices of the top matches plus the total match
-// count (the rankFileEntries contract). Rank 0: the key (issue number or
-// slug) prefix-matches; 1: the title contains the query; 2: a label contains
-// it. Source order is preserved within a rank: gh returns issues
-// newest-first and plan slugs arrive sorted.
-func rankPickerItems(items []pickerItem, query string, maxResults int) (top []int, total int) {
+// rankPickerItems returns the indices of every matching item, ranked. Rank 0:
+// the key (issue number or slug) prefix-matches; 1: the title contains the
+// query; 2: a label contains it. Source order is preserved within a rank: gh
+// returns issues newest-first and plan slugs arrive sorted. The result is
+// uncapped; the view scrolls a window over it so every match stays reachable.
+func rankPickerItems(items []pickerItem, query string) []int {
 	q := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(query)), "#")
 	type scored struct {
 		idx  int
@@ -238,15 +237,25 @@ func rankPickerItems(items []pickerItem, query string, maxResults int) (top []in
 		matches = append(matches, scored{idx: i, rank: rank})
 	}
 	sort.SliceStable(matches, func(i, j int) bool { return matches[i].rank < matches[j].rank })
-	total = len(matches)
-	if maxResults > 0 && len(matches) > maxResults {
-		matches = matches[:maxResults]
-	}
-	top = make([]int, len(matches))
+	top := make([]int, len(matches))
 	for i, s := range matches {
 		top[i] = s.idx
 	}
-	return top, total
+	return top
+}
+
+// pickerRowWindow returns the visible result range, sliding so the selected
+// row stays in view; a taller-than-pty list would be top-clipped by the
+// renderer. It mirrors assignRowWindow.
+func (m model) pickerRowWindow(p pickerState) (start, end int) {
+	rows := len(p.results)
+	visible := m.pickerVisibleRows()
+	if rows <= visible {
+		return 0, rows
+	}
+	start = clampInt(p.index-visible+1, 0, rows-visible)
+	start = min(start, p.index)
+	return start, start + visible
 }
 
 func pickerMatchRank(item pickerItem, q string) int {
@@ -335,8 +344,12 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 	if len(p.results) == 0 {
 		lines = append(lines, dimStyle.Render("  no match"))
 	}
-	for i, idx := range p.results {
-		item := p.items[idx]
+	start, end := m.pickerRowWindow(p)
+	if start > 0 {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)))
+	}
+	for i := start; i < end; i++ {
+		item := p.items[p.results[i]]
 		text := item.key
 		if item.title != "" {
 			text += " " + item.title
@@ -357,8 +370,8 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 			lines = append(lines, "  "+text)
 		}
 	}
-	if p.total > len(p.results) {
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  +%d more (type to narrow)", p.total-len(p.results))))
+	if end < len(p.results) {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↓ %d more (type to narrow)", len(p.results)-end)))
 	}
 	return strings.Join(lines, "\n")
 }
