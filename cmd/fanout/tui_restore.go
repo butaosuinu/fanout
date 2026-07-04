@@ -258,6 +258,7 @@ func recreateRecordedPane(pane state.Pane, root, session, commandName string) (s
 	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(pane.Parent, restorePaneTitle(pane))) // cosmetic pane-border label
 	_ = tmuxrun.EnablePaneBorderTitles(paneID)                                         // cosmetic pane-border label
 	_ = tmuxrun.SetPaneProjectRoot(paneID, root)                                       // best-effort dashboard keybinding hint
+	_ = tmuxrun.SetPaneWorktreePath(paneID, pane.WorktreePath)                         // best-effort same-worktree action target
 	if statusPath != "" {
 		status, err := waitForCodexPlanTUIReadyStatus(statusPath, codexPlanTUIStartupTimeout)
 		_ = os.Remove(statusPath)

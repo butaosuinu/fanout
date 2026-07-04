@@ -83,6 +83,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.jumpSession(1)
 		case "n":
 			return m, m.openNewPanePopupCmd()
+		case "a":
+			return m, m.openAttachAgentForm()
 		case "A":
 			return m, m.openSelectedWorktreeShellCmd()
 		case "t":
@@ -216,6 +218,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.notice != "":
 			m.notice = msg.notice
+		case msg.attached && msg.count > 1:
+			m.notice = fmt.Sprintf("attached %d new agent panes", msg.count)
+		case msg.attached:
+			m.notice = "attached new agent pane"
 		case msg.count > 1:
 			m.notice = fmt.Sprintf("created %d new agent panes", msg.count)
 		default:

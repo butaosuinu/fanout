@@ -190,9 +190,9 @@ func resolvePath(path string) string {
 }
 
 // LivePanes returns a LivePanes collector that maps each live tmux pane id to
-// its current path and title, so Build can require both an id match and a path
-// under the recorded worktree (robust against server-restart pane-id reuse)
-// and surface the live pane title.
+// its current path, recorded worktree path option, and title, so Build can
+// require both an id match and a path under the recorded worktree (robust
+// against server-restart pane-id reuse) and surface the live pane title.
 func LivePanes() func() (map[string]LivePaneInfo, error) {
 	return func() (map[string]LivePaneInfo, error) {
 		panes, err := tmuxrun.ListLivePanes()
@@ -201,7 +201,13 @@ func LivePanes() func() (map[string]LivePaneInfo, error) {
 		}
 		m := make(map[string]LivePaneInfo, len(panes))
 		for _, p := range panes {
-			m[p.ID] = LivePaneInfo{Path: p.CurrentPath, Title: p.Title, AgentState: p.AgentState, ShellKey: p.ShellKey}
+			m[p.ID] = LivePaneInfo{
+				Path:         p.CurrentPath,
+				WorktreePath: p.WorktreePath,
+				Title:        p.Title,
+				AgentState:   p.AgentState,
+				ShellKey:     p.ShellKey,
+			}
 		}
 		return m, nil
 	}

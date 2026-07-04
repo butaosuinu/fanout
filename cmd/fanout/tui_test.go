@@ -383,6 +383,195 @@ func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
 	}
 }
 
+func TestLaunchShellPaneFromTUIRecordsSelectedWorktreeShellInSourceRoot(t *testing.T) {
+	repo := t.TempDir()
+	sibling := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	initTUITestGitRepo(t, sibling)
+	targetPath := filepath.Join(sibling, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installTUITmuxShim(t, "%78")
+
+	err := launchShellPaneFromTUI(repo, "fanout-test", fanouttui.ShellLaunchRequest{
+		TargetPath:        targetPath,
+		SourceProjectRoot: sibling,
+		Source:            "#101",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, statErr := os.Stat(state.Path(repo)); !os.IsNotExist(statErr) {
+		t.Fatalf("source-root shell wrote state in TUI root or stat failed: %v", statErr)
+	}
+	store, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("sibling state panes = %+v, want one shell pane", store.Panes)
+	}
+	got := store.Panes[0]
+	if got.Kind != state.PaneKindShell || got.PaneID != "%78" || got.WorktreePath != targetPath {
+		t.Fatalf("shell state = %+v, want sibling-owned shell pane", got)
+	}
+}
+
+func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	targetPath := filepath.Join(repo, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%88")
+
+	notice, err := launchAttachedAgentFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.AttachLaunchRequest{
+		Prompt: "inspect this worktree",
+		Agents: []string{"claude"},
+		Target: fanouttui.AttachTarget{
+			TargetPath:       targetPath,
+			SourceParent:     "100",
+			SourceIssueNum:   101,
+			SourceBranchName: "fanout/child-101",
+			SourceLabel:      "#101",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notice != "" {
+		t.Fatalf("notice = %q, want empty success notice", notice)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("state panes = %+v, want one attached pane", store.Panes)
+	}
+	got := store.Panes[0]
+	if got.Kind != state.PaneKindAttachedAgent || got.Agent != "claude" || got.PaneID != "%88" {
+		t.Fatalf("attached state = %+v, want attached claude pane", got)
+	}
+	if got.Parent != "100" || got.IssueNum != -1 || got.SourceIssueNum != 101 || got.SourceParent != "100" {
+		t.Fatalf("attached identity = parent %s issue %d source %s/%d", got.Parent, got.IssueNum, got.SourceParent, got.SourceIssueNum)
+	}
+	if got.WorktreePath != targetPath || got.BranchName != "fanout/child-101" {
+		t.Fatalf("attached worktree/branch = %q/%q", got.WorktreePath, got.BranchName)
+	}
+	if got.Slug != "child-claude-a1" || got.DisplayName != "claude for #101" {
+		t.Fatalf("slug/display = %q/%q", got.Slug, got.DisplayName)
+	}
+	if _, err := os.Stat(filepath.Join(targetPath, ".fanout", "worktree-metadata.json")); !os.IsNotExist(err) {
+		t.Fatalf("attached launch wrote worktree metadata or stat failed: %v", err)
+	}
+}
+
+func TestLaunchAttachedAgentFromTUIRecordsStateInSourceRoot(t *testing.T) {
+	repo := t.TempDir()
+	sibling := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	initTUITestGitRepo(t, sibling)
+	targetPath := filepath.Join(sibling, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%89")
+
+	_, err := launchAttachedAgentFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.AttachLaunchRequest{
+		Prompt: "inspect this sibling worktree",
+		Agents: []string{"claude"},
+		Target: fanouttui.AttachTarget{
+			TargetPath:        targetPath,
+			SourceProjectRoot: sibling,
+			SourceParent:      "100",
+			SourceIssueNum:    101,
+			SourceBranchName:  "fanout/child-101",
+			SourceLabel:       "#101",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, statErr := os.Stat(state.Path(repo)); !os.IsNotExist(statErr) {
+		t.Fatalf("source-root attach wrote state in TUI root or stat failed: %v", statErr)
+	}
+	store, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 1 {
+		t.Fatalf("sibling state panes = %+v, want one attached pane", store.Panes)
+	}
+	got := store.Panes[0]
+	if got.Kind != state.PaneKindAttachedAgent || got.PaneID != "%89" || got.WorktreePath != targetPath {
+		t.Fatalf("attached state = %+v, want sibling-owned attached pane", got)
+	}
+	if got.SourceParent != "100" || got.SourceIssueNum != 101 {
+		t.Fatalf("source identity = %s/%d, want 100/101", got.SourceParent, got.SourceIssueNum)
+	}
+}
+
+func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	cfg := manualPaneConfigForTUIAgent("claude")
+	prompt := "inspect this worktree\nthen report"
+
+	first := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "child"),
+		SourceParent:     "100",
+		SourceIssueNum:   101,
+		SourceBranchName: "fanout/child-101",
+		SourceLabel:      "#101",
+	})
+	second := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "child"),
+		SourceParent:     "200",
+		SourceIssueNum:   201,
+		SourceBranchName: "fanout/child-201",
+		SourceLabel:      "#201",
+	})
+	if first.Number != -1 || second.Number != -1 {
+		t.Fatalf("numbers = %d/%d, want same first synthetic number", first.Number, second.Number)
+	}
+	if first.BriefingPath == "" || second.BriefingPath == "" || first.BriefingPath == second.BriefingPath {
+		t.Fatalf("briefing paths = %q/%q, want non-empty parent-scoped paths", first.BriefingPath, second.BriefingPath)
+	}
+	if !strings.Contains(first.Prompt, first.BriefingPath) || !strings.Contains(second.Prompt, second.BriefingPath) {
+		t.Fatalf("prompts do not reference briefing paths:\n%q\n%q", first.Prompt, second.Prompt)
+	}
+	if first.TaskID != "" || first.SourceTaskID != "" {
+		t.Fatalf("task identity = %q source=%q, want no task collision for issue source", first.TaskID, first.SourceTaskID)
+	}
+}
+
+func TestNewAttachedPaneRequestKeepsSourceTaskOutOfStateIdentity(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	cfg := manualPaneConfigForTUIAgent("claude")
+
+	got := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), "inspect", filepath.Join(repo, ".fanout", "worktrees", "task"), fanouttui.AttachTarget{
+		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "task"),
+		SourceParent:     "plan:launch-plan",
+		SourceTaskID:     "api-client",
+		SourceBranchName: "fanout/api-client",
+		SourceLabel:      "api-client",
+	})
+
+	if got.TaskID != "" {
+		t.Fatalf("TaskID = %q, want empty synthetic identity for attached-agent", got.TaskID)
+	}
+	if got.SourceTaskID != "api-client" {
+		t.Fatalf("SourceTaskID = %q, want api-client", got.SourceTaskID)
+	}
+}
+
 func TestCountOpenChildTargetsIncludesTaskListRefs(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in

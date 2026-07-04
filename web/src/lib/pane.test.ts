@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePane } from "../test/fixtures";
-import { paneLabel, rowKey } from "./pane";
+import { paneIssueURL, paneLabel, rowKey } from "./pane";
 
 describe("pane identity helpers", () => {
   it("keys issue rows by parent and issue number", () => {
@@ -15,6 +15,26 @@ describe("pane identity helpers", () => {
 
     expect(rowKey("plan:launch-plan", pane)).toBe("plan:launch-plan@api-client");
     expect(paneLabel(pane)).toBe("api-client");
+  });
+
+  it("labels attached agents by their source issue or task", () => {
+    const issueAgent = makePane({
+      kind: "attached-agent",
+      issueNum: -1,
+      sourceIssueNum: 42,
+    });
+    const taskAgent = makePane({
+      kind: "attached-agent",
+      issueNum: -2,
+      sourceTaskId: "api-client",
+    });
+
+    expect(paneLabel(issueAgent)).toBe("#42");
+    expect(paneIssueURL("octo/fanout", issueAgent)).toBe(
+      "https://github.com/octo/fanout/issues/42",
+    );
+    expect(paneLabel(taskAgent)).toBe("api-client");
+    expect(paneIssueURL("octo/fanout", taskAgent)).toBe("");
   });
 
   it("disambiguates worktree-local rows by sourceKey", () => {

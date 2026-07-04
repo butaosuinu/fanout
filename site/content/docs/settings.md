@@ -25,7 +25,7 @@ The behavior toggles are instructions that ship on by default but a team may wan
 - `briefingCodeReview`: tells Claude children to run the `/code-review` slash command on their changes before committing.
 - `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
-- `dashboardKeybind`: registers the `F12` / `prefix + D` tmux keybindings that open the dashboard.
+- `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 
 The watcher and notification channels are a separate track: the watcher gates opt-in label-driven launches, and notification channels pick where TUI state transitions go.
 
@@ -38,7 +38,7 @@ The watcher and notification channels are a separate track: the watcher gates op
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
-| Dashboard `F12` / `prefix + D` tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
+| Dashboard/action tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | Watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | Watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
 | Watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |

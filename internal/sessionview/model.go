@@ -44,16 +44,19 @@ type WorktreeStat struct {
 // PaneView is one recorded pane augmented with tmux liveness, gh state, and git
 // worktree status.
 type PaneView struct {
-	IssueNum     int    `json:"issueNum"`
-	TaskID       string `json:"taskId,omitempty"`
-	Kind         string `json:"kind,omitempty"`
-	Slug         string `json:"slug"`
-	DisplayName  string `json:"displayName"`
-	Agent        string `json:"agent"`
-	BranchName   string `json:"branchName"`
-	PaneID       string `json:"paneId"`
-	ShellKey     string `json:"shellKey,omitempty"`
-	WorktreePath string `json:"worktreePath"`
+	IssueNum       int    `json:"issueNum"`
+	TaskID         string `json:"taskId,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Slug           string `json:"slug"`
+	DisplayName    string `json:"displayName"`
+	Agent          string `json:"agent"`
+	BranchName     string `json:"branchName"`
+	PaneID         string `json:"paneId"`
+	ShellKey       string `json:"shellKey,omitempty"`
+	SourceParent   string `json:"sourceParent,omitempty"`
+	SourceIssueNum int    `json:"sourceIssueNum,omitempty"`
+	SourceTaskID   string `json:"sourceTaskId,omitempty"`
+	WorktreePath   string `json:"worktreePath"`
 	// SourceProjectRoot はこの pane を記録した worktree の root。複数 worktree を
 	// またいで集約した場合のみ非空(MergedStateLoader が設定し state row から
 	// passthrough)で、TUI が write(close/merge/cleanup)を所有元 state.json へ

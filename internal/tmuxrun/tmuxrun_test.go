@@ -167,17 +167,25 @@ printf '%%43\n'
 	}
 }
 
-// installLivePanesShim installs a tmux shim that answers the four
+// installLivePanesShim installs a tmux shim that answers the
 // `list-panes -a -F <format>` calls ListLivePanes makes, dispatching on the
 // format argument ($4): pathBody for livePanePathFormat, titleBody for
-// livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat, and an
-// optional shellKeyBody for livePaneShellKeyFormat. Each argv is appended to
+// livePaneTitleFormat, agentStateBody for livePaneAgentStateFormat, and
+// optional shell/project/worktree user-option bodies. Each argv is appended to
 // the args file separated by "---" lines.
-func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string, shellKeyBody ...string) string {
+func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody string, optionBodies ...string) string {
 	t.Helper()
 	shellBody := `printf ''`
-	if len(shellKeyBody) > 0 {
-		shellBody = shellKeyBody[0]
+	if len(optionBodies) > 0 {
+		shellBody = optionBodies[0]
+	}
+	projectRootBody := `printf ''`
+	if len(optionBodies) > 1 {
+		projectRootBody = optionBodies[1]
+	}
+	worktreePathBody := `printf ''`
+	if len(optionBodies) > 2 {
+		worktreePathBody = optionBodies[2]
 	}
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
@@ -190,6 +198,12 @@ case "$4" in
 	;;
 *fanout_shell_key*)
 	` + shellBody + `
+	;;
+*fanout_project_root*)
+	` + projectRootBody + `
+	;;
+*fanout_worktree_path*)
+	` + worktreePathBody + `
 	;;
 *pane_title*)
 	` + titleBody + `
@@ -208,15 +222,17 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n%%11\t/wt/eleven\n\n'`,
 		`printf '%%9\tnine: child\n%%10\ttitle\twith\ttabs\n%%11\t\n'`,
 		`printf '%%9\trunning\n%%10\tdone\n'`,
-		`printf '%%9\tshell-nine\n'`)
+		`printf '%%9\tshell-nine\n'`,
+		`printf '%%9\t/repo\n%%10\t/repo\n'`,
+		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine"},
-		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done"},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine"},
+		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done", ProjectRoot: "/repo", WorktreePath: "/wt/ten\twith\ttabs"},
 		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: ""},
 	}
 	if !reflect.DeepEqual(panes, want) {
@@ -228,6 +244,8 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		"list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_agent_state}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_shell_key}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_project_root}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_worktree_path}", "---",
 	})
 }
 
@@ -502,6 +520,46 @@ func TestBindDashboardKeysRejectsEmptyArgs(t *testing.T) {
 	}
 }
 
+func TestBindWorktreeActionKeyRegistersPopup(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := BindWorktreeActionKey("M", "/abs/path/fanout"); err != nil {
+		t.Fatalf("BindWorktreeActionKey() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	want := []string{
+		"bind-key", "M", "display-popup", "-E",
+		"-d", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
+		"/abs/path/fanout __worktree-action --pane #{pane_id}",
+	}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("tmux args = %#v, want %#v", got, want)
+	}
+}
+
+func TestBindWorktreeActionKeyRejectsEmptyArgs(t *testing.T) {
+	if err := BindWorktreeActionKey("", "/abs/fanout"); err == nil {
+		t.Fatal("BindWorktreeActionKey(empty key) should error")
+	}
+	if err := BindWorktreeActionKey("M", ""); err == nil {
+		t.Fatal("BindWorktreeActionKey(empty bin) should error")
+	}
+}
+
 func TestSetPaneProjectRoot(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
@@ -512,6 +570,19 @@ func TestSetPaneProjectRoot(t *testing.T) {
 
 	assertTmuxArgs(t, argsPath, []string{
 		"set-option", "-p", "-t", "%42", "@fanout_project_root", "/tmp/My Repo",
+	})
+}
+
+func TestSetPaneWorktreePath(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneWorktreePath("%42", "/tmp/My Worktree"); err != nil {
+		t.Fatalf("SetPaneWorktreePath() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_worktree_path", "/tmp/My Worktree",
 	})
 }
 

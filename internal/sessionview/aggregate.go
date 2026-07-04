@@ -16,11 +16,14 @@ import (
 )
 
 // LivePaneInfo is what Build needs to know about one live tmux pane: the cwd
-// of its foreground process (for the worktree-path liveness check) and its
-// pane title (surfaced as PaneView.TmuxTitle when the pane is alive).
+// of its foreground process, the recorded worktree path option, and its pane
+// title (surfaced as PaneView.TmuxTitle when the pane is alive).
 type LivePaneInfo struct {
 	// Path is the pane's current working directory.
 	Path string
+	// WorktreePath is @fanout_worktree_path, set by fanout for panes whose
+	// foreground process may leave pane_current_path stale.
+	WorktreePath string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
 	// AgentState は pane user option @fanout_agent_state の値("running" /
@@ -45,10 +48,11 @@ type LivePaneInfo struct {
 //     unresolved); the pane shows UNKNOWN and Degraded.GitHub is set.
 type Collectors struct {
 	LoadState func() (state.Store, error)
-	// LivePanes maps each live tmux pane id to its current working path and
-	// title. A pane counts as alive only when its id is present AND the live
-	// path is at/under its recorded worktree — pane ids are reused across tmux
-	// server restarts, so id-only matching would falsely revive stale rows.
+	// LivePanes maps each live tmux pane id to its current working path,
+	// recorded worktree path option, and title. A pane counts as alive only
+	// when its id is present AND the live/current or option path is at/under
+	// its recorded worktree — pane ids are reused across tmux server restarts,
+	// so id-only matching would falsely revive stale rows.
 	LivePanes func() (map[string]LivePaneInfo, error)
 	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
 	// BranchPRs mirrors IssuePRs for issue-less task rows keyed by head branch:
@@ -237,6 +241,9 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				BranchName:         p.BranchName,
 				PaneID:             p.PaneID,
 				ShellKey:           p.ShellKey,
+				SourceParent:       p.SourceParent,
+				SourceIssueNum:     p.SourceIssueNum,
+				SourceTaskID:       p.SourceTaskID,
 				WorktreePath:       p.WorktreePath,
 				SourceProjectRoot:  p.SourceProjectRoot,
 				SourceProjectRoots: p.SourceProjectRoots,
@@ -325,7 +332,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		snap.Sessions = append(snap.Sessions, session)
 
 		for _, pv := range session.Panes {
-			if countsInRollup(pv) || pv.Kind == state.PaneKindShell {
+			if countsInRollup(pv) || isPaneOnly(pv) {
 				accumulate(&snap.Rollup, pv)
 			}
 		}
@@ -515,6 +522,10 @@ func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
 		return true
 	}
 	wt := filepath.Clean(worktree)
+	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
+		opt := filepath.Clean(optionPath)
+		return opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+	}
 	cp := filepath.Clean(cur.Path)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
 }
@@ -588,7 +599,7 @@ func hasMergedPR(prs []ghissue.PRRef) bool {
 // に到達できなくなるため。merged PR を持つ CLOSED 子は「pane なしで完了した
 // 作業」として Total / Merged に算入する。記録 pane は従来どおり常に算入。
 func countsInRollup(pv PaneView) bool {
-	if pv.Kind == state.PaneKindShell {
+	if isPaneOnly(pv) {
 		return false
 	}
 	if !pv.NotStarted {
@@ -605,7 +616,7 @@ func countsInRollup(pv PaneView) bool {
 }
 
 func accumulate(r *Rollup, pv PaneView) {
-	if pv.Kind == state.PaneKindShell {
+	if isPaneOnly(pv) {
 		if pv.Alive {
 			r.Live++
 		}
@@ -629,6 +640,10 @@ func accumulate(r *Rollup, pv PaneView) {
 		// synthetic 子は Total/Merged には入るがここには数えない。
 		r.NotStarted++
 	}
+}
+
+func isPaneOnly(pv PaneView) bool {
+	return pv.Kind == state.PaneKindShell || pv.Kind == state.PaneKindAttachedAgent
 }
 
 func finalize(r *Rollup) {

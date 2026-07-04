@@ -54,6 +54,9 @@ type paneRequest struct {
 	DisplayNameOverride string
 	BranchName          string
 	Prompt              string
+	SourceParent        string
+	SourceIssueNum      int
+	SourceTaskID        string
 	Agent               string
 	AgentCommand        string
 	CodexPlanMode       bool
@@ -169,6 +172,9 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := tmuxrun.SetPaneProjectRoot(paneID, info.ProjectRoot); err != nil {
 		lg.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
+	if err := tmuxrun.SetPaneWorktreePath(paneID, prepared.WorktreePath); err != nil {
+		lg.Warn("%s: worktree path hint: %v", paneLogLabel(req), err)
+	}
 	// Re-layout right after the split so the new pane is sized into the grid
 	// immediately — a Codex Plan Mode pane otherwise sits at the ~half-width split
 	// for the whole (up to 30s) startup wait below. A failed launch reconciles any
@@ -222,6 +228,9 @@ func statePane(req paneRequest, paneID, worktreePath string, now time.Time, code
 		BranchName:     req.BranchName,
 		BaseBranch:     req.Worktree.BaseBranch,
 		PaneID:         paneID,
+		SourceParent:   req.SourceParent,
+		SourceIssueNum: req.SourceIssueNum,
+		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
 		CodexPlanMode:  req.CodexPlanMode,
 		CodexThreadID:  codexPlanStatus.ThreadID,

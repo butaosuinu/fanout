@@ -25,12 +25,15 @@ const (
 	// reports the wrapper shell's name for the whole agent run (verified on
 	// tmux 3.6a/macOS; Linux resolves the foreground pgrp leader the same way).
 	// Pane user options die with the pane, matching the liveness boundary.
-	agentStateOption         = "@fanout_agent_state"
-	shellKeyOption           = "@fanout_shell_key"
-	projectRootOption        = "@fanout_project_root"
-	livePaneAgentStateFormat = "#{pane_id}\t#{" + agentStateOption + "}"
-	livePaneShellKeyFormat   = "#{pane_id}\t#{" + shellKeyOption + "}"
-	paneAlternateFormat      = "#{alternate_on}"
+	agentStateOption           = "@fanout_agent_state"
+	shellKeyOption             = "@fanout_shell_key"
+	projectRootOption          = "@fanout_project_root"
+	worktreePathOption         = "@fanout_worktree_path"
+	livePaneAgentStateFormat   = "#{pane_id}\t#{" + agentStateOption + "}"
+	livePaneShellKeyFormat     = "#{pane_id}\t#{" + shellKeyOption + "}"
+	livePaneProjectRootFormat  = "#{pane_id}\t#{" + projectRootOption + "}"
+	livePaneWorktreePathFormat = "#{pane_id}\t#{" + worktreePathOption + "}"
+	paneAlternateFormat        = "#{alternate_on}"
 	// paneLabelOption is a tmux pane user option holding the border label fanout
 	// shows on the pane's top border (e.g. "#123 · fix-login-bug-123"). It is set
 	// per pane and referenced from paneBorderFormat. A dedicated user option keeps
@@ -289,6 +292,14 @@ type LivePane struct {
 	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
 	// shell rows without trusting broad repo-root WorktreePath prefixes.
 	ShellKey string
+	// ProjectRoot is @fanout_project_root, the state owner root fanout records
+	// on created panes so keybindings still resolve correctly when
+	// pane_current_path is stale inside agent TUIs.
+	ProjectRoot string
+	// WorktreePath is @fanout_worktree_path, the recorded worktree path for this
+	// pane. It gives action keybindings a stable match that does not depend on
+	// pane_current_path.
+	WorktreePath string
 }
 
 // ListLivePanes returns every live tmux pane across all sessions with its
@@ -298,8 +309,9 @@ type LivePane struct {
 // row live when an unrelated new pane reuses the same %N. An error (e.g. tmux
 // absent) lets callers degrade.
 //
-// It issues four list-panes calls (livePanePathFormat, livePaneTitleFormat,
-// livePaneAgentStateFormat, then livePaneShellKeyFormat) so each
+// It issues separate list-panes calls for each field (livePanePathFormat,
+// livePaneTitleFormat, livePaneAgentStateFormat, livePaneShellKeyFormat,
+// livePaneProjectRootFormat, then livePaneWorktreePathFormat) so each
 // variable-content field is last on its line and survives strings.Cut with
 // embedded tabs intact — both pane paths and pane titles may legally contain
 // tabs.
@@ -345,6 +357,14 @@ func ListLivePanes() ([]LivePane, error) {
 	if shellKeyOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneShellKeyFormat).Output(); err == nil {
 		shellKeys = parseLivePaneField(string(shellKeyOut))
 	}
+	projectRoots := map[string]string{}
+	if projectRootOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneProjectRootFormat).Output(); err == nil {
+		projectRoots = parseLivePaneField(string(projectRootOut))
+	}
+	worktreePaths := map[string]string{}
+	if worktreePathOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneWorktreePathFormat).Output(); err == nil {
+		worktreePaths = parseLivePaneField(string(worktreePathOut))
+	}
 	// A real tmux listing emits each pane id exactly once; a duplicate means a
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
@@ -367,6 +387,8 @@ func ListLivePanes() ([]LivePane, error) {
 		pane.Title = title
 		pane.AgentState = agentStates[pane.ID]
 		pane.ShellKey = shellKeys[pane.ID]
+		pane.ProjectRoot = projectRoots[pane.ID]
+		pane.WorktreePath = worktreePaths[pane.ID]
 		joined = append(joined, pane)
 	}
 	return joined, nil
@@ -478,6 +500,24 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 	return nil
 }
 
+// BindWorktreeActionKey registers a tmux prefix-table keybinding that opens a
+// small popup for actions against the currently focused fanout pane's recorded
+// worktree.
+func BindWorktreeActionKey(key, fanoutBin string) error {
+	if strings.TrimSpace(key) == "" || strings.TrimSpace(fanoutBin) == "" {
+		return fmt.Errorf("tmux bind-key: key and fanout binary path are required")
+	}
+	launch := shellQuote(fanoutBin) + " __worktree-action --pane #{pane_id}"
+	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
+	args := []string{
+		"bind-key", key, "display-popup", "-E", "-d", startDir, launch,
+	}
+	if err := exec.Command("tmux", args...).Run(); err != nil {
+		return fmt.Errorf("tmux bind-key %s: %w", key, err)
+	}
+	return nil
+}
+
 // SetPaneProjectRoot records the fanout state owner on a pane. The dashboard
 // keybinding prefers this over #{pane_current_path}, which can be stale inside
 // agent TUIs such as Codex that do not update tmux's foreground cwd signal.
@@ -490,6 +530,20 @@ func SetPaneProjectRoot(paneID, projectRoot string) error {
 	}
 	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, projectRootOption, projectRoot).Run(); err != nil {
 		return fmt.Errorf("tmux set-option %s: %w", projectRootOption, err)
+	}
+	return nil
+}
+
+// SetPaneWorktreePath records the worktree path a fanout pane belongs to.
+func SetPaneWorktreePath(paneID, worktreePath string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if strings.TrimSpace(worktreePath) == "" {
+		return fmt.Errorf("worktree path is required")
+	}
+	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, worktreePathOption, worktreePath).Run(); err != nil {
+		return fmt.Errorf("tmux set-option %s: %w", worktreePathOption, err)
 	}
 	return nil
 }

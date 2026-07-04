@@ -107,7 +107,7 @@ func (l actionLogger) Stderr() io.Writer {
 }
 
 func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.pendingAction.action == actionClose && !m.pendingAction.pane.isShell() {
+	if m.pendingAction.action == actionClose && !m.pendingAction.pane.isPaneOnly() {
 		return m.updatePendingCloseChoice(msg)
 	}
 	switch msg.String() {
@@ -163,14 +163,14 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = "no pane selected"
 		return m, nil
 	}
-	if pane.isShell() && action != actionClose {
-		m.actionMessage = fmt.Sprintf("%s unavailable for shell terminal", action)
+	if pane.isPaneOnly() && action != actionClose {
+		m.actionMessage = fmt.Sprintf("%s unavailable for %s", action, paneOnlyKindLabel(pane))
 		return m, nil
 	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
 	if action == actionClose {
 		m.pendingAction.closeMode = lifecycle.ClosePaneOnly
-		if !pane.isShell() {
+		if !pane.isPaneOnly() {
 			m.pendingAction.closeOptionIndex = 0
 			m.pendingAction.closeMode = closeOptions()[0].mode
 			m.actionMessage = closeChoiceMessage(*m.pendingAction)
@@ -420,4 +420,14 @@ func closeModeVerb(mode lifecycle.CloseMode) string {
 	default:
 		return "close"
 	}
+}
+
+func paneOnlyKindLabel(pane paneView) string {
+	if pane.isShell() {
+		return "shell terminal"
+	}
+	if pane.isAttachedAgent() {
+		return "attached agent"
+	}
+	return "pane"
 }

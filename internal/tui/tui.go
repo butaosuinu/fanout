@@ -46,6 +46,7 @@ type Options struct {
 	Hooks               hooks.Config
 	LaunchPane          LaunchFunc
 	NewPanePrompt       NewPanePromptFunc
+	LaunchAttach        AttachLaunchFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
@@ -122,9 +123,10 @@ type (
 	ghTickMsg     time.Time
 	watchTickMsg  time.Time
 	launchPaneMsg struct {
-		notice string
-		count  int
-		err    error
+		notice   string
+		count    int
+		attached bool
+		err      error
 	}
 	newPanePromptMsg struct {
 		req      LaunchRequest

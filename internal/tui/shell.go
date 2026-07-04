@@ -9,9 +9,10 @@ import (
 
 // ShellLaunchRequest describes one shell terminal launch requested from the TUI.
 type ShellLaunchRequest struct {
-	TargetPath string
-	Root       bool
-	Source     string
+	TargetPath        string
+	SourceProjectRoot string
+	Root              bool
+	Source            string
 }
 
 // ShellLaunchFunc creates a shell terminal pane for a TUI request.
@@ -29,8 +30,9 @@ func (m *model) openSelectedWorktreeShellCmd() tea.Cmd {
 		return nil
 	}
 	return m.launchShellCmd(ShellLaunchRequest{
-		TargetPath: targetPath,
-		Source:     pane.identityLabel(),
+		TargetPath:        targetPath,
+		SourceProjectRoot: pane.sourceProjectRoot,
+		Source:            pane.identityLabel(),
 	})
 }
 

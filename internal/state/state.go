@@ -14,7 +14,10 @@ import (
 
 const SchemaVersion = 1
 
-const PaneKindShell = "shell"
+const (
+	PaneKindAttachedAgent = "attached-agent"
+	PaneKindShell         = "shell"
+)
 
 type Store struct {
 	SchemaVersion int    `json:"schemaVersion"`
@@ -41,7 +44,13 @@ type Pane struct {
 	// panes can share WorktreePath with the repo root or an agent worktree, so
 	// liveness uses this marker instead of path-prefix matching.
 	ShellKey string `json:"shellKey,omitempty"`
-	Agent    string `json:"agent"`
+	// SourceParent/SourceIssueNum/SourceTaskID point at the pane whose worktree an
+	// attached-agent pane shares. They are informational; the attached pane keeps
+	// its own synthetic identity so it never overwrites the source pane's row.
+	SourceParent   string `json:"sourceParent,omitempty"`
+	SourceIssueNum int    `json:"sourceIssueNum,omitempty"`
+	SourceTaskID   string `json:"sourceTaskId,omitempty"`
+	Agent          string `json:"agent"`
 	// CodexPlanMode は --codex-plan-mode(app-server Plan thread + 対話 Codex TUI)
 	// で起動したペインかどうか。ダッシュボードの GET /api/plan が plan 抽出の
 	// 対象ペインを限定するために参照する。additive なフィールドなので
@@ -77,6 +86,10 @@ type Pane struct {
 
 func (p Pane) IsShell() bool {
 	return p.Kind == PaneKindShell
+}
+
+func (p Pane) IsAttachedAgent() bool {
+	return p.Kind == PaneKindAttachedAgent
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.

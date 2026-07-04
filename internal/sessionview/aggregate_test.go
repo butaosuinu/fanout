@@ -191,6 +191,54 @@ func TestBuildShellPaneCountsLiveButNotProgressRollup(t *testing.T) {
 	}
 }
 
+func TestBuildAttachedAgentCountsLiveButNotProgressRollup(t *testing.T) {
+	agentPane := pane("100", 101, "%1")
+	attachedPane := state.Pane{
+		Parent:         "100",
+		IssueNum:       -1,
+		Kind:           state.PaneKindAttachedAgent,
+		Slug:           "child-codex-a1",
+		BranchName:     "fanout/child-101",
+		PaneID:         "%2",
+		SourceParent:   "100",
+		SourceIssueNum: 101,
+		Agent:          "codex",
+		DisplayName:    "codex for #101",
+		WorktreePath:   "/wt/%1",
+		CreatedAt:      "2026-06-04T00:00:00Z",
+	}
+	snap := Build("owner/name", "/repo", Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(agentPane, attachedPane),
+		LivePanes: livePanesWith(map[string]LivePaneInfo{
+			"%1": {Path: "/wt/%1"},
+			"%2": {Path: "/wt/%1/subdir", Title: "codex"},
+		}),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			return "OPEN", nil, nil
+		},
+		Waves: wavesNone,
+		WorktreeStat: func(path, baseRef string) (WorktreeStat, error) {
+			return WorktreeStat{DiffSummary: "+0/-0", DirtyState: "clean"}, nil
+		},
+	})
+
+	if snap.Rollup.Total != 1 || snap.Rollup.Pending != 1 || snap.Rollup.Live != 2 {
+		t.Fatalf("repo rollup = %+v, want progress total 1 and live 2", snap.Rollup)
+	}
+	var attached PaneView
+	for _, session := range snap.Sessions {
+		for _, pane := range session.Panes {
+			if pane.Kind == state.PaneKindAttachedAgent {
+				attached = pane
+			}
+		}
+	}
+	if attached.Kind != state.PaneKindAttachedAgent || attached.SourceIssueNum != 101 || !attached.Alive || attached.Derived.Name != "codex for #101" {
+		t.Fatalf("attached pane = %+v, want live attached-agent row", attached)
+	}
+}
+
 func TestBuildShellPaneRequiresShellKeyForLiveness(t *testing.T) {
 	shellPane := state.Pane{
 		Parent:       "@manual",
@@ -451,6 +499,24 @@ func TestBuildAliveWhenPaneInWorktreeSubdir(t *testing.T) {
 	snap := Build("o/n", "/root", c)
 	if !snap.Sessions[0].Panes[0].Alive {
 		t.Fatal("a pane cd'd into a worktree subdir should still be alive")
+	}
+}
+
+func TestBuildAliveWhenPaneWorktreeOptionMatches(t *testing.T) {
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(pane("1", 2, "%1")), // worktree /wt/%1
+		LivePanes: func() (map[string]LivePaneInfo, error) {
+			return map[string]LivePaneInfo{"%1": {
+				Path:         "/repo",
+				WorktreePath: "/wt/%1",
+			}}, nil
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+	}
+	snap := Build("o/n", "/root", c)
+	if !snap.Sessions[0].Panes[0].Alive {
+		t.Fatal("a pane with matching @fanout_worktree_path should be alive even when cwd is stale")
 	}
 }
 

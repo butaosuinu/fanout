@@ -14,31 +14,34 @@ import (
 )
 
 type paneView struct {
-	Parent       string
-	IssueNum     int
-	TaskID       string
-	Kind         string
-	Name         string
-	PaneID       string
-	ShellKey     string
-	TmuxState    string
-	TmuxTitle    string
-	AgentState   string
-	IssueState   string
-	PRSummary    string
-	HasMergedPR  bool
-	Wave         int
-	WaveLabel    string
-	WaveBadge    string
-	Blockers     string
-	Blocked      bool
-	CIStatus     string
-	DiffSummary  string
-	DirtyState   string
-	WorktreeErr  string
-	BranchName   string
-	WorktreePath string
-	worktreeAbs  string
+	Parent         string
+	IssueNum       int
+	TaskID         string
+	Kind           string
+	Name           string
+	PaneID         string
+	ShellKey       string
+	SourceParent   string
+	SourceIssueNum int
+	SourceTaskID   string
+	TmuxState      string
+	TmuxTitle      string
+	AgentState     string
+	IssueState     string
+	PRSummary      string
+	HasMergedPR    bool
+	Wave           int
+	WaveLabel      string
+	WaveBadge      string
+	Blockers       string
+	Blocked        bool
+	CIStatus       string
+	DiffSummary    string
+	DirtyState     string
+	WorktreeErr    string
+	BranchName     string
+	WorktreePath   string
+	worktreeAbs    string
 	// sourceProjectRoot は複数 worktree をまたいで集約した場合に、この pane を
 	// 記録した worktree の root。close/merge/cleanup をその所有元 state.json へ
 	// 向けるために使う。単一 worktree のときは空(= m.opts.ProjectRoot を使う)。
@@ -93,6 +96,14 @@ func (p paneView) canPeek() bool {
 
 func (p paneView) isShell() bool {
 	return p.Kind == state.PaneKindShell
+}
+
+func (p paneView) isAttachedAgent() bool {
+	return p.Kind == state.PaneKindAttachedAgent
+}
+
+func (p paneView) isPaneOnly() bool {
+	return p.isShell() || p.isAttachedAgent()
 }
 
 func (p paneView) absoluteWorktreePath(projectRoot string) string {
@@ -218,6 +229,12 @@ func (p paneView) identityLabel() string {
 		}
 		return "shell"
 	}
+	if p.isAttachedAgent() {
+		if label := strings.TrimSpace(firstNonEmpty(p.Name, p.Derived.Name, p.SourceTaskID, sourceIssueLabel(p.SourceIssueNum))); label != "" && label != "-" {
+			return label
+		}
+		return "attached agent"
+	}
 	return "#" + strconv.Itoa(p.IssueNum)
 }
 
@@ -243,7 +260,23 @@ func (p paneView) itemLabel() string {
 	if p.isShell() {
 		return "shell"
 	}
+	if p.isAttachedAgent() {
+		if p.SourceTaskID != "" {
+			return p.SourceTaskID + "+"
+		}
+		if p.SourceIssueNum > 0 {
+			return "#" + strconv.Itoa(p.SourceIssueNum) + "+"
+		}
+		return "agent+"
+	}
 	return "#" + strconv.Itoa(p.IssueNum)
+}
+
+func sourceIssueLabel(num int) string {
+	if num <= 0 {
+		return ""
+	}
+	return "#" + strconv.Itoa(num)
 }
 
 func compactParent(parent string) string {
@@ -263,7 +296,7 @@ func compactParent(parent string) string {
 func summarizeHUD(panes []paneView) hudSummary {
 	summary := hudSummary{}
 	for _, pane := range panes {
-		if pane.isShell() {
+		if pane.isPaneOnly() {
 			continue
 		}
 		summary.Total++

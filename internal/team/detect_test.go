@@ -99,6 +99,15 @@ func TestIdentifyPane(t *testing.T) {
 		PaneID:       "%shell",
 		WorktreePath: "/repo/.fanout/worktrees/msg-cli-70",
 	}
+	attachedInWorktree := state.Pane{
+		Parent:         "68",
+		IssueNum:       -1,
+		Kind:           state.PaneKindAttachedAgent,
+		PaneID:         "%attached",
+		WorktreePath:   "/repo/.fanout/worktrees/msg-cli-70",
+		SourceParent:   "68",
+		SourceIssueNum: 70,
+	}
 
 	tests := []struct {
 		name       string
@@ -165,6 +174,14 @@ func TestIdentifyPane(t *testing.T) {
 			paneID:     "%2",
 			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
 			store:      state.Store{Panes: []state.Pane{inWorktree, shellInWorktree}},
+			wantIssue:  70,
+			wantParent: "68",
+		},
+		{
+			name:       "attached agent does not shadow managed worktree identity",
+			paneID:     "%2",
+			worktree:   "/repo/.fanout/worktrees/msg-cli-70",
+			store:      state.Store{Panes: []state.Pane{inWorktree, attachedInWorktree}},
 			wantIssue:  70,
 			wantParent: "68",
 		},
