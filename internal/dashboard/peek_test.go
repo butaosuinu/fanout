@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 // errPaneGone simulates capture-pane failing on a stale pane / dead tmux server.

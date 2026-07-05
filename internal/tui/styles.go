@@ -4,8 +4,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// PAPER BREEZE palette (site/assets/css/main.css; keep the internal/log
-// 256-color approximations and the internal/tmuxrun pane-border hex in sync).
+// PAPER BREEZE palette (site/assets/css/main.css; keep the internal/infra/log
+// 256-color approximations and the internal/infra/tmuxrun pane-border hex in sync).
 // Light = site values (紅 is an addition;
 // the site defines no red), dark = same hue lifted for dark backgrounds.
 var (

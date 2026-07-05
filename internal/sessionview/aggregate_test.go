@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func fixedNow() time.Time { return time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC) }

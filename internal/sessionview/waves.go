@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 // WaveInfo is one child's dependency summary: the DAG depth (1-based; 0 means

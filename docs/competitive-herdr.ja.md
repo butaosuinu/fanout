@@ -1,6 +1,6 @@
 # herdr 競合分析 — agent multiplexer との棲み分けと取り込み
 
-ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/tmuxrun` / `internal/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
+ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
 ## herdr とは
 

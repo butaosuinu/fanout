@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/naming"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 func TestValidate(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // Pins the compactWidthAt breakpoint (80) and both override directions of the

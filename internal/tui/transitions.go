@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
 
 type transitionNotifier interface {

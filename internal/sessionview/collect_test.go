@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func gitInTest(t *testing.T, dir string, args ...string) {

@@ -1,5 +1,5 @@
 /* ワイヤ契約 — Go 側の JSON タグと 1:1 対応(正は internal/sessionview/model.go、
- * internal/ghissue/ghissue.go、internal/blockers/blockers.go、
+ * internal/infra/ghissue/ghissue.go、internal/core/blockers/blockers.go、
  * internal/dashboard/peek.go)。タグの綴りに注意: paneId(paneID ではない)、
  * hasMergedPr(Pr が小文字)、PRRef の ci(ciStatus ではない)。Go の nil slice
  * は null で届くので sessions / panes / prs は null 許容(blockers のみ常に []

@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/table"
 
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/state"
 )
 
 type paneView struct {

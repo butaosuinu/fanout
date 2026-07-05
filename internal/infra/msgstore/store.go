@@ -1,5 +1,5 @@
 // Package msgstore implements the message/peer queries behind `fanout msg`
-// (#70) on top of the internal/team v1 schema. internal/team owns the DB
+// (#70) on top of the internal/infra/team v1 schema. internal/infra/team owns the DB
 // path convention, the connection helper, and the DDL; this package owns
 // every SELECT/INSERT/UPDATE so the CLI surface (cmd/fanout/msg.go) stays a
 // thin parse-and-print layer. All statements bind parameters via
@@ -56,7 +56,7 @@ type MarkResult struct {
 
 // Store wraps an open team DB scoped to one parent ref. The parent scopes
 // every messages query; peers and board_cursors are per-DB because the v1
-// schema (internal/team) keys them by issue alone. That is sound only under
+// schema (internal/infra/team) keys them by issue alone. That is sound only under
 // the one-DB-per-parent convention (team.DBPath), so New enforces it.
 type Store struct {
 	db     *sql.DB
@@ -66,13 +66,13 @@ type Store struct {
 // New wraps db scoped to parent. It enforces the single-parent invariant by
 // persisting ownership: the first parent to open the DB claims it in the
 // msg_db_owner singleton (this store's own bookkeeping table, separate from
-// the internal/team v1 schema), and every later open must present the same
+// the internal/infra/team v1 schema), and every later open must present the same
 // parent. Evidence-based checks (inspecting messages rows) are not enough —
 // a register-only DB has peer rows but no message row revealing its parent.
 // peers and board_cursors are keyed by issue alone in the v1 schema, so a
 // shared DB would leak cursors and peer rows across team boundaries; the
 // claim makes that unrepresentable. Per-parent cursors/peers need a v2
-// schema migration in internal/team, at which point this table can go.
+// schema migration in internal/infra/team, at which point this table can go.
 func New(db *sql.DB, parent string) (*Store, error) {
 	owner, err := claimDBOwner(db, parent)
 	if err != nil {

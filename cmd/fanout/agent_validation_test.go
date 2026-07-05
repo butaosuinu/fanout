@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/planspec"
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 func TestValidateIssueAgentsSkipsInstalledCheckForLimitDeferredAgents(t *testing.T) {

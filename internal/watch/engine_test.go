@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 const (

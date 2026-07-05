@@ -20,7 +20,7 @@ fanout は親 issue の子 issue ごとに tmux ペイン + git worktree を作�
 fanout には汎用レビューツールにない構造的優位が 4 つある。各案はこの優位の
 どれかを梃子にしている。
 
-1. **子 issue の意図(仕様)を CLI が既に持っている** — internal/ghissue が
+1. **子 issue の意図(仕様)を CLI が既に持っている** — internal/infra/ghissue が
    issue 本文を取得でき、「要求との照合」をゼロ配線で組める
 2. **並列子 PR 群という比較対象がある** — state.json が兄弟集合を知っている。
    PR を独立に扱う汎用ツールには原理的に作れない検証(結合検証・横断レビュー)
@@ -502,7 +502,7 @@ LLM の要約と違い証明書は再実行可能で、信じる必要がなく�
 なく検証に基づく唯一の moonshot。
 
 **fanout 適合** — CLI が主役になれる数少ない案: プローブ実行・出力比較・証明書
-生成は完全に決定論的で LLM 不要、internal/worktree の基盤を転用できる。
+生成は完全に決定論的で LLM 不要、internal/infra/worktree の基盤を転用できる。
 briefing 側は「意図差分の宣言」記述という LLM の仕事で分業が明確。
 
 **段階的 MVP** — 第 1 段: `fanout --verify <issue>` を fanout 自身でドッグ
@@ -607,7 +607,7 @@ effort routing、OpenAI Codex AGENTS.md Review guidelines、arXiv 2603.25773
 6. **計測を最初から仕込む** — 指摘の良し悪しは修正行動で測る(resolution rate、
    Cursor Bugbot / Martian Bench の手法)。「レビュー時間半減」を主張する機能は
    その実測手段を同梱する。
-7. **settings 機構の制約** — internal/settings のローダーは bool 専用。文字列・
+7. **settings 機構の制約** — internal/infra/settings のローダーは bool 専用。文字列・
    配列設定(riskPaths、verifyCommands 等)が要る案は settings の schema 拡張
    か専用ローダーの新設が前提になる(既存 bool 5 スイッチの規律は壊さない)。
 8. **任意コマンド実行の封じ込め** — PR 本文・config 由来のコマンド再実行は

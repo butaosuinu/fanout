@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
 )
 
 func TestTaskPathUsesPlanTaskNamespace(t *testing.T) {

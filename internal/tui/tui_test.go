@@ -14,13 +14,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/lifecycle"
-	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
 	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/watch"
 )
 

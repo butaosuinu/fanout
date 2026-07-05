@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/planspec"
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
 type executionResult struct {

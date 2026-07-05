@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/agent"
-	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
 )
 
 // Path returns /tmp/fanout-<repo_slug>-<num>.md.

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/tty"
+	"github.com/butaosuinu/fanout/internal/infra/tty"
 )
 
 type Logger struct {
@@ -55,7 +55,7 @@ func paletteFor(term, colorterm string) Palette {
 		strings.EqualFold(colorterm, "truecolor") || strings.EqualFold(colorterm, "24bit") {
 		// 256-color approximations of the PAPER BREEZE palette
 		// (site/assets/css/main.css; keep in sync with the internal/tui
-		// AdaptiveColor palette and the internal/tmuxrun pane-border hex):
+		// AdaptiveColor palette and the internal/infra/tmuxrun pane-border hex):
 		// 藍, 青緑, 土, 紅 — mid-brightness values readable on both light
 		// and dark backgrounds.
 		p.Info = "\x1b[38;5;31m"

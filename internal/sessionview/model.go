@@ -7,8 +7,8 @@
 package sessionview
 
 import (
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 // IssueStateUnknown marks a pane whose issue/PR state could not be fetched

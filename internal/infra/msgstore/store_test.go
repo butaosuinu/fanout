@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/team"
+	"github.com/butaosuinu/fanout/internal/infra/team"
 )
 
 const testNow = "2026-06-13T00:00:00Z"
