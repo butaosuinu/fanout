@@ -12,9 +12,10 @@ func TestAgentStateGlyph(t *testing.T) {
 	}{
 		{name: "running live pane", pane: paneView{TmuxState: "live", AgentState: "running"}, want: "●"},
 		{name: "done live pane", pane: paneView{TmuxState: "live", AgentState: "done"}, want: "✓"},
-		// 5 値化(competitive-herdr.ja.md 提案 A)の先行定義。
+		// 拡張 agent state は normalizeAgentState と同じ語彙を表示する。
 		{name: "working is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "working"}, want: "◐"},
 		{name: "idle is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "idle"}, want: "○"},
+		{name: "plan is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "plan"}, want: "◇"},
 		{name: "blocked is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "blocked"}, want: "◆"},
 		{name: "live pane without state", pane: paneView{TmuxState: "live"}, want: "·"},
 		{name: "live pane with unknown state value", pane: paneView{TmuxState: "live", AgentState: "garbage"}, want: "·"},

@@ -1040,6 +1040,47 @@ func TestStateUpdateNotifiesFirstObservedAgentStatesAfterPriming(t *testing.T) {
 	}
 }
 
+func TestAgentTransitionKeyPrefersStableRowIdentityOverPaneID(t *testing.T) {
+	tests := []struct {
+		name string
+		pane paneView
+		want string
+	}{
+		{
+			name: "issue identity wins over pane id",
+			pane: paneView{Parent: "100", IssueNum: 101, PaneID: "%1", SourceKey: "source-a"},
+			want: "issue:100:101",
+		},
+		{
+			name: "task identity wins over pane id",
+			pane: paneView{Parent: "plan:alpha", TaskID: "api-client", PaneID: "%1", SourceKey: "source-a", sourceProjectRoot: "/wt/task"},
+			want: "task:plan:alpha:/wt/task:api-client",
+		},
+		{
+			name: "shell key wins over pane id",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1", ShellKey: "shell-root", sourceProjectRoot: "/repo"},
+			want: "shell:@manual:/repo:shell-root",
+		},
+		{
+			name: "source key wins over pane id",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1", SourceKey: "manual-source", sourceProjectRoot: "/repo"},
+			want: "source:@manual:-1:manual-source",
+		},
+		{
+			name: "pane id is fallback",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1"},
+			want: "pane:%1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentTransitionKey(tt.pane); got != tt.want {
+				t.Fatalf("agentTransitionKey(%+v) = %q, want %q", tt.pane, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStateUpdateSuppressesInvalidAndRepeatedAgentTransitions(t *testing.T) {
 	notifier := &fakeTransitionNotifier{}
 	m := newModel(Options{Notifier: notifier})

@@ -312,12 +312,12 @@ func agentTransitionKey(pane paneView) string {
 		return fmt.Sprintf("issue:%s:%d", key.Parent, key.Num)
 	case key.TaskID != "":
 		return fmt.Sprintf("task:%s:%s:%s", key.Parent, key.Source, key.TaskID)
-	case strings.TrimSpace(pane.PaneID) != "":
-		return "pane:" + strings.TrimSpace(pane.PaneID)
 	case strings.TrimSpace(pane.ShellKey) != "":
 		return fmt.Sprintf("shell:%s:%s:%s", key.Parent, key.Source, strings.TrimSpace(pane.ShellKey))
 	case strings.TrimSpace(pane.SourceKey) != "":
 		return fmt.Sprintf("source:%s:%d:%s", key.Parent, key.Num, strings.TrimSpace(pane.SourceKey))
+	case strings.TrimSpace(pane.PaneID) != "":
+		return "pane:" + strings.TrimSpace(pane.PaneID)
 	case key.Parent != "" || key.Num != 0:
 		return fmt.Sprintf("row:%s:%d:%s", key.Parent, key.Num, strings.TrimSpace(pane.Name))
 	default:
