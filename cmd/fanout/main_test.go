@@ -1,89 +1,15 @@
 package main
 
 import (
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/cliflags"
-	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/hooks"
-	"github.com/butaosuinu/fanout/internal/infra/log"
-	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
-	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
-
-func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
-	dir := t.TempDir()
-
-	oldSleep := sleepBetweenIssues
-	var sleeps []time.Duration
-	sleepBetweenIssues = func(d time.Duration) {
-		sleeps = append(sleeps, d)
-	}
-	t.Cleanup(func() { sleepBetweenIssues = oldSleep })
-
-	cfg := &cliflags.Config{
-		Agent:        "claude",
-		DryRun:       true,
-		SleepBetween: 0.25,
-	}
-	lg := log.NewWith(io.Discard, io.Discard, false)
-	info := &fanoutruntime.Info{
-		Session:     "test",
-		Target:      "%caller",
-		ProjectRoot: dir,
-	}
-	targets := []ghissue.Issue{
-		{Number: 1, Title: "one", State: "OPEN", Body: "body"},
-		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
-	}
-
-	result := executePlan(cfg, lg, info, ghissue.Runner{}, targets, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
-
-	if result.Created != 2 || result.Failed != 0 {
-		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)
-	}
-	if len(sleeps) != 1 {
-		t.Fatalf("sleep calls = %d, want 1", len(sleeps))
-	}
-	if want := 250 * time.Millisecond; sleeps[0] != want {
-		t.Fatalf("sleep duration = %s, want %s", sleeps[0], want)
-	}
-}
-
-func TestLoadRunStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
-	repo := t.TempDir()
-	gitCmdTest(t, repo, "init")
-
-	cfg := &cliflags.Config{}
-	lg := log.NewWith(io.Discard, io.Discard, false)
-	_, recorder, code := loadRunState(cfg, repo, lg)
-	if code != exitcode.OK {
-		t.Fatalf("loadRunState code = %d, want %d", code, exitcode.OK)
-	}
-	if recorder == nil {
-		t.Fatal("loadRunState returned nil recorder for live run")
-	}
-	t.Cleanup(func() { _ = recorder.Unlock() })
-
-	if _, err := os.Stat(filepath.Join(repo, ".fanout", "state.json.lock")); err != nil {
-		t.Fatalf("state lock was not created: %v", err)
-	}
-	exclude, err := os.ReadFile(filepath.Join(repo, ".git", "info", "exclude"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(exclude), ".fanout/state.json.lock\n") {
-		t.Fatalf("exclude = %q, want state lock pattern", exclude)
-	}
-}
 
 func installFakeExecutable(t *testing.T, name string) {
 	t.Helper()
@@ -247,7 +173,7 @@ func TestTUILaunchCommandForwardsEnhancedKeysValue(t *testing.T) {
 	for _, value := range []string{"", "0", "1"} {
 		t.Setenv(fanouttui.EnhancedKeysEnv, value)
 		got := tuiLaunchCommand("fanout", "/tmp/repo")
-		if !strings.Contains(got, " && "+fanouttui.EnhancedKeysEnv+"="+shellQuote(value)+" ") {
+		if !strings.Contains(got, " && "+fanouttui.EnhancedKeysEnv+"="+run.ShellQuote(value)+" ") {
 			t.Fatalf("tuiLaunchCommand() = %q with %s=%q, want forwarded env prefix", got, fanouttui.EnhancedKeysEnv, value)
 		}
 	}

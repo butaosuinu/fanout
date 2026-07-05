@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"fmt"
@@ -11,12 +11,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
-
-type executionResult struct {
-	Created     int
-	Failed      int
-	CreatedNums []int
-}
 
 func logPlanDetails(plan Plan, lg *log.Logger) {
 	for _, num := range plan.MissingOnly {
@@ -99,10 +93,10 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
 		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s%s%s\n",
-			shellQuote(commandName), shellQuote(cfg.ParentRef),
+			ShellQuote(commandName), ShellQuote(cfg.ParentRef),
 			statusFlag,
-			shellQuote(deferredCSV),
-			shellQuote(deferredCSV),
+			ShellQuote(deferredCSV),
+			ShellQuote(deferredCSV),
 			boolFlag(" --unblocked-only", cfg.UnblockedOnly),
 			boolFlag(" --team", cfg.Team),
 			codexPlanModeFlag(cfg),
@@ -126,7 +120,7 @@ func optFlag(flag, value string) string {
 	if value == "" {
 		return ""
 	}
-	return " " + flag + " " + shellQuote(value)
+	return " " + flag + " " + ShellQuote(value)
 }
 
 func boolFlag(flagWithLeadSpace string, on bool) string {
@@ -225,7 +219,9 @@ func boolSettingFlag(onFlag, offFlag string, v *bool) string {
 	return " " + offFlag
 }
 
-func shellQuote(s string) string {
+// ShellQuote renders s as a single copy-paste-safe POSIX shell token for the
+// --limit rerun hints.
+func ShellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}

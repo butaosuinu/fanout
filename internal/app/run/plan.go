@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
@@ -29,7 +30,9 @@ type Plan struct {
 	LimitDeferred           []ghissue.Issue
 }
 
-func buildPlan(
+func issueNumber(issue ghissue.Issue) int { return issue.Number }
+
+func BuildPlan(
 	cfg *cliflags.Config,
 	children []ghissue.Issue,
 	fanned map[int]bool,
@@ -37,7 +40,7 @@ func buildPlan(
 	hydrateIssue func(*ghissue.Issue),
 	issueState func(int) string,
 ) Plan {
-	openChildren := openIssues(children)
+	openChildren := OpenIssues(children)
 	plan := Plan{
 		TotalChildren: len(children),
 		OpenCount:     len(openChildren),
@@ -46,7 +49,7 @@ func buildPlan(
 		return plan
 	}
 
-	openChildren, plan.FilteredOnly, plan.FilteredSkip, plan.MissingOnly = filterOnlySkip(openChildren, cfg.Only, cfg.Skip)
+	openChildren, plan.FilteredOnly, plan.FilteredSkip, plan.MissingOnly = fanset.FilterOnlySkip(openChildren, issueNumber, cfg.Only, cfg.Skip)
 	plan.OpenAfterFilter = len(openChildren)
 	if plan.OpenAfterFilter == 0 {
 		return plan
@@ -56,7 +59,7 @@ func buildPlan(
 		hydrateIssues(openChildren, hydrateIssue)
 	}
 
-	targets, skipped := splitAlreadyFanned(openChildren, fanned)
+	targets, skipped := fanset.SplitFanned(openChildren, issueNumber, fanned)
 	plan.Targets = targets
 	plan.AlreadyFanned = skipped
 	plan.UnfannedCount = len(targets)
@@ -68,11 +71,11 @@ func buildPlan(
 		plan.Targets, plan.BlockedRows, plan.BlockedLabelWithoutRefs = splitBlocked(plan.Targets, parentBody, issueState)
 	}
 
-	plan.Targets, plan.LimitDeferred = applyLimit(plan.Targets, cfg.Limit)
+	plan.Targets, plan.LimitDeferred = fanset.ApplyLimit(plan.Targets, cfg.Limit)
 	return plan
 }
 
-func openIssues(issues []ghissue.Issue) []ghissue.Issue {
+func OpenIssues(issues []ghissue.Issue) []ghissue.Issue {
 	open := make([]ghissue.Issue, 0, len(issues))
 	for _, issue := range issues {
 		if issue.State == "OPEN" {
@@ -80,36 +83,6 @@ func openIssues(issues []ghissue.Issue) []ghissue.Issue {
 		}
 	}
 	return open
-}
-
-func filterOnlySkip(issues []ghissue.Issue, only, skip []int) (kept, filteredOnly, filteredSkip []ghissue.Issue, missingOnly []int) {
-	if len(only) == 0 && len(skip) == 0 {
-		return issues, nil, nil, nil
-	}
-
-	openSet := map[int]bool{}
-	for _, issue := range issues {
-		openSet[issue.Number] = true
-	}
-	for _, num := range only {
-		if !openSet[num] {
-			missingOnly = append(missingOnly, num)
-		}
-	}
-
-	onlySet := intSet(only)
-	skipSet := intSet(skip)
-	for _, issue := range issues {
-		switch {
-		case len(only) > 0 && !onlySet[issue.Number]:
-			filteredOnly = append(filteredOnly, issue)
-		case len(skip) > 0 && skipSet[issue.Number]:
-			filteredSkip = append(filteredSkip, issue)
-		default:
-			kept = append(kept, issue)
-		}
-	}
-	return kept, filteredOnly, filteredSkip, missingOnly
 }
 
 func hydrateIssues(issues []ghissue.Issue, hydrateIssue func(*ghissue.Issue)) {
@@ -122,17 +95,6 @@ func hydrateIssues(issues []ghissue.Issue, hydrateIssue func(*ghissue.Issue)) {
 		}
 		hydrateIssue(&issues[i])
 	}
-}
-
-func splitAlreadyFanned(issues []ghissue.Issue, fanned map[int]bool) (targets []ghissue.Issue, skipped []int) {
-	for _, issue := range issues {
-		if fanned[issue.Number] {
-			skipped = append(skipped, issue.Number)
-			continue
-		}
-		targets = append(targets, issue)
-	}
-	return targets, skipped
 }
 
 func splitBlocked(issues []ghissue.Issue, parentBody string, issueState func(int) string) (kept []ghissue.Issue, blocked []blockedRow, blockedLabelWithoutRefs []int) {
@@ -189,19 +151,4 @@ func formatOpenBlockers(blockers []int) string {
 		parts[i] = fmt.Sprintf("OPEN #%d", num)
 	}
 	return strings.Join(parts, ", ")
-}
-
-func applyLimit(issues []ghissue.Issue, limit int) (targets, deferred []ghissue.Issue) {
-	if limit > 0 && len(issues) > limit {
-		return issues[:limit], issues[limit:]
-	}
-	return issues, nil
-}
-
-func intSet(nums []int) map[int]bool {
-	set := make(map[int]bool, len(nums))
-	for _, num := range nums {
-		set[num] = true
-	}
-	return set
 }

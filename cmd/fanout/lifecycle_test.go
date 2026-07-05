@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -1099,7 +1100,7 @@ func TestCmdPlanLifecycleCloseUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing
 	})
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
 
-	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, CloseTaskID: "api-client"}, discardLogger())
+	code := cmdPlanLifecycle(run.PlanCommandConfig{SpecArg: specPath, CloseTaskID: "api-client"}, discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("cmdPlanLifecycle close code = %d, want %d", code, exitcode.OK)
@@ -1136,7 +1137,7 @@ func TestCmdPlanLifecycleCloseSkipsResolvedBranchValidation(t *testing.T) {
 	})
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
 
-	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, CloseTaskID: "base-types"}, discardLogger())
+	code := cmdPlanLifecycle(run.PlanCommandConfig{SpecArg: specPath, CloseTaskID: "base-types"}, discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("cmdPlanLifecycle close code = %d, want %d", code, exitcode.OK)
@@ -1168,7 +1169,7 @@ func TestCmdPlanLifecycleMergeUsesRecordedTaskWhenSpecNoLongerListsIt(t *testing
 	writeLifecycleState(t, repo, state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", BranchName: "fanout/api-client"})
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
 
-	code := cmdPlanLifecycle(planCommandConfig{SpecArg: specPath, MergeTaskID: "api-client"}, discardLogger())
+	code := cmdPlanLifecycle(run.PlanCommandConfig{SpecArg: specPath, MergeTaskID: "api-client"}, discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("cmdPlanLifecycle merge code = %d, want %d", code, exitcode.OK)

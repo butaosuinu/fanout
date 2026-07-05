@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -76,7 +77,7 @@ func newTUIListIssueChildrenFunc(projectRoot string) func(parent int) ([]fanoutt
 		if err != nil {
 			return nil, err
 		}
-		open := openIssues(loaded.Children)
+		open := run.OpenIssues(loaded.Children)
 		targets := make([]fanouttui.ChildTarget, 0, len(open))
 		for _, child := range open {
 			targets = append(targets, fanouttui.ChildTarget{
@@ -151,7 +152,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 }
 
 // recordedPaneCountForParent counts state rows under one fan-out parent; the
-// before/after difference is the created-pane count runWithRuntime does not
+// before/after difference is the created-pane count run.Issues does not
 // return. A read failure degrades to 0 rather than failing the launch report.
 func recordedPaneCountForParent(projectRoot, parentRef string) int {
 	store, err := state.LoadProject(projectRoot)
