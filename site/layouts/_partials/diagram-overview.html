@@ -1,0 +1,61 @@
+<svg class="dg" viewBox="0 0 800 300" role="img"
+     aria-label="{{ if eq .Language.Lang "ja" }}図: 親 issue #123 の OPEN な子 3 つが、fanout 123 の 1 回で worktree と branch を持つ 3 枚の tmux ペインになる{{ else }}Diagram: one run of fanout 123 turns parent issue #123's three OPEN children into three tmux panes, each with its own worktree and branch{{ end }}">
+  <defs>
+    <marker id="dg-ov-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" style="fill:var(--ai)"/>
+    </marker>
+  </defs>
+
+  <!-- parent issue card -->
+  <rect class="box" x="24" y="70" width="200" height="160" rx="10"/>
+  <rect class="hd" x="24" y="70" width="200" height="30" rx="10"/>
+  <rect class="hd" x="24" y="85" width="200" height="15"/>
+  <text class="t-num" x="40" y="90">#123</text>
+  <text class="t-mut" x="82" y="90">parent issue</text>
+  <text class="t-name" x="40" y="126">- [ ] <tspan class="t-num">#124</tspan> auth</text>
+  <text class="t-name" x="40" y="152">- [ ] <tspan class="t-num">#125</tspan> docs</text>
+  <text class="t-name" x="40" y="178">- [ ] <tspan class="t-num">#126</tspan> api</text>
+  <text class="t-mut" x="40" y="210">Sub-issues / task list</text>
+
+  <!-- command arrow -->
+  <line class="arrow" x1="236" y1="150" x2="312" y2="150" marker-end="url(#dg-ov-arrow)"/>
+  <text class="t-cmd" x="274" y="136" text-anchor="middle">fanout 123</text>
+
+  <!-- tmux window -->
+  <rect class="frame" x="330" y="34" width="446" height="236" rx="8"/>
+  <text class="t-mut" x="344" y="26">tmux window</text>
+
+  <!-- pane #124 (left, tall) -->
+  <rect class="box" x="344" y="52" width="200" height="200" rx="6"/>
+  <rect class="chip" x="366" y="45" width="128" height="14" rx="4"/>
+  <text class="t-num" x="374" y="56">#124<tspan class="t-mut"> · auth-124</tspan></text>
+  <circle class="dot-run" cx="530" cy="66" r="3"/>
+  <rect class="bar" x="360" y="84" width="120" height="4" rx="2"/>
+  <rect class="bar b2" x="360" y="98" width="150" height="4" rx="2"/>
+  <rect class="bar" x="360" y="112" width="96" height="4" rx="2"/>
+  <rect class="bar b2" x="360" y="126" width="132" height="4" rx="2"/>
+  <text class="t-mut" x="360" y="222">.fanout/worktrees/auth-124/</text>
+  <text class="t-mut" x="360" y="240">fanout/auth-124</text>
+
+  <!-- pane #125 (right top) -->
+  <rect class="box" x="556" y="52" width="206" height="96" rx="6"/>
+  <rect class="chip" x="578" y="45" width="128" height="14" rx="4"/>
+  <text class="t-num" x="586" y="56">#125<tspan class="t-mut"> · docs-125</tspan></text>
+  <circle class="dot-run" cx="748" cy="66" r="3"/>
+  <rect class="bar" x="572" y="84" width="120" height="4" rx="2"/>
+  <rect class="bar b2" x="572" y="98" width="150" height="4" rx="2"/>
+  <text class="t-mut" x="572" y="136">fanout/docs-125</text>
+
+  <!-- pane #126 (right bottom) -->
+  <rect class="box" x="556" y="156" width="206" height="96" rx="6"/>
+  <rect class="chip" x="578" y="149" width="120" height="14" rx="4"/>
+  <text class="t-num" x="586" y="160">#126<tspan class="t-mut"> · api-126</tspan></text>
+  <circle class="dot-run" cx="748" cy="170" r="3"/>
+  <rect class="bar b2" x="572" y="188" width="140" height="4" rx="2"/>
+  <rect class="bar" x="572" y="202" width="104" height="4" rx="2"/>
+  <text class="t-mut" x="572" y="240">fanout/api-126</text>
+
+  <!-- caption -->
+  <text class="t-lbl" x="400" y="290" text-anchor="middle">{{ if eq .Language.Lang "ja" }}1 子 = 1 worktree = 1 ペイン = 1 agent{{ else }}one child = one worktree = one pane = one agent{{ end }}</text>
+</svg>

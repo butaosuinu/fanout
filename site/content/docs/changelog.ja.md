@@ -19,7 +19,7 @@ yomi: changelog
 
 ## v0.7.0 (2026-06-21)
 
-- **ライフサイクルフック。** worktree やペイン、merge のイベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`（Codex 形式の `hooks` オブジェクト）で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。
+- **ライフサイクルフック。** worktree やペイン、merge のイベントの前後でユーザーの shell hook を実行するようになりました。`$XDG_CONFIG_HOME/fanout/hooks.json`（Codex 形式の `hooks` オブジェクト）で設定します。常時有効で、ファイルが無い場合やコマンドの無いイベントは no-op です。[Lifecycle hooks]({{< relref "/docs/cli#lifecycle-hooks" >}}) を参照。
 - **TUI shell terminal。** 常駐コンソールで、選択行の worktree に `A`、project root に `t` で plain shell を開けます。shell 行は focus / peek 用に manual entry として記録され、close は tmux ペインと state 行だけを消します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 - **コンパクトな Session ナビゲーター。** 常駐コンソールに、セッション間を移動するためのコンパクトな Session ナビゲーターが加わりました（既存の focus / peek / lifecycle キーはそのままです）。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
 - **`origin` なしの `fanout plan`。** plan 実行に `origin` remote が不要になりました。base branch 解決は現在のローカルブランチや `HEAD` にフォールバックするため、ローカルだけのリポジトリでも plan をファンアウトできます。[CLI Reference]({{< relref "/docs/cli" >}}) を参照。

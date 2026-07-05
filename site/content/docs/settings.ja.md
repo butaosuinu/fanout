@@ -93,11 +93,38 @@ watcher は誰かが checkout しただけで自動起動してほしくない�
 
 trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。
 
+## watcher の運用
+
+watcher は、TUI コンソールを起動している間だけ動きます。
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+`fanout:auto` を付けた issue は、次の cycle で watcher がラベルを `fanout:running` に付け替えてから起動します。
+OPEN な子を持つ issue は `--unblocked-only` 相当の親ファンアウトになります。
+OPEN な子を持たない issue は、子が全部 CLOSED の場合も含めて、単独ペインとして起動します。
+
+`watcherMaxSessions` は起動回数ではなく live ペイン数の上限です。
+watcher は cycle ごとに、起動元を問わずリポジトリの live な(shell 以外の)fanout ペインを数え、その数が上限を下回る間だけ起動します。
+親ファンアウトは起動した子 1 つにつき 1 枠を使い、ペインが閉じれば枠は空きます。
+blocked な子や session 上限で積み残しが出た場合、fanout はラベルを `fanout:running` から `fanout:auto` に戻します。
+その親は後続の cycle で自動的に再試行されます。
+
+親ファンアウトでは、`fanout <parent> --merge <child>`、`--close`、`--cleanup` が `fanout:running` を best-effort で外します。
+単独 watcher ペインは TUI の lifecycle key(`m`、`c`、`x`)で処理してください。
+公開 CLI の parent 引数には、予約 parent `@watch` の row を指定できません。
+
+再投入するときは、まず記録済みペインを畳んでから(`--close` / `--cleanup` か TUI のキー。state 行が残っている issue を watcher はスキップします)、対象の issue に `fanout:auto` を付け直してください。
+
 ## 前方互換
 
 不正な bool / integer env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
 
-Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は [CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
+Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は CLI リファレンスの [Lifecycle hooks]({{< relref "/docs/cli#lifecycle-hooks" >}}) を参照してください。
 
 ## prVisualization の詳細
 

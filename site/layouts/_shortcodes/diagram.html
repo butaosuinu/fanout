@@ -1,0 +1,5 @@
+{{- /* {{< diagram "overview" >}} renders partial diagram-<name>.html inside a figure */ -}}
+{{- $name := .Get 0 -}}
+<figure class="dg-holder">
+  {{ partial (printf "diagram-%s.html" $name) .Page }}
+</figure>

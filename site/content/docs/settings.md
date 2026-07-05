@@ -91,16 +91,32 @@ Both HTTP channels only send outbound POST requests and never open inbound socke
 
 The watcher should never start just because someone checked out the repo, so repo config cannot opt into it. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; enable it from user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
-The trigger label starts agent work from the labeled issue and, for parent
-fan-outs, any OPEN children it launches. Their bodies become agent briefings, so
-treat the label as an execution request and apply it only when you trust that
-issue and its launchable children.
+The trigger label starts agent work from the labeled issue and, for parent fan-outs, any OPEN children it launches. Their bodies become agent briefings, so treat the label as an execution request and apply it only when you trust that issue and its launchable children.
+
+## Watcher operation
+
+The watcher only runs while a TUI console is running.
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+Issues labeled `fanout:auto` launch on the next cycle, once the watcher swaps the label to `fanout:running`. Issues with OPEN children become parent fan-outs equivalent to `--unblocked-only`; issues with no OPEN children — including ones whose children are all CLOSED — launch as a standalone pane.
+
+`watcherMaxSessions` caps live panes, not launches: each cycle the watcher counts the repository's live (non-shell) fanout panes — whoever launched them — and launches only while that count stays below the cap. A parent fan-out takes one slot per launched child, and slots free up as panes close. When blocked children or the session limit leave work outstanding, fanout reverts the label from `fanout:running` back to `fanout:auto`, and that parent is retried automatically on a later cycle.
+
+For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and `--cleanup` remove `fanout:running` on a best-effort basis. Handle standalone watcher panes with the TUI lifecycle keys (`m`, `c`, `x`) instead. The public CLI's parent argument does not accept rows for the reserved `@watch` parent.
+
+To requeue an issue, first fold away its recorded panes (`--close` / `--cleanup`, or the TUI keys) — the watcher skips an issue whose state rows still exist — then add the `fanout:auto` label back to it.
 
 ## Forward compatibility
 
 Invalid boolean or integer env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
 
-Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [CLI Reference]({{< relref "/docs/cli" >}}).
+Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [Lifecycle hooks]({{< relref "/docs/cli#lifecycle-hooks" >}}) in the CLI Reference.
 
 ## prVisualization in detail
 

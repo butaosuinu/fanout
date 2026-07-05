@@ -17,12 +17,13 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
        [--session <tmux-session>] [--sleep <seconds>]
-       [--popup-timeout <seconds>] [--dry-run] [--debug]
+       [--dry-run] [--debug]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
@@ -223,6 +224,8 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 
 `fanout <parent> --status` は読み取り専用です。`.fanout/state.json`（または `FANOUT_STATE_PATH`）からその parent の記録済み子を列挙し、各子について `gh api graphql` で issue state と closed-by PR の merge/review/CI 状態を取得して、既定では JSON 1 ドキュメントを stdout に出力します。
 
+JSON ドキュメントは `parent`、`children[]`（各子は `num` / `state` / `prs[]`（`number` / `state` / `mergedAt` / `reviewDecision` / `ci`）/ `has_merged_pr`）、`summary`（`total` / `merged` / `pending` / `blocked` / `all_merged`）を持ちます。
+
 - `--format <json|table>`（出力形式。既定: `json`）。table 形式は正規化した PR 状態（`open`、`draft`、`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを追加する。
 - `--post-dashboard`（親 issue に marker 付き rollup コメントを 1 つ upsert する）。各子の PR リンク、PR 状態、CI、差分規模、Conventional-Commit 種別、TL;DR、Review effort score を機械可読な PR データから集約する。`--status` 系で唯一 GitHub に書き込む option。
 
@@ -235,11 +238,17 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`）と排他です。
+`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
 
 ### `--merge` / `--close` / `--cleanup`
 
 Lifecycle コマンドは `.fanout/state.json` の記録済み entry だけを対象にします。任意の worktree を filesystem scan で探すことはしません。`--status` と同じく `FANOUT_STATE_PATH` を尊重します。
+
+`.fanout/state.json` には `schemaVersion` と、ペインごとに 1 行を保存します。
+各行は `parent` / `issueNum` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を必ず持ちます。
+空のとき省略されるキーは `taskId` / `kind` / `shellKey` / `baseBranch` / `wave` / `agentStatus`、Codex メタデータ(`codexPlanMode` / `codexThreadId` / `codexSessionId`)、attach 元(`sourceParent` / `sourceIssueNum` / `sourceTaskId`)です。
+TUI の shell terminal は `kind: "shell"` で記録されるため、close は tmux ペインと state 行だけを消します(`shellKey` が行と live tmux ペインを結びつけます)。
+既存 worktree に追加した agent は `kind: "attached-agent"` で記録されます。
 
 - `fanout <parent> --merge <NUM>` は、記録済み branch を `git -C <project-root> merge --ff-only <recorded-branch>` で取り込む。fast-forward できない場合は git エラーを報告するだけで、エディタや conflict 解決フローは起動しない。
 - `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux ペインが残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
@@ -251,8 +260,13 @@ fanout 123 --close 4
 fanout 123 --cleanup
 ```
 
-Hook は常に有効です。user hook config が無い場合、または event に command が無い
-場合、その event は no-op です。fanout は `$XDG_CONFIG_HOME/fanout/hooks.json`、
+## Lifecycle hooks
+
+fanout は worktree・ペイン・merge の各 event で user shell hook を実行します —
+fan-out 中（`worktree_created`、`before_pane_create`）と上記の lifecycle
+コマンドの両方が対象です。Hook は常に有効です。user hook config が無い場合、
+または event に command が無い場合、その event は no-op です。fanout は
+`$XDG_CONFIG_HOME/fanout/hooks.json`、
 または `XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/hooks.json` を読みます。
 ファイルは Codex 風の `hooks` object です:
 
@@ -401,6 +415,7 @@ fanout check-update
 | `FANOUT_WATCHER_AGENT` | watcher child agent（`watcherAgent`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_MAX_SESSIONS` | watcher session 上限（`watcherMaxSessions`）の環境変数レイヤ。 |
 | `FANOUT_NOTIFICATIONS` | TUI 遷移通知チャネル（`notifications`）の環境変数レイヤ。[設定]({{< relref "/docs/settings" >}})を参照。 |
+| `FANOUT_TUI_ENHANCED_KEYS` | `0` で TUI prompt 欄の enhanced keyboard input を無効化する。既定は有効。`Shift+Enter` の改行は端末が区別して報告する必要があり（fanout が tmux `extended-keys` を有効化する）、`Ctrl+J` は常に使える。 |
 | `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
 | `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |
 | `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite パスを上書きする。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
