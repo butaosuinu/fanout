@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
 const localExcludePattern = ".fanout/worktrees/"
@@ -502,17 +504,7 @@ func gitTrim(dir string, args ...string) (string, error) {
 }
 
 func git(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			return out, err
-		}
-		return out, fmt.Errorf("%w: %s", err, msg)
-	}
-	return out, nil
+	return execx.Combined(dir, "git", args...)
 }
 
 func dirExists(path string) bool {

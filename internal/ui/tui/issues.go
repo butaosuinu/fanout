@@ -14,6 +14,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -294,7 +295,7 @@ func recordedParents(panes []state.Pane) []string {
 		if pane.Parent == "" || pane.IssueNum <= 0 {
 			continue
 		}
-		seen[normalizedParent(pane.Parent)] = true
+		seen[parentref.Canon(pane.Parent)] = true
 	}
 	parents := make([]string, 0, len(seen))
 	for parent := range seen {
@@ -343,7 +344,7 @@ func recordedTaskRows(panes []state.Pane) []taskStatusRow {
 }
 
 func keyForIssue(parent string, num int) issueKey {
-	return issueKey{Parent: normalizedParent(parent), Num: num}
+	return issueKey{Parent: parentref.Canon(parent), Num: num}
 }
 
 func keyForPaneView(pane paneView) issueKey {
@@ -357,20 +358,12 @@ func keyForPaneView(pane paneView) issueKey {
 	default:
 		// Manual/synthetic (@manual, non-positive issueNum): worktree-local, so
 		// scope by source to keep two worktrees' rows distinct.
-		return issueKey{Parent: normalizedParent(pane.Parent), Num: pane.IssueNum, Source: pane.sourceProjectRoot}
+		return issueKey{Parent: parentref.Canon(pane.Parent), Num: pane.IssueNum, Source: pane.sourceProjectRoot}
 	}
 }
 
 func keyForTask(parent, taskID, source string) issueKey {
-	return issueKey{Parent: normalizedParent(parent), Num: 0, TaskID: strings.TrimSpace(taskID), Source: source}
-}
-
-func normalizedParent(parent string) string {
-	parentNum, err := strconv.Atoi(parent)
-	if err != nil {
-		return parent
-	}
-	return strconv.Itoa(parentNum)
+	return issueKey{Parent: parentref.Canon(parent), Num: 0, TaskID: strings.TrimSpace(taskID), Source: source}
 }
 
 func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.LivePane, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {

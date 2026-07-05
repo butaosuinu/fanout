@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 )
 
 type Info struct {
@@ -16,7 +18,7 @@ type Info struct {
 
 // Resolve discovers the git repository root and tmux target fanout should split.
 func Resolve(sessionOverride string) (*Info, error) {
-	root, err := gitToplevel()
+	root, err := gitroot.Toplevel("")
 	if err != nil {
 		return nil, err
 	}
@@ -36,18 +38,6 @@ func Resolve(sessionOverride string) (*Info, error) {
 		return nil, err
 	}
 	return &Info{Session: session, Target: target, ProjectRoot: root}, nil
-}
-
-func gitToplevel() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("current directory is not inside a git work tree")
-	}
-	root := strings.TrimSpace(string(out))
-	if root == "" {
-		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
-	}
-	return root, nil
 }
 
 func tmuxSession() (string, error) {

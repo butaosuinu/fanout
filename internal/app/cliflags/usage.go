@@ -5,6 +5,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/parentref"
 )
 
 const usageText = `Usage: fanout
@@ -214,11 +216,12 @@ func Usage(w io.Writer) {
 func NormalizeParentRef(raw string) (ref string, ok bool) {
 	raw = strings.TrimSpace(raw)
 	if reAllDigits.MatchString(raw) {
-		n, err := strconv.Atoi(raw)
-		if err != nil {
+		// Atoi validity is checked first so out-of-range digit strings keep
+		// returning ("", false); parentref.Canon would pass them through.
+		if _, err := strconv.Atoi(raw); err != nil {
 			return "", false
 		}
-		return strconv.Itoa(n), true
+		return parentref.Canon(raw), true
 	}
 	if m := reProjectURL.FindStringSubmatch(raw); len(m) == 5 {
 		n, err := strconv.Atoi(m[3])

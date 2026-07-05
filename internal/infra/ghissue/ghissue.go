@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
 // Label is the slim shape fanout cares about (just the name; we treat the
@@ -124,35 +125,12 @@ type Runner struct {
 }
 
 func (r Runner) gh(args ...string) ([]byte, error) {
-	cmd := exec.Command("gh", args...)
-	if r.Cwd != "" {
-		cmd.Dir = r.Cwd
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return out, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
-		}
-		return out, err
-	}
-	return out, nil
+	return execx.Output(r.Cwd, nil, "gh", args...)
 }
 
 func (r Runner) ghWithInput(input string, args ...string) error {
-	cmd := exec.Command("gh", args...)
-	if r.Cwd != "" {
-		cmd.Dir = r.Cwd
-	}
-	cmd.Stdin = strings.NewReader(input)
-	if _, err := cmd.Output(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
-		}
-		return err
-	}
-	return nil
+	_, err := execx.OutputStdin(r.Cwd, input, "gh", args...)
+	return err
 }
 
 // RepoNameWithOwner runs `gh repo view --json nameWithOwner -q .nameWithOwner`.

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -85,11 +85,15 @@ func main() {
 		lg = log.New(true)
 	}
 
-	if missing := checkDeps(cfg); len(missing) > 0 {
-		lg.Err("missing dependencies:")
-		for _, d := range missing {
-			fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
-		}
+	// Which deps each mode needs stays here; the probe and printing are shared
+	// (deps.go).
+	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
+	needs := depNeeds{
+		git:  true,
+		gh:   cfg.StatusMode || cfg.CleanupMode || !lifecycle,
+		tmux: !cfg.StatusMode && !lifecycle,
+	}
+	if exitOnMissingDeps(missingDeps(needs), lg) {
 		os.Exit(int(exitcode.Env))
 	}
 
@@ -290,7 +294,7 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 	lg.Info("tmux target:  %s", info.Target)
 	lg.Info("project root: %s", info.ProjectRoot)
 
-	if !isGitWorkTree(info.ProjectRoot) {
+	if !gitroot.IsWorkTree(info.ProjectRoot) {
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
@@ -543,35 +547,4 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 		}
 	}
 	return result
-}
-
-func isGitWorkTree(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = path
-	return cmd.Run() == nil
-}
-
-func checkDeps(cfg *cliflags.Config) []string {
-	var missing []string
-	check := func(cmd, hint string) {
-		if _, err := exec.LookPath(cmd); err != nil {
-			missing = append(missing, hint)
-		}
-	}
-	checkTmux := func() {
-		if err := tmuxrun.CheckMinimumVersion(); err != nil {
-			missing = append(missing, err.Error())
-		}
-	}
-	check("git", "git")
-
-	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
-	if cfg.StatusMode || cfg.CleanupMode || !lifecycle {
-		check("gh", "gh (brew install gh)")
-	}
-
-	if !cfg.StatusMode && !lifecycle {
-		checkTmux()
-	}
-	return missing
 }

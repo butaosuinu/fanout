@@ -31,7 +31,9 @@ type Status struct {
 }
 
 // writeStatus atomically writes the status file (tmp + rename). An empty path
-// is a no-op.
+// is a no-op. Deliberately not atomicfs.WriteJSON: its exact chmod would widen
+// the file mode under a restrictive umask, while os.WriteFile keeps the
+// historical umask-masked 0644.
 func writeStatus(path string, status Status) error {
 	if strings.TrimSpace(path) == "" {
 		return nil

@@ -2,13 +2,12 @@
 package gitstat
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
 var (
@@ -84,24 +83,13 @@ func (r Runner) diffBase(path, baseRef string) string {
 }
 
 func (r Runner) git(args ...string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	if r.Cwd != "" {
-		cmd.Dir = r.Cwd
-	}
-	cmd.Env = gitEnv()
-	out, err := cmd.Output()
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return out, fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
-		}
-		return out, err
-	}
-	return out, nil
+	return execx.Output(r.Cwd, gitEnv(), "git", args...)
 }
 
+// gitEnv returns the extra environment entries execx.Output appends to
+// os.Environ() for every git invocation.
 func gitEnv() []string {
-	return append(os.Environ(), "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
+	return []string{"LC_ALL=C", "GIT_OPTIONAL_LOCKS=0"}
 }
 
 func parseShortStat(out string) Stat {

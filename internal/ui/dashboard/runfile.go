@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,15 +32,9 @@ func RunFilePath(projectRoot string) string {
 
 // ReadRunFile loads the run file. A missing file returns (nil, nil).
 func ReadRunFile(projectRoot string) (*RunFile, error) {
-	data, err := os.ReadFile(RunFilePath(projectRoot))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var rf RunFile
-	if err := json.Unmarshal(data, &rf); err != nil {
+	found, err := atomicfs.ReadJSON(RunFilePath(projectRoot), &rf)
+	if err != nil || !found {
 		return nil, err
 	}
 	return &rf, nil
@@ -51,17 +44,9 @@ func ReadRunFile(projectRoot string) (*RunFile, error) {
 // the file holds the access token, so it must not be readable by other local
 // users — otherwise they could lift the token and call /api/* despite the gate.
 func WriteRunFile(projectRoot string, rf RunFile) error {
-	out, err := json.MarshalIndent(rf, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := RunFilePath(projectRoot)
-	// A repo that has never been fanned out has no .fanout/ dir yet; create it so
-	// the atomic write (and thus reuse-if-running) does not fail with ENOENT.
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return atomicfs.WriteFile(path, append(out, '\n'), 0o600)
+	// WriteJSON's MkdirAll covers the repo that has never been fanned out and
+	// so has no .fanout/ dir yet (reuse-if-running must not fail with ENOENT).
+	return atomicfs.WriteJSON(RunFilePath(projectRoot), rf, 0o600)
 }
 
 // RemoveRunFile deletes the run file (best effort; missing is fine).

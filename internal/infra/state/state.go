@@ -2,7 +2,6 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,16 +110,16 @@ func LoadProject(projectRoot string) (Store, error) {
 }
 
 func Load(path string) (Store, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return emptyStore(), nil
-	}
+	var store Store
+	found, err := atomicfs.ReadJSON(path, &store)
 	if err != nil {
+		if found {
+			return Store{}, fmt.Errorf("parse fanout state %s: %w", path, err)
+		}
 		return Store{}, fmt.Errorf("read fanout state %s: %w", path, err)
 	}
-	var store Store
-	if err := json.Unmarshal(data, &store); err != nil {
-		return Store{}, fmt.Errorf("parse fanout state %s: %w", path, err)
+	if !found {
+		return emptyStore(), nil
 	}
 	store.normalize()
 	return store, nil
@@ -307,14 +306,12 @@ func (s *Store) removeTask(parent, taskID string) bool {
 
 func save(path string, store Store) error {
 	store.normalize()
+	// MkdirAll runs here (not just inside WriteJSON) so its failure keeps this
+	// wrapped message; WriteJSON's own MkdirAll is then a no-op.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create fanout state directory: %w", err)
 	}
-	out, err := json.MarshalIndent(store, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicfs.WriteFile(path, append(out, '\n'), 0o644)
+	return atomicfs.WriteJSON(path, store, 0o644)
 }
 
 func emptyStore() Store {
