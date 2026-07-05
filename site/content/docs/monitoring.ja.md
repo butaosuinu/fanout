@@ -71,10 +71,12 @@ fanout   # start the persistent tmux console
 `n` は Mode 行つきの tmux popup を開き、Prompt / Issue を切り替えます。
 
 **Prompt** は従来の manual ペインです。
-複数行の prompt を書いて `claude` / `codex` の起動数を指定し、prompt 欄では `Shift+Enter` で改行、`@` でリポジトリのファイルパス補完を使えます。
-下の plan fan-out チェックボックスを有効にすると、プロンプトを `fanout plan` で並列タスクに分解する起動に切り替わります。
+複数行の prompt を書いて `claude` / `codex` の起動数を指定し、prompt 欄では `Shift+Enter` または `Ctrl+J` で改行、`@` でリポジトリのファイルパス補完を使えます。
+manual の `codex` ペインは Codex Plan Mode で起動し、prompt を inline で受け取ります(`claude` は通常起動)。
+下の plan fan-out チェックボックスを有効にすると、agent をちょうど 1 本選んだうえで、プロンプトを `fanout plan` で並列タスクに分解するコーディネータ 1 つの起動に切り替わります(コーディネータは `codex` でも常に通常 agent として起動します)。
 
-**Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込んで、選んだ issue ごとに `claude` / `codex` の既定 agent と割り当てを指定できます。
+**Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
+issue を選んで既定の `claude` / `codex` を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
 OPEN な子を持つ issue は `--unblocked-only` 相当でファンアウトし、blocked な子は deferred のまま残ります。
 子のない issue は `@watch` 配下の単独ペインとして起動します。
 
@@ -84,8 +86,16 @@ OPEN な子を持つ issue は `--unblocked-only` 相当でファンアウトし
 
 ```json
 { "parent": 123,
-  "children": [{ "num": 4, "state": "CLOSED", "has_merged_pr": true }],
-  "summary": { "total": 2, "merged": 1, "all_merged": false } }
+  "children": [
+    { "num": 4, "state": "CLOSED",
+      "prs": [ { "number": 250, "state": "MERGED",
+                 "mergedAt": "2026-05-04T10:00:00Z",
+                 "reviewDecision": "APPROVED", "ci": "pass" } ],
+      "has_merged_pr": true },
+    { "num": 7, "state": "OPEN", "prs": [], "has_merged_pr": false }
+  ],
+  "summary": { "total": 2, "merged": 1, "pending": 1,
+               "blocked": 0, "all_merged": false } }
 ```
 
 ```bash

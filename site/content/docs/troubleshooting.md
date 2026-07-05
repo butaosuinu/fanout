@@ -76,7 +76,7 @@ FANOUT_SKIP_PR_REVIEW=1 gh pr create ...
 
 If fanout settings resolve `prReviewGate=false`, child Claude briefings also carry this bypass permission, but the committed hook itself remains unchanged (see [Settings]({{< relref "/docs/settings" >}}) for what that switch means).
 
-The gate is pinned to HEAD, so pushing a new commit re-arms it — review again before the PR (the marker is worktree-local, so fanout's parallel panes don't interfere with each other). Without `python3` the hook fails closed and denies anything that coarsely looks like PR creation, so install `python3` or use `FANOUT_SKIP_PR_REVIEW=1`.
+The gate is pinned to HEAD, so adding a new commit re-arms it — review again before the PR (the marker is worktree-local, so fanout's parallel panes don't interfere with each other). Without `python3` the hook fails closed and denies anything that coarsely looks like PR creation, so install `python3` or use `FANOUT_SKIP_PR_REVIEW=1`.
 
 ## Project mode returns no items
 

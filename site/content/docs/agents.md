@@ -57,6 +57,8 @@ fanout 123 --agent codex --codex-plan-mode
 
 Plan Mode children launch as an interactive Codex TUI, investigate relevant context, and present the implementation plan wrapped in `<proposed_plan>`. That turn does not edit files, commit, push, or open a PR. The pane remains in the Plan Mode conversation, so you can continue from there.
 
+Every selected child must resolve to `codex`: mixing in a `claude` child fails before any pane is created.
+
 ## How the briefing works
 
 Each issue or plan-task child pane receives a one-line prompt only. The full issue or task body plus a short Requirements checklist is written to `/tmp/fanout-<repo>-<NUM>.md` or the task briefing path, and the launch prompt only tells the agent to read that file. Which instructions the briefing includes depends on the toggles in [Settings]({{< relref "/docs/settings" >}}).

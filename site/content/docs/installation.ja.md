@@ -95,6 +95,10 @@ curl インストールは prebuilt バイナリを配置するので、Go も N
 - `--version <tag>`: 指定した tag をインストールする
 - `--no-skills`: バイナリのみ更新する
 
+> install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill を含む)を上書きします。
+> カスタマイズした copy は先に退避してください。
+> Codex CLI は起動時に skill を読み込むため、更新後は実行中の Codex セッションを再起動してください。
+
 exit code の一覧は[CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
 
 次は[クイックスタート]({{< relref "/docs/quickstart" >}})で、最初の親 issue を開いてみてください。

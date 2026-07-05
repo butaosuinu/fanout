@@ -73,6 +73,9 @@ Plan Mode の子は interactive な Codex TUI として起動し、関連する�
 その turn ではファイル編集や commit、push、PR 作成をしません。
 ペインは Plan Mode の会話のまま残るので、そこから続行できます。
 
+選択された子はすべて `codex` に解決される必要があります。
+`claude` の子が混ざっているとペイン作成前に失敗します。
+
 ## briefing の仕組み
 
 issue や plan task の子ペインに送られるのは 1 行のプロンプトだけです。

@@ -130,7 +130,8 @@ verb の全表や plan task の指定方法など、詳しい仕組みは [CLI �
 ## 命名とブランチ
 
 既定では、各子の worktree slug は `slugify(title)-<issueNum>`、branch は `fanout/<slug>` です。
-`--name`、`--branch-prefix`、`--base-branch`、`--no-refresh` で上書きできます。
+名前は `--name` と `--branch-prefix` で上書きできます。
+`--base-branch` と `--no-refresh` は名前ではなく、子の分岐元 base を制御します。
 
 ```bash
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
@@ -152,8 +153,9 @@ fanout https://github.com/orgs/<org>/projects/<n> --project-status "In Progress"
 fanout https://github.com/users/<owner>/projects/<n> --project-status all
 ```
 
-既定フィルタは `Status == Todo` の item です。
-フィルタの変え方や blocker の扱いなど issue モードとの違いは [CLI リファレンス]({{< relref "/docs/cli" >}}) にまとめてあります。
+既定フィルタは `Status == Todo` の item で、`--project-status` で変更できます([CLI リファレンス]({{< relref "/docs/cli" >}}) を参照)。
+blocker は子本文の `## Blocked by` セクションからだけ読み取られます。
+親本文が無いためタスクリスト行の `(blocked by #X)` トレイラは存在せず、`blocked` ラベルだけの子は警告のうえ unblocked として扱われます。
 
 > Project モードでは `gh` CLI に `read:project` スコープが必要です([インストール]({{< relref "/docs/installation" >}})を参照)。
 

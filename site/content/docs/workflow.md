@@ -108,7 +108,7 @@ It works the same for `claude` and `codex` panes, and is distinct from Claude Co
 
 ## Naming and branches
 
-By default each child gets the worktree slug `slugify(title)-<issueNum>` and the branch `fanout/<slug>`. Override these with `--name`, `--branch-prefix`, `--base-branch`, and `--no-refresh`.
+By default each child gets the worktree slug `slugify(title)-<issueNum>` and the branch `fanout/<slug>`. Override the names with `--name` and `--branch-prefix`; `--base-branch` and `--no-refresh` control which base the children branch from instead.
 
 ```bash
 fanout 123 --name 4=fix-login-timeout --name 7='update-docs|Docs update'
@@ -128,7 +128,7 @@ fanout https://github.com/orgs/<org>/projects/<n> --project-status "In Progress"
 fanout https://github.com/users/<owner>/projects/<n> --project-status all
 ```
 
-The default filter is items with `Status == Todo`. For how to change the filter and how blockers differ from issue mode, see the [CLI Reference]({{< relref "/docs/cli" >}}).
+The default filter is items with `Status == Todo`; change it with `--project-status` (see the [CLI Reference]({{< relref "/docs/cli" >}})). Blockers come only from the child body's `## Blocked by` section — there is no parent body, so the `(blocked by #X)` task-list trailer does not exist here, and a child carrying only the `blocked` label is warned and treated as unblocked.
 
 > Project mode requires the `gh` CLI to carry the `read:project` scope — see [Installation]({{< relref "/docs/installation" >}}).
 

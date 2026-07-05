@@ -92,6 +92,8 @@ Building it needs a Go toolchain (Go 1.26+) plus Node.js 24+ and pnpm 10+ (`make
 - `--version <tag>`: install the given tag
 - `--no-skills`: update only the binary
 
+> Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills — so back up customized copies first. Codex CLI loads skills at startup; restart running Codex sessions after an update.
+
 See the [CLI reference]({{< relref "/docs/cli" >}}) for the exit code list.
 
 Next: open your first parent issue in the [Quickstart]({{< relref "/docs/quickstart" >}}).

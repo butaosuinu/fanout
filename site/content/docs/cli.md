@@ -225,6 +225,8 @@ These paired switches toggle fanout's opinionated behaviors for one run — the 
 
 `fanout <parent> --status` is read-only: it enumerates the children recorded for that parent in `.fanout/state.json` (or `FANOUT_STATE_PATH`), queries each one through `gh api graphql` for issue state plus closed-by PR merge/review/CI status, and prints one JSON document on stdout by default.
 
+The JSON document carries `parent`, `children[]` — each child with `num`, `state`, `prs[]` (`number`, `state`, `mergedAt`, `reviewDecision`, `ci`), and `has_merged_pr` — and `summary` (`total`, `merged`, `pending`, `blocked`, `all_merged`).
+
 - `--format <json|table>` — output format, default `json`. The table format adds normalized PR state (`open`, `draft`, `review-required`, `approved`, `changes-requested`, `merged`, `closed`), CI, PR diff bars, changed-file counts, Conventional-Commit type and PR links.
 - `--post-dashboard` — upsert one marker-based rollup comment on the parent issue, aggregating child PR links, PR state, CI, diff size, Conventional-Commit type, TL;DR and Review effort score from machine-readable PR data. This is the only `--status` option that writes to GitHub.
 
@@ -243,7 +245,7 @@ fanout 123 --status --post-dashboard
 
 The lifecycle commands operate on entries recorded in `.fanout/state.json`; they do not discover arbitrary worktrees by scanning the filesystem. Like `--status`, they honor `FANOUT_STATE_PATH`.
 
-`.fanout/state.json` holds `schemaVersion` plus one row per pane: `parent`, `issueNum`, optional `taskId`, `kind`, `shellKey`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. TUI shell terminals are recorded with `kind: "shell"`, so closing one removes only the tmux pane and the state row; `shellKey` ties the row to its live tmux pane.
+`.fanout/state.json` holds `schemaVersion` plus one row per pane. Every row carries `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Keys omitted when empty: `taskId`, `kind`, `shellKey`, `baseBranch`, `wave`, `agentStatus`, the Codex metadata (`codexPlanMode`, `codexThreadId`, `codexSessionId`), and the attach source (`sourceParent`, `sourceIssueNum`, `sourceTaskId`). TUI shell terminals are recorded with `kind: "shell"` (closing one removes only the tmux pane and the state row; `shellKey` ties the row to its live tmux pane), and agents attached to an existing worktree with `kind: "attached-agent"`.
 
 - `fanout <parent> --merge <NUM>` runs `git -C <project-root> merge --ff-only <recorded-branch>`. If the merge is not a fast-forward, fanout reports the git error and does not start an editor or conflict-resolution flow.
 - `fanout <parent> --close <NUM>` removes the recorded worktree with `git worktree remove <path> --force`, kills the recorded tmux pane when it is still present, removes the state entry, and runs `git worktree prune`.
@@ -409,6 +411,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_WATCHER_AGENT` | Environment layer for the watcher child agent (`watcherAgent`). |
 | `FANOUT_WATCHER_MAX_SESSIONS` | Environment layer for the watcher session cap (`watcherMaxSessions`). |
 | `FANOUT_NOTIFICATIONS` | Environment layer for the TUI transition notification channels (`notifications`); see [Settings]({{< relref "/docs/settings" >}}). |
+| `FANOUT_TUI_ENHANCED_KEYS` | Set `0` to disable enhanced keyboard input in the TUI prompt fields. On by default; `Shift+Enter` newline needs a terminal that reports it distinctly (fanout turns on tmux `extended-keys` for it), and `Ctrl+J` always works. |
 | `FANOUT_NTFY_URL` | Environment layer for the ntfy POST URL (`ntfyURL`). |
 | `FANOUT_SLACK_WEBHOOK_URL` | Environment layer for the Slack webhook POST URL (`slackWebhookURL`). |
 | `FANOUT_DB_PATH` | Override the per-parent peer-messaging SQLite path used by `--team` and `fanout msg`. Default: `/tmp/fanout-<repo>-<parent>.db`. |

@@ -106,9 +106,11 @@ fanout
 
 `fanout:auto` を付けた issue は、次の cycle で watcher がラベルを `fanout:running` に付け替えてから起動します。
 OPEN な子を持つ issue は `--unblocked-only` 相当の親ファンアウトになります。
-子を持たない issue は単独ペインとして起動します。
+OPEN な子を持たない issue は、子が全部 CLOSED の場合も含めて、単独ペインとして起動します。
 
-watcher からの起動は、親ファンアウトも単独ペインもすべて `watcherMaxSessions` を消費します。
+`watcherMaxSessions` は起動回数ではなく live ペイン数の上限です。
+watcher は cycle ごとに、起動元を問わずリポジトリの live な(shell 以外の)fanout ペインを数え、その数が上限を下回る間だけ起動します。
+親ファンアウトは起動した子 1 つにつき 1 枠を使い、ペインが閉じれば枠は空きます。
 blocked な子や session 上限で積み残しが出た場合、fanout はラベルを `fanout:running` から `fanout:auto` に戻します。
 その親は後続の cycle で自動的に再試行されます。
 
@@ -116,7 +118,7 @@ blocked な子や session 上限で積み残しが出た場合、fanout はラ�
 単独 watcher ペインは TUI の lifecycle key(`m`、`c`、`x`)で処理してください。
 公開 CLI の parent 引数には、予約 parent `@watch` の row を指定できません。
 
-再投入するときは、対象の issue に `fanout:auto` を付け直してください。
+再投入するときは、まず記録済みペインを畳んでから(`--close` / `--cleanup` か TUI のキー。state 行が残っている issue を watcher はスキップします)、対象の issue に `fanout:auto` を付け直してください。
 
 ## 前方互換
 

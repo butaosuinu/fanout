@@ -63,9 +63,9 @@ Disable it with the `consoleKeybind` config key or `FANOUT_CONSOLE_KEYBIND=0` (s
 
 `n` opens a tmux popup with a Mode row that switches between Prompt and Issue.
 
-**Prompt** is the classic manual pane. Write a multi-line prompt and set the `claude` / `codex` launch counts; in the prompt field, `Shift+Enter` inserts a newline and `@` completes repository file paths. Enabling the plan fan-out checkbox below switches the launch to decompose the prompt into parallel tasks with `fanout plan`.
+**Prompt** is the classic manual pane. Write a multi-line prompt and set the `claude` / `codex` launch counts; in the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `@` completes repository file paths. Manual `codex` panes start in Codex Plan Mode with the prompt passed inline; `claude` starts normally. Enabling the plan fan-out checkbox below switches the launch to a single coordinator (select exactly one agent) that decomposes the prompt into parallel tasks with `fanout plan` — the coordinator always launches as a normal agent, even `codex`.
 
-**Issue** lists the repository's OPEN issues, lets you narrow them by number, title, or label, and sets the default `claude` / `codex` agent and assignment for each issue you pick. An issue with OPEN children fans out the equivalent of `--unblocked-only`, leaving blocked children deferred. An issue without children starts as a single pane under `@watch`.
+**Issue** lists the repository's OPEN issues and lets you narrow them by number, title, or label. Pick an issue, choose the default `claude` / `codex` agent, and `Enter` opens an assignment screen that flips the agent per child of that issue — the equivalent of repeatable `--agent NUM=name`. An issue with OPEN children fans out the equivalent of `--unblocked-only`, leaving blocked children deferred. An issue without children starts as a single pane under `@watch`.
 
 ## --status (JSON / table / --post-dashboard)
 
@@ -73,8 +73,16 @@ Use `fanout <parent> --status` when you want to feed progress to CI or jq — it
 
 ```json
 { "parent": 123,
-  "children": [{ "num": 4, "state": "CLOSED", "has_merged_pr": true }],
-  "summary": { "total": 2, "merged": 1, "all_merged": false } }
+  "children": [
+    { "num": 4, "state": "CLOSED",
+      "prs": [ { "number": 250, "state": "MERGED",
+                 "mergedAt": "2026-05-04T10:00:00Z",
+                 "reviewDecision": "APPROVED", "ci": "pass" } ],
+      "has_merged_pr": true },
+    { "num": 7, "state": "OPEN", "prs": [], "has_merged_pr": false }
+  ],
+  "summary": { "total": 2, "merged": 1, "pending": 1,
+               "blocked": 0, "all_merged": false } }
 ```
 
 ```bash

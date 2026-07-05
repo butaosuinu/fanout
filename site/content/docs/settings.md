@@ -104,13 +104,13 @@ export FANOUT_WATCHER_AGENT=codex
 fanout
 ```
 
-Issues labeled `fanout:auto` launch on the next cycle, once the watcher swaps the label to `fanout:running`. Issues with OPEN children become parent fan-outs equivalent to `--unblocked-only`; issues without children launch as a standalone pane.
+Issues labeled `fanout:auto` launch on the next cycle, once the watcher swaps the label to `fanout:running`. Issues with OPEN children become parent fan-outs equivalent to `--unblocked-only`; issues with no OPEN children — including ones whose children are all CLOSED — launch as a standalone pane.
 
-Every watcher launch — parent fan-out or standalone pane — counts against `watcherMaxSessions`. When blocked children or the session limit leave work outstanding, fanout reverts the label from `fanout:running` back to `fanout:auto`, and that parent is retried automatically on a later cycle.
+`watcherMaxSessions` caps live panes, not launches: each cycle the watcher counts the repository's live (non-shell) fanout panes — whoever launched them — and launches only while that count stays below the cap. A parent fan-out takes one slot per launched child, and slots free up as panes close. When blocked children or the session limit leave work outstanding, fanout reverts the label from `fanout:running` back to `fanout:auto`, and that parent is retried automatically on a later cycle.
 
 For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and `--cleanup` remove `fanout:running` on a best-effort basis. Handle standalone watcher panes with the TUI lifecycle keys (`m`, `c`, `x`) instead. The public CLI's parent argument does not accept rows for the reserved `@watch` parent.
 
-To requeue an issue, add the `fanout:auto` label back to it.
+To requeue an issue, first fold away its recorded panes (`--close` / `--cleanup`, or the TUI keys) — the watcher skips an issue whose state rows still exist — then add the `fanout:auto` label back to it.
 
 ## Forward compatibility
 
