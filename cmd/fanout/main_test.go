@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {

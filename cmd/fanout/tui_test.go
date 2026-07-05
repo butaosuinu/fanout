@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
-	"github.com/butaosuinu/fanout/internal/watch"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func TestTUIAgentOrDefault(t *testing.T) {

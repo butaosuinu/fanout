@@ -13,7 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 type worktreeActionFlags struct {

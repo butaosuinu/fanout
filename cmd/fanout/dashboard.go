@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/dashboard"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
-	"github.com/butaosuinu/fanout/internal/sessionview"
+	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
 
 // defaultDashboardKey is the tmux prefix-table key fanout binds to open the dashboard.

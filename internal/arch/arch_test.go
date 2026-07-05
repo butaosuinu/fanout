@@ -28,24 +28,12 @@ const (
 	layerMeta  layer = "meta" // internal/arch itself: test-only, imports no module packages
 )
 
-// explicitLayers classifies the current flat internal/ packages. It is the
-// migration-period source of truth: once a package moves under
-// internal/<layer>/, the prefix derivation in classify takes over and the
-// package's entry here must be deleted (TestExplicitLayerMapIsCurrent fails on
-// stale entries).
+// explicitLayers classifies the packages that live outside the four layer
+// directories. Since the 4-layer move completed, only the meta package remains;
+// every other package derives its layer from its internal/<layer>/ prefix and
+// TestInternalTreeShape rejects new top-level directories under internal/.
 var explicitLayers = map[string]layer{
-	// meta
 	"internal/arch": layerMeta,
-	// app
-	"internal/briefing":    layerApp,
-	"internal/cliflags":    layerApp,
-	"internal/lifecycle":   layerApp,
-	"internal/panelayout":  layerApp,
-	"internal/sessionview": layerApp,
-	"internal/watch":       layerApp,
-	// ui
-	"internal/dashboard": layerUI,
-	"internal/tui":       layerUI,
 }
 
 // prefixLayers derives the layer from the package path once packages live
@@ -82,7 +70,7 @@ var allowedImports = map[layer]map[layer]bool{
 var legacyDirectionAllowlist = map[string][]string{
 	// infra -> app: the test pins that the team DB path and briefing.Path
 	// derive the same parent slug; decouple that fixture to remove this.
-	"internal/infra/team/path_test.go": {"internal/briefing"},
+	"internal/infra/team/path_test.go": {"internal/app/briefing"},
 }
 
 // coreForbiddenStdlib is the stdlib denylist for non-test files in core
@@ -169,6 +157,7 @@ type goFile struct {
 }
 
 type repoScan struct {
+	root       string
 	modulePath string
 	files      []goFile
 }
@@ -233,7 +222,7 @@ func scanRepo() (repoScan, error) {
 		return repoScan{}, err
 	}
 	fset := token.NewFileSet()
-	scan := repoScan{modulePath: modPath}
+	scan := repoScan{root: root, modulePath: modPath}
 	for _, top := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -310,6 +299,26 @@ func TestAllPackagesClassified(t *testing.T) {
 	slices.Sort(unclassified)
 	for _, pkg := range unclassified {
 		t.Errorf("classify(%q) = unclassified, want a layer (add it to explicitLayers or move it under internal/<layer>/)", pkg)
+	}
+}
+
+// TestInternalTreeShape pins internal/'s top level to the four layer
+// directories plus this meta package. It checks the directory entries
+// themselves, not just parsed Go files, so a retired directory resurrected by
+// stray non-Go files (a stale built bundle, fixtures) is flagged too.
+func TestInternalTreeShape(t *testing.T) {
+	repoFiles(t) // ensure scanned.root is resolved
+	allowed := map[string]bool{"core": true, "app": true, "infra": true, "ui": true, "arch": true}
+	entries, err := os.ReadDir(filepath.Join(scanned.root, "internal"))
+	if err != nil {
+		t.Fatalf("ReadDir(internal) = %v, want nil", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if allowed[name] || strings.HasPrefix(name, ".") {
+			continue
+		}
+		t.Errorf("internal/%s is outside the layer directories (move it under internal/core|app|infra|ui/)", name)
 	}
 }
 

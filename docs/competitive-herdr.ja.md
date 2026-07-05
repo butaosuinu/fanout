@@ -1,6 +1,6 @@
 # herdr 競合分析 — agent multiplexer との棲み分けと取り込み
 
-ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
+ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
 ## herdr とは
 
@@ -54,7 +54,7 @@ herdr が上位互換な 3 点を、tmux の上のレイヤーという形のま
 - hook 信号は lifecycle 全体を覆う authority ではなく、表示・nudge・wait 向けの近似テレメトリと位置づける(herdr も Claude Code / Codex は session identity 統合で、状態検出には画面検出を併用している)。取りこぼしは `Stop` → idle と `--timeout` で回収し、状態値を正確性のクリティカルパスに置かない
 - herdr の「user 設定に hooks を書き込む」インストール方式(`integration install`)は採らない。起動時注入なら fanout が起動したペインにだけ効き、ユーザーの他セッションを汚さない
 
-波及先は `internal/sessionview` の `normalizeAgentState`(許可リスト拡張)、`cmd/fanout/msg.go` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
+波及先は `internal/app/sessionview` の `normalizeAgentState`(許可リスト拡張)、`cmd/fanout/msg.go` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
 
 ### B. `fanout wait` — 待機プリミティブ(規模 M、A に依存)
 

@@ -1,6 +1,6 @@
-/* ワイヤ契約 — Go 側の JSON タグと 1:1 対応(正は internal/sessionview/model.go、
+/* ワイヤ契約 — Go 側の JSON タグと 1:1 対応(正は internal/app/sessionview/model.go、
  * internal/infra/ghissue/ghissue.go、internal/core/blockers/blockers.go、
- * internal/dashboard/peek.go)。タグの綴りに注意: paneId(paneID ではない)、
+ * internal/ui/dashboard/peek.go)。タグの綴りに注意: paneId(paneID ではない)、
  * hasMergedPr(Pr が小文字)、PRRef の ci(ciStatus ではない)。Go の nil slice
  * は null で届くので sessions / panes / prs は null 許容(blockers のみ常に []
  * が保証されている)。omitempty のフィールドは optional。 */
@@ -135,7 +135,7 @@ export interface PeekResponse {
   output: string;
 }
 
-/* 正は internal/dashboard/plan.go の planResponse。found:false は「plan-mode
+/* 正は internal/ui/dashboard/plan.go の planResponse。found:false は「plan-mode
  * ペインだが取得可能な出力に完全な plan ブロックが無い」を表す正常応答(200)。 */
 export interface PlanResponse {
   paneId: string;

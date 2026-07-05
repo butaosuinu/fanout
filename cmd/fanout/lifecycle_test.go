@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/lifecycle"
 )
 
 func TestCmdCloseRemovesWorktreeKillsPaneAndState(t *testing.T) {

@@ -298,7 +298,7 @@ golden を更新するだけの 1 PR。**新トグルは作らず既存 prVisual
 欠落表示。
 
 **実現性検証より** — 第 1 形態は `prVisualizationSectionTemplate`
-(internal/briefing/briefing.go)への追記のみで完全に成立。第 2 形態の必須
+(internal/app/briefing/briefing.go)への追記のみで完全に成立。第 2 形態の必須
 修正: (1) state.json は baseBranch を記録していないため、**台本 JSON 自体に
 base/head SHA を必須フィールドで持たせる**(rebase ズレ検出も機械検証に乗る)。
 (2) 台本の正本は PR 本文 `<details>` 内のフェンス付き JSON とし、ローカルは

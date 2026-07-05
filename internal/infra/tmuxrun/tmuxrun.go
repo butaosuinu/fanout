@@ -53,7 +53,7 @@ const (
 	// PAPER BREEZE palette: 浅葱 (asagi) for the active border, in place of tmux's
 	// default green, and 藍 (ai) for inactive borders. These are the site/light
 	// values from the palette (site/assets/css/main.css; keep in sync with the
-	// internal/tui AdaptiveColor and internal/infra/log 256-color copies). Like
+	// internal/ui/tui AdaptiveColor and internal/infra/log 256-color copies). Like
 	// internal/infra/log, tmux cannot query the terminal background, so it cannot pick
 	// the AdaptiveColor dark variants the TUI uses; 浅葱 reads on both backgrounds
 	// and the 藍 inactive border is intentionally subtle. Truecolor hex; tmux

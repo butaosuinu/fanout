@@ -9,7 +9,7 @@ code in this repository.
 (`web/`, React + Vite + TypeScript, pnpm). `make install` builds it and places
 it at `$(BINDIR)/fanout`. `make build-go` produces the local `./fanout-go`
 binary the tests exercise; it depends on `make build-web`, which bundles
-`web/` into `internal/dashboard/static/` for `go:embed` — the bundle is never
+`web/` into `internal/ui/dashboard/static/` for `go:embed` — the bundle is never
 committed (only `static/.gitkeep` is tracked; `//go:embed all:static` keeps a
 bundle-less checkout compiling without Node, serving a fallback page). `make
 test` runs the Go unit tests, the web UI vitest suite (`make test-web`), and
@@ -99,8 +99,8 @@ Build the binary with `make build-go` and validate with `make test`.
   skill on the raw prompt (`launchPlanPromptFromTUI`; `/fanout plan` for
   `claude`, `$fanout-plan` for `codex`, never Codex Plan Mode) so `fanout
   plan`'s git root stays at the repo, not a worktree (`cmd/fanout/tui_issue.go`,
-  `cmd/fanout/tui_launch.go`, `internal/tui/newpane_picker.go`,
-  `internal/tui/newpane_assign.go`).
+  `cmd/fanout/tui_launch.go`, `internal/ui/tui/newpane_picker.go`,
+  `internal/ui/tui/newpane_assign.go`).
 - `internal/infra/runtime` resolves the git repository root and the tmux target.
   Batch pane-creation mode must be invoked from inside tmux. By default fanout
   targets the invoking pane; `--session` targets a named tmux session.
@@ -110,14 +110,14 @@ Build the binary with `make build-go` and validate with `make test`.
   `split-window -d -h -P -F '#{pane_id}'`, pane titles, tiled layout, agent
   command send, best-effort pane kill during cleanup, `ListPaneIDs` (liveness
   for the dashboard), and `BindDashboardKey`.
-- `internal/sessionview` is the shared read-only data layer: it aggregates
+- `internal/app/sessionview` is the shared read-only data layer: it aggregates
   `.fanout/state.json` + tmux liveness + GitHub PR state into a `Snapshot`
   grouped by parent ("Session"); pane rows carry wave/blockers, CI status, the
   tmux pane title, and the original prompt. IO is injected via `Collectors`
   (the `LivePanes` collector returns each live pane's current path and title)
   so it is pure and unit-testable; both the web dashboard (now) and a future
   TUI consume the same `Build`.
-- `internal/dashboard` is the localhost web server: `server.go` (GET-only mux,
+- `internal/ui/dashboard` is the localhost web server: `server.go` (GET-only mux,
   token middleware, SSE, `Cache-Control: no-store` static serving with a
   fallback page when the bundle is absent), `poller.go` (two-tier state/tmux +
   throttled gh refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
@@ -171,15 +171,15 @@ Build the binary with `make build-go` and validate with `make test`.
   merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
   set by the launch wrapper in `internal/infra/tmuxrun`) idle-nudge accelerator is a
   separate, still-unmerged issue (#72) — do not assume an idle gate exists.
-- `internal/watch` owns one repository watcher cycle. It is pure at the package
+- `internal/app/watch` owns one repository watcher cycle. It is pure at the package
   boundary: production wires GitHub labels, `.fanout/state.json`, tmux liveness,
   and launch helpers through `watch.IO`, while unit tests inject fakes. The
   engine lists `watcherTriggerLabel` issues, swaps them to
   `watcherRunningLabel` before launch, classifies issues with OPEN children as
   parent fan-outs and issues without OPEN children as standalone panes, applies
   the live-pane budget/backoff, and leaves lifecycle label cleanup to
-  `internal/lifecycle`.
-- `internal/infra/ghissue`, `internal/core/blockers`, `internal/briefing`,
+  `internal/app/lifecycle`.
+- `internal/infra/ghissue`, `internal/core/blockers`, `internal/app/briefing`,
   `internal/infra/settings`, `internal/infra/displayname`, `internal/infra/atomicfs`,
   `internal/infra/log`, `internal/infra/tty`, and `internal/core/exitcode` hold the remaining
   reusable pieces. Plan status and blocked-task completion use
@@ -216,7 +216,7 @@ Build the binary with `make build-go` and validate with `make test`.
   tokened URL never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI
   decision to dashboard #117, which this implements standalone (no TUI
-  dependency — the future TUI just reuses `internal/sessionview`). Keep it
+  dependency — the future TUI just reuses `internal/app/sessionview`). Keep it
   read-only: do not add mutation endpoints.
 - The label watcher is a TUI-resident, opt-in launcher, not a cron/webhook
   service and not the #107 skill loop. Only user config or environment

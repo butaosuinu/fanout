@@ -20,7 +20,7 @@ GOCACHE    ?= $(CURDIR)/.cache/go-build
 
 PNPM       ?= pnpm
 WEB_DIR    := web
-STATIC_DIR := internal/dashboard/static
+STATIC_DIR := internal/ui/dashboard/static
 
 # .golangci-lint-version is the single source for the pinned golangci-lint
 # version; CI (golangci-lint-action in .github/workflows/test.yml) reads the

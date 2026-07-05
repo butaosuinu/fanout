@@ -8,11 +8,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/lifecycle"
-	"github.com/butaosuinu/fanout/internal/sessionview"
 )
 
 type lifecycleAction string

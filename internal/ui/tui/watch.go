@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/butaosuinu/fanout/internal/watch"
+	"github.com/butaosuinu/fanout/internal/app/watch"
 )
 
 // WatcherRunner runs one watcher cycle.
