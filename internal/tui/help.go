@@ -60,7 +60,7 @@ func (m *model) openHelpPopupCmd() tea.Cmd {
 func (m model) helpView() string {
 	monitor := []helpEntry{
 		{"n", "New agent pane"},
-		{"a", "Attach to worktree"},
+		{"a", "Attach agent to worktree"},
 		{"A", "Worktree terminal"},
 		{"t", "Project root terminal"},
 		{"j/k", "Move selection"},
@@ -87,12 +87,13 @@ func (m model) helpView() string {
 		{"Esc", "Cancel / back"},
 	}
 	columnWidth := m.helpColumnWidth()
-	// No blank line above the close hint: with the v entry the monitor column
-	// is 16 rows, and the in-TUI modal fallback must stay within a standard
-	// 24-row terminal (content 20 + border/padding 4).
-	lines := make([]string, 0, 5)
+	// No blank lines around the columns: with the v entry the monitor column
+	// is 18 rows (16 entries + title + one wrapped description), and the
+	// in-TUI modal fallback must stay within a standard 24-row terminal
+	// (content 20 + border/padding 4).
+	lines := make([]string, 0, 4)
 	if !m.helpOnly {
-		lines = append(lines, titleStyle.Render("Keyboard shortcuts"), "")
+		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
 	lines = append(lines,
 		lipgloss.JoinHorizontal(
