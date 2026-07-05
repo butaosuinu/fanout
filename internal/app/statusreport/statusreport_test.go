@@ -1,9 +1,13 @@
-package main
+package statusreport
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+)
 
 func TestBuildDashboardBody(t *testing.T) {
-	got := buildDashboardBody(200, statusSummary{
+	got := buildDashboardBody(200, Summary{
 		Total:     2,
 		Merged:    1,
 		Pending:   1,
@@ -46,7 +50,7 @@ Total: 2 | Merged: 1 | Pending: 1 | Blocked: 0 | All merged: false
 }
 
 func TestNewStatusReportCountsBlockedChildren(t *testing.T) {
-	report := newStatusReport(200, []statusChild{
+	report := NewReport(200, []Child{
 		{Num: 201, HasMergedPR: true},
 		{Num: 202, Blocked: true},
 		{Num: 203},
@@ -93,6 +97,93 @@ func TestExtractDashboardPRBody(t *testing.T) {
 			gotTLDR, gotScore := extractDashboardPRBody(tc.body)
 			if gotTLDR != tc.wantTLDR || gotScore != tc.wantScore {
 				t.Fatalf("extractDashboardPRBody() = (%q, %q), want (%q, %q)", gotTLDR, gotScore, tc.wantTLDR, tc.wantScore)
+			}
+		})
+	}
+}
+
+func TestSummarize(t *testing.T) {
+	tests := []struct {
+		name    string
+		merged  []bool // one item per entry; true = merged
+		blocked []bool
+		want    Summary
+	}{
+		{
+			name:    "empty input is never all merged",
+			merged:  nil,
+			blocked: nil,
+			want:    Summary{},
+		},
+		{
+			name:    "mixed items count pending as non-merged",
+			merged:  []bool{true, false, false},
+			blocked: []bool{false, true, false},
+			want:    Summary{Total: 3, Merged: 1, Pending: 2, Blocked: 1},
+		},
+		{
+			name:    "all merged flips the flag",
+			merged:  []bool{true, true},
+			blocked: []bool{false, false},
+			want:    Summary{Total: 2, Merged: 2, Pending: 0, Blocked: 0, AllMerged: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items := make([]int, len(tt.merged))
+			for i := range items {
+				items[i] = i
+			}
+			got := Summarize(items,
+				func(i int) bool { return tt.merged[i] },
+				func(i int) bool { return tt.blocked[i] })
+			if got != tt.want {
+				t.Fatalf("Summarize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlanTaskStatusBlocked(t *testing.T) {
+	// planTaskStatusBlocked treats a merged task as never blocked and an
+	// unmerged dependency as blocking.
+	tests := []struct {
+		name      string
+		taskID    string
+		blockedBy []string
+		merged    map[string]bool
+		want      bool
+	}{
+		{
+			name:   "merged task is never blocked",
+			taskID: "a", blockedBy: []string{"b"},
+			merged: map[string]bool{"a": true},
+			want:   false,
+		},
+		{
+			name:   "unmerged dependency blocks",
+			taskID: "a", blockedBy: []string{"b"},
+			merged: map[string]bool{"a": false, "b": false},
+			want:   true,
+		},
+		{
+			name:   "all dependencies merged unblocks",
+			taskID: "a", blockedBy: []string{"b"},
+			merged: map[string]bool{"a": false, "b": true},
+			want:   false,
+		},
+		{
+			name:   "no dependencies never blocks",
+			taskID: "a",
+			merged: map[string]bool{"a": false},
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := planspec.Task{ID: tt.taskID, BlockedBy: tt.blockedBy}
+			if got := planTaskStatusBlocked(task, tt.merged); got != tt.want {
+				t.Fatalf("planTaskStatusBlocked(%s, %v) = %t, want %t", tt.taskID, tt.merged, got, tt.want)
 			}
 		})
 	}

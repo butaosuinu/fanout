@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/cliview"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/msgstore"
@@ -862,18 +863,18 @@ func writeMsgPeersTable(peers []msgstore.Peer, lg *log.Logger) {
 	for _, p := range peers {
 		rows = append(rows, []string{
 			peerDisplayLabel(p),
-			dashIfEmpty(p.Slug),
-			dashIfEmpty(p.Agent),
-			dashIfEmpty(p.DisplayName),
-			dashIfEmpty(p.PaneID),
-			dashIfEmpty(p.LastSeen),
+			cliview.DashIfEmpty(p.Slug),
+			cliview.DashIfEmpty(p.Agent),
+			cliview.DashIfEmpty(p.DisplayName),
+			cliview.DashIfEmpty(p.PaneID),
+			cliview.DashIfEmpty(p.LastSeen),
 		})
 	}
 	writeMsgTable(out, headers, rows, make([]bool, len(peers)), lg.Colors())
 }
 
 // writeMsgTable renders the shared header/separator/rows layout via the
-// status table primitives. dims[i] dims row i (read messages in --all views).
+// cliview table primitives. dims[i] dims row i (read messages in --all views).
 func writeMsgTable(out io.Writer, headers []string, rows [][]string, dims []bool, colors log.Palette) {
 	widths := make([]int, len(headers))
 	for i, h := range headers {
@@ -884,16 +885,16 @@ func writeMsgTable(out io.Writer, headers []string, rows [][]string, dims []bool
 			widths[i] = max(widths[i], len(col))
 		}
 	}
-	fmt.Fprintln(out, statusTableLine(headers, widths))
+	fmt.Fprintln(out, cliview.TableLine(headers, widths))
 	separators := make([]string, len(headers))
 	for i := range headers {
 		separators[i] = strings.Repeat("-", widths[i])
 	}
-	fmt.Fprintln(out, statusTableLine(separators, widths))
+	fmt.Fprintln(out, cliview.TableLine(separators, widths))
 	for i, row := range rows {
-		line := statusTableLine(row, widths)
+		line := cliview.TableLine(row, widths)
 		if dims[i] {
-			line = colorWrap(colors.Dim, colors.Reset, line)
+			line = cliview.ColorWrap(colors.Dim, colors.Reset, line)
 		}
 		fmt.Fprintln(out, line)
 	}
