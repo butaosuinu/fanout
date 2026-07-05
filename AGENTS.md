@@ -130,8 +130,14 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   prefix is a fallback) and the peer roster; `internal/msgstore` is the
   send/post/inbox/board/mark-read query layer. The briefing coordination
   section is shared by `claude` and `codex` panes — distinct from Claude-only
-  Agent Teams. Messaging is pull-based; there is no idle nudge in the merged
-  code (that is the separate, unmerged #72).
+  Agent Teams. Messaging is pull-based with one push assist: `fanout msg`
+  nudges gate on `@fanout_agent_state` (today only `running` qualifies). That
+  option carries the 6-value contract running/working/plan/blocked/idle/done:
+  the launch wrapper writes running/done, launch-injected Claude hooks refine
+  claude panes to working/blocked/idle, and the Codex Plan Mode controller
+  reports working/plan around the fanout-driven initial turn. When widening
+  the nudge gate, never include blocked — the nudge's Enter could activate a
+  focused permission dialog.
 
 ## Be Careful
 
