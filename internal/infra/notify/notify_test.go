@@ -105,6 +105,40 @@ func TestNotifierRequiresOptInURLs(t *testing.T) {
 	}
 }
 
+func TestAgentEventMessagesUseNonIssueLabels(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Event
+		want  string
+	}{
+		{
+			name:  "plan task",
+			event: Event{Kind: EventAgentPlan, Parent: "plan:alpha", TaskID: "api-client", Title: "API client"},
+			want:  "fanout: task api-client API client plan ready (parent plan:alpha)",
+		},
+		{
+			name:  "manual pane",
+			event: Event{Kind: EventAgentBlocked, Parent: "@manual", IssueNum: -1, Title: "Draft release note", PaneID: "%7"},
+			want:  "fanout: Draft release note waiting for input (parent @manual)",
+		},
+		{
+			name:  "source fallback",
+			event: Event{Kind: EventAgentDone, Parent: "@manual", SourceKey: "abcd1234"},
+			want:  "fanout: source abcd1234 work complete (parent @manual)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.event.Message(); got != tt.want {
+				t.Fatalf("Message() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(tt.event.Message(), "#0") {
+				t.Fatalf("Message() = %q, must not contain issue-only #0 label", tt.event.Message())
+			}
+		})
+	}
+}
+
 type recordingRoundTripper struct {
 	requests []recordedRequest
 }

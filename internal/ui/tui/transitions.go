@@ -27,6 +27,10 @@ type issueTransitionSnapshot struct {
 	Blockers  string
 }
 
+type agentTransitionSnapshot struct {
+	State string
+}
+
 type transitionNotifiedMsg struct {
 	count int
 	err   error
@@ -71,10 +75,51 @@ func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, curre
 	return events
 }
 
+func detectAgentTransitions(previous map[string]agentTransitionSnapshot, current []paneView) []fanoutnotify.Event {
+	if len(previous) == 0 || len(current) == 0 {
+		return nil
+	}
+	events := []fanoutnotify.Event{}
+	for _, pane := range sortedAgentTransitionPanes(current) {
+		key, next, ok := agentTransitionSnapshotForPane(pane)
+		if !ok {
+			continue
+		}
+		prev, ok := previous[key]
+		if !ok {
+			continue
+		}
+		kind, ok := agentTransitionKind(prev.State, next.State)
+		if !ok {
+			continue
+		}
+		events = append(events, agentTransitionEvent(kind, pane, next.State))
+	}
+	return events
+}
+
 func issueTransitionSnapshots(statuses map[issueKey]issueStatus) map[issueKey]issueTransitionSnapshot {
 	out := make(map[issueKey]issueTransitionSnapshot, len(statuses))
 	for key, status := range statuses {
 		out[key] = transitionSnapshot(status)
+	}
+	return out
+}
+
+func mergeAgentTransitionSnapshots(previous map[string]agentTransitionSnapshot, panes []paneView) map[string]agentTransitionSnapshot {
+	out := make(map[string]agentTransitionSnapshot, len(panes))
+	for _, pane := range panes {
+		key := agentTransitionKey(pane)
+		if key == "" {
+			continue
+		}
+		if _, snapshot, ok := agentTransitionSnapshotForPane(pane); ok {
+			out[key] = snapshot
+			continue
+		}
+		if prev, ok := previous[key]; ok {
+			out[key] = prev
+		}
 	}
 	return out
 }
@@ -178,6 +223,91 @@ func transitionEvent(kind fanoutnotify.EventKind, key issueKey, snapshot issueTr
 		PRNumber: snapshot.PRNumber,
 		CIStatus: snapshot.CIStatus,
 		Blockers: snapshot.Blockers,
+	}
+}
+
+func agentTransitionSnapshotForPane(pane paneView) (string, agentTransitionSnapshot, bool) {
+	if pane.TmuxState != "live" {
+		return "", agentTransitionSnapshot{}, false
+	}
+	state := strings.ToLower(strings.TrimSpace(pane.AgentState))
+	if !trackedAgentState(state) {
+		return "", agentTransitionSnapshot{}, false
+	}
+	key := agentTransitionKey(pane)
+	if key == "" {
+		return "", agentTransitionSnapshot{}, false
+	}
+	return key, agentTransitionSnapshot{State: state}, true
+}
+
+func trackedAgentState(state string) bool {
+	switch state {
+	case "running", "working", "idle", "plan", "blocked", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func agentTransitionKind(previous, current string) (fanoutnotify.EventKind, bool) {
+	if previous == current {
+		return "", false
+	}
+	switch current {
+	case "plan":
+		return fanoutnotify.EventAgentPlan, activeAgentState(previous)
+	case "blocked":
+		return fanoutnotify.EventAgentBlocked, trackedAgentState(previous)
+	case "done":
+		return fanoutnotify.EventAgentDone, trackedAgentState(previous) && previous != "done"
+	default:
+		return "", false
+	}
+}
+
+func activeAgentState(state string) bool {
+	return state == "running" || state == "working"
+}
+
+func agentTransitionEvent(kind fanoutnotify.EventKind, pane paneView, state string) fanoutnotify.Event {
+	return fanoutnotify.Event{
+		Kind:       kind,
+		Parent:     normalizedParent(pane.Parent),
+		IssueNum:   max(pane.IssueNum, 0),
+		TaskID:     firstNonEmpty(pane.TaskID, pane.SourceTaskID),
+		Title:      firstNonEmpty(pane.Name, pane.Derived.Name, pane.TmuxTitle),
+		PaneID:     pane.PaneID,
+		SourceKey:  pane.SourceKey,
+		AgentState: state,
+	}
+}
+
+func sortedAgentTransitionPanes(panes []paneView) []paneView {
+	out := slices.Clone(panes)
+	slices.SortFunc(out, func(a, b paneView) int {
+		return cmp.Compare(agentTransitionKey(a), agentTransitionKey(b))
+	})
+	return out
+}
+
+func agentTransitionKey(pane paneView) string {
+	key := keyForPaneView(pane)
+	switch {
+	case key.Num > 0:
+		return fmt.Sprintf("issue:%s:%d", key.Parent, key.Num)
+	case key.TaskID != "":
+		return fmt.Sprintf("task:%s:%s:%s", key.Parent, key.Source, key.TaskID)
+	case strings.TrimSpace(pane.PaneID) != "":
+		return "pane:" + strings.TrimSpace(pane.PaneID)
+	case strings.TrimSpace(pane.ShellKey) != "":
+		return fmt.Sprintf("shell:%s:%s:%s", key.Parent, key.Source, strings.TrimSpace(pane.ShellKey))
+	case strings.TrimSpace(pane.SourceKey) != "":
+		return fmt.Sprintf("source:%s:%d:%s", key.Parent, key.Num, strings.TrimSpace(pane.SourceKey))
+	case key.Parent != "" || key.Num != 0:
+		return fmt.Sprintf("row:%s:%d:%s", key.Parent, key.Num, strings.TrimSpace(pane.Name))
+	default:
+		return ""
 	}
 }
 

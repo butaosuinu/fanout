@@ -24,6 +24,7 @@ type paneView struct {
 	SourceParent   string
 	SourceIssueNum int
 	SourceTaskID   string
+	SourceKey      string
 	TmuxState      string
 	TmuxTitle      string
 	AgentState     string

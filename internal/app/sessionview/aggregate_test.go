@@ -664,7 +664,7 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 }
 
 // TestNormalizeAgentState pins normalizeAgentState to the lowercase literals the
-// launch wrapper sets ("running"/"done"); every other input collapses to "".
+// dashboard/TUI accept from @fanout_agent_state; every other input collapses to "".
 func TestNormalizeAgentState(t *testing.T) {
 	tests := []struct {
 		name string
@@ -673,6 +673,10 @@ func TestNormalizeAgentState(t *testing.T) {
 	}{
 		{name: "empty stays empty", in: "", want: ""},
 		{name: "running passes through", in: "running", want: "running"},
+		{name: "working passes through", in: "working", want: "working"},
+		{name: "idle passes through", in: "idle", want: "idle"},
+		{name: "plan passes through", in: "plan", want: "plan"},
+		{name: "blocked passes through", in: "blocked", want: "blocked"},
 		{name: "done passes through", in: "done", want: "done"},
 		{name: "surrounding whitespace is trimmed", in: " running ", want: "running"},
 		{name: "value from outside the wrapper is unknown", in: "claude", want: ""},
@@ -691,16 +695,18 @@ func TestNormalizeAgentState(t *testing.T) {
 }
 
 func TestBuildAgentStateFromLiveOption(t *testing.T) {
-	dead := pane("1", 6, "%5")
+	dead := pane("1", 8, "%5")
 	dead.AgentStatus = "running" // pane 死亡 + tmux 正常なら記録値は使われない
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), dead),
+		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), pane("1", 6, "%6"), pane("1", 7, "%7"), dead),
 		LivePanes: livePanesWith(map[string]LivePaneInfo{
 			"%1": {Path: "/wt/%1", AgentState: "running"},
 			"%2": {Path: "/wt/%2", AgentState: "done"},
 			"%3": {Path: "/wt/%3", AgentState: "forged junk"}, // 偽装/未知の値は不明へ
 			"%4": {Path: "/wt/%4"},                            // option 未設定の alive pane(旧版 fanout 起動など)
+			"%6": {Path: "/wt/%6", AgentState: "plan"},
+			"%7": {Path: "/wt/%7", AgentState: "blocked"},
 			// %5 は live set に居ない(pane 死亡)
 		}),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
@@ -708,7 +714,7 @@ func TestBuildAgentStateFromLiveOption(t *testing.T) {
 	}
 	snap := Build("o/n", "/root", c)
 	panes := snap.Sessions[0].Panes
-	wants := []string{"running", "done", "", "", ""}
+	wants := []string{"running", "done", "", "", "plan", "blocked", ""}
 	for i, want := range wants {
 		if panes[i].AgentState != want {
 			t.Fatalf("#%d AgentState = %q, want %q", panes[i].IssueNum, panes[i].AgentState, want)

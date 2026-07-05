@@ -546,20 +546,20 @@ func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 }
 
 // normalizeAgentState は tmux pane user option @fanout_agent_state の値を
-// PaneView.AgentState に正規化する。fanout の起動ラッパー
-// (tmuxrun.BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
-// "done" を設定する。それ以外の値(未設定 = 旧版 fanout やラッパー外で起動
-// した pane、あるいは pane 内プロセスが偽装した文字列)は ""(不明)に落とす。
+// PaneView.AgentState に正規化する。fanout の起動ラッパーは従来
+// "running" / "done" を設定するが、Plan Mode controller など状態を詳しく
+// 知る経路は同じ option に plan / blocked などを渡せる。それ以外の値
+// (未設定 = 旧版 fanout やラッパー外で起動した pane、あるいは pane 内
+// プロセスが偽装した文字列)は ""(不明)に落とす。
 // #{pane_current_command} ヒューリスティックは使えない: 非対話 sh -lc
 // ラッパー経由の agent はラッパーと同一プロセスグループで動き、tmux は agent
 // 実行中もラッパーシェル名を報告するため、fanout 起動 pane では常に「done」
 // 誤判定になる。
 func normalizeAgentState(raw string) string {
-	switch strings.TrimSpace(raw) {
-	case "running":
-		return "running"
-	case "done":
-		return "done"
+	state := strings.TrimSpace(raw)
+	switch state {
+	case "running", "working", "idle", "plan", "blocked", "done":
+		return state
 	default:
 		return ""
 	}

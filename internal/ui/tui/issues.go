@@ -431,6 +431,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				SourceParent:       pv.SourceParent,
 				SourceIssueNum:     pv.SourceIssueNum,
 				SourceTaskID:       pv.SourceTaskID,
+				SourceKey:          pv.SourceKey,
 				TmuxState:          pv.TmuxState,
 				TmuxTitle:          pv.TmuxTitle,
 				AgentState:         pv.AgentState,
