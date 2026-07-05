@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/statusreport"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
@@ -696,20 +696,6 @@ func planParentRef(slug string) string {
 	return "plan:" + slug
 }
 
-type planStatusReport struct {
-	Plan    planspec.Plan    `json:"plan"`
-	Tasks   []planStatusTask `json:"tasks"`
-	Summary statusSummary    `json:"summary"`
-}
-
-type planStatusTask struct {
-	ID          string          `json:"id"`
-	Branch      string          `json:"branch"`
-	PRs         []ghissue.PRRef `json:"prs"`
-	HasMergedPR bool            `json:"has_merged_pr"`
-	Blocked     bool            `json:"blocked"`
-}
-
 func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	mode := planActionModeFlag(cfg)
 	rt, code := resolveStateRuntimeForMode(mode, lg)
@@ -796,45 +782,17 @@ func cmdPlanStatus(cfg planCommandConfig, spec planspec.Spec, projectRoot, state
 		lg.Err("--status: fanout state at %s is not valid JSON or has an invalid schema: %v", statePath, err)
 		return exitcode.Invocation
 	}
-	report, code := buildPlanStatusReport(cfg, spec, projectRoot, store, lg)
+	parentRef := planParentRef(spec.Plan.Slug)
+	report, code := statusreport.BuildPlanReport(spec, projectRoot, func(task planspec.Task) string {
+		return planStatusBranch(cfg, spec, store, parentRef, task)
+	}, lg)
 	if code != exitcode.OK {
 		return code
 	}
 	if cfg.Format == "table" {
-		return writePlanStatusTable(report, projectRoot, lg)
+		return statusreport.WritePlanTable(report, projectRoot, lg)
 	}
-	return writePlanStatusReport(report, lg)
-}
-
-func buildPlanStatusReport(cfg planCommandConfig, spec planspec.Spec, projectRoot string, store state.Store, lg *log.Logger) (planStatusReport, exitcode.Code) {
-	parentRef := planParentRef(spec.Plan.Slug)
-	gh := ghissue.Runner{Cwd: projectRoot}
-	tasks := make([]planStatusTask, 0, len(spec.Tasks))
-	mergedByID := map[string]bool{}
-	for _, task := range spec.Tasks {
-		branch := planStatusBranch(cfg, spec, store, parentRef, task)
-		prs, err := gh.PRsForBranch(branch)
-		if err != nil {
-			lg.Err("--status: gh pr list --head %s failed for task %s: %v", branch, task.ID, err)
-			return planStatusReport{}, exitcode.GitHub
-		}
-		row := planStatusTask{
-			ID:          task.ID,
-			Branch:      branch,
-			PRs:         prs,
-			HasMergedPR: planHasMergedPR(prs),
-		}
-		mergedByID[task.ID] = row.HasMergedPR
-		tasks = append(tasks, row)
-	}
-	for i, task := range spec.Tasks {
-		tasks[i].Blocked = planTaskStatusBlocked(task, mergedByID)
-	}
-	return planStatusReport{
-		Plan:    spec.Plan,
-		Tasks:   tasks,
-		Summary: newPlanStatusSummary(tasks),
-	}, exitcode.OK
+	return statusreport.WritePlanReport(report, lg)
 }
 
 func planStatusBranch(cfg planCommandConfig, spec planspec.Spec, store state.Store, parent string, task planspec.Task) string {
@@ -858,194 +816,6 @@ func planTaskBranch(cfg planCommandConfig, spec planspec.Spec, task planspec.Tas
 		return task.Branch
 	}
 	return naming.BranchName("", cfg.BranchPrefix, planTaskSlug(spec.Plan.Slug, task))
-}
-
-func planTaskStatusBlocked(task planspec.Task, mergedByID map[string]bool) bool {
-	if mergedByID[task.ID] {
-		return false
-	}
-	for _, depID := range task.BlockedBy {
-		if !mergedByID[depID] {
-			return true
-		}
-	}
-	return false
-}
-
-func newPlanStatusSummary(tasks []planStatusTask) statusSummary {
-	merged := 0
-	blocked := 0
-	for _, task := range tasks {
-		if task.HasMergedPR {
-			merged++
-		}
-		if task.Blocked {
-			blocked++
-		}
-	}
-	return statusSummary{
-		Total:     len(tasks),
-		Merged:    merged,
-		Pending:   len(tasks) - merged,
-		Blocked:   blocked,
-		AllMerged: len(tasks) > 0 && merged == len(tasks),
-	}
-}
-
-func writePlanStatusReport(report planStatusReport, lg *log.Logger) exitcode.Code {
-	out, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		lg.Err("--status: failed to encode plan report: %v", err)
-		return exitcode.GitHub
-	}
-	fmt.Fprintln(lg.Stdout(), string(out))
-	return exitcode.OK
-}
-
-func writePlanStatusTable(report planStatusReport, projectRoot string, lg *log.Logger) exitcode.Code {
-	rows, maxLines, addWidth, delWidth, code := planStatusTableRows(report, projectRoot, lg)
-	if code != exitcode.OK {
-		return code
-	}
-
-	out := lg.Stdout()
-	fmt.Fprintf(out, "fanout plan status %s: total=%d merged=%d pending=%d blocked=%d all_merged=%t\n",
-		report.Plan.Slug, report.Summary.Total, report.Summary.Merged, report.Summary.Pending, report.Summary.Blocked, report.Summary.AllMerged)
-	if len(rows) == 0 {
-		fmt.Fprintln(out, "(no plan tasks)")
-		return exitcode.OK
-	}
-
-	diffWidth := statusDiffWidth(addWidth, delWidth)
-	widths := []int{
-		len("TASK"),
-		len("STATE"),
-		len("PR"),
-		len("PR_STATE"),
-		len("CI"),
-		len("TYPE"),
-		len("FILES"),
-		diffWidth,
-		len("LINK"),
-	}
-	for _, row := range rows {
-		widths[0] = max(widths[0], len(row.Issue))
-		widths[1] = max(widths[1], len(row.IssueState))
-		widths[2] = max(widths[2], len(row.PR))
-		widths[3] = max(widths[3], len(row.PRState))
-		widths[4] = max(widths[4], len(row.CI))
-		widths[5] = max(widths[5], len(row.Type))
-		widths[6] = max(widths[6], len(row.Files))
-	}
-
-	headers := []string{"TASK", "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
-	fmt.Fprintln(out, statusTableLine(headers, widths))
-	separators := []string{
-		strings.Repeat("-", widths[0]),
-		strings.Repeat("-", widths[1]),
-		strings.Repeat("-", widths[2]),
-		strings.Repeat("-", widths[3]),
-		strings.Repeat("-", widths[4]),
-		strings.Repeat("-", widths[5]),
-		strings.Repeat("-", widths[6]),
-		strings.Repeat("-", diffWidth),
-		strings.Repeat("-", widths[8]),
-	}
-	fmt.Fprintln(out, statusTableLine(separators, widths))
-
-	colors := lg.Colors()
-	for _, row := range rows {
-		cols := []string{
-			row.Issue,
-			row.IssueState,
-			row.PR,
-			row.PRState,
-			row.CI,
-			row.Type,
-			row.Files,
-			renderStatusDiff(row, maxLines, addWidth, delWidth, diffWidth, colors),
-			row.Link,
-		}
-		fmt.Fprintln(out, statusTableLine(cols, widths))
-	}
-	return exitcode.OK
-}
-
-func planStatusTableRows(report planStatusReport, projectRoot string, lg *log.Logger) ([]statusTableRow, int, int, int, exitcode.Code) {
-	if len(report.Tasks) == 0 {
-		return nil, 0, len("+0"), len("-0"), exitcode.OK
-	}
-
-	gh := ghissue.Runner{Cwd: projectRoot}
-	nwo, err := gh.RepoNameWithOwner()
-	if err != nil {
-		lg.Err("--status: failed to resolve repo (gh repo view) in %s", projectRoot)
-		return nil, 0, 0, 0, exitcode.GitHub
-	}
-
-	rows := make([]statusTableRow, 0, len(report.Tasks))
-	maxLines := 0
-	addWidth := len("+0")
-	delWidth := len("-0")
-	for _, task := range report.Tasks {
-		if len(task.PRs) == 0 {
-			rows = append(rows, statusTableRow{
-				Issue:      task.ID,
-				IssueState: planStatusState(task),
-				PR:         "-",
-				PRState:    "-",
-				CI:         "-",
-				Type:       "-",
-				Files:      "-",
-				Link:       "-",
-			})
-			continue
-		}
-		for _, pr := range task.PRs {
-			stat, err := gh.PRDiffStat(pr.Number)
-			if err != nil {
-				lg.Err("--status: gh pr view #%d failed: %v", pr.Number, err)
-				return nil, 0, 0, 0, exitcode.GitHub
-			}
-			addWidth = max(addWidth, len(fmt.Sprintf("+%d", stat.Additions)))
-			delWidth = max(delWidth, len(fmt.Sprintf("-%d", stat.Deletions)))
-			maxLines = max(maxLines, stat.Additions)
-			maxLines = max(maxLines, stat.Deletions)
-			rows = append(rows, statusTableRow{
-				Issue:      task.ID,
-				IssueState: planStatusState(task),
-				PR:         "#" + strconv.Itoa(pr.Number),
-				PRState:    dashIfEmpty(pr.DisplayState()),
-				CI:         dashIfEmpty(pr.CIStatus),
-				Type:       conventionalType(stat.Title),
-				Files:      strconv.Itoa(stat.ChangedFiles),
-				Link:       fmt.Sprintf("https://github.com/%s/pull/%d", nwo, pr.Number),
-				Additions:  stat.Additions,
-				Deletions:  stat.Deletions,
-				HasDiff:    true,
-			})
-		}
-	}
-	return rows, maxLines, addWidth, delWidth, exitcode.OK
-}
-
-func planStatusState(task planStatusTask) string {
-	if task.HasMergedPR {
-		return "merged"
-	}
-	if task.Blocked {
-		return "blocked"
-	}
-	return "pending"
-}
-
-func planHasMergedPR(prs []ghissue.PRRef) bool {
-	for _, pr := range prs {
-		if strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil {
-			return true
-		}
-	}
-	return false
 }
 
 func planTaskSlug(planSlug string, task planspec.Task) string {
