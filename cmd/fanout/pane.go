@@ -1,11 +1,8 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/displayname"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -30,15 +28,12 @@ const (
 	manualPaneParentRef        = "@manual"
 	watchPaneParentRef         = "@watch"
 	codexPlanTUIStartupTimeout = 30 * time.Second
-	codexPlanTUIStartupPoll    = 200 * time.Millisecond
 )
 
 // baseRefreshSkippedNotice prefixes the warning logged when a best-effort base
 // refresh is tolerated. launchManualPaneFromTUI scrapes it from buffered launch
 // output so the TUI can surface the skip in its success notice.
 const baseRefreshSkippedNotice = "base branch refresh skipped"
-
-var errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex Plan TUI startup")
 
 type paneRequest struct {
 	ParentRef           string
@@ -187,10 +182,10 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
-	var codexPlanStatus codexPlanTUIStatus
+	var codexPlanStatus codexapp.Status
 	if req.CodexPlanMode {
 		var planErr error
-		codexPlanStatus, planErr = waitForCodexPlanTUIReadyStatus(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
+		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
 		if planErr != nil {
 			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			cleanupFailedLaunch(paneLogLabel(req), info.Target, paneID, prepared, lg)
@@ -224,7 +219,7 @@ func createPaneDetailed(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	return createdPane{req: req, paneID: paneID, prepared: prepared}, true
 }
 
-func statePane(req paneRequest, paneID, worktreePath string, now time.Time, codexPlanStatus codexPlanTUIStatus) state.Pane {
+func statePane(req paneRequest, paneID, worktreePath string, now time.Time, codexPlanStatus codexapp.Status) state.Pane {
 	return state.Pane{
 		Parent:         req.ParentRef,
 		IssueNum:       req.Number,
@@ -256,7 +251,7 @@ func buildAgentCommand(cfg *cliflags.Config, req paneRequest, commandName string
 			return "", fmt.Errorf("--codex-plan-mode requires --agent codex")
 		}
 		if cfg.DryRun {
-			return buildCodexPlanTUILaunchCommand(commandName, "codex", req.Prompt, req.CodexPlanStatusPath), nil
+			return codexapp.LaunchCommand(commandName, "codex", req.Prompt, req.CodexPlanStatusPath), nil
 		}
 		codexPath, err := agent.ResolveExecutable("codex")
 		if err != nil {
@@ -266,51 +261,12 @@ func buildAgentCommand(cfg *cliflags.Config, req paneRequest, commandName string
 		if err != nil {
 			return "", fmt.Errorf("resolve fanout executable: %w", err)
 		}
-		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath), nil
+		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + codexapp.LaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath), nil
 	}
 	if cfg.DryRun {
 		return agent.BuildCommand(req.Agent, req.Prompt)
 	}
 	return agent.BuildResolvedCommand(req.Agent, req.Prompt)
-}
-
-func buildCodexPlanTUILaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
-	if strings.TrimSpace(fanoutPath) == "" {
-		fanoutPath = "fanout"
-	}
-	args := []string{
-		fanoutPath,
-		"__codex-plan-tui",
-		"--codex", codexPath,
-		"--prompt", prompt,
-		"--status-file", statusPath,
-	}
-	quoted := make([]string, len(args))
-	for i, arg := range args {
-		quoted[i] = agent.ShellQuote(arg)
-	}
-	return strings.Join(quoted, " ")
-}
-
-func buildCodexPlanTUIResumeLaunchCommand(fanoutPath, codexPath, threadID, sessionID, statusPath string) string {
-	if strings.TrimSpace(fanoutPath) == "" {
-		fanoutPath = "fanout"
-	}
-	args := []string{
-		fanoutPath,
-		"__codex-plan-tui",
-		"--codex", codexPath,
-		"--resume-thread-id", threadID,
-	}
-	if strings.TrimSpace(sessionID) != "" {
-		args = append(args, "--resume-session-id", sessionID)
-	}
-	args = append(args, "--status-file", statusPath)
-	quoted := make([]string, len(args))
-	for i, arg := range args {
-		quoted[i] = agent.ShellQuote(arg)
-	}
-	return strings.Join(quoted, " ")
 }
 
 func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, sharedAcrossParents bool, teamCtx *briefing.TeamContext) paneRequest {
@@ -353,7 +309,7 @@ func newPaneRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issu
 	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode, teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode {
-		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, issue.Number, cfg.DryRun)
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
 	}
 	return req
 }
@@ -459,7 +415,7 @@ func newManualPaneRequest(cfg *cliflags.Config, projectRoot string, store state.
 		Worktree:      worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
 	}
 	if req.CodexPlanMode {
-		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, number, cfg.DryRun)
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
 }
@@ -529,38 +485,6 @@ func manualPaneSlug(title string, number int) string {
 	return prefix + base + suffix
 }
 
-func codexPlanStatusPath(projectRoot string, issueNum int, dryRun bool) string {
-	repo := safeCodexPlanTempPart(filepath.Base(projectRoot))
-	base := fmt.Sprintf("fanout-codex-plan-%s-%d", repo, issueNum)
-	if dryRun {
-		return filepath.Join("/tmp", base+".json")
-	}
-	unique := fmt.Sprintf("%s-%d-%d", base, os.Getpid(), time.Now().UnixNano())
-	return filepath.Join("/tmp", unique+".json")
-}
-
-func safeCodexPlanTempPart(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r >= '0' && r <= '9',
-			r == '.', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-		if b.Len() >= 40 {
-			break
-		}
-	}
-	if b.Len() == 0 {
-		return "repo"
-	}
-	return b.String()
-}
-
 func shortIssueTitle(title string) string {
 	const maxRunes = 60
 	count := 0
@@ -587,56 +511,6 @@ func taskOneLinePrompt(planSlug string, req paneRequest) string {
 
 func oneLineText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
-}
-
-func waitForCodexPlanTUIReady(statusPath string, timeout time.Duration) error {
-	_, err := waitForCodexPlanTUIReadyStatus(statusPath, timeout)
-	return err
-}
-
-func waitForCodexPlanTUIReadyStatus(statusPath string, timeout time.Duration) (codexPlanTUIStatus, error) {
-	if strings.TrimSpace(statusPath) == "" {
-		return codexPlanTUIStatus{}, fmt.Errorf("missing Codex Plan TUI status path")
-	}
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		status, err := readCodexPlanTUIStatus(statusPath)
-		if err == nil {
-			switch status.Status {
-			case codexPlanTUIStatusReady:
-				return status, nil
-			case codexPlanTUIStatusFailed:
-				if status.Error == "" {
-					return codexPlanTUIStatus{}, fmt.Errorf("Codex Plan TUI setup failed") //nolint:staticcheck // ST1005: "Codex Plan TUI" is a proper noun
-				}
-				return codexPlanTUIStatus{}, errors.New(status.Error)
-			default:
-				lastErr = fmt.Errorf("unexpected Codex Plan TUI status %q", status.Status)
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			lastErr = err
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return codexPlanTUIStatus{}, fmt.Errorf("%w after %s; last status error: %w", errCodexPlanStartupTimeout, timeout, lastErr)
-			}
-			return codexPlanTUIStatus{}, fmt.Errorf("%w after %s; no status file at %s", errCodexPlanStartupTimeout, timeout, statusPath)
-		}
-		time.Sleep(codexPlanTUIStartupPoll)
-	}
-}
-
-func readCodexPlanTUIStatus(path string) (codexPlanTUIStatus, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return codexPlanTUIStatus{}, err
-	}
-	var status codexPlanTUIStatus
-	if err := json.Unmarshal(body, &status); err != nil {
-		return codexPlanTUIStatus{}, fmt.Errorf("parse Codex Plan TUI status: %w", err)
-	}
-	return status, nil
 }
 
 func logPaneRequest(req paneRequest, lg *log.Logger) {

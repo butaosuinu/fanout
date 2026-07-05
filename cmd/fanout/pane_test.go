@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -79,7 +80,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
-	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now, codexPlanTUIStatus{
+	got := statePane(req, "%42", "/repo/.fanout/worktrees/state-idempotency-83", now, codexapp.Status{
 		ThreadID:  "thread-1",
 		SessionID: "session-1",
 	})
@@ -122,7 +123,7 @@ func TestStatePaneCapturesTaskID(t *testing.T) {
 		Worktree:   worktree.Plan{BaseBranch: "main"},
 	}
 
-	got := statePane(req, "%42", "/repo/.fanout/worktrees/extract-api-client-api-client", now, codexPlanTUIStatus{})
+	got := statePane(req, "%42", "/repo/.fanout/worktrees/extract-api-client-api-client", now, codexapp.Status{})
 
 	if got.Parent != "plan:launch-plan" || got.IssueNum != 0 || got.TaskID != "api-client" {
 		t.Fatalf("task state identity = %+v, want plan parent, issueNum 0, taskID", got)
@@ -477,7 +478,7 @@ func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 		t.Fatalf("watch briefing used Codex Plan Mode body:\n%s", got.BriefingBody)
 	}
 
-	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC), codexPlanTUIStatus{})
+	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC), codexapp.Status{})
 	if pane.Parent != watchPaneParentRef || pane.IssueNum != 223 {
 		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, watchPaneParentRef)
 	}
@@ -669,40 +670,6 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
 	if got != want {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
-	}
-}
-
-func TestWaitForCodexPlanTUIReadyReadsReadyStatus(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "status.json")
-	if err := writeCodexPlanTUIStatus(path, codexPlanTUIStatus{Status: codexPlanTUIStatusReady}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := waitForCodexPlanTUIReady(path, time.Second); err != nil {
-		t.Fatalf("waitForCodexPlanTUIReady() failed: %v", err)
-	}
-}
-
-func TestWaitForCodexPlanTUIReadyReturnsFailedStatus(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "status.json")
-	if err := writeCodexPlanTUIStatus(path, codexPlanTUIStatus{Status: codexPlanTUIStatusFailed, Error: "boom"}); err != nil {
-		t.Fatal(err)
-	}
-
-	err := waitForCodexPlanTUIReady(path, time.Second)
-
-	if err == nil || err.Error() != "boom" {
-		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want boom", err)
-	}
-}
-
-func TestWaitForCodexPlanTUIReadyTimesOutWithoutStatus(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing.json")
-
-	err := waitForCodexPlanTUIReady(path, time.Millisecond)
-
-	if err == nil || !strings.Contains(err.Error(), errCodexPlanStartupTimeout.Error()) {
-		t.Fatalf("waitForCodexPlanTUIReady() error = %v, want timeout", err)
 	}
 }
 
