@@ -1,7 +1,7 @@
 ---
 title: Agent Integrations
 linkTitle: Agent Integrations
-description: "The /fanout slash command, bundled Claude Code and Codex skills, and Codex Plan Mode."
+description: "Bundled skills for Claude Code and Codex, the /fanout slash command, and Codex Plan Mode."
 weight: 70
 kanji: 連
 yomi: agents
@@ -9,11 +9,9 @@ yomi: agents
 
 ## From inside an agent session
 
-Say you are running Claude Code or Codex in one pane and want to fan out to children without leaving it. fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates NEW panes for children; the caller's pane is never touched.
+Say you are running Claude Code or Codex in one pane and want to fan out to children without leaving it. fanout is safe to call from an agent session (Claude Code, Codex, etc.) that is itself running inside tmux. It only creates new panes for children; the caller's pane is never touched.
 
-To tell fanout which agent CLI the child panes should launch, pass `--agent` or set `FANOUT_AGENT`. To mix agents in one run, add repeatable per-target overrides: `--agent NUM=name` for issue / Project children, or `--agent task-id=name` with `fanout plan`. Each target resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT` — see the [CLI Reference]({{< relref "/docs/cli" >}}).
-
-The CLI prerequisites still apply: run from inside tmux, and run from the repository whose children should branch from the selected base. The integration files below are bundled in the repo and placed by the [install script]({{< relref "/docs/installation" >}}).
+To tell fanout which agent CLI the child panes should launch, pass `--agent` or set `FANOUT_AGENT`. To mix agents in one run, add repeatable per-target overrides: `--agent NUM=name` for issue / Project children, or `--agent task-id=name` with `fanout plan`. See the [CLI Reference]({{< relref "/docs/cli" >}}) for how the overrides resolve.
 
 ## Claude Code
 
@@ -29,63 +27,36 @@ It runs `fanout <N> --dry-run` first, shows the target list, and only fires the 
 
 ### The `fanout` skill
 
-Say the parent body scatters child references around and collecting the numbers by hand is tedious. `~/.claude/skills/fanout/` hands that collection to the agent. It lets the agent recognize when fanout is applicable and suggest `/fanout` rather than invoking it unprompted.
-
-Beyond gating invocation, the skill reads the parent body for **implicit** child references that the CLI itself does not parse — close keywords like `Closes #N`, dependency wording like `Depends on #N`, plain bullets, and Japanese idioms like `#N に関連` — lists the candidates back to you for approval, and forwards the accepted numbers via `--include`.
-
-The skill also generates the `--name` flags (slug / display name / branch) from the issue title and body. The CLI itself never calls an LLM by design; the skill makes the naming decisions.
+Say the parent issue body scatters child references around and collecting the numbers by hand is tedious. `~/.claude/skills/fanout/` reads those references, presents the candidates for approval, forwards the accepted numbers via `--include`, and suggests running `/fanout`.
 
 ### The `fanout-issues` skill
 
-Say you want to shape a plan into the issue tree fanout can run against. `~/.claude/skills/fanout-issues/` guides the agent through that conversion. It creates same-repo children, links them through GitHub Sub-issues, mirrors them in the parent task list, and records blocker waves in the `## Blocked by` / `(blocked by #N)` shapes that `fanout --unblocked-only` understands.
+Say you want to shape a plan into the issue tree fanout can run against. `~/.claude/skills/fanout-issues/` creates same-repo children, links them through GitHub Sub-issues, mirrors them in the parent task list, and records blocker waves for `fanout --unblocked-only`.
 
 ### The `fanout-plan` skill
 
-Say you want to fan out a local implementation plan without creating GitHub
-child issues. `~/.claude/skills/fanout-plan/` backs `/fanout plan`. It turns an
-approved or local implementation plan into a `fanout plan` JSON spec, runs the
-dry-run preview, summarizes tasks/waves/branches, then launches issue-less task
-panes after confirmation.
+Say you want to fan out a local implementation plan without creating GitHub child issues. `~/.claude/skills/fanout-plan/` turns the plan into a `fanout plan` JSON spec, confirms it with a dry run, and launches issue-less task panes.
 
 ### Review and PR follow-up skills
 
-Say the implementation is done and you want one more look before committing or opening a PR. `~/.claude/skills/post-work-review/` backs the local PR review gate: it runs a final review loop and records the reviewed HEAD marker.
-
-For follow-up after a PR exists, use a separate skill. `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/` watch an existing PR after creation and handle safe conflict, CI, and review-comment follow-up.
+Say the implementation is done and you want one more look before committing or opening a PR. `~/.claude/skills/post-work-review/` backs the local PR review gate and runs a final review loop. For follow-up after a PR exists, use `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/`, which watch for conflicts, CI, and review comments.
 
 ## Codex CLI
 
-The Codex skills are installed to `~/.codex/skills/fanout/`, `~/.codex/skills/fanout-issues/`, `~/.codex/skills/fanout-plan/`, `~/.codex/skills/post-work-review/`, and `~/.codex/skills/pr-watch/`. The native subagent TOML files are installed to `~/.codex/agents/post-work-reviewer.toml` and `~/.codex/agents/post-work-verifier.toml`; matching `.md` files are installed as readable contracts. Restart any running Codex session after installing or updating the skills or agents so it picks up the new files.
+Codex has the same skills under `~/.codex/skills/` (see [Installation]({{< relref "/docs/installation" >}})).
 
-Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as the Claude command — dry-run first, confirm targets, then run the real command — and it also performs the implicit-child scan and `--name` generation.
-
-The `fanout-issues` skill mirrors the Claude version: ask Codex to create a fanout-ready GitHub issue tree, decompose a plan into parent/child issues, or prepare blocker waves for `fanout --unblocked-only`, and it produces the same same-repo children, GitHub Sub-issues links, parent task-list rows, and `## Blocked by` annotations.
-
-Use `$fanout-plan` or ask Codex for `fanout plan` when you want to fan out a
-local implementation plan without creating GitHub child issues. It writes or
-selects the plan spec, previews `fanout plan ... --dry-run`, and runs live
-after confirmation unless confirmation was explicitly skipped.
-
-Use `$post-work-review` when you want Codex to run a final pre-commit or pre-PR review loop. It prepares one git-derived review bundle, sends it to one fresh `post-work-reviewer` native subagent, fixes actionable findings, uses at most two `post-work-verifier` calls after fixes, and records the same marker used by the Claude PR gate when HEAD is clean.
-
-Use `$pr-watch` after opening a PR when you want Codex to inspect mergeability, failing CI, and review comments, then safely fix and push the items it can handle. Codex does not run a background scheduler, so the skill reports when it is green, reviewer-waiting, CI-waiting, or blocked.
+Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, and `pr-watch` are also bundled as Codex versions; invoke them as `$fanout-issues` or `$pr-watch`, and they play the same role as the Claude versions.
 
 ## Codex Plan Mode
 
-Say you want Codex to propose an implementation plan before any child moves forward. Batch child launches enable Plan Mode with `--codex-plan-mode`, an opt-in mode for children that resolve to `codex` (after any per-target `--agent` overrides). It requires every selected child to resolve to `codex` — mixing in a `claude` child is rejected before launch:
+Say you want Codex to propose an implementation plan before any child moves forward. Batch child launches enable this Plan Mode with `--codex-plan-mode` (off by default).
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
 ```
 
-Instead of running positional `codex "<prompt>"`, fanout starts a Codex app-server for each child, creates a `plan` collaboration-mode thread, and resumes it with the fanout prompt through an interactive Codex TUI.
-
-The child briefing is also rewritten for Plan Mode: it tells Codex to inspect relevant context before presenting an implementation plan wrapped in `<proposed_plan>`, and explicitly forbids file edits, commits, pushes, and PR creation in that turn. The TUI manual pane popup uses the same Plan Mode path automatically when it launches `codex`, but sends the popup prompt and Plan Mode instructions inline instead of writing a `/tmp` briefing file.
-
-This path never sends `/plan` or prompt text through tmux. The pane remains an interactive Codex TUI session, so you can continue from the Plan Mode conversation. If Plan Mode thread setup or the TUI attach fails, the launch fails before state is recorded and fanout cleans up the pane/worktree so the child can be retried.
+Plan Mode children launch as an interactive Codex TUI, investigate relevant context, and present the implementation plan wrapped in `<proposed_plan>`. That turn does not edit files, commit, push, or open a PR. The pane remains in the Plan Mode conversation, so you can continue from there.
 
 ## How the briefing works
 
-Each issue or plan-task child pane receives a one-line prompt only. The full issue or task body plus a short Requirements checklist is written to `/tmp/fanout-<repo>-<NUM>.md` or the task briefing path, and the launch prompt stays short and points the agent at that briefing file.
-
-The briefing content is filtered through the resolved settings — `autoPullRequest`, `prReviewGate`, `briefingCodeReview`, `agentTeamsHint`, and `prVisualization`. See [Settings]({{< relref "/docs/settings" >}}) for how CLI flags, environment variables, and config files resolve into those switches.
+Each issue or plan-task child pane receives a one-line prompt only. The full issue or task body plus a short Requirements checklist is written to `/tmp/fanout-<repo>-<NUM>.md` or the task briefing path, and the launch prompt only tells the agent to read that file. Which instructions the briefing includes depends on the toggles in [Settings]({{< relref "/docs/settings" >}}).

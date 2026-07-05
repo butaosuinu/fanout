@@ -37,6 +37,11 @@ disableKinds = ["taxonomy", "term"]
     guessSyntax = false
   [markup.goldmark.renderer]
     unsafe = true
+  # 日本語ソースは一文一行で書くため、CJK 文字間の soft break を
+  # スペースにしない (eastAsianLineBreaks)。EN ページには影響しない。
+  [markup.goldmark.extensions.cjk]
+    enabled = true
+    eastAsianLineBreaks = true
   [markup.tableOfContents]
     startLevel = 2
     endLevel = 3

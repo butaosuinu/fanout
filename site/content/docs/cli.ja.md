@@ -242,6 +242,11 @@ fanout 123 --status --post-dashboard
 
 Lifecycle コマンドは `.fanout/state.json` の記録済み entry だけを対象にします。任意の worktree を filesystem scan で探すことはしません。`--status` と同じく `FANOUT_STATE_PATH` を尊重します。
 
+`.fanout/state.json` には `schemaVersion` と、ペインごとに 1 行を保存します。
+各行は `parent` / `issueNum` / 任意の `taskId` / `kind` / `shellKey` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を持ちます。
+TUI の shell terminal は `kind: "shell"` で記録されるため、close は tmux ペインと state 行だけを消します。
+`shellKey` は行と live tmux ペインを結びつけます。
+
 - `fanout <parent> --merge <NUM>` は、記録済み branch を `git -C <project-root> merge --ff-only <recorded-branch>` で取り込む。fast-forward できない場合は git エラーを報告するだけで、エディタや conflict 解決フローは起動しない。
 - `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux ペインが残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に `MERGED` を含む記録済み子をまとめて後始末する。保留中の子は記録されたまま残る。

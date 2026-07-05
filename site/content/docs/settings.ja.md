@@ -93,6 +93,31 @@ watcher は誰かが checkout しただけで自動起動してほしくない�
 
 trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。
 
+## watcher の運用
+
+watcher は、TUI コンソールを起動している間だけ動きます。
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+`fanout:auto` を付けた issue は、次の cycle で watcher がラベルを `fanout:running` に付け替えてから起動します。
+OPEN な子を持つ issue は `--unblocked-only` 相当の親ファンアウトになります。
+子を持たない issue は単独ペインとして起動します。
+
+watcher からの起動は、親ファンアウトも単独ペインもすべて `watcherMaxSessions` を消費します。
+blocked な子や session 上限で積み残しが出た場合、fanout はラベルを `fanout:running` から `fanout:auto` に戻します。
+その親は後続の cycle で自動的に再試行されます。
+
+親ファンアウトでは、`fanout <parent> --merge <child>`、`--close`、`--cleanup` が `fanout:running` を best-effort で外します。
+単独 watcher ペインは TUI の lifecycle key(`m`、`c`、`x`)で処理してください。
+公開 CLI の parent 引数には、予約 parent `@watch` の row を指定できません。
+
+再投入するときは、対象の issue に `fanout:auto` を付け直してください。
+
 ## 前方互換
 
 不正な bool / integer env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。

@@ -91,10 +91,26 @@ Both HTTP channels only send outbound POST requests and never open inbound socke
 
 The watcher should never start just because someone checked out the repo, so repo config cannot opt into it. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; enable it from user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
-The trigger label starts agent work from the labeled issue and, for parent
-fan-outs, any OPEN children it launches. Their bodies become agent briefings, so
-treat the label as an execution request and apply it only when you trust that
-issue and its launchable children.
+The trigger label starts agent work from the labeled issue and, for parent fan-outs, any OPEN children it launches. Their bodies become agent briefings, so treat the label as an execution request and apply it only when you trust that issue and its launchable children.
+
+## Watcher operation
+
+The watcher only runs while a TUI console is running.
+
+```bash
+# One shell
+export FANOUT_WATCHER=1
+export FANOUT_WATCHER_AGENT=codex
+fanout
+```
+
+Issues labeled `fanout:auto` launch on the next cycle, once the watcher swaps the label to `fanout:running`. Issues with OPEN children become parent fan-outs equivalent to `--unblocked-only`; issues without children launch as a standalone pane.
+
+Every watcher launch — parent fan-out or standalone pane — counts against `watcherMaxSessions`. When blocked children or the session limit leave work outstanding, fanout reverts the label from `fanout:running` back to `fanout:auto`, and that parent is retried automatically on a later cycle.
+
+For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and `--cleanup` remove `fanout:running` on a best-effort basis. Handle standalone watcher panes with the TUI lifecycle keys (`m`, `c`, `x`) instead. The public CLI's parent argument does not accept rows for the reserved `@watch` parent.
+
+To requeue an issue, add the `fanout:auto` label back to it.
 
 ## Forward compatibility
 
