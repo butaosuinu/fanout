@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -52,7 +53,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	cfg := manualPaneConfigForTUIAgent(agentNames[0])
-	_, recorder, code := loadRunState(cfg, projectRoot, launchLogger)
+	_, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
 	}

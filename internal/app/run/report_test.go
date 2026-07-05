@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"bytes"
@@ -140,7 +140,7 @@ func TestPrintTaskSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *test
 	plan := taskPlan{
 		LimitDeferred: []planspec.Task{{ID: "api-client"}},
 	}
-	cfg := planCommandConfig{
+	cfg := PlanCommandConfig{
 		SpecArg:      "launch-plan",
 		Agent:        "claude",
 		SleepBetween: cliflags.DefaultSleepBetween,
@@ -150,7 +150,7 @@ func TestPrintTaskSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *test
 		},
 	}
 
-	printTaskSummary(plan, taskExecutionResult{}, cfg, lg, log.Palette{}, "fanout-go")
+	printTaskSummary(plan, TaskExecutionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
 	want := "  fanout-go plan launch-plan --only api-client --agent claude --agent 'api-client=codex'\n"
@@ -184,7 +184,7 @@ func TestPrintSummarySuppressesLimitRerunHintAfterFailure(t *testing.T) {
 	}
 }
 
-// TestShellQuoteIsCopyPasteSafe pins shellQuote and, more importantly, proves
+// TestShellQuoteIsCopyPasteSafe pins ShellQuote and, more importantly, proves
 // the property that actually matters for the --limit rerun hint: the quoted
 // token must evaluate back to the original argument under a POSIX shell, so the
 // printed command is copy-paste-safe. This is the path reached by metacharacter
@@ -220,19 +220,19 @@ func TestShellQuoteIsCopyPasteSafe(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := shellQuote(c.in)
+			got := ShellQuote(c.in)
 			if got != c.want {
-				t.Errorf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
+				t.Errorf("ShellQuote(%q) = %q, want %q", c.in, got, c.want)
 			}
 			// Round-trip: a POSIX shell must parse the quoted token back into the
-			// exact original string (a single argument). If shellQuote under-quoted,
+			// exact original string (a single argument). If ShellQuote under-quoted,
 			// `sh` would split or expand it and the output would not match.
 			out, err := exec.Command("sh", "-c", "printf %s "+got).Output()
 			if err != nil {
-				t.Fatalf("sh failed on shellQuote(%q)=%q: %v", c.in, got, err)
+				t.Fatalf("sh failed on ShellQuote(%q)=%q: %v", c.in, got, err)
 			}
 			if string(out) != c.in {
-				t.Errorf("round-trip: sh parsed shellQuote(%q)=%q as %q, want %q", c.in, got, string(out), c.in)
+				t.Errorf("round-trip: sh parsed ShellQuote(%q)=%q as %q, want %q", c.in, got, string(out), c.in)
 			}
 		})
 	}
