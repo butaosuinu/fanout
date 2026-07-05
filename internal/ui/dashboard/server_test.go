@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/sessionview"
 )
 
 type fakeGH struct{}

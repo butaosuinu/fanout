@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/sessionview"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 )
 
 // planSnapshot is peekSnapshot's pane "%5" flagged (or not) as a Codex Plan

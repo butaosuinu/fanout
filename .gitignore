@@ -17,6 +17,6 @@ site/public/
 site/.hugo_build.lock
 site/resources/
 # Dashboard web UI: built bundle (make build-web) is embedded, never committed
-internal/dashboard/static/*
-!internal/dashboard/static/.gitkeep
+internal/ui/dashboard/static/*
+!internal/ui/dashboard/static/.gitkeep
 web/node_modules/

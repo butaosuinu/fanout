@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/briefing"
-	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/briefing"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
@@ -22,8 +23,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
-	"github.com/butaosuinu/fanout/internal/panelayout"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {

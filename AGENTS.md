@@ -77,15 +77,16 @@ names, command names, and quoted code unchanged.
 The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
 `executePlan`, `tui.go` no-argument console launch, `pane.go` creation
 orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
-`internal/` is being
-reorganized into four layer directories. Done: `internal/core/` (pure logic —
-`agent`, `blockers`, `exitcode`, `naming`, `planspec`) and `internal/infra/`
-(external process/FS/DB — `atomicfs`, `displayname`, `ghissue`, `gitstat`,
-`hooks`, `log`, `msgstore`, `notify`, `runtime`, `selfupdate`, `settings`,
-`state`, `team`, `tmuxrun`, `tty`, `worktree`). Next: `briefing`, `cliflags`,
-`lifecycle`, `panelayout`, `sessionview`, `watch` (app layer) and `tui`,
-`dashboard` (ui layer). `internal/arch` enforces the layer import direction in
-CI.
+`internal/` is
+organized into four layer directories: `internal/core/` (pure logic —
+`agent`, `blockers`, `exitcode`, `naming`, `planspec`), `internal/app/`
+(use-case orchestration — `briefing`, `cliflags`, `lifecycle`, `panelayout`,
+`sessionview`, `watch`), `internal/infra/` (external process/FS/DB —
+`atomicfs`, `displayname`, `ghissue`, `gitstat`, `hooks`, `log`, `msgstore`,
+`notify`, `runtime`, `selfupdate`, `settings`, `state`, `team`, `tmuxrun`,
+`tty`, `worktree`), and `internal/ui/` (`tui`, `dashboard`). Allowed imports:
+core -> core only; app -> core/app/infra; infra -> core/infra; ui -> all;
+importing `cmd/...` is forbidden. `internal/arch` enforces this in CI.
 
 - Runtime discovery (`internal/infra/runtime`) resolves the git repo root with
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux for
@@ -103,7 +104,7 @@ CI.
   Live runs hold `.fanout/state.json.lock` while planning and launching so
   parallel invocations cannot create the same child twice.
 - Keep prompts one line (`oneLinePrompt`). Full issue context belongs in
-  `/tmp/fanout-<repo>-<NUM>.md` (`internal/briefing`).
+  `/tmp/fanout-<repo>-<NUM>.md` (`internal/app/briefing`).
 - `--include` widens the child set; `--only` and `--skip` narrow it
   (`filterOnlySkip`; child enumeration in `mergeExtraChildren` via
   `internal/infra/ghissue`). Prose scanning for implicit children lives in the
@@ -118,7 +119,7 @@ CI.
 - `--status`, `--close`, `--merge`, and `--cleanup` operate from
   `.fanout/state.json`; set `FANOUT_STATE_PATH` to point at a specific state
   file outside the repository checkout.
-- `internal/watch` owns one repository watcher cycle behind the no-argument
+- `internal/app/watch` owns one repository watcher cycle behind the no-argument
   TUI. It lists `watcherTriggerLabel` issues, swaps them to
   `watcherRunningLabel`, launches standalone panes for issues without OPEN
   children, and launches normal parent fan-outs for issues with OPEN children.

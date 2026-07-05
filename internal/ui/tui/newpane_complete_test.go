@@ -25,7 +25,7 @@ func applyMsg(m model, msg tea.Msg) model {
 }
 
 func TestPromptCompletionTriggersAtWordBoundary(t *testing.T) {
-	files := []string{"cmd/main.go", "internal/tui/newpane.go"}
+	files := []string{"cmd/main.go", "internal/ui/tui/newpane.go"}
 
 	m := openCompletionModel(t, files)
 	m = applyMsg(m, keyRunes("@"))
@@ -42,19 +42,19 @@ func TestPromptCompletionTriggersAtWordBoundary(t *testing.T) {
 }
 
 func TestPromptCompletionAcceptInsertsAtMentionPath(t *testing.T) {
-	files := []string{"cmd/main.go", "internal/tui/newpane.go"}
+	files := []string{"cmd/main.go", "internal/ui/tui/newpane.go"}
 	m := openCompletionModel(t, files)
 
 	for _, r := range []string{"@", "n", "e", "w"} {
 		m = applyMsg(m, keyRunes(r))
 	}
-	if len(m.newPane.compResults) == 0 || m.newPane.compResults[0] != "internal/tui/newpane.go" {
+	if len(m.newPane.compResults) == 0 || m.newPane.compResults[0] != "internal/ui/tui/newpane.go" {
 		t.Fatalf("expected newpane.go ranked first, got %v", m.newPane.compResults)
 	}
 
 	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
 	got := m.newPane.prompt.Value()
-	if want := "@internal/tui/newpane.go "; !strings.HasSuffix(got, want) {
+	if want := "@internal/ui/tui/newpane.go "; !strings.HasSuffix(got, want) {
 		t.Fatalf("prompt = %q, want suffix %q", got, want)
 	}
 	if m.newPane.completing {
@@ -123,8 +123,8 @@ func TestPromptCompletionBackspaceOverAtExits(t *testing.T) {
 
 func TestRankRepoFiles(t *testing.T) {
 	files := []string{
-		"internal/tui/newpane.go",
-		"internal/tui/new_test.go",
+		"internal/ui/tui/newpane.go",
+		"internal/ui/tui/new_test.go",
 		"cmd/fanout/newpane.go",
 		"docs/news.md",
 		"cmd/main.go",
@@ -137,17 +137,17 @@ func TestRankRepoFiles(t *testing.T) {
 		{
 			name:  "basename-prefix matches rank by path length",
 			query: "new",
-			want:  []string{"docs/news.md", "cmd/fanout/newpane.go", "internal/tui/newpane.go", "internal/tui/new_test.go"},
+			want:  []string{"docs/news.md", "cmd/fanout/newpane.go", "internal/ui/tui/newpane.go", "internal/ui/tui/new_test.go"},
 		},
 		{
 			name:  "basename substring matches rank by path length",
 			query: "pane",
-			want:  []string{"cmd/fanout/newpane.go", "internal/tui/newpane.go"},
+			want:  []string{"cmd/fanout/newpane.go", "internal/ui/tui/newpane.go"},
 		},
 		{
 			name:  "path substring matches",
 			query: "tui",
-			want:  []string{"internal/tui/newpane.go", "internal/tui/new_test.go"},
+			want:  []string{"internal/ui/tui/newpane.go", "internal/ui/tui/new_test.go"},
 		},
 	}
 	for _, tt := range tests {
@@ -280,18 +280,18 @@ func TestRepoFilesLoadRetriesAfterError(t *testing.T) {
 }
 
 func TestAcceptCompletionPreservesPrecedingText(t *testing.T) {
-	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
 	for _, r := range []string{"f", "i", "x", " ", "@", "n", "e", "w"} {
 		m = applyMsg(m, keyRunes(r))
 	}
 	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got, want := m.newPane.prompt.Value(), "fix @internal/tui/newpane.go "; got != want {
+	if got, want := m.newPane.prompt.Value(), "fix @internal/ui/tui/newpane.go "; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
 }
 
 func TestAcceptCompletionRefusesWhenOverCharLimit(t *testing.T) {
-	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
 	// Fill the prompt to just under CharLimit, then start an @-token.
 	limit := m.newPane.prompt.CharLimit
 	m.newPane.prompt.SetValue(strings.Repeat("x", limit-3) + " ")
@@ -343,12 +343,12 @@ func TestAcceptCompletionHandlesFullWidthPrefix(t *testing.T) {
 	// A full-width rune before the @token exercises the rune-index path math:
 	// bubbles LineInfo.StartColumn+ColumnOffset is a rune offset, so the token
 	// is found and replaced correctly despite the double-width character.
-	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
 	for _, r := range []string{"あ", " ", "@", "n", "e", "w"} {
 		m = applyMsg(m, keyRunes(r))
 	}
 	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got, want := m.newPane.prompt.Value(), "あ @internal/tui/newpane.go "; got != want {
+	if got, want := m.newPane.prompt.Value(), "あ @internal/ui/tui/newpane.go "; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
 }
@@ -367,7 +367,7 @@ func TestFileIndexExcludesSpacePaths(t *testing.T) {
 }
 
 func TestAcceptCompletionRefusesOverCharLimitFullWidth(t *testing.T) {
-	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
 	// Full-width fill: rune count (499) is far under CharLimit but display width
 	// (~997) is near it, so a rune-count guard would wrongly allow the insert.
 	m.newPane.prompt.SetValue(strings.Repeat("あ", 498) + " ")
@@ -390,7 +390,7 @@ func TestAcceptCompletionRefusesOverCharLimitFullWidth(t *testing.T) {
 func TestAcceptCompletionFullWidthPrefixWithTrailingText(t *testing.T) {
 	// Full-width rune before the token AND text after the cursor: exercises the
 	// rune-index path math (StartColumn+ColumnOffset is a rune offset).
-	m := openCompletionModel(t, []string{"internal/tui/newpane.go"})
+	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
 	for _, r := range []string{"あ", " ", "t", "a", "i", "l"} {
 		m = applyMsg(m, keyRunes(r))
 	}
@@ -401,7 +401,7 @@ func TestAcceptCompletionFullWidthPrefixWithTrailingText(t *testing.T) {
 		m = applyMsg(m, keyRunes(r))
 	}
 	m = applyMsg(m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got, want := m.newPane.prompt.Value(), "あ @internal/tui/newpane.go tail"; got != want {
+	if got, want := m.newPane.prompt.Value(), "あ @internal/ui/tui/newpane.go tail"; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
 	}
 }
@@ -430,7 +430,7 @@ func TestNewPaneViewRendersCompletionPopup(t *testing.T) {
 	m.width = 100
 	m.height = 40
 	m.openNewPaneForm()
-	m.repoFiles = []string{"internal/tui/newpane.go", "cmd/main.go"}
+	m.repoFiles = []string{"internal/ui/tui/newpane.go", "cmd/main.go"}
 	m.repoFileIndex = buildFileIndex(m.repoFiles)
 	m.repoFilesLoaded = true
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func TestPlanSkillPromptPerAgent(t *testing.T) {

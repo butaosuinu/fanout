@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
-	"github.com/butaosuinu/fanout/internal/watch"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 // newTUIListOpenIssuesFunc lists OPEN issues for the new-session picker and

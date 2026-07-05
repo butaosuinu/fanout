@@ -485,7 +485,7 @@ func issueDisplayName(child ghissue.Issue) string {
 	return "#" + strconv.Itoa(child.Number)
 }
 
-// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/tui の synthetic
+// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/ui/tui の synthetic
 // 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
 // web で同じ意味を持つ): closed → deferred → queued の優先順で判定し、issue
 // 状態が取れないものは unknown。

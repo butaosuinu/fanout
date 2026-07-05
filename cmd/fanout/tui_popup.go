@@ -14,7 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 const (

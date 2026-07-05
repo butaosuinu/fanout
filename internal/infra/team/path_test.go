@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/briefing"
+	"github.com/butaosuinu/fanout/internal/app/briefing"
 )
 
 func TestParentDBSlug(t *testing.T) {

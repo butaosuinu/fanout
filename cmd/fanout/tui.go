@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/panelayout"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 const tuiPaneTitle = "fanout tui"
