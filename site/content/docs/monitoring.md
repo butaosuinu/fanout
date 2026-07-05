@@ -25,7 +25,7 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console. On startup and each state refresh, the console rebinds recorded worktree panes that still exist in tmux and recreates missing worktree panes by resuming their agent CLI: `claude --continue`, `codex resume --last`, or the saved Codex Plan Mode thread for Plan panes.
 
-The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance. A `RUN` column carries each pane's agent state (`running` / `done`, reported by the agent launch wrapper), so you can see which panes are still working; the detail panel repeats the value as `run=`.
+The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance. A `RUN` column carries each pane's agent state as a glyph — `●` running, `✓` done, as reported by the agent launch wrapper — so you can see which panes are still working; the detail panel spells the value out as `run=`.
 
 {{< diagram "console" >}}
 
@@ -42,7 +42,7 @@ The footer stays short; press `?` in the monitor to open the full shortcut help 
 | `?` | Open the keyboard shortcut help in a tmux popup. Press `Esc`, `q`, or `?` again to close it. |
 | `j` / `k` | Move the selection down / up (arrow keys work too). |
 | `[` / `]` | Jump to the previous / next Session group. |
-| `/` | Filter the loaded rows — free text or predicates like `state:open`. `Esc` clears the active filter. |
+| `/` | Filter the loaded rows — free text or predicates like `state:open`. `Esc` leaves filter editing; pressed again from the list, it clears the active filter. |
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |

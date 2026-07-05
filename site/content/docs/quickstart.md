@@ -9,21 +9,21 @@ yomi: quickstart
 
 ## Your first fan-out (five minutes)
 
-Suppose your parent issue has five OPEN sub-issues. Instead of picking them off one at a time and queueing the rest, fanout starts them all at once: one tmux pane per child, each with its own git worktree, so five agents work in parallel without colliding on each other's edits.
+Suppose your parent issue has three OPEN sub-issues. Instead of picking them off one at a time and queueing the rest, fanout starts them all at once: one tmux pane per child, each with its own git worktree, so three agents work in parallel without colliding on each other's edits.
 
 {{< diagram "overview" >}}
 
 No issue tree yet? The bundled `fanout-issues` skill turns a plan into a parent issue with linked children — see [Agent Integrations]({{< relref "/docs/agents" >}}). The shape fanout expects is described [below](#how-child-issues-are-declared).
 
-Pick the agent used for child panes, then start (or attach) a tmux session in the target repository:
+Start (or attach) a tmux session, then — inside the session — pick the agent and move to the target repository:
 
 ```bash
-# Use Claude for child panes
-export FANOUT_AGENT=claude
-
-# Start (or attach) a tmux session in the repository
-cd path/to/repo
+# Start (or attach) a tmux session
 tmux new -A -s work
+
+# Inside the session: use Claude for child panes, from the repository root
+export FANOUT_AGENT=claude
+cd path/to/repo
 ```
 
 Preview the plan first. `--dry-run` prints the git worktree + tmux commands without executing them. It creates no worktrees, panes, state rows, or briefing files:
@@ -59,7 +59,7 @@ Here is how to write your issue tree so fanout picks it up. fanout enumerates ch
 
 Task-list references are same-repo only; `owner/repo#NUM` is skipped. Children may be declared via either source or both — the union deduplicates them. Only children whose state is OPEN are processed; closed children never get a pane.
 
-So you can hang five sub-issues off the parent, write a five-line task list in the parent body, or mix both. Either way, every OPEN child becomes a parallel pane.
+So you can hang three sub-issues off the parent, write a three-line task list in the parent body, or mix both. Either way, every OPEN child becomes a parallel pane.
 
 ## What happens during a run
 

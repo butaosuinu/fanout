@@ -9,21 +9,21 @@ yomi: quickstart
 
 ## 最初のファンアウト（5 分）
 
-親 issue に OPEN なサブ issue が 5 つあるとします。1 つずつ着手して順番待ちさせる代わりに、fanout は全部を同時に動かします。子ごとに tmux のペインを 1 枚開き、それぞれが独立した git worktree を持つので、5 つのエージェントが互いの編集と衝突せずに並行して進みます。
+親 issue に OPEN なサブ issue が 3 つあるとします。1 つずつ着手して順番待ちさせる代わりに、fanout は全部を同時に動かします。子ごとに tmux のペインを 1 枚開き、それぞれが独立した git worktree を持つので、3 つのエージェントが互いの編集と衝突せずに並行して進みます。
 
 {{< diagram "overview" >}}
 
 issue ツリーがまだ無い場合は、同梱の `fanout-issues` skill が計画を親 issue + リンク済みの子 issue に変換します（[エージェント連携]({{< relref "/docs/agents" >}}) を参照）。fanout が期待する形は[後述](#子-issue-の宣言方法)します。
 
-子ごとのペインで使うエージェントを決め、対象リポジトリで tmux セッションを開始（または attach）します。
+tmux セッションを開始（または attach）し、セッションの中でエージェントを決めて対象リポジトリへ移動します。
 
 ```bash
-# Use Claude for child panes
-export FANOUT_AGENT=claude
-
-# Start (or attach) a tmux session in the repository
-cd path/to/repo
+# Start (or attach) a tmux session
 tmux new -A -s work
+
+# Inside the session: use Claude for child panes, from the repository root
+export FANOUT_AGENT=claude
+cd path/to/repo
 ```
 
 まず計画をプレビューします。`--dry-run` は git worktree と tmux のコマンド列を実行せずに表示するだけで、worktree もペインも state 行も briefing ファイルも作りません。
@@ -59,7 +59,7 @@ fanout 123
 
 タスクリスト参照は同一 repo 内のみで、`owner/repo#NUM` 形式はスキップされます。子はどちらか一方のソースでも両方でも宣言でき、和集合なので重複は除かれます。処理されるのは `state == "OPEN"` の子だけで、CLOSED の子にペインは作られません。
 
-つまり、親 issue にサブ issue を 5 つぶら下げてもよいし、親本文に 5 行のタスクリストを書いてもよいし、両方を混ぜてもかまいません。どう書いても、OPEN な子がそのまま並列ペインになります。
+つまり、親 issue にサブ issue を 3 つぶら下げてもよいし、親本文に 3 行のタスクリストを書いてもよいし、両方を混ぜてもかまいません。どう書いても、OPEN な子がそのまま並列ペインになります。
 
 ## 実行時に起きること
 

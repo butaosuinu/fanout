@@ -25,7 +25,7 @@ fanout   # start the persistent tmux console
 
 素のシェルから起動したときは、現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または attach し、その session 内でコンソールを開始します。tmux 内から起動したときは、現在のペインをそのままコンソール画面にします。起動時と state 更新ごとに、コンソールは tmux 上に残っている記録済み worktree ペインへ再バインドし、消えた worktree ペインは agent CLI の resume で作り直します。使うのは `claude --continue`、`codex resume --last`、または Plan ペインに保存した Codex Plan Mode thread です。
 
-コンソールは `<git-root>/.fanout/state.json` を読み、記録済みペイン ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue と closed-by PR の状態を定期更新します。エージェント側に計測の仕込みは要りません。各行にはペインの worktree の総作業量を `+X/-Y` で示します。これは記録した base ブランチとの merge-base に対する `git diff --shortstat` で、コミット済みと未 commit の合計です（base 未記録の旧行は `origin/HEAD` から `HEAD` に fallback します）。あわせて `git status --porcelain` 由来の `dirty` / `clean` を出すので、未 commit の作業を抱えたペインをその場で見分けられます。`RUN` 列には各ペインの agent 状態（agent 起動ラッパーが報告する `running` / `done`）が出るので、まだ作業中のペインが分かります。detail panel には同じ値が `run=` として出ます。
+コンソールは `<git-root>/.fanout/state.json` を読み、記録済みペイン ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue と closed-by PR の状態を定期更新します。エージェント側に計測の仕込みは要りません。各行にはペインの worktree の総作業量を `+X/-Y` で示します。これは記録した base ブランチとの merge-base に対する `git diff --shortstat` で、コミット済みと未 commit の合計です（base 未記録の旧行は `origin/HEAD` から `HEAD` に fallback します）。あわせて `git status --porcelain` 由来の `dirty` / `clean` を出すので、未 commit の作業を抱えたペインをその場で見分けられます。`RUN` 列には各ペインの agent 状態がグリフで出ます — `●` が running、`✓` が done（agent 起動ラッパーが報告）— ので、まだ作業中のペインが分かります。detail panel には同じ値が `run=` として文字で出ます。
 
 {{< diagram "console" >}}
 
@@ -42,7 +42,7 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | `?` | キーボードショートカットのヘルプを tmux popup で開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
 | `j` / `k` | 選択を下 / 上に移動する（矢印キーでも可）。 |
 | `[` / `]` | 前 / 次の Session グループへジャンプする。 |
-| `/` | ロード済みの行を絞り込む — フリーテキストか `state:open` のような述語。`Esc` でフィルタを解除する。 |
+| `/` | ロード済みの行を絞り込む — フリーテキストか `state:open` のような述語。`Esc` は入力を抜けるだけで、一覧からもう一度 `Esc` を押すとフィルタを解除する。 |
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
