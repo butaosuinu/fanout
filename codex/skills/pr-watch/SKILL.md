@@ -278,11 +278,13 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
   `reviewRequests` も空）なら完了。
 - review が必要な PR は、`reviewDecision=APPROVED` なら完了。configured `:+1:`
   だけでは必須 review を満たした扱いにしない。
-- 自動修正が完了しているが必要な approval signal が未観測なら、default で cheap
-  approval watch に入る。approval/reaction 待ちだけでは full comment/thread/log を
-  再取得しない。
+- 自動修正が完了しているが必要な `reviewDecision=APPROVED` が未観測なら、default
+  で cheap approval watch に入る。approval/reaction 待ちだけでは full
+  comment/thread/log を再取得しない。
 - `mergeable=UNKNOWN` は GitHub 計算中として cheap polling の候補にする。
-- draft、仕様判断待ち、権限不足、外部 CI にアクセスできない状態は blocked として報告する。
+- draft は完了扱いにせず、CI / conflict / mergeability の cheap watch と repair は
+  継続する。ready 化まで approval / merge 完了だけを保留する。
+- 仕様判断待ち、権限不足、外部 CI にアクセスできない状態は blocked として報告する。
 
 `mergeStateStatus=BEHIND` は、base branch の up-to-date が必須なら rebase 対象。
 必須でない repo では `mergeable=MERGEABLE` と green CI を優先し、無駄な rebase を
@@ -384,8 +386,8 @@ Continue watching while:
 - CI is pending
 - mergeability is `UNKNOWN`
 - PR is green/mergeable but waiting for a required `reviewDecision=APPROVED`
-- PR is green/mergeable, review is not required, and it is waiting for configured
-  `:+1:`
+- PR is green/mergeable, review is not required, and the user explicitly asked
+  to wait for a configured `:+1:` gate
 - a push made by this skill is still being checked
 
 Re-enter full repair only on Expensive Repair Triggers.
@@ -510,6 +512,9 @@ while :; do
     printf '%s\n' "$state_json" |
       jq -c '.approval_reaction_targets // []'
   )"
+  reaction_status_file="$(mktemp)"
+  reaction_error_file="$(mktemp)"
+  printf '0' > "$reaction_status_file"
   approval_reactions="$(
     printf '%s\n' "$reaction_targets" | jq -c '.[]' |
       while IFS= read -r target; do
@@ -521,12 +526,27 @@ while :; do
           review_comment) path="/repos/$owner/$repo/pulls/comments/$id/reactions?content=%2B1&per_page=100" ;;
           *) continue ;;
         esac
-        gh api --paginate "$path" |
-          jq --arg kind "$kind" --arg id "$id" \
-            '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}'
+        reaction_tmp="$(mktemp)"
+        if ! gh api --paginate "$path" > "$reaction_tmp" 2>> "$reaction_error_file"; then
+          printf '1' > "$reaction_status_file"
+          rm -f "$reaction_tmp"
+          break
+        fi
+        jq --arg kind "$kind" --arg id "$id" \
+          '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}' \
+          "$reaction_tmp"
+        rm -f "$reaction_tmp"
       done |
       jq -s '.'
   )"
+  if [ "$(cat "$reaction_status_file")" != "0" ]; then
+    reaction_error="$(cat "$reaction_error_file")"
+    rm -f "$reaction_status_file" "$reaction_error_file"
+    jq -cn --arg error "$reaction_error" \
+      '{event:"blocked", reason:"reaction_snapshot_failed", error:$error}'
+    break
+  fi
+  rm -f "$reaction_status_file" "$reaction_error_file"
   if [ -z "$approval_reactions" ]; then
     approval_reactions="[]"
   fi

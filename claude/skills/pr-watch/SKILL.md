@@ -1,6 +1,6 @@
 ---
 name: pr-watch
-description: "Use from Codex CLI after PR creation or for an existing PR as a local /autofix-pr style foreground watcher. Autonomously fix merge conflicts, failing CI, and actionable review comments, then keep a token-aware local watch until the PR is mergeable, green, and GitHub review requirements are satisfied. A configured :+1: can be a soft approval signal only when GitHub review is not required. During approval/reaction wait, do not repeatedly read full review threads, comments, diffs, or CI logs; use compact shell polling and re-enter full repair only on actionable state changes. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /autofix-pr, or after PR creation says あとよろしく."
+description: "Use from Claude Code after PR creation or for an existing PR as a /loop /pr-watch workflow. Autonomously fix merge conflicts, failing CI, and actionable review comments, then use ScheduleWakeup to keep watching until the PR is mergeable, green, and GitHub review requirements are satisfied. A configured :+1: can be a soft approval signal only when GitHub review is not required. During approval/reaction waits, avoid repeatedly reading full review threads, comments, diffs, or CI logs; use compact status polling between loop passes and re-enter full repair only on actionable state changes. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /pr-watch, /loop /pr-watch, or after PR creation says あとよろしく."
 metadata:
   short-description: Watch and repair an existing PR
 ---
@@ -8,27 +8,25 @@ metadata:
 # pr-watch
 
 PR 作成後に起きるマージコンフリクト、CI 失敗、レビューコメントを検知し、
-安全に自動対応する Codex 用 workflow。
+安全に自動対応する Claude Code 用 workflow。
 
-Claude 版の `pr-watch` は `/loop` と `ScheduleWakeup` を前提にする。Codex 版では
-バックグラウンド監視を装わないが、PR 作成後または「あとはよろしく」では、Claude
-Code `/autofix-pr` のローカル版として foreground watch を行う。デフォルトでは、
-修正可能な CI 失敗・レビューコメント・コンフリクトに対応し、PR が green /
-mergeable になった後、レビュー必須なら `reviewDecision=APPROVED` まで待つ。
-レビュー不要ならそこで完了する。設定済み `:+1:` は soft approval signal として
-報告できるが、必須 GitHub review の代替にはしない。
+Claude 版の `pr-watch` は `/loop /pr-watch` と `ScheduleWakeup` を前提にする。
+PR 作成後または「あとはよろしく」では、修正可能な CI 失敗・レビューコメント・
+コンフリクトに対応し、PR が green / mergeable になった後、レビュー必須なら
+`reviewDecision=APPROVED` まで待つ。レビュー不要ならそこで完了する。設定済み
+`:+1:` は soft approval signal として報告できるが、必須 GitHub review の代替にはしない。
 
-ただし、approval / reaction 待ちでは full One Pass を繰り返さず、shell-owned な
-cheap polling だけを行う。Codex セッションを終了すると監視は続かない。
+ただし、approval / reaction 待ちでは full One Pass を繰り返さず、compact status
+polling と `ScheduleWakeup` で self-paced に待つ。Claude の loop を止めたら監視は
+続かない。
 
 ## Operating Model
 
-Default mode is `post-create-autofix-watch`.
+Default mode is `/loop /pr-watch` when the user wants continuous watching.
 
-This skill behaves like a local Codex version of Claude Code `/autofix-pr`:
-after PR creation, or when the user says "あとよろしく", it watches the PR in the
-foreground, repairs tractable failures, and waits until an approval signal is
-observed.
+After PR creation, or when the user says "あとよろしく", this skill watches the
+PR through Claude Code's loop, repairs tractable failures, and waits until
+GitHub review requirements are satisfied.
 
 Completion requires:
 
@@ -39,10 +37,10 @@ Completion requires:
 - review is not required or `reviewDecision=APPROVED`; a configured `:+1:`
   can only be a soft approval signal for review-not-required PRs
 
-The watch is foreground and local. It must not claim to keep watching after the
-Codex session exits.
+The watch is local to the active Claude loop. It must not claim to keep watching
+after the user stops the loop or the Claude process exits.
 
-To reduce token usage, waiting must be shell-owned and compact. Do not repeatedly
+To reduce token usage, waiting must be compact and self-paced. Do not repeatedly
 run full One Pass just to check whether approval or `:+1:` arrived. Run full
 repair only when a cheap snapshot indicates actionable work.
 
@@ -58,7 +56,7 @@ This skill has two loops:
 
 2. `watch loop`
    - cheap
-   - shell-owned polling
+   - compact status polling plus `ScheduleWakeup`
    - model should not inspect repeated unchanged snapshots
    - reads only compact PR/check/reaction status
    - exits into repair loop only on actionable state change
@@ -139,7 +137,7 @@ or enter the repair loop.
 Possible reaction targets are:
 
 - the PR issue itself
-- the latest Codex/watch status comment, if this skill posted one
+- the latest Claude/watch status comment, if this skill posted one
 - configured comment IDs saved in the repo-scoped local git metadata path under
   `git rev-parse --git-path pr-watch-state`
 
@@ -194,7 +192,7 @@ Do not enter full One Pass for these states alone:
 - unchanged check bucket digest
 - unchanged `updatedAt`
 - waiting for human approval
-- waiting for Codex/bot `:+1:`
+- waiting for a configured watcher/bot `:+1:`
 - review requested but no actionable comment is known
 
 When only `updatedAt` changed, first classify the update cheaply:
@@ -278,11 +276,13 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
   `reviewRequests` も空）なら完了。
 - review が必要な PR は、`reviewDecision=APPROVED` なら完了。configured `:+1:`
   だけでは必須 review を満たした扱いにしない。
-- 自動修正が完了しているが必要な approval signal が未観測なら、default で cheap
-  approval watch に入る。approval/reaction 待ちだけでは full comment/thread/log を
-  再取得しない。
+- 自動修正が完了しているが必要な `reviewDecision=APPROVED` が未観測なら、default
+  で cheap approval watch に入る。approval/reaction 待ちだけでは full
+  comment/thread/log を再取得しない。
 - `mergeable=UNKNOWN` は GitHub 計算中として cheap polling の候補にする。
-- draft、仕様判断待ち、権限不足、外部 CI にアクセスできない状態は blocked として報告する。
+- draft は完了扱いにせず、CI / conflict / mergeability の cheap watch と repair は
+  継続する。ready 化まで approval / merge 完了だけを保留する。
+- 仕様判断待ち、権限不足、外部 CI にアクセスできない状態は blocked として報告する。
 
 `mergeStateStatus=BEHIND` は、base branch の up-to-date が必須なら rebase 対象。
 必須でない repo では `mergeable=MERGEABLE` と green CI を優先し、無駄な rebase を
@@ -374,7 +374,8 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 
 ## Continuous Watching
 
-Continuous foreground watch is the default after PR creation or after "あとよろしく".
+Continuous watch via `/loop /pr-watch` is the default after PR creation or after
+"あとよろしく".
 
 Use cheap polling for long waits. The model should not repeatedly inspect
 unchanged status output.
@@ -384,8 +385,8 @@ Continue watching while:
 - CI is pending
 - mergeability is `UNKNOWN`
 - PR is green/mergeable but waiting for a required `reviewDecision=APPROVED`
-- PR is green/mergeable, review is not required, and it is waiting for configured
-  `:+1:`
+- PR is green/mergeable, review is not required, and the user explicitly asked
+  to wait for a configured `:+1:` gate
 - a push made by this skill is still being checked
 
 Re-enter full repair only on Expensive Repair Triggers.
@@ -399,7 +400,7 @@ Stop when:
 - the same actionable failure repeats without progress
 - the watcher cannot safely classify an update
 
-Codex セッションを終了すると監視は続かない。バックグラウンドで見張っているように
+Claude の loop を終了すると監視は続かない。バックグラウンドで見張っているように
 表現しない。
 
 ## Token Budget Guard
@@ -411,13 +412,14 @@ Default limits:
 - max CI log fetches per failing check name: 1 per head SHA
 - max ambiguous `updatedAt` full inspections: 3
 - watch polling interval: 30-60 seconds by default
-- max foreground watch duration: configurable, default 60 minutes
+- max loop watch duration: configurable, default 60 minutes
 
 After the limit, report the PR URL, current compact status, and the reason the
 watcher stopped.
 
 The approval/reaction wait itself should consume near-zero model tokens because
-it is shell-owned.
+each loop pass should rely on compact status before deciding whether to run full
+repair.
 
 ## Local Watcher Implementation Sketch
 
@@ -431,10 +433,11 @@ When configured `:+1:` targets are used, the state JSON may include
 `approval_reaction_targets` entries with `kind` values `issue`, `issue_comment`,
 or `review_comment`.
 
-Use `PR_WATCH_CONTINUE=1` only when the model is continuing the same cheap wait.
-A fresh user-invoked watch should clear stored `deadline_ts` / `last_digest` and
-issue a new foreground deadline. If a stored deadline is already expired, clear
-it before polling so a later explicit watch does not immediately timeout.
+Use `PR_WATCH_CONTINUE=1` only when Claude is continuing the same cheap wait
+inside `/loop /pr-watch`. A fresh user-invoked watch should clear stored
+`deadline_ts` / `last_digest` and issue a new loop deadline. If a stored
+deadline is already expired, clear it before polling so a later explicit watch
+does not immediately timeout.
 
 The shell loop should emit output to the model only when:
 
@@ -510,6 +513,9 @@ while :; do
     printf '%s\n' "$state_json" |
       jq -c '.approval_reaction_targets // []'
   )"
+  reaction_status_file="$(mktemp)"
+  reaction_error_file="$(mktemp)"
+  printf '0' > "$reaction_status_file"
   approval_reactions="$(
     printf '%s\n' "$reaction_targets" | jq -c '.[]' |
       while IFS= read -r target; do
@@ -521,12 +527,27 @@ while :; do
           review_comment) path="/repos/$owner/$repo/pulls/comments/$id/reactions?content=%2B1&per_page=100" ;;
           *) continue ;;
         esac
-        gh api --paginate "$path" |
-          jq --arg kind "$kind" --arg id "$id" \
-            '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}'
+        reaction_tmp="$(mktemp)"
+        if ! gh api --paginate "$path" > "$reaction_tmp" 2>> "$reaction_error_file"; then
+          printf '1' > "$reaction_status_file"
+          rm -f "$reaction_tmp"
+          break
+        fi
+        jq --arg kind "$kind" --arg id "$id" \
+          '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}' \
+          "$reaction_tmp"
+        rm -f "$reaction_tmp"
       done |
       jq -s '.'
   )"
+  if [ "$(cat "$reaction_status_file")" != "0" ]; then
+    reaction_error="$(cat "$reaction_error_file")"
+    rm -f "$reaction_status_file" "$reaction_error_file"
+    jq -cn --arg error "$reaction_error" \
+      '{event:"blocked", reason:"reaction_snapshot_failed", error:$error}'
+    break
+  fi
+  rm -f "$reaction_status_file" "$reaction_error_file"
   if [ -z "$approval_reactions" ]; then
     approval_reactions="[]"
   fi
@@ -599,7 +620,7 @@ done
 - approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
 - unchanged cheap snapshot をモデルに何度も読ませない。
 - full review threads、top-level comments、CI logs、diffs を polling ごとに取得しない。
-- Codex セッション終了後も監視が続くように表現しない。
+- Claude の loop / process 終了後も監視が続くように表現しない。
 
 ## Finish Report
 
