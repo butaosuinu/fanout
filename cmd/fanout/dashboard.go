@@ -20,7 +20,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/log"
 	"github.com/butaosuinu/fanout/internal/sessionview"
 	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/tmuxctl"
 	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/worktree"
 )
@@ -38,7 +37,7 @@ const defaultWorktreeActionKey = "M"
 var (
 	openDashboardBrowser = openBrowser
 	showDashboardStatus  = func(msg string) error {
-		return tmuxctl.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
+		return tmuxrun.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
 	}
 	openBrowserWaitPeriod = 2 * time.Second
 )
