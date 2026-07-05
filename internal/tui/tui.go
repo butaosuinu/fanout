@@ -46,6 +46,7 @@ type Options struct {
 	Hooks               hooks.Config
 	LaunchPane          LaunchFunc
 	NewPanePrompt       NewPanePromptFunc
+	HelpPopup           HelpPopupFunc
 	LaunchAttach        AttachLaunchFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
@@ -102,6 +103,7 @@ type model struct {
 	notice           string
 	newPane          newPaneForm
 	newPanePopupOpen bool
+	helpPopupOpen    bool
 	repoFiles        []string
 	repoFileIndex    []fileEntry
 	repoFilesLoaded  bool
@@ -118,6 +120,7 @@ type model struct {
 	quitAfterLaunch  bool
 	relayoutGen      int
 	promptOnly       bool
+	helpOnly         bool
 	promptDone       bool
 	promptCanceled   bool
 	promptResult     LaunchRequest
@@ -139,6 +142,9 @@ type (
 		req      LaunchRequest
 		canceled bool
 		err      error
+	}
+	helpPopupDoneMsg struct {
+		err error
 	}
 	launchShellMsg struct {
 		req ShellLaunchRequest
@@ -267,6 +273,9 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.helpOnly {
+		return nil
+	}
 	if m.promptOnly {
 		loadFiles := m.loadRepoFilesCmd()
 		if loadFiles == nil {

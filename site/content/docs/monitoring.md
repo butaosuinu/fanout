@@ -27,11 +27,11 @@ For recorded issue parents the console also reloads the parent's child set and s
 
 ### Key bindings
 
-The footer stays short; press `?` in the monitor to open the full shortcut help.
+The footer stays short; press `?` in the monitor to open the full shortcut help in a tmux popup.
 
 | Key | Action |
 |---|---|
-| `?` | Open the keyboard shortcut help. Press `Esc`, `q`, or `?` again to close it. |
+| `?` | Open the keyboard shortcut help in a tmux popup. Press `Esc`, `q`, or `?` again to close it. |
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |

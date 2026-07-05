@@ -31,7 +31,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
-		if (m.newPanePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+		if (m.newPanePopupOpen || m.helpPopupOpen || m.newPane.launching) && m.mode != modeNewPane {
 			// An issue launch can run a whole fan-out (seconds per child), so
 			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
 			// queue a quit instead of appearing hung.
@@ -58,6 +58,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeHelp {
 			switch msg.String() {
 			case "esc", "q", "?":
+				if m.helpOnly {
+					return m.quit()
+				}
 				m.mode = modeMonitor
 			case "ctrl+c":
 				return m.quit()
@@ -75,8 +78,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m.quit()
 		case "?":
-			m.mode = modeHelp
-			return m, nil
+			return m, m.openHelpPopupCmd()
 		case "/":
 			m.filterEditing = true
 			m.refreshRows()
@@ -260,6 +262,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchNewPaneRequest(msg.req)
+	case helpPopupDoneMsg:
+		m.helpPopupOpen = false
+		if msg.err != nil {
+			m.notice = "help popup: " + msg.err.Error()
+			return m, nil
+		}
+		if m.notice == helpPopupOpeningNotice {
+			m.notice = ""
+		}
+		return m, nil
 	case newPaneIssuesLoadedMsg:
 		p := &m.newPane.issuePicker
 		p.loading = false
