@@ -55,8 +55,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` | dispatch・self-exec popup・launch 配線 | H |
-| cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
+| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` | dispatch・self-exec(popup / Plan TUI)・launch 配線・pane identity 検証 | H |
+| cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `tui_restore.go` / `tui_watch.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR 読み取り | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
@@ -100,14 +100,19 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が
   そのまま子 briefing になるため、`watcherTriggerLabel` の対象を広げる変更は
   攻撃面を広げる。
-- **dashboard は read-only・GET-only・localhost・token 必須**: `127.0.0.1`
-  バインド、mutation エンドポイント禁止、token 未検証のリクエストを通さない。
+- **dashboard は read-only・GET-only・localhost**: `127.0.0.1` バインドと
+  mutation エンドポイント禁止は全経路。token 必須は `/api/*` のみ
+  (`requireToken`)で、`/healthz` と SPA 配信は token-free(HTML shell が
+  `?token=` を読むため)。この token-free 範囲を広げる変更も狭める変更も
+  人間レビュー対象。
 - **briefing はエージェントに注入されるプロンプト本文**: `briefing.Render` /
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
-  `__tui-help-popup` / `__codex-plan-tui` は単一定数で参照し、
-  `TestSelfExecSubcommandNames` が文字列を固定する。名前を変えると
-  実行中バイナリの popup / Plan Mode 連携が壊れる。
+  `__tui-help-popup` / `__codex-plan-tui` は `TestSelfExecSubcommandNames` が
+  文字列を固定する。dispatch と popup 起動は単一定数を参照するが、
+  `infra/codexapp/launch.go` の起動コマンド生成はリテラル埋め込みが残る
+  (burn-down 参照)。名前を変えると実行中バイナリの popup / Plan Mode
+  連携が壊れるため、変更時は 3 参照元すべての追随が要る。
 - **ldflags は `-X main.version` 名指し**: バージョン注入変数は
   `cmd/fanout/main.go` の変数名に固定されており、リネームするとリリース
   ビルドが壊れる。
@@ -126,6 +131,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   にある。
 - `shellQuote` の実装が `app/run` / `app/panelaunch` / `infra/tmuxrun` の
   3 箇所にある。
+- `infra/codexapp/launch.go` の起動コマンド生成が `__codex-plan-tui` を
+  リテラル埋め込みしている(`PlanTUICommand` 定数への統一が未了)。
 - `app` から `infra` への直接 import は既存分を容認するが、新規コードは
   `watch.IO` のような port 経由を優先する。
 

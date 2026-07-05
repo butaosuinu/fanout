@@ -87,8 +87,9 @@ diagram, and the PR-review-weight classes (H/M/A) live in
   prompt-mode plan fan-out launches one coordinator pane at the project root
   running the fanout-plan skill so `fanout plan`'s git root stays at the repo,
   never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
-  `main.go` / `tui_popup.go` / `tui_launch.go` are class H; the remaining cmd
-  files (flag validation and thin dispatch into app) are class M.
+  `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
+  `codex_plan_tui.go` are class H; the remaining cmd files (flag validation
+  and thin dispatch into app) are class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
   `agent` (supported agent names, CLI validation for live mode — the only
   core packages allowed `os`/`os/exec`), `planspec` (the `fanout plan` JSON
