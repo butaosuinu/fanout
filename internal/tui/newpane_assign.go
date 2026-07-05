@@ -170,9 +170,10 @@ func (m *model) cycleAssignRowAgent(delta int) {
 // assignOverrides returns only rows whose agent differs from the default, so
 // the launch mirrors what repeatable --agent target=name flags would pass.
 func (m model) assignOverrides() map[string]string {
+	defaultIdx := defaultAgentIndex(m.selectedDefaultAgent())
 	var overrides map[string]string
 	for _, row := range m.newPane.assign.rows {
-		if row.agentIdx == m.newPane.agentChoice {
+		if row.agentIdx == defaultIdx {
 			continue
 		}
 		if overrides == nil {
@@ -187,7 +188,7 @@ func (m model) assignOverrides() map[string]string {
 // prompt result (popup) or the launch dispatch (in-process form).
 func (m *model) finalizeNewPaneModeSubmit() tea.Cmd {
 	req := LaunchRequest{
-		DefaultAgent:   launchAgents[clampInt(m.newPane.agentChoice, 0, len(launchAgents)-1)],
+		DefaultAgent:   m.selectedDefaultAgent(),
 		AgentOverrides: m.assignOverrides(),
 	}
 	switch m.newPane.mode {
@@ -268,6 +269,7 @@ func (m model) newPaneAssignView() string {
 		lines = append(lines, errStyle.Render("error: "+a.err))
 	default:
 		width := m.inputContentWidth()
+		defaultIdx := defaultAgentIndex(m.selectedDefaultAgent())
 		start, end := m.assignRowWindow()
 		if start > 0 {
 			lines = append(lines, dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)))
@@ -280,7 +282,7 @@ func (m model) newPaneAssignView() string {
 			}
 			agentName := launchAgents[clampInt(row.agentIdx, 0, len(launchAgents)-1)]
 			token := "[" + agentName + "]"
-			if row.agentIdx != m.newPane.agentChoice {
+			if row.agentIdx != defaultIdx {
 				token = titleStyle.Render(token)
 			} else {
 				token = dimStyle.Render(token)
