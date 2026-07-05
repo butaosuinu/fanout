@@ -37,7 +37,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: web-dist
-          path: internal/dashboard/static/
+          path: internal/ui/dashboard/static/
           if-no-files-found: error
 
   build:
@@ -75,7 +75,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: internal/dashboard/static/
+          path: internal/ui/dashboard/static/
 
       - name: Build archive
         env:
@@ -89,7 +89,7 @@ jobs:
 
           # Guard: go build succeeds even without the bundle (.gitkeep embed),
           # so fail here rather than ship a binary with the fallback page.
-          test -f internal/dashboard/static/index.html
+          test -f internal/ui/dashboard/static/index.html
 
           rm -rf dist artifacts
           mkdir -p dist artifacts

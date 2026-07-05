@@ -10,15 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
-	"github.com/butaosuinu/fanout/internal/watch"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func TestTUIAgentOrDefault(t *testing.T) {
@@ -523,7 +524,7 @@ func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
 	if !strings.HasPrefix(got.ShellKey, "shell-") {
 		t.Fatalf("shell key = %q, want generated shell key", got.ShellKey)
 	}
-	if got.Parent != manualPaneParentRef || got.IssueNum != -1 {
+	if got.Parent != panelaunch.ManualParentRef || got.IssueNum != -1 {
 		t.Fatalf("shell identity = %s/%d, want @manual/-1", got.Parent, got.IssueNum)
 	}
 	if got.WorktreePath != repo || got.DisplayName != "root terminal" || got.Slug != "terminal-root-1" {

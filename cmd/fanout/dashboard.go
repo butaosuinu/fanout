@@ -7,22 +7,20 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/dashboard"
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/tmuxctl"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/worktree"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/browser"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
+	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
 
 // defaultDashboardKey is the tmux prefix-table key fanout binds to open the dashboard.
@@ -38,7 +36,7 @@ const defaultWorktreeActionKey = "M"
 var (
 	openDashboardBrowser = openBrowser
 	showDashboardStatus  = func(msg string) error {
-		return tmuxctl.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
+		return tmuxrun.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
 	}
 	openBrowserWaitPeriod = 2 * time.Second
 )
@@ -340,26 +338,7 @@ func showDashboardStatusBestEffort(msg string, lg *log.Logger) {
 }
 
 func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(openBrowserWaitPeriod):
-		return nil
-	}
+	return browser.Open(url, openBrowserWaitPeriod)
 }
 
 func randomToken() (string, error) {

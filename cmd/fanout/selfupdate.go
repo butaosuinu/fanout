@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/selfupdate"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/selfupdate"
 )
 
 func cmdUpdate(args []string, current string, gh ghissue.Runner, lg *log.Logger) exitcode.Code {

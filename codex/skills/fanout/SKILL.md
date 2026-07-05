@@ -220,7 +220,7 @@ parent resolution, batch tmux pre-flight, dry-run, pane naming, or confirmation.
 
    This is skill-side target resolution for non-TTY agent entrypoints. Do not
    change the Go `fanout` CLI for it; the CLI already accepts the resolved
-   positional arg via `internal/cliflags.Parse()`.
+   positional arg via `internal/app/cliflags.Parse()`.
 2. Forward user-supplied fanout flags verbatim:
    `--agent` (including repeatable `NUM=name` overrides), `--limit`, `--only`, `--skip`, `--include`,
    `--unblocked-only`, `--project-status` (project mode only), `--format`,

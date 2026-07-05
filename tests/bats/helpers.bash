@@ -84,7 +84,7 @@ teardown() {
   # future test (or a Tier 2 leakage) doesn't confuse the next run.
   #
   # Do NOT add a /tmp/fanout-*.db scrub here: that pattern is the LIVE
-  # `fanout msg` team DB location (internal/team DBPath) for every fanout
+  # `fanout msg` team DB location (internal/infra/team DBPath) for every fanout
   # session on this machine, and deleting a WAL-mode SQLite DB out from under
   # open connections destroys real peer messages. msg tests must instead pin
   # FANOUT_DB_PATH into BATS_TEST_TMPDIR (see tier1_msg.bats msg_env).

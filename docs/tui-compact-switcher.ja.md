@@ -1,16 +1,16 @@
 # TUI compact 表示とペイン移動 — herdr switcher の取り込み設計
 
-ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/tui` / `internal/panelayout` / `internal/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
+ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/ui/tui` / `internal/app/panelayout` / `internal/infra/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
 
 ## 問題: 40 桁サイドバーで一覧が読めない
 
-agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/panelayout/layout.go` の `SidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 15 列で、列幅の合計は最小でも約 129 桁ある(`internal/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
+agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/app/panelayout/layout.go` の `SidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 15 列で、列幅の合計は最小でも約 129 桁ある(`internal/ui/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
 
-レイアウト分岐(`internal/tui/view.go` の `monitorLayout`)は、幅 120 以上で Session サイドバー、それ未満はトップストリップ、高さが足りないときはストリップ自体を落とす、の 3 通りある。ただしどの分岐でもテーブル + 固定 13 行の詳細という形は変わらず、狭い幅で表示形態そのものを切り替える仕組みがない。
+レイアウト分岐(`internal/ui/tui/view.go` の `monitorLayout`)は、幅 120 以上で Session サイドバー、それ未満はトップストリップ、高さが足りないときはストリップ自体を落とす、の 3 通りある。ただしどの分岐でもテーブル + 固定 13 行の詳細という形は変わらず、狭い幅で表示形態そのものを切り替える仕組みがない。
 
 表示項目にも穴がある。`@fanout_agent_state`(running / done)は sessionview から TUI まで届いているのに一覧にも詳細にも出しておらず、フィルタ(`run:` キーと全文一致)でしか使えない。ペインが動いているかを一目で判別できない。
 
-移動導線は片方向で、enter / o で選択ペインへ飛べる(`internal/tui/focus.go` → `tmux switch-client`)が、コンソールへ戻るのは手動の tmux 操作だけになっている。
+移動導線は片方向で、enter / o で選択ペインへ飛べる(`internal/ui/tui/focus.go` → `tmux switch-client`)が、コンソールへ戻るのは手動の tmux 操作だけになっている。
 
 ## herdr の知見
 
@@ -33,7 +33,7 @@ agent ペインを作ると auto-layout が TUI コンソールペインを幅 4
 
 ### 描画: table は状態、描画は自前
 
-bubbles table は捨てず、compact 時は `View()` の分岐でレンダリングだけ自前にする(新規 `internal/tui/compact.go`)。選択状態の単一情報源は `m.table.Cursor()` で、`selectedPane()` / j・k / enter / peek / c・m・x・X / `[` `]` / フィルタはすべてこのカーソルを参照するから、キー処理は無変更で効く。
+bubbles table は捨てず、compact 時は `View()` の分岐でレンダリングだけ自前にする(新規 `internal/ui/tui/compact.go`)。選択状態の単一情報源は `m.table.Cursor()` で、`selectedPane()` / j・k / enter / peek / c・m・x・X / `[` `]` / フィルタはすべてこのカーソルを参照するから、キー処理は無変更で効く。
 
 ### 40 桁 1 行フォーマット
 
@@ -49,9 +49,9 @@ bubbles table は捨てず、compact 時は `View()` の分岐でレンダリン
 ```
 
 - 1 ペイン 1 行: 序数(1〜9、数字ジャンプの対応表示)+ 状態グリフ + itemLabel(`#N` / taskID / shell)+ Name + 右寄せの pane ID。幅が足りないときは Name だけを削る
-- Session ヘッダは `compactParent` + `sessionSummary` の 5 カウンタ(t/m/p/b/l)を `sessionSummaryText`(`internal/tui/session.go`)と同じ並びで出す。行頭の `>` は選択ペイン行の印と紛れるためヘッダでは使わない。parent の表示名(issue タイトルや slug)は現行のデータソースに無いので出さない — 必要になったら別 issue として切る
+- Session ヘッダは `compactParent` + `sessionSummary` の 5 カウンタ(t/m/p/b/l)を `sessionSummaryText`(`internal/ui/tui/session.go`)と同じ並びで出す。行頭の `>` は選択ペイン行の印と紛れるためヘッダでは使わない。parent の表示名(issue タイトルや slug)は現行のデータソースに無いので出さない — 必要になったら別 issue として切る
 - 選択行(`>`)の直下だけ 2〜3 行展開する: ブランチ + PR、ci / wave / blockers / dirty、peek の末尾 1 行。固定 13 行の詳細 viewport は compact では描画しない。peek の取得パイプラインは無変更で、表示だけ縮める
-- スクロールは `sessionRows`(`internal/tui/session.go`)と同じ「アクティブ中心のスライド窓 + `...`」パターンの純関数にする
+- スクロールは `sessionRows`(`internal/ui/tui/session.go`)と同じ「アクティブ中心のスライド窓 + `...`」パターンの純関数にする
 
 ### 状態グリフ
 
@@ -65,7 +65,7 @@ bubbles table は捨てず、compact 時は `View()` の分岐でレンダリン
 
 ### コンソール復帰キー(F11 / prefix T)
 
-dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は tmux 3.3 互換の `run-shell` で押下時の tmux format を展開し、`tmux -S #{q:socket_path} new-window -t #{q:session_id}:` で押下元の socket/session に detached window を作る。project root/current path の各分岐は `#{q:...}` で shell quote して `new-window -c` へ、`#{client_tty}` は `new-window -e` へ渡す。一方、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する。
+dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/infra/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は tmux 3.3 互換の `run-shell` で押下時の tmux format を展開し、`tmux -S #{q:socket_path} new-window -t #{q:session_id}:` で押下元の socket/session に detached window を作る。project root/current path の各分岐は `#{q:...}` で shell quote して `new-window -c` へ、`#{client_tty}` は `new-window -e` へ渡す。一方、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する。
 
 pane id をバインドに焼き込む方式は、コンソール再起動で stale になり複数リポジトリの登録が上書き合戦になるため採らない。バイナリ経由なら押下のたびに探索するので、コンソールが作り直されてもバインドは古びない。
 
@@ -87,7 +87,7 @@ monitor モードの `1`〜`9` を「表示リストの N 番目を選択して�
 
 ### zoom(`Z`)
 
-`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/panelayout/apply.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
+`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/infra/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/app/panelayout/apply.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
 
 ## 実装分割
 
@@ -100,9 +100,9 @@ monitor モードの `1`〜`9` を「表示リストの N 番目を選択して�
 | C3 | 数字ジャンプ 1〜9 + `Z` zoom | S | なし |
 | C4 | compact switcher レンダラ + `v` トグル | M〜L | C1, C3 |
 
-C4 は C1(グリフ)と C3(序数表示)に blocked。C2 と C3 はどちらも `internal/tmuxrun` に関数を足す(C2: role listing + `BindConsoleKeys`、C3: `ZoomPane`)ので完全には独立でないが、別関数どうしでリベースは自明。ほかに C2 は cmd/fanout と internal/settings、C3 は internal/tui を触る。
+C4 は C1(グリフ)と C3(序数表示)に blocked。C2 と C3 はどちらも `internal/infra/tmuxrun` に関数を足す(C2: role listing + `BindConsoleKeys`、C3: `ZoomPane`)ので完全には独立でないが、別関数どうしでリベースは自明。ほかに C2 は cmd/fanout と internal/infra/settings、C3 は internal/ui/tui を触る。
 
-テストは各パッケージの流儀に従う(internal/tui は純関数 + Options 注入フェイク、cmd/fanout は純関数テスト)。pin する主な挙動: compact の 40 桁行フォーマット、閾値 80 と `v` の 3 状態サイクル、compact 中も enter / c が `selectedPane` に効くこと、`pickConsolePane` の優先順と role + タイトル二重照合、console 復帰バインドのスペース入りパスのクォート、数字ジャンプと close 選択肢の非衝突。ユーザー向けドキュメントの同期先は README.md / README.ja.md の TUI 節、docs サイトのキー表(`site/content/docs/monitoring.md` / `monitoring.ja.md`)、in-app help(`internal/tui/help.go`)。
+テストは各パッケージの流儀に従う(internal/ui/tui は純関数 + Options 注入フェイク、cmd/fanout は純関数テスト)。pin する主な挙動: compact の 40 桁行フォーマット、閾値 80 と `v` の 3 状態サイクル、compact 中も enter / c が `selectedPane` に効くこと、`pickConsolePane` の優先順と role + タイトル二重照合、console 復帰バインドのスペース入りパスのクォート、数字ジャンプと close 選択肢の非衝突。ユーザー向けドキュメントの同期先は README.md / README.ja.md の TUI 節、docs サイトのキー表(`site/content/docs/monitoring.md` / `monitoring.ja.md`)、in-app help(`internal/ui/tui/help.go`)。
 
 ## やらないこと(判断記録)
 

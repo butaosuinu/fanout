@@ -10,7 +10,7 @@ Claude Code 専用 (transcript 形式に依存)。fanout run メトリクス (�
 ## ガードレール
 
 - 収集は read-only。書いてよいのはスナップショット (`.fanout/retro/session-<date>.json`、ignore されない repo では `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/fanout-retro/<repo-slug>/`) のみ。
-- 改善は提案止まり。repo ファイル (CLAUDE.md / AGENTS.md / docs / skills) への適用はユーザー承認後にブランチ + PR。briefing テンプレ (`internal/briefing`) と settings の自動書き換えは禁止 (#373 のガードレール)。
+- 改善は提案止まり。repo ファイル (CLAUDE.md / AGENTS.md / docs / skills) への適用はユーザー承認後にブランチ + PR。briefing テンプレ (`internal/app/briefing`) と settings の自動書き換えは禁止 (#373 のガードレール)。
 - GitHub への書き込み (issue / PR コメント投稿) はしない。提案はチャットに出す。
 - memory feedback だけは repo 外なので、ユーザー承認後に直接追記してよい。
 - transcript 全文をコンテキストに読み込まない。件数集計を先に取り、代表例はカテゴリごとに最大 3 件・1〜2 行の抜粋に留める。

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
 func TestIsDashboardRequest(t *testing.T) {

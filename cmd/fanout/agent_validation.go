@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 
-	"github.com/butaosuinu/fanout/internal/agent"
-	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/planspec"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 func validateIssueAgents(cfg *cliflags.Config, issues, limitDeferred []ghissue.Issue) error {

@@ -3,13 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
@@ -99,15 +100,11 @@ func tmuxPaneGitToplevel() (string, error) {
 	if pane == "" {
 		return "", fmt.Errorf("not inside a tmux pane")
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#{pane_current_path}").Output()
+	path, err := tmuxrun.PaneCurrentPath(pane)
 	if err != nil {
-		return "", fmt.Errorf("tmux display-message pane_current_path: %w", err)
+		return "", err
 	}
-	path := strings.TrimSpace(string(out))
-	if path == "" {
-		return "", fmt.Errorf("tmux pane current path is empty")
-	}
-	return gitToplevelAt(path)
+	return gitroot.Toplevel(path)
 }
 
 func inferProjectRootFromStatePath(path string) string {
@@ -122,23 +119,7 @@ func inferProjectRootFromStatePath(path string) string {
 }
 
 func gitToplevelFromCwd() (string, error) {
-	return gitToplevelAt("")
-}
-
-func gitToplevelAt(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	if strings.TrimSpace(dir) != "" {
-		cmd.Dir = dir
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("current directory is not inside a git work tree")
-	}
-	root := strings.TrimSpace(string(out))
-	if root == "" {
-		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
-	}
-	return root, nil
+	return gitroot.Toplevel("")
 }
 
 func dirExists(path string) bool {

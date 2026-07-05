@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/state"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 func TestNewTUIListOpenIssuesFuncMarksRecordedSessions(t *testing.T) {

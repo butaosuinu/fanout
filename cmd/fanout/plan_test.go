@@ -6,8 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 func TestBuildPlanOnlyIdempotencyAndLimit(t *testing.T) {
@@ -134,7 +135,7 @@ func TestExistingWorktreeFannedPreservesCurrentParentQualifiedFallback(t *testin
 
 func TestExistingWorktreeFannedIgnoresGeneratedManualPaneSlug(t *testing.T) {
 	root := t.TempDir()
-	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", manualPaneSlug("Diagnostics", -12)))
+	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", panelaunch.ManualPaneSlug("Diagnostics", -12)))
 	cfg := &cliflags.Config{ParentRef: "200"}
 	issues := []ghissue.Issue{{Number: 12, Title: "Diagnostics", State: "OPEN"}}
 
