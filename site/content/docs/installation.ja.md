@@ -39,11 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### 配置先
 
-バイナリは `~/.local/bin/fanout` に、Claude Code 連携は `~/.claude` 配下、Codex CLI 連携は `~/.codex` 配下に配置されます。
+各配置先はインストールコマンドの環境変数で上書きできます。`BIN_DIR`(既定 `~/.local/bin`)、`CLAUDE_DIR`(既定 `~/.claude`)、`CODEX_DIR`(既定 `~/.codex`)です。
 
-- `~/.local/bin/fanout`(バイナリ本体)
-- `~/.claude/commands/fanout.md`、`~/.claude/skills/fanout/`(Claude Code 連携)
-- `~/.codex/skills/fanout/`(Codex CLI 連携)
+- `$BIN_DIR/fanout`(バイナリ本体)
+- `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
+- `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
+- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群)と `$CODEX_DIR/agents/`(post-work reviewer / verifier)、`$CODEX_DIR/tools/`
+
+install と update はこれらすべてを上書きします。
 
 `~/.local/bin` が `PATH` に入っていることを確認してください。
 

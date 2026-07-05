@@ -39,11 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### Installed paths
 
-The binary goes to `~/.local/bin/fanout`; the Claude Code integration goes under `~/.claude`; the Codex CLI integration goes under `~/.codex`.
+Each destination has an environment-variable override for the install command: `BIN_DIR` (default `~/.local/bin`), `CLAUDE_DIR` (default `~/.claude`), and `CODEX_DIR` (default `~/.codex`).
 
-- `~/.local/bin/fanout` (the binary)
-- `~/.claude/commands/fanout.md`, `~/.claude/skills/fanout/` (Claude Code integration)
-- `~/.codex/skills/fanout/` (Codex CLI integration)
+- `$BIN_DIR/fanout` — the binary
+- `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
+- `$CLAUDE_DIR/skills/` — the `fanout`, `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` skills
+- `$CODEX_DIR/skills/` — the same skills minus `session-retro`, plus `$CODEX_DIR/agents/` (the post-work reviewer / verifier) and `$CODEX_DIR/tools/`
+
+Install and update overwrite all of these.
 
 Confirm `~/.local/bin` is on your `PATH`:
 
