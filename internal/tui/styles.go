@@ -26,7 +26,7 @@ var (
 	warnStyle            = lipgloss.NewStyle().Foreground(colorTsuchi)
 	errStyle             = lipgloss.NewStyle().Foreground(colorBeni)
 	panelStyle           = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
-	modalStyle           = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).Padding(1, 2).BorderForeground(colorAsagi)
+	modalStyle           = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).Padding(1, 2).BorderForeground(colorAsagi)
 	// popupContentStyle drops the modal border when the popup runs inside a tmux
 	// display-popup: the popup frame is the only border, so the content only
 	// keeps a 1-column left/right gutter.
