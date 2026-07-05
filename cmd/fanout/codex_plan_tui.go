@@ -27,6 +27,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/exitcode"
 	"github.com/butaosuinu/fanout/internal/log"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const (
@@ -48,6 +49,11 @@ type codexPlanTUIConfig struct {
 	ResumeSessionID string
 	StatusFile      string
 	Help            bool
+	// SetAgentState reports the pane's agent state (working/plan) around the
+	// fanout-driven initial plan turn. Best-effort display telemetry: cmdCodexPlanTUI
+	// wires it to tmuxrun.SetPaneAgentState; nil (tests, direct calls) means no
+	// reporting.
+	SetAgentState func(state string)
 }
 
 type codexPlanTUIStatus struct {
@@ -109,6 +115,22 @@ type codexAppSessionClient interface {
 	Notify(method string) error
 }
 
+// codexAppStreamClient is the read/write surface the initial-turn drain loop
+// and the server-request handlers need. *codexAppClient implements it; tests
+// substitute a scripted fake.
+type codexAppStreamClient interface {
+	Receive() (appServerMessage, error)
+	Send(v any) error
+}
+
+// codexPlanTurnClient is what beginCodexPlanTurn needs: request the turn,
+// drain its stream, and close the connection once fanout stops listening.
+type codexPlanTurnClient interface {
+	codexAppRequester
+	codexAppStreamClient
+	Close()
+}
+
 type codexRemoteAppServer struct {
 	Addr string
 
@@ -142,6 +164,9 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 	}
 	if cfg.Help {
 		return exitcode.OK
+	}
+	cfg.SetAgentState = func(state string) {
+		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
 	}
 	if err := runCodexPlanTUI(cfg, os.Stdout, os.Stderr); err != nil {
 		lg.Err("codex plan mode TUI: %v", err)
@@ -242,7 +267,15 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	if thread.ID != "" && thread.SessionID == "" {
 		thread.SessionID = thread.ID
 	}
+	setState := cfg.SetAgentState
+	if setState == nil {
+		setState = func(string) {}
+	}
 	var drainDone chan error
+	// Every return below must settle a still-live drain goroutine (finish or
+	// bounded-wait) so its in-flight "plan" write cannot outlive the process;
+	// paths that already consumed or awaited the drain nil drainDone first.
+	defer func() { awaitDrainAfterTUIExit(client, drainDone) }()
 	tuiPrompt := ""
 	if thread.ID == "" {
 		thread, err = setupCodexPlanThread(client, cwd)
@@ -250,18 +283,15 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 			return err
 		}
 		if thread.UseTurnCollaborationMode {
-			var turnStart codexPlanTurnStartResult
-			turnStart, err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt)
+			drainDone, err = beginCodexPlanTurn(client, thread, cwd, cfg.Prompt, setState)
 			if err != nil {
 				return err
 			}
-			if turnStart.Completed {
-				client.Close()
-			} else {
-				drainDone = make(chan error, 1)
-				go func() { drainDone <- drainCodexAppServerUntilTurnComplete(client, thread.ID, turnStart.TurnID) }()
-			}
 		} else {
+			// The initial plan turn runs inside the interactive TUI here, so
+			// fanout cannot observe its completion (keeping this client open
+			// would let handleServerRequest auto-answer approval requests
+			// meant for the TUI). No working/plan state is reported.
 			err = seedCodexPlanThreadForResume(client, thread.ID)
 			if err != nil {
 				return err
@@ -320,6 +350,7 @@ func runCodexPlanTUI(cfg codexPlanTUIConfig, stdout, stderr io.Writer) (err erro
 	}
 	ready = true
 	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client)
+	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
 	tuiStopped = tuiExited
 	return err
 }
@@ -384,6 +415,30 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 		"threadSource":       "user",
 		"ephemeral":          false,
 	}
+}
+
+// beginCodexPlanTurn starts the fanout-driven initial plan turn and reports
+// its progress as agent state: "working" while the turn runs and "plan" once
+// it completes successfully (written inside the drain goroutine, so waiting on
+// the returned channel also waits for the state write). A synchronously
+// completed turn skips "working" and reports "plan" directly. The returned
+// channel is nil when there is nothing to drain.
+func beginCodexPlanTurn(client codexPlanTurnClient, thread codexThreadInfo, cwd, prompt string, setState func(string)) (chan error, error) {
+	turnStart, err := startCodexPlanTurn(client, thread, cwd, prompt)
+	if err != nil {
+		return nil, err
+	}
+	if turnStart.Completed {
+		setState("plan")
+		client.Close()
+		return nil, nil
+	}
+	setState("working")
+	drainDone := make(chan error, 1)
+	go func() {
+		drainDone <- drainCodexAppServerUntilTurnComplete(client, thread.ID, turnStart.TurnID, setState)
+	}()
+	return drainDone, nil
 }
 
 func startCodexPlanTurn(client codexAppRequester, thread codexThreadInfo, cwd, prompt string) (codexPlanTurnStartResult, error) {
@@ -931,7 +986,7 @@ func sendAppNotification(client *codexAppClient, method string) error {
 	return nil
 }
 
-func sendAppResponse(client *codexAppClient, id json.RawMessage, result any) error {
+func sendAppResponse(client codexAppStreamClient, id json.RawMessage, result any) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot respond to app-server request without id")
 	}
@@ -944,7 +999,7 @@ func sendAppResponse(client *codexAppClient, id json.RawMessage, result any) err
 	return nil
 }
 
-func sendAppError(client *codexAppClient, id json.RawMessage, message string) error {
+func sendAppError(client codexAppStreamClient, id json.RawMessage, message string) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot send app-server error without id")
 	}
@@ -996,6 +1051,7 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 	for drainDone != nil {
 		select {
 		case tuiErr := <-tuiDone:
+			awaitDrainAfterTUIExit(client, drainDone)
 			return true, tuiErr
 		case drainErr := <-drainDone:
 			client.Close()
@@ -1008,7 +1064,26 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 	return true, <-tuiDone
 }
 
-func drainCodexAppServerUntilTurnComplete(client *codexAppClient, threadID, turnID string) error {
+// awaitDrainAfterTUIExit closes the app client and briefly waits for the
+// initial-turn drain goroutine before the process exits. The drain writes the
+// "plan" agent state synchronously before signaling drainDone; skipping this
+// wait could leave an orphaned tmux set-option that stamps "plan" on the pane
+// after the launch wrapper already recorded "done". The bounded wait narrows
+// that window rather than closing it: a tmux server stalled past the timeout
+// at the exact completion instant can still land "plan" late — accepted, the
+// state is display-only telemetry.
+func awaitDrainAfterTUIExit(client *codexAppClient, drainDone <-chan error) {
+	if drainDone == nil {
+		return
+	}
+	client.Close()
+	select {
+	case <-drainDone:
+	case <-time.After(2 * time.Second):
+	}
+}
+
+func drainCodexAppServerUntilTurnComplete(client codexAppStreamClient, threadID, turnID string, setState func(string)) error {
 	for {
 		msg, err := client.Receive()
 		if err != nil {
@@ -1030,6 +1105,10 @@ func drainCodexAppServerUntilTurnComplete(client *codexAppClient, threadID, turn
 			if completion.Status != "completed" {
 				return fmt.Errorf("codex initial plan turn ended with status %q", completion.Status)
 			}
+			// The proposed plan is now part of the thread the TUI displays;
+			// report it before signaling drainDone so callers waiting on the
+			// channel also wait for this write.
+			setState("plan")
 			return nil
 		}
 	}
@@ -1100,7 +1179,7 @@ func isTerminalCodexTurnStatus(status string) bool {
 	}
 }
 
-func handleServerRequest(client *codexAppClient, msg appServerMessage) error {
+func handleServerRequest(client codexAppStreamClient, msg appServerMessage) error {
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		return sendAppResponse(client, msg.ID, map[string]any{"decision": "decline"})

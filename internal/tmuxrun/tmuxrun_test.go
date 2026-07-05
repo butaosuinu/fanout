@@ -769,6 +769,46 @@ func TestSetPaneShellKey(t *testing.T) {
 	})
 }
 
+func TestSetPaneAgentState(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	if err := SetPaneAgentState("%42", "plan"); err != nil {
+		t.Fatalf("SetPaneAgentState() failed: %v", err)
+	}
+
+	assertTmuxArgs(t, argsPath, []string{
+		"set-option", "-p", "-t", "%42", "@fanout_agent_state", "plan",
+	})
+}
+
+// TestSetPaneAgentStateSkipsEmptyArgs pins the deliberate divergence from the
+// other SetPane* helpers: the state is display-only telemetry, so missing
+// arguments are a silent no-op instead of an error, and tmux is never invoked.
+func TestSetPaneAgentStateSkipsEmptyArgs(t *testing.T) {
+	tests := []struct {
+		name   string
+		paneID string
+		state  string
+	}{
+		{name: "empty pane id", paneID: "", state: "plan"},
+		{name: "empty state", paneID: "%42", state: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+			if err := SetPaneAgentState(tt.paneID, tt.state); err != nil {
+				t.Fatalf("SetPaneAgentState(%q, %q) = %v, want nil no-op", tt.paneID, tt.state, err)
+			}
+			if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
+				t.Fatalf("tmux was invoked (args file %v), want no invocation", err)
+			}
+		})
+	}
+}
+
 func TestSetPaneLabel(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
@@ -853,6 +893,36 @@ printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 func TestEnablePaneBorderTitlesRequiresPaneID(t *testing.T) {
 	if err := EnablePaneBorderTitles(""); err == nil {
 		t.Fatal("EnablePaneBorderTitles(empty pane id) should error")
+	}
+}
+
+// TestAgentStateSetCommand pins the shared one-liner every in-pane state write
+// embeds (the launch wrapper and the Claude hooks injected by internal/agent):
+// contract values stay bare tokens, hostile values are quoted so a state can
+// never break out of the command.
+func TestAgentStateSetCommand(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{
+			name:  "contract value passes bare",
+			state: "working",
+			want:  `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state working 2>/dev/null`,
+		},
+		{
+			name:  "hostile value is quoted",
+			state: "pwned; rm -rf /",
+			want:  `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state 'pwned; rm -rf /' 2>/dev/null`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AgentStateSetCommand(tt.state); got != tt.want {
+				t.Fatalf("AgentStateSetCommand(%q) = %q, want %q", tt.state, got, tt.want)
+			}
+		})
 	}
 }
 
