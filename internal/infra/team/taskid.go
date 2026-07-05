@@ -2,8 +2,15 @@ package team
 
 import (
 	"hash/fnv"
+	"regexp"
 	"strings"
 )
+
+// TaskIDRE is the plan task id shape: lowercase kebab-case starting with an
+// alphanumeric. It is the single definition shared by the `fanout plan` /
+// `fanout msg` CLI parsers (cmd/fanout) and the msg execution layer
+// (internal/app/peermsg), which must agree on what counts as a task id.
+var TaskIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // planParentPrefix marks a parent ref scoped to an issue-less `fanout plan`
 // run (cmd/fanout planParentRef builds "plan:<slug>"). Plan tasks are

@@ -26,6 +26,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -34,7 +35,10 @@ const planSubcommand = "plan"
 var (
 	rePlanPositiveInt = regexp.MustCompile(`^[1-9][0-9]*$`)
 	rePlanNumber      = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
-	rePlanTaskID      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	// rePlanTaskID aliases the shared task-id shape (team.TaskIDRE) so the
+	// plan CLI, the msg CLI parser, and internal/app/peermsg agree on one
+	// definition.
+	rePlanTaskID = team.TaskIDRE
 )
 
 type planCommandConfig struct {
