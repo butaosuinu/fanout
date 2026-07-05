@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -237,31 +238,8 @@ func tuiProjectRoot() (string, error) {
 
 func fanoutTUISessionName(projectRoot string) string {
 	sum := sha1.Sum([]byte(projectRoot))
-	base := sanitizeSessionPart(filepath.Base(projectRoot))
+	base := panelaunch.SanitizeSessionPart(filepath.Base(projectRoot))
 	return "fanout-" + base + "-" + hex.EncodeToString(sum[:])[:8]
-}
-
-func sanitizeSessionPart(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if allowed {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "repo"
-	}
-	return out
 }
 
 func tuiLaunchCommand(commandName, projectRoot string) string {

@@ -1,14 +1,17 @@
-package main
+package panelaunch
 
 import (
 	"bytes"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
@@ -19,6 +22,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -44,7 +48,7 @@ func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
 func TestShortIssueTitleTruncatesOnRuneBoundary(t *testing.T) {
 	title := strings.Repeat("あ", 61)
 
-	got := shortIssueTitle(title)
+	got := ShortIssueTitle(title)
 
 	if !utf8.ValidString(got) {
 		t.Fatalf("short title is invalid UTF-8: %q", got)
@@ -60,14 +64,14 @@ func TestShortIssueTitleTruncatesOnRuneBoundary(t *testing.T) {
 func TestShortIssueTitleKeepsSixtyRunes(t *testing.T) {
 	title := strings.Repeat("界", 60)
 
-	if got := shortIssueTitle(title); got != title {
-		t.Fatalf("shortIssueTitle changed 60-rune title:\nwant %q\ngot  %q", title, got)
+	if got := ShortIssueTitle(title); got != title {
+		t.Fatalf("ShortIssueTitle changed 60-rune title:\nwant %q\ngot  %q", title, got)
 	}
 }
 
 func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	now := time.Date(2026, 6, 4, 1, 2, 3, 0, time.UTC)
-	req := paneRequest{
+	req := Request{
 		ParentRef:           "81",
 		Number:              83,
 		Slug:                "state-idempotency-83",
@@ -113,7 +117,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 
 func TestStatePaneCapturesTaskID(t *testing.T) {
 	now := time.Date(2026, 6, 13, 1, 2, 3, 0, time.UTC)
-	req := paneRequest{
+	req := Request{
 		ParentRef:  "plan:launch-plan",
 		TaskID:     "api-client",
 		Slug:       "extract-api-client-api-client",
@@ -132,18 +136,18 @@ func TestStatePaneCapturesTaskID(t *testing.T) {
 
 func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true}
-	if got := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "First Manual"}); got.Number != -1 {
+	if got := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{Title: "First Manual"}); got.Number != -1 {
 		t.Fatalf("first manual number = %d, want -1", got.Number)
 	}
-	store := state.Store{Panes: []state.Pane{{Parent: manualPaneParentRef, IssueNum: -1}}}
-	req := newManualPaneRequest(cfg, "/repo", store, hooks.EmptyConfig(), manualPaneOptions{
+	store := state.Store{Panes: []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}}
+	req := NewManualRequest(cfg, "/repo", store, hooks.EmptyConfig(), ManualOptions{
 		Title:  "Manual Diagnostics",
 		Body:   "extra context",
 		Agent:  "codex",
 		Prompt: "inspect the workspace",
 	})
-	if req.ParentRef != manualPaneParentRef || req.Number != -2 {
-		t.Fatalf("manual identity = parent %q number %d, want %q -2", req.ParentRef, req.Number, manualPaneParentRef)
+	if req.ParentRef != ManualParentRef || req.Number != -2 {
+		t.Fatalf("manual identity = parent %q number %d, want %q -2", req.ParentRef, req.Number, ManualParentRef)
 	}
 	if req.Agent != "codex" || !strings.Contains(req.Prompt, "inspect the workspace") {
 		t.Fatalf("manual launch = prompt %q agent %q", req.Prompt, req.Agent)
@@ -160,8 +164,9 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
 	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: "/repo"}
-	if !createPane(cfg, lg, info, req, nil, log.Palette{}, "fanout") {
-		t.Fatalf("createPane() = false, stderr:\n%s", stderr.String())
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
+	if !launcher.LaunchOK(req) {
+		t.Fatalf("LaunchOK() = false, stderr:\n%s", stderr.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -177,7 +182,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	}
 }
 
-func TestNewManualPaneRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
+func TestNewManualRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
 	repo := t.TempDir()
 	cfg := &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true}
 	// Simulate a state-only close: manual-1's worktree dir survives with no state
@@ -187,7 +192,7 @@ func TestNewManualPaneRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := newManualPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "inspect api"})
+	req := NewManualRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), ManualOptions{Title: "inspect api"})
 
 	if req.Slug != "manual-2-inspect-api-pane" || req.BranchName != "fanout/manual-2-inspect-api-pane" {
 		t.Fatalf("slug/branch = %q/%q, want manual-2-inspect-api-pane (skip orphaned manual-1)", req.Slug, req.BranchName)
@@ -197,7 +202,7 @@ func TestNewManualPaneRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
 	}
 }
 
-func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *testing.T) {
+func TestNewManualRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
 		Agent:         "codex",
@@ -205,7 +210,7 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *t
 		NoRefresh:     true,
 		CodexPlanMode: &codexPlanMode,
 	}
-	req := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{
+	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
 		Title:  "Inspect API",
 		Agent:  "codex",
 		Prompt: "Inspect API",
@@ -261,10 +266,10 @@ func TestNewManualPaneRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *t
 	}
 }
 
-func TestNewManualPaneRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
+func TestNewManualRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &codexPlanMode}
-	req := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{
+	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
 		Title:  "Inspect API",
 		Body:   "Inspect API\n\nCheck handlers",
 		Agent:  "codex",
@@ -291,10 +296,10 @@ func TestNewManualPaneRequestCodexPlanModePreservesMultilinePrompt(t *testing.T)
 
 func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude"}
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
 
-	taskReq := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	taskReq := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
 	}
@@ -302,7 +307,7 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 		t.Fatal("task pane RefreshBestEffort = true, want false (plan tasks keep strict refresh)")
 	}
 
-	manualReq := newManualPaneRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), manualPaneOptions{Title: "Manual diagnostics"})
+	manualReq := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{Title: "Manual diagnostics"})
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")
 	}
@@ -314,7 +319,7 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
 	projectRoot := t.TempDir()
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
-	req := newPaneRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	req := NewIssueRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
@@ -322,14 +327,14 @@ func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
 func TestCreatePaneTaskDryRunDoesNotWriteBriefing(t *testing.T) {
 	projectRoot := t.TempDir()
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
-	req := newTaskPaneRequest(cfg, projectRoot, spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	req := NewTaskRequest(cfg, projectRoot, spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
 
-func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Config, projectRoot string, req paneRequest) {
+func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Config, projectRoot string, req Request) {
 	t.Helper()
 	if !cfg.DryRun {
 		t.Fatal("test helper requires cfg.DryRun")
@@ -343,8 +348,9 @@ func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Conf
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
 	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: projectRoot}
-	if !createPane(cfg, lg, info, req, nil, log.Palette{}, "fanout") {
-		t.Fatalf("createPane() = false, stderr:\n%s", stderr.String())
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
+	if !launcher.LaunchOK(req) {
+		t.Fatalf("LaunchOK() = false, stderr:\n%s", stderr.String())
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -357,25 +363,84 @@ func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Conf
 	}
 }
 
-func TestManualPaneSlugBoundsPromptDerivedSlug(t *testing.T) {
-	got := manualPaneSlug(strings.Repeat("a", naming.MaxSlugLength+50), -12)
+func TestLaunchFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+	installFakeExecutable(t, "claude")
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "duplicate-title-77")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	if len(got) > naming.MaxSlugLength {
-		t.Fatalf("manualPaneSlug len = %d, want <= %d: %q", len(got), naming.MaxSlugLength, got)
+	cfg := &cliflags.Config{
+		Agent:      "claude",
+		ParentRef:  "81",
+		BaseBranch: "main",
+		NoRefresh:  true,
 	}
-	if !strings.HasPrefix(got, "manual-12-") || !strings.HasSuffix(got, "-pane") {
-		t.Fatalf("manualPaneSlug = %q, want manual-12-...-pane", got)
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+	info := &fanoutruntime.Info{
+		Session:     "test",
+		Target:      "%caller",
+		ProjectRoot: repo,
 	}
-	if strings.HasSuffix(got, "-12") {
-		t.Fatalf("manualPaneSlug = %q, must not end with an issue-like numeric suffix", got)
+	issue := ghissue.Issue{Number: 77, Title: "Duplicate Title", State: "OPEN", Body: "body"}
+
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Palette: log.Palette{}, CommandName: "fanout"}
+	if launcher.LaunchOK(NewIssueRequest(cfg, repo, issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)) {
+		t.Fatal("LaunchOK() = true, want false for launch-time worktree collision")
+	}
+	if got := stderr.String(); !strings.Contains(got, "worktree path already exists during launch") {
+		t.Fatalf("stderr = %q, want launch collision message", got)
 	}
 }
 
-func TestNewPaneRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
+func TestLaunchRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
+	repo := t.TempDir()
+	cfg := &cliflags.Config{
+		Agent:      "claude",
+		ParentRef:  "81",
+		BaseBranch: "refs/heads/main",
+		DryRun:     true,
+	}
+	var stderr bytes.Buffer
+	lg := log.NewWith(io.Discard, &stderr, false)
+	info := &fanoutruntime.Info{
+		Session:     "test",
+		Target:      "%caller",
+		ProjectRoot: repo,
+	}
+	issue := ghissue.Issue{Number: 77, Title: "Bad Base", State: "OPEN", Body: "body"}
+
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Palette: log.Palette{}, CommandName: "fanout"}
+	if launcher.LaunchOK(NewIssueRequest(cfg, repo, issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)) {
+		t.Fatal("LaunchOK() = true, want false for unsupported refresh base")
+	}
+	if got := stderr.String(); !strings.Contains(got, `base branch "refs/heads/main" is not refreshable`) {
+		t.Fatalf("stderr = %q, want unsupported base message", got)
+	}
+}
+
+func TestManualPaneSlugBoundsPromptDerivedSlug(t *testing.T) {
+	got := ManualPaneSlug(strings.Repeat("a", naming.MaxSlugLength+50), -12)
+
+	if len(got) > naming.MaxSlugLength {
+		t.Fatalf("ManualPaneSlug len = %d, want <= %d: %q", len(got), naming.MaxSlugLength, got)
+	}
+	if !strings.HasPrefix(got, "manual-12-") || !strings.HasSuffix(got, "-pane") {
+		t.Fatalf("ManualPaneSlug = %q, want manual-12-...-pane", got)
+	}
+	if strings.HasSuffix(got, "-12") {
+		t.Fatalf("ManualPaneSlug = %q, must not end with an issue-like numeric suffix", got)
+	}
+}
+
+func TestNewIssueRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Shared child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), true, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), true, nil)
 
 	if got.Slug != "shared-child-parent-200-501" {
 		t.Fatalf("slug = %q, want shared-child-parent-200-501", got.Slug)
@@ -388,29 +453,29 @@ func TestNewPaneRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 	}
 }
 
-func TestNewPaneRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
+func TestNewIssueRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
 	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
 	}
 }
 
-func TestNewPaneRequestCarriesIssueWave(t *testing.T) {
+func TestNewIssueRequestCarriesIssueWave(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude"}
 	issue := ghissue.Issue{Number: 501, Title: "Wave child", Body: "body", Wave: "wave5"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if got.Wave != "wave5" {
 		t.Fatalf("Wave = %q, want wave5", got.Wave)
 	}
 }
 
-func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
+func TestNewIssueRequestUsesIssueAgentOverride(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef: "200",
 		Agent:     "claude",
@@ -420,7 +485,7 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 501, Title: "Codex child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
@@ -433,7 +498,7 @@ func TestNewPaneRequestUsesIssueAgentOverride(t *testing.T) {
 	}
 }
 
-func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
+func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
 		ParentRef:     "220",
@@ -444,10 +509,10 @@ func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
 
-	got := newWatchPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig())
+	got := NewWatchRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig())
 
-	if got.ParentRef != watchPaneParentRef || got.Number != 223 || got.TaskID != "" {
-		t.Fatalf("watch identity = parent %q number %d task %q, want %q/223 with no task", got.ParentRef, got.Number, got.TaskID, watchPaneParentRef)
+	if got.ParentRef != WatchParentRef || got.Number != 223 || got.TaskID != "" {
+		t.Fatalf("watch identity = parent %q number %d task %q, want %q/223 with no task", got.ParentRef, got.Number, got.TaskID, WatchParentRef)
 	}
 	if got.Slug != "watch-runtime-helper-223" || got.BranchName != "watch/watch-runtime-helper-223" {
 		t.Fatalf("slug/branch = %q/%q", got.Slug, got.BranchName)
@@ -479,12 +544,12 @@ func TestNewWatchPaneRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	}
 
 	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC), codexapp.Status{})
-	if pane.Parent != watchPaneParentRef || pane.IssueNum != 223 {
-		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, watchPaneParentRef)
+	if pane.Parent != WatchParentRef || pane.IssueNum != 223 {
+		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, WatchParentRef)
 	}
 }
 
-func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T) {
+func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:  "100",
 		Agent:      "claude",
@@ -496,12 +561,18 @@ func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T
 	resolvedSettings := settings.Defaults()
 	resolvedSettings.AutoPullRequest = false
 	issue := ghissue.Issue{Number: 501, Title: "First child", Body: "body"}
-	teamCtx := buildTeamContext("/repo/project_root", "100", []ghissue.Issue{
-		issue,
-		{Number: 502, Title: "Second child"},
-	})
+	// Mirrors cmd/fanout's buildTeamContext (team.go) for parent #100 with two
+	// sibling children.
+	teamCtx := &briefing.TeamContext{
+		ParentLabel: "#100",
+		DBPath:      team.DBPath("/repo/project_root", "100"),
+		Siblings: []briefing.TeamSibling{
+			{Num: 501, Title: "First child"},
+			{Num: 502, Title: "Second child"},
+		},
+	}
 
-	got := newPaneRequest(cfg, "/repo/project_root", issue, resolvedSettings, hooks.EmptyConfig(), false, teamCtx)
+	got := NewIssueRequest(cfg, "/repo/project_root", issue, resolvedSettings, hooks.EmptyConfig(), false, teamCtx)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex from issue override", got.Agent)
@@ -533,11 +604,11 @@ func TestNewPaneRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.T
 	}
 }
 
-func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
+func TestNewIssueRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
 
-	got := newPaneRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
@@ -558,10 +629,10 @@ func TestNewPaneRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	}
 }
 
-func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
+func TestNewTaskRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "release/v1"}
 	spec := planspec.Spec{
-		Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"},
+		Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"},
 	}
 	task := planspec.Task{
 		ID:          "api-client",
@@ -571,7 +642,7 @@ func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 		Wave:        "2",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if got.ParentRef != "plan:launch-plan" || got.TaskID != "api-client" || got.Number != 0 {
 		t.Fatalf("task identity = parent %q task %q issue %d", got.ParentRef, got.TaskID, got.Number)
@@ -593,7 +664,7 @@ func TestNewTaskPaneRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 	}
 }
 
-func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
+func TestNewTaskRequestUsesTaskAgentOverride(t *testing.T) {
 	cfg := &cliflags.Config{
 		Agent:      "claude",
 		BaseBranch: "main",
@@ -601,10 +672,10 @@ func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
 			{Target: "api-client", Name: "codex"},
 		},
 	}
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", got.Agent)
@@ -614,16 +685,16 @@ func TestNewTaskPaneRequestUsesTaskAgentOverride(t *testing.T) {
 	}
 }
 
-func TestNewTaskPaneRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
+func TestNewTaskRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}
 	task := planspec.Task{
 		ID:       "api-client",
 		Title:    "Extract API\nclient\tlayer",
 		Briefing: "## Goal\nExtract it",
 	}
 
-	got := newTaskPaneRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if strings.ContainsAny(got.Prompt, "\n\t") {
 		t.Fatalf("prompt contains embedded newline/tab: %q", got.Prompt)
@@ -633,20 +704,20 @@ func TestNewTaskPaneRequestCollapsesMultilineTitleInPrompt(t *testing.T) {
 	}
 }
 
-func TestNewTaskPaneRequestQualifiesDefaultSlugByPlan(t *testing.T) {
+func TestNewTaskRequestQualifiesDefaultSlugByPlan(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "claude", BaseBranch: "main"}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	first := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
-	second := newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	first := NewTaskRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	second := NewTaskRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 
 	if first.Slug == second.Slug || first.BranchName == second.BranchName {
 		t.Fatalf("default task slugs must be plan-qualified, got %q/%q and %q/%q", first.Slug, first.BranchName, second.Slug, second.BranchName)
 	}
 
 	task.Slug = "shared-api-client"
-	first = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
-	second = newTaskPaneRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	first = NewTaskRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "launch plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	second = NewTaskRequest(cfg, "/repo", planspec.Spec{Plan: planspec.Plan{Slug: "cleanup-plan", Title: "Cleanup plan"}}, task, settings.Defaults(), hooks.EmptyConfig(), nil)
 	if first.Slug != "shared-api-client" || second.Slug != "shared-api-client" {
 		t.Fatalf("explicit slug should be shared exactly, got %q and %q", first.Slug, second.Slug)
 	}
@@ -654,7 +725,7 @@ func TestNewTaskPaneRequestQualifiesDefaultSlugByPlan(t *testing.T) {
 
 func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testing.T) {
 	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: new(true)}
-	req := paneRequest{
+	req := Request{
 		Number:              1,
 		Prompt:              "[fanout #1] plan",
 		Agent:               "codex",
@@ -681,8 +752,8 @@ func TestParentDisplay(t *testing.T) {
 	}{
 		{name: "numeric issue gets a hash prefix", parent: "123", want: "#123"},
 		{name: "plan parent passes through", parent: "plan:launch-plan", want: "plan:launch-plan"},
-		{name: "manual parent shows @manual", parent: manualPaneParentRef, want: "@manual"},
-		{name: "watch parent shows @watch", parent: watchPaneParentRef, want: "@watch"},
+		{name: "manual parent shows @manual", parent: ManualParentRef, want: "@manual"},
+		{name: "watch parent shows @watch", parent: WatchParentRef, want: "@watch"},
 		{name: "project url is stripped to its path", parent: "https://github.com/orgs/octo/projects/3", want: "orgs/octo/projects/3"},
 		{name: "empty parent stays empty", parent: "", want: ""},
 	}
@@ -698,27 +769,27 @@ func TestParentDisplay(t *testing.T) {
 func TestPaneBorderLabel(t *testing.T) {
 	cases := []struct {
 		name string
-		req  paneRequest
+		req  Request
 		want string
 	}{
 		{
 			name: "issue child uses slug",
-			req:  paneRequest{ParentRef: "123", Slug: "fix-login-bug-123"},
+			req:  Request{ParentRef: "123", Slug: "fix-login-bug-123"},
 			want: "#123 · fix-login-bug-123",
 		},
 		{
 			name: "display name override wins over slug",
-			req:  paneRequest{ParentRef: "123", Slug: "fix-login-bug-123", DisplayNameOverride: "Login fix"},
+			req:  Request{ParentRef: "123", Slug: "fix-login-bug-123", DisplayNameOverride: "Login fix"},
 			want: "#123 · Login fix",
 		},
 		{
 			name: "plan parent passes through",
-			req:  paneRequest{ParentRef: "plan:my-feature", Slug: "task-slug"},
+			req:  Request{ParentRef: "plan:my-feature", Slug: "task-slug"},
 			want: "plan:my-feature · task-slug",
 		},
 		{
 			name: "manual parent passes through",
-			req:  paneRequest{ParentRef: manualPaneParentRef, Slug: "scratch"},
+			req:  Request{ParentRef: ManualParentRef, Slug: "scratch"},
 			want: "@manual · scratch",
 		},
 	}
@@ -728,5 +799,26 @@ func TestPaneBorderLabel(t *testing.T) {
 				t.Errorf("paneBorderLabel() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// installFakeExecutable mirrors cmd/fanout's test helper: a no-op executable
+// on PATH so agent validation passes.
+func installFakeExecutable(t *testing.T, name string) {
+	t.Helper()
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func gitCmdTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }

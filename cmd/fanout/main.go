@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -22,8 +23,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
-
-const fanoutTagPrefix = "[fanout #"
 
 var (
 	version            = "dev"
@@ -523,7 +522,8 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: recorder, Palette: c, CommandName: commandName}
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -534,7 +534,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			}
 		}
 		// Fail fast: stop after the first failed child launch.
-		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, hookConfig, recorder, sharedAcrossParents[issue.Number], c, commandName, teamCtx) {
+		if !launcher.LaunchOK(panelaunch.NewIssueRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents[issue.Number], teamCtx)) {
 			result.Failed++
 			break
 		}
