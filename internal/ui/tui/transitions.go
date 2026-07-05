@@ -76,7 +76,7 @@ func detectIssueTransitions(previous map[issueKey]issueTransitionSnapshot, curre
 }
 
 func detectAgentTransitions(previous map[string]agentTransitionSnapshot, current []paneView) []fanoutnotify.Event {
-	if len(previous) == 0 || len(current) == 0 {
+	if len(current) == 0 {
 		return nil
 	}
 	events := []fanoutnotify.Event{}
@@ -87,6 +87,11 @@ func detectAgentTransitions(previous map[string]agentTransitionSnapshot, current
 		}
 		prev, ok := previous[key]
 		if !ok {
+			kind, initialOK := initialAgentTransitionKind(next.State)
+			if !initialOK {
+				continue
+			}
+			events = append(events, agentTransitionEvent(kind, pane, next.State))
 			continue
 		}
 		kind, ok := agentTransitionKind(prev.State, next.State)
@@ -256,7 +261,7 @@ func agentTransitionKind(previous, current string) (fanoutnotify.EventKind, bool
 	}
 	switch current {
 	case "plan":
-		return fanoutnotify.EventAgentPlan, activeAgentState(previous)
+		return fanoutnotify.EventAgentPlan, trackedAgentState(previous)
 	case "blocked":
 		return fanoutnotify.EventAgentBlocked, trackedAgentState(previous)
 	case "done":
@@ -266,8 +271,17 @@ func agentTransitionKind(previous, current string) (fanoutnotify.EventKind, bool
 	}
 }
 
-func activeAgentState(state string) bool {
-	return state == "running" || state == "working"
+func initialAgentTransitionKind(current string) (fanoutnotify.EventKind, bool) {
+	switch current {
+	case "plan":
+		return fanoutnotify.EventAgentPlan, true
+	case "blocked":
+		return fanoutnotify.EventAgentBlocked, true
+	case "done":
+		return fanoutnotify.EventAgentDone, true
+	default:
+		return "", false
+	}
 }
 
 func agentTransitionEvent(kind fanoutnotify.EventKind, pane paneView, state string) fanoutnotify.Event {

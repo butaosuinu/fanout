@@ -124,7 +124,7 @@ func TestAgentEventMessagesUseNonIssueLabels(t *testing.T) {
 		{
 			name:  "source fallback",
 			event: Event{Kind: EventAgentDone, Parent: "@manual", SourceKey: "abcd1234"},
-			want:  "fanout: source abcd1234 work complete (parent @manual)",
+			want:  "fanout: source abcd1234 agent exited (parent @manual)",
 		},
 	}
 	for _, tt := range tests {

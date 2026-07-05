@@ -71,7 +71,7 @@ func (e Event) Message() string {
 	case EventAgentBlocked:
 		return fmt.Sprintf("fanout: %s waiting for input%s", subject, parent)
 	case EventAgentDone:
-		return fmt.Sprintf("fanout: %s work complete%s", subject, parent)
+		return fmt.Sprintf("fanout: %s agent exited%s", subject, parent)
 	default:
 		return fmt.Sprintf("fanout: %s changed%s", subject, parent)
 	}

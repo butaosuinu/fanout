@@ -827,6 +827,9 @@ func TestAgentTransitionKindMatrix(t *testing.T) {
 	}{
 		{name: "running to plan", prev: "running", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
 		{name: "working to plan", prev: "working", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "blocked to plan", prev: "blocked", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "idle to plan", prev: "idle", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "done to plan", prev: "done", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
 		{name: "running to done", prev: "running", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
 		{name: "working to done", prev: "working", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
 		{name: "plan to done", prev: "plan", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
@@ -906,7 +909,7 @@ func TestStateUpdateNotifiesAgentTransitionsOnce(t *testing.T) {
 		}
 	}
 	gotMessageText := strings.Join(gotSubjects, "\n")
-	for _, want := range []string{"#101 issue work plan ready", "#102 issue needs approval waiting for input", "task api-client API client work complete", "manual session waiting for input"} {
+	for _, want := range []string{"#101 issue work plan ready", "#102 issue needs approval waiting for input", "task api-client API client agent exited", "manual session waiting for input"} {
 		if !strings.Contains(gotMessageText, want) {
 			t.Fatalf("messages = %#v, want substring %q", gotSubjects, want)
 		}
@@ -962,6 +965,78 @@ func TestStateUpdateNotifiesAgentTransitionsFromBuiltPaneViews(t *testing.T) {
 	wantKinds := []fanoutnotify.EventKind{fanoutnotify.EventAgentPlan, fanoutnotify.EventAgentBlocked}
 	if !reflect.DeepEqual(gotKinds, wantKinds) {
 		t.Fatalf("event kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+}
+
+func TestStateUpdateNotifiesFirstObservedAgentStatesAfterPriming(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	updated, cmd := m.Update(stateLoadedMsg{panes: nil, at: time.Unix(1, 0)})
+	if cmd != nil {
+		t.Fatal("initial empty state snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+	if !m.agentPrimed {
+		t.Fatal("agentPrimed = false, want true after initial empty state snapshot")
+	}
+
+	firstObserved := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "fast plan", PaneID: "%1", TmuxState: "live", AgentState: "plan"},
+		{Parent: "100", IssueNum: 102, Name: "fast blocked", PaneID: "%2", TmuxState: "live", AgentState: "blocked"},
+		{Parent: "100", IssueNum: 103, Name: "fast done", PaneID: "%3", TmuxState: "live", AgentState: "done"},
+		{Parent: "100", IssueNum: 104, Name: "still running", PaneID: "%4", TmuxState: "live", AgentState: "running"},
+	}
+	updated, cmd = m.Update(stateLoadedMsg{panes: firstObserved, at: time.Unix(2, 0)})
+	if cmd == nil {
+		t.Fatal("first observed agent states returned nil command, want notification command")
+	}
+	m = updated.(model)
+	var msg transitionNotifiedMsg
+	found := false
+	for _, candidate := range runCmd(cmd) {
+		if notified, ok := candidate.(transitionNotifiedMsg); ok {
+			msg = notified
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("notify command returned no transitionNotifiedMsg")
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	gotKinds := []fanoutnotify.EventKind{}
+	gotMessages := []string{}
+	for _, event := range notifier.events {
+		gotKinds = append(gotKinds, event.Kind)
+		gotMessages = append(gotMessages, event.Message())
+	}
+	wantKinds := []fanoutnotify.EventKind{
+		fanoutnotify.EventAgentPlan,
+		fanoutnotify.EventAgentBlocked,
+		fanoutnotify.EventAgentDone,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+	gotMessageText := strings.Join(gotMessages, "\n")
+	for _, want := range []string{"#101 fast plan plan ready", "#102 fast blocked waiting for input", "#103 fast done agent exited"} {
+		if !strings.Contains(gotMessageText, want) {
+			t.Fatalf("messages = %#v, want substring %q", gotMessages, want)
+		}
+	}
+	if len(m.agentStates) != 4 {
+		t.Fatalf("agentStates len = %d, want 4 including non-notifying running pane", len(m.agentStates))
+	}
+
+	_, cmd = m.Update(stateLoadedMsg{panes: firstObserved, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("repeated first observed agent states returned notification command, want nil")
+	}
+	if len(notifier.events) != 3 {
+		t.Fatalf("notifier events after repeated snapshot = %d, want 3", len(notifier.events))
 	}
 }
 
