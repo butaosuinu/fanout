@@ -348,7 +348,7 @@ parent ごとの SQLite メッセージバス上での兄弟協調です。fanou
 | `post` | `[--kind K] <body...>`: `<body...>` を共有ボードに投稿する。 |
 | `mark-read` | `[--id <N> ... \| --all]`: 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
 | `register` | このペインを peers テーブルに upsert する（`--team` が自動で行う。再 join に使う）。 |
-| `nudge` | `<N>`: best-effort で、peer `#N` の agent が running のときだけ tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。対象の agent が running でない（ペイン消失 / 状態不明 / done）ときは何もせず success（no-op）。 |
+| `nudge` | `<N>`: best-effort で、peer `#N` の agent が入力を queue できる状態（`running` / `working` / `plan` / `idle`）のときだけ tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。それ以外（ペイン消失 / 状態不明 / 許可待ちの `blocked` / done）は何もせず success（no-op）。 |
 
 verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）。
 
@@ -358,7 +358,7 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 
 | Exit code | 意味 |
 |---|---|
-| `0` | 成功（対象の agent が running でないときの best-effort `nudge` no-op を含む） |
+| `0` | 成功（対象の agent へ nudge できない状態のときの best-effort `nudge` no-op を含む） |
 | `2` | 不正な呼び出し |
 | `4` | SQLite バックエンドの失敗 |
 

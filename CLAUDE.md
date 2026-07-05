@@ -167,10 +167,16 @@ Build the binary with `make build-go` and validate with `make test`.
   panes, but `briefing.Render` returns the minimal Codex Plan Mode briefing
   before appending it, so `--codex-plan-mode` children are seeded into the
   registry without the coordination section. It is distinct from Claude Code
-  Agent Teams, which is Claude-only and coordinates inside a single session. Messaging is pull-based: nothing in the
-  merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
-  set by the launch wrapper in `internal/tmuxrun`) idle-nudge accelerator is a
-  separate, still-unmerged issue (#72) — do not assume an idle gate exists.
+  Agent Teams, which is Claude-only and coordinates inside a single session.
+  Messaging is pull-based except the explicit `fanout msg nudge` verb, a
+  best-effort send-keys hint gated on `@fanout_agent_state`: states that take
+  queued input (`running` / `working` / `plan` / `idle`) accept the hint;
+  `blocked` (a focused permission dialog), `done`, and unset are no-ops. The
+  accepted state vocabulary is the 6-value contract `running` / `working` /
+  `plan` / `blocked` / `idle` / `done`, normalized in `internal/sessionview`;
+  the launch wrapper in `internal/tmuxrun` still writes only `running` /
+  `done`, and the richer values come from agent hooks (emitter wiring is a
+  separate task).
 - `internal/watch` owns one repository watcher cycle. It is pure at the package
   boundary: production wires GitHub labels, `.fanout/state.json`, tmux liveness,
   and launch helpers through `watch.IO`, while unit tests inject fakes. The

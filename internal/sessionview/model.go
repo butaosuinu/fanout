@@ -84,10 +84,10 @@ type PaneView struct {
 
 	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
 	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
-	// AgentState は "running" / "done" / ""(pane 死亡・不明)。alive な pane は
-	// 起動ラッパーが設定する tmux pane user option @fanout_agent_state からの
-	// 動的判定、tmux 不通時は state.json の起動時記録値(AgentStatus)への
-	// fallback。
+	// AgentState は "running" / "working" / "plan" / "blocked" / "idle" /
+	// "done" / ""(pane 死亡・不明)。alive な pane は起動ラッパーと agent hooks
+	// が設定する tmux pane user option @fanout_agent_state からの動的判定、
+	// tmux 不通時は state.json の起動時記録値(AgentStatus)への fallback。
 	AgentState string `json:"agentState,omitempty"`
 	// PlanMode は Codex Plan Mode(--codex-plan-mode)で起動した記録ペインか
 	// どうか(state row の CodexPlanMode の passthrough)。ダッシュボードは
@@ -160,7 +160,7 @@ type Rollup struct {
 	Merged     int  `json:"merged"`     // panes with at least one MERGED PR
 	Pending    int  `json:"pending"`    // total - merged
 	Live       int  `json:"live"`       // panes whose tmux pane is alive
-	Running    int  `json:"running"`    // agent が実行中(AgentState=="running")のペイン数
+	Running    int  `json:"running"`    // agent が進行中(AgentState が running / working / plan)のペイン数
 	Blocked    int  `json:"blocked"`    // panes whose blockers still have an OPEN issue
 	NotStarted int  `json:"notStarted"` // 未開始子 issue(synthetic 行)の数
 	AllMerged  bool `json:"allMerged"`

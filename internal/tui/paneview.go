@@ -63,16 +63,17 @@ type hudSummary struct {
 	Blocked int
 }
 
-// agentStateGlyphs は @fanout_agent_state の値ごとの表示グリフ。5 値化
-// (docs/competitive-herdr.ja.md 提案 A)に備え working / idle / blocked を
-// 先行定義しており、5 値化時は sessionview の normalizeAgentState の許可リスト
-// 拡張だけで表示側の変更はゼロになる。
+// agentStateGlyphs は @fanout_agent_state の値ごとの表示グリフ。6 値契約
+// running / working / plan / blocked / idle / done(sessionview の
+// normalizeAgentState の許可リストと同じ集合)。塗り/白抜きのペアで覚える:
+// ● running / ○ idle、◆ blocked / ◇ plan。
 var agentStateGlyphs = map[string]string{
 	"running": "●",
 	"done":    "✓",
 	"working": "◐",
 	"idle":    "○",
 	"blocked": "◆",
+	"plan":    "◇",
 }
 
 // agentStateGlyph はグリフの単一情報源。入力は AgentState と TmuxState のみで、

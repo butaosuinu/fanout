@@ -136,7 +136,7 @@ fanout 123 --status --post-dashboard
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、`running` / `done` の agent 実行状態バッジ、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
+チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で**読み取り専用**の Web ダッシュボードを起動します。fanout の **Session**（`.fanout/state.json` に記録されたペインを親 issue 単位でまとめたもの）をブラウザに出し、SSE でライブ更新します。各行ではペインの生存（`tmux list-panes`）、ライブの tmux ペインのタイトル、agent 実行状態バッジ（起動ラッパー由来の `running` / `done` に加え、agent hooks が報告すると `working` / `plan` / `blocked` / `idle`）、wave 列と未解決 blocker 列（親 issue グラフ由来）、issue 状態、PR マージ状態、CI 状態、diff/dirty を見られます。データ源は `--status` と同じで、リポジトリ内の全親について一度に再利用します。まだファンアウトしていない子 issue は synthetic な未開始行として並びます。GitHub の状態は一切変更せず、tmux も*読み取る*だけです。便宜は 2 つです。起動中サーバを `.fanout/dashboard.json` に記録して 2 回目の起動で再利用すること、そして後述の tmux キーバインドを登録すること（`--no-keybind` でオプトアウト可）です。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
@@ -145,7 +145,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 - **localhost 限定。** サーバは `127.0.0.1` にのみバインドし、GET 専用の endpoint を公開します。内訳は `/api/snapshot`、SSE の `/api/stream`、`/api/peek`（記録ペイン 1 つの `tmux capture-pane` スナップショット）、`/api/plan`（`--codex-plan-mode` ペインの最後の完全な `<proposed_plan>` ブロック）、埋め込み UI です。`--port` は既定 `0`（OS 割り当ての ephemeral port）で、確定した URL が表示されます。
 - **トークン既定 ON。** 起動毎にランダムトークンを生成し、表示 / オープンされる URL に埋め込んで `/api/*` をゲートします。同一ホストの他ユーザや他プロセスがループバックポート経由で issue/PR データを読むのを防ぎます。単一ユーザ端末では `--no-token` で外せます。
 - **`--open`** は既定ブラウザで URL を開きます。すでに起動中のサーバ（`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しません。
-- **SPA。** 埋め込みの React+Vite SPA は、API 単体よりも多くの情報をライブ Session 一覧に重ねます。まず構造化フィルタ欄があり、自由語と `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` の各 term を AND で絞り込めて、ドロップダウンと外せるチップが付きます。行をクリックすると詳細ドロワーが開き、ペインのメタ情報、wave と blocker、worktree、CI 付き PR、元プロンプト、5 秒ごとに更新される直近出力のライブ *peek* を見られます。`--codex-plan-mode` ペインには *plan* セクションが付きます。上部の HUD は repo 全体の running 数と blocked 数を出します。テーマは PAPER BREEZE のライト/ダークです。
+- **SPA。** 埋め込みの React+Vite SPA は、API 単体よりも多くの情報をライブ Session 一覧に重ねます。まず構造化フィルタ欄があり、自由語と `state:` / `run:` / `agent:` / `wave:` / `ci:` / `dirty:` / `live:` / `issue:` / `task:` / `pr:` の各 term を AND で絞り込めて、ドロップダウンと外せるチップが付きます。行をクリックすると詳細ドロワーが開き、ペインのメタ情報、wave と blocker、worktree、CI 付き PR、元プロンプト、5 秒ごとに更新される直近出力のライブ *peek* を見られます。`--codex-plan-mode` ペインには *plan* セクションが付きます。上部の HUD は repo 全体の active 数（agent 状態が `running` / `working` / `plan`）と blocked 数を出します。テーマは PAPER BREEZE のライト/ダークです。
 
 全フラグは `fanout dashboard --help` を参照してください。
 

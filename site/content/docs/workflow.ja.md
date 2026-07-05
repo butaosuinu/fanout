@@ -184,7 +184,7 @@ read モードと lifecycle モード(`--status`、`--close`、`--merge`、`--cl
 | `post [--kind K] <body>` | 共有 board へブロードキャストを投稿する。 |
 | `mark-read [--all]` | メッセージを既読にする。 |
 | `register` | 自分を peer レジストリへ(再)seed する。 |
-| `nudge <N>` | peer `#N` のペインへ `send-keys` でヒントを送る best-effort 通知。agent が running のときだけ送り、DB は一切触らない。 |
+| `nudge <N>` | peer `#N` のペインへ `send-keys` でヒントを送る best-effort 通知。agent が入力を queue できる状態（`running` / `working` / `plan` / `idle`）のときだけ送り、DB は一切触らない。 |
 
 `claude` と `codex` どちらのペインでも同じく動きます。これは 1 セッション内の
 チームメイトを協調させる Claude Code Agent Teams とは別物で、peer messaging は

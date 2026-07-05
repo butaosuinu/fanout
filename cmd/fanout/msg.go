@@ -37,9 +37,11 @@ Write verbs:
 Notify verbs:
   nudge <N>                      Best-effort: drop an inbox hint into peer #N's
                                  pane via tmux send-keys, but only when its
-                                 agent is running. Never touches the DB (the
-                                 message is already persisted by send); a pane
-                                 that is gone, idle-unknown, or done is a no-op
+                                 agent can take queued input (state running /
+                                 working / plan / idle). Never touches the DB
+                                 (the message is already persisted by send); a
+                                 pane that is gone, blocked on a permission
+                                 prompt, state-unknown, or done is a no-op
                                  success, so a failed nudge never breaks
                                  messaging.
 
@@ -55,7 +57,7 @@ Options:
   -h, --help       Show this help.
 
 Exit codes: 0 success, 2 invalid invocation, 4 backend (SQLite) failure.
-nudge is best-effort: operational failures (pane gone, agent not running,
+nudge is best-effort: operational failures (pane gone, agent not nudgeable,
 send-keys failure) exit 0 with a warning, never 4.
 `
 
@@ -926,28 +928,36 @@ type msgNudgeReport struct {
 }
 
 // shouldNudge reports whether a pane in the given @fanout_agent_state should
-// receive a send-keys nudge. Only "running" — a live agent launched by the
-// fanout wrapper — qualifies. "done" (agent exited, bare shell), "" (unset:
-// legacy or non-fanout pane), and any other value are no-op successes so a
-// hint never lands in a shell or an unrelated pane.
-//
-// This is the deliberate re-design of the original "agentStatus == idle" gate:
-// the dmux idle/analyzing/waiting/working enum no longer exists, and the only
-// live signal (@fanout_agent_state) cannot distinguish a busy agent from one
-// idle at its prompt. Gating on "running" is safe in practice because the
-// supported agents (claude, codex) queue typed input during a turn rather than
-// aborting it, so a nudge to a busy agent is picked up at its next checkpoint —
-// the same pull the message already guarantees, only sooner.
+// receive a send-keys nudge. Every state in which the agent can safely take
+// queued input qualifies: "idle" (at its prompt, the ideal moment), "running"
+// (wrapper state, granularity unknown), and the hook states "working" and
+// "plan" — the supported agents (claude, codex) queue typed input during a
+// turn rather than aborting it, so a mid-turn hint is picked up at the next
+// checkpoint. With hooks the agent spends most of a turn in "working", so
+// excluding it would make nudge a near no-op in practice. "blocked" is the
+// deliberate exception: the pane is showing a permission dialog and the
+// nudge's trailing Enter could press the focused button. "done" (agent
+// exited, bare shell), "" (unset: legacy or non-fanout pane), and any other
+// value are no-op successes so a hint never lands in a shell or an unrelated
+// pane. The raw option value is trimmed with the same tolerance as
+// sessionview's normalizeAgentState, so the nudge gate and the dashboards
+// never disagree about a padded hook value.
 func shouldNudge(agentState string) bool {
-	return agentState == "running"
+	switch strings.TrimSpace(agentState) {
+	case "running", "working", "plan", "idle":
+		return true
+	default:
+		return false
+	}
 }
 
 // runMsgNudge resolves peer f.to's recorded pane from state.json and pushes the
-// inbox hint when its agent is running. Every operational miss (recipient
-// absent, no pane id, pane gone, agent not running, send-keys failure) is a
-// no-op SUCCESS with a warning/reason: the message is already persisted by
-// send, so a failed nudge must never break messaging. Only invocation errors
-// (handled earlier) exit non-zero.
+// inbox hint when its agent can take queued input (running / working / plan /
+// idle). Every operational miss (recipient absent, no pane id, pane gone,
+// agent not nudgeable, send-keys failure) is a no-op SUCCESS with a
+// warning/reason: the message is already persisted by send, so a failed nudge
+// must never break messaging. Only invocation errors (handled earlier) exit
+// non-zero.
 func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 	st, err := loadStateStore()
 	if err != nil {
@@ -982,7 +992,7 @@ func runMsgNudge(f *msgFlags, parent string, lg *log.Logger) exitcode.Code {
 
 // deliverNudge re-reads the live tmux panes immediately before sending (TOCTOU),
 // confirms the recorded pane id STILL belongs to the recipient, and pushes the
-// hint only when its agent is running. The recorded id alone is not enough:
+// hint only when its agent can take queued input. The recorded id alone is not enough:
 // tmux reuses %N ids after a server restart, so an id-only check could nudge an
 // unrelated pane that inherited the id — exactly the interruption accident the
 // gate must avoid. matchLivePane applies the same id+worktree liveness check the
@@ -1000,7 +1010,9 @@ func deliverNudge(pane state.Pane) (agentState, reason string, nudged bool) {
 		return "", "recipient pane is gone or its id was reused", false
 	}
 	if !shouldNudge(lp.AgentState) {
-		return lp.AgentState, fmt.Sprintf("agent is not running (state %q)", lp.AgentState), false
+		// blocked の agent は生きている — "not running" とは言わず、nudge を
+		// 意図的に見送ったことだけを述べる。
+		return lp.AgentState, fmt.Sprintf("agent is not nudgeable (state %q)", lp.AgentState), false
 	}
 	if err := sendLiteralLine(pane.PaneID, nudgeText); err != nil {
 		return lp.AgentState, fmt.Sprintf("send-keys failed: %v", err), false

@@ -6,7 +6,15 @@ import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import { blockerLabel, fmtWave, notStartedNote, paneIssueURL, paneLabel } from "../lib/pane";
 import type { PaneView } from "../lib/types";
-import { AgentStateTag, DirtyTag, GhLink, IssueStateTag, PrPill, Tag } from "./ui";
+import {
+  AgentStateTag,
+  DirtyTag,
+  GhLink,
+  isKnownAgentState,
+  IssueStateTag,
+  PrPill,
+  Tag,
+} from "./ui";
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
@@ -205,7 +213,7 @@ export function Drawer({
               <dd id="d-tmux">{pane.alive ? "live" : pane.tmuxState || "stale"}</dd>
               <dt>run</dt>
               <dd id="d-run">
-                {pane.agentState === "running" || pane.agentState === "done" ? (
+                {isKnownAgentState(pane.agentState) ? (
                   <AgentStateTag state={pane.agentState} />
                 ) : (
                   <span className="muted">—</span>

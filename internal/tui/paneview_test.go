@@ -12,10 +12,11 @@ func TestAgentStateGlyph(t *testing.T) {
 	}{
 		{name: "running live pane", pane: paneView{TmuxState: "live", AgentState: "running"}, want: "●"},
 		{name: "done live pane", pane: paneView{TmuxState: "live", AgentState: "done"}, want: "✓"},
-		// 5 値化(competitive-herdr.ja.md 提案 A)の先行定義。
-		{name: "working is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "working"}, want: "◐"},
-		{name: "idle is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "idle"}, want: "○"},
-		{name: "blocked is pre-mapped", pane: paneView{TmuxState: "live", AgentState: "blocked"}, want: "◆"},
+		// 6 値契約(competitive-herdr.ja.md 提案 A + plan)の hook 値。
+		{name: "working live pane", pane: paneView{TmuxState: "live", AgentState: "working"}, want: "◐"},
+		{name: "idle live pane", pane: paneView{TmuxState: "live", AgentState: "idle"}, want: "○"},
+		{name: "blocked live pane", pane: paneView{TmuxState: "live", AgentState: "blocked"}, want: "◆"},
+		{name: "plan live pane", pane: paneView{TmuxState: "live", AgentState: "plan"}, want: "◇"},
 		{name: "live pane without state", pane: paneView{TmuxState: "live"}, want: "·"},
 		{name: "live pane with unknown state value", pane: paneView{TmuxState: "live", AgentState: "garbage"}, want: "·"},
 		{name: "stale pane", pane: paneView{TmuxState: "stale"}, want: "✗"},

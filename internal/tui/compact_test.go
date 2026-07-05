@@ -206,6 +206,20 @@ func TestCompactPaneLineFormat(t *testing.T) {
 			want:    " 4● T1 fix-flaky-test                %21",
 		},
 		{
+			name:    "working pane shows the working glyph",
+			pane:    paneView{IssueNum: 106, Name: "hook-emitter", PaneID: "%6", TmuxState: "live", AgentState: "working"},
+			ordinal: 7,
+			width:   40,
+			want:    " 7◐ #106 hook-emitter                 %6",
+		},
+		{
+			name:    "plan-state pane shows the plan glyph",
+			pane:    paneView{TaskID: "T2", Name: "notify-sounds", PaneID: "%22", TmuxState: "live", AgentState: "plan"},
+			ordinal: 8,
+			width:   40,
+			want:    " 8◇ T2 notify-sounds                 %22",
+		},
+		{
 			name:    "narrow width keeps label and pane id intact",
 			pane:    paneView{IssueNum: 101, Name: "rate-limiter-core", PaneID: "%5", TmuxState: "live", AgentState: "done"},
 			ordinal: 1,

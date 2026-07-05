@@ -349,7 +349,7 @@ Sibling coordination over a per-parent SQLite message bus. Run from inside a fan
 | `post` | `[--kind K] <body...>` — post `<body...>` to the shared board. |
 | `mark-read` | `[--id <N> ... \| --all]` — mark 1:1 messages read by id (repeatable), or `--all` to mark everything and advance the board cursor. |
 | `register` | Upsert this pane into the peers table (auto-done by `--team`; use it to (re-)join). |
-| `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent is running. A notify verb, not a message: it never touches the DB and is a no-op success when the peer's agent is not running (pane gone, state unknown, or done). |
+| `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent can take queued input (state `running` / `working` / `plan` / `idle`). A notify verb, not a message: it never touches the DB and is a no-op success otherwise (pane gone, state unknown, `blocked` on a permission prompt, or done). |
 
 Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection).
 
@@ -359,7 +359,7 @@ The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `
 
 | Exit code | Meaning |
 |---|---|
-| `0` | success (including a best-effort `nudge` no-op when the peer's agent is not running) |
+| `0` | success (including a best-effort `nudge` no-op when the peer's agent is not nudgeable) |
 | `2` | invalid invocation |
 | `4` | SQLite backend failure |
 

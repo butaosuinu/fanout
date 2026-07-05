@@ -186,7 +186,7 @@ plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`).
 | `post [--kind K] <body>` | Post a broadcast to the shared board. |
 | `mark-read [--all]` | Mark messages read. |
 | `register` | (Re-)seed yourself into the peer registry. |
-| `nudge <N>` | Best-effort `send-keys` hint into peer `#N`'s pane — only when its agent is running, and it never touches the DB. |
+| `nudge <N>` | Best-effort `send-keys` hint into peer `#N`'s pane — only when its agent can take queued input (state `running` / `working` / `plan` / `idle`), and it never touches the DB. |
 
 This works the same for `claude` and `codex` panes. It is distinct from Claude
 Code Agent Teams, which coordinates teammates inside a single session; peer

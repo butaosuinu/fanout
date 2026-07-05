@@ -57,6 +57,8 @@ bubbles table は捨てず、compact 時は `View()` の分岐でレンダリン
 
 グリフの単一情報源として `agentStateGlyph` を新設する。現行値は running `●` / done `✓` / stale `✗` / live だが状態不明 `·`。`competitive-herdr.ja.md` 提案 A の 5 値化に備えて working `◐` / idle `○` / blocked `◆` も先行してマップに載せておき、5 値化の実装時は sessionview の `normalizeAgentState` の許可リスト拡張だけで表示側の変更をゼロにする。ペイン内容からの状態推定はしない(同 doc の判断記録どおり)。
 
+2026-07 追記: session-notifications プランで語彙拡張を実装済み。契約は提案 A の 5 値に Codex Plan Mode の plan `◇` を加えた 6 値(running / working / plan / blocked / idle / done)で、`normalizeAgentState` の許可リストと `agentStateGlyphs` の両方がこの集合を持つ。
+
 フルテーブル側にも RUN 列(AgentState)と詳細の `run=` フィールドを足し、compact 専用の情報差を作らない。
 
 ## 設計 2: ペイン移動

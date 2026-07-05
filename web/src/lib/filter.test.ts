@@ -57,6 +57,13 @@ describe("matches", () => {
     expect(matches(makePane({}), q("run:running"))).toBe(false);
   });
 
+  it("run: は 6 値契約の hook 値(working/plan/blocked/idle)にも一致する", () => {
+    for (const state of ["working", "plan", "blocked", "idle"]) {
+      expect(matches(makePane({ agentState: state }), q(`run:${state}`))).toBe(true);
+      expect(matches(makePane({ agentState: state }), q("run:running"))).toBe(false);
+    }
+  });
+
   it("agent: は部分一致", () => {
     expect(matches(makePane({ agent: "claude" }), q("agent:clau"))).toBe(true);
     expect(matches(makePane({ agent: "codex" }), q("agent:claude"))).toBe(false);
