@@ -15,13 +15,16 @@ Suppose your parent issue has three OPEN sub-issues. Instead of picking them off
 
 No issue tree yet? The bundled `fanout-issues` skill turns a plan into a parent issue with linked children — see [Agent Integrations]({{< relref "/docs/agents" >}}). The shape fanout expects is described [below](#how-child-issues-are-declared).
 
-Start (or attach) a tmux session, then — inside the session — pick the agent and move to the target repository:
+Start (or attach) a tmux session:
 
 ```bash
-# Start (or attach) a tmux session
 tmux new -A -s work
+```
 
-# Inside the session: use Claude for child panes, from the repository root
+Then, inside the session, pick the agent and move to the target repository:
+
+```bash
+# Use Claude for child panes, from the repository root
 export FANOUT_AGENT=claude
 cd path/to/repo
 ```

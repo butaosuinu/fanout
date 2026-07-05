@@ -15,13 +15,16 @@ yomi: quickstart
 
 issue ツリーがまだ無い場合は、同梱の `fanout-issues` skill が計画を親 issue + リンク済みの子 issue に変換します（[エージェント連携]({{< relref "/docs/agents" >}}) を参照）。fanout が期待する形は[後述](#子-issue-の宣言方法)します。
 
-tmux セッションを開始（または attach）し、セッションの中でエージェントを決めて対象リポジトリへ移動します。
+tmux セッションを開始（または attach）します。
 
 ```bash
-# Start (or attach) a tmux session
 tmux new -A -s work
+```
 
-# Inside the session: use Claude for child panes, from the repository root
+次に、セッションの中でエージェントを決めて対象リポジトリへ移動します。
+
+```bash
+# Use Claude for child panes, from the repository root
 export FANOUT_AGENT=claude
 cd path/to/repo
 ```
