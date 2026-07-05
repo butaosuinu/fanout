@@ -162,7 +162,10 @@ func (m model) compactExpansionLines(p paneView, width int) []string {
 	if len(status) > 0 {
 		lines = append(lines, truncateCells("   "+strings.Join(status, " "), width))
 	}
-	if err := strings.TrimSpace(p.WorktreeErr); err != "" {
+	// WorktreeErr carries raw git stderr, which can embed newlines; flatten
+	// it first so the entry stays one display line (the window and padding
+	// count slice elements as lines).
+	if err := strings.Join(strings.Fields(p.WorktreeErr), " "); err != "" {
 		lines = append(lines, truncateCells("   worktree_error="+err, width))
 	}
 	if p.PaneID != "" && m.peek.PaneID == p.PaneID {

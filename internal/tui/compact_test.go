@@ -327,6 +327,11 @@ func TestCompactExpansionLines(t *testing.T) {
 			want: []string{"   worktree_error=worktree missing"},
 		},
 		{
+			name: "multi-line worktree error flattens to one line",
+			pane: paneView{PaneID: "%8", TmuxState: "stale", WorktreeErr: "fatal: bad\nhint: try\nhint: again"},
+			want: []string{"   worktree_error=fatal: bad hint: tr..."},
+		},
+		{
 			name: "loading peek shows its state",
 			pane: full,
 			peek: panePeek{PaneID: "%8", Loading: true, Output: "stale"},
