@@ -92,7 +92,9 @@ diagram, and the PR-review-weight classes (H/M/A) live in
   `tui*.go` (no-argument console wiring; the prompt-mode plan fan-out
   launches one coordinator pane at the project root so `fanout plan`'s git
   root stays at the repo, never Codex Plan Mode), and `tui_popup.go`
-  (self-exec popup subcommands — class H).
+  (self-exec popup subcommands). `main.go` / `tui_popup.go` /
+  `tui_launch.go` are class H; the remaining cmd files (flag validation and
+  thin dispatch into app) are class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
   `agent` (supported agent names, CLI validation for live mode — the only
   core packages allowed `os`/`os/exec`), `planspec` (the `fanout plan` JSON
@@ -117,9 +119,12 @@ diagram, and the PR-review-weight classes (H/M/A) live in
   are class M; `atomicfs`, `log`, `tty`, `execx`, `gitroot`, and `browser`
   are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
-  `server.go` (GET-only mux, token middleware, SSE) is class H; `poller.go`,
-  `peek.go` (`GET /api/peek`), and `plan.go` (`GET /api/plan`) are class M;
-  TUI rendering/formatting is class A.
+  `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
+  `.fanout/dashboard.json` reuse/trust gate) are class H; `poller.go`,
+  `peek.go` (`GET /api/peek`), `plan.go` (`GET /api/plan`), `sse.go`, and
+  `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
+  cleanup wiring and confirmation flow) is class H, rendering/formatting is
+  class A, and the remaining key/form/polling wiring is class M.
 
 Rule of thumb: a PR that touches a class-H package needs human review; a PR
 touching only class-A packages can rely on AI review.

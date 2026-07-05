@@ -53,7 +53,10 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
 | app | `panelaunch` | pane 生成オーケストレーション | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
-| cmd | `main.go` / `tui_popup.go` | dispatch・popup 起動 | H |
+| ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
+| ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
+| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` | dispatch・self-exec popup・launch 配線 | H |
+| cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR 読み取り | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
@@ -70,7 +73,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `peermsg` | `fanout msg` の実行層 | M |
 | core | `agent` | エージェント名の解決・CLI 検証 | M |
 | core | `planspec` | `fanout plan` の JSON スキーマ | M |
-| ui | `dashboard`(`poller.go` / `peek.go` / `plan.go`) | state/tmux ポーリング・capture-pane | M |
+| ui | `dashboard`(`poller.go` / `peek.go` / `plan.go` / `sse.go` / `embed.go`) | state/tmux ポーリング・capture-pane・SSE・embed | M |
+| ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` ほか) | キー処理・フォーム・ポーリングの配線 | M |
 | core | `blockers` | ブロッカー判定 | A |
 | core | `naming` | slug・branch 名生成 | A |
 | core | `exitcode` | 終了コード定義 | A |
@@ -78,7 +82,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | core | `fanset` | fan-out 対象集合の計算 | A |
 | core | `cliview` | CLI 出力の整形 | A |
 | app | `cliflags` | フラグパース | A |
-| ui | `tui`(描画・整形) | TUI の View 層 | A |
+| ui | `tui`(描画・整形: `view.go` / `paneview.go` / `compact.go` / `styles.go` ほか) | TUI の View 層 | A |
 | infra | `atomicfs` | 原子的ファイル書き込み | A |
 | infra | `log` | ロギング | A |
 | infra | `tty` | 端末判定 | A |
