@@ -12,13 +12,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/panelayout"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 // Options points lifecycle operations at a concrete fanout state file.

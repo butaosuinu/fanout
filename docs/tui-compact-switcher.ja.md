@@ -1,6 +1,6 @@
 # TUI compact 表示とペイン移動 — herdr switcher の取り込み設計
 
-ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/tui` / `internal/panelayout` / `internal/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
+ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/tui` / `internal/panelayout` / `internal/infra/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
 
 ## 問題: 40 桁サイドバーで一覧が読めない
 
@@ -63,7 +63,7 @@ bubbles table は捨てず、compact 時は `View()` の分岐でレンダリン
 
 ### コンソール復帰キー(F11 / prefix T)
 
-dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は tmux 3.3 互換の `run-shell` で押下時の tmux format を展開し、`tmux -S #{q:socket_path} new-window -t #{q:session_id}:` で押下元の socket/session に detached window を作る。project root/current path の各分岐は `#{q:...}` で shell quote して `new-window -c` へ、`#{client_tty}` は `new-window -e` へ渡す。一方、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する。
+dashboard(`BindDashboardKeys`、F12 / prefix D)と同じく、tmux server にキーを登録して fanout バイナリを叩く方式で、root `F11` + prefix `T` を登録する(`internal/infra/tmuxrun` に `BindConsoleKeys` を追加)。ただしバインドの形は dashboard と同じにはならない。dashboard は tmux 3.3 互換の `run-shell` で押下時の tmux format を展開し、`tmux -S #{q:socket_path} new-window -t #{q:session_id}:` で押下元の socket/session に detached window を作る。project root/current path の各分岐は `#{q:...}` で shell quote して `new-window -c` へ、`#{client_tty}` は `new-window -e` へ渡す。一方、console 復帰でウィンドウを作るわけにはいかない。そこで `run-shell '<fanout-bin> focus-console --from "#{pane_id}"'` を使う。シェルは run-shell の 1 段だけで、バインド登録自体は argv 渡し(`exec.Command`)だから、クォートはバイナリパスの `shellQuote` 1 回で済む。`#{pane_id}` は押下時展開で `%N` 形式の安全な文字集合。スペース入りインストールパスの扱いは dashboard と同様にテストで pin する。
 
 pane id をバインドに焼き込む方式は、コンソール再起動で stale になり複数リポジトリの登録が上書き合戦になるため採らない。バイナリ経由なら押下のたびに探索するので、コンソールが作り直されてもバインドは古びない。
 
@@ -85,7 +85,7 @@ monitor モードの `1`〜`9` を「表示リストの N 番目を選択して�
 
 ### zoom(`Z`)
 
-`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/panelayout/apply.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
+`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/infra/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/panelayout/apply.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
 
 ## 実装分割
 
@@ -98,7 +98,7 @@ monitor モードの `1`〜`9` を「表示リストの N 番目を選択して�
 | C3 | 数字ジャンプ 1〜9 + `Z` zoom | S | なし |
 | C4 | compact switcher レンダラ + `v` トグル | M〜L | C1, C3 |
 
-C4 は C1(グリフ)と C3(序数表示)に blocked。C2 と C3 はどちらも `internal/tmuxrun` に関数を足す(C2: role listing + `BindConsoleKeys`、C3: `ZoomPane`)ので完全には独立でないが、別関数どうしでリベースは自明。ほかに C2 は cmd/fanout と internal/settings、C3 は internal/tui を触る。
+C4 は C1(グリフ)と C3(序数表示)に blocked。C2 と C3 はどちらも `internal/infra/tmuxrun` に関数を足す(C2: role listing + `BindConsoleKeys`、C3: `ZoomPane`)ので完全には独立でないが、別関数どうしでリベースは自明。ほかに C2 は cmd/fanout と internal/infra/settings、C3 は internal/tui を触る。
 
 テストは各パッケージの流儀に従う(internal/tui は純関数 + Options 注入フェイク、cmd/fanout は純関数テスト)。pin する主な挙動: compact の 40 桁行フォーマット、閾値 80 と `v` の 3 状態サイクル、compact 中も enter / c が `selectedPane` に効くこと、`pickConsolePane` の優先順と role + タイトル二重照合、console 復帰バインドのスペース入りパスのクォート、数字ジャンプと close 選択肢の非衝突。ユーザー向けドキュメントの同期先は README.md / README.ja.md の TUI 節、docs サイトのキー表(`site/content/docs/monitoring.md` / `monitoring.ja.md`)、in-app help(`internal/tui/help.go`)。
 

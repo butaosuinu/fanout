@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // FanoutTagRE is the canonical capture regex for the one-line prompt prefix
@@ -151,7 +151,7 @@ const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 
 // OwnerProjectRoot resolves the project root whose .fanout/state.json covers
 // the current working directory. Fanout places child worktrees under
-// <owner>/.fanout/worktrees/<slug>/ (internal/worktree), so when the current
+// <owner>/.fanout/worktrees/<slug>/ (internal/infra/worktree), so when the current
 // git toplevel sits at that path the owner is three levels up. Deriving the
 // owner from the path — instead of the shared git common dir — stays correct
 // when the owning checkout is itself a linked worktree, where the common dir
@@ -181,7 +181,7 @@ func gitToplevel() (string, error) {
 }
 
 // childWorktreeOwner reports whether top sits at the fanout child-worktree
-// convention <owner>/.fanout/worktrees/<slug> (internal/worktree) and
+// convention <owner>/.fanout/worktrees/<slug> (internal/infra/worktree) and
 // returns the owner root when it does.
 func childWorktreeOwner(top string) (string, bool) {
 	parent := filepath.Dir(top)

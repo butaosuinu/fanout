@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 var errGraphBoom = errors.New("boom")

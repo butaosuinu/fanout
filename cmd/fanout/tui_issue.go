@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/butaosuinu/fanout/internal/agent"
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 	"github.com/butaosuinu/fanout/internal/watch"
 )

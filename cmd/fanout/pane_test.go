@@ -10,15 +10,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/naming"
-	"github.com/butaosuinu/fanout/internal/planspec"
-	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/worktree"
+	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {

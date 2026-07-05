@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/naming"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 const Version = 1

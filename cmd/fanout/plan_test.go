@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
 func TestBuildPlanOnlyIdempotencyAndLimit(t *testing.T) {

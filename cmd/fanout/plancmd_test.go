@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/planspec"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestPlanTaskSlugQualifiesDefaultAndHonorsExplicit(t *testing.T) {

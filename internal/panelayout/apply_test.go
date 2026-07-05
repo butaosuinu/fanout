@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 type fakeOps struct {

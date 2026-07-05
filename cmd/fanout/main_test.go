@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/log"
-	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
-	"github.com/butaosuinu/fanout/internal/settings"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 

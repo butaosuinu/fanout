@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/state"
 )
 
 type countingGH struct {

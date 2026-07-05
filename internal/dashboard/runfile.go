@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/atomicfs"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 // runFileRelPath is the per-repo record of the currently running dashboard,

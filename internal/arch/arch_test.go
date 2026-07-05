@@ -36,12 +36,6 @@ const (
 var explicitLayers = map[string]layer{
 	// meta
 	"internal/arch": layerMeta,
-	// core
-	"internal/agent":    layerCore,
-	"internal/blockers": layerCore,
-	"internal/exitcode": layerCore,
-	"internal/naming":   layerCore,
-	"internal/planspec": layerCore,
 	// app
 	"internal/briefing":    layerApp,
 	"internal/cliflags":    layerApp,
@@ -49,23 +43,6 @@ var explicitLayers = map[string]layer{
 	"internal/panelayout":  layerApp,
 	"internal/sessionview": layerApp,
 	"internal/watch":       layerApp,
-	// infra
-	"internal/atomicfs":    layerInfra,
-	"internal/displayname": layerInfra,
-	"internal/ghissue":     layerInfra,
-	"internal/gitstat":     layerInfra,
-	"internal/hooks":       layerInfra,
-	"internal/log":         layerInfra,
-	"internal/msgstore":    layerInfra,
-	"internal/notify":      layerInfra,
-	"internal/runtime":     layerInfra,
-	"internal/selfupdate":  layerInfra,
-	"internal/settings":    layerInfra,
-	"internal/state":       layerInfra,
-	"internal/team":        layerInfra,
-	"internal/tmuxrun":     layerInfra,
-	"internal/tty":         layerInfra,
-	"internal/worktree":    layerInfra,
 	// ui
 	"internal/dashboard": layerUI,
 	"internal/tui":       layerUI,
@@ -105,7 +82,7 @@ var allowedImports = map[layer]map[layer]bool{
 var legacyDirectionAllowlist = map[string][]string{
 	// infra -> app: the test pins that the team DB path and briefing.Path
 	// derive the same parent slug; decouple that fixture to remove this.
-	"internal/team/path_test.go": {"internal/briefing"},
+	"internal/infra/team/path_test.go": {"internal/briefing"},
 }
 
 // coreForbiddenStdlib is the stdlib denylist for non-test files in core
@@ -124,12 +101,10 @@ var coreForbiddenStdlib = map[string]bool{
 }
 
 // corePurityAllowlist exempts specific core packages from part of the stdlib
-// denylist; both the flat and the post-move paths are listed. Lookup walks
-// parent directories, so subpackages inherit their parent's exemption.
+// denylist. Lookup walks parent directories, so subpackages inherit their
+// parent's exemption.
 var corePurityAllowlist = map[string]map[string]bool{
-	"internal/agent":         {"os": true, "os/exec": true},
 	"internal/core/agent":    {"os": true, "os/exec": true},
-	"internal/planspec":      {"os": true},
 	"internal/core/planspec": {"os": true},
 }
 

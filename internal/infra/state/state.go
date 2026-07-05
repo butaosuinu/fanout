@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/butaosuinu/fanout/internal/atomicfs"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 const SchemaVersion = 1

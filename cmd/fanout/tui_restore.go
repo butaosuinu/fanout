@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/butaosuinu/fanout/internal/agent"
+	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/panelayout"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/worktree"
 )
 
 type tuiRestoreReport struct {

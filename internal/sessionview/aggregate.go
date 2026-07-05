@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/blockers"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // LivePaneInfo is what Build needs to know about one live tmux pane: the cwd

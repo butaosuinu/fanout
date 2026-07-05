@@ -17,8 +17,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/sessionview"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const (

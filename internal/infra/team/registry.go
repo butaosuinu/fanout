@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // UpsertPeer records pane p in the peers registry, replacing any existing row

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/butaosuinu/fanout/internal/atomicfs"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 type FanoutMetadata struct {

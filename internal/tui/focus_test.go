@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/state"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // TestPaneAliveForActionMatchesLivenessKey pins the focus/close gate: rows

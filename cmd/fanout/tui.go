@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/log"
-	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/panelayout"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/tui"
 )
 
