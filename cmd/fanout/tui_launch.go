@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -320,7 +321,7 @@ func newAttachedPaneRequest(cfg *cliflags.Config, projectRoot string, store stat
 		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
 	}
 	if req.CodexPlanMode {
-		req.CodexPlanStatusPath = codexPlanStatusPath(projectRoot, number, cfg.DryRun)
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
 }
@@ -432,10 +433,10 @@ func createAttachedPane(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntim
 	if err := panelayout.Apply(info.Target, panelayout.Create); err != nil {
 		lg.Warn("%s: %v", paneLogLabel(req), err)
 	}
-	codexPlanStatus := codexPlanTUIStatus{}
+	codexPlanStatus := codexapp.Status{}
 	if req.CodexPlanMode {
 		var planErr error
-		codexPlanStatus, planErr = waitForCodexPlanTUIReadyStatus(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
+		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, codexPlanTUIStartupTimeout)
 		if planErr != nil {
 			lg.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			cleanupFailedAttachedLaunch(info.Target, paneID)

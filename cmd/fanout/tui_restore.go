@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -268,7 +269,7 @@ func recreateRecordedPane(pane state.Pane, root, session, commandName string) (s
 	_ = tmuxrun.SetPaneProjectRoot(paneID, root)                                       // best-effort dashboard keybinding hint
 	_ = tmuxrun.SetPaneWorktreePath(paneID, pane.WorktreePath)                         // best-effort same-worktree action target
 	if statusPath != "" {
-		status, err := waitForCodexPlanTUIReadyStatus(statusPath, codexPlanTUIStartupTimeout)
+		status, err := codexapp.WaitReady(statusPath, codexPlanTUIStartupTimeout)
 		_ = os.Remove(statusPath)
 		if err != nil {
 			_ = tmuxrun.KillPane(paneID)
@@ -295,9 +296,9 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 		if err != nil || strings.TrimSpace(fanoutPath) == "" {
 			fanoutPath = commandName
 		}
-		statusPath := codexPlanStatusPath(root, pane.IssueNum, false)
+		statusPath := codexapp.StatusPath(root, pane.IssueNum, false)
 		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " +
-			buildCodexPlanTUIResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
+			codexapp.ResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
 		return command, statusPath, nil
 	}
 	command, err := agent.BuildResolvedResumeCommand(pane.Agent)
