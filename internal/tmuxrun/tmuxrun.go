@@ -60,6 +60,10 @@ const (
 	// falls back to the nearest 256-color when the terminal lacks RGB support.
 	paneActiveBorderStyle = "fg=#00A3AF"
 	paneBorderStyle       = "fg=#165E83"
+	// popupBorderLines / popupBorderStyle make display-popup frames read as a
+	// fanout-owned modal instead of blending into the surrounding terminal.
+	popupBorderLines = "double"
+	popupBorderStyle = paneActiveBorderStyle
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -212,7 +216,13 @@ func displayPopupArgs(opts PopupOptions) ([]string, error) {
 	if strings.TrimSpace(opts.Command) == "" {
 		return nil, fmt.Errorf("popup command is required")
 	}
-	args := []string{"display-popup", "-E", "-w", strconv.Itoa(opts.Width), "-h", strconv.Itoa(opts.Height)}
+	args := []string{
+		"display-popup", "-E",
+		"-b", popupBorderLines,
+		"-S", popupBorderStyle,
+		"-w", strconv.Itoa(opts.Width),
+		"-h", strconv.Itoa(opts.Height),
+	}
 	if strings.TrimSpace(opts.StartDir) != "" {
 		args = append(args, "-d", opts.StartDir)
 	}
@@ -595,7 +605,11 @@ func BindWorktreeActionKey(key, fanoutBin string) error {
 	launch := shellQuote(fanoutBin) + " __worktree-action --pane #{pane_id}"
 	startDir := "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}"
 	args := []string{
-		"bind-key", key, "display-popup", "-E", "-d", startDir, launch,
+		"bind-key", key, "display-popup", "-E",
+		"-b", popupBorderLines,
+		"-S", popupBorderStyle,
+		"-d", startDir,
+		launch,
 	}
 	if err := exec.Command("tmux", args...).Run(); err != nil {
 		return fmt.Errorf("tmux bind-key %s: %w", key, err)

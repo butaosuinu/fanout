@@ -3618,9 +3618,12 @@ func TestNewPaneViewRendersCJKPromptInsideFrame(t *testing.T) {
 	if !strings.Contains(view, "日本語入力テスト") {
 		t.Fatalf("modal view missing CJK prompt:\n%s", view)
 	}
-	// Modal outer frame + the single Prompt box; the Agent toggle is unframed.
-	if got := strings.Count(view, "┌"); got != 2 {
-		t.Fatalf("framed input boxes: got %d top-left corners, want 2:\n%s", got, view)
+	// Double modal outer frame + the single Prompt box; the Agent toggle is unframed.
+	if got := strings.Count(view, "╔"); got != 1 {
+		t.Fatalf("modal frame top-left corners: got %d, want 1:\n%s", got, view)
+	}
+	if got := strings.Count(view, "┌"); got != 1 {
+		t.Fatalf("input box top-left corners: got %d, want 1:\n%s", got, view)
 	}
 }
 
@@ -3631,25 +3634,33 @@ func TestNewPaneViewFramesTextInputs(t *testing.T) {
 	m.openNewPaneForm()
 
 	view := m.newPaneView()
-	// One border for the modal itself plus one around the Prompt textarea; the
-	// Agent toggle stays unframed, so exactly two top-left corners must appear.
-	if got := strings.Count(view, "┌"); got != 2 {
-		t.Fatalf("framed input boxes: got %d top-left corners, want 2:\n%s", got, view)
+	// One double border for the modal itself plus one single border around the
+	// Prompt textarea; the Agent toggle stays unframed.
+	if got := strings.Count(view, "╔"); got != 1 {
+		t.Fatalf("modal frame top-left corners: got %d, want 1:\n%s", got, view)
+	}
+	if got := strings.Count(view, "┌"); got != 1 {
+		t.Fatalf("input box top-left corners: got %d, want 1:\n%s", got, view)
 	}
 
-	// Collect each "┌...┐" top border. Order: modal outer frame, then the Prompt
-	// box. Both must be well-formed single-line borders.
-	var boxTops []string
+	// Collect each top border. Order: modal outer frame, then the Prompt box.
+	var modalTops, inputTops []string
 	for ln := range strings.SplitSeq(view, "\n") {
-		i := strings.Index(ln, "┌")
-		j := strings.Index(ln, "┐")
-		if i < 0 || j < 0 || j < i {
-			continue
+		if i := strings.Index(ln, "╔"); i >= 0 {
+			j := strings.Index(ln, "╗")
+			if j >= i {
+				modalTops = append(modalTops, ln[i:j+len("╗")])
+			}
 		}
-		boxTops = append(boxTops, ln[i:j+len("┐")])
+		if i := strings.Index(ln, "┌"); i >= 0 {
+			j := strings.Index(ln, "┐")
+			if j >= i {
+				inputTops = append(inputTops, ln[i:j+len("┐")])
+			}
+		}
 	}
-	if len(boxTops) != 2 {
-		t.Fatalf("box top borders: got %d, want 2:\n%s", len(boxTops), view)
+	if len(modalTops) != 1 || len(inputTops) != 1 {
+		t.Fatalf("top borders: modal=%d input=%d, want 1 each:\n%s", len(modalTops), len(inputTops), view)
 	}
 }
 

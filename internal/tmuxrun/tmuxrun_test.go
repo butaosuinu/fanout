@@ -95,7 +95,16 @@ func TestDisplayPopupBuildsCenteredArgs(t *testing.T) {
 		t.Fatalf("DisplayPopup() failed: %v", err)
 	}
 	assertTmuxArgs(t, argsPath, []string{
-		"display-popup", "-E", "-w", "90", "-h", "32", "-d", "/tmp/work tree", "-x", "C", "-y", "C", "-T", "New agent pane", "/tmp/fanout __tui-new-pane-popup",
+		"display-popup", "-E",
+		"-b", popupBorderLines,
+		"-S", popupBorderStyle,
+		"-w", "90",
+		"-h", "32",
+		"-d", "/tmp/work tree",
+		"-x", "C",
+		"-y", "C",
+		"-T", "New agent pane",
+		"/tmp/fanout __tui-new-pane-popup",
 	})
 }
 
@@ -702,6 +711,8 @@ printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
 	want := []string{
 		"bind-key", "M", "display-popup", "-E",
+		"-b", popupBorderLines,
+		"-S", popupBorderStyle,
 		"-d", "#{?@fanout_project_root,#{@fanout_project_root},#{pane_current_path}}",
 		"/abs/path/fanout __worktree-action --pane #{pane_id}",
 	}
