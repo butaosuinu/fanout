@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
@@ -195,7 +194,7 @@ func runPlanWithRuntime(cfg planCommandConfig, rt *runtimeInfo, lg *log.Logger, 
 	}
 	cfg.SpecArg = planRerunSpecArg(cfg, spec)
 
-	parentRef := planParentRef(spec.Plan.Slug)
+	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
 	fanned := mergeTaskFanned(store.FannedTaskIDsForParent(parentRef), existingPlanWorktreeFanned(rt.info.ProjectRoot, spec))
 	plan := buildTaskPlan(cfg, spec, fanned, func(task planspec.Task) bool {
 		return planTaskComplete(rt.gh, cliCfg, rt.info.ProjectRoot, store, spec, task, lg)
@@ -696,10 +695,6 @@ func copyPlanSpec(src, projectRoot, slug string) error {
 	return atomicfs.WriteFile(dst, data, 0o644)
 }
 
-func planParentRef(slug string) string {
-	return "plan:" + slug
-}
-
 func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	mode := planActionModeFlag(cfg)
 	rt, code := resolveStateRuntimeForMode(mode, lg)
@@ -711,7 +706,7 @@ func cmdPlanLifecycle(cfg planCommandConfig, lg *log.Logger) exitcode.Code {
 	if code != exitcode.OK {
 		return code
 	}
-	parentRef := planParentRef(spec.Plan.Slug)
+	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
 
 	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
@@ -786,7 +781,7 @@ func cmdPlanStatus(cfg planCommandConfig, spec planspec.Spec, projectRoot, state
 		lg.Err("--status: fanout state at %s is not valid JSON or has an invalid schema: %v", statePath, err)
 		return exitcode.Invocation
 	}
-	parentRef := planParentRef(spec.Plan.Slug)
+	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
 	report, code := statusreport.BuildPlanReport(spec, projectRoot, func(task planspec.Task) string {
 		return planStatusBranch(cfg, spec, store, parentRef, task)
 	}, lg)
@@ -819,28 +814,14 @@ func planTaskBranch(cfg planCommandConfig, spec planspec.Spec, task planspec.Tas
 	if task.Branch != "" {
 		return task.Branch
 	}
-	return naming.BranchName("", cfg.BranchPrefix, planTaskSlug(spec.Plan.Slug, task))
-}
-
-func planTaskSlug(planSlug string, task planspec.Task) string {
-	if task.Slug != "" {
-		return task.Slug
-	}
-	slug := planSlug + "-" + task.ResolvedSlug()
-	if len(slug) <= naming.MaxSlugLength {
-		return slug
-	}
-	sum := sha1.Sum([]byte(slug))
-	suffix := "-" + hex.EncodeToString(sum[:])[:8]
-	baseLen := naming.MaxSlugLength - len(suffix)
-	return strings.Trim(slug[:baseLen], "-") + suffix
+	return naming.BranchName("", cfg.BranchPrefix, panelaunch.PlanTaskSlug(spec.Plan.Slug, task))
 }
 
 func validatePlanExecutionNames(spec planspec.Spec, cfg planCommandConfig) error {
 	seenSlugs := map[string]int{}
 	seenBranches := map[string]int{}
 	for i, task := range spec.Tasks {
-		slug := planTaskSlug(spec.Plan.Slug, task)
+		slug := panelaunch.PlanTaskSlug(spec.Plan.Slug, task)
 		if prev, ok := seenSlugs[slug]; ok {
 			return fmt.Errorf("tasks[%d] final slug %q duplicates tasks[%d]", i, slug, prev)
 		}
@@ -873,7 +854,7 @@ func existingPlanWorktreeFanned(projectRoot string, spec planspec.Spec) map[stri
 	out := map[string]bool{}
 	worktreeNames := existingWorktreeNames(filepath.Join(projectRoot, ".fanout", "worktrees"))
 	for _, task := range spec.Tasks {
-		if worktreeNameMatchesExact(worktreeNames, planTaskSlug(spec.Plan.Slug, task)) {
+		if worktreeNameMatchesExact(worktreeNames, panelaunch.PlanTaskSlug(spec.Plan.Slug, task)) {
 			out[task.ID] = true
 		}
 	}
@@ -1022,7 +1003,7 @@ func cachedTaskComplete(taskComplete func(planspec.Task) bool) func(planspec.Tas
 func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot string, store state.Store, spec planspec.Spec, task planspec.Task, lg *log.Logger) bool {
 	branch := task.Branch
 	if branch == "" {
-		branch = naming.BranchName("", cfg.BranchPrefix, planTaskSlug(spec.Plan.Slug, task))
+		branch = naming.BranchName("", cfg.BranchPrefix, panelaunch.PlanTaskSlug(spec.Plan.Slug, task))
 	}
 	prs, err := gh.PRsForBranch(branch)
 	if err != nil {
@@ -1038,11 +1019,11 @@ func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot strin
 		return false
 	}
 
-	parentRef := planParentRef(spec.Plan.Slug)
+	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
 	if _, ok := store.FindTask(parentRef, task.ID); ok {
 		return false
 	}
-	if worktreeNameMatchesExact(existingWorktreeNames(filepath.Join(projectRoot, ".fanout", "worktrees")), planTaskSlug(spec.Plan.Slug, task)) {
+	if worktreeNameMatchesExact(existingWorktreeNames(filepath.Join(projectRoot, ".fanout", "worktrees")), panelaunch.PlanTaskSlug(spec.Plan.Slug, task)) {
 		return false
 	}
 	return false
@@ -1055,11 +1036,12 @@ func applyTaskLimit(tasks []planspec.Task, limit int) (targets, deferred []plans
 	return tasks, nil
 }
 
-func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
+func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) taskExecutionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: recorder, Palette: c, CommandName: commandName}
 	var result taskExecutionResult
 	for i, task := range targets {
-		req := newTaskPaneRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, hookConfig, teamCtx)
-		if !createPane(cfg, lg, info, req, recorder, c, commandName) {
+		req := panelaunch.NewTaskRequest(cfg, info.ProjectRoot, spec, task, resolvedSettings, hookConfig, teamCtx)
+		if !launcher.LaunchOK(req) {
 			result.Failed++
 			break
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -18,11 +19,11 @@ import (
 func TestPlanTaskSlugQualifiesDefaultAndHonorsExplicit(t *testing.T) {
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "## Goal\nExtract it"}
 
-	if got := planTaskSlug("launch-plan", task); got != "launch-plan-extract-api-client-api-client" {
+	if got := panelaunch.PlanTaskSlug("launch-plan", task); got != "launch-plan-extract-api-client-api-client" {
 		t.Fatalf("default slug = %q", got)
 	}
 	task.Slug = "shared-api-client"
-	if got := planTaskSlug("launch-plan", task); got != "shared-api-client" {
+	if got := panelaunch.PlanTaskSlug("launch-plan", task); got != "shared-api-client" {
 		t.Fatalf("explicit slug = %q", got)
 	}
 }

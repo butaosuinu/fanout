@@ -14,8 +14,9 @@ import (
 )
 
 // FanoutTagRE is the canonical capture regex for the one-line prompt prefix
-// built by cmd/fanout (oneLinePrompt): "[fanout #N of #P]". Group 1 is the
-// child issue number, group 3 the parent ref ("" for tag-only prompts).
+// built by internal/app/panelaunch (oneLinePrompt): "[fanout #N of #P]".
+// Group 1 is the child issue number, group 3 the parent ref ("" for
+// tag-only prompts).
 // Later sub-issues must reference this definition instead of redefining it.
 var FanoutTagRE = regexp.MustCompile(`^\[fanout #([0-9]+)( of #([^\]]+))?\]`)
 

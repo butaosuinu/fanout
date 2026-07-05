@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -99,8 +100,9 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	req := newWatchPaneRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	if !createPane(cfg, launchLogger, info, req, recorder, log.Palette{}, commandName) {
+	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	if !launcher.LaunchOK(req) {
 		return bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -523,7 +524,7 @@ func TestLaunchShellPaneFromTUIRecordsShellState(t *testing.T) {
 	if !strings.HasPrefix(got.ShellKey, "shell-") {
 		t.Fatalf("shell key = %q, want generated shell key", got.ShellKey)
 	}
-	if got.Parent != manualPaneParentRef || got.IssueNum != -1 {
+	if got.Parent != panelaunch.ManualParentRef || got.IssueNum != -1 {
 		t.Fatalf("shell identity = %s/%d, want @manual/-1", got.Parent, got.IssueNum)
 	}
 	if got.WorktreePath != repo || got.DisplayName != "root terminal" || got.Slug != "terminal-root-1" {

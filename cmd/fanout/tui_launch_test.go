@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
@@ -53,8 +54,8 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	if req.CodexPlanMode {
 		t.Fatal("req.CodexPlanMode = true, want false for a plan coordinator")
 	}
-	if req.ParentRef != manualPaneParentRef {
-		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, manualPaneParentRef)
+	if req.ParentRef != panelaunch.ManualParentRef {
+		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
 	}
 	if req.ShellKey != "shell-coordinator-key" {
 		t.Fatalf("req.ShellKey = %q, want the liveness key passed through", req.ShellKey)
