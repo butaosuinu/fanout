@@ -4,6 +4,7 @@
 package atomicfs
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 )
@@ -39,4 +40,38 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+// WriteJSON marshals v with two-space MarshalIndent, appends a trailing
+// newline, creates filepath.Dir(path) if needed, and writes the result
+// atomically via WriteFile. All errors are returned unwrapped so callers keep
+// their own message formats.
+func WriteJSON(path string, v any, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return WriteFile(path, append(out, '\n'), perm)
+}
+
+// ReadJSON reads path and unmarshals it into v. A missing file returns
+// (false, nil) with v untouched. found reports whether the file was read:
+// (false, err) is a read error, (true, err) an unmarshal error, so callers
+// can wrap the two stages with distinct messages. Errors are returned
+// unwrapped.
+func ReadJSON(path string, v any) (found bool, err error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return true, err
+	}
+	return true, nil
 }

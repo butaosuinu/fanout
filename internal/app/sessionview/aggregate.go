@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/blockers"
+	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -422,12 +423,9 @@ func sortedParents(grouped map[string][]state.Pane) []string {
 // NormalizeParent は数値親を Atoi 往復で正規化する("0100" と "100" を同一
 // 親として扱う)。state の parentMatches と同じ規則で、dashboard poller の
 // wave cache キーもこれを使う(規則が割れるとエイリアス親の synthetic 行が
-// 二重 emit / 消失する)。
+// 二重 emit / 消失する)。実体は core の parentref.Canon。
 func NormalizeParent(parent string) string {
-	if n, err := strconv.Atoi(parent); err == nil {
-		return strconv.Itoa(n)
-	}
-	return parent
+	return parentref.Canon(parent)
 }
 
 // localSourceKey returns a stable public token distinguishing a worktree-local

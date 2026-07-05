@@ -115,8 +115,8 @@ func TestCheckPlanDepsDoesNotRequireGhForUnblockedOnly(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir)
 
-	if missing := checkPlanDeps(); len(missing) != 0 {
-		t.Fatalf("checkPlanDeps() missing = %v, want no gh requirement", missing)
+	if missing := missingDeps(depNeeds{git: true, tmux: true}); len(missing) != 0 {
+		t.Fatalf("missingDeps(plan launch needs) = %v, want no gh requirement", missing)
 	}
 }
 

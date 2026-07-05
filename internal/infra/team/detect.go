@@ -4,13 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -120,7 +119,7 @@ func paneIdentity(pane state.Pane) Identity {
 func Detect() (Identity, error) {
 	paneID := os.Getenv("TMUX_PANE")
 	worktree := ""
-	if top, err := gitToplevel(); err == nil {
+	if top, err := gitroot.Toplevel(""); err == nil {
 		if _, ok := childWorktreeOwner(top); ok {
 			worktree = top
 		}
@@ -158,24 +157,12 @@ const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 // points at the original checkout that holds no fanout state. Anywhere else
 // the toplevel itself is the owner.
 func OwnerProjectRoot() (string, error) {
-	top, err := gitToplevel()
+	top, err := gitroot.Toplevel("")
 	if err != nil {
 		return "", err
 	}
 	if owner, ok := childWorktreeOwner(top); ok {
 		return owner, nil
-	}
-	return top, nil
-}
-
-func gitToplevel() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", fmt.Errorf("current directory is not inside a git work tree")
-	}
-	top := strings.TrimSpace(string(out))
-	if top == "" {
-		return "", fmt.Errorf("git rev-parse --show-toplevel returned an empty path")
 	}
 	return top, nil
 }

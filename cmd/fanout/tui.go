@@ -34,9 +34,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
-	if versionErr := tmuxrun.CheckMinimumVersion(); versionErr != nil {
-		lg.Err("missing dependencies:")
-		fmt.Fprintf(lg.Stderr(), "  - %s\n", versionErr)
+	if exitOnMissingDeps(missingDeps(depNeeds{tmux: true}), lg) {
 		return exitcode.Env
 	}
 

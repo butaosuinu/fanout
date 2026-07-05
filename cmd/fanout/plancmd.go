@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -27,7 +26,6 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -118,21 +116,13 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		lg = log.New(true)
 	}
 	if cfg.actionMode() {
-		if missing := checkPlanActionDeps(cfg); len(missing) > 0 {
-			lg.Err("missing dependencies:")
-			for _, d := range missing {
-				fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
-			}
+		if exitOnMissingDeps(missingDeps(depNeeds{git: true, gh: cfg.StatusMode || cfg.CleanupMode}), lg) {
 			return exitcode.Env
 		}
 		return cmdPlanLifecycle(cfg, lg)
 	}
 
-	if missing := checkPlanDeps(); len(missing) > 0 {
-		lg.Err("missing dependencies:")
-		for _, d := range missing {
-			fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
-		}
+	if exitOnMissingDeps(missingDeps(depNeeds{git: true, tmux: true}), lg) {
 		return exitcode.Env
 	}
 
@@ -628,34 +618,6 @@ func parsePlanAgentArg(cfg *planCommandConfig, raw string) error {
 	}
 	cfg.AgentOverrides = cliflags.UpsertAgentOverride(cfg.AgentOverrides, target, name)
 	return nil
-}
-
-func checkPlanDeps() []string {
-	var missing []string
-	check := func(cmd, hint string) {
-		if _, err := exec.LookPath(cmd); err != nil {
-			missing = append(missing, hint)
-		}
-	}
-	check("git", "git")
-	if err := tmuxrun.CheckMinimumVersion(); err != nil {
-		missing = append(missing, err.Error())
-	}
-	return missing
-}
-
-func checkPlanActionDeps(cfg planCommandConfig) []string {
-	var missing []string
-	check := func(cmd, hint string) {
-		if _, err := exec.LookPath(cmd); err != nil {
-			missing = append(missing, hint)
-		}
-	}
-	check("git", "git")
-	if cfg.StatusMode || cfg.CleanupMode {
-		check("gh", "gh (brew install gh)")
-	}
-	return missing
 }
 
 func resolvePlanBaseBranch(cfg planCommandConfig, spec planspec.Spec, projectRoot string) (string, error) {

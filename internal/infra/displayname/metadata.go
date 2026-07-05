@@ -1,7 +1,6 @@
 package displayname
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,15 +31,14 @@ func WriteFanoutMetadata(worktreePath string, meta FanoutMetadata) error {
 	}
 	path := filepath.Join(dir, "worktree-metadata.json")
 	m := map[string]any{}
-	if data, err := os.ReadFile(path); err == nil {
-		if err = json.Unmarshal(data, &m); err != nil {
+	if found, err := atomicfs.ReadJSON(path, &m); err != nil {
+		if found {
 			return fmt.Errorf("parse existing metadata %s: %w", path, err)
 		}
-		if m == nil {
-			m = map[string]any{}
-		}
-	} else if !os.IsNotExist(err) {
 		return err
+	}
+	if m == nil {
+		m = map[string]any{}
 	}
 	m["agent"] = meta.Agent
 	m["displayName"] = meta.DisplayName
@@ -53,9 +51,5 @@ func WriteFanoutMetadata(worktreePath string, meta FanoutMetadata) error {
 	if meta.CodexSessionID != "" {
 		m["codexSessionId"] = meta.CodexSessionID
 	}
-	out, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicfs.WriteFile(path, append(out, '\n'), 0o644)
+	return atomicfs.WriteJSON(path, m, 0o644)
 }
