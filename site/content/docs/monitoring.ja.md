@@ -9,6 +9,12 @@ yomi: monitoring
 
 子 issue を 5 つファンアウトすると、tmux には 5 枚のペインが並び、それぞれ別のエージェントが別の worktree で動き出します。次に知りたいのは「どのペインが PR まで進んだか」「どこで止まっているか」「未 commit の作業を抱えたまま放置されているペインはないか」です。fanout はこれを 3 つの窓で見ます。手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**。`--status` と Web ダッシュボードは読み取り専用で、`.fanout/state.json` と tmux と GitHub を読むだけです。TUI も同じように眺めるための窓ですが、キーバインドから merge、close、cleanup も実行できます（`--merge` / `--close` / `--cleanup` と同じ経路）。
 
+## ペイン枠線ラベル
+
+3 つの窓の前に、tmux 自体がペインを見分けさせてくれます。fanout は作成した各ペインの上枠に `<parent> · <name>` のラベルを付けます — issue の子なら `#123 · fix-login-bug-123`、plan タスクなら `plan:my-feature · task-slug` — さらに枠線を fanout のテーマ色（アクティブは浅葱、それ以外は藍）に染めます。タイル状に並んだ window を一瞥するだけで、どのペインがどの子か、フォーカスせずに分かります。
+
+tmux の枠線オプションは window 単位なので、fanout ペインを含む window では全ペインに上枠が付きます。fanout が作っていないペインは自身の `#{pane_title}` に fallback し、自分で設定した `pane-border-style` はその window では上書きされます。
+
 ## 常駐 TUI コンソール
 
 手元で全ペインを眺め続けるなら、引数なしの `fanout` で常駐コンソールを起動します。
@@ -19,7 +25,9 @@ fanout   # start the persistent tmux console
 
 素のシェルから起動したときは、現在のリポジトリ用の deterministic な fanout 管理 tmux session を作成または attach し、その session 内でコンソールを開始します。tmux 内から起動したときは、現在のペインをそのままコンソール画面にします。起動時と state 更新ごとに、コンソールは tmux 上に残っている記録済み worktree ペインへ再バインドし、消えた worktree ペインは agent CLI の resume で作り直します。使うのは `claude --continue`、`codex resume --last`、または Plan ペインに保存した Codex Plan Mode thread です。
 
-コンソールは `<git-root>/.fanout/state.json` を読み、記録済みペイン ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue と closed-by PR の状態を定期更新します。エージェント側に計測の仕込みは要りません。各行にはペインの worktree の総作業量を `+X/-Y` で示します。これは記録した base ブランチとの merge-base に対する `git diff --shortstat` で、コミット済みと未 commit の合計です（base 未記録の旧行は `origin/HEAD` から `HEAD` に fallback します）。あわせて `git status --porcelain` 由来の `dirty` / `clean` を出すので、未 commit の作業を抱えたペインをその場で見分けられます。
+コンソールは `<git-root>/.fanout/state.json` を読み、記録済みペイン ID が tmux 上にまだ存在するかを確認し、`fanout <parent> --status` と同じ GitHub CLI 経路で issue と closed-by PR の状態を定期更新します。エージェント側に計測の仕込みは要りません。各行にはペインの worktree の総作業量を `+X/-Y` で示します。これは記録した base ブランチとの merge-base に対する `git diff --shortstat` で、コミット済みと未 commit の合計です（base 未記録の旧行は `origin/HEAD` から `HEAD` に fallback します）。あわせて `git status --porcelain` 由来の `dirty` / `clean` を出すので、未 commit の作業を抱えたペインをその場で見分けられます。`RUN` 列には各ペインの agent 状態（agent 起動ラッパーが報告する `running` / `done`）が出るので、まだ作業中のペインが分かります。detail panel には同じ値が `run=` として出ます。
+
+{{< diagram "console" >}}
 
 行が増えてきたら `/` で絞り込みます。ロード済みの行をメモリ内でフィルタでき、フリーテキストのほか `state:open`、`agent:codex`、`wave:wave5` のような述語も使えます。フィルタは追加の fetch を起こさず、絞り込み中も state と GitHub の自動更新は続きます。
 
@@ -32,6 +40,9 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 | キー | 動作 |
 |---|---|
 | `?` | キーボードショートカットのヘルプを tmux popup で開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
+| `j` / `k` | 選択を下 / 上に移動する（矢印キーでも可）。 |
+| `[` / `]` | 前 / 次の Session グループへジャンプする。 |
+| `/` | ロード済みの行を絞り込む — フリーテキストか `state:open` のような述語。`Esc` でフィルタを解除する。 |
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
@@ -62,8 +73,20 @@ footer は短く保ちます。通常画面で `?` を押すと、全ショー�
 
 `n` は Mode 行つきの tmux popup を開きます。Mode 行で `Left` / `Right` を押すとモードが切り替わり、`Tab` でフィールドを移動し、`Esc` でキャンセルします（agent 割り当て画面では 1 つ前に戻る）。
 
-- **Prompt** — 従来の manual ペイン。複数行の必須 prompt と `claude` / `codex` の起動数を指定する。`Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。`codex` は Codex Plan Mode で起動し popup の prompt を inline で受け取る。`claude` は通常起動する。prompt の下の **plan fan-out** チェックボックスを入れると起動内容が変わる。agent をちょうど 1 本選んで有効にすると、project root にコーディネータ pane を 1 つ起動し、そのプロンプトに対して `/fanout plan`（claude）または `$fanout-plan`（codex）を実行して並列タスクに分解する。コーディネータは自身で `fanout plan` を走らせるため、常に通常 agent として起動する — plan fan-out では `codex` でも Codex Plan Mode にはならない。prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`Enter` でペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。
-- **Issue** — リポジトリの OPEN issue を全件一覧する（cursor ページングで取得）。文字入力で番号・タイトル・ラベルで絞り込み、`Up` / `Down` で一覧をスクロールする。すでにペインが記録されている行は `(has session)` と表示されるが選択はできる。各行の先頭には GitHub Sub-issues グラフ上の位置を示すマーカーが付く — `▸` は OPEN な子を持つファンアウト親、`└` は子、`·` は単独。マーカーは Sub-issues リンクだけを見るので、子を本文のタスクリスト行（`- [ ] #N`）で管理している親は `·` と表示されても起動時にはファンアウトする。一覧の下の **Agent** 行でファンアウトの既定 agent を `claude` / `codex` の起動数として選ぶ — Prompt モードと同じカウント式表示だが、常にちょうど 1 つが `[1]`。`Up` / `Down` で行を移動し、`Space` / `Left` / `Right` で選択する。`Enter` で子 issue ごとの agent 割り当て画面が開き、`Left` / `Right` で行の agent を切り替え — 繰り返し指定の `--agent NUM=name` と同じ — もう一度 `Enter` で起動する。OPEN な子を持つ issue は `fanout <issue> --unblocked-only` 相当でファンアウトする。blocked な子は deferred のまま残るので、ブロッカーが閉じたら同じ issue を選び直す（全子を一度に起動したい場合は CLI を使う）。子のない issue は `@watch` 配下に記録される単独ペインを起動する。
+**Prompt** は従来の manual ペインです。複数行の必須 prompt と `claude` / `codex` の起動数を指定します。
+
+- `Up` / `Down` で agent 行を選び、`Space` で 0 / 1 を切り替え、`Left` / `Right` で起動数を変える。`codex` は Codex Plan Mode で起動し popup の prompt を inline で受け取る。`claude` は通常起動する。
+- prompt 欄では `Shift+Enter` または `Ctrl+J` で改行し、`@` を打つとリポジトリのファイルパス補完が開き、`Enter` でペインを作成する。enhanced keyboard input は既定で有効（`FANOUT_TUI_ENHANCED_KEYS=0` で無効化）で、`Shift+Enter` を区別して送る terminal が必要なため fanout が tmux の `extended-keys` を有効化する。
+- prompt の下の **plan fan-out** チェックボックスを入れると起動内容が変わる。agent をちょうど 1 本選んで有効にすると、project root にコーディネータ pane を 1 つ起動し、そのプロンプトに対して `/fanout plan`（claude）または `$fanout-plan`（codex）を実行して並列タスクに分解する。コーディネータは自身で `fanout plan` を走らせるため、常に通常 agent として起動する — plan fan-out では `codex` でも Codex Plan Mode にはならない。
+- manual ペインは synthetic な `@manual` state entry として記録され、起動後に一覧へ表示される。
+
+**Issue** はリポジトリの OPEN issue を全件一覧します（cursor ページングで取得）。
+
+- 文字入力で番号・タイトル・ラベルで絞り込み、`Up` / `Down` で一覧をスクロールする。すでにペインが記録されている行は `(has session)` と表示されるが選択はできる。
+- 各行の先頭には GitHub Sub-issues グラフ上の位置を示すマーカーが付く: `▸` は OPEN な子を持つファンアウト親、`└` は子、`·` は単独。マーカーは Sub-issues リンクだけを見るので、子を本文のタスクリスト行（`- [ ] #N`）で管理している親は `·` と表示されても起動時にはファンアウトする。
+- 一覧の下の **Agent** 行でファンアウトの既定 agent を `claude` / `codex` の起動数として選ぶ — Prompt モードと同じカウント式表示だが、常にちょうど 1 つが `[1]`。`Up` / `Down` で行を移動し、`Space` / `Left` / `Right` で選択する。
+- `Enter` で子 issue ごとの agent 割り当て画面が開き、`Left` / `Right` で行の agent を切り替え — 繰り返し指定の `--agent NUM=name` と同じ — もう一度 `Enter` で起動する。
+- OPEN な子を持つ issue は `fanout <issue> --unblocked-only` 相当でファンアウトする。blocked な子は deferred のまま残るので、ブロッカーが閉じたら同じ issue を選び直す（全子を一度に起動したい場合は CLI を使う）。子のない issue は `@watch` 配下に記録される単独ペインを起動する。
 
 ## --status（JSON）
 

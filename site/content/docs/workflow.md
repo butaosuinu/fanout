@@ -70,6 +70,8 @@ When several children depend on one another, you don't want to hold everyone bac
 
 Because reruns also skip children already recorded in `.fanout/state.json`, advancing the project is just running the same command again each time a blocker PR merges: Wave 1 → Wave 2 → … with no manual bookkeeping.
 
+{{< diagram "waves" >}}
+
 ```bash
 fanout 123 --unblocked-only
 
@@ -107,9 +109,10 @@ or fully cleaned parent, add `fanout:auto` again. Do not apply the trigger label
 to untrusted issues: the labeled issue and any OPEN children it launches become
 agent briefings.
 
-This watcher is separate from [#107](https://github.com/butaosuinu/fanout/issues/107):
-it discovers labeled issues across the repository and starts one-shot sessions.
-#107 remains the skill-led loop for revisiting children under a known parent.
+The watcher's job is repository-wide: it discovers labeled issues and starts
+one-shot sessions. Revisiting the children under a parent you already fanned
+out stays with the wave loop above — rerun `fanout <parent> --unblocked-only`
+as blockers close.
 
 ## Issue-less plan fan-out
 
@@ -177,22 +180,20 @@ task and `fanout msg peers` lists the live task ids. The plan bus lives at
 `/tmp/fanout-<repo>-plan-<slug>.db`, and `--team` is not combinable with the
 plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`).
 
-| Verb | Effect |
-|---|---|
-| `peers` | List the sibling panes known for this parent. |
-| `inbox [--mark-read]` | Show your unread 1:1 messages (optionally mark them read). |
-| `board [--all]` | Show recent broadcasts (all of them with `--all`). |
-| `send --to <N> <body>` | Send a 1:1 message to sibling `#N`. |
-| `post [--kind K] <body>` | Post a broadcast to the shared board. |
-| `mark-read [--all]` | Mark messages read. |
-| `register` | (Re-)seed yourself into the peer registry. |
-| `nudge <N>` | Best-effort `send-keys` hint into peer `#N`'s pane — only when its agent is running, and it never touches the DB. |
+```bash
+fanout msg peers                # who are my siblings?
+fanout msg post "auth interface merged — rebase before touching login"
+fanout msg send --to 7 "renamed SessionStore to PaneStore"
+fanout msg inbox --mark-read
+```
+
+The full verb table (`peers`, `inbox`, `board`, `send`, `post`, `mark-read`,
+`register`, `nudge`) and the common options are in the
+[CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 
 This works the same for `claude` and `codex` panes. It is distinct from Claude
 Code Agent Teams, which coordinates teammates inside a single session; peer
-messaging coordinates separate fanout panes. See the
-[CLI Reference]({{< relref "/docs/cli" >}}) or `fanout msg --help` for the full
-surface.
+messaging coordinates separate fanout panes.
 
 > **Security.** The bus is a **plaintext** SQLite file under `/tmp`. fanout
 > creates it `0600` (owner-only) and refuses one that is group/world-readable or

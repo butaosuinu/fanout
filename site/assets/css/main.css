@@ -894,3 +894,28 @@ html.search-open{ overflow:hidden; }
     transition:none !important;
   }
 }
+
+/* ============================================================
+   docs 図版(.dg)— quickstart / workflow / monitoring の SVG
+   ============================================================ */
+.dg-holder{ margin:2.4rem 0; }
+.dg{ display:block; width:100%; height:auto; overflow:visible; }
+.dg .box{ fill:var(--paper); stroke:var(--suna); stroke-width:1.5; }
+.dg .box-dash{ fill:var(--washi); stroke:var(--suna); stroke-width:1.5; stroke-dasharray:5 4; }
+.dg .hd{ fill:rgba(201,232,236,.62); }
+.dg .frame{ fill:none; stroke:var(--ai); stroke-width:1.5; opacity:.5; stroke-dasharray:2 4; }
+.dg .rule{ stroke:var(--suna); stroke-width:1; }
+.dg .chip{ fill:var(--washi); stroke:var(--suna); stroke-width:1; }
+.dg .sel{ fill:rgba(201,232,236,.45); }
+.dg .arrow{ stroke:var(--ai); stroke-width:1.8; fill:none; }
+.dg .bar{ fill:var(--suna); }
+.dg .bar.b2{ fill:rgba(22,94,131,.22); }
+.dg .dot-run{ fill:var(--asagi); }
+.dg .t-num{ font-family:var(--f-code); font-size:11px; font-weight:500; fill:var(--ai); }
+.dg .t-name{ font-family:var(--f-code); font-size:11.5px; fill:var(--sumi); }
+.dg .t-mut{ font-family:var(--f-code); font-size:10.5px; fill:var(--ink-60); }
+.dg .t-lbl{ font-family:var(--f-body); font-size:11px; fill:var(--ink-60); }
+.dg .t-cmd{ font-family:var(--f-code); font-size:12px; font-weight:500; fill:var(--ai-deep); }
+.dg .t-cap{ font-family:var(--f-head); font-size:14px; fill:var(--sumi); }
+.dg .run{ fill:var(--asagi); }
+.dg .ok{ fill:var(--asagi); }

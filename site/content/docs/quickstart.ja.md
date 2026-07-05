@@ -11,11 +11,19 @@ yomi: quickstart
 
 親 issue に OPEN なサブ issue が 5 つあるとします。1 つずつ着手して順番待ちさせる代わりに、fanout は全部を同時に動かします。子ごとに tmux のペインを 1 枚開き、それぞれが独立した git worktree を持つので、5 つのエージェントが互いの編集と衝突せずに並行して進みます。
 
+{{< diagram "overview" >}}
+
+issue ツリーがまだ無い場合は、同梱の `fanout-issues` skill が計画を親 issue + リンク済みの子 issue に変換します（[エージェント連携]({{< relref "/docs/agents" >}}) を参照）。fanout が期待する形は[後述](#子-issue-の宣言方法)します。
+
 子ごとのペインで使うエージェントを決め、対象リポジトリで tmux セッションを開始（または attach）します。
 
 ```bash
 # Use Claude for child panes
 export FANOUT_AGENT=claude
+
+# Start (or attach) a tmux session in the repository
+cd path/to/repo
+tmux new -A -s work
 ```
 
 まず計画をプレビューします。`--dry-run` は git worktree と tmux のコマンド列を実行せずに表示するだけで、worktree もペインも state 行も briefing ファイルも作りません。

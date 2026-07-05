@@ -70,6 +70,8 @@ fanout 123 --include 4,7
 
 再実行では `.fanout/state.json` に記録済みの子もスキップされます。そのため、blocker PR が merge されるたびに同じコマンドをもう一度実行するだけでプロジェクトが進みます。Wave 1 → Wave 2 → … が手動の管理なしで進みます。
 
+{{< diagram "waves" >}}
+
 ```bash
 fanout 123 --unblocked-only
 
@@ -107,9 +109,9 @@ lifecycle key(`m`、`c`、`x`)で処理してください。公開 CLI の paren
 issue と、起動される OPEN child の本文は agent briefing になります。信頼できない
 issue に trigger label を付けないでください。
 
-この watcher は [#107](https://github.com/butaosuinu/fanout/issues/107) とは別レーンです。
-watcher は repo 全体から label 付き issue を探し、one-shot session を起動します。
-#107 は既知の親 issue 配下の子を skill 主体で継続巡回するループです。
+watcher の仕事は repo 全体が対象です。label 付き issue を探し、one-shot session を
+起動します。ファンアウト済みの親配下の子を再訪するのは上の wave ループの仕事です —
+blocker が閉じるたびに `fanout <parent> --unblocked-only` を再実行してください。
 
 ## issue を介さない plan ファンアウト
 
@@ -175,22 +177,20 @@ plan レーンも `--team` に対応します(`fanout plan <spec> --team`)。動
 read モードと lifecycle モード(`--status`、`--close`、`--merge`、`--cleanup`)とは
 併用できません。
 
-| verb | 効果 |
-|---|---|
-| `peers` | この親で把握している兄弟ペインを一覧する。 |
-| `inbox [--mark-read]` | 自分宛の未読 1:1 メッセージを表示する(任意で既読化)。 |
-| `board [--all]` | 最近のブロードキャストを表示する(`--all` で全件)。 |
-| `send --to <N> <body>` | 兄弟 `#N` へ 1:1 メッセージを送る。 |
-| `post [--kind K] <body>` | 共有 board へブロードキャストを投稿する。 |
-| `mark-read [--all]` | メッセージを既読にする。 |
-| `register` | 自分を peer レジストリへ(再)seed する。 |
-| `nudge <N>` | peer `#N` のペインへ `send-keys` でヒントを送る best-effort 通知。agent が running のときだけ送り、DB は一切触らない。 |
+```bash
+fanout msg peers                # 兄弟は誰か?
+fanout msg post "auth interface merged — login を触る前に rebase して"
+fanout msg send --to 7 "SessionStore を PaneStore にリネームした"
+fanout msg inbox --mark-read
+```
+
+verb の全表(`peers`、`inbox`、`board`、`send`、`post`、`mark-read`、
+`register`、`nudge`)と共通オプションは
+[CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) にあります。
 
 `claude` と `codex` どちらのペインでも同じく動きます。これは 1 セッション内の
 チームメイトを協調させる Claude Code Agent Teams とは別物で、peer messaging は
-別々の fanout ペイン同士を協調させます。全サーフェスは
-[CLI リファレンス]({{< relref "/docs/cli" >}}) または `fanout msg --help` を
-参照してください。
+別々の fanout ペイン同士を協調させます。
 
 > **セキュリティ。** バスは `/tmp` 配下の**平文** SQLite ファイルです。fanout は
 > `0600`(所有者のみ)で作成し、group/world-readable や別ユーザー所有のファイルは

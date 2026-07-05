@@ -11,11 +11,19 @@ yomi: quickstart
 
 Suppose your parent issue has five OPEN sub-issues. Instead of picking them off one at a time and queueing the rest, fanout starts them all at once: one tmux pane per child, each with its own git worktree, so five agents work in parallel without colliding on each other's edits.
 
+{{< diagram "overview" >}}
+
+No issue tree yet? The bundled `fanout-issues` skill turns a plan into a parent issue with linked children — see [Agent Integrations]({{< relref "/docs/agents" >}}). The shape fanout expects is described [below](#how-child-issues-are-declared).
+
 Pick the agent used for child panes, then start (or attach) a tmux session in the target repository:
 
 ```bash
 # Use Claude for child panes
 export FANOUT_AGENT=claude
+
+# Start (or attach) a tmux session in the repository
+cd path/to/repo
+tmux new -A -s work
 ```
 
 Preview the plan first. `--dry-run` prints the git worktree + tmux commands without executing them. It creates no worktrees, panes, state rows, or briefing files:

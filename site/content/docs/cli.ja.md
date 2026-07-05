@@ -17,12 +17,13 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
        [--session <tmux-session>] [--sleep <seconds>]
-       [--popup-timeout <seconds>] [--dry-run] [--debug]
+       [--dry-run] [--debug]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
@@ -235,7 +236,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`）と排他です。
+`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -251,8 +252,13 @@ fanout 123 --close 4
 fanout 123 --cleanup
 ```
 
-Hook は常に有効です。user hook config が無い場合、または event に command が無い
-場合、その event は no-op です。fanout は `$XDG_CONFIG_HOME/fanout/hooks.json`、
+## Lifecycle hooks
+
+fanout は worktree・ペイン・merge の各 event で user shell hook を実行します —
+fan-out 中（`worktree_created`、`before_pane_create`）と上記の lifecycle
+コマンドの両方が対象です。Hook は常に有効です。user hook config が無い場合、
+または event に command が無い場合、その event は no-op です。fanout は
+`$XDG_CONFIG_HOME/fanout/hooks.json`、
 または `XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/hooks.json` を読みます。
 ファイルは Codex 風の `hooks` object です:
 

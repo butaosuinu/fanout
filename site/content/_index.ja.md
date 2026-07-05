@@ -14,7 +14,7 @@ quickstart:
   caption: "もう一度実行しても、同じ子に二度目のペインは作られない —— <code class=\"in\">.fanout/state.json</code> が覚えている。"
 features:
   title: "並列を止めないための、六つの機能。"
-  lede: "issue でも、ローカルの plan でも —— どの機能も並列の手を止めないために働く。"
+  lede: "冪等な再実行から三つの監視面まで —— GitHub issue にもローカルの plan spec にも、同じ仕組みで効く。"
   items:
     - no: "i"
       icon: "seal"
@@ -48,7 +48,7 @@ features:
       link: "/docs/agents"
 workflow:
   title: "用意して、展開して、片づける。"
-  lede: "基本はこの三手。wave が終わるたび、繰り返すだけ。"
+  lede: "一度きりではなくループ。再実行のたび、blocker の外れた子だけが次に動き出す。"
   steps:
     - num: "一"
       title: "用意する"

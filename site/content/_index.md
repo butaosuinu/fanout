@@ -14,7 +14,7 @@ quickstart:
   caption: "Run it again and no child gets a second pane &mdash; <code class=\"in\">.fanout/state.json</code> remembers."
 features:
   title: "Six features that keep parallel work moving."
-  lede: "Whether you fan out GitHub issues or a local plan, every feature keeps parallel work moving."
+  lede: "The same machinery serves GitHub issues and local plan specs &mdash; from idempotent reruns to three ways of watching progress."
   items:
     - no: "i"
       icon: "seal"
@@ -48,7 +48,7 @@ features:
       link: "/docs/agents"
 workflow:
   title: "Prepare, fan out, fold away."
-  lede: "Prepare the work, fan it out, fold finished panes away &mdash; then rerun for the next wave."
+  lede: "A loop, not a one-shot: each rerun picks up exactly the children whose blockers just cleared."
   steps:
     - num: "一"
       title: "Prepare the work"

@@ -100,7 +100,7 @@ issue and its launchable children.
 
 Invalid boolean or integer env values, unknown file keys, and file values with the wrong JSON type are warned and ignored, so future settings additions do not break older fanout binaries.
 
-Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [CLI Reference]({{< relref "/docs/cli" >}}).
+Lifecycle hooks are always enabled and configured separately in `hooks.json`; see [Lifecycle hooks]({{< relref "/docs/cli#lifecycle-hooks" >}}) in the CLI Reference.
 
 ## prVisualization in detail
 

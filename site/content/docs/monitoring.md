@@ -9,6 +9,12 @@ yomi: monitoring
 
 Fan out five children and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, where one is stuck, and whether any pane is sitting on uncommitted work. fanout answers that through three windows: the **persistent TUI console** for watching from your terminal, `--status` **JSON** for feeding automation, and the read-only **web dashboard** for sharing with a team or a browser. `--status` and the web dashboard are strictly read-only — they only read `.fanout/state.json`, tmux, and GitHub. The TUI watches the same way, but its key bindings can also merge, close, and clean up panes (the same paths as `--merge` / `--close` / `--cleanup`).
 
+## Pane border labels
+
+Before any of the three windows, tmux itself tells the panes apart: fanout labels each pane it creates on its top border with `<parent> · <name>` — `#123 · fix-login-bug-123` for issue children, `plan:my-feature · task-slug` for plan tasks — and themes the borders with fanout's colors (asagi teal for the active pane, ai indigo for the rest). A glance at a tiled window shows which pane belongs to which child without focusing anything.
+
+tmux scopes border options to the window, so every pane in a window holding fanout panes shows a top border: panes fanout did not create fall back to their own `#{pane_title}`, and a `pane-border-style` you configured yourself is overridden for that window.
+
 ## Persistent TUI console
 
 To watch every pane from your terminal, run `fanout` with no arguments to start the persistent console:
@@ -19,7 +25,9 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates a deterministic fanout-managed tmux session for the current repository, starts the console in that session, and attaches to it. From inside tmux it turns the current pane into the console. On startup and each state refresh, the console rebinds recorded worktree panes that still exist in tmux and recreates missing worktree panes by resuming their agent CLI: `claude --continue`, `codex resume --last`, or the saved Codex Plan Mode thread for Plan panes.
 
-The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance.
+The console reads `<git-root>/.fanout/state.json`, checks whether recorded pane IDs still exist in tmux, and periodically refreshes issue / closed-by PR state through the same GitHub CLI source used by `fanout <parent> --status` — no agent instrumentation required. Each row shows the pane worktree's total work size as `+X/-Y`: `git diff --shortstat` against the merge-base with the recorded base branch, so committed and uncommitted changes both count (rows recorded before the base branch was tracked fall back to `origin/HEAD`, then `HEAD`). It also shows `dirty`/`clean` from `git status --porcelain`, so you can spot a pane holding uncommitted work at a glance. A `RUN` column carries each pane's agent state (`running` / `done`, reported by the agent launch wrapper), so you can see which panes are still working; the detail panel repeats the value as `run=`.
+
+{{< diagram "console" >}}
 
 When the list grows, press `/` to filter the loaded rows in memory, with free-text terms or predicates such as `state:open`, `agent:codex`, and `wave:wave5`. Filtering never triggers extra data fetches, and the automatic state / GitHub refresh continues while a filter is active.
 
@@ -32,6 +40,9 @@ The footer stays short; press `?` in the monitor to open the full shortcut help 
 | Key | Action |
 |---|---|
 | `?` | Open the keyboard shortcut help in a tmux popup. Press `Esc`, `q`, or `?` again to close it. |
+| `j` / `k` | Move the selection down / up (arrow keys work too). |
+| `[` / `]` | Jump to the previous / next Session group. |
+| `/` | Filter the loaded rows — free text or predicates like `state:open`. `Esc` clears the active filter. |
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
@@ -62,8 +73,20 @@ Disable the registration with the `consoleKeybind` config key or `FANOUT_CONSOLE
 
 `n` opens a tmux popup with a Mode row. `Left` / `Right` on that row switches the mode, `Tab` moves between fields, and `Esc` cancels (or steps back from the assignment screen).
 
-- **Prompt** — the classic manual pane: a required **multi-line** prompt plus `claude` / `codex` launch counts. Use `Up` / `Down` to pick an agent row, `Space` to toggle it, and `Left` / `Right` to change the count. `codex` starts in Codex Plan Mode and receives the popup prompt inline; `claude` starts normally. A **plan fan-out** checkbox below the prompt changes what launches: tick it, select exactly one agent, and fanout starts a single coordinator pane at the project root that runs `/fanout plan` (claude) or `$fanout-plan` (codex) on the prompt to decompose it into parallel tasks. The coordinator always launches as a normal agent — `codex` is not in Codex Plan Mode for a plan fan-out — because it runs `fanout plan` itself. In the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `Enter` creates the selected panes. Enhanced keyboard input is on by default (set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out); `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`. Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch.
-- **Issue** — lists every OPEN issue in the repository, fetched with cursor pagination. Typing narrows by number, title, or label, and `Up` / `Down` scroll the list; rows that already have a recorded pane show `(has session)` but stay selectable. Each row leads with a marker for its place in the GitHub Sub-issues graph — `▸` a fan-out parent with OPEN children, `└` a child, `·` standalone. The marker reads Sub-issues links only: a parent that tracks its children as body task-list rows (`- [ ] #N`) shows `·` yet still fans out on launchAn **Agent** row below the list picks the fan-out's default agent as `claude` / `codex` launch counts — the same count-style selector as Prompt mode, but exactly one is always `[1]`; `Up` / `Down` move between rows and `Space` / `Left` / `Right` select. `Enter` opens a per-child agent assignment screen where `Left` / `Right` flips one row's agent — the equivalent of repeatable `--agent NUM=name` flags — and `Enter` launches. An issue with OPEN children fans out like `fanout <issue> --unblocked-only`: blocked children stay deferred, so re-select the issue after their blockers close (or use the CLI to launch every child at once). An issue without children starts a single pane recorded under `@watch`.
+**Prompt** is the classic manual pane: a required **multi-line** prompt plus `claude` / `codex` launch counts.
+
+- Pick an agent row with `Up` / `Down`, toggle it with `Space`, and change the count with `Left` / `Right`. `codex` starts in Codex Plan Mode and receives the popup prompt inline; `claude` starts normally.
+- In the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline, typing `@` completes repository file paths into the prompt, and `Enter` creates the selected panes. Enhanced keyboard input is on by default (set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out); `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`.
+- A **plan fan-out** checkbox below the prompt changes what launches: tick it, select exactly one agent, and fanout starts a single coordinator pane at the project root that runs `/fanout plan` (claude) or `$fanout-plan` (codex) on the prompt to decompose it into parallel tasks. The coordinator always launches as a normal agent — `codex` is not in Codex Plan Mode here — because it runs `fanout plan` itself.
+- Manual panes are recorded as synthetic `@manual` state entries and appear in the list after launch.
+
+**Issue** lists every OPEN issue in the repository, fetched with cursor pagination.
+
+- Typing narrows by number, title, or label; `Up` / `Down` scroll the list. Rows that already have a recorded pane show `(has session)` but stay selectable.
+- Each row leads with a marker for its place in the GitHub Sub-issues graph: `▸` a fan-out parent with OPEN children, `└` a child, `·` standalone. The marker reads Sub-issues links only — a parent that tracks its children as body task-list rows (`- [ ] #N`) shows `·` yet still fans out on launch.
+- An **Agent** row below the list picks the fan-out's default agent as `claude` / `codex` launch counts — the same count-style selector as Prompt mode, but exactly one is always `[1]`. `Up` / `Down` move between rows, `Space` / `Left` / `Right` select.
+- `Enter` opens a per-child agent assignment screen where `Left` / `Right` flips one row's agent — the equivalent of repeatable `--agent NUM=name` flags — and `Enter` launches.
+- An issue with OPEN children fans out like `fanout <issue> --unblocked-only`: blocked children stay deferred, so re-select the issue after their blockers close (or use the CLI to launch every child at once). An issue without children starts a single pane recorded under `@watch`.
 
 ## --status (JSON)
 

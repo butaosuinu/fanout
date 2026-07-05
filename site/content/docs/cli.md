@@ -17,12 +17,13 @@ fanout <parent-issue|project-url>
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
        [--session <tmux-session>] [--sleep <seconds>]
-       [--popup-timeout <seconds>] [--dry-run] [--debug]
+       [--dry-run] [--debug]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
        [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
+       [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
 fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
@@ -236,7 +237,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`).
+`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--team`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`, `--dashboard-keybind`, `--no-dashboard-keybind`).
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -252,8 +253,12 @@ fanout 123 --close 4
 fanout 123 --cleanup
 ```
 
-Hooks are always enabled. If the user hook config is missing, or an event has no
-commands, the event is a no-op. fanout reads hooks from
+## Lifecycle hooks
+
+fanout runs user shell hooks around worktree, pane, and merge events — both
+during fan-out (`worktree_created`, `before_pane_create`) and in the lifecycle
+commands above. Hooks are always enabled. If the user hook config is missing,
+or an event has no commands, the event is a no-op. fanout reads hooks from
 `$XDG_CONFIG_HOME/fanout/hooks.json`, or `~/.config/fanout/hooks.json` when
 `XDG_CONFIG_HOME` is unset. The file uses a Codex-style `hooks` object:
 

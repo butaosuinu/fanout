@@ -97,7 +97,7 @@ trigger label は、label を付けた issue と、それが parent fan-out な�
 
 不正な bool / integer env 値、設定ファイル内の未知キー、JSON type が合わない値は warn して無視します。将来の設定追加で古い fanout バイナリが壊れないようにするためです。
 
-Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は [CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
+Lifecycle hook は常に有効で、別の `hooks.json` で設定します。詳細は CLI リファレンスの [Lifecycle hooks]({{< relref "/docs/cli#lifecycle-hooks" >}}) を参照してください。
 
 ## prVisualization の詳細
 
