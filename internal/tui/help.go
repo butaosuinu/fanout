@@ -70,6 +70,7 @@ func (m model) helpView() string {
 		{"Enter/o", "Focus pane"},
 		{"Z", "Focus + zoom pane"},
 		{"p", "Peek output"},
+		{"v", "Auto/compact/full view"},
 		{"c/x", "Close pane"},
 		{"m", "Merge branch"},
 		{"X", "Cleanup parent"},
@@ -86,9 +87,13 @@ func (m model) helpView() string {
 		{"Esc", "Cancel / back"},
 	}
 	columnWidth := m.helpColumnWidth()
-	lines := make([]string, 0, 5)
+	// No blank lines around the columns: with the v entry the monitor column
+	// is 18 rows (16 entries + title + one wrapped description), and the
+	// in-TUI modal fallback must stay within a standard 24-row terminal
+	// (content 20 + border/padding 4).
+	lines := make([]string, 0, 4)
 	if !m.helpOnly {
-		lines = append(lines, titleStyle.Render("Keyboard shortcuts"), "")
+		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
 	lines = append(lines,
 		lipgloss.JoinHorizontal(
@@ -97,7 +102,6 @@ func (m model) helpView() string {
 			"  ",
 			m.helpColumn("New pane popup", newPane, columnWidth),
 		),
-		"",
 		dimStyle.Render("Esc / q / ? close"),
 	)
 	content := strings.Join(lines, "\n")

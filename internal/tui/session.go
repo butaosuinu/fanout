@@ -188,9 +188,12 @@ func sessionSummaryText(session sessionSummary) string {
 	if session.Active {
 		marker = ">"
 	}
+	return marker + " " + sessionCountersText(session)
+}
+
+func sessionCountersText(session sessionSummary) string {
 	return fmt.Sprintf(
-		"%s %s t%d m%d p%d b%d l%d",
-		marker,
+		"%s t%d m%d p%d b%d l%d",
 		compactParent(session.Parent),
 		session.Total,
 		session.Merged,
@@ -200,6 +203,16 @@ func sessionSummaryText(session sessionSummary) string {
 	)
 }
 
+// normalizeParent is the session grouping key. compactEntries relies on the
+// same normalization to look session summaries back up by parent.
+func normalizeParent(parent string) string {
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return "-"
+	}
+	return parent
+}
+
 func buildSessionSummaries(panes []paneView, cursor int) []sessionSummary {
 	if len(panes) == 0 {
 		return nil
@@ -207,17 +220,11 @@ func buildSessionSummaries(panes []paneView, cursor int) []sessionSummary {
 	if cursor < 0 || cursor >= len(panes) {
 		cursor = 0
 	}
-	activeParent := strings.TrimSpace(panes[cursor].Parent)
-	if activeParent == "" {
-		activeParent = "-"
-	}
+	activeParent := normalizeParent(panes[cursor].Parent)
 	indexByParent := map[string]int{}
 	sessions := []sessionSummary{}
 	for i, pane := range panes {
-		parent := strings.TrimSpace(pane.Parent)
-		if parent == "" {
-			parent = "-"
-		}
+		parent := normalizeParent(pane.Parent)
 		idx, ok := indexByParent[parent]
 		if !ok {
 			idx = len(sessions)

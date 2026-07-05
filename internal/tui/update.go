@@ -112,6 +112,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "p":
 			cmd := m.peekSelectedCmd(true)
 			return m, cmd
+		case "v":
+			// Rendering-only toggle: no command, no relayout, no tmux.
+			// resize() re-sizes the stored table/viewport for the new mode so
+			// cursor scrolling stays in sync; it only touches in-memory
+			// bubbles models.
+			m.viewOverride = m.viewOverride.next()
+			m.notice = "view=" + m.viewOverride.String()
+			m.resize()
+			return m, nil
 		case "c":
 			return m.startPendingAction(actionClose)
 		case "m":

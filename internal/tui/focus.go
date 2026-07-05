@@ -36,6 +36,13 @@ type panePeek struct {
 
 var errPaneNotAlive = errors.New("pane is no longer live")
 
+// Shared by the detail panel and the compact switcher so both views report
+// the same empty states.
+const (
+	emptyStateNoPanes  = "No recorded fanout panes in .fanout/state.json."
+	emptyStateNoFilter = "No panes match the current filter."
+)
+
 func (m *model) refreshRows() {
 	m.allPanes = applyIssueStatuses(m.opts.ProjectRoot, m.allPanes, m.issues)
 	m.panes = filterPaneViews(m.allPanes, m.filterQuery)
@@ -54,14 +61,14 @@ func (m *model) refreshDetail() {
 
 func (m model) detailContent() string {
 	if len(m.allPanes) == 0 {
-		return "No recorded fanout panes in .fanout/state.json."
+		return emptyStateNoPanes
 	}
 	if len(m.panes) == 0 {
-		return "No panes match the current filter."
+		return emptyStateNoFilter
 	}
 	pane, ok := m.selectedPane()
 	if !ok {
-		return "No panes match the current filter."
+		return emptyStateNoFilter
 	}
 	lines := []string{
 		fmt.Sprintf("%s %s  %s", pane.Parent, pane.itemLabel(), pane.Name),
