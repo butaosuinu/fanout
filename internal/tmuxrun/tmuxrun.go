@@ -546,7 +546,7 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 }
 
 func dashboardNewWindowShellCommand(fanoutBin, startDir string) string {
-	launch := strings.ReplaceAll(shellQuote(fanoutBin), "#", "##") + " dashboard --web --open"
+	launch := tmuxLiteral(shellQuote(fanoutBin)) + " dashboard --web --open"
 	notifyClientEnv := DashboardNotifyClientEnv + "=#{client_tty}"
 	return "__fanout_start_dir=" + startDir + `; __fanout_start_dir=$(printf '%s' "$__fanout_start_dir" | sed 's/#/####/g'); ` +
 		"tmux -S #{q:socket_path} new-window -d -n fanout-dashboard -t #{q:session_id}: -c \"$__fanout_start_dir\" -e " + shellQuote(notifyClientEnv) + " " + shellQuote(launch)
@@ -583,7 +583,7 @@ func BindConsoleKeys(prefixKey, directKey, fanoutBin string) error {
 	if strings.TrimSpace(prefixKey) == "" || strings.TrimSpace(directKey) == "" || strings.TrimSpace(fanoutBin) == "" {
 		return fmt.Errorf("tmux bind-key: prefix key, direct key, and fanout binary path are required")
 	}
-	launch := strings.ReplaceAll(shellQuote(fanoutBin), "#", "##") +
+	launch := tmuxLiteral(shellQuote(fanoutBin)) +
 		` focus-console --from "#{pane_id}" --client "#{client_name}" >/dev/null 2>&1` +
 		` || tmux display-message "fanout: focus-console failed; restart fanout to refresh this key"`
 	if err := exec.Command("tmux", "bind-key", prefixKey, "run-shell", launch).Run(); err != nil {

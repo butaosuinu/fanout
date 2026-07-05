@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/tmuxctl"
+	"github.com/butaosuinu/fanout/internal/tmuxrun"
 )
 
 const (
@@ -208,7 +208,7 @@ func (s bellSink) Notify(Event) error {
 }
 
 func (s tmuxSink) Notify(event Event) error {
-	return tmuxctl.DisplayMessage(s.target, event.Message())
+	return tmuxrun.DisplayMessage(s.target, event.Message())
 }
 
 func (s ntfySink) Notify(event Event) error {
