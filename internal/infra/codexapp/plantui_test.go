@@ -185,19 +185,8 @@ func TestCodexPlanThreadStartsInitialTurnAfterSettingsUpdate(t *testing.T) {
 	}
 
 	turn := client.lastRequest("turn/start").paramsMap(t)
-	mode, ok := turn["collaborationMode"].(map[string]any)
-	if !ok {
-		t.Fatalf("turn/start missing collaborationMode: %#v", turn)
-	}
-	if mode["mode"] != "plan" {
-		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
-	}
-	settings, ok := mode["settings"].(map[string]any)
-	if !ok {
-		t.Fatalf("collaborationMode.settings = %#v, want map", mode["settings"])
-	}
-	if settings["model"] != "gpt-test" || settings["reasoning_effort"] != "xhigh" {
-		t.Fatalf("settings = %#v, want model gpt-test and effort xhigh", settings)
+	if _, ok := turn["collaborationMode"]; ok {
+		t.Fatalf("turn/start collaborationMode = %#v, want absent after thread/settings/update", turn["collaborationMode"])
 	}
 	assertTurnStartText(t, turn, "hello plan")
 }
@@ -524,6 +513,89 @@ func TestCodexTurnCompletedNotificationReportsFailedStatus(t *testing.T) {
 	}
 }
 
+func TestCodexTurnCompletionAgentStateMarksCompletedAsPlan(t *testing.T) {
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "plan" {
+		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want plan", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "failed"}); got != "" {
+		t.Fatalf("codexTurnCompletionAgentState(failed) = %q, want empty", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{}); got != "" {
+		t.Fatalf("codexTurnCompletionAgentState(unmatched) = %q, want empty", got)
+	}
+}
+
+func TestCodexTurnNotificationAgentStateMarksStartedAndCompleted(t *testing.T) {
+	started := appServerMessage{Method: "turn/started"}
+	if got := codexTurnNotificationAgentState(started); got != "working" {
+		t.Fatalf("codexTurnNotificationAgentState(turn/started) = %q, want working", got)
+	}
+
+	completed := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","threadId":"thread-1","status":"completed"}}`),
+	}
+	if got := codexTurnNotificationAgentState(completed); got != "plan" {
+		t.Fatalf("codexTurnNotificationAgentState(turn/completed) = %q, want plan", got)
+	}
+
+	failed := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"status":"failed"}}`),
+	}
+	if got := codexTurnNotificationAgentState(failed); got != "" {
+		t.Fatalf("codexTurnNotificationAgentState(failed turn/completed) = %q, want empty", got)
+	}
+}
+
+func TestServerRequestAgentStateMarksBlockingRequests(t *testing.T) {
+	methods := []string{
+		"item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+		"tool/requestUserInput",
+		"item/permissions/requestApproval",
+		"mcpServer/elicitation/request",
+		"execCommandApproval",
+		"applyPatchApproval",
+	}
+	for _, method := range methods {
+		if got := serverRequestAgentState(method); got != "blocked" {
+			t.Fatalf("serverRequestAgentState(%q) = %q, want blocked", method, got)
+		}
+	}
+	if got := serverRequestAgentState("item/tool/call"); got != "" {
+		t.Fatalf("serverRequestAgentState(item/tool/call) = %q, want empty", got)
+	}
+}
+
+func TestHandleServerRequestRestoresWorkingAfterAutoHandledBlockingRequest(t *testing.T) {
+	var states []string
+	old := setPlanTUIAgentState
+	setPlanTUIAgentState = func(state string) {
+		states = append(states, state)
+	}
+	t.Cleanup(func() {
+		setPlanTUIAgentState = old
+	})
+
+	client := &fakeCodexAppClient{}
+	err := handleServerRequest(client, appServerMessage{
+		ID:     json.RawMessage(`"req-1"`),
+		Method: "tool/requestUserInput",
+		Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(states, []string{"blocked", "working"}) {
+		t.Fatalf("states = %#v, want blocked then working", states)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(client.sent))
+	}
+}
+
 func TestSignalExitCodeUsesConventionalShellSignalStatus(t *testing.T) {
 	if got, want := signalExitCode(syscall.SIGHUP), 129; got != want {
 		t.Fatalf("signalExitCode(SIGHUP) = %d, want %d", got, want)
@@ -560,6 +632,7 @@ func TestUnsupportedCodexAppServerMethodDetection(t *testing.T) {
 type fakeCodexAppClient struct {
 	calls         []fakeCodexRequest
 	notifications []string
+	sent          []any
 	methodErrors  map[string]error
 	methodResults map[string]json.RawMessage
 }
@@ -596,6 +669,11 @@ func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMes
 
 func (f *fakeCodexAppClient) Notify(method string) error {
 	f.notifications = append(f.notifications, method)
+	return nil
+}
+
+func (f *fakeCodexAppClient) send(v any) error {
+	f.sent = append(f.sent, v)
 	return nil
 }
 

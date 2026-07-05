@@ -287,7 +287,7 @@ func initialAgentTransitionKind(current string) (fanoutnotify.EventKind, bool) {
 func agentTransitionEvent(kind fanoutnotify.EventKind, pane paneView, state string) fanoutnotify.Event {
 	return fanoutnotify.Event{
 		Kind:       kind,
-		Parent:     normalizedParent(pane.Parent),
+		Parent:     normalizeParent(pane.Parent),
 		IssueNum:   max(pane.IssueNum, 0),
 		TaskID:     firstNonEmpty(pane.TaskID, pane.SourceTaskID),
 		Title:      firstNonEmpty(pane.Name, pane.Derived.Name, pane.TmuxTitle),

@@ -1152,6 +1152,44 @@ func TestStateUpdatePreservesAgentNotificationBaselineOnError(t *testing.T) {
 	}
 }
 
+func TestStateUpdateDetectsAgentTransitionsWhenRestoreFails(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "running"}}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	done := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "done"}}
+	updated, cmd := m.Update(stateLoadedMsg{
+		panes:      done,
+		at:         time.Unix(2, 0),
+		err:        errBoom,
+		restoreErr: errBoom,
+	})
+	if cmd == nil {
+		t.Fatal("restore-only error snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventAgentDone, Parent: "100", IssueNum: 101, Title: "work", AgentState: "done"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if got := m.agentStates[agentTransitionKey(initial[0])].State; got != "done" {
+		t.Fatalf("agent baseline after restore-only error = %q, want done", got)
+	}
+	if m.stateErr == "" {
+		t.Fatal("stateErr = empty, want restore error still displayed")
+	}
+}
+
 func TestStateUpdatePreservesAgentNotificationBaselineOnUntrackableSnapshot(t *testing.T) {
 	notifier := &fakeTransitionNotifier{}
 	m := newModel(Options{Notifier: notifier})

@@ -47,7 +47,7 @@ export interface PaneView {
   worktreeErr?: string;
   tmuxState: string; // "live" / "stale" / "unknown" / "-"
   tmuxTitle?: string;
-  agentState?: string; // "running" / "done" / ""(不明)
+  agentState?: string; // "running" / "working" / "idle" / "plan" / "blocked" / "done" / ""(不明)
   planMode?: boolean; // Codex Plan Mode 起動ペイン(/api/plan・Plan セクションの対象)
   prompt?: string;
   ciStatus?: string; // lowercase; "-" = primary PR に CI なし

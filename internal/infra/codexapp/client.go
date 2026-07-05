@@ -38,6 +38,10 @@ type sessionClient interface {
 	Notify(method string) error
 }
 
+type sender interface {
+	send(v any) error
+}
+
 // dialClient connects a client to a running app-server websocket address.
 func dialClient(addr string, timeout time.Duration) (*client, error) {
 	conn, err := dialWebSocket(addr, timeout)
@@ -79,7 +83,7 @@ func (c *client) receive() (appServerMessage, error) {
 	return c.conn.Receive()
 }
 
-func sendAppRequest(client *client, id, method string, params any) error {
+func sendAppRequest(client sender, id, method string, params any) error {
 	if err := client.send(map[string]any{
 		"id":     id,
 		"method": method,
@@ -90,14 +94,14 @@ func sendAppRequest(client *client, id, method string, params any) error {
 	return nil
 }
 
-func sendAppNotification(client *client, method string) error {
+func sendAppNotification(client sender, method string) error {
 	if err := client.send(map[string]any{"method": method}); err != nil {
 		return fmt.Errorf("send app-server notification %s: %w", method, err)
 	}
 	return nil
 }
 
-func sendAppResponse(client *client, id json.RawMessage, result any) error {
+func sendAppResponse(client sender, id json.RawMessage, result any) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot respond to app-server request without id")
 	}
@@ -110,7 +114,7 @@ func sendAppResponse(client *client, id json.RawMessage, result any) error {
 	return nil
 }
 
-func sendAppError(client *client, id json.RawMessage, message string) error {
+func sendAppError(client sender, id json.RawMessage, message string) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot send app-server error without id")
 	}
@@ -158,7 +162,35 @@ func readUntilResponse(client *client, id string) (json.RawMessage, error) {
 	}
 }
 
-func handleServerRequest(client *client, msg appServerMessage) error {
+func handleServerRequest(client sender, msg appServerMessage) error {
+	if state := serverRequestAgentState(msg.Method); state != "" {
+		setPlanTUIAgentState(state)
+		err := handleServerRequestResponse(client, msg)
+		if err == nil {
+			setPlanTUIAgentState("working")
+		}
+		return err
+	}
+	return handleServerRequestResponse(client, msg)
+}
+
+func serverRequestAgentState(method string) string {
+	switch method {
+	case "item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+		"tool/requestUserInput",
+		"item/permissions/requestApproval",
+		"mcpServer/elicitation/request",
+		"execCommandApproval",
+		"applyPatchApproval":
+		return "blocked"
+	default:
+		return ""
+	}
+}
+
+func handleServerRequestResponse(client sender, msg appServerMessage) error {
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		return sendAppResponse(client, msg.ID, map[string]any{"decision": "decline"})

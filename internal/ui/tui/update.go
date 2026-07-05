@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -149,7 +149,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var agentEvents []fanoutnotify.Event
 		wasAgentPrimed := m.agentPrimed
-		if msg.err == nil {
+		if msg.agentSnapshotOK() {
 			agentEvents = detectAgentTransitions(m.agentStates, msg.panes)
 			m.agentStates = mergeAgentTransitionSnapshots(m.agentStates, msg.panes)
 			if !m.agentPrimed {

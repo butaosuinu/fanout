@@ -23,6 +23,10 @@ const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: read
       ariaLabel: "agent 実行状態で絞り込み",
       options: [
         ["running", "running"],
+        ["working", "working"],
+        ["idle", "idle"],
+        ["plan", "plan"],
+        ["blocked", "blocked"],
         ["done", "done"],
       ],
     },

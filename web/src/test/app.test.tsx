@@ -109,6 +109,32 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("running", { selector: ".tag" })).toBeInTheDocument();
   });
 
+  it("拡張 agent state を行と drawer に表示する", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "plan output"));
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Plan work", paneId: "%1", agentState: "plan" }),
+          makePane({
+            issueNum: 102,
+            displayName: "Blocked work",
+            paneId: "%2",
+            agentState: "blocked",
+          }),
+        ]),
+      ]),
+    );
+
+    expect(screen.getByText("plan", { selector: ".tag" })).toBeInTheDocument();
+    expect(screen.getByText("blocked", { selector: ".tag" })).toBeInTheDocument();
+
+    await user.click(screen.getByText("Plan work"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(drawer.querySelector("#d-run")).toHaveTextContent("plan");
+  });
+
   it("repo が owner/name 形式でなければリンク化しない", () => {
     render(<App />);
     streamSnapshot(makeSnapshot([makeSession("142", [makePane({ issueNum: 101 })])], { repo: "" }));

@@ -38,12 +38,34 @@ export function GhLink({
   );
 }
 
-/* agentState バッジ。"running" / "done" 以外(空 = pane 死亡・不明)は null を
+function agentStateClass(state?: string) {
+  switch (state) {
+    case "running":
+    case "working":
+      return "t-warn";
+    case "plan":
+      return "t-open";
+    case "blocked":
+      return "t-err";
+    case "done":
+      return "t-ok";
+    case "idle":
+      return "";
+    default:
+      return null;
+  }
+}
+
+export function isKnownAgentState(state?: string) {
+  return agentStateClass(state) !== null;
+}
+
+/* agentState バッジ。既知 state 以外(空 = pane 死亡・不明)は null を
  * 返し、呼び出し側が省略 or ミュート表示を選ぶ。 */
 export function AgentStateTag({ state }: { state?: string }) {
-  if (state === "running") return <Tag cls="t-warn">running</Tag>;
-  if (state === "done") return <Tag cls="t-ok">done</Tag>;
-  return null;
+  const cls = agentStateClass(state);
+  if (cls === null) return null;
+  return <Tag cls={cls}>{state}</Tag>;
 }
 
 /* dirty 状態のタグ。unknown 時の表示は行("—")とドロワー("unknown")で
