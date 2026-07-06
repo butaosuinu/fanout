@@ -31,20 +31,27 @@ type msgNudgeReport struct {
 }
 
 // shouldNudge reports whether a pane in the given @fanout_agent_state should
-// receive a send-keys nudge. Only "running" — a live agent launched by the
-// fanout wrapper — qualifies. "done" (agent exited, bare shell), "" (unset:
-// legacy or non-fanout pane), and any other value are no-op successes so a
-// hint never lands in a shell or an unrelated pane.
+// receive a send-keys nudge. Active/waiting agent states qualify: "running"
+// from the launch wrapper and the Codex Plan Mode controller's "working",
+// "plan", and "idle". "blocked" is excluded because it may be sitting at an
+// approval/input prompt; "done" (agent exited, bare shell), "" (unset: legacy
+// or non-fanout pane), and any other value are no-op successes so a hint never
+// lands in a shell or an unrelated pane.
 //
 // This is the deliberate re-design of the original "agentStatus == idle" gate:
 // the dmux idle/analyzing/waiting/working enum no longer exists, and the only
-// live signal (@fanout_agent_state) cannot distinguish a busy agent from one
-// idle at its prompt. Gating on "running" is safe in practice because the
-// supported agents (claude, codex) queue typed input during a turn rather than
-// aborting it, so a nudge to a busy agent is picked up at its next checkpoint —
-// the same pull the message already guarantees, only sooner.
+// live signal (@fanout_agent_state) only tells us that a supported agent or the
+// Plan Mode controller owns the pane. These states are safe in practice because
+// the supported agents (claude, codex) queue typed input during a turn rather
+// than aborting it, so a nudge to a busy agent is picked up at its next
+// checkpoint — the same pull the message already guarantees, only sooner.
 func shouldNudge(agentState string) bool {
-	return agentState == "running"
+	switch agentState {
+	case "running", "working", "plan", "idle":
+		return true
+	default:
+		return false
+	}
 }
 
 // runMsgNudge resolves peer req.To's recorded pane from state.json and pushes

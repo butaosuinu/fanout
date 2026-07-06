@@ -3,6 +3,7 @@ package codexapp
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"syscall"
@@ -513,12 +514,15 @@ func TestCodexTurnCompletedNotificationReportsFailedStatus(t *testing.T) {
 	}
 }
 
-func TestCodexTurnCompletionAgentStateMarksCompletedAsPlan(t *testing.T) {
+func TestCodexTurnCompletionAgentStateMapsTerminalStates(t *testing.T) {
 	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "plan" {
 		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want plan", got)
 	}
-	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "failed"}); got != "" {
-		t.Fatalf("codexTurnCompletionAgentState(failed) = %q, want empty", got)
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "failed"}); got != "idle" {
+		t.Fatalf("codexTurnCompletionAgentState(failed) = %q, want idle", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "interrupted"}); got != "idle" {
+		t.Fatalf("codexTurnCompletionAgentState(interrupted) = %q, want idle", got)
 	}
 	if got := codexTurnCompletionAgentState(codexTurnCompletion{}); got != "" {
 		t.Fatalf("codexTurnCompletionAgentState(unmatched) = %q, want empty", got)
@@ -543,8 +547,39 @@ func TestCodexTurnNotificationAgentStateMarksStartedAndCompleted(t *testing.T) {
 		Method: "turn/completed",
 		Params: json.RawMessage(`{"turn":{"status":"failed"}}`),
 	}
-	if got := codexTurnNotificationAgentState(failed); got != "" {
-		t.Fatalf("codexTurnNotificationAgentState(failed turn/completed) = %q, want empty", got)
+	if got := codexTurnNotificationAgentState(failed); got != "idle" {
+		t.Fatalf("codexTurnNotificationAgentState(failed turn/completed) = %q, want idle", got)
+	}
+}
+
+func TestDrainCodexAppServerNotificationsUntilClosedDoesNotHandleServerRequests(t *testing.T) {
+	var states []string
+	old := setPlanTUIAgentState
+	setPlanTUIAgentState = func(state string) {
+		states = append(states, state)
+	}
+	t.Cleanup(func() {
+		setPlanTUIAgentState = old
+	})
+
+	receiver := &fakeAppServerReceiver{messages: []appServerMessage{
+		{
+			ID:     json.RawMessage(`"req-1"`),
+			Method: "tool/requestUserInput",
+			Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+		},
+		{Method: "turn/started"},
+		{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"turn":{"status":"interrupted"}}`),
+		},
+	}}
+
+	if err := drainCodexAppServerNotificationsUntilClosed(receiver); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(states, []string{"working", "idle"}) {
+		t.Fatalf("states = %#v, want working then idle", states)
 	}
 }
 
@@ -635,6 +670,19 @@ type fakeCodexAppClient struct {
 	sent          []any
 	methodErrors  map[string]error
 	methodResults map[string]json.RawMessage
+}
+
+type fakeAppServerReceiver struct {
+	messages []appServerMessage
+}
+
+func (f *fakeAppServerReceiver) receive() (appServerMessage, error) {
+	if len(f.messages) == 0 {
+		return appServerMessage{}, io.EOF
+	}
+	msg := f.messages[0]
+	f.messages = f.messages[1:]
+	return msg, nil
 }
 
 type fakeCodexRequest struct {

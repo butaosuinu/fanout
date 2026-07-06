@@ -119,7 +119,10 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 			go func() { drainDone <- drainCodexAppServerUntilTurnComplete(client, thread.ID, turnStart.TurnID) }()
 		}
 	} else {
-		client.Close()
+		err = initializeCodexPlanClient(client, cfg.Version)
+		if err != nil {
+			return err
+		}
 	}
 
 	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), "", stdout, stderr)
@@ -135,7 +138,6 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 
 	startupTimer := time.NewTimer(codexRemoteTUIStartupGrace)
 	defer startupTimer.Stop()
-	initialTurnDrainCompleted := false
 	for waitingStartup := true; waitingStartup; {
 		select {
 		case tuiErr := <-tuiDone:
@@ -148,7 +150,6 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 			if drainErr != nil {
 				return fmt.Errorf("codex app-server request handling failed during TUI startup: %w", drainErr)
 			}
-			initialTurnDrainCompleted = true
 			drainDone = nil
 		case <-server.Done():
 			if _, serverErr := server.Exited(); serverErr != nil {
@@ -159,7 +160,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 			waitingStartup = false
 		}
 	}
-	if initialTurnDrainCompleted && canWatchAppServer(client) {
+	if drainDone == nil && canWatchAppServer(client) {
 		drainDone = completedAppServerDrain()
 	}
 
@@ -178,24 +179,9 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 }
 
 func setupCodexPlanThread(client sessionClient, cwd, version string) (codexThreadInfo, error) {
-	if _, err := client.Request("fanout-init", "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "fanout-codex-plan-tui",
-			"title":   nil,
-			"version": version,
-		},
-		"capabilities": map[string]any{
-			"experimentalApi":           true,
-			"requestAttestation":        false,
-			"optOutNotificationMethods": nil,
-		},
-	}); err != nil {
+	if err := initializeCodexPlanClient(client, version); err != nil {
 		return codexThreadInfo{}, err
 	}
-	if err := client.Notify("initialized"); err != nil {
-		return codexThreadInfo{}, err
-	}
-
 	modeResult, err := client.Request("fanout-modes", "collaborationMode/list", map[string]any{})
 	if err != nil {
 		return codexThreadInfo{}, err
@@ -227,6 +213,27 @@ func setupCodexPlanThread(client sessionClient, cwd, version string) (codexThrea
 		thread.UseTurnCollaborationMode = true
 	}
 	return thread, nil
+}
+
+func initializeCodexPlanClient(client sessionClient, version string) error {
+	if _, err := client.Request("fanout-init", "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "fanout-codex-plan-tui",
+			"title":   nil,
+			"version": version,
+		},
+		"capabilities": map[string]any{
+			"experimentalApi":           true,
+			"requestAttestation":        false,
+			"optOutNotificationMethods": nil,
+		},
+	}); err != nil {
+		return err
+	}
+	if err := client.Notify("initialized"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func codexThreadStartParams(cwd, model string) map[string]any {
@@ -384,8 +391,16 @@ func drainCodexAppServerUntilClosedCmd(client *client) chan error {
 }
 
 func drainCodexAppServerUntilClosed(client *client) error {
+	return drainCodexAppServerNotificationsUntilClosed(client)
+}
+
+type appServerReceiver interface {
+	receive() (appServerMessage, error)
+}
+
+func drainCodexAppServerNotificationsUntilClosed(receiver appServerReceiver) error {
 	for {
-		msg, err := client.receive()
+		msg, err := receiver.receive()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
 				return nil
@@ -394,11 +409,6 @@ func drainCodexAppServerUntilClosed(client *client) error {
 		}
 		if state := codexTurnNotificationAgentState(msg); state != "" {
 			setPlanTUIAgentState(state)
-		}
-		if isServerRequest(msg) {
-			if err := handleServerRequest(client, msg); err != nil {
-				return err
-			}
 		}
 	}
 }
@@ -526,10 +536,17 @@ func isTerminalCodexTurnStatus(status string) bool {
 }
 
 func codexTurnCompletionAgentState(completion codexTurnCompletion) string {
-	if completion.Matched && completion.Status == "completed" {
-		return "plan"
+	if !completion.Matched {
+		return ""
 	}
-	return ""
+	switch completion.Status {
+	case "completed":
+		return "plan"
+	case "failed", "interrupted":
+		return "idle"
+	default:
+		return ""
+	}
 }
 
 func setCurrentTmuxPaneAgentState(state string) {
