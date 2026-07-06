@@ -43,6 +43,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 
 | 層 | パッケージ | 責務 | Class |
 |---|---|---|---|
+| meta | `arch` | 層ルールの CI 強制(唯一のガード)。緩和・allowlist 追加は要精査 | H |
 | infra | `state` | `.fanout/state.json` と lock の読み書き | H |
 | infra | `worktree` | base branch 解決・refresh・`git worktree add` | H |
 | infra | `hooks` | ライフサイクルフック実行 | H |
@@ -71,18 +72,18 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `run` | `executePlan` の実行ロジック | M |
 | app | `statusreport` | `--status` のレポート生成 | M |
 | app | `peermsg` | `fanout msg` の実行層 | M |
+| app | `cliflags` | フラグ検証(lifecycle 相互排他・親正規化など main の分岐を決める) | M |
 | core | `agent` | エージェント名の解決・CLI 検証 | M |
 | core | `planspec` | `fanout plan` の JSON スキーマ | M |
 | ui | `dashboard`(`poller.go` / `peek.go` / `plan.go` / `sse.go` / `embed.go`) | state/tmux ポーリング・capture-pane・SSE・embed | M |
-| ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` ほか) | キー処理・フォーム・ポーリングの配線 | M |
+| ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` / `paneview.go` ほか) | キー処理・フォーム・ポーリングの配線。`paneview.go` は lifecycle 対象 state root の選択入力(`sourceProjectRoot`)を含む | M |
 | core | `blockers` | ブロッカー判定 | A |
 | core | `naming` | slug・branch 名生成 | A |
 | core | `exitcode` | 終了コード定義 | A |
 | core | `parentref` | 親参照の正規化 | A |
 | core | `fanset` | fan-out 対象集合の計算 | A |
 | core | `cliview` | CLI 出力の整形 | A |
-| app | `cliflags` | フラグパース | A |
-| ui | `tui`(描画・整形: `view.go` / `paneview.go` / `compact.go` / `styles.go` ほか) | TUI の View 層 | A |
+| ui | `tui`(描画・整形: `view.go` / `compact.go` / `styles.go` ほか) | TUI の View 層 | A |
 | infra | `atomicfs` | 原子的ファイル書き込み | A |
 | infra | `log` | ロギング | A |
 | infra | `tty` | 端末判定 | A |

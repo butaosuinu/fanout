@@ -73,9 +73,9 @@ FS/DB), `app` (use-case orchestration), `infra` (external process/FS/DB), and
 core/app/infra; infra -> core/infra; ui -> all four; `cmd/fanout` is the
 composition root and no package may import `cmd/...`. `internal/arch` enforces
 the direction and a core stdlib-purity denylist in CI (depguard is off on
-purpose). Canonical reference, the full package table, the Mermaid dependency
-diagram, and the PR-review-weight classes (H/M/A) live in
-`docs/architecture.ja.md`.
+purpose) and is itself class H — weakening it disables every layer guard.
+Canonical reference, the full package table, the Mermaid dependency diagram,
+and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
 
 - `cmd/fanout` is the composition root and CLI boundary: `main.go` (the
   first-match-wins dispatch table, ldflags `version`/`commit` — class H),
@@ -91,17 +91,18 @@ diagram, and the PR-review-weight classes (H/M/A) live in
   `codex_plan_tui.go` are class H; the remaining cmd files (flag validation
   and thin dispatch into app) are class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
-  `agent` (supported agent names, CLI validation for live mode — the only
-  core packages allowed `os`/`os/exec`), `planspec` (the `fanout plan` JSON
-  schema), `naming` (deterministic slug/branch generation), and the
+  `agent` (supported agent names, CLI validation for live mode; allowed
+  `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
+  schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
+  generation), and the
   AI-reviewable `blockers`/`exitcode`/`parentref`/`fanset`/`cliview`.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch` (pane creation), `lifecycle`, `watch` (the label-watcher
   cycle, pure at the package boundary via `watch.IO`), and `briefing` (the
   prompt text injected into agents) are class H; `sessionview` (the read-only
   `Snapshot` aggregator shared by the web dashboard and a future TUI),
-  `panelayout`, `run`, `statusreport`, and `peermsg` are class M; `cliflags`
-  is class A.
+  `panelayout`, `run`, `statusreport`, `peermsg`, and `cliflags` (flag
+  validation that decides main's lifecycle branches) are class M.
 - `internal/infra` talks to external processes, the filesystem, and the
   team SQLite bus: `state` (`.fanout/state.json` + its lock), `worktree`
   (`git worktree add` under `.fanout/worktrees/<slug>/`), `hooks`,
@@ -120,7 +121,7 @@ diagram, and the PR-review-weight classes (H/M/A) live in
   `peek.go` (`GET /api/peek`), `plan.go` (`GET /api/plan`), `sse.go`, and
   `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
   cleanup wiring and confirmation flow) is class H, rendering/formatting
-  (`view.go` / `paneview.go` / `compact.go` / `styles.go`) is class A, and
+  (`view.go` / `compact.go` / `styles.go`) is class A, and
   the remaining key/form/polling wiring is class M. The dashboard SPA lives
   in `web/` (React + Vite + TS) and bundles into
   `internal/ui/dashboard/static/` via `go:embed`.
