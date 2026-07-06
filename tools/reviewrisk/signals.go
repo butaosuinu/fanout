@@ -157,8 +157,11 @@ func criticalReasons(d Diff) []Reason {
 			touches(fc, "claude/skills/post-work-review/") {
 			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})
 		}
-		// S6 risk-tool-modified: this tool or its workflow.
-		if touches(fc, "tools/reviewrisk/") || fc.Path == riskWorkflow || fc.OldPath == riskWorkflow {
+		// S6 risk-tool-modified: this tool or either of its workflows (the
+		// pull_request judge and the base-side pull_request_target guard).
+		if touches(fc, "tools/reviewrisk/") ||
+			fc.Path == riskWorkflow || fc.OldPath == riskWorkflow ||
+			fc.Path == riskGuardWorkflow || fc.OldPath == riskGuardWorkflow {
 			reasons = append(reasons, Reason{Signal: sigRiskToolModified, Level: LevelCritical, File: fc.Path, Detail: "risk 判定ツール自身の変更"})
 		}
 		// S7 installer-modified: install.sh.
@@ -185,7 +188,10 @@ func criticalReasons(d Diff) []Reason {
 	return reasons
 }
 
-const riskWorkflow = ".github/workflows/review-risk.yml"
+const (
+	riskWorkflow      = ".github/workflows/review-risk.yml"
+	riskGuardWorkflow = ".github/workflows/review-risk-guard.yml"
+)
 
 // invariantReasons collects S10 signals: a diff line (added or removed) that hits
 // a human-must-read invariant pattern, plus FANOUT_* env var names dropped by the

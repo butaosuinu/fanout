@@ -41,7 +41,7 @@ jobs:
           # of SIGPIPE under pipefail and skips the guard on large diffs), and
           # the old-path side of a rename out of these trees still matches.
           base="$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)"
-          if ! git diff --quiet "$base" HEAD -- tools/reviewrisk .github/workflows/review-risk.yml; then
+          if ! git diff --quiet "$base" HEAD -- tools/reviewrisk .github/workflows/review-risk.yml .github/workflows/review-risk-guard.yml; then
             {
               echo '<!-- review-risk -->'
               echo '## Review risk: **CRITICAL**'

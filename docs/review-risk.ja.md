@@ -68,7 +68,7 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 | S3 | skip-added | 追加行に `\b\w+\.(Skip\|Skipf\|SkipNow)\(`(receiver 名は固定せず `t` 以外の `*testing.T`/`*testing.B`、例 `tb.Skip(` / `b.Skip(` も拾う。`t.Skipped()` は Skip 直後の `(` 要求で非マッチ)、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` / `*.spec.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
 | S4 | guard-modified | `internal/arch/` の変更 |
 | S5 | review-gate-modified | `.claude/` と post-work-review gate(`codex/tools/post-work-review*` / `codex/agents/post-work-*` / `codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
-| S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` の変更 |
+| S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` / `review-risk-guard.yml` の変更 |
 | S7 | installer-modified | `install.sh` の変更 |
 | S8 | ci-workflow-deleted | `.github/workflows/` 直下の `.yml`/`.yaml` の削除(D)。rename による無効化(配下外への移動・拡張子変更・サブディレクトリへの移動)も含む |
 
@@ -136,10 +136,10 @@ go run ./tools/reviewrisk [--base <ref>] [--format text|markdown|json] [--fail-a
 書き込み token を `.git/config` に残さない(gh を呼ぶステップだけが env 経由で
 token を受け取る)。
 
-1. PR が `tools/reviewrisk/` か `review-risk.yml` 自身を変更している場合
-   (rename で外へ移す場合も pathspec 判定で含む)、PR 側ツールの判定は信用せず
-   (S6 の安全弁を PR 側が緩められるため)、workflow が fail-closed で critical
-   に固定する。この self-modification guard は Set up Go より前の shell 専用
+1. PR が `tools/reviewrisk/` か `review-risk.yml` / `review-risk-guard.yml` 自身を
+   変更している場合(rename で外へ移す場合も pathspec 判定で含む)、PR 側ツールの
+   判定は信用せず(S6 の安全弁を PR 側が緩められるため)、workflow が fail-closed で
+   critical に固定する。この self-modification guard は Set up Go より前の shell 専用
    ステップで、PR 側の `go.mod` に依存しない — ツール改変と同時に `go.mod` を
    壊す PR でも setup-go で落ちず critical ラベル/コメントに到達する。それ以外は
    `--format json` と `--format markdown` を実行し、`jq -r .level` で level を
@@ -150,6 +150,18 @@ token を受け取る)。
    外し、現在の level を付ける。
 3. PR コメントを `<!-- review-risk -->` マーカーで検索し、あれば内容を
    置き換え、なければ新規投稿する(sticky コメント)。
+
+`review-risk.yml` は `pull_request` で走るため、self-modification guard も PR の
+merge ref 側 — PR が編集した後の定義 — で実行される。PR が guard 自体を削除・緩和
+すると S6 の critical 固定に届かない。これを塞ぐのが `review-risk-guard.yml` で、
+`pull_request_target` を使い常に base ブランチ側の定義を実行する。base 側で走る
+ため PR からは無効化できず、PR コードは一切実行しない(checkout は base のみ、PR
+head は `git fetch` で取り込んで diff を取るだけ)。risk ツール系のパスに差分が
+あるときだけ critical ラベルと sticky コメントを固定し、なければ即終了する。
+
+限界: 同一 repo の PR はどの workflow からも書き込み token を得られるため、この
+ラベルは悪意ある作者に対する防御ではなく advisory にとどまる(この境界は設計
+どおり)。
 
 判定はブランチ保護ルールに足さない。CI green と level ラベルは別軸で、
 critical でも CI が通ればマージ自体は可能 — 人間が読むかどうかの判断材料を

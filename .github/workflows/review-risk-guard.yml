@@ -1,0 +1,123 @@
+# Base-side self-modification guard for the review-risk tooling.
+#
+# review-risk.yml runs on `pull_request`, so its self-modification guard executes
+# from the PR's merge ref — the workflow definition the PR itself edited. A PR
+# that strips or weakens that guard removes the very check meant to pin it to
+# critical, so the S6 fail-closed never fires.
+#
+# This workflow runs on `pull_request_target`, which ALWAYS executes the base
+# branch's copy of the definition. A PR cannot change what runs here — the guard
+# lives on trunk, out of the PR's reach.
+#
+# pull_request_target runs with a write-scoped token, so the iron rule is: never
+# execute PR-authored code. This job runs no build, no Go, no PR scripts. It only
+# `git fetch`es the PR head (fetching moves objects, it does not run them) and
+# diffs it against the merge base. actions/checkout stays on its default ref (the
+# base SHA), so every file on disk is base-side and trusted.
+name: review-risk-guard
+
+on: pull_request_target
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: review-risk-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-risk-guard:
+    name: PR review risk guard (base-side)
+    runs-on: ubuntu-latest
+    # Fork PRs get a github.token without label/comment write access; skip rather
+    # than fail noisily. This also means the guard is advisory for same-repo PRs
+    # only (see docs/review-risk.ja.md).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # Default ref = the base branch SHA (pull_request_target). This is the
+      # trusted base-side checkout; the PR's tree is never checked out here.
+      # persist-credentials: false — the gh steps below get their token via
+      # GH_TOKEN env, so no write-scoped token is left in .git/config. fetch of a
+      # public SHA below needs no credentials.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Fetch the PR head by SHA and diff it against the merge base for the risk
+      # tooling paths only. `git fetch` transfers objects without executing any
+      # PR code, so it is safe under pull_request_target. HEAD_SHA comes via env
+      # (never interpolated into the shell) to keep the PR out of the command.
+      - name: Self-modification guard
+        id: guard
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$HEAD_SHA"
+          # HEAD is the base branch (base-side checkout); FETCH_HEAD is the PR head.
+          base="$(git merge-base HEAD FETCH_HEAD)"
+          # `git diff --quiet` with a pathspec, no pipe (a `| grep -q` here dies of
+          # SIGPIPE under pipefail on large diffs). Rename old-paths out of these
+          # trees still match. Only when this touches the risk tooling do we fix the
+          # verdict; otherwise exit clean and let review-risk.yml judge normally.
+          if ! git diff --quiet "$base" FETCH_HEAD -- tools/reviewrisk .github/workflows/review-risk.yml .github/workflows/review-risk-guard.yml; then
+            {
+              echo '<!-- review-risk -->'
+              echo '## Review risk: **CRITICAL**'
+              echo
+              echo '人間精読必須。risk 判定ツール自身(`tools/reviewrisk/` / `review-risk.yml` / `review-risk-guard.yml`)が変更されているため、base ブランチ側で走る自己改変ガード(`pull_request_target`)が fail-closed で critical に固定しました(S6 相当)。この workflow は base 側の定義で実行されるため、PR からは無効化できません。'
+            } > comment.md
+            echo "self=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply review:critical label
+        if: steps.guard.outputs.self == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Idempotent label creation: ignore the error when a label already
+          # exists rather than forcing a color update via --force.
+          gh label create "review:none" --color cccccc --description "PR review risk: none" 2>/dev/null || true
+          gh label create "review:low" --color 0e8a16 --description "PR review risk: low" 2>/dev/null || true
+          gh label create "review:medium" --color fbca04 --description "PR review risk: medium" 2>/dev/null || true
+          gh label create "review:high" --color d93f0b --description "PR review risk: high" 2>/dev/null || true
+          gh label create "review:critical" --color b60205 --description "PR review risk: critical" 2>/dev/null || true
+
+          existing_labels="$(gh pr view "$PR" --json labels --jq '.labels[].name')"
+          while IFS= read -r label; do
+            case "$label" in
+              review:*)
+                if [ "$label" != "review:critical" ]; then
+                  gh pr edit "$PR" --remove-label "$label"
+                fi
+                ;;
+            esac
+          done <<< "$existing_labels"
+
+          gh pr edit "$PR" --add-label "review:critical"
+
+      - name: Update sticky comment
+        if: steps.guard.outputs.self == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # The startswith marker must match reviewRiskMarker in tools/reviewrisk/report.go.
+          existing_id="$(gh api "repos/$GH_REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- review-risk -->"))][0].id // empty')"
+
+          if [ -n "$existing_id" ]; then
+            gh api --method PATCH "repos/$GH_REPO/issues/comments/$existing_id" -F body=@comment.md
+          else
+            gh api --method POST "repos/$GH_REPO/issues/$PR/comments" -F body=@comment.md
+          fi

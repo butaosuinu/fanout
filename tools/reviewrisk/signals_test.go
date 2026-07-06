@@ -221,6 +221,14 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigRiskToolModified},
 		},
 		{
+			// The base-side pull_request_target guard workflow is risk tooling too:
+			// weakening it disables the self-modification defense.
+			name:      "S6 risk guard workflow change is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'M', Path: ".github/workflows/review-risk-guard.yml"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigRiskToolModified},
+		},
+		{
 			name:      "S7 installer change is critical",
 			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "install.sh"}}},
 			wantLevel: LevelCritical,
