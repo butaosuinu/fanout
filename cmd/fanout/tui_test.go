@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -339,7 +340,7 @@ func TestTUIHelpPopupShellCommandPropagatesPathAndDimensions(t *testing.T) {
 		tuiHelpPopupCommand,
 		"--width 80",
 		"--height 18",
-		"PATH=" + shellQuote(os.Getenv("PATH")),
+		"PATH=" + run.ShellQuote(os.Getenv("PATH")),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("help popup shell command missing %q:\n%s", want, got)
@@ -351,7 +352,7 @@ func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testin
 	for _, value := range []string{"", "0", "1"} {
 		t.Setenv(fanouttui.EnhancedKeysEnv, value)
 		got := tuiNewPanePopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", "codex", 80, 18)
-		if !strings.Contains(got, fanouttui.EnhancedKeysEnv+"="+shellQuote(value)+" ") {
+		if !strings.Contains(got, fanouttui.EnhancedKeysEnv+"="+run.ShellQuote(value)+" ") {
 			t.Fatalf("popup shell command = %q with %s=%q, want forwarded env prefix", got, fanouttui.EnhancedKeysEnv, value)
 		}
 	}
@@ -365,7 +366,7 @@ func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testin
 		"--result-file /tmp/result.json",
 		// The popup runs under the tmux server env; PATH must come from the
 		// parent so the issue/plan pickers can exec gh.
-		"PATH=" + shellQuote(os.Getenv("PATH")),
+		"PATH=" + run.ShellQuote(os.Getenv("PATH")),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("popup shell command missing %q:\n%s", want, got)

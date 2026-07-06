@@ -9,6 +9,16 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.9.0 (2026-07-06)
+
+- **常駐コンソールの刷新。** 引数なしコンソールに、コンパクトな Session switcher(`v` で切り替え)、`1`–`9` の数字ジャンプ、`Z` zoom、AgentState 列、tmux popup のショートカットヘルプを追加し、再起動時にペインを復元するようにしました。任意のペインから `F11` または `prefix T` で復帰できます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **新規 Session modal の強化。** `n` で Prompt と Issue の 2 モードを開けます。Prompt モードは `@`-mention ファイル補完と plan fan-out チェックボックス付きの複数行 prompt、Issue モードは親 / 子 / 単独の issue を marker 表示する GraphQL ページングの issue picker とカウント式の `claude` / `codex` 選択を備えます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **テーマ化とペインの自動レイアウト。** ペインは dmux 相当の自動レイアウトで並び、`#parent · name` ラベル付きの fanout カラーの境界を持ちます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **新しいレビュー skill。** 過去のセッションから再発するツールエラー・CI 失敗・レビュー指摘を掘り出す `session-retro` skill を新設し、`post-work-review` にプロジェクト検証パスとレビューチェックリストを追加しました。[Agent Integrations]({{< relref "/docs/agents" >}}) を参照。
+- **4層の内部アーキテクチャ。** `internal/` を `core` / `app` / `infra` / `ui` の 4 層に再配置し、import 方向を CI で強制するようにしました。挙動は変わりません。正典は `docs/architecture.ja.md` です。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.9.0)
+
 ## v0.8.0 (2026-06-24)
 
 - **ラベル watcher。** 有効化すると、TUI 常駐の watcher が信頼できる `fanout:auto` issue を 1 回限りの fanout session に変えます。起動前に trigger ラベルを `fanout:running` へ付け替え、OPEN な子を持つ issue を親ファンアウトとして分類し、live ペインの上限を尊重します。有効化できるのは user config か `FANOUT_WATCHER*` 環境変数だけです。repo config はラベル、間隔、子 agent、session 上限を設定できますが、checkout を起動側に切り替えることはできません。[Workflow]({{< relref "/docs/workflow" >}}) と [Settings]({{< relref "/docs/settings" >}}) を参照。

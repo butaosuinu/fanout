@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # Custom destination or pinned release tag
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.8.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.9.0 sh
 ```
 
 `install.sh` auto-detects your OS/arch, then fetches and installs the `fanout` binary and the Claude/Codex integration files from the latest Release (or the tag given via `FANOUT_VERSION`).
