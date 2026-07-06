@@ -38,6 +38,21 @@ type sessionClient interface {
 	Notify(method string) error
 }
 
+// streamClient is the read/write slice of client the initial-turn drain loop
+// and the server-request handlers consume; tests substitute a scripted fake.
+type streamClient interface {
+	receive() (appServerMessage, error)
+	send(v any) error
+}
+
+// planTurnClient is what beginCodexPlanTurn needs: request the turn, drain its
+// stream, and close the connection once fanout stops listening.
+type planTurnClient interface {
+	requester
+	streamClient
+	Close()
+}
+
 // dialClient connects a client to a running app-server websocket address.
 func dialClient(addr string, timeout time.Duration) (*client, error) {
 	conn, err := dialWebSocket(addr, timeout)
@@ -97,7 +112,7 @@ func sendAppNotification(client *client, method string) error {
 	return nil
 }
 
-func sendAppResponse(client *client, id json.RawMessage, result any) error {
+func sendAppResponse(client streamClient, id json.RawMessage, result any) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot respond to app-server request without id")
 	}
@@ -110,7 +125,7 @@ func sendAppResponse(client *client, id json.RawMessage, result any) error {
 	return nil
 }
 
-func sendAppError(client *client, id json.RawMessage, message string) error {
+func sendAppError(client streamClient, id json.RawMessage, message string) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot send app-server error without id")
 	}
@@ -158,7 +173,7 @@ func readUntilResponse(client *client, id string) (json.RawMessage, error) {
 	}
 }
 
-func handleServerRequest(client *client, msg appServerMessage) error {
+func handleServerRequest(client streamClient, msg appServerMessage) error {
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		return sendAppResponse(client, msg.ID, map[string]any{"decision": "decline"})

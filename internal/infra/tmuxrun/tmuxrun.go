@@ -20,7 +20,9 @@ const (
 	livePaneTitleFormat      = "#{pane_id}\t#{pane_title}"
 	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
 	// wrapper sets to "running" before the agent starts and "done" after it
-	// exits. It is the dashboard's agent-state signal: #{pane_current_command}
+	// exits; in between, in-pane emitters refine it (launch-injected Claude
+	// hooks: working/blocked/idle, Codex Plan Mode controller: working/plan).
+	// It is the dashboard's agent-state signal: #{pane_current_command}
 	// cannot be used because the non-interactive `sh -lc` wrapper runs without
 	// job control, so the agent shares the wrapper's process group and tmux
 	// reports the wrapper shell's name for the whole agent run (verified on
@@ -265,6 +267,37 @@ func splitPane(target, worktreePath, launchCommand string) (string, error) {
 	return paneID, nil
 }
 
+// AgentStateSetCommand returns the best-effort shell one-liner that records an
+// agent state on the invoking pane's agentStateOption user option. It is the
+// single source for every in-pane state write: the BuildPaneLaunchCommand
+// wrapper and the Claude Code hooks injected by internal/agent both embed it,
+// so the option name and the failure handling cannot drift apart. The state is
+// shell-quoted defensively; the contract values (running, working, plan,
+// blocked, idle, done) are bare tokens and pass through unchanged.
+func AgentStateSetCommand(state string) string {
+	return `tmux set-option -p -t "$TMUX_PANE" ` + agentStateOption + " " + shellQuote(state) + " 2>/dev/null"
+}
+
+// SetPaneAgentState records an agent state on a tmux pane from inside a Go
+// process (the Codex Plan Mode controller runs in the pane itself). Unlike the
+// other SetPane* helpers, missing arguments are a silent no-op: the state is
+// display-only telemetry and must never fail a launch.
+func SetPaneAgentState(paneID, state string) error {
+	if strings.TrimSpace(paneID) == "" || strings.TrimSpace(state) == "" {
+		return nil
+	}
+	return setPaneOption(paneID, agentStateOption, state)
+}
+
+// setPaneOption writes one pane user option; argument validation stays with
+// each SetPane* wrapper.
+func setPaneOption(paneID, option, value string) error {
+	if err := exec.Command("tmux", "set-option", "-p", "-t", paneID, option, value).Run(); err != nil {
+		return fmt.Errorf("tmux set-option %s: %w", option, err)
+	}
+	return nil
+}
+
 // BuildPaneLaunchCommand returns a tmux shell-command that starts the agent via
 // a POSIX wrapper and leaves the user's shell behind after the agent exits.
 //
@@ -282,7 +315,7 @@ func BuildPaneLaunchCommand(agentCommand string) string {
 		return ""
 	}
 	setState := func(value string) string {
-		return `tmux set-option -p -t "$TMUX_PANE" ` + agentStateOption + " " + value + " 2>/dev/null; "
+		return AgentStateSetCommand(value) + "; "
 	}
 	body := setState("running") +
 		agentCommand +
@@ -299,8 +332,10 @@ type LivePane struct {
 	Title       string
 	// AgentState は pane user option @fanout_agent_state の値。fanout の起動
 	// ラッパー(BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
-	// "done" を設定する。旧版 fanout やラッパー外で起動した pane では未設定で
-	// ""。listing が失敗したとき・join 済み id に対応する行が無いときも空。
+	// "done" を設定し、その間を起動時注入の Claude hooks が
+	// working/blocked/idle に、Codex Plan Mode コントローラが working/plan に
+	// 細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
+	// listing が失敗したとき・join 済み id に対応する行が無いときも空。
 	AgentState string
 	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
 	// shell rows without trusting broad repo-root WorktreePath prefixes.

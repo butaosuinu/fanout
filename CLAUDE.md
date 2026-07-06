@@ -137,6 +137,21 @@ canonical reference in `docs/architecture.ja.md`. Rule of thumb: a PR that
 touches a class-H package needs human review; a PR touching only class-A
 packages can rely on AI review.
 
+- Agent-state telemetry is a cross-cutting contract on the `@fanout_agent_state`
+  tmux pane option, carrying running/working/plan/blocked/idle/done. The launch
+  wrapper in `internal/infra/tmuxrun` brackets every agent run with
+  running/done; launch-time `--settings` hooks injected by `internal/core/agent`
+  refine claude panes to working/blocked/idle; and the Codex Plan Mode
+  controller in `internal/infra/codexapp` reports working/plan around the
+  fanout-driven initial turn (only on the `thread/settings/update`-unsupported
+  fallback path; the seed path hands the prompt to the interactive TUI and is
+  unobservable by design). Messaging is pull-based with one push assist:
+  `fanout msg send` nudges the recipient pane only when `shouldNudge`
+  (`internal/app/peermsg`) allows its state — today only `running` qualifies.
+  When widening that allowlist to the richer states, never include blocked — a
+  blocked pane shows a permission/input dialog and the nudge's Enter could
+  activate the focused control.
+
 ## Behavior Boundaries
 
 - Child enumeration unions GitHub Sub-issues and same-repo parent task-list

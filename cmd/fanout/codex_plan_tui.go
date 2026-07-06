@@ -8,6 +8,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 func isCodexPlanTUIRequest(args []string) bool {
@@ -20,6 +21,9 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 		return code
 	}
 	cfg.Version = version
+	cfg.SetAgentState = func(state string) {
+		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
+	}
 	if err := codexapp.RunPlanTUI(cfg, os.Stdout, os.Stderr); err != nil {
 		lg.Err("codex plan mode TUI: %v", err)
 		return exitcode.Env

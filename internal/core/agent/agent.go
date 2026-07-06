@@ -11,13 +11,17 @@ import (
 )
 
 type Definition struct {
-	Name       string
-	Command    string
+	Name    string
+	Command string
+	// LaunchArgs are flags injected into every launch and resume command.
+	// claude carries the @fanout_agent_state hook settings; codex has no
+	// launch-time hook mechanism and keeps the bare two-value wrapper signal.
+	LaunchArgs []string
 	ResumeArgs []string
 }
 
 var registry = map[string]Definition{
-	"claude": {Name: "claude", Command: "claude", ResumeArgs: []string{"--continue"}},
+	"claude": {Name: "claude", Command: "claude", LaunchArgs: []string{"--settings", claudeHookSettingsJSON}, ResumeArgs: []string{"--continue"}},
 	"codex":  {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
 }
 
@@ -62,7 +66,7 @@ func BuildCommand(name, prompt string) (string, error) {
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	return BuildCommandWithExecutable(def.Command, prompt), nil
+	return buildCommand(def.Command, def.LaunchArgs, prompt), nil
 }
 
 // BuildResolvedCommand returns the live-launch command using the resolved
@@ -72,7 +76,7 @@ func BuildResolvedCommand(name, prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + BuildCommandWithExecutable(path, prompt), nil
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, registry[name].LaunchArgs, prompt), nil
 }
 
 // BuildResumeCommand returns the generic resume command for a supported agent.
@@ -81,7 +85,7 @@ func BuildResumeCommand(name string) (string, error) {
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	return buildCommandWithArgs(def.Command, def.ResumeArgs), nil
+	return buildCommand(def.Command, slices.Concat(def.LaunchArgs, def.ResumeArgs), ""), nil
 }
 
 // BuildResolvedResumeCommand returns the live resume command using the resolved
@@ -91,25 +95,19 @@ func BuildResolvedResumeCommand(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	def, ok := registry[name]
-	if !ok {
-		return "", ValidateKnown(name)
-	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommandWithArgs(path, def.ResumeArgs), nil
+	def := registry[name]
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(def.LaunchArgs, def.ResumeArgs), ""), nil
 }
 
-// BuildCommandWithExecutable builds a shell command for a known executable path.
-func BuildCommandWithExecutable(executable, prompt string) string {
-	if strings.TrimSpace(prompt) == "" {
-		return ShellQuote(executable)
-	}
-	return ShellQuote(executable) + " " + ShellQuote(prompt)
-}
-
-func buildCommandWithArgs(executable string, args []string) string {
+// buildCommand assembles a shell command from an executable, per-agent flags,
+// and an optional prompt, quoting every token.
+func buildCommand(executable string, args []string, prompt string) string {
 	parts := []string{ShellQuote(executable)}
 	for _, arg := range args {
 		parts = append(parts, ShellQuote(arg))
+	}
+	if strings.TrimSpace(prompt) != "" {
+		parts = append(parts, ShellQuote(prompt))
 	}
 	return strings.Join(parts, " ")
 }
