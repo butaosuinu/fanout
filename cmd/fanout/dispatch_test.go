@@ -19,6 +19,7 @@ func TestSelfExecSubcommandNames(t *testing.T) {
 	}{
 		{name: "new pane popup", got: tuiNewPanePopupCommand, want: "__tui-new-pane-popup"},
 		{name: "help popup", got: tuiHelpPopupCommand, want: "__tui-help-popup"},
+		{name: "close popup", got: tuiClosePopupCommand, want: "__tui-close-popup"},
 		{name: "codex plan tui", got: codexapp.PlanTUICommand, want: "__codex-plan-tui"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

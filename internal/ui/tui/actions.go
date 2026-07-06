@@ -130,28 +130,39 @@ func (m model) updatePendingCloseChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex - 1)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
-		m.actionMessage = closeChoiceMessage(*m.pendingAction)
 		return m, nil
 	case "down", "j":
 		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex + 1)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
-		m.actionMessage = closeChoiceMessage(*m.pendingAction)
 		return m, nil
 	case "1", "2", "3":
 		idx := int(msg.String()[0] - '1')
 		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(idx)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
-		m.actionMessage = closeChoiceMessage(*m.pendingAction)
 		return m, nil
 	case "y", "enter":
 		pending := *m.pendingAction
+		if m.closeOnly {
+			m.closeDone = true
+			m.closeResult = pending.closeMode
+			m.pendingAction = nil
+			return m.quit()
+		}
 		m.pendingAction = nil
+		m.mode = modeMonitor
 		m.actionRunning = true
 		m.actionMessage = lifecycleRunningMessage(pending)
 		return m, m.lifecycleCmd(pending)
 	case "n", "esc", "q", "ctrl+c":
+		if m.closeOnly {
+			m.closeDone = true
+			m.closeCanceled = true
+			m.pendingAction = nil
+			return m.quit()
+		}
 		m.actionMessage = "close canceled"
 		m.pendingAction = nil
+		m.mode = modeMonitor
 		return m, nil
 	}
 	return m, nil
@@ -173,8 +184,7 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		if !pane.isPaneOnly() {
 			m.pendingAction.closeOptionIndex = 0
 			m.pendingAction.closeMode = closeOptions()[0].mode
-			m.actionMessage = closeChoiceMessage(*m.pendingAction)
-			return m, nil
+			return m.closeChoicePopupCmd()
 		}
 	}
 	m.actionMessage = confirmMessage(action, pane)
@@ -395,20 +405,6 @@ func clampCloseOptionIndex(idx int) int {
 		return len(opts) - 1
 	}
 	return idx
-}
-
-func closeChoiceMessage(pending pendingLifecycleAction) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "close %s?\n", pending.pane.identityLabel())
-	for i, opt := range closeOptions() {
-		prefix := "  "
-		if i == pending.closeOptionIndex {
-			prefix = "> "
-		}
-		fmt.Fprintf(&b, "%s%d. %s - %s\n", prefix, i+1, opt.label, opt.description)
-	}
-	b.WriteString("up/down or 1-3 select, enter confirm, esc cancel")
-	return b.String()
 }
 
 func closeModeVerb(mode lifecycle.CloseMode) string {

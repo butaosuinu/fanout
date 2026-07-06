@@ -60,6 +60,12 @@ func (m model) compactActive() bool {
 }
 
 func (m model) View() string {
+	if m.closeOnly {
+		if m.width == 0 {
+			return "Close pane"
+		}
+		return m.closeChoiceView()
+	}
 	if m.helpOnly {
 		if m.width == 0 {
 			return "Keyboard shortcuts"
@@ -132,6 +138,9 @@ func (m model) View() string {
 	}
 	if m.mode == modeHelp {
 		return overlayCentered(base, m.helpView(), m.width, m.height)
+	}
+	if m.mode == modeCloseChoice {
+		return overlayCentered(base, m.closeChoiceView(), m.width, m.height)
 	}
 	return base
 }
