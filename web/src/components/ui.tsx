@@ -38,34 +38,33 @@ export function GhLink({
   );
 }
 
-function agentStateClass(state?: string) {
-  switch (state) {
-    case "running":
-    case "working":
-      return "t-warn";
-    case "plan":
-      return "t-open";
-    case "blocked":
-      return "t-err";
-    case "done":
-      return "t-ok";
-    case "idle":
-      return "";
-    default:
-      return null;
-  }
+/* agentState の 6 値契約(sessionview normalizeAgentState の許可リスト)ごとの
+ * タグ色。進行中(running / working)はアンバー、plan は浅葱、blocked は赤、
+ * idle は破線、done は緑。既存 .tag バリアントの再利用で CSS 追加なし。 */
+const AGENT_STATE_CLASSES = {
+  running: "t-warn",
+  working: "t-warn",
+  plan: "t-open",
+  blocked: "t-err",
+  idle: "t-draft",
+  done: "t-ok",
+} as const;
+
+/* 契約 6 値の並び(挿入順)。FilterBar の run ドロップダウンが順序ごと使う。 */
+export const AGENT_STATES = Object.keys(AGENT_STATE_CLASSES) as readonly string[];
+
+/* state が 6 値契約の値かどうか。行・ドロワーの表示ゲートが AgentStateTag と
+ * 同じ語彙で判定するための共有ヘルパー。Object.hasOwn で prototype 由来の
+ * キー("toString" 等)を弾く。 */
+export function isKnownAgentState(state?: string): state is keyof typeof AGENT_STATE_CLASSES {
+  return !!state && Object.hasOwn(AGENT_STATE_CLASSES, state);
 }
 
-export function isKnownAgentState(state?: string) {
-  return agentStateClass(state) !== null;
-}
-
-/* agentState バッジ。既知 state 以外(空 = pane 死亡・不明)は null を
- * 返し、呼び出し側が省略 or ミュート表示を選ぶ。 */
+/* agentState バッジ。契約 6 値以外(空 = pane 死亡・不明)は null を返し、
+ * 呼び出し側が省略 or ミュート表示を選ぶ。 */
 export function AgentStateTag({ state }: { state?: string }) {
-  const cls = agentStateClass(state);
-  if (cls === null) return null;
-  return <Tag cls={cls}>{state}</Tag>;
+  if (!isKnownAgentState(state)) return null;
+  return <Tag cls={AGENT_STATE_CLASSES[state]}>{state}</Tag>;
 }
 
 /* dirty 状態のタグ。unknown 時の表示は行("—")とドロワー("unknown")で

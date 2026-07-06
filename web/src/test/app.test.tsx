@@ -109,28 +109,25 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("running", { selector: ".tag" })).toBeInTheDocument();
   });
 
-  it("拡張 agent state を行と drawer に表示する", async () => {
+  it("6 値契約の hook 状態を行と drawer に表示する", async () => {
     const user = userEvent.setup();
     server.use(peekHandler(() => "plan output"));
     render(<App />);
     streamSnapshot(
       makeSnapshot([
         makeSession("142", [
-          makePane({ issueNum: 101, displayName: "Plan work", paneId: "%1", agentState: "plan" }),
-          makePane({
-            issueNum: 102,
-            displayName: "Blocked work",
-            paneId: "%2",
-            agentState: "blocked",
-          }),
+          makePane({ issueNum: 101, displayName: "One", agentState: "working" }),
+          makePane({ issueNum: 102, displayName: "Two", agentState: "plan" }),
+          makePane({ issueNum: 103, displayName: "Three", agentState: "blocked" }),
+          makePane({ issueNum: 104, displayName: "Four", agentState: "idle" }),
         ]),
       ]),
     );
+    for (const state of ["working", "plan", "blocked", "idle"]) {
+      expect(screen.getByText(state, { selector: ".tag" })).toBeInTheDocument();
+    }
 
-    expect(screen.getByText("plan", { selector: ".tag" })).toBeInTheDocument();
-    expect(screen.getByText("blocked", { selector: ".tag" })).toBeInTheDocument();
-
-    await user.click(screen.getByText("Plan work"));
+    await user.click(screen.getByText("Two"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(drawer.querySelector("#d-run")).toHaveTextContent("plan");
   });
@@ -250,6 +247,25 @@ describe("フィルタ", () => {
     expect(
       screen.getByRole("listitem", { name: "フィルタ state:closed を外す" }),
     ).toBeInTheDocument();
+  });
+
+  it("run ドロップダウンは 6 値契約の順で option を並べる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(basicSnapshot());
+
+    await user.click(screen.getByRole("button", { name: "agent 実行状態で絞り込み" }));
+    const opts = within(
+      screen.getByRole("listbox", { name: "agent 実行状態で絞り込み" }),
+    ).getAllByRole("option");
+    expect(opts.map((o) => o.textContent)).toEqual([
+      "running",
+      "working",
+      "plan",
+      "blocked",
+      "idle",
+      "done",
+    ]);
   });
 
   it("アクティブ option は aria-selected で示し、再クリックでトグルオフする", async () => {

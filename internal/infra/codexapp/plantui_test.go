@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"slices"
 	"strings"
 	"syscall"
@@ -186,8 +187,12 @@ func TestCodexPlanThreadStartsInitialTurnAfterSettingsUpdate(t *testing.T) {
 	}
 
 	turn := client.lastRequest("turn/start").paramsMap(t)
-	if _, ok := turn["collaborationMode"]; ok {
-		t.Fatalf("turn/start collaborationMode = %#v, want absent after thread/settings/update", turn["collaborationMode"])
+	mode, ok := turn["collaborationMode"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn/start missing collaborationMode: %#v", turn)
+	}
+	if mode["mode"] != "plan" {
+		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
 	}
 	assertTurnStartText(t, turn, "hello plan")
 }
@@ -265,6 +270,104 @@ func TestCodexPlanTurnStartErrorsOnFailedStatus(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), `status "failed"`) {
 		t.Fatalf("error = %v, want failed status error", err)
+	}
+}
+
+// recordedStates collects setState calls; read them only after the drain
+// channel is received so the drain goroutine's writes are ordered before the
+// assertion.
+func recordedStates(states *[]string) func(string) {
+	return func(state string) { *states = append(*states, state) }
+}
+
+// TestBeginCodexPlanTurnReportsWorkingThenPlan guarantees the fanout-driven
+// initial turn reports "working" while the turn runs and "plan" once the
+// turn/completed notification lands, in that order.
+func TestBeginCodexPlanTurnReportsWorkingThenPlan(t *testing.T) {
+	client := &fakeCodexAppClient{
+		stream: []appServerMessage{{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"threadId":"thread-1","turn":{"status":"completed"}}`),
+		}},
+	}
+	var states []string
+
+	drainDone, err := beginCodexPlanTurn(client, codexThreadInfo{ID: "thread-1"}, "/repo", "hello plan", recordedStates(&states))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drainDone == nil {
+		t.Fatal("drainDone = nil, want drain channel for in-progress turn")
+	}
+	if drainErr := <-drainDone; drainErr != nil {
+		t.Fatalf("drain error = %v, want nil", drainErr)
+	}
+	if got := strings.Join(states, ","); got != "working,plan" {
+		t.Fatalf("states = %q, want working,plan", got)
+	}
+}
+
+// TestBeginCodexPlanTurnReportsPlanOnSynchronousCompletion covers the
+// turn/start response that already carries a completed status: no drain is
+// needed, "working" is skipped, and the client is closed.
+func TestBeginCodexPlanTurnReportsPlanOnSynchronousCompletion(t *testing.T) {
+	client := &fakeCodexAppClient{
+		methodResults: map[string]json.RawMessage{
+			"turn/start": json.RawMessage(`{"turn":{"id":"turn-1","status":"completed"}}`),
+		},
+	}
+	var states []string
+
+	drainDone, err := beginCodexPlanTurn(client, codexThreadInfo{ID: "thread-1"}, "/repo", "hello plan", recordedStates(&states))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drainDone != nil {
+		t.Fatal("drainDone != nil, want nil for synchronously completed turn")
+	}
+	if got := strings.Join(states, ","); got != "plan" {
+		t.Fatalf("states = %q, want plan", got)
+	}
+	if client.closed {
+		t.Fatal("client closed after synchronous completion")
+	}
+}
+
+// TestBeginCodexPlanTurnReportsIdleOnFailedTurn pins that a turn ending in a
+// non-completed terminal status leaves the display state at a non-running idle.
+func TestBeginCodexPlanTurnSkipsPlanOnFailedTurn(t *testing.T) {
+	client := &fakeCodexAppClient{
+		stream: []appServerMessage{{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"threadId":"thread-1","turn":{"status":"failed"}}`),
+		}},
+	}
+	var states []string
+
+	drainDone, err := beginCodexPlanTurn(client, codexThreadInfo{ID: "thread-1"}, "/repo", "hello plan", recordedStates(&states))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if drainErr := <-drainDone; drainErr == nil || !strings.Contains(drainErr.Error(), `status "failed"`) {
+		t.Fatalf("drain error = %v, want failed status error", drainErr)
+	}
+	if got := strings.Join(states, ","); got != "working,idle" {
+		t.Fatalf("states = %q, want working,idle", got)
+	}
+}
+
+// TestDrainCodexAppServerSkipsPlanWhenClientClosed pins that the drain's
+// closed-connection exit (fanout shutting down, not turn completion) reports
+// nothing: a dead pane must not end up labeled "plan".
+func TestDrainCodexAppServerSkipsPlanWhenClientClosed(t *testing.T) {
+	client := &fakeCodexAppClient{streamErr: net.ErrClosed}
+	var states []string
+
+	if err := drainCodexAppServerUntilTurnComplete(client, "thread-1", "", recordedStates(&states)); err != nil {
+		t.Fatalf("drain error = %v, want nil on closed client", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states = %v, want none", states)
 	}
 }
 
@@ -431,7 +534,7 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	drainDone := make(chan error, 1)
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -446,7 +549,7 @@ func TestWaitForCodexTUIAfterReadyReturnsDrainError(t *testing.T) {
 	drainDone := make(chan error, 1)
 	drainDone <- errors.New("unsupported request")
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if tuiExited {
 		t.Fatal("tuiExited = true, want false")
@@ -462,7 +565,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
 	drainDone <- nil
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -554,13 +657,6 @@ func TestCodexTurnNotificationAgentStateMarksStartedAndCompleted(t *testing.T) {
 
 func TestDrainCodexAppServerNotificationsUntilClosedDoesNotHandleServerRequests(t *testing.T) {
 	var states []string
-	old := setPlanTUIAgentState
-	setPlanTUIAgentState = func(state string) {
-		states = append(states, state)
-	}
-	t.Cleanup(func() {
-		setPlanTUIAgentState = old
-	})
 
 	receiver := &fakeAppServerReceiver{messages: []appServerMessage{
 		{
@@ -575,7 +671,7 @@ func TestDrainCodexAppServerNotificationsUntilClosedDoesNotHandleServerRequests(
 		},
 	}}
 
-	if err := drainCodexAppServerNotificationsUntilClosed(receiver); err != nil {
+	if err := drainCodexAppServerNotificationsUntilClosed(receiver, recordedStates(&states)); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(states, []string{"working", "idle"}) {
@@ -606,20 +702,13 @@ func TestServerRequestAgentStateMarksBlockingRequests(t *testing.T) {
 
 func TestHandleServerRequestRestoresWorkingAfterAutoHandledBlockingRequest(t *testing.T) {
 	var states []string
-	old := setPlanTUIAgentState
-	setPlanTUIAgentState = func(state string) {
-		states = append(states, state)
-	}
-	t.Cleanup(func() {
-		setPlanTUIAgentState = old
-	})
 
 	client := &fakeCodexAppClient{}
-	err := handleServerRequest(client, appServerMessage{
+	err := handleServerRequestWithState(client, appServerMessage{
 		ID:     json.RawMessage(`"req-1"`),
 		Method: "tool/requestUserInput",
 		Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
-	})
+	}, recordedStates(&states))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,9 +756,16 @@ func TestUnsupportedCodexAppServerMethodDetection(t *testing.T) {
 type fakeCodexAppClient struct {
 	calls         []fakeCodexRequest
 	notifications []string
-	sent          []any
 	methodErrors  map[string]error
 	methodResults map[string]json.RawMessage
+	// stream scripts receive for drain tests: messages are popped in order,
+	// then streamErr (default net.ErrClosed, as if fanout closed the client)
+	// is returned. sent records and closed flags, so beginCodexPlanTurn is
+	// fully observable.
+	stream    []appServerMessage
+	streamErr error
+	sent      []any
+	closed    bool
 }
 
 type fakeAppServerReceiver struct {
@@ -689,6 +785,27 @@ type fakeCodexRequest struct {
 	id     string
 	method string
 	params any
+}
+
+func (f *fakeCodexAppClient) receive() (appServerMessage, error) {
+	if len(f.stream) == 0 {
+		if f.streamErr != nil {
+			return appServerMessage{}, f.streamErr
+		}
+		return appServerMessage{}, net.ErrClosed
+	}
+	msg := f.stream[0]
+	f.stream = f.stream[1:]
+	return msg, nil
+}
+
+func (f *fakeCodexAppClient) send(v any) error {
+	f.sent = append(f.sent, v)
+	return nil
+}
+
+func (f *fakeCodexAppClient) Close() {
+	f.closed = true
 }
 
 func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMessage, error) {
@@ -717,11 +834,6 @@ func (f *fakeCodexAppClient) Request(id, method string, params any) (json.RawMes
 
 func (f *fakeCodexAppClient) Notify(method string) error {
 	f.notifications = append(f.notifications, method)
-	return nil
-}
-
-func (f *fakeCodexAppClient) send(v any) error {
-	f.sent = append(f.sent, v)
 	return nil
 }
 

@@ -29,7 +29,9 @@ export function Hud({ rollup }: { rollup: Rollup | null | undefined }) {
           <b id="s-live">{r.live}</b>
         </div>
         <div className="stat">
-          <label>running</label>
+          {/* Rollup.running は active 集合(running / working / plan)の数。
+              テーブルの running バッジ数と混同しないよう active と表示する。 */}
+          <label>active</label>
           <b id="s-running">{r.running ?? 0}</b>
         </div>
         <div className="stat">

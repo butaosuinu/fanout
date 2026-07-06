@@ -18,10 +18,10 @@ import {
   AgentStateTag,
   DirtyTag,
   GhLink,
+  isKnownAgentState,
   IssueStateTag,
   PrPill,
   Tag,
-  isKnownAgentState,
 } from "./ui";
 
 function BlockersCell({ pane }: { pane: PaneView }) {

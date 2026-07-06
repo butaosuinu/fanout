@@ -42,6 +42,21 @@ type sender interface {
 	send(v any) error
 }
 
+// streamClient is the read/write slice of client the initial-turn drain loop
+// and the server-request handlers consume; tests substitute a scripted fake.
+type streamClient interface {
+	receive() (appServerMessage, error)
+	sender
+}
+
+// planTurnClient is what beginCodexPlanTurn needs: request the turn, drain its
+// stream, and close the connection once fanout stops listening.
+type planTurnClient interface {
+	requester
+	streamClient
+	Close()
+}
+
 // dialClient connects a client to a running app-server websocket address.
 func dialClient(addr string, timeout time.Duration) (*client, error) {
 	conn, err := dialWebSocket(addr, timeout)
@@ -163,11 +178,17 @@ func readUntilResponse(client *client, id string) (json.RawMessage, error) {
 }
 
 func handleServerRequest(client sender, msg appServerMessage) error {
+	return handleServerRequestWithState(client, msg, nil)
+}
+
+func handleServerRequestWithState(client sender, msg appServerMessage, setState func(string)) error {
 	if state := serverRequestAgentState(msg.Method); state != "" {
-		setPlanTUIAgentState(state)
+		if setState != nil {
+			setState(state)
+		}
 		err := handleServerRequestResponse(client, msg)
-		if err == nil {
-			setPlanTUIAgentState("working")
+		if err == nil && setState != nil {
+			setState("working")
 		}
 		return err
 	}

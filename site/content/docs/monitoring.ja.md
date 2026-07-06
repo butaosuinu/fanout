@@ -30,7 +30,7 @@ fanout   # start the persistent tmux console
 
 素のシェルから起動すると fanout 管理の tmux session を作成または attach し、tmux 内から起動すると現在のペインをそのままコンソールにします。
 コンソールは `.fanout/state.json` を読み、記録済みペインの issue と PR の状態を定期更新し、各行の worktree には変更量を `+X/-Y`、未 commit の作業の有無を `dirty` / `clean` で示します。
-`RUN` 列には agent の実行状態がグリフで出て(`●` が running、`✓` が done)、detail panel には同じ値が `run=` として出ます。
+`RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
 
 {{< diagram "console" >}}
 

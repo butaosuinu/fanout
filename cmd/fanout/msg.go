@@ -29,9 +29,11 @@ Write verbs:
 Notify verbs:
   nudge <N>                      Best-effort: drop an inbox hint into peer #N's
                                  pane via tmux send-keys, but only when its
-                                 agent is running. Never touches the DB (the
-                                 message is already persisted by send); a pane
-                                 that is gone, idle-unknown, or done is a no-op
+                                 agent can take queued input (state running /
+                                 working / plan / idle). Never touches the DB
+                                 (the message is already persisted by send); a
+                                 pane that is gone, blocked on a permission
+                                 prompt, state-unknown, or done is a no-op
                                  success, so a failed nudge never breaks
                                  messaging.
 
@@ -47,7 +49,7 @@ Options:
   -h, --help       Show this help.
 
 Exit codes: 0 success, 2 invalid invocation, 4 backend (SQLite) failure.
-nudge is best-effort: operational failures (pane gone, agent not running,
+nudge is best-effort: operational failures (pane gone, agent not nudgeable,
 send-keys failure) exit 0 with a warning, never 4.
 `
 

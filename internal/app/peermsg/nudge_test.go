@@ -12,22 +12,27 @@ import (
 )
 
 func TestShouldNudge(t *testing.T) {
-	for _, tc := range []struct {
+	tests := []struct {
+		name  string
 		state string
 		want  bool
 	}{
-		{"running", true},
-		{"working", true},
-		{"plan", true},
-		{"idle", true},
-		{"blocked", false},
-		{"done", false},
-		{"", false},
-		{"garbage", false},
-	} {
-		if got := shouldNudge(tc.state); got != tc.want {
-			t.Errorf("shouldNudge(%q) = %v, want %v", tc.state, got, tc.want)
-		}
+		{name: "running is nudged (granularity-unknown wrapper state)", state: "running", want: true},
+		{name: "idle is nudged (agent at its prompt)", state: "idle", want: true},
+		{name: "working is nudged (turns queue typed input)", state: "working", want: true},
+		{name: "plan is nudged (Plan Mode composer queues input too)", state: "plan", want: true},
+		{name: "padded hook value is trimmed like the display path", state: " idle ", want: true},
+		{name: "blocked is a no-op (never type into a permission dialog)", state: "blocked", want: false},
+		{name: "done is a no-op (bare shell)", state: "done", want: false},
+		{name: "unset state is a no-op", state: "", want: false},
+		{name: "unknown value is a no-op", state: "garbage", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldNudge(tt.state); got != tt.want {
+				t.Errorf("shouldNudge(%q) = %v, want %v", tt.state, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -89,16 +94,24 @@ func TestRunMsgNudge(t *testing.T) {
 			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
 		},
 		{
-			name: "done pane is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
-			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "done")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not running",
+			name: "idle pane is nudged", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "idle")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
 		},
 		{
-			name: "blocked pane is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
-			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "blocked")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not running",
+			name: "working pane is nudged (typed input queues mid-turn)", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "working")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			name: "blocked pane is a no-op success (permission dialog)", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "blocked")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not nudgeable",
+		},
+		{
+			name: "done pane is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "done")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not nudgeable",
 		},
 		{
 			name: "unset state is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
-			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not running",
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not nudgeable",
 		},
 		{
 			name: "tmux unavailable is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,

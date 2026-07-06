@@ -663,8 +663,10 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 	}
 }
 
-// TestNormalizeAgentState pins normalizeAgentState to the lowercase literals the
-// dashboard/TUI accept from @fanout_agent_state; every other input collapses to "".
+// TestNormalizeAgentState pins normalizeAgentState to the lowercase literals of
+// the 6-value contract (running / working / plan / blocked / idle / done: the
+// wrapper writes running/done, agent hooks write the rest); every other input
+// collapses to "".
 func TestNormalizeAgentState(t *testing.T) {
 	tests := []struct {
 		name string
@@ -679,11 +681,15 @@ func TestNormalizeAgentState(t *testing.T) {
 		{name: "blocked passes through", in: "blocked", want: "blocked"},
 		{name: "done passes through", in: "done", want: "done"},
 		{name: "surrounding whitespace is trimmed", in: " running ", want: "running"},
+		{name: "hook value with whitespace is trimmed", in: " idle ", want: "idle"},
 		{name: "value from outside the wrapper is unknown", in: "claude", want: ""},
 		{name: "process name is unknown", in: "bash", want: ""},
 		{name: "string spoofed by an in-pane process is unknown", in: "x\ty", want: ""},
 		{name: "only the lowercase literal is accepted", in: "RUNNING", want: ""},
+		{name: "uppercase hook value is rejected", in: "WORKING", want: ""},
+		{name: "mixed-case hook value is rejected", in: "Idle", want: ""},
 		{name: "trailing garbage is rejected", in: "done extra", want: ""},
+		{name: "trailing garbage on a hook value is rejected", in: "plan extra", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -695,36 +701,43 @@ func TestNormalizeAgentState(t *testing.T) {
 }
 
 func TestBuildAgentStateFromLiveOption(t *testing.T) {
-	dead := pane("1", 8, "%5")
+	dead := pane("1", 10, "%9")
 	dead.AgentStatus = "running" // pane 死亡 + tmux 正常なら記録値は使われない
 	c := Collectors{
-		Now:       fixedNow,
-		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"), pane("1", 6, "%6"), pane("1", 7, "%7"), dead),
+		Now: fixedNow,
+		LoadState: storeOf(
+			pane("1", 2, "%1"), pane("1", 3, "%2"), pane("1", 4, "%3"), pane("1", 5, "%4"),
+			pane("1", 6, "%5"), pane("1", 7, "%6"), pane("1", 8, "%7"), pane("1", 9, "%8"), dead,
+		),
 		LivePanes: livePanesWith(map[string]LivePaneInfo{
 			"%1": {Path: "/wt/%1", AgentState: "running"},
 			"%2": {Path: "/wt/%2", AgentState: "done"},
 			"%3": {Path: "/wt/%3", AgentState: "forged junk"}, // 偽装/未知の値は不明へ
 			"%4": {Path: "/wt/%4"},                            // option 未設定の alive pane(旧版 fanout 起動など)
+			"%5": {Path: "/wt/%5", AgentState: "working"},     // 以下 4 値は hooks が書く明示信号
 			"%6": {Path: "/wt/%6", AgentState: "plan"},
 			"%7": {Path: "/wt/%7", AgentState: "blocked"},
-			// %5 は live set に居ない(pane 死亡)
+			"%8": {Path: "/wt/%8", AgentState: "idle"},
+			// %9 は live set に居ない(pane 死亡)
 		}),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 		Waves:    wavesNone,
 	}
 	snap := Build("o/n", "/root", c)
 	panes := snap.Sessions[0].Panes
-	wants := []string{"running", "done", "", "", "plan", "blocked", ""}
+	wants := []string{"running", "done", "", "", "working", "plan", "blocked", "idle", ""}
 	for i, want := range wants {
 		if panes[i].AgentState != want {
 			t.Fatalf("#%d AgentState = %q, want %q", panes[i].IssueNum, panes[i].AgentState, want)
 		}
 	}
-	if snap.Sessions[0].Rollup.Running != 1 {
-		t.Fatalf("session Rollup.Running = %d, want 1", snap.Sessions[0].Rollup.Running)
+	// active 集合(running / working / plan)だけを数える: blocked と idle は
+	// live でも進行中ではない。
+	if snap.Sessions[0].Rollup.Running != 3 {
+		t.Fatalf("session Rollup.Running = %d, want 3", snap.Sessions[0].Rollup.Running)
 	}
-	if snap.Rollup.Running != 1 {
-		t.Fatalf("snapshot Rollup.Running = %d, want 1", snap.Rollup.Running)
+	if snap.Rollup.Running != 3 {
+		t.Fatalf("snapshot Rollup.Running = %d, want 3", snap.Rollup.Running)
 	}
 }
 
@@ -734,9 +747,11 @@ func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) 
 	unrecorded := pane("1", 3, "%2") // 旧 state 行: agentStatus 無し
 	tampered := pane("1", 4, "%3")   // 手編集された state 行: 規定外の値は捨てる
 	tampered.AgentStatus = "<b>maybe</b>"
+	hooked := pane("1", 5, "%4") // 6 値契約の hook 値も fallback で通る
+	hooked.AgentStatus = "working"
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(recorded, unrecorded, tampered),
+		LoadState: storeOf(recorded, unrecorded, tampered, hooked),
 		LivePanes: func() (map[string]LivePaneInfo, error) { return nil, errors.New("tmux not found") },
 		IssuePRs:  func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
 		Waves:     wavesNone,
@@ -752,8 +767,11 @@ func TestBuildAgentStateFallsBackToRecordedStatusWhenTmuxDegraded(t *testing.T) 
 	if panes[2].AgentState != "" {
 		t.Fatalf("degraded-tmux AgentState with tampered status = %q, want empty", panes[2].AgentState)
 	}
-	if snap.Rollup.Running != 1 {
-		t.Fatalf("Rollup.Running = %d, want 1 (fallback row counts)", snap.Rollup.Running)
+	if panes[3].AgentState != "working" {
+		t.Fatalf("degraded-tmux AgentState = %q, want fallback to recorded \"working\"", panes[3].AgentState)
+	}
+	if snap.Rollup.Running != 2 {
+		t.Fatalf("Rollup.Running = %d, want 2 (running + working fallback rows count)", snap.Rollup.Running)
 	}
 }
 

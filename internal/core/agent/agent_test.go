@@ -1,19 +1,61 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// TestClaudeHookSettingsJSONPinsAgentStateHooks pins the exact inline
+// --settings JSON injected into claude launches: key order (dry-run goldens
+// embed the string verbatim), the event -> @fanout_agent_state mapping, the
+// best-effort `|| true` suffix on every hook command, and the Notification
+// stdin filter that keeps the ~60s idle_prompt reminder from flipping an idle
+// pane to blocked.
+func TestClaudeHookSettingsJSONPinsAgentStateHooks(t *testing.T) {
+	hook := func(command string) string {
+		return `[{"hooks":[{"type":"command","command":"` + command + `"}]}]`
+	}
+	stateHook := func(state string) string {
+		return hook(`tmux set-option -p -t \"$TMUX_PANE\" @fanout_agent_state ` + state + ` 2>/dev/null || true`)
+	}
+	blockedHook := hook(`grep -Eq '\"notification_type\"[[:space:]]*:[[:space:]]*\"(permission_prompt|agent_needs_input|elicitation_dialog)\"' - && tmux set-option -p -t \"$TMUX_PANE\" @fanout_agent_state blocked 2>/dev/null || true`)
+	want := `{"hooks":{` +
+		`"UserPromptSubmit":` + stateHook("working") + `,` +
+		`"PreToolUse":` + stateHook("working") + `,` +
+		`"PostToolUse":` + stateHook("working") + `,` +
+		`"Notification":` + blockedHook + `,` +
+		`"Stop":` + stateHook("idle") + `}}`
+	if claudeHookSettingsJSON != want {
+		t.Fatalf("claudeHookSettingsJSON = %q, want %q", claudeHookSettingsJSON, want)
+	}
+	if !json.Valid([]byte(claudeHookSettingsJSON)) {
+		t.Fatalf("claudeHookSettingsJSON is not valid JSON: %q", claudeHookSettingsJSON)
+	}
+}
 
 func TestBuildCommandQuotesPrompt(t *testing.T) {
 	got, err := BuildCommand("claude", "[fanout #1] it's ready")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "claude '[fanout #1] it'\\''s ready'"
+	want := "claude --settings " + ShellQuote(claudeHookSettingsJSON) + " '[fanout #1] it'\\''s ready'"
 	if got != want {
 		t.Fatalf("BuildCommand() = %q, want %q", got, want)
+	}
+}
+
+// TestBuildCommandCodexStaysBare guarantees hook injection is claude-only:
+// codex has no launch-time hook mechanism, so its command must stay unchanged.
+func TestBuildCommandCodexStaysBare(t *testing.T) {
+	got, err := BuildCommand("codex", "[fanout #1] go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "codex '[fanout #1] go'"
+	if got != want {
+		t.Fatalf("BuildCommand(codex) = %q, want %q", got, want)
 	}
 }
 
@@ -36,8 +78,9 @@ func TestBuildResumeCommandUsesAgentResumeArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "claude --continue" {
-		t.Fatalf("BuildResumeCommand(claude) = %q, want claude --continue", got)
+	want := "claude --settings " + ShellQuote(claudeHookSettingsJSON) + " --continue"
+	if got != want {
+		t.Fatalf("BuildResumeCommand(claude) = %q, want %q", got, want)
 	}
 }
 
@@ -57,7 +100,7 @@ func TestBuildResolvedCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " prompt"
+	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " --settings " + ShellQuote(claudeHookSettingsJSON) + " prompt"
 	if got != want {
 		t.Fatalf("BuildResolvedCommand() = %q, want %q", got, want)
 	}

@@ -64,8 +64,10 @@ type hudSummary struct {
 	Blocked int
 }
 
-// agentStateGlyphs は @fanout_agent_state の値ごとの表示グリフ。
-// sessionview の normalizeAgentState が通す値はここでも unknown 表示にしない。
+// agentStateGlyphs は @fanout_agent_state の値ごとの表示グリフ。6 値契約
+// running / working / plan / blocked / idle / done(sessionview の
+// normalizeAgentState の許可リストと同じ集合)。塗り/白抜きのペアで覚える:
+// ● running / ○ idle、◆ blocked / ◇ plan。
 var agentStateGlyphs = map[string]string{
 	"running": "●",
 	"done":    "✓",

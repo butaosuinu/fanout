@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -2034,11 +2035,14 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 
 func TestDetailContentShowsAgentState(t *testing.T) {
 	m := newModel(Options{})
-	m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live", AgentState: "running"}}
-	m.refreshRows()
+	// hook 由来の新値(6 値契約)も raw のまま run= に出る。
+	for _, state := range []string{"running", "working", "plan", "blocked", "idle", "done"} {
+		m.allPanes = []paneView{{IssueNum: 1, Name: "one", PaneID: "%1", TmuxState: "live", AgentState: state}}
+		m.refreshRows()
 
-	if got := m.detailContent(); !strings.Contains(got, "run=running") {
-		t.Fatalf("detailContent() = %q, want run=running", got)
+		if got := m.detailContent(); !strings.Contains(got, "run="+state) {
+			t.Fatalf("detailContent() = %q, want run=%s", got, state)
+		}
 	}
 }
 
@@ -2319,6 +2323,49 @@ func TestFilterPaneViewsSearchesTextAndPredicates(t *testing.T) {
 	got = filterPaneViews([]paneView{{TaskID: "api-client", Name: "plan task"}}, "task:api")
 	if len(got) != 1 || got[0].TaskID != "api-client" {
 		t.Fatalf("filterPaneViews task predicate = %#v, want api-client task", got)
+	}
+}
+
+// TestFilterPaneViewsRunPredicate pins run: against the 6-value agent-state
+// contract: exact match (equalFold), one glyph-worth of state per pane, and no
+// run:stale — stale lives in TmuxState (state:stale), and stale panes carry no
+// AgentState.
+func TestFilterPaneViewsRunPredicate(t *testing.T) {
+	panes := []paneView{
+		{IssueNum: 1, TmuxState: "live", AgentState: "running"},
+		{IssueNum: 2, TmuxState: "live", AgentState: "working"},
+		{IssueNum: 3, TmuxState: "live", AgentState: "plan"},
+		{IssueNum: 4, TmuxState: "live", AgentState: "blocked"},
+		{IssueNum: 5, TmuxState: "live", AgentState: "idle"},
+		{IssueNum: 6, TmuxState: "live", AgentState: "done"},
+		{IssueNum: 7, TmuxState: "live"},  // 状態不明の live pane
+		{IssueNum: 8, TmuxState: "stale"}, // stale pane は AgentState を持たない
+	}
+	tests := []struct {
+		name  string
+		query string
+		want  []int // matching issue numbers
+	}{
+		{name: "run:running matches only the running pane", query: "run:running", want: []int{1}},
+		{name: "run:working matches only the working pane", query: "run:working", want: []int{2}},
+		{name: "run:plan matches only the plan pane", query: "run:plan", want: []int{3}},
+		{name: "run:blocked matches only the blocked pane", query: "run:blocked", want: []int{4}},
+		{name: "run:idle matches only the idle pane", query: "run:idle", want: []int{5}},
+		{name: "run:done matches only the done pane", query: "run:done", want: []int{6}},
+		{name: "run matches case-insensitively", query: "run:WORKING", want: []int{2}},
+		{name: "run is exact, not substring", query: "run:work", want: []int{}},
+		{name: "run:stale matches nothing", query: "run:stale", want: []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var nums []int
+			for _, p := range filterPaneViews(panes, tt.query) {
+				nums = append(nums, p.IssueNum)
+			}
+			if !slices.Equal(nums, tt.want) {
+				t.Fatalf("filterPaneViews(%q) = %v, want %v", tt.query, nums, tt.want)
+			}
+		})
 	}
 }
 

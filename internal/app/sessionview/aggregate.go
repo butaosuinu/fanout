@@ -27,9 +27,11 @@ type LivePaneInfo struct {
 	WorktreePath string
 	// Title is the tmux pane title; "" when tmux reports none.
 	Title string
-	// AgentState は pane user option @fanout_agent_state の値("running" /
-	// "done")。fanout の起動ラッパーが agent 実行前後に設定する。未設定
-	// (旧版 fanout やラッパー外で起動した pane)や取得失敗時は ""。
+	// AgentState は pane user option @fanout_agent_state の生値。許可 6 値
+	// (running / working / plan / blocked / idle / done)への正規化は
+	// normalizeAgentState が行う。running / done は fanout の起動ラッパー、
+	// それ以外は agent hooks が設定する。未設定(旧版 fanout やラッパー外で
+	// 起動した pane)や取得失敗時は ""。
 	AgentState string
 	// ShellKey is @fanout_shell_key for TUI shell panes.
 	ShellKey string
@@ -273,7 +275,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
 				// state.json は手編集されうる入力なので option 値と同じく
-				// running/done 以外は捨てる。pane 死亡かつ tmux 正常のときは
+				// 許可 6 値以外は捨てる。pane 死亡かつ tmux 正常のときは
 				// tmux 列が stale を伝えるので空のままにする。
 				pv.AgentState = normalizeAgentState(p.AgentStatus)
 			}
@@ -545,24 +547,33 @@ func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 	}
 }
 
+// knownAgentStates は @fanout_agent_state の許可語彙(6 値契約:
+// docs/competitive-herdr.ja.md 提案 A + Codex Plan Mode の plan)。TUI の
+// agentStateGlyphs・web の AGENT_STATE_CLASSES はこの集合と同じキーを持つ。
+var knownAgentStates = map[string]bool{
+	"running": true,
+	"working": true,
+	"plan":    true,
+	"blocked": true,
+	"idle":    true,
+	"done":    true,
+}
+
 // normalizeAgentState は tmux pane user option @fanout_agent_state の値を
-// PaneView.AgentState に正規化する。fanout の起動ラッパーは従来
-// "running" / "done" を設定するが、Plan Mode controller など状態を詳しく
-// 知る経路は同じ option に plan / blocked などを渡せる。それ以外の値
-// (未設定 = 旧版 fanout やラッパー外で起動した pane、あるいは pane 内
-// プロセスが偽装した文字列)は ""(不明)に落とす。
+// PaneView.AgentState に正規化する。running と done は fanout の起動ラッパー
+// (tmuxrun.BuildPaneLaunchCommand)が agent の起動前後に設定し、working /
+// plan / blocked / idle は agent hooks が明示信号として設定する。それ以外の値
+// (未設定 = 旧版 fanout やラッパー外で起動した pane、あるいは pane 内プロセスが
+// 偽装した文字列)は ""(不明)に落とす。
 // #{pane_current_command} ヒューリスティックは使えない: 非対話 sh -lc
 // ラッパー経由の agent はラッパーと同一プロセスグループで動き、tmux は agent
 // 実行中もラッパーシェル名を報告するため、fanout 起動 pane では常に「done」
-// 誤判定になる。
+// 誤判定になる。capture-pane からの状態推定もしない(ペイン内容は攻撃可能面)。
 func normalizeAgentState(raw string) string {
-	state := strings.TrimSpace(raw)
-	switch state {
-	case "running", "working", "idle", "plan", "blocked", "done":
+	if state := strings.TrimSpace(raw); knownAgentStates[state] {
 		return state
-	default:
-		return ""
 	}
+	return ""
 }
 
 // normalizeBlockers keeps PaneView.Blockers non-nil so it serializes as []
@@ -628,7 +639,10 @@ func accumulate(r *Rollup, pv PaneView) {
 	if pv.Alive {
 		r.Live++
 	}
-	if pv.AgentState == "running" {
+	switch pv.AgentState {
+	case "running", "working", "plan":
+		// active 集合: agent が手を動かしている状態。blocked / idle / done は
+		// 「進行中」ではないので数えない。
 		r.Running++
 	}
 	if pv.Blocked {

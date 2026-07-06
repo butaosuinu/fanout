@@ -10,10 +10,10 @@ import {
   AgentStateTag,
   DirtyTag,
   GhLink,
+  isKnownAgentState,
   IssueStateTag,
   PrPill,
   Tag,
-  isKnownAgentState,
 } from "./ui";
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {

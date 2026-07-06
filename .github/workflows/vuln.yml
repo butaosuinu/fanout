@@ -19,9 +19,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
 
