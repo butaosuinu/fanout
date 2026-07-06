@@ -2183,13 +2183,16 @@ func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
 	})
 
 	t.Run("failure", func(t *testing.T) {
+		runner := &fakeLifecycleRunner{code: exitcode.OK}
 		m := newModel(Options{
 			ProjectRoot: "/repo",
-			lifecycle:   &fakeLifecycleRunner{code: exitcode.OK},
+			lifecycle:   runner,
 			CloseChoicePopup: func(CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
 				return lifecycle.ClosePaneOnly, false, errBoom
 			},
 		})
+		m.width = 100
+		m.height = 40
 		m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
 		m.refreshRows()
 
@@ -2203,11 +2206,32 @@ func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
 		if m.closePopupOpen {
 			t.Fatal("closePopupOpen = true after failure")
 		}
-		if m.pendingAction != nil {
-			t.Fatalf("pendingAction = %#v, want nil after failure", m.pendingAction)
+		if m.pendingAction == nil {
+			t.Fatal("pendingAction = nil, want fallback close choice")
+		}
+		if m.mode != modeCloseChoice {
+			t.Fatalf("mode = %v, want close choice fallback", m.mode)
 		}
 		if m.notice != "close popup: boom" {
 			t.Fatalf("notice = %q, want close popup error", m.notice)
+		}
+		if view := m.View(); !strings.Contains(view, "Close #101?") {
+			t.Fatalf("fallback view = %q, want close choice modal", view)
+		}
+
+		updated, next = m.Update(keyRunes("enter"))
+		m = updated.(model)
+		if next == nil {
+			t.Fatal("fallback enter returned nil command, want lifecycle command")
+		}
+		if !m.actionRunning {
+			t.Fatal("actionRunning = false, want true while fallback lifecycle runs")
+		}
+		if _, ok := next().(lifecycleDoneMsg); !ok {
+			t.Fatal("fallback lifecycle command did not return lifecycleDoneMsg")
+		}
+		if runner.closeMode != lifecycle.ClosePaneOnly {
+			t.Fatalf("close mode = %v, want pane only", runner.closeMode)
 		}
 	})
 }

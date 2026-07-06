@@ -288,7 +288,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.closePopupOpen = false
 		if msg.err != nil {
 			m.notice = "close popup: " + msg.err.Error()
-			m.pendingAction = nil
+			if m.pendingAction != nil {
+				m.mode = modeCloseChoice
+				m.actionMessage = ""
+			}
 			return m, nil
 		}
 		if msg.canceled {
