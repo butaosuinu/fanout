@@ -5,10 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/tmuxctl"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 // defaultConsoleKey / defaultConsoleDirectKey are the tmux keys bindConsoleKey
@@ -73,7 +72,7 @@ func cmdFocusConsole(args []string, lg *log.Logger) exitcode.Code {
 	}
 	console, ok := pickConsolePane(from, panes)
 	if !ok {
-		if err := tmuxctl.DisplayMessageToClient(flags.client, "fanout: no live console; run 'fanout' to start one"); err != nil {
+		if err := tmuxrun.DisplayMessageToClient(flags.client, "fanout: no live console; run 'fanout' to start one"); err != nil {
 			lg.Debug("focus-console: %v", err)
 		}
 		return exitcode.OK

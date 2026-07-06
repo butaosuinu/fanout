@@ -7,7 +7,7 @@
   fanout dashboard — PAPER BREEZE redesign mockup (design-approval artifact).
   Self-contained: inline CSS/JS + sample snapshot. Open via file://.
   IDs / class names / data attributes / localStorage key are the FINAL
-  contract for internal/dashboard/static/{index.html,style.css,app.js}.
+  contract for internal/ui/dashboard/static/{index.html,style.css,app.js}.
   Fonts: Google Fonts (user-approved). no-referrer is kept in the real SPA.
   The font stylesheet loads non-blocking (media-swap) so a hanging proxy
   cannot stall first paint — same pattern as the real SPA.
@@ -674,7 +674,7 @@ const SAMPLE = {
           issueState: "CLOSED", wave: 1, waveLabel: "wave1", blockers: [], blocked: false,
           prs: [{ number: 168, state: "MERGED", url: "#", author: "butaosuinu", ci: "pass" }],
           hasMergedPr: true, ciStatus: "pass", diffSummary: "+412/-96", dirtyState: "clean", worktreeErr: "",
-          prompt: "internal/sessionview を新設し、state.json + tmux 生死 + GitHub PR 状態を Snapshot に集約する。" },
+          prompt: "internal/app/sessionview を新設し、state.json + tmux 生死 + GitHub PR 状態を Snapshot に集約する。" },
         { issueNum: 136, slug: "tui-shell-136", displayName: "TUI コンソール骨格(Bubble Tea)",
           agent: "claude", branchName: "fanout/tui-shell-136", paneId: "%7",
           worktreePath: ".fanout/worktrees/tui-shell-136", createdAt: "2026-06-10T14:31:00+09:00",
@@ -753,8 +753,8 @@ const SAMPLE = {
 
 const SAMPLE_PEEK = `$ codex --resume
 ▌ ペイン詳細パネルの peek 実装を継続します
-• Read internal/tui/tui.go (lines 900-1000)
-• Edit internal/tui/detail.go
+• Read internal/ui/tui/tui.go (lines 900-1000)
+• Edit internal/ui/tui/detail.go
     func renderPeek(lines []string) string {
         var b strings.Builder
         for _, l := range lines {
@@ -764,7 +764,7 @@ const SAMPLE_PEEK = `$ codex --resume
         return b.String()
     }
 ✓ go build ./...
-✓ go test ./internal/tui/...  ok  (2.41s)
+✓ go test ./internal/ui/tui/...  ok  (2.41s)
 ? 次: capture-pane のエスケープシーケンス除去を
   tmuxrun 側に寄せるか検討中…`;
 

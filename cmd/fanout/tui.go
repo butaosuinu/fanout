@@ -10,14 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/log"
-	fanoutnotify "github.com/butaosuinu/fanout/internal/notify"
-	"github.com/butaosuinu/fanout/internal/panelayout"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	fanouttui "github.com/butaosuinu/fanout/internal/tui"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 const tuiPaneTitle = "fanout tui"
@@ -34,9 +35,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		lg.Err("%s", err.Error())
 		return exitcode.Env
 	}
-	if versionErr := tmuxrun.CheckMinimumVersion(); versionErr != nil {
-		lg.Err("missing dependencies:")
-		fmt.Fprintf(lg.Stderr(), "  - %s\n", versionErr)
+	if exitOnMissingDeps(missingDeps(depNeeds{tmux: true}), lg) {
 		return exitcode.Env
 	}
 
@@ -239,31 +238,8 @@ func tuiProjectRoot() (string, error) {
 
 func fanoutTUISessionName(projectRoot string) string {
 	sum := sha1.Sum([]byte(projectRoot))
-	base := sanitizeSessionPart(filepath.Base(projectRoot))
+	base := panelaunch.SanitizeSessionPart(filepath.Base(projectRoot))
 	return "fanout-" + base + "-" + hex.EncodeToString(sum[:])[:8]
-}
-
-func sanitizeSessionPart(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		allowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if allowed {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "repo"
-	}
-	return out
 }
 
 func tuiLaunchCommand(commandName, projectRoot string) string {

@@ -9,7 +9,7 @@ code in this repository.
 (`web/`, React + Vite + TypeScript, pnpm). `make install` builds it and places
 it at `$(BINDIR)/fanout`. `make build-go` produces the local `./fanout-go`
 binary the tests exercise; it depends on `make build-web`, which bundles
-`web/` into `internal/dashboard/static/` for `go:embed` — the bundle is never
+`web/` into `internal/ui/dashboard/static/` for `go:embed` — the bundle is never
 committed (only `static/.gitkeep` is tracked; `//go:embed all:static` keeps a
 bundle-less checkout compiling without Node, serving a fallback page). `make
 test` runs the Go unit tests, the web UI vitest suite (`make test-web`), and
@@ -99,25 +99,25 @@ Build the binary with `make build-go` and validate with `make test`.
   skill on the raw prompt (`launchPlanPromptFromTUI`; `/fanout plan` for
   `claude`, `$fanout-plan` for `codex`, never Codex Plan Mode) so `fanout
   plan`'s git root stays at the repo, not a worktree (`cmd/fanout/tui_issue.go`,
-  `cmd/fanout/tui_launch.go`, `internal/tui/newpane_picker.go`,
-  `internal/tui/newpane_assign.go`).
-- `internal/runtime` resolves the git repository root and the tmux target.
+  `cmd/fanout/tui_launch.go`, `internal/ui/tui/newpane_picker.go`,
+  `internal/ui/tui/newpane_assign.go`).
+- `internal/infra/runtime` resolves the git repository root and the tmux target.
   Batch pane-creation mode must be invoked from inside tmux. By default fanout
   targets the invoking pane; `--session` targets a named tmux session.
-- `internal/worktree` owns base branch resolution, refresh, local exclude
+- `internal/infra/worktree` owns base branch resolution, refresh, local exclude
   setup, and `git worktree add` under `.fanout/worktrees/<slug>/`.
-- `internal/tmuxrun` owns direct tmux operations:
+- `internal/infra/tmuxrun` owns direct tmux operations:
   `split-window -d -h -P -F '#{pane_id}'`, pane titles, tiled layout, agent
   command send, best-effort pane kill during cleanup, `ListPaneIDs` (liveness
   for the dashboard), and `BindDashboardKey`.
-- `internal/sessionview` is the shared read-only data layer: it aggregates
+- `internal/app/sessionview` is the shared read-only data layer: it aggregates
   `.fanout/state.json` + tmux liveness + GitHub PR state into a `Snapshot`
   grouped by parent ("Session"); pane rows carry wave/blockers, CI status, the
   tmux pane title, and the original prompt. IO is injected via `Collectors`
   (the `LivePanes` collector returns each live pane's current path and title)
   so it is pure and unit-testable; both the web dashboard (now) and a future
   TUI consume the same `Build`.
-- `internal/dashboard` is the localhost web server: `server.go` (GET-only mux,
+- `internal/ui/dashboard` is the localhost web server: `server.go` (GET-only mux,
   token middleware, SSE, `Cache-Control: no-store` static serving with a
   fallback page when the bundle is absent), `poller.go` (two-tier state/tmux +
   throttled gh refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
@@ -134,23 +134,23 @@ Build the binary with `make build-go` and validate with `make test`.
   tests are integration-first (vitest + testing-library + MSW; SSE via a
   FakeEventSource). `make build-web` emits the bundle into `static/`
   (deterministic names `assets/app.js` / `assets/app.css`, never committed).
-- `internal/agent` maps supported agents (`claude`, `codex`) to launch
+- `internal/core/agent` maps supported agents (`claude`, `codex`) to launch
   commands and validates installed CLIs for live mode. The batch lanes accept
   repeatable per-target agent overrides (`NUM=name` for issue/Project children,
   `task-id=name` for `fanout plan`) and validate only selected targets.
-- `internal/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
+- `internal/infra/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
   The coarse lock covers planning and launching so two fanout invocations do
   not race on the same `(parent, issueNum)` idempotency key. Issue-less plan
   rows use parent `plan:<slug>`, `issueNum: 0`, and `taskId`; `taskId` is an
   additive key used by plan idempotency and task lifecycle.
-- `internal/planspec` owns the pure JSON schema for `fanout plan`: `version`,
+- `internal/core/planspec` owns the pure JSON schema for `fanout plan`: `version`,
   `plan` metadata, task validation, deterministic task slug/branch defaults,
   duplicate/collision checks, and `blocked_by` dependency cycle detection.
-- `internal/naming` deterministically generates slugs and branch names.
+- `internal/core/naming` deterministically generates slugs and branch names.
   `--name` may override slug, display name, and branch. The skills generate
   these flags from issue context; the CLI does not call an LLM.
-- `internal/team` + `internal/msgstore` back the `--team` / `fanout msg`
-  sibling-coordination feature (parent #68, waves #69–#71). `internal/team`
+- `internal/infra/team` + `internal/infra/msgstore` back the `--team` / `fanout msg`
+  sibling-coordination feature (parent #68, waves #69–#71). `internal/infra/team`
   owns the per-parent SQLite bus: `db.go` opens it with `modernc.org/sqlite`
   (pure-Go, no external `sqlite3` binary) in WAL mode at file mode `0600` and
   refuses a group/world-readable or foreign-owned file; `path.go` scopes the
@@ -159,7 +159,7 @@ Build the binary with `make build-go` and validate with `make test`.
   `detect.go` resolves the invoking pane's identity from `.fanout/state.json`
   by `(parent, issueNum)`, with the `[fanout #N of #P]` prompt prefix
   (`FanoutTagRE`) as a fallback; `registry.go` `UpsertPeer` seeds the roster.
-  `internal/msgstore` is the query layer for send/post/inbox/board/mark-read.
+  `internal/infra/msgstore` is the query layer for send/post/inbox/board/mark-read.
   `cmd/fanout/team.go` wires `--team` (briefing roster via `buildTeamContext`
   plus a post-`executePlan` peer seed), and `cmd/fanout/msg.go` is the
   `fanout msg` island. The briefing coordination section is injected
@@ -167,31 +167,31 @@ Build the binary with `make build-go` and validate with `make test`.
   panes, but `briefing.Render` returns the minimal Codex Plan Mode briefing
   before appending it, so `--codex-plan-mode` children are seeded into the
   registry without the coordination section. It is distinct from Claude Code
-  Agent Teams, which is Claude-only and coordinates inside a single session. Messaging is pull-based with one
-  push assist: `fanout msg send` nudges the recipient pane only when
-  `shouldNudge` (`cmd/fanout/msg.go`) allows its `@fanout_agent_state` —
-  today only `running` qualifies. `@fanout_agent_state` carries
-  running/working/plan/blocked/idle/done: the launch wrapper in
-  `internal/tmuxrun` brackets every agent run with running/done, launch-time
-  `--settings` hooks injected by `internal/agent` refine claude panes to
-  working/blocked/idle, and the Codex Plan Mode controller reports
-  working/plan around the fanout-driven initial turn (only on the
-  `thread/settings/update`-unsupported fallback path; the seed path hands the
-  prompt to the interactive TUI and is unobservable by design). When widening
-  the `shouldNudge` allowlist to the richer states, never include blocked — a
-  blocked pane shows a permission/input dialog and the nudge's Enter could
-  activate the focused control.
-- `internal/watch` owns one repository watcher cycle. It is pure at the package
+  Agent Teams, which is Claude-only and coordinates inside a single session.
+  Messaging is pull-based with one push assist: `fanout msg send` nudges the
+  recipient pane only when `shouldNudge` (`internal/app/peermsg`) allows its
+  `@fanout_agent_state` — today only `running` qualifies. `@fanout_agent_state`
+  carries running/working/plan/blocked/idle/done: the launch wrapper in
+  `internal/infra/tmuxrun` brackets every agent run with running/done,
+  launch-time `--settings` hooks injected by `internal/core/agent` refine
+  claude panes to working/blocked/idle, and the Codex Plan Mode controller in
+  `internal/infra/codexapp` reports working/plan around the fanout-driven
+  initial turn (only on the `thread/settings/update`-unsupported fallback path;
+  the seed path hands the prompt to the interactive TUI and is unobservable by
+  design). When widening the `shouldNudge` allowlist to the richer states,
+  never include blocked — a blocked pane shows a permission/input dialog and
+  the nudge's Enter could activate the focused control.
+- `internal/app/watch` owns one repository watcher cycle. It is pure at the package
   boundary: production wires GitHub labels, `.fanout/state.json`, tmux liveness,
   and launch helpers through `watch.IO`, while unit tests inject fakes. The
   engine lists `watcherTriggerLabel` issues, swaps them to
   `watcherRunningLabel` before launch, classifies issues with OPEN children as
   parent fan-outs and issues without OPEN children as standalone panes, applies
   the live-pane budget/backoff, and leaves lifecycle label cleanup to
-  `internal/lifecycle`.
-- `internal/ghissue`, `internal/blockers`, `internal/briefing`,
-  `internal/settings`, `internal/displayname`, `internal/atomicfs`,
-  `internal/log`, `internal/tty`, and `internal/exitcode` hold the remaining
+  `internal/app/lifecycle`.
+- `internal/infra/ghissue`, `internal/core/blockers`, `internal/app/briefing`,
+  `internal/infra/settings`, `internal/infra/displayname`, `internal/infra/atomicfs`,
+  `internal/infra/log`, `internal/infra/tty`, and `internal/core/exitcode` hold the remaining
   reusable pieces. Plan status and blocked-task completion use
   `ghissue.Runner.PRsForBranch` (`gh pr list --head <branch>`) because plan
   tasks have no issue closed-by graph. `briefing.RenderTask` is the plan-task
@@ -226,7 +226,7 @@ Build the binary with `make build-go` and validate with `make test`.
   tokened URL never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI
   decision to dashboard #117, which this implements standalone (no TUI
-  dependency — the future TUI just reuses `internal/sessionview`). Keep it
+  dependency — the future TUI just reuses `internal/app/sessionview`). Keep it
   read-only: do not add mutation endpoints.
 - The label watcher is a TUI-resident, opt-in launcher, not a cron/webhook
   service and not the #107 skill loop. Only user config or environment
@@ -284,7 +284,7 @@ Build the binary with `make build-go` and validate with `make test`.
 ## Test Conventions
 
 Table-driven tests must be readable case-by-case from `go test -v` alone, not
-just from the function name. `internal/team/detect_test.go` is the model.
+just from the function name. `internal/infra/team/detect_test.go` is the model.
 
 - Give every case a `name` field and wrap the loop in
   `t.Run(tt.name, func(t *testing.T) { ... })`. This makes each case a named

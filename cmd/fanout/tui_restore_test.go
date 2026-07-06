@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 func TestRestoreRecordedPanesRebindsLivePaneByTitle(t *testing.T) {

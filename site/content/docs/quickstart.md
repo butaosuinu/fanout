@@ -1,7 +1,7 @@
 ---
 title: Quickstart
 linkTitle: Quickstart
-description: "Your first fan-out in five minutes — bring up parallel panes from a parent issue, and see what happens in between."
+description: "Your first fan-out in five minutes — the steps to bring up parallel panes from a parent issue."
 weight: 20
 kanji: 開
 yomi: quickstart
@@ -9,16 +9,27 @@ yomi: quickstart
 
 ## Your first fan-out (five minutes)
 
-Suppose your parent issue has five OPEN sub-issues. Instead of picking them off one at a time and queueing the rest, fanout starts them all at once: one tmux pane per child, each with its own git worktree, so five agents work in parallel without colliding on each other's edits.
+Suppose your parent issue has three OPEN sub-issues. Instead of picking them off one at a time and queueing the rest, fanout starts them all at once: one tmux pane per child, each with its own git worktree, so three agents work in parallel without colliding on each other's edits.
 
-Pick the agent used for child panes, then start (or attach) a tmux session in the target repository:
+{{< diagram "overview" >}}
+
+No issue tree yet? The bundled `fanout-issues` skill turns a plan into a parent issue with linked children — see [Agent Integrations]({{< relref "/docs/agents" >}}).
+
+Start (or attach) a tmux session:
 
 ```bash
-# Use Claude for child panes
-export FANOUT_AGENT=claude
+tmux new -A -s work
 ```
 
-Preview the plan first. `--dry-run` prints the git worktree + tmux commands without executing them. It creates no worktrees, panes, state rows, or briefing files:
+Then, inside the session, pick the agent and move to the target repository:
+
+```bash
+# Use Claude for child panes, from the repository root
+export FANOUT_AGENT=claude
+cd path/to/repo
+```
+
+Preview the plan first. `--dry-run` prints the git worktree and tmux commands without executing them. It creates no worktrees, panes, state rows, or briefing files:
 
 ```bash
 # Preview commands without creating worktrees, panes, state, or briefings
@@ -38,47 +49,16 @@ Each child gets a pane in the current tmux session, an isolated worktree under `
 
 ## How child issues are declared
 
-Here is how to write your issue tree so fanout picks it up. fanout enumerates children by taking the union of two sources:
-
-- issues formally linked to the parent as **Sub-issues**, and
-- **task-list references in the parent body** — any line matching `- [ ] #NUM ...` contributes `#NUM`.
-
-```text
-- [ ] #124 Extract the parser
-- [ ] #125 Add the --format flag
-- [ ] other/repo#126 Upstream fix   <- skipped: same-repo references only
-```
-
-Task-list references are same-repo only; `owner/repo#NUM` is skipped. Children may be declared via either source or both — the union deduplicates them. Only children whose state is OPEN are processed; closed children never get a pane.
-
-So you can hang five sub-issues off the parent, write a five-line task list in the parent body, or mix both. Either way, every OPEN child becomes a parallel pane.
-
-## What happens during a run
-
-A live run walks these steps:
-
-1. Verifies `gh`, `git`, and `tmux 3.3+` are installed.
-2. Resolves the repository root, the current tmux session and invoking pane, and the agent from `--agent` or `FANOUT_AGENT`.
-3. Enumerates children as the union of Sub-issues and parent task-list rows; only OPEN children are processed.
-4. Reads `.fanout/state.json` and skips children whose `(parent, issueNum)` pair is already recorded.
-5. Writes a briefing for each target with the issue body and a short Requirements checklist.
-6. Creates `.fanout/worktrees/<slug>/` from the refreshed base branch, creates the child pane with `tmux split-window` without selecting it, sets the pane title, re-lays out the window into a comfortable-width grid (falling back to `main-vertical` then `tiled`), then sleeps `--sleep` seconds (default 4) before the next child.
-7. Prints a summary of created / skipped / deferred / failed counts.
-
-> The pane launch prompt stays short on purpose: the full issue body lives in the briefing file, and the agent is told to read it from there. `deferred` only appears with `--unblocked-only`, which holds back children that still have an OPEN blocker.
-
-> In `--dry-run`, fanout prints the future briefing path and size for review, but writes the file only during the live run.
+fanout enumerates children as the union of GitHub Sub-issues and task-list rows in the parent body (`- [ ] #NUM ...`), and only children with `state == "OPEN"` are processed. Task-list references are same-repo only — `owner/repo#NUM` is skipped. See [Workflow]({{< relref "/docs/workflow" >}}) for details on how to write it.
 
 ## Safe to rerun (idempotency)
 
-Idempotent means running the same operation many times leaves the same result as running it once. `.fanout/state.json` records every launched pane keyed by `(parent, issueNum)`, so rerunning the same parent skips children that already have a recorded fanout pane and only creates what is missing:
+`.fanout/state.json` records every launched child, so rerunning the same parent skips children that are already recorded and only creates what is missing:
 
 ```bash
 # Rerun after the first batch — already-recorded children are skipped
 fanout 123
 ```
-
-An existing `.fanout/worktrees/<slug>/` directory without a state row is also treated as already fanned — a migration fallback for pre-state runs or interrupted launches.
 
 ## Choosing the agent
 

@@ -3,27 +3,26 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/briefing"
-	"github.com/butaosuinu/fanout/internal/cliflags"
-	"github.com/butaosuinu/fanout/internal/exitcode"
-	"github.com/butaosuinu/fanout/internal/ghissue"
-	"github.com/butaosuinu/fanout/internal/hooks"
-	"github.com/butaosuinu/fanout/internal/log"
-	"github.com/butaosuinu/fanout/internal/naming"
-	fanoutruntime "github.com/butaosuinu/fanout/internal/runtime"
-	"github.com/butaosuinu/fanout/internal/settings"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/worktree"
+	"github.com/butaosuinu/fanout/internal/app/briefing"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
-
-const fanoutTagPrefix = "[fanout #"
 
 var (
 	version            = "dev"
@@ -85,11 +84,15 @@ func main() {
 		lg = log.New(true)
 	}
 
-	if missing := checkDeps(cfg); len(missing) > 0 {
-		lg.Err("missing dependencies:")
-		for _, d := range missing {
-			fmt.Fprintf(lg.Stderr(), "  - %s\n", d)
-		}
+	// Which deps each mode needs stays here; the probe and printing are shared
+	// (deps.go).
+	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
+	needs := depNeeds{
+		git:  true,
+		gh:   cfg.StatusMode || cfg.CleanupMode || !lifecycle,
+		tmux: !cfg.StatusMode && !lifecycle,
+	}
+	if exitOnMissingDeps(missingDeps(needs), lg) {
 		os.Exit(int(exitcode.Env))
 	}
 
@@ -290,7 +293,7 @@ func resolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*runtimeInfo, exitcod
 	lg.Info("tmux target:  %s", info.Target)
 	lg.Info("project root: %s", info.ProjectRoot)
 
-	if !isGitWorkTree(info.ProjectRoot) {
+	if !gitroot.IsWorkTree(info.ProjectRoot) {
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
@@ -519,7 +522,8 @@ func worktreeNameMatchesIssue(names []string, exactSlug string, issueNum int) bo
 	return false
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder paneStateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: recorder, Palette: c, CommandName: commandName}
 	var result executionResult
 	for i, issue := range targets {
 		// Hydrate body lazily for issues that came from the Sub-issues API
@@ -530,7 +534,7 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			}
 		}
 		// Fail fast: stop after the first failed child launch.
-		if !createPaneForIssue(cfg, lg, info, issue, resolvedSettings, hookConfig, recorder, sharedAcrossParents[issue.Number], c, commandName, teamCtx) {
+		if !launcher.LaunchOK(panelaunch.NewIssueRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents[issue.Number], teamCtx)) {
 			result.Failed++
 			break
 		}
@@ -543,35 +547,4 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 		}
 	}
 	return result
-}
-
-func isGitWorkTree(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = path
-	return cmd.Run() == nil
-}
-
-func checkDeps(cfg *cliflags.Config) []string {
-	var missing []string
-	check := func(cmd, hint string) {
-		if _, err := exec.LookPath(cmd); err != nil {
-			missing = append(missing, hint)
-		}
-	}
-	checkTmux := func() {
-		if err := tmuxrun.CheckMinimumVersion(); err != nil {
-			missing = append(missing, err.Error())
-		}
-	}
-	check("git", "git")
-
-	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
-	if cfg.StatusMode || cfg.CleanupMode || !lifecycle {
-		check("gh", "gh (brew install gh)")
-	}
-
-	if !cfg.StatusMode && !lifecycle {
-		checkTmux()
-	}
-	return missing
 }

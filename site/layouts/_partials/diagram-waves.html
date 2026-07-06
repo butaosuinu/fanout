@@ -1,0 +1,57 @@
+<svg class="dg" viewBox="0 0 800 260" role="img"
+     aria-label="{{ if eq .Language.Lang "ja" }}図: Wave 1 では blocker の無い #124 と #125 だけが起動し、#126 と #127 は deferred。PR がマージされた後に同じコマンドを再実行すると Wave 2 として #126 と #127 が起動する{{ else }}Diagram: Wave 1 launches only unblocked children #124 and #125 while #126 and #127 stay deferred; rerunning the same command after the PRs merge launches #126 and #127 as Wave 2{{ end }}">
+  <defs>
+    <marker id="dg-wv-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" style="fill:var(--ai)"/>
+    </marker>
+  </defs>
+
+  <!-- Wave 1 -->
+  <text class="t-cap" x="28" y="40">Wave 1</text>
+  <text class="t-cmd" x="110" y="40">fanout 123 --unblocked-only</text>
+
+  <rect class="box" x="28" y="58" width="150" height="64" rx="8"/>
+  <text class="t-num" x="44" y="84">#124<tspan class="t-mut"> auth</tspan></text>
+  <circle class="dot-run" cx="160" cy="80" r="3"/>
+  <text class="t-mut" x="44" y="106">running</text>
+
+  <rect class="box" x="192" y="58" width="150" height="64" rx="8"/>
+  <text class="t-num" x="208" y="84">#125<tspan class="t-mut"> docs</tspan></text>
+  <circle class="dot-run" cx="324" cy="80" r="3"/>
+  <text class="t-mut" x="208" y="106">running</text>
+
+  <rect class="box-dash" x="28" y="138" width="150" height="64" rx="8"/>
+  <text class="t-num" x="44" y="164">#126<tspan class="t-mut"> api</tspan></text>
+  <text class="t-mut" x="44" y="186">blocked by #124</text>
+
+  <rect class="box-dash" x="192" y="138" width="150" height="64" rx="8"/>
+  <text class="t-num" x="208" y="164">#127<tspan class="t-mut"> cli</tspan></text>
+  <text class="t-mut" x="208" y="186">blocked by #125</text>
+
+  <!-- rerun arrow -->
+  <line class="arrow" x1="360" y1="130" x2="436" y2="130" marker-end="url(#dg-wv-arrow)"/>
+  <text class="t-lbl" x="398" y="112" text-anchor="middle">{{ if eq .Language.Lang "ja" }}PR がマージ{{ else }}PRs merge{{ end }}</text>
+  <text class="t-lbl" x="398" y="152" text-anchor="middle">{{ if eq .Language.Lang "ja" }}再実行{{ else }}rerun{{ end }}</text>
+
+  <!-- Wave 2 -->
+  <text class="t-cap" x="456" y="40">Wave 2</text>
+  <text class="t-cmd" x="538" y="40">{{ if eq .Language.Lang "ja" }}同じコマンド{{ else }}same command{{ end }}</text>
+
+  <rect class="chip" x="456" y="66" width="150" height="24" rx="12"/>
+  <text class="t-mut" x="472" y="82"><tspan class="ok">✓</tspan> #124 merged</text>
+  <rect class="chip" x="620" y="66" width="150" height="24" rx="12"/>
+  <text class="t-mut" x="636" y="82"><tspan class="ok">✓</tspan> #125 merged</text>
+
+  <rect class="box" x="456" y="138" width="150" height="64" rx="8"/>
+  <text class="t-num" x="472" y="164">#126<tspan class="t-mut"> api</tspan></text>
+  <circle class="dot-run" cx="588" cy="160" r="3"/>
+  <text class="t-mut" x="472" y="186">running</text>
+
+  <rect class="box" x="620" y="138" width="150" height="64" rx="8"/>
+  <text class="t-num" x="636" y="164">#127<tspan class="t-mut"> cli</tspan></text>
+  <circle class="dot-run" cx="752" cy="160" r="3"/>
+  <text class="t-mut" x="636" y="186">running</text>
+
+  <text class="t-lbl" x="400" y="244" text-anchor="middle">{{ if eq .Language.Lang "ja" }}記録済みの子は skip されるので、同じコマンドの再実行が次の wave を開く{{ else }}already-recorded children are skipped, so rerunning the same command opens the next wave{{ end }}</text>
+</svg>

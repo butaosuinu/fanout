@@ -77,12 +77,18 @@ names, command names, and quoted code unchanged.
 The package map: `cmd/fanout` is the command flow (`main.go` dispatch and
 `executePlan`, `tui.go` no-argument console launch, `pane.go` creation
 orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
-`internal/` holds `agent`,
-`cliflags`, `ghissue`, `runtime`, `worktree`, `tmuxrun`, `state`, `naming`,
-`blockers`, `displayname`, `briefing`, `watch`, `team`, `msgstore`, plus
-`atomicfs`/`log`/`tty`/`exitcode`.
+`internal/` is
+organized into four layer directories: `internal/core/` (pure logic —
+`agent`, `blockers`, `exitcode`, `naming`, `planspec`), `internal/app/`
+(use-case orchestration — `briefing`, `cliflags`, `lifecycle`, `panelayout`,
+`sessionview`, `watch`), `internal/infra/` (external process/FS/DB —
+`atomicfs`, `displayname`, `ghissue`, `gitstat`, `hooks`, `log`, `msgstore`,
+`notify`, `runtime`, `selfupdate`, `settings`, `state`, `team`, `tmuxrun`,
+`tty`, `worktree`), and `internal/ui/` (`tui`, `dashboard`). Allowed imports:
+core -> core only; app -> core/app/infra; infra -> core/infra; ui -> all;
+importing `cmd/...` is forbidden. `internal/arch` enforces this in CI.
 
-- Runtime discovery (`internal/runtime`) resolves the git repo root with
+- Runtime discovery (`internal/infra/runtime`) resolves the git repo root with
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux for
   batch pane creation, and targets the invoking pane (`$TMUX_PANE`) unless
   `--session` is supplied. No-argument TUI mode can start from a plain shell by
@@ -92,19 +98,19 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   `tmux split-window -d -h -P -F '#{pane_id}'`, and
   `tmuxrun.BuildPaneLaunchCommand` launches the selected agent through a POSIX
   wrapper while leaving the user's shell after exit.
-- `--agent` or `FANOUT_AGENT` is required. `internal/agent` validates supported
+- `--agent` or `FANOUT_AGENT` is required. `internal/core/agent` validates supported
   agent names and, in live mode, verifies the corresponding CLI is installed.
 - Idempotency is stored in `.fanout/state.json` under `(parent, issueNum)`.
   Live runs hold `.fanout/state.json.lock` while planning and launching so
   parallel invocations cannot create the same child twice.
 - Keep prompts one line (`oneLinePrompt`). Full issue context belongs in
-  `/tmp/fanout-<repo>-<NUM>.md` (`internal/briefing`).
+  `/tmp/fanout-<repo>-<NUM>.md` (`internal/app/briefing`).
 - `--include` widens the child set; `--only` and `--skip` narrow it
   (`filterOnlySkip`; child enumeration in `mergeExtraChildren` via
-  `internal/ghissue`). Prose scanning for implicit children lives in the
+  `internal/infra/ghissue`). Prose scanning for implicit children lives in the
   Claude/Codex skills, not in the CLI.
 - `--unblocked-only` filters out issues with OPEN blockers (`splitBlocked` +
-  `internal/blockers`); `--limit` overflow lands in `Plan.LimitDeferred`.
+  `internal/core/blockers`); `--limit` overflow lands in `Plan.LimitDeferred`.
 - `--name` threads caller-generated names through
   (`cliflags.parseNameArg` -> `NameOverride`). Slug hints become deterministic
   worktree slugs, display names become tmux pane titles, and branch overrides
@@ -113,7 +119,7 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
 - `--status`, `--close`, `--merge`, and `--cleanup` operate from
   `.fanout/state.json`; set `FANOUT_STATE_PATH` to point at a specific state
   file outside the repository checkout.
-- `internal/watch` owns one repository watcher cycle behind the no-argument
+- `internal/app/watch` owns one repository watcher cycle behind the no-argument
   TUI. It lists `watcherTriggerLabel` issues, swaps them to
   `watcherRunningLabel`, launches standalone panes for issues without OPEN
   children, and launches normal parent fan-outs for issues with OPEN children.
@@ -123,11 +129,11 @@ orchestration, `plan.go` filtering, `status.go`, `lifecycle.go`, `report.go`).
   prompt-injection boundary because issue bodies become briefings.
 - `--team` (`cmd/fanout/team.go`) and the `fanout msg` subcommand
   (`cmd/fanout/msg.go`) are sibling-pane peer messaging over a per-parent
-  SQLite bus. `internal/team` owns the DB (`modernc.org/sqlite`, pure-Go — no
+  SQLite bus. `internal/infra/team` owns the DB (`modernc.org/sqlite`, pure-Go — no
   external `sqlite3` binary; file `0600`/owner-only) scoped to
   `/tmp/fanout-<repo>-<parent>.db` (`FANOUT_DB_PATH` overrides), plus pane
   identity detection from `.fanout/state.json` (the `[fanout #N of #P]` prompt
-  prefix is a fallback) and the peer roster; `internal/msgstore` is the
+  prefix is a fallback) and the peer roster; `internal/infra/msgstore` is the
   send/post/inbox/board/mark-read query layer. The briefing coordination
   section is shared by `claude` and `codex` panes — distinct from Claude-only
   Agent Teams. Messaging is pull-based with one push assist: `fanout msg`

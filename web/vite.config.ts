@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-// outDir は Go 側の go:embed 対象 (internal/dashboard/static)。成果物はコミット
+// outDir は Go 側の go:embed 対象 (internal/ui/dashboard/static)。成果物はコミット
 // しない (.gitignore 済み、.gitkeep のみ track)。emptyOutDir:false で .gitkeep を
 // 守る代わりに、残骸掃除は Makefile の build-web が行う。ファイル名はハッシュ
 // なしの決定的な名前 — サーバが Cache-Control: no-store を付けるので stale の
@@ -11,7 +11,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: "../internal/dashboard/static",
+    outDir: "../internal/ui/dashboard/static",
     emptyOutDir: false,
     rollupOptions: {
       input: { app: fileURLToPath(new URL("./index.html", import.meta.url)) },

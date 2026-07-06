@@ -10,11 +10,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/butaosuinu/fanout/internal/agent"
-	"github.com/butaosuinu/fanout/internal/panelayout"
-	"github.com/butaosuinu/fanout/internal/state"
-	"github.com/butaosuinu/fanout/internal/tmuxrun"
-	"github.com/butaosuinu/fanout/internal/worktree"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 type tuiRestoreReport struct {
@@ -262,13 +264,13 @@ func recreateRecordedPane(pane state.Pane, root, session, commandName string) (s
 			return pane, fmt.Errorf("restore pane liveness key on %s: %w", paneID, err)
 		}
 	}
-	_ = tmuxrun.SetPaneTitle(paneID, restorePaneTitle(pane))                           // cosmetic; pane is still usable if tmux rejects title updates
-	_ = tmuxrun.SetPaneLabel(paneID, borderLabel(pane.Parent, restorePaneTitle(pane))) // cosmetic pane-border label
-	_ = tmuxrun.EnablePaneBorderTitles(paneID)                                         // cosmetic pane-border label
-	_ = tmuxrun.SetPaneProjectRoot(paneID, root)                                       // best-effort dashboard keybinding hint
-	_ = tmuxrun.SetPaneWorktreePath(paneID, pane.WorktreePath)                         // best-effort same-worktree action target
+	_ = tmuxrun.SetPaneTitle(paneID, restorePaneTitle(pane))                                      // cosmetic; pane is still usable if tmux rejects title updates
+	_ = tmuxrun.SetPaneLabel(paneID, panelaunch.BorderLabel(pane.Parent, restorePaneTitle(pane))) // cosmetic pane-border label
+	_ = tmuxrun.EnablePaneBorderTitles(paneID)                                                    // cosmetic pane-border label
+	_ = tmuxrun.SetPaneProjectRoot(paneID, root)                                                  // best-effort dashboard keybinding hint
+	_ = tmuxrun.SetPaneWorktreePath(paneID, pane.WorktreePath)                                    // best-effort same-worktree action target
 	if statusPath != "" {
-		status, err := waitForCodexPlanTUIReadyStatus(statusPath, codexPlanTUIStartupTimeout)
+		status, err := codexapp.WaitReady(statusPath, panelaunch.CodexPlanTUIStartupTimeout)
 		_ = os.Remove(statusPath)
 		if err != nil {
 			_ = tmuxrun.KillPane(paneID)
@@ -295,9 +297,9 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 		if err != nil || strings.TrimSpace(fanoutPath) == "" {
 			fanoutPath = commandName
 		}
-		statusPath := codexPlanStatusPath(root, pane.IssueNum, false)
+		statusPath := codexapp.StatusPath(root, pane.IssueNum, false)
 		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " +
-			buildCodexPlanTUIResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
+			codexapp.ResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
 		return command, statusPath, nil
 	}
 	command, err := agent.BuildResolvedResumeCommand(pane.Agent)

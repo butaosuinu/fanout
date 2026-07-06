@@ -1,0 +1,66 @@
+<svg class="dg" viewBox="0 0 800 300" role="img"
+     aria-label="{{ if eq .Language.Lang "ja" }}図: 常駐 TUI コンソールの模式図。Session ヘッダの下に ISSUE / NAME / AGENT / RUN / STATE / PR / DIFF / DIRTY 列のテーブルが並び、選択行の詳細と peek、footer が続く{{ else }}Diagram: mock of the persistent TUI console — a Session header over a table with ISSUE, NAME, AGENT, RUN, STATE, PR, DIFF and DIRTY columns, a detail line with an output peek, and the footer{{ end }}">
+
+  <!-- terminal card -->
+  <rect class="box" x="20" y="16" width="760" height="268" rx="10"/>
+  <rect class="hd" x="20" y="16" width="760" height="30" rx="10"/>
+  <rect class="hd" x="20" y="31" width="760" height="15"/>
+  <text class="t-mut" x="40" y="36">fanout — console</text>
+  <text class="t-mut" x="760" y="36" text-anchor="end">%12</text>
+
+  <!-- session header row -->
+  <text class="t-name" x="40" y="72"><tspan class="t-num">#123</tspan> parent issue</text>
+  <text class="t-mut" x="760" y="72" text-anchor="end">t3 m0 p2 b1 l2</text>
+  <line class="rule" x1="36" y1="84" x2="764" y2="84"/>
+
+  <!-- table header -->
+  <text class="t-mut" x="56" y="104">ISSUE</text>
+  <text class="t-mut" x="130" y="104">NAME</text>
+  <text class="t-mut" x="230" y="104">AGENT</text>
+  <text class="t-mut" x="310" y="104">RUN</text>
+  <text class="t-mut" x="400" y="104">STATE</text>
+  <text class="t-mut" x="490" y="104">PR</text>
+  <text class="t-mut" x="600" y="104">DIFF</text>
+  <text class="t-mut" x="690" y="104">DIRTY</text>
+
+  <!-- selected row -->
+  <rect class="sel" x="36" y="114" width="728" height="24" rx="4"/>
+  <text class="t-num" x="40" y="130">▌</text>
+  <text class="t-num" x="56" y="130">#124</text>
+  <text class="t-name" x="130" y="130">auth</text>
+  <text class="t-name" x="230" y="130">claude</text>
+  <text class="t-name" x="310" y="130"><tspan class="run">●</tspan></text>
+  <text class="t-name" x="400" y="130">OPEN</text>
+  <text class="t-mut" x="490" y="130">—</text>
+  <text class="t-name" x="600" y="130">+182/-40</text>
+  <text class="t-name" x="690" y="130">dirty</text>
+
+  <!-- row 2 -->
+  <text class="t-num" x="56" y="158">#125</text>
+  <text class="t-name" x="130" y="158">docs</text>
+  <text class="t-name" x="230" y="158">codex</text>
+  <text class="t-name" x="310" y="158">✓</text>
+  <text class="t-name" x="400" y="158">OPEN</text>
+  <text class="t-name" x="490" y="158">#250 <tspan class="ok">ci✓</tspan></text>
+  <text class="t-name" x="600" y="158">+96/-12</text>
+  <text class="t-name" x="690" y="158">clean</text>
+
+  <!-- row 3 (deferred) -->
+  <text class="t-num" x="56" y="186">#126</text>
+  <text class="t-name" x="130" y="186">api</text>
+  <text class="t-mut" x="230" y="186">—</text>
+  <text class="t-mut" x="310" y="186">—</text>
+  <text class="t-mut" x="400" y="186">deferred · blocked by #124</text>
+
+  <line class="rule" x1="36" y1="202" x2="764" y2="202"/>
+
+  <!-- detail / peek -->
+  <text class="t-mut" x="40" y="224">#124 · fanout/auth-124 · wave 1 · run=running</text>
+  <text class="t-mut" x="40" y="246">peek: writing token refresh tests…<tspan class="t-num">▌</tspan></text>
+
+  <!-- footer -->
+  <line class="rule" x1="36" y1="258" x2="764" y2="258"/>
+  <text class="t-mut" x="40" y="276">? help</text>
+  <text class="t-mut" x="110" y="276">state 12s</text>
+  <text class="t-mut" x="196" y="276">gh 45s</text>
+</svg>
