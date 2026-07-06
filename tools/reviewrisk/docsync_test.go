@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
@@ -123,18 +124,22 @@ func TestDocSyncReverse(t *testing.T) {
 			t.Errorf("fileRules[%q] (rule %q) is class %v in rules.go but %v in the doc table", p, r.ID, r.Class, got)
 		}
 	}
-	docClasses := collectDocRuleClasses(t)
+	// prefixRules are matched per PREFIX for the same reason: web/src/hooks/ and
+	// web/src/lib/ share the web-transport ID, so dropping one dir from the doc
+	// must still surface as a stale prefix rule.
+	docDirs := collectDocDirClasses(t)
 	for _, pr := range prefixRules {
 		if pr.rule.Source != SourceDocTable {
 			continue
 		}
-		got, ok := docClasses[pr.rule.ID]
+		dir := strings.TrimSuffix(pr.prefix, "/")
+		classes, ok := docDirs[dir]
 		if !ok {
 			t.Errorf("prefixRules[%s] (rule %q, class %v) has no matching package-table row (stale rule — remove it or restore the doc row)", pr.prefix, pr.rule.ID, pr.rule.Class)
 			continue
 		}
-		if got != pr.rule.Class {
-			t.Errorf("prefixRules[%s] (rule %q) is class %v in rules.go but %v in the doc table", pr.prefix, pr.rule.ID, pr.rule.Class, got)
+		if !classes[pr.rule.Class] {
+			t.Errorf("prefixRules[%s] (rule %q) is class %v in rules.go but the doc table assigns %s only %v", pr.prefix, pr.rule.ID, pr.rule.Class, dir, slices.Sorted(maps.Keys(classes)))
 		}
 	}
 }
@@ -256,18 +261,40 @@ func collectDocFilePaths(t *testing.T) map[string]Class {
 	return out
 }
 
-// collectDocRuleClasses probes every package-table row and records, per matched
-// rule ID, the class the doc assigns it. TestDocSyncReverse reads this to detect
-// rules that no longer have a doc row.
-func collectDocRuleClasses(t *testing.T) map[string]Class {
+// collectDocDirClasses returns every directory the package table names — each
+// dir token resolved individually against the row's layer base, plus the bare
+// base for file-only rows (the cmd rows enumerate files but still pin
+// cmd/fanout) — mapped to the set of classes its rows declare. A dir can carry
+// several classes (internal/ui/tui appears in an H, an M, and an A row), so
+// TestDocSyncReverse checks membership, not equality.
+func collectDocDirClasses(t *testing.T) map[string]map[Class]bool {
 	t.Helper()
-	rows := parsePackageTable(t, readArchDoc(t))
-	out := make(map[string]Class)
-	for _, row := range rows {
-		for _, p := range docProbePaths(row) {
-			if r, ok := classifyPath(p); ok {
-				out[r.ID] = r.Class
+	out := make(map[string]map[Class]bool)
+	add := func(dir string, c Class) {
+		if out[dir] == nil {
+			out[dir] = make(map[Class]bool)
+		}
+		out[dir][c] = true
+	}
+	for _, row := range parsePackageTable(t, readArchDoc(t)) {
+		base := docLayerBase[row.layer]
+		var dirTokens []string
+		hasFile := false
+		for _, tok := range backtickTokens(row.packageCell) {
+			if strings.Contains(tok, "*") {
+				continue
 			}
+			if hasKnownExt(tok) {
+				hasFile = true
+			} else {
+				dirTokens = append(dirTokens, tok)
+			}
+		}
+		for _, d := range dirTokens {
+			add(path.Join(base, d), row.class)
+		}
+		if len(dirTokens) == 0 && hasFile && base != "" {
+			add(base, row.class)
 		}
 	}
 	return out

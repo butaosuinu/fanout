@@ -65,10 +65,10 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
 | S3 | skip-added | 追加行に `\bt\.(Skip\|Skipf\|SkipNow)\(`、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)の `^\s*skip\b` |
 | S4 | guard-modified | `internal/arch/` の変更 |
-| S5 | review-gate-modified | `.claude/` と post-work-review gate(`codex/tools/post-work-review*` / `codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
+| S5 | review-gate-modified | `.claude/` と post-work-review gate(`codex/tools/post-work-review*` / `codex/agents/post-work-*` / `codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
 | S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` の変更 |
 | S7 | installer-modified | `install.sh` の変更 |
-| S8 | ci-workflow-deleted | `.github/workflows/` 配下の削除(D)。rename で配下外へ移す場合も含む |
+| S8 | ci-workflow-deleted | `.github/workflows/` 配下の `.yml`/`.yaml` の削除(D)。rename で配下外へ移す・拡張子を変えて無効化する場合も含む |
 
 ### high に押し上げ(S9-S10)
 

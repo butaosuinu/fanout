@@ -145,8 +145,11 @@ func criticalReasons(d Diff) []Reason {
 		// S5 review-gate-modified: any touch of .claude/ or the post-work-review
 		// gate pieces installed from codex/ and claude/ (they produce the review
 		// marker the PR gate checks; weakening them weakens the gate itself).
+		// codex/agents/post-work-* are the reviewer/verifier agent definitions
+		// the gate script drives — same gate, same weight.
 		if touches(fc, ".claude/") ||
 			touches(fc, "codex/tools/post-work-review") ||
+			touches(fc, "codex/agents/post-work-") ||
 			touches(fc, "codex/skills/post-work-review/") ||
 			touches(fc, "claude/skills/post-work-review/") {
 			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})
@@ -159,13 +162,15 @@ func criticalReasons(d Diff) []Reason {
 		if fc.Path == "install.sh" || fc.OldPath == "install.sh" {
 			reasons = append(reasons, Reason{Signal: sigInstallerModified, Level: LevelCritical, File: fc.Path, Detail: "install.sh 変更"})
 		}
-		// S8 ci-workflow-deleted: a deleted workflow file, or a rename that
-		// carries one out of .github/workflows/.
-		if fc.Status == 'D' && strings.HasPrefix(fc.Path, ".github/workflows/") {
+		// S8 ci-workflow-deleted: a deleted workflow file, or a rename that stops
+		// it being one — moving it out of .github/workflows/ OR dropping the
+		// .yml/.yaml extension in place (test.yml -> test.yml.disabled), which
+		// GitHub Actions treats as removal.
+		if fc.Status == 'D' && isWorkflowFile(fc.Path) {
 			reasons = append(reasons, Reason{Signal: sigCIWorkflowDeleted, Level: LevelCritical, File: fc.Path, Detail: "CI workflow 削除"})
 		}
-		if fc.Status == 'R' && strings.HasPrefix(fc.OldPath, ".github/workflows/") && !strings.HasPrefix(fc.Path, ".github/workflows/") {
-			reasons = append(reasons, Reason{Signal: sigCIWorkflowDeleted, Level: LevelCritical, File: fc.Path, Detail: "CI workflow を rename で移動(" + fc.OldPath + ")"})
+		if fc.Status == 'R' && isWorkflowFile(fc.OldPath) && !isWorkflowFile(fc.Path) {
+			reasons = append(reasons, Reason{Signal: sigCIWorkflowDeleted, Level: LevelCritical, File: fc.Path, Detail: "CI workflow を rename で無効化(" + fc.OldPath + ")"})
 		}
 	}
 	// S3 skip-added: an added skip/xit/xdescribe line in a test file.
@@ -320,6 +325,14 @@ func isTestShape(p string) bool {
 
 // isMeasurePath reports whether a path is a measurement yardstick: a golden,
 // fixture, or test-bin file whose deletion removes what a test checks against.
+// isWorkflowFile reports whether p is a file GitHub Actions actually runs:
+// under .github/workflows/ AND carrying the required .yml/.yaml extension.
+// A same-directory rename to another extension stops being a workflow.
+func isWorkflowFile(p string) bool {
+	return strings.HasPrefix(p, ".github/workflows/") &&
+		(strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml"))
+}
+
 func isMeasurePath(p string) bool {
 	return strings.HasPrefix(p, "tests/golden/") ||
 		strings.HasPrefix(p, "tests/fixtures/") ||

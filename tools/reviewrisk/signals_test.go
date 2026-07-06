@@ -185,6 +185,22 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigCIWorkflowDeleted},
 		},
 		{
+			// GitHub Actions only runs .yml/.yaml under workflows/, so an in-place
+			// rename to another extension disables the workflow.
+			name:      "S8 in-place rename dropping the yml extension is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: ".github/workflows/test.yml", Path: ".github/workflows/test.yml.disabled"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigCIWorkflowDeleted},
+		},
+		{
+			name: "S5 post-work-review agent definition change is critical",
+			diff: Diff{
+				Files: []FileChange{{Status: 'M', Path: "codex/agents/post-work-reviewer.md"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
 			name:      "S9 unclassified dashboard file is high",
 			diff:      Diff{Files: []FileChange{{Status: 'A', Path: "internal/ui/dashboard/newthing.go"}}},
 			wantLevel: LevelHigh,
