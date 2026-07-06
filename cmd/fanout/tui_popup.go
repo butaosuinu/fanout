@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -296,7 +297,7 @@ func tuiHelpPopupShellCommand(commandName string, width, height int) string {
 		exe = commandName
 	}
 	parts := []string{
-		shellQuote(exe),
+		run.ShellQuote(exe),
 		tuiHelpPopupCommand,
 		"--width", fmt.Sprintf("%d", width),
 		"--height", fmt.Sprintf("%d", height),
@@ -304,7 +305,7 @@ func tuiHelpPopupShellCommand(commandName string, width, height int) string {
 	// display-popup runs under the tmux server's environment. Forward PATH so a
 	// fallback command name resolves the same way as the parent fanout process.
 	if path := os.Getenv("PATH"); path != "" {
-		parts = append([]string{"PATH=" + shellQuote(path)}, parts...)
+		parts = append([]string{"PATH=" + run.ShellQuote(path)}, parts...)
 	}
 	return strings.Join(parts, " ")
 }
@@ -315,29 +316,29 @@ func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile,
 		exe = commandName
 	}
 	parts := []string{
-		shellQuote(exe),
+		run.ShellQuote(exe),
 		tuiNewPanePopupCommand,
-		"--project-root", shellQuote(projectRoot),
-		"--result-file", shellQuote(resultFile),
-		"--default-agent", shellQuote(defaultAgent),
+		"--project-root", run.ShellQuote(projectRoot),
+		"--result-file", run.ShellQuote(resultFile),
+		"--default-agent", run.ShellQuote(defaultAgent),
 		"--width", fmt.Sprintf("%d", width),
 		"--height", fmt.Sprintf("%d", height),
 	}
 	// Enhanced keyboard input is on by default. Always forward the current value,
 	// including opt-out values, so the helper mirrors the parent TUI.
-	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
+	prefix := fanouttui.EnhancedKeysEnv + "=" + run.ShellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
 	// display-popup runs under the tmux server's environment, not the parent
 	// fanout process's. Forward PATH so the issue picker finds `gh` (and git)
 	// wherever the parent did. Secrets (GH_TOKEN etc.) are deliberately
 	// not inlined: the command line is visible via ps; token-less setups rely
 	// on gh's config-file auth, which needs only HOME.
 	if path := os.Getenv("PATH"); path != "" {
-		prefix = "PATH=" + shellQuote(path) + " " + prefix
+		prefix = "PATH=" + run.ShellQuote(path) + " " + prefix
 	}
 	parts = append([]string{prefix}, parts...)
 	command := strings.Join(parts, " ")
-	markDone := "printf '' > " + shellQuote(doneFile)
-	return "trap " + shellQuote(markDone) + " EXIT HUP INT TERM; " + command
+	markDone := "printf '' > " + run.ShellQuote(doneFile)
+	return "trap " + run.ShellQuote(markDone) + " EXIT HUP INT TERM; " + command
 }
 
 func waitForTUINewPanePopupResult(resultFile, doneFile string, timeout time.Duration) (tuiNewPanePopupResult, error) {

@@ -1,3 +1,7 @@
 # #205 squash: .golangci.yml 追加と gofumpt/goimports 一括整形 (#191)
 # (整形差分のほか .golangci.yml と本ファイルの追加を含む squash コミット)
 cf435be5367f905af17b81ba66a41263dc7f214c
+# 4層再配置 layered 2/10: core/infra 層へ 21 パッケージを移動 (#414)
+c46d183e6945f64d40d9ffe162cf6da1de638aed
+# 4層再配置 layered 3/10: app/ui 層へ 8 パッケージを移動 (#415)
+a2c2fb297df543e8db6ffe73695d25ddd261df78

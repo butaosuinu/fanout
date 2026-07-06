@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"fmt"
@@ -9,6 +9,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
 
+// validateIssueAgents checks the resolved agent for every issue target and
+// --limit-deferred issue. Deferred issues are validated for name/known-agent
+// but not for install presence.
 func validateIssueAgents(cfg *cliflags.Config, issues, limitDeferred []ghissue.Issue) error {
 	targets := make([]agentTarget, 0, len(issues)+len(limitDeferred))
 	for _, issue := range issues {
@@ -29,6 +32,7 @@ func validateIssueAgents(cfg *cliflags.Config, issues, limitDeferred []ghissue.I
 	return validateAgentTargets(cfg, targets)
 }
 
+// validateTaskAgents is the plan-lane variant, keyed by task id.
 func validateTaskAgents(cfg *cliflags.Config, tasks, limitDeferred []planspec.Task) error {
 	targets := make([]agentTarget, 0, len(tasks)+len(limitDeferred))
 	for _, task := range tasks {
