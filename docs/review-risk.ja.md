@@ -157,11 +157,14 @@ merge ref 側 — PR が編集した後の定義 — で実行される。PR が
 `pull_request_target` を使い常に base ブランチ側の定義を実行する。base 側で走る
 ため PR からは無効化できず、PR コードは一切実行しない(checkout は base のみ、PR
 head は `git fetch` で取り込んで diff を取るだけ)。risk ツール系のパスに差分が
-あるときだけ critical ラベルと sticky コメントを固定し、なければ即終了する。
+あるときだけ critical ラベルとコメントを固定し、なければ即終了する。guard の
+コメントは judge とは別マーカー `<!-- review-risk-guard -->` の独立 sticky
+comment — guard を剥がした PR 側 workflow が `review-risk` 側のコメントやラベルを
+後から上書きしても、guard の判定はコメントとして残る(push ごとに再主張もされる)。
 
-限界: 同一 repo の PR はどの workflow からも書き込み token を得られるため、この
-ラベルは悪意ある作者に対する防御ではなく advisory にとどまる(この境界は設計
-どおり)。
+限界: 同一 repo の PR はどの workflow からも書き込み token を得られるため、
+ラベル自体は悪意ある作者に対する防御ではなく advisory にとどまる(この境界は
+設計どおり)。
 
 判定はブランチ保護ルールに足さない。CI green と level ラベルは別軸で、
 critical でも CI が通ればマージ自体は可能 — 人間が読むかどうかの判断材料を
