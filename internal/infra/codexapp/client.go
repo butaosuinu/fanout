@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,7 +24,9 @@ type appServerMessage struct {
 // client is a JSON-RPC client over one websocket connection to a Codex
 // app-server.
 type client struct {
-	conn *websocketJSONConn
+	mu     sync.Mutex
+	conn   *websocketJSONConn
+	closed bool
 }
 
 // requester is the request-only slice of client that the Plan Mode setup
@@ -78,26 +81,57 @@ func (c *client) Notify(method string) error {
 }
 
 func (c *client) Close() {
-	if c == nil || c.conn == nil {
+	conn := c.closeConn()
+	if conn == nil {
 		return
 	}
-	conn := c.conn
-	c.conn = nil
 	_ = conn.Close()
 }
 
 func (c *client) send(v any) error {
-	if c == nil || c.conn == nil {
+	conn, ok := c.activeConn()
+	if !ok {
 		return io.ErrClosedPipe
 	}
-	return c.conn.Send(v)
+	return conn.Send(v)
 }
 
 func (c *client) receive() (appServerMessage, error) {
-	if c == nil || c.conn == nil {
+	conn, ok := c.activeConn()
+	if !ok {
 		return appServerMessage{}, io.ErrClosedPipe
 	}
-	return c.conn.Receive()
+	return conn.Receive()
+}
+
+func (c *client) canWatch() bool {
+	_, ok := c.activeConn()
+	return ok
+}
+
+func (c *client) activeConn() (*websocketJSONConn, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.conn == nil {
+		return nil, false
+	}
+	return c.conn, true
+}
+
+func (c *client) closeConn() *websocketJSONConn {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	return c.conn
 }
 
 func sendAppRequest(client sender, id, method string, params any) error {

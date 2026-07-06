@@ -416,7 +416,7 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 }
 
 func canWatchAppServer(client *client) bool {
-	return client != nil && client.conn != nil
+	return client != nil && client.canWatch()
 }
 
 func completedAppServerDrain() chan error {

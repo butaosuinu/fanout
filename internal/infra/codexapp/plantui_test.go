@@ -1,6 +1,7 @@
 package codexapp
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCodexPlanSettingsUpdateParamsUsesPlanMode(t *testing.T) {
@@ -367,13 +369,45 @@ func TestDrainCodexAppServerSkipsPlanWhenClientClosed(t *testing.T) {
 	}
 }
 
-func TestClientCloseClearsConnectionForWatchGate(t *testing.T) {
+func TestClientCloseClosesWatchGate(t *testing.T) {
 	client := &client{conn: &websocketJSONConn{}}
 
 	client.Close()
 
 	if canWatchAppServer(client) {
 		t.Fatal("canWatchAppServer() = true after Close, want false")
+	}
+}
+
+func TestClientCloseUnblocksReceive(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer peer.Close()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	client := &client{conn: &websocketJSONConn{conn: conn, br: bufio.NewReader(conn)}}
+	receiveDone := make(chan error, 1)
+	go func() {
+		_, err := client.receive()
+		receiveDone <- err
+	}()
+
+	client.Close()
+
+	select {
+	case err := <-receiveDone:
+		if err == nil {
+			t.Fatal("receive error = nil after Close, want error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("receive did not unblock after Close")
+	}
+	peer.Close()
+	<-peerDone
+	if canWatchAppServer(client) {
+		t.Fatal("canWatchAppServer() = true after receive Close, want false")
 	}
 }
 
