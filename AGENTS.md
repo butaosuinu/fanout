@@ -92,22 +92,23 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `tui*.go` (no-argument console wiring; the prompt-mode plan fan-out
   launches one coordinator pane at the project root so `fanout plan`'s git
   root stays at the repo, never Codex Plan Mode), and `tui_popup.go`
-  (self-exec popup subcommands). `main.go` / `tui_popup.go` /
-  `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` are class H;
-  the remaining cmd files (flag validation and thin dispatch into app) are
+  (self-exec popup subcommands). `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
+  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` are class H; the
+  remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
   `agent` (supported agent names, CLI validation for live mode; allowed
   `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
   schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
-  generation), and the
-  AI-reviewable `blockers`/`exitcode`/`parentref`/`fanset`/`cliview`.
+  generation; identity-deciding, class M with `parentref`/`fanset`), and the
+  AI-reviewable `blockers`/`exitcode`/`cliview`.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch`, `lifecycle`, `watch` (the label-watcher cycle, pure at the
   package boundary via `watch.IO`), and `briefing` (the prompt text injected
   into agents) are class H; `sessionview` (the read-only `Snapshot`
   aggregator shared by the web dashboard and a future TUI), `panelayout`,
-  `run`, `statusreport`, and `peermsg` are class M; `cliflags` is class A.
+  `run`, `statusreport`, `peermsg`, and `cliflags` (flag validation that
+  decides main's lifecycle branches) are class M.
 - `internal/infra` talks to external processes, the filesystem, and the team
   SQLite bus: `state` (`.fanout/state.json` + its lock), `worktree` (`git
   worktree add` under `.fanout/worktrees/<slug>/`), `hooks`, `selfupdate`,
@@ -115,16 +116,17 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `modernc.org/sqlite`, WAL mode, file mode `0600`, DB scoped to
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
-  prompt prefix as fallback) are class H; `ghissue`, `gitstat`,
-  `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git
-  root + tmux target resolution), `settings`, `displayname`, and `codexapp`
-  are class M; `atomicfs`, `log`, `tty`, `execx`, `gitroot`, and `browser`
-  are class A.
+  prompt prefix as fallback), and `settings` (the safety gate that blocks
+  repo config from enabling the watcher or notification targets) are class
+  H; `ghissue`, `gitstat`,
+  `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
+  and `atomicfs` (the shared write path for state.json and the tokened
+  dashboard.json) are class M; `log`, `tty`, `execx`, `gitroot`, and
+  `browser` are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
   `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
-  `.fanout/dashboard.json` reuse/trust gate) are class H; `poller.go`,
-  `peek.go` (`GET /api/peek`), `plan.go` (`GET /api/plan`), `sse.go`, and
-  `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
+  `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class
+  H; `poller.go`, `sse.go`, and `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
   cleanup wiring and confirmation flow) is class H, rendering/formatting is
   class A, and the remaining key/form/polling wiring is class M.
 
