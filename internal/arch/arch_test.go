@@ -25,7 +25,8 @@ const (
 	layerInfra layer = "infra"
 	layerUI    layer = "ui"
 	layerCmd   layer = "cmd"
-	layerMeta  layer = "meta" // internal/arch itself: test-only, imports no module packages
+	layerTools layer = "tools" // repo meta-tooling under tools/: stdlib-only, imports no module packages
+	layerMeta  layer = "meta"  // internal/arch itself: test-only, imports no module packages
 )
 
 // explicitLayers classifies the packages that live outside the four layer
@@ -47,6 +48,7 @@ var prefixLayers = []struct {
 	{"internal/infra/", layerInfra},
 	{"internal/ui/", layerUI},
 	{"cmd/", layerCmd},
+	{"tools/", layerTools},
 }
 
 // allowedImports is the layer dependency direction: a key layer may import
@@ -60,6 +62,9 @@ var allowedImports = map[layer]map[layer]bool{
 	layerInfra: {layerCore: true, layerInfra: true},
 	layerUI:    {layerCore: true, layerApp: true, layerInfra: true, layerUI: true},
 	layerCmd:   {layerCore: true, layerApp: true, layerInfra: true, layerUI: true},
+	// tools may import only tools; TestToolsStdlibOnly further bans even that,
+	// pinning the tree to the standard library alone.
+	layerTools: {layerTools: true},
 }
 
 // legacyDirectionAllowlist grandfathers layer violations that existed before
@@ -168,8 +173,8 @@ var (
 	scanErr  error
 )
 
-// repoFiles parses every *.go file under internal/ and cmd/ (imports only),
-// once per test binary, and resolves the module path from go.mod.
+// repoFiles parses every *.go file under internal/, cmd/, and tools/ (imports
+// only), once per test binary, and resolves the module path from go.mod.
 func repoFiles(t *testing.T) []goFile {
 	t.Helper()
 	scanOnce.Do(func() { scanned, scanErr = scanRepo() })
@@ -223,8 +228,15 @@ func scanRepo() (repoScan, error) {
 	}
 	fset := token.NewFileSet()
 	scan := repoScan{root: root, modulePath: modPath}
-	for _, top := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, top), func(p string, d fs.DirEntry, err error) error {
+	for _, top := range []string{"internal", "cmd", "tools"} {
+		topPath := filepath.Join(root, top)
+		// A checkout without one of these trees (e.g. tools/ deleted) still
+		// exercises the others; TestScanSanity turns the resulting gap into a
+		// clear counts[...] == 0 failure instead of a fatal walk error here.
+		if _, statErr := os.Stat(topPath); errors.Is(statErr, fs.ErrNotExist) {
+			continue
+		}
+		err := filepath.WalkDir(topPath, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
@@ -272,9 +284,9 @@ func scanRepo() (repoScan, error) {
 	return scan, nil
 }
 
-// TestAllPackagesClassified guarantees every package under internal/ and cmd/,
-// and every module-internal import target, resolves to a layer, so a new
-// package cannot ship unclassified.
+// TestAllPackagesClassified guarantees every package under internal/, cmd/, and
+// tools/, and every module-internal import target, resolves to a layer, so a
+// new package cannot ship unclassified.
 func TestAllPackagesClassified(t *testing.T) {
 	seen := make(map[string]bool)
 	var unclassified []string
@@ -415,13 +427,40 @@ func TestCorePurity(t *testing.T) {
 	}
 }
 
-// TestPackageMainOnlyInCmd pins package main declarations to cmd/fanout and
-// forbids every package from importing cmd/... .
+// TestToolsStdlibOnly pins the tools/ tree to standard-library imports only:
+// no module-internal packages (stronger than the layer direction, which would
+// permit tools -> tools) and no third-party modules. This keeps repo meta-tools
+// physically separate from product code at the directory level, so a PR that
+// touches tools/ can never reach into internal/ or cmd/.
+func TestToolsStdlibOnly(t *testing.T) {
+	for _, f := range repoFiles(t) {
+		if l, ok := classify(f.pkgDir); !ok || l != layerTools {
+			continue
+		}
+		for _, imp := range f.imports {
+			if rel, ok := moduleRel(imp.path); ok {
+				t.Errorf("%s:%d: %s may not import %s (tools/ is stdlib-only, no module-internal imports)", f.relPath, imp.line, f.pkgDir, rel)
+				continue
+			}
+			if !stdlibImport(imp.path) {
+				t.Errorf("%s:%d: %s may not import %q (tools/ is stdlib-only, no third-party modules)", f.relPath, imp.line, f.pkgDir, imp.path)
+			}
+		}
+	}
+}
+
+// TestPackageMainOnlyInCmd pins package main declarations to cmd/fanout (the
+// one product composition root) and tools/ subdirectories (repo meta-tools,
+// each its own main, kept stdlib-only by TestToolsStdlibOnly), and forbids
+// every package from importing cmd/... . A bare tools/ file is not allowed:
+// classify() leaves tools/-direct files unclassified, so every tool must live
+// in its own subdirectory.
 func TestPackageMainOnlyInCmd(t *testing.T) {
 	for _, f := range repoFiles(t) {
 		underCmdFanout := f.pkgDir == "cmd/fanout" || strings.HasPrefix(f.pkgDir, "cmd/fanout/")
-		if f.pkgName == "main" && !underCmdFanout {
-			t.Errorf("%s:%d: package main is only allowed under cmd/fanout", f.relPath, f.pkgLine)
+		underTools := strings.HasPrefix(f.pkgDir, "tools/")
+		if f.pkgName == "main" && !underCmdFanout && !underTools {
+			t.Errorf("%s:%d: package main is only allowed under cmd/fanout or tools/", f.relPath, f.pkgLine)
 		}
 		for _, imp := range f.imports {
 			if imp.path != scanned.modulePath+"/cmd" && !strings.HasPrefix(imp.path, scanned.modulePath+"/cmd/") {
@@ -443,8 +482,8 @@ func TestScanSanity(t *testing.T) {
 		top, _, _ := strings.Cut(f.pkgDir, "/")
 		counts[top]++
 	}
-	if counts["internal"] == 0 || counts["cmd"] == 0 {
-		t.Errorf("scanRepo() saw internal=%d cmd=%d files, want both > 0", counts["internal"], counts["cmd"])
+	if counts["internal"] == 0 || counts["cmd"] == 0 || counts["tools"] == 0 {
+		t.Errorf("scanRepo() saw internal=%d cmd=%d tools=%d files, want all > 0", counts["internal"], counts["cmd"], counts["tools"])
 	}
 	if scanned.modulePath == "" || strings.ContainsAny(scanned.modulePath, " \t\"") {
 		t.Errorf("readModulePath() = %q, want a plausible module path", scanned.modulePath)

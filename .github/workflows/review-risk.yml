@@ -1,0 +1,104 @@
+name: review-risk
+
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: review-risk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-risk:
+    name: PR review risk
+    runs-on: ubuntu-latest
+    # Fork PRs get a github.token without label/comment write access; skip
+    # rather than fail noisily.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The judge step compiles and runs PR-authored Go code; do not leave
+          # the write-scoped job token in .git/config for it to read. The gh
+          # steps below receive the token via GH_TOKEN instead.
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Judge review risk
+        id: risk
+        run: |
+          set -euo pipefail
+          # Fail-closed self-modification guard: when the PR touches the risk
+          # tool or this workflow, the PR-side implementation cannot be trusted
+          # to judge itself (it could weaken S6). Skip running it and pin the
+          # verdict to critical — the unmodified tool would report S6 here anyway.
+          base="$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)"
+          if git diff --name-only "$base" HEAD | grep -qE '^(tools/reviewrisk/|\.github/workflows/review-risk\.yml$)'; then
+            {
+              echo '<!-- review-risk -->'
+              echo '## Review risk: **CRITICAL**'
+              echo
+              echo '人間精読必須。risk 判定ツール自身(`tools/reviewrisk/` または `review-risk.yml`)が変更されているため、PR 側ツールの判定は使わず workflow が fail-closed で critical に固定しました(S6 相当)。'
+            } > comment.md
+            echo "level=critical" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          go run ./tools/reviewrisk --base "origin/$GITHUB_BASE_REF" --format json > risk.json
+          go run ./tools/reviewrisk --base "origin/$GITHUB_BASE_REF" --format markdown > comment.md
+          echo "level=$(jq -r .level risk.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Apply review:<level> label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          LEVEL: ${{ steps.risk.outputs.level }}
+        run: |
+          set -euo pipefail
+
+          # Idempotent label creation: ignore the error when a label already
+          # exists rather than forcing a color update via --force.
+          gh label create "review:none" --color cccccc --description "PR review risk: none" 2>/dev/null || true
+          gh label create "review:low" --color 0e8a16 --description "PR review risk: low" 2>/dev/null || true
+          gh label create "review:medium" --color fbca04 --description "PR review risk: medium" 2>/dev/null || true
+          gh label create "review:high" --color d93f0b --description "PR review risk: high" 2>/dev/null || true
+          gh label create "review:critical" --color b60205 --description "PR review risk: critical" 2>/dev/null || true
+
+          existing_labels="$(gh pr view "$PR" --json labels --jq '.labels[].name')"
+          while IFS= read -r label; do
+            case "$label" in
+              review:*)
+                if [ "$label" != "review:$LEVEL" ]; then
+                  gh pr edit "$PR" --remove-label "$label"
+                fi
+                ;;
+            esac
+          done <<< "$existing_labels"
+
+          gh pr edit "$PR" --add-label "review:$LEVEL"
+
+      - name: Update sticky comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # The startswith marker must match reviewRiskMarker in tools/reviewrisk/report.go.
+          existing_id="$(gh api "repos/$GH_REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- review-risk -->"))][0].id // empty')"
+
+          if [ -n "$existing_id" ]; then
+            gh api --method PATCH "repos/$GH_REPO/issues/comments/$existing_id" -F body=@comment.md
+          else
+            gh api --method POST "repos/$GH_REPO/issues/$PR/comments" -F body=@comment.md
+          fi
