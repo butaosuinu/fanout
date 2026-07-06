@@ -88,14 +88,16 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   running the fanout-plan skill so `fanout plan`'s git root stays at the repo,
   never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` are class H; the remaining cmd files (flag validation
-  and thin dispatch into app) are class M.
+  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` are class H; the
+  remaining cmd files (flag validation and thin dispatch into app) are
+  class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
   `agent` (supported agent names, CLI validation for live mode; allowed
   `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
   schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
   generation; identity-deciding, class M with `parentref`/`fanset`), and the
-  AI-reviewable `blockers`/`exitcode`/`cliview`.
+  AI-reviewable `exitcode`/`cliview` (`blockers` is class M: it drives
+  --unblocked-only launch selection and wave computation).
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch` (pane creation), `lifecycle`, `watch` (the label-watcher
   cycle, pure at the package boundary via `watch.IO`), and `briefing` (the
@@ -112,12 +114,12 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
   repo config from enabling the watcher or notification targets) are class
-  H; `ghissue`,
+  H; `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
   `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`,
   `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
-  dashboard.json) are class M; `log`, `tty`, `execx`, `gitroot`, and
-  `browser` are class A.
+  dashboard.json) and `gitroot` (project/state-root resolution input) are class M; `log`,
+  `tty`, `execx`, and `browser` are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
   `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
   `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class

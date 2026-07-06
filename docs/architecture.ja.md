@@ -60,7 +60,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
 | cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` | dispatch・self-exec・launch 配線・pane identity 検証・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
-| infra | `ghissue` | GitHub issue/PR 読み取り | M |
+| infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
 | infra | `msgstore` | send/post/inbox/board/mark-read | M |
@@ -69,6 +69,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `displayname` | 表示名生成 | M |
 | infra | `codexapp` | Codex app-server クライアント | M |
 | infra | `atomicfs` | 原子的ファイル書き込み(state.json / token 入り dashboard.json の共通経路) | M |
+| infra | `gitroot` | git root 探索(project root・state root・親 repo 判定の入力) | M |
 | app | `panelayout` | ペインレイアウト計算 | M |
 | app | `sessionview` | state + tmux + gh を集約する Snapshot | M |
 | app | `run` | `executePlan` の実行ロジック | M |
@@ -80,16 +81,15 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | core | `naming` | slug・branch 名生成(worktree/branch identity を決める) | M |
 | core | `parentref` | 親参照の正規化(state/sessionview の parent key) | M |
 | core | `fanset` | fan-out 対象集合の計算(launch 対象の選別) | M |
+| core | `blockers` | ブロッカー判定(--unblocked-only の起動対象選別・wave 計算の入力) | M |
 | ui | `dashboard`(`poller.go` / `sse.go` / `embed.go`) | state/tmux ポーリング・SSE・embed | M |
 | ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` / `paneview.go` ほか) | キー処理・フォーム・ポーリングの配線。`paneview.go` は lifecycle 対象 state root の選択入力(`sourceProjectRoot`)を含む | M |
-| core | `blockers` | ブロッカー判定 | A |
 | core | `exitcode` | 終了コード定義 | A |
 | core | `cliview` | CLI 出力の整形 | A |
 | ui | `tui`(描画・整形: `view.go` / `compact.go` / `styles.go` ほか) | TUI の View 層 | A |
 | infra | `log` | ロギング | A |
 | infra | `tty` | 端末判定 | A |
 | infra | `execx` | コマンド実行の薄いラッパ | A |
-| infra | `gitroot` | git root 探索 | A |
 | infra | `browser` | ブラウザ起動 | A |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/hooks` / `web/src/lib` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
