@@ -104,27 +104,37 @@ func TestDocSyncPackageTable(t *testing.T) {
 // TestDocSyncReverse is the reverse direction: every SourceDocTable rule in
 // rules.go must correspond to a package-table row of the same class. A rule with
 // no matching row is stale (the doc dropped it); a class mismatch is a conflict.
+// fileRules are matched per PATH, not per rule ID: several files share one ID
+// (e.g. the cmd H set), so an ID-level check would keep passing after the doc
+// dropped a single file's row while its sibling still supplies the ID.
 func TestDocSyncReverse(t *testing.T) {
-	docClasses := collectDocRuleClasses(t)
-	check := func(id string, class Class, where string) {
-		got, ok := docClasses[id]
-		if !ok {
-			t.Errorf("%s (rule %q, class %v) has no matching package-table row (stale rule — remove it or restore the doc row)", where, id, class)
-			return
-		}
-		if got != class {
-			t.Errorf("%s (rule %q) is class %v in rules.go but %v in the doc table", where, id, class, got)
-		}
-	}
+	docFiles := collectDocFilePaths(t)
 	// fileRules iteration order is undefined, but each check is independent.
 	for p, r := range fileRules {
-		if r.Source == SourceDocTable {
-			check(r.ID, r.Class, "fileRules["+p+"]")
+		if r.Source != SourceDocTable {
+			continue
+		}
+		got, ok := docFiles[p]
+		if !ok {
+			t.Errorf("fileRules[%q] (rule %q, class %v) is not enumerated in the package table (stale rule — remove it or restore the doc row)", p, r.ID, r.Class)
+			continue
+		}
+		if got != r.Class {
+			t.Errorf("fileRules[%q] (rule %q) is class %v in rules.go but %v in the doc table", p, r.ID, r.Class, got)
 		}
 	}
+	docClasses := collectDocRuleClasses(t)
 	for _, pr := range prefixRules {
-		if pr.rule.Source == SourceDocTable {
-			check(pr.rule.ID, pr.rule.Class, "prefixRules["+pr.prefix+"]")
+		if pr.rule.Source != SourceDocTable {
+			continue
+		}
+		got, ok := docClasses[pr.rule.ID]
+		if !ok {
+			t.Errorf("prefixRules[%s] (rule %q, class %v) has no matching package-table row (stale rule — remove it or restore the doc row)", pr.prefix, pr.rule.ID, pr.rule.Class)
+			continue
+		}
+		if got != pr.rule.Class {
+			t.Errorf("prefixRules[%s] (rule %q) is class %v in rules.go but %v in the doc table", pr.prefix, pr.rule.ID, pr.rule.Class, got)
 		}
 	}
 }
@@ -214,6 +224,36 @@ func docProbePaths(row docRow) []string {
 		paths = append(paths, path.Join(base, d, "__probe__"+ext))
 	}
 	return paths
+}
+
+// collectDocFilePaths returns every concrete file path the package table
+// enumerates (file tokens scoped by their dir tokens), with the row's class.
+// TestDocSyncReverse matches fileRules against it per path.
+func collectDocFilePaths(t *testing.T) map[string]Class {
+	t.Helper()
+	out := make(map[string]Class)
+	for _, row := range parsePackageTable(t, readArchDoc(t)) {
+		base := docLayerBase[row.layer]
+		var dirTokens, fileTokens []string
+		for _, tok := range backtickTokens(row.packageCell) {
+			if strings.Contains(tok, "*") {
+				continue
+			}
+			if hasKnownExt(tok) {
+				fileTokens = append(fileTokens, tok)
+			} else {
+				dirTokens = append(dirTokens, tok)
+			}
+		}
+		dirPrefix := base
+		for _, d := range dirTokens {
+			dirPrefix = path.Join(dirPrefix, d)
+		}
+		for _, f := range fileTokens {
+			out[path.Join(dirPrefix, f)] = row.class
+		}
+	}
+	return out
 }
 
 // collectDocRuleClasses probes every package-table row and records, per matched

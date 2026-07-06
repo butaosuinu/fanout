@@ -117,6 +117,32 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigSkipAdded},
 		},
 		{
+			name: "S3 added describe.skip in the web test harness is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "web/src/test/setup.ts"}},
+				AddedLines: map[string][]string{"web/src/test/setup.ts": {"describe.skip('flaky suite', () => {"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
+			name: "S3 added vitest skipIf variant is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "web/src/lib/sort.test.ts"}},
+				AddedLines: map[string][]string{"web/src/lib/sort.test.ts": {"test.skipIf(isCI)('sorts', () => {})"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
+			name: "S5 post-work-review gate script change is critical",
+			diff: Diff{
+				Files: []FileChange{{Status: 'M', Path: "codex/tools/post-work-review.sh"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
 			name:      "S4 arch change is critical",
 			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "internal/arch/arch.go"}}},
 			wantLevel: LevelCritical,
@@ -200,6 +226,21 @@ func TestEvaluate(t *testing.T) {
 			},
 			wantLevel: LevelLow,
 			notSig:    []string{sigInvariantHit},
+		},
+		{
+			// Suppression is per-file: a string occurrence added in another file
+			// (a comment, a fixture) must not mask a real reference removal.
+			name: "S10 FANOUT_ removal fires even when another file adds the same name",
+			diff: Diff{
+				Files: []FileChange{
+					{Status: 'M', Path: "internal/app/sessionview/collect.go"},
+					{Status: 'M', Path: "internal/infra/log/log.go"},
+				},
+				RemovedLines: map[string][]string{"internal/app/sessionview/collect.go": {"os.Getenv(\"FANOUT_STATE_PATH\")"}},
+				AddedLines:   map[string][]string{"internal/infra/log/log.go": {"// see FANOUT_STATE_PATH"}},
+			},
+			wantLevel: LevelHigh,
+			wantSig:   []string{sigInvariantHit},
 		},
 		{
 			name: "S10 renamed FANOUT_ fires for the dropped old name only",

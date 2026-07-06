@@ -36,9 +36,12 @@ const (
 
 // Skip-marker greps for S3, one per test flavor. goSkipRe requires the call
 // paren so t.Skip/Skipf/SkipNow match but t.Skipped() (a status read) does not.
+// tsSkipRe covers the vitest skip spellings: .skip(...), .skipIf(...), chained
+// modifiers like test.skip.concurrent(...), the { skip: true } option, and the
+// x-prefixed aliases.
 var (
 	goSkipRe   = regexp.MustCompile(`\bt\.(Skip|Skipf|SkipNow)\(`)
-	tsSkipRe   = regexp.MustCompile(`\.skip\(|\bxit\(|\bxdescribe\(`)
+	tsSkipRe   = regexp.MustCompile(`\.skip(If)?\s*\(|\.skip\.|\bskip:\s*true|\bxit\(|\bxdescribe\(|\bxtest\(`)
 	batsSkipRe = regexp.MustCompile(`^\s*skip\b`)
 )
 
@@ -139,9 +142,14 @@ func criticalReasons(d Diff) []Reason {
 		if touches(fc, "internal/arch/") {
 			reasons = append(reasons, Reason{Signal: sigGuardModified, Level: LevelCritical, File: fc.Path, Detail: "層ガード(internal/arch)変更"})
 		}
-		// S5 review-gate-modified: any touch of .claude/.
-		if touches(fc, ".claude/") {
-			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude)変更"})
+		// S5 review-gate-modified: any touch of .claude/ or the post-work-review
+		// gate pieces installed from codex/ and claude/ (they produce the review
+		// marker the PR gate checks; weakening them weakens the gate itself).
+		if touches(fc, ".claude/") ||
+			touches(fc, "codex/tools/post-work-review") ||
+			touches(fc, "codex/skills/post-work-review/") ||
+			touches(fc, "claude/skills/post-work-review/") {
+			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})
 		}
 		// S6 risk-tool-modified: this tool or its workflow.
 		if touches(fc, "tools/reviewrisk/") || fc.Path == riskWorkflow || fc.OldPath == riskWorkflow {
@@ -192,44 +200,38 @@ func invariantReasons(d Diff) []Reason {
 }
 
 // envRemovalReasons fires S10 for each FANOUT_* env var name that appears on a
-// removed line but nowhere on an added line. A set difference (removed − added),
-// not a per-line grep, so a line move or re-indent (the same name re-added) does
-// not misfire; adding a name is routine. Markdown files are exempt on both
-// sides, and the reported File is where the name was first removed.
+// removed line of a file without reappearing on an added line of the SAME file.
+// The suppression is per-file on purpose: it forgives line moves and re-indents
+// inside one file, but a mere string occurrence added elsewhere (a comment, a
+// test fixture) must not mask a genuine reference removal. Markdown files are
+// exempt on both sides.
 func envRemovalReasons(d Diff) []Reason {
-	added := make(map[string]bool)
-	for p, lines := range d.AddedLines {
-		if strings.HasSuffix(p, ".md") {
-			continue
-		}
-		for _, l := range lines {
-			for _, name := range envPatternRe.FindAllString(l, -1) {
-				added[name] = true
-			}
-		}
-	}
-	removedAt := make(map[string]string) // name -> representative file
+	var reasons []Reason
 	for _, p := range slices.Sorted(maps.Keys(d.RemovedLines)) {
 		if strings.HasSuffix(p, ".md") {
 			continue
 		}
-		for _, l := range d.RemovedLines[p] {
+		addedHere := make(map[string]bool)
+		for _, l := range d.AddedLines[p] {
 			for _, name := range envPatternRe.FindAllString(l, -1) {
-				if _, ok := removedAt[name]; !ok {
-					removedAt[name] = p
-				}
+				addedHere[name] = true
 			}
 		}
-	}
-	var reasons []Reason
-	for _, name := range slices.Sorted(maps.Keys(removedAt)) {
-		if added[name] {
-			continue
+		removedHere := make(map[string]bool)
+		for _, l := range d.RemovedLines[p] {
+			for _, name := range envPatternRe.FindAllString(l, -1) {
+				removedHere[name] = true
+			}
 		}
-		reasons = append(reasons, Reason{
-			Signal: sigInvariantHit, Level: LevelHigh, File: removedAt[name],
-			Detail: "FANOUT_* env 参照を削除: " + name,
-		})
+		for _, name := range slices.Sorted(maps.Keys(removedHere)) {
+			if addedHere[name] {
+				continue
+			}
+			reasons = append(reasons, Reason{
+				Signal: sigInvariantHit, Level: LevelHigh, File: p,
+				Detail: "FANOUT_* env 参照を削除: " + name,
+			})
+		}
 	}
 	return reasons
 }
@@ -269,14 +271,16 @@ func computeStats(d Diff) Stats {
 }
 
 // skipAddedMatch reports the first added line in a test file that introduces a
-// skip marker, choosing the grep by the file's extension. bats sourced helpers
-// (tests/bats/*.bash) call skip the same way, so they get the bats grep too.
+// skip marker, choosing the grep by the file's shape. bats sourced helpers
+// (tests/bats/*.bash) call skip the same way, so they get the bats grep too,
+// and the web harness under web/src/test/ gets the vitest grep alongside
+// *.test.ts(x) (isWebTestFile covers both).
 func skipAddedMatch(p string, lines []string) (string, bool) {
 	var re *regexp.Regexp
 	switch {
 	case strings.HasSuffix(p, "_test.go"):
 		re = goSkipRe
-	case strings.HasSuffix(p, ".test.ts") || strings.HasSuffix(p, ".test.tsx"):
+	case isWebTestFile(p):
 		re = tsSkipRe
 	case strings.HasSuffix(p, ".bats"):
 		re = batsSkipRe

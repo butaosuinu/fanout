@@ -63,9 +63,9 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 |---|---|---|
 | S1 | test-deleted | `*_test.go` / `*.bats` / `web/src/**/*.test.*` の削除(D)。rename でテスト形状が失われる場合も含む |
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
-| S3 | skip-added | 追加行に `\bt\.(Skip\|Skipf\|SkipNow)\(`、`.skip(` / `xit(` / `xdescribe(`、bats(`tests/bats/**` の `.bats` と `.bash`)の `^\s*skip\b` |
+| S3 | skip-added | 追加行に `\bt\.(Skip\|Skipf\|SkipNow)\(`、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)の `^\s*skip\b` |
 | S4 | guard-modified | `internal/arch/` の変更 |
-| S5 | review-gate-modified | `.claude/` の変更 |
+| S5 | review-gate-modified | `.claude/` と post-work-review gate(`codex/tools/post-work-review*` / `codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
 | S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` の変更 |
 | S7 | installer-modified | `install.sh` の変更 |
 | S8 | ci-workflow-deleted | `.github/workflows/` 配下の削除(D)。rename で配下外へ移す場合も含む |
@@ -76,11 +76,11 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 実装そのもの。`S10 invariant-hit` は `docs/architecture.ja.md` の人間必見の
 不変条件に出てくる文字列の追加・削除行を grep する: `requireToken` /
 `127.0.0.1` / `__tui-new-pane-popup` / `__tui-help-popup` / `__codex-plan-tui` /
-`main.version`。`FANOUT_[A-Z_]{2,}` は、その名前が削除行に現れ、かつ追加行の
-どこにも同名が現れない場合だけ発火する(全ファイル横断の集合差 removed−added)。
-行移動や再インデントで同名が追加行にも戻るケースを誤検知しないための判定で、
-env 変数参照の追加は日常的だが既存参照の削除はシェル/CI/doc 側の呼び出し元を
-壊しうる。`.md` ファイルは S10 の対象外。散文が不変条件の文字列を引用しても(この文書や
+`main.version`。`FANOUT_[A-Z_]{2,}` は、その名前が削除行に現れ、かつ**同じ
+ファイルの**追加行に同名が現れない場合だけ発火する(ファイル単位の集合差)。
+同一ファイル内の行移動・再インデントは誤検知しないが、別ファイルにコメントや
+フィクスチャとして同名を足しても実参照の削除は隠せない。env 変数参照の追加は
+日常的だが既存参照の削除はシェル/CI/doc 側の呼び出し元を壊しうる。`.md` ファイルは S10 の対象外。散文が不変条件の文字列を引用しても(この文書や
 architecture.ja.md の不変条件カタログ自体、インストール手順の
 `FANOUT_VERSION=` 例)、それは不変条件へのコード変更ではない。
 
@@ -134,11 +134,11 @@ go run ./tools/reviewrisk [--base <ref>] [--format text|markdown|json] [--fail-a
 書き込み token を `.git/config` に残さない(gh を呼ぶステップだけが env 経由で
 token を受け取る)。
 
-1. PR が `tools/reviewrisk/` か `review-risk.yml` 自身を変更している場合、
-   PR 側ツールの判定は信用せず(S6 の安全弁を PR 側が緩められるため)、
-   workflow が fail-closed で critical に固定する。それ以外は
-   `--format json` と `--format markdown` を実行し、`jq -r .level` で level を
-   取り出す。
+1. PR が `tools/reviewrisk/` か `review-risk.yml` 自身を変更している場合
+   (rename で外へ移す場合も pathspec 判定で含む)、PR 側ツールの判定は信用せず
+   (S6 の安全弁を PR 側が緩められるため)、workflow が fail-closed で critical
+   に固定する。それ以外は `--format json` と `--format markdown` を実行し、
+   `jq -r .level` で level を取り出す。
 2. `review:none` / `review:low` / `review:medium` / `review:high` /
    `review:critical` の 5 ラベルを冪等に作成し(既存なら作成コマンドが失敗する
    ので無視する)、PR に付いている `review:*` ラベルのうち現在の level 以外を
