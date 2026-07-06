@@ -193,6 +193,32 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigCIWorkflowDeleted},
 		},
 		{
+			// Actions ignores subdirectories of workflows/, so this move also
+			// disables the workflow.
+			name:      "S8 rename into a workflows subdirectory is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: ".github/workflows/test.yml", Path: ".github/workflows/disabled/test.yml"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigCIWorkflowDeleted},
+		},
+		{
+			name: "S3 conditional bats skip after && is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "tests/bats/tier1_flags.bats"}},
+				AddedLines: map[string][]string{"tests/bats/tier1_flags.bats": {"  [[ $CI == true ]] && skip \"flaky\""}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
+			name: "S3 does not fire on a bats comment mentioning skip",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "tests/bats/tier1_flags.bats"}},
+				AddedLines: map[string][]string{"tests/bats/tier1_flags.bats": {"# do not skip this scenario"}},
+			},
+			wantLevel: LevelMedium, // tests/bats (M), no S3
+			notSig:    []string{sigSkipAdded},
+		},
+		{
 			name: "S5 post-work-review agent definition change is critical",
 			diff: Diff{
 				Files: []FileChange{{Status: 'M', Path: "codex/agents/post-work-reviewer.md"}},

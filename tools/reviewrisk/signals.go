@@ -38,11 +38,13 @@ const (
 // paren so t.Skip/Skipf/SkipNow match but t.Skipped() (a status read) does not.
 // tsSkipRe covers the vitest skip spellings: .skip(...), .skipIf(...), chained
 // modifiers like test.skip.concurrent(...), the { skip: true } option, and the
-// x-prefixed aliases.
+// x-prefixed aliases. batsSkipRe matches skip in command position — at line
+// start or after &&, ||, ;, {, (, then/else/do — so conditional forms like
+// `[[ $CI == true ]] && skip "flaky"` count, while prose in a comment does not.
 var (
 	goSkipRe   = regexp.MustCompile(`\bt\.(Skip|Skipf|SkipNow)\(`)
 	tsSkipRe   = regexp.MustCompile(`\.skip(If)?\s*\(|\.skip\.|\bskip:\s*true|\bxit\(|\bxdescribe\(|\bxtest\(`)
-	batsSkipRe = regexp.MustCompile(`^\s*skip\b`)
+	batsSkipRe = regexp.MustCompile(`(^|&&|\|\||;|\{|\(|\bthen\b|\belse\b|\bdo\b)\s*skip\b`)
 )
 
 // evaluate classifies every changed file and aggregates the risk level. Order:
@@ -326,11 +328,15 @@ func isTestShape(p string) bool {
 // isMeasurePath reports whether a path is a measurement yardstick: a golden,
 // fixture, or test-bin file whose deletion removes what a test checks against.
 // isWorkflowFile reports whether p is a file GitHub Actions actually runs:
-// under .github/workflows/ AND carrying the required .yml/.yaml extension.
-// A same-directory rename to another extension stops being a workflow.
+// DIRECTLY under .github/workflows/ (Actions ignores subdirectories) AND
+// carrying the required .yml/.yaml extension. A rename to another extension or
+// into a subdirectory stops being a workflow.
 func isWorkflowFile(p string) bool {
-	return strings.HasPrefix(p, ".github/workflows/") &&
-		(strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml"))
+	rest, ok := strings.CutPrefix(p, ".github/workflows/")
+	if !ok || strings.Contains(rest, "/") {
+		return false
+	}
+	return strings.HasSuffix(rest, ".yml") || strings.HasSuffix(rest, ".yaml")
 }
 
 func isMeasurePath(p string) bool {
