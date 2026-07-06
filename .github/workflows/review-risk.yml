@@ -27,19 +27,16 @@ jobs:
           # steps below receive the token via GH_TOKEN instead.
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Judge review risk
-        id: risk
+      # Fail-closed self-modification guard, before Set up Go so a PR that also
+      # breaks go.mod still reaches the critical label/comment instead of dying
+      # in setup-go. When the PR touches the risk tool or this workflow, the
+      # PR-side implementation cannot be trusted to judge itself (it could weaken
+      # S6); pin the verdict to critical — the unmodified tool would report S6
+      # here anyway. Shell only, no Go needed.
+      - name: Self-modification guard
+        id: guard
         run: |
           set -euo pipefail
-          # Fail-closed self-modification guard: when the PR touches the risk
-          # tool or this workflow, the PR-side implementation cannot be trusted
-          # to judge itself (it could weaken S6). Skip running it and pin the
-          # verdict to critical — the unmodified tool would report S6 here anyway.
           # `git diff --quiet` with a pathspec: no pipe (a `| grep -q` here dies
           # of SIGPIPE under pipefail and skips the guard on large diffs), and
           # the old-path side of a rename out of these trees still matches.
@@ -51,9 +48,20 @@ jobs:
               echo
               echo '人間精読必須。risk 判定ツール自身(`tools/reviewrisk/` または `review-risk.yml`)が変更されているため、PR 側ツールの判定は使わず workflow が fail-closed で critical に固定しました(S6 相当)。'
             } > comment.md
-            echo "level=critical" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "self=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set up Go
+        if: steps.guard.outputs.self != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Judge review risk
+        id: risk
+        if: steps.guard.outputs.self != 'true'
+        run: |
+          set -euo pipefail
           go run ./tools/reviewrisk --base "origin/$GITHUB_BASE_REF" --format json > risk.json
           go run ./tools/reviewrisk --base "origin/$GITHUB_BASE_REF" --format markdown > comment.md
           echo "level=$(jq -r .level risk.json)" >> "$GITHUB_OUTPUT"
@@ -63,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          LEVEL: ${{ steps.risk.outputs.level }}
+          LEVEL: ${{ steps.guard.outputs.self == 'true' && 'critical' || steps.risk.outputs.level }}
         run: |
           set -euo pipefail
 

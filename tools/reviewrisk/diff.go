@@ -151,15 +151,25 @@ func parseNumstat(out string) map[string]numstatEntry {
 
 // numstatPath collapses the merged rename forms `git diff --numstat -M` emits so
 // the result is the new path, matching the name-status new path. A brace group
-// `dir/{old => new}/rest` becomes `dir/new/rest` (an empty old, `{ => new}`,
-// yields just the new side); a brace-less whole-path `old => new` takes the new
-// side. A field with no ` => ` passes through unchanged.
+// `dir/{old => new}/rest` becomes `dir/new/rest`; an empty new side
+// (`dir/{old => }/file.go`, a rename that only drops a path segment) collapses
+// the doubled slash to `dir/file.go`, and an empty old side (`{ => new}`) yields
+// just the new side. A brace-less whole-path `old => new` takes the new side. A
+// field with no ` => ` passes through unchanged.
 func numstatPath(field string) string {
 	if open := strings.IndexByte(field, '{'); open >= 0 {
 		if shut := strings.IndexByte(field[open:], '}'); shut >= 0 {
 			shut += open
 			if _, newPart, ok := strings.Cut(field[open+1:shut], " => "); ok {
-				return field[:open] + newPart + field[shut+1:]
+				prefix, suffix := field[:open], field[shut+1:]
+				// An empty new side (dir/{old => }/file.go) leaves prefix ending
+				// in '/' and suffix beginning with '/'. Splicing an empty middle
+				// between them doubles the separator (dir//file.go) and misses
+				// the name-status new path, so drop the redundant slash.
+				if newPart == "" {
+					suffix = strings.TrimPrefix(suffix, "/")
+				}
+				return prefix + newPart + suffix
 			}
 		}
 	}

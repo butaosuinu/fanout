@@ -78,6 +78,14 @@ func TestParseNumstat(t *testing.T) {
 			in:   "2\t1\tinternal/{old => new}/foo.go\n",
 			want: map[string]numstatEntry{"internal/new/foo.go": {added: 2, deleted: 1}},
 		},
+		{
+			// A segment-dropping rename emits an empty new side; the doubled
+			// slash must collapse so the key matches the name-status new path
+			// (else Added/Deleted fall to 0).
+			name: "segment-dropping rename keys on the collapsed new path",
+			in:   "3\t1\tdir/{old => }/file.go\n",
+			want: map[string]numstatEntry{"dir/file.go": {added: 3, deleted: 1}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +120,13 @@ func TestNumstatPath(t *testing.T) {
 			name: "empty old side yields just the new segment",
 			in:   "dir/{ => sub}/file.go",
 			want: "dir/sub/file.go",
+		},
+		{
+			// A rename that only drops a path segment (dir/old/file.go ->
+			// dir/file.go) has an empty new side; the doubled slash collapses.
+			name: "empty new side collapses the doubled slash",
+			in:   "dir/{old => }/file.go",
+			want: "dir/file.go",
 		},
 		{
 			name: "plain path without an arrow is unchanged",

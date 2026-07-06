@@ -75,6 +75,21 @@ func TestEvaluate(t *testing.T) {
 			notSig:    []string{sigTestDeleted},
 		},
 		{
+			// A sourced bats helper (tests/bats/helpers.bash) is test shape too:
+			// deleting it drops harness the .bats suites rely on.
+			name:      "S1 deleted bats helper .bash is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'D', Path: "tests/bats/helpers.bash"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigTestDeleted},
+		},
+		{
+			// Renaming a bats helper out of tests/bats/ loses test shape and fires S1.
+			name:      "S1 rename of a bats helper out of tests/bats drops test shape",
+			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: "tests/bats/helpers.bash", Path: "docs/helpers.bash"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigTestDeleted},
+		},
+		{
 			name:      "rename from an H package into docs is judged by the heavier old class",
 			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: "internal/infra/settings/resolve.go", Path: "docs/resolve-notes.md"}}},
 			wantLevel: LevelHigh, // old path is H (settings), new path is docs (NONE)

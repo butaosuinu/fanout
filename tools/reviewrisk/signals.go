@@ -306,15 +306,17 @@ func skipAddedMatch(p string, lines []string) (string, bool) {
 }
 
 // isTestShape reports whether a path is a test file: a Go *_test.go, a bats file
-// under tests/bats/, or a web test (isWebTestFile: a *.test/*.spec .ts(x) under
-// web/src/, or anything under web/src/test/). Sharing isWebTestFile is what
-// makes a rename that drops the suffix (foo.test.ts -> foo.test.disabled.ts)
-// lose test shape and fire S1 — a substring check would keep it "test-shaped".
+// or sourced helper under tests/bats/ (.bats or .bash — helpers.bash carries the
+// skip harness skipAddedMatch already scans), or a web test (isWebTestFile: a
+// *.test/*.spec .ts(x) under web/src/, or anything under web/src/test/). Sharing
+// isWebTestFile is what makes a rename that drops the suffix (foo.test.ts ->
+// foo.test.disabled.ts) lose test shape and fire S1 — a substring check would
+// keep it "test-shaped".
 func isTestShape(p string) bool {
 	if strings.HasSuffix(p, "_test.go") {
 		return true
 	}
-	if strings.HasPrefix(p, "tests/bats/") && strings.HasSuffix(p, ".bats") {
+	if strings.HasPrefix(p, "tests/bats/") && (strings.HasSuffix(p, ".bats") || strings.HasSuffix(p, ".bash")) {
 		return true
 	}
 	return isWebTestFile(p)

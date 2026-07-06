@@ -63,7 +63,7 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 
 | ID | 名前 | 条件 |
 |---|---|---|
-| S1 | test-deleted | `*_test.go` / `*.bats` / `web/src/**/*.test.ts(x)` / `web/src/**/*.spec.ts(x)` / `web/src/test/**` の削除(D)。rename でテスト形状が失われる場合(`.test.ts` → `.test.disabled.ts` など vitest が収集しない接尾辞への改名)も含む |
+| S1 | test-deleted | `*_test.go` / `tests/bats/**` の `.bats`・`.bash`(`helpers.bash` などソースされる bats ヘルパ)/ `web/src/**/*.test.ts(x)` / `web/src/**/*.spec.ts(x)` / `web/src/test/**` の削除(D)。rename でテスト形状が失われる場合(`.test.ts` → `.test.disabled.ts` など vitest が収集しない接尾辞への改名)も含む |
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
 | S3 | skip-added | 追加行に `\b\w+\.(Skip\|Skipf\|SkipNow)\(`(receiver 名は固定せず `t` 以外の `*testing.T`/`*testing.B`、例 `tb.Skip(` / `b.Skip(` も拾う。`t.Skipped()` は Skip 直後の `(` 要求で非マッチ)、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` / `*.spec.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
 | S4 | guard-modified | `internal/arch/` の変更 |
@@ -139,8 +139,11 @@ token を受け取る)。
 1. PR が `tools/reviewrisk/` か `review-risk.yml` 自身を変更している場合
    (rename で外へ移す場合も pathspec 判定で含む)、PR 側ツールの判定は信用せず
    (S6 の安全弁を PR 側が緩められるため)、workflow が fail-closed で critical
-   に固定する。それ以外は `--format json` と `--format markdown` を実行し、
-   `jq -r .level` で level を取り出す。
+   に固定する。この self-modification guard は Set up Go より前の shell 専用
+   ステップで、PR 側の `go.mod` に依存しない — ツール改変と同時に `go.mod` を
+   壊す PR でも setup-go で落ちず critical ラベル/コメントに到達する。それ以外は
+   `--format json` と `--format markdown` を実行し、`jq -r .level` で level を
+   取り出す。
 2. `review:none` / `review:low` / `review:medium` / `review:high` /
    `review:critical` の 5 ラベルを冪等に作成し(既存なら作成コマンドが失敗する
    ので無視する)、PR に付いている `review:*` ラベルのうち現在の level 以外を
