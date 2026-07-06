@@ -72,6 +72,8 @@ func TestClassifyPath(t *testing.T) {
 		// web test override beats the hooks transport prefix.
 		{name: "web hooks test file overrides to A", path: "web/src/hooks/useDrawerWidth.test.tsx", want: ClassA, found: true},
 		{name: "web test harness dir is A", path: "web/src/test/server.ts", want: ClassA, found: true},
+		// vitest collects .spec files too, so a .spec.ts under web/src overrides to A.
+		{name: "web spec file overrides to A", path: "web/src/lib/foo.spec.ts", want: ClassA, found: true},
 		// longest-prefix: lib(M) beats web/src/(A) for a non-test lib file.
 		{name: "web lib file beats web src by longest prefix", path: "web/src/lib/x.ts", want: ClassM, found: true},
 		{name: "web root unknown file is unclassified", path: "web/unknown.txt", found: false},

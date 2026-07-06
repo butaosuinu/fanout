@@ -2,7 +2,6 @@ package main
 
 import (
 	"maps"
-	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -34,15 +33,17 @@ const (
 	sigLargeDiff         = "S11-large-diff"
 )
 
-// Skip-marker greps for S3, one per test flavor. goSkipRe requires the call
-// paren so t.Skip/Skipf/SkipNow match but t.Skipped() (a status read) does not.
-// tsSkipRe covers the vitest skip spellings: .skip(...), .skipIf(...), chained
-// modifiers like test.skip.concurrent(...), the { skip: true } option, and the
-// x-prefixed aliases. batsSkipRe matches skip in command position — at line
-// start or after &&, ||, ;, {, (, then/else/do — so conditional forms like
-// `[[ $CI == true ]] && skip "flaky"` count, while prose in a comment does not.
+// Skip-marker greps for S3, one per test flavor. goSkipRe matches a
+// *testing.T/*testing.B skip call under any receiver name (t, tb, b …) and
+// requires the call paren so t.Skip/Skipf/SkipNow match but t.Skipped() (a
+// status read) does not. tsSkipRe covers the vitest skip spellings: .skip(...),
+// .skipIf(...), chained modifiers like test.skip.concurrent(...), the
+// { skip: true } option, and the x-prefixed aliases. batsSkipRe matches skip in
+// command position — at line start or after &&, ||, ;, {, (, then/else/do — so
+// conditional forms like `[[ $CI == true ]] && skip "flaky"` count, while prose
+// in a comment does not.
 var (
-	goSkipRe   = regexp.MustCompile(`\bt\.(Skip|Skipf|SkipNow)\(`)
+	goSkipRe   = regexp.MustCompile(`\b\w+\.(Skip|Skipf|SkipNow)\(`)
 	tsSkipRe   = regexp.MustCompile(`\.skip(If)?\s*\(|\.skip\.|\bskip:\s*true|\bxit\(|\bxdescribe\(|\bxtest\(`)
 	batsSkipRe = regexp.MustCompile(`(^|&&|\|\||;|\{|\(|\bthen\b|\belse\b|\bdo\b)\s*skip\b`)
 )
@@ -281,7 +282,7 @@ func computeStats(d Diff) Stats {
 // skip marker, choosing the grep by the file's shape. bats sourced helpers
 // (tests/bats/*.bash) call skip the same way, so they get the bats grep too,
 // and the web harness under web/src/test/ gets the vitest grep alongside
-// *.test.ts(x) (isWebTestFile covers both).
+// *.test.ts(x) and *.spec.ts(x) (isWebTestFile covers all).
 func skipAddedMatch(p string, lines []string) (string, bool) {
 	var re *regexp.Regexp
 	switch {
@@ -305,8 +306,10 @@ func skipAddedMatch(p string, lines []string) (string, bool) {
 }
 
 // isTestShape reports whether a path is a test file: a Go *_test.go, a bats file
-// under tests/bats/, a web *.test.* under web/src/, or anything under
-// web/src/test/.
+// under tests/bats/, or a web test (isWebTestFile: a *.test/*.spec .ts(x) under
+// web/src/, or anything under web/src/test/). Sharing isWebTestFile is what
+// makes a rename that drops the suffix (foo.test.ts -> foo.test.disabled.ts)
+// lose test shape and fire S1 — a substring check would keep it "test-shaped".
 func isTestShape(p string) bool {
 	if strings.HasSuffix(p, "_test.go") {
 		return true
@@ -314,15 +317,7 @@ func isTestShape(p string) bool {
 	if strings.HasPrefix(p, "tests/bats/") && strings.HasSuffix(p, ".bats") {
 		return true
 	}
-	if strings.HasPrefix(p, "web/src/") {
-		if strings.HasPrefix(p, "web/src/test/") {
-			return true
-		}
-		if strings.Contains(path.Base(p), ".test.") {
-			return true
-		}
-	}
-	return false
+	return isWebTestFile(p)
 }
 
 // isMeasurePath reports whether a path is a measurement yardstick: a golden,

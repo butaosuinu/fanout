@@ -60,6 +60,15 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigTestDeleted},
 		},
 		{
+			// A web test renamed to a suffix vitest no longer collects
+			// (foo.test.ts -> foo.test.disabled.ts) drops test shape: the
+			// suffix check, not a substring, is what catches this.
+			name:      "S1 web rename to an uncollected suffix drops test shape",
+			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: "web/src/lib/foo.test.ts", Path: "web/src/lib/foo.test.disabled.ts"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigTestDeleted},
+		},
+		{
 			name:      "rename keeping test shape does not fire S1",
 			diff:      Diff{Files: []FileChange{{Status: 'R', OldPath: "internal/core/naming/a_test.go", Path: "internal/core/naming/b_test.go"}}},
 			wantLevel: LevelMedium, // still classified under core/naming (M)
@@ -99,6 +108,26 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigSkipAdded},
 		},
 		{
+			// Skip receiver is not fixed to t: a testing.TB helper (tb) skips too.
+			name: "S3 added tb.Skip under a non-t receiver is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "internal/core/naming/foo_test.go"}},
+				AddedLines: map[string][]string{"internal/core/naming/foo_test.go": {"\ttb.Skip(\"wip\")"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
+			// A *testing.B benchmark skips via b.Skip; the receiver name still varies.
+			name: "S3 added b.Skip in a benchmark is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "internal/core/naming/foo_test.go"}},
+				AddedLines: map[string][]string{"internal/core/naming/foo_test.go": {"\tb.Skip(\"bench\")"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
 			name: "S3 does not fire on t.Skipped() (a status read, not a skip call)",
 			diff: Diff{
 				Files:      []FileChange{{Status: 'M', Path: "internal/core/naming/foo_test.go"}},
@@ -130,6 +159,16 @@ func TestEvaluate(t *testing.T) {
 			diff: Diff{
 				Files:      []FileChange{{Status: 'M', Path: "web/src/lib/sort.test.ts"}},
 				AddedLines: map[string][]string{"web/src/lib/sort.test.ts": {"test.skipIf(isCI)('sorts', () => {})"}},
+			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigSkipAdded},
+		},
+		{
+			// vitest collects .spec files too, so a skip added in one fires S3.
+			name: "S3 added test.skip in a .spec.tsx file is critical",
+			diff: Diff{
+				Files:      []FileChange{{Status: 'M', Path: "web/src/components/foo.spec.tsx"}},
+				AddedLines: map[string][]string{"web/src/components/foo.spec.tsx": {"  test.skip('renders', () => {})"}},
 			},
 			wantLevel: LevelCritical,
 			wantSig:   []string{sigSkipAdded},

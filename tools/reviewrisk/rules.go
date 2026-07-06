@@ -207,8 +207,12 @@ func classifyPath(p string) (Rule, bool) {
 }
 
 // isWebTestFile reports whether p is a web test under web/src/: either the
-// web/src/test/ harness dir or a *.test.ts(x) file. Per the doc these are class
-// A (display), overriding the web/src/hooks|lib transport prefixes.
+// web/src/test/ harness dir or a *.test/*.spec .ts(x) file. Vitest collects both
+// the .test and .spec suffixes (web/vite.config.ts does not override
+// test.include), so both count. Per the doc these are class A (display),
+// overriding the web/src/hooks|lib transport prefixes. This is the single
+// web-test-shape predicate shared by classifyPath's A override, S3 skip
+// detection, and S1's isTestShape.
 func isWebTestFile(p string) bool {
 	if !strings.HasPrefix(p, "web/src/") {
 		return false
@@ -216,7 +220,8 @@ func isWebTestFile(p string) bool {
 	if strings.HasPrefix(p, "web/src/test/") {
 		return true
 	}
-	return strings.HasSuffix(p, ".test.ts") || strings.HasSuffix(p, ".test.tsx")
+	return strings.HasSuffix(p, ".test.ts") || strings.HasSuffix(p, ".test.tsx") ||
+		strings.HasSuffix(p, ".spec.ts") || strings.HasSuffix(p, ".spec.tsx")
 }
 
 // longestPrefixRule returns the prefixRules entry with the longest prefix that

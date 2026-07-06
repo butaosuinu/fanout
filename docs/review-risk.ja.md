@@ -24,9 +24,11 @@ PR に反映する。判定は advisory — マージはブロックしない。
 2. Go テストペアリング: `foo_test.go` は `foo.go` の file rule を継承する。
    ただしパッケージの prefix rule がその file rule より重ければそちらを採る
    — テストをパッケージのクラスより軽く落とすことはしない
-3. web テスト上書き: `web/src/` 配下の `*.test.ts(x)` と `web/src/test/**` は
-   常に A(`docs/architecture.ja.md` の「tests は A」の行に従う。hooks/lib の
-   M より優先する非対称)
+3. web テスト上書き: `web/src/` 配下の `*.test.ts(x)` / `*.spec.ts(x)` と
+   `web/src/test/**` は常に A(`docs/architecture.ja.md` の「tests は A」の行に
+   従う。hooks/lib の M より優先する非対称)。`.spec` も含むのは
+   `web/vite.config.ts` が `test.include` を上書きせず vitest 既定で
+   `.spec` も収集するため
 4. `prefixRules` の longest-prefix wins
 5. どれにも一致しない → unclassified → **fail-closed で high**(S9)
 
@@ -61,9 +63,9 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 
 | ID | 名前 | 条件 |
 |---|---|---|
-| S1 | test-deleted | `*_test.go` / `*.bats` / `web/src/**/*.test.*` の削除(D)。rename でテスト形状が失われる場合も含む |
+| S1 | test-deleted | `*_test.go` / `*.bats` / `web/src/**/*.test.ts(x)` / `web/src/**/*.spec.ts(x)` / `web/src/test/**` の削除(D)。rename でテスト形状が失われる場合(`.test.ts` → `.test.disabled.ts` など vitest が収集しない接尾辞への改名)も含む |
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
-| S3 | skip-added | 追加行に `\bt\.(Skip\|Skipf\|SkipNow)\(`、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
+| S3 | skip-added | 追加行に `\b\w+\.(Skip\|Skipf\|SkipNow)\(`(receiver 名は固定せず `t` 以外の `*testing.T`/`*testing.B`、例 `tb.Skip(` / `b.Skip(` も拾う。`t.Skipped()` は Skip 直後の `(` 要求で非マッチ)、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` / `*.spec.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
 | S4 | guard-modified | `internal/arch/` の変更 |
 | S5 | review-gate-modified | `.claude/` と post-work-review gate(`codex/tools/post-work-review*` / `codex/agents/post-work-*` / `codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
 | S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` の変更 |
