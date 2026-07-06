@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -252,6 +253,6 @@ func tuiLaunchCommand(commandName, projectRoot string) string {
 	// overrides any stale FANOUT_TUI_ENHANCED_KEYS that an earlier run captured in
 	// the tmux session environment — otherwise an old opt-out would persist even
 	// after relaunching from a plain shell with the variable unset.
-	prefix := fanouttui.EnhancedKeysEnv + "=" + shellQuote(os.Getenv(fanouttui.EnhancedKeysEnv)) + " "
-	return "cd " + shellQuote(projectRoot) + " && " + prefix + shellQuote(exe)
+	prefix := fanouttui.EnhancedKeysEnv + "=" + run.ShellQuote(os.Getenv(fanouttui.EnhancedKeysEnv)) + " "
+	return "cd " + run.ShellQuote(projectRoot) + " && " + prefix + run.ShellQuote(exe)
 }

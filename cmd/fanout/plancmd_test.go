@@ -7,13 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
-	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestPlanTaskSlugQualifiesDefaultAndHonorsExplicit(t *testing.T) {
@@ -25,80 +23,6 @@ func TestPlanTaskSlugQualifiesDefaultAndHonorsExplicit(t *testing.T) {
 	task.Slug = "shared-api-client"
 	if got := panelaunch.PlanTaskSlug("launch-plan", task); got != "shared-api-client" {
 		t.Fatalf("explicit slug = %q", got)
-	}
-}
-
-func TestValidatePlanExecutionNamesRejectsFinalDuplicates(t *testing.T) {
-	tests := []struct {
-		name    string
-		spec    planspec.Spec
-		wantErr string
-	}{
-		{
-			name: "final slug duplicate",
-			spec: planspec.Spec{
-				Plan: planspec.Plan{Slug: "launch-plan"},
-				Tasks: []planspec.Task{
-					{ID: "api-client", Title: "Extract API client"},
-					{ID: "worker", Title: "Worker", Slug: "launch-plan-extract-api-client-api-client"},
-				},
-			},
-			wantErr: "final slug",
-		},
-		{
-			name: "final branch duplicate",
-			spec: planspec.Spec{
-				Plan: planspec.Plan{Slug: "launch-plan"},
-				Tasks: []planspec.Task{
-					{ID: "api-client", Title: "Extract API client"},
-					{ID: "worker", Title: "Worker", Branch: "fanout/launch-plan-extract-api-client-api-client"},
-				},
-			},
-			wantErr: "final branch",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validatePlanExecutionNames(tc.spec, planCommandConfig{})
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("validatePlanExecutionNames() error = %v, want %q", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestResolvePlanBaseBranchValidatesSpecBranchOnlyWhenUsed(t *testing.T) {
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", BaseBranch: "release candidate"}}
-
-	got, err := resolvePlanBaseBranch(planCommandConfig{BaseBranch: "main"}, spec, t.TempDir())
-	if err != nil || got != "main" {
-		t.Fatalf("resolvePlanBaseBranch() = %q, %v; want main, nil", got, err)
-	}
-
-	_, err = resolvePlanBaseBranch(planCommandConfig{}, spec, t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "plan.base_branch must not contain whitespace") {
-		t.Fatalf("resolvePlanBaseBranch() error = %v, want plan.base_branch whitespace error", err)
-	}
-}
-
-func TestResolvePlanBaseBranchUsesCurrentBranchWithoutOrigin(t *testing.T) {
-	repo := t.TempDir()
-	gitCmdTest(t, repo, "init", "-b", "trunk")
-	gitCmdTest(t, repo, "config", "user.email", "fanout@example.test")
-	gitCmdTest(t, repo, "config", "user.name", "Fanout Test")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitCmdTest(t, repo, "add", "README.md")
-	gitCmdTest(t, repo, "commit", "-m", "base")
-
-	got, err := resolvePlanBaseBranch(planCommandConfig{}, planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}, repo)
-	if err != nil {
-		t.Fatalf("resolvePlanBaseBranch() error = %v", err)
-	}
-	if got != "trunk" {
-		t.Fatalf("resolvePlanBaseBranch() = %q, want current branch trunk", got)
 	}
 }
 
@@ -121,17 +45,6 @@ func TestCheckPlanDepsDoesNotRequireGhForUnblockedOnly(t *testing.T) {
 	}
 }
 
-func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
-	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan"}}
-
-	if got := planRerunSpecArg(planCommandConfig{DryRun: true, SpecArg: "/tmp/plan.json"}, spec); got != "/tmp/plan.json" {
-		t.Fatalf("dry-run rerun spec arg = %q, want original path", got)
-	}
-	if got := planRerunSpecArg(planCommandConfig{SpecArg: "/tmp/plan.json"}, spec); got != "launch-plan" {
-		t.Fatalf("live rerun spec arg = %q, want copied plan slug", got)
-	}
-}
-
 func TestParsePlanAgentOverrides(t *testing.T) {
 	cfg := parsePlanOK(t, "launch-plan",
 		"--agent", "claude",
@@ -144,7 +57,7 @@ func TestParsePlanAgentOverrides(t *testing.T) {
 	if cfg.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex", cfg.Agent)
 	}
-	cliCfg := cfg.cliConfig()
+	cliCfg := cfg.CLIConfig()
 	if got := cliCfg.EffectiveAgent("api-client"); got != "claude" {
 		t.Fatalf("EffectiveAgent(api-client) = %q, want claude", got)
 	}
@@ -213,8 +126,8 @@ func TestParsePlanTeamFlagSetsConfig(t *testing.T) {
 	if !cfg.Team {
 		t.Fatal("cfg.Team = false, want true")
 	}
-	if !cfg.cliConfig().Team {
-		t.Fatal("cliConfig().Team = false, want true (forwarded to executeTaskPlan)")
+	if !cfg.CLIConfig().Team {
+		t.Fatal("CLIConfig().Team = false, want true (forwarded to the task launch lane)")
 	}
 }
 
@@ -241,7 +154,7 @@ func TestParsePlanTeamRejectedInStatusAndLifecycle(t *testing.T) {
 }
 
 func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
-	cfg := planCommandConfig{StatusMode: true, Format: "json", BranchPrefix: "custom/"}
+	cfg := run.PlanCommandConfig{StatusMode: true, Format: "json", BranchPrefix: "custom/"}
 
 	if code := validatePlanActionFlags(cfg, "", "", false, log.New(false)); code != exitcode.OK {
 		t.Fatalf("validatePlanActionFlags() = %d, want %d", code, exitcode.OK)
@@ -254,7 +167,7 @@ func TestPlanStatusAllowsBranchPrefixForFallbackBranches(t *testing.T) {
 	}
 }
 
-func parsePlanOK(t *testing.T, args ...string) planCommandConfig {
+func parsePlanOK(t *testing.T, args ...string) run.PlanCommandConfig {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	cfg, code := parsePlanCommand(args, log.NewWith(&stdout, &stderr, false))
@@ -262,146 +175,4 @@ func parsePlanOK(t *testing.T, args ...string) planCommandConfig {
 		t.Fatalf("parsePlanCommand(%q) failed with code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 	}
 	return cfg
-}
-
-func TestSplitPlanBlockedKeepsSameRunDependenciesOpen(t *testing.T) {
-	tasks := []planspec.Task{
-		{ID: "base-types", Title: "Define base types"},
-		{ID: "api-client", Title: "Extract API client", BlockedBy: []string{"base-types"}},
-	}
-
-	kept, blocked := splitPlanBlocked(tasks, tasks, func(planspec.Task) bool {
-		return false
-	})
-
-	if len(kept) != 1 || kept[0].ID != "base-types" {
-		t.Fatalf("kept = %+v, want only base-types", kept)
-	}
-	if len(blocked) != 1 || blocked[0].Task.ID != "api-client" || blocked[0].Refs != "base-types" {
-		t.Fatalf("blocked = %+v, want api-client blocked by base-types", blocked)
-	}
-}
-
-func TestSplitPlanBlockedAllowsCompletedTargetDependencies(t *testing.T) {
-	tasks := []planspec.Task{
-		{ID: "base-types", Title: "Define base types"},
-		{ID: "api-client", Title: "Extract API client", BlockedBy: []string{"base-types"}},
-	}
-
-	kept, blocked := splitPlanBlocked(tasks[1:], tasks, func(task planspec.Task) bool {
-		return task.ID == "base-types"
-	})
-
-	if len(blocked) != 0 {
-		t.Fatalf("blocked = %+v, want no blocked rows", blocked)
-	}
-	if len(kept) != 1 || kept[0].ID != "api-client" {
-		t.Fatalf("kept = %+v, want api-client", kept)
-	}
-}
-
-func TestBuildTaskPlanSkipsCompletedTargetsBeforeBlockerCheck(t *testing.T) {
-	spec := planspec.Spec{
-		Plan: planspec.Plan{Slug: "launch-plan"},
-		Tasks: []planspec.Task{
-			{ID: "base-types", Title: "Define base types"},
-			{ID: "api-client", Title: "Extract API client", BlockedBy: []string{"base-types"}},
-		},
-	}
-
-	plan := buildTaskPlan(planCommandConfig{UnblockedOnly: true}, spec, nil, func(task planspec.Task) bool {
-		return task.ID == "base-types"
-	})
-
-	if len(plan.AlreadyComplete) != 1 || plan.AlreadyComplete[0] != "base-types" {
-		t.Fatalf("AlreadyComplete = %+v, want base-types", plan.AlreadyComplete)
-	}
-	if len(plan.BlockedRows) != 0 {
-		t.Fatalf("BlockedRows = %+v, want none", plan.BlockedRows)
-	}
-	if len(plan.Targets) != 1 || plan.Targets[0].ID != "api-client" {
-		t.Fatalf("Targets = %+v, want only api-client", plan.Targets)
-	}
-}
-
-func TestBuildTaskPlanSkipsCompletedLeafTargets(t *testing.T) {
-	spec := planspec.Spec{
-		Plan: planspec.Plan{Slug: "launch-plan"},
-		Tasks: []planspec.Task{
-			{ID: "ui-shell", Title: "Build UI shell"},
-		},
-	}
-
-	plan := buildTaskPlan(planCommandConfig{UnblockedOnly: true}, spec, nil, func(task planspec.Task) bool {
-		return task.ID == "ui-shell"
-	})
-
-	if len(plan.AlreadyComplete) != 1 || plan.AlreadyComplete[0] != "ui-shell" {
-		t.Fatalf("AlreadyComplete = %+v, want ui-shell", plan.AlreadyComplete)
-	}
-	if plan.UnfannedCount != 0 || len(plan.Targets) != 0 {
-		t.Fatalf("targets = %+v (unfanned=%d), want none", plan.Targets, plan.UnfannedCount)
-	}
-}
-
-func TestPlanTaskCompleteTreatsMissingEvidenceAsIncomplete(t *testing.T) {
-	binDir := t.TempDir()
-	ghPath := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nprintf '[]\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	projectRoot := t.TempDir()
-	spec := planspec.Spec{
-		Plan:  planspec.Plan{Slug: "launch-plan"},
-		Tasks: []planspec.Task{{ID: "base-types", Title: "Define base types"}},
-	}
-
-	complete := planTaskComplete(
-		ghissue.Runner{Cwd: projectRoot},
-		&cliflags.Config{},
-		projectRoot,
-		state.Store{},
-		spec,
-		spec.Tasks[0],
-		log.New(false),
-	)
-
-	if complete {
-		t.Fatal("planTaskComplete() = true, want false without merged PR, state row, or worktree")
-	}
-}
-
-func TestPlanTaskCompleteTreatsNonMergedPRAsIncomplete(t *testing.T) {
-	binDir := t.TempDir()
-	ghPath := filepath.Join(binDir, "gh")
-	if err := os.WriteFile(ghPath, []byte(`#!/bin/sh
-cat <<'JSON'
-[{"number":42,"state":"OPEN","mergedAt":null,"isDraft":false,"reviewDecision":"","statusCheckRollup":null}]
-JSON
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	projectRoot := t.TempDir()
-	spec := planspec.Spec{
-		Plan:  planspec.Plan{Slug: "launch-plan"},
-		Tasks: []planspec.Task{{ID: "base-types", Title: "Define base types"}},
-	}
-
-	complete := planTaskComplete(
-		ghissue.Runner{Cwd: projectRoot},
-		&cliflags.Config{},
-		projectRoot,
-		state.Store{},
-		spec,
-		spec.Tasks[0],
-		log.New(false),
-	)
-
-	if complete {
-		t.Fatal("planTaskComplete() = true, want false when branch has a non-merged PR")
-	}
 }

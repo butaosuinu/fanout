@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"os"
@@ -23,7 +23,7 @@ func TestBuildPlanOnlyIdempotencyAndLimit(t *testing.T) {
 		Limit: 1,
 	}
 
-	plan := buildPlan(cfg, children, map[int]bool{104: true}, "", nil, nil)
+	plan := BuildPlan(cfg, children, map[int]bool{104: true}, "", nil, nil)
 
 	assertEqual(t, "total", plan.TotalChildren, 4)
 	assertEqual(t, "open", plan.OpenCount, 3)
@@ -57,7 +57,7 @@ func TestExistingWorktreeFannedUsesDeterministicSlugAndOverride(t *testing.T) {
 		{Number: 105, Title: "Retitled child", State: "OPEN"},
 	}
 
-	got := existingWorktreeFanned(cfg, root, issues, nil)
+	got := ExistingWorktreeFanned(cfg, root, issues, nil)
 
 	if !got[101] || !got[102] || !got[103] || !got[105] {
 		t.Fatalf("expected #101, #102, #103, and #105 to be fanned, got %#v", got)
@@ -67,21 +67,13 @@ func TestExistingWorktreeFannedUsesDeterministicSlugAndOverride(t *testing.T) {
 	}
 }
 
-func TestMergeFannedIncludesMigrationFallback(t *testing.T) {
-	got := mergeFanned(map[int]bool{101: true}, map[int]bool{102: true})
-
-	if !got[101] || !got[102] {
-		t.Fatalf("merged fanned = %#v, want #101 and #102", got)
-	}
-}
-
 func TestExistingWorktreeFannedIgnoresOtherParentDefaultSlug(t *testing.T) {
 	root := t.TempDir()
 	mkdirAll(t, filepath.Join(root, ".fanout", "worktrees", "shared-child-501"))
 	cfg := &cliflags.Config{ParentRef: "200"}
 	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
 
-	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+	got := ExistingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
 
 	if got[501] {
 		t.Fatalf("fanned = %#v, did not want other-parent default slug to skip current parent", got)
@@ -97,7 +89,7 @@ func TestExistingWorktreeFannedIgnoresOtherParentDefaultSlugWhenCurrentSlugOverr
 	}
 	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
 
-	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+	got := ExistingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
 
 	if got[501] {
 		t.Fatalf("fanned = %#v, did not want other-parent default slug to skip current explicit slug", got)
@@ -113,7 +105,7 @@ func TestExistingWorktreeFannedPreservesSharedExplicitSlugFallback(t *testing.T)
 	}
 	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
 
-	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+	got := ExistingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
 
 	if !got[501] {
 		t.Fatalf("fanned = %#v, want current explicit slug fallback", got)
@@ -126,7 +118,7 @@ func TestExistingWorktreeFannedPreservesCurrentParentQualifiedFallback(t *testin
 	cfg := &cliflags.Config{ParentRef: "200"}
 	issues := []ghissue.Issue{{Number: 501, Title: "Shared child", State: "OPEN"}}
 
-	got := existingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
+	got := ExistingWorktreeFanned(cfg, root, issues, map[int]bool{501: true})
 
 	if !got[501] {
 		t.Fatalf("fanned = %#v, want current-parent qualified fallback", got)
@@ -139,7 +131,7 @@ func TestExistingWorktreeFannedIgnoresGeneratedManualPaneSlug(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200"}
 	issues := []ghissue.Issue{{Number: 12, Title: "Diagnostics", State: "OPEN"}}
 
-	got := existingWorktreeFanned(cfg, root, issues, nil)
+	got := ExistingWorktreeFanned(cfg, root, issues, nil)
 
 	if got[12] {
 		t.Fatalf("fanned = %#v, generated manual slug must not skip issue #12", got)
@@ -154,7 +146,7 @@ func TestBuildPlanSkipFilter(t *testing.T) {
 	}
 	cfg := &cliflags.Config{Skip: []int{202}}
 
-	plan := buildPlan(cfg, children, nil, "", nil, nil)
+	plan := BuildPlan(cfg, children, nil, "", nil, nil)
 
 	assertInts(t, "targets", issueNums(plan.Targets), []int{201, 203})
 	assertInts(t, "filtered skip", issueNums(plan.FilteredSkip), []int{202})
@@ -177,7 +169,7 @@ func TestBuildPlanUnblockedOnly(t *testing.T) {
 	}
 	cfg := &cliflags.Config{UnblockedOnly: true}
 
-	plan := buildPlan(cfg, children, nil, parentBody, nil, func(num int) string {
+	plan := BuildPlan(cfg, children, nil, parentBody, nil, func(num int) string {
 		return states[num]
 	})
 
@@ -199,7 +191,7 @@ func TestBuildPlanHydratesBeforeBlockerCheck(t *testing.T) {
 	cfg := &cliflags.Config{UnblockedOnly: true}
 	hydrated := false
 
-	plan := buildPlan(cfg, children, nil, "", func(issue *ghissue.Issue) {
+	plan := BuildPlan(cfg, children, nil, "", func(issue *ghissue.Issue) {
 		hydrated = true
 		issue.Body = "## Blocked by\n- #601\n"
 	}, func(num int) string {

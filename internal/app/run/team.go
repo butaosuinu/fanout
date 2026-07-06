@@ -1,4 +1,4 @@
-package main
+package run
 
 import (
 	"fmt"
@@ -57,49 +57,28 @@ func teamParentLabel(parentRef string) string {
 }
 
 // seedTeamRegistry upserts the panes created this run into the per-parent
-// peers table. Messaging is best-effort by design: every failure is a warning
-// and the fan-out result is never affected.
+// peers table, looked up by issue number.
 func seedTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentRef string, created []int) {
-	db, err := team.Open(dbPath)
-	if err != nil {
-		lg.Warn("team: %v", err)
-		return
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			lg.Warn("team: close registry db: %v", err)
-		}
-	}()
-	if err := team.EnsureSchema(db); err != nil {
-		lg.Warn("team: %v", err)
-		return
-	}
-
-	// One timestamp for the run so a cohort launched together joins together.
-	now := team.Now()
-	seeded := 0
-	for _, num := range created {
-		pane, ok := st.Find(parentRef, num)
-		if !ok {
-			lg.Warn("team: #%d: no state row to seed into the peers registry", num)
-			continue
-		}
-		if err := team.UpsertPeer(db, pane, now); err != nil {
-			lg.Warn("team: %v", err)
-			continue
-		}
-		seeded++
-	}
-	if seeded > 0 {
-		lg.Ok("team: seeded %d peer(s) -> %s", seeded, dbPath)
-	}
+	seedRegistry(lg, dbPath, created,
+		func(num int) (state.Pane, bool) { return st.Find(parentRef, num) },
+		func(num int) string { return fmt.Sprintf("#%d", num) },
+	)
 }
 
-// seedTaskTeamRegistry is the issue-less plan variant of seedTeamRegistry: it
-// upserts the plan-task panes created this run into the per-parent peers table,
-// looked up by task id. Best-effort by design: every failure is a warning and
-// the fan-out result is never affected.
+// seedTaskTeamRegistry is the issue-less plan variant: it upserts the plan-task
+// panes created this run into the per-parent peers table, looked up by task id.
 func seedTaskTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentRef string, createdIDs []string) {
+	seedRegistry(lg, dbPath, createdIDs,
+		func(id string) (state.Pane, bool) { return st.FindTask(parentRef, id) },
+		func(id string) string { return id },
+	)
+}
+
+// seedRegistry is the shared best-effort peer-registry seeder for both lanes.
+// Messaging is best-effort by design: every failure is a warning and the
+// fan-out result is never affected. find resolves a created key to its state
+// row; label renders the key for the missing-row warning ("#42" or a task id).
+func seedRegistry[K any](lg *log.Logger, dbPath string, created []K, find func(K) (state.Pane, bool), label func(K) string) {
 	db, err := team.Open(dbPath)
 	if err != nil {
 		lg.Warn("team: %v", err)
@@ -118,10 +97,10 @@ func seedTaskTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentR
 	// One timestamp for the run so a cohort launched together joins together.
 	now := team.Now()
 	seeded := 0
-	for _, id := range createdIDs {
-		pane, ok := st.FindTask(parentRef, id)
+	for _, key := range created {
+		pane, ok := find(key)
 		if !ok {
-			lg.Warn("team: %s: no state row to seed into the peers registry", id)
+			lg.Warn("team: %s: no state row to seed into the peers registry", label(key))
 			continue
 		}
 		if err := team.UpsertPeer(db, pane, now); err != nil {
