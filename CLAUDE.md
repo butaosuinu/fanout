@@ -67,126 +67,75 @@ Build the binary with `make build-go` and validate with `make test`.
 
 ## Architecture Notes
 
-- `cmd/fanout/main.go` handles parse dispatch, dependency checks, runtime
-  resolution, child loading, state loading/locking, and the fail-fast
-  `executePlan` loop.
-- `cmd/fanout/plancmd.go` is the issue-less `fanout plan` entrypoint
-  dispatched before normal `cliflags.Parse`. It loads a local plan spec or
-  `.fanout/plans/<slug>.json`, resolves the base branch, builds task rows,
-  applies `--only` / `--skip` / `--limit` / `--unblocked-only`, copies live
-  specs into `.fanout/plans/`, and wires plan `--status`, `--close`, `--merge`,
-  and `--cleanup`.
-- `cmd/fanout/pane.go` is the creation orchestration: briefing render, naming,
-  worktree planning/preparation, tmux split/title/layout, state recording,
-  metadata write, and agent launch.
-- `cmd/fanout/status.go` reads `.fanout/state.json` and queries GitHub PR state.
-  `cmd/fanout/lifecycle.go` implements `--close`, `--merge`, and `--cleanup`
-  against recorded state rows.
-- `cmd/fanout/dashboard.go` implements the `dashboard` subcommand (dispatched
-  before `cliflags.Parse`, like `update`): it starts the read-only web
-  dashboard, handles reuse-if-running, token generation, browser open, and
-  registers the `prefix + D` tmux keybinding (`bindDashboardKey`, also called
-  after a live `executePlan`).
-- `cmd/fanout/tui.go` implements the no-argument persistent TUI console. Plain
-  shells are relaunched into a deterministic fanout-managed tmux session;
-  invocations already inside tmux use the current pane. It also wires the
-  opt-in label watcher into the TUI runtime; no other command path starts the
-  watcher. The `n` new-session popup has two modes: free prompt (manual pane)
-  and issue (OPEN issue picker; children fan out via the watch launch helpers
-  with `UnblockedOnly`, childless issues become `@watch` panes), with a
-  per-child agent assignment step. A prompt-mode plan fan-out checkbox instead
-  launches one coordinator pane at the project root that runs the fanout-plan
-  skill on the raw prompt (`launchPlanPromptFromTUI`; `/fanout plan` for
-  `claude`, `$fanout-plan` for `codex`, never Codex Plan Mode) so `fanout
-  plan`'s git root stays at the repo, not a worktree (`cmd/fanout/tui_issue.go`,
-  `cmd/fanout/tui_launch.go`, `internal/ui/tui/newpane_picker.go`,
-  `internal/ui/tui/newpane_assign.go`).
-- `internal/infra/runtime` resolves the git repository root and the tmux target.
-  Batch pane-creation mode must be invoked from inside tmux. By default fanout
-  targets the invoking pane; `--session` targets a named tmux session.
-- `internal/infra/worktree` owns base branch resolution, refresh, local exclude
-  setup, and `git worktree add` under `.fanout/worktrees/<slug>/`.
-- `internal/infra/tmuxrun` owns direct tmux operations:
-  `split-window -d -h -P -F '#{pane_id}'`, pane titles, tiled layout, agent
-  command send, best-effort pane kill during cleanup, `ListPaneIDs` (liveness
-  for the dashboard), and `BindDashboardKey`.
-- `internal/app/sessionview` is the shared read-only data layer: it aggregates
-  `.fanout/state.json` + tmux liveness + GitHub PR state into a `Snapshot`
-  grouped by parent ("Session"); pane rows carry wave/blockers, CI status, the
-  tmux pane title, and the original prompt. IO is injected via `Collectors`
-  (the `LivePanes` collector returns each live pane's current path and title)
-  so it is pure and unit-testable; both the web dashboard (now) and a future
-  TUI consume the same `Build`.
-- `internal/ui/dashboard` is the localhost web server: `server.go` (GET-only mux,
-  token middleware, SSE, `Cache-Control: no-store` static serving with a
-  fallback page when the bundle is absent), `poller.go` (two-tier state/tmux +
-  throttled gh refresh, broadcast on change), `sse.go` (channel hub), `peek.go`
-  (`GET /api/peek`, a read-only capture-pane of one recorded pane; also the
-  `livePaneView` validation chain `plan.go` reuses), `plan.go`
-  (`GET /api/plan`, the last complete `<proposed_plan>` block of a recorded
-  Codex Plan Mode pane), and `runfile.go` (`.fanout/dashboard.json`
-  reuse-if-running). The SPA itself
-  lives in `web/` (React + Vite + TS, PAPER BREEZE light/dark matching the
-  docs site): `src/lib/` is the pure logic layer (wire types mirroring
-  `sessionview` JSON tags, filter/sort/link builders), `src/hooks/` owns
-  transport (`useSnapshot` SSE + polling fallback, `usePeek`, `usePlan`,
-  `useTheme`), and
-  tests are integration-first (vitest + testing-library + MSW; SSE via a
-  FakeEventSource). `make build-web` emits the bundle into `static/`
-  (deterministic names `assets/app.js` / `assets/app.css`, never committed).
-- `internal/core/agent` maps supported agents (`claude`, `codex`) to launch
-  commands and validates installed CLIs for live mode. The batch lanes accept
-  repeatable per-target agent overrides (`NUM=name` for issue/Project children,
-  `task-id=name` for `fanout plan`) and validate only selected targets.
-- `internal/infra/state` owns `.fanout/state.json` plus `.fanout/state.json.lock`.
-  The coarse lock covers planning and launching so two fanout invocations do
-  not race on the same `(parent, issueNum)` idempotency key. Issue-less plan
-  rows use parent `plan:<slug>`, `issueNum: 0`, and `taskId`; `taskId` is an
-  additive key used by plan idempotency and task lifecycle.
-- `internal/core/planspec` owns the pure JSON schema for `fanout plan`: `version`,
-  `plan` metadata, task validation, deterministic task slug/branch defaults,
-  duplicate/collision checks, and `blocked_by` dependency cycle detection.
-- `internal/core/naming` deterministically generates slugs and branch names.
-  `--name` may override slug, display name, and branch. The skills generate
-  these flags from issue context; the CLI does not call an LLM.
-- `internal/infra/team` + `internal/infra/msgstore` back the `--team` / `fanout msg`
-  sibling-coordination feature (parent #68, waves #69–#71). `internal/infra/team`
-  owns the per-parent SQLite bus: `db.go` opens it with `modernc.org/sqlite`
-  (pure-Go, no external `sqlite3` binary) in WAL mode at file mode `0600` and
-  refuses a group/world-readable or foreign-owned file; `path.go` scopes the
-  DB to `/tmp/fanout-<repo>-<parent_key>.db` (collapsing leading zeros on
-  numeric parents, slugifying Project URLs; `FANOUT_DB_PATH` overrides);
-  `detect.go` resolves the invoking pane's identity from `.fanout/state.json`
-  by `(parent, issueNum)`, with the `[fanout #N of #P]` prompt prefix
-  (`FanoutTagRE`) as a fallback; `registry.go` `UpsertPeer` seeds the roster.
-  `internal/infra/msgstore` is the query layer for send/post/inbox/board/mark-read.
-  `cmd/fanout/team.go` wires `--team` (briefing roster via `buildTeamContext`
-  plus a post-`executePlan` peer seed), and `cmd/fanout/msg.go` is the
-  `fanout msg` island. The briefing coordination section is injected
-  agent-agnostic into the standard briefing for both `claude` and `codex`
-  panes, but `briefing.Render` returns the minimal Codex Plan Mode briefing
-  before appending it, so `--codex-plan-mode` children are seeded into the
-  registry without the coordination section. It is distinct from Claude Code
-  Agent Teams, which is Claude-only and coordinates inside a single session. Messaging is pull-based: nothing in the
-  merged code nudges a pane. The `@fanout_agent_state` (`running` / `done`,
-  set by the launch wrapper in `internal/infra/tmuxrun`) idle-nudge accelerator is a
-  separate, still-unmerged issue (#72) — do not assume an idle gate exists.
-- `internal/app/watch` owns one repository watcher cycle. It is pure at the package
-  boundary: production wires GitHub labels, `.fanout/state.json`, tmux liveness,
-  and launch helpers through `watch.IO`, while unit tests inject fakes. The
-  engine lists `watcherTriggerLabel` issues, swaps them to
-  `watcherRunningLabel` before launch, classifies issues with OPEN children as
-  parent fan-outs and issues without OPEN children as standalone panes, applies
-  the live-pane budget/backoff, and leaves lifecycle label cleanup to
-  `internal/app/lifecycle`.
-- `internal/infra/ghissue`, `internal/core/blockers`, `internal/app/briefing`,
-  `internal/infra/settings`, `internal/infra/displayname`, `internal/infra/atomicfs`,
-  `internal/infra/log`, `internal/infra/tty`, and `internal/core/exitcode` hold the remaining
-  reusable pieces. Plan status and blocked-task completion use
-  `ghissue.Runner.PRsForBranch` (`gh pr list --head <branch>`) because plan
-  tasks have no issue closed-by graph. `briefing.RenderTask` is the plan-task
-  briefing variant; it removes issue-closing footers and asks PR bodies to end
-  with `Plan: <slug> / Task: <id>`.
+`internal/` is a 4-layer architecture: `core` (pure logic, no process/network/
+FS/DB), `app` (use-case orchestration), `infra` (external process/FS/DB), and
+`ui` (TUI + web dashboard). Allowed imports: core -> core only; app ->
+core/app/infra; infra -> core/infra; ui -> all four; `cmd/fanout` is the
+composition root and no package may import `cmd/...`. `internal/arch` enforces
+the direction and a core stdlib-purity denylist in CI (depguard is off on
+purpose) and is itself class H — weakening it disables every layer guard.
+Canonical reference, the full package table, the Mermaid dependency diagram,
+and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
+
+- `cmd/fanout` is the composition root and CLI boundary: `main.go` (the
+  first-match-wins dispatch table, ldflags `version`/`commit` — class H),
+  `plancmd.go` (`fanout plan` flag parsing/validation; execution lives in
+  `app/run`), `status.go` / `lifecycle.go` / `msg.go` (thin dispatch into
+  `app/statusreport`, `app/lifecycle`, `app/peermsg`), `dashboard.go`,
+  `tui*.go` (the no-argument persistent TUI console wiring: `tui_issue.go`
+  issue-mode popup, `tui_launch.go` manual/plan/attach/shell launch — the
+  prompt-mode plan fan-out launches one coordinator pane at the project root
+  running the fanout-plan skill so `fanout plan`'s git root stays at the repo,
+  never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
+  `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
+  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` are class H; the
+  remaining cmd files (flag validation and thin dispatch into app) are
+  class M.
+- `internal/core` is pure logic with no process/network/FS/DB access:
+  `agent` (supported agent names, CLI validation for live mode; allowed
+  `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
+  schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
+  generation; identity-deciding, class M with `parentref`/`fanset`), and the
+  AI-reviewable `exitcode`/`cliview` (`blockers` is class M: it drives
+  --unblocked-only launch selection and wave computation).
+- `internal/app` orchestrates use cases on top of `core` and `infra`:
+  `panelaunch` (pane creation), `lifecycle`, `watch` (the label-watcher
+  cycle, pure at the package boundary via `watch.IO`), and `briefing` (the
+  prompt text injected into agents) are class H; `sessionview` (the read-only
+  `Snapshot` aggregator shared by the web dashboard and a future TUI),
+  `panelayout`, `run`, `statusreport`, `peermsg`, and `cliflags` (flag
+  validation that decides main's lifecycle branches) are class M.
+- `internal/infra` talks to external processes, the filesystem, and the
+  team SQLite bus: `state` (`.fanout/state.json` + its lock), `worktree`
+  (`git worktree add` under `.fanout/worktrees/<slug>/`), `hooks`,
+  `selfupdate`, and `team` (the `--team`/`fanout msg` per-parent SQLite bus:
+  `modernc.org/sqlite`, WAL mode, file mode `0600`, DB scoped to
+  `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
+  identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
+  prompt prefix as fallback), and `settings` (the safety gate that blocks
+  repo config from enabling the watcher or notification targets) are class
+  H; `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
+  `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`,
+  `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
+  and `atomicfs` (the shared write path for state.json and the tokened
+  dashboard.json) and `gitroot` (project/state-root resolution input) are class M; `log`,
+  `tty`, `execx`, and `browser` are class A.
+- `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
+  `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
+  `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class
+  H; `poller.go`, `sse.go`, and `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
+  cleanup wiring and confirmation flow) is class H, rendering/formatting
+  (`view.go` / `compact.go` / `styles.go`) is class A, and
+  the remaining key/form/polling wiring is class M. The dashboard SPA lives in `web/` (React + Vite + TS; `index.html`'s
+  no-referrer/external-fetch policy is class H, `src/hooks`+`src/lib`
+  transport is class M, the rest is class A) and bundles into
+  `internal/ui/dashboard/static/` via `go:embed`.
+
+The full package table, the Mermaid dependency diagram, the human-must-read
+invariant catalog, and the burn-down list of known layering debt are the
+canonical reference in `docs/architecture.ja.md`. Rule of thumb: a PR that
+touches a class-H package needs human review; a PR touching only class-A
+packages can rely on AI review.
 
 ## Behavior Boundaries
 
