@@ -1,6 +1,7 @@
 import { useMemo, type CSSProperties } from "react";
 import { filterTokens, tokenForKey } from "../lib/filter";
 import { FilterDropdown, type Option } from "./FilterDropdown";
+import { AGENT_STATES } from "./ui";
 
 /* 静的キーのドロップダウン定義。options をモジュール定数にすることで
  * memo(FilterDropdown) が snapshot tick の再レンダーをスキップできる。 */
@@ -21,10 +22,8 @@ const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: read
     {
       key: "run",
       ariaLabel: "agent 実行状態で絞り込み",
-      options: [
-        ["running", "running"],
-        ["done", "done"],
-      ],
+      // 6 値契約の単一情報源(ui.tsx AGENT_STATE_CLASSES)から順序ごと導出。
+      options: AGENT_STATES.map((s) => [s, s] as const),
     },
     {
       key: "ci",

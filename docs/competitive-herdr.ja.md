@@ -47,14 +47,14 @@ herdr が上位互換な 3 点を、tmux の上のレイヤーという形のま
 
 ### A. エージェント状態のセマンティック化(規模 M + web S)
 
-`@fanout_agent_state` を running / working / idle / blocked / done の 5 値 + 空に拡張する。キーも書き込み先(tmux pane user option)も変えない。running(起動済みだが粒度不明)と done(プロセス終了)は現行の起動ラッパーがそのまま書くので、hooks 非対応エージェントや旧版 fanout が起動したペインは自然に 2 値に留まり、後方互換は値のセマンティクスだけで成立する。
+`@fanout_agent_state` を running / working / idle / blocked / done の 5 値 + 空に拡張する。キーも書き込み先(tmux pane user option)も変えない。(2026-07 追記: 受理・表示側は session-notifications プランで実装済み。実装された契約は 5 値に Codex Plan Mode の plan を加えた 6 値 running / working / plan / blocked / idle / done。)running(起動済みだが粒度不明)と done(プロセス終了)は現行の起動ラッパーがそのまま書くので、hooks 非対応エージェントや旧版 fanout が起動したペインは自然に 2 値に留まり、後方互換は値のセマンティクスだけで成立する。
 
 - Claude Code: 起動コマンドに `--settings`(インライン JSON)で hooks を注入する。`UserPromptSubmit` / `PreToolUse` / `PostToolUse` → working、`Notification` → blocked、`Stop` → idle。`PreToolUse` は許可判定の前に発火するため、許可待ち(blocked)からの復帰はそれでは拾えず、次の `PostToolUse` か `Stop` で解除する。hook 実体は `tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state <state> 2>/dev/null || true` の 1 行シェルで、fanout バイナリを経由しない
 - Codex: hooks が既定有効で(`~/.codex/hooks.json` / `config.toml`、https://developers.openai.com/codex/hooks)、`PermissionRequest` → blocked に置き換えるほかは Claude と同じマッピングを組める。起動時注入の経路(`-c` での hooks 定義可否)と非管理 hooks の信頼確認ダイアログの挙動は spike で検証する
 - hook 信号は lifecycle 全体を覆う authority ではなく、表示・nudge・wait 向けの近似テレメトリと位置づける(herdr も Claude Code / Codex は session identity 統合で、状態検出には画面検出を併用している)。取りこぼしは `Stop` → idle と `--timeout` で回収し、状態値を正確性のクリティカルパスに置かない
 - herdr の「user 設定に hooks を書き込む」インストール方式(`integration install`)は採らない。起動時注入なら fanout が起動したペインにだけ効き、ユーザーの他セッションを汚さない
 
-波及先は `internal/app/sessionview` の `normalizeAgentState`(許可リスト拡張)、`cmd/fanout/msg.go` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
+波及先は `internal/app/sessionview` の `normalizeAgentState`(許可リスト拡張)、`internal/app/peermsg` の `shouldNudge`(idle と粒度不明の running だけ nudge し、working / blocked / done は no-op のまま。2026-07 追記: 実装では working / plan も nudge 許可に含めた — ターン中の入力は queue されて安全で、hooks 導入後はターンの大半が working になり running / idle だけでは nudge がほぼ届かないため。blocked / done / 未設定は no-op のまま)、TUI detail と web dashboard の状態表示。起動コマンドが変わるので Tier 2 dry-run golden は全件再生成になる。#106(レビュー追従 nudge)は blocked / busy を避けて idle の瞬間に届ける品質になり、#59(Wave 自動進行)の完了検知の土台にもなる。
 
 ### B. `fanout wait` — 待機プリミティブ(規模 M、A に依存)
 

@@ -14,7 +14,15 @@ import {
 } from "../lib/pane";
 import { COLS, type SortDir } from "../lib/sort";
 import type { PaneView, Rollup } from "../lib/types";
-import { AgentStateTag, DirtyTag, GhLink, IssueStateTag, PrPill, Tag } from "./ui";
+import {
+  AgentStateTag,
+  DirtyTag,
+  GhLink,
+  isKnownAgentState,
+  IssueStateTag,
+  PrPill,
+  Tag,
+} from "./ui";
 
 function BlockersCell({ pane }: { pane: PaneView }) {
   if (pane.blocked) return <Tag cls="t-warn">{`${openBlockerCount(pane)} open`}</Tag>;
@@ -97,7 +105,7 @@ function PaneRow({
       <td title={pane.tmuxTitle ?? ""}>
         <span className={pane.alive ? "dot on" : "dot off"} aria-hidden="true"></span>
         {pane.alive ? "live" : pane.tmuxState || "stale"}
-        {(pane.agentState === "running" || pane.agentState === "done") && (
+        {isKnownAgentState(pane.agentState) && (
           <>
             {" "}
             <AgentStateTag state={pane.agentState} />
