@@ -9,6 +9,16 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.9.0 (2026-07-06)
+
+- **Persistent console overhaul.** The no-argument console gained a compact Session switcher (toggle with `v`), `1`–`9` number jumps, `Z` zoom, an AgentState column, and a tmux-popup shortcut help modal, and it restores its panes on restart. Return to it from any pane with `F11` or the `prefix T` binding. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Richer new-session modal.** Pressing `n` opens Prompt and Issue modes. Prompt mode takes a multi-line prompt with `@`-mention file completion and a plan fan-out checkbox; Issue mode adds a GraphQL-paged issue picker that marks parent / child / standalone issues and count-based `claude` / `codex` selection. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Themed, auto-laid-out panes.** Panes tile through a dmux-style auto-layout and carry fanout-colored borders labeled `#parent · name`. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **New review skills.** Added the `session-retro` skill, which mines past sessions for recurring tool errors, CI failures, and review findings, and gave `post-work-review` a project-verification pass plus a review checklist. See [Agent Integrations]({{< relref "/docs/agents" >}}).
+- **4-layer internal architecture.** Reorganized `internal/` into `core` / `app` / `infra` / `ui` layers with a CI-enforced import direction. No behavior change; the canonical reference is `docs/architecture.ja.md`.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.9.0)
+
 ## v0.8.0 (2026-06-24)
 
 - **Label watcher.** Opt in to a TUI-resident watcher that turns trusted `fanout:auto` issues into one-shot fanout sessions. It swaps the trigger label to `fanout:running` before launch, classifies issues with OPEN children as parent fan-outs, and honors a live-pane budget. Enable it only through user config or `FANOUT_WATCHER*` environment variables; repo config can set the labels, interval, child agent, and session cap but never opt a checkout into launching. See [Workflow]({{< relref "/docs/workflow" >}}) and [Settings]({{< relref "/docs/settings" >}}).
