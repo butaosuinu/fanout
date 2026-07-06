@@ -124,15 +124,14 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 				return err
 			}
 		} else {
-			// The initial plan turn runs inside the interactive TUI here, so
-			// fanout cannot observe its completion (keeping this client open
-			// would let handleServerRequest auto-answer approval requests
-			// meant for the TUI). No working/plan state is reported.
+			// The initial plan turn runs inside the interactive TUI here. Keep
+			// the initialized controller connection open so the post-ready
+			// notification watcher can mirror turn/started and turn/completed
+			// into @fanout_agent_state without answering TUI-owned requests.
 			err = seedCodexPlanThreadForResume(client, thread.ID)
 			if err != nil {
 				return err
 			}
-			client.Close()
 			tuiPrompt = cfg.Prompt
 		}
 	} else {
@@ -265,7 +264,11 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 }
 
 func startCodexPlanTurn(client requester, thread codexThreadInfo, cwd, prompt string) (codexPlanTurnStartResult, error) {
-	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, codexPlanCollaborationMode(thread.Model, thread.PlanEffort))
+	var collaborationMode map[string]any
+	if thread.UseTurnCollaborationMode {
+		collaborationMode = codexPlanCollaborationMode(thread.Model, thread.PlanEffort)
+	}
+	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, collaborationMode)
 	result, err := client.Request("fanout-turn", "turn/start", params)
 	if err != nil {
 		return codexPlanTurnStartResult{}, err

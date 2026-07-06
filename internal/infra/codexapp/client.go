@@ -81,7 +81,9 @@ func (c *client) Close() {
 	if c == nil || c.conn == nil {
 		return
 	}
-	_ = c.conn.Close()
+	conn := c.conn
+	c.conn = nil
+	_ = conn.Close()
 }
 
 func (c *client) send(v any) error {

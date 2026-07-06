@@ -187,12 +187,8 @@ func TestCodexPlanThreadStartsInitialTurnAfterSettingsUpdate(t *testing.T) {
 	}
 
 	turn := client.lastRequest("turn/start").paramsMap(t)
-	mode, ok := turn["collaborationMode"].(map[string]any)
-	if !ok {
-		t.Fatalf("turn/start missing collaborationMode: %#v", turn)
-	}
-	if mode["mode"] != "plan" {
-		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
+	if _, ok := turn["collaborationMode"]; ok {
+		t.Fatalf("turn/start collaborationMode = %#v, want absent after thread/settings/update", turn["collaborationMode"])
 	}
 	assertTurnStartText(t, turn, "hello plan")
 }
@@ -368,6 +364,16 @@ func TestDrainCodexAppServerSkipsPlanWhenClientClosed(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("states = %v, want none", states)
+	}
+}
+
+func TestClientCloseClearsConnectionForWatchGate(t *testing.T) {
+	client := &client{conn: &websocketJSONConn{}}
+
+	client.Close()
+
+	if canWatchAppServer(client) {
+		t.Fatal("canWatchAppServer() = true after Close, want false")
 	}
 }
 
