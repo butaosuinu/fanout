@@ -80,6 +80,37 @@ printf '132 41\n'
 	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "#{client_width} #{client_height}"})
 }
 
+func TestPaneGeometryForPane(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '10\t2\t40\t20\t132\t41\n'
+`)
+
+	got, err := PaneGeometryForPane("%7")
+	if err != nil {
+		t.Fatalf("PaneGeometryForPane() failed: %v", err)
+	}
+	want := PaneGeometry{Left: 10, Top: 2, Width: 40, Height: 20, ClientWidth: 132, ClientHeight: 41}
+	if got != want {
+		t.Fatalf("PaneGeometryForPane() = %#v, want %#v", got, want)
+	}
+	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "-t", "%7", "-F", paneGeometryFormat})
+}
+
+func TestPaneGeometryForPaneRejectsBadOutput(t *testing.T) {
+	installTmuxShim(t, `printf '10\t2\t40\n'
+`)
+
+	if _, err := PaneGeometryForPane("%7"); err == nil {
+		t.Fatal("PaneGeometryForPane() succeeded for malformed output")
+	}
+}
+
+func TestPaneGeometryForPaneRejectsMalformedPaneID(t *testing.T) {
+	if _, err := PaneGeometryForPane("pane"); err == nil {
+		t.Fatal("PaneGeometryForPane() succeeded for malformed pane id")
+	}
+}
+
 func TestDisplayPopupBuildsCenteredArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
@@ -105,6 +136,35 @@ func TestDisplayPopupBuildsCenteredArgs(t *testing.T) {
 		"-y", "C",
 		"-T", "New agent pane",
 		"/tmp/fanout __tui-new-pane-popup",
+	})
+}
+
+func TestDisplayPopupBuildsPositionedArgs(t *testing.T) {
+	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+
+	err := DisplayPopup(PopupOptions{
+		Width:    76,
+		Height:   20,
+		StartDir: "/tmp/repo",
+		Title:    "Keyboard shortcuts",
+		Command:  "/tmp/fanout __tui-help-popup",
+		Position: &PopupPosition{X: 41, Y: 0},
+	})
+	if err != nil {
+		t.Fatalf("DisplayPopup() failed: %v", err)
+	}
+	assertTmuxArgs(t, argsPath, []string{
+		"display-popup", "-E",
+		"-b", popupBorderLines,
+		"-S", popupBorderStyle,
+		"-w", "76",
+		"-h", "20",
+		"-d", "/tmp/repo",
+		"-x", "41",
+		"-y", "0",
+		"-T", "Keyboard shortcuts",
+		"/tmp/fanout __tui-help-popup",
 	})
 }
 

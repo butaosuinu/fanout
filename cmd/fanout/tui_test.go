@@ -280,6 +280,54 @@ func TestTUIClosePopupGeometryUsesClientDimensions(t *testing.T) {
 	}
 }
 
+func TestTUIPopupPositionAdjacentToPane(t *testing.T) {
+	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
+		Left: 0, Width: 40, ClientWidth: 160,
+	}, 90)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 41, Y: 0}) {
+		t.Fatalf("popup position = %#v, want x=41 y=0", got)
+	}
+}
+
+func TestTUIPopupPositionClampsToClient(t *testing.T) {
+	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
+		Left: 0, Width: 40, ClientWidth: 80,
+	}, 76)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 4, Y: 0}) {
+		t.Fatalf("clamped popup position = %#v, want x=4 y=0", got)
+	}
+}
+
+func TestTUIPopupPositionUsesLeftSideForRightPane(t *testing.T) {
+	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
+		Left: 80, Width: 80, ClientWidth: 160,
+	}, 70)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 9, Y: 0}) {
+		t.Fatalf("left-side popup position = %#v, want x=9 y=0", got)
+	}
+}
+
+func TestTUIPopupPositionChoosesLowerOverlapEdge(t *testing.T) {
+	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
+		Left: 80, Width: 80, ClientWidth: 160,
+	}, 90)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 0, Y: 0}) {
+		t.Fatalf("edge popup position = %#v, want x=0 y=0", got)
+	}
+}
+
+func TestTUIPopupPositionFallsBackWithoutPane(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
+	if got := tuiPopupPositionForCurrentPane(90); got != nil {
+		t.Fatalf("popup position = %#v, want centered fallback", got)
+	}
+
+	t.Setenv("TMUX_PANE", "%tui")
+	if got := tuiPopupPositionForCurrentPane(90); got != nil {
+		t.Fatalf("popup position with malformed pane id = %#v, want centered fallback", got)
+	}
+}
+
 func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 	tests := []struct {
 		name   string
