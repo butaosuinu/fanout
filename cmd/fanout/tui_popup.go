@@ -267,7 +267,7 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 			StartDir: projectRoot,
 			Title:    "Keyboard shortcuts",
 			Command:  tuiHelpPopupShellCommand(commandName, geometry.ContentWidth, geometry.ContentHeight),
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth),
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
 		})
 	}
 }
@@ -365,7 +365,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			StartDir: projectRoot,
 			Title:    "New agent pane",
 			Command:  command,
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth),
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
 		})
 		result, readErr := readTUINewPanePopupResult(resultFile)
 		if os.IsNotExist(readErr) && displayErr == nil {
@@ -398,7 +398,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 	}
 }
 
-func tuiPopupPositionForCurrentPane(popupWidth int) *tmuxrun.PopupPosition {
+func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *tmuxrun.PopupPosition {
 	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if paneID == "" {
 		return nil
@@ -407,14 +407,15 @@ func tuiPopupPositionForCurrentPane(popupWidth int) *tmuxrun.PopupPosition {
 	if err != nil {
 		return nil
 	}
-	return tuiPopupPositionAdjacentToPane(geom, popupWidth)
+	return tuiPopupPositionAdjacentToPane(geom, popupWidth, popupHeight)
 }
 
-func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth int) *tmuxrun.PopupPosition {
-	if popupWidth <= 0 || geom.ClientWidth <= 0 {
+func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth, popupHeight int) *tmuxrun.PopupPosition {
+	if popupWidth <= 0 || popupHeight <= 0 || geom.ClientWidth <= 0 || geom.ClientHeight <= 0 {
 		return nil
 	}
 	maxX := max(geom.ClientWidth-popupWidth, 0)
+	maxY := max(geom.ClientHeight-popupHeight, 0)
 	rightX := geom.Left + geom.Width + 1
 	leftX := geom.Left - popupWidth - 1
 	x := rightX
@@ -427,7 +428,7 @@ func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth int) *
 	}
 	return &tmuxrun.PopupPosition{
 		X: min(max(x, 0), maxX),
-		Y: 0,
+		Y: min(max(geom.Top, 0), maxY),
 	}
 }
 

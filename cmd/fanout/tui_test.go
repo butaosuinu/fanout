@@ -282,26 +282,26 @@ func TestTUIClosePopupGeometryUsesClientDimensions(t *testing.T) {
 
 func TestTUIPopupPositionAdjacentToPane(t *testing.T) {
 	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
-		Left: 0, Width: 40, ClientWidth: 160,
-	}, 90)
-	if got == nil || *got != (tmuxrun.PopupPosition{X: 41, Y: 0}) {
-		t.Fatalf("popup position = %#v, want x=41 y=0", got)
+		Left: 0, Top: 3, Width: 40, Height: 20, ClientWidth: 160, ClientHeight: 40,
+	}, 90, 20)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 41, Y: 3}) {
+		t.Fatalf("popup position = %#v, want x=41 y=3", got)
 	}
 }
 
 func TestTUIPopupPositionClampsToClient(t *testing.T) {
 	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
-		Left: 0, Width: 40, ClientWidth: 80,
-	}, 76)
-	if got == nil || *got != (tmuxrun.PopupPosition{X: 4, Y: 0}) {
-		t.Fatalf("clamped popup position = %#v, want x=4 y=0", got)
+		Left: 0, Top: 18, Width: 40, Height: 6, ClientWidth: 80, ClientHeight: 24,
+	}, 76, 20)
+	if got == nil || *got != (tmuxrun.PopupPosition{X: 4, Y: 4}) {
+		t.Fatalf("clamped popup position = %#v, want x=4 y=4", got)
 	}
 }
 
 func TestTUIPopupPositionUsesLeftSideForRightPane(t *testing.T) {
 	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
-		Left: 80, Width: 80, ClientWidth: 160,
-	}, 70)
+		Left: 80, Width: 80, ClientWidth: 160, ClientHeight: 40,
+	}, 70, 20)
 	if got == nil || *got != (tmuxrun.PopupPosition{X: 9, Y: 0}) {
 		t.Fatalf("left-side popup position = %#v, want x=9 y=0", got)
 	}
@@ -309,8 +309,8 @@ func TestTUIPopupPositionUsesLeftSideForRightPane(t *testing.T) {
 
 func TestTUIPopupPositionChoosesLowerOverlapEdge(t *testing.T) {
 	got := tuiPopupPositionAdjacentToPane(tmuxrun.PaneGeometry{
-		Left: 80, Width: 80, ClientWidth: 160,
-	}, 90)
+		Left: 80, Width: 80, ClientWidth: 160, ClientHeight: 40,
+	}, 90, 20)
 	if got == nil || *got != (tmuxrun.PopupPosition{X: 0, Y: 0}) {
 		t.Fatalf("edge popup position = %#v, want x=0 y=0", got)
 	}
@@ -318,12 +318,12 @@ func TestTUIPopupPositionChoosesLowerOverlapEdge(t *testing.T) {
 
 func TestTUIPopupPositionFallsBackWithoutPane(t *testing.T) {
 	t.Setenv("TMUX_PANE", "")
-	if got := tuiPopupPositionForCurrentPane(90); got != nil {
+	if got := tuiPopupPositionForCurrentPane(90, 20); got != nil {
 		t.Fatalf("popup position = %#v, want centered fallback", got)
 	}
 
 	t.Setenv("TMUX_PANE", "%tui")
-	if got := tuiPopupPositionForCurrentPane(90); got != nil {
+	if got := tuiPopupPositionForCurrentPane(90, 20); got != nil {
 		t.Fatalf("popup position with malformed pane id = %#v, want centered fallback", got)
 	}
 }
