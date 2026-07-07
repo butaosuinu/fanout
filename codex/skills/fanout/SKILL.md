@@ -418,7 +418,7 @@ API + parent body. Key points:
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
   Plan Mode path automatically but pass the popup prompt inline instead of
-  writing a `/tmp` briefing file. The inline prompt keeps normal non-mutating
+  writing a briefing file. The inline prompt keeps normal non-mutating
   discovery before the `<proposed_plan>` response.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
   thread, and resumes it with the child prompt through the interactive Codex

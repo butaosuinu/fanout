@@ -130,15 +130,8 @@ func (l *Launcher) launch(req Request) (created, bool) {
 		return created{}, false
 	}
 
-	if req.BriefingPath != "" && !l.Cfg.DryRun {
-		if mkdirErr := os.MkdirAll(filepath.Dir(req.BriefingPath), 0o755); mkdirErr != nil {
-			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), mkdirErr)
-			return created{}, false
-		}
-		if writeErr := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); writeErr != nil {
-			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), writeErr)
-			return created{}, false
-		}
+	if req.BriefingPath != "" && !l.Cfg.DryRun && !l.writeBriefing(req) {
+		return created{}, false
 	}
 
 	logPaneRequest(req, l.Log)
@@ -221,6 +214,20 @@ func (l *Launcher) launch(req Request) (created, bool) {
 	return created{Request: req, PaneID: paneID, Prepared: prepared}, true
 }
 
+// writeBriefing creates the briefing directory and writes req.BriefingBody to
+// req.BriefingPath, logging under the pane's label on failure.
+func (l *Launcher) writeBriefing(req Request) bool {
+	if err := os.MkdirAll(filepath.Dir(req.BriefingPath), 0o755); err != nil {
+		l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
+		return false
+	}
+	if err := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
+		l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
+		return false
+	}
+	return true
+}
+
 // Attach creates one agent pane attached to an existing directory (no
 // worktree preparation, no WorktreeCreated hook, no metadata write).
 func (l *Launcher) Attach(req Request, targetPath string) bool {
@@ -230,15 +237,8 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 		return false
 	}
 	req.AgentCommand = agentCmd
-	if req.BriefingPath != "" {
-		if err = os.MkdirAll(filepath.Dir(req.BriefingPath), 0o755); err != nil {
-			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
-			return false
-		}
-		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
-			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
-			return false
-		}
+	if req.BriefingPath != "" && !l.writeBriefing(req) {
+		return false
 	}
 
 	l.Log.Info("%s: attach %s to %s", paneLogLabel(req), req.Agent, targetPath)
