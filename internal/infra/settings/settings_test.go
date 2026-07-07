@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -338,6 +339,116 @@ func TestUserConfigPathHonorsXDGConfigHome(t *testing.T) {
 	want := "/tmp/fanout-xdg/fanout/config.json"
 	if got != want {
 		t.Fatalf("UserConfigPath() = %q, want %q", got, want)
+	}
+}
+
+func TestSaveEditablePreservesUnknownKeysAndDeletesInheritedValues(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	path := filepath.Join(xdg, "fanout", "config.json")
+	writeConfig(t, path, `{
+  "custom": "keep",
+  "autoPullRequest": false,
+  "notifications": "ntfy",
+  "ntfyURL": "https://ntfy.example/topic"
+}`)
+
+	gotPath, err := SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
+		"autoPullRequest":        {},
+		"prReviewGate":           BoolValue(false),
+		"watcherIntervalSeconds": IntValue(20),
+		"notifications":          StringValue("tmux bell"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != path {
+		t.Fatalf("SaveEditable path = %q, want %q", gotPath, path)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if unmarshalErr := json.Unmarshal(body, &root); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if root["custom"] != "keep" {
+		t.Fatalf("custom key = %#v, want preserved", root["custom"])
+	}
+	if _, ok := root["autoPullRequest"]; ok {
+		t.Fatalf("autoPullRequest should have been deleted for inherit:\n%s", body)
+	}
+	if root["prReviewGate"] != false {
+		t.Fatalf("prReviewGate = %#v, want false", root["prReviewGate"])
+	}
+	if root["notifications"] != "tmux,bell" {
+		t.Fatalf("notifications = %#v, want normalized tmux,bell", root["notifications"])
+	}
+	if root["ntfyURL"] != "https://ntfy.example/topic" {
+		t.Fatalf("ntfyURL = %#v, want preserved untouched", root["ntfyURL"])
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("user config mode = %o, want 600", got)
+	}
+}
+
+func TestSaveEditableWritesRepoConfigWorldReadable(t *testing.T) {
+	repo := t.TempDir()
+	setEmptyUserConfig(t)
+	clearEnv(t)
+	path := RepoConfigPath(repo)
+
+	gotPath, err := SaveEditable(repo, ConfigScopeRepo, map[string]ConfigValue{
+		"autoPullRequest": BoolValue(false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != path {
+		t.Fatalf("SaveEditable path = %q, want %q", gotPath, path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("repo config mode = %o, want 644", got)
+	}
+}
+
+func TestSaveEditableRejectsUnsafeRepoSettingsWithoutChangingFile(t *testing.T) {
+	repo := t.TempDir()
+	setEmptyUserConfig(t)
+	clearEnv(t)
+	path := RepoConfigPath(repo)
+	original := "{\n  \"custom\": \"keep\"\n}\n"
+	writeConfig(t, path, original)
+
+	_, err := SaveEditable(repo, ConfigScopeRepo, map[string]ConfigValue{
+		"watcher": BoolValue(true),
+	})
+	if err == nil {
+		t.Fatal("SaveEditable(repo watcher) = nil, want error")
+	}
+	body, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(body) != original {
+		t.Fatalf("repo config changed after rejected save:\nwant %q\ngot  %q", original, body)
+	}
+
+	_, err = SaveEditable(repo, ConfigScopeRepo, map[string]ConfigValue{
+		"notifications": StringValue("bell,slack"),
+	})
+	if err == nil {
+		t.Fatal("SaveEditable(repo slack notifications) = nil, want error")
 	}
 }
 

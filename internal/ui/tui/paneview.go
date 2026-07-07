@@ -180,7 +180,7 @@ func columnsForWidth(width int) []table.Column {
 }
 
 func (m model) footerText() string {
-	parts := []string{"? help"}
+	parts := []string{"? help", "s settings"}
 	if m.filterEditing {
 		parts = append(parts, "typing")
 	}

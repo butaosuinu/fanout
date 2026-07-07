@@ -267,6 +267,21 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 	if !enabled {
 		return
 	}
+	syncDashboardKey(lg, enabled, false)
+}
+
+func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
+	if !enabled {
+		if cleanupDisabled {
+			if err := tmuxrun.UnbindDashboardKeys(defaultDashboardKey, defaultDashboardDirectKey); err != nil {
+				lg.Debug("dashboard keybind cleanup: %v (not in tmux?)", err)
+			}
+			if err := tmuxrun.UnbindWorktreeActionKey(defaultWorktreeActionKey); err != nil {
+				lg.Debug("worktree action keybind cleanup: %v (not in tmux?)", err)
+			}
+		}
+		return
+	}
 	bin, err := os.Executable()
 	if err != nil {
 		lg.Debug("dashboard keybind: cannot resolve fanout binary path: %v", err)

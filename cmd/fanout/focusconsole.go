@@ -185,6 +185,18 @@ func bindConsoleKey(lg *log.Logger, enabled bool) {
 	if !enabled {
 		return
 	}
+	syncConsoleKey(lg, enabled, false)
+}
+
+func syncConsoleKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
+	if !enabled {
+		if cleanupDisabled {
+			if err := tmuxrun.UnbindConsoleKeys(defaultConsoleKey, defaultConsoleDirectKey); err != nil {
+				lg.Debug("console keybind cleanup: %v (not in tmux?)", err)
+			}
+		}
+		return
+	}
 	bin, err := os.Executable()
 	if err != nil {
 		lg.Debug("console keybind: cannot resolve fanout binary path: %v", err)

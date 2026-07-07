@@ -42,6 +42,7 @@ fanout reads structured agent state from the pane's `@fanout_agent_state` tmux o
 | `[` / `]` | Jump to the previous / next Session group. |
 | `/` | Filter the loaded rows (free text or a predicate such as `state:open`). `Esc` only leaves the input; pressing `Esc` again from the list clears the filter. |
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
+| `s` | Open the settings tmux popup. Choose user or repo config, edit the same keys as `config.json`, and save with `Ctrl+S`. |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it removes only the tmux pane and the state row; it never deletes the git worktree. |
@@ -58,6 +59,10 @@ fanout reads structured agent state from the pane's `@fanout_agent_state` tmux o
 ### Compact view
 
 Below 80 columns, the table and detail panel become a one-line-per-pane switcher, and only the selected row expands into details such as branch, PR, and ci / wave / blockers / dirty.
+
+### Settings popup
+
+Press `s` to edit fanout's JSON settings without leaving the console. The Target row switches between user config and repo config; each setting can be set or returned to `inherit`, which removes that key from the selected file. CLI flags and `FANOUT_*` environment variables still win over saved files. Repo config keeps the same safety rules as `config.json`: it cannot enable the watcher or HTTP notification endpoints, and its notification channels are limited to `bell`, `tmux`, and `none`.
 
 ### F11 / prefix + T
 

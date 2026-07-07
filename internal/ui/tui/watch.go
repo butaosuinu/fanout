@@ -27,7 +27,8 @@ func (m model) watchTickCmd() tea.Cmd {
 		return nil
 	}
 	interval := m.opts.WatchInterval
-	return tea.Tick(interval, func(t time.Time) tea.Msg { return watchTickMsg(t) })
+	gen := m.watchTickGen
+	return tea.Tick(interval, func(t time.Time) tea.Msg { return watchTickMsg{at: t, gen: gen} })
 }
 
 func (m model) runWatchCmd() tea.Cmd {

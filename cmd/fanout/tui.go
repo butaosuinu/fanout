@@ -93,6 +93,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		NewPanePrompt:       newTUINewPanePromptFunc(projectRoot, commandName),
 		HelpPopup:           newTUIHelpPopupFunc(projectRoot, commandName),
 		CloseChoicePopup:    newTUICloseChoicePopupFunc(projectRoot, commandName),
+		SettingsPopup:       newTUISettingsPopupFunc(projectRoot, commandName),
+		ReloadSettings:      newTUISettingsReloadFunc(projectRoot, session, commandName, hookConfig, lg),
 		LaunchAttach:        newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig),
 		// List providers also feed the in-process fallback form (NewPanePrompt
 		// unavailable); the popup process wires its own copies.
@@ -108,6 +110,36 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, lg *log.Logger) fanouttui.SettingsReloadFunc {
+	return func() (fanouttui.SettingsRuntime, error) {
+		resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+		watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
+		if err != nil {
+			return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", err)
+		}
+		notifier, err := fanoutnotify.New(fanoutnotify.Config{
+			Channels:        resolvedSettings.Notifications,
+			TmuxTarget:      session,
+			NtfyURL:         resolvedSettings.NtfyURL,
+			SlackWebhookURL: resolvedSettings.SlackWebhookURL,
+			BellWriter:      os.Stdout,
+		})
+		if err != nil {
+			return fanouttui.SettingsRuntime{}, fmt.Errorf("notifications: %w", err)
+		}
+		syncDashboardKey(lg, resolvedSettings.DashboardKeybind, true)
+		syncConsoleKey(lg, resolvedSettings.ConsoleKeybind, true)
+		return fanouttui.SettingsRuntime{
+			Watcher:             watcher,
+			WatchInterval:       watchInterval,
+			WatchLabel:          watchLabel,
+			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
+			Notifier:            notifier,
+			LaunchIssue:         newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
+		}, nil
+	}
 }
 
 func tuiLaunchTarget(session string) string {

@@ -33,7 +33,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
-		if (m.newPanePopupOpen || m.helpPopupOpen || m.closePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+		if (m.newPanePopupOpen || m.helpPopupOpen || m.closePopupOpen || m.settingsPopupOpen || m.newPane.launching) && m.mode != modeNewPane {
 			// An issue launch can run a whole fan-out (seconds per child), so
 			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
 			// queue a quit instead of appearing hung.
@@ -72,6 +72,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeCloseChoice {
 			return m, nil
 		}
+		if m.mode == modeSettings {
+			return m.updateSettings(msg)
+		}
 		if m.mode == modeNewPane {
 			return m.updateNewPane(msg)
 		}
@@ -100,6 +103,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.jumpSession(1)
 		case "n":
 			return m, m.openNewPanePopupCmd()
+		case "s":
+			return m, m.openSettingsPopupCmd()
 		case "a":
 			return m, m.openAttachAgentForm()
 		case "A":
@@ -241,6 +246,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ghTickMsg:
 		return m, m.loadGHCmd(true)
 	case watchTickMsg:
+		if msg.gen != m.watchTickGen {
+			return m, nil
+		}
 		if m.opts.Watcher == nil {
 			return m, nil
 		}
@@ -341,6 +349,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = ""
 		}
 		return m, m.lifecycleCmd(pending)
+	case settingsPopupDoneMsg:
+		m.settingsPopupOpen = false
+		if msg.err != nil {
+			m.notice = "settings popup: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.canceled {
+			if m.notice == settingsPopupOpeningNotice {
+				m.notice = ""
+			}
+			return m, nil
+		}
+		if msg.result.Saved {
+			m.notice = "settings saved: " + displayConfigPath(msg.result.Path)
+			return m, m.reloadSettingsCmd(msg.result)
+		}
+		if m.notice == settingsPopupOpeningNotice {
+			m.notice = ""
+		}
+		return m, nil
+	case settingsReloadedMsg:
+		if msg.err != nil {
+			m.notice = "settings saved; reload failed: " + msg.err.Error()
+			return m, nil
+		}
+		cmd := applySettingsRuntime(&m, msg.runtime)
+		if msg.result.Path != "" {
+			m.notice = "settings saved: " + displayConfigPath(msg.result.Path)
+		}
+		return m, cmd
 	case newPaneIssuesLoadedMsg:
 		p := &m.newPane.issuePicker
 		p.loading = false

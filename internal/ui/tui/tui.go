@@ -50,6 +50,8 @@ type Options struct {
 	NewPanePrompt       NewPanePromptFunc
 	HelpPopup           HelpPopupFunc
 	CloseChoicePopup    CloseChoicePopupFunc
+	SettingsPopup       SettingsPopupFunc
+	ReloadSettings      SettingsReloadFunc
 	LaunchAttach        AttachLaunchFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
@@ -80,70 +82,81 @@ const (
 	modeNewPane
 	modeHelp
 	modeCloseChoice
+	modeSettings
 )
 
 type model struct {
-	opts             Options
-	mode             viewMode
-	table            table.Model
-	detail           viewport.Model
-	width            int
-	height           int
-	allPanes         []paneView
-	panes            []paneView
-	filterQuery      string
-	filterEditing    bool
-	viewOverride     viewOverride
-	issues           map[issueKey]issueStatus
-	lastState        time.Time
-	lastGH           time.Time
-	stateErr         string
-	ghErr            string
-	notifyErr        string
-	watchRunning     bool
-	lastWatch        time.Time
-	watchLaunched    int
-	watchErr         string
-	watchDisabled    bool
-	notice           string
-	newPane          newPaneForm
-	newPanePopupOpen bool
-	helpPopupOpen    bool
-	closePopupOpen   bool
-	repoFiles        []string
-	repoFileIndex    []fileEntry
-	repoFilesLoaded  bool
-	repoFilesLoading bool
-	repoFilesErr     string
-	peek             panePeek
-	pendingAction    *pendingLifecycleAction
-	actionRunning    bool
-	quitAfterAction  bool
-	actionMessage    string
-	notifications    map[issueKey]issueTransitionSnapshot
-	notifyPrimed     bool
-	keyboardPaused   bool
-	quitAfterLaunch  bool
-	relayoutGen      int
-	promptOnly       bool
-	helpOnly         bool
-	closeOnly        bool
-	promptDone       bool
-	promptCanceled   bool
-	promptResult     LaunchRequest
-	agentStates      map[string]agentTransitionSnapshot
-	agentPrimed      bool
-	closeDone        bool
-	closeCanceled    bool
-	closeResult      lifecycle.CloseMode
+	opts              Options
+	mode              viewMode
+	table             table.Model
+	detail            viewport.Model
+	width             int
+	height            int
+	allPanes          []paneView
+	panes             []paneView
+	filterQuery       string
+	filterEditing     bool
+	viewOverride      viewOverride
+	issues            map[issueKey]issueStatus
+	lastState         time.Time
+	lastGH            time.Time
+	stateErr          string
+	ghErr             string
+	notifyErr         string
+	watchRunning      bool
+	lastWatch         time.Time
+	watchLaunched     int
+	watchErr          string
+	watchDisabled     bool
+	watchTickGen      int
+	notice            string
+	newPane           newPaneForm
+	settings          settingsForm
+	newPanePopupOpen  bool
+	helpPopupOpen     bool
+	closePopupOpen    bool
+	settingsPopupOpen bool
+	repoFiles         []string
+	repoFileIndex     []fileEntry
+	repoFilesLoaded   bool
+	repoFilesLoading  bool
+	repoFilesErr      string
+	peek              panePeek
+	pendingAction     *pendingLifecycleAction
+	actionRunning     bool
+	quitAfterAction   bool
+	actionMessage     string
+	notifications     map[issueKey]issueTransitionSnapshot
+	notifyPrimed      bool
+	keyboardPaused    bool
+	quitAfterLaunch   bool
+	relayoutGen       int
+	promptOnly        bool
+	helpOnly          bool
+	closeOnly         bool
+	promptDone        bool
+	promptCanceled    bool
+	promptResult      LaunchRequest
+	agentStates       map[string]agentTransitionSnapshot
+	agentPrimed       bool
+	closeDone         bool
+	closeCanceled     bool
+	closeResult       lifecycle.CloseMode
+	settingsOnly      bool
+	settingsDone      bool
+	settingsCanceled  bool
+	settingsResult    SettingsPopupResult
 }
 
 type keyboardProtocolsEnabledMsg struct{}
 
 type (
-	stateTickMsg  time.Time
-	ghTickMsg     time.Time
-	watchTickMsg  time.Time
+	stateTickMsg time.Time
+	ghTickMsg    time.Time
+	watchTickMsg struct {
+		at  time.Time
+		gen int
+	}
 	launchPaneMsg struct {
 		notice   string
 		count    int
@@ -162,6 +175,16 @@ type (
 		mode     lifecycle.CloseMode
 		canceled bool
 		err      error
+	}
+	settingsPopupDoneMsg struct {
+		result   SettingsPopupResult
+		canceled bool
+		err      error
+	}
+	settingsReloadedMsg struct {
+		result  SettingsPopupResult
+		runtime SettingsRuntime
+		err     error
 	}
 	launchShellMsg struct {
 		req ShellLaunchRequest
@@ -292,6 +315,9 @@ func newModel(opts Options) model {
 
 func (m model) Init() tea.Cmd {
 	if m.closeOnly {
+		return nil
+	}
+	if m.settingsOnly {
 		return nil
 	}
 	if m.helpOnly {
