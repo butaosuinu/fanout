@@ -634,6 +634,83 @@ func TestBindDashboardKeysRejectsEmptyArgs(t *testing.T) {
 	}
 }
 
+func TestUnbindDashboardKeysRemovesPrefixAndDirectBindings(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+if [ "$1" = list-keys ] && [ "$3" = prefix ] && [ "$4" = D ]; then
+  printf 'bind-key D run-shell -b /abs/fanout dashboard --web --open; tmux new-window -n fanout-dashboard\n'
+fi
+if [ "$1" = list-keys ] && [ "$3" = root ] && [ "$4" = F12 ]; then
+  printf 'bind-key -n F12 run-shell -b /abs/fanout dashboard --web --open; tmux new-window -n fanout-dashboard\n'
+fi
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := UnbindDashboardKeys("D", "F12"); err != nil {
+		t.Fatalf("UnbindDashboardKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := strings.Split(strings.TrimSuffix(string(body), "\n---\n"), "\n---\n")
+	if len(commands) != 4 {
+		t.Fatalf("tmux command count = %d, want 4\n%s", len(commands), body)
+	}
+	if got := strings.Split(commands[0], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"list-keys", "-T", "prefix", "D"}, "\x00") {
+		t.Fatalf("prefix list tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[1], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"unbind-key", "-q", "D"}, "\x00") {
+		t.Fatalf("prefix unbind tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[2], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"list-keys", "-T", "root", "F12"}, "\x00") {
+		t.Fatalf("direct list tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[3], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"unbind-key", "-q", "-n", "F12"}, "\x00") {
+		t.Fatalf("direct unbind tmux args = %#v", got)
+	}
+}
+
+func TestUnbindDashboardKeysKeepsNonFanoutBindings(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+if [ "$1" = list-keys ] && [ "$3" = prefix ] && [ "$4" = D ]; then
+  printf 'bind-key D send-prefix\n'
+fi
+if [ "$1" = list-keys ] && [ "$3" = root ] && [ "$4" = F12 ]; then
+  printf 'bind-key -n F12 display-message user-binding\n'
+fi
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := UnbindDashboardKeys("D", "F12"); err != nil {
+		t.Fatalf("UnbindDashboardKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "unbind-key") {
+		t.Fatalf("tmux log unbound non-fanout bindings:\n%s", body)
+	}
+}
+
 func TestBindConsoleKeysRegistersRunShellBindings(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")
@@ -748,6 +825,51 @@ func TestBindConsoleKeysRejectsEmptyArgs(t *testing.T) {
 	}
 }
 
+func TestUnbindConsoleKeysRemovesPrefixAndDirectBindings(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
+printf '%s\n' '---' >> "$TMUXRUN_ARGS"
+if [ "$1" = list-keys ] && [ "$3" = prefix ] && [ "$4" = T ]; then
+  printf 'bind-key T run-shell /abs/fanout focus-console --from "#{pane_id}"; tmux display-message "fanout: focus-console failed"\n'
+fi
+if [ "$1" = list-keys ] && [ "$3" = root ] && [ "$4" = F11 ]; then
+  printf 'bind-key -n F11 run-shell /abs/fanout focus-console --from "#{pane_id}"; tmux display-message "fanout: focus-console failed"\n'
+fi
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := UnbindConsoleKeys("T", "F11"); err != nil {
+		t.Fatalf("UnbindConsoleKeys() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := strings.Split(strings.TrimSuffix(string(body), "\n---\n"), "\n---\n")
+	if len(commands) != 4 {
+		t.Fatalf("tmux command count = %d, want 4\n%s", len(commands), body)
+	}
+	if got := strings.Split(commands[0], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"list-keys", "-T", "prefix", "T"}, "\x00") {
+		t.Fatalf("prefix list tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[1], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"unbind-key", "-q", "T"}, "\x00") {
+		t.Fatalf("prefix unbind tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[2], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"list-keys", "-T", "root", "F11"}, "\x00") {
+		t.Fatalf("direct list tmux args = %#v", got)
+	}
+	if got := strings.Split(commands[3], "\n"); strings.Join(got, "\x00") != strings.Join([]string{"unbind-key", "-q", "-n", "F11"}, "\x00") {
+		t.Fatalf("direct unbind tmux args = %#v", got)
+	}
+}
+
 func TestBindWorktreeActionKeyRegistersPopup(t *testing.T) {
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args.txt")
@@ -787,6 +909,36 @@ func TestBindWorktreeActionKeyRejectsEmptyArgs(t *testing.T) {
 	}
 	if err := BindWorktreeActionKey("M", ""); err == nil {
 		t.Fatal("BindWorktreeActionKey(empty bin) should error")
+	}
+}
+
+func TestUnbindWorktreeActionKeyRemovesPrefixBinding(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+if [ "$1" = list-keys ] && [ "$3" = prefix ] && [ "$4" = M ]; then
+  printf 'bind-key M display-popup -E /abs/fanout __worktree-action --pane #{pane_id}\n'
+fi
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUXRUN_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := UnbindWorktreeActionKey("M"); err != nil {
+		t.Fatalf("UnbindWorktreeActionKey() failed: %v", err)
+	}
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	want := []string{"unbind-key", "-q", "M"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("tmux args = %#v, want %#v", got, want)
 	}
 }
 

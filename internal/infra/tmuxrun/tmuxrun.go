@@ -649,6 +649,14 @@ func BindDashboardKeys(prefixKey, directKey, fanoutBin string) error {
 	return nil
 }
 
+func UnbindDashboardKeys(prefixKey, directKey string) error {
+	markers := []string{"dashboard --web --open", "fanout-dashboard"}
+	if err := unbindPrefixKeyIfFanoutOwned(prefixKey, markers); err != nil {
+		return err
+	}
+	return unbindDirectKeyIfFanoutOwned(directKey, markers)
+}
+
 func dashboardNewWindowShellCommand(fanoutBin, startDir string) string {
 	launch := tmuxLiteral(shellQuote(fanoutBin)) + " dashboard --web --open"
 	notifyClientEnv := DashboardNotifyClientEnv + "=#{client_tty}"
@@ -699,6 +707,14 @@ func BindConsoleKeys(prefixKey, directKey, fanoutBin string) error {
 	return nil
 }
 
+func UnbindConsoleKeys(prefixKey, directKey string) error {
+	markers := []string{"focus-console --from", "fanout: focus-console failed"}
+	if err := unbindPrefixKeyIfFanoutOwned(prefixKey, markers); err != nil {
+		return err
+	}
+	return unbindDirectKeyIfFanoutOwned(directKey, markers)
+}
+
 // BindWorktreeActionKey registers a tmux prefix-table keybinding that opens a
 // small popup for actions against the currently focused fanout pane's recorded
 // worktree.
@@ -719,6 +735,61 @@ func BindWorktreeActionKey(key, fanoutBin string) error {
 		return fmt.Errorf("tmux bind-key %s: %w", key, err)
 	}
 	return nil
+}
+
+func UnbindWorktreeActionKey(key string) error {
+	return unbindPrefixKeyIfFanoutOwned(key, []string{"__worktree-action --pane"})
+}
+
+func unbindPrefixKeyIfFanoutOwned(key string, markers []string) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("tmux unbind-key: key is required")
+	}
+	owned, err := keyBindingIsFanoutOwned("prefix", key, markers)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return nil
+	}
+	if err := exec.Command("tmux", "unbind-key", "-q", key).Run(); err != nil {
+		return fmt.Errorf("tmux unbind-key %s: %w", key, err)
+	}
+	return nil
+}
+
+func unbindDirectKeyIfFanoutOwned(key string, markers []string) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("tmux unbind-key: key is required")
+	}
+	owned, err := keyBindingIsFanoutOwned("root", key, markers)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		return nil
+	}
+	if err := exec.Command("tmux", "unbind-key", "-q", "-n", key).Run(); err != nil {
+		return fmt.Errorf("tmux unbind-key -n %s: %w", key, err)
+	}
+	return nil
+}
+
+func keyBindingIsFanoutOwned(table, key string, markers []string) (bool, error) {
+	out, err := exec.Command("tmux", "list-keys", "-T", table, key).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "no key binding") {
+			return false, nil
+		}
+		return false, fmt.Errorf("tmux list-keys -T %s %s: %w", table, key, err)
+	}
+	binding := string(out)
+	for _, marker := range markers {
+		if !strings.Contains(binding, marker) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // SetPaneProjectRoot records the fanout state owner on a pane. The dashboard

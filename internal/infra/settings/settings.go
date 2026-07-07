@@ -4,10 +4,13 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 const (
@@ -33,6 +36,49 @@ type Settings struct {
 	Notifications          string
 	NtfyURL                string
 	SlackWebhookURL        string
+}
+
+// ConfigScope selects which JSON config file is edited.
+type ConfigScope string
+
+const (
+	ConfigScopeUser ConfigScope = "user"
+	ConfigScopeRepo ConfigScope = "repo"
+)
+
+// ValueKind is the JSON scalar kind for one settings key.
+type ValueKind string
+
+const (
+	ValueBool   ValueKind = "bool"
+	ValueString ValueKind = "string"
+	ValueInt    ValueKind = "int"
+)
+
+// ConfigKey describes one key accepted by fanout config.json files.
+type ConfigKey struct {
+	Key          string
+	Group        string
+	Label        string
+	Kind         ValueKind
+	Env          string
+	Default      string
+	RepoEditable bool
+	Sensitive    bool
+}
+
+// ConfigValue is one nullable config.json value. A zero ConfigValue means the
+// key is inherited from lower-priority settings.
+type ConfigValue struct {
+	Bool   *bool
+	String *string
+	Int    *int
+}
+
+// EditableConfig is a parsed config file ready for a UI editor.
+type EditableConfig struct {
+	Path   string
+	Values map[string]ConfigValue
 }
 
 // CLIOverrides holds tri-state command-line overrides. nil means the flag was
@@ -63,6 +109,25 @@ type overrides struct {
 	Notifications          *string
 	NtfyURL                *string
 	SlackWebhookURL        *string
+}
+
+var configKeys = []ConfigKey{
+	{Key: "autoPullRequest", Group: "Briefing", Label: "PR auto-create", Kind: ValueBool, Env: "FANOUT_AUTO_PR", Default: "true", RepoEditable: true},
+	{Key: "prReviewGate", Group: "Briefing", Label: "PR review gate", Kind: ValueBool, Env: "FANOUT_PR_REVIEW_GATE", Default: "true", RepoEditable: true},
+	{Key: "briefingCodeReview", Group: "Briefing", Label: "Claude code review", Kind: ValueBool, Env: "FANOUT_BRIEFING_CODE_REVIEW", Default: "true", RepoEditable: true},
+	{Key: "agentTeamsHint", Group: "Briefing", Label: "Agent Teams hint", Kind: ValueBool, Env: "FANOUT_AGENT_TEAMS_HINT", Default: "true", RepoEditable: true},
+	{Key: "prVisualization", Group: "Briefing", Label: "PR visualization", Kind: ValueBool, Env: "FANOUT_PR_VISUALIZATION", Default: "true", RepoEditable: true},
+	{Key: "dashboardKeybind", Group: "TUI", Label: "Dashboard keybind", Kind: ValueBool, Env: "FANOUT_DASHBOARD_KEYBIND", Default: "true", RepoEditable: true},
+	{Key: "consoleKeybind", Group: "TUI", Label: "Console keybind", Kind: ValueBool, Env: "FANOUT_CONSOLE_KEYBIND", Default: "true", RepoEditable: true},
+	{Key: "watcher", Group: "Watcher", Label: "Watcher", Kind: ValueBool, Env: "FANOUT_WATCHER", Default: "false", RepoEditable: false},
+	{Key: "watcherTriggerLabel", Group: "Watcher", Label: "Trigger label", Kind: ValueString, Env: "FANOUT_WATCHER_TRIGGER_LABEL", Default: "fanout:auto", RepoEditable: true},
+	{Key: "watcherRunningLabel", Group: "Watcher", Label: "Running label", Kind: ValueString, Env: "FANOUT_WATCHER_RUNNING_LABEL", Default: "fanout:running", RepoEditable: true},
+	{Key: "watcherIntervalSeconds", Group: "Watcher", Label: "Interval seconds", Kind: ValueInt, Env: "FANOUT_WATCHER_INTERVAL_SECONDS", Default: "60", RepoEditable: true},
+	{Key: "watcherAgent", Group: "Watcher", Label: "Child agent", Kind: ValueString, Env: "FANOUT_WATCHER_AGENT", Default: "", RepoEditable: true},
+	{Key: "watcherMaxSessions", Group: "Watcher", Label: "Max sessions", Kind: ValueInt, Env: "FANOUT_WATCHER_MAX_SESSIONS", Default: "4", RepoEditable: true},
+	{Key: "notifications", Group: "Notifications", Label: "Channels", Kind: ValueString, Env: "FANOUT_NOTIFICATIONS", Default: "bell", RepoEditable: true},
+	{Key: "ntfyURL", Group: "Notifications", Label: "ntfy URL", Kind: ValueString, Env: "FANOUT_NTFY_URL", Default: "", RepoEditable: false, Sensitive: true},
+	{Key: "slackWebhookURL", Group: "Notifications", Label: "Slack webhook", Kind: ValueString, Env: "FANOUT_SLACK_WEBHOOK_URL", Default: "", RepoEditable: false, Sensitive: true},
 }
 
 // WarnFunc receives tolerant-parse diagnostics. Nil suppresses warnings.
@@ -115,6 +180,100 @@ func UserConfigPath() string {
 // RepoConfigPath returns the repository-scoped fanout config path.
 func RepoConfigPath(projectRoot string) string {
 	return filepath.Join(projectRoot, repoConfigRelPath)
+}
+
+// ConfigKeys returns the config.json keys in UI display order.
+func ConfigKeys() []ConfigKey {
+	out := make([]ConfigKey, len(configKeys))
+	copy(out, configKeys)
+	return out
+}
+
+// Path returns the config file path for the scope.
+func (s ConfigScope) Path(projectRoot string) string {
+	if s == ConfigScopeRepo {
+		return RepoConfigPath(projectRoot)
+	}
+	return UserConfigPath()
+}
+
+// LoadEditable loads the selected config file. Missing files are treated as an
+// empty config.
+func LoadEditable(projectRoot string, scope ConfigScope) (EditableConfig, error) {
+	path := scope.Path(projectRoot)
+	raw, err := readConfigRaw(path)
+	if err != nil {
+		return EditableConfig{}, err
+	}
+	values := make(map[string]ConfigValue, len(configKeys))
+	for _, spec := range configKeys {
+		value, ok := parseConfigValue(spec, raw[spec.Key])
+		if ok {
+			values[spec.Key] = value
+		}
+	}
+	return EditableConfig{Path: path, Values: values}, nil
+}
+
+// SaveEditable writes the selected config file, preserving unknown keys.
+// Values absent from the map are left untouched; present zero values delete the
+// corresponding known key so it inherits from lower-priority layers.
+func SaveEditable(projectRoot string, scope ConfigScope, values map[string]ConfigValue) (string, error) {
+	path := scope.Path(projectRoot)
+	raw, err := readConfigRaw(path)
+	if err != nil {
+		return path, err
+	}
+	if raw == nil {
+		raw = map[string]json.RawMessage{}
+	}
+	specs := configKeyMap()
+	for key, value := range values {
+		spec, ok := specs[key]
+		if !ok {
+			return path, fmt.Errorf("unknown settings key %q", key)
+		}
+		if err := validateEditableValue(scope, spec, value); err != nil {
+			return path, err
+		}
+		if value.Empty() {
+			delete(raw, key)
+			continue
+		}
+		encoded, err := encodeConfigValue(spec, value)
+		if err != nil {
+			return path, err
+		}
+		raw[key] = encoded
+	}
+	return path, atomicfs.WriteJSON(path, raw, configFileMode(scope))
+}
+
+// Empty reports whether the key should be inherited.
+func (v ConfigValue) Empty() bool {
+	return v.Bool == nil && v.String == nil && v.Int == nil
+}
+
+// BoolValue returns a bool config value.
+func BoolValue(v bool) ConfigValue {
+	return ConfigValue{Bool: &v}
+}
+
+// StringValue returns a string config value.
+func StringValue(v string) ConfigValue {
+	return ConfigValue{String: &v}
+}
+
+// IntValue returns an int config value.
+func IntValue(v int) ConfigValue {
+	return ConfigValue{Int: &v}
+}
+
+func configFileMode(scope ConfigScope) os.FileMode {
+	if scope == ConfigScopeRepo {
+		return 0o644
+	}
+	return 0o600
 }
 
 func apply(s *Settings, o overrides) {
@@ -200,28 +359,20 @@ func repoOverrides(path string, warnf WarnFunc) overrides {
 }
 
 func repoSafeNotifications(path, raw string, warnf WarnFunc) *string {
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n'
-	})
+	parts := notificationChannelParts(raw)
 	if len(parts) == 0 {
 		return nil
 	}
 	safe := make([]string, 0, len(parts))
-	seen := map[string]bool{}
-	for _, part := range parts {
-		ch := strings.ToLower(strings.TrimSpace(part))
-		if ch == "" || seen[ch] {
-			continue
-		}
+	for _, ch := range parts {
 		switch ch {
-		case "ntfy", "slack":
-			warn(warnf, "settings %s: notification channel %q is ignored in repo config; use user config or FANOUT_NOTIFICATIONS", path, ch)
 		case "none":
 			none := "none"
 			return &none
 		case "bell", "tmux":
-			seen[ch] = true
 			safe = append(safe, ch)
+		case "ntfy", "slack":
+			warn(warnf, "settings %s: notification channel %q is ignored in repo config; use user config or FANOUT_NOTIFICATIONS", path, ch)
 		default:
 			warn(warnf, "settings %s: notification channel %q is ignored in repo config; allowed repo channels are bell, tmux, none", path, ch)
 		}
@@ -231,6 +382,161 @@ func repoSafeNotifications(path, raw string, warnf WarnFunc) *string {
 	}
 	value := strings.Join(safe, ",")
 	return &value
+}
+
+func notificationChannelParts(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		ch := strings.ToLower(strings.TrimSpace(part))
+		if ch == "" || seen[ch] {
+			continue
+		}
+		seen[ch] = true
+		out = append(out, ch)
+	}
+	return out
+}
+
+func normalizeNotificationChannels(raw string, repo bool) (string, error) {
+	parts := notificationChannelParts(raw)
+	if len(parts) == 0 {
+		return "", nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, ch := range parts {
+		switch ch {
+		case "none":
+			return "none", nil
+		case "bell", "tmux":
+			out = append(out, ch)
+		case "ntfy", "slack":
+			if repo {
+				return "", fmt.Errorf("notification channel %q is not allowed in repo config", ch)
+			}
+			out = append(out, ch)
+		default:
+			return "", fmt.Errorf("unknown notification channel %q", ch)
+		}
+	}
+	return strings.Join(out, ","), nil
+}
+
+func readConfigRaw(path string) (map[string]json.RawMessage, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]json.RawMessage{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if root == nil {
+		return nil, fmt.Errorf("parse %s: top-level JSON must be an object", path)
+	}
+	return root, nil
+}
+
+func parseConfigValue(spec ConfigKey, raw json.RawMessage) (ConfigValue, bool) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return ConfigValue{}, false
+	}
+	switch spec.Kind {
+	case ValueBool:
+		var v bool
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return ConfigValue{}, false
+		}
+		return BoolValue(v), true
+	case ValueString:
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return ConfigValue{}, false
+		}
+		return StringValue(v), true
+	case ValueInt:
+		var v int
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return ConfigValue{}, false
+		}
+		return IntValue(v), true
+	default:
+		return ConfigValue{}, false
+	}
+}
+
+func configKeyMap() map[string]ConfigKey {
+	out := make(map[string]ConfigKey, len(configKeys))
+	for _, spec := range configKeys {
+		out[spec.Key] = spec
+	}
+	return out
+}
+
+func validateEditableValue(scope ConfigScope, spec ConfigKey, value ConfigValue) error {
+	if value.Empty() {
+		return nil
+	}
+	if scope == ConfigScopeRepo && !spec.RepoEditable {
+		return fmt.Errorf("%s cannot be set in repo config", spec.Key)
+	}
+	switch spec.Kind {
+	case ValueBool:
+		if value.Bool == nil || value.String != nil || value.Int != nil {
+			return fmt.Errorf("%s must be a boolean", spec.Key)
+		}
+	case ValueString:
+		if value.String == nil || value.Bool != nil || value.Int != nil {
+			return fmt.Errorf("%s must be a string", spec.Key)
+		}
+	case ValueInt:
+		if value.Int == nil || value.Bool != nil || value.String != nil {
+			return fmt.Errorf("%s must be an integer", spec.Key)
+		}
+	default:
+		return fmt.Errorf("%s has unknown value kind %q", spec.Key, spec.Kind)
+	}
+	if spec.Key == "notifications" && value.String != nil {
+		normalized, err := normalizeNotificationChannels(*value.String, scope == ConfigScopeRepo)
+		if err != nil {
+			return err
+		}
+		*value.String = normalized
+	}
+	if spec.Key == "watcherIntervalSeconds" && value.Int != nil && *value.Int < 20 {
+		return fmt.Errorf("watcherIntervalSeconds must be at least 20")
+	}
+	if spec.Key == "watcherMaxSessions" && value.Int != nil && *value.Int < 0 {
+		return fmt.Errorf("watcherMaxSessions must be 0 or greater")
+	}
+	return nil
+}
+
+func encodeConfigValue(spec ConfigKey, value ConfigValue) (json.RawMessage, error) {
+	var (
+		data []byte
+		err  error
+	)
+	switch spec.Kind {
+	case ValueBool:
+		data, err = json.Marshal(*value.Bool)
+	case ValueString:
+		data, err = json.Marshal(*value.String)
+	case ValueInt:
+		data, err = json.Marshal(*value.Int)
+	default:
+		err = fmt.Errorf("unknown value kind %q", spec.Kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
 }
 
 func loadFile(path string, warnf WarnFunc) overrides {

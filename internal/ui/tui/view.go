@@ -72,6 +72,12 @@ func (m model) View() string {
 		}
 		return m.helpView()
 	}
+	if m.settingsOnly {
+		if m.width == 0 {
+			return "Settings"
+		}
+		return m.settingsView()
+	}
 	if m.width == 0 {
 		return "fanout TUI"
 	}
@@ -103,7 +109,11 @@ func (m model) View() string {
 		header += " " + dimStyle.Render(formatHUD(summarizeHUD(m.panes)))
 	}
 
-	footer := dimStyle.Render(m.footerText())
+	footerText := m.footerText()
+	if layout.Compact {
+		footerText = truncateCells(footerText, layout.MainWidth)
+	}
+	footer := dimStyle.Render(footerText)
 	if m.notice != "" {
 		footer += "\n" + warnStyle.Render(m.notice)
 	}
@@ -141,6 +151,9 @@ func (m model) View() string {
 	}
 	if m.mode == modeCloseChoice {
 		return overlayCentered(base, m.closeChoiceView(), m.width, m.height)
+	}
+	if m.mode == modeSettings {
+		return overlayCentered(base, m.settingsView(), m.width, m.height)
 	}
 	return base
 }

@@ -16,6 +16,12 @@ When the same setting is given on both the CLI and a config file, which one wins
 - Repo config: `<project_root>/.fanout/config.json`, where `project_root` is the parent repository root, not the child worktree.
 - User config: `$XDG_CONFIG_HOME/fanout/config.json`, or `~/.config/fanout/config.json` when `XDG_CONFIG_HOME` is unset.
 
+## Edit settings from the TUI
+
+Press `s` in the persistent TUI console to edit either config file in a popup. The Target row switches between user config and repo config. Each key can be set to a value or returned to `inherit`, which removes that key from the selected JSON file.
+
+The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, cannot set HTTP notification URLs, and can only choose `bell`, `tmux`, or `none` for `notifications`.
+
 ## What each toggle is for
 
 The behavior toggles are instructions that ship on by default but a team may want off. Here is the purpose of each key, one line apiece.

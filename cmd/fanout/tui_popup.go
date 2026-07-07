@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutsettings "github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
@@ -26,6 +27,7 @@ const (
 	tuiHelpPopupMinHeight      = 18
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
 	tuiNewPanePopupMinHeight   = 18
+	tuiSettingsPopupCommand    = "__tui-settings-popup"
 	tuiNewPanePopupBorderInset = 2
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
 	tuiNewPanePopupResultWait  = 24 * time.Hour
@@ -75,6 +77,14 @@ type tuiClosePopupResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type tuiSettingsPopupResult struct {
+	Canceled bool   `json:"canceled,omitempty"`
+	Saved    bool   `json:"saved,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 func isTUINewPanePopupRequest(args []string) bool {
 	return len(args) > 0 && args[0] == tuiNewPanePopupCommand
 }
@@ -85,6 +95,10 @@ func isTUIHelpPopupRequest(args []string) bool {
 
 func isTUIClosePopupRequest(args []string) bool {
 	return len(args) > 0 && args[0] == tuiClosePopupCommand
+}
+
+func isTUISettingsPopupRequest(args []string) bool {
+	return len(args) > 0 && args[0] == tuiSettingsPopupCommand
 }
 
 func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
@@ -201,6 +215,43 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 	return code
 }
 
+func cmdTUISettingsPopup(args []string, lg *log.Logger) exitcode.Code {
+	fs := flag.NewFlagSet(tuiSettingsPopupCommand, flag.ContinueOnError)
+	fs.SetOutput(lg.Stderr())
+	projectRoot := fs.String("project-root", "", "project root")
+	resultFile := fs.String("result-file", "", "result file")
+	width := fs.Int("width", 90, "popup width")
+	height := fs.Int("height", 24, "popup height")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Invocation
+	}
+	if strings.TrimSpace(*projectRoot) == "" || strings.TrimSpace(*resultFile) == "" {
+		lg.Err("--project-root and --result-file are required")
+		return exitcode.Invocation
+	}
+	result, canceled, err := fanouttui.RunSettingsPopup(fanouttui.SettingsPopupOptions{
+		ProjectRoot: *projectRoot,
+		Width:       *width,
+		Height:      *height,
+	})
+	out := tuiSettingsPopupResult{
+		Canceled: canceled,
+		Saved:    result.Saved,
+		Scope:    result.Scope,
+		Path:     result.Path,
+	}
+	code := exitcode.OK
+	if err != nil {
+		out = tuiSettingsPopupResult{Error: err.Error()}
+		code = exitcode.Env
+	}
+	if writeErr := writeTUISettingsPopupResult(*resultFile, out); writeErr != nil {
+		lg.Err("write settings popup result: %v", writeErr)
+		return exitcode.Env
+	}
+	return code
+}
+
 func writeTUINewPanePopupResult(path string, result tuiNewPanePopupResult) error {
 	return writePopupJSON(path, result)
 }
@@ -210,6 +261,10 @@ func writeTUIClosePopupRequest(path string, request tuiClosePopupRequest) error 
 }
 
 func writeTUIClosePopupResult(path string, result tuiClosePopupResult) error {
+	return writePopupJSON(path, result)
+}
+
+func writeTUISettingsPopupResult(path string, result tuiSettingsPopupResult) error {
 	return writePopupJSON(path, result)
 }
 
@@ -399,6 +454,64 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 	}
 }
 
+func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.SettingsPopupFunc {
+	return func(fanouttui.SettingsPopupRequest) (fanouttui.SettingsPopupResult, bool, error) {
+		size, err := tmuxrun.CurrentClientSize()
+		if err != nil {
+			return fanouttui.SettingsPopupResult{}, false, err
+		}
+		geometry, err := tuiNewPanePopupGeometryForClient(size)
+		if err != nil {
+			return fanouttui.SettingsPopupResult{}, false, err
+		}
+		resultFile, doneFile, cleanupPopupResult, err := newPopupResultPaths()
+		if err != nil {
+			return fanouttui.SettingsPopupResult{}, false, err
+		}
+		defer cleanupPopupResult()
+		command := tuiSettingsPopupShellCommand(
+			commandName,
+			projectRoot,
+			resultFile,
+			doneFile,
+			geometry.PromptWidth,
+			geometry.PromptHeight,
+		)
+		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+			Width:    geometry.PopupWidth,
+			Height:   geometry.PopupHeight,
+			StartDir: projectRoot,
+			Title:    "Settings",
+			Command:  command,
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+		})
+		result, readErr := readTUISettingsPopupResult(resultFile)
+		if os.IsNotExist(readErr) && displayErr == nil {
+			result, readErr = waitForTUISettingsPopupResult(resultFile, doneFile, tuiNewPanePopupResultWait)
+		}
+		if readErr != nil {
+			if displayErr != nil {
+				return fanouttui.SettingsPopupResult{}, false, displayErr
+			}
+			return fanouttui.SettingsPopupResult{}, false, readErr
+		}
+		if result.Error != "" {
+			return fanouttui.SettingsPopupResult{}, false, fmt.Errorf("%s", result.Error)
+		}
+		if result.Canceled {
+			return fanouttui.SettingsPopupResult{}, true, nil
+		}
+		if displayErr != nil {
+			return fanouttui.SettingsPopupResult{}, false, displayErr
+		}
+		return fanouttui.SettingsPopupResult{
+			Saved: result.Saved,
+			Scope: result.Scope,
+			Path:  result.Path,
+		}, false, nil
+	}
+}
+
 func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *tmuxrun.PopupPosition {
 	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if paneID == "" {
@@ -563,21 +676,60 @@ func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile,
 		"--width", fmt.Sprintf("%d", width),
 		"--height", fmt.Sprintf("%d", height),
 	}
-	// Enhanced keyboard input is on by default. Always forward the current value,
-	// including opt-out values, so the helper mirrors the parent TUI.
-	prefix := fanouttui.EnhancedKeysEnv + "=" + run.ShellQuote(os.Getenv(fanouttui.EnhancedKeysEnv))
 	// display-popup runs under the tmux server's environment, not the parent
-	// fanout process's. Forward PATH so the issue picker finds `gh` (and git)
-	// wherever the parent did. Secrets (GH_TOKEN etc.) are deliberately
-	// not inlined: the command line is visible via ps; token-less setups rely
-	// on gh's config-file auth, which needs only HOME.
-	if path := os.Getenv("PATH"); path != "" {
-		prefix = "PATH=" + run.ShellQuote(path) + " " + prefix
-	}
+	// fanout process's. Forward non-secret path environment so helper commands
+	// resolve tools and config files the same way as the parent process.
+	prefix := tuiPopupShellEnvPrefix()
 	parts = append([]string{prefix}, parts...)
 	command := strings.Join(parts, " ")
 	markDone := "printf '' > " + run.ShellQuote(doneFile)
 	return "trap " + run.ShellQuote(markDone) + " EXIT HUP INT TERM; " + command
+}
+
+func tuiSettingsPopupShellCommand(commandName, projectRoot, resultFile, doneFile string, width, height int) string {
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
+		exe = commandName
+	}
+	parts := []string{
+		run.ShellQuote(exe),
+		tuiSettingsPopupCommand,
+		"--project-root", run.ShellQuote(projectRoot),
+		"--result-file", run.ShellQuote(resultFile),
+		"--width", fmt.Sprintf("%d", width),
+		"--height", fmt.Sprintf("%d", height),
+	}
+	prefix := tuiPopupShellEnvPrefix()
+	parts = append([]string{prefix}, parts...)
+	command := strings.Join(parts, " ")
+	markDone := "printf '' > " + run.ShellQuote(doneFile)
+	return "trap " + run.ShellQuote(markDone) + " EXIT HUP INT TERM; " + command
+}
+
+func tuiPopupShellEnvPrefix() string {
+	parts := []string{
+		fanouttui.SettingsEnvOverridesEnv + "=" + run.ShellQuote(settingsEnvOverrideNames()),
+		fanouttui.EnhancedKeysEnv + "=" + run.ShellQuote(os.Getenv(fanouttui.EnhancedKeysEnv)),
+	}
+	for _, key := range []string{"XDG_CONFIG_HOME", "HOME", "PATH"} {
+		if value, ok := os.LookupEnv(key); ok || key != "PATH" {
+			parts = append([]string{key + "=" + run.ShellQuote(value)}, parts...)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func settingsEnvOverrideNames() string {
+	names := []string{}
+	for _, spec := range fanoutsettings.ConfigKeys() {
+		if spec.Env == "" {
+			continue
+		}
+		if _, ok := os.LookupEnv(spec.Env); ok {
+			names = append(names, spec.Env)
+		}
+	}
+	return strings.Join(names, ",")
 }
 
 func waitForTUINewPanePopupResult(resultFile, doneFile string, timeout time.Duration) (tuiNewPanePopupResult, error) {
@@ -624,6 +776,28 @@ func waitForTUIClosePopupResult(resultFile, doneFile string, timeout time.Durati
 	}
 }
 
+func waitForTUISettingsPopupResult(resultFile, doneFile string, timeout time.Duration) (tuiSettingsPopupResult, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		result, err := readTUISettingsPopupResult(resultFile)
+		if err == nil {
+			return result, nil
+		}
+		if !os.IsNotExist(err) {
+			return tuiSettingsPopupResult{}, err
+		}
+		if _, err := os.Stat(doneFile); err == nil {
+			return tuiSettingsPopupResult{Canceled: true}, nil
+		} else if !os.IsNotExist(err) {
+			return tuiSettingsPopupResult{}, err
+		}
+		if timeout > 0 && time.Now().After(deadline) {
+			return tuiSettingsPopupResult{}, fmt.Errorf("timed out waiting for settings popup result after %s", timeout)
+		}
+		time.Sleep(tuiNewPanePopupResultPoll)
+	}
+}
+
 func readTUINewPanePopupResult(path string) (tuiNewPanePopupResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -632,6 +806,18 @@ func readTUINewPanePopupResult(path string) (tuiNewPanePopupResult, error) {
 	var result tuiNewPanePopupResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		return tuiNewPanePopupResult{}, err
+	}
+	return result, nil
+}
+
+func readTUISettingsPopupResult(path string) (tuiSettingsPopupResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tuiSettingsPopupResult{}, err
+	}
+	var result tuiSettingsPopupResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return tuiSettingsPopupResult{}, err
 	}
 	return result, nil
 }

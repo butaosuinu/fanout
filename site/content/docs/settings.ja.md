@@ -16,6 +16,16 @@ fanout の挙動はチームの好みで変えたくなる箇所がいくつか�
 - リポジトリ設定: `<project_root>/.fanout/config.json`。この `project_root` は親リポジトリルートで、子 worktree ではありません。
 - ユーザー設定: `$XDG_CONFIG_HOME/fanout/config.json`、`XDG_CONFIG_HOME` が無い場合は `~/.config/fanout/config.json`。
 
+## TUI から設定を編集する
+
+常駐 TUI コンソールで `s` を押すと、どちらの config ファイルも popup で編集できます。
+Target 行で user config と repo config を切り替えます。
+各キーは値を指定するか `inherit` に戻せます。`inherit` は選択中の JSON ファイルからそのキーを削除します。
+
+popup が編集するのは config ファイルだけです。
+CLI flag と `FANOUT_*` 環境変数は、保存した値より引き続き優先されます。
+repo config の安全制限も後述のとおりです。repo config から watcher は有効化できず、HTTP 通知 URL も設定できません。`notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
+
 ## 各トグルの目的
 
 挙動トグルは「既定で入っているが、チームの事情で外したくなる」指示の集合です。各キーの目的を 1 行ずつ示します。

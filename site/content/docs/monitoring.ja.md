@@ -43,6 +43,7 @@ fanout   # start the persistent tmux console
 | `[` / `]` | 前 / 次の Session グループへジャンプする。 |
 | `/` | ロード済みの行を絞り込む(フリーテキストか `state:open` のような述語)。`Esc` は入力を抜けるだけで、一覧からもう一度 `Esc` を押すとフィルタを解除する。 |
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
+| `s` | 設定の tmux popup を開く。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は Codex Plan Mode で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
@@ -59,6 +60,14 @@ fanout   # start the persistent tmux console
 ### コンパクト表示
 
 幅 80 桁未満では、テーブル + detail panel が 1 ペイン 1 行の switcher に切り替わり、選択中の行だけが branch や PR、ci / wave / blockers / dirty などの詳細に展開されます。
+
+### 設定 popup
+
+`s` で、コンソールを離れずに fanout の JSON 設定を編集できます。
+Target 行で user config と repo config を切り替えます。
+各設定は値を指定するか `inherit` に戻せます。`inherit` は選択中のファイルからそのキーを削除します。
+CLI flag と `FANOUT_*` 環境変数は、保存済みファイルより引き続き優先されます。
+repo config の安全ルールも `config.json` と同じです。repo config から watcher や HTTP 通知 endpoint は有効化できず、通知 channel は `bell`、`tmux`、`none` だけです。
 
 ### F11 / prefix + T
 

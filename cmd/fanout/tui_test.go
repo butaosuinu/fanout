@@ -115,8 +115,11 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	}
 
 	log := readTUITmuxLog(t, argsPath)
-	if strings.Contains(log, "bind-key\n") {
-		t.Fatalf("tmux log should not contain keybinds when both are disabled:\n%s", log)
+	if tmuxLogHasCommand(log, "run-shell") || tmuxLogHasCommand(log, "display-popup") {
+		t.Fatalf("tmux log should not register keybind commands when both are disabled:\n%s", log)
+	}
+	if tmuxLogHasCommand(log, "list-keys") || tmuxLogHasCommand(log, "unbind-key") {
+		t.Fatalf("startup opt-out should not cleanup existing key commands:\n%s", log)
 	}
 }
 
@@ -178,6 +181,43 @@ func TestCmdTUINoConsoleKeybindHonorsEnv(t *testing.T) {
 	}
 	if !tmuxLogHasCommand(log, "bind-key\nD\nrun-shell") {
 		t.Fatalf("tmux log missing dashboard keybind (must stay registered):\n%s", log)
+	}
+}
+
+func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	configPath := filepath.Join(xdg, "fanout", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"dashboardKeybind": false, "consoleKeybind": false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := installTUISettingsReloadTmuxShim(t)
+
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, discardLogger())
+	if _, err := reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	for _, want := range []string{
+		"unbind-key\n-q\nD",
+		"unbind-key\n-q\n-n\nF12",
+		"unbind-key\n-q\nM",
+		"unbind-key\n-q\nT",
+		"unbind-key\n-q\n-n\nF11",
+	} {
+		if !tmuxLogHasCommand(log, want) {
+			t.Fatalf("tmux log missing settings cleanup %q:\n%s", want, log)
+		}
+	}
+	if tmuxLogHasCommand(log, "run-shell") || tmuxLogHasCommand(log, "display-popup") {
+		t.Fatalf("tmux log should not bind disabled key commands:\n%s", log)
 	}
 }
 
@@ -468,6 +508,29 @@ func TestTUIClosePopupRequestAndResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTUISettingsPopupResultRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	resultPath := filepath.Join(dir, "result.json")
+	result := tuiSettingsPopupResult{Saved: true, Scope: "user", Path: "/tmp/fanout/config.json"}
+	if writeErr := writeTUISettingsPopupResult(resultPath, result); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	got, err := readTUISettingsPopupResult(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != result {
+		t.Fatalf("settings popup result = %#v, want %#v", got, result)
+	}
+	info, err := os.Stat(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("settings popup result mode = %o, want 600", got)
+	}
+}
+
 func TestNewPopupResultPathsUsesPrivateDirectory(t *testing.T) {
 	resultPath, donePath, cleanup, err := newPopupResultPaths()
 	if err != nil {
@@ -528,6 +591,23 @@ func TestWaitForTUIClosePopupResultTreatsDoneWithoutResultAsCancel(t *testing.T)
 	}
 }
 
+func TestWaitForTUISettingsPopupResultTreatsDoneWithoutResultAsCancel(t *testing.T) {
+	dir := t.TempDir()
+	resultPath := filepath.Join(dir, "result.json")
+	donePath := filepath.Join(dir, "result.done")
+	if err := os.WriteFile(donePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := waitForTUISettingsPopupResult(resultPath, donePath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Canceled {
+		t.Fatalf("settings popup result = %#v, want canceled", got)
+	}
+}
+
 func TestTUIHelpPopupShellCommandPropagatesPathAndDimensions(t *testing.T) {
 	got := tuiHelpPopupShellCommand("fanout", 80, 18)
 	for _, want := range []string{
@@ -562,6 +642,8 @@ func TestTUIClosePopupShellCommandMarksDoneAndPropagatesPath(t *testing.T) {
 }
 
 func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testing.T) {
+	t.Setenv("HOME", "/tmp/fanout-home")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/fanout-xdg")
 	for _, value := range []string{"", "0", "1"} {
 		t.Setenv(fanouttui.EnhancedKeysEnv, value)
 		got := tuiNewPanePopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", "codex", 80, 18)
@@ -580,10 +662,49 @@ func TestTUINewPanePopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testin
 		// The popup runs under the tmux server env; PATH must come from the
 		// parent so the issue/plan pickers can exec gh.
 		"PATH=" + run.ShellQuote(os.Getenv("PATH")),
+		"HOME=/tmp/fanout-home",
+		"XDG_CONFIG_HOME=/tmp/fanout-xdg",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("popup shell command missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestTUISettingsPopupShellCommandMarksDoneAndPropagatesEnhancedKeys(t *testing.T) {
+	t.Setenv("HOME", "/tmp/fanout-home")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/fanout-xdg")
+	t.Setenv("FANOUT_WATCHER", "1")
+	t.Setenv("FANOUT_SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/secret")
+	for _, value := range []string{"", "0", "1"} {
+		t.Setenv(fanouttui.EnhancedKeysEnv, value)
+		got := tuiSettingsPopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", 80, 18)
+		if !strings.Contains(got, fanouttui.EnhancedKeysEnv+"="+run.ShellQuote(value)+" ") {
+			t.Fatalf("settings popup shell command = %q with %s=%q, want forwarded env prefix", got, fanouttui.EnhancedKeysEnv, value)
+		}
+	}
+
+	got := tuiSettingsPopupShellCommand("fanout", "/tmp/repo", "/tmp/result.json", "/tmp/result.done", 80, 18)
+	for _, want := range []string{
+		"trap ",
+		"EXIT HUP INT TERM",
+		"/tmp/result.done",
+		tuiSettingsPopupCommand,
+		"--project-root /tmp/repo",
+		"--result-file /tmp/result.json",
+		"PATH=" + run.ShellQuote(os.Getenv("PATH")),
+		"HOME=/tmp/fanout-home",
+		"XDG_CONFIG_HOME=/tmp/fanout-xdg",
+		fanouttui.SettingsEnvOverridesEnv + "=",
+		"FANOUT_WATCHER",
+		"FANOUT_SLACK_WEBHOOK_URL",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("settings popup shell command missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "hooks.slack.com") || strings.Contains(got, "secret") {
+		t.Fatalf("settings popup shell command leaked sensitive env value:\n%s", got)
 	}
 }
 
@@ -1438,7 +1559,44 @@ case "${1:-}" in
       printf '%%tui\t0\t1\tconsole\t\n'
     fi
     ;;
-  bind-key|set-option|select-pane|select-layout|kill-pane)
+  bind-key|unbind-key|list-keys|set-option|select-pane|select-layout|kill-pane)
+    ;;
+  *)
+    ;;
+esac
+`
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_SHIM_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
+
+func installTUISettingsReloadTmuxShim(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "tmux-args.txt")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
+printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+case "${1:-}" in
+  list-keys)
+    if [[ "$*" == *" -T prefix D"* ]]; then
+      printf 'bind-key D run-shell -b fanout dashboard --web --open; tmux new-window -n fanout-dashboard\n'
+    elif [[ "$*" == *" -T root F12"* ]]; then
+      printf 'bind-key -n F12 run-shell -b fanout dashboard --web --open; tmux new-window -n fanout-dashboard\n'
+    elif [[ "$*" == *" -T prefix M"* ]]; then
+      printf 'bind-key M display-popup -E fanout __worktree-action --pane #{pane_id}\n'
+    elif [[ "$*" == *" -T prefix T"* ]]; then
+      printf 'bind-key T run-shell fanout focus-console --from "#{pane_id}"; tmux display-message "fanout: focus-console failed"\n'
+    elif [[ "$*" == *" -T root F11"* ]]; then
+      printf 'bind-key -n F11 run-shell fanout focus-console --from "#{pane_id}"; tmux display-message "fanout: focus-console failed"\n'
+    fi
+    ;;
+  unbind-key)
     ;;
   *)
     ;;

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	fanoutsettings "github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -1279,7 +1281,7 @@ func TestWatchTickRunsCycleAndRefreshesStateAndGH(t *testing.T) {
 		ShellPaneAlive: func(string, string) bool { return true },
 	})
 
-	updated, cmd := m.Update(watchTickMsg(time.Unix(1, 0)))
+	updated, cmd := m.Update(watchTickMsg{at: time.Unix(1, 0)})
 	m = updated.(model)
 	if !m.watchRunning {
 		t.Fatal("watchRunning = false, want true while RunCycle command is outstanding")
@@ -1351,12 +1353,33 @@ func TestWatchLaunchFailureRendersFooter(t *testing.T) {
 func TestWatchTickIgnoredWhenWatcherDisabled(t *testing.T) {
 	m := newModel(Options{})
 
-	updated, cmd := m.Update(watchTickMsg(time.Unix(1, 0)))
+	updated, cmd := m.Update(watchTickMsg{at: time.Unix(1, 0)})
 	if cmd != nil {
 		t.Fatal("watch tick without watcher returned command, want nil")
 	}
 	if updated.(model).watchRunning {
 		t.Fatal("watchRunning = true without watcher, want false")
+	}
+}
+
+func TestWatchTickIgnoresStaleGeneration(t *testing.T) {
+	runner := &fakeWatcherRunner{}
+	m := newModel(Options{
+		Watcher:       runner,
+		WatchInterval: time.Minute,
+	})
+	m.watchTickGen = 2
+
+	updated, cmd := m.Update(watchTickMsg{at: time.Unix(1, 0), gen: 1})
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("stale watch tick returned command")
+	}
+	if m.watchRunning {
+		t.Fatal("watchRunning = true after stale watch tick")
+	}
+	if runner.calls != 0 {
+		t.Fatalf("RunCycle calls = %d, want 0", runner.calls)
 	}
 }
 
@@ -3652,6 +3675,359 @@ func TestHelpPopupFailureSurfacesNotice(t *testing.T) {
 	}
 	if m.notice != "help popup: boom" {
 		t.Fatalf("notice = %q, want help popup error", m.notice)
+	}
+}
+
+func TestSettingsKeyUsesPopupAndReloadsRuntime(t *testing.T) {
+	popupCalls := 0
+	reloadCalls := 0
+	issueLaunchCalls := 0
+	m := newModel(Options{
+		SettingsPopup: func(req SettingsPopupRequest) (SettingsPopupResult, bool, error) {
+			popupCalls++
+			if req.ProjectRoot != "/repo" {
+				t.Fatalf("settings popup project root = %q, want /repo", req.ProjectRoot)
+			}
+			return SettingsPopupResult{Saved: true, Scope: "user", Path: "/tmp/fanout-config.json"}, false, nil
+		},
+		ReloadSettings: func() (SettingsRuntime, error) {
+			reloadCalls++
+			return SettingsRuntime{
+				WatchLabel:    "fanout:test",
+				WatchInterval: time.Minute,
+				LaunchIssue: func(int, string, map[string]string) (string, error) {
+					issueLaunchCalls++
+					return "launched with reloaded settings", nil
+				},
+			}, nil
+		},
+		ProjectRoot: "/repo",
+	})
+
+	updated, cmd := m.Update(keyRunes("s"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("s returned nil command, want settings popup command")
+	}
+	if popupCalls != 0 {
+		t.Fatalf("popup calls before command execution = %d, want 0", popupCalls)
+	}
+	if m.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor while popup owns input", m.mode)
+	}
+	if !m.settingsPopupOpen {
+		t.Fatal("settingsPopupOpen = false, want true")
+	}
+	if m.notice != settingsPopupOpeningNotice {
+		t.Fatalf("notice = %q, want %q", m.notice, settingsPopupOpeningNotice)
+	}
+
+	updated, reloadCmd := m.Update(cmd())
+	m = updated.(model)
+	if reloadCmd == nil {
+		t.Fatal("settings popup save returned nil command, want reload command")
+	}
+	if popupCalls != 1 {
+		t.Fatalf("popup calls = %d, want 1", popupCalls)
+	}
+	if m.settingsPopupOpen {
+		t.Fatal("settingsPopupOpen = true after popup completion")
+	}
+
+	updated, next := m.Update(reloadCmd())
+	m = updated.(model)
+	if next != nil {
+		t.Fatal("settings reload returned command with nil watcher")
+	}
+	if reloadCalls != 1 {
+		t.Fatalf("reload calls = %d, want 1", reloadCalls)
+	}
+	if m.opts.WatchLabel != "fanout:test" || m.opts.WatchInterval != time.Minute {
+		t.Fatalf("runtime = label %q interval %s, want reloaded", m.opts.WatchLabel, m.opts.WatchInterval)
+	}
+	if m.opts.LaunchIssue == nil {
+		t.Fatal("LaunchIssue = nil, want reloaded launcher")
+	}
+	notice, err := m.opts.LaunchIssue(123, "codex", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issueLaunchCalls != 1 || notice != "launched with reloaded settings" {
+		t.Fatalf("LaunchIssue calls=%d notice=%q, want reloaded launcher", issueLaunchCalls, notice)
+	}
+	if m.notice != "settings saved: /tmp/fanout-config.json" {
+		t.Fatalf("notice = %q, want settings saved", m.notice)
+	}
+}
+
+func TestSettingsPopupOpenBlocksMonitorKeys(t *testing.T) {
+	m := newModel(Options{
+		SettingsPopup: func(SettingsPopupRequest) (SettingsPopupResult, bool, error) {
+			return SettingsPopupResult{}, true, nil
+		},
+	})
+
+	updated, popupCmd := m.Update(keyRunes("s"))
+	m = updated.(model)
+	if popupCmd == nil {
+		t.Fatal("s returned nil command, want settings popup command")
+	}
+	if !m.settingsPopupOpen {
+		t.Fatal("settingsPopupOpen = false, want true")
+	}
+
+	for _, key := range []tea.KeyMsg{keyRunes("q"), keyRunes("s"), {Type: tea.KeyCtrlC}} {
+		updated, cmd := m.Update(key)
+		m = updated.(model)
+		if cmd != nil {
+			t.Fatalf("%q returned command while settings popup is open", key.String())
+		}
+		if m.mode != modeMonitor {
+			t.Fatalf("%q changed mode = %v, want monitor", key.String(), m.mode)
+		}
+		if !m.settingsPopupOpen {
+			t.Fatalf("%q cleared settingsPopupOpen", key.String())
+		}
+	}
+}
+
+func TestSettingsReloadPreservesRunningWatcher(t *testing.T) {
+	m := newModel(Options{
+		Watcher:       &fakeWatcherRunner{},
+		WatchInterval: time.Minute,
+	})
+	m.watchRunning = true
+
+	updated, cmd := m.Update(settingsReloadedMsg{
+		result: SettingsPopupResult{Saved: true, Path: "/tmp/fanout-config.json"},
+		runtime: SettingsRuntime{
+			Watcher:       &fakeWatcherRunner{},
+			WatchInterval: 2 * time.Minute,
+			WatchLabel:    "fanout:test",
+		},
+	})
+	m = updated.(model)
+	if !m.watchRunning {
+		t.Fatal("watchRunning = false after settings reload, want in-flight cycle preserved")
+	}
+	if cmd == nil {
+		t.Fatal("settings reload with watcher returned nil command, want next watch tick")
+	}
+	if m.opts.WatchInterval != 2*time.Minute || m.opts.WatchLabel != "fanout:test" {
+		t.Fatalf("runtime not applied: interval=%s label=%q", m.opts.WatchInterval, m.opts.WatchLabel)
+	}
+}
+
+func TestSettingsReloadInvalidatesOlderWatchTicks(t *testing.T) {
+	m := newModel(Options{
+		Watcher:       &fakeWatcherRunner{},
+		WatchInterval: time.Minute,
+	})
+	m.notifyErr = "old notifier failure"
+	before := m.watchTickGen
+
+	updated, cmd := m.Update(settingsReloadedMsg{
+		result: SettingsPopupResult{Saved: true, Path: "/tmp/fanout-config.json"},
+		runtime: SettingsRuntime{
+			Watcher:       &fakeWatcherRunner{},
+			WatchInterval: 2 * time.Minute,
+		},
+	})
+	m = updated.(model)
+	if m.watchTickGen != before+1 {
+		t.Fatalf("watchTickGen = %d, want %d", m.watchTickGen, before+1)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want cleared after settings reload", m.notifyErr)
+	}
+	if cmd == nil {
+		t.Fatal("settings reload with watcher returned nil command, want replacement tick")
+	}
+
+	updated, staleCmd := m.Update(watchTickMsg{at: time.Unix(1, 0), gen: before})
+	m = updated.(model)
+	if staleCmd != nil {
+		t.Fatal("stale pre-reload watch tick returned command")
+	}
+	if m.watchRunning {
+		t.Fatal("watchRunning = true after stale pre-reload watch tick")
+	}
+}
+
+func TestSettingsRowMasksSensitiveValues(t *testing.T) {
+	row := settingsRow{
+		spec:  fanoutsettings.ConfigKey{Key: "slackWebhookURL", Kind: fanoutsettings.ValueString, Sensitive: true},
+		value: fanoutsettings.StringValue("https://hooks.slack.com/services/secret"),
+	}
+	m := newModel(Options{})
+	m.settings = settingsForm{rows: []settingsRow{row}, cursor: 1}
+
+	view := m.settingsRowView(1, row)
+	if strings.Contains(view, "hooks.slack.com") || strings.Contains(view, "secret") {
+		t.Fatalf("sensitive row leaked URL:\n%s", view)
+	}
+	if !strings.Contains(view, "set") {
+		t.Fatalf("sensitive row = %q, want masked persisted value", view)
+	}
+
+	m.settings.editing = true
+	m.settings.editText = "https://hooks.slack.com/services/typed-secret"
+	editView := m.settingsRowView(1, row)
+	if strings.Contains(editView, "hooks.slack.com") || strings.Contains(editView, "secret") {
+		t.Fatalf("sensitive edit row leaked URL:\n%s", editView)
+	}
+	if !strings.Contains(editView, "****************") {
+		t.Fatalf("sensitive edit row = %q, want masked edit value", editView)
+	}
+}
+
+func TestSettingsRowMarksForwardedEnvOverride(t *testing.T) {
+	spec := fanoutsettings.ConfigKey{
+		Key:  "watcher",
+		Kind: fanoutsettings.ValueBool,
+		Env:  "FANOUT_TEST_ONLY_SETTINGS_ENV_OVERRIDE_9D0A4F0E",
+	}
+	t.Setenv(SettingsEnvOverridesEnv, spec.Env)
+	row := settingsRow{
+		spec:        spec,
+		value:       fanoutsettings.BoolValue(false),
+		envOverride: settingsEnvOverridePresent(spec),
+	}
+	m := newModel(Options{})
+	m.settings = settingsForm{rows: []settingsRow{row}, cursor: 1}
+
+	view := m.settingsRowView(1, row)
+	if !strings.Contains(view, " env") {
+		t.Fatalf("settings row = %q, want forwarded env marker", view)
+	}
+}
+
+func TestSettingsSaveBlocksInvalidConfig(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	configPath := filepath.Join(xdg, "fanout", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "{broken"
+	if err := os.WriteFile(configPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(Options{ProjectRoot: t.TempDir()})
+	m.openSettingsForm(fanoutsettings.ConfigScopeUser)
+	if !m.settings.loadErr {
+		t.Fatal("settings loadErr = false, want true for invalid JSON")
+	}
+
+	updated, cmd := m.saveSettings()
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("save invalid settings returned command")
+	}
+	if !strings.Contains(m.settings.err, "fix or remove the invalid config before saving") {
+		t.Fatalf("settings err = %q, want save-blocking error", m.settings.err)
+	}
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != original {
+		t.Fatalf("invalid config changed after blocked save:\nwant %q\ngot  %q", original, body)
+	}
+}
+
+func TestSettingsRepoSaveDeletesDisabledUnsafeKeys(t *testing.T) {
+	repo := t.TempDir()
+	configPath := fanoutsettings.RepoConfigPath(repo)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{
+  "watcher": true,
+  "watcherLabel": "fanout:ready",
+  "notifications": "slack ntfy bell",
+  "ntfyURL": "https://ntfy.example/topic",
+  "slackWebhookURL": "https://hooks.slack.com/services/secret"
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(Options{ProjectRoot: repo})
+	m.openSettingsForm(fanoutsettings.ConfigScopeRepo)
+	updated, cmd := m.saveSettings()
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("repo settings save returned reload command")
+	}
+	if m.settings.err != "" {
+		t.Fatalf("settings err = %q", m.settings.err)
+	}
+
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"watcher", "ntfyURL", "slackWebhookURL"} {
+		if _, ok := root[key]; ok {
+			t.Fatalf("%s should be deleted from repo config:\n%s", key, body)
+		}
+	}
+	if root["notifications"] != "bell" {
+		t.Fatalf("notifications = %#v, want safe selector preserved", root["notifications"])
+	}
+	if root["watcherLabel"] != "fanout:ready" {
+		t.Fatalf("watcherLabel = %#v, want preserved", root["watcherLabel"])
+	}
+}
+
+func TestSettingsRepoSavePreservesSafeNotificationValues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "none", raw: "none", want: "none"},
+		{name: "comma-safe", raw: "bell,tmux", want: "bell,tmux"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			configPath := fanoutsettings.RepoConfigPath(repo)
+			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := fmt.Appendf(nil, `{"notifications": %q, "watcherLabel": "fanout:ready"}`, tc.raw)
+			if err := os.WriteFile(configPath, body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			m := newModel(Options{ProjectRoot: repo})
+			m.openSettingsForm(fanoutsettings.ConfigScopeRepo)
+			updated, cmd := m.saveSettings()
+			m = updated.(model)
+			if cmd != nil {
+				t.Fatal("repo settings save returned reload command")
+			}
+			if m.settings.err != "" {
+				t.Fatalf("settings err = %q", m.settings.err)
+			}
+
+			body, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(body, &root); err != nil {
+				t.Fatal(err)
+			}
+			if root["notifications"] != tc.want {
+				t.Fatalf("notifications = %#v, want %q\n%s", root["notifications"], tc.want, body)
+			}
+		})
 	}
 }
 
