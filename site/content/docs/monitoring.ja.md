@@ -34,6 +34,18 @@ fanout   # start the persistent tmux console
 
 {{< diagram "console" >}}
 
+### agent-state の通知音
+
+TUI の通知 channel は agent-state の変化も扱います。
+既定の `notifications=bell` では、従来の issue / PR 遷移と同じ terminal bell が、agent が plan を提示したとき、ユーザー入力や承認を待つとき、agent が終了したときにも鳴ります。
+通知先は `notifications` または `FANOUT_NOTIFICATIONS` で変えられます。
+詳細は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
+
+fanout は、ペインの `@fanout_agent_state` tmux option から構造化された agent state を読みます。
+ペイン出力からは推定しません。
+観測する state は `running`、`working`、`plan`、`blocked`、`idle`、`done` ですが、通知を送るのは `plan`(`plan ready`)、`blocked`(`waiting for input`)、`done`(`agent exited`)だけです。
+それ以外の state は表示専用です。
+
 ### キー操作
 
 | キー | 動作 |

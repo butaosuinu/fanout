@@ -27,6 +27,12 @@ From a plain shell it creates or attaches to fanout's managed tmux session; from
 
 {{< diagram "console" >}}
 
+### Agent-state notification sounds
+
+The TUI's notification channels also cover agent-state changes. With the default `notifications=bell`, the same terminal bell that already reports issue / PR transitions also sounds when an agent presents a plan, waits for user input or approval, or exits. Change the destination with `notifications` or `FANOUT_NOTIFICATIONS`; see [Settings]({{< relref "/docs/settings" >}}).
+
+fanout reads structured agent state from the pane's `@fanout_agent_state` tmux option. It does not scrape pane output. The observed states are `running`, `working`, `plan`, `blocked`, `idle`, and `done`, but notifications are sent only for `plan` (`plan ready`), `blocked` (`waiting for input`), and `done` (`agent exited`). The other states are display state only.
+
 ### Key bindings
 
 | Key | Action |

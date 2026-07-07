@@ -83,9 +83,16 @@ integer の環境変数は 10 進整数を受け付けます。`watcherIntervalS
 
 ## 通知 channel
 
-ターミナルを離れている間に子の状態遷移を知りたいなら、通知先を選びます。`notifications` は comma または空白区切りの selector で、指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。
+ターミナルを離れている間に子の状態遷移を知りたいなら、通知先を選びます。
+`notifications` は、issue / PR 遷移(merged、CI failed、blocker 待ち)と TUI 由来の agent-state 遷移(plan ready、waiting for input、agent exited)の両方を扱います。
+comma または空白区切りの selector で、指定できる値は `bell`、`tmux`、`ntfy`、`slack`、`none` です。
+`ntfy` は `ntfyURL`、`slack` は `slackWebhookURL` が必要です。
 
 どちらの HTTP channel も outbound POST のみで、inbound socket は開きません。repo の設定だけで外部へ勝手に送信されるのを防ぐため、repo config で選べるのは `bell`、`tmux`、`none` だけです。`ntfy`、`slack`、`ntfyURL`、`slackWebhookURL` は user config か環境変数からだけ有効になります。
+
+agent-state 通知は `@fanout_agent_state` から発火し、ペイン出力からは推定しません。
+通知するのは `plan`、`blocked`、`done` だけです。
+`running`、`working`、`idle` は TUI に表示されますが、通知は送りません。
 
 ## watcher の安全制約
 

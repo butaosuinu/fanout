@@ -83,9 +83,11 @@ Integer environment values accept base-10 integers. `watcherIntervalSeconds` res
 
 ## Notification channels
 
-When you step away from the terminal and still want to know when a child changes state, pick where the notice goes. `notifications` is a comma- or space-separated selector. Supported values are `bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`; `slack` requires `slackWebhookURL`.
+When you step away from the terminal and still want to know when a child changes state, pick where the notice goes. The `notifications` setting covers both issue / PR transitions (merged, CI failed, waiting on blockers) and agent-state transitions from the TUI (plan ready, waiting for input, agent exited). It is a comma- or space-separated selector. Supported values are `bell`, `tmux`, `ntfy`, `slack`, and `none`. `ntfy` requires `ntfyURL`; `slack` requires `slackWebhookURL`.
 
 Both HTTP channels only send outbound POST requests and never open inbound sockets. To stop a repo's config from sending anywhere on its own, repo config may only select `bell`, `tmux`, or `none`; `ntfy`, `slack`, `ntfyURL`, and `slackWebhookURL` are honored only from user config or environment variables.
+
+Agent-state notifications come from `@fanout_agent_state`, not from pane output. fanout sends them only for `plan`, `blocked`, and `done`; `running`, `working`, and `idle` are visible in the TUI but do not send notifications.
 
 ## Watcher safety
 
