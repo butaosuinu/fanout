@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -48,6 +49,7 @@ type Options struct {
 	LaunchPane          LaunchFunc
 	NewPanePrompt       NewPanePromptFunc
 	HelpPopup           HelpPopupFunc
+	CloseChoicePopup    CloseChoicePopupFunc
 	LaunchAttach        AttachLaunchFunc
 	LaunchShell         ShellLaunchFunc
 	RestorePanes        func() (string, error)
@@ -77,6 +79,7 @@ const (
 	modeMonitor viewMode = iota
 	modeNewPane
 	modeHelp
+	modeCloseChoice
 )
 
 type model struct {
@@ -106,6 +109,7 @@ type model struct {
 	newPane          newPaneForm
 	newPanePopupOpen bool
 	helpPopupOpen    bool
+	closePopupOpen   bool
 	repoFiles        []string
 	repoFileIndex    []fileEntry
 	repoFilesLoaded  bool
@@ -123,11 +127,15 @@ type model struct {
 	relayoutGen      int
 	promptOnly       bool
 	helpOnly         bool
+	closeOnly        bool
 	promptDone       bool
 	promptCanceled   bool
 	promptResult     LaunchRequest
 	agentStates      map[string]agentTransitionSnapshot
 	agentPrimed      bool
+	closeDone        bool
+	closeCanceled    bool
+	closeResult      lifecycle.CloseMode
 }
 
 type keyboardProtocolsEnabledMsg struct{}
@@ -149,6 +157,11 @@ type (
 	}
 	helpPopupDoneMsg struct {
 		err error
+	}
+	closeChoicePopupDoneMsg struct {
+		mode     lifecycle.CloseMode
+		canceled bool
+		err      error
 	}
 	launchShellMsg struct {
 		req ShellLaunchRequest
@@ -278,6 +291,9 @@ func newModel(opts Options) model {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.closeOnly {
+		return nil
+	}
 	if m.helpOnly {
 		return nil
 	}

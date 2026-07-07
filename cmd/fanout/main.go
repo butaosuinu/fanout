@@ -40,6 +40,7 @@ func main() {
 		{isTUIRequest, func() exitcode.Code { return cmdTUI(commandName, lg) }},
 		{isTUINewPanePopupRequest, func() exitcode.Code { return cmdTUINewPanePopup(os.Args[2:], lg) }},
 		{isTUIHelpPopupRequest, func() exitcode.Code { return cmdTUIHelpPopup(os.Args[2:], lg) }},
+		{isTUIClosePopupRequest, func() exitcode.Code { return cmdTUIClosePopup(os.Args[2:], lg) }},
 		{isCodexPlanTUIRequest, func() exitcode.Code { return cmdCodexPlanTUI(os.Args[2:], lg) }},
 		{isPlanRequest, func() exitcode.Code { return cmdPlan(os.Args[2:], lg, commandName) }},
 		{isDashboardRequest, func() exitcode.Code { return cmdDashboard(os.Args[2:], lg) }},
