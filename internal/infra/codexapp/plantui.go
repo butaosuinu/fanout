@@ -124,19 +124,21 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 				return err
 			}
 		} else {
-			// The initial plan turn runs inside the interactive TUI here, so
-			// fanout cannot observe its completion (keeping this client open
-			// would let handleServerRequest auto-answer approval requests
-			// meant for the TUI). No working/plan state is reported.
+			// The initial plan turn runs inside the interactive TUI here. Keep
+			// the initialized controller connection open so the post-ready
+			// notification watcher can mirror turn/started and turn/completed
+			// into @fanout_agent_state without answering TUI-owned requests.
 			err = seedCodexPlanThreadForResume(client, thread.ID)
 			if err != nil {
 				return err
 			}
-			client.Close()
 			tuiPrompt = cfg.Prompt
 		}
 	} else {
-		client.Close()
+		err = initializeCodexPlanClient(client, cfg.Version)
+		if err != nil {
+			return err
+		}
 	}
 
 	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), tuiPrompt, stdout, stderr)
@@ -161,11 +163,10 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 			}
 			return fmt.Errorf("codex TUI resume exited during startup")
 		case drainErr := <-drainDone:
-			client.Close()
-			drainDone = nil
 			if drainErr != nil {
 				return fmt.Errorf("codex app-server request handling failed during TUI startup: %w", drainErr)
 			}
+			drainDone = nil
 		case <-server.Done():
 			if _, serverErr := server.Exited(); serverErr != nil {
 				return fmt.Errorf("codex app-server exited during TUI startup: %w%s", serverErr, serverLogSuffix(server))
@@ -174,6 +175,9 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		case <-startupTimer.C:
 			waitingStartup = false
 		}
+	}
+	if drainDone == nil && canWatchAppServer(client) {
+		drainDone = completedAppServerDrain()
 	}
 
 	if err = writeStatus(cfg.StatusFile, Status{
@@ -185,31 +189,16 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState)
 	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
 	tuiStopped = tuiExited
 	return err
 }
 
 func setupCodexPlanThread(client sessionClient, cwd, version string) (codexThreadInfo, error) {
-	if _, err := client.Request("fanout-init", "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "fanout-codex-plan-tui",
-			"title":   nil,
-			"version": version,
-		},
-		"capabilities": map[string]any{
-			"experimentalApi":           true,
-			"requestAttestation":        false,
-			"optOutNotificationMethods": nil,
-		},
-	}); err != nil {
+	if err := initializeCodexPlanClient(client, version); err != nil {
 		return codexThreadInfo{}, err
 	}
-	if err := client.Notify("initialized"); err != nil {
-		return codexThreadInfo{}, err
-	}
-
 	modeResult, err := client.Request("fanout-modes", "collaborationMode/list", map[string]any{})
 	if err != nil {
 		return codexThreadInfo{}, err
@@ -243,6 +232,27 @@ func setupCodexPlanThread(client sessionClient, cwd, version string) (codexThrea
 	return thread, nil
 }
 
+func initializeCodexPlanClient(client sessionClient, version string) error {
+	if _, err := client.Request("fanout-init", "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "fanout-codex-plan-tui",
+			"title":   nil,
+			"version": version,
+		},
+		"capabilities": map[string]any{
+			"experimentalApi":           true,
+			"requestAttestation":        false,
+			"optOutNotificationMethods": nil,
+		},
+	}); err != nil {
+		return err
+	}
+	if err := client.Notify("initialized"); err != nil {
+		return err
+	}
+	return nil
+}
+
 func codexThreadStartParams(cwd, model string) map[string]any {
 	return map[string]any{
 		"cwd":                cwd,
@@ -254,7 +264,11 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 }
 
 func startCodexPlanTurn(client requester, thread codexThreadInfo, cwd, prompt string) (codexPlanTurnStartResult, error) {
-	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, codexPlanCollaborationMode(thread.Model, thread.PlanEffort))
+	var collaborationMode map[string]any
+	if thread.UseTurnCollaborationMode {
+		collaborationMode = codexPlanCollaborationMode(thread.Model, thread.PlanEffort)
+	}
+	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, collaborationMode)
 	result, err := client.Request("fanout-turn", "turn/start", params)
 	if err != nil {
 		return codexPlanTurnStartResult{}, err
@@ -369,7 +383,6 @@ func beginCodexPlanTurn(client planTurnClient, thread codexThreadInfo, cwd, prom
 	}
 	if turnStart.Completed {
 		setState("plan")
-		client.Close()
 		return nil, nil
 	}
 	setState("working")
@@ -380,21 +393,69 @@ func beginCodexPlanTurn(client planTurnClient, thread codexThreadInfo, cwd, prom
 	return drainDone, nil
 }
 
-func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client) (bool, error) {
+func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string)) (bool, error) {
+	watchingAppServer := false
 	for drainDone != nil {
 		select {
 		case tuiErr := <-tuiDone:
 			awaitDrainAfterTUIExit(client, drainDone)
 			return true, tuiErr
 		case drainErr := <-drainDone:
-			client.Close()
-			drainDone = nil
 			if drainErr != nil {
+				if watchingAppServer {
+					drainDone = nil
+					continue
+				}
 				return false, fmt.Errorf("codex app-server request handling failed while Codex TUI was attached: %w", drainErr)
 			}
+			if !watchingAppServer && canWatchAppServer(client) {
+				watchingAppServer = true
+				drainDone = drainCodexAppServerUntilClosedCmd(client, setState)
+				continue
+			}
+			drainDone = nil
 		}
 	}
 	return true, <-tuiDone
+}
+
+func canWatchAppServer(client *client) bool {
+	return client != nil && client.canWatch()
+}
+
+func completedAppServerDrain() chan error {
+	done := make(chan error, 1)
+	done <- nil
+	return done
+}
+
+func drainCodexAppServerUntilClosedCmd(client *client, setState func(string)) chan error {
+	done := make(chan error, 1)
+	go func() { done <- drainCodexAppServerUntilClosed(client, setState) }()
+	return done
+}
+
+func drainCodexAppServerUntilClosed(client *client, setState func(string)) error {
+	return drainCodexAppServerNotificationsUntilClosed(client, setState)
+}
+
+type appServerReceiver interface {
+	receive() (appServerMessage, error)
+}
+
+func drainCodexAppServerNotificationsUntilClosed(receiver appServerReceiver, setState func(string)) error {
+	for {
+		msg, err := receiver.receive()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if state := codexTurnNotificationAgentState(msg); state != "" {
+			reportCodexPlanAgentState(setState, state)
+		}
+	}
 }
 
 // awaitDrainAfterTUIExit closes the app client and briefly waits for the
@@ -429,21 +490,26 @@ func drainCodexAppServerUntilTurnComplete(client streamClient, threadID, turnID 
 			return err
 		}
 		if isServerRequest(msg) {
-			if err := handleServerRequest(client, msg); err != nil {
+			if err := handleServerRequestWithState(client, msg, setState); err != nil {
 				return err
 			}
 		}
 		completion := codexTurnCompletedNotification(msg, threadID, turnID)
 		if completion.Matched {
+			if state := codexTurnCompletionAgentState(completion); state != "" {
+				reportCodexPlanAgentState(setState, state)
+			}
 			if completion.Status != "completed" {
 				return fmt.Errorf("codex initial plan turn ended with status %q", completion.Status)
 			}
-			// The proposed plan is now part of the thread the TUI displays;
-			// report it before signaling drainDone so callers waiting on the
-			// channel also wait for this write.
-			setState("plan")
 			return nil
 		}
+	}
+}
+
+func reportCodexPlanAgentState(setState func(string), state string) {
+	if setState != nil && state != "" {
+		setState(state)
 	}
 }
 
@@ -485,6 +551,33 @@ func codexTurnCompletedNotification(msg appServerMessage, threadID, turnID strin
 	return codexTurnCompletion{Matched: true, Status: status}
 }
 
+func codexTurnNotificationAgentState(msg appServerMessage) string {
+	if msg.Method == "turn/started" {
+		return "working"
+	}
+	completion := anyCodexTurnCompletedNotification(msg)
+	return codexTurnCompletionAgentState(completion)
+}
+
+func anyCodexTurnCompletedNotification(msg appServerMessage) codexTurnCompletion {
+	if msg.Method != "turn/completed" {
+		return codexTurnCompletion{}
+	}
+	var params struct {
+		Turn struct {
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return codexTurnCompletion{}
+	}
+	status := strings.TrimSpace(params.Turn.Status)
+	if !isTerminalCodexTurnStatus(status) {
+		return codexTurnCompletion{}
+	}
+	return codexTurnCompletion{Matched: true, Status: status}
+}
+
 func codexTurnCompletionMatches(topLevelThreadID, turnThreadID, actualTurnID, expectedThreadID, expectedTurnID string) bool {
 	topLevelThreadID = strings.TrimSpace(topLevelThreadID)
 	turnThreadID = strings.TrimSpace(turnThreadID)
@@ -509,6 +602,20 @@ func isTerminalCodexTurnStatus(status string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func codexTurnCompletionAgentState(completion codexTurnCompletion) string {
+	if !completion.Matched {
+		return ""
+	}
+	switch completion.Status {
+	case "completed":
+		return "plan"
+	case "failed", "interrupted":
+		return "idle"
+	default:
+		return ""
 	}
 }
 

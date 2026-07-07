@@ -561,10 +561,10 @@ var knownAgentStates = map[string]bool{
 
 // normalizeAgentState は tmux pane user option @fanout_agent_state の値を
 // PaneView.AgentState に正規化する。running と done は fanout の起動ラッパー
-// (tmuxrun.BuildPaneLaunchCommand)が agent の起動前後に設定し、
-// working / plan / blocked / idle は agent hooks が明示信号として設定する。
-// それ以外の値(未設定 = 旧版 fanout やラッパー外で起動した pane、あるいは
-// pane 内プロセスが偽装した文字列)は ""(不明)に落とす。
+// (tmuxrun.BuildPaneLaunchCommand)が agent の起動前後に設定し、working /
+// plan / blocked / idle は agent hooks が明示信号として設定する。それ以外の値
+// (未設定 = 旧版 fanout やラッパー外で起動した pane、あるいは pane 内プロセスが
+// 偽装した文字列)は ""(不明)に落とす。
 // #{pane_current_command} ヒューリスティックは使えない: 非対話 sh -lc
 // ラッパー経由の agent はラッパーと同一プロセスグループで動き、tmux は agent
 // 実行中もラッパーシェル名を報告するため、fanout 起動 pane では常に「done」

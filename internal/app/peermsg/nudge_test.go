@@ -74,6 +74,10 @@ func TestRunMsgNudge(t *testing.T) {
 			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient/nested", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
 		},
 		{
+			name: "plan-ready pane at the recorded worktree is nudged", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
+			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient", "plan")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
 			// The core Codex P2: tmux reused %5 for a pane sitting elsewhere.
 			// It must NOT be nudged even though it reports "running".
 			name: "reused id off the recorded worktree is not nudged", req: Request{Verb: "nudge", To: 71}, store: withWorktree,

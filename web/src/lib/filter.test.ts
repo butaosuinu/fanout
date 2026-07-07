@@ -53,6 +53,8 @@ describe("matches", () => {
 
   it("run: は agentState と厳密比較(未設定は空文字)", () => {
     expect(matches(makePane({ agentState: "running" }), q("run:running"))).toBe(true);
+    expect(matches(makePane({ agentState: "plan" }), q("run:plan"))).toBe(true);
+    expect(matches(makePane({ agentState: "blocked" }), q("run:blocked"))).toBe(true);
     expect(matches(makePane({ agentState: "done" }), q("run:running"))).toBe(false);
     expect(matches(makePane({}), q("run:running"))).toBe(false);
   });

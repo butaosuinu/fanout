@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,7 +24,9 @@ type appServerMessage struct {
 // client is a JSON-RPC client over one websocket connection to a Codex
 // app-server.
 type client struct {
-	conn *websocketJSONConn
+	mu     sync.Mutex
+	conn   *websocketJSONConn
+	closed bool
 }
 
 // requester is the request-only slice of client that the Plan Mode setup
@@ -38,11 +41,15 @@ type sessionClient interface {
 	Notify(method string) error
 }
 
+type sender interface {
+	send(v any) error
+}
+
 // streamClient is the read/write slice of client the initial-turn drain loop
 // and the server-request handlers consume; tests substitute a scripted fake.
 type streamClient interface {
 	receive() (appServerMessage, error)
-	send(v any) error
+	sender
 }
 
 // planTurnClient is what beginCodexPlanTurn needs: request the turn, drain its
@@ -74,27 +81,60 @@ func (c *client) Notify(method string) error {
 }
 
 func (c *client) Close() {
-	if c == nil || c.conn == nil {
+	conn := c.closeConn()
+	if conn == nil {
 		return
 	}
-	_ = c.conn.Close()
+	_ = conn.Close()
 }
 
 func (c *client) send(v any) error {
-	if c == nil || c.conn == nil {
+	conn, ok := c.activeConn()
+	if !ok {
 		return io.ErrClosedPipe
 	}
-	return c.conn.Send(v)
+	return conn.Send(v)
 }
 
 func (c *client) receive() (appServerMessage, error) {
-	if c == nil || c.conn == nil {
+	conn, ok := c.activeConn()
+	if !ok {
 		return appServerMessage{}, io.ErrClosedPipe
 	}
-	return c.conn.Receive()
+	return conn.Receive()
 }
 
-func sendAppRequest(client *client, id, method string, params any) error {
+func (c *client) canWatch() bool {
+	_, ok := c.activeConn()
+	return ok
+}
+
+func (c *client) activeConn() (*websocketJSONConn, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.conn == nil {
+		return nil, false
+	}
+	return c.conn, true
+}
+
+func (c *client) closeConn() *websocketJSONConn {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	return c.conn
+}
+
+func sendAppRequest(client sender, id, method string, params any) error {
 	if err := client.send(map[string]any{
 		"id":     id,
 		"method": method,
@@ -105,14 +145,14 @@ func sendAppRequest(client *client, id, method string, params any) error {
 	return nil
 }
 
-func sendAppNotification(client *client, method string) error {
+func sendAppNotification(client sender, method string) error {
 	if err := client.send(map[string]any{"method": method}); err != nil {
 		return fmt.Errorf("send app-server notification %s: %w", method, err)
 	}
 	return nil
 }
 
-func sendAppResponse(client streamClient, id json.RawMessage, result any) error {
+func sendAppResponse(client sender, id json.RawMessage, result any) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot respond to app-server request without id")
 	}
@@ -125,7 +165,7 @@ func sendAppResponse(client streamClient, id json.RawMessage, result any) error 
 	return nil
 }
 
-func sendAppError(client streamClient, id json.RawMessage, message string) error {
+func sendAppError(client sender, id json.RawMessage, message string) error {
 	if len(id) == 0 {
 		return fmt.Errorf("cannot send app-server error without id")
 	}
@@ -173,7 +213,41 @@ func readUntilResponse(client *client, id string) (json.RawMessage, error) {
 	}
 }
 
-func handleServerRequest(client streamClient, msg appServerMessage) error {
+func handleServerRequest(client sender, msg appServerMessage) error {
+	return handleServerRequestWithState(client, msg, nil)
+}
+
+func handleServerRequestWithState(client sender, msg appServerMessage, setState func(string)) error {
+	if state := serverRequestAgentState(msg.Method); state != "" {
+		if setState != nil {
+			setState(state)
+		}
+		err := handleServerRequestResponse(client, msg)
+		if err == nil && setState != nil {
+			setState("working")
+		}
+		return err
+	}
+	return handleServerRequestResponse(client, msg)
+}
+
+func serverRequestAgentState(method string) string {
+	switch method {
+	case "item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+		"tool/requestUserInput",
+		"item/permissions/requestApproval",
+		"mcpServer/elicitation/request",
+		"execCommandApproval",
+		"applyPatchApproval":
+		return "blocked"
+	default:
+		return ""
+	}
+}
+
+func handleServerRequestResponse(client sender, msg appServerMessage) error {
 	switch msg.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		return sendAppResponse(client, msg.ID, map[string]any{"decision": "decline"})

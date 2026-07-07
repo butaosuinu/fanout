@@ -131,6 +131,8 @@ type model struct {
 	promptDone       bool
 	promptCanceled   bool
 	promptResult     LaunchRequest
+	agentStates      map[string]agentTransitionSnapshot
+	agentPrimed      bool
 	closeDone        bool
 	closeCanceled    bool
 	closeResult      lifecycle.CloseMode
@@ -284,6 +286,7 @@ func newModel(opts Options) model {
 		detail:        viewport.New(120, detailHeight),
 		issues:        map[issueKey]issueStatus{},
 		notifications: map[issueKey]issueTransitionSnapshot{},
+		agentStates:   map[string]agentTransitionSnapshot{},
 	}
 }
 

@@ -51,8 +51,20 @@ type stateLoadedMsg struct {
 	panes         []paneView
 	at            time.Time
 	err           error
+	snapshotErr   error
+	restoreErr    error
 	restoreNotice string
 	scheduleNext  bool
+}
+
+func (msg stateLoadedMsg) agentSnapshotOK() bool {
+	if msg.snapshotErr != nil {
+		return false
+	}
+	if msg.restoreErr != nil {
+		return true
+	}
+	return msg.err == nil
 }
 
 type ghLoadedMsg struct {
@@ -79,7 +91,15 @@ func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 			restoreNotice, restoreErr = restorePanes()
 		}
 		panes, err := loadPaneViews(projectRoot, issues)
-		return stateLoadedMsg{panes: panes, at: time.Now(), err: errors.Join(restoreErr, err), restoreNotice: restoreNotice, scheduleNext: scheduleNext}
+		return stateLoadedMsg{
+			panes:         panes,
+			at:            time.Now(),
+			err:           errors.Join(restoreErr, err),
+			snapshotErr:   err,
+			restoreErr:    restoreErr,
+			restoreNotice: restoreNotice,
+			scheduleNext:  scheduleNext,
+		}
 	}
 }
 
@@ -431,6 +451,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				SourceParent:       pv.SourceParent,
 				SourceIssueNum:     pv.SourceIssueNum,
 				SourceTaskID:       pv.SourceTaskID,
+				SourceKey:          pv.SourceKey,
 				TmuxState:          pv.TmuxState,
 				TmuxTitle:          pv.TmuxTitle,
 				AgentState:         pv.AgentState,

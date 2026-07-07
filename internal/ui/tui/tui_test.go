@@ -794,6 +794,443 @@ func TestGHUpdateRecordsPartialRecoveryBeforeLaterTransition(t *testing.T) {
 	}
 }
 
+func TestStateUpdatePrimesAgentNotificationsOnInitialSnapshot(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	updated, cmd := m.Update(stateLoadedMsg{
+		panes: []paneView{
+			{Parent: "100", IssueNum: 101, Name: "existing plan", TmuxState: "live", AgentState: "plan"},
+			{Parent: "100", IssueNum: 102, Name: "existing blocked", TmuxState: "live", AgentState: "blocked"},
+			{Parent: "100", IssueNum: 103, Name: "existing done", TmuxState: "live", AgentState: "done"},
+		},
+		at: time.Unix(1, 0),
+	})
+	if cmd != nil {
+		t.Fatal("initial state snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+	if !m.agentPrimed {
+		t.Fatal("agentPrimed = false, want true after initial state snapshot")
+	}
+	if len(notifier.events) != 0 {
+		t.Fatalf("notifier events = %#v, want none", notifier.events)
+	}
+}
+
+func TestAgentTransitionKindMatrix(t *testing.T) {
+	tests := []struct {
+		name string
+		prev string
+		next string
+		want fanoutnotify.EventKind
+		ok   bool
+	}{
+		{name: "running to plan", prev: "running", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "working to plan", prev: "working", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "blocked to plan", prev: "blocked", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "idle to plan", prev: "idle", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "done to plan", prev: "done", next: "plan", want: fanoutnotify.EventAgentPlan, ok: true},
+		{name: "running to done", prev: "running", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
+		{name: "working to done", prev: "working", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
+		{name: "plan to done", prev: "plan", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
+		{name: "blocked to done", prev: "blocked", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
+		{name: "idle to done", prev: "idle", next: "done", want: fanoutnotify.EventAgentDone, ok: true},
+		{name: "running to blocked", prev: "running", next: "blocked", want: fanoutnotify.EventAgentBlocked, ok: true},
+		{name: "working to blocked", prev: "working", next: "blocked", want: fanoutnotify.EventAgentBlocked, ok: true},
+		{name: "idle to blocked", prev: "idle", next: "blocked", want: fanoutnotify.EventAgentBlocked, ok: true},
+		{name: "plan to blocked", prev: "plan", next: "blocked", want: fanoutnotify.EventAgentBlocked, ok: true},
+		{name: "done to blocked", prev: "done", next: "blocked", want: fanoutnotify.EventAgentBlocked, ok: true},
+		{name: "unchanged running", prev: "running", next: "running", ok: false},
+		{name: "repeated done", prev: "done", next: "done", ok: false},
+		{name: "unknown next", prev: "running", next: "surprised", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := agentTransitionKind(tt.prev, tt.next)
+			if ok != tt.ok {
+				t.Fatalf("agentTransitionKind(%q, %q) ok = %v, want %v", tt.prev, tt.next, ok, tt.ok)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("agentTransitionKind(%q, %q) = %q, want %q", tt.prev, tt.next, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStateUpdateNotifiesAgentTransitionsOnce(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "issue work", PaneID: "%1", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 102, Name: "issue needs approval", PaneID: "%2", TmuxState: "live", AgentState: "plan"},
+		{Parent: "plan:alpha", TaskID: "api-client", Name: "API client", PaneID: "%3", SourceKey: "tasksrc", TmuxState: "live", AgentState: "working", sourceProjectRoot: "/wt/task"},
+		{Parent: "@manual", IssueNum: -1, Kind: state.PaneKindAttachedAgent, Name: "manual session", PaneID: "%4", SourceKey: "manualsrc", TmuxState: "live", AgentState: "working", sourceProjectRoot: "/wt/manual"},
+	}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	next := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "issue work", PaneID: "%1", TmuxState: "live", AgentState: "plan"},
+		{Parent: "100", IssueNum: 102, Name: "issue needs approval", PaneID: "%2", TmuxState: "live", AgentState: "blocked"},
+		{Parent: "plan:alpha", TaskID: "api-client", Name: "API client", PaneID: "%3", SourceKey: "tasksrc", TmuxState: "live", AgentState: "done", sourceProjectRoot: "/wt/task"},
+		{Parent: "@manual", IssueNum: -1, Kind: state.PaneKindAttachedAgent, Name: "manual session", PaneID: "%4", SourceKey: "manualsrc", TmuxState: "live", AgentState: "blocked", sourceProjectRoot: "/wt/manual"},
+	}
+	updated, cmd := m.Update(stateLoadedMsg{panes: next, at: time.Unix(2, 0)})
+	if cmd == nil {
+		t.Fatal("agent transition snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	gotKinds := []fanoutnotify.EventKind{}
+	gotSubjects := []string{}
+	for _, event := range notifier.events {
+		gotKinds = append(gotKinds, event.Kind)
+		gotSubjects = append(gotSubjects, event.Message())
+	}
+	wantKinds := []fanoutnotify.EventKind{
+		fanoutnotify.EventAgentPlan,
+		fanoutnotify.EventAgentBlocked,
+		fanoutnotify.EventAgentBlocked,
+		fanoutnotify.EventAgentDone,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+	for _, msg := range gotSubjects {
+		if strings.Contains(msg, "#0") {
+			t.Fatalf("agent notification %q contains #0 label", msg)
+		}
+	}
+	gotMessageText := strings.Join(gotSubjects, "\n")
+	for _, want := range []string{"#101 issue work plan ready", "#102 issue needs approval waiting for input", "task api-client API client agent exited", "manual session waiting for input"} {
+		if !strings.Contains(gotMessageText, want) {
+			t.Fatalf("messages = %#v, want substring %q", gotSubjects, want)
+		}
+	}
+	if !strings.Contains(m.notice, "4 state changes") {
+		t.Fatalf("notice = %q, want transition summary", m.notice)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+
+	_, cmd = m.Update(stateLoadedMsg{panes: next, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("unchanged agent state snapshot returned notification command, want nil")
+	}
+	if len(notifier.events) != 4 {
+		t.Fatalf("notifier events after unchanged snapshot = %d, want 4", len(notifier.events))
+	}
+}
+
+func TestStateUpdateNotifiesAgentTransitionsFromBuiltPaneViews(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+	statePanes := []state.Pane{
+		{Parent: "100", IssueNum: 101, DisplayName: "issue work", PaneID: "%1", WorktreePath: "/repo/.fanout/worktrees/issue-work", Agent: "codex"},
+		{Parent: "plan:alpha", IssueNum: 0, TaskID: "api-client", DisplayName: "API client", PaneID: "%2", WorktreePath: "/repo/.fanout/worktrees/api-client", Agent: "codex", BranchName: "fanout/api-client"},
+	}
+
+	initial := buildPaneViews(statePanes, []tmuxrun.LivePane{
+		{ID: "%1", AgentState: "running"},
+		{ID: "%2", AgentState: "working"},
+	}, true, nil, nil)
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	next := buildPaneViews(statePanes, []tmuxrun.LivePane{
+		{ID: "%1", AgentState: "plan"},
+		{ID: "%2", AgentState: "blocked"},
+	}, true, nil, nil)
+	_, cmd := m.Update(stateLoadedMsg{panes: next, at: time.Unix(2, 0)})
+	if cmd == nil {
+		t.Fatal("built paneView transition returned nil command, want notification command")
+	}
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+
+	gotKinds := []fanoutnotify.EventKind{}
+	for _, event := range notifier.events {
+		gotKinds = append(gotKinds, event.Kind)
+	}
+	wantKinds := []fanoutnotify.EventKind{fanoutnotify.EventAgentPlan, fanoutnotify.EventAgentBlocked}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+}
+
+func TestStateUpdateNotifiesFirstObservedAgentStatesAfterPriming(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	updated, cmd := m.Update(stateLoadedMsg{panes: nil, at: time.Unix(1, 0)})
+	if cmd != nil {
+		t.Fatal("initial empty state snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+	if !m.agentPrimed {
+		t.Fatal("agentPrimed = false, want true after initial empty state snapshot")
+	}
+
+	firstObserved := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "fast plan", PaneID: "%1", TmuxState: "live", AgentState: "plan"},
+		{Parent: "100", IssueNum: 102, Name: "fast blocked", PaneID: "%2", TmuxState: "live", AgentState: "blocked"},
+		{Parent: "100", IssueNum: 103, Name: "fast done", PaneID: "%3", TmuxState: "live", AgentState: "done"},
+		{Parent: "100", IssueNum: 104, Name: "still running", PaneID: "%4", TmuxState: "live", AgentState: "running"},
+	}
+	updated, cmd = m.Update(stateLoadedMsg{panes: firstObserved, at: time.Unix(2, 0)})
+	if cmd == nil {
+		t.Fatal("first observed agent states returned nil command, want notification command")
+	}
+	m = updated.(model)
+	var msg transitionNotifiedMsg
+	found := false
+	for _, candidate := range runCmd(cmd) {
+		if notified, ok := candidate.(transitionNotifiedMsg); ok {
+			msg = notified
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("notify command returned no transitionNotifiedMsg")
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	gotKinds := []fanoutnotify.EventKind{}
+	gotMessages := []string{}
+	for _, event := range notifier.events {
+		gotKinds = append(gotKinds, event.Kind)
+		gotMessages = append(gotMessages, event.Message())
+	}
+	wantKinds := []fanoutnotify.EventKind{
+		fanoutnotify.EventAgentPlan,
+		fanoutnotify.EventAgentBlocked,
+		fanoutnotify.EventAgentDone,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("event kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+	gotMessageText := strings.Join(gotMessages, "\n")
+	for _, want := range []string{"#101 fast plan plan ready", "#102 fast blocked waiting for input", "#103 fast done agent exited"} {
+		if !strings.Contains(gotMessageText, want) {
+			t.Fatalf("messages = %#v, want substring %q", gotMessages, want)
+		}
+	}
+	if len(m.agentStates) != 4 {
+		t.Fatalf("agentStates len = %d, want 4 including non-notifying running pane", len(m.agentStates))
+	}
+
+	_, cmd = m.Update(stateLoadedMsg{panes: firstObserved, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("repeated first observed agent states returned notification command, want nil")
+	}
+	if len(notifier.events) != 3 {
+		t.Fatalf("notifier events after repeated snapshot = %d, want 3", len(notifier.events))
+	}
+}
+
+func TestAgentTransitionKeyPrefersStableRowIdentityOverPaneID(t *testing.T) {
+	tests := []struct {
+		name string
+		pane paneView
+		want string
+	}{
+		{
+			name: "issue identity wins over pane id",
+			pane: paneView{Parent: "100", IssueNum: 101, PaneID: "%1", SourceKey: "source-a"},
+			want: "issue:100:101",
+		},
+		{
+			name: "task identity wins over pane id",
+			pane: paneView{Parent: "plan:alpha", TaskID: "api-client", PaneID: "%1", SourceKey: "source-a", sourceProjectRoot: "/wt/task"},
+			want: "task:plan:alpha:/wt/task:api-client",
+		},
+		{
+			name: "shell key wins over pane id",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1", ShellKey: "shell-root", sourceProjectRoot: "/repo"},
+			want: "shell:@manual:/repo:shell-root",
+		},
+		{
+			name: "source key wins over pane id",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1", SourceKey: "manual-source", sourceProjectRoot: "/repo"},
+			want: "source:@manual:-1:manual-source",
+		},
+		{
+			name: "pane id is fallback",
+			pane: paneView{Parent: "@manual", IssueNum: -1, PaneID: "%1"},
+			want: "pane:%1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentTransitionKey(tt.pane); got != tt.want {
+				t.Fatalf("agentTransitionKey(%+v) = %q, want %q", tt.pane, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStateUpdateSuppressesInvalidAndRepeatedAgentTransitions(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "unchanged", PaneID: "%1", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 102, Name: "stale", PaneID: "%2", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 103, Name: "queued", PaneID: "%3", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 104, Name: "unknown", PaneID: "%4", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 105, Name: "empty", PaneID: "%5", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 106, Name: "done already", PaneID: "%6", TmuxState: "live", AgentState: "done"},
+	}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	next := []paneView{
+		{Parent: "100", IssueNum: 101, Name: "unchanged", PaneID: "%1", TmuxState: "live", AgentState: "running"},
+		{Parent: "100", IssueNum: 102, Name: "stale", PaneID: "%2", TmuxState: "stale", AgentState: "done"},
+		{Parent: "100", IssueNum: 103, Name: "queued", PaneID: "%3", TmuxState: "queued", AgentState: "done"},
+		{Parent: "100", IssueNum: 104, Name: "unknown", PaneID: "%4", TmuxState: "live", AgentState: "surprised"},
+		{Parent: "100", IssueNum: 105, Name: "empty", PaneID: "%5", TmuxState: "live"},
+		{Parent: "100", IssueNum: 106, Name: "done already", PaneID: "%6", TmuxState: "live", AgentState: "done"},
+	}
+	_, cmd := m.Update(stateLoadedMsg{panes: next, at: time.Unix(2, 0)})
+	if cmd != nil {
+		t.Fatal("invalid/repeated agent state snapshot returned notification command, want nil")
+	}
+	if len(notifier.events) != 0 {
+		t.Fatalf("notifier events = %#v, want none", notifier.events)
+	}
+}
+
+func TestStateUpdatePreservesAgentNotificationBaselineOnError(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "running"}}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	errored := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "done"}}
+	updated, cmd := m.Update(stateLoadedMsg{panes: errored, at: time.Unix(2, 0), err: errBoom})
+	if cmd != nil {
+		t.Fatal("errored state snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+	if got := m.agentStates[agentTransitionKey(initial[0])].State; got != "running" {
+		t.Fatalf("agent baseline after errored refresh = %q, want running", got)
+	}
+
+	updated, cmd = m.Update(stateLoadedMsg{panes: errored, at: time.Unix(3, 0)})
+	if cmd == nil {
+		t.Fatal("recovered done snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventAgentDone, Parent: "100", IssueNum: 101, Title: "work", AgentState: "done"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+}
+
+func TestStateUpdateDetectsAgentTransitionsWhenRestoreFails(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "running"}}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	done := []paneView{{Parent: "100", IssueNum: 101, Name: "work", TmuxState: "live", AgentState: "done"}}
+	updated, cmd := m.Update(stateLoadedMsg{
+		panes:      done,
+		at:         time.Unix(2, 0),
+		err:        errBoom,
+		restoreErr: errBoom,
+	})
+	if cmd == nil {
+		t.Fatal("restore-only error snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventAgentDone, Parent: "100", IssueNum: 101, Title: "work", AgentState: "done"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if got := m.agentStates[agentTransitionKey(initial[0])].State; got != "done" {
+		t.Fatalf("agent baseline after restore-only error = %q, want done", got)
+	}
+	if m.stateErr == "" {
+		t.Fatal("stateErr = empty, want restore error still displayed")
+	}
+}
+
+func TestStateUpdatePreservesAgentNotificationBaselineOnUntrackableSnapshot(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	initial := []paneView{{Parent: "100", IssueNum: 101, Name: "work", PaneID: "%1", TmuxState: "live", AgentState: "running"}}
+	updated, _ := m.Update(stateLoadedMsg{panes: initial, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	untrackable := []paneView{{Parent: "100", IssueNum: 101, Name: "work", PaneID: "%1", TmuxState: "stale", AgentState: "done"}}
+	updated, cmd := m.Update(stateLoadedMsg{panes: untrackable, at: time.Unix(2, 0)})
+	if cmd != nil {
+		t.Fatal("untrackable state snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+	if got := m.agentStates[agentTransitionKey(initial[0])].State; got != "running" {
+		t.Fatalf("agent baseline after untrackable refresh = %q, want running", got)
+	}
+
+	done := []paneView{{Parent: "100", IssueNum: 101, Name: "work", PaneID: "%1", TmuxState: "live", AgentState: "done"}}
+	updated, cmd = m.Update(stateLoadedMsg{panes: done, at: time.Unix(3, 0)})
+	if cmd == nil {
+		t.Fatal("recovered done snapshot returned nil command, want notification command")
+	}
+	m = updated.(model)
+	msg, ok := cmd().(transitionNotifiedMsg)
+	if !ok {
+		t.Fatalf("notify command returned %T, want transitionNotifiedMsg", msg)
+	}
+	updated, _ = m.Update(msg)
+	m = updated.(model)
+
+	want := []fanoutnotify.Event{{Kind: fanoutnotify.EventAgentDone, Parent: "100", IssueNum: 101, Title: "work", PaneID: "%1", AgentState: "done"}}
+	if !reflect.DeepEqual(notifier.events, want) {
+		t.Fatalf("notifier events = %#v, want %#v", notifier.events, want)
+	}
+	if m.notifyErr != "" {
+		t.Fatalf("notifyErr = %q, want empty", m.notifyErr)
+	}
+}
+
 func TestViewRendersHUDCounts(t *testing.T) {
 	m := newModel(Options{ProjectRoot: "/repo"})
 	m.width = 100

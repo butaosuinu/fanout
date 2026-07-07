@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -148,10 +150,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.stateErr = ""
 		}
+		var agentEvents []fanoutnotify.Event
+		wasAgentPrimed := m.agentPrimed
+		if msg.agentSnapshotOK() {
+			agentEvents = detectAgentTransitions(m.agentStates, msg.panes)
+			m.agentStates = mergeAgentTransitionSnapshots(m.agentStates, msg.panes)
+			if !m.agentPrimed {
+				m.agentPrimed = true
+			}
+		}
 		m.allPanes = msg.panes
 		m.lastState = msg.at
 		if msg.restoreNotice != "" {
 			m.notice = msg.restoreNotice
+		}
+		var notifyCmd tea.Cmd
+		if wasAgentPrimed && len(agentEvents) > 0 {
+			notifyCmd = m.notifyEventsCmd(agentEvents)
+			m.notice = transitionNotice(agentEvents)
 		}
 		m.refreshRows()
 		peekCmd := m.peekSelectedCmd(false)
@@ -159,7 +175,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(
 				tea.Tick(m.opts.StateInterval, func(t time.Time) tea.Msg { return stateTickMsg(t) }),
 				peekCmd,
+				notifyCmd,
 			)
+		}
+		if notifyCmd != nil && peekCmd != nil {
+			return m, tea.Batch(peekCmd, notifyCmd)
+		}
+		if notifyCmd != nil {
+			return m, notifyCmd
 		}
 		return m, peekCmd
 	case ghLoadedMsg:

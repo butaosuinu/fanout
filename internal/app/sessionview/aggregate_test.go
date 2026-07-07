@@ -675,11 +675,11 @@ func TestNormalizeAgentState(t *testing.T) {
 	}{
 		{name: "empty stays empty", in: "", want: ""},
 		{name: "running passes through", in: "running", want: "running"},
-		{name: "done passes through", in: "done", want: "done"},
 		{name: "working passes through", in: "working", want: "working"},
+		{name: "idle passes through", in: "idle", want: "idle"},
 		{name: "plan passes through", in: "plan", want: "plan"},
 		{name: "blocked passes through", in: "blocked", want: "blocked"},
-		{name: "idle passes through", in: "idle", want: "idle"},
+		{name: "done passes through", in: "done", want: "done"},
 		{name: "surrounding whitespace is trimmed", in: " running ", want: "running"},
 		{name: "hook value with whitespace is trimmed", in: " idle ", want: "idle"},
 		{name: "value from outside the wrapper is unknown", in: "claude", want: ""},

@@ -109,7 +109,9 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("running", { selector: ".tag" })).toBeInTheDocument();
   });
 
-  it("6 値契約の hook 状態(working/plan/blocked/idle)もバッジ描画される", () => {
+  it("6 値契約の hook 状態を行と drawer に表示する", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "plan output"));
     render(<App />);
     streamSnapshot(
       makeSnapshot([
@@ -124,6 +126,10 @@ describe("snapshot 描画", () => {
     for (const state of ["working", "plan", "blocked", "idle"]) {
       expect(screen.getByText(state, { selector: ".tag" })).toBeInTheDocument();
     }
+
+    await user.click(screen.getByText("Two"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(drawer.querySelector("#d-run")).toHaveTextContent("plan");
   });
 
   it("repo が owner/name 形式でなければリンク化しない", () => {

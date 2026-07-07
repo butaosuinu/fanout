@@ -27,33 +27,34 @@ const (
 type EventKind string
 
 const (
-	EventMerged   EventKind = "merged"
-	EventCIFailed EventKind = "ci-failed"
-	EventWaiting  EventKind = "waiting"
+	EventMerged       EventKind = "merged"
+	EventCIFailed     EventKind = "ci-failed"
+	EventWaiting      EventKind = "waiting"
+	EventAgentPlan    EventKind = "agent-plan"
+	EventAgentBlocked EventKind = "agent-blocked"
+	EventAgentDone    EventKind = "agent-done"
 )
 
 // Event describes one child state transition detected between snapshots.
 type Event struct {
-	Kind      EventKind
-	Parent    string
-	IssueNum  int
-	Title     string
-	PRNumber  int
-	CIStatus  string
-	Blockers  string
-	IssueLink string
+	Kind       EventKind
+	Parent     string
+	IssueNum   int
+	TaskID     string
+	Title      string
+	PRNumber   int
+	CIStatus   string
+	Blockers   string
+	IssueLink  string
+	PaneID     string
+	SourceKey  string
+	AgentState string
 }
 
 // Message renders the event as one compact operator-facing line.
 func (e Event) Message() string {
-	subject := fmt.Sprintf("#%d", e.IssueNum)
-	if title := strings.TrimSpace(e.Title); title != "" {
-		subject += " " + title
-	}
-	parent := ""
-	if strings.TrimSpace(e.Parent) != "" {
-		parent = " (parent " + strings.TrimSpace(e.Parent) + ")"
-	}
+	subject := e.subject()
+	parent := e.parentSuffix()
 	switch e.Kind {
 	case EventMerged:
 		return fmt.Sprintf("fanout: %s merged%s%s", subject, prSuffix(e.PRNumber), parent)
@@ -65,9 +66,51 @@ func (e Event) Message() string {
 			blockers = " on " + strings.TrimSpace(e.Blockers)
 		}
 		return fmt.Sprintf("fanout: %s waiting%s%s", subject, blockers, parent)
+	case EventAgentPlan:
+		return fmt.Sprintf("fanout: %s plan ready%s", subject, parent)
+	case EventAgentBlocked:
+		return fmt.Sprintf("fanout: %s waiting for input%s", subject, parent)
+	case EventAgentDone:
+		return fmt.Sprintf("fanout: %s agent exited%s", subject, parent)
 	default:
 		return fmt.Sprintf("fanout: %s changed%s", subject, parent)
 	}
+}
+
+func (e Event) subject() string {
+	title := strings.TrimSpace(e.Title)
+	switch {
+	case e.IssueNum > 0:
+		subject := fmt.Sprintf("#%d", e.IssueNum)
+		if title != "" {
+			subject += " " + title
+		}
+		return subject
+	case strings.TrimSpace(e.TaskID) != "":
+		task := strings.TrimSpace(e.TaskID)
+		subject := "task " + task
+		if title != "" && title != task {
+			subject += " " + title
+		}
+		return subject
+	case title != "":
+		return title
+	case strings.TrimSpace(e.PaneID) != "":
+		return "pane " + strings.TrimSpace(e.PaneID)
+	case strings.TrimSpace(e.SourceKey) != "":
+		return "source " + strings.TrimSpace(e.SourceKey)
+	case strings.TrimSpace(e.Parent) != "":
+		return "session " + strings.TrimSpace(e.Parent)
+	default:
+		return "session"
+	}
+}
+
+func (e Event) parentSuffix() string {
+	if strings.TrimSpace(e.Parent) == "" {
+		return ""
+	}
+	return " (parent " + strings.TrimSpace(e.Parent) + ")"
 }
 
 func prSuffix(num int) string {

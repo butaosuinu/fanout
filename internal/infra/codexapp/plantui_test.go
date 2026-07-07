@@ -1,13 +1,16 @@
 package codexapp
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestCodexPlanSettingsUpdateParamsUsesPlanMode(t *testing.T) {
@@ -186,19 +189,8 @@ func TestCodexPlanThreadStartsInitialTurnAfterSettingsUpdate(t *testing.T) {
 	}
 
 	turn := client.lastRequest("turn/start").paramsMap(t)
-	mode, ok := turn["collaborationMode"].(map[string]any)
-	if !ok {
-		t.Fatalf("turn/start missing collaborationMode: %#v", turn)
-	}
-	if mode["mode"] != "plan" {
-		t.Fatalf("collaborationMode.mode = %q, want plan", mode["mode"])
-	}
-	settings, ok := mode["settings"].(map[string]any)
-	if !ok {
-		t.Fatalf("collaborationMode.settings = %#v, want map", mode["settings"])
-	}
-	if settings["model"] != "gpt-test" || settings["reasoning_effort"] != "xhigh" {
-		t.Fatalf("settings = %#v, want model gpt-test and effort xhigh", settings)
+	if _, ok := turn["collaborationMode"]; ok {
+		t.Fatalf("turn/start collaborationMode = %#v, want absent after thread/settings/update", turn["collaborationMode"])
 	}
 	assertTurnStartText(t, turn, "hello plan")
 }
@@ -334,13 +326,13 @@ func TestBeginCodexPlanTurnReportsPlanOnSynchronousCompletion(t *testing.T) {
 	if got := strings.Join(states, ","); got != "plan" {
 		t.Fatalf("states = %q, want plan", got)
 	}
-	if !client.closed {
-		t.Fatal("client not closed after synchronous completion")
+	if client.closed {
+		t.Fatal("client closed after synchronous completion")
 	}
 }
 
-// TestBeginCodexPlanTurnSkipsPlanOnFailedTurn pins that a turn ending in a
-// non-completed terminal status reports "working" but never "plan".
+// TestBeginCodexPlanTurnReportsIdleOnFailedTurn pins that a turn ending in a
+// non-completed terminal status leaves the display state at a non-running idle.
 func TestBeginCodexPlanTurnSkipsPlanOnFailedTurn(t *testing.T) {
 	client := &fakeCodexAppClient{
 		stream: []appServerMessage{{
@@ -357,8 +349,8 @@ func TestBeginCodexPlanTurnSkipsPlanOnFailedTurn(t *testing.T) {
 	if drainErr := <-drainDone; drainErr == nil || !strings.Contains(drainErr.Error(), `status "failed"`) {
 		t.Fatalf("drain error = %v, want failed status error", drainErr)
 	}
-	if got := strings.Join(states, ","); got != "working" {
-		t.Fatalf("states = %q, want working only", got)
+	if got := strings.Join(states, ","); got != "working,idle" {
+		t.Fatalf("states = %q, want working,idle", got)
 	}
 }
 
@@ -374,6 +366,48 @@ func TestDrainCodexAppServerSkipsPlanWhenClientClosed(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("states = %v, want none", states)
+	}
+}
+
+func TestClientCloseClosesWatchGate(t *testing.T) {
+	client := &client{conn: &websocketJSONConn{}}
+
+	client.Close()
+
+	if canWatchAppServer(client) {
+		t.Fatal("canWatchAppServer() = true after Close, want false")
+	}
+}
+
+func TestClientCloseUnblocksReceive(t *testing.T) {
+	conn, peer := net.Pipe()
+	defer peer.Close()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	client := &client{conn: &websocketJSONConn{conn: conn, br: bufio.NewReader(conn)}}
+	receiveDone := make(chan error, 1)
+	go func() {
+		_, err := client.receive()
+		receiveDone <- err
+	}()
+
+	client.Close()
+
+	select {
+	case err := <-receiveDone:
+		if err == nil {
+			t.Fatal("receive error = nil after Close, want error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("receive did not unblock after Close")
+	}
+	peer.Close()
+	<-peerDone
+	if canWatchAppServer(client) {
+		t.Fatal("canWatchAppServer() = true after receive Close, want false")
 	}
 }
 
@@ -540,7 +574,7 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	drainDone := make(chan error, 1)
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -555,7 +589,7 @@ func TestWaitForCodexTUIAfterReadyReturnsDrainError(t *testing.T) {
 	drainDone := make(chan error, 1)
 	drainDone <- errors.New("unsupported request")
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if tuiExited {
 		t.Fatal("tuiExited = true, want false")
@@ -571,13 +605,63 @@ func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
 	drainDone <- nil
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{})
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
 	}
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
+	}
+}
+
+func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
+	conn, peer := net.Pipe()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	client := &client{conn: &websocketJSONConn{conn: conn, br: bufio.NewReader(conn)}}
+	defer func() {
+		client.Close()
+		_ = peer.Close()
+		<-peerDone
+	}()
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error, 1)
+	drainDone <- nil
+	resultDone := make(chan struct {
+		tuiExited bool
+		err       error
+	}, 1)
+	go func() {
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil)
+		resultDone <- struct {
+			tuiExited bool
+			err       error
+		}{tuiExited: tuiExited, err: err}
+	}()
+
+	// Send a malformed server text frame. This makes the post-ready
+	// notification watcher fail, but the interactive TUI owns its own
+	// connection and should keep running.
+	if _, err := peer.Write([]byte{0x81, 0x01, '{'}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-resultDone:
+		t.Fatalf("wait returned before TUI exit: tuiExited=%v err=%v", result.tuiExited, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	tuiDone <- nil
+	result := <-resultDone
+	if !result.tuiExited {
+		t.Fatal("tuiExited = false, want true")
+	}
+	if result.err != nil {
+		t.Fatalf("error = %v, want nil", result.err)
 	}
 }
 
@@ -620,6 +704,109 @@ func TestCodexTurnCompletedNotificationReportsFailedStatus(t *testing.T) {
 	completion := codexTurnCompletedNotification(msg, "thread-1", "turn-1")
 	if !completion.Matched || completion.Status != "failed" {
 		t.Fatalf("completion = %+v, want failed match", completion)
+	}
+}
+
+func TestCodexTurnCompletionAgentStateMapsTerminalStates(t *testing.T) {
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "plan" {
+		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want plan", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "failed"}); got != "idle" {
+		t.Fatalf("codexTurnCompletionAgentState(failed) = %q, want idle", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "interrupted"}); got != "idle" {
+		t.Fatalf("codexTurnCompletionAgentState(interrupted) = %q, want idle", got)
+	}
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{}); got != "" {
+		t.Fatalf("codexTurnCompletionAgentState(unmatched) = %q, want empty", got)
+	}
+}
+
+func TestCodexTurnNotificationAgentStateMarksStartedAndCompleted(t *testing.T) {
+	started := appServerMessage{Method: "turn/started"}
+	if got := codexTurnNotificationAgentState(started); got != "working" {
+		t.Fatalf("codexTurnNotificationAgentState(turn/started) = %q, want working", got)
+	}
+
+	completed := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","threadId":"thread-1","status":"completed"}}`),
+	}
+	if got := codexTurnNotificationAgentState(completed); got != "plan" {
+		t.Fatalf("codexTurnNotificationAgentState(turn/completed) = %q, want plan", got)
+	}
+
+	failed := appServerMessage{
+		Method: "turn/completed",
+		Params: json.RawMessage(`{"turn":{"status":"failed"}}`),
+	}
+	if got := codexTurnNotificationAgentState(failed); got != "idle" {
+		t.Fatalf("codexTurnNotificationAgentState(failed turn/completed) = %q, want idle", got)
+	}
+}
+
+func TestDrainCodexAppServerNotificationsUntilClosedDoesNotHandleServerRequests(t *testing.T) {
+	var states []string
+
+	receiver := &fakeAppServerReceiver{messages: []appServerMessage{
+		{
+			ID:     json.RawMessage(`"req-1"`),
+			Method: "tool/requestUserInput",
+			Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+		},
+		{Method: "turn/started"},
+		{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"turn":{"status":"interrupted"}}`),
+		},
+	}}
+
+	if err := drainCodexAppServerNotificationsUntilClosed(receiver, recordedStates(&states)); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(states, []string{"working", "idle"}) {
+		t.Fatalf("states = %#v, want working then idle", states)
+	}
+}
+
+func TestServerRequestAgentStateMarksBlockingRequests(t *testing.T) {
+	methods := []string{
+		"item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+		"tool/requestUserInput",
+		"item/permissions/requestApproval",
+		"mcpServer/elicitation/request",
+		"execCommandApproval",
+		"applyPatchApproval",
+	}
+	for _, method := range methods {
+		if got := serverRequestAgentState(method); got != "blocked" {
+			t.Fatalf("serverRequestAgentState(%q) = %q, want blocked", method, got)
+		}
+	}
+	if got := serverRequestAgentState("item/tool/call"); got != "" {
+		t.Fatalf("serverRequestAgentState(item/tool/call) = %q, want empty", got)
+	}
+}
+
+func TestHandleServerRequestRestoresWorkingAfterAutoHandledBlockingRequest(t *testing.T) {
+	var states []string
+
+	client := &fakeCodexAppClient{}
+	err := handleServerRequestWithState(client, appServerMessage{
+		ID:     json.RawMessage(`"req-1"`),
+		Method: "tool/requestUserInput",
+		Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+	}, recordedStates(&states))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(states, []string{"blocked", "working"}) {
+		t.Fatalf("states = %#v, want blocked then working", states)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(client.sent))
 	}
 }
 
@@ -669,6 +856,19 @@ type fakeCodexAppClient struct {
 	streamErr error
 	sent      []any
 	closed    bool
+}
+
+type fakeAppServerReceiver struct {
+	messages []appServerMessage
+}
+
+func (f *fakeAppServerReceiver) receive() (appServerMessage, error) {
+	if len(f.messages) == 0 {
+		return appServerMessage{}, io.EOF
+	}
+	msg := f.messages[0]
+	f.messages = f.messages[1:]
+	return msg, nil
 }
 
 type fakeCodexRequest struct {

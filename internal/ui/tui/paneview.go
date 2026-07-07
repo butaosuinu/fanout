@@ -24,6 +24,7 @@ type paneView struct {
 	SourceParent   string
 	SourceIssueNum int
 	SourceTaskID   string
+	SourceKey      string
 	TmuxState      string
 	TmuxTitle      string
 	AgentState     string
@@ -72,8 +73,8 @@ var agentStateGlyphs = map[string]string{
 	"done":    "✓",
 	"working": "◐",
 	"idle":    "○",
-	"blocked": "◆",
 	"plan":    "◇",
+	"blocked": "◆",
 }
 
 // agentStateGlyph はグリフの単一情報源。入力は AgentState と TmuxState のみで、
