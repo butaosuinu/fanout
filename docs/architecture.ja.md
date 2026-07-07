@@ -14,6 +14,7 @@ composition root。層ルールの正典実装は `internal/arch/arch_test.go` �
 | `infra` | 外部プロセス・ファイルシステム・DB | core / infra | 制約なし |
 | `ui` | TUI・web ダッシュボード | core / app / infra / ui | 制約なし |
 | `cmd` | composition root(`cmd/fanout`) | core / app / infra / ui | import される側になってはならない — 他パッケージからの `cmd/...` import は全面禁止 |
+| `tools` | repo 支援メタツール(PR review risk 判定など製品コード外) | tools のみ(本体層は import 不可・被 import も不可) | stdlib のみ(arch ガードが強制) |
 
 依存の向きは一方向で、`ui -> app -> core` が主経路、`app` と `ui` はどちらも
 `infra` に直接手を伸ばせる。強制するのは `internal/arch` の Go テスト
@@ -91,6 +92,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `tty` | 端末判定 | A |
 | infra | `execx` | コマンド実行の薄いラッパ | A |
 | infra | `browser` | ブラウザ起動 | A |
+| tools | `tools/reviewrisk` | PR review risk 判定(物差し。ルール変更はレビュー配線を変える) | H |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/hooks` / `web/src/lib` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
 | web | 上記以外の `web/src`(components / styles / tests) | 表示 | A |
@@ -147,3 +149,5 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
    `TestInternalTreeShape` が拒否する。
 2. 層ルールに合わない import は `internal/arch` の CI が落とす。
 3. この文書の「パッケージ表」に層・責務・Review クラスを追記する。
+4. クラスの追加・変更は `tools/reviewrisk/rules.go` のルール表を同時更新する
+   (docsync テストが不一致を CI で落とす)。詳細は `docs/review-risk.ja.md`。

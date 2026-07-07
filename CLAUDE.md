@@ -152,6 +152,13 @@ packages can rely on AI review.
   blocked pane shows a permission/input dialog and the nudge's Enter could
   activate the focused control.
 
+`tools/reviewrisk` turns that H/M/A canon into an automated `review:<level>`
+judgment on every PR (`make review-risk` runs it locally; see
+`docs/review-risk.ja.md`). Changing a package's review class means updating
+`tools/reviewrisk/rules.go` in the same PR, or a docsync test fails CI.
+`tools/` sits outside `internal/`/`cmd/` and `internal/arch` pins it to
+stdlib-only imports, so repo-support code stays isolated from the product.
+
 ## Behavior Boundaries
 
 - Child enumeration unions GitHub Sub-issues and same-repo parent task-list

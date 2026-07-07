@@ -29,7 +29,7 @@ GOLANGCI_LINT_VERSION ?= $(shell cat .golangci-lint-version)
 GOLANGCI_LINT_BIN     := $(CURDIR)/.cache/tools/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT_CACHE   ?= $(CURDIR)/.cache/golangci-lint
 
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk
 
 # The dashboard web UI (web/, React + Vite) is built into $(STATIC_DIR) and
 # embedded via go:embed. The bundle is never committed, so building the binary
@@ -156,6 +156,8 @@ uninstall: uninstall-integrations
 #                       `lint` on purpose: it fetches the vulnerability DB over
 #                       the network and can fail on new CVEs without any code
 #                       change, so it is not a deterministic lint gate.
+# `make review-risk`   — PR review risk level for the working diff (see
+#                       docs/review-risk.ja.md); CI runs the same tool.
 #
 # bats-core is required: `brew install bats-core` (macOS) or `apt install bats`
 # (Debian/Ubuntu). check-bats prints the install hint before failing.
@@ -222,3 +224,6 @@ fix:
 
 vuln:
 	GOCACHE="$(GOCACHE)" $(GO) tool govulncheck ./...
+
+review-risk:
+	GOCACHE="$(GOCACHE)" $(GO) run ./tools/reviewrisk
