@@ -106,13 +106,13 @@ func (m model) closeChoiceView() string {
 	}
 	lines = append(lines, fmt.Sprintf("Close %s?", label))
 	for i, opt := range closeOptions() {
-		marker := " "
+		marker := plainItemMarker
 		style := lipgloss.NewStyle()
 		if i == optionIndex {
-			marker = ">"
+			marker = selectedItemMarker
 			style = titleStyle
 		}
-		lines = append(lines, style.Render(fmt.Sprintf("%s %d. %s - %s", marker, i+1, opt.label, opt.description)))
+		lines = append(lines, style.Render(fmt.Sprintf("%s%d. %s - %s", marker, i+1, opt.label, opt.description)))
 	}
 	lines = append(lines, dimStyle.Render("up/down or 1-3 select, enter confirm, esc cancel"))
 	content := strings.Join(lines, "\n")

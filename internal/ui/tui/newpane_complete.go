@@ -333,9 +333,9 @@ func (m model) completionPopupView() string {
 	for i, p := range m.newPane.compResults {
 		text := truncatePathTail(p, width-2)
 		if i == m.newPane.compIndex {
-			lines = append(lines, "> "+titleStyle.Render(text))
+			lines = append(lines, selectedItemMarker+titleStyle.Render(text))
 		} else {
-			lines = append(lines, "  "+dimStyle.Render(text))
+			lines = append(lines, plainItemMarker+dimStyle.Render(text))
 		}
 	}
 	if m.newPane.compTotal > len(m.newPane.compResults) {

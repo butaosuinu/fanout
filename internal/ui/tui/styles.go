@@ -26,13 +26,19 @@ var (
 	warnStyle            = lipgloss.NewStyle().Foreground(colorTsuchi)
 	errStyle             = lipgloss.NewStyle().Foreground(colorBeni)
 	panelStyle           = lipgloss.NewStyle().Border(lipgloss.NormalBorder(), true, false, false, false).BorderForeground(colorSuna)
-	modalStyle           = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).Padding(1, 2).BorderForeground(colorAsagi)
+	modalStyle           = lipgloss.NewStyle().Border(lipgloss.DoubleBorder()).Padding(1, 1).BorderForeground(colorAsagi)
 	// popupContentStyle drops the modal border when the popup runs inside a tmux
-	// display-popup: the popup frame is the only border, so the content only
-	// keeps a 1-column left/right gutter.
-	popupContentStyle = lipgloss.NewStyle().Padding(0, 1)
+	// display-popup: the popup frame is the only border, so the content keeps a
+	// one-cell gutter on every side.
+	popupContentStyle = lipgloss.NewStyle().Padding(popupContentPadding, popupContentPadding)
 	// inputBoxStyle / inputBoxFocusStyle frame the modal's text inputs so the
 	// field bounds are visible; the border color also doubles as a focus cue.
 	inputBoxStyle      = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorSuna)
 	inputBoxFocusStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(colorAsagi)
+)
+
+const (
+	popupContentPadding = 1
+	selectedItemMarker  = "▶ "
+	plainItemMarker     = "  "
 )

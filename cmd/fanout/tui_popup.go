@@ -24,9 +24,9 @@ const (
 	tuiClosePopupCommand       = "__tui-close-popup"
 	tuiClosePopupMinHeight     = 9
 	tuiHelpPopupCommand        = "__tui-help-popup"
-	tuiHelpPopupMinHeight      = 18
+	tuiHelpPopupMinHeight      = 20
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
-	tuiNewPanePopupMinHeight   = 18
+	tuiNewPanePopupMinHeight   = 20
 	tuiSettingsPopupCommand    = "__tui-settings-popup"
 	tuiNewPanePopupBorderInset = 2
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
@@ -105,7 +105,7 @@ func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
 	fs := flag.NewFlagSet(tuiHelpPopupCommand, flag.ContinueOnError)
 	fs.SetOutput(lg.Stderr())
 	width := fs.Int("width", 76, "help width")
-	height := fs.Int("height", 18, "help height")
+	height := fs.Int("height", tuiHelpPopupMinHeight, "help height")
 	if err := fs.Parse(args); err != nil {
 		return exitcode.Invocation
 	}

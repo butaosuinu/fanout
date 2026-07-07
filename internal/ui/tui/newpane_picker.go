@@ -141,7 +141,11 @@ func (m model) pickerVisibleRows() int {
 	if m.height <= 0 {
 		return pickerMaxRows
 	}
-	return clampInt(m.height-pickerFormOverhead, 3, pickerMaxRows)
+	height := m.height
+	if m.promptOnly {
+		height = popupContentAvailableHeight(height)
+	}
+	return clampInt(height-pickerFormOverhead, 3, pickerMaxRows)
 }
 
 func (m *model) moveActivePicker(delta int) {
@@ -424,11 +428,11 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 		text = truncateToWidth(text, width-2)
 		switch {
 		case i == p.index:
-			lines = append(lines, "> "+titleStyle.Render(text))
+			lines = append(lines, selectedItemMarker+titleStyle.Render(text))
 		case item.note != "":
-			lines = append(lines, "  "+dimStyle.Render(text))
+			lines = append(lines, plainItemMarker+dimStyle.Render(text))
 		default:
-			lines = append(lines, "  "+text)
+			lines = append(lines, plainItemMarker+text)
 		}
 	}
 	if end < len(p.results) {
