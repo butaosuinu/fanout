@@ -3,7 +3,7 @@
 # Every `.bats` file should `load helpers` as its first non-comment line.
 # This file provides:
 #   * setup()          — PATH shim injection, deterministic env, FANOUT_BIN discovery
-#   * teardown()       — clean up /tmp/fanout-* briefings so tests can't pollute each other
+#   * teardown()       — scrub the /tmp --team registry DB glob defensively for future live tests
 #   * run_fanout       — thin wrapper that always invokes the binary under test ($FANOUT_BIN) via bats `run`
 #   * run_fanout_dry   — Tier 2 wrapper that adds --dry-run and --agent defaults
 #   * assert_golden    — compare captured $output to tests/golden/<name>.dry-run.txt
@@ -79,21 +79,23 @@ setup() {
 }
 
 teardown() {
-  # Briefings are written to /tmp with a hardcoded prefix (fanout:791).
-  # Tier 1 tests don't reach the briefing path, but scrub defensively so a
-  # future test (or a Tier 2 leakage) doesn't confuse the next run.
+  # Briefings live under each project root's .fanout/briefings/
+  # (internal/app/briefing), not /tmp, so there is no machine-global briefing
+  # scrub anymore. Tier 1/2 runs are dry-run/status only and never write one;
+  # a future live-launch test would write into its fixture project root under
+  # tests/fixtures/ (inside the repo tree) and must clean up after itself.
   #
   # Do NOT add a /tmp/fanout-*.db scrub here: that pattern is the LIVE
   # `fanout msg` team DB location (internal/infra/team DBPath) for every fanout
   # session on this machine, and deleting a WAL-mode SQLite DB out from under
   # open connections destroys real peer messages. msg tests must instead pin
   # FANOUT_DB_PATH into BATS_TEST_TMPDIR (see tier1_msg.bats msg_env).
-  rm -f /tmp/fanout-*.md 2>/dev/null || true
+  #
   # --team registry DBs share the same /tmp prefix (team.DBPath). Dry-run
   # tests never create one, but scrub defensively for future live tests.
   # Scoped to the fixture repo slug (always project_root): a bare
   # /tmp/fanout-*.db glob would delete the live, durable message DBs of any
-  # real --team session on this machine, unlike the regenerable .md briefings.
+  # real --team session on this machine.
   rm -f /tmp/fanout-project_root-*.db /tmp/fanout-project_root-*.db-wal /tmp/fanout-project_root-*.db-shm 2>/dev/null || true
 }
 
@@ -212,8 +214,10 @@ skip_unless_fanout_go() {
 # Scrub machine-local prefixes from captured output so goldens are portable
 # across workstations and CI runners. Rewrites:
 #   - $REPO_ROOT                       -> <REPO>
-# The /tmp/fanout-<repo_slug>-<N>.md briefing path stays verbatim because
-# repo_slug is deterministic (always "project_root" per fixture layout).
+# Briefing paths live under the fixture project root's .fanout/briefings/
+# (itself under $REPO_ROOT), so this same rewrite normalizes them too; only
+# the --team DB path stays under the machine-wide /tmp/fanout-<repo_slug>-*
+# prefix and is left verbatim.
 _scrub_output() {
   printf '%s' "$1" | sed -e "s|$REPO_ROOT|<REPO>|g"
 }

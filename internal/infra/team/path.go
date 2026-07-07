@@ -16,10 +16,12 @@ var nonAlnumRE = regexp.MustCompile("[^a-z0-9]+")
 
 // DBPath returns the per-parent team DB path,
 // /tmp/fanout-<repo_slug>-<parent_key>.db, where repo_slug is
-// filepath.Base(projectRoot) — the same convention as briefing.Path
-// (/tmp/fanout-<repo>-<N>.md). /tmp is used because every sibling worktree
-// reaches the same path there. A non-empty FANOUT_DB_PATH wins over
-// everything and is returned verbatim.
+// filepath.Base(projectRoot) — the same repo-slug convention as
+// briefing.Path. Unlike the briefing files (which moved under
+// <projectRoot>/.fanout/briefings/), the DB stays under /tmp because every
+// sibling worktree needs to reach the same path, and only the shared
+// projectRoot (not any one worktree) is guaranteed common to all of them. A
+// non-empty FANOUT_DB_PATH wins over everything and is returned verbatim.
 func DBPath(projectRoot, parentRef string) string {
 	if override := os.Getenv(DBPathEnv); override != "" {
 		return override

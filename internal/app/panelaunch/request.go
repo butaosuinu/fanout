@@ -4,7 +4,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -268,7 +267,7 @@ func attachedBriefingPath(projectRoot, parentRef string, target AttachTarget, nu
 	if number < 0 {
 		number = -number
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("fanout-%s-attach-%s-%s-a%d.md", filepath.Base(projectRoot), parentSlug, sourceSlug, number))
+	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-attach-%s-%s-a%d.md", filepath.Base(projectRoot), parentSlug, sourceSlug, number))
 }
 
 func attachedPaneTitle(agentName, sourceLabel, targetPath string) string {

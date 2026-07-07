@@ -8,6 +8,7 @@ package panelaunch
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -130,6 +131,10 @@ func (l *Launcher) launch(req Request) (created, bool) {
 	}
 
 	if req.BriefingPath != "" && !l.Cfg.DryRun {
+		if mkdirErr := os.MkdirAll(filepath.Dir(req.BriefingPath), 0o755); mkdirErr != nil {
+			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), mkdirErr)
+			return created{}, false
+		}
 		if writeErr := os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); writeErr != nil {
 			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), writeErr)
 			return created{}, false
@@ -226,6 +231,10 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 	}
 	req.AgentCommand = agentCmd
 	if req.BriefingPath != "" {
+		if err = os.MkdirAll(filepath.Dir(req.BriefingPath), 0o755); err != nil {
+			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
+			return false
+		}
 		if err = os.WriteFile(req.BriefingPath, []byte(req.BriefingBody), 0o644); err != nil {
 			l.Log.Err("%s: write briefing: %v", paneLogLabel(req), err)
 			return false

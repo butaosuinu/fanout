@@ -54,7 +54,7 @@ or `which` just to "verify" the surface wastes a tool call and adds nothing.
 issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and
 creates one new tmux pane per child. Each pane gets its own git worktree under
 `.fanout/worktrees/` and an agent CLI prompt that points at
-`/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
+`.fanout/briefings/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
 `fanout` with no arguments starts the persistent fanout TUI console. From a
 plain shell it creates or attaches a deterministic fanout-managed tmux session

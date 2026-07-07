@@ -79,5 +79,5 @@ Plan Mode の子は interactive な Codex TUI として起動し、関連する�
 ## briefing の仕組み
 
 issue や plan task の子ペインに送られるのは 1 行のプロンプトだけです。
-issue や task の本文と短い Requirements チェックリストは `/tmp/fanout-<repo>-<NUM>.md` または task 用の briefing path に書き出され、起動プロンプトはそのファイルを読むよう agent に伝えるだけです。
+issue や task の本文と短い Requirements チェックリストは `.fanout/briefings/fanout-<repo>-<NUM>.md` または task 用の briefing path に書き出され、起動プロンプトはそのファイルを読むよう agent に伝えるだけです。
 どの指示を briefing に含めるかは [Settings]({{< relref "/docs/settings" >}}) のトグルで変わります。

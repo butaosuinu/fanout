@@ -67,11 +67,12 @@ func TestDBPathOverrideWins(t *testing.T) {
 }
 
 // The DB and the briefing must agree on the repo slug so that operators can
-// correlate /tmp/fanout-<repo>-<N>.md with /tmp/fanout-<repo>-<parent>.db.
+// correlate .fanout/briefings/fanout-<repo>-<N>.md with /tmp/fanout-<repo>-<parent>.db.
 func TestDBPathMatchesBriefingRepoSlug(t *testing.T) {
 	t.Setenv(DBPathEnv, "")
 	root := "/some/where/myrepo"
-	briefingSlug := strings.TrimSuffix(strings.TrimPrefix(briefing.Path(root, 68), "/tmp/fanout-"), "-68.md")
+	briefingBase := filepath.Base(briefing.Path(root, 68))
+	briefingSlug := strings.TrimSuffix(strings.TrimPrefix(briefingBase, "fanout-"), "-68.md")
 	dbSlug := strings.TrimSuffix(strings.TrimPrefix(DBPath(root, "99"), "/tmp/fanout-"), "-99.db")
 	if briefingSlug != dbSlug {
 		t.Errorf("repo slug mismatch: briefing %q vs db %q", briefingSlug, dbSlug)

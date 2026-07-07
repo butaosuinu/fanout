@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
@@ -178,12 +179,12 @@ func planSkillPrompt(agentName, path string) string {
 }
 
 // planPromptPath mirrors briefing.Path for the coordinator's prompt file:
-// /tmp/fanout-<repo>-plan-prompt-<N>.md.
+// <projectRoot>/.fanout/briefings/fanout-<repo>-plan-prompt-<N>.md.
 func planPromptPath(projectRoot string, number int) string {
 	if number < 0 {
 		number = -number
 	}
-	return fmt.Sprintf("/tmp/fanout-%s-plan-prompt-%d.md", filepath.Base(projectRoot), number)
+	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-prompt-%d.md", filepath.Base(projectRoot), number))
 }
 
 func planPromptSlug(number int) string {

@@ -1,6 +1,7 @@
 package briefing
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 func TestTaskPathUsesPlanTaskNamespace(t *testing.T) {
 	root := "/repos/project_root"
 	got := TaskPath(root, "plan-alpha", "task-001")
-	want := "/tmp/fanout-project_root-plan%2Dalpha-task%2D001.md"
+	want := filepath.Join(Dir(root), "fanout-project_root-plan%2Dalpha-task%2D001.md")
 	if got != want {
 		t.Fatalf("TaskPath() = %q, want %q", got, want)
 	}

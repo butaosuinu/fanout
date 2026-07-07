@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestPlanSkillPromptPerAgent(t *testing.T) {
-	const path = "/tmp/fanout-repo-plan-prompt-1.md"
+	path := planPromptPath("/repo", 1)
 	tests := []struct {
 		name  string
 		agent string
@@ -48,8 +49,9 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	if req.BriefingBody != prompt {
 		t.Fatalf("req.BriefingBody = %q, want the full prompt", req.BriefingBody)
 	}
-	if !strings.HasPrefix(req.BriefingPath, "/tmp/fanout-repo-plan-prompt-") {
-		t.Fatalf("req.BriefingPath = %q, want /tmp/fanout-repo-plan-prompt- prefix", req.BriefingPath)
+	wantPrefix := briefing.Dir("/repo") + "/fanout-repo-plan-prompt-"
+	if !strings.HasPrefix(req.BriefingPath, wantPrefix) {
+		t.Fatalf("req.BriefingPath = %q, want %q prefix", req.BriefingPath, wantPrefix)
 	}
 	if req.CodexPlanMode {
 		t.Fatal("req.CodexPlanMode = true, want false for a plan coordinator")
