@@ -307,6 +307,7 @@ func newTUICloseChoicePopupFunc(projectRoot, commandName string) fanouttui.Close
 				geometry.ContentWidth,
 				geometry.ContentHeight,
 			),
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
 		})
 		result, readErr := readTUIClosePopupResult(resultFile)
 		if os.IsNotExist(readErr) && displayErr == nil {

@@ -328,6 +328,62 @@ func TestTUIPopupPositionFallsBackWithoutPane(t *testing.T) {
 	}
 }
 
+func TestTUIClosePopupUsesCurrentPanePosition(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "tmux-args.txt")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
+printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+case "${1:-}" in
+  display-message)
+    if [[ "$*" == *pane_left* ]]; then
+      printf '0\t3\t40\t20\t160\t50\n'
+    elif [[ "$*" == *client_width* ]]; then
+      printf '160 50\n'
+    fi
+    ;;
+  display-popup)
+    command="${@: -1}"
+    if [[ "$command" =~ --result-file[[:space:]]([^[:space:]]+) ]]; then
+      printf '{"mode":"pane"}\n' > "${BASH_REMATCH[1]}"
+    fi
+    ;;
+  *)
+    ;;
+esac
+`
+	tmuxPath := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_SHIM_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_PANE", "%7")
+
+	popup := newTUICloseChoicePopupFunc("/tmp/repo", "fanout")
+	mode, canceled, err := popup(fanouttui.CloseChoiceRequest{
+		PaneLabel:   "#101",
+		InitialMode: lifecycle.ClosePaneOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canceled {
+		t.Fatal("close popup canceled, want selection")
+	}
+	if mode != lifecycle.ClosePaneOnly {
+		t.Fatalf("close popup mode = %v, want pane-only", mode)
+	}
+
+	log := readTUITmuxLog(t, argsPath)
+	if !tmuxLogHasCommand(log, "display-popup\n-E\n") ||
+		!tmuxLogHasCommand(log, "\n-x\n41\n-y\n3\n") ||
+		!tmuxLogHasCommand(log, tuiClosePopupCommand) {
+		t.Fatalf("close popup display-popup was not positioned next to the current pane:\n%s", log)
+	}
+}
+
 func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 	tests := []struct {
 		name   string
