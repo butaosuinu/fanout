@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
@@ -243,6 +244,42 @@ func TestTUIHelpPopupGeometryUsesClientDimensions(t *testing.T) {
 	}
 }
 
+func TestTUIClosePopupGeometryUsesClientDimensions(t *testing.T) {
+	got, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 160, Height: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tuiClosePopupGeometry{PopupWidth: 78, PopupHeight: 22, ContentWidth: 76, ContentHeight: 20}
+	if got != want {
+		t.Fatalf("close popup geometry = %#v, want %#v", got, want)
+	}
+
+	got, err = tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 11, ContentWidth: 74, ContentHeight: 9}
+	if got != want {
+		t.Fatalf("80x24 close popup geometry = %#v, want %#v", got, want)
+	}
+
+	got, err = tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 11, ContentWidth: 74, ContentHeight: 9}
+	if got != want {
+		t.Fatalf("small client close popup geometry = %#v, want %#v", got, want)
+	}
+
+	if _, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
+		t.Fatal("tuiClosePopupGeometryForClient() succeeded for too-small client")
+	}
+	if _, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 10}); err == nil {
+		t.Fatal("tuiClosePopupGeometryForClient() succeeded without enough close popup height")
+	}
+}
+
 func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -291,6 +328,42 @@ func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTUIClosePopupRequestAndResultRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	requestPath := filepath.Join(dir, "request.json")
+	request := tuiClosePopupRequest{PaneLabel: "#101", Mode: closeModeName(lifecycle.CloseEverything)}
+	if err := writeTUIClosePopupRequest(requestPath, request); err != nil {
+		t.Fatal(err)
+	}
+	gotRequest, err := readTUIClosePopupRequest(requestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRequest != request {
+		t.Fatalf("close popup request = %#v, want %#v", gotRequest, request)
+	}
+
+	resultPath := filepath.Join(dir, "result.json")
+	result := tuiClosePopupResult{Mode: closeModeName(lifecycle.CloseWorktree)}
+	if writeErr := writeTUIClosePopupResult(resultPath, result); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	gotResult, err := readTUIClosePopupResult(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotResult != result {
+		t.Fatalf("close popup result = %#v, want %#v", gotResult, result)
+	}
+	info, err := os.Stat(resultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("close popup result mode = %o, want 600", got)
+	}
+}
+
 func TestNewPopupResultPathsUsesPrivateDirectory(t *testing.T) {
 	resultPath, donePath, cleanup, err := newPopupResultPaths()
 	if err != nil {
@@ -334,6 +407,23 @@ func TestWaitForTUINewPanePopupResultTreatsDoneWithoutResultAsCancel(t *testing.
 	}
 }
 
+func TestWaitForTUIClosePopupResultTreatsDoneWithoutResultAsCancel(t *testing.T) {
+	dir := t.TempDir()
+	resultPath := filepath.Join(dir, "result.json")
+	donePath := filepath.Join(dir, "result.done")
+	if err := os.WriteFile(donePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := waitForTUIClosePopupResult(resultPath, donePath, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Canceled {
+		t.Fatalf("close popup result = %#v, want canceled", got)
+	}
+}
+
 func TestTUIHelpPopupShellCommandPropagatesPathAndDimensions(t *testing.T) {
 	got := tuiHelpPopupShellCommand("fanout", 80, 18)
 	for _, want := range []string{
@@ -344,6 +434,25 @@ func TestTUIHelpPopupShellCommandPropagatesPathAndDimensions(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("help popup shell command missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestTUIClosePopupShellCommandMarksDoneAndPropagatesPath(t *testing.T) {
+	got := tuiClosePopupShellCommand("fanout", "/tmp/request.json", "/tmp/result.json", "/tmp/result.done", 72, 9)
+	for _, want := range []string{
+		"trap ",
+		"EXIT HUP INT TERM",
+		"/tmp/result.done",
+		tuiClosePopupCommand,
+		"--request-file /tmp/request.json",
+		"--result-file /tmp/result.json",
+		"--width 72",
+		"--height 9",
+		"PATH=" + run.ShellQuote(os.Getenv("PATH")),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("close popup shell command missing %q:\n%s", want, got)
 		}
 	}
 }

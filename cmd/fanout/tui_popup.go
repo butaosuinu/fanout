@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -19,6 +20,8 @@ import (
 )
 
 const (
+	tuiClosePopupCommand       = "__tui-close-popup"
+	tuiClosePopupMinHeight     = 9
 	tuiHelpPopupCommand        = "__tui-help-popup"
 	tuiHelpPopupMinHeight      = 18
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
@@ -27,6 +30,13 @@ const (
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
 	tuiNewPanePopupResultWait  = 24 * time.Hour
 )
+
+type tuiClosePopupGeometry struct {
+	PopupWidth    int
+	PopupHeight   int
+	ContentWidth  int
+	ContentHeight int
+}
 
 type tuiHelpPopupGeometry struct {
 	PopupWidth    int
@@ -54,12 +64,27 @@ type tuiNewPanePopupResult struct {
 	Error          string            `json:"error,omitempty"`
 }
 
+type tuiClosePopupRequest struct {
+	PaneLabel string `json:"paneLabel,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+}
+
+type tuiClosePopupResult struct {
+	Canceled bool   `json:"canceled,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 func isTUINewPanePopupRequest(args []string) bool {
 	return len(args) > 0 && args[0] == tuiNewPanePopupCommand
 }
 
 func isTUIHelpPopupRequest(args []string) bool {
 	return len(args) > 0 && args[0] == tuiHelpPopupCommand
+}
+
+func isTUIClosePopupRequest(args []string) bool {
+	return len(args) > 0 && args[0] == tuiClosePopupCommand
 }
 
 func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
@@ -78,6 +103,56 @@ func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func cmdTUIClosePopup(args []string, lg *log.Logger) exitcode.Code {
+	fs := flag.NewFlagSet(tuiClosePopupCommand, flag.ContinueOnError)
+	fs.SetOutput(lg.Stderr())
+	requestFile := fs.String("request-file", "", "request file")
+	resultFile := fs.String("result-file", "", "result file")
+	width := fs.Int("width", 72, "popup width")
+	height := fs.Int("height", 10, "popup height")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Invocation
+	}
+	if strings.TrimSpace(*requestFile) == "" || strings.TrimSpace(*resultFile) == "" {
+		lg.Err("--request-file and --result-file are required")
+		return exitcode.Invocation
+	}
+
+	var result tuiClosePopupResult
+	code := exitcode.OK
+	request, err := readTUIClosePopupRequest(*requestFile)
+	if err != nil {
+		result = tuiClosePopupResult{Error: err.Error()}
+		code = exitcode.Env
+	} else {
+		mode, err := parseCloseModeName(request.Mode)
+		if err != nil {
+			result = tuiClosePopupResult{Error: err.Error()}
+			code = exitcode.Invocation
+		} else {
+			selected, canceled, runErr := fanouttui.RunCloseChoicePopup(fanouttui.CloseChoicePopupOptions{
+				PaneLabel:   request.PaneLabel,
+				InitialMode: mode,
+				Width:       *width,
+				Height:      *height,
+			})
+			result = tuiClosePopupResult{
+				Canceled: canceled,
+				Mode:     closeModeName(selected),
+			}
+			if runErr != nil {
+				result = tuiClosePopupResult{Error: runErr.Error()}
+				code = exitcode.Env
+			}
+		}
+	}
+	if writeErr := writeTUIClosePopupResult(*resultFile, result); writeErr != nil {
+		lg.Err("write close popup result: %v", writeErr)
+		return exitcode.Env
+	}
+	return code
 }
 
 func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
@@ -127,11 +202,23 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 }
 
 func writeTUINewPanePopupResult(path string, result tuiNewPanePopupResult) error {
+	return writePopupJSON(path, result)
+}
+
+func writeTUIClosePopupRequest(path string, request tuiClosePopupRequest) error {
+	return writePopupJSON(path, request)
+}
+
+func writeTUIClosePopupResult(path string, result tuiClosePopupResult) error {
+	return writePopupJSON(path, result)
+}
+
+func writePopupJSON(path string, value any) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(result)
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -181,6 +268,69 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 			Title:    "Keyboard shortcuts",
 			Command:  tuiHelpPopupShellCommand(commandName, geometry.ContentWidth, geometry.ContentHeight),
 		})
+	}
+}
+
+func newTUICloseChoicePopupFunc(projectRoot, commandName string) fanouttui.CloseChoicePopupFunc {
+	return func(req fanouttui.CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
+		size, err := tmuxrun.CurrentClientSize()
+		if err != nil {
+			return lifecycle.ClosePaneOnly, false, err
+		}
+		geometry, err := tuiClosePopupGeometryForClient(size)
+		if err != nil {
+			return lifecycle.ClosePaneOnly, false, err
+		}
+		resultFile, doneFile, cleanupPopupResult, err := newPopupResultPaths()
+		if err != nil {
+			return lifecycle.ClosePaneOnly, false, err
+		}
+		defer cleanupPopupResult()
+		requestFile := filepath.Join(filepath.Dir(resultFile), "request.json")
+		if writeErr := writeTUIClosePopupRequest(requestFile, tuiClosePopupRequest{
+			PaneLabel: req.PaneLabel,
+			Mode:      closeModeName(req.InitialMode),
+		}); writeErr != nil {
+			return lifecycle.ClosePaneOnly, false, writeErr
+		}
+		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+			Width:    geometry.PopupWidth,
+			Height:   geometry.PopupHeight,
+			StartDir: projectRoot,
+			Title:    "Close pane",
+			Command: tuiClosePopupShellCommand(
+				commandName,
+				requestFile,
+				resultFile,
+				doneFile,
+				geometry.ContentWidth,
+				geometry.ContentHeight,
+			),
+		})
+		result, readErr := readTUIClosePopupResult(resultFile)
+		if os.IsNotExist(readErr) && displayErr == nil {
+			result, readErr = waitForTUIClosePopupResult(resultFile, doneFile, tuiNewPanePopupResultWait)
+		}
+		if readErr != nil {
+			if displayErr != nil {
+				return lifecycle.ClosePaneOnly, false, displayErr
+			}
+			return lifecycle.ClosePaneOnly, false, readErr
+		}
+		if result.Error != "" {
+			return lifecycle.ClosePaneOnly, false, fmt.Errorf("%s", result.Error)
+		}
+		if result.Canceled {
+			return lifecycle.ClosePaneOnly, true, nil
+		}
+		if displayErr != nil {
+			return lifecycle.ClosePaneOnly, false, displayErr
+		}
+		mode, err := parseCloseModeName(result.Mode)
+		if err != nil {
+			return lifecycle.ClosePaneOnly, false, err
+		}
+		return mode, false, nil
 	}
 }
 
@@ -263,6 +413,22 @@ func tuiHelpPopupGeometryForClient(size tmuxrun.ClientSize) (tuiHelpPopupGeometr
 	}, nil
 }
 
+func tuiClosePopupGeometryForClient(size tmuxrun.ClientSize) (tuiClosePopupGeometry, error) {
+	minPopupHeight := tuiClosePopupMinHeight + tuiNewPanePopupBorderInset
+	if size.Width < 54 || size.Height < minPopupHeight {
+		return tuiClosePopupGeometry{}, fmt.Errorf("tmux client is too small for the close popup: %dx%d", size.Width, size.Height)
+	}
+	popupWidth := min(78, size.Width-4)
+	targetPopupHeight := min(int(math.Floor(float64(size.Height)*0.45)), size.Height-2)
+	popupHeight := max(targetPopupHeight, minPopupHeight)
+	return tuiClosePopupGeometry{
+		PopupWidth:    popupWidth,
+		PopupHeight:   popupHeight,
+		ContentWidth:  popupWidth - tuiNewPanePopupBorderInset,
+		ContentHeight: popupHeight - tuiNewPanePopupBorderInset,
+	}, nil
+}
+
 func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
 	if size.Width < 54 || size.Height < minPopupHeight {
@@ -308,6 +474,28 @@ func tuiHelpPopupShellCommand(commandName string, width, height int) string {
 		parts = append([]string{"PATH=" + run.ShellQuote(path)}, parts...)
 	}
 	return strings.Join(parts, " ")
+}
+
+func tuiClosePopupShellCommand(commandName, requestFile, resultFile, doneFile string, width, height int) string {
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
+		exe = commandName
+	}
+	parts := []string{
+		run.ShellQuote(exe),
+		tuiClosePopupCommand,
+		"--request-file", run.ShellQuote(requestFile),
+		"--result-file", run.ShellQuote(resultFile),
+		"--width", fmt.Sprintf("%d", width),
+		"--height", fmt.Sprintf("%d", height),
+	}
+	prefix := ""
+	if path := os.Getenv("PATH"); path != "" {
+		prefix = "PATH=" + run.ShellQuote(path) + " "
+	}
+	command := prefix + strings.Join(parts, " ")
+	markDone := "printf '' > " + run.ShellQuote(doneFile)
+	return "trap " + run.ShellQuote(markDone) + " EXIT HUP INT TERM; " + command
 }
 
 func tuiNewPanePopupShellCommand(commandName, projectRoot, resultFile, doneFile, defaultAgent string, width, height int) string {
@@ -363,6 +551,28 @@ func waitForTUINewPanePopupResult(resultFile, doneFile string, timeout time.Dura
 	}
 }
 
+func waitForTUIClosePopupResult(resultFile, doneFile string, timeout time.Duration) (tuiClosePopupResult, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		result, err := readTUIClosePopupResult(resultFile)
+		if err == nil {
+			return result, nil
+		}
+		if !os.IsNotExist(err) {
+			return tuiClosePopupResult{}, err
+		}
+		if _, err := os.Stat(doneFile); err == nil {
+			return tuiClosePopupResult{Canceled: true}, nil
+		} else if !os.IsNotExist(err) {
+			return tuiClosePopupResult{}, err
+		}
+		if timeout > 0 && time.Now().After(deadline) {
+			return tuiClosePopupResult{}, fmt.Errorf("timed out waiting for close popup result after %s", timeout)
+		}
+		time.Sleep(tuiNewPanePopupResultPoll)
+	}
+}
+
 func readTUINewPanePopupResult(path string) (tuiNewPanePopupResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -373,4 +583,54 @@ func readTUINewPanePopupResult(path string) (tuiNewPanePopupResult, error) {
 		return tuiNewPanePopupResult{}, err
 	}
 	return result, nil
+}
+
+func readTUIClosePopupRequest(path string) (tuiClosePopupRequest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tuiClosePopupRequest{}, err
+	}
+	var request tuiClosePopupRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return tuiClosePopupRequest{}, err
+	}
+	return request, nil
+}
+
+func readTUIClosePopupResult(path string) (tuiClosePopupResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tuiClosePopupResult{}, err
+	}
+	var result tuiClosePopupResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return tuiClosePopupResult{}, err
+	}
+	return result, nil
+}
+
+func closeModeName(mode lifecycle.CloseMode) string {
+	switch mode {
+	case lifecycle.ClosePaneOnly:
+		return "pane"
+	case lifecycle.CloseWorktree:
+		return "worktree"
+	case lifecycle.CloseEverything:
+		return "everything"
+	default:
+		return "pane"
+	}
+}
+
+func parseCloseModeName(name string) (lifecycle.CloseMode, error) {
+	switch strings.TrimSpace(name) {
+	case "", "pane":
+		return lifecycle.ClosePaneOnly, nil
+	case "worktree":
+		return lifecycle.CloseWorktree, nil
+	case "everything":
+		return lifecycle.CloseEverything, nil
+	default:
+		return lifecycle.ClosePaneOnly, fmt.Errorf("unknown close mode %q", name)
+	}
 }

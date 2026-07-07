@@ -31,7 +31,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		m.resumeKeyboardProtocols()
-		if (m.newPanePopupOpen || m.helpPopupOpen || m.newPane.launching) && m.mode != modeNewPane {
+		if (m.newPanePopupOpen || m.helpPopupOpen || m.closePopupOpen || m.newPane.launching) && m.mode != modeNewPane {
 			// An issue launch can run a whole fan-out (seconds per child), so
 			// mirror the lifecycle-action gate: keys stay blocked, but q/ctrl+c
 			// queue a quit instead of appearing hung.
@@ -65,6 +65,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				return m.quit()
 			}
+			return m, nil
+		}
+		if m.mode == modeCloseChoice {
 			return m, nil
 		}
 		if m.mode == modeNewPane {
@@ -281,6 +284,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = ""
 		}
 		return m, nil
+	case closeChoicePopupDoneMsg:
+		m.closePopupOpen = false
+		if msg.err != nil {
+			m.notice = "close popup: " + msg.err.Error()
+			if m.pendingAction != nil {
+				m.mode = modeCloseChoice
+				m.actionMessage = ""
+			}
+			return m, nil
+		}
+		if msg.canceled {
+			if m.notice == closePopupOpeningNotice {
+				m.notice = ""
+			}
+			m.actionMessage = "close canceled"
+			m.pendingAction = nil
+			return m, nil
+		}
+		if m.pendingAction == nil {
+			if m.notice == closePopupOpeningNotice {
+				m.notice = ""
+			}
+			return m, nil
+		}
+		pending := *m.pendingAction
+		pending.closeMode = msg.mode
+		pending.closeOptionIndex = closeOptionIndexForMode(msg.mode)
+		m.pendingAction = nil
+		m.actionRunning = true
+		m.actionMessage = lifecycleRunningMessage(pending)
+		if m.notice == closePopupOpeningNotice {
+			m.notice = ""
+		}
+		return m, m.lifecycleCmd(pending)
 	case newPaneIssuesLoadedMsg:
 		p := &m.newPane.issuePicker
 		p.loading = false

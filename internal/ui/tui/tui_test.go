@@ -2053,6 +2053,8 @@ func paneByIssue(t *testing.T, panes []paneView, issueNum int) paneView {
 func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
 	m := newModel(Options{ProjectRoot: "/repo", WatcherRunningLabel: "fanout:test-running", lifecycle: runner})
+	m.width = 100
+	m.height = 40
 	m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
 	m.refreshRows()
 
@@ -2064,8 +2066,12 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	if m.pendingAction == nil || m.pendingAction.action != actionClose {
 		t.Fatalf("pendingAction = %#v, want close", m.pendingAction)
 	}
-	if !strings.Contains(m.actionMessage, "Just close pane") || !strings.Contains(m.actionMessage, "Close and delete everything") {
-		t.Fatalf("actionMessage = %q, want close option menu", m.actionMessage)
+	if m.mode != modeCloseChoice {
+		t.Fatalf("mode = %v, want close choice", m.mode)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Just close pane") || !strings.Contains(view, "Close and delete everything") {
+		t.Fatalf("view = %q, want close option menu", view)
 	}
 
 	updated, cmd = m.Update(keyRunes("y"))
@@ -2106,6 +2112,175 @@ func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("done returned nil command, want state/GH reload")
 	}
+}
+
+func TestLifecycleCloseKeyUsesPopupWhenConfigured(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	calls := 0
+	var prompted CloseChoiceRequest
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		lifecycle:   runner,
+		CloseChoicePopup: func(req CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
+			calls++
+			prompted = req
+			return lifecycle.CloseEverything, false, nil
+		},
+	})
+	m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
+	m.refreshRows()
+
+	updated, cmd := m.Update(keyRunes("c"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("close key returned nil command, want popup command")
+	}
+	if calls != 0 {
+		t.Fatalf("popup calls before command execution = %d, want 0", calls)
+	}
+	if m.mode != modeMonitor {
+		t.Fatalf("mode = %v, want monitor while popup owns input", m.mode)
+	}
+	if !m.closePopupOpen {
+		t.Fatal("closePopupOpen = false, want true")
+	}
+	if m.notice != closePopupOpeningNotice {
+		t.Fatalf("notice = %q, want %q", m.notice, closePopupOpeningNotice)
+	}
+	if m.actionMessage != "" {
+		t.Fatalf("actionMessage = %q, want no footer close menu", m.actionMessage)
+	}
+
+	for _, key := range []tea.KeyMsg{keyRunes("q"), keyRunes("1"), keyRunes("n"), {Type: tea.KeyCtrlC}} {
+		nextModel, blockedCmd := m.Update(key)
+		m = nextModel.(model)
+		if blockedCmd != nil {
+			t.Fatalf("%q returned command while close popup is open", key.String())
+		}
+		if !m.closePopupOpen {
+			t.Fatalf("%q cleared closePopupOpen", key.String())
+		}
+	}
+
+	updated, next := m.Update(cmd())
+	m = updated.(model)
+	if next == nil {
+		t.Fatal("close popup completion returned nil command, want lifecycle command")
+	}
+	if calls != 1 {
+		t.Fatalf("popup calls = %d, want 1", calls)
+	}
+	if prompted.PaneLabel != "#101" || prompted.InitialMode != lifecycle.ClosePaneOnly {
+		t.Fatalf("popup request = %#v, want #101 pane-only", prompted)
+	}
+	if m.closePopupOpen {
+		t.Fatal("closePopupOpen = true after popup completion")
+	}
+	if m.notice != "" {
+		t.Fatalf("notice = %q, want cleared", m.notice)
+	}
+	if !m.actionRunning {
+		t.Fatal("actionRunning = false, want true while command runs")
+	}
+	if !strings.Contains(m.actionMessage, "delete #101") {
+		t.Fatalf("actionMessage = %q, want delete running message", m.actionMessage)
+	}
+
+	rawMsg := next()
+	if _, ok := rawMsg.(lifecycleDoneMsg); !ok {
+		t.Fatalf("lifecycle command returned %T, want lifecycleDoneMsg", rawMsg)
+	}
+	if runner.closeMode != lifecycle.CloseEverything {
+		t.Fatalf("close mode = %v, want delete everything", runner.closeMode)
+	}
+}
+
+func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
+	t.Run("cancel", func(t *testing.T) {
+		runner := &fakeLifecycleRunner{code: exitcode.OK}
+		m := newModel(Options{
+			ProjectRoot: "/repo",
+			lifecycle:   runner,
+			CloseChoicePopup: func(CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
+				return lifecycle.ClosePaneOnly, true, nil
+			},
+		})
+		m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
+		m.refreshRows()
+
+		updated, cmd := m.Update(keyRunes("c"))
+		m = updated.(model)
+		updated, next := m.Update(cmd())
+		m = updated.(model)
+		if next != nil {
+			t.Fatal("canceled close popup returned command")
+		}
+		if m.closePopupOpen {
+			t.Fatal("closePopupOpen = true after cancel")
+		}
+		if m.pendingAction != nil {
+			t.Fatalf("pendingAction = %#v, want nil after cancel", m.pendingAction)
+		}
+		if m.actionMessage != "close canceled" {
+			t.Fatalf("actionMessage = %q, want close canceled", m.actionMessage)
+		}
+		if runner.closeParent != "" {
+			t.Fatalf("runner closeParent = %q, want not called", runner.closeParent)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		runner := &fakeLifecycleRunner{code: exitcode.OK}
+		m := newModel(Options{
+			ProjectRoot: "/repo",
+			lifecycle:   runner,
+			CloseChoicePopup: func(CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
+				return lifecycle.ClosePaneOnly, false, errBoom
+			},
+		})
+		m.width = 100
+		m.height = 40
+		m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
+		m.refreshRows()
+
+		updated, cmd := m.Update(keyRunes("c"))
+		m = updated.(model)
+		updated, next := m.Update(cmd())
+		m = updated.(model)
+		if next != nil {
+			t.Fatal("failed close popup returned command")
+		}
+		if m.closePopupOpen {
+			t.Fatal("closePopupOpen = true after failure")
+		}
+		if m.pendingAction == nil {
+			t.Fatal("pendingAction = nil, want fallback close choice")
+		}
+		if m.mode != modeCloseChoice {
+			t.Fatalf("mode = %v, want close choice fallback", m.mode)
+		}
+		if m.notice != "close popup: boom" {
+			t.Fatalf("notice = %q, want close popup error", m.notice)
+		}
+		if view := m.View(); !strings.Contains(view, "Close #101?") {
+			t.Fatalf("fallback view = %q, want close choice modal", view)
+		}
+
+		updated, next = m.Update(keyRunes("enter"))
+		m = updated.(model)
+		if next == nil {
+			t.Fatal("fallback enter returned nil command, want lifecycle command")
+		}
+		if !m.actionRunning {
+			t.Fatal("actionRunning = false, want true while fallback lifecycle runs")
+		}
+		if _, ok := next().(lifecycleDoneMsg); !ok {
+			t.Fatal("fallback lifecycle command did not return lifecycleDoneMsg")
+		}
+		if runner.closeMode != lifecycle.ClosePaneOnly {
+			t.Fatalf("close mode = %v, want pane only", runner.closeMode)
+		}
+	})
 }
 
 func TestLifecycleCloseChoiceSelectsWorktreeAndBranchModes(t *testing.T) {
@@ -2354,6 +2529,8 @@ func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 		t.Run(tc.key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
 			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m.width = 100
+			m.height = 40
 			m.allPanes = []paneView{{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Name: "task"}}
 			m.refreshRows()
 
@@ -2365,12 +2542,21 @@ func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 			if m.pendingAction == nil || m.pendingAction.action != tc.action {
 				t.Fatalf("pendingAction = %#v, want %s", m.pendingAction, tc.action)
 			}
-			wantMessage := "api-client"
-			if tc.action == actionCleanup {
-				wantMessage = "plan:launch-plan"
-			}
-			if !strings.Contains(m.actionMessage, wantMessage) {
-				t.Fatalf("actionMessage = %q, want confirmation containing %q", m.actionMessage, wantMessage)
+			if tc.action == actionClose {
+				if m.mode != modeCloseChoice {
+					t.Fatalf("mode = %v, want close choice", m.mode)
+				}
+				if view := m.View(); !strings.Contains(view, "api-client") {
+					t.Fatalf("close choice view = %q, want task id", view)
+				}
+			} else {
+				wantMessage := "api-client"
+				if tc.action == actionCleanup {
+					wantMessage = "plan:launch-plan"
+				}
+				if !strings.Contains(m.actionMessage, wantMessage) {
+					t.Fatalf("actionMessage = %q, want confirmation containing %q", m.actionMessage, wantMessage)
+				}
 			}
 
 			updated, cmd = m.Update(keyRunes("y"))
