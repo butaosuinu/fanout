@@ -95,6 +95,51 @@ func TestCmdTUIRegistersConsoleKeybinds(t *testing.T) {
 	}
 }
 
+func TestCmdTUIWiresActivePaneProvider(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	writeTUITestStateFile(t, repo)
+	t.Chdir(repo)
+	t.Setenv("TMUX", "tmux-session")
+	t.Setenv("TMUX_PANE", "%tui")
+	installTUIDashboardTmuxShim(t)
+	original := runTUI
+	var opts fanouttui.Options
+	runTUI = func(o fanouttui.Options) error {
+		opts = o
+		return nil
+	}
+	defer func() { runTUI = original }()
+
+	code := cmdTUI("fanout", discardLogger())
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+	if opts.ActivePane == nil {
+		t.Fatal("ActivePane provider is nil, want tmux-backed provider")
+	}
+	got, err := opts.ActivePane()
+	if err != nil {
+		t.Fatalf("ActivePane() failed: %v", err)
+	}
+	if got != "%2" {
+		t.Fatalf("ActivePane() = %q, want %%2", got)
+	}
+}
+
+func TestTUIActivePaneProviderIgnoresConsolePane(t *testing.T) {
+	installTUIActivePaneTmuxShim(t, "%tui")
+
+	got, err := newTUIActivePaneFunc("%tui")()
+	if err != nil {
+		t.Fatalf("ActivePane() failed: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("ActivePane() = %q, want empty for console pane", got)
+	}
+}
+
 func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
@@ -1534,6 +1579,7 @@ esac
 func installTUIDashboardTmuxShim(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	argsPath := filepath.Join(dir, "tmux-args.txt")
 	script := `#!/usr/bin/env bash
 set -euo pipefail
@@ -1557,6 +1603,8 @@ case "${1:-}" in
   list-panes)
     if [[ "$*" == *fanout_role* ]]; then
       printf '%%tui\t0\t1\tconsole\t\n'
+    elif [[ "$*" == *pane_active* ]]; then
+      printf '%%tui:@1:0:0:fanout tui\n%%2:@1:1:1:child\n'
     fi
     ;;
   bind-key|unbind-key|list-keys|set-option|select-pane|select-layout|kill-pane)
@@ -1572,6 +1620,33 @@ esac
 	t.Setenv("TMUX_SHIM_ARGS", argsPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsPath
+}
+
+func installTUIActivePaneTmuxShim(t *testing.T, activePaneID string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  list-panes)
+    if [[ "$*" == *pane_active* ]]; then
+      if [[ "$TMUX_SHIM_ACTIVE_PANE" == "%tui" ]]; then
+        printf '%%tui:@1:0:1:fanout tui\n%%2:@1:1:0:child\n'
+      else
+        printf '%%tui:@1:0:0:fanout tui\n%%2:@1:1:1:child\n'
+      fi
+    fi
+    ;;
+  *)
+    ;;
+esac
+`
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_SHIM_ACTIVE_PANE", activePaneID)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func installTUISettingsReloadTmuxShim(t *testing.T) string {
@@ -1596,7 +1671,7 @@ case "${1:-}" in
       printf 'bind-key -n F11 run-shell fanout focus-console --from "#{pane_id}"; tmux display-message "fanout: focus-console failed"\n'
     fi
     ;;
-  unbind-key)
+  bind-key|unbind-key|set-option|select-pane|select-layout|kill-pane)
     ;;
   *)
     ;;

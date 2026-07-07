@@ -23,7 +23,7 @@ To watch every pane from your terminal, run `fanout` with no arguments to start 
 fanout   # start the persistent tmux console
 ```
 
-From a plain shell it creates or attaches to fanout's managed tmux session; from inside tmux it turns the current pane into the console. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`.
+From a plain shell it creates or attaches to fanout's managed tmux session; from inside tmux it turns the current pane into the console. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
 
 {{< diagram "console" >}}
 

@@ -17,18 +17,19 @@ import (
 )
 
 const (
-	defaultStateInterval = 2 * time.Second
-	defaultGHInterval    = 20 * time.Second
-	defaultWatchInterval = 60 * time.Second
-	minWatchInterval     = 20 * time.Second
-	defaultWatchLabel    = "fanout:auto"
-	detailHeight         = 13
-	peekLines            = 80
-	defaultLaunchAgent   = "claude"
-	sessionSidebarAt     = 120
-	sessionSidebarWidth  = 26
-	sessionTopHeight     = 3
-	compactWidthAt       = 80
+	defaultStateInterval  = 2 * time.Second
+	defaultGHInterval     = 20 * time.Second
+	defaultActiveInterval = 500 * time.Millisecond
+	defaultWatchInterval  = 60 * time.Second
+	minWatchInterval      = 20 * time.Second
+	defaultWatchLabel     = "fanout:auto"
+	detailHeight          = 13
+	peekLines             = 80
+	defaultLaunchAgent    = "claude"
+	sessionSidebarAt      = 120
+	sessionSidebarWidth   = 26
+	sessionTopHeight      = 3
+	compactWidthAt        = 80
 	// relayoutDebounce coalesces the burst of resize events tmux emits while a
 	// terminal window is being dragged into a single relayout.
 	relayoutDebounce = 150 * time.Millisecond
@@ -40,6 +41,7 @@ type Options struct {
 	Session             string
 	StateInterval       time.Duration
 	GHInterval          time.Duration
+	ActivePaneInterval  time.Duration
 	Watcher             WatcherRunner
 	WatchInterval       time.Duration
 	WatchLabel          string
@@ -67,6 +69,7 @@ type Options struct {
 	Relayout          func() error
 	FocusPane         func(string) error
 	ZoomPane          func(string) error
+	ActivePane        func() (string, error)
 	PaneAlive         func(string) bool
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
@@ -152,9 +155,10 @@ type model struct {
 type keyboardProtocolsEnabledMsg struct{}
 
 type (
-	stateTickMsg time.Time
-	ghTickMsg    time.Time
-	watchTickMsg struct {
+	stateTickMsg  time.Time
+	ghTickMsg     time.Time
+	activeTickMsg time.Time
+	watchTickMsg  struct {
 		at  time.Time
 		gen int
 	}
@@ -163,6 +167,11 @@ type (
 		count    int
 		attached bool
 		err      error
+	}
+	activePaneMsg struct {
+		paneID       string
+		err          error
+		scheduleNext bool
 	}
 	newPanePromptMsg struct {
 		req      LaunchRequest
@@ -253,6 +262,9 @@ func normalizeOptions(opts Options) Options {
 	if opts.GHInterval <= 0 {
 		opts.GHInterval = defaultGHInterval
 	}
+	if opts.ActivePaneInterval <= 0 {
+		opts.ActivePaneInterval = defaultActiveInterval
+	}
 	if opts.Watcher != nil {
 		if opts.WatchInterval <= 0 {
 			opts.WatchInterval = defaultWatchInterval
@@ -335,7 +347,7 @@ func (m model) Init() tea.Cmd {
 		}
 		return tea.Sequence(m.enableKeyboardProtocolsCmd(), loadFiles)
 	}
-	loads := tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true))
+	loads := tea.Batch(m.loadStateCmd(true), m.loadGHCmd(true), m.activePaneTickCmd())
 	if m.opts.Watcher == nil {
 		return tea.Sequence(m.enableKeyboardProtocolsCmd(), loads)
 	}

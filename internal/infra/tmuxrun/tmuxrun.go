@@ -950,6 +950,28 @@ func ListAllPanes() ([]PaneInfo, error) {
 	return parseListPanesOutput(string(out))
 }
 
+// ActivePaneInWindow returns the active pane in targetPaneID's tmux window.
+func ActivePaneInWindow(targetPaneID string) (string, error) {
+	targetPaneID = strings.TrimSpace(targetPaneID)
+	if targetPaneID == "" {
+		return "", nil
+	}
+	out, err := exec.Command("tmux", "list-panes", "-t", targetPaneID, "-F", paneListFormat).Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux list-panes: %w", err)
+	}
+	panes, err := parseListPanesOutput(string(out))
+	if err != nil {
+		return "", err
+	}
+	for _, pane := range panes {
+		if pane.Active {
+			return pane.ID, nil
+		}
+	}
+	return "", nil
+}
+
 // NewWindow creates a detached window in session and returns its initial pane.
 func NewWindow(session, name, startDir string) (PaneInfo, error) {
 	session = strings.TrimSpace(session)

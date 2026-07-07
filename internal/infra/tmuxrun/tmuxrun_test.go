@@ -1221,6 +1221,43 @@ printf '%%3:@2:4:1:fanout pane\n'
 	assertTmuxArgs(t, argsPath, []string{"list-panes", "-s", "-t", "=target-session", "-F", paneListFormat})
 }
 
+func TestActivePaneInWindowReturnsActivePaneForTargetWindow(t *testing.T) {
+	argsPath := installTmuxShim(t, `if [ "$1" = "has-session" ]; then
+	exit 1
+fi
+printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+printf '%%1:@2:0:0:fanout tui\n%%2:@2:1:1:child pane\n'
+`)
+
+	got, err := ActivePaneInWindow("%1")
+	if err != nil {
+		t.Fatalf("ActivePaneInWindow() failed: %v", err)
+	}
+	if got != "%2" {
+		t.Fatalf("ActivePaneInWindow() = %q, want %%2", got)
+	}
+	assertTmuxArgs(t, argsPath, []string{"list-panes", "-t", "%1", "-F", paneListFormat})
+}
+
+func TestActivePaneInWindowReturnsEmptyForNoTargetOrNoActivePane(t *testing.T) {
+	if got, err := ActivePaneInWindow(""); err != nil || got != "" {
+		t.Fatalf("ActivePaneInWindow(empty) = %q, %v; want empty nil", got, err)
+	}
+
+	installTmuxShim(t, `if [ "$1" = "has-session" ]; then
+	exit 1
+fi
+printf '%%1:@2:0:0:fanout tui\n%%2:@2:1:0:child pane\n'
+`)
+	got, err := ActivePaneInWindow("%1")
+	if err != nil {
+		t.Fatalf("ActivePaneInWindow() failed: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("ActivePaneInWindow() = %q, want empty when no pane is active", got)
+	}
+}
+
 func TestListPanesPreservesPaneTargetArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `if [ "$1" = "has-session" ]; then
 	exit 1

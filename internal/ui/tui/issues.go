@@ -111,6 +111,24 @@ func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
 	}
 }
 
+func (m model) activePaneTickCmd() tea.Cmd {
+	if m.opts.ActivePane == nil {
+		return nil
+	}
+	return tea.Tick(m.opts.ActivePaneInterval, func(t time.Time) tea.Msg { return activeTickMsg(t) })
+}
+
+func (m model) loadActivePaneCmd(scheduleNext bool) tea.Cmd {
+	activePane := m.opts.ActivePane
+	if activePane == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		paneID, err := activePane()
+		return activePaneMsg{paneID: paneID, err: err, scheduleNext: scheduleNext}
+	}
+}
+
 func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneView, error) {
 	var stateErr error
 	mergedState := sessionview.MergedStateLoader(projectRoot)
