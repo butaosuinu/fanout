@@ -50,6 +50,9 @@ type LaunchFunc func(LaunchRequest) (notice string, err error)
 // issue has OPEN children, a single pane otherwise.
 type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (notice string, err error)
 
+// IssueOpenFunc opens a GitHub issue in an external browser surface.
+type IssueOpenFunc func(issueNum int) error
+
 // NewPanePromptRequest describes a request to collect a manual pane prompt from
 // an external prompt surface, such as a tmux display-popup.
 type NewPanePromptRequest struct {
@@ -70,6 +73,7 @@ type NewPanePromptOptions struct {
 	// List providers for the issue mode; a nil provider hides its mode.
 	ListOpenIssues    func() ([]IssueListItem, error)
 	ListIssueChildren func(parent int) ([]ChildTarget, error)
+	OpenIssue         IssueOpenFunc
 }
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
@@ -138,6 +142,7 @@ type newPaneForm struct {
 	agentIndex  int
 	focus       newPaneField
 	launching   bool
+	notice      string
 	err         string
 	attach      *AttachTarget
 
@@ -189,6 +194,7 @@ func RunNewPanePrompt(opts NewPanePromptOptions) (LaunchRequest, bool, error) {
 		ListRepoFiles:     opts.ListRepoFiles,
 		ListOpenIssues:    opts.ListOpenIssues,
 		ListIssueChildren: opts.ListIssueChildren,
+		OpenIssue:         opts.OpenIssue,
 		LaunchPane:        func(LaunchRequest) (string, error) { return "", nil },
 		keyboard:          keyboard,
 	})
@@ -409,6 +415,10 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		return m, m.submitNewPane()
+	case "ctrl+o":
+		if m.newPane.mode == newPaneModeIssue {
+			return m, m.openSelectedIssueCmd()
+		}
 	}
 
 	var cmd tea.Cmd
@@ -733,6 +743,9 @@ func (m model) newPaneView() string {
 	if m.newPane.launching {
 		lines = append(lines, dimStyle.Render("creating pane..."))
 	}
+	if m.newPane.notice != "" {
+		lines = append(lines, dimStyle.Render(m.newPane.notice))
+	}
 	if m.newPane.err != "" {
 		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
 	}
@@ -752,7 +765,7 @@ func (m model) renderNewPaneModal(content string) string {
 
 func (m model) newPaneHint() string {
 	if m.newPane.mode != newPaneModePrompt {
-		return "enter next  type to filter  tab field  esc cancel"
+		return "enter next  ctrl+o open issue  type to filter  tab field  esc cancel"
 	}
 	// Only advertise Shift+Enter when enhanced keyboard input is active; otherwise
 	// it submits the form and the hint would mislead. Ctrl+J always inserts a newline.

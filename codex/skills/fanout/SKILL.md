@@ -71,6 +71,7 @@ opt out — and `Shift+Enter` needs a terminal that reports it distinctly, for
 which fanout turns on tmux `extended-keys`; `Up` / `Down` picks an agent row,
 `Space` toggles it, `Left` / `Right` changes its count, and `Enter` creates the
 selected panes).
+In Issue mode, `Ctrl+O` opens the selected issue in the default browser.
 Manual `codex` panes start in Codex Plan Mode and receive the popup prompt
 inline; manual `claude` panes start normally. Press `a` on a recorded row to
 attach one or more new agent panes to that same worktree without creating a new

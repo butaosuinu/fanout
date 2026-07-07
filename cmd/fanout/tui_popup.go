@@ -192,6 +192,7 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 		ListRepoFiles:     worktree.ListFiles,
 		ListOpenIssues:    newTUIListOpenIssuesFunc(*projectRoot),
 		ListIssueChildren: newTUIListIssueChildrenFunc(*projectRoot),
+		OpenIssue:         newTUIOpenIssueFunc(*projectRoot),
 	})
 	result := tuiNewPanePopupResult{
 		Canceled:       canceled,

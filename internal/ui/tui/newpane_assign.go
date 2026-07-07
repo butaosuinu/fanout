@@ -55,18 +55,22 @@ func (m *model) submitNewPanePicker() tea.Cmd {
 	}
 	if p.loading {
 		m.newPane.err = "list is still loading"
+		m.newPane.notice = ""
 		return nil
 	}
 	if p.err != "" {
 		m.newPane.err = "list failed: " + p.err
+		m.newPane.notice = ""
 		return nil
 	}
 	item, ok := p.selectedItem()
 	if !ok {
 		m.newPane.err = "nothing selected"
+		m.newPane.notice = ""
 		return nil
 	}
 	m.newPane.err = ""
+	m.newPane.notice = ""
 	switch m.newPane.mode {
 	case newPaneModeIssue:
 		m.newPane.selIssue = item.number

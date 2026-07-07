@@ -31,11 +31,12 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   ライブ表示し、コンパクトな Session ナビゲータと focus・peek・terminal・
   同一 worktree への agent 追加・lifecycle キー・消えた worktree ペインの
   自動復元を備えたコンソールを開きます。新規 Session popup は自由記述 prompt
-  や一覧から選んだ OPEN issue から開始でき、子ごとに agent を選べます(あるタ
-  スクは claude、別のタスクは codex、のように)。prompt モードのチェックボック
-  スを入れると、そのプロンプトを `/fanout plan` で並列タスクに分解します。
-  `s` キーで設定 popup を開けます。どのペインからでも `F11` または `prefix + T`
-  でコンソールに戻れます。
+  や一覧から選んだ OPEN issue から開始でき、`Ctrl+O` で選択中の issue を
+  ブラウザで開けます。子ごとに agent も選べます(あるタスクは claude、別のタ
+  スクは codex、のように)。prompt モードのチェックボックスを入れると、
+  そのプロンプトを `/fanout plan` で並列タスクに分解します。`s` キーで設定
+  popup を開けます。どのペインからでも `F11` または `prefix + T` でコンソールに
+  戻れます。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ

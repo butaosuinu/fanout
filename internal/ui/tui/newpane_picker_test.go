@@ -482,6 +482,139 @@ func TestNewPanePickerFilterAcceptsSpaces(t *testing.T) {
 	}
 }
 
+func TestNewPaneIssuePickerCtrlOOpensSelectedIssue(t *testing.T) {
+	opened := 0
+	m := newModel(Options{
+		OpenIssue: func(num int) error {
+			opened = num
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+
+	updated, _ := m.Update(newPaneIssuesLoadedMsg{items: []IssueListItem{
+		{Number: 41, Title: "Add API client"},
+		{Number: 42, Title: "Fix UI overflow"},
+	}})
+	m = updated.(model)
+	m.newPane.issuePicker.index = 1
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("ctrl+o returned nil command, want browser-open command")
+	}
+	if !strings.Contains(m.newPane.notice, "opening #42") {
+		t.Fatalf("notice before command = %q, want opening #42", m.newPane.notice)
+	}
+	if opened != 0 {
+		t.Fatalf("OpenIssue called before command execution with %d", opened)
+	}
+
+	updated, _ = m.Update(cmd())
+	m = updated.(model)
+	if opened != 42 {
+		t.Fatalf("OpenIssue called with %d, want 42", opened)
+	}
+	if m.newPane.err != "" || m.newPane.notice != "opened #42 in browser" {
+		t.Fatalf("after open err/notice = %q/%q, want empty/opened", m.newPane.err, m.newPane.notice)
+	}
+}
+
+func TestNewPaneIssuePickerPlainOFiltersInsteadOfOpening(t *testing.T) {
+	calls := 0
+	m := newModel(Options{
+		OpenIssue: func(int) error {
+			calls++
+			return nil
+		},
+	})
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	updated, _ := m.Update(newPaneIssuesLoadedMsg{items: []IssueListItem{{Number: 42, Title: "Open issue"}}})
+	m = updated.(model)
+
+	updated, cmd := m.Update(keyRunes("o"))
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("plain o returned command, want filter input only")
+	}
+	if calls != 0 {
+		t.Fatalf("OpenIssue calls = %d, want 0", calls)
+	}
+	if m.newPane.issuePicker.query != "o" {
+		t.Fatalf("query = %q, want o", m.newPane.issuePicker.query)
+	}
+}
+
+func TestNewPaneIssuePickerOpenIssueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*model)
+		wantErr string
+	}{
+		{
+			name: "loading",
+			setup: func(m *model) {
+				m.newPane.issuePicker.loading = true
+				m.opts.OpenIssue = func(int) error { return nil }
+			},
+			wantErr: "list is still loading",
+		},
+		{
+			name: "nothing selected",
+			setup: func(m *model) {
+				m.newPane.issuePicker.loaded = true
+				m.newPane.issuePicker.items = issuePickerItems([]IssueListItem{{Number: 42, Title: "Fix UI"}})
+				m.recomputePicker(&m.newPane.issuePicker)
+				m.newPane.issuePicker.query = "zzz"
+				m.recomputePicker(&m.newPane.issuePicker)
+				m.opts.OpenIssue = func(int) error { return nil }
+			},
+			wantErr: "nothing selected",
+		},
+		{
+			name: "unwired opener",
+			setup: func(m *model) {
+				m.newPane.issuePicker.loaded = true
+				m.newPane.issuePicker.items = issuePickerItems([]IssueListItem{{Number: 42, Title: "Fix UI"}})
+				m.recomputePicker(&m.newPane.issuePicker)
+			},
+			wantErr: "issue opener is not configured",
+		},
+		{
+			name: "opener failure",
+			setup: func(m *model) {
+				m.newPane.issuePicker.loaded = true
+				m.newPane.issuePicker.items = issuePickerItems([]IssueListItem{{Number: 42, Title: "Fix UI"}})
+				m.recomputePicker(&m.newPane.issuePicker)
+				m.opts.OpenIssue = func(int) error { return errors.New("browser boom") }
+			},
+			wantErr: "browser boom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(Options{})
+			m.openNewPaneForm()
+			m.newPane.mode = newPaneModeIssue
+			tt.setup(&m)
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+			m = updated.(model)
+			if cmd != nil {
+				updated, _ = m.Update(cmd())
+				m = updated.(model)
+			}
+			if !strings.Contains(m.newPane.err, tt.wantErr) {
+				t.Fatalf("err = %q, want containing %q", m.newPane.err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestLaunchingGateQueuesQuit pins the fan-out escape hatch: while a launch
 // runs, q queues a quit instead of being silently swallowed.
 func TestLaunchingGateQueuesQuit(t *testing.T) {

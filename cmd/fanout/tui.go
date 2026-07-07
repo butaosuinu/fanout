@@ -101,6 +101,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		ListOpenIssues:    newTUIListOpenIssuesFunc(projectRoot),
 		ListIssueChildren: newTUIListIssueChildrenFunc(projectRoot),
 		LaunchIssue:       newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
+		OpenIssue:         newTUIOpenIssueFunc(projectRoot),
 		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
