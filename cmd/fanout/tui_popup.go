@@ -267,6 +267,7 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 			StartDir: projectRoot,
 			Title:    "Keyboard shortcuts",
 			Command:  tuiHelpPopupShellCommand(commandName, geometry.ContentWidth, geometry.ContentHeight),
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
 		})
 	}
 }
@@ -364,6 +365,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			StartDir: projectRoot,
 			Title:    "New agent pane",
 			Command:  command,
+			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
 		})
 		result, readErr := readTUINewPanePopupResult(resultFile)
 		if os.IsNotExist(readErr) && displayErr == nil {
@@ -394,6 +396,54 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			AgentOverrides: result.AgentOverrides,
 		}, false, nil
 	}
+}
+
+func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *tmuxrun.PopupPosition {
+	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	if paneID == "" {
+		return nil
+	}
+	geom, err := tmuxrun.PaneGeometryForPane(paneID)
+	if err != nil {
+		return nil
+	}
+	return tuiPopupPositionAdjacentToPane(geom, popupWidth, popupHeight)
+}
+
+func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth, popupHeight int) *tmuxrun.PopupPosition {
+	if popupWidth <= 0 || popupHeight <= 0 || geom.ClientWidth <= 0 || geom.ClientHeight <= 0 {
+		return nil
+	}
+	maxX := max(geom.ClientWidth-popupWidth, 0)
+	maxY := max(geom.ClientHeight-popupHeight, 0)
+	rightX := geom.Left + geom.Width + 1
+	leftX := geom.Left - popupWidth - 1
+	x := rightX
+	switch {
+	case rightX <= maxX:
+	case leftX >= 0:
+		x = leftX
+	default:
+		x = nearestHorizontalPopupEdge(geom, popupWidth)
+	}
+	return &tmuxrun.PopupPosition{
+		X: min(max(x, 0), maxX),
+		Y: min(max(geom.Top, 0), maxY),
+	}
+}
+
+func nearestHorizontalPopupEdge(geom tmuxrun.PaneGeometry, popupWidth int) int {
+	leftOverlap := overlapWidth(0, popupWidth, geom.Left, geom.Left+geom.Width)
+	rightX := max(geom.ClientWidth-popupWidth, 0)
+	rightOverlap := overlapWidth(rightX, rightX+popupWidth, geom.Left, geom.Left+geom.Width)
+	if leftOverlap <= rightOverlap {
+		return 0
+	}
+	return rightX
+}
+
+func overlapWidth(aStart, aEnd, bStart, bEnd int) int {
+	return max(0, min(aEnd, bEnd)-max(aStart, bStart))
 }
 
 func tuiHelpPopupGeometryForClient(size tmuxrun.ClientSize) (tuiHelpPopupGeometry, error) {

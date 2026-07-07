@@ -39,6 +39,7 @@ const (
 	livePaneRoleFormat         = "#{pane_id}\t#{" + roleOption + "}"
 	livePaneSessionIDFormat    = "#{pane_id}\t#{session_id}"
 	paneAlternateFormat        = "#{alternate_on}"
+	paneGeometryFormat         = "#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{client_width}\t#{client_height}"
 	// paneLabelOption is a tmux pane user option holding the border label fanout
 	// shows on the pane's top border (e.g. "#123 · fix-login-bug-123"). It is set
 	// per pane and referenced from paneBorderFormat. A dedicated user option keeps
@@ -89,13 +90,31 @@ type ClientSize struct {
 	Height int
 }
 
-// PopupOptions describes a centered tmux display-popup invocation.
+// PopupPosition describes an absolute tmux display-popup origin.
+type PopupPosition struct {
+	X int
+	Y int
+}
+
+// PopupOptions describes a tmux display-popup invocation.
 type PopupOptions struct {
 	Width    int
 	Height   int
 	StartDir string
 	Title    string
 	Command  string
+	Position *PopupPosition
+}
+
+// PaneGeometry is the absolute position and size of a tmux pane plus the
+// current client size used to clamp adjacent popups into view.
+type PaneGeometry struct {
+	Left         int
+	Top          int
+	Width        int
+	Height       int
+	ClientWidth  int
+	ClientHeight int
 }
 
 type tmuxVersion struct {
@@ -196,7 +215,53 @@ func parseClientSize(out string) (ClientSize, error) {
 	return ClientSize{Width: width, Height: height}, nil
 }
 
-// DisplayPopup opens command in a centered tmux popup.
+// PaneGeometryForPane returns pane bounds in client coordinates.
+func PaneGeometryForPane(paneID string) (PaneGeometry, error) {
+	paneID = strings.TrimSpace(paneID)
+	if !paneIDPattern.MatchString(paneID) {
+		return PaneGeometry{}, fmt.Errorf("pane id must be a tmux pane id (%%N), got %q", paneID)
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "-F", paneGeometryFormat).Output()
+	if err != nil {
+		return PaneGeometry{}, fmt.Errorf("tmux display-message pane geometry: %w", err)
+	}
+	geom, err := parsePaneGeometry(string(out))
+	if err != nil {
+		return PaneGeometry{}, fmt.Errorf("parse tmux pane geometry: %w", err)
+	}
+	return geom, nil
+}
+
+func parsePaneGeometry(out string) (PaneGeometry, error) {
+	fields := strings.Split(strings.TrimRight(out, "\r\n"), "\t")
+	if len(fields) != 6 {
+		return PaneGeometry{}, fmt.Errorf("expected 6 fields, got %d", len(fields))
+	}
+	values := make([]int, len(fields))
+	for i, field := range fields {
+		value, err := strconv.Atoi(field)
+		if err != nil {
+			return PaneGeometry{}, fmt.Errorf("field %d: %w", i+1, err)
+		}
+		if value < 0 {
+			return PaneGeometry{}, fmt.Errorf("field %d must be non-negative, got %d", i+1, value)
+		}
+		values[i] = value
+	}
+	if values[2] <= 0 || values[3] <= 0 || values[4] <= 0 || values[5] <= 0 {
+		return PaneGeometry{}, fmt.Errorf("pane and client dimensions must be positive")
+	}
+	return PaneGeometry{
+		Left:         values[0],
+		Top:          values[1],
+		Width:        values[2],
+		Height:       values[3],
+		ClientWidth:  values[4],
+		ClientHeight: values[5],
+	}, nil
+}
+
+// DisplayPopup opens command in a tmux popup.
 func DisplayPopup(opts PopupOptions) error {
 	args, err := displayPopupArgs(opts)
 	if err != nil {
@@ -228,7 +293,11 @@ func displayPopupArgs(opts PopupOptions) ([]string, error) {
 	if strings.TrimSpace(opts.StartDir) != "" {
 		args = append(args, "-d", opts.StartDir)
 	}
-	args = append(args, "-x", "C", "-y", "C")
+	if opts.Position != nil {
+		args = append(args, "-x", strconv.Itoa(opts.Position.X), "-y", strconv.Itoa(opts.Position.Y))
+	} else {
+		args = append(args, "-x", "C", "-y", "C")
+	}
 	if strings.TrimSpace(opts.Title) != "" {
 		args = append(args, "-T", opts.Title)
 	}
