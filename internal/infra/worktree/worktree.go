@@ -23,6 +23,7 @@ var localExcludePatterns = []string{
 	".fanout/dashboard.json",
 	".fanout/dashboard.json.lock",
 	".fanout/plans/",
+	".fanout/briefings/",
 	localExcludePattern,
 }
 

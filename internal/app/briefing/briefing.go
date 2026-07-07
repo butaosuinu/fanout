@@ -1,5 +1,6 @@
-// Package briefing builds task briefs that fanout drops under /tmp and points
-// the agent at via the one-line prompt.
+// Package briefing builds task briefs that fanout drops under
+// <projectRoot>/.fanout/briefings/ and points the agent at via the one-line
+// prompt.
 //
 // The body is locked in by Tier 2 goldens (briefing size: NNN bytes) — both
 // the heredoc text and the trailing newline must match fanout:799-814 byte
@@ -15,16 +16,23 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 )
 
-// Path returns /tmp/fanout-<repo_slug>-<num>.md.
-func Path(projectRoot string, num int) string {
-	repo := filepath.Base(projectRoot)
-	return fmt.Sprintf("/tmp/fanout-%s-%d.md", repo, num)
+// Dir returns <projectRoot>/.fanout/briefings, the directory fanout writes
+// briefing files under.
+func Dir(projectRoot string) string {
+	return filepath.Join(projectRoot, ".fanout", "briefings")
 }
 
-// TaskPath returns /tmp/fanout-<repo_slug>-<escaped-planSlug>-<escaped-taskID>.md.
+// Path returns <projectRoot>/.fanout/briefings/fanout-<repo_slug>-<num>.md.
+func Path(projectRoot string, num int) string {
+	repo := filepath.Base(projectRoot)
+	return filepath.Join(Dir(projectRoot), fmt.Sprintf("fanout-%s-%d.md", repo, num))
+}
+
+// TaskPath returns
+// <projectRoot>/.fanout/briefings/fanout-<repo_slug>-<escaped-planSlug>-<escaped-taskID>.md.
 func TaskPath(projectRoot, planSlug, taskID string) string {
 	repo := filepath.Base(projectRoot)
-	return fmt.Sprintf("/tmp/fanout-%s-%s-%s.md", repo, taskPathComponent(planSlug), taskPathComponent(taskID))
+	return filepath.Join(Dir(projectRoot), fmt.Sprintf("fanout-%s-%s-%s.md", repo, taskPathComponent(planSlug), taskPathComponent(taskID)))
 }
 
 var taskPathComponentReplacer = strings.NewReplacer(

@@ -77,7 +77,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Slug:                "state-idempotency-83",
 		DisplayNameOverride: "State Idempotency",
 		BranchName:          "fanout/state-idempotency-83",
-		Prompt:              "[fanout #83 of #81] state-idempotency-83: read /tmp/fanout-fanout-83.md and begin.",
+		Prompt:              "[fanout #83 of #81] state-idempotency-83: read .fanout/briefings/fanout-fanout-83.md and begin.",
 		Agent:               "codex",
 		Wave:                "wave5",
 		CodexPlanMode:       true,
@@ -152,10 +152,11 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	if req.Agent != "codex" || !strings.Contains(req.Prompt, "inspect the workspace") {
 		t.Fatalf("manual launch = prompt %q agent %q", req.Prompt, req.Agent)
 	}
-	if req.BriefingPath != "/tmp/fanout-repo--2.md" || req.BriefingBody != "extra context" {
+	wantBriefingPath := briefing.Path("/repo", -2)
+	if req.BriefingPath != wantBriefingPath || req.BriefingBody != "extra context" {
 		t.Fatalf("manual briefing = path %q body %q", req.BriefingPath, req.BriefingBody)
 	}
-	if !strings.Contains(req.Prompt, "read /tmp/fanout-repo--2.md for additional context and begin") {
+	if !strings.Contains(req.Prompt, "read "+wantBriefingPath+" for additional context and begin") {
 		t.Fatalf("manual prompt does not reference briefing path: %q", req.Prompt)
 	}
 	_ = os.Remove(req.BriefingPath)
@@ -520,10 +521,11 @@ func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	if got.Worktree.WorktreePath != "/repo/.fanout/worktrees/watch-runtime-helper-223" {
 		t.Fatalf("worktree path = %q", got.Worktree.WorktreePath)
 	}
-	if got.BriefingPath != "/tmp/fanout-repo-223.md" {
+	wantBriefingPath := briefing.Path("/repo", 223)
+	if got.BriefingPath != wantBriefingPath {
 		t.Fatalf("briefing path = %q", got.BriefingPath)
 	}
-	wantPrompt := "[fanout #223 of #@watch] watch-runtime-helper-223: Watch runtime helper. read /tmp/fanout-repo-223.md and begin."
+	wantPrompt := "[fanout #223 of #@watch] watch-runtime-helper-223: Watch runtime helper. read " + wantBriefingPath + " and begin."
 	if got.Prompt != wantPrompt {
 		t.Fatalf("prompt = %q, want %q", got.Prompt, wantPrompt)
 	}
@@ -613,7 +615,7 @@ func TestNewIssueRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
 	}
-	if !strings.Contains(got.Prompt, "read /tmp/fanout-repo-501.md and investigate, then propose a plan.") {
+	if !strings.Contains(got.Prompt, "read "+briefing.Path("/repo", 501)+" and investigate, then propose a plan.") {
 		t.Fatalf("prompt = %q, want plan action", got.Prompt)
 	}
 	if !strings.Contains(got.BriefingBody, "Before presenting a plan, follow normal Codex planning behavior") {
@@ -650,10 +652,11 @@ func TestNewTaskRequestUsesTaskBriefingPathAndPrompt(t *testing.T) {
 	if got.Slug != "launch-plan-extract-api-client-api-client" || got.BranchName != "fanout/launch-plan-extract-api-client-api-client" {
 		t.Fatalf("slug/branch = %q/%q", got.Slug, got.BranchName)
 	}
-	if got.BriefingPath != "/tmp/fanout-repo-launch%2Dplan-api%2Dclient.md" {
+	wantBriefingPath := briefing.TaskPath("/repo", "launch-plan", "api-client")
+	if got.BriefingPath != wantBriefingPath {
 		t.Fatalf("briefing path = %q", got.BriefingPath)
 	}
-	if !strings.Contains(got.Prompt, "[fanout api-client of plan:launch-plan] launch-plan-extract-api-client-api-client: Extract API client. read /tmp/fanout-repo-launch%2Dplan-api%2Dclient.md and begin.") {
+	if !strings.Contains(got.Prompt, "[fanout api-client of plan:launch-plan] launch-plan-extract-api-client-api-client: Extract API client. read "+wantBriefingPath+" and begin.") {
 		t.Fatalf("prompt = %q", got.Prompt)
 	}
 	if got.DisplayNameOverride != "API client" || got.Wave != "2" {

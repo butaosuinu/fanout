@@ -54,7 +54,7 @@ or `which` just to "verify" the surface wastes a tool call and adds nothing.
 issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and
 creates one new tmux pane per child. Each pane gets its own git worktree under
 `.fanout/worktrees/` and an agent CLI prompt that points at
-`/tmp/fanout-<repo>-<N>.md`. The caller's pane is not modified.
+`.fanout/briefings/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
 `fanout` with no arguments starts the persistent fanout TUI console. From a
 plain shell it creates or attaches a deterministic fanout-managed tmux session
@@ -418,7 +418,7 @@ API + parent body. Key points:
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
   Plan Mode path automatically but pass the popup prompt inline instead of
-  writing a `/tmp` briefing file. The inline prompt keeps normal non-mutating
+  writing a briefing file. The inline prompt keeps normal non-mutating
   discovery before the `<proposed_plan>` response.
   When enabled, fanout starts a Codex app-server, creates the child Plan Mode
   thread, and resumes it with the child prompt through the interactive Codex

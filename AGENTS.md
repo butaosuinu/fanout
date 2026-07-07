@@ -150,7 +150,7 @@ touching only class-A packages can rely on AI review.
   Live runs hold `.fanout/state.json.lock` while planning and launching so
   parallel invocations cannot create the same child twice.
 - Keep prompts one line (`oneLinePrompt`). Full issue context belongs in
-  `/tmp/fanout-<repo>-<NUM>.md` (`internal/app/briefing`).
+  `.fanout/briefings/fanout-<repo>-<NUM>.md` (`internal/app/briefing`).
 - `--include` widens the child set; `--only` and `--skip` narrow it
   (`fanset.FilterOnlySkip`; child enumeration in `mergeExtraChildren` via
   `internal/infra/ghissue`). Prose scanning for implicit children lives in the

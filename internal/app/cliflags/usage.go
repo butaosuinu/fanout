@@ -20,7 +20,7 @@ shows recorded panes from .fanout/state.json with live tmux and issue/PR status.
 With a parent issue or GitHub Projects v2 URL, creates one tmux pane per OPEN
 sub-issue of a parent issue, OR per OPEN item in that Project. Each pane gets a
 dedicated git worktree under .fanout/worktrees/ and starts the configured agent
-with a briefing that points at /tmp/fanout-<repo>-<num>.md.
+with a briefing that points at .fanout/briefings/fanout-<repo>-<num>.md.
 
 Options:
   --agent <name|NUM=name>
