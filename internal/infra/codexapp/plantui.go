@@ -402,6 +402,10 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 			return true, tuiErr
 		case drainErr := <-drainDone:
 			if drainErr != nil {
+				if watchingAppServer {
+					drainDone = nil
+					continue
+				}
 				return false, fmt.Errorf("codex app-server request handling failed while Codex TUI was attached: %w", drainErr)
 			}
 			if !watchingAppServer && canWatchAppServer(client) {

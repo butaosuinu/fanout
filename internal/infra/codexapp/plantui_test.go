@@ -615,6 +615,56 @@ func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
 	}
 }
 
+func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
+	conn, peer := net.Pipe()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		_, _ = io.Copy(io.Discard, peer)
+	}()
+	client := &client{conn: &websocketJSONConn{conn: conn, br: bufio.NewReader(conn)}}
+	defer func() {
+		client.Close()
+		_ = peer.Close()
+		<-peerDone
+	}()
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error, 1)
+	drainDone <- nil
+	resultDone := make(chan struct {
+		tuiExited bool
+		err       error
+	}, 1)
+	go func() {
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil)
+		resultDone <- struct {
+			tuiExited bool
+			err       error
+		}{tuiExited: tuiExited, err: err}
+	}()
+
+	// Send a malformed server text frame. This makes the post-ready
+	// notification watcher fail, but the interactive TUI owns its own
+	// connection and should keep running.
+	if _, err := peer.Write([]byte{0x81, 0x01, '{'}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-resultDone:
+		t.Fatalf("wait returned before TUI exit: tuiExited=%v err=%v", result.tuiExited, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	tuiDone <- nil
+	result := <-resultDone
+	if !result.tuiExited {
+		t.Fatal("tuiExited = false, want true")
+	}
+	if result.err != nil {
+		t.Fatalf("error = %v, want nil", result.err)
+	}
+}
+
 func TestCodexTurnCompletedNotificationMatchesThread(t *testing.T) {
 	msg := appServerMessage{
 		Method: "turn/completed",
