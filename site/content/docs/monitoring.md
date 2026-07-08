@@ -43,6 +43,7 @@ fanout reads structured agent state from the pane's `@fanout_agent_state` tmux o
 | `/` | Filter the loaded rows (free text or a predicate such as `state:open`). `Esc` only leaves the input; pressing `Esc` again from the list clears the filter. |
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
 | `s` | Open the settings tmux popup. Choose user or repo config, edit the same keys as `config.json`, and save with `Ctrl+S`. |
+| `Ctrl+O` | In the new-session Issue list, open the selected issue in the default browser. |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it removes only the tmux pane and the state row; it never deletes the git worktree. |
@@ -76,7 +77,7 @@ Disable it with the `consoleKeybind` config key or `FANOUT_CONSOLE_KEYBIND=0` (s
 
 **Prompt** is the classic manual pane. Write a multi-line prompt and set the `claude` / `codex` launch counts; in the prompt field, `Shift+Enter` or `Ctrl+J` inserts a newline and `@` completes repository file paths. Manual `codex` panes start in Codex Plan Mode with the prompt passed inline; `claude` starts normally. Enabling the plan fan-out checkbox below switches the launch to a single coordinator (select exactly one agent) that decomposes the prompt into parallel tasks with `fanout plan` — the coordinator always launches as a normal agent, even `codex`.
 
-**Issue** lists the repository's OPEN issues and lets you narrow them by number, title, or label. Pick an issue, choose the default `claude` / `codex` agent, and `Enter` opens an assignment screen that flips the agent per child of that issue — the equivalent of repeatable `--agent NUM=name`. An issue with OPEN children fans out the equivalent of `--unblocked-only`, leaving blocked children deferred. An issue without children starts as a single pane under `@watch`.
+**Issue** lists the repository's OPEN issues and lets you narrow them by number, title, or label. `Ctrl+O` opens the selected issue in the default browser. Pick an issue, choose the default `claude` / `codex` agent, and `Enter` opens an assignment screen that flips the agent per child of that issue — the equivalent of repeatable `--agent NUM=name`. An issue with OPEN children fans out the equivalent of `--unblocked-only`, leaving blocked children deferred. An issue without children starts as a single pane under `@watch`.
 
 ## --status (JSON / table / --post-dashboard)
 

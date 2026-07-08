@@ -154,6 +154,8 @@ func (m *model) moveActivePicker(delta int) {
 		return
 	}
 	p.index = (p.index + delta + n) % n
+	m.newPane.notice = ""
+	m.newPane.err = ""
 }
 
 func pickerMoveDelta(key string) int {
@@ -175,11 +177,15 @@ func (m *model) updateActivePickerFilter(msg tea.KeyMsg) {
 		if p.query != "" {
 			p.query = trimLastRune(p.query)
 			m.recomputePicker(p)
+			m.newPane.notice = ""
+			m.newPane.err = ""
 		}
 	case "ctrl+u":
 		if p.query != "" {
 			p.query = ""
 			m.recomputePicker(p)
+			m.newPane.notice = ""
+			m.newPane.err = ""
 		}
 	default:
 		// A lone space arrives as tea.KeySpace, not KeyRunes; without it
@@ -187,12 +193,56 @@ func (m *model) updateActivePickerFilter(msg tea.KeyMsg) {
 		if msg.Type == tea.KeySpace {
 			p.query += " "
 			m.recomputePicker(p)
+			m.newPane.notice = ""
+			m.newPane.err = ""
 			return
 		}
 		if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
 			p.query += string(msg.Runes)
 			m.recomputePicker(p)
+			m.newPane.notice = ""
+			m.newPane.err = ""
 		}
+	}
+}
+
+// openSelectedIssueCmd opens the selected issue from issue mode without
+// advancing the new-session wizard. Plain "o" still feeds the filter; Ctrl+O
+// is the explicit browser-open shortcut.
+func (m *model) openSelectedIssueCmd() tea.Cmd {
+	if m.newPane.mode != newPaneModeIssue {
+		return nil
+	}
+	p := m.activePicker()
+	if p == nil {
+		return nil
+	}
+	if p.loading {
+		m.newPane.notice = ""
+		m.newPane.err = "list is still loading"
+		return nil
+	}
+	if p.err != "" {
+		m.newPane.notice = ""
+		m.newPane.err = "list failed: " + p.err
+		return nil
+	}
+	item, ok := p.selectedItem()
+	if !ok {
+		m.newPane.notice = ""
+		m.newPane.err = "nothing selected"
+		return nil
+	}
+	openIssue := m.opts.OpenIssue
+	if openIssue == nil {
+		m.newPane.notice = ""
+		m.newPane.err = "issue opener is not configured"
+		return nil
+	}
+	m.newPane.err = ""
+	m.newPane.notice = fmt.Sprintf("opening %s in browser...", item.key)
+	return func() tea.Msg {
+		return newPaneIssueOpenedMsg{issue: item.number, err: openIssue(item.number)}
 	}
 }
 

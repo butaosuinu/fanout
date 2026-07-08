@@ -83,6 +83,7 @@ func (m model) helpView() string {
 		{"Space", "Toggle agent"},
 		{"Left/Right", "Mode / agent"},
 		{"@", "File completion"},
+		{"Ctrl+O", "Open issue"},
 		{"Enter", "Create / next"},
 		{"Esc", "Cancel / back"},
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/run"
@@ -15,6 +16,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
+
+var openTUIIssueBrowser = openBrowser
 
 // newTUIListOpenIssuesFunc lists OPEN issues for the new-session picker and
 // marks the ones that already have a recorded fanout pane.
@@ -94,6 +97,56 @@ func newTUIIssueLaunchFunc(projectRoot, session, commandName string, resolvedSet
 	return func(issueNum int, defaultAgent string, overrides map[string]string) (string, error) {
 		return launchIssueSessionFromTUI(projectRoot, session, commandName, resolvedSettings, hookConfig, issueNum, defaultAgent, overrides)
 	}
+}
+
+func newTUIOpenIssueFunc(projectRoot string) fanouttui.IssueOpenFunc {
+	return func(issueNum int) error {
+		return openIssueFromTUI(projectRoot, issueNum)
+	}
+}
+
+func openIssueFromTUI(projectRoot string, issueNum int) error {
+	issueURL, err := issueURLFromRepo(projectRoot, issueNum)
+	if err != nil {
+		return err
+	}
+	if err := openTUIIssueBrowser(issueURL); err != nil {
+		return fmt.Errorf("open issue #%d: %w", issueNum, err)
+	}
+	return nil
+}
+
+func issueURLFromRepo(projectRoot string, issueNum int) (string, error) {
+	if issueNum <= 0 {
+		return "", fmt.Errorf("issue number is required")
+	}
+	gh := ghissue.Runner{Cwd: projectRoot}
+	nwo, err := gh.RepoNameWithOwner()
+	if err != nil {
+		return "", fmt.Errorf("resolve repo: %w", err)
+	}
+	owner, repo, ok := strings.Cut(nwo, "/")
+	if !ok || !validGitHubPathPart(owner) || !validGitHubPathPart(repo) {
+		return "", fmt.Errorf("unexpected repo nameWithOwner: %s", nwo)
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, issueNum), nil
+}
+
+func validGitHubPathPart(part string) bool {
+	if part == "" {
+		return false
+	}
+	for _, r := range part {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // launchIssueSessionFromTUI starts a session for one issue picked in the TUI:

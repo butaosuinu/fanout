@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,77 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
+
+func TestOpenIssueFromTUIOpensGitHubIssueURL(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"repo view --json nameWithOwner -q .nameWithOwner")
+  printf 'octo/fanout\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	oldOpen := openTUIIssueBrowser
+	t.Cleanup(func() { openTUIIssueBrowser = oldOpen })
+	var opened string
+	openTUIIssueBrowser = func(url string) error {
+		opened = url
+		return nil
+	}
+
+	if err := openIssueFromTUI(t.TempDir(), 42); err != nil {
+		t.Fatal(err)
+	}
+	if opened != "https://github.com/octo/fanout/issues/42" {
+		t.Fatalf("opened URL = %q, want GitHub issue URL", opened)
+	}
+}
+
+func TestOpenIssueFromTUIReportsBrowserFailure(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"repo view --json nameWithOwner -q .nameWithOwner")
+  printf 'octo/fanout\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	oldOpen := openTUIIssueBrowser
+	t.Cleanup(func() { openTUIIssueBrowser = oldOpen })
+	openTUIIssueBrowser = func(string) error { return errors.New("launcher unavailable") }
+
+	err := openIssueFromTUI(t.TempDir(), 42)
+	if err == nil || !strings.Contains(err.Error(), "open issue #42") || !strings.Contains(err.Error(), "launcher unavailable") {
+		t.Fatalf("openIssueFromTUI() error = %v, want browser failure context", err)
+	}
+}
+
+func TestIssueURLFromRepoRejectsInvalidInputs(t *testing.T) {
+	if got, err := issueURLFromRepo(t.TempDir(), 0); err == nil || got != "" || !strings.Contains(err.Error(), "issue number is required") {
+		t.Fatalf("issueURLFromRepo(0) = %q, %v; want issue number error", got, err)
+	}
+
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"repo view --json nameWithOwner -q .nameWithOwner")
+  printf 'octo/fanout/extra\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	if got, err := issueURLFromRepo(t.TempDir(), 42); err == nil || got != "" || !strings.Contains(err.Error(), "unexpected repo nameWithOwner") {
+		t.Fatalf("issueURLFromRepo(invalid repo) = %q, %v; want repo validation error", got, err)
+	}
+}
 
 func TestNewTUIListOpenIssuesFuncMarksRecordedSessions(t *testing.T) {
 	repo := t.TempDir()
