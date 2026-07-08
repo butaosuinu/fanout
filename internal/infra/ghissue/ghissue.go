@@ -380,8 +380,10 @@ func (r Runner) EnsureLabel(name string) error {
 		return err
 	}
 	var labels []Label
-	if unmarshalErr := json.Unmarshal(out, &labels); unmarshalErr != nil {
-		return fmt.Errorf("parse gh label list --search %q: %w", name, unmarshalErr)
+	if strings.TrimSpace(string(out)) != "" {
+		if unmarshalErr := json.Unmarshal(out, &labels); unmarshalErr != nil {
+			return fmt.Errorf("parse gh label list --search %q: %w", name, unmarshalErr)
+		}
 	}
 	for _, label := range labels {
 		if strings.EqualFold(strings.TrimSpace(label.Name), strings.TrimSpace(name)) {

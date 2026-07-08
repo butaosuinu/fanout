@@ -431,6 +431,32 @@ esac
 	})
 }
 
+func TestEnsureLabelCreatesWhenListOutputEmpty(t *testing.T) {
+	argsPath := installFakeGHScript(t, `
+args="$*"
+printf '%s\n' "$args" >> "$GH_FAKE_ARGS"
+case "$args" in
+"label list --search fanout:running --limit 100 --json name")
+  ;;
+"label create fanout:running")
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	if err := (Runner{}).EnsureLabel("fanout:running"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFakeGHCommandLines(t, argsPath, []string{
+		"label list --search fanout:running --limit 100 --json name",
+		"label create fanout:running",
+	})
+}
+
 func TestEnsureLabelReturnsParseError(t *testing.T) {
 	installFakeGH(t, `not-json`)
 
