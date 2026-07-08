@@ -1,0 +1,104 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":configMigration",
+    "security:minimumReleaseAgeNpm",
+    "schedule:weekly"
+  ],
+  "timezone": "Asia/Tokyo",
+  "enabledManagers": ["gomod", "npm", "nvm", "github-actions", "custom.regex"],
+  "ignoreScripts": true,
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 1,
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Dashboard",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "vulnerabilityFixStrategy": "lowest"
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 8am on monday"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update the pinned golangci-lint version",
+      "managerFilePatterns": ["/^\\.golangci-lint-version$/"],
+      "matchStrings": ["(?<currentValue>v\\d+\\.\\d+\\.\\d+)\\s*"],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the docs-site Hugo version",
+      "managerFilePatterns": ["/^\\.github/workflows/pages\\.yml$/"],
+      "matchStrings": ["HUGO_VERSION: (?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "gohugoio/hugo",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the docs-site Pagefind version",
+      "managerFilePatterns": ["/^\\.github/workflows/pages\\.yml$/"],
+      "matchStrings": ["PAGEFIND_VERSION: (?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "Pagefind/pagefind",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Apply cooldown to public non-npm release datasources",
+      "matchDatasources": ["go", "github-releases", "github-tags", "node-version"],
+      "minimumReleaseAge": "3 days",
+      "minimumReleaseAgeBehaviour": "timestamp-required",
+      "internalChecksFilter": "strict"
+    },
+    {
+      "description": "Keep pnpm/action-setup on v5 until the v6 package_json_file regression is resolved",
+      "matchPackageNames": ["pnpm/action-setup"],
+      "allowedVersions": "/^v?5\\./"
+    },
+    {
+      "description": "Run go mod tidy for Go module updates",
+      "matchManagers": ["gomod"],
+      "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "description": "Group non-major Go module updates",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "Go modules"
+    },
+    {
+      "description": "Group non-major web dependency updates",
+      "matchManagers": ["npm", "nvm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "web dependencies"
+    },
+    {
+      "description": "Group non-major GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Group non-major docs-site tool updates",
+      "matchPackageNames": ["gohugoio/hugo", "Pagefind/pagefind"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "docs-site tools"
+    },
+    {
+      "description": "Require dashboard approval for major updates",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
