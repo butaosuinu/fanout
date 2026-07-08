@@ -774,7 +774,7 @@ func (m model) newPaneView() string {
 		footers = append(footers, dimStyle.Render("creating pane..."))
 	}
 	if m.newPane.notice != "" {
-		lines = append(lines, dimStyle.Render(m.newPane.notice))
+		footers = append(footers, dimStyle.Render(m.newPane.notice))
 	}
 	if m.newPane.err != "" {
 		footers = append(footers, errStyle.Render("error: "+m.newPane.err))
