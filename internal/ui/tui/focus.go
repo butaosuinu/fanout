@@ -59,6 +59,25 @@ func (m *model) refreshDetail() {
 	m.detail.SetContent(m.detailContent())
 }
 
+func (m *model) syncCursorToActivePane(paneID string) bool {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return false
+	}
+	for i, pane := range m.panes {
+		if strings.TrimSpace(pane.PaneID) != paneID || !pane.canFocus() {
+			continue
+		}
+		if i == m.table.Cursor() {
+			return false
+		}
+		m.moveTableCursorTo(i)
+		m.refreshDetail()
+		return true
+	}
+	return false
+}
+
 func (m model) detailContent() string {
 	if len(m.allPanes) == 0 {
 		return emptyStateNoPanes

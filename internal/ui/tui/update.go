@@ -245,6 +245,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadStateCmd(true)
 	case ghTickMsg:
 		return m, m.loadGHCmd(true)
+	case activeTickMsg:
+		return m, m.loadActivePaneCmd(true)
+	case activePaneMsg:
+		var peekCmd tea.Cmd
+		if msg.err == nil && m.syncCursorToActivePane(msg.paneID) {
+			peekCmd = m.peekSelectedCmd(false)
+		}
+		if msg.scheduleNext {
+			return m, tea.Batch(m.activePaneTickCmd(), peekCmd)
+		}
+		return m, peekCmd
 	case watchTickMsg:
 		if msg.gen != m.watchTickGen {
 			return m, nil

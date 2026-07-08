@@ -105,6 +105,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
+		ActivePane:        newTUIActivePaneFunc(os.Getenv("TMUX_PANE")),
 		Notifier:          notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
@@ -148,6 +149,20 @@ func tuiLaunchTarget(session string) string {
 		return pane
 	}
 	return session
+}
+
+func newTUIActivePaneFunc(consolePaneID string) func() (string, error) {
+	consolePaneID = strings.TrimSpace(consolePaneID)
+	return func() (string, error) {
+		paneID, err := tmuxrun.ActivePaneInWindow(consolePaneID)
+		if err != nil {
+			return "", err
+		}
+		if paneID == consolePaneID {
+			return "", nil
+		}
+		return paneID, nil
+	}
 }
 
 func defaultTUIAgent() string {

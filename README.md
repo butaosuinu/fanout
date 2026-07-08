@@ -35,7 +35,8 @@ English and 日本語.
   in the browser, and per-child agent choices let one task use claude while
   another uses codex. A prompt-mode checkbox instead decomposes the prompt into
   parallel tasks via `/fanout plan`. The `s` key opens the settings popup.
-  Return to the console from any pane with `F11` or `prefix + T`.
+  Return to the console from any pane with `F11` or `prefix + T`; mouse or
+  `prefix` movement keys keep the selected row in sync with the focused pane.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it

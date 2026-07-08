@@ -36,7 +36,8 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   スクは codex、のように)。prompt モードのチェックボックスを入れると、
   そのプロンプトを `/fanout plan` で並列タスクに分解します。`s` キーで設定
   popup を開けます。どのペインからでも `F11` または `prefix + T` でコンソールに
-  戻れます。
+  戻れます。マウスや `prefix` のペイン移動でフォーカスしたペインにも、選択行が
+  追従します。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ

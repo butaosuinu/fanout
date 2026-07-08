@@ -427,6 +427,93 @@ func TestSessionJumpUsesFilteredVisibleRows(t *testing.T) {
 	}
 }
 
+func TestActivePaneMessageSyncsCursorAndPeek(t *testing.T) {
+	var captured string
+	m := newModel(Options{
+		CapturePaneOutput: func(paneID string, _ int) (string, error) {
+			captured = paneID
+			return "latest output", nil
+		},
+	})
+	m.allPanes = []paneView{
+		{Parent: "100", IssueNum: 101, Name: "one", PaneID: "%1", TmuxState: "live"},
+		{Parent: "100", IssueNum: 102, Name: "two", PaneID: "%2", TmuxState: "live"},
+	}
+	m.refreshRows()
+
+	updated, cmd := m.Update(activePaneMsg{paneID: "%2"})
+	m = updated.(model)
+
+	if got := m.table.Cursor(); got != 1 {
+		t.Fatalf("cursor after active pane sync = %d, want 1", got)
+	}
+	if cmd == nil {
+		t.Fatal("active pane sync returned nil command, want peek refresh")
+	}
+	msg, ok := cmd().(panePeekLoadedMsg)
+	if !ok {
+		t.Fatalf("active pane sync command = %T, want panePeekLoadedMsg", msg)
+	}
+	if msg.paneID != "%2" || captured != "%2" {
+		t.Fatalf("peek pane = msg %q captured %q, want %%2", msg.paneID, captured)
+	}
+}
+
+func TestActivePaneMessageIgnoresUnselectableRows(t *testing.T) {
+	tests := []struct {
+		name   string
+		panes  []paneView
+		filter string
+		active string
+	}{
+		{
+			name: "filtered out pane",
+			panes: []paneView{
+				{IssueNum: 1, Name: "visible", PaneID: "%1", TmuxState: "live"},
+				{IssueNum: 2, Name: "hidden", PaneID: "%2", TmuxState: "live"},
+			},
+			filter: "visible",
+			active: "%2",
+		},
+		{
+			name: "stale pane",
+			panes: []paneView{
+				{IssueNum: 1, Name: "live", PaneID: "%1", TmuxState: "live"},
+				{IssueNum: 2, Name: "stale", PaneID: "%2", TmuxState: "stale"},
+			},
+			active: "%2",
+		},
+		{
+			name: "unrecorded pane",
+			panes: []paneView{
+				{IssueNum: 1, Name: "live", PaneID: "%1", TmuxState: "live"},
+			},
+			active: "%9",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(Options{CapturePaneOutput: func(string, int) (string, error) {
+				t.Fatal("CapturePaneOutput should not run when cursor does not move")
+				return "", nil
+			}})
+			m.allPanes = tt.panes
+			m.filterQuery = tt.filter
+			m.refreshRows()
+
+			updated, cmd := m.Update(activePaneMsg{paneID: tt.active})
+			m = updated.(model)
+
+			if got := m.table.Cursor(); got != 0 {
+				t.Fatalf("cursor after ignored active pane = %d, want 0", got)
+			}
+			if cmd != nil {
+				t.Fatalf("active pane sync command = %T, want nil", cmd)
+			}
+		})
+	}
+}
+
 func TestNarrowShortLayoutCollapsesTopStrip(t *testing.T) {
 	m := newModel(Options{})
 	m.width = 90
