@@ -5042,6 +5042,27 @@ func TestNewPanePromptOnlyPromptNoticeViewFitsStandardPopup(t *testing.T) {
 	}
 }
 
+func TestNewPanePromptOnlyPromptEnhancedHintFitsMinimumPopup(t *testing.T) {
+	t.Setenv(EnhancedKeysEnv, "")
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 54
+	m.height = 20
+	m.openNewPaneForm()
+
+	view := m.View()
+	if !strings.Contains(view, "shift+enter/ctrl+j newline") {
+		t.Fatalf("prompt popup view missing enhanced-key hint:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("prompt popup enhanced hint view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestNewPanePromptOnlyIssueNoticeViewFitsStandardPopup(t *testing.T) {
 	m := newModel(Options{
 		ListOpenIssues: func() ([]IssueListItem, error) {

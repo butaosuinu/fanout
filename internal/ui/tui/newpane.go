@@ -383,6 +383,7 @@ func (m model) newPanePromptFixedOverhead() int {
 	if len(m.availableNewPaneModes()) > 1 {
 		overhead += 3
 	}
+	overhead += m.newPaneHintRows() - 1
 	if m.newPane.attach != nil {
 		overhead -= 2
 	}
@@ -396,6 +397,23 @@ func (m model) newPanePromptFixedOverhead() int {
 		overhead++
 	}
 	return overhead
+}
+
+func (m model) newPaneHintRows() int {
+	width := m.newPaneHintWrapWidth()
+	if width <= 0 {
+		return 1
+	}
+	return max(lipgloss.Height(lipgloss.NewStyle().Width(width).Render(m.newPaneHint())), 1)
+}
+
+func (m model) newPaneHintWrapWidth() int {
+	width := m.modalWidth()
+	if m.promptOnly {
+		return max(width-2*popupContentPadding, 1)
+	}
+	// modalStyle adds one-cell padding and one border cell on each side.
+	return max(width-4, 1)
 }
 
 func (m *model) setNewPaneNotice(notice string) {
