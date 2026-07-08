@@ -164,6 +164,7 @@ func (m *model) resize() {
 	}
 	if m.mode == modeNewPane {
 		m.newPane.prompt.SetWidth(m.inputContentWidth())
+		m.fitNewPanePromptHeight()
 	}
 	layout := m.monitorLayout()
 	m.table.SetWidth(layout.MainWidth)

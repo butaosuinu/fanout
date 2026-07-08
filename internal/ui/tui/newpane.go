@@ -78,6 +78,11 @@ type NewPanePromptOptions struct {
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
 
+const (
+	newPanePromptDefaultRows = 6
+	newPanePromptMinRows     = 3
+)
+
 // AttachTarget describes the recorded pane/worktree a new agent should share.
 type AttachTarget struct {
 	TargetPath        string
@@ -174,6 +179,7 @@ func (m *model) openNewPaneForm() {
 	m.mode = modeNewPane
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
+	m.fitNewPanePromptHeight()
 }
 
 // RunNewPanePrompt opens only the new-pane prompt UI and returns the submitted
@@ -295,6 +301,7 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
 	m.newPane.attach = &target
+	m.fitNewPanePromptHeight()
 	return m.reloadRepoFilesCmd()
 }
 
@@ -328,7 +335,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt.ShowLineNumbers = false
 	prompt.CharLimit = 1000
 	prompt.SetWidth(width)
-	prompt.SetHeight(6)
+	prompt.SetHeight(newPanePromptDefaultRows)
 	prompt.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j"),
 		key.WithHelp("ctrl+j", "newline"),
@@ -344,6 +351,27 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		agentIndex: defaultAgentIndex(defaultAgent),
 		focus:      newPaneFieldMain,
 	}
+}
+
+func (m *model) fitNewPanePromptHeight() {
+	if !m.promptOnly || m.height <= 0 || m.newPane.mode != newPaneModePrompt {
+		return
+	}
+	available := popupContentAvailableHeight(m.height)
+	overhead := 10
+	if len(m.availableNewPaneModes()) > 1 {
+		overhead += 3
+	}
+	if m.newPane.attach != nil {
+		overhead -= 2
+	}
+	if m.newPane.launching {
+		overhead++
+	}
+	if m.newPane.err != "" {
+		overhead++
+	}
+	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
 }
 
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

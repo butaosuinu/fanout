@@ -4902,6 +4902,26 @@ func TestNewPanePromptOnlyViewFillsPopupWithoutModalFrame(t *testing.T) {
 	}
 }
 
+func TestNewPanePromptOnlyViewFitsStandardPopupWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+
+	view := m.View()
+	if !strings.Contains(view, "Mode") {
+		t.Fatalf("popup view should render the mode selector when issue mode is wired:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("popup view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestPopupContentStyleUsesOneCellPadding(t *testing.T) {
 	view := popupContentStyle.Width(8).Render("x")
 	lines := strings.Split(view, "\n")
