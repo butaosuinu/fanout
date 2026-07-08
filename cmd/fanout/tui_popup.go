@@ -22,7 +22,7 @@ import (
 
 const (
 	tuiClosePopupCommand       = "__tui-close-popup"
-	tuiClosePopupMinHeight     = 9
+	tuiClosePopupMinHeight     = 10
 	tuiHelpPopupCommand        = "__tui-help-popup"
 	tuiHelpPopupMinHeight      = 21
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"

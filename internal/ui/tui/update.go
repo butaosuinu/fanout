@@ -308,8 +308,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case newPaneIssueOpenedMsg:
 		if msg.err != nil {
 			if m.mode == modeNewPane {
-				m.newPane.notice = ""
-				m.newPane.err = msg.err.Error()
+				m.setNewPaneNotice("")
+				m.setNewPaneErr(msg.err.Error())
 			} else {
 				m.notice = fmt.Sprintf("open issue #%d: %v", msg.issue, msg.err)
 			}
@@ -317,7 +317,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.mode == modeNewPane {
 			m.newPane.err = ""
-			m.newPane.notice = fmt.Sprintf("opened #%d in browser", msg.issue)
+			m.setNewPaneNotice(fmt.Sprintf("opened #%d in browser", msg.issue))
 		} else {
 			m.notice = fmt.Sprintf("opened #%d in browser", msg.issue)
 		}

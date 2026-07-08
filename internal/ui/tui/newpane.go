@@ -389,10 +389,18 @@ func (m model) newPanePromptFixedOverhead() int {
 	if m.newPane.launching {
 		overhead++
 	}
+	if m.newPane.notice != "" {
+		overhead++
+	}
 	if m.newPane.err != "" {
 		overhead++
 	}
 	return overhead
+}
+
+func (m *model) setNewPaneNotice(notice string) {
+	m.newPane.notice = notice
+	m.fitNewPanePromptHeight()
 }
 
 func (m *model) setNewPaneErr(err string) {

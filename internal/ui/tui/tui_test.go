@@ -4992,6 +4992,56 @@ func TestNewPaneFallbackIssueViewFitsStandardHeightWithModeRow(t *testing.T) {
 	}
 }
 
+func TestNewPaneFallbackIssueLaunchingViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	m.newPane.launching = true
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "creating pane...") {
+		t.Fatalf("fallback issue launching view missing footer:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback issue launching view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyPromptNoticeViewFitsStandardPopup(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+	m.setNewPaneNotice("opened #42 in browser")
+
+	view := m.View()
+	if !strings.Contains(view, m.newPane.notice) {
+		t.Fatalf("prompt popup view missing notice:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("prompt popup notice view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestNewPanePromptOnlyIssueNoticeViewFitsStandardPopup(t *testing.T) {
 	m := newModel(Options{
 		ListOpenIssues: func() ([]IssueListItem, error) {

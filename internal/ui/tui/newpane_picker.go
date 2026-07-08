@@ -159,6 +159,9 @@ func (m model) pickerVisibleRows() int {
 	if m.newPane.err != "" {
 		overhead++
 	}
+	if m.newPane.launching {
+		overhead++
+	}
 	return clampInt(height-overhead, 1, pickerMaxRows)
 }
 
