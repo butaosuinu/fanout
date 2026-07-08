@@ -358,6 +358,11 @@ func (m *model) fitNewPanePromptHeight() {
 		return
 	}
 	available := popupContentAvailableHeight(m.height)
+	overhead := m.newPanePromptFixedOverhead() + m.newPaneCompletionPopupHeight()
+	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
+}
+
+func (m model) newPanePromptFixedOverhead() int {
 	overhead := 10
 	if len(m.availableNewPaneModes()) > 1 {
 		overhead += 3
@@ -371,7 +376,7 @@ func (m *model) fitNewPanePromptHeight() {
 	if m.newPane.err != "" {
 		overhead++
 	}
-	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
+	return overhead
 }
 
 func (m *model) setNewPaneErr(err string) {
@@ -767,7 +772,9 @@ func (m model) newPaneView() string {
 	default:
 		promptSection := m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true)
 		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
-			promptSection += "\n" + m.completionPopupView()
+			if popup := m.completionPopupView(); popup != "" {
+				promptSection += "\n" + popup
+			}
 		}
 		sections = append(sections, promptSection)
 		if m.newPane.attach == nil {

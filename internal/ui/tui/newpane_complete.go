@@ -89,6 +89,7 @@ func (m *model) endCompletion() {
 	m.newPane.compResults = nil
 	m.newPane.compIndex = 0
 	m.newPane.compTotal = 0
+	m.fitNewPanePromptHeight()
 }
 
 // recomputeCompletion re-ranks results for the current query and resets the
@@ -99,6 +100,7 @@ func (m *model) recomputeCompletion() {
 	m.newPane.compResults = results
 	m.newPane.compTotal = total
 	m.newPane.compIndex = 0
+	m.fitNewPanePromptHeight()
 }
 
 func (m *model) moveCompletion(delta int) {
@@ -319,6 +321,10 @@ func entryMatchRank(e fileEntry, q string) int {
 }
 
 func (m model) completionPopupView() string {
+	maxRows := m.newPaneCompletionPopupMaxRows()
+	if maxRows <= 0 {
+		return ""
+	}
 	if !m.repoFilesLoaded {
 		if m.repoFilesErr != "" {
 			return warnStyle.Render("  file list unavailable: " + m.repoFilesErr)
@@ -329,20 +335,70 @@ func (m model) completionPopupView() string {
 		return dimStyle.Render("  no match")
 	}
 	width := m.inputContentWidth()
-	lines := make([]string, 0, len(m.newPane.compResults)+1)
-	for i, p := range m.newPane.compResults {
+	results, start, hidden := m.visibleCompletionResults(maxRows)
+	lines := make([]string, 0, len(results)+1)
+	for i, p := range results {
 		text := truncatePathTail(p, width-2)
-		if i == m.newPane.compIndex {
+		if start+i == m.newPane.compIndex {
 			lines = append(lines, selectedItemMarker+titleStyle.Render(text))
 		} else {
 			lines = append(lines, plainItemMarker+dimStyle.Render(text))
 		}
 	}
-	if m.newPane.compTotal > len(m.newPane.compResults) {
-		more := m.newPane.compTotal - len(m.newPane.compResults)
+	if hidden && len(lines) < maxRows {
+		more := max(m.newPane.compTotal-len(results), 1)
 		lines = append(lines, dimStyle.Render(fmt.Sprintf("  +%d more (type to narrow)", more)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) visibleCompletionResults(maxRows int) (results []string, start int, hidden bool) {
+	n := len(m.newPane.compResults)
+	if n == 0 || maxRows <= 0 {
+		return nil, 0, false
+	}
+	slots := min(maxRows, n)
+	if maxRows > 1 && m.newPane.compTotal > maxRows {
+		slots = maxRows - 1
+	}
+	if slots <= 0 {
+		slots = 1
+	}
+	if m.newPane.compIndex >= slots {
+		start = m.newPane.compIndex - slots + 1
+	}
+	if start+slots > n {
+		start = n - slots
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := min(start+slots, n)
+	hidden = start > 0 || end < m.newPane.compTotal
+	return m.newPane.compResults[start:end], start, hidden
+}
+
+func (m model) newPaneCompletionPopupHeight() int {
+	if !m.newPaneCompletionPopupVisible() {
+		return 0
+	}
+	popup := m.completionPopupView()
+	if popup == "" {
+		return 0
+	}
+	return lipgloss.Height(popup)
+}
+
+func (m model) newPaneCompletionPopupMaxRows() int {
+	if !m.newPaneCompletionPopupVisible() || !m.promptOnly || m.height <= 0 {
+		return completionMax + 1
+	}
+	available := popupContentAvailableHeight(m.height)
+	return max(available-m.newPanePromptFixedOverhead()-newPanePromptMinRows, 0)
+}
+
+func (m model) newPaneCompletionPopupVisible() bool {
+	return m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt && m.newPane.completing
 }
 
 // truncatePathTail keeps the tail (basename side) of a path visible, eliding the
