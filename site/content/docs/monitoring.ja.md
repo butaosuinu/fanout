@@ -101,7 +101,7 @@ manual の `codex` ペインは Codex Plan Mode で起動し、prompt を inline
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
 issue を選んで既定の `claude` / `codex` を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
 OPEN な子を持つ issue は `--unblocked-only` 相当でファンアウトし、blocked な子は deferred のまま残ります。
-子のない issue は `@watch` 配下の単独ペインとして起動します。
+子のない issue は `@watch` 配下の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
 
 ## --status（JSON / table / --post-dashboard）
 
