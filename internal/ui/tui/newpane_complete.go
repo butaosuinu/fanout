@@ -128,11 +128,11 @@ func (m *model) acceptCompletion() {
 	if limit := m.newPane.prompt.CharLimit; limit > 0 {
 		newLength := m.newPane.prompt.Length() - tokenWidth + lipgloss.Width(insertion)
 		if newLength > limit {
-			m.newPane.err = "prompt too long to insert that path"
+			m.setNewPaneErr("prompt too long to insert that path")
 			return
 		}
 	}
-	m.newPane.err = ""
+	m.setNewPaneErr("")
 	for range tokenRunes {
 		m.newPane.prompt, _ = m.newPane.prompt.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	}

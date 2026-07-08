@@ -4922,6 +4922,29 @@ func TestNewPanePromptOnlyViewFitsStandardPopupWithModeRow(t *testing.T) {
 	}
 }
 
+func TestNewPanePromptOnlyErrorViewFitsStandardPopupWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+
+	if cmd := m.submitNewPane(); cmd != nil {
+		t.Fatal("submitNewPane returned a command without a prompt")
+	}
+	view := m.View()
+	if !strings.Contains(view, "error: prompt is required") {
+		t.Fatalf("popup view missing prompt error:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("popup error view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestPopupContentStyleUsesOneCellPadding(t *testing.T) {
 	view := popupContentStyle.Width(8).Render("x")
 	lines := strings.Split(view, "\n")

@@ -374,6 +374,11 @@ func (m *model) fitNewPanePromptHeight() {
 	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
 }
 
+func (m *model) setNewPaneErr(err string) {
+	m.newPane.err = err
+	m.fitNewPanePromptHeight()
+}
+
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.newPane.launching {
 		if msg.String() == "ctrl+c" {
@@ -630,24 +635,25 @@ func (m *model) submitNewPane() tea.Cmd {
 	}
 	prompt := strings.TrimSpace(m.newPane.prompt.Value())
 	if prompt == "" {
-		m.newPane.err = "prompt is required"
+		m.setNewPaneErr("prompt is required")
 		return nil
 	}
 	agents := m.selectedNewPaneAgents()
 	if len(agents) == 0 {
-		m.newPane.err = "select at least one agent"
+		m.setNewPaneErr("select at least one agent")
 		return nil
 	}
 	if m.newPane.planFanout && len(agents) != 1 {
-		m.newPane.err = "plan fan-out launches one coordinator agent; select exactly one"
+		m.setNewPaneErr("plan fan-out launches one coordinator agent; select exactly one")
 		return nil
 	}
-	m.newPane.err = ""
+	m.setNewPaneErr("")
 	m.newPane.launching = true
+	m.fitNewPanePromptHeight()
 	if m.newPane.attach != nil {
 		if m.opts.LaunchAttach == nil {
-			m.newPane.err = "attach launcher is not configured"
 			m.newPane.launching = false
+			m.setNewPaneErr("attach launcher is not configured")
 			return nil
 		}
 		req := AttachLaunchRequest{
@@ -672,8 +678,8 @@ func (m *model) submitNewPane() tea.Cmd {
 		return tea.Quit
 	}
 	if m.opts.LaunchPane == nil {
-		m.newPane.err = "new pane launcher is not configured"
 		m.newPane.launching = false
+		m.setNewPaneErr("new pane launcher is not configured")
 		return nil
 	}
 	launch := m.opts.LaunchPane
