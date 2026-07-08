@@ -7,7 +7,7 @@ var (
 	ruleCmdH       = Rule{ID: "cmd-h-files", Class: ClassH, Source: SourceDocTable, Note: "dispatch・self-exec・launch 配線・state 書き換えを伴う cmd エントリ"}
 	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/tmux ポーリング・SSE・embed"}
 	ruleTuiA       = Rule{ID: "tui-a-files", Class: ClassA, Source: SourceDocTable, Note: "TUI の View 層(描画・整形)"}
-	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "token を扱う埋め込みバンドルの生成系"}
+	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "web 依存・埋め込みバンドルの生成系"}
 	ruleWebConfig  = Rule{ID: "extra-web-config", Class: ClassM, Source: SourceExtra, Note: "web ビルド設定"}
 	ruleLintConfig = Rule{ID: "extra-lint-config", Class: ClassM, Source: SourceExtra, Note: "Go lint 設定"}
 	ruleAgentGuide = Rule{ID: "extra-agent-guide", Class: ClassM, Source: SourceExtra, Note: "エージェント作業規約"}
@@ -54,9 +54,10 @@ var fileRules = map[string]Rule{
 	"install.sh": {ID: "extra-install-sh", Class: ClassH, Source: SourceExtra, Note: "curl|sh 配布経路"},
 	"Makefile":   {ID: "extra-makefile", Class: ClassH, Source: SourceExtra, Note: "test・install 定義"},
 
-	"web/package.json":   ruleWebBundle,
-	"web/pnpm-lock.yaml": ruleWebBundle,
-	"web/vite.config.ts": ruleWebBundle,
+	"web/package.json":        ruleWebBundle,
+	"web/pnpm-lock.yaml":      ruleWebBundle,
+	"web/pnpm-workspace.yaml": ruleWebBundle,
+	"web/vite.config.ts":      ruleWebBundle,
 
 	"web/tsconfig.json":  ruleWebConfig,
 	"web/.nvmrc":         ruleWebConfig,
