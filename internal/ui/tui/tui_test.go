@@ -4945,6 +4945,83 @@ func TestNewPanePromptOnlyErrorViewFitsStandardPopupWithModeRow(t *testing.T) {
 	}
 }
 
+func TestNewPaneFallbackPromptViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "New agent pane") {
+		t.Fatalf("fallback view should keep the in-modal title:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback prompt view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPaneFallbackIssueViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "more") {
+		t.Fatalf("fallback issue view should window overflowing rows:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback issue view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyIssueNoticeViewFitsStandardPopup(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	m.newPane.notice = "opened https://example.test/issues/1"
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.View()
+	if !strings.Contains(view, m.newPane.notice) {
+		t.Fatalf("issue popup view missing notice:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("issue popup notice view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestPopupContentStyleUsesOneCellPadding(t *testing.T) {
 	view := popupContentStyle.Width(8).Render("x")
 	lines := strings.Split(view, "\n")

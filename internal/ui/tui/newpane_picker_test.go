@@ -678,7 +678,7 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
-	m.height = 26 // 26-18 overhead = 8 visible rows
+	m.height = 26 // 26-21 overhead = 5 visible rows
 
 	items := make([]IssueListItem, 15)
 	for i := range items {
@@ -692,8 +692,8 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	if len(p.results) != 15 {
 		t.Fatalf("uncapped results = %d, want all 15", len(p.results))
 	}
-	if start, end := m.pickerRowWindow(*p); start != 0 || end != 8 {
-		t.Fatalf("window at top = [%d,%d), want [0,8)", start, end)
+	if start, end := m.pickerRowWindow(*p); start != 0 || end != 5 {
+		t.Fatalf("window at top = [%d,%d), want [0,5)", start, end)
 	}
 
 	p.index = 12

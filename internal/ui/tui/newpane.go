@@ -354,16 +354,32 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 }
 
 func (m *model) fitNewPanePromptHeight() {
-	if !m.promptOnly || m.height <= 0 || m.newPane.mode != newPaneModePrompt {
+	if m.height <= 0 || m.newPane.mode != newPaneModePrompt {
 		return
 	}
-	available := popupContentAvailableHeight(m.height)
+	available := m.newPaneContentAvailableHeight()
 	overhead := m.newPanePromptFixedOverhead() + m.newPaneCompletionPopupHeight()
 	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
 }
 
+func (m model) newPaneContentAvailableHeight() int {
+	if m.height <= 0 {
+		return m.height
+	}
+	if m.promptOnly {
+		return popupContentAvailableHeight(m.height)
+	}
+	// modalStyle adds one-cell padding plus a border on the top and bottom.
+	return max(m.height-4, 0)
+}
+
 func (m model) newPanePromptFixedOverhead() int {
 	overhead := 10
+	if !m.promptOnly {
+		// The in-process fallback keeps the title as its own section, followed
+		// by the blank section separator.
+		overhead += 2
+	}
 	if len(m.availableNewPaneModes()) > 1 {
 		overhead += 3
 	}

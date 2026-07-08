@@ -145,7 +145,20 @@ func (m model) pickerVisibleRows() int {
 	if m.promptOnly {
 		height = popupContentAvailableHeight(height)
 	}
-	return clampInt(height-pickerFormOverhead, 3, pickerMaxRows)
+	overhead := pickerFormOverhead
+	if !m.promptOnly {
+		// The rendered in-process fallback separates sections with blank lines,
+		// and the standard-width issue hint wraps to two lines, so it needs
+		// less room for issue rows than the borderless tmux popup.
+		overhead += 3
+	}
+	if m.newPane.notice != "" {
+		overhead++
+	}
+	if m.newPane.err != "" {
+		overhead++
+	}
+	return clampInt(height-overhead, 1, pickerMaxRows)
 }
 
 func (m *model) moveActivePicker(delta int) {
