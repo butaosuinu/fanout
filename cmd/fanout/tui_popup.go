@@ -24,9 +24,10 @@ const (
 	tuiClosePopupCommand       = "__tui-close-popup"
 	tuiClosePopupMinHeight     = 9
 	tuiHelpPopupCommand        = "__tui-help-popup"
-	tuiHelpPopupMinHeight      = 20
+	tuiHelpPopupMinHeight      = 21
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
 	tuiNewPanePopupMinHeight   = 20
+	tuiNewPanePopupMinWidth    = 54
 	tuiSettingsPopupCommand    = "__tui-settings-popup"
 	tuiSettingsPopupMinHeight  = 18
 	tuiSettingsPopupMinWidth   = 54
@@ -598,7 +599,8 @@ func tuiClosePopupGeometryForClient(size tmuxrun.ClientSize) (tuiClosePopupGeome
 
 func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
-	if size.Width < 54 || size.Height < minPopupHeight {
+	minClientWidth := tuiNewPanePopupMinWidth + tuiNewPanePopupBorderInset + 4
+	if size.Width < minClientWidth || size.Height < minPopupHeight {
 		return tuiNewPanePopupGeometry{}, fmt.Errorf("tmux client is too small for the new pane popup: %dx%d", size.Width, size.Height)
 	}
 	popupWidth := min(90, size.Width-4)

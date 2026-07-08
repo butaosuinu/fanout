@@ -33,7 +33,7 @@ func RunHelpPopup(opts HelpPopupOptions) error {
 	}
 	height := opts.Height
 	if height <= 0 {
-		height = 20
+		height = 21
 	}
 	m := newModel(Options{})
 	m.helpOnly = true

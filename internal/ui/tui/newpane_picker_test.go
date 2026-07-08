@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRankPickerItems(t *testing.T) {
@@ -830,6 +831,35 @@ func TestIssueModeNormalizesCarriedOverAgentCounts(t *testing.T) {
 	}
 	if got := m.selectedDefaultAgent(); got != "claude" {
 		t.Fatalf("selectedDefaultAgent() = %q, want claude", got)
+	}
+}
+
+func TestPromptModeReturnAfterIssueResizeRefitsPromptHeight(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil },
+	})
+	m.width = 120
+	m.height = 40
+	m.openNewPaneForm()
+	m.newPane.focus = newPaneFieldMode
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue
+	m = updated.(model)
+	if m.newPane.mode != newPaneModeIssue {
+		t.Fatalf("mode after first switch = %v, want issue", m.newPane.mode)
+	}
+
+	m.width = 80
+	m.height = 24
+	m.resize()
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight}) // issue -> prompt
+	m = updated.(model)
+	if m.newPane.mode != newPaneModePrompt {
+		t.Fatalf("mode after return = %v, want prompt", m.newPane.mode)
+	}
+	if got := lipgloss.Height(m.View()); got > m.height {
+		t.Fatalf("prompt return view height = %d, want <= %d:\n%s", got, m.height, m.View())
 	}
 }
 

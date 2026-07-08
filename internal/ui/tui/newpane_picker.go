@@ -92,6 +92,7 @@ func (m *model) cycleNewPaneMode(key string) tea.Cmd {
 	}
 	m.newPane.mode = modes[idx]
 	m.newPane.err = ""
+	m.fitNewPanePromptHeight()
 	return m.ensureModeListLoaded()
 }
 
