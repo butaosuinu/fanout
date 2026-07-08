@@ -29,6 +29,7 @@ const (
 	tuiNewPanePopupMinHeight   = 20
 	tuiSettingsPopupCommand    = "__tui-settings-popup"
 	tuiSettingsPopupMinHeight  = 18
+	tuiSettingsPopupMinWidth   = 54
 	tuiNewPanePopupBorderInset = 2
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
 	tuiNewPanePopupResultWait  = 24 * time.Hour
@@ -614,7 +615,8 @@ func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupG
 
 func tuiSettingsPopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiSettingsPopupMinHeight + tuiNewPanePopupBorderInset
-	if size.Width < 54 || size.Height < minPopupHeight {
+	minClientWidth := tuiSettingsPopupMinWidth + tuiNewPanePopupBorderInset + 4
+	if size.Width < minClientWidth || size.Height < minPopupHeight {
 		return tuiNewPanePopupGeometry{}, fmt.Errorf("tmux client is too small for the settings popup: %dx%d", size.Width, size.Height)
 	}
 	popupWidth := min(90, size.Width-4)

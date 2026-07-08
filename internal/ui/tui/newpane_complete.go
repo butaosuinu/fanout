@@ -390,10 +390,10 @@ func (m model) newPaneCompletionPopupHeight() int {
 }
 
 func (m model) newPaneCompletionPopupMaxRows() int {
-	if !m.newPaneCompletionPopupVisible() || !m.promptOnly || m.height <= 0 {
+	if !m.newPaneCompletionPopupVisible() || m.height <= 0 {
 		return completionMax + 1
 	}
-	available := popupContentAvailableHeight(m.height)
+	available := m.newPaneContentAvailableHeight()
 	return max(available-m.newPanePromptFixedOverhead()-newPanePromptMinRows, 0)
 }
 

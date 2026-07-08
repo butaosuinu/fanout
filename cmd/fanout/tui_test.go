@@ -262,8 +262,20 @@ func TestTUISettingsPopupGeometryUsesSettingsMinimumHeight(t *testing.T) {
 		t.Fatalf("80x20 settings popup geometry = %#v, want %#v", got, want)
 	}
 
-	if _, err := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 19}); err == nil {
+	if _, heightErr := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 19}); heightErr == nil {
 		t.Fatal("tuiSettingsPopupGeometryForClient() succeeded without enough settings height")
+	}
+
+	got, err = tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 60, Height: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = tuiNewPanePopupGeometry{PopupWidth: 56, PopupHeight: 20, PromptWidth: 54, PromptHeight: 18}
+	if got != want {
+		t.Fatalf("60x20 settings popup geometry = %#v, want %#v", got, want)
+	}
+	if _, widthErr := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 59, Height: 20}); widthErr == nil {
+		t.Fatal("tuiSettingsPopupGeometryForClient() succeeded without enough settings width")
 	}
 }
 

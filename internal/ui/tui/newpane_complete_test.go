@@ -479,6 +479,41 @@ func TestPromptCompletionFitsStandardPopupWithModeRow(t *testing.T) {
 	}
 }
 
+func TestPromptCompletionFallbackFitsStandardModalWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+	m.repoFiles = []string{
+		"cmd/main.go",
+		"docs/readme.md",
+		"internal/ui/tui/newpane.go",
+		"internal/ui/tui/newpane_complete.go",
+	}
+	m.repoFileIndex = buildFileIndex(m.repoFiles)
+	m.repoFilesLoaded = true
+
+	m = applyMsg(m, keyRunes("@"))
+
+	if !m.newPane.completing {
+		t.Fatal("expected completion to stay open")
+	}
+	if got := m.newPaneCompletionPopupHeight(); got > 2 {
+		t.Fatalf("completion popup height = %d, want <= 2", got)
+	}
+	view := m.View()
+	if !strings.Contains(view, "+3 more") {
+		t.Fatalf("completion popup should summarize hidden matches:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback modal height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
 func TestRepoFilesReloadOnEachFormOpen(t *testing.T) {
 	calls := 0
 	m := newModel(Options{
