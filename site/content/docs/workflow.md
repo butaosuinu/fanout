@@ -64,7 +64,7 @@ The second form caps each wave while letting fanout pick the next unblocked batc
 
 ## Label watcher
 
-The watcher is an opt-in launcher that runs only while the no-argument TUI console is open, turning a `fanout:auto` label on a trusted issue into a one-shot session. It is off by default, and only user config or environment variables can enable it (repo config cannot opt a checkout into automatic launches). See [Settings]({{< relref "/docs/settings" >}}) for the enablement steps and label conventions.
+The watcher is an opt-in launcher that runs only while the no-argument TUI console is open, turning a `fanout:auto` label on a trusted issue into a one-shot session. It is off by default, and only user config or environment variables can enable it (repo config cannot opt a checkout into automatic launches). See [Watcher]({{< relref "/docs/watcher" >}}) for the enablement steps and label conventions.
 
 ## Issue-less plan fan-out
 

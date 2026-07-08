@@ -77,7 +77,7 @@ fanout 123 --unblocked-only --limit 3
 
 watcher は引数なしの TUI コンソールを開いている間だけ動く opt-in のランチャで、信頼できる issue に付けた `fanout:auto` ラベルを one-shot session に変えます。
 既定は off で、有効化できるのは user config か環境変数だけです(repo config では checkout を自動起動の対象にできません)。
-有効化の手順とラベル運用の詳細は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
+有効化の手順とラベル運用の詳細は [Watcher]({{< relref "/docs/watcher" >}}) を参照してください。
 
 ## issue を介さない plan ファンアウト
 

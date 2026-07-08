@@ -38,7 +38,17 @@ repo config の安全制限も後述のとおりです。repo config から watc
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
 
-watcher と通知 channel は別系統の設定です。watcher はラベル巡回による自動起動の opt-in 制御、通知 channel は TUI の状態遷移をどこへ知らせるかの選択です。
+watcher と通知 channel は別系統の設定です。
+watcher はラベル巡回による自動起動を opt-in で制御します。
+
+- `watcher`: opt-in スイッチです。有効化できるのは user config か `FANOUT_WATCHER` だけで、repo config では有効化できません。
+- `watcherTriggerLabel`: 「この issue を起動せよ」を意味する trigger label です(既定 `fanout:auto`)。
+- `watcherRunningLabel`: issue を起動する際に付け替える running label です(既定 `fanout:running`)。自前のラベル体系と衝突するなら変更します。
+- `watcherIntervalSeconds`: watcher が trigger label を巡回する間隔です(既定 `60` 秒、最低 20 秒に丸められます)。
+- `watcherAgent`: watcher が子を起動する agent です。未設定なら TUI の既定 agent にフォールバックします。
+- `watcherMaxSessions`: 同時に生きている fanout ペイン数の上限です(既定 `4`、`0` で無制限)。
+
+通知 channel は、TUI の状態遷移をどこへ知らせるかを選びます。
 
 ## トグルと通知 channel
 
@@ -108,11 +118,12 @@ agent-state 通知は `@fanout_agent_state` から発火し、ペイン出力か
 
 watcher は誰かが checkout しただけで自動起動してほしくない機能です。そのため repo config では opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定していると、fanout は警告してそのキーを無視します。有効化は user config か `FANOUT_WATCHER` で行ってください。一方、`watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は repo config でも設定できます。
 
-trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。
+trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。運用の詳細は [Watcher]({{< relref "/docs/watcher" >}}) を参照してください。
 
 ## watcher の運用
 
 watcher は、TUI コンソールを起動している間だけ動きます。
+有効化の手順やラベルのライフサイクル、session 予算、後始末までの全体像は [Watcher]({{< relref "/docs/watcher" >}}) を参照してください。
 
 ```bash
 # One shell
@@ -120,22 +131,6 @@ export FANOUT_WATCHER=1
 export FANOUT_WATCHER_AGENT=codex
 fanout
 ```
-
-`fanout:auto` を付けた issue は、次の cycle で watcher がラベルを `fanout:running` に付け替えてから起動します。
-OPEN な子を持つ issue は `--unblocked-only` 相当の親ファンアウトになります。
-OPEN な子を持たない issue は、子が全部 CLOSED の場合も含めて、単独ペインとして起動します。
-
-`watcherMaxSessions` は起動回数ではなく live ペイン数の上限です。
-watcher は cycle ごとに、起動元を問わずリポジトリの live な(shell 以外の)fanout ペインを数え、その数が上限を下回る間だけ起動します。
-親ファンアウトは起動した子 1 つにつき 1 枠を使い、ペインが閉じれば枠は空きます。
-blocked な子や session 上限で積み残しが出た場合、fanout はラベルを `fanout:running` から `fanout:auto` に戻します。
-その親は後続の cycle で自動的に再試行されます。
-
-親ファンアウトでは、`fanout <parent> --merge <child>`、`--close`、`--cleanup` が `fanout:running` を best-effort で外します。
-単独 watcher ペインは TUI の lifecycle key(`m`、`c`、`x`)で処理してください。
-公開 CLI の parent 引数には、予約 parent `@watch` の row を指定できません。
-
-再投入するときは、まず記録済みペインを畳んでから(`--close` / `--cleanup` か TUI のキー。state 行が残っている issue を watcher はスキップします)、対象の issue に `fanout:auto` を付け直してください。
 
 ## 前方互換
 

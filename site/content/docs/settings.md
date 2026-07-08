@@ -34,7 +34,16 @@ The behavior toggles are instructions that ship on by default but a team may wan
 - `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
 
-The watcher and notification channels are a separate track: the watcher gates opt-in label-driven launches, and notification channels pick where TUI state transitions go.
+The watcher and notification channels are a separate track. The watcher gates opt-in label-driven launches:
+
+- `watcher`: the opt-in switch. Only user config or `FANOUT_WATCHER` can turn it on — repo config cannot.
+- `watcherTriggerLabel`: the label that means "launch this issue" (default `fanout:auto`).
+- `watcherRunningLabel`: the label the watcher swaps to once it launches an issue (default `fanout:running`). Change it if it collides with your own label scheme.
+- `watcherIntervalSeconds`: how often the watcher polls for the trigger label (default `60`, clamped to a 20-second minimum).
+- `watcherAgent`: the agent the watcher launches children with. Falls back to the TUI's default agent when unset.
+- `watcherMaxSessions`: the cap on live fanout panes at once (default `4`, `0` for unlimited).
+
+Notification channels pick where TUI state transitions go.
 
 ## The toggles and notification channels
 
@@ -99,11 +108,11 @@ Agent-state notifications come from `@fanout_agent_state`, not from pane output.
 
 The watcher should never start just because someone checked out the repo, so repo config cannot opt into it. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; enable it from user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
-The trigger label starts agent work from the labeled issue and, for parent fan-outs, any OPEN children it launches. Their bodies become agent briefings, so treat the label as an execution request and apply it only when you trust that issue and its launchable children.
+The trigger label starts agent work from the labeled issue and, for parent fan-outs, any OPEN children it launches. Their bodies become agent briefings, so treat the label as an execution request and apply it only when you trust that issue and its launchable children. See [Watcher]({{< relref "/docs/watcher" >}}) for the operational details.
 
 ## Watcher operation
 
-The watcher only runs while a TUI console is running.
+The watcher only runs while a TUI console is running. See [Watcher]({{< relref "/docs/watcher" >}}) for the full operation guide — enabling it, the label lifecycle, the session budget, and cleanup.
 
 ```bash
 # One shell
@@ -111,14 +120,6 @@ export FANOUT_WATCHER=1
 export FANOUT_WATCHER_AGENT=codex
 fanout
 ```
-
-Issues labeled `fanout:auto` launch on the next cycle, once the watcher swaps the label to `fanout:running`. Issues with OPEN children become parent fan-outs equivalent to `--unblocked-only`; issues with no OPEN children — including ones whose children are all CLOSED — launch as a standalone pane.
-
-`watcherMaxSessions` caps live panes, not launches: each cycle the watcher counts the repository's live (non-shell) fanout panes — whoever launched them — and launches only while that count stays below the cap. A parent fan-out takes one slot per launched child, and slots free up as panes close. When blocked children or the session limit leave work outstanding, fanout reverts the label from `fanout:running` back to `fanout:auto`, and that parent is retried automatically on a later cycle.
-
-For parent fan-outs, `fanout <parent> --merge <child>`, `--close`, and `--cleanup` remove `fanout:running` on a best-effort basis. Handle standalone watcher panes with the TUI lifecycle keys (`m`, `c`, `x`) instead. The public CLI's parent argument does not accept rows for the reserved `@watch` parent.
-
-To requeue an issue, first fold away its recorded panes (`--close` / `--cleanup`, or the TUI keys) — the watcher skips an issue whose state rows still exist — then add the `fanout:auto` label back to it.
 
 ## Forward compatibility
 
