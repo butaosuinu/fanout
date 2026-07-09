@@ -49,6 +49,9 @@ type pickerItem struct {
 	labels []string
 	note   string
 	marker string // "▸" fan-out parent, "└" child, "·" standalone; "" for non-issue pickers
+	// hasOpenChildren mirrors IssueListItem.HasOpenChildren: an issue with OPEN
+	// children fans out as plain panes, so issue-mode plan fan-out excludes it.
+	hasOpenChildren bool
 }
 
 type newPaneIssuesLoadedMsg struct {
@@ -153,6 +156,14 @@ func (m model) pickerVisibleRows() int {
 		// less room for issue rows than the borderless tmux popup.
 		overhead += 3
 	}
+	if m.newPane.mode == newPaneModeIssue {
+		// The plan fan-out checkbox row and its section separator.
+		overhead += 2
+		if m.newPane.planFanout {
+			// The extra Task agent label + tab row and its separator.
+			overhead += 3
+		}
+	}
 	if m.newPane.notice != "" {
 		overhead++
 	}
@@ -187,12 +198,15 @@ func pickerMoveDelta(key string) int {
 }
 
 // updateActivePickerFilter feeds printable keys into the active picker's
-// incremental filter; backspace shrinks it and ctrl+u clears it.
+// incremental filter; backspace shrinks it and ctrl+u clears it. A filter change
+// can move the selection onto an issue that cannot decompose, so it re-syncs the
+// plan fan-out state afterward.
 func (m *model) updateActivePickerFilter(msg tea.KeyMsg) {
 	p := m.activePicker()
 	if p == nil {
 		return
 	}
+	defer m.syncPlanFanoutForSelection()
 	switch msg.String() {
 	case "backspace", "ctrl+h":
 		if p.query != "" {
@@ -347,12 +361,13 @@ func issuePickerItems(items []IssueListItem) []pickerItem {
 			note = "has session"
 		}
 		out = append(out, pickerItem{
-			key:    "#" + strconv.Itoa(item.Number),
-			number: item.Number,
-			title:  item.Title,
-			labels: item.Labels,
-			note:   note,
-			marker: issueMarker(item),
+			key:             "#" + strconv.Itoa(item.Number),
+			number:          item.Number,
+			title:           item.Title,
+			labels:          item.Labels,
+			note:            note,
+			marker:          issueMarker(item),
+			hasOpenChildren: item.HasOpenChildren,
 		})
 	}
 	return out

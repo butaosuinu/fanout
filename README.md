@@ -34,7 +34,9 @@ English and 日本語.
   prompt or an OPEN issue picked from a list; `Ctrl+O` opens the selected issue
   in the browser, and per-child agent choices let one task use claude while
   another uses codex. A prompt-mode checkbox instead decomposes the prompt into
-  parallel tasks via `/fanout plan`. The `s` key opens the settings popup.
+  parallel tasks via `/fanout plan`; the same checkbox appears in issue mode,
+  decomposing a single issue into parallel issue-less tasks with separately
+  chosen coordinator and task agents. The `s` key opens the settings popup.
   Return to the console from any pane with `F11` or `prefix + T`; mouse or
   `prefix` movement keys keep the selected row in sync with the focused pane.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted

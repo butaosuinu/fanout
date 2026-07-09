@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -31,6 +32,12 @@ func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig h
 func newTUIAttachAgentFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.AttachLaunchFunc {
 	return func(req fanouttui.AttachLaunchRequest) (string, error) {
 		return launchAttachedAgentFromTUI(projectRoot, session, commandName, hookConfig, req)
+	}
+}
+
+func newTUIIssuePlanLaunchFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.IssuePlanLaunchFunc {
+	return func(issueNum int, coordinatorAgent, workerAgent string) (string, error) {
+		return launchIssuePlanFromTUI(projectRoot, session, commandName, hookConfig, issueNum, coordinatorAgent, workerAgent)
 	}
 }
 
@@ -87,11 +94,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 }
 
 // launchPlanPromptFromTUI launches one coordinator pane at the project root
-// that runs the fanout-plan skill against the raw prompt. The coordinator
-// decomposes the prompt into parallel tasks and fans them out itself, so it
-// runs as a normal agent (never Codex Plan Mode) directly on the project root:
-// running `fanout plan` inside a worktree would resolve the git root there and
-// nest state under the coordinator's worktree.
+// that runs the fanout-plan skill against the raw prompt. It normalizes the
+// prompt, requires exactly one coordinator agent, and delegates the pane launch
+// to launchPlanCoordinator.
 func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
@@ -102,21 +107,38 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return "", fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
+	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, agentName,
+		func(store state.Store, livenessKey string) panelaunch.Request {
+			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, agentName, livenessKey)
+		})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt), nil
+}
+
+// launchPlanCoordinator validates the coordinator agent, locks state, and
+// attaches one project-root coordinator pane built by buildReq. The coordinator
+// decomposes its source and fans the tasks out itself, so it runs as a normal
+// agent (never Codex Plan Mode) directly on the project root: running `fanout
+// plan` inside a worktree would resolve the git root there and nest state under
+// the coordinator's worktree.
+func launchPlanCoordinator(projectRoot, session, commandName, agentName string, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-		return "", validateErr
+		return panelaunch.Request{}, validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return "", validateErr
+		return panelaunch.Request{}, validateErr
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
-		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+		return panelaunch.Request{}, fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
-		return "", err
+		return panelaunch.Request{}, err
 	}
 	defer func() {
 		_ = recorder.Unlock()
@@ -132,14 +154,60 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	livenessKey, err := panelaunch.NewShellPaneKey()
 	if err != nil {
-		return "", err
+		return panelaunch.Request{}, err
 	}
-	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName, livenessKey)
+	paneReq := buildReq(recorder.Store, livenessKey)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	if !launcher.Attach(paneReq, projectRoot) {
-		return "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+		return panelaunch.Request{}, bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
-	return fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt), nil
+	return paneReq, nil
+}
+
+// launchIssuePlanFromTUI launches one plan coordinator pane that decomposes a
+// single OPEN issue (no OPEN children) into issue-less fanout plan tasks run by
+// workerAgent. countOpenChildTargets is the backstop behind the TUI gray-out:
+// the picker's child markers can be stale, so an issue that grew children after
+// the picker loaded fans out its children instead.
+func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, issueNum int, coordinatorAgent, workerAgent string) (string, error) {
+	if issueNum <= 0 {
+		return "", fmt.Errorf("issue number is required")
+	}
+	// Fail fast on unknown agent names before any gh call. The coordinator is
+	// install-checked inside launchPlanCoordinator; the worker's install check is
+	// left to fanout plan at task-launch time (same philosophy as
+	// validateTUIAgentSelection).
+	if validateErr := agent.ValidateKnown(coordinatorAgent); validateErr != nil {
+		return "", validateErr
+	}
+	if validateErr := agent.ValidateKnown(workerAgent); validateErr != nil {
+		return "", validateErr
+	}
+	gh := ghissue.Runner{Cwd: projectRoot}
+	// Re-fetch the issue: the picker list may be stale, and the detail carries
+	// the body the coordinator briefing needs.
+	detail, err := gh.IssueDetail(issueNum)
+	if err != nil {
+		return "", err
+	}
+	if detail.State != "OPEN" {
+		return "", fmt.Errorf("issue #%d is not OPEN", issueNum)
+	}
+	openChildren, err := countOpenChildTargets(gh, issueNum)
+	if err != nil {
+		return "", err
+	}
+	if openChildren > 0 {
+		return "", fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox to fan out its children", issueNum, openChildren)
+	}
+	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, coordinatorAgent,
+		func(store state.Store, livenessKey string) panelaunch.Request {
+			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
+		})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("started plan coordinator for #%d (%s): %s", issueNum, coordinatorAgent, paneReq.Prompt), nil
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
@@ -168,6 +236,32 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 	}
 }
 
+// newIssuePlanPaneRequest builds the issue-sourced plan coordinator's pane
+// request: a project-root pane (no worktree) whose prompt invokes the
+// fanout-plan skill on the issue-derived coordinator brief written to
+// BriefingPath. It mirrors newPlanPromptPaneRequest but sources the title,
+// body, and briefing from the GitHub issue and never sets Source*/CodexPlanMode.
+func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, coordinatorAgent, workerAgent, livenessKey string) panelaunch.Request {
+	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
+	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
+	briefingPath := planIssuePromptPath(projectRoot, issue.Number)
+	return panelaunch.Request{
+		ParentRef:           panelaunch.ManualParentRef,
+		Number:              number,
+		Title:               title,
+		Body:                issue.Body,
+		ShortTitle:          panelaunch.ShortIssueTitle(title),
+		Slug:                fmt.Sprintf("plan-issue-%d", issue.Number),
+		DisplayNameOverride: title,
+		Prompt:              planSkillPrompt(coordinatorAgent, briefingPath),
+		Agent:               coordinatorAgent,
+		ShellKey:            livenessKey,
+		Hooks:               hookConfig,
+		BriefingPath:        briefingPath,
+		BriefingBody:        briefing.RenderIssuePlanCoordinator(issue.Number, issue.Title, issue.Body, workerAgent),
+	}
+}
+
 // planSkillPrompt points the coordinator agent at the raw prompt file and
 // invokes the fanout-plan skill to decompose it. Codex uses the `$fanout-plan`
 // invocation; claude uses the `/fanout plan` slash command.
@@ -185,6 +279,16 @@ func planPromptPath(projectRoot string, number int) string {
 		number = -number
 	}
 	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-prompt-%d.md", filepath.Base(projectRoot), number))
+}
+
+// planIssuePromptPath mirrors planPromptPath for the issue-sourced coordinator's
+// briefing file, keyed by the issue number:
+// <projectRoot>/.fanout/briefings/fanout-<repo>-plan-issue-<num>.md.
+func planIssuePromptPath(projectRoot string, num int) string {
+	if num < 0 {
+		num = -num
+	}
+	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-issue-%d.md", filepath.Base(projectRoot), num))
 }
 
 func planPromptSlug(number int) string {

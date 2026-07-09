@@ -62,6 +62,7 @@ type Options struct {
 	ListOpenIssues    func() ([]IssueListItem, error)
 	ListIssueChildren func(parent int) ([]ChildTarget, error)
 	LaunchIssue       IssueLaunchFunc
+	LaunchIssuePlan   IssuePlanLaunchFunc
 	OpenIssue         IssueOpenFunc
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
 	// to panelayout.Apply(target, Resize) in production and left nil in tests

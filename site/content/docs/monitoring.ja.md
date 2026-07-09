@@ -104,6 +104,8 @@ issue を選んで既定の `claude` / `codex` を決めると、`Enter` で子�
 OPEN な子を持つ issue は `--unblocked-only` 相当でファンアウトし、blocked な子は deferred のまま残ります。
 子のない issue は `@watch` 配下の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
 
+Prompt モードと同じ plan fan-out チェックボックスがここにもあり、1 つの issue に対して有効にすると子への割り当て画面をスキップし、選んだ issue を issue-less な `fanout plan` タスクに分解するコーディネータ 1 つだけを起動します(タスクは選択した agent で実行)。選択中の issue に OPEN な子がある間、このチェックボックスは無効表示になります(その場合は子をファンアウトしてください)。
+
 ## --status（JSON / table / --post-dashboard）
 
 進捗を CI や jq に食わせて判定したいなら `fanout <parent> --status` を使い、`.fanout/state.json` から指定 parent の子 issue を列挙して各子の状態と紐づく PR を JSON で出します(読み取り専用)。

@@ -5086,7 +5086,11 @@ func TestNewPaneFallbackIssueLaunchingViewFitsStandardHeightWithModeRow(t *testi
 		},
 	})
 	m.width = 80
-	m.height = 24
+	// The issue plan checkbox adds a two-line block, so the launching issue form
+	// (which also renders the "creating pane..." footer) needs one row more than
+	// the childless-picker minimum before the floor-of-one picker window would
+	// clip the modal top.
+	m.height = 25
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
 	m.newPane.launching = true

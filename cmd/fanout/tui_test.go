@@ -528,6 +528,16 @@ func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 			name:   "prompt mode carries the plan fan-out flag",
 			result: tuiNewPanePopupResult{Prompt: "Ship search", PlanFanout: true, Agents: []string{"claude"}},
 		},
+		{
+			name: "issue mode plan fan-out carries the worker agent",
+			result: tuiNewPanePopupResult{
+				Mode:         "issue",
+				Issue:        99,
+				PlanFanout:   true,
+				DefaultAgent: "claude",
+				WorkerAgent:  "codex",
+			},
+		},
 	}
 
 	for _, tt := range tests {
