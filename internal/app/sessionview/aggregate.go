@@ -58,9 +58,10 @@ type Collectors struct {
 	// so id-only matching would falsely revive stale rows.
 	LivePanes func() (map[string]LivePaneInfo, error)
 	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
-	// BranchPRs mirrors IssuePRs for issue-less task rows keyed by head branch:
-	// a nil PR slice with nil error is a cache miss, while a non-nil error marks
-	// GitHub degraded.
+	// BranchPRs mirrors IssuePRs for branch-owning issue-less pane rows (for
+	// example plan tasks and @manual Prompt Sessions), keyed by normalized head
+	// branch. A nil PR slice with nil error is a cache miss, while a non-nil
+	// error marks GitHub degraded.
 	BranchPRs func(branch string) ([]ghissue.PRRef, error)
 	// Waves follows the same three-outcome cache contract as IssuePRs, keyed by
 	// parent instead of issue number (the caller closes over the recorded issue
@@ -77,6 +78,17 @@ type Collectors struct {
 	Waves        func(parent string) (WaveGraph, error)
 	WorktreeStat func(path, baseRef string) (WorktreeStat, error)
 	Now          func() time.Time
+}
+
+// BranchPRLookupKey returns the normalized head branch for an issue-less pane
+// that owns its worktree branch. Shell and attached-agent rows reuse another
+// pane's worktree and must not duplicate its PR lookup.
+func BranchPRLookupKey(p state.Pane) (string, bool) {
+	if p.IssueNum > 0 || p.IsShell() || p.IsAttachedAgent() {
+		return "", false
+	}
+	branch := strings.TrimSpace(p.BranchName)
+	return branch, branch != ""
 }
 
 // Build assembles a Snapshot. It never returns an error: a read-only dashboard
@@ -162,8 +174,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		return prs
 	}
 	fetchPanePRs := func(p state.Pane) (string, []ghissue.PRRef) {
-		if p.IssueNum <= 0 && strings.TrimSpace(p.TaskID) != "" && strings.TrimSpace(p.BranchName) != "" {
-			return IssueStateUnknown, fetchBranch(p.BranchName)
+		if branch, ok := BranchPRLookupKey(p); ok {
+			return IssueStateUnknown, fetchBranch(branch)
 		}
 		if p.IssueNum <= 0 {
 			return IssueStateUnknown, []ghissue.PRRef{}

@@ -114,6 +114,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
 The server binds only to `127.0.0.1` and exposes GET-only endpoints, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
+The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
 ### F12 / prefix + D
 
