@@ -9,6 +9,16 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.10.0 (2026-07-09)
+
+- **Agent-state telemetry.** The `@fanout_agent_state` contract expanded to a six-value vocabulary (`running` / `working` / `plan` / `blocked` / `idle` / `done`), emitted by the launch wrapper and Codex Plan Mode and surfaced as TUI / web glyphs and badges. The console now sounds a notification when an agent presents a plan, waits for input, or exits. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **TUI popup actions.** Added a settings popup and a pane-close chooser popup, both positioned next to the active pane. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **TUI picker refinements.** Open issue links straight from the picker, and keep the compact switcher selection synced with the focused pane. See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Automated PR review-risk.** New `tools/reviewrisk` derives a `review:<level>` judgment from the H/M/A canon; run it locally with `make review-risk`. See `docs/review-risk.ja.md`.
+- **Briefings out of `/tmp`.** Child briefings moved from `/tmp` to `.fanout/briefings/`.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.10.0)
+
 ## v0.9.0 (2026-07-06)
 
 - **Persistent console overhaul.** The no-argument console gained a compact Session switcher (toggle with `v`), `1`–`9` number jumps, `Z` zoom, an AgentState column, and a tmux-popup shortcut help modal, and it restores its panes on restart. Return to it from any pane with `F11` or the `prefix T` binding. See [Monitoring]({{< relref "/docs/monitoring" >}}).
