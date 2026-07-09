@@ -504,6 +504,8 @@ func modelListSelection(raw json.RawMessage, preferred string) (codexModelSelect
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return codexModelSelection{}, fmt.Errorf("parse model/list response: %w", err)
 	}
+	// Use separate passes so server list order cannot override this priority:
+	// explicit preference (including hidden), visible default, then first visible.
 	preferred = strings.TrimSpace(preferred)
 	if preferred != "" {
 		for _, model := range res.Data {
