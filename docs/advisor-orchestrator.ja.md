@@ -121,31 +121,42 @@ msg bus で相談往復する。
 
 ```
 codex 子(worktree 内で実装)
-  │ advisor の宛先番号を引く: fanout msg peers(role=advisor の行から <A>)
+  │ advisor の宛先を引く: fanout msg peers(role=advisor の行から <A>)
   │ 要所で相談: fanout msg send --to <A> "goal / tried / question"
   │             fanout msg nudge <A>
   ▼
 Fable advisor ペイン(project root、worktree なし、read-only)
-  │ inbox を読み、必要なら子の worktree を読む
+  │ inbox を読み、必要なら子の worktree を Read/Grep で確認
   ▼ plan / correction / stop signal を 1 通で返信
 codex 子: 次のチェックポイントで inbox を読み、助言を適用して続行
 ```
 
-- 宛先の解決: msg bus の `--to` と `nudge` はメンバー番号で宛先を取る
-  (`internal/app/peermsg` の resolveMemberNum。子 issue 番号、または
-  project root の manual ペインは負の合成番号)。advisor ペインは manual
-  ペインと同じく負の合成番号で roster に載るので、既存の宛先解決をそのまま
-  使える。子は番号を直接知らないため、`fanout msg peers` の role=advisor 行
-  から番号 `<A>` を引く。role 列は「どのメンバーが advisor か」を見つける
-  ためのもので、`--to` に渡すのは番号
+- 宛先の解決は lane 依存で、ここは spike #453 で確定させる論点。`--to` と
+  `nudge` の宛先解決(`internal/app/peermsg` の resolveMemberNum)は、issue/
+  Project parent では非ゼロ整数(manual ペインは負の合成番号)、plan parent
+  では task id(kebab-case)を要求し、両者は非対称。issue lane では advisor を
+  manual ペインと同じ負の合成番号で roster に載せれば既存解決をそのまま使える
+  が、plan lane では負番号が弾かれるため task-id 形の宛先が要る。plan lane の
+  advisor は予約 task id(例 `advisor`)で登録するか、resolveMemberNum に
+  advisor 用の例外を足すかの二択(未決点 1)。いずれでも子は番号/ID を直接
+  知らず、`fanout msg peers` の role=advisor 行から宛先 `<A>` を引く。role 列は
+  discovery 用で、`--to` に渡すのは解決済みの宛先トークン
 - 起動: `--advisor-pane claude[:model]`(issue / plan 両 lane)と TUI
   new-pane フォーム。coordinator ペインと同型で project root に起動し、
   state.json に記録、roster に role=advisor で登録
 - per-parent DB 制約(msg_db_owner singleton)は、advisor を同一 fan-out
   セッションから起動することで自然に満たされる
 - advisor の read-only 化: `--permission-mode plan` 等での強制を spike で
-  検証する。強制できなければ briefing の指示に留める
-- 相談の規律は briefing で契約化する(「未決点と推奨」の 3 を参照)
+  検証する。強制できなければ briefing の指示に留める。advisor は worktree を
+  Read/Grep で読む必要があるので、禁止するのは編集と Bash であって読み取りは
+  許す(未決点 3)
+- 相談の規律は briefing で契約化する(「未決点と推奨」の 3 を参照)。ただし
+  issue lane の codex 子を `--codex-plan-mode` で起動する場合、
+  `internal/app/briefing.Render` は codexPlanMode で `renderCodexPlanBriefing`
+  を即返すため、標準 work briefing に足した相談プロトコルは executor に届かない。
+  この経路で B を使うなら Codex Plan Mode の初期プロンプト側に契約を注入する
+  必要がある。当面は「codex 子は素起動(非 Plan Mode)で advisor と組む」を
+  前提とし、Plan Mode 併用は #456 のスコープ外とする
 
 純正 advisor tool との忠実度差は明記しておく: 純正は advisor が全会話
 (全ツール呼び出しと結果)を受け取るが、fanout 版で advisor が見るのは
@@ -202,14 +213,16 @@ post-work-review(claude 実装 → codex レビュー)の鏡像。codex 子が�
 ## 未決点と推奨(spike で確定)
 
 1. **roster への advisor 表現と宛先** — 推奨: peers テーブルに `role TEXT
-   NOT NULL DEFAULT 'worker'` 列を追加する。per-parent DB は /tmp のセッション
-   一時物で additive migration のコストが低く、peers 表示・briefing 生成が
-   role で素直に分岐できる。予約 task_id="advisor" の慣習は plan lane の
-   task_id の意味を汚すため不採用。宛先番号は新設しない — advisor は project
-   root の manual ペインと同じく負の合成番号で roster に載り、`--to` / `nudge`
-   はその番号で解決できる(role 列は番号を引くための discovery 用で、送信
-   トークンそのものではない)。spike の手動検証は display_name 慣習で代用
-   してよいが、role 列で引ける形が実装の到達点
+   NOT NULL DEFAULT 'worker'` 列を追加し、discovery は role で行う(peers 表示・
+   briefing 生成が role で素直に分岐でき、additive migration のコストも低い)。
+   宛先トークンは lane で分かれる。issue/Project lane では advisor を project
+   root の manual ペインと同じ負の合成番号で載せれば `--to` / `nudge` がその
+   番号で解決できる。plan lane は resolveMemberNum が宛先を task id(kebab-case)
+   として解釈し負番号を弾くため、負番号方式が使えない — plan lane の advisor は
+   予約 task id(例 `advisor`)で登録するか、resolveMemberNum に advisor 用の
+   例外を足す。予約 task id は plan の実タスク ID 空間に 1 語混ざるが role 列で
+   区別でき、resolver 例外より実装が浅い。どちらを採るかは #453 spike で確定
+   させる。手動検証は display_name 慣習で代用してよい
 2. **advisor ペインの起動形態と flag 名** — 推奨: `--advisor-pane
    claude[:model]` フラグ(issue / plan 両 lane)+ TUI new-pane フォーム。
    project root に worktree なしで起動する。専用サブコマンド(`fanout
@@ -217,8 +230,9 @@ post-work-review(claude 実装 → codex レビュー)の鏡像。codex 子が�
    `--advisor` と分けるのは、パターン C のパススルー(子に渡す claude 自身の
    `--advisor <model>`)との綴りの衝突を避けるため
 3. **相談プロトコルの briefing 文面** — 推奨: blog の規範を契約化する。
-   advisor 側「plan / correction / stop signal のみ返す。ツール実行・
-   ファイル編集はしない。返信は 1 通・15 行以内」。codex 子側「相談は
+   advisor 側「plan / correction / stop signal のみ返す。worktree の確認に
+   Read / Grep など read-only 操作は使ってよいが、ファイル編集と Bash・その他の
+   副作用ツールは禁止。返信は 1 通・15 行以内」。codex 子側「相談は
    (a) 大きい設計判断の前、(b) 2 回試して失敗したとき、(c) PR を開く直前
    に限る。1 タスク 1〜2 回が目安。質問は goal / tried / question の 3 部
    形式。送信後に nudge し、次のチェックポイントで inbox を読む(手を
