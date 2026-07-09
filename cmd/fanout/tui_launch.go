@@ -212,11 +212,11 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 
 // guardIssuePlanCoordinator is the plan-checkbox lane's dedupe, run on the
 // locked store: it mirrors the standalone lane's ErrAlreadyFanned so a repeated
-// submit never creates a second pane or overwrites a coordinator brief another
-// coordinator may still be reading.
+// submit never creates a second coordinator, overwrites a brief another
+// coordinator may still be reading, or regenerates a spec over live plan tasks.
 func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
-	if issuePlanCoordinatorRecorded(store, issueNum) {
-		return fmt.Errorf("issue #%d already has a plan coordinator pane", issueNum)
+	if issuePlanRecorded(store, issueNum) {
+		return fmt.Errorf("issue #%d already has a plan session", issueNum)
 	}
 	if hasRecordedIssuePane(store, issueNum) {
 		return fmt.Errorf("issue #%d already has a fanout pane", issueNum)
@@ -224,19 +224,27 @@ func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
 	return nil
 }
 
-// issuePlanCoordinatorRecorded reports whether a plan coordinator for the issue
-// is already recorded. Coordinator rows live under the manual parent with
-// synthetic numbers, so the slug is their only issue link.
-func issuePlanCoordinatorRecorded(store state.Store, issueNum int) bool {
+// issuePlanRecorded reports whether any plan-lane row is linked to the issue: a
+// coordinator, or — after the coordinator closed — the plan task rows it fanned
+// out. It keeps the issue-plan and plain issue lanes mutually exclusive in both
+// directions and in both lifecycle phases.
+func issuePlanRecorded(store state.Store, issueNum int) bool {
 	for _, pane := range store.Panes {
-		if pane.Parent != panelaunch.ManualParentRef {
-			continue
-		}
-		if num, ok := planIssueSlugIssueNum(pane.Slug); ok && num == issueNum {
+		if num, ok := planPaneIssueNum(pane); ok && num == issueNum {
 			return true
 		}
 	}
 	return false
+}
+
+// planPaneIssueNum returns the GitHub issue a plan-lane row is linked to: a
+// coordinator through its own slug under the manual parent, or a plan task
+// through its plan parent ref. ok is false for every other row.
+func planPaneIssueNum(pane state.Pane) (int, bool) {
+	if pane.Parent == panelaunch.ManualParentRef {
+		return planIssueSlugIssueNum(pane.Slug)
+	}
+	return planParentIssueNum(pane.Parent)
 }
 
 // planIssueSlugIssueNum parses the issue number back out of a planIssueSlug
@@ -247,6 +255,23 @@ func planIssueSlugIssueNum(slug string) (int, bool) {
 	if !found {
 		return 0, false
 	}
+	return parseLeadingIssueNum(rest)
+}
+
+// planParentIssueNum parses the issue number from a plan parent ref whose slug
+// follows the coordinator briefing's "issue-<num>-<short-kebab-title>" naming
+// ("plan:issue-474-add-search"). The link is convention-based — the plan lane
+// itself stays issue-less — so a plan named differently just loses this dedupe
+// hint and degrades to the pre-existing no-link behavior.
+func planParentIssueNum(parent string) (int, bool) {
+	rest, found := strings.CutPrefix(parent, "plan:issue-")
+	if !found {
+		return 0, false
+	}
+	return parseLeadingIssueNum(rest)
+}
+
+func parseLeadingIssueNum(rest string) (int, bool) {
 	numStr, _, found := strings.Cut(rest, "-")
 	if !found {
 		return 0, false

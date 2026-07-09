@@ -150,12 +150,20 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 		{
 			name:    "recorded coordinator for the issue blocks",
 			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"}},
-			wantErr: "issue #123 already has a plan coordinator pane",
+			wantErr: "issue #123 already has a plan session",
 		},
 		{
 			name:    "coordinator for a different issue does not alias by prefix",
 			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-1234-1"}},
 			wantErr: "",
+		},
+		{
+			// The coordinator closed after the live fan-out; its plan task rows
+			// still own the issue, so a second coordinator (and spec regen) is
+			// rejected.
+			name:    "surviving plan task rows for the issue block",
+			panes:   []state.Pane{{Parent: "plan:issue-123-add-search", TaskID: "base-types", Slug: "issue-123-add-search-base-types"}},
+			wantErr: "issue #123 already has a plan session",
 		},
 		{
 			name:    "recorded work pane for the issue blocks",
@@ -182,42 +190,80 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 	}
 }
 
-// TestPlanIssueSlugIssueNum pins the slug parser both dedupe directions rely
-// on (guardIssuePlanCoordinator, hasRecordedIssuePane, recordedIssueNumbers).
-func TestPlanIssueSlugIssueNum(t *testing.T) {
+// TestPlanPaneIssueNum pins the issue links both dedupe directions rely on
+// (guardIssuePlanCoordinator, hasRecordedIssuePane, recordedIssueNumbers): a
+// coordinator's own slug under the manual parent, and a plan task's parent ref
+// following the briefing's issue-<num>-<title> naming.
+func TestPlanPaneIssueNum(t *testing.T) {
 	tests := []struct {
 		name string
-		slug string
+		pane state.Pane
 		want int
 		ok   bool
 	}{
-		{name: "issue coordinator slug parses", slug: "plan-issue-123-4", want: 123, ok: true},
-		{name: "prompt coordinator slug is not an issue link", slug: "plan-prompt-4", ok: false},
-		{name: "missing launch suffix is rejected", slug: "plan-issue-123", ok: false},
-		{name: "non-numeric issue segment is rejected", slug: "plan-issue-abc-1", ok: false},
-		{name: "empty issue segment is rejected", slug: "plan-issue--1", ok: false},
+		{name: "issue coordinator slug parses", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-123-4"}, want: 123, ok: true},
+		{name: "prompt coordinator slug is not an issue link", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-prompt-4"}, ok: false},
+		{name: "missing launch suffix is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-123"}, ok: false},
+		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-abc-1"}, ok: false},
+		{name: "empty issue segment is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue--1"}, ok: false},
+		{name: "plan task parent following the naming links", pane: state.Pane{Parent: "plan:issue-474-add-search", Slug: "issue-474-add-search-base"}, want: 474, ok: true},
+		{name: "plan parent without the issue prefix has no link", pane: state.Pane{Parent: "plan:launch-plan", Slug: "launch-plan-base"}, ok: false},
+		// A work pane whose generated slug happens to start with plan-issue-
+		// (issue #999 titled "Plan issue 123 migration") must not alias #123.
+		{name: "non-manual pane slug is never parsed", pane: state.Pane{Parent: "700", IssueNum: 999, Slug: "plan-issue-123-migration"}, ok: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := planIssueSlugIssueNum(tt.slug)
+			got, ok := planPaneIssueNum(tt.pane)
 			if got != tt.want || ok != tt.ok {
-				t.Fatalf("planIssueSlugIssueNum(%q) = %d, %v, want %d, %v", tt.slug, got, ok, tt.want, tt.ok)
+				t.Fatalf("planPaneIssueNum(%+v) = %d, %v, want %d, %v", tt.pane, got, ok, tt.want, tt.ok)
 			}
 		})
 	}
 }
 
-// TestHasRecordedIssuePaneSeesPlanCoordinator pins the reverse dedupe: after a
-// coordinator launch, the normal issue lane (launchStandaloneIssuePane and the
-// watcher) must not start a second session for the same issue.
-func TestHasRecordedIssuePaneSeesPlanCoordinator(t *testing.T) {
-	store := state.Store{Panes: []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"}}}
+// TestHasRecordedIssuePaneSeesPlanSessions pins the reverse dedupe: while a
+// coordinator or its surviving plan task rows exist, the normal issue lane
+// (launchStandaloneIssuePane and the watcher) must not start a second session
+// for the same issue.
+func TestHasRecordedIssuePaneSeesPlanSessions(t *testing.T) {
+	store := state.Store{Panes: []state.Pane{
+		{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"},
+		{Parent: "plan:issue-474-add-search", TaskID: "base", Slug: "issue-474-add-search-base"},
+	}}
 	if !hasRecordedIssuePane(store, 123) {
 		t.Fatal("hasRecordedIssuePane(store, 123) = false, want true for a recorded plan coordinator")
 	}
+	if !hasRecordedIssuePane(store, 474) {
+		t.Fatal("hasRecordedIssuePane(store, 474) = false, want true for surviving plan task rows")
+	}
 	if hasRecordedIssuePane(store, 12) {
 		t.Fatal("hasRecordedIssuePane(store, 12) = true, want false for a different issue")
+	}
+}
+
+// TestLaunchParentIssueFanoutRejectsPlanSession pins the parent-lane guard: an
+// issue owned by a plan session (here: surviving plan task rows) must not also
+// fan out its children, even when it gained OPEN children after the plan
+// coordinator launched.
+func TestLaunchParentIssueFanoutRejectsPlanSession(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(state.Pane{Parent: "plan:issue-123-add-search", TaskID: "base", Slug: "issue-123-add-search-base", PaneID: "%9"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = launchParentIssueFanout(repo, "fanout-test", "fanout", tuiIssueLaunchConfig(123, "claude", nil))
+	if err == nil || !strings.Contains(err.Error(), "issue #123 already has a plan session") {
+		t.Fatalf("launchParentIssueFanout() error = %v, want plan-session rejection", err)
 	}
 }
 

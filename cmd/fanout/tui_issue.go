@@ -64,8 +64,9 @@ func recordedIssueNumbers(projectRoot string) map[int]bool {
 		if parent, err := strconv.Atoi(pane.Parent); err == nil && parent > 0 {
 			recorded[parent] = true
 		}
-		// Plan coordinators reference their issue only through the slug.
-		if num, ok := planIssueSlugIssueNum(pane.Slug); ok {
+		// Plan-lane rows (a coordinator, or the tasks it fanned out) reference
+		// their issue only through slugs.
+		if num, ok := planPaneIssueNum(pane); ok {
 			recorded[num] = true
 		}
 	}

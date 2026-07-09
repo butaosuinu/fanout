@@ -119,6 +119,13 @@ func launchWatchParent(projectRoot, session, commandName string, resolvedSetting
 // against a synthesized runtime targeting the TUI session. The watcher and
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
+	// A plan session for this issue (a coordinator, or the tasks it fanned out)
+	// must finish or be closed before the child fan-out lane runs, or the two
+	// decompose the same work twice. Best-effort read: a state read failure
+	// degrades to the pre-existing unguarded behavior.
+	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(store, cfg.Parent) {
+		return watch.ParentLaunchResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
+	}
 	gh := ghissue.Runner{Cwd: projectRoot}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
@@ -356,9 +363,9 @@ func hasRecordedIssuePane(store state.Store, issueNum int) bool {
 			return true
 		}
 	}
-	// A plan coordinator binds to its issue only through its slug: the row
-	// lives under the manual parent with a synthetic number. Without this, a
-	// standalone launch for the issue would run alongside the coordinator's
-	// plan tasks and duplicate the work.
-	return issuePlanCoordinatorRecorded(store, issueNum)
+	// Plan-lane rows bind to their issue only through slugs (the coordinator's
+	// own, or the plan parent ref of the tasks it fanned out). Without this, a
+	// standalone launch for the issue would run alongside the plan session and
+	// duplicate the work.
+	return issuePlanRecorded(store, issueNum)
 }
