@@ -5,6 +5,34 @@ minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.5.3 || 11.8.0
   - pnpm@11.5.3 || 11.8.0
+  # TS 7 (Go ネイティブコンパイラ) の major 採用。security ではなく、公開直後の
+  # 7.0.2 を採るため 3 日ゲートを一時回避する。@typescript/typescript-<platform> は
+  # tsc バイナリをプラットフォーム別に配る typescript の optionalDependencies で、lock は
+  # 全 20 プラットフォーム分を含むため個別に列挙する (pnpm は name パターンと version の
+  # 併記を許さず glob 不可)。すべて 7.0.2 に version 束縛し、将来版・別バージョンには
+  # quarantine を効かせたままにする。ゲート通過 (2026-07-11 15:55 UTC) 後は無くても
+  # frozen install に影響しない。
+  - typescript@7.0.2
+  - "@typescript/typescript-aix-ppc64@7.0.2"
+  - "@typescript/typescript-darwin-arm64@7.0.2"
+  - "@typescript/typescript-darwin-x64@7.0.2"
+  - "@typescript/typescript-freebsd-arm64@7.0.2"
+  - "@typescript/typescript-freebsd-x64@7.0.2"
+  - "@typescript/typescript-linux-arm@7.0.2"
+  - "@typescript/typescript-linux-arm64@7.0.2"
+  - "@typescript/typescript-linux-loong64@7.0.2"
+  - "@typescript/typescript-linux-mips64el@7.0.2"
+  - "@typescript/typescript-linux-ppc64@7.0.2"
+  - "@typescript/typescript-linux-riscv64@7.0.2"
+  - "@typescript/typescript-linux-s390x@7.0.2"
+  - "@typescript/typescript-linux-x64@7.0.2"
+  - "@typescript/typescript-netbsd-arm64@7.0.2"
+  - "@typescript/typescript-netbsd-x64@7.0.2"
+  - "@typescript/typescript-openbsd-arm64@7.0.2"
+  - "@typescript/typescript-openbsd-x64@7.0.2"
+  - "@typescript/typescript-sunos-x64@7.0.2"
+  - "@typescript/typescript-win32-arm64@7.0.2"
+  - "@typescript/typescript-win32-x64@7.0.2"
 
 # pnpm 11 flipped strictDepBuilds to true, so an unreviewed build script now
 # fails `pnpm install`. msw ships a build script we intentionally skip (node
