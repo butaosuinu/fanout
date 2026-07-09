@@ -112,6 +112,21 @@ state_dir_for() {
   [[ "$output" == *"checks_fail=1"* ]]
 }
 
+@test "an empty review decision does not shift snapshot fields" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  write_pr OPEN false MERGEABLE CLEAN "" 0 head-one 2026-07-10T00:00:00Z
+
+  run_watch "$repo" snapshot --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"review=NONE"* ]]
+  [[ "$output" == *"review_requests=0"* ]]
+  [[ "$output" == *"head=head-one"* ]]
+  [[ "$output" == *"updated=2026-07-10T00:00:00Z"* ]]
+  [[ "$output" == *"url=https://github.com/acme/widget/pull/27"* ]]
+}
+
 @test "reaction targets count only actors matching the configured policy" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_repo "$repo"

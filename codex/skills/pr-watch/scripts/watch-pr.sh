@@ -142,7 +142,7 @@ tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/pr-watch.XXXXXX")" || emit_blocked temp_di
 state_tmp="$state_dir/.watch-state.$$.tmp"
 cleanup() {
   rm -f "$tmp_dir/pr.out" "$tmp_dir/pr.err" "$tmp_dir/checks.out" "$tmp_dir/checks.err" \
-    "$tmp_dir/checks.sorted" "$tmp_dir/reactions.out" "$tmp_dir/reaction.out" \
+    "$tmp_dir/pr.fields" "$tmp_dir/checks.sorted" "$tmp_dir/reactions.out" "$tmp_dir/reaction.out" \
     "$tmp_dir/reaction.err" "$state_tmp"
   rmdir "$tmp_dir" 2>/dev/null || :
 }
@@ -173,12 +173,28 @@ fetch_snapshot() {
   [ "$pr_status" -eq 0 ] || emit_blocked pr_snapshot_failed "$pr_status"
   [ -s "$tmp_dir/pr.out" ] || emit_blocked pr_snapshot_empty 1
 
-  old_ifs=$IFS
-  IFS="$(printf '\t')"
-  read -r snap_number snap_state snap_draft snap_mergeable snap_merge_state snap_review \
-    snap_review_requests snap_updated snap_head snap_url <"$tmp_dir/pr.out" ||
+  awk -F '	' '
+    NR == 1 && NF == 10 {
+      for (field = 1; field <= 10; field++) print $field
+      next
+    }
+    { invalid = 1 }
+    END { if (NR != 1 || invalid) exit 1 }
+  ' "$tmp_dir/pr.out" >"$tmp_dir/pr.fields" ||
     emit_blocked pr_snapshot_invalid 1
-  IFS=$old_ifs
+  {
+    IFS= read -r snap_number &&
+      IFS= read -r snap_state &&
+      IFS= read -r snap_draft &&
+      IFS= read -r snap_mergeable &&
+      IFS= read -r snap_merge_state &&
+      IFS= read -r snap_review &&
+      IFS= read -r snap_review_requests &&
+      IFS= read -r snap_updated &&
+      IFS= read -r snap_head &&
+      IFS= read -r snap_url
+  } <"$tmp_dir/pr.fields" || emit_blocked pr_snapshot_invalid 1
+  [ -n "$snap_review" ] || snap_review=NONE
   [ "$snap_number" = "$pr" ] || emit_blocked pr_snapshot_mismatch 1
 
   : >"$tmp_dir/checks.out"
