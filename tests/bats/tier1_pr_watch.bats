@@ -18,6 +18,9 @@ setup() {
 case "${1:-} ${2:-}" in
   "pr view")
     cat "$PR_WATCH_FIXTURE/pr.tsv"
+    if [ -f "$PR_WATCH_FIXTURE/pr.next.tsv" ]; then
+      mv "$PR_WATCH_FIXTURE/pr.next.tsv" "$PR_WATCH_FIXTURE/pr.tsv"
+    fi
     exit "${PR_WATCH_PR_STATUS:-0}"
     ;;
   "pr checks")
@@ -122,14 +125,52 @@ state_dir_for() {
   [[ "$output" == *"reactions=2"* ]]
   [[ "$output" == *"reaction_match=1"* ]]
   [[ "$output" == *"plus1=true"* ]]
+}
 
-  unset PR_WATCH_PLUS1_ACTOR_RE
+@test "reaction targets do not treat an escaped class as a character class" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'chatgpt-codex-connectorb\t2026-07-10T00:01:00Z\n' \
+    >"$PR_WATCH_FIXTURE/reactions.tsv"
+
+  export PR_WATCH_PLUS1_ACTOR_RE='^chatgpt-codex-connector\[bot\]$'
   run_watch "$repo" snapshot --repo acme/widget --pr 27 --reaction-target issue
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"reactions=2"* ]]
+  [[ "$output" == *"reactions=1"* ]]
   [[ "$output" == *"reaction_match=0"* ]]
   [[ "$output" == *"plus1=false"* ]]
+}
+
+@test "reaction targets do not approve without an actor policy" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'chatgpt-codex-connector[bot]\t2026-07-10T00:01:00Z\n' \
+    >"$PR_WATCH_FIXTURE/reactions.tsv"
+
+  run_watch "$repo" snapshot --repo acme/widget --pr 27 --reaction-target issue
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reactions=1"* ]]
+  [[ "$output" == *"reaction_match=0"* ]]
+  [[ "$output" == *"plus1=false"* ]]
+}
+
+@test "wait does not report readiness before merge state is ready" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'pass\tunit\tSUCCESS\tci\thttps://example.test/run/1\n' \
+    >"$PR_WATCH_FIXTURE/checks.tsv"
+  write_pr OPEN false MERGEABLE CLEAN NONE 0 head-one 2026-07-10T00:01:00Z
+  mv "$PR_WATCH_FIXTURE/pr.tsv" "$PR_WATCH_FIXTURE/pr.next.tsv"
+  write_pr OPEN false MERGEABLE UNSTABLE NONE 0 head-one 2026-07-10T00:00:00Z
+  export PR_WATCH_INTERVAL=0
+
+  run_watch "$repo" wait --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=change* ]]
+  [[ "$output" == *"merge_state=CLEAN"* ]]
 }
 
 @test "wait times out and reset removes only the selected state" {

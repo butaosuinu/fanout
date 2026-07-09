@@ -12,7 +12,8 @@ description: "Actively watch and repair an existing GitHub PR until it is mergea
 
 PR 作成後または「あとはよろしく」では、次の状態まで repair と watch を所有する。
 
-- PR が OPEN、non-draft、mergeable
+- PR が OPEN、non-draft、`mergeable=MERGEABLE` で、`mergeStateStatus` が
+  `CLEAN` または `HAS_HOOKS`
 - required checks が pass / skipping
 - actionable な unresolved review work がない
 - review 不要、または `reviewDecision=APPROVED`
@@ -111,6 +112,10 @@ until checks appear. A repository with no CI may finish without checks only
 after its workflow and branch-protection configuration confirms none are
 expected.
 
+Finish only with `mergeable=MERGEABLE` and `merge_state=CLEAN|HAS_HOOKS`.
+`BLOCKED`, `UNSTABLE`, `DRAFT`, `BEHIND`, `DIRTY`, and `UNKNOWN` are not
+completion states even when checks and review fields otherwise look ready.
+
 ## Repair pass
 
 Before each repair step, tell the user in one sentence what will be checked or
@@ -169,7 +174,8 @@ Report in 2-4 sentences:
 - repair pass count and conflict / CI / review counts
 - whether commits, pushes, replies, and cheap watch occurred
 - approval source (`reviewDecision=APPROVED`, configured `:+1:`, or not required)
-- final state: terminal, mergeable+green+approved, timeout, or blocked
+- final state: terminal, `mergeable=MERGEABLE` +
+  `merge_state=CLEAN|HAS_HOOKS` + green + approved, timeout, or blocked
 
 List remaining work only when the result is not complete.
 

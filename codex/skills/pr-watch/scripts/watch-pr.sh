@@ -238,7 +238,12 @@ EOF
   reaction_count="$(awk 'END { print NR + 0 }' "$tmp_dir/reactions.out")"
   reaction_match=0
   if [ -n "$actor_re" ]; then
-    reaction_match="$(awk -F '	' -v re="$actor_re" '$2 ~ re { count++ } END { print count + 0 }' "$tmp_dir/reactions.out")"
+    reaction_match="$(
+      PR_WATCH_PLUS1_ACTOR_RE="$actor_re" \
+        awk -F '	' \
+          '$2 ~ ENVIRON["PR_WATCH_PLUS1_ACTOR_RE"] { count++ } END { print count + 0 }' \
+          "$tmp_dir/reactions.out"
+    )"
   fi
 
   digest="$(
@@ -276,6 +281,10 @@ emit_change() {
   emit_status change
 }
 
+merge_state_is_ready() {
+  [ "$snap_merge_state" = CLEAN ] || [ "$snap_merge_state" = HAS_HOOKS ]
+}
+
 baseline_is_actionable() {
   [ "$checks_reported" = false ] ||
     [ "$snap_state" != OPEN ] ||
@@ -286,6 +295,7 @@ baseline_is_actionable() {
     [ "$check_fail" -gt 0 ] ||
     [ "$check_cancel" -gt 0 ] ||
     { [ "$snap_draft" = false ] && [ "$snap_mergeable" = MERGEABLE ] &&
+      merge_state_is_ready &&
       [ "$check_pending" -eq 0 ] &&
       { [ "$snap_review" = APPROVED ] ||
         { [ "$snap_review" = NONE ] && [ "$snap_review_requests" -eq 0 ]; }; }; }
