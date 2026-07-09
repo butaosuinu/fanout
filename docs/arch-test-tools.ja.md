@@ -44,14 +44,14 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 
 | 現行テスト | go-arch-lint | arch-go | depguard |
 |---|---|---|---|
-| `TestLayerImportDirection` | △ 方向は `_test.go` 込みで書けるが、`legacyDirectionAllowlist` の自動失効がない。component はディレクトリ単位のため、`path_test.go` 1 ファイル限定の例外が `internal/infra/team` パッケージ全体の許可に広がる(production ファイルの同じ違反も通る) | △ 加えて `_test.go`(`Tests: false`)と build 対象外を検査しない。例外もパッケージ単位に広がる | △ 方向は書けるが自動失効がなく、build 対象外を検査しない。`files` glob はファイル単位なので例外の粒度は保てる |
+| `TestLayerImportDirection` | △ 方向は `_test.go` 込みで書けるが、`legacyDirectionAllowlist` の自動失効がない。ファイル単位の例外は `excludeFiles` で当該ファイルを丸ごと未検査にする形になり、そのファイル内の他の違反も見えなくなる | △ `_test.go`(`Tests: false`)と build 対象外を検査しないため、`path_test.go` の例外は不要になる代わりにテスト全部が層方向の検査外。自動失効もない | △ 方向は書けるが自動失効がなく、build 対象外を検査しない。`files` glob はファイル単位なので例外の粒度は保てる |
 | `TestCorePurity` | × stdlib 制限機構がない | × 例外の上書き不可 | △ `$` 完全一致・`files` 否定 glob・`$test` で denylist と例外を書けるが、未使用例外の自動失効がない |
 | `TestToolsStdlibOnly` | ○ 依存許可を空にした component は stdlib のみ許可 | △ 非テスト・build 対象のみ | △ Strict + `$gostd` で書けるが build 対象のみ |
 | `TestPackageMainOnlyInCmd` | △ `cmd/...` の被 import 禁止は可。package main 配置(package 節の検査)は import linter の範囲外 | △ 同左 | △ 同左 |
 | `TestInternalTreeShape` | × 実ディレクトリ検査(非 Go ファイル含む)は import 解析の範囲外 | × 同左 | × 同左 |
 | `TestAllPackagesClassified` | ○ component 未所属ファイルを検出(component glob の整備が前提) | △ coverage 閾値 100% で近似 | × `files` glob 外のパッケージは素通し |
 | `TestExplicitLayerMapIsCurrent` | △ 0 件に解決される component glob は既定でエラー、component 未所属ファイルは警告になるため、設定の stale はおおむね fail-closed(Go ファイルを失った空ディレクトリ等の差は残る) | × 設定側の stale エントリ検出はない | × 同左 |
-| `TestScanSanity` | △ 0 件解決 glob のエラーと未所属警告が空回りを兼ねて検出 | △ coverage 閾値 100% なら rule が 1 件も評価しない設定壊れを失敗にできる(build 対象外を見ない差は残る) | × `files` glob が空振りしても検出されない |
+| `TestScanSanity` | △ 0 件解決 glob のエラーと未所属警告が空回りを兼ねて検出 | × coverage はロード済みパッケージだけが分母のため、ツリーごと欠落しても残りで 100% になれる(internal/・cmd/・tools/ 各 >0 という現行契約を検出できない) | × `files` glob が空振りしても検出されない |
 
 `tools/reviewrisk` の docsync(`docs/architecture.ja.md` のパッケージ表 ↔
 `rules.go`)はアーキテクチャリンターの守備範囲外で、どの案でも手書き維持。
