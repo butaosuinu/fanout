@@ -195,6 +195,45 @@ func TestModelListDefaultPrefersVisibleDefault(t *testing.T) {
 	}
 }
 
+func TestResolveCodexSettingsNormalizesConfiguredEffort(t *testing.T) {
+	requester := &fakeRequester{results: map[string]json.RawMessage{
+		"config/read": json.RawMessage(`{"config":{"model":"gpt-test","plan_mode_reasoning_effort":"xhigh"}}`),
+		"model/list": json.RawMessage(`{"data":[
+			{"id":"gpt-test","model":"gpt-test","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]}
+		]}`),
+	}}
+
+	got, err := resolveCodexSettings(requester, "/repo", "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", got.Model)
+	}
+	if got.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got.ReasoningEffort)
+	}
+}
+
+func TestResolveCodexSettingsKeepsConfiguredModelWhenModelListFails(t *testing.T) {
+	requester := &fakeRequester{
+		results: map[string]json.RawMessage{
+			"config/read": json.RawMessage(`{"config":{"model":"gpt-test","plan_mode_reasoning_effort":"xhigh"}}`),
+		},
+		errors: map[string]error{
+			"model/list": errors.New("models unavailable"),
+		},
+	}
+
+	got, err := resolveCodexSettings(requester, "/repo", "medium")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "gpt-test" || got.ReasoningEffort != "xhigh" {
+		t.Fatalf("settings = %+v, want configured model and effort", got)
+	}
+}
+
 func TestCodexPlanEffortReadsPlanMode(t *testing.T) {
 	got, err := codexPlanEffort(json.RawMessage(`{"data":[
 		{"name":"Default","mode":"default","reasoning_effort":"low"},
@@ -688,9 +727,11 @@ type fakeCodexAppClient struct {
 }
 
 type fakeRequester struct {
-	result json.RawMessage
-	err    error
-	calls  []fakeRequesterCall
+	result  json.RawMessage
+	err     error
+	results map[string]json.RawMessage
+	errors  map[string]error
+	calls   []fakeRequesterCall
 }
 
 type fakeRequesterCall struct {
@@ -738,6 +779,16 @@ func (f *fakeCodexAppClient) send(v any) error {
 
 func (f *fakeRequester) Request(id, method string, params any) (json.RawMessage, error) {
 	f.calls = append(f.calls, fakeRequesterCall{id: id, method: method, params: params})
+	if f.errors != nil {
+		if err := f.errors[method]; err != nil {
+			return nil, err
+		}
+	}
+	if f.results != nil {
+		if result, ok := f.results[method]; ok {
+			return result, nil
+		}
+	}
 	if f.err != nil {
 		return nil, f.err
 	}

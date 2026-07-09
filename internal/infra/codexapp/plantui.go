@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -45,6 +46,13 @@ type codexResolvedSettings struct {
 	Model           string
 	ReasoningEffort string
 }
+
+type codexModelSelection struct {
+	Model                     string
+	SupportedReasoningEfforts []string
+}
+
+type supportedReasoningEfforts []string
 
 type codexPlanTurnStartResult struct {
 	TurnID    string
@@ -328,28 +336,34 @@ func resolveCodexSettings(client requester, cwd, defaultEffort string) (codexRes
 		if config.ReasoningEffort != "" {
 			settings.ReasoningEffort = config.ReasoningEffort
 		}
-		if settings.Model != "" {
-			return settings, nil
-		}
 	}
 
 	modelResult, modelErr := client.Request("fanout-models", "model/list", map[string]any{
-		"includeHidden": false,
+		"includeHidden": true,
 	})
 	if modelErr != nil {
+		if settings.Model != "" {
+			return settings, nil
+		}
 		if configErr != nil {
 			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
 		}
 		return codexResolvedSettings{}, fmt.Errorf("resolve codex model from model/list: %w", modelErr)
 	}
-	model, err := modelListDefault(modelResult)
+	selection, err := modelListSelection(modelResult, settings.Model)
 	if err != nil {
+		if settings.Model != "" {
+			return settings, nil
+		}
 		if configErr != nil {
 			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
 		}
 		return codexResolvedSettings{}, err
 	}
-	settings.Model = model
+	settings.Model = selection.Model
+	if len(selection.SupportedReasoningEfforts) > 0 {
+		settings.ReasoningEffort = supportedReasoningEffort(settings.ReasoningEffort, selection.SupportedReasoningEfforts)
+	}
 	return settings, nil
 }
 
@@ -379,23 +393,50 @@ func configSettings(raw json.RawMessage) codexResolvedSettings {
 }
 
 func modelListDefault(raw json.RawMessage) (string, error) {
+	selection, err := modelListSelection(raw, "")
+	if err != nil {
+		return "", err
+	}
+	return selection.Model, nil
+}
+
+func modelListSelection(raw json.RawMessage, preferred string) (codexModelSelection, error) {
 	var res struct {
 		Data []struct {
-			ID        string `json:"id"`
-			Model     string `json:"model"`
-			Hidden    bool   `json:"hidden"`
-			IsDefault bool   `json:"isDefault"`
+			ID                                string                    `json:"id"`
+			Model                             string                    `json:"model"`
+			Hidden                            bool                      `json:"hidden"`
+			IsDefault                         bool                      `json:"isDefault"`
+			SupportedReasoningEfforts         supportedReasoningEfforts `json:"supportedReasoningEfforts"`
+			SupportedReasoningEffortsFallback supportedReasoningEfforts `json:"supported_reasoning_efforts"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return "", fmt.Errorf("parse model/list response: %w", err)
+		return codexModelSelection{}, fmt.Errorf("parse model/list response: %w", err)
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		for _, model := range res.Data {
+			if modelName(model.Model, model.ID) != preferred && strings.TrimSpace(model.ID) != preferred {
+				continue
+			}
+			if name := modelName(model.Model, model.ID); name != "" {
+				return codexModelSelection{
+					Model:                     name,
+					SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback),
+				}, nil
+			}
+		}
 	}
 	for _, model := range res.Data {
 		if model.Hidden || !model.IsDefault {
 			continue
 		}
 		if name := modelName(model.Model, model.ID); name != "" {
-			return name, nil
+			return codexModelSelection{
+				Model:                     name,
+				SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback),
+			}, nil
 		}
 	}
 	for _, model := range res.Data {
@@ -403,10 +444,75 @@ func modelListDefault(raw json.RawMessage) (string, error) {
 			continue
 		}
 		if name := modelName(model.Model, model.ID); name != "" {
-			return name, nil
+			return codexModelSelection{
+				Model:                     name,
+				SupportedReasoningEfforts: modelSupportedReasoningEfforts(model.SupportedReasoningEfforts, model.SupportedReasoningEffortsFallback),
+			}, nil
 		}
 	}
-	return "", fmt.Errorf("model/list response did not include an available model")
+	return codexModelSelection{}, fmt.Errorf("model/list response did not include an available model")
+}
+
+func modelSupportedReasoningEfforts(primary, fallback []string) []string {
+	if len(primary) > 0 {
+		return primary
+	}
+	return fallback
+}
+
+func (e *supportedReasoningEfforts) UnmarshalJSON(raw []byte) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		var effort string
+		if err := json.Unmarshal(item, &effort); err == nil {
+			effort = strings.TrimSpace(effort)
+			if effort != "" {
+				out = append(out, effort)
+			}
+			continue
+		}
+		var shaped struct {
+			ReasoningEffort string `json:"reasoningEffort"`
+			Value           string `json:"value"`
+			ID              string `json:"id"`
+			Name            string `json:"name"`
+		}
+		if err := json.Unmarshal(item, &shaped); err != nil {
+			return err
+		}
+		for _, candidate := range []string{shaped.ReasoningEffort, shaped.Value, shaped.ID, shaped.Name} {
+			if effort = strings.TrimSpace(candidate); effort != "" {
+				out = append(out, effort)
+				break
+			}
+		}
+	}
+	*e = out
+	return nil
+}
+
+func supportedReasoningEffort(requested string, supported []string) string {
+	requested = strings.TrimSpace(requested)
+	available := map[string]bool{}
+	for _, effort := range supported {
+		effort = strings.TrimSpace(effort)
+		if effort != "" {
+			available[effort] = true
+		}
+	}
+	if len(available) == 0 || available[requested] {
+		return requested
+	}
+	for _, supportedEffort := range slices.Backward(supported) {
+		if effort := strings.TrimSpace(supportedEffort); effort != "" {
+			return effort
+		}
+	}
+	return requested
 }
 
 func modelName(model, id string) string {
