@@ -335,6 +335,59 @@ func TestCreatePaneTaskDryRunDoesNotWriteBriefing(t *testing.T) {
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
 
+func TestLaunchWithResultDryRunHasNoPaneID(t *testing.T) {
+	projectRoot := t.TempDir()
+	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
+	req := NewIssueRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	launcher := &Launcher{
+		Cfg:         cfg,
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: projectRoot},
+		Palette:     log.Palette{},
+		CommandName: "fanout",
+	}
+
+	result, ok := launcher.LaunchWithResult(req)
+
+	if !ok {
+		t.Fatal("LaunchWithResult() = false, want successful dry run")
+	}
+	if result.PaneID != "" {
+		t.Fatalf("dry-run PaneID = %q, want empty", result.PaneID)
+	}
+}
+
+func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
+	installFakeExecutable(t, "claude")
+	installFakeTmux(t, "%314")
+	targetPath := t.TempDir()
+	cfg := &cliflags.Config{Agent: "claude"}
+	launcher := &Launcher{
+		Cfg:         cfg,
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Palette:     log.Palette{},
+		CommandName: "fanout",
+	}
+	req := Request{
+		ParentRef: ManualParentRef,
+		Number:    -1,
+		Slug:      "attached-pane",
+		Prompt:    "inspect",
+		Agent:     "claude",
+		Hooks:     hooks.EmptyConfig(),
+	}
+
+	result, ok := launcher.AttachWithResult(req, targetPath)
+
+	if !ok {
+		t.Fatal("AttachWithResult() = false, want true")
+	}
+	if result.PaneID != "%314" {
+		t.Fatalf("PaneID = %q, want %%314", result.PaneID)
+	}
+}
+
 func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Config, projectRoot string, req Request) {
 	t.Helper()
 	if !cfg.DryRun {
@@ -812,6 +865,17 @@ func installFakeExecutable(t *testing.T, name string) {
 	binDir := t.TempDir()
 	path := filepath.Join(binDir, name)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installFakeTmux(t *testing.T, paneID string) {
+	t.Helper()
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, "tmux")
+	script := "#!/bin/sh\nif [ \"$1\" = \"split-window\" ]; then\n  printf '%s\\n' '" + paneID + "'\nfi\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

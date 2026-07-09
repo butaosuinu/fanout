@@ -94,7 +94,7 @@ func newTUIListIssueChildrenFunc(projectRoot string) func(parent int) ([]fanoutt
 }
 
 func newTUIIssueLaunchFunc(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {
-	return func(issueNum int, defaultAgent string, overrides map[string]string) (string, error) {
+	return func(issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
 		return launchIssueSessionFromTUI(projectRoot, session, commandName, resolvedSettings, hookConfig, issueNum, defaultAgent, overrides)
 	}
 }
@@ -152,67 +152,59 @@ func validGitHubPathPart(part string) bool {
 // launchIssueSessionFromTUI starts a session for one issue picked in the TUI:
 // a full fan-out when the issue has OPEN children (the watcher's parent lane),
 // a single pane otherwise (the watcher's standalone lane).
-func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issueNum int, defaultAgent string, overrides map[string]string) (string, error) {
+func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
 	if issueNum <= 0 {
-		return "", fmt.Errorf("issue number is required")
+		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
 	}
 	if err := validateTUIAgentSelection(defaultAgent, overrides); err != nil {
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	gh := ghissue.Runner{Cwd: projectRoot}
 	// Re-fetch the issue: the picker list may be stale, and the detail carries
 	// the body the standalone briefing needs.
 	detail, err := gh.IssueDetail(issueNum)
 	if err != nil {
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	if detail.State != "OPEN" {
-		return "", fmt.Errorf("issue #%d is not OPEN", issueNum)
+		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d is not OPEN", issueNum)
 	}
 	openChildren, err := countOpenChildTargets(gh, issueNum)
 	if err != nil {
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	cfg := tuiIssueLaunchConfig(issueNum, defaultAgent, overrides)
 	if openChildren == 0 {
-		if launchErr := launchStandaloneIssuePane(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, detail); launchErr != nil {
+		paneID, launchErr := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, detail)
+		if launchErr != nil {
 			if errors.Is(launchErr, watch.ErrAlreadyFanned) {
-				return "", fmt.Errorf("issue #%d already has a fanout pane", issueNum)
+				return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d already has a fanout pane", issueNum)
 			}
-			return "", launchErr
+			return fanouttui.LaunchResult{}, launchErr
 		}
-		return fmt.Sprintf("started session for #%d", issueNum), nil
+		return fanouttui.LaunchResult{
+			Notice:         fmt.Sprintf("started session for #%d", issueNum),
+			CreatedPaneIDs: []string{paneID},
+		}, nil
 	}
-	before := recordedPaneCountForParent(projectRoot, cfg.ParentRef)
-	result, err := launchParentIssueFanout(projectRoot, session, commandName, cfg)
-	created := recordedPaneCountForParent(projectRoot, cfg.ParentRef) - before
+	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
+	created := len(result.CreatedPaneIDs)
 	if err != nil {
 		if created > 0 {
 			// The fail-fast loop may have created panes before the failure;
 			// they are running agents, so a pure failure report would mislead.
-			return "", fmt.Errorf("created %d pane(s), then failed: %w", created, err)
+			return fanouttui.LaunchResult{}, fmt.Errorf("created %d pane(s), then failed: %w", created, err)
 		}
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	notice := fmt.Sprintf("fanned out #%d: created %d pane(s)", issueNum, created)
 	if created <= 0 {
 		notice = fmt.Sprintf("#%d: no new panes (children already have one)", issueNum)
 	}
-	if result.Deferred {
+	if result.Watch.Deferred {
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
-	return notice, nil
-}
-
-// recordedPaneCountForParent counts state rows under one fan-out parent; the
-// before/after difference is the created-pane count run.Issues does not
-// return. A read failure degrades to 0 rather than failing the launch report.
-func recordedPaneCountForParent(projectRoot, parentRef string) int {
-	store, err := state.LoadProject(projectRoot)
-	if err != nil {
-		return 0
-	}
-	return len(store.FannedNumbersForParent(parentRef))
+	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: result.CreatedPaneIDs}, nil
 }
 
 // validateTUIAgentSelection rejects unknown agent names up front so a typo

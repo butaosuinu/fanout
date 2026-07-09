@@ -17,6 +17,7 @@ type paneFocusedMsg struct {
 	err            error
 	zoomErr        error
 	keyboardPaused bool
+	contextNotice  string
 }
 
 type panePeekLoadedMsg struct {
@@ -137,24 +138,39 @@ func (m *model) focusSelected(zoom bool) tea.Cmd {
 		m.notice = fmt.Sprintf("focus skipped for %s: tmux state is %s", dash(pane.PaneID), pane.TmuxState)
 		return nil
 	}
+	return m.focusPaneCmd(pane, zoom, "")
+}
 
+func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return nil
+	}
+	return m.focusPaneCmd(paneView{PaneID: paneID, TmuxState: "live"}, false, contextNotice)
+}
+
+func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {
 	paneID := pane.PaneID
 	alive := m.opts.PaneAlive
 	shellAlive := m.opts.ShellPaneAlive
 	focus := m.opts.FocusPane
 	zoomPane := m.opts.ZoomPane
 	keyboard := m.opts.keyboard
-	m.notice = fmt.Sprintf("focusing %s...", paneID)
+	if contextNotice == "" {
+		m.notice = fmt.Sprintf("focusing %s...", paneID)
+	} else {
+		m.notice = contextNotice
+	}
 	return func() tea.Msg {
 		if !paneAliveForAction(pane, alive, shellAlive) {
-			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive}
+			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive, contextNotice: contextNotice}
 		}
 		keyboard.Disable()
 		if err := focus(paneID); err != nil {
 			keyboard.Enable()
-			return paneFocusedMsg{paneID: paneID, err: err}
+			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
 		}
-		msg := paneFocusedMsg{paneID: paneID, keyboardPaused: true}
+		msg := paneFocusedMsg{paneID: paneID, keyboardPaused: true, contextNotice: contextNotice}
 		if zoom {
 			msg.zoomErr = zoomPane(paneID)
 		}

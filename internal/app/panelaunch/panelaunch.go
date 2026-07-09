@@ -72,11 +72,10 @@ type Request struct {
 	Worktree worktree.Plan
 }
 
-// created is the result of a successful launch.
-type created struct {
-	Request  Request
-	PaneID   string
-	Prepared worktree.Result
+// Result identifies the tmux pane created by a successful launch. PaneID is
+// empty for successful dry runs because no pane is created.
+type Result struct {
+	PaneID string
 }
 
 // ManualOptions parameterizes NewManualRequest.
@@ -107,19 +106,25 @@ type Launcher struct {
 
 // LaunchOK is launch without the created-pane detail.
 func (l *Launcher) LaunchOK(req Request) bool {
-	_, ok := l.launch(req)
+	_, ok := l.LaunchWithResult(req)
 	return ok
+}
+
+// LaunchWithResult creates one worktree-backed agent pane and returns its exact
+// tmux pane id. A successful dry run returns an empty Result.
+func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
+	return l.launch(req)
 }
 
 // launch creates one worktree-backed agent pane: briefing write, worktree
 // preparation, hooks, tmux split and decoration, optional Codex Plan Mode
 // wait, state recording, and worktree metadata write. A failure after the
 // split tears the partial launch down.
-func (l *Launcher) launch(req Request) (created, bool) {
+func (l *Launcher) launch(req Request) (Result, bool) {
 	agentCmd, cmdErr := buildAgentCommand(l.Cfg, req, l.CommandName)
 	if cmdErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), cmdErr)
-		return created{}, false
+		return Result{}, false
 	}
 	req.AgentCommand = agentCmd
 	// Strict children (issue/plan) fail fast on a known refresh error. Best-effort
@@ -127,18 +132,18 @@ func (l *Launcher) launch(req Request) (created, bool) {
 	// RefreshWarning below so it is not logged twice.
 	if req.Worktree.Refresh && req.Worktree.RefreshError != nil && !req.Worktree.RefreshBestEffort {
 		l.Log.Err("%s: prepare worktree: %v", paneLogLabel(req), req.Worktree.RefreshError)
-		return created{}, false
+		return Result{}, false
 	}
 
 	if req.BriefingPath != "" && !l.Cfg.DryRun && !l.writeBriefing(req) {
-		return created{}, false
+		return Result{}, false
 	}
 
 	logPaneRequest(req, l.Log)
 
 	if l.Cfg.DryRun {
 		printPaneDryRun(req, l.Info.Target, l.Log, l.Palette)
-		return created{}, true
+		return Result{}, true
 	}
 
 	prepared, prepErr := worktree.Prepare(worktree.Options{
@@ -157,25 +162,25 @@ func (l *Launcher) launch(req Request) (created, bool) {
 	}
 	if prepErr != nil {
 		l.Log.Err("%s: prepare worktree: %v", paneLogLabel(req), prepErr)
-		return created{}, false
+		return Result{}, false
 	}
 	if prepared.AlreadyExists {
 		l.Log.Err("%s: worktree path already exists during launch: %s (duplicate slug or concurrent fanout run)", paneLogLabel(req), prepared.WorktreePath)
-		return created{}, false
+		return Result{}, false
 	}
 
 	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, l.Info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, l.Log); !result.OK() {
 		l.Log.Err("%s: %v", paneLogLabel(req), result.Err)
 		printPaneHookOutput(result, l.Log)
 		failCleanup(paneLogLabel(req), l.Info.Target, "", &prepared, l.Log)
-		return created{}, false
+		return Result{}, false
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, l.Log)
 
 	paneID, ok := l.splitAndDecorate(req, prepared.WorktreePath, decorateOpts{})
 	if !ok {
 		failCleanup(paneLogLabel(req), l.Info.Target, "", &prepared, l.Log)
-		return created{}, false
+		return Result{}, false
 	}
 	var codexPlanStatus codexapp.Status
 	if req.CodexPlanMode {
@@ -184,7 +189,7 @@ func (l *Launcher) launch(req Request) (created, bool) {
 		if planErr != nil {
 			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			failCleanup(paneLogLabel(req), l.Info.Target, paneID, &prepared, l.Log)
-			return created{}, false
+			return Result{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
@@ -193,7 +198,7 @@ func (l *Launcher) launch(req Request) (created, bool) {
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			failCleanup(paneLogLabel(req), l.Info.Target, paneID, &prepared, l.Log)
-			return created{}, false
+			return Result{}, false
 		}
 	}
 	if err := displayname.WriteFanoutMetadata(prepared.WorktreePath, displayname.FanoutMetadata{
@@ -208,10 +213,10 @@ func (l *Launcher) launch(req Request) (created, bool) {
 		l.Log.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		rollbackState(l.Recorder, req, l.Log)
 		failCleanup(paneLogLabel(req), l.Info.Target, paneID, &prepared, l.Log)
-		return created{}, false
+		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
-	return created{Request: req, PaneID: paneID, Prepared: prepared}, true
+	return Result{PaneID: paneID}, true
 }
 
 // writeBriefing creates the briefing directory and writes req.BriefingBody to
@@ -231,14 +236,21 @@ func (l *Launcher) writeBriefing(req Request) bool {
 // Attach creates one agent pane attached to an existing directory (no
 // worktree preparation, no WorktreeCreated hook, no metadata write).
 func (l *Launcher) Attach(req Request, targetPath string) bool {
+	_, ok := l.AttachWithResult(req, targetPath)
+	return ok
+}
+
+// AttachWithResult creates one agent pane attached to an existing directory
+// and returns its exact tmux pane id.
+func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, bool) {
 	agentCmd, err := buildAgentCommand(l.Cfg, req, l.CommandName)
 	if err != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), err)
-		return false
+		return Result{}, false
 	}
 	req.AgentCommand = agentCmd
 	if req.BriefingPath != "" && !l.writeBriefing(req) {
-		return false
+		return Result{}, false
 	}
 
 	l.Log.Info("%s: attach %s to %s", paneLogLabel(req), req.Agent, targetPath)
@@ -251,7 +263,7 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
-		return false
+		return Result{}, false
 	}
 	codexPlanStatus := codexapp.Status{}
 	if req.CodexPlanMode {
@@ -260,7 +272,7 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 		if planErr != nil {
 			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			failCleanup("", l.Info.Target, paneID, nil, nil)
-			return false
+			return Result{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
@@ -270,11 +282,11 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			failCleanup("", l.Info.Target, paneID, nil, nil)
-			return false
+			return Result{}, false
 		}
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), paneID, targetPath)
-	return true
+	return Result{PaneID: paneID}, true
 }
 
 // decorateOpts selects the strictness of splitAndDecorate's post-split steps.

@@ -176,6 +176,46 @@ esac
 	}
 }
 
+func TestLaunchIssueSessionFromTUIReturnsStandalonePaneID(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	origin := t.TempDir()
+	gitCmdTest(t, origin, "init", "--bare")
+	gitCmdTest(t, repo, "remote", "add", "origin", origin)
+	gitCmdTest(t, repo, "push", "-u", "origin", "main")
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%91")
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 501 --json number,title,state,body,labels")
+  printf '{"number":501,"title":"standalone","state":"OPEN","body":"body","labels":[]}'
+  ;;
+"api --paginate --slurp repos/{owner}/{repo}/issues/501/sub_issues?per_page=100")
+  printf '[[]]'
+  ;;
+"issue view 501 --json body -q .body")
+  printf 'body\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 501, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Notice != "started session for #501" {
+		t.Fatalf("notice = %q, want standalone success", result.Notice)
+	}
+	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91"}) {
+		t.Fatalf("created pane ids = %#v, want [%%91]", result.CreatedPaneIDs)
+	}
+}
+
 // TestLaunchIssueSessionFromTUITranslatesAlreadyFanned pins the standalone
 // lane: a childless issue whose pane is already recorded surfaces a readable
 // message instead of the raw sentinel error.

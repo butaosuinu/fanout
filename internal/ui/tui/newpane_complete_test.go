@@ -178,9 +178,9 @@ func TestPromptCompletionEnterSubmitsWhenNoResults(t *testing.T) {
 	var launched bool
 	m := newModel(Options{
 		ProjectRoot: "/repo",
-		LaunchPane: func(LaunchRequest) (string, error) {
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 			launched = true
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -319,7 +319,7 @@ func TestPromptCompletionEnterDuringLoadDoesNotSubmit(t *testing.T) {
 	var launched bool
 	m := newModel(Options{
 		ProjectRoot: "/repo",
-		LaunchPane:  func(LaunchRequest) (string, error) { launched = true; return "", nil },
+		LaunchPane:  func(LaunchRequest) (LaunchResult, error) { launched = true; return LaunchResult{}, nil },
 	})
 	m.openNewPaneForm()
 	// repoFilesLoaded stays false (still loading); no index set.

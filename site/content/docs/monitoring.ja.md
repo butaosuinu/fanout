@@ -93,6 +93,10 @@ repo config の安全ルールも `config.json` と同じです。repo config �
 
 `n` は Mode 行つきの tmux popup を開き、Prompt / Issue を切り替えます。
 
+この popup から Prompt、plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の新規ペインへフォーカスが移ります。
+`F11` または `prefix + T` でコンソールに戻れます。
+agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元のフォーカスを維持します。
+
 **Prompt** は従来の manual ペインです。
 複数行の prompt を書いて `claude` / `codex` の起動数を指定し、prompt 欄では `Shift+Enter` または `Ctrl+J` で改行、`@` でリポジトリのファイルパス補完を使えます。
 manual の `codex` ペインは app-server 経由の Codex Plan Mode で起動します(`claude` は通常起動)。

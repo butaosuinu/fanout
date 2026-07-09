@@ -302,7 +302,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.notice = "created new agent pane"
 		}
-		return m, m.loadStateCmd(false)
+		reloadCmd := m.loadStateCmd(false)
+		if msg.attached || len(msg.createdPaneIDs) == 0 {
+			return m, reloadCmd
+		}
+		focusCmd := m.focusPaneIDCmd(msg.createdPaneIDs[0], m.notice)
+		if focusCmd == nil {
+			return m, reloadCmd
+		}
+		return m, tea.Batch(reloadCmd, focusCmd)
 	case newPanePromptMsg:
 		m.newPanePopupOpen = false
 		if msg.err != nil {
@@ -479,7 +487,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.keyboardPaused = true
 		}
 		if msg.err != nil {
-			m.notice = fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
+			focusNotice := fmt.Sprintf("focus skipped for %s: %v", dash(msg.paneID), msg.err)
+			m.notice = appendFocusNotice(msg.contextNotice, focusNotice)
 			if errors.Is(msg.err, errPaneNotAlive) {
 				m.markPaneStale(msg.paneID)
 				m.refreshRows()
@@ -489,7 +498,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.zoomErr != nil {
 				zoomNote = fmt.Sprintf(" (zoom failed: %v)", msg.zoomErr)
 			}
-			m.notice = fmt.Sprintf("focused %s%s; return to the fanout tui pane to continue", msg.paneID, zoomNote)
+			focusNotice := fmt.Sprintf("focused %s%s; return to the fanout tui pane to continue", msg.paneID, zoomNote)
+			m.notice = appendFocusNotice(msg.contextNotice, focusNotice)
 		}
 		return m, nil
 	case panePeekLoadedMsg:
@@ -516,6 +526,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func appendFocusNotice(contextNotice, focusNotice string) string {
+	if contextNotice == "" {
+		return focusNotice
+	}
+	return contextNotice + "; " + focusNotice
 }
 
 // scheduleRelayout bumps the resize generation and returns a debounced tick. A
