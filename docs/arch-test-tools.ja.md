@@ -44,7 +44,7 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 
 | 現行テスト | go-arch-lint | arch-go | depguard |
 |---|---|---|---|
-| `TestLayerImportDirection` | △ 方向は `_test.go` 込みで書けるが、`legacyDirectionAllowlist` の自動失効がない | △ 加えて `_test.go`(`Tests: false`)と build 対象外を検査しない | △ 方向は書けるが自動失効がなく、build 対象外を検査しない |
+| `TestLayerImportDirection` | △ 方向は `_test.go` 込みで書けるが、`legacyDirectionAllowlist` の自動失効がない。component はディレクトリ単位のため、`path_test.go` 1 ファイル限定の例外が `internal/infra/team` パッケージ全体の許可に広がる(production ファイルの同じ違反も通る) | △ 加えて `_test.go`(`Tests: false`)と build 対象外を検査しない。例外もパッケージ単位に広がる | △ 方向は書けるが自動失効がなく、build 対象外を検査しない。`files` glob はファイル単位なので例外の粒度は保てる |
 | `TestCorePurity` | × stdlib 制限機構がない | × 例外の上書き不可 | △ `$` 完全一致・`files` 否定 glob・`$test` で denylist と例外を書けるが、未使用例外の自動失効がない |
 | `TestToolsStdlibOnly` | ○ 依存許可を空にした component は stdlib のみ許可 | △ 非テスト・build 対象のみ | △ Strict + `$gostd` で書けるが build 対象のみ |
 | `TestPackageMainOnlyInCmd` | △ `cmd/...` の被 import 禁止は可。package main 配置(package 節の検査)は import linter の範囲外 | △ 同左 | △ 同左 |
