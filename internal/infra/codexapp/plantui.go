@@ -119,6 +119,9 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		if err != nil {
 			return err
 		}
+		if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
+			return err
+		}
 	} else {
 		if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
 			return err

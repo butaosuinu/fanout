@@ -253,6 +253,22 @@ func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
 	}
 }
 
+func TestWaitForCodexRemoteTUIStartupRejectsEarlyTUIExit(t *testing.T) {
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error, 1)
+	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
+	tuiDone <- errors.New("early exit")
+
+	gotDrain, err := waitForCodexRemoteTUIStartup(tuiDone, drainDone, server)
+
+	if gotDrain != nil {
+		t.Fatalf("drainDone = %#v, want nil on startup failure", gotDrain)
+	}
+	if err == nil || !strings.Contains(err.Error(), "early exit") {
+		t.Fatalf("error = %v, want early exit", err)
+	}
+}
+
 func TestCodexTurnCompletionAgentStateMapsTerminalStates(t *testing.T) {
 	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "plan" {
 		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want plan", got)
