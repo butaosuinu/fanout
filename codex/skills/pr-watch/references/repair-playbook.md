@@ -29,14 +29,20 @@ Compare `headRefName` with `git branch --show-current`. Checkout the PR head or
 stop before editing when they differ. Do not push a different local branch over
 the PR head.
 
-Read check buckets rather than relying on the command exit code; pending and
-failing checks can make `gh pr checks` nonzero.
+Read required-check buckets rather than relying on the command exit code;
+pending and failing checks can make `gh pr checks` nonzero. Optional checks stay
+out of these buckets and CI repair triggers; `mergeStateStatus` still governs
+final readiness independently.
 
 ```bash
 gh pr checks ${pr:+"$pr"} \
+  --required \
   --json name,state,bucket,link,workflow \
   --jq 'sort_by(.bucket,.workflow,.name) | .[] | {bucket,workflow,name,state,link}' || true
 ```
+
+Treat `no required checks reported` as a known empty required-check set. Other
+empty or failed responses remain unknown or blocked; do not coerce them to green.
 
 ## Fetch actionable review state
 
@@ -156,8 +162,9 @@ churn-only rebase.
 
 ## Repair CI
 
-For each `fail` or `cancel` bucket, identify the failing provider and head SHA.
-For GitHub Actions, inspect failed logs only and always name the repository.
+For each required-check `fail` or `cancel` bucket, identify the failing provider
+and head SHA. For GitHub Actions, inspect failed logs only and always name the
+repository.
 
 ```bash
 gh run view -R "$owner/$repo" RUN_ID --log-failed

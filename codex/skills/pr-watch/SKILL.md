@@ -107,14 +107,17 @@ human approval, configured `:+1:`, or a review request with no known actionable
 comment. For an ambiguous update, inspect latest event/comment metadata first;
 fetch bodies only when it likely contains actionable work.
 
-Treat `checks_reported=false` as unknown, not green. After a push, keep polling
-until checks appear. A repository with no CI may finish without checks only
-after its workflow and branch-protection configuration confirms none are
-expected.
+The helper polls only GitHub-required checks; optional checks do not enter its
+digest or CI repair triggers. `no required checks reported` is a known empty
+required-check set. Treat a generic `checks_reported=false` as unknown, not
+green, and after a push keep polling while it remains false. Completion requires
+`checks_reported=true` (including a known empty required-check set), zero
+pending/failing/cancelled required checks, and a ready merge state.
 
-Finish only with `mergeable=MERGEABLE` and `merge_state=CLEAN|HAS_HOOKS`.
+Finish with `mergeable=MERGEABLE` and `merge_state=CLEAN|HAS_HOOKS`.
 `BLOCKED`, `UNSTABLE`, `DRAFT`, `BEHIND`, `DIRTY`, and `UNKNOWN` are not
-completion states even when checks and review fields otherwise look ready.
+completion states even when required checks and review fields otherwise look
+ready.
 
 ## Repair pass
 
@@ -175,7 +178,8 @@ Report in 2-4 sentences:
 - whether commits, pushes, replies, and cheap watch occurred
 - approval source (`reviewDecision=APPROVED`, configured `:+1:`, or not required)
 - final state: terminal, `mergeable=MERGEABLE` +
-  `merge_state=CLEAN|HAS_HOOKS` + green + approved, timeout, or blocked
+  `merge_state=CLEAN|HAS_HOOKS` + required checks ready + approved, timeout, or
+  blocked
 
 List remaining work only when the result is not complete.
 

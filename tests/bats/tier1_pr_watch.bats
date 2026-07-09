@@ -24,6 +24,13 @@ case "${1:-} ${2:-}" in
     exit "${PR_WATCH_PR_STATUS:-0}"
     ;;
   "pr checks")
+    case " $* " in
+      *" --required "*) ;;
+      *)
+        printf 'pr checks must use --required: %s\n' "$*" >&2
+        exit 2
+        ;;
+    esac
     cat "$PR_WATCH_FIXTURE/checks.tsv"
     [ -z "${PR_WATCH_CHECKS_ERROR:-}" ] || printf '%s\n' "$PR_WATCH_CHECKS_ERROR" >&2
     exit "${PR_WATCH_CHECKS_STATUS:-0}"
@@ -83,8 +90,40 @@ state_dir_for() {
 
   [ "$status" -eq 0 ]
   [[ "$output" == event=change* ]]
-  [[ "$output" == *"checks_reported=false"* ]]
+  [[ "$output" == *"checks_reported=false"* ]] || return 1
   [[ "$output" == *"checks_pass=0"* ]]
+}
+
+@test "an empty required-check set is known and does not become pending" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  export PR_WATCH_CHECKS_STATUS=1
+  export PR_WATCH_CHECKS_ERROR="no required checks reported on the branch"
+
+  run_watch "$repo" snapshot --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=change* ]]
+  [[ "$output" == *"checks_reported=true"* ]] || return 1
+  [[ "$output" == *"checks_pass=0"* ]] || return 1
+  [[ "$output" == *"checks_pending=0"* ]] || return 1
+  [[ "$output" == *"checks_fail=0"* ]]
+}
+
+@test "wait accepts a known empty required-check set when merge state is ready" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  export PR_WATCH_CHECKS_STATUS=1
+  export PR_WATCH_CHECKS_ERROR="no required checks reported on the branch"
+
+  run_watch "$repo" wait --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=change* ]]
+  [[ "$output" == *"merge_state=CLEAN"* ]] || return 1
+  [[ "$output" == *"checks_reported=true"* ]] || return 1
+  [[ "$output" == *"checks_pending=0"* ]] || return 1
+  [[ "$output" == *"checks_fail=0"* ]]
 }
 
 @test "snapshot emits changes and suppresses an unchanged continued digest" {
@@ -199,7 +238,7 @@ state_dir_for() {
   [ "$status" -eq 124 ]
   [[ "$output" == event=timeout* ]]
   [[ "$output" == *"state=OPEN"* ]]
-  [[ "$output" == *"checks_reported=false"* ]]
+  [[ "$output" == *"checks_reported=true"* ]] || return 1
   [[ "$output" == *"head=head-one"* ]]
 
   unset PR_WATCH_MAX_SECONDS

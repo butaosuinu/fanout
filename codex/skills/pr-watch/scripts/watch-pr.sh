@@ -200,16 +200,21 @@ fetch_snapshot() {
   : >"$tmp_dir/checks.out"
   : >"$tmp_dir/checks.err"
   set +e
-  gh pr checks -R "$repo" "$pr" --json name,bucket,state,workflow,link \
+  gh pr checks -R "$repo" "$pr" --required --json name,bucket,state,workflow,link \
     --jq 'sort_by(.bucket,.name,.workflow,.link,.state) | .[] | [.bucket,.name,.state,.workflow,.link] | @tsv' \
     >"$tmp_dir/checks.out" 2>"$tmp_dir/checks.err"
   checks_status=$?
   set -e
   checks_reported=true
   if [ ! -s "$tmp_dir/checks.out" ]; then
-    checks_reported=false
-    if [ "$checks_status" -ne 0 ] && ! grep -qi 'no checks reported' "$tmp_dir/checks.err"; then
-      emit_blocked checks_snapshot_failed "$checks_status"
+    if [ "$checks_status" -ne 0 ]; then
+      if grep -qi 'no required checks reported' "$tmp_dir/checks.err"; then
+        : # An empty required-check set is known and does not block completion.
+      elif grep -qi 'no checks reported' "$tmp_dir/checks.err"; then
+        checks_reported=false
+      else
+        emit_blocked checks_snapshot_failed "$checks_status"
+      fi
     fi
   fi
   LC_ALL=C sort "$tmp_dir/checks.out" >"$tmp_dir/checks.sorted"
@@ -301,6 +306,13 @@ merge_state_is_ready() {
   [ "$snap_merge_state" = CLEAN ] || [ "$snap_merge_state" = HAS_HOOKS ]
 }
 
+required_checks_are_ready() {
+  [ "$checks_reported" = true ] &&
+    [ "$check_pending" -eq 0 ] &&
+    [ "$check_fail" -eq 0 ] &&
+    [ "$check_cancel" -eq 0 ]
+}
+
 baseline_is_actionable() {
   [ "$checks_reported" = false ] ||
     [ "$snap_state" != OPEN ] ||
@@ -312,7 +324,7 @@ baseline_is_actionable() {
     [ "$check_cancel" -gt 0 ] ||
     { [ "$snap_draft" = false ] && [ "$snap_mergeable" = MERGEABLE ] &&
       merge_state_is_ready &&
-      [ "$check_pending" -eq 0 ] &&
+      required_checks_are_ready &&
       { [ "$snap_review" = APPROVED ] ||
         { [ "$snap_review" = NONE ] && [ "$snap_review_requests" -eq 0 ]; }; }; }
 }
