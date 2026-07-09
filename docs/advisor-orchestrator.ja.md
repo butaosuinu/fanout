@@ -75,13 +75,14 @@ Fable advisor を直接呼ぶ純正経路は存在しない**。claude CLI 側�
 
 1. **msg bus**(`internal/infra/team` + `msgstore` + `app/peermsg`)—
    per-parent SQLite。roster(peers)、`fanout msg send/inbox/register`。
-   push 補助の `nudge` は実装済みで、`@fanout_agent_state` が
-   running / working / plan / idle のときだけ send-keys する
-   (blocked / done には送らない)。なお claude/skills/fanout/SKILL.md と
-   codex/skills/fanout/SKILL.md はどちらも「nudge は無い」と記載しており
-   実装と乖離している(両方を本件で修正する)。CLAUDE.md も Architecture
-   Notes(「today only running qualifies」)と Behavior Boundaries(4 値の
-   許可リスト)で食い違っており、実装に合わせて前者を正す
+   push 補助は別 verb の `fanout msg nudge`(`send` は保存のみ)。実装済みで、
+   `@fanout_agent_state` が running / working / plan / idle のときだけ send-keys
+   する(blocked / done には送らない)。なお fanout / fanout-plan の SKILL.md
+   4 本(claude/codex × fanout/fanout-plan)はいずれも「nudge は無い」旨を
+   記載しており実装と乖離している(4 本とも本件で修正する)。CLAUDE.md も
+   Architecture Notes(「today only running qualifies」+「send nudges」)と
+   Behavior Boundaries(4 値の許可リスト・nudge は別 verb)で食い違っており、
+   実装に合わせて前者を正す
 2. **briefing**(`internal/app/briefing`)— agent 名で文面が分岐し、子の
    行動を親側から設計できる。codex 子は post-work-review gate、claude 子は
    /code-review 指示を既に受けている
@@ -240,6 +241,9 @@ post-work-review(claude 実装 → codex レビュー)の鏡像。codex 子が�
    合成番号)が要る — pane option だけでは保存・受信のキーにならない。(2)
    pane 照合 identity: nudge が正しいペインに送るための識別子。discovery は
    role 列で行う(`role TEXT NOT NULL DEFAULT 'worker'` を additive 追加)。
+   ただし DB に列を足すだけでは足りず、子が advisor 行を判別できるよう
+   `fanout msg peers` の出力(render.go の PEER/SLUG/AGENT/DISPLAY_NAME/PANE/
+   LAST_SEEN テーブルと JSON)に role 列を出す配線が #455 に要る。
    既存 msg bus を素直に流用すると穴が 3 つあるため spike #453 で確定させる:
    (a) `--to`/`nudge` の解決は lane 非対称で、issue lane は負の合成番号を受ける
    が plan lane は task id を要求し負番号を弾く。(b) plan lane で予約 task id
