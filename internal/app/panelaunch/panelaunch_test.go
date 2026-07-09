@@ -203,7 +203,7 @@ func TestNewManualRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
 	}
 }
 
-func TestNewManualRequestCodexPlanModeUsesPlanControllerAndInlinePrompt(t *testing.T) {
+func TestNewManualRequestCodexPlanModeUsesPlanControllerAndPlanPrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
 		Agent:         "codex",

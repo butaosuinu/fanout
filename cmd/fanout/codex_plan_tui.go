@@ -11,6 +11,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
+const codexPlanTUIScreenCaptureLines = 2000
+
 func isCodexPlanTUIRequest(args []string) bool {
 	return len(args) > 0 && args[0] == codexapp.PlanTUICommand
 }
@@ -21,6 +23,9 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 		return code
 	}
 	cfg.Version = version
+	cfg.CapturePlanScreen = func() (string, error) {
+		return tmuxrun.CapturePlanSource(os.Getenv("TMUX_PANE"), codexPlanTUIScreenCaptureLines)
+	}
 	cfg.SetAgentState = func(state string) {
 		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
 	}

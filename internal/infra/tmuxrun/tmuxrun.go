@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
 	// wrapper sets to "running" before the agent starts and "done" after it
 	// exits; in between, in-pane emitters refine it (launch-injected Claude
-	// hooks: working/blocked/idle, Codex Plan Mode controller: working/plan).
+	// hooks: working/blocked/idle, Codex Plan Mode controller: startup working).
 	// It is the dashboard's agent-state signal: #{pane_current_command}
 	// cannot be used because the non-interactive `sh -lc` wrapper runs without
 	// job control, so the agent shares the wrapper's process group and tmux
@@ -65,8 +66,9 @@ const (
 	paneBorderStyle       = "fg=#165E83"
 	// popupBorderLines / popupBorderStyle make display-popup frames read as a
 	// fanout-owned modal instead of blending into the surrounding terminal.
-	popupBorderLines = "double"
-	popupBorderStyle = paneActiveBorderStyle
+	popupBorderLines       = "double"
+	popupBorderStyle       = paneActiveBorderStyle
+	literalLineSubmitDelay = 250 * time.Millisecond
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -402,8 +404,8 @@ type LivePane struct {
 	// AgentState は pane user option @fanout_agent_state の値。fanout の起動
 	// ラッパー(BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
 	// "done" を設定し、その間を起動時注入の Claude hooks が
-	// working/blocked/idle に、Codex Plan Mode コントローラが working/plan に
-	// 細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
+	// working/blocked/idle に、Codex Plan Mode コントローラが startup 中の
+	// working に細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
 	// listing が失敗したとき・join 済み id に対応する行が無いときも空。
 	AgentState string
 	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
@@ -1371,7 +1373,9 @@ func SendKeys(target string, keys ...string) error {
 // the literal send succeeds but the Enter fails the hint sits unsubmitted in
 // the input buffer, which is harmless (it is just text) and fits the
 // best-effort contract — the message it points at is already persisted, so a
-// failed nudge never loses information.
+// failed nudge never loses information. The short pause before Enter gives
+// terminal TUIs time to move the literal bytes into their composer; without it
+// fast tmux writes can leave the text inserted but unsubmitted.
 func SendLiteralLine(paneID, text string) error {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
@@ -1380,6 +1384,7 @@ func SendLiteralLine(paneID, text string) error {
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", "--", text).Run(); err != nil {
 		return fmt.Errorf("tmux send-keys -l: %w", err)
 	}
+	time.Sleep(literalLineSubmitDelay)
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
 		return fmt.Errorf("tmux send-keys Enter: %w", err)
 	}

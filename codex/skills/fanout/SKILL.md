@@ -72,8 +72,8 @@ which fanout turns on tmux `extended-keys`; `Up` / `Down` picks an agent row,
 `Space` toggles it, `Left` / `Right` changes its count, and `Enter` creates the
 selected panes).
 In Issue mode, `Ctrl+O` opens the selected issue in the default browser.
-Manual `codex` panes start in Codex Plan Mode and receive the popup prompt
-inline; manual `claude` panes start normally. Press `a` on a recorded row to
+Manual `codex` panes start in Codex Plan Mode through app-server; manual
+`claude` panes start normally. Press `a` on a recorded row to
 attach one or more new agent panes to that same worktree without creating a new
 git worktree; attached rows can be focused/peeked but do not count toward merge
 progress. Press `A` to open a shell in the selected row's worktree, or `t` for
@@ -141,10 +141,12 @@ use this workflow directly.
    `FANOUT_AGENT`; repeat `--agent NUM=name` to override one child issue.
    Supported agents are `claude` and `codex`.
 4. `--codex-plan-mode` is valid only when every selected child resolves to
-   `codex` after per-issue overrides. It uses Codex app-server to create the
-   child Plan Mode thread, then resumes it with the fanout prompt through the
-   interactive Codex TUI. The prompt tells Codex to inspect relevant context
-   before presenting a plan.
+   `codex` after per-issue overrides. It starts a Codex app-server, creates a
+   Plan Mode thread, attaches the interactive Codex TUI, then starts the fanout
+   prompt. Launch readiness is recorded after the TUI attaches and accepts the
+   initial Plan turn; plan generation and the approval UI continue inside the
+   pane without a startup timeout. The prompt tells Codex to inspect relevant
+   context before presenting a plan.
 
 ## Workflow
 
@@ -418,14 +420,14 @@ API + parent body. Key points:
 - Lifecycle hooks are always on and come from user `hooks.json`.
 - `--codex-plan-mode` / `--no-codex-plan-mode` apply only when every selected
   child resolves to `codex`. TUI-created manual `codex` panes use the same
-  Plan Mode path automatically but pass the popup prompt inline instead of
-  writing a briefing file. The inline prompt keeps normal non-mutating
-  discovery before the `<proposed_plan>` response.
-  When enabled, fanout starts a Codex app-server, creates the child Plan Mode
-  thread, and resumes it with the child prompt through the interactive Codex
-  TUI. fanout does not send `/plan` or prompt text through tmux. If Plan Mode
-  thread setup or TUI attach fails, fanout fails that launch before recording
-  state and cleans up the pane/worktree so the child can be retried.
+  app-server Plan Mode path automatically instead of writing a briefing file.
+  The prompt keeps normal non-mutating discovery before the `<proposed_plan>`
+  response. When enabled, fanout starts a Codex app-server, creates a Plan Mode
+  thread, attaches the interactive Codex TUI, and starts the child prompt. It
+  records the launch after the initial Plan turn is accepted; slow plan
+  generation or approval waiting never triggers startup cleanup. Failures before
+  app-server startup, TUI attach, thread setup, or initial turn acceptance still
+  fail the launch and clean up the pane/worktree so the child can be retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

@@ -29,8 +29,8 @@ type client struct {
 	closed bool
 }
 
-// requester is the request-only slice of client that the Plan Mode setup
-// helpers consume; tests substitute a fake implementation.
+// requester is the request-only slice of client used during app-server
+// initialization; tests substitute a fake implementation.
 type requester interface {
 	Request(id, method string, params any) (json.RawMessage, error)
 }
@@ -43,21 +43,6 @@ type sessionClient interface {
 
 type sender interface {
 	send(v any) error
-}
-
-// streamClient is the read/write slice of client the initial-turn drain loop
-// and the server-request handlers consume; tests substitute a scripted fake.
-type streamClient interface {
-	receive() (appServerMessage, error)
-	sender
-}
-
-// planTurnClient is what beginCodexPlanTurn needs: request the turn, drain its
-// stream, and close the connection once fanout stops listening.
-type planTurnClient interface {
-	requester
-	streamClient
-	Close()
 }
 
 // dialClient connects a client to a running app-server websocket address.

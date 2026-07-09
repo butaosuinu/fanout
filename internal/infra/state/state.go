@@ -50,7 +50,7 @@ type Pane struct {
 	SourceIssueNum int    `json:"sourceIssueNum,omitempty"`
 	SourceTaskID   string `json:"sourceTaskId,omitempty"`
 	Agent          string `json:"agent"`
-	// CodexPlanMode は --codex-plan-mode(app-server Plan thread + 対話 Codex TUI)
+	// CodexPlanMode は --codex-plan-mode(app-server Plan Mode thread + 対話 Codex TUI)
 	// で起動したペインかどうか。ダッシュボードの GET /api/plan が plan 抽出の
 	// 対象ペインを限定するために参照する。additive なフィールドなので
 	// SchemaVersion は据え置き(旧版 fanout は未知キーとして無視して読める)。

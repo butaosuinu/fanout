@@ -95,7 +95,7 @@ repo config の安全ルールも `config.json` と同じです。repo config �
 
 **Prompt** は従来の manual ペインです。
 複数行の prompt を書いて `claude` / `codex` の起動数を指定し、prompt 欄では `Shift+Enter` または `Ctrl+J` で改行、`@` でリポジトリのファイルパス補完を使えます。
-manual の `codex` ペインは Codex Plan Mode で起動し、prompt を inline で受け取ります(`claude` は通常起動)。
+manual の `codex` ペインは app-server 経由の Codex Plan Mode で起動します(`claude` は通常起動)。
 下の plan fan-out チェックボックスを有効にすると、agent をちょうど 1 本選んだうえで、プロンプトを `fanout plan` で並列タスクに分解するコーディネータ 1 つの起動に切り替わります(コーディネータは `codex` でも常に通常 agent として起動します)。
 
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
