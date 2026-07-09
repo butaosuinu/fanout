@@ -34,28 +34,33 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 | GoArchTest v0.1.0 / go-arctest / archtest / cht-go-lint | 未成熟または停滞 | — | — | 対象外 |
 | gomodguard | 活発 | ×(module 単位のみ) | — | 対象外 |
 
-## どのツールも置換できないもの
+## 置換可能性の内訳
 
-- 未使用例外の自動失効(`legacyDirectionAllowlist` / `explicitLayers` の stale 検出)。手書きガードで最も価値の高い機能
-- `TestCorePurity` の例外(`core/agent`・`core/planspec`)。arch-go は denylist 本体を書けても、例外を持つパッケージだけ緩める手段がない
-- `TestInternalTreeShape`(import graph でなく実ディレクトリの検査)
-- `TestPackageMainOnlyInCmd` の package main 配置検査。`cmd/...` の被 import 禁止は import ルールとして表現できるが、package 節の検査は import linter の範囲外
-- `TestScanSanity`
-- `tools/reviewrisk` の docsync(`docs/architecture.ja.md` のパッケージ表 ↔ `rules.go`)
+テストごとの置換可能性。○ = ほぼ等価に置換可、△ = 劣化置換(欠ける性質を注記)、
+× = 表現不可。前提として、arch-go と depguard は build システム経由でパッケージを
+読むため、build tag や OS suffix で現在の GOOS/GOARCH から外れるファイルを
+検査しない(現行 `scanRepo` は build constraint を評価せず全 `.go` を parse
+する)。go-arch-lint は自前 scanner で全 `.go` を parse する。
 
-完全に置換できるのは go-arch-lint による `TestToolsStdlibOnly` 1 つ(依存許可を
-空にした component は stdlib のみ許可になり、scanner は `_test.go` を含む全
-`.go` を parse する)。層方向も go-arch-lint なら `_test.go` 込みで表現できるが、
-stale allowlist の自動失効がない。arch-go はさらに狭く、`packages.Load` の
-build 対象 import だけを見るため、`_test.go` に加えて build tag や OS suffix で
-現在の GOOS/GOARCH から外れるファイルも検査されない(現行 `scanRepo` は build
-constraint を評価せず全 `.go` を parse する)。
+| 現行テスト | go-arch-lint | arch-go | depguard |
+|---|---|---|---|
+| `TestLayerImportDirection` | △ 方向は `_test.go` 込みで書けるが、`legacyDirectionAllowlist` の自動失効がない | △ 加えて `_test.go`(`Tests: false`)と build 対象外を検査しない | △ 方向は書けるが自動失効がなく、build 対象外を検査しない |
+| `TestCorePurity` | × stdlib 制限機構がない | × 例外の上書き不可 | △ `$` 完全一致・`files` 否定 glob・`$test` で denylist と例外を書けるが、未使用例外の自動失効がない |
+| `TestToolsStdlibOnly` | ○ 依存許可を空にした component は stdlib のみ許可 | △ 非テスト・build 対象のみ | △ Strict + `$gostd` で書けるが build 対象のみ |
+| `TestPackageMainOnlyInCmd` | △ `cmd/...` の被 import 禁止は可。package main 配置(package 節の検査)は import linter の範囲外 | △ 同左 | △ 同左 |
+| `TestInternalTreeShape` | × 実ディレクトリ検査(非 Go ファイル含む)は import 解析の範囲外 | × 同左 | × 同左 |
+| `TestAllPackagesClassified` | ○ component 未所属ファイルを検出(component glob の整備が前提) | △ coverage 閾値 100% で近似 | × `files` glob 外のパッケージは素通し |
+| `TestExplicitLayerMapIsCurrent` | × 設定側の stale エントリ検出はない | × 同左 | × 同左 |
+| `TestScanSanity` | × 設定の空回り(壊れた glob で何も検査しない状態)を自己検出する仕組みはない | × 同左 | × 同左 |
+
+`tools/reviewrisk` の docsync(`docs/architecture.ja.md` のパッケージ表 ↔
+`rules.go`)はアーキテクチャリンターの守備範囲外で、どの案でも手書き維持。
 
 ## 判断
 
 不採用。理由:
 
-1. 置換範囲が小さい。完全置換できるのは go-arch-lint による `TestToolsStdlibOnly` 1 つで、層方向は stale allowlist の自動失効を失う劣化置換、core 純度はどのツールも例外を表現できない(arch-go は `_test.go` と build 対象外ファイルも検査しない)。stdlib 制約まで書ける depguard でも部分置換にとどまる(「検討した代替案」参照)。残る 7 テストの手書きは消えないため、ルール系統が Go map と YAML の 2 系統に分裂してドリフトのリスクだけ増える
+1. 置換範囲が狭い。上の表のとおり ○ は最多の go-arch-lint でも 2 テストにとどまり、核心の `TestLayerImportDirection` と `TestCorePurity` はどの候補でも劣化置換(自動失効の喪失、`_test.go`・build 対象外の非検査、例外の表現不可のいずれか)になる。手書きテストは全候補で複数残るため、ルール系統が Go map と設定ファイルの 2 系統に分裂してドリフトのリスクだけ増える
 2. arch-go は例外セマンティクスを表現できない。broad ルール側から例外パッケージを除外列挙して模倣すると、新規パッケージが自動でルールに入る現行の性質が壊れる
 3. 依存最小主義と合わない。必須依存を git/tmux/gh(+ live 実行時に選んだ agent CLI)に絞り、lint は pinned golangci-lint と shellcheck だけという方針に対し、go-arch-lint / arch-go はバイナリ pin か go.mod のテスト依存を増やす(golangci-lint 同梱の depguard は増やさないが、置換範囲は前項と「検討した代替案」のとおり)。現状の CI 追加コストはゼロ(`go test ./...` に同梱)
 4. `internal/arch` は review class H・reviewrisk S4(触れたら critical)の保護対象。ルールを YAML へ移すとガード定義が S4 の監視対象外に出て、`rules.go` / `signals.go` の保護面拡張が別途必要になる
@@ -64,7 +69,7 @@ constraint を評価せず全 `.go` を parse する)。
 検討した代替案も不採用:
 
 - ルール表のデータファイル(YAML 等)外出し — Go map は型検査・enforcement との同居・S4 保護をそのまま得られる。外出しはパーサ追加と保護面分裂のコストしかない
-- depguard の再有効化 — 候補の中では表現力が最も高い。`$` 末尾の完全一致で「`net` 禁止・`net/url` 許可」を再現でき、`files` の否定 glob と `$test` で `core/agent` / `core/planspec` の例外もテスト込みの検査も書け、pinned golangci-lint 同梱で追加依存もない。それでも不採用にする: 未使用例外の自動失効・実ディレクトリ検査・package main 配置・空回り防止は表現できず、`files` glob に載らない新規パッケージを黙って素通しする(`TestAllPackagesClassified` 相当の fail-closed がない)。部分置換で 2 系統分裂が残る点は他ツールと同じで、#191 の「ノイズ」判断を覆す利得がない
+- depguard の再有効化 — stdlib 制約の表現力は候補中で最も高い。`$` 末尾の完全一致で「`net` 禁止・`net/url` 許可」を再現でき、`files` の否定 glob と `$test` で `core/agent` / `core/planspec` の例外もテスト込みの検査も書け、pinned golangci-lint 同梱で追加依存もない。それでも不採用にする: 上の表のとおり自動失効・実ディレクトリ検査・package main 配置・空回り検出を持たず、`files` glob に載らない新規パッケージを黙って素通しする(`TestAllPackagesClassified` 相当の fail-closed がない)。部分置換で 2 系統分裂が残る点は他ツールと同じで、#191 の「ノイズ」判断を覆す利得がない
 
 ## 再評価の条件
 
