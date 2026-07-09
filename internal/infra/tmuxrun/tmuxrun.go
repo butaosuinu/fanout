@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 	// agentStateOption is a tmux pane user option the BuildPaneLaunchCommand
 	// wrapper sets to "running" before the agent starts and "done" after it
 	// exits; in between, in-pane emitters refine it (launch-injected Claude
-	// hooks: working/blocked/idle, Codex Plan Mode controller: working/plan).
+	// hooks: working/blocked/idle, Codex Plan Mode controller: startup working).
 	// It is the dashboard's agent-state signal: #{pane_current_command}
 	// cannot be used because the non-interactive `sh -lc` wrapper runs without
 	// job control, so the agent shares the wrapper's process group and tmux
@@ -402,8 +403,8 @@ type LivePane struct {
 	// AgentState は pane user option @fanout_agent_state の値。fanout の起動
 	// ラッパー(BuildPaneLaunchCommand)が agent 起動前に "running"、終了後に
 	// "done" を設定し、その間を起動時注入の Claude hooks が
-	// working/blocked/idle に、Codex Plan Mode コントローラが working/plan に
-	// 細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
+	// working/blocked/idle に、Codex Plan Mode コントローラが startup 中の
+	// working に細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
 	// listing が失敗したとき・join 済み id に対応する行が無いときも空。
 	AgentState string
 	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
@@ -1379,6 +1380,31 @@ func SendLiteralLine(paneID, text string) error {
 	}
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", "--", text).Run(); err != nil {
 		return fmt.Errorf("tmux send-keys -l: %w", err)
+	}
+	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
+		return fmt.Errorf("tmux send-keys Enter: %w", err)
+	}
+	return nil
+}
+
+// PasteLiteralLine pastes text into paneID and submits it with Enter. Unlike
+// SendLiteralLine, the payload can contain newlines: tmux paste-buffer sends it
+// as one paste operation, which preserves multi-line prompts for TUIs that
+// support bracketed paste.
+func PasteLiteralLine(paneID, text string) error {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	bufferName := fmt.Sprintf("fanout-%d-%d", os.Getpid(), time.Now().UnixNano())
+	load := exec.Command("tmux", "load-buffer", "-b", bufferName, "-")
+	load.Stdin = strings.NewReader(text)
+	if err := load.Run(); err != nil {
+		return fmt.Errorf("tmux load-buffer: %w", err)
+	}
+	defer func() { _ = exec.Command("tmux", "delete-buffer", "-b", bufferName).Run() }()
+	if err := exec.Command("tmux", "paste-buffer", "-t", paneID, "-b", bufferName).Run(); err != nil {
+		return fmt.Errorf("tmux paste-buffer: %w", err)
 	}
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
 		return fmt.Errorf("tmux send-keys Enter: %w", err)

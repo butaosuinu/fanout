@@ -28,11 +28,14 @@ type TUIConfig struct {
 	ResumeSessionID string
 	StatusFile      string
 	Version         string
-	// SetAgentState reports the pane's agent state (working/plan) from
-	// app-server turn notifications. Best-effort display telemetry: the cmd
-	// entrypoint wires it to tmuxrun.SetPaneAgentState; nil (tests, direct
-	// calls) means no reporting.
+	// SetAgentState reports best-effort pane state while the Plan Mode prompt is
+	// being submitted. The cmd entrypoint wires it to tmuxrun.SetPaneAgentState;
+	// nil (tests, direct calls) means no reporting.
 	SetAgentState func(state string)
+	// SendPlanPrompt types the initial /plan line into the already-running TUI.
+	// The cmd entrypoint wires this to tmux paste/send-keys so Codex sees the
+	// same composer slash-command path a user would type by hand.
+	SendPlanPrompt func(prompt string) error
 }
 
 type codexThreadInfo struct {
@@ -86,12 +89,12 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	// bounded-wait) so its in-flight "plan" write cannot outlive the process;
 	// paths that already consumed or awaited the drain nil drainDone first.
 	defer func() { awaitDrainAfterTUIExit(client, drainDone) }()
-	tuiPrompt := ""
+	planPrompt := ""
 	if thread.ID == "" {
 		if err = initializeCodexPlanClient(client, cfg.Version); err != nil {
 			return err
 		}
-		tuiPrompt = codexPlanStartupPrompt(cfg.Prompt)
+		planPrompt = codexPlanStartupPrompt(cfg.Prompt)
 	} else {
 		err = initializeCodexPlanClient(client, cfg.Version)
 		if err != nil {
@@ -99,7 +102,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		}
 	}
 
-	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), tuiPrompt, stdout, stderr)
+	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), "", stdout, stderr)
 	if err != nil {
 		return err
 	}
@@ -110,22 +113,28 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		}
 	}()
 
-	watchingAppServer := false
 	if thread.ID == "" {
 		threadReady, watchDone := drainCodexAppServerUntilThreadStartedCmd(client, setState)
 		drainDone = watchDone
-		watchingAppServer = true
+		if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
+			return err
+		}
+		if err = sendCodexPlanStartupPrompt(cfg.SendPlanPrompt, planPrompt); err != nil {
+			return err
+		}
+		reportCodexPlanAgentState(setState, "working")
 		thread, err = waitForCodexPlanThreadStarted(tuiDone, drainDone, threadReady, server)
 		if err != nil {
 			return err
 		}
-		if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
-			return err
-		}
+		closeCodexAppServerObserver(client, drainDone)
+		drainDone = nil
 	} else {
 		if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
 			return err
 		}
+		closeCodexAppServerObserver(client, drainDone)
+		drainDone = nil
 	}
 
 	if err = writeStatus(cfg.StatusFile, Status{
@@ -137,7 +146,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, watchingAppServer)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, false)
 	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
 	tuiStopped = tuiExited
 	return err
@@ -256,6 +265,16 @@ func codexPlanStartupPrompt(prompt string) string {
 	return "/plan " + prompt
 }
 
+func sendCodexPlanStartupPrompt(send func(string) error, prompt string) error {
+	if send == nil {
+		return fmt.Errorf("codex plan mode prompt injection is not configured")
+	}
+	if err := send(prompt); err != nil {
+		return fmt.Errorf("send Codex Plan Mode prompt: %w", err)
+	}
+	return nil
+}
+
 func codexRemoteTUIResumeID(thread codexThreadInfo) string {
 	if strings.TrimSpace(thread.SessionID) != "" {
 		return thread.SessionID
@@ -350,6 +369,10 @@ func drainCodexAppServerNotificationsUntilClosedWithThread(receiver appServerRec
 // outlive this process by much. The bounded wait keeps shutdown responsive;
 // stale agent state is display-only telemetry.
 func awaitDrainAfterTUIExit(client *client, drainDone <-chan error) {
+	closeCodexAppServerObserver(client, drainDone)
+}
+
+func closeCodexAppServerObserver(client *client, drainDone <-chan error) {
 	if drainDone == nil {
 		return
 	}

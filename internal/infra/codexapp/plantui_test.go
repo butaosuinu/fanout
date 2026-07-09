@@ -22,9 +22,9 @@ func TestCodexRemoteTUIArgsPassPromptToResume(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteTUIArgsStartsFreshSessionWithPrompt(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "", "/plan hello plan")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "--", "/plan hello plan"}
+func TestCodexRemoteTUIArgsStartsFreshSessionWithoutPrompt(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "", "")
+	want := []string{"--remote", "ws://127.0.0.1:1234"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
@@ -58,6 +58,26 @@ func TestCodexPlanStartupPromptUsesSlashPlan(t *testing.T) {
 	empty := codexPlanStartupPrompt(" \n ")
 	if empty != "/plan" {
 		t.Fatalf("codexPlanStartupPrompt(empty) = %q, want /plan", empty)
+	}
+}
+
+func TestSendCodexPlanStartupPromptUsesConfiguredSender(t *testing.T) {
+	var sent string
+	err := sendCodexPlanStartupPrompt(func(prompt string) error {
+		sent = prompt
+		return nil
+	}, "/plan inspect repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent != "/plan inspect repo" {
+		t.Fatalf("sent prompt = %q, want /plan inspect repo", sent)
+	}
+}
+
+func TestSendCodexPlanStartupPromptRequiresSender(t *testing.T) {
+	if err := sendCodexPlanStartupPrompt(nil, "/plan"); err == nil {
+		t.Fatal("sendCodexPlanStartupPrompt(nil) error = nil, want error")
 	}
 }
 
