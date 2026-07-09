@@ -9,6 +9,16 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.10.0 (2026-07-09)
+
+- **Agent-state テレメトリ。** `@fanout_agent_state` 契約を 6 値の語彙(`running` / `working` / `plan` / `blocked` / `idle` / `done`)に拡張しました。起動ラッパーと Codex Plan Mode が状態を発行し、TUI / web の glyph とバッジに反映されます。agent がプランを提示・入力待ち・終了したときにコンソールが通知音を鳴らします。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **TUI popup アクション。** settings popup とペインクローズの選択 popup を追加し、いずれもアクティブなペインの隣に表示します。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **TUI picker の改善。** picker から issue リンクを直接開けるようにし、コンパクト switcher の選択をフォーカス中のペインと同期させました。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **PR review-risk の機械判定。** H/M/A 正典から `review:<level>` を判定する `tools/reviewrisk` を新設しました。ローカルでは `make review-risk` で実行できます。`docs/review-risk.ja.md` を参照。
+- **briefing を `/tmp` の外へ。** 子の briefing を `/tmp` から `.fanout/briefings/` へ移設しました。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.10.0)
+
 ## v0.9.0 (2026-07-06)
 
 - **常駐コンソールの刷新。** 引数なしコンソールに、コンパクトな Session switcher(`v` で切り替え)、`1`–`9` の数字ジャンプ、`Z` zoom、AgentState 列、tmux popup のショートカットヘルプを追加し、再起動時にペインを復元するようにしました。任意のペインから `F11` または `prefix T` で復帰できます。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
