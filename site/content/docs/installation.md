@@ -84,7 +84,7 @@ make link           # symlinks the Go binary as $(BINDIR)/fanout + symlinks inte
 make uninstall      # removes installed paths
 ```
 
-Building it needs a Go toolchain (Go 1.26+) plus Node.js 24+ and pnpm 10+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
+Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 10+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 
 ## Keeping it updated
 

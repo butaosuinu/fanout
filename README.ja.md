@@ -176,7 +176,7 @@ flag を生成します。詳しくは
   引数なしの TUI コンソールは素の shell から起動できます。
 - Project モードは `read:project` の gh スコープが必要です
   (`gh auth refresh -s read:project`)。
-- チェックアウトからビルドする場合は、追加で Go 1.26+、Node.js 24+、pnpm 10+
+- チェックアウトからビルドする場合は、追加で Go 1.26.5+、Node.js 24+、pnpm 10+
   が必要です(curl インストールはビルド済みバイナリを配るのでどちらも不要)。
 
 ## 開発

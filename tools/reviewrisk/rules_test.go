@@ -66,6 +66,7 @@ func TestClassifyPath(t *testing.T) {
 
 		// --- web ---
 		{name: "web index.html is H", path: "web/index.html", want: ClassH, found: true},
+		{name: "web pnpm workspace config is H", path: "web/pnpm-workspace.yaml", want: ClassH, found: true},
 		{name: "web hooks transport is M", path: "web/src/hooks/useSnapshot.ts", want: ClassM, found: true},
 		{name: "web lib transport is M", path: "web/src/lib/api.ts", want: ClassM, found: true},
 		{name: "web components are A", path: "web/src/components/App.tsx", want: ClassA, found: true},
