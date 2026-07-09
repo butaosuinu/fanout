@@ -142,9 +142,9 @@ use this workflow directly.
    Supported agents are `claude` and `codex`.
 4. `--codex-plan-mode` is valid only when every selected child resolves to
    `codex` after per-issue overrides. It starts a Codex app-server, creates a
-   Plan Mode turn with the fanout prompt, then attaches the interactive Codex
-   TUI to that session. The prompt tells Codex to inspect relevant context
-   before presenting a plan.
+   Plan Mode thread, attaches the interactive Codex TUI, then starts the fanout
+   prompt and waits for the approval UI. The prompt tells Codex to inspect
+   relevant context before presenting a plan.
 
 ## Workflow
 
@@ -421,10 +421,10 @@ API + parent body. Key points:
   app-server Plan Mode path automatically instead of writing a briefing file.
   The prompt keeps normal non-mutating discovery before the `<proposed_plan>`
   response. When enabled, fanout starts a Codex app-server, creates a Plan Mode
-  turn with the child prompt, then attaches the interactive Codex TUI. If
-  app-server Plan Mode startup or TUI attach fails, fanout fails that launch
-  before recording state and cleans up the pane/worktree so the child can be
-  retried.
+  thread, attaches the interactive Codex TUI, starts the child prompt, and waits
+  until Codex shows the approval UI. If app-server Plan Mode startup, TUI
+  attach, or approval UI readiness fails, fanout fails that launch before
+  recording state and cleans up the pane/worktree so the child can be retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

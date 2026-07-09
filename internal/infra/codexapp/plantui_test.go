@@ -69,17 +69,17 @@ func TestCodexPlanSettingsUpdateParamsUsesPlanMode(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteTUIResumeIDPrefersSessionID(t *testing.T) {
+func TestCodexRemoteTUIResumeIDPrefersThreadID(t *testing.T) {
 	got := codexRemoteTUIResumeID(codexThreadInfo{ID: "thread-1", SessionID: "session-1"})
-	if got != "session-1" {
-		t.Fatalf("codexRemoteTUIResumeID() = %q, want session-1", got)
+	if got != "thread-1" {
+		t.Fatalf("codexRemoteTUIResumeID() = %q, want thread-1", got)
 	}
 }
 
-func TestCodexRemoteTUIResumeIDFallsBackToThreadID(t *testing.T) {
-	got := codexRemoteTUIResumeID(codexThreadInfo{ID: "thread-1"})
-	if got != "thread-1" {
-		t.Fatalf("codexRemoteTUIResumeID() = %q, want thread-1", got)
+func TestCodexRemoteTUIResumeIDFallsBackToSessionID(t *testing.T) {
+	got := codexRemoteTUIResumeID(codexThreadInfo{SessionID: "session-1"})
+	if got != "session-1" {
+		t.Fatalf("codexRemoteTUIResumeID() = %q, want session-1", got)
 	}
 }
 
@@ -311,6 +311,43 @@ func TestStartCodexPlanTurnReportsSynchronousCompletion(t *testing.T) {
 	}
 }
 
+func TestStartCodexPlanTurnCarriesPlanCollaborationMode(t *testing.T) {
+	requester := &fakeRequester{result: json.RawMessage(`{"turn":{"id":"turn-1","status":"started"}}`)}
+
+	_, err := startCodexPlanTurn(requester, codexThreadInfo{ID: "thread-1", Model: "gpt-test", PlanEffort: "high"}, "/repo", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requester.calls) != 1 || requester.calls[0].method != "turn/start" {
+		t.Fatalf("calls = %#v, want one turn/start", requester.calls)
+	}
+	body, err := json.Marshal(requester.calls[0].params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shaped struct {
+		CollaborationMode struct {
+			Mode     string `json:"mode"`
+			Settings struct {
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			} `json:"settings"`
+		} `json:"collaborationMode"`
+	}
+	if err := json.Unmarshal(body, &shaped); err != nil {
+		t.Fatal(err)
+	}
+	if shaped.CollaborationMode.Mode != "plan" {
+		t.Fatalf("mode = %q, want plan", shaped.CollaborationMode.Mode)
+	}
+	if shaped.CollaborationMode.Settings.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", shaped.CollaborationMode.Settings.Model)
+	}
+	if shaped.CollaborationMode.Settings.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", shaped.CollaborationMode.Settings.ReasoningEffort)
+	}
+}
+
 // recordedStates collects setState calls for synchronous notification-drain
 // assertions.
 func recordedStates(states *[]string) func(string) {
@@ -489,6 +526,119 @@ func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
 	}
 }
 
+func TestWaitForCodexPlanApprovalUIReportsPlanWhenPromptAppears(t *testing.T) {
+	var states []string
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error)
+	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
+	captures := 0
+
+	gotDrain, err := waitForCodexPlanApprovalUI(
+		tuiDone,
+		drainDone,
+		server,
+		func() (string, error) {
+			captures++
+			if captures == 1 {
+				return "planning...", nil
+			}
+			return "Implement this plan?", nil
+		},
+		recordedStates(&states),
+		time.Second,
+		time.Millisecond,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDrain != drainDone {
+		t.Fatalf("drainDone = %#v, want original channel", gotDrain)
+	}
+	if !slices.Equal(states, []string{"plan"}) {
+		t.Fatalf("states = %#v, want plan", states)
+	}
+}
+
+func TestWaitForCodexPlanApprovalUITimesOut(t *testing.T) {
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error)
+	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
+
+	gotDrain, err := waitForCodexPlanApprovalUI(
+		tuiDone,
+		drainDone,
+		server,
+		func() (string, error) { return "plan text without approval prompt", nil },
+		nil,
+		5*time.Millisecond,
+		time.Millisecond,
+	)
+
+	if gotDrain != nil {
+		t.Fatalf("drainDone = %#v, want nil", gotDrain)
+	}
+	if err == nil || !strings.Contains(err.Error(), `Implement this plan?`) {
+		t.Fatalf("error = %v, want approval prompt timeout", err)
+	}
+}
+
+func TestWaitForCodexPlanApprovalUIRejectsEarlyTUIExit(t *testing.T) {
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error)
+	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
+	tuiDone <- errors.New("early exit")
+
+	gotDrain, err := waitForCodexPlanApprovalUI(
+		tuiDone,
+		drainDone,
+		server,
+		func() (string, error) { return "planning...", nil },
+		nil,
+		time.Second,
+		time.Millisecond,
+	)
+
+	if gotDrain != nil {
+		t.Fatalf("drainDone = %#v, want nil", gotDrain)
+	}
+	if err == nil || !strings.Contains(err.Error(), "early exit") {
+		t.Fatalf("error = %v, want early exit", err)
+	}
+}
+
+func TestWaitForCodexPlanApprovalUIRejectsDrainError(t *testing.T) {
+	tuiDone := make(chan error, 1)
+	drainDone := make(chan error, 1)
+	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
+	drainDone <- errors.New("turn failed")
+
+	gotDrain, err := waitForCodexPlanApprovalUI(
+		tuiDone,
+		drainDone,
+		server,
+		func() (string, error) { return "planning...", nil },
+		nil,
+		time.Second,
+		time.Millisecond,
+	)
+
+	if gotDrain != nil {
+		t.Fatalf("drainDone = %#v, want nil", gotDrain)
+	}
+	if err == nil || !strings.Contains(err.Error(), "turn failed") {
+		t.Fatalf("error = %v, want drain failure", err)
+	}
+}
+
+func TestCodexPlanApprovalUIReadyRequiresApprovalPrompt(t *testing.T) {
+	if !codexPlanApprovalUIReady("some plan\n\nImplement this plan?") {
+		t.Fatal("codexPlanApprovalUIReady() = false for approval prompt, want true")
+	}
+	if codexPlanApprovalUIReady("<proposed_plan>plan</proposed_plan>") {
+		t.Fatal("codexPlanApprovalUIReady() = true for plan text only, want false")
+	}
+}
+
 func TestWaitForCodexRemoteTUIStartupRejectsEarlyTUIExit(t *testing.T) {
 	tuiDone := make(chan error, 1)
 	drainDone := make(chan error, 1)
@@ -502,6 +652,45 @@ func TestWaitForCodexRemoteTUIStartupRejectsEarlyTUIExit(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "early exit") {
 		t.Fatalf("error = %v, want early exit", err)
+	}
+}
+
+func TestReceiveCodexRemoteTUIThreadHandlesRequestsAndReportsThread(t *testing.T) {
+	var states []string
+	client := &fakeStartupAppServerClient{messages: []appServerMessage{
+		{
+			ID:     json.RawMessage(`"req-1"`),
+			Method: "tool/requestUserInput",
+			Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+		},
+		{
+			Method: "thread/started",
+			Params: json.RawMessage(`{"thread":{"id":"thread-1","sessionId":"session-1"}}`),
+		},
+	}}
+
+	thread, err := receiveCodexRemoteTUIThread(client, recordedStates(&states))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.ID != "thread-1" || thread.SessionID != "session-1" {
+		t.Fatalf("thread = %+v, want thread/session ids", thread)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(client.sent))
+	}
+	if !slices.Equal(states, []string{"blocked", "working"}) {
+		t.Fatalf("states = %#v, want blocked then working", states)
+	}
+}
+
+func TestReceiveCodexRemoteTUIThreadRejectsEOFBeforeThread(t *testing.T) {
+	client := &fakeStartupAppServerClient{messages: []appServerMessage{{Method: "turn/started"}}}
+
+	_, err := receiveCodexRemoteTUIThread(client, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "before TUI reported its active thread") {
+		t.Fatalf("error = %v, want missing thread error", err)
 	}
 }
 
@@ -588,8 +777,8 @@ func TestDrainCodexAppServerDuringStartupHandlesRequestsAndStates(t *testing.T) 
 	if len(client.sent) != 1 {
 		t.Fatalf("sent responses = %d, want 1", len(client.sent))
 	}
-	if !slices.Equal(states, []string{"blocked", "working", "working", "plan"}) {
-		t.Fatalf("states = %#v, want blocked, working, working, plan", states)
+	if !slices.Equal(states, []string{"blocked", "working", "working"}) {
+		t.Fatalf("states = %#v, want blocked, working, working", states)
 	}
 }
 
