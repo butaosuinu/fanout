@@ -141,10 +141,10 @@ use this workflow directly.
    `FANOUT_AGENT`; repeat `--agent NUM=name` to override one child issue.
    Supported agents are `claude` and `codex`.
 4. `--codex-plan-mode` is valid only when every selected child resolves to
-   `codex` after per-issue overrides. It uses Codex app-server to create the
-   child Plan Mode thread, then resumes it with the fanout prompt through the
-   interactive Codex TUI. The prompt tells Codex to inspect relevant context
-   before presenting a plan.
+   `codex` after per-issue overrides. It starts an interactive Codex TUI
+   through app-server and submits the fanout prompt as the initial `/plan`
+   prompt. The prompt tells Codex to inspect relevant context before
+   presenting a plan.
 
 ## Workflow
 
@@ -421,11 +421,11 @@ API + parent body. Key points:
   Plan Mode path automatically but pass the popup prompt inline instead of
   writing a briefing file. The inline prompt keeps normal non-mutating
   discovery before the `<proposed_plan>` response.
-  When enabled, fanout starts a Codex app-server, creates the child Plan Mode
-  thread, and resumes it with the child prompt through the interactive Codex
-  TUI. fanout does not send `/plan` or prompt text through tmux. If Plan Mode
-  thread setup or TUI attach fails, fanout fails that launch before recording
-  state and cleans up the pane/worktree so the child can be retried.
+  When enabled, fanout starts a Codex app-server, launches an interactive Codex
+  TUI, and passes the child prompt as the TUI's initial `/plan` prompt. fanout
+  does not type `/plan` or prompt text through tmux. If `/plan` thread startup
+  or TUI attach fails, fanout fails that launch before recording state and
+  cleans up the pane/worktree so the child can be retried.
 - **`gh` scope** — Projects v2 GraphQL needs `read:project` on top of `repo`.
   If fanout reports an authorization failure on `projectV2`
   (`HTTP 401` / `Resource not accessible by integration`), instruct the

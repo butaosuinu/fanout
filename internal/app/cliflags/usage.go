@@ -104,9 +104,9 @@ Options:
                       Include or omit the Claude-only Agent Teams hint in
                       child briefings. Default: on.
   --codex-plan-mode / --no-codex-plan-mode
-                      For --agent codex, create a Codex app-server plan thread
-                      and resume it with the prompt through an interactive
-                      Codex TUI instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
+                      For --agent codex, start an interactive Codex TUI
+                      through app-server and submit the prompt via /plan
+                      instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
   --pr-visualization / --no-pr-visualization
                       Include or omit structured PR-body plus gated Mermaid
                       guidance in auto-PR child briefings. Default: on.

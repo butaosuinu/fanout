@@ -10,9 +10,9 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101
   branch -> fanout/first-child-101
   base -> main
-  codex-plan-mode -> app-server Plan thread + interactive Codex TUI
+  codex-plan-mode -> app-server + interactive Codex TUI /plan session
   briefing size: 750 bytes
-  codex plan mode: app-server Plan thread + interactive Codex TUI
+  codex plan mode: app-server + interactive Codex TUI /plan session
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
@@ -27,7 +27,7 @@
     $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
-    # fanout waits for Plan Mode thread setup and Codex TUI attach before recording state
+    # fanout waits for Codex TUI /plan thread startup before recording state
     # status file: /tmp/fanout-codex-plan-project_root-101.json
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
@@ -38,9 +38,9 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102
   branch -> fanout/second-child-102
   base -> main
-  codex-plan-mode -> app-server Plan thread + interactive Codex TUI
+  codex-plan-mode -> app-server + interactive Codex TUI /plan session
   briefing size: 751 bytes
-  codex plan mode: app-server Plan thread + interactive Codex TUI
+  codex plan mode: app-server + interactive Codex TUI /plan session
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
@@ -55,7 +55,7 @@
     $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
-    # fanout waits for Plan Mode thread setup and Codex TUI attach before recording state
+    # fanout waits for Codex TUI /plan thread startup before recording state
     # status file: /tmp/fanout-codex-plan-project_root-102.json
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
