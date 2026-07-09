@@ -21,7 +21,8 @@
 
 depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノイズ」として
 不採用済み(`.golangci.yml` ヘッダに記録)。今回は「良いツールがあれば手書き
-テストを置換する」前提で、Go のアーキテクチャテストツールを調査した。
+テストを置換する」前提で、depguard も含めて Go のアーキテクチャテストツールを
+調査した。
 
 ## 調査結果
 
@@ -29,7 +30,7 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 |---|---|---|---|---|
 | [go-arch-lint](https://github.com/fe3dback/go-arch-lint) v1.16.0 | 514★・活発 | ○ | ×(`mayDependOn` / `canUse` は component / vendor のみ。stdlib は常時許可) | `TestCorePurity` を表現できない。方向のみの部分置換 |
 | [arch-go](https://github.com/arch-go/arch-go) v2.1.2 | 266★・活発 | ○ | ○ | マッチした全ルールを AND 適用し、上書き・除外機構がない(arch-go リポジトリの `internal/verifications/dependencies/verifications.go` で確認)。`core/agent` 等のサブパッケージ例外を表現できない。パッケージを `Tests: false` で読むため `_test.go` の import も検査対象外 |
-| [depguard](https://github.com/OpenPeeDeeP/depguard) v2 | golangci-lint 同梱 | ○ | ○(`$gostd`) | #191 で不採用済み。覆す材料なし |
+| [depguard](https://github.com/OpenPeeDeeP/depguard) v2 | golangci-lint 同梱 | ○ | ○(`$gostd`。`$` 末尾で完全一致指定可) | 候補中で表現力が最も高く、追加依存もない。それでも部分置換にとどまる(「検討した代替案」参照) |
 | GoArchTest v0.1.0 / go-arctest / archtest / cht-go-lint | 未成熟または停滞 | — | — | 対象外 |
 | gomodguard | 活発 | ×(module 単位のみ) | — | 対象外 |
 
@@ -42,16 +43,19 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 - `TestScanSanity`
 - `tools/reviewrisk` の docsync(`docs/architecture.ja.md` のパッケージ表 ↔ `rules.go`)
 
-完全に置換できるテストは 1 つもない。最良ケース(arch-go)でも
+完全に置換できるテストは 1 つもない。arch-go でも
 `TestLayerImportDirection` と `TestToolsStdlibOnly` の非テストファイル部分の
 置換にとどまる — 現行テストは `_test.go` にも層方向を適用し、stale allowlist
-検査も含むが、arch-go はどちらも持たない。
+検査も含むが、arch-go はどちらも持たない。さらに arch-go は `packages.Load` の
+build 対象 import だけを見るため、build tag や OS suffix で現在の GOOS/GOARCH
+から外れるファイルも検査されない(現行 `scanRepo` は build constraint を
+評価せず全 `.go` を parse する)。
 
 ## 判断
 
 不採用。理由:
 
-1. 置換範囲が小さい。go-arch-lint は方向のみ、arch-go でも方向と tools の stdlib-only の非テストファイル部分どまり(core 純度は例外が表現できず、`_test.go` の import はどのルールでも検査されない)。8 テストのどれも完全には置換できず、手書きは全テスト残るため、ルール系統が Go map と YAML の 2 系統に分裂してドリフトのリスクだけ増える
+1. 置換範囲が小さい。go-arch-lint は方向のみ、arch-go でも方向と tools の stdlib-only の非テスト・build 対象ファイル部分どまり(core 純度は例外が表現できず、`_test.go` の import はどのルールでも検査されない)。表現力が最も高い depguard でも部分置換にとどまる(「検討した代替案」参照)。8 テストのどれも完全には置換できず、手書きは全テスト残るため、ルール系統が Go map と YAML の 2 系統に分裂してドリフトのリスクだけ増える
 2. arch-go は例外セマンティクスを表現できない。broad ルール側から例外パッケージを除外列挙して模倣すると、新規パッケージが自動でルールに入る現行の性質が壊れる
 3. 依存最小主義と合わない。必須依存を git/tmux/gh(+ live 実行時に選んだ agent CLI)に絞り、lint は pinned golangci-lint と shellcheck だけという方針に対し、ツールはバイナリ pin か go.mod のテスト依存を増やす。現状の CI 追加コストはゼロ(`go test ./...` に同梱)
 4. `internal/arch` は review class H・reviewrisk S4(触れたら critical)の保護対象。ルールを YAML へ移すとガード定義が S4 の監視対象外に出て、`rules.go` / `signals.go` の保護面拡張が別途必要になる
@@ -60,7 +64,7 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 検討した代替案も不採用:
 
 - ルール表のデータファイル(YAML 等)外出し — Go map は型検査・enforcement との同居・S4 保護をそのまま得られる。外出しはパーサ追加と保護面分裂のコストしかない
-- depguard の再有効化 — #191 の判断を覆す材料がない
+- depguard の再有効化 — 候補の中では表現力が最も高い。`$` 末尾の完全一致で「`net` 禁止・`net/url` 許可」を再現でき、`files` の否定 glob と `$test` で `core/agent` / `core/planspec` の例外もテスト込みの検査も書け、pinned golangci-lint 同梱で追加依存もない。それでも不採用にする: 未使用例外の自動失効・実ディレクトリ検査・package main 配置・空回り防止は表現できず、`files` glob に載らない新規パッケージを黙って素通しする(`TestAllPackagesClassified` 相当の fail-closed がない)。部分置換で 2 系統分裂が残る点は他ツールと同じで、#191 の「ノイズ」判断を覆す利得がない
 
 ## 再評価の条件
 
