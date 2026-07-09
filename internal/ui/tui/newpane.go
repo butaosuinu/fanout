@@ -78,6 +78,11 @@ type NewPanePromptOptions struct {
 
 const newPanePopupOpeningNotice = "opening new pane popup..."
 
+const (
+	newPanePromptDefaultRows = 6
+	newPanePromptMinRows     = 3
+)
+
 // AttachTarget describes the recorded pane/worktree a new agent should share.
 type AttachTarget struct {
 	TargetPath        string
@@ -174,6 +179,7 @@ func (m *model) openNewPaneForm() {
 	m.mode = modeNewPane
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
+	m.fitNewPanePromptHeight()
 }
 
 // RunNewPanePrompt opens only the new-pane prompt UI and returns the submitted
@@ -295,6 +301,7 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 	m.notice = ""
 	m.newPane = newNewPaneForm(m.opts.DefaultAgent, m.inputContentWidth())
 	m.newPane.attach = &target
+	m.fitNewPanePromptHeight()
 	return m.reloadRepoFilesCmd()
 }
 
@@ -324,11 +331,11 @@ func attachSourceIdentity(pane paneView) (parent string, issueNum int, taskID, l
 func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt := textarea.New()
 	prompt.Placeholder = "Prompt"
-	prompt.Prompt = "> "
+	prompt.Prompt = ""
 	prompt.ShowLineNumbers = false
 	prompt.CharLimit = 1000
 	prompt.SetWidth(width)
-	prompt.SetHeight(6)
+	prompt.SetHeight(newPanePromptDefaultRows)
 	prompt.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j"),
 		key.WithHelp("ctrl+j", "newline"),
@@ -344,6 +351,79 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		agentIndex: defaultAgentIndex(defaultAgent),
 		focus:      newPaneFieldMain,
 	}
+}
+
+func (m *model) fitNewPanePromptHeight() {
+	if m.height <= 0 || m.newPane.mode != newPaneModePrompt {
+		return
+	}
+	available := m.newPaneContentAvailableHeight()
+	overhead := m.newPanePromptFixedOverhead() + m.newPaneCompletionPopupHeight()
+	m.newPane.prompt.SetHeight(clampInt(available-overhead, newPanePromptMinRows, newPanePromptDefaultRows))
+}
+
+func (m model) newPaneContentAvailableHeight() int {
+	if m.height <= 0 {
+		return m.height
+	}
+	if m.promptOnly {
+		return popupContentAvailableHeight(m.height)
+	}
+	// modalStyle adds one-cell padding plus a border on the top and bottom.
+	return max(m.height-4, 0)
+}
+
+func (m model) newPanePromptFixedOverhead() int {
+	overhead := 10
+	if !m.promptOnly {
+		// The in-process fallback keeps the title as its own section, followed
+		// by the blank section separator.
+		overhead += 2
+	}
+	if len(m.availableNewPaneModes()) > 1 {
+		overhead += 3
+	}
+	overhead += m.newPaneHintRows() - 1
+	if m.newPane.attach != nil {
+		overhead -= 2
+	}
+	if m.newPane.launching {
+		overhead++
+	}
+	if m.newPane.notice != "" {
+		overhead++
+	}
+	if m.newPane.err != "" {
+		overhead++
+	}
+	return overhead
+}
+
+func (m model) newPaneHintRows() int {
+	width := m.newPaneHintWrapWidth()
+	if width <= 0 {
+		return 1
+	}
+	return max(lipgloss.Height(lipgloss.NewStyle().Width(width).Render(m.newPaneHint())), 1)
+}
+
+func (m model) newPaneHintWrapWidth() int {
+	width := m.modalWidth()
+	if m.promptOnly {
+		return max(width-2*popupContentPadding, 1)
+	}
+	// modalStyle adds one-cell padding and one border cell on each side.
+	return max(width-4, 1)
+}
+
+func (m *model) setNewPaneNotice(notice string) {
+	m.newPane.notice = notice
+	m.fitNewPanePromptHeight()
+}
+
+func (m *model) setNewPaneErr(err string) {
+	m.newPane.err = err
+	m.fitNewPanePromptHeight()
 }
 
 func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -602,24 +682,25 @@ func (m *model) submitNewPane() tea.Cmd {
 	}
 	prompt := strings.TrimSpace(m.newPane.prompt.Value())
 	if prompt == "" {
-		m.newPane.err = "prompt is required"
+		m.setNewPaneErr("prompt is required")
 		return nil
 	}
 	agents := m.selectedNewPaneAgents()
 	if len(agents) == 0 {
-		m.newPane.err = "select at least one agent"
+		m.setNewPaneErr("select at least one agent")
 		return nil
 	}
 	if m.newPane.planFanout && len(agents) != 1 {
-		m.newPane.err = "plan fan-out launches one coordinator agent; select exactly one"
+		m.setNewPaneErr("plan fan-out launches one coordinator agent; select exactly one")
 		return nil
 	}
-	m.newPane.err = ""
+	m.setNewPaneErr("")
 	m.newPane.launching = true
+	m.fitNewPanePromptHeight()
 	if m.newPane.attach != nil {
 		if m.opts.LaunchAttach == nil {
-			m.newPane.err = "attach launcher is not configured"
 			m.newPane.launching = false
+			m.setNewPaneErr("attach launcher is not configured")
 			return nil
 		}
 		req := AttachLaunchRequest{
@@ -644,8 +725,8 @@ func (m *model) submitNewPane() tea.Cmd {
 		return tea.Quit
 	}
 	if m.opts.LaunchPane == nil {
-		m.newPane.err = "new pane launcher is not configured"
 		m.newPane.launching = false
+		m.setNewPaneErr("new pane launcher is not configured")
 		return nil
 	}
 	launch := m.opts.LaunchPane
@@ -717,45 +798,56 @@ func (m model) newPaneView() string {
 	}
 	// In the tmux popup the -T frame already shows the title, so drop the
 	// duplicate in-content heading; the in-process fallback keeps it.
-	var lines []string
+	var sections []string
 	if !m.promptOnly {
-		lines = append(lines, titleStyle.Render(title))
+		sections = append(sections, titleStyle.Render(title))
 	}
 	if len(m.availableNewPaneModes()) > 1 {
-		lines = append(lines, m.newPaneFieldView(newPaneFieldMode, "Mode", m.newPaneModeTabsView(), false))
+		sections = append(sections, m.newPaneFieldView(newPaneFieldMode, "Mode", m.newPaneModeTabsView(), false))
 	}
 	switch m.newPane.mode {
 	case newPaneModeIssue:
-		lines = append(lines,
+		sections = append(sections,
 			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
 			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
 		)
 	default:
-		lines = append(lines, m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true))
+		promptSection := m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true)
 		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
-			lines = append(lines, m.completionPopupView())
+			if popup := m.completionPopupView(); popup != "" {
+				promptSection += "\n" + popup
+			}
 		}
+		sections = append(sections, promptSection)
 		if m.newPane.attach == nil {
-			lines = append(lines, m.planFanoutCheckboxView())
+			sections = append(sections, m.planFanoutCheckboxView())
 		}
-		lines = append(lines, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
+		sections = append(sections, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
 	}
+	footers := make([]string, 0, 3)
 	if m.newPane.launching {
-		lines = append(lines, dimStyle.Render("creating pane..."))
+		footers = append(footers, dimStyle.Render("creating pane..."))
 	}
 	if m.newPane.notice != "" {
-		lines = append(lines, dimStyle.Render(m.newPane.notice))
+		footers = append(footers, dimStyle.Render(m.newPane.notice))
 	}
 	if m.newPane.err != "" {
-		lines = append(lines, errStyle.Render("error: "+m.newPane.err))
+		footers = append(footers, errStyle.Render("error: "+m.newPane.err))
 	}
-	lines = append(lines, dimStyle.Render(m.newPaneHint()))
-	return m.renderNewPaneModal(strings.Join(lines, "\n"))
+	footers = append(footers, dimStyle.Render(m.newPaneHint()))
+	content := strings.Join(sections, "\n\n")
+	if len(footers) > 0 {
+		if content != "" {
+			content += "\n"
+		}
+		content += strings.Join(footers, "\n")
+	}
+	return m.renderNewPaneModal(content)
 }
 
 // renderNewPaneModal frames the new-pane content. The tmux popup already draws
-// a border, so promptOnly renders borderless (popupContentStyle) to avoid a
-// double frame; the in-process overlay keeps the modal border.
+// a border, so promptOnly renders borderless with a one-cell content gutter;
+// the in-process overlay keeps the modal border.
 func (m model) renderNewPaneModal(content string) string {
 	if m.promptOnly {
 		return popupContentStyle.Width(m.modalWidth()).Render(content)
@@ -782,9 +874,9 @@ func (m model) newPaneHint() string {
 
 func (m model) newPaneFieldView(field newPaneField, label, value string, boxed bool) string {
 	focused := m.newPane.focus == field
-	marker := "  "
+	marker := plainItemMarker
 	if focused {
-		marker = "> "
+		marker = selectedItemMarker
 	}
 	if boxed {
 		style := inputBoxStyle
@@ -800,9 +892,9 @@ func (m model) newPaneFieldView(field newPaneField, label, value string, boxed b
 // the launch hands the prompt to the fanout-plan skill instead of starting a
 // plain agent pane.
 func (m model) planFanoutCheckboxView() string {
-	marker := "  "
+	marker := plainItemMarker
 	if m.newPane.focus == newPaneFieldPlan {
-		marker = "> "
+		marker = selectedItemMarker
 	}
 	box := "[ ]"
 	if m.newPane.planFanout {
@@ -821,9 +913,9 @@ func (m model) agentSelectorView() string {
 	lines := make([]string, 0, len(launchAgents))
 	for i, agentName := range launchAgents {
 		count := m.newPane.agentCount[agentName]
-		marker := "  "
+		marker := plainItemMarker
 		if m.newPane.focus == newPaneFieldAgent && m.newPane.agentIndex == i {
-			marker = "> "
+			marker = selectedItemMarker
 		}
 		token := fmt.Sprintf("[%d] %s", count, agentName)
 		if count > 0 {
@@ -903,8 +995,8 @@ func (m model) modalWidth() int {
 		return 80
 	}
 	if m.promptOnly {
-		// No modal border in the popup, so the content may use the full pty width
-		// (lipgloss Width excludes the border the popup frame already draws).
+		// No modal border in the popup; popupContentStyle owns the one-cell
+		// gutter inside the pty that tmux display-popup provides.
 		return clampInt(m.width, 40, 106)
 	}
 	return clampInt(m.width-12, 40, 104)

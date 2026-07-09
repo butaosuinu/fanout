@@ -101,3 +101,10 @@ func clampInt(v, low, high int) int {
 	}
 	return v
 }
+
+func popupContentAvailableHeight(height int) int {
+	if height <= 0 {
+		return height
+	}
+	return max(height-2*popupContentPadding, 0)
+}

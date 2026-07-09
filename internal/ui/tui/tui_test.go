@@ -2830,6 +2830,25 @@ func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
 	})
 }
 
+func TestCloseChoiceViewUsesTriangleSelectionMarker(t *testing.T) {
+	m := newModel(Options{})
+	m.mode = modeCloseChoice
+	m.pendingAction = &pendingLifecycleAction{
+		action:           actionClose,
+		pane:             paneView{Parent: "84", IssueNum: 101},
+		closeOptionIndex: 0,
+		closeMode:        lifecycle.ClosePaneOnly,
+	}
+
+	view := m.closeChoiceView()
+	if !strings.Contains(view, "▶ 1. Just close pane") {
+		t.Fatalf("close choice view missing selected triangle marker:\n%s", view)
+	}
+	if strings.Contains(view, "> 1.") {
+		t.Fatalf("close choice view should not render the old > marker:\n%s", view)
+	}
+}
+
 func TestLifecycleCloseChoiceSelectsWorktreeAndBranchModes(t *testing.T) {
 	tests := []struct {
 		key  string
@@ -3989,6 +4008,20 @@ func TestSettingsRowMarksForwardedEnvOverride(t *testing.T) {
 	}
 }
 
+func TestSettingsRowUsesTriangleSelectionMarker(t *testing.T) {
+	row := settingsRow{
+		spec:  fanoutsettings.ConfigKey{Key: "watcher", Kind: fanoutsettings.ValueBool},
+		value: fanoutsettings.BoolValue(true),
+	}
+	m := newModel(Options{})
+	m.settings = settingsForm{rows: []settingsRow{row}, cursor: 1}
+
+	view := m.settingsRowView(1, row)
+	if !strings.HasPrefix(view, selectedItemMarker) || strings.HasPrefix(view, "> ") {
+		t.Fatalf("settings selected row marker = %q, want %q", view, selectedItemMarker)
+	}
+}
+
 func TestSettingsSaveBlocksInvalidConfig(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
@@ -4797,6 +4830,78 @@ func TestNewPaneViewFramesTextInputs(t *testing.T) {
 	}
 }
 
+func TestNewPaneViewUsesOneCellModalPadding(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("modal view too short:\n%s", view)
+	}
+	if strings.Trim(strings.Trim(lines[1], "║"), " ") != "" {
+		t.Fatalf("modal should have one blank top padding line:\n%s", view)
+	}
+	for _, line := range lines {
+		if strings.Contains(line, selectedItemMarker+"Prompt") {
+			if !strings.HasPrefix(line, "║ "+selectedItemMarker) || strings.HasPrefix(line, "║  "+selectedItemMarker) {
+				t.Fatalf("modal content should start after one cell of padding:\n%s", view)
+			}
+			return
+		}
+	}
+	t.Fatalf("modal view missing selected prompt line:\n%s", view)
+}
+
+func TestNewPanePromptRemovesTextareaPromptMarker(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	if strings.Contains(view, "> Prompt") || strings.Contains(view, "> ") {
+		t.Fatalf("new pane prompt view should not render the old > marker:\n%s", view)
+	}
+	if !strings.Contains(view, selectedItemMarker+"Prompt") {
+		t.Fatalf("new pane prompt view missing selected marker %q:\n%s", selectedItemMarker, view)
+	}
+}
+
+func TestNewPaneViewSeparatesFormSections(t *testing.T) {
+	m := newModel(Options{})
+	m.width = 100
+	m.height = 30
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	lines := strings.Split(view, "\n")
+	promptBoxEnd := -1
+	planLine := -1
+	agentLine := -1
+	for i, line := range lines {
+		switch {
+		case strings.Contains(line, "┘"):
+			promptBoxEnd = i
+		case strings.Contains(line, "decompose via /fanout plan"):
+			planLine = i
+		case strings.Contains(line, "Agent"):
+			agentLine = i
+		}
+	}
+	if promptBoxEnd < 0 || planLine < 0 || agentLine < 0 {
+		t.Fatalf("new pane view missing prompt/plan/agent sections:\n%s", view)
+	}
+	if promptBoxEnd+2 != planLine || strings.Trim(strings.Trim(lines[promptBoxEnd+1], "║"), " ") != "" {
+		t.Fatalf("new pane view should leave one blank line between prompt and plan sections:\n%s", view)
+	}
+	if planLine+2 != agentLine || strings.Trim(strings.Trim(lines[planLine+1], "║"), " ") != "" {
+		t.Fatalf("new pane view should leave one blank line between plan and agent sections:\n%s", view)
+	}
+}
+
 func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	m := newModel(Options{})
 	m.openNewPaneForm()
@@ -4862,8 +4967,8 @@ func TestMergeDegradedIssueStatusKeepsWaveOfUnblockedPrevious(t *testing.T) {
 }
 
 // The tmux display-popup already frames the prompt-only popup, so its content
-// must drop the modal border and the duplicate "New agent pane" heading and use
-// the full pty width.
+// must drop the modal border and the duplicate "New agent pane" heading while
+// keeping the popup pty width stable.
 func TestNewPanePromptOnlyViewFillsPopupWithoutModalFrame(t *testing.T) {
 	m := newModel(Options{})
 	m.promptOnly = true
@@ -4881,6 +4986,214 @@ func TestNewPanePromptOnlyViewFillsPopupWithoutModalFrame(t *testing.T) {
 	}
 	if got := lipgloss.Width(view); got != 88 {
 		t.Fatalf("lipgloss.Width(view) = %d, want 88:\n%s", got, view)
+	}
+}
+
+func TestNewPanePromptOnlyViewFitsStandardPopupWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+
+	view := m.View()
+	if !strings.Contains(view, "Mode") {
+		t.Fatalf("popup view should render the mode selector when issue mode is wired:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("popup view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyErrorViewFitsStandardPopupWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+
+	if cmd := m.submitNewPane(); cmd != nil {
+		t.Fatal("submitNewPane returned a command without a prompt")
+	}
+	view := m.View()
+	if !strings.Contains(view, "error: prompt is required") {
+		t.Fatalf("popup view missing prompt error:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("popup error view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPaneFallbackPromptViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "New agent pane") {
+		t.Fatalf("fallback view should keep the in-modal title:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback prompt view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPaneFallbackIssueViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "more") {
+		t.Fatalf("fallback issue view should window overflowing rows:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback issue view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPaneFallbackIssueLaunchingViewFitsStandardHeightWithModeRow(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.width = 80
+	m.height = 24
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	m.newPane.launching = true
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.newPaneView()
+	if !strings.Contains(view, "creating pane...") {
+		t.Fatalf("fallback issue launching view missing footer:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("fallback issue launching view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyPromptNoticeViewFitsStandardPopup(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+	m.setNewPaneNotice("opened #42 in browser")
+
+	view := m.View()
+	if !strings.Contains(view, m.newPane.notice) {
+		t.Fatalf("prompt popup view missing notice:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("prompt popup notice view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyPromptEnhancedHintFitsMinimumPopup(t *testing.T) {
+	t.Setenv(EnhancedKeysEnv, "")
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 54
+	m.height = 20
+	m.openNewPaneForm()
+
+	view := m.View()
+	if !strings.Contains(view, "shift+enter/ctrl+j newline") {
+		t.Fatalf("prompt popup view missing enhanced-key hint:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("prompt popup enhanced hint view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestNewPanePromptOnlyIssueNoticeViewFitsStandardPopup(t *testing.T) {
+	m := newModel(Options{
+		ListOpenIssues: func() ([]IssueListItem, error) {
+			return nil, nil
+		},
+	})
+	m.promptOnly = true
+	m.width = 74
+	m.height = 20
+	m.openNewPaneForm()
+	m.newPane.mode = newPaneModeIssue
+	m.newPane.notice = "opened https://example.test/issues/1"
+	items := make([]IssueListItem, 12)
+	for i := range items {
+		items[i] = IssueListItem{Number: i + 1, Title: "issue row", HasOpenChildren: true}
+	}
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems(items)
+	m.recomputePicker(p)
+
+	view := m.View()
+	if !strings.Contains(view, m.newPane.notice) {
+		t.Fatalf("issue popup view missing notice:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("issue popup notice view height = %d, want <= %d:\n%s", got, m.height, view)
+	}
+}
+
+func TestPopupContentStyleUsesOneCellPadding(t *testing.T) {
+	view := popupContentStyle.Width(8).Render("x")
+	lines := strings.Split(view, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("popup content height = %d, want 3:\n%s", len(lines), view)
+	}
+	if strings.TrimSpace(lines[0]) != "" || strings.TrimSpace(lines[2]) != "" {
+		t.Fatalf("popup content should have blank top/bottom padding:\n%s", view)
+	}
+	if !strings.HasPrefix(lines[1], " x") || strings.HasPrefix(lines[1], "  x") {
+		t.Fatalf("popup content should have one leading cell of padding:\n%s", view)
+	}
+	if got := lipgloss.Width(view); got != 8 {
+		t.Fatalf("popup content width = %d, want 8:\n%s", got, view)
 	}
 }
 

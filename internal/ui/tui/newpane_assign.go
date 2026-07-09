@@ -250,7 +250,11 @@ func (m model) assignRowWindow() (start, end int) {
 	rows := len(m.newPane.assign.rows)
 	visible := pickerMaxRows
 	if m.height > 0 {
-		visible = clampInt(m.height-assignViewOverhead, 3, pickerMaxRows)
+		height := m.height
+		if m.promptOnly {
+			height = popupContentAvailableHeight(height)
+		}
+		visible = clampInt(height-assignViewOverhead, 3, pickerMaxRows)
 	}
 	if rows <= visible {
 		return 0, rows
@@ -280,9 +284,9 @@ func (m model) newPaneAssignView() string {
 		}
 		for i := start; i < end; i++ {
 			row := a.rows[i]
-			marker := "  "
+			marker := plainItemMarker
 			if i == a.index {
-				marker = "> "
+				marker = selectedItemMarker
 			}
 			agentName := launchAgents[clampInt(row.agentIdx, 0, len(launchAgents)-1)]
 			token := "[" + agentName + "]"

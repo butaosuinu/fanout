@@ -92,6 +92,7 @@ func (m *model) cycleNewPaneMode(key string) tea.Cmd {
 	}
 	m.newPane.mode = modes[idx]
 	m.newPane.err = ""
+	m.fitNewPanePromptHeight()
 	return m.ensureModeListLoaded()
 }
 
@@ -141,7 +142,27 @@ func (m model) pickerVisibleRows() int {
 	if m.height <= 0 {
 		return pickerMaxRows
 	}
-	return clampInt(m.height-pickerFormOverhead, 3, pickerMaxRows)
+	height := m.height
+	if m.promptOnly {
+		height = popupContentAvailableHeight(height)
+	}
+	overhead := pickerFormOverhead
+	if !m.promptOnly {
+		// The rendered in-process fallback separates sections with blank lines,
+		// and the standard-width issue hint wraps to two lines, so it needs
+		// less room for issue rows than the borderless tmux popup.
+		overhead += 3
+	}
+	if m.newPane.notice != "" {
+		overhead++
+	}
+	if m.newPane.err != "" {
+		overhead++
+	}
+	if m.newPane.launching {
+		overhead++
+	}
+	return clampInt(height-overhead, 1, pickerMaxRows)
 }
 
 func (m *model) moveActivePicker(delta int) {
@@ -424,11 +445,11 @@ func (m model) pickerView(p pickerState, emptyText string) string {
 		text = truncateToWidth(text, width-2)
 		switch {
 		case i == p.index:
-			lines = append(lines, "> "+titleStyle.Render(text))
+			lines = append(lines, selectedItemMarker+titleStyle.Render(text))
 		case item.note != "":
-			lines = append(lines, "  "+dimStyle.Render(text))
+			lines = append(lines, plainItemMarker+dimStyle.Render(text))
 		default:
-			lines = append(lines, "  "+text)
+			lines = append(lines, plainItemMarker+text)
 		}
 	}
 	if end < len(p.results) {

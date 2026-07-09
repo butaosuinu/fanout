@@ -493,9 +493,9 @@ func (m model) settingsView() string {
 }
 
 func (m model) settingsTargetView() string {
-	marker := "  "
+	marker := plainItemMarker
 	if m.settings.cursor == 0 {
-		marker = "> "
+		marker = selectedItemMarker
 	}
 	scope := "User config"
 	if m.settings.scope == fanoutsettings.ConfigScopeRepo {
@@ -505,9 +505,9 @@ func (m model) settingsTargetView() string {
 }
 
 func (m model) settingsRowView(cursor int, row settingsRow) string {
-	marker := "  "
+	marker := plainItemMarker
 	if m.settings.cursor == cursor {
-		marker = "> "
+		marker = selectedItemMarker
 	}
 	value := settingsDisplayValue(row)
 	if m.settings.editing && m.settings.cursor == cursor {
@@ -586,11 +586,15 @@ func (m model) settingsVisibleRows() int {
 	if m.height <= 0 {
 		return len(m.settings.rows)
 	}
+	height := m.height
+	if m.settingsOnly {
+		height = popupContentAvailableHeight(height)
+	}
 	overhead := 7
 	if !m.settingsOnly {
 		overhead++
 	}
-	return clampInt(m.height-overhead, 4, len(m.settings.rows))
+	return clampInt(height-overhead, 4, len(m.settings.rows))
 }
 
 func displayConfigPath(path string) string {

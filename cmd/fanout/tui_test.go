@@ -280,18 +280,25 @@ func TestTUINewPanePopupGeometryUsesClientDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 20, PromptWidth: 74, PromptHeight: 18}
+	want = tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 22, PromptWidth: 74, PromptHeight: 20}
 	if got != want {
 		t.Fatalf("80x24 popup geometry = %#v, want %#v", got, want)
 	}
 
-	got, err = tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 20})
+	got, err = tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 60, Height: 22})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 20, PromptWidth: 74, PromptHeight: 18}
+	want = tuiNewPanePopupGeometry{PopupWidth: 56, PopupHeight: 22, PromptWidth: 54, PromptHeight: 20}
 	if got != want {
-		t.Fatalf("small client popup geometry = %#v, want %#v", got, want)
+		t.Fatalf("60x22 popup geometry = %#v, want %#v", got, want)
+	}
+	if _, widthErr := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 59, Height: 22}); widthErr == nil {
+		t.Fatal("tuiNewPanePopupGeometryForClient() succeeded without enough prompt width")
+	}
+
+	if _, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 20}); err == nil {
+		t.Fatal("tuiNewPanePopupGeometryForClient() succeeded without enough prompt height")
 	}
 
 	if _, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
@@ -299,6 +306,33 @@ func TestTUINewPanePopupGeometryUsesClientDimensions(t *testing.T) {
 	}
 	if _, err := tuiNewPanePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 19}); err == nil {
 		t.Fatal("tuiNewPanePopupGeometryForClient() succeeded without enough prompt height")
+	}
+}
+
+func TestTUISettingsPopupGeometryUsesSettingsMinimumHeight(t *testing.T) {
+	got, err := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tuiNewPanePopupGeometry{PopupWidth: 76, PopupHeight: 20, PromptWidth: 74, PromptHeight: 18}
+	if got != want {
+		t.Fatalf("80x20 settings popup geometry = %#v, want %#v", got, want)
+	}
+
+	if _, heightErr := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 19}); heightErr == nil {
+		t.Fatal("tuiSettingsPopupGeometryForClient() succeeded without enough settings height")
+	}
+
+	got, err = tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 60, Height: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = tuiNewPanePopupGeometry{PopupWidth: 56, PopupHeight: 20, PromptWidth: 54, PromptHeight: 18}
+	if got != want {
+		t.Fatalf("60x20 settings popup geometry = %#v, want %#v", got, want)
+	}
+	if _, widthErr := tuiSettingsPopupGeometryForClient(tmuxrun.ClientSize{Width: 59, Height: 20}); widthErr == nil {
+		t.Fatal("tuiSettingsPopupGeometryForClient() succeeded without enough settings width")
 	}
 }
 
@@ -316,11 +350,14 @@ func TestTUIHelpPopupGeometryUsesClientDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = tuiHelpPopupGeometry{PopupWidth: 76, PopupHeight: 20, ContentWidth: 74, ContentHeight: 18}
+	want = tuiHelpPopupGeometry{PopupWidth: 76, PopupHeight: 23, ContentWidth: 74, ContentHeight: 21}
 	if got != want {
 		t.Fatalf("80x24 help popup geometry = %#v, want %#v", got, want)
 	}
 
+	if _, heightErr := tuiHelpPopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 22}); heightErr == nil {
+		t.Fatal("tuiHelpPopupGeometryForClient() succeeded without enough help height")
+	}
 	if _, err := tuiHelpPopupGeometryForClient(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
 		t.Fatal("tuiHelpPopupGeometryForClient() succeeded for too-small client")
 	}
@@ -343,16 +380,16 @@ func TestTUIClosePopupGeometryUsesClientDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 11, ContentWidth: 74, ContentHeight: 9}
+	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 12, ContentWidth: 74, ContentHeight: 10}
 	if got != want {
 		t.Fatalf("80x24 close popup geometry = %#v, want %#v", got, want)
 	}
 
-	got, err = tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 11})
+	got, err = tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 11, ContentWidth: 74, ContentHeight: 9}
+	want = tuiClosePopupGeometry{PopupWidth: 76, PopupHeight: 12, ContentWidth: 74, ContentHeight: 10}
 	if got != want {
 		t.Fatalf("small client close popup geometry = %#v, want %#v", got, want)
 	}
@@ -360,7 +397,7 @@ func TestTUIClosePopupGeometryUsesClientDimensions(t *testing.T) {
 	if _, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 40, Height: 20}); err == nil {
 		t.Fatal("tuiClosePopupGeometryForClient() succeeded for too-small client")
 	}
-	if _, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 10}); err == nil {
+	if _, err := tuiClosePopupGeometryForClient(tmuxrun.ClientSize{Width: 80, Height: 11}); err == nil {
 		t.Fatal("tuiClosePopupGeometryForClient() succeeded without enough close popup height")
 	}
 }

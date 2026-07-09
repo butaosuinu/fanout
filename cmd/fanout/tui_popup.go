@@ -22,12 +22,15 @@ import (
 
 const (
 	tuiClosePopupCommand       = "__tui-close-popup"
-	tuiClosePopupMinHeight     = 9
+	tuiClosePopupMinHeight     = 10
 	tuiHelpPopupCommand        = "__tui-help-popup"
-	tuiHelpPopupMinHeight      = 18
+	tuiHelpPopupMinHeight      = 21
 	tuiNewPanePopupCommand     = "__tui-new-pane-popup"
-	tuiNewPanePopupMinHeight   = 18
+	tuiNewPanePopupMinHeight   = 20
+	tuiNewPanePopupMinWidth    = 54
 	tuiSettingsPopupCommand    = "__tui-settings-popup"
+	tuiSettingsPopupMinHeight  = 18
+	tuiSettingsPopupMinWidth   = 54
 	tuiNewPanePopupBorderInset = 2
 	tuiNewPanePopupResultPoll  = 50 * time.Millisecond
 	tuiNewPanePopupResultWait  = 24 * time.Hour
@@ -105,7 +108,7 @@ func cmdTUIHelpPopup(args []string, lg *log.Logger) exitcode.Code {
 	fs := flag.NewFlagSet(tuiHelpPopupCommand, flag.ContinueOnError)
 	fs.SetOutput(lg.Stderr())
 	width := fs.Int("width", 76, "help width")
-	height := fs.Int("height", 18, "help height")
+	height := fs.Int("height", tuiHelpPopupMinHeight, "help height")
 	if err := fs.Parse(args); err != nil {
 		return exitcode.Invocation
 	}
@@ -461,7 +464,7 @@ func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.Settings
 		if err != nil {
 			return fanouttui.SettingsPopupResult{}, false, err
 		}
-		geometry, err := tuiNewPanePopupGeometryForClient(size)
+		geometry, err := tuiSettingsPopupGeometryForClient(size)
 		if err != nil {
 			return fanouttui.SettingsPopupResult{}, false, err
 		}
@@ -596,13 +599,31 @@ func tuiClosePopupGeometryForClient(size tmuxrun.ClientSize) (tuiClosePopupGeome
 
 func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
-	if size.Width < 54 || size.Height < minPopupHeight {
+	minClientWidth := tuiNewPanePopupMinWidth + tuiNewPanePopupBorderInset + 4
+	if size.Width < minClientWidth || size.Height < minPopupHeight {
 		return tuiNewPanePopupGeometry{}, fmt.Errorf("tmux client is too small for the new pane popup: %dx%d", size.Width, size.Height)
 	}
 	popupWidth := min(90, size.Width-4)
 	targetPopupHeight := min(int(math.Floor(float64(size.Height)*0.8)), size.Height-2)
 	popupHeight := max(targetPopupHeight, minPopupHeight)
 	// Bordered tmux display-popup subtracts the frame from the child pty.
+	return tuiNewPanePopupGeometry{
+		PopupWidth:   popupWidth,
+		PopupHeight:  popupHeight,
+		PromptWidth:  popupWidth - tuiNewPanePopupBorderInset,
+		PromptHeight: popupHeight - tuiNewPanePopupBorderInset,
+	}, nil
+}
+
+func tuiSettingsPopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
+	minPopupHeight := tuiSettingsPopupMinHeight + tuiNewPanePopupBorderInset
+	minClientWidth := tuiSettingsPopupMinWidth + tuiNewPanePopupBorderInset + 4
+	if size.Width < minClientWidth || size.Height < minPopupHeight {
+		return tuiNewPanePopupGeometry{}, fmt.Errorf("tmux client is too small for the settings popup: %dx%d", size.Width, size.Height)
+	}
+	popupWidth := min(90, size.Width-4)
+	targetPopupHeight := min(int(math.Floor(float64(size.Height)*0.8)), size.Height-2)
+	popupHeight := max(targetPopupHeight, minPopupHeight)
 	return tuiNewPanePopupGeometry{
 		PopupWidth:   popupWidth,
 		PopupHeight:  popupHeight,
