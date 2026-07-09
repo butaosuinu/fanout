@@ -41,6 +41,16 @@ type codexThreadInfo struct {
 	UseTurnCollaborationMode bool
 }
 
+type codexResolvedSettings struct {
+	Model           string
+	ReasoningEffort string
+}
+
+type codexPlanTurnStartResult struct {
+	TurnID    string
+	Completed bool
+}
+
 type codexTurnCompletion struct {
 	Matched bool
 	Status  string
@@ -101,11 +111,18 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		if err != nil {
 			return err
 		}
-		reportCodexPlanAgentState(setState, "working")
-		if err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt); err != nil {
+		var turnStart codexPlanTurnStartResult
+		turnStart, err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt)
+		if err != nil {
 			return err
 		}
-		drainDone = drainCodexAppServerDuringStartupCmd(client, setState)
+		if turnStart.Completed {
+			reportCodexPlanAgentState(setState, "plan")
+			drainDone = completedAppServerDrain()
+		} else {
+			reportCodexPlanAgentState(setState, "working")
+			drainDone = drainCodexAppServerDuringStartupCmd(client, setState, thread.ID, turnStart.TurnID)
+		}
 	}
 
 	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, codexRemoteTUIResumeID(thread), stdout, stderr)
@@ -125,8 +142,6 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
 		return err
 	}
-	closeCodexAppServerObserver(client, drainDone)
-	drainDone = nil
 
 	if err = writeStatus(cfg.StatusFile, Status{
 		Status:    statusReady,
@@ -204,12 +219,12 @@ func setupCodexPlanThread(client requester, cwd string) (codexThreadInfo, error)
 		return codexThreadInfo{}, err
 	}
 
-	model, err := resolveCodexModel(client, cwd)
+	settings, err := resolveCodexSettings(client, cwd, planEffort)
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
 
-	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, model))
+	threadResult, err := client.Request("fanout-thread", "thread/start", codexThreadStartParams(cwd, settings.Model))
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
@@ -217,10 +232,10 @@ func setupCodexPlanThread(client requester, cwd string) (codexThreadInfo, error)
 	if err != nil {
 		return codexThreadInfo{}, err
 	}
-	thread.Model = model
-	thread.PlanEffort = planEffort
+	thread.Model = settings.Model
+	thread.PlanEffort = settings.ReasoningEffort
 
-	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, model, planEffort)); err != nil {
+	if _, err := client.Request("fanout-plan-mode", "thread/settings/update", codexPlanSettingsUpdateParams(thread.ID, settings.Model, settings.ReasoningEffort)); err != nil {
 		if !isUnsupportedCodexAppServerMethod(err) {
 			return codexThreadInfo{}, err
 		}
@@ -239,15 +254,24 @@ func codexThreadStartParams(cwd, model string) map[string]any {
 	}
 }
 
-func startCodexPlanTurn(client requester, thread codexThreadInfo, cwd, prompt string) error {
+func startCodexPlanTurn(client requester, thread codexThreadInfo, cwd, prompt string) (codexPlanTurnStartResult, error) {
 	params := codexTurnStartParams(thread.ID, cwd, thread.Model, prompt, nil)
 	if thread.UseTurnCollaborationMode {
 		params["collaborationMode"] = codexPlanCollaborationMode(thread.Model, thread.PlanEffort)
 	}
-	if _, err := client.Request("fanout-turn", "turn/start", params); err != nil {
-		return err
+	result, err := client.Request("fanout-turn", "turn/start", params)
+	if err != nil {
+		return codexPlanTurnStartResult{}, err
 	}
-	return nil
+	status, turnID := codexTurnStartStatus(result)
+	switch status {
+	case "completed":
+		return codexPlanTurnStartResult{TurnID: turnID, Completed: true}, nil
+	case "failed", "interrupted":
+		return codexPlanTurnStartResult{}, fmt.Errorf("codex initial plan turn ended with status %q", status)
+	default:
+		return codexPlanTurnStartResult{TurnID: turnID}, nil
+	}
 }
 
 func codexTurnStartParams(threadID, cwd, model, prompt string, collaborationMode map[string]any) map[string]any {
@@ -286,14 +310,26 @@ func codexPlanCollaborationMode(model, effort string) map[string]any {
 	}
 }
 
-func resolveCodexModel(client requester, cwd string) (string, error) {
+func resolveCodexSettings(client requester, cwd, defaultEffort string) (codexResolvedSettings, error) {
+	defaultEffort = strings.TrimSpace(defaultEffort)
+	if defaultEffort == "" {
+		defaultEffort = "medium"
+	}
+	settings := codexResolvedSettings{ReasoningEffort: defaultEffort}
 	configResult, configErr := client.Request("fanout-config", "config/read", map[string]any{
 		"includeLayers": false,
 		"cwd":           cwd,
 	})
 	if configErr == nil {
-		if model := configModel(configResult); model != "" {
-			return model, nil
+		config := configSettings(configResult)
+		if config.Model != "" {
+			settings.Model = config.Model
+		}
+		if config.ReasoningEffort != "" {
+			settings.ReasoningEffort = config.ReasoningEffort
+		}
+		if settings.Model != "" {
+			return settings, nil
 		}
 	}
 
@@ -302,30 +338,44 @@ func resolveCodexModel(client requester, cwd string) (string, error) {
 	})
 	if modelErr != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
+			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
 		}
-		return "", fmt.Errorf("resolve codex model from model/list: %w", modelErr)
+		return codexResolvedSettings{}, fmt.Errorf("resolve codex model from model/list: %w", modelErr)
 	}
 	model, err := modelListDefault(modelResult)
 	if err != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
+			return codexResolvedSettings{}, fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
 		}
-		return "", err
+		return codexResolvedSettings{}, err
 	}
-	return model, nil
+	settings.Model = model
+	return settings, nil
 }
 
-func configModel(raw json.RawMessage) string {
+func configSettings(raw json.RawMessage) codexResolvedSettings {
 	var res struct {
 		Config struct {
-			Model string `json:"model"`
+			Model                   string `json:"model"`
+			ReasoningEffort         string `json:"reasoning_effort"`
+			ModelReasoningEffort    string `json:"model_reasoning_effort"`
+			PlanModeReasoningEffort string `json:"plan_mode_reasoning_effort"`
 		} `json:"config"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
-		return ""
+		return codexResolvedSettings{}
 	}
-	return strings.TrimSpace(res.Config.Model)
+	effort := strings.TrimSpace(res.Config.PlanModeReasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ReasoningEffort)
+	}
+	if effort == "" {
+		effort = strings.TrimSpace(res.Config.ModelReasoningEffort)
+	}
+	return codexResolvedSettings{
+		Model:           strings.TrimSpace(res.Config.Model),
+		ReasoningEffort: effort,
+	}
 }
 
 func modelListDefault(raw json.RawMessage) (string, error) {
@@ -420,7 +470,7 @@ func isUnsupportedCodexAppServerMethod(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "unknown variant") ||
 		strings.Contains(msg, "unknown method") ||
 		strings.Contains(msg, "method not found") ||
@@ -496,9 +546,9 @@ func drainCodexAppServerUntilClosedCmd(client *client, setState func(string)) ch
 	return done
 }
 
-func drainCodexAppServerDuringStartupCmd(client *client, setState func(string)) chan error {
+func drainCodexAppServerDuringStartupCmd(client *client, setState func(string), threadID, turnID string) chan error {
 	done := make(chan error, 1)
-	go func() { done <- drainCodexAppServerDuringStartup(client, setState) }()
+	go func() { done <- drainCodexAppServerDuringStartup(client, setState, threadID, turnID) }()
 	return done
 }
 
@@ -506,12 +556,15 @@ func drainCodexAppServerUntilClosed(client *client, setState func(string)) error
 	return drainCodexAppServerNotificationsUntilClosed(client, setState)
 }
 
-func drainCodexAppServerDuringStartup(client appServerStartupClient, setState func(string)) error {
+func drainCodexAppServerDuringStartup(client appServerStartupClient, setState func(string), threadID, turnID string) error {
 	for {
 		msg, err := client.receive()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
 				return nil
+			}
+			if errors.Is(err, io.EOF) {
+				return fmt.Errorf("codex app-server disconnected before initial turn completed: %w", err)
 			}
 			return err
 		}
@@ -521,8 +574,18 @@ func drainCodexAppServerDuringStartup(client appServerStartupClient, setState fu
 			}
 			continue
 		}
-		if state := codexTurnNotificationAgentState(msg); state != "" {
-			reportCodexPlanAgentState(setState, state)
+		if msg.Method == "turn/started" {
+			reportCodexPlanAgentState(setState, "working")
+		}
+		completion := codexTurnCompletedNotification(msg, threadID, turnID)
+		if completion.Matched {
+			if state := codexTurnCompletionAgentState(completion); state != "" {
+				reportCodexPlanAgentState(setState, state)
+			}
+			if completion.Status != "completed" {
+				return fmt.Errorf("codex initial plan turn ended with status %q", completion.Status)
+			}
+			return nil
 		}
 	}
 }
@@ -587,6 +650,44 @@ func reportCodexPlanAgentState(setState func(string), state string) {
 	}
 }
 
+func codexTurnStartStatus(raw json.RawMessage) (string, string) {
+	var res struct {
+		Turn struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(res.Turn.Status), strings.TrimSpace(res.Turn.ID)
+}
+
+func codexTurnCompletedNotification(msg appServerMessage, threadID, turnID string) codexTurnCompletion {
+	if msg.Method != "turn/completed" {
+		return codexTurnCompletion{}
+	}
+	var params struct {
+		ThreadID string `json:"threadId"`
+		Turn     struct {
+			ID       string `json:"id"`
+			ThreadID string `json:"threadId"`
+			Status   string `json:"status"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return codexTurnCompletion{}
+	}
+	status := strings.TrimSpace(params.Turn.Status)
+	if !isTerminalCodexTurnStatus(status) {
+		return codexTurnCompletion{}
+	}
+	if !codexTurnCompletionMatches(params.ThreadID, params.Turn.ThreadID, params.Turn.ID, threadID, turnID) {
+		return codexTurnCompletion{}
+	}
+	return codexTurnCompletion{Matched: true, Status: status}
+}
+
 func codexTurnNotificationAgentState(msg appServerMessage) string {
 	if msg.Method == "turn/started" {
 		return "working"
@@ -612,6 +713,24 @@ func anyCodexTurnCompletedNotification(msg appServerMessage) codexTurnCompletion
 		return codexTurnCompletion{}
 	}
 	return codexTurnCompletion{Matched: true, Status: status}
+}
+
+func codexTurnCompletionMatches(topLevelThreadID, turnThreadID, actualTurnID, expectedThreadID, expectedTurnID string) bool {
+	topLevelThreadID = strings.TrimSpace(topLevelThreadID)
+	turnThreadID = strings.TrimSpace(turnThreadID)
+	actualTurnID = strings.TrimSpace(actualTurnID)
+	expectedThreadID = strings.TrimSpace(expectedThreadID)
+	expectedTurnID = strings.TrimSpace(expectedTurnID)
+
+	if expectedTurnID != "" && actualTurnID != "" {
+		return actualTurnID == expectedTurnID
+	}
+	if expectedThreadID != "" && (topLevelThreadID != "" || turnThreadID != "") {
+		return topLevelThreadID == expectedThreadID || turnThreadID == expectedThreadID
+	}
+	// Older app-server payloads may only include {"turn":{"status":...}}.
+	// In this startup drain fanout has exactly one outstanding initial turn.
+	return topLevelThreadID == "" && turnThreadID == "" && actualTurnID == ""
 }
 
 func isTerminalCodexTurnStatus(status string) bool {
