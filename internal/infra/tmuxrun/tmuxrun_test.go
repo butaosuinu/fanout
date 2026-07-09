@@ -1659,52 +1659,6 @@ func TestSendLiteralLineErrorsWhenLiteralSendFails(t *testing.T) {
 	}
 }
 
-func TestPasteLiteralLinePastesTextThenEnter(t *testing.T) {
-	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
-printf '%s\n' '---' >> "$TMUXRUN_ARGS"
-if [ "$1" = "load-buffer" ]; then
-  cat > "$TMUXRUN_PAYLOAD"
-fi
-`)
-	payloadPath := filepath.Join(t.TempDir(), "payload.txt")
-	t.Setenv("TMUXRUN_PAYLOAD", payloadPath)
-
-	text := "/plan inspect\n\nCheck handlers"
-	if err := PasteLiteralLine("%3", text); err != nil {
-		t.Fatalf("PasteLiteralLine() failed: %v", err)
-	}
-
-	got := readTmuxArgs(t, argsPath)
-	if len(got) != 20 {
-		t.Fatalf("tmux args len = %d, want 20: %#v", len(got), got)
-	}
-	if got[0] != "load-buffer" || got[1] != "-b" || !strings.HasPrefix(got[2], "fanout-") || got[3] != "-" || got[4] != "---" {
-		t.Fatalf("load-buffer args = %#v", got[:5])
-	}
-	bufferName := got[2]
-	want := []string{
-		"paste-buffer", "-t", "%3", "-b", bufferName, "---",
-		"send-keys", "-t", "%3", "Enter", "---",
-		"delete-buffer", "-b", bufferName, "---",
-	}
-	if strings.Join(got[5:], "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("tmux args tail = %#v, want %#v", got[5:], want)
-	}
-	body, err := os.ReadFile(payloadPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != text {
-		t.Fatalf("payload = %q, want %q", body, text)
-	}
-}
-
-func TestPasteLiteralLineRejectsEmptyPaneID(t *testing.T) {
-	if err := PasteLiteralLine("", "hi"); err == nil {
-		t.Fatal("PasteLiteralLine(empty pane id) should error")
-	}
-}
-
 func TestFocusPaneSelectsWindowAndPane(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"

@@ -66,8 +66,9 @@ const (
 	paneBorderStyle       = "fg=#165E83"
 	// popupBorderLines / popupBorderStyle make display-popup frames read as a
 	// fanout-owned modal instead of blending into the surrounding terminal.
-	popupBorderLines = "double"
-	popupBorderStyle = paneActiveBorderStyle
+	popupBorderLines       = "double"
+	popupBorderStyle       = paneActiveBorderStyle
+	literalLineSubmitDelay = 250 * time.Millisecond
 )
 
 // paneIDPattern matches a well-formed tmux pane id (%N). The live-pane parsers
@@ -1372,7 +1373,9 @@ func SendKeys(target string, keys ...string) error {
 // the literal send succeeds but the Enter fails the hint sits unsubmitted in
 // the input buffer, which is harmless (it is just text) and fits the
 // best-effort contract — the message it points at is already persisted, so a
-// failed nudge never loses information.
+// failed nudge never loses information. The short pause before Enter gives
+// terminal TUIs time to move the literal bytes into their composer; without it
+// fast tmux writes can leave the text inserted but unsubmitted.
 func SendLiteralLine(paneID, text string) error {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
@@ -1381,31 +1384,7 @@ func SendLiteralLine(paneID, text string) error {
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", "--", text).Run(); err != nil {
 		return fmt.Errorf("tmux send-keys -l: %w", err)
 	}
-	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
-		return fmt.Errorf("tmux send-keys Enter: %w", err)
-	}
-	return nil
-}
-
-// PasteLiteralLine pastes text into paneID and submits it with Enter. Unlike
-// SendLiteralLine, the payload can contain newlines: tmux paste-buffer sends it
-// as one paste operation, which preserves multi-line prompts for TUIs that
-// support bracketed paste.
-func PasteLiteralLine(paneID, text string) error {
-	paneID = strings.TrimSpace(paneID)
-	if paneID == "" {
-		return fmt.Errorf("pane id is required")
-	}
-	bufferName := fmt.Sprintf("fanout-%d-%d", os.Getpid(), time.Now().UnixNano())
-	load := exec.Command("tmux", "load-buffer", "-b", bufferName, "-")
-	load.Stdin = strings.NewReader(text)
-	if err := load.Run(); err != nil {
-		return fmt.Errorf("tmux load-buffer: %w", err)
-	}
-	defer func() { _ = exec.Command("tmux", "delete-buffer", "-b", bufferName).Run() }()
-	if err := exec.Command("tmux", "paste-buffer", "-t", paneID, "-b", bufferName).Run(); err != nil {
-		return fmt.Errorf("tmux paste-buffer: %w", err)
-	}
+	time.Sleep(literalLineSubmitDelay)
 	if err := exec.Command("tmux", "send-keys", "-t", paneID, "Enter").Run(); err != nil {
 		return fmt.Errorf("tmux send-keys Enter: %w", err)
 	}

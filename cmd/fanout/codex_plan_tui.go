@@ -25,7 +25,7 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
 	}
 	cfg.SendPlanPrompt = func(prompt string) error {
-		return tmuxrun.PasteLiteralLine(os.Getenv("TMUX_PANE"), prompt)
+		return tmuxrun.SendLiteralLine(os.Getenv("TMUX_PANE"), prompt)
 	}
 	if err := codexapp.RunPlanTUI(cfg, os.Stdout, os.Stderr); err != nil {
 		lg.Err("codex plan mode TUI: %v", err)

@@ -55,6 +55,11 @@ func TestCodexPlanStartupPromptUsesSlashPlan(t *testing.T) {
 		t.Fatalf("codexPlanStartupPrompt() = %q, want slash plan prompt", got)
 	}
 
+	multiLine := codexPlanStartupPrompt(" inspect\n\nrepo\tstate ")
+	if multiLine != "/plan inspect repo state" {
+		t.Fatalf("codexPlanStartupPrompt(multiline) = %q, want one-line slash plan prompt", multiLine)
+	}
+
 	empty := codexPlanStartupPrompt(" \n ")
 	if empty != "/plan" {
 		t.Fatalf("codexPlanStartupPrompt(empty) = %q, want /plan", empty)

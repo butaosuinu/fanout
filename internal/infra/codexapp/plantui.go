@@ -33,8 +33,8 @@ type TUIConfig struct {
 	// nil (tests, direct calls) means no reporting.
 	SetAgentState func(state string)
 	// SendPlanPrompt types the initial /plan line into the already-running TUI.
-	// The cmd entrypoint wires this to tmux paste/send-keys so Codex sees the
-	// same composer slash-command path a user would type by hand.
+	// The cmd entrypoint wires this to tmux send-keys so Codex sees the same
+	// composer slash-command path a user would type by hand.
 	SendPlanPrompt func(prompt string) error
 }
 
@@ -258,7 +258,7 @@ func codexRemoteTUIArgs(remoteAddr, resumeID, prompt string) []string {
 }
 
 func codexPlanStartupPrompt(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
+	prompt = strings.Join(strings.Fields(prompt), " ")
 	if prompt == "" {
 		return "/plan"
 	}
