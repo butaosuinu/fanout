@@ -183,13 +183,13 @@ touching only class-A packages can rely on AI review.
   send/post/inbox/board/mark-read query layer. The briefing coordination
   section is shared by `claude` and `codex` panes — distinct from Claude-only
   Agent Teams. Messaging is pull-based with one push assist: `fanout msg`
-  nudges gate on `@fanout_agent_state` (today only `running` qualifies). That
-  option carries the 6-value contract running/working/plan/blocked/idle/done:
-  the launch wrapper writes running/done, launch-injected Claude hooks refine
-  claude panes to working/blocked/idle, and the Codex Plan Mode controller
-  reports working/plan around the fanout-driven initial turn. When widening
-  the nudge gate, never include blocked — the nudge's Enter could activate a
-  focused permission dialog.
+  nudges gate on `@fanout_agent_state` (`running` / `working` / `plan` / `idle`
+  qualify). That option carries the 6-value contract
+  running/working/plan/blocked/idle/done: the launch wrapper writes
+  running/done, launch-injected Claude hooks refine claude panes to
+  working/blocked/idle, and the Codex Plan Mode controller reports working/plan
+  around the fanout-driven initial turn. The nudge gate never includes blocked —
+  the nudge's Enter could activate a focused permission dialog.
 
 ## Be Careful
 

@@ -146,11 +146,12 @@ packages can rely on AI review.
   fanout-driven initial turn (only on the `thread/settings/update`-unsupported
   fallback path; the seed path hands the prompt to the interactive TUI and is
   unobservable by design). Messaging is pull-based with one push assist:
-  `fanout msg send` nudges the recipient pane only when `shouldNudge`
-  (`internal/app/peermsg`) allows its state — today only `running` qualifies.
-  When widening that allowlist to the richer states, never include blocked — a
-  blocked pane shows a permission/input dialog and the nudge's Enter could
-  activate the focused control.
+  `fanout msg send` only persists the message; the separate `fanout msg nudge`
+  verb pushes an inbox hint to the recipient pane, and only when `shouldNudge`
+  (`internal/app/peermsg`) allows its state — `running` / `working` / `plan` /
+  `idle` qualify (matching the Behavior Boundaries list below). The allowlist
+  never includes blocked — a blocked pane shows a permission/input dialog and
+  the nudge's Enter could activate the focused control.
 
 `tools/reviewrisk` turns that H/M/A canon into an automated `review:<level>`
 judgment on every PR (`make review-risk` runs it locally; see
