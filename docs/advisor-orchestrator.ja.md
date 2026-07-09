@@ -151,6 +151,12 @@ codex 子: 次のチェックポイントで inbox を読み、助言を適用�
 - 起動: `--advisor-pane claude[:model]`(issue / plan 両 lane)と TUI
   new-pane フォーム。coordinator ペインと同型で project root に起動し、
   state.json に記録、roster に role=advisor で登録
+- `--advisor-pane` は `--team` を含意する。msg bus 配線(TeamContext 注入・
+  `FANOUT_DB_PATH`・coordination briefing・peers registry の seed)は
+  `internal/app/run` の issues.go / plancmd.go で `cfg.Team` のときだけ走る
+  ため、`--advisor-pane` 単独では roster も DB も作られず `fanout msg peers`
+  経路が成立しない。よって `--advisor-pane` 指定時は team 配線を自動で有効化
+  する(`--team` 前提を暗黙にオン)
 - per-parent DB 制約(msg_db_owner singleton)は、advisor を同一 fan-out
   セッションから起動することで自然に満たされる
 - advisor のツール権限: worktree 確認の Read/Grep と、inbox/返信/宛先確認の
