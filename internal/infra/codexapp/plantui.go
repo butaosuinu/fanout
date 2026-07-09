@@ -20,6 +20,7 @@ const (
 	codexPlanApprovalUIStartupTimeout  = 60 * time.Second
 	codexPlanApprovalUIPollInterval    = 250 * time.Millisecond
 	codexPlanApprovalUIPrompt          = "Implement this plan?"
+	codexPlanTUIWorkingPrompt          = "esc to interrupt"
 )
 
 // TUIConfig configures one RunPlanTUI invocation. Version is the fanout
@@ -190,7 +191,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, cfg.CapturePlanScreen, false)
 	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
 	tuiStopped = tuiExited
 	return err
@@ -711,19 +712,24 @@ func codexRemoteTUIResumeID(thread codexThreadInfo) string {
 	return thread.SessionID
 }
 
-func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), watchingAppServer bool) (bool, error) {
-	for drainDone != nil {
+func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), capturePlanScreen func() (string, error), watchingAppServer bool) (bool, error) {
+	screenTracker := newCodexPlanScreenTracker(capturePlanScreen, setState)
+	screenTicks := screenTracker.ticks()
+	defer screenTracker.stop()
+	for {
 		select {
 		case tuiErr := <-tuiDone:
 			awaitDrainAfterTUIExit(client, drainDone)
 			return true, tuiErr
 		case drainErr := <-drainDone:
 			if drainErr != nil {
-				if watchingAppServer {
-					drainDone = nil
+				if !watchingAppServer && canWatchAppServer(client) {
+					watchingAppServer = true
+					drainDone = drainCodexAppServerUntilClosedCmd(client, setState)
 					continue
 				}
-				return false, fmt.Errorf("codex app-server request handling failed while Codex TUI was attached: %w", drainErr)
+				drainDone = nil
+				continue
 			}
 			if !watchingAppServer && canWatchAppServer(client) {
 				watchingAppServer = true
@@ -731,9 +737,83 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 				continue
 			}
 			drainDone = nil
+		case <-screenTicks:
+			screenTracker.poll()
 		}
 	}
-	return true, <-tuiDone
+}
+
+type codexPlanScreenPhase int
+
+const (
+	codexPlanScreenAwaitingApproval codexPlanScreenPhase = iota
+	codexPlanScreenRunning
+	codexPlanScreenIdle
+)
+
+type codexPlanScreenTracker struct {
+	capture  func() (string, error)
+	setState func(string)
+	ticker   *time.Ticker
+	phase    codexPlanScreenPhase
+	last     string
+}
+
+func newCodexPlanScreenTracker(capture func() (string, error), setState func(string)) *codexPlanScreenTracker {
+	tracker := &codexPlanScreenTracker{capture: capture, setState: setState}
+	if capture != nil {
+		tracker.ticker = time.NewTicker(codexPlanApprovalUIPollInterval)
+	}
+	return tracker
+}
+
+func (t *codexPlanScreenTracker) ticks() <-chan time.Time {
+	if t == nil || t.ticker == nil {
+		return nil
+	}
+	return t.ticker.C
+}
+
+func (t *codexPlanScreenTracker) stop() {
+	if t != nil && t.ticker != nil {
+		t.ticker.Stop()
+	}
+}
+
+func (t *codexPlanScreenTracker) poll() {
+	if t == nil || t.capture == nil {
+		return
+	}
+	screen, err := t.capture()
+	if err != nil {
+		return
+	}
+	state, phase := codexPlanScreenAgentState(screen, t.phase)
+	t.phase = phase
+	if state == "" || state == t.last {
+		return
+	}
+	t.last = state
+	reportCodexPlanAgentState(t.setState, state)
+}
+
+func codexPlanScreenAgentState(screen string, phase codexPlanScreenPhase) (string, codexPlanScreenPhase) {
+	switch {
+	case codexPlanApprovalUIReady(screen):
+		return "plan", codexPlanScreenAwaitingApproval
+	case codexPlanScreenWorking(screen):
+		return "working", codexPlanScreenRunning
+	case phase == codexPlanScreenAwaitingApproval:
+		return "working", codexPlanScreenRunning
+	case phase == codexPlanScreenRunning:
+		return "idle", codexPlanScreenIdle
+	default:
+		return "", phase
+	}
+}
+
+func codexPlanScreenWorking(screen string) bool {
+	return strings.Contains(screen, codexPlanTUIWorkingPrompt) || strings.Contains(screen, "Working (")
 }
 
 func waitForCodexPlanApprovalUI(
@@ -1015,7 +1095,7 @@ func codexTurnCompletionAgentState(completion codexTurnCompletion) string {
 	}
 	switch completion.Status {
 	case "completed":
-		return "plan"
+		return "idle"
 	case "failed", "interrupted":
 		return "idle"
 	default:

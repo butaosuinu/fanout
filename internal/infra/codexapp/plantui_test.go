@@ -435,7 +435,7 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	drainDone := make(chan error, 1)
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -445,18 +445,35 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	}
 }
 
-func TestWaitForCodexTUIAfterReadyReturnsDrainError(t *testing.T) {
+func TestWaitForCodexTUIAfterReadyIgnoresDrainErrorAfterReady(t *testing.T) {
 	tuiDone := make(chan error, 1)
 	drainDone := make(chan error, 1)
 	drainDone <- errors.New("unsupported request")
+	resultDone := make(chan struct {
+		tuiExited bool
+		err       error
+	}, 1)
+	go func() {
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
+		resultDone <- struct {
+			tuiExited bool
+			err       error
+		}{tuiExited: tuiExited, err: err}
+	}()
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, false)
-
-	if tuiExited {
-		t.Fatal("tuiExited = true, want false")
+	select {
+	case result := <-resultDone:
+		t.Fatalf("wait returned before TUI exit: tuiExited=%v err=%v", result.tuiExited, result.err)
+	case <-time.After(100 * time.Millisecond):
 	}
-	if err == nil || !strings.Contains(err.Error(), "unsupported request") {
-		t.Fatalf("error = %v, want unsupported request", err)
+
+	tuiDone <- nil
+	result := <-resultDone
+	if !result.tuiExited {
+		t.Fatal("tuiExited = false, want true")
+	}
+	if result.err != nil {
+		t.Fatalf("error = %v, want nil", result.err)
 	}
 }
 
@@ -466,7 +483,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
 	drainDone <- nil
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -497,7 +514,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
 		err       error
 	}, 1)
 	go func() {
-		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil, false)
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil, nil, false)
 		resultDone <- struct {
 			tuiExited bool
 			err       error
@@ -556,6 +573,34 @@ func TestWaitForCodexPlanApprovalUIReportsPlanWhenPromptAppears(t *testing.T) {
 	}
 	if !slices.Equal(states, []string{"plan"}) {
 		t.Fatalf("states = %#v, want plan", states)
+	}
+}
+
+func TestCodexPlanScreenAgentStateTracksPostApprovalLifecycle(t *testing.T) {
+	phase := codexPlanScreenAwaitingApproval
+	state, phase := codexPlanScreenAgentState("plan\n\nImplement this plan?", phase)
+	if state != "plan" || phase != codexPlanScreenAwaitingApproval {
+		t.Fatalf("approval screen state = %q phase %v, want plan/awaiting", state, phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("Implementation prompt", phase)
+	if state != "working" || phase != codexPlanScreenRunning {
+		t.Fatalf("approval dismissed state = %q phase %v, want working/running", state, phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("Working (2s - esc to interrupt)", phase)
+	if state != "working" || phase != codexPlanScreenRunning {
+		t.Fatalf("working screen state = %q phase %v, want working/running", state, phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("Implementation complete", phase)
+	if state != "idle" || phase != codexPlanScreenIdle {
+		t.Fatalf("completed screen state = %q phase %v, want idle/idle", state, phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("Implementation complete", phase)
+	if state != "" || phase != codexPlanScreenIdle {
+		t.Fatalf("idle screen state = %q phase %v, want empty/idle", state, phase)
 	}
 }
 
@@ -695,8 +740,8 @@ func TestReceiveCodexRemoteTUIThreadRejectsEOFBeforeThread(t *testing.T) {
 }
 
 func TestCodexTurnCompletionAgentStateMapsTerminalStates(t *testing.T) {
-	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "plan" {
-		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want plan", got)
+	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "completed"}); got != "idle" {
+		t.Fatalf("codexTurnCompletionAgentState(completed) = %q, want idle", got)
 	}
 	if got := codexTurnCompletionAgentState(codexTurnCompletion{Matched: true, Status: "failed"}); got != "idle" {
 		t.Fatalf("codexTurnCompletionAgentState(failed) = %q, want idle", got)
@@ -719,8 +764,8 @@ func TestCodexTurnNotificationAgentStateMarksStartedAndCompleted(t *testing.T) {
 		Method: "turn/completed",
 		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","threadId":"thread-1","status":"completed"}}`),
 	}
-	if got := codexTurnNotificationAgentState(completed); got != "plan" {
-		t.Fatalf("codexTurnNotificationAgentState(turn/completed) = %q, want plan", got)
+	if got := codexTurnNotificationAgentState(completed); got != "idle" {
+		t.Fatalf("codexTurnNotificationAgentState(turn/completed) = %q, want idle", got)
 	}
 
 	failed := appServerMessage{
@@ -830,8 +875,8 @@ func TestDrainCodexAppServerNotificationsReportsThreadStarted(t *testing.T) {
 	if thread.ID != "thread-1" || thread.SessionID != "session-1" {
 		t.Fatalf("thread = %+v, want thread/session ids", thread)
 	}
-	if !slices.Equal(states, []string{"working", "plan"}) {
-		t.Fatalf("states = %#v, want working then plan", states)
+	if !slices.Equal(states, []string{"working", "idle"}) {
+		t.Fatalf("states = %#v, want working then idle", states)
 	}
 }
 
@@ -901,7 +946,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresFreshWatcherError(t *testing.T) {
 	tuiDone <- nil
 	drainDone <- errors.New("watcher parse error")
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, true)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, true)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
