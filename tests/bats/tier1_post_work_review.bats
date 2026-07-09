@@ -127,7 +127,7 @@ prepare_branch_review() {
   record_clean_broad "$repo" || return 1
 }
 
-@test "post-work-review prepare writes one bundle, not per-file packets" {
+@test "post-work-review shard-12: prepare writes one bundle, not per-file packets" {
   local repo="$BATS_TEST_TMPDIR/review-uncommitted"
   local state
   setup_review_repo "$repo"
@@ -161,7 +161,7 @@ prepare_branch_review() {
   grep -Fq "+new" "$state/review-bundle.md"
 }
 
-@test "post-work-review prepare paths are usable from caller subdirectories" {
+@test "post-work-review shard-8: prepare paths are usable from caller subdirectories" {
   local repo="$BATS_TEST_TMPDIR/review-subdir"
   local state bundle_path
   setup_review_repo "$repo"
@@ -178,7 +178,7 @@ prepare_branch_review() {
   [ -f "$bundle_path" ]
 }
 
-@test "post-work-review rejects no-sandbox Codex overrides" {
+@test "post-work-review shard-12: rejects no-sandbox Codex overrides" {
   local repo="$BATS_TEST_TMPDIR/review-no-sandbox"
   setup_review_repo "$repo"
   printf 'dirty\n' >"$repo/tracked.txt"
@@ -189,7 +189,7 @@ prepare_branch_review() {
   [[ "$output" == *"isolated reviewer requires an enforceable read-only subagent sandbox"* ]]
 }
 
-@test "post-work-review resolve_base prefers GitHub default before main fallback" {
+@test "post-work-review shard-8: resolve_base prefers GitHub default before main fallback" {
   local repo="$BATS_TEST_TMPDIR/review-default-branch"
   local gh_bin
   setup_review_repo "$repo"
@@ -223,7 +223,7 @@ prepare_branch_review() {
   [[ "$output" == *"base=origin/develop"* ]]
 }
 
-@test "post-work-review ignores external diff drivers for review bundles" {
+@test "post-work-review shard-12: ignores external diff drivers for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-ext-diff"
   local state external_diff
   setup_review_repo "$repo"
@@ -245,7 +245,7 @@ prepare_branch_review() {
   ! grep -Fq "EXTERNAL-DIFF" "$state/review-bundle.md"
 }
 
-@test "post-work-review disables color for review bundles" {
+@test "post-work-review shard-8: disables color for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-color"
   local state
   setup_review_repo "$repo"
@@ -262,7 +262,7 @@ prepare_branch_review() {
   ! LC_ALL=C grep -q "$(printf '\033')" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes dangling symlink diffs" {
+@test "post-work-review shard-12: includes dangling symlink diffs" {
   local repo="$BATS_TEST_TMPDIR/review-dangling-symlink"
   local state
   setup_review_repo "$repo"
@@ -278,7 +278,7 @@ prepare_branch_review() {
   grep -Fq "dangling-link" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes directory symlink diffs" {
+@test "post-work-review shard-8: includes directory symlink diffs" {
   local repo="$BATS_TEST_TMPDIR/review-directory-symlink"
   local state
   setup_review_repo "$repo"
@@ -295,7 +295,7 @@ prepare_branch_review() {
   grep -Fq "linkdir" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes quoted untracked path diffs" {
+@test "post-work-review shard-12: includes quoted untracked path diffs" {
   local repo="$BATS_TEST_TMPDIR/review-quoted-untracked"
   local state weird
   setup_review_repo "$repo"
@@ -311,7 +311,7 @@ prepare_branch_review() {
   grep -Fq "line" "$state/review-bundle.md"
 }
 
-@test "post-work-review fences changed files in review bundle" {
+@test "post-work-review shard-8: fences changed files in review bundle" {
   local repo="$BATS_TEST_TMPDIR/review-changed-files-fence"
   local state fence_name
   setup_review_repo "$repo"
@@ -326,7 +326,7 @@ prepare_branch_review() {
   grep -Fq '```json' "$state/review-bundle.md"
 }
 
-@test "post-work-review ignores textconv filters for review bundles" {
+@test "post-work-review shard-12: ignores textconv filters for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-textconv"
   local state textconv
   setup_review_repo "$repo"
@@ -355,7 +355,7 @@ prepare_branch_review() {
   ! grep -Fq "TEXTCONV" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes submodule changes ignored by repo config" {
+@test "post-work-review shard-8: includes submodule changes ignored by repo config" {
   local repo="$BATS_TEST_TMPDIR/review-submodule-ignore"
   local sub="$BATS_TEST_TMPDIR/review-submodule-source"
   local state next_sub_head
@@ -391,7 +391,7 @@ prepare_branch_review() {
   grep -Fq "deps/sub" "$state/review-bundle.md"
 }
 
-@test "post-work-review records, summarizes, and marks a clean branch review" {
+@test "post-work-review shard-11: records, summarizes, and marks a clean branch review" {
   local repo="$BATS_TEST_TMPDIR/review-branch"
   local gitdir
   setup_review_repo "$repo"
@@ -426,7 +426,80 @@ prepare_branch_review() {
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
 }
 
-@test "post-work-review prepare clears stale marker files" {
+@test "post-work-review shard-7: parses each reviewer result once per driver command" {
+  local repo="$BATS_TEST_TMPDIR/review-json-batch"
+  local json_file="$BATS_TEST_TMPDIR/json-batch.json"
+  local parser_bin="$BATS_TEST_TMPDIR/json-parser-bin"
+  local count_file="$BATS_TEST_TMPDIR/json-parser-count"
+  local parser_name real_parser
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-batch" false false false "" "$json_file"
+
+  if real_parser="$(command -v ruby)"; then
+    parser_name="ruby"
+  else
+    real_parser="$(command -v python3)"
+    parser_name="python3"
+  fi
+  [ -n "$real_parser" ]
+  mkdir -p "$parser_bin"
+  cat >"$parser_bin/$parser_name" <<'EOF'
+#!/usr/bin/env bash
+printf 'parse\n' >>"$JSON_PARSER_COUNT_FILE"
+exec "$REAL_JSON_PARSER" "$@"
+EOF
+  chmod +x "$parser_bin/$parser_name"
+  export REAL_JSON_PARSER="$real_parser"
+  export JSON_PARSER_COUNT_FILE="$count_file"
+  export PATH="$parser_bin:$PATH"
+
+  : >"$count_file"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+  cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
+
+  : >"$count_file"
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+
+  : >"$count_file"
+  run_review "$repo" mark
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+}
+
+@test "post-work-review shard-10: falls back to Python when Ruby is unavailable" {
+  local repo="$BATS_TEST_TMPDIR/review-json-python"
+  local json_file="$BATS_TEST_TMPDIR/json-python.json"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-python" false false false "" "$json_file"
+
+  run bash -c '
+    command() {
+      if [ "$1" = "-v" ] && [ "$2" = "ruby" ]; then
+        return 1
+      fi
+      builtin command "$@"
+    }
+    export -f command
+    cd "$1" || exit 1
+    bash "$2" record broad "$3"
+  ' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"recorded=true"* ]]
+  cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
+}
+
+@test "post-work-review shard-7: prepare clears stale marker files" {
   local repo="$BATS_TEST_TMPDIR/review-clear-marker"
   local gitdir
   setup_review_repo "$repo"
@@ -445,7 +518,7 @@ prepare_branch_review() {
   [ ! -e "$gitdir/post-work-review-passed.meta" ]
 }
 
-@test "post-work-review record rejects same-agent and hooks-only results" {
+@test "post-work-review shard-8: record rejects same-agent and hooks-only results" {
   local repo="$BATS_TEST_TMPDIR/review-reject"
   local json_file="$BATS_TEST_TMPDIR/reject.json"
   setup_review_repo "$repo"
@@ -465,7 +538,7 @@ prepare_branch_review() {
   [[ "$output" == *"hooks-only success is rejected"* ]]
 }
 
-@test "post-work-review record rejects incomplete findings" {
+@test "post-work-review shard-8: record rejects incomplete findings" {
   local repo="$BATS_TEST_TMPDIR/review-incomplete-finding"
   local json_file="$BATS_TEST_TMPDIR/incomplete-finding.json"
   setup_review_repo "$repo"
@@ -480,7 +553,22 @@ prepare_branch_review() {
   [[ "$output" == *"finding missing required fields"* ]]
 }
 
-@test "post-work-review record rejects stale review targets" {
+@test "post-work-review shard-11: record rejects invalid reviewer JSON" {
+  local repo="$BATS_TEST_TMPDIR/review-invalid-json"
+  local json_file="$BATS_TEST_TMPDIR/invalid-reviewer.json"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+  printf '{"backend":' >"$json_file"
+
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"invalid reviewer JSON"* ]]
+}
+
+@test "post-work-review shard-8: record rejects stale review targets" {
   local repo="$BATS_TEST_TMPDIR/review-stale-record"
   local json_file="$BATS_TEST_TMPDIR/stale.json"
   setup_review_repo "$repo"
@@ -496,7 +584,7 @@ prepare_branch_review() {
   [[ "$output" == *"review target changed since prepare: diff_hash"* ]]
 }
 
-@test "post-work-review summarize rejects target changes after record" {
+@test "post-work-review shard-4: summarize rejects target changes after record" {
   local repo="$BATS_TEST_TMPDIR/review-stale-summary"
   setup_review_repo "$repo"
   printf 'dirty\n' >"$repo/tracked.txt"
@@ -519,7 +607,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=review_target_changed"* ]]
 }
 
-@test "post-work-review verifier requires prepared fix rounds and fresh sessions" {
+@test "post-work-review shard-6: verifier requires prepared fix rounds and fresh sessions" {
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
   local verify_json="$BATS_TEST_TMPDIR/verify.json"
@@ -560,7 +648,7 @@ prepare_branch_review() {
   grep -Fq "+fixed" "$(state_dir_for "$repo")/verify-bundle.md"
 }
 
-@test "post-work-review rejects failed verifier results without findings" {
+@test "post-work-review shard-4: rejects failed verifier results without findings" {
   local repo="$BATS_TEST_TMPDIR/review-empty-failed-verifier"
   local broad_json="$BATS_TEST_TMPDIR/broad-empty-failed-verifier.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-empty-failed-verifier.json"
@@ -587,7 +675,7 @@ prepare_branch_review() {
   [[ "$output" == *"failed verifier result requires findings"* ]]
 }
 
-@test "post-work-review branch verifier bundle includes uncommitted fixes" {
+@test "post-work-review shard-9: branch verifier bundle includes uncommitted fixes" {
   local repo="$BATS_TEST_TMPDIR/review-branch-dirty-verify"
   local broad_json="$BATS_TEST_TMPDIR/broad-dirty-verify.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-dirty-verify.json"
@@ -620,7 +708,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
-@test "post-work-review rejects prepare-verify after a clean broad result" {
+@test "post-work-review shard-6: rejects prepare-verify after a clean broad result" {
   local repo="$BATS_TEST_TMPDIR/review-clean-prepare-verify"
   setup_review_repo "$repo"
   make_branch_change "$repo"
@@ -639,7 +727,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
-@test "post-work-review prepare does not reset an unresolved broad review" {
+@test "post-work-review shard-12: prepare does not reset an unresolved broad review" {
   local repo="$BATS_TEST_TMPDIR/review-prepare-budget-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-prepare-budget.json"
   local finding state
@@ -664,7 +752,7 @@ prepare_branch_review() {
   [ -f "$state/results/broad-001.json" ]
 }
 
-@test "post-work-review pending verify bundle prevents clean summarize and mark" {
+@test "post-work-review shard-10: pending verify bundle prevents clean summarize and mark" {
   local repo="$BATS_TEST_TMPDIR/review-pending-verify"
   local broad_json="$BATS_TEST_TMPDIR/broad-pending-verify.json"
   local finding
@@ -695,7 +783,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_reason=last_review_not_clean"* ]]
 }
 
-@test "post-work-review verifier clean path and repeated finding detection" {
+@test "post-work-review shard-3: verifier clean path and repeated finding detection" {
   local clean_repo="$BATS_TEST_TMPDIR/review-verify-clean"
   local repeat_repo="$BATS_TEST_TMPDIR/review-repeat"
   local broad_json="$BATS_TEST_TMPDIR/broad.json"
@@ -745,7 +833,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=same_finding_repeated"* ]]
 }
 
-@test "post-work-review duplicate broad findings do not count as repeated after a clean verifier" {
+@test "post-work-review shard-5: duplicate broad findings do not count as repeated after a clean verifier" {
   local repo="$BATS_TEST_TMPDIR/review-duplicate-broad"
   local broad_json="$BATS_TEST_TMPDIR/broad-duplicate.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-duplicate-clean.json"
@@ -777,7 +865,7 @@ prepare_branch_review() {
   [[ "$output" != *"stop_reason=same_finding_repeated"* ]]
 }
 
-@test "post-work-review summarize stops on truncated and exhausted verifier budget" {
+@test "post-work-review shard-1: summarize stops on truncated and exhausted verifier budget" {
   local trunc_repo="$BATS_TEST_TMPDIR/review-truncated"
   local budget_repo="$BATS_TEST_TMPDIR/review-budget"
   local broad_json="$BATS_TEST_TMPDIR/broad.json"
@@ -833,7 +921,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=review_budget_exhausted"* ]]
 }
 
-@test "post-work-review mark rejects dirty worktree and stale review targets" {
+@test "post-work-review shard-2: mark rejects dirty worktree and stale review targets" {
   local dirty_repo="$BATS_TEST_TMPDIR/review-dirty"
   setup_review_repo "$dirty_repo"
   make_branch_change "$dirty_repo"

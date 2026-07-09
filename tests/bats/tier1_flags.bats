@@ -20,6 +20,32 @@
 
 load helpers
 
+@test "prepare-dev-cache rejects symlinks and makes owned caches private" {
+  local cache="$BATS_TEST_TMPDIR/dev-cache"
+  local cache_link="$BATS_TEST_TMPDIR/dev-cache-link"
+  local mode
+
+  mkdir "$cache"
+  chmod 755 "$cache"
+  ln -s "$cache" "$cache_link"
+
+  run env CI= make -C "$REPO_ROOT" --no-print-directory \
+    FANOUT_DEV_CACHE_DIR="$cache_link" prepare-dev-cache
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"fanout dev cache must not be a symlink"* ]]
+
+  run env CI= make -C "$REPO_ROOT" --no-print-directory \
+    FANOUT_DEV_CACHE_DIR="$cache" prepare-dev-cache
+  [ "$status" -eq 0 ]
+
+  if mode="$(stat -f '%Lp' "$cache" 2>/dev/null)"; then
+    :
+  else
+    mode="$(stat -c '%a' "$cache")"
+  fi
+  [ "$mode" = "700" ]
+}
+
 # --- Help & usage -----------------------------------------------------------
 
 @test "-h prints usage and exits 0" {

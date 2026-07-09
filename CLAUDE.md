@@ -17,7 +17,8 @@ the bats black-box suite against the binary via `FANOUT_BIN`; `make lint` is
 pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) +
 shellcheck of the test shims (Node-free on purpose; the web lint is
 `make lint-web` = oxlint + oxfmt `--check` + tsc, configs `web/.oxlintrc.json`
-/ `web/.oxfmtrc.json`). `make fmt` formats Go (gofumpt/goimports),
+/ `web/.oxfmtrc.json`). `make check` is the canonical full local gate and runs
+`test`, `lint`, and `lint-web`. `make fmt` formats Go (gofumpt/goimports),
 `make fmt-web` formats `web/src` + `vite.config.ts` (oxfmt, printWidth 100; CSS と web/ 直下の JSON は対象外), `make fix` runs
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
@@ -35,7 +36,8 @@ notes.
 
 ## Working With fanout
 
-Build the binary with `make build-go` and validate with `make test`.
+Build the binary with `make build-go`. Use focused tests while editing and
+`make check` for the final full local gate.
 
 - Open the console: `make build-go`, then `./fanout-go`. From a plain shell it
   creates or attaches the repository's fanout-managed tmux session; from inside
@@ -242,15 +244,16 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `--unblocked-only`. If branch generation, task `branch` overrides, or
   `--branch-prefix` behavior changes, update the plan status fixtures and
   docs together.
-- Run `make lint` and `make test` before creating a PR (`make lint-web` too
-  when `web/` changed) — the top CI failures, Tier 2 golden drift and
-  golangci-lint findings, all reproduce locally. Then walk
-  `docs/review-checklist.ja.md`; the same review findings recur.
+- Run focused checks while editing, then commit the candidate. The final
+  `/post-work-review` pass owns one `make check` run for that exact HEAD; do not
+  duplicate it with separate full `make lint`, `make test`, or `make lint-web`
+  runs. Then walk `docs/review-checklist.ja.md`; the same review findings recur.
 - `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
   `.claude/settings.json`. Retrying a denied command with nothing changed
   never succeeds — fix the stated cause, then re-run it: complete
-  `/post-work-review` (the marker must match HEAD), issue `gh pr create` as a
-  standalone command with no `cd`/`pushd`/`env --chdir` chained in (any cwd
+  `/post-work-review` (`make check` must pass and the marker must match HEAD),
+  then issue `gh pr create` as a standalone command with no
+  `cd`/`pushd`/`env --chdir` chained in (any cwd
   inside the target worktree works), and keep the PR base at the default
   branch. `FANOUT_SKIP_PR_REVIEW=1` is only for the documented escape hatch.
 

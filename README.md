@@ -179,8 +179,10 @@ context. See the
 
 ```bash
 make build-go   # build the web bundle + the ./fanout-go CLI
+make check      # canonical full local gate: test + lint + lint-web
 make test       # Go unit tests + web vitest + bats black-box tiers
-make lint       # golangci-lint v2 + shellcheck (make lint-web for the web UI)
+make lint       # golangci-lint v2 + shellcheck
+make lint-web   # oxlint + oxfmt --check + TypeScript typecheck
 ```
 
 See [CLAUDE.md](CLAUDE.md) for the repository architecture and maintenance notes.

@@ -55,16 +55,30 @@ assume a shell-like `$post-work-review` prefix reached the driver.
 
 ## Validate before the gate
 
-Resolve the project lint and test commands from `AGENTS.md`, `CLAUDE.md`, and
-the build files. Run them as the main agent before `prepare`; reviewer agents
-must not run them. Fix failures caused by the reviewed change. Report
-pre-existing or environment failures in one line and do not expand scope.
+Inspect `git status --short` before `prepare`, then choose one validation path:
 
-If a committed branch was clean before validation, commit validation fixes
-before `prepare`; otherwise the driver selects `uncommitted|HEAD` and `mark`
-rejects `non_branch_review_scope`. If the work was already uncommitted, leave
-the fixes uncommitted so the same bundle includes all reviewed work. Note and
-skip projects with no validation commands.
+- **Clean committed branch (final gate):** resolve the project's one canonical
+  full validation command from `AGENTS.md`, `CLAUDE.md`, or the build files.
+  Prefer an umbrella target such as `make check` over composing separate lint,
+  test, and typecheck commands. Run that command exactly once for the candidate
+  HEAD; do not also run its component targets. If it fails, stop before
+  `prepare`. Fix only failures caused by the branch, run focused checks while
+  editing, commit the fixes, then restart the final gate on the new HEAD.
+  Environment or pre-existing failures are non-clean gate results, not reasons
+  to mark an unvalidated commit.
+- **Dirty uncommitted review:** run only the focused validation needed for the
+  changed area. Do not spend a branch-wide full-validation pass on a target
+  that cannot receive the exact-HEAD marker. The `uncommitted|HEAD` bundle may
+  still be reviewed, but the caller must commit the candidate and restart this
+  skill in branch scope before pushing.
+
+If the project documents no validation command, report that in one line. Main
+agent validation runs outside the isolated reviewer/verifier calls and never
+replaces them.
+
+If validation changes a committed candidate, commit the fix and restart the
+final gate on the new HEAD. If the work was already uncommitted, leave focused
+validation fixes uncommitted so the same bundle includes all reviewed work.
 
 ## Run the gate
 
@@ -76,9 +90,11 @@ skip projects with no validation commands.
    `reviewer_sandbox_mode: "read-only"`.
 2. Run `bash "$driver" summarize`. Stop non-clean on `stop_reason=`. If
    `clean=true`, run `bash "$driver" mark` only when
-   `marker_eligible=true`. If branch scope is clean but not marker-eligible
-   because fixes remain dirty, commit them and restart at `prepare` for the new
-   HEAD; this is a new gate, not a second broad call in the prior gate.
+   `marker_eligible=true`. Before `mark`, confirm that HEAD and the clean
+   worktree still match the candidate that passed canonical full validation.
+   If branch scope is clean but fixes remain dirty, commit them and restart
+   from project validation on the new HEAD; this is a new gate, not a second
+   broad call in the prior gate.
 3. If actionable findings remain, fix only those findings from the stored
    results and `findings.tsv`. Run focused validation for changed files, then
    run `bash "$driver" prepare-verify`. Pass `verify_bundle=` to one fresh
@@ -94,6 +110,6 @@ skip projects with no validation commands.
 
 ## Report
 
-Report the reviewed scope, broad/verifier call counts, fixes made, final
-`clean=`, final `stop_reason=`, and whether
-`.git/post-work-review-passed` was written.
+Report the canonical or focused validation command and result, reviewed scope,
+broad/verifier call counts, fixes made, final `clean=`, final `stop_reason=`,
+and whether `.git/post-work-review-passed` was written.

@@ -1,6 +1,6 @@
 ---
 name: post-work-review
-description: 実装作業が一段落したコードを「仕上げ」モードに通すワークフロー。まず code-review プラグインで diff の bug をざっと洗い出して修正し、続けて codex:review を別視点として回し、指摘がなくなる (codex が approve / clean / 問題なし と返す) まで「review → 修正 → 再 review」をループする。ユーザーが「review して仕上げて」「post-review」「finalize」「コミット前にもう一度見て」「二重チェック」「codex review もかけて」等と言ったとき、または /post-work-review が明示的に呼ばれたときに、必ずこの skill を使う。実装後のチェックを口にしたら「dashboard」「visualization」のような明示語が無くてもこの skill を呼ぶこと — 同種の単一エージェントによるレビューより、二段構え + ループの方が見落としが少ない。
+description: 実装作業が一段落したコードを「仕上げ」モードに通すワークフロー。まず code-review プラグインで diff の bug を洗い出して修正し、続けて codex:review を別視点として回し、指摘がなくなる (codex が approve / clean / 問題なし と返す) まで「review → 修正 → 再 review」をループする。最終 branch では canonical full check と exact-HEAD marker も管理する。ユーザーが「review して仕上げて」「post-review」「finalize」「コミット前にもう一度見て」「二重チェック」「codex review もかけて」等と言ったとき、または /post-work-review が明示的に呼ばれたときに、必ずこの skill を使う。実装後のチェックを口にしたら「dashboard」「visualization」のような明示語が無くてもこの skill を呼ぶこと。
 ---
 
 # post-work-review
@@ -9,11 +9,16 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 
 ## なぜこれが要るか
 
-単発の code review は見落とすことがある。`code-review` プラグイン (内製のマルチエージェント) と `codex:review` (Codex CLI、別モデル別視点) を直列で通し、後者は「指摘なし」になるまでループさせることで、コミット直前に独立した二系統の最終チェックを掛けるのが狙い。本 skill はそのオーケストレーターであり、レビュー自体は実装しない。
+単発の code review は見落とすことがある。
+`code-review` プラグイン (内製のマルチエージェント) と `codex:review` (Codex CLI、別モデル別視点) を直列で通し、後者は「指摘なし」になるまでループさせる。
+push または PR 作成の直前に、独立した二系統の最終チェックを掛けるのが狙いである。
+本 skill はそのオーケストレーターであり、レビュー自体は実装しない。
 
 ## 適用範囲と前提
 
-- **対象**: 現在の git 作業ツリーにある変更 (dirty でも commit 済みでも可)。`code-review` は内部で `git diff` 系を見るし、`codex:review` も `--scope auto` で同様に判定する。
+- **対象**: 現在の git 作業ツリーにある変更 (dirty でも commit 済みでも可)。
+  dirty tree は未コミットレビューとして扱い、最終 marker は clean な commit 済み branch をレビューしたときだけ書く。
+  `code-review` は内部で `git diff` 系を見るし、`codex:review` も `--scope auto` で同様に判定する。
 - **git リポジトリ外なら早期終了**: `git rev-parse --is-inside-work-tree` で false なら、ユーザーに「ここは git リポジトリではないので post-work-review は使えない」と伝えて終了する。
 - **diff が空なら早期終了**: `git status --porcelain` と `git diff main..HEAD --stat` (または default branch) が両方空なら、レビュー対象が無い旨を伝えて終了する。無駄なレビュー呼び出しはトークンの浪費。
 
@@ -23,7 +28,7 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 [ユーザー: /post-work-review or 「review して仕上げて」]
         │
         ▼
-[Pass 0] プロジェクト検証 (lint / test) ── 検証手段が無ければ skip
+[Pass 0] final branch は canonical full check、dirty tree は focused check
         │
         ▼
 [Pass 1] code-review プラグイン  ── 指摘を集める → 修正
@@ -49,13 +54,21 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 [Step 5] レビュー済みコミットを marker に記録 (PR ゲートの signal)
 ```
 
-## Pass 0 — プロジェクト検証 (lint / test)
+## Pass 0: プロジェクト検証
 
-レビューに入る前にプロジェクト標準の検証を回し、機械的な失敗を先に潰す。壊れたコードへの二系統レビューはトークンの浪費で、CI 失敗の大半 (golden 不一致・lint 指摘) はローカルで再現できる。
+`git status --short` を確認し、次のどちらか一方だけを実行する。
 
-1. 検証コマンドを解決する: repo の CLAUDE.md / AGENTS.md / Makefile から lint・test 相当のターゲットを探す。見つからなければ Pass 0 を skip し、その旨を 1 行報告して Pass 1 へ。
-2. 実行し、**今回の diff に起因する失敗**を直してから先へ進む。base 由来の既存失敗や環境起因の失敗 (ツールチェーン欠如など) は 1 行報告して先へ進み、スコープ外のコードは直さない。golden / スナップショットの意図的な更新が要る失敗は、repo に regen 手順があればそれに従い、regen 差分を目視してから commit 対象に含める。
-3. web / フロントエンドを触った diff は対応する web 系 lint も回す。
+1. **clean な commit 済み branch の最終ゲート**: repo の CLAUDE.md、AGENTS.md、Makefile から canonical full check を 1 つ解決する。
+   `make check` が定義されていれば、個別の `make test`、`make lint`、`make lint-web` を組み合わせず `make check` を 1 回だけ実行する。
+   失敗したら Pass 1 へ進まない。
+   今回の branch に起因する失敗だけを直し、focused check を回して commit してから、新しい HEAD で本 skill を最初からやり直す。
+   環境起因または既存の失敗でも、未検証の HEAD に marker は書かない。
+2. **dirty tree の未コミットレビュー**: 変更範囲の focused check だけを実行する。
+   marker を書けない対象に full check を使わない。
+   レビュー後に候補を commit し、push 前に clean な branch scope で本 skill をやり直す。
+
+検証手段が無い repo では、その旨を 1 行報告して Pass 1 へ進む。
+golden またはスナップショットを更新した場合は、diff を目視してから commit 対象に含める。
 
 ## Pass 1 — code-review プラグインで掃除
 
@@ -63,7 +76,8 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 2. **Skill ツール経由で `code-review` を呼ぶ**: `Skill(skill="code-review")`。引数は付けない (デフォルトの effort で十分。`--comment` は付けない — PR が無いローカル作業中にも使う skill なので、コメント posting は本質ではない。レビュー本文の収集だけが目的)。
 3. 返ってきた指摘を読み、修正すべき項目を選別する。**全ての指摘を機械的に直すのではなく**、明らかな bug / 規約違反 / セキュリティ問題を優先する。スタイル提案レベルは Pass 2 のあとに一括判断してよい (codex で同じことが再度挙がるなら直す価値がある)。
 4. repo にレビューチェックリスト (fanout では `docs/review-checklist.ja.md`) があれば、diff に対して各項目を自己チェックし、取りこぼしを修正対象に加える。無ければ飛ばす。
-5. 修正する項目をユーザーに 1〜2 文で宣言してから Edit に入る (例:「null チェック漏れ 2 箇所と未使用 import を直します」)。修正後は短く完了報告。
+5. 修正する項目をユーザーに 1〜2 文で宣言してから Edit に入る (例:「null チェック漏れ 2 箇所と未使用 import を直します」)。
+   修正後は変更範囲の focused check を実行し、短く完了報告する。
 
 ### code-review-strict との区別 (重要)
 
@@ -135,7 +149,10 @@ native review の markdown には機械可読な「0 findings」マーカーが 
 
 ### 修正フェーズ
 
-指摘を直す手順は通常の Edit ベース実装と同じ。Pass 1 と同じく、修正に入る前に「これとこれを直します」と 1〜2 文で宣言する。修正後は次の反復に進む。
+指摘を直す手順は通常の Edit ベース実装と同じ。
+Pass 1 と同じく、修正に入る前に「これとこれを直します」と 1〜2 文で宣言する。
+修正後は変更範囲の focused check を実行してから次の反復に進む。
+full check はここで重ねて実行しない。
 
 ## Step 4: show final change summary in chat
 
@@ -158,7 +175,9 @@ Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知
 
 1. **最低 1 つのレビューパスが成功している**: Pass 1 (code-review) が正常完了したか、Pass 2 (codex) が少なくとも 1 反復回って結果を返している。Pass 1 がエラーで、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューが 0 件なので **marker を書かず**、レビュー未完了である旨をユーザーに伝えて終了する(ゲートは閉じたまま)。
 2. **working tree が clean**: Pass 1/Pass 2 の修正が全て commit 済みであること。dirty なまま marker を書くと、未コミットの修正は PR (= push 済みコミット) に乗らないのに HEAD が「レビュー済み」とマークされ、ゲートが unreviewed なコードの PR 作成を通してしまう。
-3. **Pass 0 を実行した場合、今回の diff に起因する検証失敗が残っていない**: Pass 1 / Pass 2 の修正でコードを変えたら、変更範囲に対応する検証 (最低限 lint、テスト対象を触ったら test) を再実行してから marker を書く。Pass 0 で 1 行報告して先へ進んだ base 由来・環境起因の失敗は marker をブロックしない。Pass 0 を skip した repo ではこの前提は課さない。
+3. **現在の HEAD が canonical full check を通過している**: Pass 1 / Pass 2 の修正でファイルが変わったら focused check だけを実行し、marker は書かない。
+   修正を commit して新しい HEAD で本 skill をやり直し、canonical full check とレビューを通す。
+   検証手段が無い repo ではこの前提を課さない。
 
 ```bash
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -173,13 +192,15 @@ fi
 
 - git リポジトリ外で `/post-work-review` を呼ばれた場合は no-op。
 - マーカーは worktree-local (`.git/worktrees/<name>/post-work-review-passed`) なので fanout の並列ペインで干渉しない。
-- HEAD が進めば marker は自動的に stale になりゲートが再び閉じる。だから marker を書くのは「修正を全て commit し、これ以上コミットしない」最終状態に到達してから。push やコミット自体は本 skill の責任外なので、ユーザーが別途コミット → このステップ、の順序を守る。
+- HEAD が進めば marker は自動的に stale になりゲートが再び閉じる。
+  marker を書くのは、修正を全て commit し、canonical full check とレビューを通した最終状態だけ。
+  push やコミット自体は本 skill の責任外なので、review で修正した場合は別途 commit してから本 skill をやり直す。
 
 ## 完了報告
 
 ループ終了時 (clean 判定 / ユーザー停止指示 / oscillation 検知のいずれか) に、以下を 2〜3 文で報告する:
 
-- Pass 0 の検証結果 (検証手段が無く skip した場合はその旨)
+- Pass 0 で実行した canonical full check または focused check と結果 (検証手段が無く skip した場合はその旨)
 - Pass 1 で何件直したか
 - Pass 2 が何反復回って終わったか (codex 未検出で skip した場合はその旨)
 - 最終的に codex が approve したか、それともユーザー判断で停止したか

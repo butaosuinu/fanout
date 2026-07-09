@@ -20,3 +20,4 @@ site/resources/
 internal/ui/dashboard/static/*
 !internal/ui/dashboard/static/.gitkeep
 web/node_modules/
+.pnpm-store/

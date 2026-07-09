@@ -397,84 +397,208 @@ env_set() {
   mv "$tmp" "$file" || die "failed to update review env"
 }
 
-json_ruby() {
-  ruby -rjson -rdigest/sha1 -e "$1" "$2" "${3:-}" "${4:-}"
+JSON_CACHE_ROOT=""
+JSON_CACHE_FILES=()
+JSON_CACHE_DIRS=()
+
+json_cache_cleanup() {
+  if [ -n "$JSON_CACHE_ROOT" ]; then
+    rm -rf -- "$JSON_CACHE_ROOT"
+  fi
 }
 
-json_python() {
-  python3 -c "$1" "$2" "${3:-}" "${4:-}"
+trap json_cache_cleanup EXIT
+
+json_cache_init() {
+  [ -n "$JSON_CACHE_ROOT" ] && return 0
+  JSON_CACHE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fanout-post-work-review-json.XXXXXX")" || \
+    die "failed to create reviewer JSON cache"
 }
 
-json_eval() {
-  local ruby_code python_code file arg
-  ruby_code="$1"
-  python_code="$2"
-  file="$3"
-  arg="${4:-}"
+json_cache_dir_for() {
+  local file i
+  file="$1"
+  for i in "${!JSON_CACHE_FILES[@]}"; do
+    if [ "${JSON_CACHE_FILES[$i]}" = "$file" ]; then
+      printf '%s\n' "${JSON_CACHE_DIRS[$i]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+json_parse_result() {
+  local file out
+  file="$1"
+  out="$2"
   if command -v ruby >/dev/null 2>&1; then
-    json_ruby "$ruby_code" "$file" "$arg"
+    ruby -rjson -rdigest/sha1 -e '
+def scalar(v)
+  return "true" if v == true
+  return "false" if v == false
+  return "null" if v.nil?
+  return JSON.generate(v) if v.is_a?(Array) || v.is_a?(Hash)
+  v.to_s
+end
+def clean(v)
+  v.to_s.gsub(/[[:space:]]+/, " ").strip
+end
+file, out = ARGV
+data = JSON.parse(File.read(file))
+keys = %w[backend review_type reviewer_agent reviewer_provenance reviewer_session_id same_agent_review reviewer_isolated reviewer_sandbox_mode hooks_only_success head diff_hash finding_count truncated all_previous_findings_fixed new_regressions]
+if data.is_a?(Hash)
+  keys.each do |key|
+    File.binwrite(File.join(out, key), scalar(data[key])) if data.key?(key)
+  end
+  findings = data["findings"]
+  if findings.is_a?(Array)
+    File.write(File.join(out, "findings_count"), findings.length.to_s)
+    required = %w[severity file line title description recommendation]
+    missing = findings.count do |finding|
+      !finding.is_a?(Hash) || required.any? { |key| !finding.key?(key) || finding[key].nil? || finding[key].to_s.strip.empty? }
+    end
+    File.write(File.join(out, "findings_missing_required_count"), missing.to_s)
+    File.open(File.join(out, "findings.tsv"), "wb") do |io|
+      findings.each_with_index do |finding, index|
+        finding = {} unless finding.is_a?(Hash)
+        severity = clean(finding["severity"])
+        path = clean(finding["file"])
+        line = clean(finding["line"])
+        title = clean(finding["title"])
+        description = clean(finding["description"])
+        recommendation = clean(finding["recommendation"])
+        fingerprint = Digest::SHA1.hexdigest([path, line, title, description].join("\0"))
+        io.write([index + 1, severity, path, line, title, fingerprint, description, recommendation].join("\t"))
+        io.write("\n")
+      end
+    end
+  end
+end
+File.write(File.join(out, "valid"), "")
+' "$file" "$out"
   elif command -v python3 >/dev/null 2>&1; then
-    json_python "$python_code" "$file" "$arg"
+    python3 -c '
+import hashlib,json,os,re,sys
+def scalar(value):
+    if value is True: return "true"
+    if value is False: return "false"
+    if value is None: return "null"
+    if isinstance(value,(list,dict)): return json.dumps(value,separators=(",",":"))
+    return str(value)
+def clean(value):
+    return re.sub(r"\s+"," ","" if value is None else str(value)).strip()
+file,out=sys.argv[1:3]
+with open(file,encoding="utf-8") as source:
+    data=json.load(source)
+keys=["backend","review_type","reviewer_agent","reviewer_provenance","reviewer_session_id","same_agent_review","reviewer_isolated","reviewer_sandbox_mode","hooks_only_success","head","diff_hash","finding_count","truncated","all_previous_findings_fixed","new_regressions"]
+if isinstance(data,dict):
+    for key in keys:
+        if key in data:
+            with open(os.path.join(out,key),"w",encoding="utf-8") as target:
+                target.write(scalar(data[key]))
+    findings=data.get("findings")
+    if isinstance(findings,list):
+        with open(os.path.join(out,"findings_count"),"w",encoding="utf-8") as target:
+            target.write(str(len(findings)))
+        required=["severity","file","line","title","description","recommendation"]
+        missing=sum(1 for finding in findings if not isinstance(finding,dict) or any(key not in finding or finding[key] is None or str(finding[key]).strip()=="" for key in required))
+        with open(os.path.join(out,"findings_missing_required_count"),"w",encoding="utf-8") as target:
+            target.write(str(missing))
+        with open(os.path.join(out,"findings.tsv"),"w",encoding="utf-8") as target:
+            for index,finding in enumerate(findings,1):
+                finding=finding if isinstance(finding,dict) else {}
+                severity=clean(finding.get("severity")); path=clean(finding.get("file")); line=clean(finding.get("line")); title=clean(finding.get("title")); description=clean(finding.get("description")); recommendation=clean(finding.get("recommendation"))
+                fingerprint=hashlib.sha1("\0".join([path,line,title,description]).encode()).hexdigest()
+                target.write("\t".join([str(index),severity,path,line,title,fingerprint,description,recommendation])+"\n")
+with open(os.path.join(out,"valid"),"w",encoding="utf-8"):
+    pass
+' "$file" "$out"
   else
     die "ruby or python3 is required to parse reviewer JSON"
   fi
 }
 
-json_validate() {
-  local file
+json_cache_add() {
+  local file cache index status
   file="$1"
-  json_eval \
-    'JSON.parse(File.read(ARGV[0])); exit 0' \
-    'import json,sys; json.load(open(sys.argv[1])); sys.exit(0)' \
-    "$file"
+  if cache="$(json_cache_dir_for "$file")"; then
+    [ -f "$cache/valid" ]
+    return
+  fi
+  json_cache_init
+  index="${#JSON_CACHE_FILES[@]}"
+  cache="$JSON_CACHE_ROOT/$index"
+  mkdir "$cache" || die "failed to create reviewer JSON cache entry"
+  json_parse_result "$file" "$cache" >/dev/null 2>&1
+  status=$?
+  JSON_CACHE_FILES[index]="$file"
+  JSON_CACHE_DIRS[index]="$cache"
+  return "$status"
+}
+
+json_cache_alias() {
+  local source alias cache index
+  source="$1"
+  alias="$2"
+  cache="$(json_cache_dir_for "$source")" || return 1
+  if json_cache_dir_for "$alias" >/dev/null 2>&1; then
+    return 0
+  fi
+  index="${#JSON_CACHE_FILES[@]}"
+  JSON_CACHE_FILES[index]="$alias"
+  JSON_CACHE_DIRS[index]="$cache"
+}
+
+json_cache_prepare_stored_results() {
+  local path i
+  path="$(result_path broad 1)"
+  if [ -f "$path" ]; then
+    json_cache_add "$path" || true
+  fi
+  for i in 1 2; do
+    path="$(result_path verify "$i")"
+    if [ -f "$path" ]; then
+      json_cache_add "$path" || true
+    fi
+  done
+}
+
+json_cache_file() {
+  local file name cache
+  file="$1"
+  name="$2"
+  json_cache_add "$file" || return 1
+  cache="$(json_cache_dir_for "$file")" || return 1
+  [ -f "$cache/$name" ] || return 1
+  printf '%s\n' "$cache/$name"
+}
+
+json_validate() {
+  json_cache_add "$1"
 }
 
 json_scalar() {
-  local file key
-  file="$1"
-  key="$2"
-  json_eval \
-    'data=JSON.parse(File.read(ARGV[0])); key=ARGV[1]; exit 1 unless data.key?(key); v=data[key]; if v == true then puts "true"; elsif v == false then puts "false"; elsif v.nil? then puts "null"; elsif v.is_a?(Array) || v.is_a?(Hash) then puts JSON.generate(v); else puts v.to_s; end' \
-    'import json,sys; data=json.load(open(sys.argv[1])); key=sys.argv[2]; sys.exit(1) if key not in data else None; v=data[key]; print("true" if v is True else "false" if v is False else "null" if v is None else json.dumps(v,separators=(",",":")) if isinstance(v,(list,dict)) else str(v))' \
-    "$file" "$key"
+  local cached
+  cached="$(json_cache_file "$1" "$2")" || return 1
+  cat "$cached"
 }
 
 json_findings_count() {
-  local file
-  file="$1"
-  json_eval \
-    'data=JSON.parse(File.read(ARGV[0])); f=data["findings"]; exit 1 unless f.is_a?(Array); puts f.length' \
-    'import json,sys; data=json.load(open(sys.argv[1])); f=data.get("findings"); sys.exit(1) if not isinstance(f,list) else print(len(f))' \
-    "$file"
+  local cached
+  cached="$(json_cache_file "$1" findings_count)" || return 1
+  cat "$cached"
 }
 
 json_findings_missing_required_count() {
-  local file
-  file="$1"
-  json_eval \
-    'data=JSON.parse(File.read(ARGV[0])); findings=data["findings"]; exit 1 unless findings.is_a?(Array); required=%w[severity file line title description recommendation]; missing=0; findings.each do |f|; if !f.is_a?(Hash) || required.any? { |k| !f.key?(k) || f[k].nil? || f[k].to_s.strip.empty? }; missing += 1; end; end; puts missing' \
-    'import json,sys; data=json.load(open(sys.argv[1])); findings=data.get("findings"); sys.exit(1) if not isinstance(findings,list) else None; required=["severity","file","line","title","description","recommendation"]; missing=0
-for f in findings:
-    if not isinstance(f,dict) or any(k not in f or f[k] is None or str(f[k]).strip()=="" for k in required):
-        missing += 1
-print(missing)' \
-    "$file"
+  local cached
+  cached="$(json_cache_file "$1" findings_missing_required_count)" || return 1
+  cat "$cached"
 }
 
 json_findings_tsv() {
-  local file result_name
-  file="$1"
-  result_name="$2"
-  json_eval \
-    'def clean(v); v.to_s.gsub(/[[:space:]]+/, " ").strip; end; data=JSON.parse(File.read(ARGV[0])); result=ARGV[1]; findings=data["findings"]; exit 1 unless findings.is_a?(Array); findings.each_with_index do |f,i|; f={} unless f.is_a?(Hash); severity=clean(f["severity"]); path=clean(f["file"]); line=clean(f["line"]); title=clean(f["title"]); desc=clean(f["description"]); rec=clean(f["recommendation"]); fp_src=[path,line,title,desc].join("\0"); fp=Digest::SHA1.hexdigest(fp_src); puts [result,i+1,severity,path,line,title,fp,desc,rec].join("\t"); end' \
-    'import hashlib,json,re,sys; data=json.load(open(sys.argv[1])); result=sys.argv[2]; findings=data.get("findings"); sys.exit(1) if not isinstance(findings,list) else None
-def clean(v): return re.sub(r"\s+"," ", "" if v is None else str(v)).strip()
-for i,f in enumerate(findings,1):
-    f=f if isinstance(f,dict) else {}
-    severity=clean(f.get("severity")); path=clean(f.get("file")); line=clean(f.get("line")); title=clean(f.get("title")); desc=clean(f.get("description")); rec=clean(f.get("recommendation"))
-    fp=hashlib.sha1("\0".join([path,line,title,desc]).encode()).hexdigest()
-    print("\t".join([result,str(i),severity,path,line,title,fp,desc,rec]))' \
-    "$file" "$result_name"
+  local cached
+  cached="$(json_cache_file "$1" findings.tsv)" || return 1
+  awk -v result="$2" '{ print result "\t" $0 }' "$cached"
 }
 
 result_path() {
@@ -529,6 +653,7 @@ latest_result() {
 
 latest_finding_count() {
   local path count
+  json_cache_prepare_stored_results
   path="$(latest_result)"
   [ -f "$path" ] || {
     echo 0
@@ -542,6 +667,7 @@ latest_finding_count() {
 reviewer_session_used() {
   local candidate path i stored
   candidate="$1"
+  json_cache_prepare_stored_results
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
     stored="$(json_scalar "$path" reviewer_session_id 2>/dev/null || true)"
@@ -559,6 +685,7 @@ reviewer_session_used() {
 
 duplicate_reviewer_session_count() {
   local path i stored tmp
+  json_cache_prepare_stored_results
   tmp="$(state_dir_abs)/reviewer-sessions.tmp.$$"
   : >"$tmp" || die "failed to inspect reviewer sessions"
   path="$(result_path broad 1)"
@@ -701,6 +828,7 @@ validate_result() {
 
 rewrite_findings_tsv() {
   local out path name i
+  json_cache_prepare_stored_results
   out="$(findings_tsv_path)"
   mkdir -p "$(dirname "$out")"
   printf 'result\tindex\tseverity\tfile\tline\ttitle\tfingerprint\tdescription\trecommendation\n' >"$out"
@@ -745,6 +873,7 @@ repeated_fingerprint_count() {
 
 any_result_truncated() {
   local path i value
+  json_cache_prepare_stored_results
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
     value="$(json_scalar "$path" truncated 2>/dev/null || echo false)"
@@ -781,6 +910,7 @@ summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
   local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions i path
   local target_changed_reason
+  json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
   total_calls="$(total_reviewer_calls)"
@@ -1068,6 +1198,7 @@ cmd_prepare() {
   cd "$root" || die "failed to enter repo root"
   state="$(state_dir_abs)"
   results="$(results_dir)"
+  json_cache_prepare_stored_results
   if [ -f "$(review_env_path)" ] && [ "$(broad_review_calls)" -ge "$BROAD_REVIEW_MAX" ]; then
     latest_findings="$(latest_finding_count)"
     if any_result_truncated; then
@@ -1115,6 +1246,7 @@ cmd_prepare_verify() {
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
   [ "$broad_calls" -eq 1 ] || die "broad review result not found"
   if any_result_truncated; then
@@ -1188,6 +1320,7 @@ cmd_record() {
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
   mkdir -p "$(results_dir)" || die "failed to create results dir"
+  json_cache_prepare_stored_results
 
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -1218,6 +1351,7 @@ cmd_record() {
   fi
   dest="$(result_path "$kind" "$index")"
   cp "$review_json" "$dest" || die "failed to store review result"
+  json_cache_alias "$review_json" "$dest" || die "failed to cache review result"
   if [ "$kind" = "verify" ]; then
     commit_pending_reviewed_diff
     env_set pending_verify 0
@@ -1239,6 +1373,7 @@ cmd_summarize() {
   ensure_repo
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  json_cache_prepare_stored_results
   rewrite_findings_tsv
   summary_values
   print_state_lines
@@ -1264,6 +1399,7 @@ cmd_status() {
     printf 'marker_eligible=false\n'
     exit 0
   fi
+  json_cache_prepare_stored_results
   rewrite_findings_tsv
   summary_values
   printf 'prepared=true\n'
@@ -1298,6 +1434,7 @@ cmd_mark() {
   ensure_repo
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || mark_reject "review_state_missing"
+  json_cache_prepare_stored_results
   backend="$(env_get backend || true)"
   [ "$backend" = "$BACKEND" ] || mark_reject "backend_not_bounded_isolated_reviewer"
 

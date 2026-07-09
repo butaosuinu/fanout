@@ -586,7 +586,7 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 		"- #502: Second child",
 		"/tmp/fanout-project_root-100.db",
 		"$post-work-review",
-		"Push only after the final branch review is clean",
+		"Only after the committed branch review is clean and marked should you push the",
 	} {
 		if !strings.Contains(got.BriefingBody, want) {
 			t.Fatalf("briefing missing %q:\n%s", want, got.BriefingBody)
