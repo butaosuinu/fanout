@@ -50,8 +50,8 @@ depguard は golangci-lint v2 導入(#191)で「コミュニティ合意でノ�
 | `TestPackageMainOnlyInCmd` | △ `cmd/...` の被 import 禁止は可。package main 配置(package 節の検査)は import linter の範囲外 | △ 同左 | △ 同左 |
 | `TestInternalTreeShape` | × 実ディレクトリ検査(非 Go ファイル含む)は import 解析の範囲外 | × 同左 | × 同左 |
 | `TestAllPackagesClassified` | ○ component 未所属ファイルを検出(component glob の整備が前提) | △ coverage 閾値 100% で近似 | × `files` glob 外のパッケージは素通し |
-| `TestExplicitLayerMapIsCurrent` | × 設定側の stale エントリ検出はない | × 同左 | × 同左 |
-| `TestScanSanity` | × 設定の空回り(壊れた glob で何も検査しない状態)を自己検出する仕組みはない | × 同左 | × 同左 |
+| `TestExplicitLayerMapIsCurrent` | △ 0 件に解決される component glob は既定でエラー、component 未所属ファイルは警告になるため、設定の stale はおおむね fail-closed(Go ファイルを失った空ディレクトリ等の差は残る) | × 設定側の stale エントリ検出はない | × 同左 |
+| `TestScanSanity` | △ 0 件解決 glob のエラーと未所属警告が空回りを兼ねて検出 | △ coverage 閾値 100% なら rule が 1 件も評価しない設定壊れを失敗にできる(build 対象外を見ない差は残る) | × `files` glob が空振りしても検出されない |
 
 `tools/reviewrisk` の docsync(`docs/architecture.ja.md` のパッケージ表 ↔
 `rules.go`)はアーキテクチャリンターの守備範囲外で、どの案でも手書き維持。
