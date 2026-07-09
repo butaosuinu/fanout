@@ -245,7 +245,7 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 	l.Log.Dim("  slug -> %s", req.Slug)
 	l.Log.Dim("  worktree -> %s", targetPath)
 	if req.CodexPlanMode {
-		l.Log.Dim("  codex-plan-mode -> app-server + interactive Codex TUI /plan session")
+		l.Log.Dim("  codex-plan-mode -> app-server Plan Mode turn + interactive Codex TUI resume")
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
 
@@ -396,7 +396,7 @@ func logPaneRequest(req Request, lg *log.Logger) {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
 	if req.CodexPlanMode {
-		lg.Dim("  codex-plan-mode -> app-server + interactive Codex TUI /plan session")
+		lg.Dim("  codex-plan-mode -> app-server Plan Mode turn + interactive Codex TUI resume")
 	}
 }
 
@@ -405,7 +405,7 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
 	if req.CodexPlanMode {
-		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server + interactive Codex TUI /plan session\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan Mode turn + interactive Codex TUI resume\n", c.Dim, c.Reset)
 	}
 	if req.Worktree.Refresh {
 		details := req.Worktree.RefreshDetails
@@ -441,7 +441,7 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
 	if req.CodexPlanMode {
-		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI /plan thread startup before recording state%s\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for app-server Plan Mode startup before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)

@@ -13,17 +13,17 @@ import (
 	"time"
 )
 
-func TestCodexRemoteTUIArgsPassPromptToResume(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "hello plan")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1", "--", "hello plan"}
+func TestCodexRemoteTUIArgsResumesSession(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1")
+	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
 	}
 }
 
-func TestCodexRemoteTUIArgsStartsFreshSessionWithoutPrompt(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "", "")
+func TestCodexRemoteTUIArgsStartsFreshSession(t *testing.T) {
+	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "")
 	want := []string{"--remote", "ws://127.0.0.1:1234"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
@@ -31,58 +31,41 @@ func TestCodexRemoteTUIArgsStartsFreshSessionWithoutPrompt(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteTUIArgsSeparatesDashLeadingPrompt(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "-- investigate")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1", "--", "-- investigate"}
+func TestCodexPlanSettingsUpdateParamsUsesPlanMode(t *testing.T) {
+	got := codexPlanSettingsUpdateParams("thread-1", "gpt-test", "high")
 
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestCodexRemoteTUIArgsCanResumeWithoutPromptForFallbackTurn(t *testing.T) {
-	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "thread-1", "")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "thread-1"}
-
-	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
-		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestCodexPlanStartupPromptUsesSlashPlan(t *testing.T) {
-	got := codexPlanStartupPrompt(" inspect repo ")
-	if got != "/plan inspect repo" {
-		t.Fatalf("codexPlanStartupPrompt() = %q, want slash plan prompt", got)
-	}
-
-	multiLine := codexPlanStartupPrompt(" inspect\n\nrepo\tstate ")
-	if multiLine != "/plan inspect repo state" {
-		t.Fatalf("codexPlanStartupPrompt(multiline) = %q, want one-line slash plan prompt", multiLine)
-	}
-
-	empty := codexPlanStartupPrompt(" \n ")
-	if empty != "/plan" {
-		t.Fatalf("codexPlanStartupPrompt(empty) = %q, want /plan", empty)
-	}
-}
-
-func TestSendCodexPlanStartupPromptUsesConfiguredSender(t *testing.T) {
-	var sent string
-	err := sendCodexPlanStartupPrompt(func(prompt string) error {
-		sent = prompt
-		return nil
-	}, "/plan inspect repo")
+	body, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent != "/plan inspect repo" {
-		t.Fatalf("sent prompt = %q, want /plan inspect repo", sent)
+	var shaped struct {
+		ThreadID          string `json:"threadId"`
+		CollaborationMode struct {
+			Mode     string `json:"mode"`
+			Settings struct {
+				Model                 string  `json:"model"`
+				ReasoningEffort       string  `json:"reasoning_effort"`
+				DeveloperInstructions *string `json:"developer_instructions"`
+			} `json:"settings"`
+		} `json:"collaborationMode"`
 	}
-}
-
-func TestSendCodexPlanStartupPromptRequiresSender(t *testing.T) {
-	if err := sendCodexPlanStartupPrompt(nil, "/plan"); err == nil {
-		t.Fatal("sendCodexPlanStartupPrompt(nil) error = nil, want error")
+	if err := json.Unmarshal(body, &shaped); err != nil {
+		t.Fatal(err)
+	}
+	if shaped.ThreadID != "thread-1" {
+		t.Fatalf("threadId = %q, want thread-1", shaped.ThreadID)
+	}
+	if shaped.CollaborationMode.Mode != "plan" {
+		t.Fatalf("mode = %q, want plan", shaped.CollaborationMode.Mode)
+	}
+	if shaped.CollaborationMode.Settings.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", shaped.CollaborationMode.Settings.Model)
+	}
+	if shaped.CollaborationMode.Settings.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", shaped.CollaborationMode.Settings.ReasoningEffort)
+	}
+	if shaped.CollaborationMode.Settings.DeveloperInstructions != nil {
+		t.Fatalf("developer_instructions = %q, want nil", *shaped.CollaborationMode.Settings.DeveloperInstructions)
 	}
 }
 
@@ -97,6 +80,151 @@ func TestCodexRemoteTUIResumeIDFallsBackToThreadID(t *testing.T) {
 	got := codexRemoteTUIResumeID(codexThreadInfo{ID: "thread-1"})
 	if got != "thread-1" {
 		t.Fatalf("codexRemoteTUIResumeID() = %q, want thread-1", got)
+	}
+}
+
+func TestCodexThreadStartParamsCreatesPersistentStartupThread(t *testing.T) {
+	got := codexThreadStartParams("/repo", "gpt-test")
+
+	if got["cwd"] != "/repo" {
+		t.Fatalf("cwd = %q, want /repo", got["cwd"])
+	}
+	if got["model"] != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", got["model"])
+	}
+	if got["sessionStartSource"] != "startup" {
+		t.Fatalf("sessionStartSource = %q, want startup", got["sessionStartSource"])
+	}
+	if got["threadSource"] != "user" {
+		t.Fatalf("threadSource = %q, want user", got["threadSource"])
+	}
+	if got["ephemeral"] != false {
+		t.Fatalf("ephemeral = %v, want false", got["ephemeral"])
+	}
+}
+
+func TestCodexTurnStartParamsSubmitsPromptThroughAppServer(t *testing.T) {
+	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", nil)
+
+	if got["threadId"] != "thread-1" {
+		t.Fatalf("threadId = %q, want thread-1", got["threadId"])
+	}
+	if got["cwd"] != "/repo" {
+		t.Fatalf("cwd = %q, want /repo", got["cwd"])
+	}
+	if got["model"] != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", got["model"])
+	}
+	input, ok := got["input"].([]map[string]any)
+	if !ok {
+		t.Fatalf("input has type %T, want []map[string]any", got["input"])
+	}
+	if len(input) != 1 || input[0]["type"] != "text" || input[0]["text"] != "hello plan" {
+		t.Fatalf("input = %#v, want one text prompt", input)
+	}
+	if _, ok := got["collaborationMode"]; ok {
+		t.Fatalf("collaborationMode was included without fallback: %#v", got["collaborationMode"])
+	}
+}
+
+func TestCodexTurnStartParamsCanCarryPlanCollaborationMode(t *testing.T) {
+	got := codexTurnStartParams("thread-1", "/repo", "gpt-test", "hello plan", codexPlanCollaborationMode("gpt-test", "medium"))
+
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shaped struct {
+		CollaborationMode struct {
+			Mode     string `json:"mode"`
+			Settings struct {
+				Model           string `json:"model"`
+				ReasoningEffort string `json:"reasoning_effort"`
+			} `json:"settings"`
+		} `json:"collaborationMode"`
+	}
+	if err := json.Unmarshal(body, &shaped); err != nil {
+		t.Fatal(err)
+	}
+	if shaped.CollaborationMode.Mode != "plan" {
+		t.Fatalf("mode = %q, want plan", shaped.CollaborationMode.Mode)
+	}
+	if shaped.CollaborationMode.Settings.Model != "gpt-test" {
+		t.Fatalf("model = %q, want gpt-test", shaped.CollaborationMode.Settings.Model)
+	}
+	if shaped.CollaborationMode.Settings.ReasoningEffort != "medium" {
+		t.Fatalf("reasoning_effort = %q, want medium", shaped.CollaborationMode.Settings.ReasoningEffort)
+	}
+}
+
+func TestConfigModelReadsConfiguredModel(t *testing.T) {
+	got := configModel(json.RawMessage(`{"config":{"model":"gpt-test"}}`))
+	if got != "gpt-test" {
+		t.Fatalf("configModel() = %q, want gpt-test", got)
+	}
+}
+
+func TestModelListDefaultPrefersVisibleDefault(t *testing.T) {
+	got, err := modelListDefault(json.RawMessage(`{"data":[
+		{"id":"hidden-id","model":"hidden-model","hidden":true,"isDefault":true},
+		{"id":"fallback-id","model":"fallback-model","hidden":false,"isDefault":false},
+		{"id":"default-id","model":"default-model","hidden":false,"isDefault":true}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "default-model" {
+		t.Fatalf("modelListDefault() = %q, want default-model", got)
+	}
+}
+
+func TestCodexPlanEffortReadsPlanMode(t *testing.T) {
+	got, err := codexPlanEffort(json.RawMessage(`{"data":[
+		{"name":"Default","mode":"default","reasoning_effort":"low"},
+		{"name":"Plan","mode":"plan","settings":{"reasoning_effort":"high"}}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "high" {
+		t.Fatalf("codexPlanEffort() = %q, want high", got)
+	}
+}
+
+func TestCodexPlanEffortDefaultsWhenPlanHasNoEffort(t *testing.T) {
+	got, err := codexPlanEffort(json.RawMessage(`{"data":[{"name":"Plan","mode":"plan"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "medium" {
+		t.Fatalf("codexPlanEffort() = %q, want medium", got)
+	}
+}
+
+func TestParseThreadStartFallsBackToThreadIDAsSessionID(t *testing.T) {
+	got, err := parseThreadStart([]byte(`{"thread":{"id":"thread-1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "thread-1" || got.SessionID != "thread-1" {
+		t.Fatalf("parseThreadStart() = %+v, want thread id reused as session id", got)
+	}
+}
+
+func TestParseThreadStartReturnsThreadAndSessionID(t *testing.T) {
+	got, err := parseThreadStart([]byte(`{"thread":{"id":"thread-1","sessionId":"session-1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "thread-1" || got.SessionID != "session-1" {
+		t.Fatalf("parseThreadStart() = %+v, want thread/session ids", got)
+	}
+}
+
+func TestUnsupportedCodexAppServerMethodDetection(t *testing.T) {
+	err := errors.New(`app-server request fanout-plan-mode failed: unknown variant "thread/settings/update"`)
+	if !isUnsupportedCodexAppServerMethod(err) {
+		t.Fatalf("isUnsupportedCodexAppServerMethod() = false, want true")
 	}
 }
 
@@ -356,6 +484,32 @@ func TestDrainCodexAppServerNotificationsUntilClosedDoesNotHandleServerRequests(
 	}
 }
 
+func TestDrainCodexAppServerDuringStartupHandlesRequestsAndStates(t *testing.T) {
+	var states []string
+	client := &fakeStartupAppServerClient{messages: []appServerMessage{
+		{
+			ID:     json.RawMessage(`"req-1"`),
+			Method: "tool/requestUserInput",
+			Params: json.RawMessage(`{"questions":[{"id":"scope"}]}`),
+		},
+		{Method: "turn/started"},
+		{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"turn":{"status":"completed"}}`),
+		},
+	}}
+
+	if err := drainCodexAppServerDuringStartup(client, recordedStates(&states)); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent responses = %d, want 1", len(client.sent))
+	}
+	if !slices.Equal(states, []string{"blocked", "working", "working", "plan"}) {
+		t.Fatalf("states = %#v, want blocked, working, working, plan", states)
+	}
+}
+
 func TestDrainCodexAppServerNotificationsReportsThreadStarted(t *testing.T) {
 	var states []string
 	threadReady := make(chan codexThreadInfo, 1)
@@ -464,8 +618,27 @@ type fakeCodexAppClient struct {
 	sent []any
 }
 
+type fakeStartupAppServerClient struct {
+	messages []appServerMessage
+	sent     []any
+}
+
 type fakeAppServerReceiver struct {
 	messages []appServerMessage
+}
+
+func (f *fakeStartupAppServerClient) receive() (appServerMessage, error) {
+	if len(f.messages) == 0 {
+		return appServerMessage{}, io.EOF
+	}
+	msg := f.messages[0]
+	f.messages = f.messages[1:]
+	return msg, nil
+}
+
+func (f *fakeStartupAppServerClient) send(v any) error {
+	f.sent = append(f.sent, v)
+	return nil
 }
 
 func (f *fakeAppServerReceiver) receive() (appServerMessage, error) {

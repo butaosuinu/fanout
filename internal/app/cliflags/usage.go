@@ -105,7 +105,7 @@ Options:
                       child briefings. Default: on.
   --codex-plan-mode / --no-codex-plan-mode
                       For --agent codex, start an interactive Codex TUI
-                      through app-server and submit the prompt via /plan
+                      from an app-server Plan Mode turn
                       instead of positional ` + "`" + `codex "<prompt>"` + "`" + `. Default: off.
   --pr-visualization / --no-pr-visualization
                       Include or omit structured PR-body plus gated Mermaid
