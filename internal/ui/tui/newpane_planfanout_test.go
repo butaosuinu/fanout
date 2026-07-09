@@ -226,8 +226,10 @@ func TestNewPaneViewPlanFanoutCheckbox(t *testing.T) {
 }
 
 // TestIssuePlanFanoutSyncsWithSelection drives the gray-out via the real update
-// path: moving onto an open-children issue clears fan-out and disables the row,
-// and moving back onto a childless issue makes it togglable again.
+// path: moving onto an open-children issue suspends fan-out (checked but inert,
+// row disabled) without discarding the user's choice, and moving back onto a
+// childless issue re-arms it — so a transient selection change never flips what
+// a later submit launches.
 func TestIssuePlanFanoutSyncsWithSelection(t *testing.T) {
 	childless := IssueListItem{Number: 42, Title: "Fix UI"}
 	parent := IssueListItem{Number: 7, Title: "Epic", HasOpenChildren: true}
@@ -241,16 +243,19 @@ func TestIssuePlanFanoutSyncsWithSelection(t *testing.T) {
 	}
 
 	step(tea.KeyMsg{Type: tea.KeyDown}) // select the open-children issue
-	if m.newPane.issuePlanFanout {
-		t.Fatal("plan fan-out should clear when the selection has open children")
+	if !m.newPane.issuePlanFanout {
+		t.Fatal("plan fan-out choice should survive an open-children selection")
+	}
+	if m.issuePlanFanoutActive() {
+		t.Fatal("issuePlanFanoutActive() = true, want suspended for an open-children selection")
 	}
 	if !m.issuePlanFanoutDisabled() {
 		t.Fatal("issuePlanFanoutDisabled() = false, want true for an open-children selection")
 	}
 
 	step(tea.KeyMsg{Type: tea.KeyUp}) // back onto the childless issue
-	if m.issuePlanFanoutDisabled() {
-		t.Fatal("issuePlanFanoutDisabled() = true, want false back on the childless issue")
+	if !m.issuePlanFanoutActive() {
+		t.Fatal("issuePlanFanoutActive() = false, want re-armed back on the childless issue")
 	}
 }
 

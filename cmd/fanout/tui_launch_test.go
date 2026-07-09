@@ -96,8 +96,10 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 			if !strings.Contains(req.Prompt, req.BriefingPath) {
 				t.Fatalf("req.Prompt %q does not reference briefing path %q", req.Prompt, req.BriefingPath)
 			}
-			if base := filepath.Base(req.BriefingPath); base != "fanout-repo-plan-issue-123.md" {
-				t.Fatalf("briefing basename = %q, want fanout-repo-plan-issue-123.md", base)
+			// The trailing -1 is the synthetic pane number: per-launch unique so a
+			// relaunch never overwrites a brief an earlier coordinator still reads.
+			if base := filepath.Base(req.BriefingPath); base != "fanout-repo-plan-issue-123-1.md" {
+				t.Fatalf("briefing basename = %q, want fanout-repo-plan-issue-123-1.md", base)
 			}
 			if !strings.Contains(req.BriefingBody, issue.Title) {
 				t.Fatalf("req.BriefingBody = %q, want the issue title", req.BriefingBody)
@@ -121,13 +123,109 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 			if req.ShellKey != "shell-issue-plan-key" {
 				t.Fatalf("req.ShellKey = %q, want the liveness key passed through", req.ShellKey)
 			}
-			if req.Slug != "plan-issue-123" {
-				t.Fatalf("req.Slug = %q, want plan-issue-123", req.Slug)
+			if req.Slug != "plan-issue-123-1" {
+				t.Fatalf("req.Slug = %q, want plan-issue-123-1", req.Slug)
 			}
 			if want := "plan: #123 Add full-text search"; req.Title != want {
 				t.Fatalf("req.Title = %q, want %q", req.Title, want)
 			}
 		})
+	}
+}
+
+// TestGuardIssuePlanCoordinator pins the plan-checkbox dedupe run on the locked
+// store: a recorded coordinator (manual-parent row with the per-issue slug
+// prefix) or any recorded pane for the issue blocks a second launch.
+func TestGuardIssuePlanCoordinator(t *testing.T) {
+	tests := []struct {
+		name    string
+		panes   []state.Pane
+		wantErr string
+	}{
+		{
+			name:    "empty store allows the launch",
+			panes:   nil,
+			wantErr: "",
+		},
+		{
+			name:    "recorded coordinator for the issue blocks",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"}},
+			wantErr: "issue #123 already has a plan coordinator pane",
+		},
+		{
+			name:    "coordinator for a different issue does not alias by prefix",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-1234-1"}},
+			wantErr: "",
+		},
+		{
+			name:    "recorded work pane for the issue blocks",
+			panes:   []state.Pane{{Parent: "@watch", IssueNum: 123, Slug: "fix-search-123"}},
+			wantErr: "issue #123 already has a fanout pane",
+		},
+		{
+			name:    "prompt coordinator rows never block an issue launch",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-prompt-1"}},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := guardIssuePlanCoordinator(state.Store{Panes: tt.panes}, 123)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("guardIssuePlanCoordinator(store, 123) = %v, want nil", err)
+			case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
+				t.Fatalf("guardIssuePlanCoordinator(store, 123) = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestLaunchIssuePlanFromTUIRejectsClosedIssue pins the launch-time re-fetch:
+// a picker row gone stale (issue closed meanwhile) is rejected by state.
+func TestLaunchIssuePlanFromTUIRejectsClosedIssue(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 7 --json number,title,state,body,labels")
+  printf '{"number":7,"title":"Stale row","state":"CLOSED","body":"","labels":[]}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
+	if err == nil || !strings.Contains(err.Error(), "issue #7 is not OPEN") {
+		t.Fatalf("launchIssuePlanFromTUI(closed issue) error = %v, want not-OPEN rejection", err)
+	}
+}
+
+// TestLaunchIssuePlanFromTUIBackstopsOpenChildren pins the gray-out backstop:
+// the picker's child marker can be stale, so an issue that has OPEN children at
+// launch time is rejected instead of getting a plan coordinator.
+func TestLaunchIssuePlanFromTUIBackstopsOpenChildren(t *testing.T) {
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 7 --json number,title,state,body,labels")
+  printf '{"number":7,"title":"Epic","state":"OPEN","body":"","labels":[]}'
+  ;;
+"api --paginate --slurp repos/{owner}/{repo}/issues/7/sub_issues?per_page=100")
+  printf '[[{"number":8,"title":"child","state":"open"}]]'
+  ;;
+"issue view 7 --json body -q .body")
+  printf ''
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
+	if err == nil || !strings.Contains(err.Error(), "issue #7 has 1 open children; uncheck the plan checkbox") {
+		t.Fatalf("launchIssuePlanFromTUI(open children) error = %v, want backstop rejection", err)
 	}
 }
 

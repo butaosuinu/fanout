@@ -159,17 +159,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	if err := validateTUIAgentSelection(defaultAgent, overrides); err != nil {
 		return "", err
 	}
-	gh := ghissue.Runner{Cwd: projectRoot}
-	// Re-fetch the issue: the picker list may be stale, and the detail carries
-	// the body the standalone briefing needs.
-	detail, err := gh.IssueDetail(issueNum)
-	if err != nil {
-		return "", err
-	}
-	if detail.State != "OPEN" {
-		return "", fmt.Errorf("issue #%d is not OPEN", issueNum)
-	}
-	openChildren, err := countOpenChildTargets(gh, issueNum)
+	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
 	if err != nil {
 		return "", err
 	}
@@ -202,6 +192,26 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
 	return notice, nil
+}
+
+// fetchLaunchableIssue is the shared launch preamble for the TUI issue lanes:
+// it re-fetches the issue (the picker list may be stale, and the detail carries
+// the body the briefing needs), rejects non-OPEN issues, and counts the OPEN
+// children that decide between the standalone, fan-out, and plan lanes.
+func fetchLaunchableIssue(projectRoot string, issueNum int) (ghissue.Issue, int, error) {
+	gh := ghissue.Runner{Cwd: projectRoot}
+	detail, err := gh.IssueDetail(issueNum)
+	if err != nil {
+		return ghissue.Issue{}, 0, err
+	}
+	if detail.State != "OPEN" {
+		return ghissue.Issue{}, 0, fmt.Errorf("issue #%d is not OPEN", issueNum)
+	}
+	openChildren, err := countOpenChildTargets(gh, issueNum)
+	if err != nil {
+		return ghissue.Issue{}, 0, err
+	}
+	return detail, openChildren, nil
 }
 
 // recordedPaneCountForParent counts state rows under one fan-out parent; the

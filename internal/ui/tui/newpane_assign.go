@@ -76,7 +76,7 @@ func (m *model) submitNewPanePicker() tea.Cmd {
 		m.newPane.selIssue = item.number
 		// Plan fan-out launches one coordinator pane, so it never opens the
 		// per-child assignment step.
-		if m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled() {
+		if m.issuePlanFanoutActive() {
 			return m.finalizeIssuePlanSubmit()
 		}
 		if m.opts.ListIssueChildren == nil {

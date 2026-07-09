@@ -513,7 +513,7 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "down", "ctrl+p", "ctrl+n":
 		if m.newPane.focus == newPaneFieldMain && m.newPane.mode != newPaneModePrompt {
 			m.moveActivePicker(pickerMoveDelta(msg.String()))
-			m.syncPlanFanoutForSelection()
+			m.clampNewPaneFocus()
 			return m, nil
 		}
 		if (msg.String() == "up" || msg.String() == "down") && m.newPane.focus != newPaneFieldMain {
@@ -590,7 +590,7 @@ func (m model) newPaneFocusOrder() []newPaneField {
 		order = append(order, newPaneFieldPlan)
 	}
 	order = append(order, newPaneFieldAgent)
-	if planEnabled && m.newPane.mode == newPaneModeIssue && m.newPane.issuePlanFanout {
+	if planEnabled && m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutActive() {
 		order = append(order, newPaneFieldWorker)
 	}
 	return order
@@ -616,15 +616,14 @@ func (m model) issuePlanFanoutDisabled() bool {
 	return item.hasOpenChildren
 }
 
-// syncPlanFanoutForSelection keeps the issue-mode plan fan-out state consistent
-// with the picker selection: an issue that cannot decompose clears the checkbox,
-// and if that retires the focused row the focus falls back onto a valid field.
-// The prompt-mode planFanout toggle is deliberately untouched.
-func (m *model) syncPlanFanoutForSelection() {
-	if m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutDisabled() && m.newPane.issuePlanFanout {
-		m.newPane.issuePlanFanout = false
-	}
-	m.clampNewPaneFocus()
+// issuePlanFanoutActive reports whether an issue-mode submit decomposes via a
+// plan coordinator: the checkbox is on and the current selection can decompose.
+// A checked box over a disabled selection stays checked but inert (rendered
+// dimmed), so transient picker states — a zero-match filter, a keystroke that
+// momentarily top-ranks an open-children issue — never silently discard the
+// user's explicit choice.
+func (m model) issuePlanFanoutActive() bool {
+	return m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled()
 }
 
 // clampNewPaneFocus moves focus onto a valid row when the focused field just
@@ -902,11 +901,13 @@ func (m model) newPaneView() string {
 	}
 	switch m.newPane.mode {
 	case newPaneModeIssue:
+		// The checkbox joins the Issue section with a single newline: the extra
+		// blank separator would push the launching-state form past a 24-row
+		// terminal (pickerVisibleRows budgets one line for it).
 		sections = append(sections,
-			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
-			m.issuePlanFanoutCheckboxView(),
-		)
-		if m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled() {
+			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true)+
+				"\n"+m.issuePlanFanoutCheckboxView())
+		if m.issuePlanFanoutActive() {
 			sections = append(sections, m.coordinatorWorkerRowView())
 		} else {
 			sections = append(sections, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
@@ -958,8 +959,10 @@ func (m model) renderNewPaneModal(content string) string {
 func (m model) newPaneHint() string {
 	if m.newPane.mode != newPaneModePrompt {
 		enter := "enter next"
-		if m.newPane.mode == newPaneModeIssue && m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled() {
-			enter = "enter plan coordinator"
+		if m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutActive() {
+			// Kept short: a longer verb wraps the hint to a third line at
+			// narrow modal widths and overflows the form height.
+			enter = "enter coordinator"
 		}
 		return enter + "  ctrl+o open issue  type to filter  tab field  esc cancel"
 	}
@@ -1055,7 +1058,9 @@ func (m model) coordinatorWorkerRowView() string {
 	}
 	coord := coordMarker + "Coordinator agent\n" + m.agentSelectorView()
 	worker := workerMarker + "Task agent\n" + m.workerSelectorView()
-	return lipgloss.JoinHorizontal(lipgloss.Top, coord, "    ", worker)
+	// A two-space gap keeps the joined block inside the modal's 40-column
+	// width floor on narrow terminals.
+	return lipgloss.JoinHorizontal(lipgloss.Top, coord, "  ", worker)
 }
 
 // workerSelectorView renders the issue-mode plan fan-out task-agent tabs: the

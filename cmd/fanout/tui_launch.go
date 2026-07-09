@@ -107,7 +107,7 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return "", fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
-	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, agentName,
+	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, agentName, nil,
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, agentName, livenessKey)
 		})
@@ -118,12 +118,14 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 }
 
 // launchPlanCoordinator validates the coordinator agent, locks state, and
-// attaches one project-root coordinator pane built by buildReq. The coordinator
-// decomposes its source and fans the tasks out itself, so it runs as a normal
-// agent (never Codex Plan Mode) directly on the project root: running `fanout
-// plan` inside a worktree would resolve the git root there and nest state under
-// the coordinator's worktree.
-func launchPlanCoordinator(projectRoot, session, commandName, agentName string, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, error) {
+// attaches one project-root coordinator pane built by buildReq. guard, when
+// non-nil, runs on the locked store before any pane is created, so callers can
+// reject duplicate launches without a lock race. The coordinator decomposes its
+// source and fans the tasks out itself, so it runs as a normal agent (never
+// Codex Plan Mode) directly on the project root: running `fanout plan` inside a
+// worktree would resolve the git root there and nest state under the
+// coordinator's worktree.
+func launchPlanCoordinator(projectRoot, session, commandName, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
 		return panelaunch.Request{}, validateErr
 	}
@@ -143,6 +145,11 @@ func launchPlanCoordinator(projectRoot, session, commandName, agentName string, 
 	defer func() {
 		_ = recorder.Unlock()
 	}()
+	if guard != nil {
+		if guardErr := guard(recorder.Store); guardErr != nil {
+			return panelaunch.Request{}, guardErr
+		}
+	}
 
 	// A plain agent config: the coordinator runs fanout plan itself, so it must
 	// not launch in Codex Plan Mode even when the agent is codex.
@@ -183,24 +190,16 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if validateErr := agent.ValidateKnown(workerAgent); validateErr != nil {
 		return "", validateErr
 	}
-	gh := ghissue.Runner{Cwd: projectRoot}
-	// Re-fetch the issue: the picker list may be stale, and the detail carries
-	// the body the coordinator briefing needs.
-	detail, err := gh.IssueDetail(issueNum)
-	if err != nil {
-		return "", err
-	}
-	if detail.State != "OPEN" {
-		return "", fmt.Errorf("issue #%d is not OPEN", issueNum)
-	}
-	openChildren, err := countOpenChildTargets(gh, issueNum)
+	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
 	if err != nil {
 		return "", err
 	}
 	if openChildren > 0 {
-		return "", fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox to fan out its children", issueNum, openChildren)
+		// Short enough to render unwrapped as the form's one error line.
+		return "", fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
 	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, coordinatorAgent,
+		func(store state.Store) error { return guardIssuePlanCoordinator(store, issueNum) },
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
 		})
@@ -208,6 +207,33 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		return "", err
 	}
 	return fmt.Sprintf("started plan coordinator for #%d (%s): %s", issueNum, coordinatorAgent, paneReq.Prompt), nil
+}
+
+// guardIssuePlanCoordinator is the plan-checkbox lane's dedupe, run on the
+// locked store: it mirrors the standalone lane's ErrAlreadyFanned so a repeated
+// submit never creates a second pane or overwrites a coordinator brief another
+// coordinator may still be reading.
+func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
+	if issuePlanCoordinatorRecorded(store, issueNum) {
+		return fmt.Errorf("issue #%d already has a plan coordinator pane", issueNum)
+	}
+	if hasRecordedIssuePane(store, issueNum) {
+		return fmt.Errorf("issue #%d already has a fanout pane", issueNum)
+	}
+	return nil
+}
+
+// issuePlanCoordinatorRecorded reports whether a plan coordinator for the issue
+// is already recorded. Coordinator rows live under the manual parent with
+// synthetic numbers, so the per-issue slug prefix is their only issue link.
+func issuePlanCoordinatorRecorded(store state.Store, issueNum int) bool {
+	prefix := fmt.Sprintf("plan-issue-%d-", issueNum)
+	for _, pane := range store.Panes {
+		if pane.Parent == panelaunch.ManualParentRef && strings.HasPrefix(pane.Slug, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
@@ -244,14 +270,14 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, coordinatorAgent, workerAgent, livenessKey string) panelaunch.Request {
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
-	briefingPath := planIssuePromptPath(projectRoot, issue.Number)
+	briefingPath := planIssuePromptPath(projectRoot, issue.Number, number)
 	return panelaunch.Request{
 		ParentRef:           panelaunch.ManualParentRef,
 		Number:              number,
 		Title:               title,
 		Body:                issue.Body,
 		ShortTitle:          panelaunch.ShortIssueTitle(title),
-		Slug:                fmt.Sprintf("plan-issue-%d", issue.Number),
+		Slug:                planIssueSlug(issue.Number, number),
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(coordinatorAgent, briefingPath),
 		Agent:               coordinatorAgent,
@@ -282,13 +308,23 @@ func planPromptPath(projectRoot string, number int) string {
 }
 
 // planIssuePromptPath mirrors planPromptPath for the issue-sourced coordinator's
-// briefing file, keyed by the issue number:
-// <projectRoot>/.fanout/briefings/fanout-<repo>-plan-issue-<num>.md.
-func planIssuePromptPath(projectRoot string, num int) string {
-	if num < 0 {
-		num = -num
+// briefing file. The per-launch synthetic pane number keeps relaunches (after a
+// closed coordinator) from overwriting a brief an earlier coordinator may still
+// be reading: <projectRoot>/.fanout/briefings/fanout-<repo>-plan-issue-<num>-<n>.md.
+func planIssuePromptPath(projectRoot string, issueNum, number int) string {
+	if number < 0 {
+		number = -number
 	}
-	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-issue-%d.md", filepath.Base(projectRoot), num))
+	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-issue-%d-%d.md", filepath.Base(projectRoot), issueNum, number))
+}
+
+// planIssueSlug keys the coordinator's state row by issue for the dedupe guard
+// and by the synthetic pane number for uniqueness across relaunches.
+func planIssueSlug(issueNum, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("plan-issue-%d-%d", issueNum, number)
 }
 
 func planPromptSlug(number int) string {

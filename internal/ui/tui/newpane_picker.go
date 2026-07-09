@@ -157,10 +157,10 @@ func (m model) pickerVisibleRows() int {
 		overhead += 3
 	}
 	if m.newPane.mode == newPaneModeIssue {
-		// The plan fan-out checkbox row and its section separator. Turning the
-		// checkbox on adds no rows: the coordinator/task-agent block renders
-		// side by side at the plain Agent row's height.
-		overhead += 2
+		// The plan fan-out checkbox line, joined to the Issue section without a
+		// separator. Turning the checkbox on adds no rows: the coordinator/
+		// task-agent block renders side by side at the plain Agent row's height.
+		overhead++
 	}
 	if m.newPane.notice != "" {
 		overhead++
@@ -197,14 +197,15 @@ func pickerMoveDelta(key string) int {
 
 // updateActivePickerFilter feeds printable keys into the active picker's
 // incremental filter; backspace shrinks it and ctrl+u clears it. A filter change
-// can move the selection onto an issue that cannot decompose, so it re-syncs the
-// plan fan-out state afterward.
+// can move the selection onto an issue that cannot decompose, retiring the Plan
+// or Worker row, so it re-clamps the focus afterward (the checkbox state itself
+// is preserved — see issuePlanFanoutActive).
 func (m *model) updateActivePickerFilter(msg tea.KeyMsg) {
 	p := m.activePicker()
 	if p == nil {
 		return
 	}
-	defer m.syncPlanFanoutForSelection()
+	defer m.clampNewPaneFocus()
 	switch msg.String() {
 	case "backspace", "ctrl+h":
 		if p.query != "" {
