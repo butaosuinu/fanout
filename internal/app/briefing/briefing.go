@@ -125,7 +125,7 @@ func RenderIssuePlanCoordinator(num int, title, body, workerAgent string) string
 		"",
 		"Fan-out instructions:",
 		"- Draft a detailed implementation plan for this issue, then decompose it into independent parallel tasks following the fanout-plan skill that invoked you.",
-		fmt.Sprintf("- Set the spec's plan.source to \"issue #%d\" and derive plan.slug from the issue title.", num),
+		fmt.Sprintf("- Set the spec's plan.source to \"issue #%d\" and plan.slug to \"issue-%d-<short-kebab-title>\": the issue number keeps plans for same-titled issues from sharing a slug (plan:<slug> is a state key and the saved-spec filename).", num, num),
 		"- The tasks are issue-less fanout plan tasks: do not invent GitHub issue numbers, and keep task selection keyed by task ids.",
 		fmt.Sprintf("- Fan out with `fanout plan <spec> --agent %s`; add `--agent <task-id>=<name>` overrides only where a task clearly favors a different agent.", workerAgent),
 		fmt.Sprintf("- In each task briefing, require the task's PR body to reference this issue with \"Refs #%d\" and never \"Closes #%d\": no single task PR completes the issue.", num, num),

@@ -356,5 +356,9 @@ func hasRecordedIssuePane(store state.Store, issueNum int) bool {
 			return true
 		}
 	}
-	return false
+	// A plan coordinator binds to its issue only through its slug: the row
+	// lives under the manual parent with a synthetic number. Without this, a
+	// standalone launch for the issue would run alongside the coordinator's
+	// plan tasks and duplicate the work.
+	return issuePlanCoordinatorRecorded(store, issueNum)
 }

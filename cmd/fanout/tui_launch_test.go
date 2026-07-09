@@ -182,6 +182,45 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 	}
 }
 
+// TestPlanIssueSlugIssueNum pins the slug parser both dedupe directions rely
+// on (guardIssuePlanCoordinator, hasRecordedIssuePane, recordedIssueNumbers).
+func TestPlanIssueSlugIssueNum(t *testing.T) {
+	tests := []struct {
+		name string
+		slug string
+		want int
+		ok   bool
+	}{
+		{name: "issue coordinator slug parses", slug: "plan-issue-123-4", want: 123, ok: true},
+		{name: "prompt coordinator slug is not an issue link", slug: "plan-prompt-4", ok: false},
+		{name: "missing launch suffix is rejected", slug: "plan-issue-123", ok: false},
+		{name: "non-numeric issue segment is rejected", slug: "plan-issue-abc-1", ok: false},
+		{name: "empty issue segment is rejected", slug: "plan-issue--1", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := planIssueSlugIssueNum(tt.slug)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("planIssueSlugIssueNum(%q) = %d, %v, want %d, %v", tt.slug, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// TestHasRecordedIssuePaneSeesPlanCoordinator pins the reverse dedupe: after a
+// coordinator launch, the normal issue lane (launchStandaloneIssuePane and the
+// watcher) must not start a second session for the same issue.
+func TestHasRecordedIssuePaneSeesPlanCoordinator(t *testing.T) {
+	store := state.Store{Panes: []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"}}}
+	if !hasRecordedIssuePane(store, 123) {
+		t.Fatal("hasRecordedIssuePane(store, 123) = false, want true for a recorded plan coordinator")
+	}
+	if hasRecordedIssuePane(store, 12) {
+		t.Fatal("hasRecordedIssuePane(store, 12) = true, want false for a different issue")
+	}
+}
+
 // TestLaunchIssuePlanFromTUIRejectsClosedIssue pins the launch-time re-fetch:
 // a picker row gone stale (issue closed meanwhile) is rejected by state.
 func TestLaunchIssuePlanFromTUIRejectsClosedIssue(t *testing.T) {

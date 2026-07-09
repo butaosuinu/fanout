@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
@@ -225,15 +226,36 @@ func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
 
 // issuePlanCoordinatorRecorded reports whether a plan coordinator for the issue
 // is already recorded. Coordinator rows live under the manual parent with
-// synthetic numbers, so the per-issue slug prefix is their only issue link.
+// synthetic numbers, so the slug is their only issue link.
 func issuePlanCoordinatorRecorded(store state.Store, issueNum int) bool {
-	prefix := fmt.Sprintf("plan-issue-%d-", issueNum)
 	for _, pane := range store.Panes {
-		if pane.Parent == panelaunch.ManualParentRef && strings.HasPrefix(pane.Slug, prefix) {
+		if pane.Parent != panelaunch.ManualParentRef {
+			continue
+		}
+		if num, ok := planIssueSlugIssueNum(pane.Slug); ok && num == issueNum {
 			return true
 		}
 	}
 	return false
+}
+
+// planIssueSlugIssueNum parses the issue number back out of a planIssueSlug
+// ("plan-issue-<issue>-<n>"); ok is false for every other slug shape, including
+// the prompt coordinator's "plan-prompt-<n>".
+func planIssueSlugIssueNum(slug string) (int, bool) {
+	rest, found := strings.CutPrefix(slug, "plan-issue-")
+	if !found {
+		return 0, false
+	}
+	numStr, _, found := strings.Cut(rest, "-")
+	if !found {
+		return 0, false
+	}
+	num, err := strconv.Atoi(numStr)
+	if err != nil || num <= 0 {
+		return 0, false
+	}
+	return num, true
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
