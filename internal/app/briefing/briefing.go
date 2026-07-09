@@ -137,7 +137,11 @@ type workBriefing struct {
 }
 
 func renderWorkBriefing(b workBriefing) string {
-	lines := baseRequirementLines(b.header, b.title, b.body, b.scopeRequirement)
+	completionRequirement := "- When implementation passes tests, commit and push the branch."
+	if b.agentName == "codex" {
+		completionRequirement = "- After implementation passes tests, follow the review, commit, and push sequence below."
+	}
+	lines := baseRequirementLines(b.header, b.title, b.body, b.scopeRequirement, completionRequirement)
 	if b.settings.AutoPullRequest {
 		lines = append(lines, b.autoPullRequestRequirement)
 	}
@@ -173,7 +177,7 @@ func renderWorkBriefing(b workBriefing) string {
 	return base
 }
 
-func baseRequirementLines(header, title, body, scopeRequirement string) []string {
+func baseRequirementLines(header, title, body, scopeRequirement, completionRequirement string) []string {
 	return []string{
 		header,
 		"",
@@ -186,7 +190,7 @@ func baseRequirementLines(header, title, body, scopeRequirement string) []string
 		"- You are working inside a git worktree that was prepared for this task. Do not create additional worktrees.",
 		scopeRequirement,
 		"- Run the project's lint/test commands if they exist (inspect package.json / Makefile / pyproject.toml first).",
-		"- When implementation passes tests, commit and push the branch.",
+		completionRequirement,
 	}
 }
 
@@ -288,45 +292,28 @@ func codexReviewSection(autoPullRequest bool, baseBranch string) string {
 }
 
 const codexReviewWithPRSectionTemplate = `
-Before committing your final changes or opening a PR, run ` + "`$post-work-review`" + `
-on your current diff. Treat it as a required gate:
-1. Run ` + "`$post-work-review`" + `.
-2. The skill prepares one git-derived review bundle, runs exactly one fresh
-   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
-   ` + "`post-work-verifier`" + ` calls after fixes.
-3. If review reports findings, fix only the actionable findings and let the
-   skill verify the fix. Do not start a new broad review.
-4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
-   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-5. Commit the reviewed changes.
-6. Run ` + "`$post-work-review`" + ` again on the committed branch state with base
-   ` + "`%s`" + `. The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to the driver
-   commands for this pass. This second pass must write ` + "`.git/post-work-review-passed`" + `
-   for the HEAD you will push.
+Treat ` + "`$post-work-review`" + ` as a required gate before the final commit or PR:
+1. Run it on the current diff and follow its bounded fix/verification loop.
+   Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
+2. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
+3. Commit the reviewed changes.
+4. Run ` + "`$post-work-review`" + ` on the committed branch with base ` + "`%s`" + `,
+   passing ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to its driver. Require
+   ` + "`.git/post-work-review-passed`" + ` for the HEAD you will push.
 
-Only after the committed branch review is clean and marked should you push and
-open the PR. If the review gate is unavailable or fails for tooling/auth
-reasons, stop and report that instead of bypassing the gate.
+Push and open the PR only after the branch review is clean and marked.
 `
 
 const codexReviewWithoutPRSectionTemplate = `
-Before committing your final changes, run ` + "`$post-work-review`" + ` on your
-current diff. Treat it as a required gate:
-1. Run ` + "`$post-work-review`" + `.
-2. The skill prepares one git-derived review bundle, runs exactly one fresh
-   ` + "`post-work-reviewer`" + ` broad review, then uses at most two
-   ` + "`post-work-verifier`" + ` calls after fixes.
-3. If review reports findings, fix only the actionable findings and let the
-   skill verify the fix. Do not start a new broad review.
-4. Stop if the skill reports any ` + "`stop_reason=`" + `. Continue only when it
-   reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-5. For any final branch-scope review before pushing, run ` + "`$post-work-review`" + `
-   with base ` + "`%s`" + `. The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to
-   the driver commands for that pass.
+Treat ` + "`$post-work-review`" + ` as a required gate before the final commit:
+1. Run it on the current diff and follow its bounded fix/verification loop.
+   Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
+2. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
+3. Commit the reviewed changes.
+4. Before pushing, run ` + "`$post-work-review`" + ` on the final branch with base
+   ` + "`%s`" + `, passing ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to its driver.
 
-Only after the review loop is clean should you commit and push the branch.
-If the review gate is unavailable or fails for tooling/auth reasons, stop
-and report that instead of bypassing the gate.
+Push only after the final branch review is clean.
 `
 
 const codeReviewSection = `

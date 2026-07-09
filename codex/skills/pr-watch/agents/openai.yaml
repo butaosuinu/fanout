@@ -1,7 +1,7 @@
 interface:
-  display_name: "pr-watch"
-  short_description: "Watch and repair an existing PR"
-  default_prompt: "Use $pr-watch to monitor an existing PR and fix conflicts, CI, or review comments."
+  display_name: "PR watch"
+  short_description: "Watch and repair a PR to completion"
+  default_prompt: "Use $pr-watch to repair actionable PR failures, then cheap-poll until the PR is mergeable, green, and approved."
 
 policy:
   allow_implicit_invocation: true

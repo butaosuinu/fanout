@@ -10,7 +10,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/first-child-101
   branch -> fanout/first-child-101
   base -> main
-  briefing size: 3447 bytes
+  briefing size: 2960 bytes
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main
@@ -34,7 +34,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-sub-issue-only/project_root/.fanout/worktrees/second-child-102
   branch -> fanout/second-child-102
   base -> main
-  briefing size: 3448 bytes
+  briefing size: 2961 bytes
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root branch -f main refs/remotes/origin/main

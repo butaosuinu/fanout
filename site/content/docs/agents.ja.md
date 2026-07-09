@@ -54,11 +54,19 @@ PR を作ったあとの追従には `~/.claude/commands/pr-watch.md` と `~/.cl
 
 ## Codex CLI
 
-Codex にも `~/.codex/skills/` 配下に同じ skill が用意されています([インストール]({{< relref "/docs/installation" >}}) を参照)。
+Codex には repo 管理の skill 5 個を `~/.codex/skills/` 配下へインストールします([インストール]({{< relref "/docs/installation" >}}) を参照)。
+各 skill は主な判断手順を `SKILL.md` に置き、必要なときだけ同梱の reference や script を読み込みます。
 
 fanout skill は「#123 を fan out して」のように依頼するか、明示的に `$fanout` を指定すると起動します。
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
 `fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
+
+`$post-work-review` は、広いレビューを read-only の `post-work-reviewer`(`gpt-5.6-sol`、`xhigh`)、修正確認を read-only の `post-work-verifier`(`gpt-5.6-terra`、`high`)へ割り当てます。
+設定したモデルを利用できない場合、別モデルへ暗黙に切り替えず、必須 gate を停止します。
+
+`$pr-watch` は foreground で動きます。
+helper は変化のない snapshot の出力を省き、linked worktree でも cursor を Git metadata に保存します。
+Codex セッション終了後に background watcher は残りません。
 
 ## Codex Plan Mode
 

@@ -83,6 +83,7 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 		{
 			agent: "claude",
 			wants: []string{
+				"When implementation passes tests, commit and push the branch",
 				"run the `/code-review` slash command",
 				"Optional: Agent Teams",
 			},
@@ -90,12 +91,14 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 		{
 			agent: "codex",
 			wants: []string{
+				"follow the review, commit, and push sequence below",
 				"$post-work-review",
-				"post-work-reviewer",
-				"post-work-verifier",
-				"Run `$post-work-review` again on the committed branch state with base",
+				"Run it on the current diff",
+				"Run `$post-work-review` on the committed branch with base",
 				"POST_WORK_REVIEW_BASE=release/v1` to",
-				"Only after the committed branch review is clean and marked should you push and",
+				"Require",
+				"`.git/post-work-review-passed` for the HEAD you will push",
+				"Push and open the PR only after the branch review is clean and marked",
 			},
 		},
 	} {
@@ -118,6 +121,9 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				t.Fatalf("RenderTask(..., %q) missing %q:\n%s", tc.agent, want, got)
 			}
 		}
+		if strings.Contains(got, "Fix actionable findings and rerun it") {
+			t.Fatalf("RenderTask(..., %q) asks for a second broad review:\n%s", tc.agent, got)
+		}
 		assertIssueLessTaskBriefing(t, got)
 	}
 }
@@ -133,12 +139,14 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 		"structure the PR body",
 		"Diagram gate",
 		"open the PR",
+		"When implementation passes tests, commit and push the branch",
+		"complete any review steps below before the final commit and push",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("RenderTask(..., AutoPullRequest=false) contains %q:\n%s", unwanted, got)
 		}
 	}
-	if !strings.Contains(got, "Only after the review loop is clean should you commit and push the branch") {
+	if !strings.Contains(got, "Push only after the final branch review is clean") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR post-work-review gate:\n%s", got)
 	}
 	if !strings.Contains(got, "clean=true`, `findings=0`, and an empty `stop_reason=") {
@@ -146,6 +154,19 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	}
 	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
+	}
+	last := -1
+	for _, step := range []string{
+		"Run it on the current diff",
+		"Commit the reviewed changes",
+		"Before pushing, run `$post-work-review` on the final branch",
+		"Push only after the final branch review is clean",
+	} {
+		index := strings.Index(got, step)
+		if index <= last {
+			t.Fatalf("RenderTask(..., AutoPullRequest=false) review step %q is missing or out of order:\n%s", step, got)
+		}
+		last = index
 	}
 	assertIssueLessTaskBriefing(t, got)
 

@@ -179,7 +179,7 @@ check-bats:
 test: build-web go-test test-web test-tier1 test-tier2
 
 test-tier1: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_post_work_review.bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_post_work_review.bats tests/bats/tier1_pr_watch.bats
 
 test-tier2: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats tests/bats/tier2_msg.bats
@@ -214,7 +214,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	GOCACHE="$(GOCACHE)" GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh codex/skills/pr-watch/scripts/watch-pr.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	GOCACHE="$(GOCACHE)" GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt

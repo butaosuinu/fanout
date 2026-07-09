@@ -1,7 +1,7 @@
 interface:
   display_name: "fanout"
-  short_description: "Spawn GitHub sub-issues into tmux panes"
-  default_prompt: "Use $fanout to fan out a GitHub parent issue into tmux panes."
+  short_description: "Run the TUI or fan out GitHub work"
+  default_prompt: "Use $fanout to preview and launch this GitHub work in isolated panes."
 
 policy:
   allow_implicit_invocation: true

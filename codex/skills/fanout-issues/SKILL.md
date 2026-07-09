@@ -1,8 +1,6 @@
 ---
 name: fanout-issues
-description: "Use from Codex CLI to create fanout-ready GitHub issue trees: a parent issue plus OPEN child issues linked with GitHub Sub-issues and mirrored in the parent task list. Use when the user asks Codex to decompose work into parent/child GitHub issues, prepare issues for the fanout CLI, create sub-issues for parallel tmux panes, or encode blocker waves for fanout --unblocked-only."
-metadata:
-  short-description: Create fanout-ready GitHub issue trees
+description: "Create fanout-ready GitHub issue trees with linked OPEN children, mirrored parent task rows, and blocker waves. Use for `$fanout-issues` or requests to decompose work into parent/child issues for parallel fanout panes."
 ---
 
 # fanout-issues
@@ -11,15 +9,11 @@ Build GitHub issue hierarchies that `fanout` can consume without extra cleanup.
 The output should work through both supported discovery paths: GitHub's
 Sub-issues relationship and same-repo task-list rows in the parent body.
 
-## When To Use
-
-Use this skill when the user asks Codex to create a parent issue with child
-issues, decompose a plan into GitHub issues, prepare work for `$fanout`, or
-model blocker waves for `fanout --unblocked-only`.
-
-Issue creation is a live GitHub mutation. Unless the user explicitly asked to
-create the issues immediately, show the planned parent title, child list,
-dependency graph, labels/assignees, and target repo before creating anything.
+Treat an explicit request to create or prepare the issues as authorization for
+the GitHub issue creation, linking, and parent-body edits described here.
+Otherwise show the planned parent title, child list, dependency graph,
+labels/assignees, and target repository, then wait for authorization before
+mutating GitHub.
 
 ## Preconditions
 

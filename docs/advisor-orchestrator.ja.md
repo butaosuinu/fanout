@@ -1,4 +1,4 @@
-# 異種モデル協調 — codex (GPT-5.5) × Fable の advisor / orchestrator
+# 異種モデル協調 — codex (GPT-5.6) × Fable の advisor / orchestrator
 
 ステータス: 提案(proposal)。作成: 2026-07。@ClaudeDevs の運用パターン公開
 (2026-07-07)を起点に、Claude Code / Claude API 公式ドキュメントの調査と
@@ -29,7 +29,7 @@ fanout ユーザーにはもう 1 つの効率がある。codex と Claude の�
 
 ### 軸 2: 異種モデルの多様性
 
-GPT-5.5 と Fable は失敗モードが相関しにくいと期待できる。同族 LLM の
+GPT-5.6 と Fable は失敗モードが相関しにくいと期待できる。同族 LLM の
 生成とレビューは誤りが相関して循環する(arXiv 2603.25773。[pr-review-visualization-v2](pr-review-visualization-v2.ja.md)
 と共有の論拠)ため、見落とし削減には異種モデルの交差が効く。異ベンダー間の
 相関がゼロだと示す直接の証拠はないが、同族での相関の裏返しとして脱相関を
@@ -39,7 +39,7 @@ post-work-review(claude 実装 → codex レビュー)は既にこの軸の実�
 本書はその鏡像(codex 実装 → Fable レビュー)と常駐化(advisor ペイン)
 への拡張にあたる。
 
-ツイートの構図は「安い executor + 強い advisor」だが、codex(GPT-5.5)×
+ツイートの構図は「安い executor + 強い advisor」だが、codex(GPT-5.6)×
 Fable は異ベンダーのフラッグシップ同士。コスト勾配は緩い代わりに多様性の
 価値が大きい、という点でオリジナルと力点が異なる。
 
