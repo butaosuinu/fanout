@@ -5,3 +5,9 @@ minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   # Renovate security update: pnpm@11.5.3
   - pnpm@11.5.3
+
+# pnpm 11 flipped strictDepBuilds to true, so an unreviewed build script now
+# fails `pnpm install`. msw ships a build script we intentionally skip (node
+# tests use msw/node, not the browser service worker), so mark it disallowed.
+allowBuilds:
+  msw: false
