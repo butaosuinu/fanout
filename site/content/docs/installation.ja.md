@@ -85,7 +85,7 @@ make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を s
 make uninstall      # インストール済みのパスを削除
 ```
 
-ビルドには Go ツールチェイン(Go 1.26+)に加えて Node.js 24+ と pnpm 10+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
+ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 10+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 
 ## 更新を保つ

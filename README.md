@@ -172,7 +172,7 @@ context. See the
   TUI console can start from a plain shell.
 - Project mode needs the `read:project` gh scope
   (`gh auth refresh -s read:project`).
-- Building from a checkout additionally needs Go 1.26+, Node.js 24+, and
+- Building from a checkout additionally needs Go 1.26.5+, Node.js 24+, and
   pnpm 10+ (the curl install ships a prebuilt binary and needs neither).
 
 ## Development
