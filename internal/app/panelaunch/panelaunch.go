@@ -32,7 +32,7 @@ const (
 	// standalone issue panes.
 	WatchParentRef = "@watch"
 	// CodexPlanTUIStartupTimeout bounds the wait for a Codex Plan Mode TUI to
-	// show Codex's plan approval UI after its pane was created.
+	// attach, report its thread, and accept the initial Plan turn.
 	CodexPlanTUIStartupTimeout = 90 * time.Second
 )
 
@@ -322,7 +322,7 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 	}
 	// Re-layout right after the split so the new pane is sized into the grid
 	// immediately — a Codex Plan Mode pane otherwise sits at the ~half-width split
-	// for the whole (up to 30s) startup wait below. A failed launch reconciles any
+	// for the whole startup handshake below. A failed launch reconciles any
 	// spacer this created via failCleanup's relayout, so no orphan remains.
 	if err := panelayout.Apply(l.Info.Target, panelayout.Create); err != nil {
 		l.Log.Warn("%s: %v", paneLogLabel(req), err)
@@ -441,7 +441,7 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
 	if req.CodexPlanMode {
-		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for the Codex Plan approval UI before recording state%s\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)

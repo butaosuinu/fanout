@@ -27,7 +27,7 @@
     $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
-    # fanout waits for the Codex Plan approval UI before recording state
+    # fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state
     # status file: /tmp/fanout-codex-plan-project_root-101.json
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree
@@ -55,7 +55,7 @@
     $ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'
     # would re-layout the window: fanout grid (sidebar + comfortable-width grid),
     #   falling back to main-vertical then tiled
-    # fanout waits for the Codex Plan approval UI before recording state
+    # fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state
     # status file: /tmp/fanout-codex-plan-project_root-102.json
     # would write .fanout/state.json with paneId <pane_id>
     # would write .fanout/worktree-metadata.json in the child worktree

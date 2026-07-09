@@ -17,7 +17,6 @@ const (
 	codexRemoteAppConnectTimeout       = 10 * time.Second
 	codexRemoteTUIStartupGrace         = 3 * time.Second
 	codexRemoteTUIThreadStartupTimeout = 10 * time.Second
-	codexPlanApprovalUIStartupTimeout  = 60 * time.Second
 	codexPlanApprovalUIPollInterval    = 250 * time.Millisecond
 	codexPlanApprovalUIPrompt          = "Implement this plan?"
 	codexPlanTUIWorkingPrompt          = "esc to interrupt"
@@ -33,8 +32,9 @@ type TUIConfig struct {
 	ResumeSessionID string
 	StatusFile      string
 	Version         string
-	// CapturePlanScreen snapshots the running TUI pane. Fresh Plan Mode startup
-	// is only ready once this capture contains Codex's plan approval prompt.
+	// CapturePlanScreen snapshots the running TUI pane for best-effort state
+	// telemetry. It is not a startup gate: a Plan turn may legitimately take
+	// longer than any fixed timeout before the approval prompt appears.
 	CapturePlanScreen func() (string, error)
 	// SetAgentState reports best-effort pane state while the Plan Mode turn
 	// runs and once the approval UI is visible. The cmd entrypoint wires it to
@@ -74,7 +74,8 @@ type codexTurnCompletion struct {
 // RunPlanTUI runs the fanout Codex Plan Mode controller: it starts an
 // app-server, creates a native Plan Mode thread through app-server (or resumes
 // an existing one), attaches the interactive Codex TUI, starts the initial turn,
-// and reports readiness once Codex's approval UI is visible.
+// and reports readiness once that turn has been accepted. Plan generation and
+// approval remain owned by the TUI and are not bounded as startup work.
 func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	ready := false
 	defer func() {
@@ -168,18 +169,6 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		} else {
 			drainDone = drainCodexAppServerDuringStartupCmd(client, setState, thread.ID, turnStart.TurnID)
 		}
-		drainDone, err = waitForCodexPlanApprovalUI(
-			tuiDone,
-			drainDone,
-			server,
-			cfg.CapturePlanScreen,
-			setState,
-			codexPlanApprovalUIStartupTimeout,
-			codexPlanApprovalUIPollInterval,
-		)
-		if err != nil {
-			return err
-		}
 	}
 
 	if err = writeStatus(cfg.StatusFile, Status{
@@ -191,7 +180,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, cfg.CapturePlanScreen, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, cfg.CapturePlanScreen, freshThread, false)
 	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
 	tuiStopped = tuiExited
 	return err
@@ -712,8 +701,8 @@ func codexRemoteTUIResumeID(thread codexThreadInfo) string {
 	return thread.SessionID
 }
 
-func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), capturePlanScreen func() (string, error), watchingAppServer bool) (bool, error) {
-	screenTracker := newCodexPlanScreenTracker(capturePlanScreen, setState)
+func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), capturePlanScreen func() (string, error), initialPlanTurn, watchingAppServer bool) (bool, error) {
+	screenTracker := newCodexPlanScreenTracker(capturePlanScreen, setState, initialPlanTurn)
 	screenTicks := screenTracker.ticks()
 	defer screenTracker.stop()
 	for {
@@ -722,6 +711,9 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 			awaitDrainAfterTUIExit(client, drainDone)
 			return true, tuiErr
 		case drainErr := <-drainDone:
+			if !watchingAppServer {
+				screenTracker.initialTurnCompleted()
+			}
 			if drainErr != nil {
 				if !watchingAppServer && canWatchAppServer(client) {
 					watchingAppServer = true
@@ -746,7 +738,9 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 type codexPlanScreenPhase int
 
 const (
-	codexPlanScreenAwaitingApproval codexPlanScreenPhase = iota
+	codexPlanScreenPlanning codexPlanScreenPhase = iota
+	codexPlanScreenAwaitingApproval
+	codexPlanScreenApprovalVisible
 	codexPlanScreenRunning
 	codexPlanScreenIdle
 )
@@ -759,12 +753,22 @@ type codexPlanScreenTracker struct {
 	last     string
 }
 
-func newCodexPlanScreenTracker(capture func() (string, error), setState func(string)) *codexPlanScreenTracker {
-	tracker := &codexPlanScreenTracker{capture: capture, setState: setState}
+func newCodexPlanScreenTracker(capture func() (string, error), setState func(string), initialPlanTurn bool) *codexPlanScreenTracker {
+	phase := codexPlanScreenIdle
+	if initialPlanTurn {
+		phase = codexPlanScreenPlanning
+	}
+	tracker := &codexPlanScreenTracker{capture: capture, setState: setState, phase: phase}
 	if capture != nil {
 		tracker.ticker = time.NewTicker(codexPlanApprovalUIPollInterval)
 	}
 	return tracker
+}
+
+func (t *codexPlanScreenTracker) initialTurnCompleted() {
+	if t != nil && t.phase == codexPlanScreenPlanning {
+		t.phase = codexPlanScreenAwaitingApproval
+	}
 }
 
 func (t *codexPlanScreenTracker) ticks() <-chan time.Time {
@@ -800,10 +804,14 @@ func (t *codexPlanScreenTracker) poll() {
 func codexPlanScreenAgentState(screen string, phase codexPlanScreenPhase) (string, codexPlanScreenPhase) {
 	switch {
 	case codexPlanApprovalUIReady(screen):
-		return "plan", codexPlanScreenAwaitingApproval
+		return "plan", codexPlanScreenApprovalVisible
+	case phase == codexPlanScreenPlanning && codexPlanScreenWorking(screen):
+		return "working", codexPlanScreenPlanning
+	case phase == codexPlanScreenPlanning:
+		return "", phase
 	case codexPlanScreenWorking(screen):
 		return "working", codexPlanScreenRunning
-	case phase == codexPlanScreenAwaitingApproval:
+	case phase == codexPlanScreenApprovalVisible:
 		return "working", codexPlanScreenRunning
 	case phase == codexPlanScreenRunning:
 		return "idle", codexPlanScreenIdle
@@ -814,63 +822,6 @@ func codexPlanScreenAgentState(screen string, phase codexPlanScreenPhase) (strin
 
 func codexPlanScreenWorking(screen string) bool {
 	return strings.Contains(screen, codexPlanTUIWorkingPrompt) || strings.Contains(screen, "Working (")
-}
-
-func waitForCodexPlanApprovalUI(
-	tuiDone <-chan error,
-	drainDone chan error,
-	server *appServer,
-	capturePlanScreen func() (string, error),
-	setState func(string),
-	timeout time.Duration,
-	pollInterval time.Duration,
-) (chan error, error) {
-	if capturePlanScreen == nil {
-		return nil, fmt.Errorf("codex plan approval UI capture is not configured")
-	}
-	if pollInterval <= 0 {
-		pollInterval = codexPlanApprovalUIPollInterval
-	}
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	poll := time.NewTicker(pollInterval)
-	defer poll.Stop()
-	var lastCaptureErr error
-	for {
-		screen, captureErr := capturePlanScreen()
-		if captureErr != nil {
-			lastCaptureErr = captureErr
-		} else if codexPlanApprovalUIReady(screen) {
-			reportCodexPlanAgentState(setState, "plan")
-			if drainDone == nil {
-				drainDone = completedAppServerDrain()
-			}
-			return drainDone, nil
-		}
-		select {
-		case tuiErr := <-tuiDone:
-			if tuiErr != nil {
-				return nil, fmt.Errorf("codex TUI exited before plan approval UI appeared: %w", tuiErr)
-			}
-			return nil, fmt.Errorf("codex TUI exited before plan approval UI appeared")
-		case drainErr := <-drainDone:
-			if drainErr != nil {
-				return nil, fmt.Errorf("codex app-server request handling failed before plan approval UI appeared: %w", drainErr)
-			}
-			drainDone = nil
-		case <-server.Done():
-			if _, serverErr := server.Exited(); serverErr != nil {
-				return nil, fmt.Errorf("codex app-server exited before plan approval UI appeared: %w%s", serverErr, serverLogSuffix(server))
-			}
-			return nil, fmt.Errorf("codex app-server exited before plan approval UI appeared%s", serverLogSuffix(server))
-		case <-deadline.C:
-			if lastCaptureErr != nil {
-				return nil, fmt.Errorf("codex plan approval UI %q did not appear within %s; last capture error: %w", codexPlanApprovalUIPrompt, timeout, lastCaptureErr)
-			}
-			return nil, fmt.Errorf("codex plan approval UI %q did not appear within %s", codexPlanApprovalUIPrompt, timeout)
-		case <-poll.C:
-		}
-	}
 }
 
 func codexPlanApprovalUIReady(screen string) bool {

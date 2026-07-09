@@ -435,7 +435,7 @@ func TestWaitForCodexTUIAfterReadyReturnsTUIExit(t *testing.T) {
 	drainDone := make(chan error, 1)
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false, false)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -454,7 +454,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresDrainErrorAfterReady(t *testing.T) {
 		err       error
 	}, 1)
 	go func() {
-		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, true, false)
 		resultDone <- struct {
 			tuiExited bool
 			err       error
@@ -483,7 +483,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresCompletedTurnDrain(t *testing.T) {
 	drainDone <- nil
 	tuiDone <- nil
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, true, false)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")
@@ -514,7 +514,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
 		err       error
 	}, 1)
 	go func() {
-		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil, nil, false)
+		tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, nil, nil, true, false)
 		resultDone <- struct {
 			tuiExited bool
 			err       error
@@ -543,44 +543,74 @@ func TestWaitForCodexTUIAfterReadyIgnoresPostReadyWatcherError(t *testing.T) {
 	}
 }
 
-func TestWaitForCodexPlanApprovalUIReportsPlanWhenPromptAppears(t *testing.T) {
-	var states []string
+func TestWaitForCodexTUIAfterReadyKeepsLongInitialPlanAlive(t *testing.T) {
 	tuiDone := make(chan error, 1)
 	drainDone := make(chan error)
-	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
-	captures := 0
+	resultDone := make(chan struct {
+		tuiExited bool
+		err       error
+	}, 1)
+	go func() {
+		tuiExited, err := waitForCodexTUIAfterReady(
+			tuiDone,
+			drainDone,
+			&client{},
+			nil,
+			func() (string, error) { return "planning without approval prompt", nil },
+			true,
+			false,
+		)
+		resultDone <- struct {
+			tuiExited bool
+			err       error
+		}{tuiExited: tuiExited, err: err}
+	}()
 
-	gotDrain, err := waitForCodexPlanApprovalUI(
-		tuiDone,
-		drainDone,
-		server,
-		func() (string, error) {
-			captures++
-			if captures == 1 {
-				return "planning...", nil
-			}
-			return "Implement this plan?", nil
-		},
-		recordedStates(&states),
-		time.Second,
-		time.Millisecond,
-	)
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case result := <-resultDone:
+		t.Fatalf("wait returned during initial Plan turn: tuiExited=%v err=%v", result.tuiExited, result.err)
+	case <-time.After(350 * time.Millisecond):
 	}
-	if gotDrain != drainDone {
-		t.Fatalf("drainDone = %#v, want original channel", gotDrain)
-	}
-	if !slices.Equal(states, []string{"plan"}) {
-		t.Fatalf("states = %#v, want plan", states)
+
+	tuiDone <- nil
+	result := <-resultDone
+	if !result.tuiExited || result.err != nil {
+		t.Fatalf("TUI exit result = %+v, want tuiExited with nil error", result)
 	}
 }
 
 func TestCodexPlanScreenAgentStateTracksPostApprovalLifecycle(t *testing.T) {
-	phase := codexPlanScreenAwaitingApproval
-	state, phase := codexPlanScreenAgentState("plan\n\nImplement this plan?", phase)
-	if state != "plan" || phase != codexPlanScreenAwaitingApproval {
-		t.Fatalf("approval screen state = %q phase %v, want plan/awaiting", state, phase)
+	phase := codexPlanScreenPlanning
+	state, phase := codexPlanScreenAgentState("planning output", phase)
+	if state != "" || phase != codexPlanScreenPlanning {
+		t.Fatalf("planning screen state = %q phase %v, want unchanged planning", state, phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("Working (2s - esc to interrupt)", phase)
+	if state != "working" || phase != codexPlanScreenPlanning {
+		t.Fatalf("active planning screen state = %q phase %v, want working/planning", state, phase)
+	}
+
+	tracker := &codexPlanScreenTracker{phase: phase}
+	tracker.initialTurnCompleted()
+	phase = tracker.phase
+	if phase != codexPlanScreenAwaitingApproval {
+		t.Fatalf("phase after initial turn = %v, want awaiting approval", phase)
+	}
+
+	state, phase = codexPlanScreenAgentState("plan text before prompt paint", phase)
+	if state != "" || phase != codexPlanScreenAwaitingApproval {
+		t.Fatalf("pre-approval screen state = %q phase %v, want unchanged awaiting", state, phase)
+	}
+
+	quickState, quickPhase := codexPlanScreenAgentState("Working (1s - esc to interrupt)", phase)
+	if quickState != "working" || quickPhase != codexPlanScreenRunning {
+		t.Fatalf("missed approval fallback = %q phase %v, want working/running", quickState, quickPhase)
+	}
+
+	state, phase = codexPlanScreenAgentState("plan\n\nImplement this plan?", phase)
+	if state != "plan" || phase != codexPlanScreenApprovalVisible {
+		t.Fatalf("approval screen state = %q phase %v, want plan/visible", state, phase)
 	}
 
 	state, phase = codexPlanScreenAgentState("Implementation prompt", phase)
@@ -601,77 +631,6 @@ func TestCodexPlanScreenAgentStateTracksPostApprovalLifecycle(t *testing.T) {
 	state, phase = codexPlanScreenAgentState("Implementation complete", phase)
 	if state != "" || phase != codexPlanScreenIdle {
 		t.Fatalf("idle screen state = %q phase %v, want empty/idle", state, phase)
-	}
-}
-
-func TestWaitForCodexPlanApprovalUITimesOut(t *testing.T) {
-	tuiDone := make(chan error, 1)
-	drainDone := make(chan error)
-	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
-
-	gotDrain, err := waitForCodexPlanApprovalUI(
-		tuiDone,
-		drainDone,
-		server,
-		func() (string, error) { return "plan text without approval prompt", nil },
-		nil,
-		5*time.Millisecond,
-		time.Millisecond,
-	)
-
-	if gotDrain != nil {
-		t.Fatalf("drainDone = %#v, want nil", gotDrain)
-	}
-	if err == nil || !strings.Contains(err.Error(), `Implement this plan?`) {
-		t.Fatalf("error = %v, want approval prompt timeout", err)
-	}
-}
-
-func TestWaitForCodexPlanApprovalUIRejectsEarlyTUIExit(t *testing.T) {
-	tuiDone := make(chan error, 1)
-	drainDone := make(chan error)
-	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
-	tuiDone <- errors.New("early exit")
-
-	gotDrain, err := waitForCodexPlanApprovalUI(
-		tuiDone,
-		drainDone,
-		server,
-		func() (string, error) { return "planning...", nil },
-		nil,
-		time.Second,
-		time.Millisecond,
-	)
-
-	if gotDrain != nil {
-		t.Fatalf("drainDone = %#v, want nil", gotDrain)
-	}
-	if err == nil || !strings.Contains(err.Error(), "early exit") {
-		t.Fatalf("error = %v, want early exit", err)
-	}
-}
-
-func TestWaitForCodexPlanApprovalUIRejectsDrainError(t *testing.T) {
-	tuiDone := make(chan error, 1)
-	drainDone := make(chan error, 1)
-	server := &appServer{done: make(chan struct{}), logs: &lockedBuffer{}}
-	drainDone <- errors.New("turn failed")
-
-	gotDrain, err := waitForCodexPlanApprovalUI(
-		tuiDone,
-		drainDone,
-		server,
-		func() (string, error) { return "planning...", nil },
-		nil,
-		time.Second,
-		time.Millisecond,
-	)
-
-	if gotDrain != nil {
-		t.Fatalf("drainDone = %#v, want nil", gotDrain)
-	}
-	if err == nil || !strings.Contains(err.Error(), "turn failed") {
-		t.Fatalf("error = %v, want drain failure", err)
 	}
 }
 
@@ -946,7 +905,7 @@ func TestWaitForCodexTUIAfterReadyIgnoresFreshWatcherError(t *testing.T) {
 	tuiDone <- nil
 	drainDone <- errors.New("watcher parse error")
 
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, true)
+	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, &client{}, nil, nil, false, true)
 
 	if !tuiExited {
 		t.Fatal("tuiExited = false, want true")

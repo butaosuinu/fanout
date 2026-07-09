@@ -215,7 +215,7 @@ These paired switches toggle fanout's opinionated behaviors for one run — the 
 | `--pr-review-gate` / `--no-pr-review-gate` | — | Keep the default PR review-gate expectation, or add a Claude briefing note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the hook blocks PR creation. Default: on. |
 | `--briefing-code-review` / `--no-briefing-code-review` | — | Include or omit the Claude-only `/code-review` briefing instruction. Default: on. |
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Include or omit the Claude-only Agent Teams hint in child briefings. Default: on. |
-| `--codex-plan-mode` / `--no-codex-plan-mode` | — | For `--agent codex`, start an app-server Plan Mode thread and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. Default: off. Details in [Agent Integrations]({{< relref "/docs/agents" >}}). |
+| `--codex-plan-mode` / `--no-codex-plan-mode` | — | For `--agent codex`, start an app-server Plan Mode thread and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. The launch is recorded after the initial Plan turn is accepted; plan generation and approval waiting have no startup timeout. Default: off. Details in [Agent Integrations]({{< relref "/docs/agents" >}}). |
 | `--pr-visualization` / `--no-pr-visualization` | — | Include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. Default: on. |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key after a live fan-out. Default: on. |
 
