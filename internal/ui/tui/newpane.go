@@ -160,10 +160,14 @@ type newPaneForm struct {
 	err         string
 	attach      *AttachTarget
 
-	// planFanout is the plan fan-out checkbox: decompose the source via the
-	// fanout-plan skill instead of launching a plain agent pane. In prompt mode
-	// it decomposes the prompt; in issue mode it decomposes the selected issue.
+	// planFanout is the prompt-mode plan fan-out checkbox: decompose the prompt
+	// via the fanout-plan skill instead of launching plain agent panes.
 	planFanout bool
+	// issuePlanFanout is the issue-mode counterpart: decompose the selected
+	// issue into issue-less plan tasks via one coordinator pane. The two modes
+	// keep separate toggles so peeking at one mode never changes what the other
+	// mode's submit launches (see syncAgentSelectionForMode's invariant).
+	issuePlanFanout bool
 	// workerIndex is the issue-mode plan fan-out task-agent selection: the
 	// launchAgents index the coordinator passes to `fanout plan --agent`.
 	workerIndex int
@@ -485,9 +489,13 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncAgentSelectionForMode()
 			return m, cmd
 		case newPaneFieldPlan:
-			// Defensive: the focus order withholds the Plan row when the issue
-			// selection cannot decompose, so this should be unreachable.
-			if m.issuePlanFanoutDisabled() {
+			if m.newPane.mode == newPaneModeIssue {
+				// Defensive: the focus order withholds the Plan row when the issue
+				// selection cannot decompose, so this should be unreachable.
+				if m.issuePlanFanoutDisabled() {
+					return m, nil
+				}
+				m.newPane.issuePlanFanout = !m.newPane.issuePlanFanout
 				return m, nil
 			}
 			m.newPane.planFanout = !m.newPane.planFanout
@@ -582,7 +590,7 @@ func (m model) newPaneFocusOrder() []newPaneField {
 		order = append(order, newPaneFieldPlan)
 	}
 	order = append(order, newPaneFieldAgent)
-	if planEnabled && m.newPane.mode == newPaneModeIssue && m.newPane.planFanout {
+	if planEnabled && m.newPane.mode == newPaneModeIssue && m.newPane.issuePlanFanout {
 		order = append(order, newPaneFieldWorker)
 	}
 	return order
@@ -592,6 +600,11 @@ func (m model) newPaneFocusOrder() []newPaneField {
 // to the current selection: no issue is selected, or the selected issue already
 // has OPEN children (those fan out as plain panes, not a plan). It is always
 // false in prompt mode, where the checkbox governs the free prompt.
+//
+// hasOpenChildren mirrors the picker's Sub-issues-only marker, so an issue
+// whose OPEN children exist only as parent-body task-list rows stays togglable
+// here; launchIssuePlanFromTUI's countOpenChildTargets backstop (the union of
+// both sources) rejects that launch with a guiding error.
 func (m model) issuePlanFanoutDisabled() bool {
 	if m.newPane.mode != newPaneModeIssue {
 		return false
@@ -604,13 +617,12 @@ func (m model) issuePlanFanoutDisabled() bool {
 }
 
 // syncPlanFanoutForSelection keeps the issue-mode plan fan-out state consistent
-// with the picker selection: an issue that cannot decompose clears the checkbox
-// (restoring the shared agent counts), and if that retires the focused row the
-// focus falls back onto a valid field.
+// with the picker selection: an issue that cannot decompose clears the checkbox,
+// and if that retires the focused row the focus falls back onto a valid field.
+// The prompt-mode planFanout toggle is deliberately untouched.
 func (m *model) syncPlanFanoutForSelection() {
-	if m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutDisabled() && m.newPane.planFanout {
-		m.newPane.planFanout = false
-		m.syncAgentSelectionForMode()
+	if m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutDisabled() && m.newPane.issuePlanFanout {
+		m.newPane.issuePlanFanout = false
 	}
 	m.clampNewPaneFocus()
 }
@@ -894,11 +906,8 @@ func (m model) newPaneView() string {
 			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
 			m.issuePlanFanoutCheckboxView(),
 		)
-		if m.newPane.planFanout && !m.issuePlanFanoutDisabled() {
-			sections = append(sections,
-				m.newPaneFieldView(newPaneFieldAgent, "Coordinator agent", m.agentSelectorView(), false),
-				m.newPaneFieldView(newPaneFieldWorker, "Task agent", m.workerSelectorView(), false),
-			)
+		if m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled() {
+			sections = append(sections, m.coordinatorWorkerRowView())
 		} else {
 			sections = append(sections, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
 		}
@@ -949,7 +958,7 @@ func (m model) renderNewPaneModal(content string) string {
 func (m model) newPaneHint() string {
 	if m.newPane.mode != newPaneModePrompt {
 		enter := "enter next"
-		if m.newPane.mode == newPaneModeIssue && m.newPane.planFanout && !m.issuePlanFanoutDisabled() {
+		if m.newPane.mode == newPaneModeIssue && m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled() {
 			enter = "enter plan coordinator"
 		}
 		return enter + "  ctrl+o open issue  type to filter  tab field  esc cancel"
@@ -1014,7 +1023,7 @@ func (m model) issuePlanFanoutCheckboxView() string {
 		marker = selectedItemMarker
 	}
 	box := "[ ]"
-	if m.newPane.planFanout {
+	if m.newPane.issuePlanFanout {
 		box = "[x]"
 	}
 	text := box + " decompose via /fanout plan"
@@ -1024,12 +1033,29 @@ func (m model) issuePlanFanoutCheckboxView() string {
 		}
 		return marker + dimStyle.Render(text)
 	}
-	if m.newPane.planFanout {
+	if m.newPane.issuePlanFanout {
 		text = titleStyle.Render(text)
 	} else {
 		text = dimStyle.Render(text)
 	}
 	return marker + text
+}
+
+// coordinatorWorkerRowView renders the issue-mode plan fan-out agent choices as
+// one side-by-side block (coordinator selector next to the task-agent tabs), so
+// turning the checkbox on never grows the form taller than the plain Agent row:
+// the popup geometry has no room for extra rows at common terminal heights.
+func (m model) coordinatorWorkerRowView() string {
+	coordMarker, workerMarker := plainItemMarker, plainItemMarker
+	if m.newPane.focus == newPaneFieldAgent {
+		coordMarker = selectedItemMarker
+	}
+	if m.newPane.focus == newPaneFieldWorker {
+		workerMarker = selectedItemMarker
+	}
+	coord := coordMarker + "Coordinator agent\n" + m.agentSelectorView()
+	worker := workerMarker + "Task agent\n" + m.workerSelectorView()
+	return lipgloss.JoinHorizontal(lipgloss.Top, coord, "    ", worker)
 }
 
 // workerSelectorView renders the issue-mode plan fan-out task-agent tabs: the

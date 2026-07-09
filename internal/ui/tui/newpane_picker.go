@@ -157,12 +157,10 @@ func (m model) pickerVisibleRows() int {
 		overhead += 3
 	}
 	if m.newPane.mode == newPaneModeIssue {
-		// The plan fan-out checkbox row and its section separator.
+		// The plan fan-out checkbox row and its section separator. Turning the
+		// checkbox on adds no rows: the coordinator/task-agent block renders
+		// side by side at the plain Agent row's height.
 		overhead += 2
-		if m.newPane.planFanout {
-			// The extra Task agent label + tab row and its separator.
-			overhead += 3
-		}
 	}
 	if m.newPane.notice != "" {
 		overhead++

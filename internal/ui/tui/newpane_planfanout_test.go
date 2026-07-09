@@ -129,7 +129,7 @@ func TestNewPaneFocusOrderPlanRowVisibility(t *testing.T) {
 			setup: func(t *testing.T) model {
 				t.Helper()
 				m := issueModeModel(t, childless)
-				m.newPane.planFanout = true
+				m.newPane.issuePlanFanout = true
 				return m
 			},
 			wantPlan:   true,
@@ -209,7 +209,7 @@ func TestNewPaneViewPlanFanoutCheckbox(t *testing.T) {
 
 	t.Run("issue mode on renders coordinator and task agent rows", func(t *testing.T) {
 		m := issueModeModel(t, childless)
-		m.newPane.planFanout = true
+		m.newPane.issuePlanFanout = true
 		view := m.newPaneView()
 		if !strings.Contains(view, "Coordinator agent") || !strings.Contains(view, "Task agent") {
 			t.Fatalf("issue plan view missing coordinator/task labels:\n%s", view)
@@ -233,7 +233,7 @@ func TestIssuePlanFanoutSyncsWithSelection(t *testing.T) {
 	parent := IssueListItem{Number: 7, Title: "Epic", HasOpenChildren: true}
 	m := issueModeModel(t, childless, parent) // index 0 childless, index 1 open-children
 	m.newPane.focus = newPaneFieldMain
-	m.newPane.planFanout = true
+	m.newPane.issuePlanFanout = true
 
 	step := func(key tea.KeyMsg) {
 		updated, _ := m.Update(key)
@@ -241,7 +241,7 @@ func TestIssuePlanFanoutSyncsWithSelection(t *testing.T) {
 	}
 
 	step(tea.KeyMsg{Type: tea.KeyDown}) // select the open-children issue
-	if m.newPane.planFanout {
+	if m.newPane.issuePlanFanout {
 		t.Fatal("plan fan-out should clear when the selection has open children")
 	}
 	if !m.issuePlanFanoutDisabled() {
@@ -275,7 +275,7 @@ func TestNewPaneIssuePlanFanoutSubmitSkipsAssign(t *testing.T) {
 	p.loaded = true
 	p.items = issuePickerItems([]IssueListItem{{Number: 42, Title: "Fix UI"}})
 	m.recomputePicker(p)
-	m.newPane.planFanout = true
+	m.newPane.issuePlanFanout = true
 	m.newPane.workerIndex = defaultAgentIndex("codex")
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -351,5 +351,42 @@ func TestLaunchNewPaneRequestRoutesIssuePlan(t *testing.T) {
 				t.Fatalf("LaunchIssue called = %v, want %v", issueCalled, tt.wantIssueCall)
 			}
 		})
+	}
+}
+
+// TestIssuePlanFanoutDoesNotLeakIntoPromptMode pins the mode-scoped toggles:
+// turning issue-mode fan-out on and returning to prompt mode leaves the prompt
+// checkbox off and the stashed multi-agent counts restored, so what a prompt
+// submit launches never changes from peeking at issue mode.
+func TestIssuePlanFanoutDoesNotLeakIntoPromptMode(t *testing.T) {
+	m := newModel(Options{ListOpenIssues: func() ([]IssueListItem, error) { return nil, nil }})
+	m.openNewPaneForm()
+	m.newPane.agentCount["claude"] = 2
+	m.newPane.agentCount["codex"] = 1
+
+	step := func(key tea.KeyMsg) {
+		updated, _ := m.Update(key)
+		m = updated.(model)
+	}
+
+	m.newPane.focus = newPaneFieldMode
+	step(tea.KeyMsg{Type: tea.KeyRight}) // prompt -> issue (stashes the counts)
+	p := &m.newPane.issuePicker
+	p.loaded = true
+	p.items = issuePickerItems([]IssueListItem{{Number: 42, Title: "Fix UI"}})
+	m.recomputePicker(p)
+	m.newPane.focus = newPaneFieldPlan
+	step(tea.KeyMsg{Type: tea.KeySpace}) // issue-mode checkbox on
+	if !m.newPane.issuePlanFanout {
+		t.Fatal("issue-mode checkbox did not toggle on")
+	}
+
+	m.newPane.focus = newPaneFieldMode
+	step(tea.KeyMsg{Type: tea.KeyLeft}) // issue -> prompt
+	if m.newPane.planFanout {
+		t.Fatal("issue-mode fan-out leaked into the prompt-mode checkbox")
+	}
+	if m.newPane.agentCount["claude"] != 2 || m.newPane.agentCount["codex"] != 1 {
+		t.Fatalf("prompt counts = %v, want claude 2 / codex 1 restored", m.newPane.agentCount)
 	}
 }
