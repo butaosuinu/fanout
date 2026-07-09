@@ -302,14 +302,14 @@ func resolveCodexModel(client requester, cwd string) (string, error) {
 	})
 	if modelErr != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, modelErr)
+			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, modelErr)
 		}
 		return "", fmt.Errorf("resolve codex model from model/list: %w", modelErr)
 	}
 	model, err := modelListDefault(modelResult)
 	if err != nil {
 		if configErr != nil {
-			return "", fmt.Errorf("resolve codex model: config/read failed: %v; model/list failed: %w", configErr, err)
+			return "", fmt.Errorf("resolve codex model: config/read failed: %w; model/list failed: %w", configErr, err)
 		}
 		return "", err
 	}
