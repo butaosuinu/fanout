@@ -36,9 +36,11 @@ English and 日本語.
   another uses codex. A prompt-mode checkbox instead decomposes the prompt into
   parallel tasks via `/fanout plan`; the same checkbox appears in issue mode,
   decomposing a single issue into parallel issue-less tasks with separately
-  chosen coordinator and task agents. The `s` key opens the settings popup.
-  Return to the console from any pane with `F11` or `prefix + T`; mouse or
-  `prefix` movement keys keep the selected row in sync with the focused pane.
+  chosen coordinator and task agents. After a Prompt, plan coordinator, or Issue
+  launch from `n` succeeds, focus moves to the first newly created pane in
+  actual creation order. The `s` key opens the settings popup. Return to the
+  console from any pane with `F11` or `prefix + T`; mouse or `prefix` movement
+  keys keep the selected row in sync with the focused pane.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it

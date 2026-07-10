@@ -86,11 +86,19 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 // children. The watcher and the TUI issue launcher share it; cfg carries the
 // caller's agent selection.
 func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
+	_, err := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, issue)
+	return err
+}
+
+// launchStandaloneIssuePaneWithResult is the TUI-facing standalone launch
+// path. The watcher keeps the error-only wrapper above so background launches
+// never gain foreground-focus behavior.
+func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
-		return bufferedLaunchError(stdout, stderr, "load fanout state")
+		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
 	if recorder != nil {
 		defer func() {
@@ -98,7 +106,7 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 		}()
 	}
 	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
-		return watch.ErrAlreadyFanned
+		return "", watch.ErrAlreadyFanned
 	}
 	info := &fanoutruntime.Info{
 		Session:     session,
@@ -107,10 +115,11 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
-	if !launcher.LaunchOK(req) {
-		return bufferedLaunchError(stdout, stderr, "create watch pane")
+	result, ok := launcher.LaunchWithResult(req)
+	if !ok {
+		return "", bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
-	return nil
+	return result.PaneID, nil
 }
 
 func launchWatchParent(projectRoot, session, commandName string, resolvedSettings settings.Settings, issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
@@ -122,12 +131,25 @@ func launchWatchParent(projectRoot, session, commandName string, resolvedSetting
 // against a synthesized runtime targeting the TUI session. The watcher and
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
+	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
+	return result.Watch, err
+}
+
+type parentIssueFanoutResult struct {
+	Watch          watch.ParentLaunchResult
+	CreatedPaneIDs []string
+}
+
+// launchParentIssueFanoutWithResult preserves the exact pane ids returned by
+// tmux for the foreground TUI launch. The watcher calls the wrapper above and
+// deliberately discards them so it cannot steal focus.
+func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
 	// degrades to the pre-existing unguarded behavior.
 	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(projectRoot, store, cfg.Parent) {
-		return watch.ParentLaunchResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
+		return parentIssueFanoutResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
 	}
 	gh := ghissue.Runner{Cwd: projectRoot}
 	var stdout, stderr bytes.Buffer
@@ -140,10 +162,13 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 		},
 		GH: gh,
 	}
-	if code := run.Issues(cfg, launchLogger, rt, commandName, bindDashboardKey); code != exitcode.OK {
-		return watch.ParentLaunchResult{}, bufferedLaunchError(stdout, stderr, "launch parent")
+	execution, code := run.IssuesWithResult(cfg, launchLogger, rt, commandName, bindDashboardKey)
+	result := parentIssueFanoutResult{CreatedPaneIDs: execution.CreatedPaneIDs}
+	if code != exitcode.OK {
+		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
-	return watchParentResultAfterLaunch(projectRoot, cfg, gh), nil
+	result.Watch = watchParentResultAfterLaunch(projectRoot, cfg, gh)
+	return result, nil
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {

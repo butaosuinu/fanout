@@ -1360,7 +1360,7 @@ func TestWatchTickRunsCycleAndRefreshesStateAndGH(t *testing.T) {
 		DefaultAgent:   "codex",
 		FocusPane:      func(string) error { return nil },
 		PaneAlive:      func(string) bool { return true },
-		LaunchPane:     func(LaunchRequest) (string, error) { return "", nil },
+		LaunchPane:     func(LaunchRequest) (LaunchResult, error) { return LaunchResult{}, nil },
 		LaunchShell:    func(ShellLaunchRequest) error { return nil },
 		Notifier:       nil,
 		lifecycle:      &fakeLifecycleRunner{},
@@ -3508,9 +3508,9 @@ func TestNewPaneKeyUsesPopupPromptWhenConfigured(t *testing.T) {
 			prompted = req
 			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
 		},
-		LaunchPane: func(req LaunchRequest) (string, error) {
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
 			launched = req
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 
@@ -3555,8 +3555,8 @@ func TestNewPanePopupOpenBlocksMonitorKeys(t *testing.T) {
 		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
 			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
 		},
-		LaunchPane: func(LaunchRequest) (string, error) {
-			return "", nil
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
+			return LaunchResult{}, nil
 		},
 	})
 
@@ -3591,9 +3591,9 @@ func TestNewPanePopupLaunchBlocksMonitorKeysWhileRunning(t *testing.T) {
 		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
 			return LaunchRequest{Prompt: "Inspect the API", Agents: []string{"codex"}}, false, nil
 		},
-		LaunchPane: func(LaunchRequest) (string, error) {
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 			launchCalls++
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 
@@ -3641,9 +3641,9 @@ func TestNewPanePopupCancelDoesNotLaunch(t *testing.T) {
 		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
 			return LaunchRequest{}, true, nil
 		},
-		LaunchPane: func(LaunchRequest) (string, error) {
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 			launched = true
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 
@@ -3668,8 +3668,8 @@ func TestNewPanePopupCancelPreservesNewerNotice(t *testing.T) {
 		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
 			return LaunchRequest{}, true, nil
 		},
-		LaunchPane: func(LaunchRequest) (string, error) {
-			return "", nil
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
+			return LaunchResult{}, nil
 		},
 	})
 
@@ -3801,9 +3801,9 @@ func TestSettingsKeyUsesPopupAndReloadsRuntime(t *testing.T) {
 			return SettingsRuntime{
 				WatchLabel:    "fanout:test",
 				WatchInterval: time.Minute,
-				LaunchIssue: func(int, string, map[string]string) (string, error) {
+				LaunchIssue: func(int, string, map[string]string) (LaunchResult, error) {
 					issueLaunchCalls++
-					return "launched with reloaded settings", nil
+					return LaunchResult{Notice: "launched with reloaded settings"}, nil
 				},
 			}, nil
 		},
@@ -3854,12 +3854,12 @@ func TestSettingsKeyUsesPopupAndReloadsRuntime(t *testing.T) {
 	if m.opts.LaunchIssue == nil {
 		t.Fatal("LaunchIssue = nil, want reloaded launcher")
 	}
-	notice, err := m.opts.LaunchIssue(123, "codex", nil)
+	result, err := m.opts.LaunchIssue(123, "codex", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if issueLaunchCalls != 1 || notice != "launched with reloaded settings" {
-		t.Fatalf("LaunchIssue calls=%d notice=%q, want reloaded launcher", issueLaunchCalls, notice)
+	if issueLaunchCalls != 1 || result.Notice != "launched with reloaded settings" {
+		t.Fatalf("LaunchIssue calls=%d notice=%q, want reloaded launcher", issueLaunchCalls, result.Notice)
 	}
 	if m.notice != "settings saved: /tmp/fanout-config.json" {
 		t.Fatalf("notice = %q, want settings saved", m.notice)
@@ -4523,9 +4523,9 @@ func TestAttachAgentKeyRequiresSelectedWorktree(t *testing.T) {
 }
 
 func TestNewPaneFormRequiresPrompt(t *testing.T) {
-	m := newModel(Options{LaunchPane: func(LaunchRequest) (string, error) {
+	m := newModel(Options{LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 		t.Fatal("LaunchPane should not be called without a prompt")
-		return "", nil
+		return LaunchResult{}, nil
 	}})
 	m.openNewPaneForm()
 
@@ -4538,9 +4538,9 @@ func TestNewPaneFormRequiresPrompt(t *testing.T) {
 }
 
 func TestNewPaneFormRequiresAgentSelection(t *testing.T) {
-	m := newModel(Options{LaunchPane: func(LaunchRequest) (string, error) {
+	m := newModel(Options{LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 		t.Fatal("LaunchPane should not be called without a selected agent")
-		return "", nil
+		return LaunchResult{}, nil
 	}})
 	m.openNewPaneForm()
 	m.newPane.prompt.SetValue("Inspect the HTTP API")
@@ -4561,10 +4561,10 @@ func TestNewPaneFormSubmitsLaunchRequest(t *testing.T) {
 	called := false
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) (string, error) {
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
 			called = true
 			got = req
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -4594,9 +4594,9 @@ func TestNewPaneFormSubmitsMultipleAgents(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) (string, error) {
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
 			got = req
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -4661,9 +4661,9 @@ func TestAttachAgentFormSubmitsAttachRequest(t *testing.T) {
 func TestNewPaneFormPromptNewlineKeysDoNotSubmit(t *testing.T) {
 	called := false
 	m := newModel(Options{
-		LaunchPane: func(LaunchRequest) (string, error) {
+		LaunchPane: func(LaunchRequest) (LaunchResult, error) {
 			called = true
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -4684,9 +4684,9 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) (string, error) {
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
 			got = req
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -4708,9 +4708,9 @@ func TestNewPaneFormAcceptsCJKPromptInput(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{
 		DefaultAgent: "codex",
-		LaunchPane: func(req LaunchRequest) (string, error) {
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
 			got = req
-			return "", nil
+			return LaunchResult{}, nil
 		},
 	})
 	m.openNewPaneForm()
@@ -4917,6 +4917,157 @@ func TestNewPaneLaunchSuccessReturnsToMonitorAndReloadsState(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("launch success did not request a state reload")
+	}
+}
+
+func TestNewPaneLaunchSuccessReloadsStateAndFocusesFirstCreatedPane(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	var focused []string
+	launchNotice := "fanned out #100: created 2 pane(s); blocked/deferred children remain"
+	m := newModel(Options{
+		ProjectRoot: t.TempDir(),
+		FocusPane: func(paneID string) error {
+			focused = append(focused, paneID)
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+		keyboard:  protocols,
+	})
+	m.openNewPaneForm()
+
+	updated, cmd := m.Update(launchPaneMsg{notice: launchNotice, count: 2, createdPaneIDs: []string{"%2", "%3"}})
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("launch success returned nil command, want state reload and focus")
+	}
+
+	msgs := runCmd(cmd)
+	var reloaded bool
+	var focusMsg paneFocusedMsg
+	var focusedMsgFound bool
+	for _, msg := range msgs {
+		switch msg := msg.(type) {
+		case stateLoadedMsg:
+			reloaded = true
+		case paneFocusedMsg:
+			focusMsg = msg
+			focusedMsgFound = true
+		}
+	}
+	if !reloaded {
+		t.Fatal("launch success did not schedule a state reload")
+	}
+	if !focusedMsgFound {
+		t.Fatal("launch success did not schedule pane focus")
+	}
+	if !reflect.DeepEqual(focused, []string{"%2"}) {
+		t.Fatalf("focused panes = %#v, want first created pane %%2", focused)
+	}
+	if protocols.disableCount != 1 || protocols.enableCount != 0 {
+		t.Fatalf("protocol calls after focus = enable %d disable %d, want enable 0 disable 1", protocols.enableCount, protocols.disableCount)
+	}
+
+	updated, _ = m.Update(focusMsg)
+	m = updated.(model)
+	if !m.keyboardPaused {
+		t.Fatal("keyboardPaused = false, want true after automatic focus")
+	}
+	if !strings.Contains(m.notice, launchNotice) || !strings.Contains(m.notice, "focused %2") {
+		t.Fatalf("notice = %q, want launch detail and focus result", m.notice)
+	}
+}
+
+func TestNewPaneLaunchAutoFocusFailureIsNonFatal(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	launchNotice := "base branch refresh skipped: local branch main is checked out"
+	m := newModel(Options{
+		ProjectRoot: t.TempDir(),
+		FocusPane:   func(string) error { return errors.New("focus failed") },
+		PaneAlive:   func(string) bool { return true },
+		keyboard:    protocols,
+	})
+	m.openNewPaneForm()
+
+	updated, cmd := m.Update(launchPaneMsg{notice: launchNotice, count: 1, createdPaneIDs: []string{"%2"}})
+	m = updated.(model)
+	focusMsg := findPaneFocusedMsg(t, runCmd(cmd))
+	updated, next := m.Update(focusMsg)
+	m = updated.(model)
+
+	if next != nil {
+		t.Fatal("focus failure returned a command")
+	}
+	if m.mode != modeMonitor || m.newPane.launching {
+		t.Fatalf("mode/launching = %v/%v, want successful launch in monitor mode", m.mode, m.newPane.launching)
+	}
+	if !strings.Contains(m.notice, launchNotice) || !strings.Contains(m.notice, "focus skipped for %2: focus failed") {
+		t.Fatalf("notice = %q, want launch detail and non-fatal focus failure", m.notice)
+	}
+	if protocols.disableCount != 1 || protocols.enableCount != 1 {
+		t.Fatalf("protocol calls = enable %d disable %d, want enable 1 disable 1", protocols.enableCount, protocols.disableCount)
+	}
+	if m.keyboardPaused {
+		t.Fatal("keyboardPaused = true after failed automatic focus")
+	}
+}
+
+func TestNewPaneLaunchAutoFocusChecksPaneLiveness(t *testing.T) {
+	protocols := &fakeKeyboardProtocols{}
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot: t.TempDir(),
+		FocusPane: func(string) error {
+			focusCalls++
+			return nil
+		},
+		PaneAlive: func(string) bool { return false },
+		keyboard:  protocols,
+	})
+
+	_, cmd := m.Update(launchPaneMsg{count: 1, createdPaneIDs: []string{"%2"}})
+	focusMsg := findPaneFocusedMsg(t, runCmd(cmd))
+	if !errors.Is(focusMsg.err, errPaneNotAlive) {
+		t.Fatalf("focus error = %v, want errPaneNotAlive", focusMsg.err)
+	}
+	if focusCalls != 0 {
+		t.Fatalf("FocusPane calls = %d, want 0 for stale pane", focusCalls)
+	}
+	if protocols.disableCount != 0 || protocols.enableCount != 0 {
+		t.Fatalf("protocol calls = enable %d disable %d, want none before liveness passes", protocols.enableCount, protocols.disableCount)
+	}
+}
+
+func TestNewPaneLaunchSkipsAutoFocusWhenIneligible(t *testing.T) {
+	tests := []struct {
+		name      string
+		msg       launchPaneMsg
+		queueQuit bool
+	}{
+		{name: "no pane ids", msg: launchPaneMsg{count: 1}},
+		{name: "attached pane", msg: launchPaneMsg{count: 1, createdPaneIDs: []string{"%2"}, attached: true}},
+		{name: "launch error", msg: launchPaneMsg{count: 1, createdPaneIDs: []string{"%2"}, err: errors.New("launch failed")}},
+		{name: "queued quit", msg: launchPaneMsg{count: 1, createdPaneIDs: []string{"%2"}}, queueQuit: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			focusCalls := 0
+			m := newModel(Options{
+				ProjectRoot: t.TempDir(),
+				FocusPane: func(string) error {
+					focusCalls++
+					return nil
+				},
+				PaneAlive: func(string) bool { return true },
+			})
+			m.quitAfterLaunch = tt.queueQuit
+
+			_, cmd := m.Update(tt.msg)
+			_ = runCmd(cmd)
+			if focusCalls != 0 {
+				t.Fatalf("FocusPane calls = %d, want 0", focusCalls)
+			}
+		})
 	}
 }
 

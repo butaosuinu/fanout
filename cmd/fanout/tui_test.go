@@ -864,12 +864,15 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%77")
 
-	_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+	result, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agents: []string{"claude", "claude"},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%77", "%77"}) {
+		t.Fatalf("created pane ids = %#v, want creation-order ids", result.CreatedPaneIDs)
 	}
 
 	store, err := state.LoadProject(repo)
@@ -901,15 +904,18 @@ func TestLaunchManualPaneFromTUIReportsPartialMultipleLaunch(t *testing.T) {
 		}},
 	}}
 
-	notice, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hookConfig, fanouttui.LaunchRequest{
+	result, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hookConfig, fanouttui.LaunchRequest{
 		Prompt: "inspect workspace",
 		Agents: []string{"claude", "claude"},
 	})
 	if err != nil {
 		t.Fatalf("launchManualPaneFromTUI() error = %v, want partial success notice", err)
 	}
-	if !strings.Contains(notice, "created 1 new agent pane(s); stopped after a later pane failed") {
-		t.Fatalf("notice = %q, want partial success", notice)
+	if !strings.Contains(result.Notice, "created 1 new agent pane(s); stopped after a later pane failed") {
+		t.Fatalf("notice = %q, want partial success", result.Notice)
+	}
+	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%77"}) {
+		t.Fatalf("created pane ids = %#v, want first successful pane", result.CreatedPaneIDs)
 	}
 
 	store, err := state.LoadProject(repo)

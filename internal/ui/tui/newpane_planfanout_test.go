@@ -328,13 +328,13 @@ func TestLaunchNewPaneRequestRoutesIssuePlan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var planCalled, issueCalled bool
 			m := newModel(Options{
-				LaunchIssue: func(int, string, map[string]string) (string, error) {
+				LaunchIssue: func(int, string, map[string]string) (LaunchResult, error) {
 					issueCalled = true
-					return "", nil
+					return LaunchResult{}, nil
 				},
-				LaunchIssuePlan: func(int, string, string) (string, error) {
+				LaunchIssuePlan: func(int, string, string) (LaunchResult, error) {
 					planCalled = true
-					return "", nil
+					return LaunchResult{}, nil
 				},
 			})
 			req := LaunchRequest{

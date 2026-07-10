@@ -267,8 +267,13 @@ func (m *model) launchIssuePlanRequest(req LaunchRequest) tea.Cmd {
 		launch := m.opts.LaunchIssuePlan
 		num := req.Issue
 		return func() tea.Msg {
-			notice, err := launch(num, coordinator, worker)
-			return launchPaneMsg{notice: notice, count: 1, err: err}
+			result, err := launch(num, coordinator, worker)
+			return launchPaneMsg{
+				notice:         result.Notice,
+				count:          launchPaneCount(1, result.CreatedPaneIDs),
+				createdPaneIDs: result.CreatedPaneIDs,
+				err:            err,
+			}
 		}
 	}
 	return nil
@@ -289,8 +294,13 @@ func (m *model) launchIssueSessionRequest(req LaunchRequest) tea.Cmd {
 		launch := m.opts.LaunchIssue
 		num, overrides := req.Issue, req.AgentOverrides
 		return func() tea.Msg {
-			notice, err := launch(num, agentName, overrides)
-			return launchPaneMsg{notice: notice, count: 1, err: err}
+			result, err := launch(num, agentName, overrides)
+			return launchPaneMsg{
+				notice:         result.Notice,
+				count:          launchPaneCount(1, result.CreatedPaneIDs),
+				createdPaneIDs: result.CreatedPaneIDs,
+				err:            err,
+			}
 		}
 	}
 	return nil

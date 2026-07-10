@@ -164,10 +164,11 @@ type (
 		gen int
 	}
 	launchPaneMsg struct {
-		notice   string
-		count    int
-		attached bool
-		err      error
+		notice         string
+		count          int
+		createdPaneIDs []string
+		attached       bool
+		err            error
 	}
 	activePaneMsg struct {
 		paneID       string

@@ -36,10 +36,11 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   スクは codex、のように)。prompt モードのチェックボックスを入れると、
   そのプロンプトを `/fanout plan` で並列タスクに分解します。同じチェックボックスは
   issue モードにもあり、1 つの issue を issue-less な並列タスクに分解し、
-  コーディネータとタスクの agent を別々に選べます。`s` キーで設定 popup を
-  開けます。どのペインからでも `F11` または `prefix + T` でコンソールに
-  戻れます。マウスや `prefix` のペイン移動でフォーカスしたペインにも、選択行が
-  追従します。
+  コーディネータとタスクの agent を別々に選べます。`n` から Prompt、
+  plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の
+  新規ペインへフォーカスが移ります。`s` キーで設定 popup を開けます。どのペイン
+  からでも `F11` または `prefix + T` でコンソールに戻れます。マウスや `prefix` の
+  ペイン移動でフォーカスしたペインにも、選択行が追従します。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ

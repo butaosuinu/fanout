@@ -17,21 +17,35 @@ import (
 )
 
 type executionResult struct {
-	Created     int
-	Failed      int
-	CreatedNums []int
+	Created        int
+	Failed         int
+	CreatedNums    []int
+	CreatedPaneIDs []string
+}
+
+// IssueExecutionResult reports the exact tmux panes created by an issue or
+// Project fan-out, in creation order. Dry runs return an empty slice.
+type IssueExecutionResult struct {
+	CreatedPaneIDs []string
 }
 
 // Issues runs the issue / Project fan-out lane against an already-resolved
 // runtime. cmd owns parsing, dependency checks, and runtime resolution before
 // calling this; bindKeys is the cmd-side dashboard keybinding hook.
 func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) exitcode.Code {
+	_, code := IssuesWithResult(cfg, lg, rt, commandName, bindKeys)
+	return code
+}
+
+// IssuesWithResult runs the issue / Project fan-out lane and returns the exact
+// pane ids created before completion or a fail-fast launch error.
+func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) (IssueExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg), lg.Warn)
 	hookConfig := hooks.LoadUserConfig(lg)
 
 	loaded, code := loadChildren(cfg, rt.GH, lg)
 	if code != exitcode.OK {
-		return code
+		return IssueExecutionResult{}, code
 	}
 
 	totalChildren := len(loaded.Children)
@@ -41,19 +55,19 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 		} else {
 			lg.Info("no sub-issues on #%d. nothing to do.", cfg.Parent)
 		}
-		return exitcode.OK
+		return IssueExecutionResult{}, exitcode.OK
 	}
 
 	openCount := len(OpenIssues(loaded.Children))
 	lg.Info("%s: %d total, %d OPEN", loaded.ChildNoun, totalChildren, openCount)
 	if openCount == 0 {
 		lg.Info("no OPEN %s. nothing to do.", loaded.ChildNoun)
-		return exitcode.OK
+		return IssueExecutionResult{}, exitcode.OK
 	}
 
 	store, recorder, code := LoadState(cfg.DryRun, rt.Info.ProjectRoot, lg)
 	if code != exitcode.OK {
-		return code
+		return IssueExecutionResult{}, code
 	}
 	if recorder != nil {
 		defer func() {
@@ -78,7 +92,7 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 	// across two uncoordinated sessions.
 	if cfg.ParentMode == cliflags.ModeIssue && planOwnedFanned[cfg.Parent] {
 		lg.Err("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
-		return exitcode.Env
+		return IssueExecutionResult{}, exitcode.Env
 	}
 
 	plan := BuildPlan(
@@ -100,15 +114,15 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 
 	if plan.OpenAfterFilter == 0 {
 		lg.Info("all OPEN sub-issues filtered out by --only/--skip. nothing to do.")
-		return exitcode.OK
+		return IssueExecutionResult{}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
-		return exitcode.OK
+		return IssueExecutionResult{}, exitcode.OK
 	}
 	if err := validateIssueAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
-		return exitcode.Env
+		return IssueExecutionResult{}, exitcode.Env
 	}
 
 	logAlreadyFanned(plan.AlreadyFanned, lg)
@@ -149,13 +163,14 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 	}
 
 	if result.Failed > 0 {
-		return exitcode.Env
+		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.Env
 	}
-	return exitcode.OK
+	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.OK
 }
 
 func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: recorder, Palette: c, CommandName: commandName}
+	var createdPaneIDs []string
 	created, failed := executeFailFast(
 		targets,
 		func(issue ghissue.Issue) int { return issue.Number },
@@ -167,11 +182,15 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 					issue.Body = detail.Body
 				}
 			}
-			return launcher.LaunchOK(panelaunch.NewIssueRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents[issue.Number], teamCtx))
+			result, ok := launcher.LaunchWithResult(panelaunch.NewIssueRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents[issue.Number], teamCtx))
+			if ok && result.PaneID != "" {
+				createdPaneIDs = append(createdPaneIDs, result.PaneID)
+			}
+			return ok
 		},
 		sleepBetweenFunc(cfg),
 	)
-	return executionResult{Created: len(created), Failed: failed, CreatedNums: created}
+	return executionResult{Created: len(created), Failed: failed, CreatedNums: created, CreatedPaneIDs: createdPaneIDs}
 }
 
 // executeFailFast launches targets in order and stops after the first failure,

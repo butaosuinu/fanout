@@ -354,3 +354,26 @@ func TestLaunchPlanPromptFromTUIRejectsMultipleAgents(t *testing.T) {
 		t.Fatalf("launchPlanPromptFromTUI() error = %v, want single-agent rejection", err)
 	}
 }
+
+func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	installFakeExecutable(t, "claude")
+	installTUITmuxShim(t, "%88")
+	req := fanouttui.LaunchRequest{
+		Prompt:     "Ship search",
+		PlanFanout: true,
+		Agents:     []string{"claude"},
+	}
+
+	result, err := launchPlanPromptFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedPaneIDs) != 1 || result.CreatedPaneIDs[0] != "%88" {
+		t.Fatalf("created pane ids = %#v, want [%%88]", result.CreatedPaneIDs)
+	}
+	if !strings.Contains(result.Notice, "started plan coordinator (claude)") {
+		t.Fatalf("notice = %q, want coordinator success", result.Notice)
+	}
+}
