@@ -61,6 +61,27 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   [ ! -e "$claude_dir/agents/post-work-verifier.md" ]
 }
 
+@test "post-work-review shard-7: skills revalidate the exact HEAD before verifying broad-review fixes" {
+  local skill workflow
+
+  for skill in \
+    "$REPO_ROOT/codex/skills/post-work-review/SKILL.md" \
+    "$REPO_ROOT/claude/skills/post-work-review/SKILL.md"; do
+    workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill")"
+    [[ "$workflow" == *"Run focused validation while editing."* ]]
+    [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]]
+    [[ "$workflow" == *"once on that new exact HEAD"* ]]
+    [[ "$workflow" == *'replace `validated_head` only after it'* ]]
+    [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]]
+    [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]]
+    [[ "$workflow" == *'continue the existing driver'*'`prepare-verify`'* ]]
+    [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]]
+    ! grep -Fq 'Run focused validation for changed files, then' "$skill"
+    grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill"
+    grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill"
+  done
+}
+
 setup_review_repo() {
   local repo="$1"
   mkdir -p "$repo"

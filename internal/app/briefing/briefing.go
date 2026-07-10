@@ -249,11 +249,16 @@ The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command
 It owns the canonical full project validation for that exact HEAD and writes
 ` + "`.git/post-work-review-passed`" + ` only after both validation and review are clean
 for that HEAD.
-If review fixes change files, run focused checks for those edits, commit them,
-then run ` + "`/post-work-review`" + ` again on the new HEAD. Do not run a separate full
-lint/test sweep outside the skill. If the review gate is unavailable or fails,
-stop and report it instead of bypassing the gate.
+` + boundedReviewFixContinuation + `
+Do not run a separate full lint/test sweep outside the skill. If the review gate
+is unavailable or fails, stop and report it instead of bypassing the gate.
 `
+
+const boundedReviewFixContinuation = `If the broad review reports actionable findings, stay in the same bounded gate.
+After each fix round, run focused checks for the edited files, commit the fixes,
+run the project's canonical full validation on the new HEAD, then run
+` + "`prepare-verify`" + ` and a fresh ` + "`post-work-verifier`" + `. Run ` + "`mark`" + ` for that HEAD only
+after the verifier reports clean. Do not start another broad review.`
 
 const prVisualizationSectionTemplate = `
 When opening the PR, structure the PR body in this order:
@@ -327,9 +332,8 @@ must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this 
 2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
    and writes ` + "`.git/post-work-review-passed`" + ` for the
    exact HEAD you will push.
-3. If review fixes change files, run focused checks for those edits, commit
-   them, and rerun the gate on the new HEAD.
-4. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
+` + boundedReviewFixContinuation + `
+3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
 
 Push and open the PR only after the branch review is clean and marked.
 `
@@ -343,9 +347,8 @@ must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this 
 2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
    and writes ` + "`.git/post-work-review-passed`" + ` for the
    exact HEAD you will push.
-3. If review fixes change files, run focused checks for those edits, commit
-   them, and rerun the gate on the new HEAD.
-4. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
+` + boundedReviewFixContinuation + `
+3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
 
 Only after the committed branch review is clean and marked should you push the
 branch. If the review gate is unavailable or fails for tooling/auth reasons,

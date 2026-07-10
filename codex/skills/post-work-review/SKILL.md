@@ -64,6 +64,8 @@ Inspect `git status --short` before `prepare`, then choose one validation path:
   HEAD; do not also run its component targets. If it fails, stop before
   `prepare`. Fix only failures caused by the branch, run focused checks while
   editing, commit the fixes, then restart the final gate on the new HEAD.
+  After the canonical command passes, record that exact commit as
+  `validated_head="$(git rev-parse HEAD)"`.
   Environment or pre-existing failures are non-clean gate results, not reasons
   to mark an unvalidated commit.
 - **Dirty uncommitted review:** run only the focused validation needed for the
@@ -79,6 +81,8 @@ replaces them.
 If validation changes a committed candidate, commit the fix and restart the
 final gate on the new HEAD. If the work was already uncommitted, leave focused
 validation fixes uncommitted so the same bundle includes all reviewed work.
+These restart rules apply before the initial `prepare`; after a broad result
+has recorded findings, keep its driver state and follow step 3 instead.
 
 ## Run the gate
 
@@ -90,20 +94,27 @@ validation fixes uncommitted so the same bundle includes all reviewed work.
    `reviewer_sandbox_mode: "read-only"`.
 2. Run `bash "$driver" summarize`. Stop non-clean on `stop_reason=`. If
    `clean=true`, run `bash "$driver" mark` only when
-   `marker_eligible=true`. Before `mark`, confirm that HEAD and the clean
-   worktree still match the candidate that passed canonical full validation.
-   If branch scope is clean but fixes remain dirty, commit them and restart
-   from project validation on the new HEAD; this is a new gate, not a second
-   broad call in the prior gate.
+   `marker_eligible=true`. Before `mark`, require a clean worktree and confirm
+   that the current HEAD equals the last exact HEAD that passed canonical full
+   validation. If no actionable-finding verifier path applies and either
+   condition fails, stop without marking.
 3. If actionable findings remain, fix only those findings from the stored
-   results and `findings.tsv`. Run focused validation for changed files, then
-   run `bash "$driver" prepare-verify`. Pass `verify_bundle=` to one fresh
-   `post-work-verifier`; it may check only prior findings and obvious
-   fix-introduced regressions.
+   results and `findings.tsv`. Run focused validation while editing. For branch
+   scope, commit the fixes, run the canonical full validation command exactly
+   once on that new exact HEAD, and replace `validated_head` only after it
+   passes. Require a clean worktree and the same current HEAD before continuing.
+   Do not run `prepare` again or start another broad review; continue the
+   existing driver state with `bash "$driver" prepare-verify`. For dirty
+   uncommitted scope, run focused validation only because that scope cannot
+   receive a marker, then continue the same driver state with `prepare-verify`.
+   Pass `verify_bundle=` to one fresh `post-work-verifier`; it may check only
+   prior findings and obvious fix-introduced regressions.
 4. Save the verifier's exact JSON outside the repository, run
    `bash "$driver" record verify <review-json-file>`, then `summarize`. If it
-   remains non-clean without a stop reason, allow one final fix/validation/
-   verifier round. Never exceed two verifier calls.
+   is clean, mark only under the exact-HEAD condition in step 2. If it remains
+   non-clean without a stop reason, allow one final fix/validation/verifier
+   round using the same sequence in step 3 and the existing driver state.
+   Never exceed two verifier calls.
 5. Stop non-clean without marking when a cap is exhausted, `truncated=true`, a
    finding fingerprint repeats after a fix round, or any `stop_reason=` is
    reported.

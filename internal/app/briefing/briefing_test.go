@@ -106,6 +106,9 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"POST_WORK_REVIEW_BASE=release/v1` to every driver command",
 				"canonical full project validation for that exact HEAD",
 				"`.git/post-work-review-passed`",
+				"stay in the same bounded gate",
+				"`prepare-verify` and a fresh `post-work-verifier`",
+				"Do not start another broad review",
 				"Optional: Agent Teams",
 			},
 		},
@@ -118,6 +121,9 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"POST_WORK_REVIEW_BASE=release/v1` to every driver command",
 				"canonical full project validation for that exact HEAD",
 				"`.git/post-work-review-passed` for the",
+				"stay in the same bounded gate",
+				"`prepare-verify` and a fresh `post-work-verifier`",
+				"Do not start another broad review",
 				"exact HEAD you will push",
 				"Push and open the PR only after the branch review is clean and marked",
 			},
@@ -143,7 +149,7 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				t.Fatalf("RenderTask(..., %q) missing %q:\n%s", tc.agent, want, got)
 			}
 		}
-		for _, unwanted := range []string{"Fix actionable findings and rerun it", "post-work-reviewer", "post-work-verifier"} {
+		for _, unwanted := range []string{"Fix actionable findings and rerun it", "post-work-reviewer", "rerun the gate on the new HEAD"} {
 			if strings.Contains(got, unwanted) {
 				t.Fatalf("RenderTask(..., %q) contains redundant review detail %q:\n%s", tc.agent, unwanted, got)
 			}
@@ -183,7 +189,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 		strings.Contains(got, "Run it on the current diff") ||
 		strings.Contains(got, "Run `$post-work-review` again") ||
 		strings.Contains(got, "post-work-reviewer") ||
-		strings.Contains(got, "post-work-verifier") {
+		strings.Contains(got, "rerun the gate on the new HEAD") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) contains redundant pre-commit review guidance:\n%s", got)
 	}
 	assertIssueLessTaskBriefing(t, got)
@@ -223,6 +229,46 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 		}
 	}
 	assertIssueLessTaskBriefing(t, got)
+}
+
+func TestReviewFixFlowStaysWithinOneBoundedGate(t *testing.T) {
+	for _, agentName := range []string{"claude", "codex"} {
+		for _, autoPullRequest := range []bool{false, true} {
+			cfg := settings.Defaults()
+			cfg.AutoPullRequest = autoPullRequest
+			got := Render(123, "review briefing", "Issue body", agentName, "main", cfg, false, nil)
+			ordered := []string{
+				"stay in the same bounded gate",
+				"run focused checks for the edited files",
+				"commit the fixes",
+				"canonical full validation on the new HEAD",
+				"`prepare-verify`",
+				"`post-work-verifier`",
+				"`mark` for that HEAD only",
+				"after the verifier reports clean",
+				"Do not start another broad review",
+			}
+			previous := -1
+			for _, want := range ordered {
+				index := strings.Index(got, want)
+				if index == -1 {
+					t.Fatalf("Render(..., %q, AutoPullRequest=%t) missing %q:\n%s", agentName, autoPullRequest, want, got)
+				}
+				if index <= previous {
+					t.Fatalf("Render(..., %q, AutoPullRequest=%t) has review-fix step %q out of order:\n%s", agentName, autoPullRequest, want, got)
+				}
+				previous = index
+			}
+			for _, unwanted := range []string{
+				"run `/post-work-review` again",
+				"rerun the gate on the new HEAD",
+			} {
+				if strings.Contains(got, unwanted) {
+					t.Fatalf("Render(..., %q, AutoPullRequest=%t) contains legacy restart guidance %q:\n%s", agentName, autoPullRequest, unwanted, got)
+				}
+			}
+		}
+	}
 }
 
 func TestRenderTaskPRVisualizationQuotesBaseBranch(t *testing.T) {
