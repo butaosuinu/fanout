@@ -274,10 +274,22 @@ func TestLaunchParentIssueFanoutRejectsPlanSession(t *testing.T) {
 	}
 }
 
+// installFakeAgentCLIs puts executable claude/codex stubs next to the fake gh
+// so the up-front agent ValidateInstalled checks pass in agent-less CI
+// environments; the shim dir already leads PATH.
+func installFakeAgentCLIs(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // TestLaunchIssuePlanFromTUIRejectsClosedIssue pins the launch-time re-fetch:
 // a picker row gone stale (issue closed meanwhile) is rejected by state.
 func TestLaunchIssuePlanFromTUIRejectsClosedIssue(t *testing.T) {
-	installTUIWatcherGHScript(t, `
+	shimArgs := installTUIWatcherGHScript(t, `
 case "$args" in
 "issue view 7 --json number,title,state,body,labels")
   printf '{"number":7,"title":"Stale row","state":"CLOSED","body":"","labels":[]}'
@@ -288,6 +300,7 @@ case "$args" in
   ;;
 esac
 `)
+	installFakeAgentCLIs(t, filepath.Dir(shimArgs))
 	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
 	if err == nil || !strings.Contains(err.Error(), "issue #7 is not OPEN") {
 		t.Fatalf("launchIssuePlanFromTUI(closed issue) error = %v, want not-OPEN rejection", err)
@@ -298,7 +311,7 @@ esac
 // the picker's child marker can be stale, so an issue that has OPEN children at
 // launch time is rejected instead of getting a plan coordinator.
 func TestLaunchIssuePlanFromTUIBackstopsOpenChildren(t *testing.T) {
-	installTUIWatcherGHScript(t, `
+	shimArgs := installTUIWatcherGHScript(t, `
 case "$args" in
 "issue view 7 --json number,title,state,body,labels")
   printf '{"number":7,"title":"Epic","state":"OPEN","body":"","labels":[]}'
@@ -315,6 +328,7 @@ case "$args" in
   ;;
 esac
 `)
+	installFakeAgentCLIs(t, filepath.Dir(shimArgs))
 	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
 	if err == nil || !strings.Contains(err.Error(), "issue #7 has 1 open children; uncheck the plan checkbox") {
 		t.Fatalf("launchIssuePlanFromTUI(open children) error = %v, want backstop rejection", err)
