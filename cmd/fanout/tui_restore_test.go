@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -329,6 +330,31 @@ func TestRestoreAgentCommandUsesSavedCodexPlanThread(t *testing.T) {
 	}
 	if statusPath == "" || !strings.Contains(statusPath, "fanout-codex-plan-") {
 		t.Fatalf("statusPath = %q, want generated codex plan status path", statusPath)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantPrefix := "FANOUT_BIN=" + agent.ShellQuote(executable) + " "; !strings.HasPrefix(command, wantPrefix) {
+		t.Fatalf("command = %q, want prefix %q", command, wantPrefix)
+	}
+}
+
+func TestRestoreAgentCommandPinsFanoutBinaryForNormalAgent(t *testing.T) {
+	installRestoreAgentScript(t, "claude")
+	command, statusPath, err := restoreAgentCommand(state.Pane{Agent: "claude"}, t.TempDir(), "fanout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statusPath != "" {
+		t.Fatalf("statusPath = %q, want empty", statusPath)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantPrefix := "FANOUT_BIN=" + agent.ShellQuote(executable) + " "; !strings.HasPrefix(command, wantPrefix) {
+		t.Fatalf("command = %q, want prefix %q", command, wantPrefix)
 	}
 }
 

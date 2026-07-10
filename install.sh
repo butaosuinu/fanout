@@ -157,7 +157,9 @@ copy_agent_files() {
   mkdir -p "$dest_root"
   for src in "$src_root"/*; do
     [ -f "$src" ] || continue
-    install_data "$src" "$dest_root/$(basename "$src")"
+    dest="$dest_root/$(basename "$src")"
+    rm -f "$dest"
+    install_data "$src" "$dest"
   done
 }
 

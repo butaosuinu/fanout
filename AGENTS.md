@@ -10,7 +10,8 @@ repository.
 produces the local `./fanout-go` binary; `make test` runs the Go unit tests plus
 the bats black-box suite against it (via `FANOUT_BIN`); `make lint` is the
 pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) plus
-a shellcheck of the test shims. `make fmt` formats (gofumpt/goimports),
+a shellcheck of the test shims. `make check` is the canonical full local gate
+and runs `test`, `lint`, and `lint-web`. `make fmt` formats (gofumpt/goimports),
 `make fix` runs `go fix` idiom updates (run `make test` after applying), and
 `make vuln` runs govulncheck.
 
@@ -42,7 +43,8 @@ names, command names, and quoted code unchanged.
 ## Working With fanout
 
 `fanout` is a standalone git worktree + tmux pane + agent launcher. Build with
-`make build-go` (output `./fanout-go`) and validate with `make test`.
+`make build-go` (output `./fanout-go`). Use focused tests while editing and
+`make check` for the final full local gate.
 
 - Open the TUI console: `make build-go`, then `./fanout-go`. From a plain
   shell it creates or attaches the repository's fanout-managed tmux session;
@@ -54,7 +56,7 @@ names, command names, and quoted code unchanged.
 - Lint with `make lint` (pinned golangci-lint v2 + a shellcheck of the bats
   test shims). Treat shellcheck quoting warnings on the shims as real.
 - Run `make test` (Go unit tests + Tier 1/Tier 2 bats against `./fanout-go`)
-  before relying on a change.
+  when the full test suite is the focused validation you need.
 - A live end-to-end test requires tmux, an agent CLI, and a real GitHub parent
   issue or Project with OPEN child issues. There is no mock layer.
 
@@ -96,7 +98,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   pane at the project root so `fanout plan`'s git root stays at the repo,
   never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` are class H; the
+  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` /
+  `post_work_review_json.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
@@ -121,7 +124,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
-  repo config from enabling the watcher or notification targets) are class
+  repo config from enabling the watcher or notification targets), and
+  `reviewjson` (reviewer JSON validation and cache projection) are class
   H; `ghissue` (GitHub reads and mutations: label swaps, dashboard
   comments), `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
@@ -208,18 +212,18 @@ touching only class-A packages can rely on AI review.
   race-safe replacement for `(parent, issueNum)` idempotency.
 - When changing dry-run output, update Tier 2 goldens with
   `FANOUT_GOLDEN_UPDATE=1 make test-tier2` and review the diff.
-- Walk `docs/review-checklist.ja.md` before creating a PR — the top CI
-  failures and review findings all recur (`make lint` / `make test` as
-  described above).
+- Walk `docs/review-checklist.ja.md` before creating a PR. The final
+  post-work-review gate owns one `make check` run; do not duplicate it with
+  separate full `make lint`, `make test`, or `make lint-web` runs.
 - `go:embed` snapshots whatever is on disk at build time: after editing
   `web/src`, build via `make build-go`, not raw `go build`, or the binary
   ships a stale bundle.
 - Preserve fail-fast in `executePlan`: stop after the first failed child
   launch.
 - Commit all fixes first, then run the post-work-review gate (the installed
-  driver, invoked per `codex/skills/post-work-review`) against that final
-  HEAD before `gh pr create` — the marker is tied to the exact commit
-  reviewed, so committing anything afterward invalidates it.
+  driver, invoked per `codex/skills/post-work-review`) against that final HEAD
+  before `gh pr create`. The gate owns `make check`, and its marker is tied to
+  the exact commit reviewed, so committing anything afterward invalidates it.
 
 ## Documentation Writing
 

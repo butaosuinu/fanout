@@ -68,7 +68,7 @@ fanout 123 --branch-prefix fanout/release/
 
 ## `gh pr create` is denied ("post-work-review が未実施です")
 
-A `PreToolUse(Bash)` hook (`.claude/hooks/pre-pr-review-gate.sh`, registered in the committed `.claude/settings.json`) blocks `gh pr create` until the current HEAD has passed `/post-work-review`. Running `/post-work-review` records the reviewed commit at its final step, so rerun `gh pr create` afterward (to bypass once, prefix the command with the following).
+A `PreToolUse(Bash)` hook (`.claude/hooks/pre-pr-review-gate.sh`, registered in the committed `.claude/settings.json`) blocks `gh pr create` until the current HEAD has passed `/post-work-review`. Claude's legacy review marker permits the default PR base only. When Codex records reviewed-base metadata, the hook requires both the PR base and the current `origin/<base>...head` diff hash to match it. Invalid or stale metadata fails closed. Run `/post-work-review`, then rerun `gh pr create` with the reviewed base (to bypass once, prefix the command with the following).
 
 ```bash
 FANOUT_SKIP_PR_REVIEW=1 gh pr create ...

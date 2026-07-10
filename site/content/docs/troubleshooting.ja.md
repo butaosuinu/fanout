@@ -74,7 +74,10 @@ fanout 123 --branch-prefix fanout/release/
 ## `gh pr create` が deny される("post-work-review が未実施です")
 
 `PreToolUse(Bash)` hook(`.claude/hooks/pre-pr-review-gate.sh`、コミット済みの `.claude/settings.json` に登録)が、現在の HEAD が `/post-work-review` を通過するまで `gh pr create` をブロックします。
-`/post-work-review` を実行すると最終ステップでレビュー済みコミットが記録されるので、その後 `gh pr create` を再実行してください(一度だけバイパスしたいときは、コマンドの先頭に次を付けます)。
+Claude の legacy review marker では既定の PR base だけを許可します。
+Codex が reviewed-base metadata を記録した場合は、PR base と現在の `origin/<base>...head` diff hash を metadata の値と照合します。
+metadata が不正または stale なら deny します。
+`/post-work-review` を実行してから、レビュー済みの base を指定して `gh pr create` を再実行してください(一度だけバイパスしたいときは、コマンドの先頭に次を付けます)。
 
 ```bash
 FANOUT_SKIP_PR_REVIEW=1 gh pr create ...

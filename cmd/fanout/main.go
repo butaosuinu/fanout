@@ -34,6 +34,7 @@ func main() {
 	}
 	table := []dispatch{
 		{hooks.IsBackgroundRunnerRequest, func() exitcode.Code { return exitcode.Code(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr)) }},
+		{isPostWorkReviewJSONRequest, func() exitcode.Code { return cmdPostWorkReviewJSON(os.Args[2:], os.Stdout, os.Stderr) }},
 		{isVersionRequest, func() exitcode.Code { fmt.Fprintln(os.Stdout, versionLine()); return exitcode.OK }},
 		{isUpdateRequest, func() exitcode.Code { return cmdUpdate(os.Args[2:], version, ghissue.Runner{}, lg) }},
 		{isCheckUpdateRequest, func() exitcode.Code { return cmdCheckUpdate(version, ghissue.Runner{}, lg) }},

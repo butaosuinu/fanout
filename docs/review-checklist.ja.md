@@ -23,7 +23,11 @@ diff へ自問する。
 
 ## 機械チェック
 
-- `make lint` と `make test` を回す。`web/` を触ったら `make lint-web` も。
+- 実装中は変更範囲のテストと Linter だけを回す。
+- 最終候補を commit したら、`/post-work-review` または `$post-work-review` から `make check` を 1 回通す。
+  レビューゲートをバイパスする場合は、PR 作成前に `make check` を直接実行する。
+- `make test`、`make lint`、`make lint-web` は失敗の切り分けに使う。
+  同じ最終ゲートで個別に重ねて実行しない。
 - dry-run / status 出力を変えたら `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で
   golden を regen して diff を目視する。
 

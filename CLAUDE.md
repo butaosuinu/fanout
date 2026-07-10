@@ -17,7 +17,8 @@ the bats black-box suite against the binary via `FANOUT_BIN`; `make lint` is
 pinned golangci-lint v2 (`.golangci-lint-version`, config `.golangci.yml`) +
 shellcheck of the test shims (Node-free on purpose; the web lint is
 `make lint-web` = oxlint + oxfmt `--check` + tsc, configs `web/.oxlintrc.json`
-/ `web/.oxfmtrc.json`). `make fmt` formats Go (gofumpt/goimports),
+/ `web/.oxfmtrc.json`). `make check` is the canonical full local gate and runs
+`test`, `lint`, and `lint-web`. `make fmt` formats Go (gofumpt/goimports),
 `make fmt-web` formats `web/src` + `vite.config.ts` (oxfmt, printWidth 100; CSS と web/ 直下の JSON は対象外), `make fix` runs
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
@@ -35,7 +36,8 @@ notes.
 
 ## Working With fanout
 
-Build the binary with `make build-go` and validate with `make test`.
+Build the binary with `make build-go`. Use focused tests while editing and
+`make check` for the final full local gate.
 
 - Open the console: `make build-go`, then `./fanout-go`. From a plain shell it
   creates or attaches the repository's fanout-managed tmux session; from inside
@@ -90,7 +92,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   skill so `fanout plan`'s git root stays at the repo, never Codex Plan
   Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` are class H; the
+  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` /
+  `post_work_review_json.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
@@ -115,7 +118,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
-  repo config from enabling the watcher or notification targets) are class
+  repo config from enabling the watcher or notification targets), and
+  `reviewjson` (reviewer JSON validation and cache projection) are class
   H; `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
   `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`,
   `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
@@ -243,15 +247,16 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `--unblocked-only`. If branch generation, task `branch` overrides, or
   `--branch-prefix` behavior changes, update the plan status fixtures and
   docs together.
-- Run `make lint` and `make test` before creating a PR (`make lint-web` too
-  when `web/` changed) — the top CI failures, Tier 2 golden drift and
-  golangci-lint findings, all reproduce locally. Then walk
-  `docs/review-checklist.ja.md`; the same review findings recur.
+- Run focused checks while editing, then commit the candidate. The final
+  `/post-work-review` pass owns one `make check` run for that exact HEAD; do not
+  duplicate it with separate full `make lint`, `make test`, or `make lint-web`
+  runs. Then walk `docs/review-checklist.ja.md`; the same review findings recur.
 - `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
   `.claude/settings.json`. Retrying a denied command with nothing changed
   never succeeds — fix the stated cause, then re-run it: complete
-  `/post-work-review` (the marker must match HEAD), issue `gh pr create` as a
-  standalone command with no `cd`/`pushd`/`env --chdir` chained in (any cwd
+  `/post-work-review` (`make check` must pass and the marker must match HEAD),
+  then issue `gh pr create` as a standalone command with no
+  `cd`/`pushd`/`env --chdir` chained in (any cwd
   inside the target worktree works), and keep the PR base at the default
   branch. `FANOUT_SKIP_PR_REVIEW=1` is only for the documented escape hatch.
 

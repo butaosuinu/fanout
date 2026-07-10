@@ -185,13 +185,16 @@ type workBriefing struct {
 }
 
 func renderWorkBriefing(b workBriefing) string {
-	completionRequirement := "- When implementation passes tests, commit and push the branch."
+	completionRequirement := "- After focused checks pass, follow the final validation, commit, and push instructions below."
 	if b.agentName == "codex" {
-		completionRequirement = "- After implementation passes tests, follow the review, commit, and push sequence below."
+		completionRequirement = "- After focused checks pass, follow the review, commit, and push sequence below."
 	}
 	lines := baseRequirementLines(b.header, b.title, b.body, b.scopeRequirement, completionRequirement)
 	if b.settings.AutoPullRequest {
 		lines = append(lines, b.autoPullRequestRequirement)
+		if b.agentName == "codex" {
+			lines = append(lines, pullRequestBaseRequirement(b.baseBranch))
+		}
 	}
 	lines = append(lines, b.ambiguityRequirement)
 
@@ -213,16 +216,35 @@ func renderWorkBriefing(b workBriefing) string {
 		return base
 	}
 
-	if !b.settings.PRReviewGate {
-		base += reviewGateBypassSection
-	}
 	if b.settings.BriefingCodeReview {
 		base += codeReviewSection
+	}
+	if b.settings.PRReviewGate {
+		base += claudeReviewGateSection
+	} else {
+		base += reviewGateBypassSection
 	}
 	if b.settings.AgentTeamsHint {
 		base += agentTeamsSection
 	}
 	return base
+}
+
+func pullRequestBaseRequirement(baseBranch string) string {
+	baseBranch = pullRequestBaseBranch(baseBranch)
+	return fmt.Sprintf("- Run `gh pr create --base %s` so the PR base matches the reviewed diff.", agent.ShellQuote(baseBranch))
+}
+
+func pullRequestBaseBranch(baseBranch string) string {
+	if baseBranch == "" {
+		return "main"
+	}
+	for _, prefix := range []string{"refs/remotes/origin/", "origin/", "refs/heads/"} {
+		if branch, ok := strings.CutPrefix(baseBranch, prefix); ok {
+			return branch
+		}
+	}
+	return baseBranch
 }
 
 func baseRequirementLines(header, title, body, scopeRequirement, completionRequirement string) []string {
@@ -237,7 +259,7 @@ func baseRequirementLines(header, title, body, scopeRequirement, completionRequi
 		"Requirements:",
 		"- You are working inside a git worktree that was prepared for this task. Do not create additional worktrees.",
 		scopeRequirement,
-		"- Run the project's lint/test commands if they exist (inspect package.json / Makefile / pyproject.toml first).",
+		"- During implementation, run focused lint/test commands for the area you change (inspect package.json / Makefile / pyproject.toml first).",
 		completionRequirement,
 	}
 }
@@ -272,9 +294,31 @@ func renderCodexPlanBriefingWithHeader(header, title, body, inspectRequirement s
 }
 
 const reviewGateBypassSection = `
-The PR review gate is disabled for this fanout run. If ` + "`gh pr create`" + ` is denied
-before ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
+The PR review gate is disabled for this fanout run. After committing the
+candidate changes, resolve the project's single canonical full validation
+command from the repository's own instructions and build configuration, then
+run it once on the exact HEAD you will push. Do not also run the individual
+full lint/test targets unless you are diagnosing a failure. If ` + "`gh pr create`" + ` is denied before
+` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
 `
+
+const claudeReviewGateSection = `
+After the candidate changes and any ` + "`/code-review`" + ` fixes are committed, run
+` + "`/post-work-review`" + ` once on the committed branch before pushing. The skill owns
+the canonical full project validation for that exact HEAD and writes
+` + "`.git/post-work-review-passed`" + ` only after both validation and review are clean
+for that HEAD.
+If review fixes change files, run focused checks for those edits, commit them,
+then run ` + "`/post-work-review`" + ` again on the new HEAD. Do not run a separate full
+lint/test sweep outside the skill. If the review gate is unavailable or fails,
+stop and report it instead of bypassing the gate.
+`
+
+const boundedReviewFixContinuation = `If the broad review reports actionable findings, stay in the same bounded gate.
+After each fix round, run focused checks for the edited files, commit the fixes,
+run the project's canonical full validation on the new HEAD, then run
+` + "`prepare-verify`" + ` and a fresh ` + "`post-work-verifier`" + `. Run ` + "`mark`" + ` for that HEAD only
+after the verifier reports clean. Do not start another broad review.`
 
 const prVisualizationSectionTemplate = `
 When opening the PR, structure the PR body in this order:
@@ -340,35 +384,43 @@ func codexReviewSection(autoPullRequest bool, baseBranch string) string {
 }
 
 const codexReviewWithPRSectionTemplate = `
-Treat ` + "`$post-work-review`" + ` as a required gate before the final commit or PR:
-1. Run it on the current diff and follow its bounded fix/verification loop.
-   Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-2. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
-3. Commit the reviewed changes.
-4. Run ` + "`$post-work-review`" + ` on the committed branch with base ` + "`%s`" + `,
-   passing ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to its driver. Require
-   ` + "`.git/post-work-review-passed`" + ` for the HEAD you will push.
+Commit the candidate changes before the final branch-scope review. Then run
+` + "`$post-work-review`" + ` once on the committed branch with base ` + "`%s`" + `. The skill
+must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this gate:
+1. The skill owns the canonical full project validation for that exact HEAD.
+   Do not run a separate full lint/test sweep before the skill.
+2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
+   and writes ` + "`.git/post-work-review-passed`" + ` for the
+   exact HEAD you will push.
+` + boundedReviewFixContinuation + `
+3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
 
 Push and open the PR only after the branch review is clean and marked.
 `
 
 const codexReviewWithoutPRSectionTemplate = `
-Treat ` + "`$post-work-review`" + ` as a required gate before the final commit:
-1. Run it on the current diff and follow its bounded fix/verification loop.
-   Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `.
-2. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
-3. Commit the reviewed changes.
-4. Before pushing, run ` + "`$post-work-review`" + ` on the final branch with base
-   ` + "`%s`" + `, passing ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to its driver.
+Commit the candidate changes before the final branch-scope review. Then run
+` + "`$post-work-review`" + ` once on the committed branch with base ` + "`%s`" + `. The skill
+must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this gate:
+1. The skill owns the canonical full project validation for that exact HEAD.
+   Do not run a separate full lint/test sweep before the skill.
+2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
+   and writes ` + "`.git/post-work-review-passed`" + ` for the
+   exact HEAD you will push.
+` + boundedReviewFixContinuation + `
+3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
 
-Push only after the final branch review is clean.
+Only after the committed branch review is clean and marked should you push the
+branch. If the review gate is unavailable or fails for tooling/auth reasons,
+stop and report that instead of bypassing the gate.
 `
 
 const codeReviewSection = `
-Before committing your final changes, run the ` + "`/code-review`" + ` slash command on the
-files you've changed. /code-review is a Claude Code skill that reviews changed code
-for reuse, quality, and efficiency and fixes issues it finds. Apply its fixes,
-re-run lint/test, then commit and push as described above.
+During implementation, run the ` + "`/code-review`" + ` slash command on the files you've
+changed. /code-review is a Claude Code skill that reviews changed code for
+reuse, quality, and efficiency and fixes issues it finds. Apply its fixes and
+run focused checks for those edits. Do not run the full project check here; the
+final ` + "`/post-work-review`" + ` gate or bypass flow owns it.
 `
 
 // teamSection renders the --team coordination block appended to the shared

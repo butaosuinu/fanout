@@ -62,15 +62,53 @@ func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	}
 }
 
-func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
-	got := Render(123, "structured PR briefing", "Issue body", "codex", "foo;bar", settings.Defaults(), false, nil)
-	want := "git diff --name-only 'foo;bar'...HEAD"
-	if !strings.Contains(got, want) {
-		t.Fatalf("Render(...) missing shell-quoted base branch command %q", want)
+func TestPRVisualizationAndReviewSectionsQuoteBaseBranch(t *testing.T) {
+	for _, agentName := range []string{"claude", "codex"} {
+		got := Render(123, "structured PR briefing", "Issue body", agentName, "foo;bar", settings.Defaults(), false, nil)
+		want := "git diff --name-only 'foo;bar'...HEAD"
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., %q) missing shell-quoted base branch command %q", agentName, want)
+		}
 	}
-	want = "POST_WORK_REVIEW_BASE='foo;bar'` to"
-	if !strings.Contains(got, want) {
-		t.Fatalf("Render(...) missing shell-quoted post-work-review base branch command %q", want)
+
+	codex := Render(123, "structured PR briefing", "Issue body", "codex", "foo;bar", settings.Defaults(), false, nil)
+	for _, want := range []string{
+		"POST_WORK_REVIEW_BASE='foo;bar'` to every driver command",
+		"gh pr create --base 'foo;bar'",
+	} {
+		if !strings.Contains(codex, want) {
+			t.Fatalf("Render(..., codex) missing shell-quoted review command %q", want)
+		}
+	}
+
+	claude := Render(123, "structured PR briefing", "Issue body", "claude", "foo;bar", settings.Defaults(), false, nil)
+	for _, unwanted := range []string{"POST_WORK_REVIEW_BASE=", "gh pr create --base"} {
+		if strings.Contains(claude, unwanted) {
+			t.Fatalf("Render(..., claude) contains Codex-only review command %q", unwanted)
+		}
+	}
+}
+
+func TestCodexAutoPRNormalizesOriginBaseForGitHub(t *testing.T) {
+	got := Render(123, "review briefing", "Issue body", "codex", "origin/release/v1", settings.Defaults(), false, nil)
+	if !strings.Contains(got, "gh pr create --base release/v1") {
+		t.Fatalf("Render(..., codex) missing normalized PR base branch:\n%s", got)
+	}
+	if strings.Contains(got, "gh pr create --base origin/release/v1") {
+		t.Fatalf("Render(..., codex) kept remote prefix in PR base branch:\n%s", got)
+	}
+}
+
+func TestCodexReviewSectionDefaultsEmptyBaseBranchToMain(t *testing.T) {
+	got := Render(123, "review briefing", "Issue body", "codex", "", settings.Defaults(), false, nil)
+	for _, want := range []string{
+		"with base `main`",
+		"POST_WORK_REVIEW_BASE=main` to every driver command",
+		"gh pr create --base main",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., codex, baseBranch=empty) missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -83,21 +121,29 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 		{
 			agent: "claude",
 			wants: []string{
-				"When implementation passes tests, commit and push the branch",
+				"After focused checks pass, follow the final validation, commit, and push instructions below",
 				"run the `/code-review` slash command",
+				"final `/post-work-review` gate or bypass flow owns it",
+				"`/post-work-review` once on the committed branch before pushing",
+				"canonical full project validation for that exact HEAD",
+				"`.git/post-work-review-passed`",
+				"run `/post-work-review` again on the new HEAD",
 				"Optional: Agent Teams",
 			},
 		},
 		{
 			agent: "codex",
 			wants: []string{
-				"follow the review, commit, and push sequence below",
+				"After focused checks pass, follow the review, commit, and push sequence below",
 				"$post-work-review",
-				"Run it on the current diff",
-				"Run `$post-work-review` on the committed branch with base",
-				"POST_WORK_REVIEW_BASE=release/v1` to",
-				"Require",
-				"`.git/post-work-review-passed` for the HEAD you will push",
+				"Commit the candidate changes before the final branch-scope review",
+				"POST_WORK_REVIEW_BASE=release/v1` to every driver command",
+				"canonical full project validation for that exact HEAD",
+				"`.git/post-work-review-passed` for the",
+				"stay in the same bounded gate",
+				"`prepare-verify` and a fresh `post-work-verifier`",
+				"Do not start another broad review",
+				"exact HEAD you will push",
 				"Push and open the PR only after the branch review is clean and marked",
 			},
 		},
@@ -108,6 +154,7 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 			"Title: Task title",
 			"Task body",
 			"Make focused, minimal changes scoped to this single task",
+			"During implementation, run focused lint/test commands",
 			`Open a pull request and end the PR body with "Plan: plan-alpha / Task: task-001"`,
 			"do not add an issue-closing footer",
 			"stop and report the ambiguity in this pane",
@@ -121,10 +168,47 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				t.Fatalf("RenderTask(..., %q) missing %q:\n%s", tc.agent, want, got)
 			}
 		}
-		if strings.Contains(got, "Fix actionable findings and rerun it") {
-			t.Fatalf("RenderTask(..., %q) asks for a second broad review:\n%s", tc.agent, got)
+		for _, unwanted := range []string{"Fix actionable findings and rerun it", "post-work-reviewer", "rerun the gate on the new HEAD"} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("RenderTask(..., %q) contains redundant review detail %q:\n%s", tc.agent, unwanted, got)
+			}
+		}
+		if tc.agent == "claude" {
+			for _, unwanted := range []string{"POST_WORK_REVIEW_BASE=", "prepare-verify", "post-work-verifier", "gh pr create --base"} {
+				if strings.Contains(got, unwanted) {
+					t.Fatalf("RenderTask(..., claude) contains Codex-only review detail %q:\n%s", unwanted, got)
+				}
+			}
 		}
 		assertIssueLessTaskBriefing(t, got)
+	}
+}
+
+func TestClaudeLegacyReviewGateRunsWithoutAutoPR(t *testing.T) {
+	cfg := settings.Defaults()
+	cfg.AutoPullRequest = false
+	got := Render(123, "review briefing", "Issue body", "claude", "release/v1", cfg, false, nil)
+	for _, want := range []string{
+		"`/post-work-review` once on the committed branch before pushing",
+		"canonical full project validation for that exact HEAD",
+		"run focused checks for those edits, commit them",
+		"run `/post-work-review` again on the new HEAD",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., claude, AutoPullRequest=false) missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"POST_WORK_REVIEW_BASE=",
+		"bounded gate",
+		"prepare-verify",
+		"post-work-verifier",
+		"post-work-review-passed.meta",
+		"gh pr create --base",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("Render(..., claude, AutoPullRequest=false) contains Codex-only review detail %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -146,27 +230,24 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 			t.Fatalf("RenderTask(..., AutoPullRequest=false) contains %q:\n%s", unwanted, got)
 		}
 	}
-	if !strings.Contains(got, "Push only after the final branch review is clean") {
+	if !strings.Contains(got, "Only after the committed branch review is clean and marked should you push the") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR post-work-review gate:\n%s", got)
 	}
 	if !strings.Contains(got, "clean=true`, `findings=0`, and an empty `stop_reason=") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing bounded clean condition:\n%s", got)
 	}
-	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to") {
+	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to every driver command") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
-	last := -1
-	for _, step := range []string{
-		"Run it on the current diff",
-		"Commit the reviewed changes",
-		"Before pushing, run `$post-work-review` on the final branch",
-		"Push only after the final branch review is clean",
-	} {
-		index := strings.Index(got, step)
-		if index <= last {
-			t.Fatalf("RenderTask(..., AutoPullRequest=false) review step %q is missing or out of order:\n%s", step, got)
-		}
-		last = index
+	if strings.Contains(got, "gh pr create --base") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) contains PR creation command:\n%s", got)
+	}
+	if strings.Contains(got, "on your current diff") ||
+		strings.Contains(got, "Run it on the current diff") ||
+		strings.Contains(got, "Run `$post-work-review` again") ||
+		strings.Contains(got, "post-work-reviewer") ||
+		strings.Contains(got, "rerun the gate on the new HEAD") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) contains redundant pre-commit review guidance:\n%s", got)
 	}
 	assertIssueLessTaskBriefing(t, got)
 
@@ -191,7 +272,16 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	if !strings.Contains(got, "The PR review gate is disabled for this fanout run") {
 		t.Fatalf("RenderTask(..., PRReviewGate=false) missing bypass notice:\n%s", got)
 	}
+	if !strings.Contains(got, "single canonical full validation") ||
+		!strings.Contains(got, "repository's own instructions and build configuration") ||
+		!strings.Contains(got, "run it once on the exact HEAD") ||
+		!strings.Contains(got, "Do not also run the individual") ||
+		!strings.Contains(got, "full lint/test targets") {
+		t.Fatalf("RenderTask(..., PRReviewGate=false) missing final full validation:\n%s", got)
+	}
 	for _, unwanted := range []string{
+		"`make check`",
+		"docs/review-checklist.ja.md",
 		"run the `/code-review` slash command",
 		"Optional: Agent Teams",
 	} {
@@ -200,6 +290,44 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 		}
 	}
 	assertIssueLessTaskBriefing(t, got)
+}
+
+func TestCodexReviewFixFlowStaysWithinOneBoundedGate(t *testing.T) {
+	for _, autoPullRequest := range []bool{false, true} {
+		cfg := settings.Defaults()
+		cfg.AutoPullRequest = autoPullRequest
+		got := Render(123, "review briefing", "Issue body", "codex", "main", cfg, false, nil)
+		ordered := []string{
+			"stay in the same bounded gate",
+			"run focused checks for the edited files",
+			"commit the fixes",
+			"canonical full validation on the new HEAD",
+			"`prepare-verify`",
+			"`post-work-verifier`",
+			"`mark` for that HEAD only",
+			"after the verifier reports clean",
+			"Do not start another broad review",
+		}
+		previous := -1
+		for _, want := range ordered {
+			index := strings.Index(got, want)
+			if index == -1 {
+				t.Fatalf("Render(..., codex, AutoPullRequest=%t) missing %q:\n%s", autoPullRequest, want, got)
+			}
+			if index <= previous {
+				t.Fatalf("Render(..., codex, AutoPullRequest=%t) has review-fix step %q out of order:\n%s", autoPullRequest, want, got)
+			}
+			previous = index
+		}
+		for _, unwanted := range []string{
+			"run `/post-work-review` again",
+			"rerun the gate on the new HEAD",
+		} {
+			if strings.Contains(got, unwanted) {
+				t.Fatalf("Render(..., codex, AutoPullRequest=%t) contains legacy restart guidance %q:\n%s", autoPullRequest, unwanted, got)
+			}
+		}
+	}
 }
 
 func TestRenderTaskPRVisualizationQuotesBaseBranch(t *testing.T) {
