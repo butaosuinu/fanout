@@ -468,19 +468,19 @@ json_cache_add() {
     [ -f "$cache/valid" ]
     return
   fi
+  # Resolve before allocating an entry so a missing helper cannot leave the
+  # next read colliding with an unregistered cache directory.
+  ensure_json_helper || return 1
   json_cache_init
   index="${#JSON_CACHE_FILES[@]}"
   cache="$JSON_CACHE_ROOT/$index"
   mkdir "$cache" || die "failed to create reviewer JSON cache entry"
-  # Resolve outside the redirected parser call so a missing helper remains a
-  # distinct environment error instead of looking like malformed reviewer JSON.
-  ensure_json_helper || return 1
   helper_stdout="$cache/helper.stdout"
   helper_stderr="$cache/helper.stderr"
   json_parse_result "$file" "$cache" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
   if ! grep -Fxq 'post_work_review_json_helper_version=1' "$helper_stdout"; then
-    rm -f "$helper_stdout" "$helper_stderr"
+    rm -rf -- "$cache"
     JSON_HELPER_ERROR="post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
     return 1
   fi
@@ -507,12 +507,16 @@ json_cache_prepare_stored_results() {
   local path i
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
-    json_cache_add "$path" || true
+    if ! json_cache_add "$path"; then
+      [ -z "$JSON_HELPER_ERROR" ] || die "$JSON_HELPER_ERROR"
+    fi
   fi
   for i in 1 2; do
     path="$(result_path verify "$i")"
     if [ -f "$path" ]; then
-      json_cache_add "$path" || true
+      if ! json_cache_add "$path"; then
+        [ -z "$JSON_HELPER_ERROR" ] || die "$JSON_HELPER_ERROR"
+      fi
     fi
   done
 }

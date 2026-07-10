@@ -847,6 +847,36 @@ EOF
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
+@test "post-work-review shard-10: stored results preserve JSON helper diagnostics" {
+  local repo="$BATS_TEST_TMPDIR/review-json-stored-helper-errors"
+  local incompatible_helper="$BATS_TEST_TMPDIR/incompatible-stored-json-helper"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  prepare_branch_review "$repo" || return 1
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$3" bash "$2" summarize 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$BATS_TEST_TMPDIR/missing-stored-helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
+  [[ "$output" != *"File exists"* ]]
+  [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
+
+  cat >"$incompatible_helper" <<'EOF'
+#!/usr/bin/env bash
+exit 42
+EOF
+  chmod +x "$incompatible_helper"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$3" bash "$2" status 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$incompatible_helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [[ "$output" != *"File exists"* ]]
+  [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
+}
+
 @test "post-work-review shard-7: prepare clears stale marker files" {
   local repo="$BATS_TEST_TMPDIR/review-clear-marker"
   local gitdir
