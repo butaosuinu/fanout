@@ -216,6 +216,33 @@ esac
 	}
 }
 
+func TestFinishTUIIssueParentLaunchPreservesPartialSuccess(t *testing.T) {
+	result, err := finishTUIIssueParentLaunch(500, parentIssueFanoutResult{
+		CreatedPaneIDs: []string{"%91"},
+	}, errors.New("launch child #502: boom"))
+	if err != nil {
+		t.Fatalf("finishTUIIssueParentLaunch() error = %v, want partial success", err)
+	}
+	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91"}) {
+		t.Fatalf("created pane ids = %#v, want [%%91]", result.CreatedPaneIDs)
+	}
+	if !strings.Contains(result.Notice, "created 1 pane(s), then failed") ||
+		!strings.Contains(result.Notice, "launch child #502: boom") {
+		t.Fatalf("notice = %q, want partial failure context", result.Notice)
+	}
+}
+
+func TestFinishTUIIssueParentLaunchReturnsErrorWithoutCreatedPane(t *testing.T) {
+	wantErr := errors.New("launch failed")
+	result, err := finishTUIIssueParentLaunch(500, parentIssueFanoutResult{}, wantErr)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("finishTUIIssueParentLaunch() error = %v, want %v", err, wantErr)
+	}
+	if !reflect.DeepEqual(result, fanouttui.LaunchResult{}) {
+		t.Fatalf("result = %#v, want empty result", result)
+	}
+}
+
 // TestLaunchIssueSessionFromTUITranslatesAlreadyFanned pins the standalone
 // lane: a childless issue whose pane is already recorded surfaces a readable
 // message instead of the raw sentinel error.

@@ -188,12 +188,20 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		}, nil
 	}
 	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
+	return finishTUIIssueParentLaunch(issueNum, result, err)
+}
+
+func finishTUIIssueParentLaunch(issueNum int, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
 	created := len(result.CreatedPaneIDs)
 	if err != nil {
 		if created > 0 {
 			// The fail-fast loop may have created panes before the failure;
-			// they are running agents, so a pure failure report would mislead.
-			return fanouttui.LaunchResult{}, fmt.Errorf("created %d pane(s), then failed: %w", created, err)
+			// report a partial success so the TUI reloads state and focuses the
+			// first running agent while preserving the failure in its notice.
+			return fanouttui.LaunchResult{
+				Notice:         fmt.Sprintf("created %d pane(s), then failed: %v", created, err),
+				CreatedPaneIDs: result.CreatedPaneIDs,
+			}, nil
 		}
 		return fanouttui.LaunchResult{}, err
 	}
