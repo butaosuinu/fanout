@@ -2,6 +2,7 @@ package panelaunch
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -826,10 +827,9 @@ func gitCmdTest(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestPlanPaneIssueNum pins the issue links the fan-out dedupe relies on
-// (run.Issues' fanned set, watch's alreadyFanned, and the TUI guards): a
-// coordinator's own PlanIssueSlug under the manual parent, and a plan task's
-// parent ref following the coordinator briefing's issue-<num>-<title> naming.
+// TestPlanPaneIssueNum pins the coordinator-row issue link the fan-out dedupe
+// relies on: only this lane's own PlanIssueSlug under the manual parent parses;
+// plan task rows and issue-like slugs elsewhere never link here.
 func TestPlanPaneIssueNum(t *testing.T) {
 	tests := []struct {
 		name string
@@ -842,8 +842,7 @@ func TestPlanPaneIssueNum(t *testing.T) {
 		{name: "missing launch suffix is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-123"}, ok: false},
 		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-abc-1"}, ok: false},
 		{name: "empty issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue--1"}, ok: false},
-		{name: "plan task parent following the naming links", pane: state.Pane{Parent: "plan:issue-474-add-search", Slug: "issue-474-add-search-base"}, want: 474, ok: true},
-		{name: "plan parent without the issue prefix has no link", pane: state.Pane{Parent: "plan:launch-plan", Slug: "launch-plan-base"}, ok: false},
+		{name: "plan task rows never link through this parser", pane: state.Pane{Parent: "plan:issue-474-add-search", Slug: "issue-474-add-search-base"}, ok: false},
 		// A work pane whose generated slug happens to start with plan-issue-
 		// (issue #999 titled "Plan issue 123 migration") must not alias #123.
 		{name: "non-manual pane slug is never parsed", pane: state.Pane{Parent: "700", IssueNum: 999, Slug: "plan-issue-123-migration"}, ok: false},
@@ -859,17 +858,41 @@ func TestPlanPaneIssueNum(t *testing.T) {
 	}
 }
 
-// TestPlanLinkedIssueNums pins the fanned-set contribution: plan-lane rows map
-// to their issues, everything else contributes nothing.
+// TestPlanLinkedIssueNums pins the fanned-set contribution: coordinator rows
+// link through their slug, plan task rows only through a saved spec whose
+// plan.source declares the issue — an issue-like plan slug alone never links,
+// so a hand-authored "issue-123-migration" plan cannot block issue #123.
 func TestPlanLinkedIssueNums(t *testing.T) {
+	root := t.TempDir()
+	writeSpec := func(t *testing.T, slug, source string) {
+		t.Helper()
+		dir := filepath.Join(root, ".fanout", "plans")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf(`{"version":1,"plan":{"slug":%q,"title":"t","source":%q},"tasks":[]}`, slug, source)
+		if err := os.WriteFile(filepath.Join(dir, slug+".json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSpec(t, "issue-474-add-search", "issue #474")
+	writeSpec(t, "issue-123-migration", "path-or-conversation-label")
+	writeSpec(t, "launch-plan", "issue #99")
+
 	store := state.Store{Panes: []state.Pane{
 		{Parent: ManualParentRef, IssueNum: -1, Slug: PlanIssueSlug(123, -1)},
 		{Parent: "plan:issue-474-add-search", TaskID: "base", Slug: "issue-474-add-search-base"},
+		// Issue-like slug whose spec declares no issue source: never links.
+		{Parent: "plan:issue-123-migration", TaskID: "move", Slug: "issue-123-migration-move"},
+		// Neutral slug whose spec declares an issue source: links by declaration.
+		{Parent: "plan:launch-plan", TaskID: "base", Slug: "launch-plan-base"},
+		// Plan rows without a saved spec: no link.
+		{Parent: "plan:issue-555-ghost", TaskID: "base", Slug: "issue-555-ghost-base"},
 		{Parent: "700", IssueNum: 701, Slug: "child-701"},
 	}}
-	got := PlanLinkedIssueNums(store)
-	want := map[int]bool{123: true, 474: true}
-	if len(got) != len(want) || !got[123] || !got[474] {
-		t.Fatalf("PlanLinkedIssueNums(store) = %v, want %v", got, want)
+	got := PlanLinkedIssueNums(root, store)
+	want := map[int]bool{123: true, 474: true, 99: true}
+	if len(got) != len(want) || !got[123] || !got[474] || !got[99] {
+		t.Fatalf("PlanLinkedIssueNums(root, store) = %v, want %v", got, want)
 	}
 }

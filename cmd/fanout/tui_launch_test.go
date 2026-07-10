@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,13 +135,28 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 	}
 }
 
+// writeSavedPlanSpec writes .fanout/plans/<slug>.json declaring source, the
+// provenance PlanLinkedIssueNums verifies before linking plan task rows.
+func writeSavedPlanSpec(t *testing.T, projectRoot, slug, source string) {
+	t.Helper()
+	dir := filepath.Join(projectRoot, ".fanout", "plans")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"version":1,"plan":{"slug":%q,"title":"t","source":%q},"tasks":[]}`, slug, source)
+	if err := os.WriteFile(filepath.Join(dir, slug+".json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestGuardIssuePlanCoordinator pins the plan-checkbox dedupe run on the locked
-// store: a recorded coordinator (manual-parent row with the per-issue slug
-// prefix) or any recorded pane for the issue blocks a second launch.
+// store: a recorded coordinator, plan task rows whose saved spec declares the
+// issue, or any recorded pane for the issue blocks a second launch.
 func TestGuardIssuePlanCoordinator(t *testing.T) {
 	tests := []struct {
 		name    string
 		panes   []state.Pane
+		spec    [2]string // slug, source — written to .fanout/plans when set
 		wantErr string
 	}{
 		{
@@ -159,11 +176,20 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 		},
 		{
 			// The coordinator closed after the live fan-out; its plan task rows
-			// still own the issue, so a second coordinator (and spec regen) is
-			// rejected.
-			name:    "surviving plan task rows for the issue block",
+			// still own the issue through the saved spec's declared source, so a
+			// second coordinator (and spec regen) is rejected.
+			name:    "surviving plan task rows with declared source block",
 			panes:   []state.Pane{{Parent: "plan:issue-123-add-search", TaskID: "base-types", Slug: "issue-123-add-search-base-types"}},
+			spec:    [2]string{"issue-123-add-search", "issue #123"},
 			wantErr: "issue #123 already has a plan session",
+		},
+		{
+			// An issue-like plan slug without declared provenance must not block
+			// the issue (a hand-authored plan may just be named that way).
+			name:    "issue-like plan slug without declared source never blocks",
+			panes:   []state.Pane{{Parent: "plan:issue-123-migration", TaskID: "move", Slug: "issue-123-migration-move"}},
+			spec:    [2]string{"issue-123-migration", "path-or-conversation-label"},
+			wantErr: "",
 		},
 		{
 			name:    "recorded work pane for the issue blocks",
@@ -179,12 +205,16 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := guardIssuePlanCoordinator(state.Store{Panes: tt.panes}, 123)
+			root := t.TempDir()
+			if tt.spec[0] != "" {
+				writeSavedPlanSpec(t, root, tt.spec[0], tt.spec[1])
+			}
+			err := guardIssuePlanCoordinator(root, state.Store{Panes: tt.panes}, 123)
 			switch {
 			case tt.wantErr == "" && err != nil:
-				t.Fatalf("guardIssuePlanCoordinator(store, 123) = %v, want nil", err)
+				t.Fatalf("guardIssuePlanCoordinator(root, store, 123) = %v, want nil", err)
 			case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
-				t.Fatalf("guardIssuePlanCoordinator(store, 123) = %v, want %q", err, tt.wantErr)
+				t.Fatalf("guardIssuePlanCoordinator(root, store, 123) = %v, want %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -195,18 +225,20 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 // (launchStandaloneIssuePane and the watcher) must not start a second session
 // for the same issue.
 func TestHasRecordedIssuePaneSeesPlanSessions(t *testing.T) {
+	root := t.TempDir()
+	writeSavedPlanSpec(t, root, "issue-474-add-search", "issue #474")
 	store := state.Store{Panes: []state.Pane{
 		{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"},
 		{Parent: "plan:issue-474-add-search", TaskID: "base", Slug: "issue-474-add-search-base"},
 	}}
-	if !hasRecordedIssuePane(store, 123) {
-		t.Fatal("hasRecordedIssuePane(store, 123) = false, want true for a recorded plan coordinator")
+	if !hasRecordedIssuePane(root, store, 123) {
+		t.Fatal("hasRecordedIssuePane(root, store, 123) = false, want true for a recorded plan coordinator")
 	}
-	if !hasRecordedIssuePane(store, 474) {
-		t.Fatal("hasRecordedIssuePane(store, 474) = false, want true for surviving plan task rows")
+	if !hasRecordedIssuePane(root, store, 474) {
+		t.Fatal("hasRecordedIssuePane(root, store, 474) = false, want true for surviving plan task rows")
 	}
-	if hasRecordedIssuePane(store, 12) {
-		t.Fatal("hasRecordedIssuePane(store, 12) = true, want false for a different issue")
+	if hasRecordedIssuePane(root, store, 12) {
+		t.Fatal("hasRecordedIssuePane(root, store, 12) = true, want false for a different issue")
 	}
 }
 
@@ -227,6 +259,7 @@ func TestLaunchParentIssueFanoutRejectsPlanSession(t *testing.T) {
 	if err = locked.Unlock(); err != nil {
 		t.Fatal(err)
 	}
+	writeSavedPlanSpec(t, repo, "issue-123-add-search", "issue #123")
 
 	_, err = launchParentIssueFanout(repo, "fanout-test", "fanout", tuiIssueLaunchConfig(123, "claude", nil))
 	if err == nil || !strings.Contains(err.Error(), "issue #123 already has a plan session") {

@@ -51,6 +51,9 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		LaunchParent: func(issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
 			return launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
 		},
+		PlanLinkedIssueNums: func(store state.Store) map[int]bool {
+			return panelaunch.PlanLinkedIssueNums(projectRoot, store)
+		},
 	}
 	cfg := watch.Config{
 		TriggerLabel: resolvedSettings.WatcherTriggerLabel,
@@ -94,7 +97,7 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 			_ = recorder.Unlock()
 		}()
 	}
-	if hasRecordedIssuePane(store, issue.Number) {
+	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
 		return watch.ErrAlreadyFanned
 	}
 	info := &fanoutruntime.Info{
@@ -123,7 +126,7 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
 	// degrades to the pre-existing unguarded behavior.
-	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(store, cfg.Parent) {
+	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(projectRoot, store, cfg.Parent) {
 		return watch.ParentLaunchResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
 	}
 	gh := ghissue.Runner{Cwd: projectRoot}
@@ -282,7 +285,7 @@ func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, gh ghissue.R
 	// Match run.Issues: plan-owned children never become targets, so the
 	// watcher's capacity planning and post-launch remaining-target recompute
 	// agree with what a launch would actually create.
-	planOwnedFanned := panelaunch.PlanLinkedIssueNums(store)
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(projectRoot, store)
 	return run.BuildPlan(
 		cfg,
 		loaded.Children,
@@ -361,15 +364,14 @@ func mergeWatchExtraChildren(cfg *cliflags.Config, gh ghissue.Runner, base []ghi
 	return ghissue.MergeExtra(base, extra), len(extra)
 }
 
-func hasRecordedIssuePane(store state.Store, issueNum int) bool {
+func hasRecordedIssuePane(projectRoot string, store state.Store, issueNum int) bool {
 	for _, pane := range store.Panes {
 		if pane.IssueNum == issueNum {
 			return true
 		}
 	}
-	// Plan-lane rows bind to their issue only through slugs (the coordinator's
-	// own, or the plan parent ref of the tasks it fanned out). Without this, a
-	// standalone launch for the issue would run alongside the plan session and
-	// duplicate the work.
-	return issuePlanRecorded(store, issueNum)
+	// Plan-lane rows bind to their issue only through the coordinator slug or
+	// the saved spec's declared source. Without this, a standalone launch for
+	// the issue would run alongside the plan session and duplicate the work.
+	return issuePlanRecorded(projectRoot, store, issueNum)
 }

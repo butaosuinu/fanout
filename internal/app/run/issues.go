@@ -70,7 +70,7 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 	// task rows) count as fanned: their rows carry no positive IssueNum, so the
 	// parent-keyed sets above cannot see them, and launching a plain child pane
 	// would decompose the same work twice.
-	planOwnedFanned := panelaunch.PlanLinkedIssueNums(store)
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(rt.Info.ProjectRoot, store)
 	// The parent itself being plan-owned aborts the run outright (checked here,
 	// under the state lock, so a racing coordinator launch cannot slip past a
 	// caller's unlocked pre-check): its children were not part of the plan

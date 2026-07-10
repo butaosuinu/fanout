@@ -199,7 +199,7 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		return "", fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
 	paneReq, err := launchPlanCoordinator(projectRoot, session, commandName, coordinatorAgent,
-		func(store state.Store) error { return guardIssuePlanCoordinator(store, issueNum) },
+		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
 		})
@@ -213,27 +213,22 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 // locked store: it mirrors the standalone lane's ErrAlreadyFanned so a repeated
 // submit never creates a second coordinator, overwrites a brief another
 // coordinator may still be reading, or regenerates a spec over live plan tasks.
-func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
-	if issuePlanRecorded(store, issueNum) {
+func guardIssuePlanCoordinator(projectRoot string, store state.Store, issueNum int) error {
+	if issuePlanRecorded(projectRoot, store, issueNum) {
 		return fmt.Errorf("issue #%d already has a plan session", issueNum)
 	}
-	if hasRecordedIssuePane(store, issueNum) {
+	if hasRecordedIssuePane(projectRoot, store, issueNum) {
 		return fmt.Errorf("issue #%d already has a fanout pane", issueNum)
 	}
 	return nil
 }
 
 // issuePlanRecorded reports whether any plan-lane row is linked to the issue: a
-// coordinator, or — after the coordinator closed — the plan task rows it fanned
-// out. It keeps the issue-plan and plain issue lanes mutually exclusive in both
-// directions and in both lifecycle phases.
-func issuePlanRecorded(store state.Store, issueNum int) bool {
-	for _, pane := range store.Panes {
-		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok && num == issueNum {
-			return true
-		}
-	}
-	return false
+// coordinator, or — after the coordinator closed — the plan task rows whose
+// saved spec declares the issue as its source. It keeps the issue-plan and
+// plain issue lanes mutually exclusive in both directions and lifecycle phases.
+func issuePlanRecorded(projectRoot string, store state.Store, issueNum int) bool {
+	return panelaunch.PlanLinkedIssueNums(projectRoot, store)[issueNum]
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:

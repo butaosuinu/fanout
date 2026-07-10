@@ -34,6 +34,7 @@ type fakeWatchIO struct {
 	openChildren  map[int]int
 	childCounts   map[int]ChildCounts
 	alive         map[string]bool
+	planLinked    map[int]bool
 
 	swapErr        map[swapKey]error
 	standaloneErr  map[int]error
@@ -105,6 +106,9 @@ func (f *fakeWatchIO) IO() IO {
 		LaunchParent: func(issue ghissue.Issue, limit int) (ParentLaunchResult, error) {
 			f.parents = append(f.parents, parentLaunch{num: issue.Number, limit: limit})
 			return ParentLaunchResult{Deferred: f.parentDeferred[issue.Number]}, f.parentErr[issue.Number]
+		},
+		PlanLinkedIssueNums: func(state.Store) map[int]bool {
+			return f.planLinked
 		},
 	}
 }
@@ -181,10 +185,7 @@ func TestRunCycleTableDriven(t *testing.T) {
 			fake: &fakeWatchIO{
 				issues:       []ghissue.Issue{issue(101), issue(102)},
 				openChildren: map[int]int{101: 0, 102: 0},
-				store: state.Store{Panes: []state.Pane{
-					{Parent: "@manual", IssueNum: -1, Slug: "plan-issue-101-1", PaneID: "%1"},
-					{Parent: "plan:issue-102-add-search", TaskID: "base", Slug: "issue-102-add-search-base", PaneID: "%2"},
-				}},
+				planLinked:   map[int]bool{101: true, 102: true},
 			},
 			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
 				t.Helper()
@@ -220,9 +221,7 @@ func TestRunCycleTableDriven(t *testing.T) {
 			fake: &fakeWatchIO{
 				issues:       []ghissue.Issue{issue(201)},
 				openChildren: map[int]int{201: 2},
-				store: state.Store{Panes: []state.Pane{
-					{Parent: "plan:issue-201-epic-split", TaskID: "base", Slug: "issue-201-epic-split-base", PaneID: "%3"},
-				}},
+				planLinked:   map[int]bool{201: true},
 			},
 			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
 				t.Helper()
