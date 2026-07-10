@@ -192,15 +192,20 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if issueNum <= 0 {
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
 	}
-	// Fail fast on unknown agent names before any gh call. The coordinator is
-	// install-checked inside launchPlanCoordinator; the worker's install check is
-	// left to fanout plan at task-launch time (same philosophy as
-	// validateTUIAgentSelection).
-	if validateErr := agent.ValidateKnown(coordinatorAgent); validateErr != nil {
-		return fanouttui.LaunchResult{}, validateErr
+	// Fail fast on both agents before any gh call. The worker is the default
+	// agent of every fanned-out task, so its install check runs up front like
+	// issue mode's default agent (validateTUIAgentSelection): failing later,
+	// when the coordinator runs `fanout plan --agent <worker>`, would leave a
+	// launched coordinator pane behind.
+	for _, name := range []string{coordinatorAgent, workerAgent} {
+		if validateErr := agent.ValidateKnown(name); validateErr != nil {
+			return fanouttui.LaunchResult{}, validateErr
+		}
 	}
-	if validateErr := agent.ValidateKnown(workerAgent); validateErr != nil {
-		return fanouttui.LaunchResult{}, validateErr
+	for _, name := range []string{coordinatorAgent, workerAgent} {
+		if validateErr := agent.ValidateInstalled(name); validateErr != nil {
+			return fanouttui.LaunchResult{}, validateErr
+		}
 	}
 	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
 	if err != nil {

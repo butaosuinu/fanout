@@ -322,26 +322,38 @@ esac
 }
 
 // TestLaunchIssuePlanFromTUIValidatesBeforeGH pins the fail-fast validation:
-// a bad issue number or an unknown agent name must be rejected before any gh
-// call, so no gh binary is needed on PATH.
+// a bad issue number, an unknown agent name, or an uninstalled agent CLI must
+// be rejected before any gh call, so no gh binary is needed on PATH. The
+// worker is every task's default agent, so its missing CLI must fail here
+// instead of after the coordinator pane launched.
 func TestLaunchIssuePlanFromTUIValidatesBeforeGH(t *testing.T) {
 	tests := []struct {
 		name        string
 		issueNum    int
 		coordinator string
 		worker      string
+		installed   []string
 		wantErr     string
 	}{
 		{name: "rejects non-positive issue number", issueNum: 0, coordinator: "claude", worker: "codex", wantErr: "issue number is required"},
 		{name: "rejects unknown coordinator agent", issueNum: 7, coordinator: "bogus", worker: "codex", wantErr: `unknown agent "bogus"`},
 		{name: "rejects unknown worker agent", issueNum: 7, coordinator: "claude", worker: "bogus", wantErr: `unknown agent "bogus"`},
+		{name: "rejects uninstalled coordinator agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"codex"}, wantErr: `agent "claude" is not installed`},
+		{name: "rejects uninstalled worker agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"claude"}, wantErr: `agent "codex" is not installed`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// An empty PATH: a validation that leaked to a gh call would fail with a
-			// gh-not-found error instead of the expected message, exposing the bug.
-			t.Setenv("PATH", t.TempDir())
+			// PATH holds only the case's fake agent CLIs: a validation that leaked
+			// to a gh call would fail with a gh-not-found error instead of the
+			// expected message, exposing the bug.
+			binDir := t.TempDir()
+			for _, name := range tt.installed {
+				if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", binDir)
 			_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), tt.issueNum, tt.coordinator, tt.worker)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("launchIssuePlanFromTUI() error = %v, want %q", err, tt.wantErr)
