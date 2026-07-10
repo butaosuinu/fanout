@@ -39,7 +39,7 @@ Say you want to fan out a local implementation plan without creating GitHub chil
 
 ### Review and PR follow-up skills
 
-Say the implementation is done and you want one more look before committing or opening a PR. `~/.claude/skills/post-work-review/` backs the local PR review gate and runs a final review loop. For follow-up after a PR exists, use `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/`, which watch for conflicts, CI, and review comments.
+Say the implementation is done and you want one more look before committing or opening a PR. `~/.claude/skills/post-work-review/` runs the bounded review driver and delegates the broad review and fix verification to the bundled `~/.claude/agents/post-work-reviewer.md` and `post-work-verifier.md`. Those agents expose only the read-only `Read`, `Grep`, and `Glob` tools. Restart Claude Code after installing or updating fanout so the session discovers the agent definitions. For follow-up after a PR exists, use `~/.claude/commands/pr-watch.md` and `~/.claude/skills/pr-watch/`, which watch for conflicts, CI, and review comments.
 
 ## Codex CLI
 

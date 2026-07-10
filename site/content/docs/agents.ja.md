@@ -49,7 +49,9 @@ GitHub の子 issue を作らず、手元の実装計画をそのまま fanout �
 ### レビューと PR follow-up の skill
 
 実装が一段落し、コミットや PR 作成の前にもう一度見直したいことがあります。
-`~/.claude/skills/post-work-review/` はローカルの PR review gate を支え、最終レビュー loop を回します。
+`~/.claude/skills/post-work-review/` は bounded review driver を実行し、広いレビューと修正確認を同梱の `~/.claude/agents/post-work-reviewer.md` と `post-work-verifier.md` へ割り当てます。
+両 agent が使える tool は read-only の `Read`、`Grep`、`Glob` だけです。
+fanout の install または update 後は Claude Code を再起動し、agent 定義を読み直してください。
 PR を作ったあとの追従には `~/.claude/commands/pr-watch.md` と `~/.claude/skills/pr-watch/` を使い、コンフリクトや CI、レビューコメントへの対応を見張ります。
 
 ## Codex CLI

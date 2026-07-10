@@ -152,11 +152,11 @@ every flag, environment variable, and exit code.
 
 ## Agent integrations
 
-`make install` (and the install script) place a `/fanout` slash command and a
-set of skills under `~/.claude/` and `~/.codex/`, so Claude Code and Codex can
-recognize when fanout applies, preview with `--dry-run`, and run it after you
-confirm. fanout itself never calls an LLM — the skills generate flags from issue
-context. See the
+`make install` (and the install script) place a `/fanout` slash command, skills,
+and the read-only post-work-review agents under `~/.claude/` and `~/.codex/`, so
+Claude Code and Codex can recognize when fanout applies, preview with
+`--dry-run`, and run it after you confirm. fanout itself never calls an LLM —
+the skills generate flags from issue context. See the
 [agent integration docs](https://butaosuinu.github.io/fanout/docs/agents/).
 
 ## Prerequisites

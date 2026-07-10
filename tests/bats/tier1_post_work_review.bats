@@ -10,6 +10,57 @@ load helpers
 
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
 
+@test "post-work-review shard-7: Claude skill uses the bounded driver and installs read-only agents" {
+  local skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
+  local source_agents="$REPO_ROOT/claude/skills/post-work-review/agents"
+  local claude_dir="$BATS_TEST_TMPDIR/claude"
+  local codex_dir="$BATS_TEST_TMPDIR/codex"
+  local agent frontmatter
+
+  grep -Fq 'bounded-isolated-reviewer' "$skill"
+  grep -Fq 'tools/post-work-review.sh' "$skill"
+  grep -Fq 'POST_WORK_REVIEW_BASE=<base>' "$skill"
+  grep -Fq 'to every driver command' "$skill"
+  grep -Fq 'subagent_type: "post-work-reviewer"' "$skill"
+  grep -Fq 'subagent_type: "post-work-verifier"' "$skill"
+  ! grep -Fq 'codex-companion.mjs' "$skill"
+  ! grep -Fq 'Skill(skill="code-review")' "$skill"
+
+  for agent in post-work-reviewer post-work-verifier; do
+    frontmatter="$(awk 'NR == 1 { next } /^---$/ { exit } { print }' "$source_agents/$agent.md")"
+    [[ "$frontmatter" == *"name: $agent"* ]]
+    [[ "$frontmatter" == *"tools: Read, Grep, Glob"* ]]
+    [[ "$frontmatter" == *"permissionMode: plan"* ]]
+    [[ "$frontmatter" != *"Bash"* ]]
+    [[ "$frontmatter" != *"Write"* ]]
+    [[ "$frontmatter" != *"Edit"* ]]
+    grep -Fq 'Never return the literal' "$source_agents/$agent.md"
+    grep -Fq '`<fresh subagent id>` placeholder.' "$source_agents/$agent.md"
+  done
+
+  run make -C "$REPO_ROOT" --no-print-directory \
+    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" install-integrations
+  [ "$status" -eq 0 ]
+  cmp "$source_agents/post-work-reviewer.md" "$claude_dir/agents/post-work-reviewer.md"
+  cmp "$source_agents/post-work-verifier.md" "$claude_dir/agents/post-work-verifier.md"
+
+  run make -C "$REPO_ROOT" --no-print-directory \
+    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" link-integrations
+  [ "$status" -eq 0 ]
+  [ -L "$claude_dir/agents/post-work-reviewer.md" ]
+  [ -L "$claude_dir/agents/post-work-verifier.md" ]
+
+  grep -Fq 'copy_agent_files "$tmp/extract/claude/skills/post-work-review/agents"' \
+    "$REPO_ROOT/install.sh"
+  grep -Fq '"$claude_dir/agents/post-work-reviewer.md"' "$REPO_ROOT/install.sh"
+
+  run make -C "$REPO_ROOT" --no-print-directory \
+    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" uninstall-integrations
+  [ "$status" -eq 0 ]
+  [ ! -e "$claude_dir/agents/post-work-reviewer.md" ]
+  [ ! -e "$claude_dir/agents/post-work-verifier.md" ]
+}
+
 setup_review_repo() {
   local repo="$1"
   mkdir -p "$repo"

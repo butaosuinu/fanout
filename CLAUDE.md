@@ -23,8 +23,9 @@ shellcheck of the test shims (Node-free on purpose; the web lint is
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
 govulncheck (network; deliberately not part of `lint`).
 
-The Claude Code integration files (`claude/commands/*.md` slash commands and
-`claude/skills/*/SKILL.md` skills) and Codex CLI integration files
+The Claude Code integration files (`claude/commands/*.md` slash commands,
+`claude/skills/*/SKILL.md` skills, and the review agents under
+`claude/skills/post-work-review/agents/`) and Codex CLI integration files
 (`codex/skills/*/` skill resources, `codex/agents/*`, and `codex/tools/*`) are
 bundled in the repo as the source of truth. `make install` places them under
 the matching `~/.claude/` and `~/.codex/` directories. Do not edit installed

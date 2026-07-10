@@ -44,6 +44,7 @@ Each destination has an environment-variable override for the install command: `
 - `$BIN_DIR/fanout` — the binary
 - `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
 - `$CLAUDE_DIR/skills/` — the `fanout`, `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` skills
+- `$CLAUDE_DIR/agents/` — the read-only `post-work-reviewer` and `post-work-verifier` agents
 - `$CODEX_DIR/skills/` — the same skills minus `session-retro`, plus `$CODEX_DIR/agents/` (the post-work reviewer / verifier) and `$CODEX_DIR/tools/`
 
 Install and update overwrite all of these.
@@ -95,7 +96,7 @@ Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 10+ (`ma
 - `--version <tag>`: install the given tag
 - `--no-skills`: update only the binary
 
-> Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills — so back up customized copies first. Codex CLI loads skills at startup; restart running Codex sessions after an update.
+> Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills and review agents — so back up customized copies first. Claude Code and Codex CLI load these integrations at startup; restart running sessions after an update.
 
 See the [CLI reference]({{< relref "/docs/cli" >}}) for the exit code list.
 

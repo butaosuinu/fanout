@@ -106,7 +106,8 @@ install_data() {
 # Uninstall runs before the release tarball is fetched/extracted, so the list of
 # integrations to remove cannot be derived from the source the way
 # install_integrations does. Keep this enumeration in sync with whatever
-# claude/commands, claude/skills, codex/skills, codex/tools, and codex/agents
+# claude/commands, claude/skills, bundled Claude agents, codex/skills,
+# codex/tools, and codex/agents
 # the repo ships.
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md" \
@@ -114,6 +115,8 @@ remove_integrations() {
   rm -rf "$claude_dir/skills/fanout" "$claude_dir/skills/fanout-issues" \
     "$claude_dir/skills/fanout-plan" "$claude_dir/skills/post-work-review" \
     "$claude_dir/skills/pr-watch" "$claude_dir/skills/session-retro"
+  rm -f "$claude_dir/agents/post-work-reviewer.md" \
+    "$claude_dir/agents/post-work-verifier.md"
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
     "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
     "$codex_dir/skills/pr-watch"
@@ -157,7 +160,9 @@ copy_agent_files() {
   mkdir -p "$dest_root"
   for src in "$src_root"/*; do
     [ -f "$src" ] || continue
-    install_data "$src" "$dest_root/$(basename "$src")"
+    dest="$dest_root/$(basename "$src")"
+    rm -f "$dest"
+    install_data "$src" "$dest"
   done
 }
 
@@ -173,6 +178,8 @@ install_integrations() {
   fi
 
   copy_skill_dirs "$tmp/extract/claude/skills" "$claude_dir/skills"
+  copy_agent_files "$tmp/extract/claude/skills/post-work-review/agents" \
+    "$claude_dir/agents"
   copy_skill_dirs "$tmp/extract/codex/skills" "$codex_dir/skills"
   copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
   copy_agent_files "$tmp/extract/codex/agents" "$codex_dir/agents"

@@ -4,11 +4,13 @@ CLAUDE_DIR ?= $(HOME)/.claude
 CODEX_DIR  ?= $(HOME)/.codex
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
+CLAUDE_AGENT_DIR := $(CLAUDE_DIR)/agents
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
 CODEX_TOOL_DIR   := $(CODEX_DIR)/tools
 CODEX_AGENT_DIR  := $(CODEX_DIR)/agents
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
+CLAUDE_AGENTS   := $(notdir $(wildcard claude/skills/post-work-review/agents/*.md))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
 CODEX_TOOLS     := $(notdir $(wildcard codex/tools/*))
 CODEX_AGENTS    := $(notdir $(wildcard codex/agents/*))
@@ -111,7 +113,7 @@ clean-web:
 	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
 install-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CLAUDE_AGENT_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -119,6 +121,10 @@ install-integrations:
 		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		mkdir -p "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		cp -R "claude/skills/$$skill/." "$(CLAUDE_SKILL_DIR)/$$skill/"; \
+	done
+	@for agent in $(CLAUDE_AGENTS); do \
+		rm -f "$(CLAUDE_AGENT_DIR)/$$agent"; \
+		install -m 0644 "claude/skills/post-work-review/agents/$$agent" "$(CLAUDE_AGENT_DIR)/$$agent"; \
 	done
 	@for skill in $(CODEX_SKILLS); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
@@ -133,13 +139,16 @@ install-integrations:
 	done
 
 link-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CLAUDE_AGENT_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
 	@for skill in $(CLAUDE_SKILLS); do \
 		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/claude/skills/$$skill" "$(CLAUDE_SKILL_DIR)/$$skill"; \
+	done
+	@for agent in $(CLAUDE_AGENTS); do \
+		ln -sf "$(CURDIR)/claude/skills/post-work-review/agents/$$agent" "$(CLAUDE_AGENT_DIR)/$$agent"; \
 	done
 	@for skill in $(CODEX_SKILLS); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
@@ -157,6 +166,7 @@ link-integrations:
 uninstall-integrations:
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for agent in $(CLAUDE_AGENTS); do rm -f "$(CLAUDE_AGENT_DIR)/$$agent"; done
 	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do rm -f "$(CODEX_TOOL_DIR)/$$tool"; done
 	@for agent in $(CODEX_AGENTS); do rm -f "$(CODEX_AGENT_DIR)/$$agent"; done
@@ -168,6 +178,7 @@ install: build-go install-integrations
 	@echo "  $(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for agent in $(CLAUDE_AGENTS); do echo "  $(CLAUDE_AGENT_DIR)/$$agent"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
 	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
@@ -179,6 +190,7 @@ link: build-go link-integrations
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
+	@for agent in $(CLAUDE_AGENTS); do echo "  $(CLAUDE_AGENT_DIR)/$$agent -> $(CURDIR)/claude/skills/post-work-review/agents/$$agent"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool -> $(CURDIR)/codex/tools/$$tool"; done
 	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent -> $(CURDIR)/codex/agents/$$agent"; done
@@ -189,6 +201,7 @@ uninstall: uninstall-integrations
 	@echo "  $(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
+	@for agent in $(CLAUDE_AGENTS); do echo "  $(CLAUDE_AGENT_DIR)/$$agent"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
 	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
