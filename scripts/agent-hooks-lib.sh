@@ -74,14 +74,21 @@ resolve_project_dir() {
 # executable `git push`.
 strip_shell_noise() {
   awk '
-    BEGIN { hd = 0; hdword = ""; sq = 0; dq = 0; buf = ""; S = sprintf("%c", 1) }
+    BEGIN {
+      hd = 0; hdword = ""; hdq = 0
+      sq = 0; dq = 0
+      pdepth = 0; btres = 0
+      buf = ""; S = sprintf("%c", 1)
+    }
     {
       line = $0
       if (hd) {
         stripped = line
         sub(/^\t+/, "", stripped)
-        if (stripped == hdword) hd = 0
-        next
+        if (stripped == hdword) { hd = 0; next }
+        # Expansions still run inside an unquoted heredoc body: scan lines
+        # that contain a substitution as code; drop everything else.
+        if (hdq || (index(line, "$(") == 0 && index(line, "`") == 0)) next
       }
       n = length(line)
       i = 1
@@ -104,11 +111,17 @@ strip_shell_noise() {
             continue
           }
           # $(…) and `…` inside "…" still execute: break the segment and
-          # rescan the substitution as code (the string is prose, the
-          # substitution is not). The dangling close quote this leaves is an
-          # accepted heuristic imbalance.
-          if (c == "$" && substr(line, i + 1, 1) == "(") { dq = 0; buf = buf "\n"; i += 2; continue }
-          if (c == "`") { dq = 0; buf = buf "\n"; i++; continue }
+          # rescan the substitution as code, then resume the string state at
+          # the matching closer so the rest of the line keeps its quoting.
+          if (c == "$" && substr(line, i + 1, 1) == "(") {
+            pdepth++
+            resume[pdepth] = 1
+            dq = 0
+            buf = buf "\n"
+            i += 2
+            continue
+          }
+          if (c == "`") { btres = 1; dq = 0; buf = buf "\n"; i++; continue }
           if (c == "\"") { dq = 0 }
           else if (c == " " || c == "\t") buf = buf S
           else buf = buf c
@@ -139,12 +152,28 @@ strip_shell_noise() {
             j++
           }
           if (qc != "" && substr(line, j, 1) == qc) j++ # closing quote of <<"EOF"
-          if (w != "") { hd = 1; hdword = w; buf = buf " "; i = j; continue }
+          if (w != "") { hd = 1; hdword = w; hdq = (qc != ""); buf = buf " "; i = j; continue }
           buf = buf c
           i++
           continue
         }
-        if (c ~ /[;|&(){}`]/) { buf = buf "\n"; i++; continue }
+        if (c == "(") { pdepth++; buf = buf "\n"; i++; continue }
+        if (c == ")") {
+          if (pdepth > 0) {
+            if (resume[pdepth]) { dq = 1; delete resume[pdepth] }
+            pdepth--
+          }
+          buf = buf "\n"
+          i++
+          continue
+        }
+        if (c == "`") {
+          if (btres) { dq = 1; btres = 0 }
+          buf = buf "\n"
+          i++
+          continue
+        }
+        if (c ~ /[;|&{}]/) { buf = buf "\n"; i++; continue }
         buf = buf c
         i++
       }

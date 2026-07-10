@@ -17,19 +17,30 @@ lib="$(cd "$(dirname "$0")" && pwd)/agent-hooks-lib.sh"
 # shellcheck source=scripts/agent-hooks-lib.sh
 . "$lib"
 
-file="$(json_field "$input" file_path)"
-[ -n "$file" ] || exit 0
-
 dir="$(resolve_project_dir "$input")"
 # The session may run from a subdirectory; the version pin, web/ tree, and
 # .cache fallback all live at the repository root.
 top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$top" ] && dir="$top"
-case "$file" in
-/*) ;;
-*) file="$dir/$file" ;;
-esac
-[ -f "$file" ] || exit 0
+
+# Claude Edit/Write payloads carry tool_input.file_path. Codex apply_patch
+# payloads carry the patch text instead; its `*** Add/Update File:` headers
+# name every touched path.
+files=()
+file="$(json_field "$input" file_path)"
+if [ -n "$file" ]; then
+  files+=("$file")
+else
+  patch="$(json_field "$input" command)"
+  [ -n "$patch" ] || patch="$(json_field "$input" patch)"
+  [ -n "$patch" ] || exit 0
+  while IFS= read -r line; do
+    case "$line" in
+    "*** Add File: "* | "*** Update File: "*) files+=("${line#*File: }") ;;
+    esac
+  done <<<"$patch"
+fi
+[ "${#files[@]}" -gt 0 ] || exit 0
 
 # trusted_cache_root DIR — refuse a symlinked or foreign-owned shared cache
 # before executing a binary out of it (same checks as the Makefile's
@@ -42,12 +53,13 @@ trusted_cache_root() {
   [ "$owner" = "$(id -u)" ]
 }
 
-case "$file" in
-*.go)
-  [ -f "$dir/.golangci-lint-version" ] || exit 0
+# golangci_bin — resolve the pinned formatter once. Same resolution order as
+# the Makefile: explicit override, local shared cache (owner-validated), then
+# the repo-local .cache the CI branch uses. Empty when unavailable.
+golangci_bin() {
+  local version bin cache_root
+  [ -f "$dir/.golangci-lint-version" ] || return 0
   version="$(tr -d '[:space:]' <"$dir/.golangci-lint-version")"
-  # Same resolution order as the Makefile: explicit override, local shared
-  # cache (owner-validated), then the repo-local .cache the CI branch uses.
   bin="${GOLANGCI_LINT_BIN:-}"
   if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
@@ -60,15 +72,34 @@ case "$file" in
   if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     bin="$dir/.cache/tools/golangci-lint-$version"
   fi
-  [ -x "$bin" ] || exit 0
-  "$bin" fmt "$file" >/dev/null 2>&1 || true
-  ;;
-"$dir"/web/vite.config.ts | "$dir"/web/src/*.ts | "$dir"/web/src/*.tsx | "$dir"/web/src/*.js | "$dir"/web/src/*.jsx)
-  [ -d "$dir/web/node_modules" ] || exit 0
-  command -v pnpm >/dev/null 2>&1 || exit 0
-  rel="${file#"$dir"/web/}"
-  (cd "$dir/web" && pnpm exec oxfmt "$rel") >/dev/null 2>&1 || true
-  ;;
-esac
+  [ -x "$bin" ] && printf '%s' "$bin"
+}
+
+go_bin=""
+go_bin_resolved=0
+
+for file in "${files[@]}"; do
+  case "$file" in
+  /*) ;;
+  *) file="$dir/$file" ;;
+  esac
+  [ -f "$file" ] || continue
+  case "$file" in
+  *.go)
+    if [ "$go_bin_resolved" = "0" ]; then
+      go_bin="$(golangci_bin)"
+      go_bin_resolved=1
+    fi
+    [ -n "$go_bin" ] || continue
+    "$go_bin" fmt "$file" >/dev/null 2>&1 || true
+    ;;
+  "$dir"/web/vite.config.ts | "$dir"/web/src/*.ts | "$dir"/web/src/*.tsx | "$dir"/web/src/*.js | "$dir"/web/src/*.jsx)
+    [ -d "$dir/web/node_modules" ] || continue
+    command -v pnpm >/dev/null 2>&1 || continue
+    rel="${file#"$dir"/web/}"
+    (cd "$dir/web" && pnpm exec oxfmt "$rel") >/dev/null 2>&1 || true
+    ;;
+  esac
+done
 
 exit 0

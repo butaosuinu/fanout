@@ -341,6 +341,63 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
+@test "push gate: wrapper and config evasions stay gated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+
+  run_push_gate '/usr/bin/git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate '>trace.log git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'env -C /elsewhere git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  write_marker "$repo"
+  # An inline config override can change what a push sends: fail closed.
+  run_push_gate 'git -c remote.origin.push=refs/heads/x:refs/heads/x push origin' "$repo"
+  [ "$status" -eq 2 ]
+
+  # Quote state resumes after "$(...)": the chained push is still seen.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"branch=\\\"\$(echo main)\\\" && git push origin stale-ref\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  # An unquoted heredoc body runs its substitutions.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat <<EOF\\n\$(git push origin stale-ref)\\nEOF\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: --repo and forced deletion refspecs classify correctly" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" branch stale-branch
+  printf 'more\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm "second"
+  write_marker "$repo"
+
+  # After --repo <remote>, the first positional is a refspec, not the remote.
+  run_push_gate 'git push --repo origin stale-branch' "$repo"
+  [ "$status" -eq 2 ]
+
+  # +:branch is a forced deletion and stays ungated.
+  run_push_gate 'git push origin +:old-branch' "$repo"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: a mirror remote validates every branch tip" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" branch stale-branch
+  printf 'more\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm "second"
+  write_marker "$repo"
+  git -C "$repo" config remote.origin.mirror true
+
+  run_push_gate 'git push origin' "$repo"
+  [ "$status" -eq 2 ]
+}
+
 @test "push gate: fails closed when extraction fails but the payload mentions git push" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
@@ -518,6 +575,24 @@ format_payload() {
   run_hook "$FORMAT_HOOK" "$(format_payload "$repo/bad.go" "$repo/sub")"
   [ "$status" -eq 0 ]
   [[ "$(cat "$repo/bad.go")" == *'println("y")'* ]]
+}
+
+@test "format-on-edit: formats paths from a Codex apply_patch payload" {
+  local cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
+  local version
+  version="$(tr -d '[:space:]' <"$REPO_ROOT/.golangci-lint-version")"
+  [ -x "$cache_root/tools/golangci-lint-$version" ] || skip "pinned golangci-lint not cached locally"
+
+  local repo="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  cp "$REPO_ROOT/.golangci-lint-version" "$REPO_ROOT/.golangci.yml" "$repo/"
+  printf 'package main\n\nfunc main() {\nprintln( "x" )\n}\n' >"$repo/bad.go"
+
+  local payload="{\"tool_name\":\"apply_patch\",\"tool_input\":{\"command\":\"*** Begin Patch\\n*** Update File: bad.go\\n@@\\n-x\\n+y\\n*** End Patch\"},\"cwd\":\"$repo\"}"
+  run_hook "$FORMAT_HOOK" "$payload"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$repo/bad.go")" == *'println("x")'* ]]
 }
 
 @test "format-on-edit: refuses a foreign or symlinked shared cache" {

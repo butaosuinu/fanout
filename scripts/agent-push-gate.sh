@@ -23,6 +23,13 @@
 # prefixing the push command itself (a mention elsewhere in the command does
 # not count). If the command cannot be extracted at all but the raw payload
 # mentions `git push` in a Bash call, the gate fails closed.
+#
+# Known accepted limits of the linear scan: subshell scoping and
+# short-circuit control flow are not modeled — `(cd /x); git push` gates
+# against /x, and a bypass behind `false &&` still counts as set. The Codex
+# stop gate and CI remain the backstops for what the heuristic misses; the
+# gate exists to stop forgetting, not a deliberate evader (that is what the
+# sanctioned FANOUT_SKIP_PUSH_CHECK=1 is for).
 set -u
 
 [ "${FANOUT_SKIP_PUSH_CHECK:-}" = "1" ] && exit 0
@@ -58,8 +65,9 @@ deny() {
 # command. Sets SEG_ARGS (words after `push`, newline-separated), SEG_BYPASS
 # (a FANOUT_SKIP_PUSH_CHECK=1 assignment prefixes this command), SEG_GIT_C
 # (newline-separated values of `git -C` in order), and SEG_REPO_SWITCH
-# (--git-dir/--work-tree seen — the gate cannot follow those, so the caller
-# fails closed).
+# (--git-dir/--work-tree, a repo-hopping `env -C`/`-S`, or a push-affecting
+# `git -c` override seen — the gate cannot follow those, so the caller fails
+# closed).
 parse_push_segment() {
   SEG_ARGS=""
   SEG_BYPASS=0
@@ -73,10 +81,17 @@ parse_push_segment() {
     [A-Za-z_]*=*) ;;
     env)
       # Consume env's own options so `env -i git push` is still a push.
+      # env -C hops directories and env -S splices a command string; the
+      # scan cannot follow either, so a push behind them fails closed.
       shift
       while [ $# -gt 0 ]; do
         case "$1" in
-        -u | -S | --split-string | -C | --chdir) shift ;;
+        -C | --chdir | -S | --split-string)
+          SEG_REPO_SWITCH=1
+          shift # the option; its value falls to the shift below
+          ;;
+        -C* | -S*) SEG_REPO_SWITCH=1 ;;
+        -u) shift ;;
         --) shift; break ;;
         -*) ;;
         *) break ;;
@@ -88,11 +103,20 @@ parse_push_segment() {
     command | exec | nohup) ;;
     # Shell control words: `if git push …; then` must still gate the push.
     if | then | elif | else | fi | do | done | while | until | ! | time) ;;
+    # Leading redirections (`>log git push …`) are valid shell.
+    \>* | [0-9]\>* | \<*)
+      case "$1" in
+      *\> | *\<)
+        shift
+        [ $# -gt 0 ] || return 1
+        ;;
+      esac
+      ;;
     *) break ;;
     esac
     shift
   done
-  [ "${1:-}" = "git" ] || return 1
+  [ "${1##*/}" = "git" ] || return 1
   shift
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -109,7 +133,18 @@ parse_push_segment() {
         ;;
       esac
       ;;
-    -c | --namespace | --config-env)
+    -c | --config-env)
+      shift
+      [ $# -gt 0 ] || return 1
+      # An inline config override can redirect what a push sends
+      # (remote.*.push / push.* / mirror / pushRemote); fail closed on those.
+      case "$1" in
+      push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=*)
+        SEG_REPO_SWITCH=1
+        ;;
+      esac
+      ;;
+    --namespace)
       shift
       [ $# -gt 0 ] || return 1
       ;;
@@ -175,6 +210,7 @@ while IFS= read -r seg; do
   deletions=0
   non_flag=0
   skip_next=0
+  repo_val_next=0
   tag_kw=0
   remote_w=""
   refspecs=()
@@ -184,17 +220,31 @@ while IFS= read -r seg; do
       skip_next=0
       continue
     fi
+    if [ "$repo_val_next" = "1" ]; then
+      repo_val_next=0
+      remote_w="$w"
+      continue
+    fi
     case "$w" in
     --delete | -d) gated=0 ;;
     --dry-run | -n) gated=0 ;; # side-effect-free probe push
     --all | --branches | --mirror) all_flag=1 ;;
     --tags) tags_flag=1 ;;
-    -o | --push-option | --receive-pack | --exec | --repo) skip_next=1 ;;
+    -o | --push-option | --receive-pack | --exec) skip_next=1 ;;
+    # --repo supplies the repository, so the next positional is a refspec.
+    --repo)
+      repo_val_next=1
+      non_flag=$((non_flag + 1))
+      ;;
+    --repo=*)
+      remote_w="${w#--repo=}"
+      non_flag=$((non_flag + 1))
+      ;;
     \>* | [0-9]\>* | \<*)
       case "$w" in *\> | *\<) skip_next=1 ;; esac
       ;;
     : | +:) all_flag=1 ;; # bare colon: matching push, every shared branch
-    :*) deletions=$((deletions + 1)) ;;
+    :* | +:*) deletions=$((deletions + 1)) ;;
     -*) ;;
     tag)
       if [ "$non_flag" -ge 1 ]; then
@@ -241,15 +291,25 @@ while IFS= read -r seg; do
       continue # deletion-only push or pure `git push --tags [remote]`
     fi
     # No explicit refspec: git falls back to remote.<name>.push, then
-    # push.default. A configured refspec set or `matching` can push tips
-    # other than HEAD.
+    # push.default. A configured refspec set, a mirror remote, or `matching`
+    # can push tips other than HEAD.
     if [ -z "$remote_w" ]; then
+      # Git resolves the implicit remote as branch.<name>.pushRemote,
+      # remote.pushDefault, branch.<name>.remote, then origin.
       cur_branch="$(git -C "$push_dir" symbolic-ref --short -q HEAD 2>/dev/null)"
-      remote_w="$(git -C "$push_dir" config "branch.${cur_branch:-HEAD}.remote" 2>/dev/null)"
+      remote_w="$(git -C "$push_dir" config "branch.${cur_branch:-HEAD}.pushRemote" 2>/dev/null)"
+      [ -n "$remote_w" ] || remote_w="$(git -C "$push_dir" config remote.pushDefault 2>/dev/null)"
+      [ -n "$remote_w" ] || remote_w="$(git -C "$push_dir" config "branch.${cur_branch:-HEAD}.remote" 2>/dev/null)"
       remote_w="${remote_w:-origin}"
     fi
     cfg_specs="$(git -C "$push_dir" config --get-all "remote.$remote_w.push" 2>/dev/null)"
-    if [ -n "$cfg_specs" ]; then
+    if [ "$(git -C "$push_dir" config --bool "remote.$remote_w.mirror" 2>/dev/null)" = "true" ]; then
+      # remote.<name>.mirror makes a bare `git push` mirror every ref.
+      while IFS= read -r tip; do
+        [ -n "$tip" ] || continue
+        required+=("$tip")
+      done < <(git -C "$push_dir" for-each-ref refs/heads --format='%(objectname)' 2>/dev/null | sort -u)
+    elif [ -n "$cfg_specs" ]; then
       while IFS= read -r spec; do
         [ -n "$spec" ] || continue
         refspecs+=("$spec")
