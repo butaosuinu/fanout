@@ -578,10 +578,11 @@ def main():
                           "marker meta の base に合わせて --base を指定するか、対象 base に対して /post-work-review し直してください。\n%s"
                           % (base or "未指定・既定ブランチを解決不可",
                              reviewed_base or "marker meta から解決不可", HATCH))
-            current_diff_hash = branch_diff_hash(reviewed_base, target)
+            pr_base_ref = "refs/remotes/origin/" + requested_base
+            current_diff_hash = branch_diff_hash(pr_base_ref, target)
             if current_diff_hash != review_metadata.get("diff_hash"):
                 emit_deny("marker_reason=review_diff_changed\n"
-                          "PR head とレビュー済み base の diff が post-work-review 後に変わっています。\n"
+                          "PR head と remote base の diff が post-work-review 後に変わっているか、remote base をローカルで解決できません。\n"
                           "対象 base に対して /post-work-review をやり直してください。\n%s" % HATCH)
         elif not (defbr and (base or defbr) == defbr):
             shown = ("既定ブランチ (%s)" % defbr) if defbr else "既定ブランチ(ローカルで解決不可)"

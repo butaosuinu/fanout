@@ -51,8 +51,10 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   git -C "$repo" config init.defaultBranch main
   gitdir="$(gitdir_for "$repo")"
   head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" branch release/v1 "$head^"
   git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head^"
-  release_hash="$(branch_diff_hash "$repo" origin/release/v1 "$head")"
+  git -C "$repo" update-ref refs/remotes/origin/main "$head^"
+  release_hash="$(branch_diff_hash "$repo" release/v1 "$head")"
   main_hash="$(branch_diff_hash "$repo" main "$head")"
   hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
   printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
@@ -86,7 +88,7 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'backend=bounded-isolated-reviewer\n'
     printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
     printf 'scope=branch\n'
-    printf 'base=origin/release/v1\n'
+    printf 'base=release/v1\n'
     printf 'diff_hash=%s\n' "$release_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
@@ -105,7 +107,7 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'backend=bounded-isolated-reviewer\n'
     printf 'head=%s\n' "$head"
     printf 'scope=branch\n'
-    printf 'base=origin/release/v1\n'
+    printf 'base=release/v1\n'
     printf 'diff_hash=%s\n' "$release_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
@@ -140,6 +142,20 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
   git -C "$repo" config --unset branch.feature.gh-merge-base
+
+  # Metadata may also store the remote-qualified spelling from the driver.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
 
   # Metadata for this HEAD fails closed when its reviewed base is missing.
   {
