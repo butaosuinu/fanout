@@ -60,8 +60,9 @@ func Project(inputPath, outputDir string) error {
 	}
 
 	validPath := filepath.Join(outputDir, "valid")
-	if err := os.Remove(validPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("clear stale valid marker: %w", err)
+	removeErr := os.Remove(validPath)
+	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return fmt.Errorf("clear stale valid marker: %w", removeErr)
 	}
 
 	data, err := os.ReadFile(inputPath)
@@ -71,13 +72,14 @@ func Project(inputPath, outputDir string) error {
 	if !utf8.Valid(data) {
 		return errors.New("reviewer JSON is not valid UTF-8")
 	}
-	if err := validateSurrogatePairs(data); err != nil {
-		return err
+	if surrogateErr := validateSurrogatePairs(data); surrogateErr != nil {
+		return surrogateErr
 	}
 
 	var root map[string]json.RawMessage
-	if err := json.Unmarshal(data, &root); err != nil {
-		return fmt.Errorf("parse reviewer JSON: %w", err)
+	unmarshalErr := json.Unmarshal(data, &root)
+	if unmarshalErr != nil {
+		return fmt.Errorf("parse reviewer JSON: %w", unmarshalErr)
 	}
 	if root == nil {
 		return errors.New("reviewer JSON must be an object")
@@ -183,8 +185,8 @@ func projectFiles(root map[string]json.RawMessage) ([]projectedFile, error) {
 	if !ok {
 		return files, nil
 	}
-	var findings []json.RawMessage
-	if err := json.Unmarshal(findingsRaw, &findings); err != nil || findings == nil {
+	findings, array := findingsArray(findingsRaw)
+	if !array {
 		// Schema validation remains in the shell driver. Omitting these derived
 		// files preserves its existing "findings must be an array" result.
 		return files, nil
@@ -225,6 +227,14 @@ func projectFiles(root map[string]json.RawMessage) ([]projectedFile, error) {
 		projectedFile{name: "findings.tsv", data: tsv.Bytes()},
 	)
 	return files, nil
+}
+
+func findingsArray(raw json.RawMessage) ([]json.RawMessage, bool) {
+	var findings []json.RawMessage
+	if json.Unmarshal(raw, &findings) != nil || findings == nil {
+		return nil, false
+	}
+	return findings, true
 }
 
 func scalarValue(raw json.RawMessage) (string, error) {
