@@ -93,7 +93,7 @@ parse_push_segment() {
           SEG_REPO_SWITCH=1
           shift # the option; its value falls to the shift below
           ;;
-        -C* | -S*) SEG_REPO_SWITCH=1 ;;
+        -C* | -S* | --chdir=* | --split-string=*) SEG_REPO_SWITCH=1 ;;
         -u) shift ;;
         --) shift; break ;;
         -*) ;;
@@ -103,7 +103,19 @@ parse_push_segment() {
       done
       continue
       ;;
-    command | exec | nohup) ;;
+    command | exec | nohup)
+      # Consume the wrapper's own options and `--` so `command -- git push`
+      # is still a push.
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     # Shell control words: `if git push …; then` must still gate the push.
     if | then | elif | else | fi | do | done | while | until | ! | time) ;;
     # Leading redirections (`>log git push …`) are valid shell.
@@ -212,7 +224,7 @@ seg_ref_mutating() {
     shift
   done
   case "${1:-}" in
-  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout) return 0 ;;
+  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout | fetch | branch | update-ref) return 0 ;;
   esac
   return 1
 }
@@ -222,22 +234,31 @@ segments="$(strip_shell_noise "$cmd")"
 
 cmd_bypass=0
 ref_mut=0
+
+# First pass — command-wide facts. Substitution bodies are queued after the
+# outer segments, so positional scanning would see a `git commit` inside
+# `$(…)` only after the push; ref mutation and an exported bypass are
+# command-wide either way.
+while IFS= read -r seg; do
+  case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+  if seg_ref_mutating "$seg"; then
+    ref_mut=1
+    continue
+  fi
+  # shellcheck disable=SC2086
+  set -- $seg
+  if [ "${1:-}" = "export" ] && [ "${2:-}" = "FANOUT_SKIP_PUSH_CHECK=1" ]; then
+    cmd_bypass=1
+  fi
+done <<<"$segments"
+
 seg_dir="$base_dir" # follows `cd` segments so later pushes gate the right repo
 
 while IFS= read -r seg; do
   case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
 
-  if seg_ref_mutating "$seg"; then
-    ref_mut=1
-    continue
-  fi
-
   # shellcheck disable=SC2086
   set -- $seg
-  if [ "${1:-}" = "export" ] && [ "${2:-}" = "FANOUT_SKIP_PUSH_CHECK=1" ]; then
-    cmd_bypass=1
-    continue
-  fi
   if [ "${1:-}" = "cd" ] || [ "${1:-}" = "pushd" ]; then
     if [ -n "${2:-}" ]; then
       seg_dir="$(abs_dir "$seg_dir" "$(unsentinel "$2")")"
