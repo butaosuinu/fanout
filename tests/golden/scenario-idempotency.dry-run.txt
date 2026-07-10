@@ -11,7 +11,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-idempotency/project_root/.fanout/worktrees/new-target-802
   branch -> fanout/new-target-802
   base -> main
-  briefing size: 5276 bytes
+  briefing size: 5351 bytes
     $ git -C <REPO>/tests/fixtures/scenario-idempotency/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-idempotency/project_root branch -f main refs/remotes/origin/main

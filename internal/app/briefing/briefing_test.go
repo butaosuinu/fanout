@@ -73,6 +73,22 @@ func TestPRVisualizationAndReviewSectionsQuoteBaseBranch(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Render(..., %q) missing shell-quoted post-work-review base branch command %q", agentName, want)
 		}
+		want = "gh pr create --base 'foo;bar'"
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., %q) missing shell-quoted PR base branch command %q", agentName, want)
+		}
+	}
+}
+
+func TestAutoPRNormalizesOriginBaseForGitHub(t *testing.T) {
+	for _, agentName := range []string{"claude", "codex"} {
+		got := Render(123, "review briefing", "Issue body", agentName, "origin/release/v1", settings.Defaults(), false, nil)
+		if !strings.Contains(got, "gh pr create --base release/v1") {
+			t.Fatalf("Render(..., %q) missing normalized PR base branch:\n%s", agentName, got)
+		}
+		if strings.Contains(got, "gh pr create --base origin/release/v1") {
+			t.Fatalf("Render(..., %q) kept remote prefix in PR base branch:\n%s", agentName, got)
+		}
 	}
 }
 
@@ -82,6 +98,7 @@ func TestReviewSectionsDefaultEmptyBaseBranchToMain(t *testing.T) {
 		for _, want := range []string{
 			"with base `main`",
 			"POST_WORK_REVIEW_BASE=main` to every driver command",
+			"gh pr create --base main",
 		} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("Render(..., %q, baseBranch=empty) missing %q:\n%s", agentName, want, got)
@@ -184,6 +201,9 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	}
 	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to every driver command") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
+	}
+	if strings.Contains(got, "gh pr create --base") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) contains PR creation command:\n%s", got)
 	}
 	if strings.Contains(got, "on your current diff") ||
 		strings.Contains(got, "Run it on the current diff") ||

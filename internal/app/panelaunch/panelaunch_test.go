@@ -463,6 +463,9 @@ func TestNewIssueRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
 	}
+	if !strings.Contains(got.BriefingBody, "gh pr create --base release/v1") {
+		t.Fatalf("briefing did not include PR base branch:\n%s", got.BriefingBody)
+	}
 }
 
 func TestNewIssueRequestCarriesIssueWave(t *testing.T) {

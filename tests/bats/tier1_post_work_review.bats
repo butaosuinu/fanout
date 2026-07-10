@@ -67,20 +67,97 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   for skill in \
     "$REPO_ROOT/codex/skills/post-work-review/SKILL.md" \
     "$REPO_ROOT/claude/skills/post-work-review/SKILL.md"; do
-    workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill")"
-    [[ "$workflow" == *"Run focused validation while editing."* ]]
-    [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]]
-    [[ "$workflow" == *"once on that new exact HEAD"* ]]
-    [[ "$workflow" == *'replace `validated_head` only after it'* ]]
-    [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]]
-    [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]]
-    [[ "$workflow" == *"continue the existing driver state with"* ]]
-    [[ "$workflow" == *"prepare-verify"* ]]
-    [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]]
-    ! grep -Fq 'Run focused validation for changed files, then' "$skill"
-    grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill"
-    grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill"
+    workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
+    [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
+    [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
+    [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
+    [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
+    [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
+    [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
+    [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
+    [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
+    ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
+    grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
+    grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
   done
+}
+
+@test "post-work-review shard-7: PR gate requires the reviewed base from marker metadata" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 is required"
+
+  local repo="$BATS_TEST_TMPDIR/pr-gate-reviewed-base"
+  local gitdir head hook
+  setup_review_repo "$repo"
+  git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
+  make_branch_change "$repo"
+  git -C "$repo" config init.defaultBranch main
+  gitdir="$(gitdir_for "$repo")"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
+  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
+  {
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+  } >"$gitdir/post-work-review-passed.meta"
+
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base origin/release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  rm "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  {
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+  } >"$gitdir/post-work-review-passed.meta"
+
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  git -C "$repo" config branch.feature.gh-merge-base release/v1
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  git -C "$repo" config --unset branch.feature.gh-merge-base
+  {
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  {
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  {
+    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
 }
 
 setup_review_repo() {
@@ -128,6 +205,16 @@ run_review() {
   local repo="$1"
   shift
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
+}
+
+run_pr_gate() {
+  local repo="$1"
+  local command="$2"
+  local hook="$3"
+  local python
+  python="$(command -v python3)"
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' "$command" "$repo" | \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
 }
 
 run_review_base() {
@@ -494,6 +581,8 @@ prepare_branch_review() {
   [[ "$output" == *"marker_written=true"* ]]
   gitdir="$(gitdir_for "$repo")"
   [ -f "$gitdir/post-work-review-passed" ]
+  grep -Fxq "head=$(git -C "$repo" rev-parse HEAD)" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "base=main" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"

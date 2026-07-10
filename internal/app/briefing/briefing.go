@@ -144,6 +144,7 @@ func renderWorkBriefing(b workBriefing) string {
 	lines := baseRequirementLines(b.header, b.title, b.body, b.scopeRequirement, completionRequirement)
 	if b.settings.AutoPullRequest {
 		lines = append(lines, b.autoPullRequestRequirement)
+		lines = append(lines, pullRequestBaseRequirement(b.baseBranch))
 	}
 	lines = append(lines, b.ambiguityRequirement)
 
@@ -177,6 +178,23 @@ func renderWorkBriefing(b workBriefing) string {
 		base += agentTeamsSection
 	}
 	return base
+}
+
+func pullRequestBaseRequirement(baseBranch string) string {
+	baseBranch = pullRequestBaseBranch(baseBranch)
+	return fmt.Sprintf("- Run `gh pr create --base %s` so the PR base matches the reviewed diff.", agent.ShellQuote(baseBranch))
+}
+
+func pullRequestBaseBranch(baseBranch string) string {
+	if baseBranch == "" {
+		return "main"
+	}
+	for _, prefix := range []string{"refs/remotes/origin/", "origin/", "refs/heads/"} {
+		if branch, ok := strings.CutPrefix(baseBranch, prefix); ok {
+			return branch
+		}
+	}
+	return baseBranch
 }
 
 func baseRequirementLines(header, title, body, scopeRequirement, completionRequirement string) []string {
