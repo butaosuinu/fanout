@@ -53,6 +53,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher 有効化・通知先設定を遮断する安全ゲート | H |
+| infra | `reviewjson` | reviewer JSON の検証と PR review marker 用 cache への射影 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
@@ -61,7 +62,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane 以外の端末出力を読まない境界) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` | dispatch・self-exec・launch 配線・pane identity 検証・state 書き換えを伴う復元/watch 起動 | H |
+| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
@@ -117,11 +118,17 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **briefing はエージェントに注入されるプロンプト本文**: `briefing.Render` /
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
-  `__tui-help-popup` / `__codex-plan-tui` は `TestSelfExecSubcommandNames` が
-  文字列を固定する。dispatch と popup 起動は単一定数を参照するが、
+  `__tui-help-popup` / `__codex-plan-tui` / `__post-work-review-json` は
+  `TestSelfExecSubcommandNames` が文字列を固定する。dispatch と popup 起動は
+  単一定数を参照するが、
   `infra/codexapp/launch.go` の起動コマンド生成はリテラル埋め込みが残る
-  (burn-down 参照)。名前を変えると実行中バイナリの popup / Plan Mode
+  (burn-down 参照)。`__codex-plan-tui` を変えると実行中バイナリの Plan Mode
   連携が壊れるため、変更時は 3 参照元すべての追随が要る。
+  `__post-work-review-json` は `codex/tools/post-work-review.sh` もリテラルで
+  呼び出すため、command 定数と同時に更新する。
+- **reviewer JSON は fail-closed**: cache の `valid` は JSON 全体の検証と
+  全 projection file の書き込みが成功した後にだけ作る。欠損または非対応の
+  helper で PR review marker を書かない。
 - **ldflags は `-X main.version` 名指し**: バージョン注入変数は
   `cmd/fanout/main.go` の変数名に固定されており、リネームするとリリース
   ビルドが壊れる。

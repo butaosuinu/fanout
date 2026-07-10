@@ -13,6 +13,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -508,13 +509,16 @@ func TestNewIssueRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 }
 
 func TestNewIssueRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
-	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", BaseBranch: "release/v1"}
 	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
 
 	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
 
 	if !strings.Contains(got.BriefingBody, "git diff --name-only release/v1...HEAD") {
 		t.Fatalf("briefing did not include selected base branch:\n%s", got.BriefingBody)
+	}
+	if !strings.Contains(got.BriefingBody, "gh pr create --base release/v1") {
+		t.Fatalf("briefing did not include PR base branch:\n%s", got.BriefingBody)
 	}
 }
 
@@ -639,7 +643,7 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 		"- #502: Second child",
 		"/tmp/fanout-project_root-100.db",
 		"$post-work-review",
-		"Push only after the final branch review is clean",
+		"Only after the committed branch review is clean and marked should you push the",
 	} {
 		if !strings.Contains(got.BriefingBody, want) {
 			t.Fatalf("briefing missing %q:\n%s", want, got.BriefingBody)
@@ -797,6 +801,47 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
 	if got != want {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "FANOUT_BIN=" + agent.ShellQuote(executable) + " "
+
+	for _, tc := range []struct {
+		name string
+		cfg  *cliflags.Config
+		req  Request
+	}{
+		{
+			name: "normal agent",
+			cfg:  &cliflags.Config{Agent: "claude"},
+			req:  Request{Agent: "claude", Prompt: "review"},
+		},
+		{
+			name: "Codex Plan Mode",
+			cfg:  &cliflags.Config{Agent: "codex", CodexPlanMode: new(true)},
+			req: Request{
+				Agent:               "codex",
+				Prompt:              "plan",
+				CodexPlanMode:       true,
+				CodexPlanStatusPath: "/tmp/status.json",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeExecutable(t, tc.req.Agent)
+			got, buildErr := buildAgentCommand(tc.cfg, tc.req, "fanout-go")
+			if buildErr != nil {
+				t.Fatal(buildErr)
+			}
+			if !strings.HasPrefix(got, wantPrefix) {
+				t.Fatalf("buildAgentCommand() = %q, want prefix %q", got, wantPrefix)
+			}
+		})
 	}
 }
 

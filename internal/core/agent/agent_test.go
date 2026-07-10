@@ -127,3 +127,12 @@ func TestBuildResolvedResumeCommandUsesAbsoluteExecutablePathAndPathPrefix(t *te
 		t.Fatalf("BuildResolvedResumeCommand() = %q, want %q", got, want)
 	}
 }
+
+func TestWithFanoutBinQuotesExecutablePath(t *testing.T) {
+	t.Parallel()
+	got := WithFanoutBin("PATH=/bin codex", "/tmp/fanout build/fanout-go")
+	want := "FANOUT_BIN='/tmp/fanout build/fanout-go' PATH=/bin codex"
+	if got != want {
+		t.Fatalf("WithFanoutBin() = %q, want %q", got, want)
+	}
+}

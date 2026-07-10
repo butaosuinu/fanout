@@ -184,8 +184,10 @@ flag を生成します。詳しくは
 
 ```bash
 make build-go   # web バンドル + ./fanout-go CLI をビルド
+make check      # 正典のローカル全体ゲート: test + lint + lint-web
 make test       # Go ユニットテスト + web vitest + bats ブラックボックス tier
-make lint       # golangci-lint v2 + shellcheck(web UI は make lint-web)
+make lint       # golangci-lint v2 + shellcheck
+make lint-web   # oxlint + oxfmt --check + TypeScript 型チェック
 ```
 
 リポジトリのアーキテクチャと保守メモは [CLAUDE.md](CLAUDE.md) を参照してください。

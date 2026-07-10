@@ -4,7 +4,7 @@ import "strings"
 
 // Rule values reused across several exact-match paths that share one doc row.
 var (
-	ruleCmdH       = Rule{ID: "cmd-h-files", Class: ClassH, Source: SourceDocTable, Note: "dispatch・self-exec・launch 配線・state 書き換えを伴う cmd エントリ"}
+	ruleCmdH       = Rule{ID: "cmd-h-files", Class: ClassH, Source: SourceDocTable, Note: "dispatch・self-exec・launch・review cache・state 書き換えを伴う cmd エントリ"}
 	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/tmux ポーリング・SSE・embed"}
 	ruleTuiA       = Rule{ID: "tui-a-files", Class: ClassA, Source: SourceDocTable, Note: "TUI の View 層(描画・整形)"}
 	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "web 依存・埋め込みバンドルの生成系"}
@@ -18,14 +18,15 @@ var (
 // package table land here (a doc row that pins individual .go files) alongside
 // extra top-level files that have no package-table row.
 var fileRules = map[string]Rule{
-	// cmd/fanout H set: dispatch/self-exec/launch wiring and state rewrites.
-	"cmd/fanout/main.go":            ruleCmdH,
-	"cmd/fanout/tui_popup.go":       ruleCmdH,
-	"cmd/fanout/tui_launch.go":      ruleCmdH,
-	"cmd/fanout/worktree_action.go": ruleCmdH,
-	"cmd/fanout/codex_plan_tui.go":  ruleCmdH,
-	"cmd/fanout/tui_restore.go":     ruleCmdH,
-	"cmd/fanout/tui_watch.go":       ruleCmdH,
+	// cmd/fanout H set: dispatch/self-exec/launch/review cache wiring and state rewrites.
+	"cmd/fanout/main.go":                  ruleCmdH,
+	"cmd/fanout/tui_popup.go":             ruleCmdH,
+	"cmd/fanout/tui_launch.go":            ruleCmdH,
+	"cmd/fanout/worktree_action.go":       ruleCmdH,
+	"cmd/fanout/codex_plan_tui.go":        ruleCmdH,
+	"cmd/fanout/tui_restore.go":           ruleCmdH,
+	"cmd/fanout/tui_watch.go":             ruleCmdH,
+	"cmd/fanout/post_work_review_json.go": ruleCmdH,
 
 	// dashboard H files (server mux / runfile trust gate / capture-pane chain).
 	"internal/ui/dashboard/server.go":  {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux・token 検証"},
@@ -100,6 +101,7 @@ var prefixRules = []struct {
 	{"internal/infra/selfupdate/", Rule{ID: "infra-selfupdate", Class: ClassH, Source: SourceDocTable, Note: "自己アップデート"}},
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
+	{"internal/infra/reviewjson/", Rule{ID: "infra-reviewjson", Class: ClassH, Source: SourceDocTable, Note: "reviewer JSON の検証・cache 射影"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},

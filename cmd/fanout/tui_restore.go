@@ -300,10 +300,17 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 		statusPath := codexapp.StatusPath(root, pane.IssueNum, false)
 		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " +
 			codexapp.ResumeLaunchCommand(fanoutPath, codexPath, pane.CodexThreadID, pane.CodexSessionID, statusPath)
-		return command, statusPath, nil
+		return agent.WithFanoutBin(command, fanoutPath), statusPath, nil
 	}
 	command, err := agent.BuildResolvedResumeCommand(pane.Agent)
-	return command, "", err
+	if err != nil {
+		return "", "", err
+	}
+	fanoutPath, executableErr := os.Executable()
+	if executableErr != nil || strings.TrimSpace(fanoutPath) == "" {
+		fanoutPath = commandName
+	}
+	return agent.WithFanoutBin(command, fanoutPath), "", nil
 }
 
 func restorePaneAlive(live map[string]tmuxrun.LivePane, pane state.Pane) bool {

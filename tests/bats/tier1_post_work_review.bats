@@ -9,6 +9,254 @@
 load helpers
 
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
+export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN}"
+
+@test "post-work-review shard-7: Codex skill revalidates the exact HEAD before verifying broad-review fixes" {
+  local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
+  local workflow
+
+  workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
+  [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
+  [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
+  [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
+  [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
+  [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
+  [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
+  [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
+  [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
+  ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
+  grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
+  grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
+}
+
+@test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
+  local skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
+  local marker_step
+
+  marker_step="$(sed -n '/^## Step 5/,/^## 完了報告/p' "$skill")"
+  [[ "$marker_step" == *'marker="$(git rev-parse --git-dir)/post-work-review-passed"'* ]] || return 1
+  [[ "$marker_step" == *'rm -f "${marker}.meta"'* ]] || return 1
+  [[ "$marker_step" == *'git rev-parse HEAD > "$marker"'* ]] || return 1
+  ! grep -Fq 'POST_WORK_REVIEW_BASE' "$skill" || return 1
+  ! grep -Fq 'bounded-isolated-reviewer' "$skill" || return 1
+}
+
+@test "post-work-review shard-7: distributed skills stay repository-agnostic" {
+  local claude_skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
+  local codex_skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
+  local unwanted
+
+  for unwanted in \
+    'git diff main..HEAD' \
+    '`make check`' \
+    '`make test`' \
+    '`make lint`' \
+    '`make lint-web`' \
+    'docs/review-checklist.ja.md' \
+    '.claude/hooks/pre-pr-review-gate.sh' \
+    'fanout の並列ペイン' \
+    '[[feedback_reviewer_role]]'; do
+    ! grep -Fq "$unwanted" "$claude_skill" || return 1
+  done
+  for unwanted in '`make check`' 'make install-integrations'; do
+    ! grep -Fq "$unwanted" "$codex_skill" || return 1
+  done
+  grep -Fq 'canonical full check' "$claude_skill"
+  grep -Fq '包括的な単一コマンド' "$claude_skill"
+  grep -Fq 'focused check' "$claude_skill"
+}
+
+@test "post-work-review shard-7: PR gate supports Codex metadata and Claude marker-only reviews" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 is required"
+
+  local repo="$BATS_TEST_TMPDIR/pr-gate-review-modes"
+  local gitdir head hook release_hash main_hash
+  setup_review_repo "$repo"
+  git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
+  make_branch_change "$repo"
+  git -C "$repo" config init.defaultBranch main
+  gitdir="$(gitdir_for "$repo")"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" branch release/v1 "$head^"
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head^"
+  git -C "$repo" update-ref refs/remotes/origin/main "$head^"
+  release_hash="$(branch_diff_hash "$repo" release/v1 "$head")"
+  main_hash="$(branch_diff_hash "$repo" main "$head")"
+  hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
+  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
+
+  # Claude's legacy review writes only the exact-HEAD marker. It may open a PR
+  # against the default base, but not a non-default base it did not record.
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  git -C "$repo" config branch.feature.gh-merge-base release/v1
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+  git -C "$repo" config --unset branch.feature.gh-merge-base
+
+  # A present but stale metadata file fails closed until the legacy writer
+  # removes it before recording its marker.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
+    printf 'scope=branch\n'
+    printf 'base=release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  rm "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  # Codex metadata matching the target HEAD permits exactly its reviewed base.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  [[ "$output" == *"marker_reason=review_diff_changed"* ]] || return 1
+
+  git -C "$repo" update-ref -d refs/remotes/origin/release/v1
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  [[ "$output" == *"marker_reason=review_diff_changed"* ]] || return 1
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head^"
+
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  git -C "$repo" config branch.feature.gh-merge-base release/v1
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+  git -C "$repo" config --unset branch.feature.gh-merge-base
+
+  # Metadata may also store the remote-qualified spelling from the driver.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  # Metadata for this HEAD fails closed when its reviewed base is missing.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Metadata for this HEAD also fails closed without the reviewed diff hash.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # The exact-HEAD marker remains mandatory in both modes.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  printf '%s\n' "$(git -C "$repo" rev-parse HEAD^)" >"$gitdir/post-work-review-passed"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Present but malformed Codex metadata never falls back to legacy mode.
+  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
+  {
+    printf 'backend=unexpected-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # A dangling metadata symlink is present-invalid, not legacy absence.
+  rm "$gitdir/post-work-review-passed.meta"
+  ln -s no-such-meta "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Legacy mode also fails closed when the default base cannot be resolved.
+  rm "$gitdir/post-work-review-passed.meta"
+  git -C "$repo" config init.defaultBranch ""
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+}
 
 setup_review_repo() {
   local repo="$1"
@@ -55,6 +303,34 @@ run_review() {
   local repo="$1"
   shift
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
+}
+
+run_pr_gate() {
+  local repo="$1"
+  local command="$2"
+  local hook="$3"
+  local python
+  python="$(command -v python3)"
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' "$command" "$repo" | \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
+}
+
+branch_diff_hash() {
+  local repo="$1"
+  local base="$2"
+  local target="$3"
+  local diff_file="$BATS_TEST_TMPDIR/pr-gate-current.diff"
+
+  if git -C "$repo" diff --no-ext-diff --no-textconv --ignore-submodules=none \
+    --no-color --binary "$base"..."$target" -- >"$diff_file" 2>/dev/null; then
+    :
+  elif git -C "$repo" diff --no-ext-diff --no-textconv --ignore-submodules=none \
+    --no-color --binary "$base" "$target" -- >"$diff_file" 2>/dev/null; then
+    :
+  else
+    return 1
+  fi
+  git -C "$repo" hash-object "$diff_file"
 }
 
 run_review_base() {
@@ -127,7 +403,7 @@ prepare_branch_review() {
   record_clean_broad "$repo" || return 1
 }
 
-@test "post-work-review prepare writes one bundle, not per-file packets" {
+@test "post-work-review shard-12: prepare writes one bundle, not per-file packets" {
   local repo="$BATS_TEST_TMPDIR/review-uncommitted"
   local state
   setup_review_repo "$repo"
@@ -161,7 +437,7 @@ prepare_branch_review() {
   grep -Fq "+new" "$state/review-bundle.md"
 }
 
-@test "post-work-review prepare paths are usable from caller subdirectories" {
+@test "post-work-review shard-8: prepare paths are usable from caller subdirectories" {
   local repo="$BATS_TEST_TMPDIR/review-subdir"
   local state bundle_path
   setup_review_repo "$repo"
@@ -178,7 +454,7 @@ prepare_branch_review() {
   [ -f "$bundle_path" ]
 }
 
-@test "post-work-review rejects no-sandbox Codex overrides" {
+@test "post-work-review shard-12: rejects no-sandbox Codex overrides" {
   local repo="$BATS_TEST_TMPDIR/review-no-sandbox"
   setup_review_repo "$repo"
   printf 'dirty\n' >"$repo/tracked.txt"
@@ -189,7 +465,7 @@ prepare_branch_review() {
   [[ "$output" == *"isolated reviewer requires an enforceable read-only subagent sandbox"* ]]
 }
 
-@test "post-work-review resolve_base prefers GitHub default before main fallback" {
+@test "post-work-review shard-8: resolve_base prefers GitHub default before main fallback" {
   local repo="$BATS_TEST_TMPDIR/review-default-branch"
   local gh_bin
   setup_review_repo "$repo"
@@ -223,7 +499,7 @@ prepare_branch_review() {
   [[ "$output" == *"base=origin/develop"* ]]
 }
 
-@test "post-work-review ignores external diff drivers for review bundles" {
+@test "post-work-review shard-12: ignores external diff drivers for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-ext-diff"
   local state external_diff
   setup_review_repo "$repo"
@@ -245,7 +521,7 @@ prepare_branch_review() {
   ! grep -Fq "EXTERNAL-DIFF" "$state/review-bundle.md"
 }
 
-@test "post-work-review disables color for review bundles" {
+@test "post-work-review shard-8: disables color for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-color"
   local state
   setup_review_repo "$repo"
@@ -262,7 +538,7 @@ prepare_branch_review() {
   ! LC_ALL=C grep -q "$(printf '\033')" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes dangling symlink diffs" {
+@test "post-work-review shard-12: includes dangling symlink diffs" {
   local repo="$BATS_TEST_TMPDIR/review-dangling-symlink"
   local state
   setup_review_repo "$repo"
@@ -278,7 +554,7 @@ prepare_branch_review() {
   grep -Fq "dangling-link" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes directory symlink diffs" {
+@test "post-work-review shard-8: includes directory symlink diffs" {
   local repo="$BATS_TEST_TMPDIR/review-directory-symlink"
   local state
   setup_review_repo "$repo"
@@ -295,7 +571,7 @@ prepare_branch_review() {
   grep -Fq "linkdir" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes quoted untracked path diffs" {
+@test "post-work-review shard-12: includes quoted untracked path diffs" {
   local repo="$BATS_TEST_TMPDIR/review-quoted-untracked"
   local state weird
   setup_review_repo "$repo"
@@ -311,7 +587,7 @@ prepare_branch_review() {
   grep -Fq "line" "$state/review-bundle.md"
 }
 
-@test "post-work-review fences changed files in review bundle" {
+@test "post-work-review shard-8: fences changed files in review bundle" {
   local repo="$BATS_TEST_TMPDIR/review-changed-files-fence"
   local state fence_name
   setup_review_repo "$repo"
@@ -326,7 +602,7 @@ prepare_branch_review() {
   grep -Fq '```json' "$state/review-bundle.md"
 }
 
-@test "post-work-review ignores textconv filters for review bundles" {
+@test "post-work-review shard-12: ignores textconv filters for review bundles" {
   local repo="$BATS_TEST_TMPDIR/review-no-textconv"
   local state textconv
   setup_review_repo "$repo"
@@ -355,7 +631,7 @@ prepare_branch_review() {
   ! grep -Fq "TEXTCONV" "$state/review-bundle.md"
 }
 
-@test "post-work-review includes submodule changes ignored by repo config" {
+@test "post-work-review shard-8: includes submodule changes ignored by repo config" {
   local repo="$BATS_TEST_TMPDIR/review-submodule-ignore"
   local sub="$BATS_TEST_TMPDIR/review-submodule-source"
   local state next_sub_head
@@ -391,7 +667,7 @@ prepare_branch_review() {
   grep -Fq "deps/sub" "$state/review-bundle.md"
 }
 
-@test "post-work-review records, summarizes, and marks a clean branch review" {
+@test "post-work-review shard-11: records, summarizes, and marks a clean branch review" {
   local repo="$BATS_TEST_TMPDIR/review-branch"
   local gitdir
   setup_review_repo "$repo"
@@ -421,12 +697,187 @@ prepare_branch_review() {
   [[ "$output" == *"marker_written=true"* ]]
   gitdir="$(gitdir_for "$repo")"
   [ -f "$gitdir/post-work-review-passed" ]
+  grep -Fxq "head=$(git -C "$repo" rev-parse HEAD)" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "base=main" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
 }
 
-@test "post-work-review prepare clears stale marker files" {
+@test "post-work-review shard-7: parses each reviewer result once per driver command" {
+  local repo="$BATS_TEST_TMPDIR/review-json-batch"
+  local json_file="$BATS_TEST_TMPDIR/json-batch.json"
+  local helper_wrapper="$BATS_TEST_TMPDIR/fanout-json-helper"
+  local count_file="$BATS_TEST_TMPDIR/json-parser-count"
+  local real_helper="$POST_WORK_REVIEW_JSON_HELPER"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-batch" false false false "" "$json_file"
+
+  cat >"$helper_wrapper" <<'EOF'
+#!/usr/bin/env bash
+printf 'parse\n' >>"$JSON_PARSER_COUNT_FILE"
+exec "$REAL_JSON_HELPER" "$@"
+EOF
+  chmod +x "$helper_wrapper"
+  export REAL_JSON_HELPER="$real_helper"
+  export JSON_PARSER_COUNT_FILE="$count_file"
+  export POST_WORK_REVIEW_JSON_HELPER="$helper_wrapper"
+
+  : >"$count_file"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+  cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
+
+  : >"$count_file"
+  run_review "$repo" summarize
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+
+  : >"$count_file"
+  run_review "$repo" mark
+  [ "$status" -eq 0 ]
+  [ "$(wc -l <"$count_file")" -eq 1 ]
+}
+
+@test "post-work-review shard-7: keeps JSON cache outside a repo-local TMPDIR" {
+  local repo="$BATS_TEST_TMPDIR/review-json-repo-tmpdir"
+  local repo_tmp="$repo/repo-tmp"
+  local json_file="$BATS_TEST_TMPDIR/json-repo-tmpdir.json"
+  setup_review_repo "$repo"
+  mkdir -p "$repo_tmp"
+  # macOS may create this system cache in TMPDIR; keep the driver cache visible.
+  printf 'xcrun_db\n' >"$repo_tmp/.gitignore"
+  git -C "$repo" add repo-tmp/.gitignore
+  git -C "$repo" commit -qm "track local temporary directory"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-repo-tmpdir" false false false "" "$json_file"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 0 ]
+
+  run bash -c 'cd "$1" || exit 1; TMPDIR="$2" bash "$3" mark 2>&1' \
+    bash "$repo" "$repo_tmp" "$POST_WORK_REVIEW_DRIVER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"marker_written=true"* ]]
+  [ -z "$(git -C "$repo" status --porcelain -uall)" ]
+}
+
+@test "post-work-review shard-10: uses FANOUT_BIN without Ruby or Python" {
+  local repo="$BATS_TEST_TMPDIR/review-json-fanout-bin"
+  local json_file="$BATS_TEST_TMPDIR/json-fanout-bin.json"
+  local runtime_bin="$BATS_TEST_TMPDIR/forbidden-json-runtimes"
+  local runtime_log="$BATS_TEST_TMPDIR/forbidden-json-runtimes.log"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-fanout-bin" false false false "" "$json_file"
+
+  mkdir -p "$runtime_bin"
+  for runtime in ruby python3; do
+    cat >"$runtime_bin/$runtime" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$0" >>"$FORBIDDEN_RUNTIME_LOG"
+exit 99
+EOF
+    chmod +x "$runtime_bin/$runtime"
+  done
+  export FORBIDDEN_RUNTIME_LOG="$runtime_log"
+  export PATH="$runtime_bin:$PATH"
+  export FANOUT_BIN
+  unset POST_WORK_REVIEW_JSON_HELPER
+
+  run_review "$repo" record broad "$json_file"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"recorded=true"* ]]
+  [ ! -e "$runtime_log" ]
+  cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
+}
+
+@test "post-work-review shard-10: fails closed when the JSON helper is missing" {
+  local repo="$BATS_TEST_TMPDIR/review-json-helper-missing"
+  local json_file="$BATS_TEST_TMPDIR/json-helper-missing.json"
+  local gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-helper-missing" false false false "" "$json_file"
+  gitdir="$(gitdir_for "$repo")"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" FANOUT_BIN="$5" bash "$2" record broad "$3" 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$BATS_TEST_TMPDIR/missing-helper" "$FANOUT_BIN"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-10: fails closed when the JSON helper rejects a result" {
+  local repo="$BATS_TEST_TMPDIR/review-json-helper-failure"
+  local json_file="$BATS_TEST_TMPDIR/json-helper-failure.json"
+  local helper="$BATS_TEST_TMPDIR/failing-json-helper"
+  local gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-helper-failure" false false false "" "$json_file"
+  gitdir="$(gitdir_for "$repo")"
+  cat >"$helper" <<'EOF'
+#!/usr/bin/env bash
+exit 42
+EOF
+  chmod +x "$helper"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" bash "$2" record broad "$3" 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-10: stored results preserve JSON helper diagnostics" {
+  local repo="$BATS_TEST_TMPDIR/review-json-stored-helper-errors"
+  local incompatible_helper="$BATS_TEST_TMPDIR/incompatible-stored-json-helper"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  prepare_branch_review "$repo" || return 1
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$3" bash "$2" summarize 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$BATS_TEST_TMPDIR/missing-stored-helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
+  [[ "$output" != *"File exists"* ]]
+  [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
+
+  cat >"$incompatible_helper" <<'EOF'
+#!/usr/bin/env bash
+exit 42
+EOF
+  chmod +x "$incompatible_helper"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$3" bash "$2" status 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$incompatible_helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [[ "$output" != *"File exists"* ]]
+  [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
+}
+
+@test "post-work-review shard-7: prepare clears stale marker files" {
   local repo="$BATS_TEST_TMPDIR/review-clear-marker"
   local gitdir
   setup_review_repo "$repo"
@@ -445,7 +896,7 @@ prepare_branch_review() {
   [ ! -e "$gitdir/post-work-review-passed.meta" ]
 }
 
-@test "post-work-review record rejects same-agent and hooks-only results" {
+@test "post-work-review shard-8: record rejects same-agent and hooks-only results" {
   local repo="$BATS_TEST_TMPDIR/review-reject"
   local json_file="$BATS_TEST_TMPDIR/reject.json"
   setup_review_repo "$repo"
@@ -465,7 +916,7 @@ prepare_branch_review() {
   [[ "$output" == *"hooks-only success is rejected"* ]]
 }
 
-@test "post-work-review record rejects incomplete findings" {
+@test "post-work-review shard-8: record rejects incomplete findings" {
   local repo="$BATS_TEST_TMPDIR/review-incomplete-finding"
   local json_file="$BATS_TEST_TMPDIR/incomplete-finding.json"
   setup_review_repo "$repo"
@@ -480,7 +931,22 @@ prepare_branch_review() {
   [[ "$output" == *"finding missing required fields"* ]]
 }
 
-@test "post-work-review record rejects stale review targets" {
+@test "post-work-review shard-11: record rejects invalid reviewer JSON" {
+  local repo="$BATS_TEST_TMPDIR/review-invalid-json"
+  local json_file="$BATS_TEST_TMPDIR/invalid-reviewer.json"
+  setup_review_repo "$repo"
+  printf 'dirty\n' >"$repo/tracked.txt"
+
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+  printf '{"backend":' >"$json_file"
+
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"invalid reviewer JSON"* ]]
+}
+
+@test "post-work-review shard-8: record rejects stale review targets" {
   local repo="$BATS_TEST_TMPDIR/review-stale-record"
   local json_file="$BATS_TEST_TMPDIR/stale.json"
   setup_review_repo "$repo"
@@ -496,7 +962,7 @@ prepare_branch_review() {
   [[ "$output" == *"review target changed since prepare: diff_hash"* ]]
 }
 
-@test "post-work-review summarize rejects target changes after record" {
+@test "post-work-review shard-4: summarize rejects target changes after record" {
   local repo="$BATS_TEST_TMPDIR/review-stale-summary"
   setup_review_repo "$repo"
   printf 'dirty\n' >"$repo/tracked.txt"
@@ -519,7 +985,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=review_target_changed"* ]]
 }
 
-@test "post-work-review verifier requires prepared fix rounds and fresh sessions" {
+@test "post-work-review shard-6: verifier requires prepared fix rounds and fresh sessions" {
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
   local verify_json="$BATS_TEST_TMPDIR/verify.json"
@@ -560,7 +1026,7 @@ prepare_branch_review() {
   grep -Fq "+fixed" "$(state_dir_for "$repo")/verify-bundle.md"
 }
 
-@test "post-work-review rejects failed verifier results without findings" {
+@test "post-work-review shard-4: rejects failed verifier results without findings" {
   local repo="$BATS_TEST_TMPDIR/review-empty-failed-verifier"
   local broad_json="$BATS_TEST_TMPDIR/broad-empty-failed-verifier.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-empty-failed-verifier.json"
@@ -587,7 +1053,7 @@ prepare_branch_review() {
   [[ "$output" == *"failed verifier result requires findings"* ]]
 }
 
-@test "post-work-review branch verifier bundle includes uncommitted fixes" {
+@test "post-work-review shard-9: branch verifier bundle includes uncommitted fixes" {
   local repo="$BATS_TEST_TMPDIR/review-branch-dirty-verify"
   local broad_json="$BATS_TEST_TMPDIR/broad-dirty-verify.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-dirty-verify.json"
@@ -620,7 +1086,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
-@test "post-work-review rejects prepare-verify after a clean broad result" {
+@test "post-work-review shard-6: rejects prepare-verify after a clean broad result" {
   local repo="$BATS_TEST_TMPDIR/review-clean-prepare-verify"
   setup_review_repo "$repo"
   make_branch_change "$repo"
@@ -639,7 +1105,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_eligible=false"* ]]
 }
 
-@test "post-work-review prepare does not reset an unresolved broad review" {
+@test "post-work-review shard-12: prepare does not reset an unresolved broad review" {
   local repo="$BATS_TEST_TMPDIR/review-prepare-budget-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-prepare-budget.json"
   local finding state
@@ -664,7 +1130,7 @@ prepare_branch_review() {
   [ -f "$state/results/broad-001.json" ]
 }
 
-@test "post-work-review pending verify bundle prevents clean summarize and mark" {
+@test "post-work-review shard-10: pending verify bundle prevents clean summarize and mark" {
   local repo="$BATS_TEST_TMPDIR/review-pending-verify"
   local broad_json="$BATS_TEST_TMPDIR/broad-pending-verify.json"
   local finding
@@ -695,7 +1161,7 @@ prepare_branch_review() {
   [[ "$output" == *"marker_reason=last_review_not_clean"* ]]
 }
 
-@test "post-work-review verifier clean path and repeated finding detection" {
+@test "post-work-review shard-3: verifier clean path and repeated finding detection" {
   local clean_repo="$BATS_TEST_TMPDIR/review-verify-clean"
   local repeat_repo="$BATS_TEST_TMPDIR/review-repeat"
   local broad_json="$BATS_TEST_TMPDIR/broad.json"
@@ -745,7 +1211,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=same_finding_repeated"* ]]
 }
 
-@test "post-work-review duplicate broad findings do not count as repeated after a clean verifier" {
+@test "post-work-review shard-5: duplicate broad findings do not count as repeated after a clean verifier" {
   local repo="$BATS_TEST_TMPDIR/review-duplicate-broad"
   local broad_json="$BATS_TEST_TMPDIR/broad-duplicate.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-duplicate-clean.json"
@@ -777,7 +1243,7 @@ prepare_branch_review() {
   [[ "$output" != *"stop_reason=same_finding_repeated"* ]]
 }
 
-@test "post-work-review summarize stops on truncated and exhausted verifier budget" {
+@test "post-work-review shard-1: summarize stops on truncated and exhausted verifier budget" {
   local trunc_repo="$BATS_TEST_TMPDIR/review-truncated"
   local budget_repo="$BATS_TEST_TMPDIR/review-budget"
   local broad_json="$BATS_TEST_TMPDIR/broad.json"
@@ -833,7 +1299,7 @@ prepare_branch_review() {
   [[ "$output" == *"stop_reason=review_budget_exhausted"* ]]
 }
 
-@test "post-work-review mark rejects dirty worktree and stale review targets" {
+@test "post-work-review shard-2: mark rejects dirty worktree and stale review targets" {
   local dirty_repo="$BATS_TEST_TMPDIR/review-dirty"
   setup_review_repo "$dirty_repo"
   make_branch_change "$dirty_repo"
