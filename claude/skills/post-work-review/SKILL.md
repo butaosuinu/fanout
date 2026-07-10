@@ -185,13 +185,20 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 elif [ -n "$(git status --porcelain)" ]; then
   echo "⚠️ 未コミットの変更があります。修正を commit してから再度この手順を実行してください (dirty tree では marker を記録しません)。"
 else
-  git rev-parse HEAD > "$(git rev-parse --git-dir)/post-work-review-passed"
-  echo "marker 記録: $(git rev-parse HEAD)"
+  marker="$(git rev-parse --git-dir)/post-work-review-passed"
+  if ! rm -f "${marker}.meta"; then
+    echo "⚠️ 古い Codex marker metadata を削除できないため marker は書きません"
+  elif git rev-parse HEAD > "$marker"; then
+    echo "marker 記録: $(git rev-parse HEAD)"
+  else
+    echo "⚠️ marker を書き込めませんでした"
+  fi
 fi
 ```
 
 - git リポジトリ外で `/post-work-review` を呼ばれた場合は no-op。
 - マーカーは worktree-local (`.git/worktrees/<name>/post-work-review-passed`) なので fanout の並列ペインで干渉しない。
+- legacy marker を記録する前に、Codex bounded review の sibling `.meta` を削除する。
 - HEAD が進めば marker は自動的に stale になりゲートが再び閉じる。
   marker を書くのは、修正を全て commit し、canonical full check とレビューを通した最終状態だけ。
   push やコミット自体は本 skill の責任外なので、review で修正した場合は別途 commit してから本 skill をやり直す。

@@ -28,6 +28,160 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
 }
 
+@test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
+  local skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
+  local marker_step
+
+  marker_step="$(sed -n '/^## Step 5/,/^## 完了報告/p' "$skill")"
+  [[ "$marker_step" == *'marker="$(git rev-parse --git-dir)/post-work-review-passed"'* ]] || return 1
+  [[ "$marker_step" == *'rm -f "${marker}.meta"'* ]] || return 1
+  [[ "$marker_step" == *'git rev-parse HEAD > "$marker"'* ]] || return 1
+  ! grep -Fq 'POST_WORK_REVIEW_BASE' "$skill" || return 1
+  ! grep -Fq 'bounded-isolated-reviewer' "$skill" || return 1
+}
+
+@test "post-work-review shard-7: PR gate supports Codex metadata and Claude marker-only reviews" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 is required"
+
+  local repo="$BATS_TEST_TMPDIR/pr-gate-review-modes"
+  local gitdir head hook
+  setup_review_repo "$repo"
+  git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
+  make_branch_change "$repo"
+  git -C "$repo" config init.defaultBranch main
+  gitdir="$(gitdir_for "$repo")"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
+  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
+
+  # Claude's legacy review writes only the exact-HEAD marker. It may open a PR
+  # against the default base, but not a non-default base it did not record.
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  git -C "$repo" config branch.feature.gh-merge-base release/v1
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+  git -C "$repo" config --unset branch.feature.gh-merge-base
+
+  # A present but stale metadata file fails closed until the legacy writer
+  # removes it before recording its marker.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  rm "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  # Codex metadata matching the target HEAD permits exactly its reviewed base.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  git -C "$repo" config branch.feature.gh-merge-base release/v1
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+  git -C "$repo" config --unset branch.feature.gh-merge-base
+
+  # Metadata for this HEAD fails closed when its reviewed base is missing.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # The exact-HEAD marker remains mandatory in both modes.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  printf '%s\n' "$(git -C "$repo" rev-parse HEAD^)" >"$gitdir/post-work-review-passed"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Present but malformed Codex metadata never falls back to legacy mode.
+  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
+  {
+    printf 'backend=unexpected-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # A dangling metadata symlink is present-invalid, not legacy absence.
+  rm "$gitdir/post-work-review-passed.meta"
+  ln -s no-such-meta "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Legacy mode also fails closed when the default base cannot be resolved.
+  rm "$gitdir/post-work-review-passed.meta"
+  git -C "$repo" config init.defaultBranch ""
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+}
+
 setup_review_repo() {
   local repo="$1"
   mkdir -p "$repo"
@@ -73,6 +227,16 @@ run_review() {
   local repo="$1"
   shift
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
+}
+
+run_pr_gate() {
+  local repo="$1"
+  local command="$2"
+  local hook="$3"
+  local python
+  python="$(command -v python3)"
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' "$command" "$repo" | \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
 }
 
 run_review_base() {

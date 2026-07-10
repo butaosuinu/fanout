@@ -455,6 +455,7 @@ def main():
         emit_allow()
     marker = gitdir if os.path.isabs(gitdir) else os.path.join(cwd, gitdir)
     marker = os.path.join(marker, "post-work-review-passed")
+    marker_meta = marker + ".meta"
 
     def read_marker():
         try:
@@ -462,6 +463,32 @@ def main():
                 return f.read().strip()
         except Exception:
             return None
+
+    def read_review_metadata():
+        metadata = {}
+        try:
+            with open(marker_meta) as f:
+                for line in f:
+                    key, sep, value = line.rstrip("\n").partition("=")
+                    if sep and key:
+                        metadata[key] = value.strip()
+        except FileNotFoundError:
+            return {}, os.path.lexists(marker_meta)
+        except Exception:
+            return {}, True
+        return metadata, True
+
+    def normalize_reviewed_base(value):
+        if not value:
+            return None
+        value = value.strip()
+        for prefix in ("refs/remotes/origin/", "origin/", "refs/heads/"):
+            if value.startswith(prefix):
+                value = value[len(prefix):]
+                break
+        return value or None
+
+    review_metadata, review_metadata_present = read_review_metadata()
 
     defbr = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).stdout.strip()
     if defbr.startswith("origin/"):
@@ -473,17 +500,6 @@ def main():
     for c in real:
         if c["bypass"]:
             continue  # this specific create is bypassed; others still checked
-        base = c["base"]
-        if not base and cur:
-            mb = git(["config", "--get", "branch.%s.gh-merge-base" % cur]).stdout.strip()
-            if mb:
-                base = mb
-        # Fail closed: allow an explicit base only when it resolvably equals the
-        # default branch (the diff range /post-work-review verified).
-        if base and not (defbr and base == defbr):
-            shown = ("既定ブランチ (%s)" % defbr) if defbr else "既定ブランチ(ローカルで解決不可)"
-            emit_deny("gh pr create の base (%s) が%sと異なる/確認できないため、レビューした diff 範囲と PR の diff 範囲がずれる可能性があります。\n"
-                      "既定ブランチを base にするか、対象 base に対して /post-work-review し直してください。\n%s" % (base, shown, HATCH))
         hr = c["head"]
         if hr:
             if ":" in hr:
@@ -505,6 +521,41 @@ def main():
                       "(codex companion 未検出の場合は Pass 2 はスキップされ、Pass 1 通過で marker が書かれます)\n"
                       "/post-work-review が使えない場合は repo で make install (または make link) を実行してください。\n"
                       "完了後に gh pr create を再実行してください。\n%s" % (head, marker, HATCH))
+
+        base = c["base"]
+        if not base and cur:
+            mb = git(["config", "--get", "branch.%s.gh-merge-base" % cur]).stdout.strip()
+            if mb:
+                base = mb
+
+        # Codex's bounded driver records the reviewed base in marker metadata.
+        # Claude's legacy skill removes that sibling file before writing its
+        # exact-HEAD marker, so marker-only mode remains default-base-only.
+        if review_metadata_present:
+            metadata_valid = (
+                review_metadata.get("backend") == "bounded-isolated-reviewer" and
+                review_metadata.get("head") == target and
+                review_metadata.get("scope") == "branch" and
+                review_metadata.get("clean") == "true" and
+                review_metadata.get("stop_reason") == ""
+            )
+            if not metadata_valid:
+                emit_deny("post-work-review の marker metadata が不完全か PR head と一致しません。\n"
+                          "対象 HEAD で /post-work-review をやり直してください。\n%s" % HATCH)
+            reviewed_base = review_metadata.get("base")
+            requested_base = (base or defbr or "").strip() or None
+            normalized_reviewed_base = normalize_reviewed_base(reviewed_base)
+            if not (requested_base and normalized_reviewed_base and
+                    requested_base == normalized_reviewed_base):
+                emit_deny("gh pr create の base (%s) がレビュー済み base (%s) と異なる/確認できないため、レビューした diff 範囲と PR の diff 範囲がずれる可能性があります。\n"
+                          "marker meta の base に合わせて --base を指定するか、対象 base に対して /post-work-review し直してください。\n%s"
+                          % (base or "未指定・既定ブランチを解決不可",
+                             reviewed_base or "marker meta から解決不可", HATCH))
+        elif not (defbr and (base or defbr) == defbr):
+            shown = ("既定ブランチ (%s)" % defbr) if defbr else "既定ブランチ(ローカルで解決不可)"
+            emit_deny("gh pr create の base (%s) が%sと異なる/確認できないため、Claude の marker-only review と PR の diff 範囲がずれる可能性があります。\n"
+                      "既定ブランチを base にするか、Codex の reviewed-base metadata を伴う /post-work-review を実行してください。\n%s"
+                      % (base or "未指定", shown, HATCH))
 
     emit_allow()
 
