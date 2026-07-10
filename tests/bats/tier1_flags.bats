@@ -46,6 +46,27 @@ load helpers
   [ "$mode" = "700" ]
 }
 
+@test "prepare-dev-cache ignores a repo-local TMPDIR" {
+  local sandbox_repo="$BATS_TEST_TMPDIR/project"
+  local repo_tmp="$sandbox_repo/tmp"
+  local status_before
+  local status_after
+
+  mkdir -p "$sandbox_repo"
+  cp "$REPO_ROOT/Makefile" "$REPO_ROOT/.golangci-lint-version" "$sandbox_repo/"
+  git -C "$sandbox_repo" init -q
+  git -C "$sandbox_repo" add Makefile .golangci-lint-version
+  status_before="$(git -C "$sandbox_repo" status --short)"
+
+  run env CI= TMPDIR="$repo_tmp" make -C "$sandbox_repo" --no-print-directory \
+    prepare-dev-cache
+  [ "$status" -eq 0 ]
+  [ ! -e "$repo_tmp" ]
+
+  status_after="$(git -C "$sandbox_repo" status --short)"
+  [ "$status_after" = "$status_before" ]
+}
+
 # --- Help & usage -----------------------------------------------------------
 
 @test "-h prints usage and exits 0" {

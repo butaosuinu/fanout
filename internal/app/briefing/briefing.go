@@ -169,7 +169,7 @@ func renderWorkBriefing(b workBriefing) string {
 		base += codeReviewSection
 	}
 	if b.settings.PRReviewGate {
-		base += claudeReviewGateSection
+		base += claudeReviewGateSection(b.baseBranch)
 	} else {
 		base += reviewGateBypassSection
 	}
@@ -234,10 +234,19 @@ unless you are diagnosing a failure. If ` + "`gh pr create`" + ` is denied befor
 ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
 `
 
-const claudeReviewGateSection = `
+func claudeReviewGateSection(baseBranch string) string {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	quotedBase := agent.ShellQuote(baseBranch)
+	return fmt.Sprintf(claudeReviewGateSectionTemplate, quotedBase, quotedBase)
+}
+
+const claudeReviewGateSectionTemplate = `
 After the candidate changes and any ` + "`/code-review`" + ` fixes are committed, run
-` + "`/post-work-review`" + ` once on the committed branch before pushing. The skill owns
-the canonical full project validation for that exact HEAD and writes
+` + "`/post-work-review`" + ` once on the committed branch with base ` + "`%s`" + ` before pushing.
+The skill must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this gate.
+It owns the canonical full project validation for that exact HEAD and writes
 ` + "`.git/post-work-review-passed`" + ` only after both validation and review are clean
 for that HEAD.
 If review fixes change files, run focused checks for those edits, commit them,

@@ -473,6 +473,31 @@ EOF
   [ "$(wc -l <"$count_file")" -eq 1 ]
 }
 
+@test "post-work-review shard-7: keeps JSON cache outside a repo-local TMPDIR" {
+  local repo="$BATS_TEST_TMPDIR/review-json-repo-tmpdir"
+  local repo_tmp="$repo/repo-tmp"
+  local json_file="$BATS_TEST_TMPDIR/json-repo-tmpdir.json"
+  setup_review_repo "$repo"
+  mkdir -p "$repo_tmp"
+  # macOS may create this system cache in TMPDIR; keep the driver cache visible.
+  printf 'xcrun_db\n' >"$repo_tmp/.gitignore"
+  git -C "$repo" add repo-tmp/.gitignore
+  git -C "$repo" commit -qm "track local temporary directory"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-repo-tmpdir" false false false "" "$json_file"
+  run_review "$repo" record broad "$json_file"
+  [ "$status" -eq 0 ]
+
+  run bash -c 'cd "$1" || exit 1; TMPDIR="$2" bash "$3" mark 2>&1' \
+    bash "$repo" "$repo_tmp" "$POST_WORK_REVIEW_DRIVER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"marker_written=true"* ]]
+  [ -z "$(git -C "$repo" status --porcelain -uall)" ]
+}
+
 @test "post-work-review shard-10: falls back to Python when Ruby is unavailable" {
   local repo="$BATS_TEST_TMPDIR/review-json-python"
   local json_file="$BATS_TEST_TMPDIR/json-python.json"

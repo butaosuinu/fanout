@@ -13,7 +13,7 @@ filtered out:
   worktree -> <REPO>/tests/fixtures/scenario-plan-blocked/project_root/.fanout/worktrees/launch-plan-extract-api-client-api-client
   branch -> fanout/launch-plan-extract-api-client-api-client
   base -> main
-  briefing size: 5131 bytes
+  briefing size: 5229 bytes
     $ git -C <REPO>/tests/fixtures/scenario-plan-blocked/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-plan-blocked/project_root branch -f main refs/remotes/origin/main

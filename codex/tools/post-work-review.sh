@@ -410,8 +410,10 @@ json_cache_cleanup() {
 trap json_cache_cleanup EXIT
 
 json_cache_init() {
+  local cache_parent
   [ -n "$JSON_CACHE_ROOT" ] && return 0
-  JSON_CACHE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fanout-post-work-review-json.XXXXXX")" || \
+  cache_parent="$(git_dir_abs)"
+  JSON_CACHE_ROOT="$(mktemp -d "$cache_parent/post-work-review-json.XXXXXX")" || \
     die "failed to create reviewer JSON cache"
 }
 

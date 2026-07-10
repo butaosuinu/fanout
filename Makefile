@@ -28,10 +28,12 @@ STATIC_DIR := internal/ui/dashboard/static
 GOLANGCI_LINT_VERSION ?= $(shell cat .golangci-lint-version)
 GOLANGCI_LINT_CACHE   ?= $(CURDIR)/.cache/golangci-lint
 
-# Trusted local worktrees share download/build caches for the same user;
-# override FANOUT_DEV_CACHE_DIR to relocate them. CI keeps the native caches
-# restored by setup-go/setup-node and the lint action.
-FANOUT_DEV_CACHE_DIR ?= $(patsubst %/,%,$(or $(TMPDIR),/tmp))/fanout-dev-cache-$(shell id -u)
+# Trusted local worktrees share download/build caches for the same user. Keep
+# the default under the POSIX system temp root instead of TMPDIR: local agent
+# sandboxes may point TMPDIR inside the worktree. Override FANOUT_DEV_CACHE_DIR
+# to relocate it. CI keeps the native caches restored by setup-go/setup-node
+# and the lint action.
+FANOUT_DEV_CACHE_DIR ?= /tmp/fanout-dev-cache-$(shell id -u)
 ifeq ($(strip $(CI)),)
 GOCACHE           ?= $(FANOUT_DEV_CACHE_DIR)/go-build
 PNPM_STORE_DIR    ?= $(FANOUT_DEV_CACHE_DIR)/pnpm-store
@@ -51,9 +53,10 @@ POST_WORK_REVIEW_SHARD_TARGETS := $(addprefix test-tier1-post-work-review-shard-
 
 .PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache $(POST_WORK_REVIEW_SHARD_TARGETS)
 
-# The Linux fallback lives under predictable /tmp. Reject a pre-created
-# symlink or a directory owned by another user before trusting cached tools.
-# chmod also keeps later cache contents private on multi-user hosts.
+# The local default lives under predictable /tmp on supported macOS and Linux
+# hosts. Reject a pre-created symlink or a directory owned by another user
+# before trusting cached tools. chmod also keeps later cache contents private
+# on multi-user hosts.
 prepare-dev-cache:
 ifeq ($(strip $(CI)),)
 	@set -eu; \

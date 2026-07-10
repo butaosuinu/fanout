@@ -62,15 +62,31 @@ func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	}
 }
 
-func TestPRVisualizationSectionQuotesBaseBranch(t *testing.T) {
-	got := Render(123, "structured PR briefing", "Issue body", "codex", "foo;bar", settings.Defaults(), false, nil)
-	want := "git diff --name-only 'foo;bar'...HEAD"
-	if !strings.Contains(got, want) {
-		t.Fatalf("Render(...) missing shell-quoted base branch command %q", want)
+func TestPRVisualizationAndReviewSectionsQuoteBaseBranch(t *testing.T) {
+	for _, agentName := range []string{"claude", "codex"} {
+		got := Render(123, "structured PR briefing", "Issue body", agentName, "foo;bar", settings.Defaults(), false, nil)
+		want := "git diff --name-only 'foo;bar'...HEAD"
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., %q) missing shell-quoted base branch command %q", agentName, want)
+		}
+		want = "POST_WORK_REVIEW_BASE='foo;bar'` to every driver command"
+		if !strings.Contains(got, want) {
+			t.Fatalf("Render(..., %q) missing shell-quoted post-work-review base branch command %q", agentName, want)
+		}
 	}
-	want = "POST_WORK_REVIEW_BASE='foo;bar'` to"
-	if !strings.Contains(got, want) {
-		t.Fatalf("Render(...) missing shell-quoted post-work-review base branch command %q", want)
+}
+
+func TestReviewSectionsDefaultEmptyBaseBranchToMain(t *testing.T) {
+	for _, agentName := range []string{"claude", "codex"} {
+		got := Render(123, "review briefing", "Issue body", agentName, "", settings.Defaults(), false, nil)
+		for _, want := range []string{
+			"with base `main`",
+			"POST_WORK_REVIEW_BASE=main` to every driver command",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("Render(..., %q, baseBranch=empty) missing %q:\n%s", agentName, want, got)
+			}
+		}
 	}
 }
 
@@ -86,6 +102,8 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"After focused checks pass, follow the final validation, commit, and push instructions below",
 				"run the `/code-review` slash command",
 				"`/post-work-review` once on the committed branch",
+				"with base `release/v1`",
+				"POST_WORK_REVIEW_BASE=release/v1` to every driver command",
 				"canonical full project validation for that exact HEAD",
 				"`.git/post-work-review-passed`",
 				"Optional: Agent Teams",

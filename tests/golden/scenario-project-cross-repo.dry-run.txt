@@ -12,7 +12,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-project-cross-repo/project_root/.fanout/worktrees/self-repo-todo-921
   branch -> fanout/self-repo-todo-921
   base -> main
-  briefing size: 4938 bytes
+  briefing size: 5036 bytes
     $ git -C <REPO>/tests/fixtures/scenario-project-cross-repo/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-project-cross-repo/project_root branch -f main refs/remotes/origin/main

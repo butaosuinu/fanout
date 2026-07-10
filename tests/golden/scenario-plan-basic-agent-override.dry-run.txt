@@ -9,7 +9,7 @@
   worktree -> <REPO>/tests/fixtures/scenario-plan-basic/project_root/.fanout/worktrees/launch-plan-define-base-types-base-types
   branch -> fanout/launch-plan-define-base-types-base-types
   base -> main
-  briefing size: 5129 bytes
+  briefing size: 5227 bytes
     $ git -C <REPO>/tests/fixtures/scenario-plan-basic/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
     $ git -C <REPO>/tests/fixtures/scenario-plan-basic/project_root branch -f main refs/remotes/origin/main
