@@ -66,6 +66,7 @@ type tuiNewPanePopupResult struct {
 	Agents         []string          `json:"agents,omitempty"`
 	DefaultAgent   string            `json:"defaultAgent,omitempty"`
 	AgentOverrides map[string]string `json:"agentOverrides,omitempty"`
+	WorkerAgent    string            `json:"workerAgent,omitempty"`
 	Error          string            `json:"error,omitempty"`
 }
 
@@ -206,6 +207,7 @@ func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
 		Agents:         req.Agents,
 		DefaultAgent:   req.DefaultAgent,
 		AgentOverrides: req.AgentOverrides,
+		WorkerAgent:    req.WorkerAgent,
 	}
 	code := exitcode.OK
 	if err != nil {
@@ -454,6 +456,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			Agents:         result.Agents,
 			DefaultAgent:   result.DefaultAgent,
 			AgentOverrides: result.AgentOverrides,
+			WorkerAgent:    result.WorkerAgent,
 		}, false, nil
 	}
 }

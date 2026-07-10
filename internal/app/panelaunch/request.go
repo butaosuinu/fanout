@@ -3,8 +3,11 @@ package panelaunch
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
@@ -446,6 +449,104 @@ func parentDisplay(parent string) string {
 // PlanParentRef is the state parent key of an issue-less plan: "plan:<slug>".
 func PlanParentRef(slug string) string {
 	return "plan:" + slug
+}
+
+// PlanIssueSlug keys an issue-sourced plan coordinator's state row by issue
+// number for the dedupe guards and by the synthetic pane number for uniqueness
+// across relaunches: "plan-issue-<issue>-<n>".
+func PlanIssueSlug(issueNum, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("plan-issue-%d-%d", issueNum, number)
+}
+
+// PlanPaneIssueNum returns the GitHub issue an issue-sourced plan coordinator
+// row is linked to, parsed from its own PlanIssueSlug under the manual parent.
+// Only this lane's launch code creates such rows, so the slug is explicit
+// provenance. ok is false for every other row, including the prompt
+// coordinator's "plan-prompt-<n>" and all plan task rows (see
+// PlanLinkedIssueNums for their spec-verified link).
+func PlanPaneIssueNum(pane state.Pane) (int, bool) {
+	if pane.Parent != ManualParentRef {
+		return 0, false
+	}
+	rest, found := strings.CutPrefix(pane.Slug, "plan-issue-")
+	if !found {
+		return 0, false
+	}
+	return parseLeadingIssueNum(rest)
+}
+
+// PlanLinkedIssueNums collects the issues owned by plan-lane rows so the issue
+// fan-out lanes can treat them as already fanned: coordinator rows through
+// PlanPaneIssueNum, and plan task rows through the saved spec's declared
+// provenance (plan.source "issue #N" in .fanout/plans/<slug>.json, written by
+// the coordinator per its briefing). A slug that merely looks issue-like never
+// links — only a spec that declares its source issue does — so a hand-authored
+// plan named "issue-123-migration" cannot block issue #123's normal lanes.
+func PlanLinkedIssueNums(projectRoot string, store state.Store) map[int]bool {
+	out := map[int]bool{}
+	specSource := map[string]int{}
+	for _, pane := range store.Panes {
+		if num, ok := PlanPaneIssueNum(pane); ok {
+			out[num] = true
+			continue
+		}
+		planSlug, found := strings.CutPrefix(pane.Parent, "plan:")
+		if !found || planSlug == "" {
+			continue
+		}
+		num, seen := specSource[planSlug]
+		if !seen {
+			num = savedPlanSourceIssue(projectRoot, planSlug)
+			specSource[planSlug] = num
+		}
+		if num > 0 {
+			out[num] = true
+		}
+	}
+	return out
+}
+
+// savedPlanSourceIssue returns the issue number a saved plan spec declares as
+// its source ("issue #N"), or 0 when the spec is absent, unreadable, or names
+// no issue. Read failures degrade to no link — the safe direction, because a
+// false link would block the issue's normal lanes.
+func savedPlanSourceIssue(projectRoot, planSlug string) int {
+	data, err := os.ReadFile(filepath.Join(projectRoot, ".fanout", "plans", planSlug+".json"))
+	if err != nil {
+		return 0
+	}
+	var spec struct {
+		Plan struct {
+			Source string `json:"source"`
+		} `json:"plan"`
+	}
+	if unmarshalErr := json.Unmarshal(data, &spec); unmarshalErr != nil {
+		return 0
+	}
+	rest, found := strings.CutPrefix(strings.TrimSpace(spec.Plan.Source), "issue #")
+	if !found {
+		return 0
+	}
+	num, err := strconv.Atoi(strings.TrimSpace(rest))
+	if err != nil || num <= 0 {
+		return 0
+	}
+	return num
+}
+
+func parseLeadingIssueNum(rest string) (int, bool) {
+	numStr, _, found := strings.Cut(rest, "-")
+	if !found {
+		return 0, false
+	}
+	num, err := strconv.Atoi(numStr)
+	if err != nil || num <= 0 {
+		return 0, false
+	}
+	return num, true
 }
 
 // PlanTaskSlug resolves a plan task's worktree slug: the explicit task slug,

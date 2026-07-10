@@ -81,6 +81,8 @@ After this popup successfully launches a Prompt, plan coordinator, or Issue Sess
 
 **Issue** lists the repository's OPEN issues and lets you narrow them by number, title, or label. `Ctrl+O` opens the selected issue in the default browser. Pick an issue, choose the default `claude` / `codex` agent, and `Enter` opens an assignment screen that flips the agent per child of that issue — the equivalent of repeatable `--agent NUM=name`. An issue with OPEN children fans out the equivalent of `--unblocked-only`, leaving blocked children deferred. An issue without children starts as a single pane under `@watch` (see [Watcher]({{< relref "/docs/watcher" >}})).
 
+The same plan fan-out checkbox from Prompt mode appears here for a single issue: turn it on and the child-assignment screen is skipped, launching one coordinator pane that decomposes the issue into issue-less `fanout plan` tasks run by the chosen task agent. The checkbox is grayed out while the selected issue has OPEN children — fan those out instead.
+
 ## --status (JSON / table / --post-dashboard)
 
 Use `fanout <parent> --status` when you want to feed progress to CI or jq — it enumerates the specified parent's child issues from `.fanout/state.json` and prints each child's state and linked PR as JSON (read-only).

@@ -34,6 +34,7 @@ type fakeWatchIO struct {
 	openChildren  map[int]int
 	childCounts   map[int]ChildCounts
 	alive         map[string]bool
+	planLinked    map[int]bool
 
 	swapErr        map[swapKey]error
 	standaloneErr  map[int]error
@@ -106,6 +107,9 @@ func (f *fakeWatchIO) IO() IO {
 			f.parents = append(f.parents, parentLaunch{num: issue.Number, limit: limit})
 			return ParentLaunchResult{Deferred: f.parentDeferred[issue.Number]}, f.parentErr[issue.Number]
 		},
+		PlanLinkedIssueNums: func(state.Store) map[int]bool {
+			return f.planLinked
+		},
 	}
 }
 
@@ -174,6 +178,23 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
+			// Plan-lane rows carry no positive IssueNum; the plan link must skip
+			// the issue before any trigger->running label swap, or every cycle
+			// mutates GitHub labels just to hit the late ErrAlreadyFanned.
+			name: "plan-owned issues skip before any label mutation",
+			fake: &fakeWatchIO{
+				issues:       []ghissue.Issue{issue(101), issue(102)},
+				openChildren: map[int]int{101: 0, 102: 0},
+				planLinked:   map[int]bool{101: true, 102: true},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "standalone launches", fake.standalone, nil)
+				assertSwaps(t, fake.swaps, nil)
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned, SkipAlreadyFanned})
+			},
+		},
+		{
 			name: "standalone already fanned during launch requeues trigger label",
 			fake: &fakeWatchIO{
 				issues:        []ghissue.Issue{issue(101)},
@@ -191,6 +212,44 @@ func TestRunCycleTableDriven(t *testing.T) {
 				if len(report.Launched) != 0 || len(report.Failures) != 0 {
 					t.Fatalf("report = %#v, want requeued skip without launched/failure", report)
 				}
+			},
+		},
+		{
+			// Plan-owned skips must fire on state alone, before the session
+			// budget defers the issue and before any GitHub child count runs.
+			name: "plan-owned issue skips before max-sessions deferral and counting",
+			cfg:  Config{MaxSessions: 1},
+			fake: &fakeWatchIO{
+				issues:     []ghissue.Issue{issue(101)},
+				store:      state.Store{Panes: []state.Pane{{IssueNum: 900, PaneID: "%live"}}},
+				alive:      map[string]bool{"%live": true},
+				planLinked: map[int]bool{101: true},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, nil)
+				if len(report.Deferred) != 0 {
+					t.Fatalf("deferred = %#v, want none for a plan-owned issue", report.Deferred)
+				}
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned})
+			},
+		},
+		{
+			// The plan link must beat the LaunchParent early-return: a failing
+			// parent launch would back off into the three-strike disable.
+			name: "plan-owned issue with open children skips instead of parent launch",
+			fake: &fakeWatchIO{
+				issues:       []ghissue.Issue{issue(201)},
+				openChildren: map[int]int{201: 2},
+				planLinked:   map[int]bool{201: true},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				if len(fake.parents) != 0 {
+					t.Fatalf("parent launches = %v, want none for a plan-owned issue", fake.parents)
+				}
+				assertSwaps(t, fake.swaps, nil)
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned})
 			},
 		},
 		{

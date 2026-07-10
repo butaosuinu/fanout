@@ -74,6 +74,11 @@ func (m *model) submitNewPanePicker() tea.Cmd {
 	switch m.newPane.mode {
 	case newPaneModeIssue:
 		m.newPane.selIssue = item.number
+		// Plan fan-out launches one coordinator pane, so it never opens the
+		// per-child assignment step.
+		if m.issuePlanFanoutActive() {
+			return m.finalizeIssuePlanSubmit()
+		}
 		if m.opts.ListIssueChildren == nil {
 			return m.finalizeNewPaneModeSubmit()
 		}
@@ -216,6 +221,62 @@ func (m *model) finalizeNewPaneModeSubmit() tea.Cmd {
 		return tea.Quit
 	}
 	return m.launchNewPaneRequest(req)
+}
+
+// finalizeIssuePlanSubmit builds the issue-mode plan-coordinator LaunchRequest
+// and hands it to the prompt result (popup) or the launch dispatch (in-process
+// form). Unlike finalizeNewPaneModeSubmit it never opens the assign step: plan
+// fan-out launches one coordinator pane, not one pane per child.
+func (m *model) finalizeIssuePlanSubmit() tea.Cmd {
+	req := LaunchRequest{
+		Mode:         LaunchModeIssue,
+		Issue:        m.newPane.selIssue,
+		PlanFanout:   true,
+		DefaultAgent: m.selectedDefaultAgent(),
+		WorkerAgent:  launchAgents[clampInt(m.newPane.workerIndex, 0, len(launchAgents)-1)],
+	}
+	if !m.promptOnly && m.opts.LaunchIssuePlan == nil {
+		m.newPane.err = "issue plan launcher is not configured"
+		return nil
+	}
+	m.newPane.err = ""
+	m.newPane.launching = true
+	if m.promptOnly {
+		m.promptResult = req
+		m.promptDone = true
+		return tea.Quit
+	}
+	return m.launchNewPaneRequest(req)
+}
+
+func (m *model) launchIssuePlanRequest(req LaunchRequest) tea.Cmd {
+	coordinator := strings.TrimSpace(req.DefaultAgent)
+	worker := strings.TrimSpace(req.WorkerAgent)
+	switch {
+	case req.Issue <= 0:
+		m.notice = "new session: issue number is required"
+	case coordinator == "":
+		m.notice = "new session: select a coordinator agent"
+	case worker == "":
+		m.notice = "new session: select a task agent"
+	case m.opts.LaunchIssuePlan == nil:
+		m.notice = "new session: issue plan launcher is not configured"
+	default:
+		m.newPane.launching = true
+		m.notice = fmt.Sprintf("starting plan coordinator for #%d...", req.Issue)
+		launch := m.opts.LaunchIssuePlan
+		num := req.Issue
+		return func() tea.Msg {
+			result, err := launch(num, coordinator, worker)
+			return launchPaneMsg{
+				notice:         result.Notice,
+				count:          launchPaneCount(1, result.CreatedPaneIDs),
+				createdPaneIDs: result.CreatedPaneIDs,
+				err:            err,
+			}
+		}
+	}
+	return nil
 }
 
 func (m *model) launchIssueSessionRequest(req LaunchRequest) tea.Cmd {

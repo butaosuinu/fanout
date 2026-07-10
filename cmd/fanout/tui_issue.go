@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
@@ -63,6 +64,11 @@ func recordedIssueNumbers(projectRoot string) map[int]bool {
 		}
 		if parent, err := strconv.Atoi(pane.Parent); err == nil && parent > 0 {
 			recorded[parent] = true
+		}
+		// Plan-lane rows (a coordinator, or the tasks it fanned out) reference
+		// their issue only through slugs.
+		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok {
+			recorded[num] = true
 		}
 	}
 	return recorded
@@ -159,17 +165,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	if err := validateTUIAgentSelection(defaultAgent, overrides); err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
-	gh := ghissue.Runner{Cwd: projectRoot}
-	// Re-fetch the issue: the picker list may be stale, and the detail carries
-	// the body the standalone briefing needs.
-	detail, err := gh.IssueDetail(issueNum)
-	if err != nil {
-		return fanouttui.LaunchResult{}, err
-	}
-	if detail.State != "OPEN" {
-		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d is not OPEN", issueNum)
-	}
-	openChildren, err := countOpenChildTargets(gh, issueNum)
+	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
@@ -213,6 +209,26 @@ func finishTUIIssueParentLaunch(issueNum int, result parentIssueFanoutResult, er
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
 	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: result.CreatedPaneIDs}, nil
+}
+
+// fetchLaunchableIssue is the shared launch preamble for the TUI issue lanes:
+// it re-fetches the issue (the picker list may be stale, and the detail carries
+// the body the briefing needs), rejects non-OPEN issues, and counts the OPEN
+// children that decide between the standalone, fan-out, and plan lanes.
+func fetchLaunchableIssue(projectRoot string, issueNum int) (ghissue.Issue, int, error) {
+	gh := ghissue.Runner{Cwd: projectRoot}
+	detail, err := gh.IssueDetail(issueNum)
+	if err != nil {
+		return ghissue.Issue{}, 0, err
+	}
+	if detail.State != "OPEN" {
+		return ghissue.Issue{}, 0, fmt.Errorf("issue #%d is not OPEN", issueNum)
+	}
+	openChildren, err := countOpenChildTargets(gh, issueNum)
+	if err != nil {
+		return ghissue.Issue{}, 0, err
+	}
+	return detail, openChildren, nil
 }
 
 // validateTUIAgentSelection rejects unknown agent names up front so a typo

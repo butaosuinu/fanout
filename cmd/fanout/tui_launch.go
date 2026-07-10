@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -31,6 +32,12 @@ func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig h
 func newTUIAttachAgentFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.AttachLaunchFunc {
 	return func(req fanouttui.AttachLaunchRequest) (string, error) {
 		return launchAttachedAgentFromTUI(projectRoot, session, commandName, hookConfig, req)
+	}
+}
+
+func newTUIIssuePlanLaunchFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.IssuePlanLaunchFunc {
+	return func(issueNum int, coordinatorAgent, workerAgent string) (fanouttui.LaunchResult, error) {
+		return launchIssuePlanFromTUI(projectRoot, session, commandName, hookConfig, issueNum, coordinatorAgent, workerAgent)
 	}
 }
 
@@ -95,11 +102,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 }
 
 // launchPlanPromptFromTUI launches one coordinator pane at the project root
-// that runs the fanout-plan skill against the raw prompt. The coordinator
-// decomposes the prompt into parallel tasks and fans them out itself, so it
-// runs as a normal agent (never Codex Plan Mode) directly on the project root:
-// running `fanout plan` inside a worktree would resolve the git root there and
-// nest state under the coordinator's worktree.
+// that runs the fanout-plan skill against the raw prompt. It normalizes the
+// prompt, requires exactly one coordinator agent, and delegates the pane launch
+// to launchPlanCoordinator.
 func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
@@ -110,25 +115,52 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
+	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, agentName, nil,
+		func(store state.Store, livenessKey string) panelaunch.Request {
+			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, agentName, livenessKey)
+		})
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
+	return fanouttui.LaunchResult{
+		Notice:         fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt),
+		CreatedPaneIDs: []string{paneID},
+	}, nil
+}
+
+// launchPlanCoordinator validates the coordinator agent, locks state, and
+// attaches one project-root coordinator pane built by buildReq. guard, when
+// non-nil, runs on the locked store before any pane is created, so callers can
+// reject duplicate launches without a lock race. The coordinator decomposes its
+// source and fans the tasks out itself, so it runs as a normal agent (never
+// Codex Plan Mode) directly on the project root: running `fanout plan` inside a
+// worktree would resolve the git root there and nest state under the
+// coordinator's worktree.
+func launchPlanCoordinator(projectRoot, session, commandName, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-		return fanouttui.LaunchResult{}, validateErr
+		return panelaunch.Request{}, "", validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return fanouttui.LaunchResult{}, validateErr
+		return panelaunch.Request{}, "", validateErr
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
-		return fanouttui.LaunchResult{}, fmt.Errorf("prepare local git exclude: %w", excludeErr)
+		return panelaunch.Request{}, "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
-		return fanouttui.LaunchResult{}, err
+		return panelaunch.Request{}, "", err
 	}
 	defer func() {
 		_ = recorder.Unlock()
 	}()
+	if guard != nil {
+		if guardErr := guard(recorder.Store); guardErr != nil {
+			return panelaunch.Request{}, "", guardErr
+		}
+	}
 
 	// A plain agent config: the coordinator runs fanout plan itself, so it must
 	// not launch in Codex Plan Mode even when the agent is codex.
@@ -140,18 +172,83 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	livenessKey, err := panelaunch.NewShellPaneKey()
 	if err != nil {
-		return fanouttui.LaunchResult{}, err
+		return panelaunch.Request{}, "", err
 	}
-	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName, livenessKey)
+	paneReq := buildReq(recorder.Store, livenessKey)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
-		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+		return panelaunch.Request{}, "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+	}
+	return paneReq, result.PaneID, nil
+}
+
+// launchIssuePlanFromTUI launches one plan coordinator pane that decomposes a
+// single OPEN issue (no OPEN children) into issue-less fanout plan tasks run by
+// workerAgent. countOpenChildTargets is the backstop behind the TUI gray-out:
+// the picker's child markers can be stale, so an issue that grew children after
+// the picker loaded fans out its children instead.
+func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, issueNum int, coordinatorAgent, workerAgent string) (fanouttui.LaunchResult, error) {
+	if issueNum <= 0 {
+		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
+	}
+	// Fail fast on both agents before any gh call. The worker is the default
+	// agent of every fanned-out task, so its install check runs up front like
+	// issue mode's default agent (validateTUIAgentSelection): failing later,
+	// when the coordinator runs `fanout plan --agent <worker>`, would leave a
+	// launched coordinator pane behind.
+	for _, name := range []string{coordinatorAgent, workerAgent} {
+		if validateErr := agent.ValidateKnown(name); validateErr != nil {
+			return fanouttui.LaunchResult{}, validateErr
+		}
+	}
+	for _, name := range []string{coordinatorAgent, workerAgent} {
+		if validateErr := agent.ValidateInstalled(name); validateErr != nil {
+			return fanouttui.LaunchResult{}, validateErr
+		}
+	}
+	detail, openChildren, err := fetchLaunchableIssue(projectRoot, issueNum)
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
+	if openChildren > 0 {
+		// Short enough to render unwrapped as the form's one error line.
+		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
+	}
+	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, coordinatorAgent,
+		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
+		func(store state.Store, livenessKey string) panelaunch.Request {
+			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
+		})
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
 	}
 	return fanouttui.LaunchResult{
-		Notice:         fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt),
-		CreatedPaneIDs: []string{result.PaneID},
+		Notice:         fmt.Sprintf("started plan coordinator for #%d (%s): %s", issueNum, coordinatorAgent, paneReq.Prompt),
+		CreatedPaneIDs: []string{paneID},
 	}, nil
+}
+
+// guardIssuePlanCoordinator is the plan-checkbox lane's dedupe, run on the
+// locked store: it mirrors the standalone lane's ErrAlreadyFanned so a repeated
+// submit never creates a second coordinator, overwrites a brief another
+// coordinator may still be reading, or regenerates a spec over live plan tasks.
+func guardIssuePlanCoordinator(projectRoot string, store state.Store, issueNum int) error {
+	if issuePlanRecorded(projectRoot, store, issueNum) {
+		return fmt.Errorf("issue #%d already has a plan session", issueNum)
+	}
+	if hasRecordedIssuePane(projectRoot, store, issueNum) {
+		return fmt.Errorf("issue #%d already has a fanout pane", issueNum)
+	}
+	return nil
+}
+
+// issuePlanRecorded reports whether any plan-lane row is linked to the issue: a
+// coordinator, or — after the coordinator closed — the plan task rows whose
+// saved spec declares the issue as its source. It keeps the issue-plan and
+// plain issue lanes mutually exclusive in both directions and lifecycle phases.
+func issuePlanRecorded(projectRoot string, store state.Store, issueNum int) bool {
+	return panelaunch.PlanLinkedIssueNums(projectRoot, store)[issueNum]
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
@@ -180,6 +277,32 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 	}
 }
 
+// newIssuePlanPaneRequest builds the issue-sourced plan coordinator's pane
+// request: a project-root pane (no worktree) whose prompt invokes the
+// fanout-plan skill on the issue-derived coordinator brief written to
+// BriefingPath. It mirrors newPlanPromptPaneRequest but sources the title,
+// body, and briefing from the GitHub issue and never sets Source*/CodexPlanMode.
+func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, coordinatorAgent, workerAgent, livenessKey string) panelaunch.Request {
+	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
+	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
+	briefingPath := planIssuePromptPath(projectRoot, issue.Number, number)
+	return panelaunch.Request{
+		ParentRef:           panelaunch.ManualParentRef,
+		Number:              number,
+		Title:               title,
+		Body:                issue.Body,
+		ShortTitle:          panelaunch.ShortIssueTitle(title),
+		Slug:                panelaunch.PlanIssueSlug(issue.Number, number),
+		DisplayNameOverride: title,
+		Prompt:              planSkillPrompt(coordinatorAgent, briefingPath),
+		Agent:               coordinatorAgent,
+		ShellKey:            livenessKey,
+		Hooks:               hookConfig,
+		BriefingPath:        briefingPath,
+		BriefingBody:        briefing.RenderIssuePlanCoordinator(issue.Number, issue.Title, issue.Body, workerAgent),
+	}
+}
+
 // planSkillPrompt points the coordinator agent at the raw prompt file and
 // invokes the fanout-plan skill to decompose it. Codex uses the `$fanout-plan`
 // invocation; claude uses the `/fanout plan` slash command.
@@ -197,6 +320,17 @@ func planPromptPath(projectRoot string, number int) string {
 		number = -number
 	}
 	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-prompt-%d.md", filepath.Base(projectRoot), number))
+}
+
+// planIssuePromptPath mirrors planPromptPath for the issue-sourced coordinator's
+// briefing file. The per-launch synthetic pane number keeps relaunches (after a
+// closed coordinator) from overwriting a brief an earlier coordinator may still
+// be reading: <projectRoot>/.fanout/briefings/fanout-<repo>-plan-issue-<num>-<n>.md.
+func planIssuePromptPath(projectRoot string, issueNum, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-issue-%d-%d.md", filepath.Base(projectRoot), issueNum, number))
 }
 
 func planPromptSlug(number int) string {

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
@@ -61,6 +65,314 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	}
 	if req.ShellKey != "shell-coordinator-key" {
 		t.Fatalf("req.ShellKey = %q, want the liveness key passed through", req.ShellKey)
+	}
+}
+
+// TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief pins the issue-sourced
+// plan coordinator pane request: a plain (non-Codex-Plan-Mode) agent whose
+// one-line prompt invokes the fanout-plan skill on the issue-derived coordinator
+// brief, and whose briefing carries the issue title/body, the worker --agent
+// override, and the "Refs #N" (never "Closes") requirement.
+func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
+	issue := ghissue.Issue{
+		Number: 123,
+		Title:  "Add full-text search",
+		Body:   "Users cannot search issues by keyword.",
+	}
+	tests := []struct {
+		name        string
+		coordinator string
+		wantPrefix  string
+	}{
+		{name: "claude coordinator uses the slash command", coordinator: "claude", wantPrefix: "/fanout plan "},
+		{name: "codex coordinator uses the dollar invocation", coordinator: "codex", wantPrefix: "$fanout-plan "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newIssuePlanPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, tt.coordinator, "codex", "shell-issue-plan-key")
+
+			if !strings.HasPrefix(req.Prompt, tt.wantPrefix) {
+				t.Fatalf("req.Prompt = %q, want %q prefix", req.Prompt, tt.wantPrefix)
+			}
+			if !strings.Contains(req.Prompt, req.BriefingPath) {
+				t.Fatalf("req.Prompt %q does not reference briefing path %q", req.Prompt, req.BriefingPath)
+			}
+			// The trailing -1 is the synthetic pane number: per-launch unique so a
+			// relaunch never overwrites a brief an earlier coordinator still reads.
+			if base := filepath.Base(req.BriefingPath); base != "fanout-repo-plan-issue-123-1.md" {
+				t.Fatalf("briefing basename = %q, want fanout-repo-plan-issue-123-1.md", base)
+			}
+			if !strings.Contains(req.BriefingBody, issue.Title) {
+				t.Fatalf("req.BriefingBody = %q, want the issue title", req.BriefingBody)
+			}
+			if !strings.Contains(req.BriefingBody, issue.Body) {
+				t.Fatalf("req.BriefingBody = %q, want the issue body", req.BriefingBody)
+			}
+			// The worker agent flows into the fan-out command; a codex worker pins the override.
+			if !strings.Contains(req.BriefingBody, "--agent codex") {
+				t.Fatalf("req.BriefingBody = %q, want a --agent codex worker override", req.BriefingBody)
+			}
+			if !strings.Contains(req.BriefingBody, "Refs #123") {
+				t.Fatalf("req.BriefingBody = %q, want a Refs #123 requirement", req.BriefingBody)
+			}
+			if req.CodexPlanMode {
+				t.Fatal("req.CodexPlanMode = true, want false for a plan coordinator")
+			}
+			if req.ParentRef != panelaunch.ManualParentRef {
+				t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
+			}
+			if req.ShellKey != "shell-issue-plan-key" {
+				t.Fatalf("req.ShellKey = %q, want the liveness key passed through", req.ShellKey)
+			}
+			if req.Slug != "plan-issue-123-1" {
+				t.Fatalf("req.Slug = %q, want plan-issue-123-1", req.Slug)
+			}
+			if want := "plan: #123 Add full-text search"; req.Title != want {
+				t.Fatalf("req.Title = %q, want %q", req.Title, want)
+			}
+		})
+	}
+}
+
+// writeSavedPlanSpec writes .fanout/plans/<slug>.json declaring source, the
+// provenance PlanLinkedIssueNums verifies before linking plan task rows.
+func writeSavedPlanSpec(t *testing.T, projectRoot, slug, source string) {
+	t.Helper()
+	dir := filepath.Join(projectRoot, ".fanout", "plans")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"version":1,"plan":{"slug":%q,"title":"t","source":%q},"tasks":[]}`, slug, source)
+	if err := os.WriteFile(filepath.Join(dir, slug+".json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGuardIssuePlanCoordinator pins the plan-checkbox dedupe run on the locked
+// store: a recorded coordinator, plan task rows whose saved spec declares the
+// issue, or any recorded pane for the issue blocks a second launch.
+func TestGuardIssuePlanCoordinator(t *testing.T) {
+	tests := []struct {
+		name    string
+		panes   []state.Pane
+		spec    [2]string // slug, source — written to .fanout/plans when set
+		wantErr string
+	}{
+		{
+			name:    "empty store allows the launch",
+			panes:   nil,
+			wantErr: "",
+		},
+		{
+			name:    "recorded coordinator for the issue blocks",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"}},
+			wantErr: "issue #123 already has a plan session",
+		},
+		{
+			name:    "coordinator for a different issue does not alias by prefix",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-1234-1"}},
+			wantErr: "",
+		},
+		{
+			// The coordinator closed after the live fan-out; its plan task rows
+			// still own the issue through the saved spec's declared source, so a
+			// second coordinator (and spec regen) is rejected.
+			name:    "surviving plan task rows with declared source block",
+			panes:   []state.Pane{{Parent: "plan:issue-123-add-search", TaskID: "base-types", Slug: "issue-123-add-search-base-types"}},
+			spec:    [2]string{"issue-123-add-search", "issue #123"},
+			wantErr: "issue #123 already has a plan session",
+		},
+		{
+			// An issue-like plan slug without declared provenance must not block
+			// the issue (a hand-authored plan may just be named that way).
+			name:    "issue-like plan slug without declared source never blocks",
+			panes:   []state.Pane{{Parent: "plan:issue-123-migration", TaskID: "move", Slug: "issue-123-migration-move"}},
+			spec:    [2]string{"issue-123-migration", "path-or-conversation-label"},
+			wantErr: "",
+		},
+		{
+			name:    "recorded work pane for the issue blocks",
+			panes:   []state.Pane{{Parent: "@watch", IssueNum: 123, Slug: "fix-search-123"}},
+			wantErr: "issue #123 already has a fanout pane",
+		},
+		{
+			// A legacy/other-parent row identified only by its worktree suffix is
+			// fanned in the normal lanes, so the plan lane refuses it too.
+			name:    "worktree-suffix fallback row blocks",
+			panes:   []state.Pane{{Parent: "900", IssueNum: 999, Slug: "api-client-123", WorktreePath: "/repo/.fanout/worktrees/api-client-123"}},
+			wantErr: "issue #123 already has a fanout pane",
+		},
+		{
+			name:    "prompt coordinator rows never block an issue launch",
+			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-prompt-1"}},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.spec[0] != "" {
+				writeSavedPlanSpec(t, root, tt.spec[0], tt.spec[1])
+			}
+			err := guardIssuePlanCoordinator(root, state.Store{Panes: tt.panes}, 123)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("guardIssuePlanCoordinator(root, store, 123) = %v, want nil", err)
+			case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
+				t.Fatalf("guardIssuePlanCoordinator(root, store, 123) = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestHasRecordedIssuePaneSeesPlanSessions pins the reverse dedupe: while a
+// coordinator or its surviving plan task rows exist, the normal issue lane
+// (launchStandaloneIssuePane and the watcher) must not start a second session
+// for the same issue.
+func TestHasRecordedIssuePaneSeesPlanSessions(t *testing.T) {
+	root := t.TempDir()
+	writeSavedPlanSpec(t, root, "issue-474-add-search", "issue #474")
+	store := state.Store{Panes: []state.Pane{
+		{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"},
+		{Parent: "plan:issue-474-add-search", TaskID: "base", Slug: "issue-474-add-search-base"},
+	}}
+	if !hasRecordedIssuePane(root, store, 123) {
+		t.Fatal("hasRecordedIssuePane(root, store, 123) = false, want true for a recorded plan coordinator")
+	}
+	if !hasRecordedIssuePane(root, store, 474) {
+		t.Fatal("hasRecordedIssuePane(root, store, 474) = false, want true for surviving plan task rows")
+	}
+	if hasRecordedIssuePane(root, store, 12) {
+		t.Fatal("hasRecordedIssuePane(root, store, 12) = true, want false for a different issue")
+	}
+}
+
+// TestLaunchParentIssueFanoutRejectsPlanSession pins the parent-lane guard: an
+// issue owned by a plan session (here: surviving plan task rows) must not also
+// fan out its children, even when it gained OPEN children after the plan
+// coordinator launched.
+func TestLaunchParentIssueFanoutRejectsPlanSession(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(state.Pane{Parent: "plan:issue-123-add-search", TaskID: "base", Slug: "issue-123-add-search-base", PaneID: "%9"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	writeSavedPlanSpec(t, repo, "issue-123-add-search", "issue #123")
+
+	_, err = launchParentIssueFanout(repo, "fanout-test", "fanout", tuiIssueLaunchConfig(123, "claude", nil))
+	if err == nil || !strings.Contains(err.Error(), "issue #123 already has a plan session") {
+		t.Fatalf("launchParentIssueFanout() error = %v, want plan-session rejection", err)
+	}
+}
+
+// installFakeAgentCLIs puts executable claude/codex stubs next to the fake gh
+// so the up-front agent ValidateInstalled checks pass in agent-less CI
+// environments; the shim dir already leads PATH.
+func installFakeAgentCLIs(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLaunchIssuePlanFromTUIRejectsClosedIssue pins the launch-time re-fetch:
+// a picker row gone stale (issue closed meanwhile) is rejected by state.
+func TestLaunchIssuePlanFromTUIRejectsClosedIssue(t *testing.T) {
+	shimArgs := installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 7 --json number,title,state,body,labels")
+  printf '{"number":7,"title":"Stale row","state":"CLOSED","body":"","labels":[]}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	installFakeAgentCLIs(t, filepath.Dir(shimArgs))
+	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
+	if err == nil || !strings.Contains(err.Error(), "issue #7 is not OPEN") {
+		t.Fatalf("launchIssuePlanFromTUI(closed issue) error = %v, want not-OPEN rejection", err)
+	}
+}
+
+// TestLaunchIssuePlanFromTUIBackstopsOpenChildren pins the gray-out backstop:
+// the picker's child marker can be stale, so an issue that has OPEN children at
+// launch time is rejected instead of getting a plan coordinator.
+func TestLaunchIssuePlanFromTUIBackstopsOpenChildren(t *testing.T) {
+	shimArgs := installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 7 --json number,title,state,body,labels")
+  printf '{"number":7,"title":"Epic","state":"OPEN","body":"","labels":[]}'
+  ;;
+"api --paginate --slurp repos/{owner}/{repo}/issues/7/sub_issues?per_page=100")
+  printf '[[{"number":8,"title":"child","state":"open"}]]'
+  ;;
+"issue view 7 --json body -q .body")
+  printf ''
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+	installFakeAgentCLIs(t, filepath.Dir(shimArgs))
+	_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "codex")
+	if err == nil || !strings.Contains(err.Error(), "issue #7 has 1 open children; uncheck the plan checkbox") {
+		t.Fatalf("launchIssuePlanFromTUI(open children) error = %v, want backstop rejection", err)
+	}
+}
+
+// TestLaunchIssuePlanFromTUIValidatesBeforeGH pins the fail-fast validation:
+// a bad issue number, an unknown agent name, or an uninstalled agent CLI must
+// be rejected before any gh call, so no gh binary is needed on PATH. The
+// worker is every task's default agent, so its missing CLI must fail here
+// instead of after the coordinator pane launched.
+func TestLaunchIssuePlanFromTUIValidatesBeforeGH(t *testing.T) {
+	tests := []struct {
+		name        string
+		issueNum    int
+		coordinator string
+		worker      string
+		installed   []string
+		wantErr     string
+	}{
+		{name: "rejects non-positive issue number", issueNum: 0, coordinator: "claude", worker: "codex", wantErr: "issue number is required"},
+		{name: "rejects unknown coordinator agent", issueNum: 7, coordinator: "bogus", worker: "codex", wantErr: `unknown agent "bogus"`},
+		{name: "rejects unknown worker agent", issueNum: 7, coordinator: "claude", worker: "bogus", wantErr: `unknown agent "bogus"`},
+		{name: "rejects uninstalled coordinator agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"codex"}, wantErr: `agent "claude" is not installed`},
+		{name: "rejects uninstalled worker agent", issueNum: 7, coordinator: "claude", worker: "codex", installed: []string{"claude"}, wantErr: `agent "codex" is not installed`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// PATH holds only the case's fake agent CLIs: a validation that leaked
+			// to a gh call would fail with a gh-not-found error instead of the
+			// expected message, exposing the bug.
+			binDir := t.TempDir()
+			for _, name := range tt.installed {
+				if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", binDir)
+			_, err := launchIssuePlanFromTUI(t.TempDir(), "fanout-test", "fanout", hooks.EmptyConfig(), tt.issueNum, tt.coordinator, tt.worker)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("launchIssuePlanFromTUI() error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

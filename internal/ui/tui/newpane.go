@@ -30,8 +30,9 @@ type LaunchRequest struct {
 	Mode   LaunchMode
 	Prompt string // Mode == prompt
 	Issue  int    // Mode == issue: the selected issue number
-	// PlanFanout is prompt mode only: decompose the prompt via the fanout-plan
-	// skill instead of launching a plain agent pane.
+	// PlanFanout decomposes the source via the fanout-plan skill instead of
+	// launching plain agent panes: the prompt in prompt mode, the selected
+	// issue in issue mode.
 	PlanFanout bool
 	// Agents holds the prompt-mode launch list (one pane per entry).
 	Agents []string
@@ -40,6 +41,9 @@ type LaunchRequest struct {
 	// differ from DefaultAgent, mirroring repeatable --agent target=name flags.
 	DefaultAgent   string
 	AgentOverrides map[string]string
+	// WorkerAgent is issue mode with PlanFanout only: the default agent the
+	// coordinator passes to `fanout plan --agent` for the fanned-out tasks.
+	WorkerAgent string
 }
 
 // LaunchResult reports the panes created by a successful TUI launch. Pane IDs
@@ -55,6 +59,10 @@ type LaunchFunc func(LaunchRequest) (LaunchResult, error)
 // IssueLaunchFunc starts a session for one GitHub issue: a fan-out when the
 // issue has OPEN children, a single pane otherwise.
 type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (LaunchResult, error)
+
+// IssuePlanLaunchFunc launches one plan coordinator pane that decomposes a
+// single GitHub issue into issue-less fanout plan tasks run by workerAgent.
+type IssuePlanLaunchFunc func(issueNum int, coordinatorAgent, workerAgent string) (LaunchResult, error)
 
 // IssueOpenFunc opens a GitHub issue in an external browser surface.
 type IssueOpenFunc func(issueNum int) error
@@ -118,6 +126,7 @@ const (
 	newPaneFieldMain
 	newPaneFieldPlan
 	newPaneFieldAgent
+	newPaneFieldWorker
 )
 
 // newPaneMode is the form's input lane: the classic free prompt or the OPEN
@@ -157,9 +166,17 @@ type newPaneForm struct {
 	err         string
 	attach      *AttachTarget
 
-	// planFanout is the prompt-mode checkbox: decompose the prompt via the
-	// fanout-plan skill instead of launching a plain agent pane.
+	// planFanout is the prompt-mode plan fan-out checkbox: decompose the prompt
+	// via the fanout-plan skill instead of launching plain agent panes.
 	planFanout bool
+	// issuePlanFanout is the issue-mode counterpart: decompose the selected
+	// issue into issue-less plan tasks via one coordinator pane. The two modes
+	// keep separate toggles so peeking at one mode never changes what the other
+	// mode's submit launches (see syncAgentSelectionForMode's invariant).
+	issuePlanFanout bool
+	// workerIndex is the issue-mode plan fan-out task-agent selection: the
+	// launchAgents index the coordinator passes to `fanout plan --agent`.
+	workerIndex int
 
 	// Issue mode state. The default-agent choice reuses the prompt-mode count
 	// selector (agentCount/agentIndex), constrained to a single-agent selection.
@@ -352,10 +369,11 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
-		prompt:     prompt,
-		agentCount: defaultAgentCounts(defaultAgent),
-		agentIndex: defaultAgentIndex(defaultAgent),
-		focus:      newPaneFieldMain,
+		prompt:      prompt,
+		agentCount:  defaultAgentCounts(defaultAgent),
+		agentIndex:  defaultAgentIndex(defaultAgent),
+		workerIndex: defaultAgentIndex(defaultAgent),
+		focus:       newPaneFieldMain,
 	}
 }
 
@@ -477,11 +495,23 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncAgentSelectionForMode()
 			return m, cmd
 		case newPaneFieldPlan:
+			if m.newPane.mode == newPaneModeIssue {
+				// Defensive: the focus order withholds the Plan row when the issue
+				// selection cannot decompose, so this should be unreachable.
+				if m.issuePlanFanoutDisabled() {
+					return m, nil
+				}
+				m.newPane.issuePlanFanout = !m.newPane.issuePlanFanout
+				return m, nil
+			}
 			m.newPane.planFanout = !m.newPane.planFanout
 			m.syncAgentSelectionForMode()
 			return m, nil
 		case newPaneFieldAgent:
 			m.adjustNewPaneAgent(msg.String())
+			return m, nil
+		case newPaneFieldWorker:
+			m.cycleNewPaneWorker(msg.String())
 			return m, nil
 		default:
 			// Main field: the key falls through to the text/filter routing below.
@@ -489,6 +519,7 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "down", "ctrl+p", "ctrl+n":
 		if m.newPane.focus == newPaneFieldMain && m.newPane.mode != newPaneModePrompt {
 			m.moveActivePicker(pickerMoveDelta(msg.String()))
+			m.clampNewPaneFocus()
 			return m, nil
 		}
 		if (msg.String() == "up" || msg.String() == "down") && m.newPane.focus != newPaneFieldMain {
@@ -549,18 +580,78 @@ func (m *model) moveNewPaneFocus(key string) {
 }
 
 // newPaneFocusOrder hides the Mode row when only the classic prompt mode is
-// wired, and offers the plan fan-out checkbox only in a non-attach prompt form.
+// wired, and offers the plan fan-out checkbox in a non-attach prompt form or an
+// issue form whose selection can decompose. Issue-mode plan fan-out adds the
+// task-agent row right after the coordinator agent.
 func (m model) newPaneFocusOrder() []newPaneField {
-	order := make([]newPaneField, 0, 4)
+	order := make([]newPaneField, 0, 5)
 	if len(m.availableNewPaneModes()) > 1 {
 		order = append(order, newPaneFieldMode)
 	}
 	order = append(order, newPaneFieldMain)
-	if m.newPane.mode == newPaneModePrompt && m.newPane.attach == nil {
+	planEnabled := m.newPane.attach == nil &&
+		(m.newPane.mode == newPaneModePrompt ||
+			(m.newPane.mode == newPaneModeIssue && !m.issuePlanFanoutDisabled()))
+	if planEnabled {
 		order = append(order, newPaneFieldPlan)
 	}
 	order = append(order, newPaneFieldAgent)
+	if planEnabled && m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutActive() {
+		order = append(order, newPaneFieldWorker)
+	}
 	return order
+}
+
+// issuePlanFanoutDisabled reports whether issue-mode plan fan-out cannot apply
+// to the current selection: no issue is selected, or the selected issue already
+// has OPEN children (those fan out as plain panes, not a plan). It is always
+// false in prompt mode, where the checkbox governs the free prompt.
+//
+// hasOpenChildren mirrors the picker's Sub-issues-only marker, so an issue
+// whose OPEN children exist only as parent-body task-list rows stays togglable
+// here; launchIssuePlanFromTUI's countOpenChildTargets backstop (the union of
+// both sources) rejects that launch with a guiding error.
+func (m model) issuePlanFanoutDisabled() bool {
+	if m.newPane.mode != newPaneModeIssue {
+		return false
+	}
+	item, ok := m.newPane.issuePicker.selectedItem()
+	if !ok {
+		return true
+	}
+	return item.hasOpenChildren
+}
+
+// issuePlanFanoutActive reports whether an issue-mode submit decomposes via a
+// plan coordinator: the checkbox is on and the current selection can decompose.
+// A checked box over a disabled selection stays checked but inert (rendered
+// dimmed), so transient picker states — a zero-match filter, a keystroke that
+// momentarily top-ranks an open-children issue — never silently discard the
+// user's explicit choice.
+func (m model) issuePlanFanoutActive() bool {
+	return m.newPane.issuePlanFanout && !m.issuePlanFanoutDisabled()
+}
+
+// clampNewPaneFocus moves focus onto a valid row when the focused field just
+// left the focus order (the Plan or Worker row vanished after a selection
+// change). It lands on the agent row, which is always present.
+func (m *model) clampNewPaneFocus() {
+	if slices.Contains(m.newPaneFocusOrder(), m.newPane.focus) {
+		return
+	}
+	m.newPane.focus = newPaneFieldAgent
+	m.newPane.prompt.Blur()
+}
+
+// cycleNewPaneWorker advances the issue-mode plan fan-out task-agent selection,
+// wrapping in both directions like the mode tabs.
+func (m *model) cycleNewPaneWorker(key string) {
+	switch key {
+	case "left":
+		m.newPane.workerIndex = (m.newPane.workerIndex + len(launchAgents) - 1) % len(launchAgents)
+	default:
+		m.newPane.workerIndex = (m.newPane.workerIndex + 1) % len(launchAgents)
+	}
 }
 
 func (m *model) moveNewPaneAgent(key string) {
@@ -765,6 +856,9 @@ func (m *model) openNewPanePopupCmd() tea.Cmd {
 func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 	switch req.Mode {
 	case LaunchModeIssue:
+		if req.PlanFanout {
+			return m.launchIssuePlanRequest(req)
+		}
 		return m.launchIssueSessionRequest(req)
 	default:
 		// Prompt mode continues below.
@@ -830,10 +924,17 @@ func (m model) newPaneView() string {
 	}
 	switch m.newPane.mode {
 	case newPaneModeIssue:
+		// The checkbox joins the Issue section with a single newline: the extra
+		// blank separator would push the launching-state form past a 24-row
+		// terminal (pickerVisibleRows budgets one line for it).
 		sections = append(sections,
-			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true),
-			m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false),
-		)
+			m.newPaneFieldView(newPaneFieldMain, "Issue", m.pickerView(m.newPane.issuePicker, "no open issues"), true)+
+				"\n"+m.issuePlanFanoutCheckboxView())
+		if m.issuePlanFanoutActive() {
+			sections = append(sections, m.coordinatorWorkerRowView())
+		} else {
+			sections = append(sections, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
+		}
 	default:
 		promptSection := m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true)
 		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
@@ -880,7 +981,13 @@ func (m model) renderNewPaneModal(content string) string {
 
 func (m model) newPaneHint() string {
 	if m.newPane.mode != newPaneModePrompt {
-		return "enter next  ctrl+o open issue  type to filter  tab field  esc cancel"
+		enter := "enter next"
+		if m.newPane.mode == newPaneModeIssue && m.issuePlanFanoutActive() {
+			// Kept short: a longer verb wraps the hint to a third line at
+			// narrow modal widths and overflows the form height.
+			enter = "enter coordinator"
+		}
+		return enter + "  ctrl+o open issue  type to filter  tab field  esc cancel"
 	}
 	// Only advertise Shift+Enter when enhanced keyboard input is active; otherwise
 	// it submits the form and the hint would mislead. Ctrl+J always inserts a newline.
@@ -930,6 +1037,68 @@ func (m model) planFanoutCheckboxView() string {
 		text = dimStyle.Render(text)
 	}
 	return marker + text
+}
+
+// issuePlanFanoutCheckboxView renders the issue-mode plan fan-out toggle. When
+// the selection cannot decompose (none selected, or one with OPEN children that
+// fan out as plain panes) the row stays visible but dimmed and inert, with a
+// "(has open children)" suffix naming the reason.
+func (m model) issuePlanFanoutCheckboxView() string {
+	marker := plainItemMarker
+	if m.newPane.focus == newPaneFieldPlan {
+		marker = selectedItemMarker
+	}
+	box := "[ ]"
+	if m.newPane.issuePlanFanout {
+		box = "[x]"
+	}
+	text := box + " decompose via /fanout plan"
+	if m.issuePlanFanoutDisabled() {
+		if item, ok := m.newPane.issuePicker.selectedItem(); ok && item.hasOpenChildren {
+			text += " (has open children)"
+		}
+		return marker + dimStyle.Render(text)
+	}
+	if m.newPane.issuePlanFanout {
+		text = titleStyle.Render(text)
+	} else {
+		text = dimStyle.Render(text)
+	}
+	return marker + text
+}
+
+// coordinatorWorkerRowView renders the issue-mode plan fan-out agent choices as
+// one side-by-side block (coordinator selector next to the task-agent tabs), so
+// turning the checkbox on never grows the form taller than the plain Agent row:
+// the popup geometry has no room for extra rows at common terminal heights.
+func (m model) coordinatorWorkerRowView() string {
+	coordMarker, workerMarker := plainItemMarker, plainItemMarker
+	if m.newPane.focus == newPaneFieldAgent {
+		coordMarker = selectedItemMarker
+	}
+	if m.newPane.focus == newPaneFieldWorker {
+		workerMarker = selectedItemMarker
+	}
+	coord := coordMarker + "Coordinator agent\n" + m.agentSelectorView()
+	worker := workerMarker + "Task agent\n" + m.workerSelectorView()
+	// A two-space gap keeps the joined block inside the modal's 40-column
+	// width floor on narrow terminals.
+	return lipgloss.JoinHorizontal(lipgloss.Top, coord, "  ", worker)
+}
+
+// workerSelectorView renders the issue-mode plan fan-out task-agent tabs: the
+// default agent the coordinator passes to `fanout plan --agent`. workerIndex
+// selects one of launchAgents; the row cycles like the mode tabs.
+func (m model) workerSelectorView() string {
+	parts := make([]string, 0, len(launchAgents))
+	for i, agentName := range launchAgents {
+		if i == m.newPane.workerIndex {
+			parts = append(parts, titleStyle.Render("["+agentName+"]"))
+		} else {
+			parts = append(parts, dimStyle.Render(" "+agentName+" "))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m model) agentSelectorView() string {

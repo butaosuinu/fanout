@@ -51,6 +51,9 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		LaunchParent: func(issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
 			return launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
 		},
+		PlanLinkedIssueNums: func(store state.Store) map[int]bool {
+			return panelaunch.PlanLinkedIssueNums(projectRoot, store)
+		},
 	}
 	cfg := watch.Config{
 		TriggerLabel: resolvedSettings.WatcherTriggerLabel,
@@ -102,7 +105,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 			_ = recorder.Unlock()
 		}()
 	}
-	if hasRecordedIssuePane(store, issue.Number) {
+	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
 		return "", watch.ErrAlreadyFanned
 	}
 	info := &fanoutruntime.Info{
@@ -141,6 +144,13 @@ type parentIssueFanoutResult struct {
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
 // deliberately discards them so it cannot steal focus.
 func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config) (parentIssueFanoutResult, error) {
+	// A plan session for this issue (a coordinator, or the tasks it fanned out)
+	// must finish or be closed before the child fan-out lane runs, or the two
+	// decompose the same work twice. Best-effort read: a state read failure
+	// degrades to the pre-existing unguarded behavior.
+	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(projectRoot, store, cfg.Parent) {
+		return parentIssueFanoutResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
+	}
 	gh := ghissue.Runner{Cwd: projectRoot}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
@@ -297,10 +307,14 @@ func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, gh ghissue.R
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
 	worktreeFallbackFanned := run.ExistingWorktreeFanned(cfg, projectRoot, loaded.Children, otherParentFanned)
+	// Match run.Issues: plan-owned children never become targets, so the
+	// watcher's capacity planning and post-launch remaining-target recompute
+	// agree with what a launch would actually create.
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(projectRoot, store)
 	return run.BuildPlan(
 		cfg,
 		loaded.Children,
-		fanset.Union(sameParentFanned, worktreeFallbackFanned),
+		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			// Match run.Issues: a hydration failure degrades blocker checks
@@ -375,11 +389,20 @@ func mergeWatchExtraChildren(cfg *cliflags.Config, gh ghissue.Runner, base []ghi
 	return ghissue.MergeExtra(base, extra), len(extra)
 }
 
-func hasRecordedIssuePane(store state.Store, issueNum int) bool {
+func hasRecordedIssuePane(projectRoot string, store state.Store, issueNum int) bool {
 	for _, pane := range store.Panes {
 		if pane.IssueNum == issueNum {
 			return true
 		}
+		// The worktree-suffix fallback matches legacy and other-parent rows the
+		// watcher's alreadyFanned treats as fanned, so the standalone and plan
+		// lanes refuse the same set of issues.
+		if pane.IssueNum > 0 && watch.PaneWorktreeMatchesIssue(pane, issueNum) {
+			return true
+		}
 	}
-	return false
+	// Plan-lane rows bind to their issue only through the coordinator slug or
+	// the saved spec's declared source. Without this, a standalone launch for
+	// the issue would run alongside the plan session and duplicate the work.
+	return issuePlanRecorded(projectRoot, store, issueNum)
 }

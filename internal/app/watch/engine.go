@@ -88,6 +88,12 @@ type IO struct {
 	PaneAlive         func(pane state.Pane) (bool, error)
 	LaunchStandalone  func(issue ghissue.Issue) error
 	LaunchParent      func(issue ghissue.Issue, limit int) (ParentLaunchResult, error)
+	// PlanLinkedIssueNums maps recorded plan-lane rows to the GitHub issues
+	// they decompose (production wires panelaunch.PlanLinkedIssueNums). Plan
+	// rows carry no positive IssueNum, so without this link a plan-owned issue
+	// keeping its trigger label would be relaunched or relabeled every cycle.
+	// Optional: nil means no plan links.
+	PlanLinkedIssueNums func(store state.Store) map[int]bool
 }
 
 // ChildCounts separates parent classification from launch-capacity accounting.
@@ -215,6 +221,10 @@ func (e *Engine) PlanCycle() (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("load fanout state: %w", err)
 	}
+	planOwned := map[int]bool{}
+	if e.io.PlanLinkedIssueNums != nil {
+		planOwned = e.io.PlanLinkedIssueNums(store)
+	}
 	running, err := countLivePanes(store, e.io.PaneAlive)
 	if err != nil {
 		return Report{}, err
@@ -256,6 +266,17 @@ func (e *Engine) PlanCycle() (Report, error) {
 				RetryAfter: failure.NextRetryAt.Sub(now),
 				RetryAt:    failure.NextRetryAt,
 			})
+			continue
+		}
+		// Plan-owned issues skip on state alone, before capacity deferral and
+		// the GitHub child count: a full session budget or a transient count
+		// failure must not keep reporting a plan-owned issue as deferred or
+		// failing every cycle.
+		if planOwned[issue.Number] {
+			if candidate.retryKind != "" {
+				delete(e.runningRetries, issue.Number)
+			}
+			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
 			continue
 		}
 		if remaining == 0 {
@@ -300,7 +321,7 @@ func (e *Engine) PlanCycle() (Report, error) {
 			action.Kind = LaunchParent
 			consumes = launchableChildren
 		}
-		if alreadyFanned(store, action) {
+		if alreadyFanned(store, planOwned, action) {
 			if candidate.retryKind != "" {
 				delete(e.runningRetries, issue.Number)
 			}
@@ -566,9 +587,17 @@ func reportRemaining(remaining int) int {
 	return remaining
 }
 
-func alreadyFanned(store state.Store, action Action) bool {
+func alreadyFanned(store state.Store, planOwned map[int]bool, action Action) bool {
 	if action.Issue.Number <= 0 {
 		return false
+	}
+	// A plan session owns its source issue outright, so the check runs before
+	// the LaunchParent early-return: a plan-owned issue that later gained
+	// children must skip here, not fail the parent launch into backoff and the
+	// three-strike disable, and not be relabeled trigger->running->trigger on
+	// every cycle before the standalone launch's late ErrAlreadyFanned fallback.
+	if planOwned[action.Issue.Number] {
+		return true
 	}
 	if action.Kind == LaunchParent {
 		return false
@@ -602,6 +631,15 @@ func hasLivePaneForParent(store state.Store, issueNum int, alive func(state.Pane
 		}
 	}
 	return false, nil
+}
+
+// PaneWorktreeMatchesIssue reports whether a recorded pane's slug or worktree
+// directory name ends in the issue number: the fallback identity for legacy or
+// other-parent rows whose IssueNum does not match directly. The TUI issue-plan
+// guard shares it so the plan lane refuses exactly what this lane treats as
+// already fanned.
+func PaneWorktreeMatchesIssue(pane state.Pane, issueNum int) bool {
+	return paneWorktreeMatchesIssue(pane, issueNum)
 }
 
 func paneWorktreeMatchesIssue(pane state.Pane, issueNum int) bool {

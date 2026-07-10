@@ -93,10 +93,11 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `plancmd.go` (`fanout plan` flag parsing/validation; execution lives in
   `app/run`), `status.go` / `lifecycle.go` / `msg.go` (thin dispatch into
   `app/statusreport`, `app/lifecycle`, `app/peermsg`), `dashboard.go`,
-  `tui*.go` (no-argument console wiring; the prompt-mode plan fan-out
-  launches one coordinator pane at the project root so `fanout plan`'s git
-  root stays at the repo, never Codex Plan Mode), and `tui_popup.go`
-  (self-exec popup subcommands). `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
+  `tui*.go` (no-argument console wiring; the plan fan-out (prompt mode's
+  checkbox, and issue mode's for a single issue) launches one coordinator
+  pane at the project root so `fanout plan`'s git root stays at the repo,
+  never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
+  `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
   `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` /
   `post_work_review_json.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are

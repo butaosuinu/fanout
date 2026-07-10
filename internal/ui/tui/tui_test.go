@@ -5237,6 +5237,9 @@ func TestNewPaneFallbackIssueLaunchingViewFitsStandardHeightWithModeRow(t *testi
 		},
 	})
 	m.width = 80
+	// 24 rows is the standard terminal height this form fit before the plan
+	// checkbox existed; the checkbox joins the Issue section without a blank
+	// separator precisely so the launching issue form keeps fitting it.
 	m.height = 24
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue

@@ -80,11 +80,25 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
 	worktreeFallbackFanned := ExistingWorktreeFanned(cfg, rt.Info.ProjectRoot, loaded.Children, otherParentFanned)
+	// Issues owned by a plan session (an issue-sourced coordinator or its plan
+	// task rows) count as fanned: their rows carry no positive IssueNum, so the
+	// parent-keyed sets above cannot see them, and launching a plain child pane
+	// would decompose the same work twice.
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(rt.Info.ProjectRoot, store)
+	// The parent itself being plan-owned aborts the run outright (checked here,
+	// under the state lock, so a racing coordinator launch cannot slip past a
+	// caller's unlocked pre-check): its children were not part of the plan
+	// decomposition, and fanning them out alongside the plan splits the issue
+	// across two uncoordinated sessions.
+	if cfg.ParentMode == cliflags.ModeIssue && planOwnedFanned[cfg.Parent] {
+		lg.Err("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
+		return IssueExecutionResult{}, exitcode.Env
+	}
 
 	plan := BuildPlan(
 		cfg,
 		loaded.Children,
-		fanset.Union(sameParentFanned, worktreeFallbackFanned),
+		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			if err := rt.GH.HydrateBodyLabels(issue); err != nil {
