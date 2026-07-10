@@ -256,7 +256,11 @@ check:
 check-marker:
 	@set -eu; \
 		git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; \
-		if [ -n "$$(git status --porcelain -uall)" ]; then \
+		status_out="$$(git status --porcelain -uall)" || { \
+			echo "error: git status failed; push-gate marker not written." >&2; \
+			exit 1; \
+		}; \
+		if [ -n "$$status_out" ]; then \
 			echo "warning: working tree is dirty; push-gate marker not written." >&2; \
 			echo "         commit the candidate and rerun make check to unlock git push." >&2; \
 			exit 0; \

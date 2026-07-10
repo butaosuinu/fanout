@@ -56,19 +56,36 @@ deny() {
 
 # parse_push_segment SEGMENT — return 0 when SEGMENT is a `git … push`
 # command. Sets SEG_ARGS (words after `push`, newline-separated), SEG_BYPASS
-# (a FANOUT_SKIP_PUSH_CHECK=1 assignment prefixes this command), and
-# SEG_GIT_C (newline-separated values of `git -C` in order).
+# (a FANOUT_SKIP_PUSH_CHECK=1 assignment prefixes this command), SEG_GIT_C
+# (newline-separated values of `git -C` in order), and SEG_REPO_SWITCH
+# (--git-dir/--work-tree seen — the gate cannot follow those, so the caller
+# fails closed).
 parse_push_segment() {
   SEG_ARGS=""
   SEG_BYPASS=0
   SEG_GIT_C=""
+  SEG_REPO_SWITCH=0
   # shellcheck disable=SC2086 # word splitting is the tokenizer here
   set -- $1
   while [ $# -gt 0 ]; do
     case "$1" in
     FANOUT_SKIP_PUSH_CHECK=1) SEG_BYPASS=1 ;;
     [A-Za-z_]*=*) ;;
-    env | command | exec | nohup) ;;
+    env)
+      # Consume env's own options so `env -i git push` is still a push.
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -u | -S | --split-string | -C | --chdir) shift ;;
+        --) shift; break ;;
+        -*) ;;
+        *) break ;;
+        esac
+        shift
+      done
+      continue
+      ;;
+    command | exec | nohup) ;;
     # Shell control words: `if git push …; then` must still gate the push.
     if | then | elif | else | fi | do | done | while | until | ! | time) ;;
     *) break ;;
@@ -84,7 +101,15 @@ parse_push_segment() {
       [ $# -gt 0 ] || return 1
       SEG_GIT_C="${SEG_GIT_C}${1}"$'\n'
       ;;
-    -c | --git-dir | --work-tree | --namespace | --config-env)
+    --git-dir | --work-tree | --git-dir=* | --work-tree=*)
+      SEG_REPO_SWITCH=1
+      case "$1" in --git-dir | --work-tree)
+        shift
+        [ $# -gt 0 ] || return 1
+        ;;
+      esac
+      ;;
+    -c | --namespace | --config-env)
       shift
       [ $# -gt 0 ] || return 1
       ;;
@@ -134,6 +159,9 @@ while IFS= read -r seg; do
   parse_push_segment "$seg" || continue
   [ "$SEG_BYPASS" = "1" ] && continue
   [ "$cmd_bypass" = "1" ] && continue
+  if [ "$SEG_REPO_SWITCH" = "1" ]; then
+    deny "--git-dir / --work-tree 経由の push はゲートが対象リポジトリを追跡できないため安全側で拒否します。対象リポジトリ内から通常の git push を実行してください。"
+  fi
 
   push_dir="$seg_dir"
   while IFS= read -r c_path; do
@@ -148,6 +176,7 @@ while IFS= read -r seg; do
   non_flag=0
   skip_next=0
   tag_kw=0
+  remote_w=""
   refspecs=()
   while IFS= read -r w; do
     [ -n "$w" ] || continue
@@ -164,20 +193,26 @@ while IFS= read -r seg; do
     \>* | [0-9]\>* | \<*)
       case "$w" in *\> | *\<) skip_next=1 ;; esac
       ;;
+    : | +:) all_flag=1 ;; # bare colon: matching push, every shared branch
     :*) deletions=$((deletions + 1)) ;;
     -*) ;;
     tag)
-      if [ "$non_flag" -ge 1 ]; then tag_kw=1; else non_flag=$((non_flag + 1)); fi
+      if [ "$non_flag" -ge 1 ]; then
+        tag_kw=1
+      else
+        non_flag=$((non_flag + 1))
+        remote_w="$w"
+      fi
       ;;
     *)
       non_flag=$((non_flag + 1))
-      if [ "$non_flag" -ge 2 ]; then
-        if [ "$tag_kw" = "1" ]; then
-          refspecs+=("refs/tags/$w")
-          tag_kw=0
-        else
-          refspecs+=("$w")
-        fi
+      if [ "$non_flag" -eq 1 ]; then
+        remote_w="$w"
+      elif [ "$tag_kw" = "1" ]; then
+        refspecs+=("refs/tags/$w")
+        tag_kw=0
+      else
+        refspecs+=("$w")
       fi
       ;;
     esac
@@ -205,8 +240,30 @@ while IFS= read -r seg; do
     if [ "$deletions" -gt 0 ] || [ "$tags_flag" = "1" ]; then
       continue # deletion-only push or pure `git push --tags [remote]`
     fi
-    required+=("HEAD")
-  else
+    # No explicit refspec: git falls back to remote.<name>.push, then
+    # push.default. A configured refspec set or `matching` can push tips
+    # other than HEAD.
+    if [ -z "$remote_w" ]; then
+      cur_branch="$(git -C "$push_dir" symbolic-ref --short -q HEAD 2>/dev/null)"
+      remote_w="$(git -C "$push_dir" config "branch.${cur_branch:-HEAD}.remote" 2>/dev/null)"
+      remote_w="${remote_w:-origin}"
+    fi
+    cfg_specs="$(git -C "$push_dir" config --get-all "remote.$remote_w.push" 2>/dev/null)"
+    if [ -n "$cfg_specs" ]; then
+      while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+        refspecs+=("$spec")
+      done <<<"$cfg_specs"
+    elif [ "$(git -C "$push_dir" config push.default 2>/dev/null)" = "matching" ]; then
+      while IFS= read -r tip; do
+        [ -n "$tip" ] || continue
+        required+=("$tip")
+      done < <(git -C "$push_dir" for-each-ref refs/heads --format='%(objectname)' 2>/dev/null | sort -u)
+    else
+      required+=("HEAD")
+    fi
+  fi
+  if [ "${#required[@]}" -eq 0 ] && [ "${#refspecs[@]}" -gt 0 ]; then
     for spec in "${refspecs[@]}"; do
       src="${spec%%:*}"
       src="${src#+}"

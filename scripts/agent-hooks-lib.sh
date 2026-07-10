@@ -85,6 +85,7 @@ strip_shell_noise() {
       }
       n = length(line)
       i = 1
+      joinnext = 0
       while (i <= n) {
         c = substr(line, i, 1)
         if (sq) {
@@ -102,6 +103,12 @@ strip_shell_noise() {
             i += 2
             continue
           }
+          # $(…) and `…` inside "…" still execute: break the segment and
+          # rescan the substitution as code (the string is prose, the
+          # substitution is not). The dangling close quote this leaves is an
+          # accepted heuristic imbalance.
+          if (c == "$" && substr(line, i + 1, 1) == "(") { dq = 0; buf = buf "\n"; i += 2; continue }
+          if (c == "`") { dq = 0; buf = buf "\n"; i++; continue }
           if (c == "\"") { dq = 0 }
           else if (c == " " || c == "\t") buf = buf S
           else buf = buf c
@@ -111,21 +118,27 @@ strip_shell_noise() {
         if (c == "\047") { sq = 1; i++; continue }
         if (c == "\"") { dq = 1; i++; continue }
         if (c == "\\") {
+          if (i == n) { joinnext = 1; i++; continue } # line continuation
           e = substr(line, i + 1, 1)
           if (e == " " || e == "\t") buf = buf S
-          else if (e != "") buf = buf e
+          else buf = buf e
           i += 2
           continue
         }
         if (c == "<" && substr(line, i + 1, 1) == "<" && substr(line, i + 2, 1) != "<") {
           j = i + 2
           if (substr(line, j, 1) == "-") j++
-          if (substr(line, j, 1) == "\047" || substr(line, j, 1) == "\"") j++
+          qc = ""
+          if (substr(line, j, 1) == "\047" || substr(line, j, 1) == "\"") {
+            qc = substr(line, j, 1)
+            j++
+          }
           w = ""
           while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_]/) {
             w = w substr(line, j, 1)
             j++
           }
+          if (qc != "" && substr(line, j, 1) == qc) j++ # closing quote of <<"EOF"
           if (w != "") { hd = 1; hdword = w; buf = buf " "; i = j; continue }
           buf = buf c
           i++
@@ -135,9 +148,10 @@ strip_shell_noise() {
         buf = buf c
         i++
       }
-      # A quoted span continuing past the line end keeps the word joined.
+      # A quoted span continuing past the line end keeps the word joined; a
+      # backslash continuation splices the next line into this segment.
       if (sq || dq) buf = buf S
-      else buf = buf "\n"
+      else if (!joinnext) buf = buf "\n"
     }
     END { printf "%s", buf }
   ' <<<"$1"

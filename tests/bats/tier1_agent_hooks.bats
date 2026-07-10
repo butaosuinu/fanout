@@ -280,6 +280,67 @@ run_push_gate() {
   [ "$status" -eq 0 ]
 }
 
+@test "push gate: shell continuation and substitution forms are still pushes" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+
+  # Backslash line continuation splices into one command.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push \\\\\\n  origin HEAD\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  # Command substitution inside double quotes executes the push.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"result=\\\"\$(git push origin HEAD)\\\"\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  run_push_gate 'env -i git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # A command chained onto a quoted heredoc opener is not heredoc body.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat <<'EOF' && git push origin HEAD\\nbody\\nEOF\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: repository-switching options fail closed" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_marker "$repo"
+
+  run_push_gate 'git --git-dir /elsewhere/.git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'git --work-tree=/elsewhere push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: implicit refspecs from git config are validated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" branch release
+  printf 'more\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm "second"
+  write_marker "$repo" # release's tip is one commit behind the marker
+
+  # Bare `git push origin` normally validates HEAD only.
+  run_push_gate 'git push origin' "$repo"
+  [ "$status" -eq 0 ]
+
+  # remote.<name>.push redirects the implicit refspec to a stale tip.
+  git -C "$repo" config remote.origin.push refs/heads/release:refs/heads/release
+  run_push_gate 'git push origin' "$repo"
+  [ "$status" -eq 2 ]
+  git -C "$repo" config --unset remote.origin.push
+
+  # push.default=matching pushes every shared branch; so does a bare colon.
+  git -C "$repo" config push.default matching
+  run_push_gate 'git push origin' "$repo"
+  [ "$status" -eq 2 ]
+  git -C "$repo" config --unset push.default
+  run_push_gate 'git push origin :' "$repo"
+  [ "$status" -eq 2 ]
+}
+
 @test "push gate: fails closed when extraction fails but the payload mentions git push" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
