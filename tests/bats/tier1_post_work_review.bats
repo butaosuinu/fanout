@@ -74,7 +74,8 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     [[ "$workflow" == *'replace `validated_head` only after it'* ]]
     [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]]
     [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]]
-    [[ "$workflow" == *'continue the existing driver'*'`prepare-verify`'* ]]
+    [[ "$workflow" == *"continue the existing driver state with"* ]]
+    [[ "$workflow" == *"prepare-verify"* ]]
     [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]]
     ! grep -Fq 'Run focused validation for changed files, then' "$skill"
     grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill"
