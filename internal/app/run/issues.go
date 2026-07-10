@@ -71,6 +71,15 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 	// parent-keyed sets above cannot see them, and launching a plain child pane
 	// would decompose the same work twice.
 	planOwnedFanned := panelaunch.PlanLinkedIssueNums(store)
+	// The parent itself being plan-owned aborts the run outright (checked here,
+	// under the state lock, so a racing coordinator launch cannot slip past a
+	// caller's unlocked pre-check): its children were not part of the plan
+	// decomposition, and fanning them out alongside the plan splits the issue
+	// across two uncoordinated sessions.
+	if cfg.ParentMode == cliflags.ModeIssue && planOwnedFanned[cfg.Parent] {
+		lg.Err("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
+		return exitcode.Env
+	}
 
 	plan := BuildPlan(
 		cfg,

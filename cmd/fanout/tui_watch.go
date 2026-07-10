@@ -279,10 +279,14 @@ func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, gh ghissue.R
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
 	worktreeFallbackFanned := run.ExistingWorktreeFanned(cfg, projectRoot, loaded.Children, otherParentFanned)
+	// Match run.Issues: plan-owned children never become targets, so the
+	// watcher's capacity planning and post-launch remaining-target recompute
+	// agree with what a launch would actually create.
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(store)
 	return run.BuildPlan(
 		cfg,
 		loaded.Children,
-		fanset.Union(sameParentFanned, worktreeFallbackFanned),
+		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			// Match run.Issues: a hydration failure degrades blocker checks

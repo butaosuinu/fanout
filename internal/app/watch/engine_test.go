@@ -214,6 +214,26 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
+			// The plan link must beat the LaunchParent early-return: a failing
+			// parent launch would back off into the three-strike disable.
+			name: "plan-owned issue with open children skips instead of parent launch",
+			fake: &fakeWatchIO{
+				issues:       []ghissue.Issue{issue(201)},
+				openChildren: map[int]int{201: 2},
+				store: state.Store{Panes: []state.Pane{
+					{Parent: "plan:issue-201-epic-split", TaskID: "base", Slug: "issue-201-epic-split-base", PaneID: "%3"},
+				}},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				if len(fake.parents) != 0 {
+					t.Fatalf("parent launches = %v, want none for a plan-owned issue", fake.parents)
+				}
+				assertSwaps(t, fake.swaps, nil)
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned})
+			},
+		},
+		{
 			name: "parent fanout ignores child issue false positive",
 			fake: &fakeWatchIO{
 				issues:       []ghissue.Issue{issue(201), issue(202)},

@@ -571,6 +571,17 @@ func alreadyFanned(store state.Store, action Action) bool {
 	if action.Issue.Number <= 0 {
 		return false
 	}
+	// A plan session owns its source issue outright, so the check runs before
+	// the LaunchParent early-return: a plan-owned issue that later gained
+	// children must skip here, not fail the parent launch into backoff and the
+	// three-strike disable. Plan-lane rows carry no positive IssueNum; without
+	// this link the issue would also be relabeled trigger->running->trigger on
+	// every cycle before the standalone launch's late ErrAlreadyFanned fallback.
+	for _, pane := range store.Panes {
+		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok && num == action.Issue.Number {
+			return true
+		}
+	}
 	if action.Kind == LaunchParent {
 		return false
 	}
@@ -579,13 +590,6 @@ func alreadyFanned(store state.Store, action Action) bool {
 			return true
 		}
 		if pane.IssueNum > 0 && paneWorktreeMatchesIssue(pane, action.Issue.Number) {
-			return true
-		}
-		// Plan-lane rows carry no positive IssueNum; without this link a
-		// plan-owned issue that keeps its trigger label would be relabeled
-		// trigger->running->trigger on every cycle before the standalone
-		// launch's late ErrAlreadyFanned fallback.
-		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok && num == action.Issue.Number {
 			return true
 		}
 	}
