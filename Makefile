@@ -51,7 +51,7 @@ POST_WORK_REVIEW_BATS := tests/bats/tier1_post_work_review.bats
 POST_WORK_REVIEW_SHARDS := 1 2 3 4 5 6 7 8 9 10 11 12
 POST_WORK_REVIEW_SHARD_TARGETS := $(addprefix test-tier1-post-work-review-shard-,$(POST_WORK_REVIEW_SHARDS))
 
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache $(POST_WORK_REVIEW_SHARD_TARGETS)
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache $(POST_WORK_REVIEW_SHARD_TARGETS)
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -239,11 +239,30 @@ test: build-web go-test test-web test-tier1 test-tier2
 
 # Serialize even when the caller passes -j: go-test must see build-web's fresh
 # go:embed inputs. One submake also de-duplicates the shared phony prerequisites.
+# check-marker runs last (-j1), so the push-gate marker is only written when
+# every gate goal passed.
 check:
-	+$(MAKE) -j1 --no-print-directory test lint lint-web
+	+$(MAKE) -j1 --no-print-directory test lint lint-web check-marker
+
+# Internal: records the validated HEAD into the per-worktree marker
+# $(git rev-parse --git-dir)/fanout-check-passed, which scripts/agent-push-gate.sh
+# compares against the pushed tip. Clean tree only (same dirty test as
+# codex/tools/post-work-review.sh has_dirty_tree): a dirty tree means the
+# validated content is not the commit that would be pushed. Running this
+# target without `check` defeats the push gate — for a deliberate bypass use
+# FANOUT_SKIP_PUSH_CHECK=1 instead.
+check-marker:
+	@set -eu; \
+		git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; \
+		if [ -n "$$(git status --porcelain -uall)" ]; then \
+			echo "warning: working tree is dirty; push-gate marker not written." >&2; \
+			echo "         commit the candidate and rerun make check to unlock git push." >&2; \
+			exit 0; \
+		fi; \
+		git rev-parse HEAD >"$$(git rev-parse --git-dir)/fanout-check-passed"
 
 test-tier1: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_pr_watch.bats
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_pr_watch.bats tests/bats/tier1_agent_hooks.bats
 	@set -eu; \
 		all=$$($(BATS) --count "$(POST_WORK_REVIEW_BATS)"); \
 		assigned=0; \
@@ -298,7 +317,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh codex/skills/pr-watch/scripts/watch-pr.sh
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt

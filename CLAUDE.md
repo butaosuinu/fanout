@@ -258,6 +258,16 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `cd`/`pushd`/`env --chdir` chained in (any cwd
   inside the target worktree works), and keep the PR base at the default
   branch. `FANOUT_SKIP_PR_REVIEW=1` is only for the documented escape hatch.
+- `git push` to a branch is gated the same way (`scripts/agent-push-gate.sh`,
+  a second `PreToolUse(Bash)` hook; Codex runs it via `.codex/hooks.json`):
+  the pushed tip must equal the per-worktree marker
+  `$(git rev-parse --git-dir)/fanout-check-passed`, which only a successful
+  `make check` on a clean tree writes. When denied, commit the candidate, run
+  `make check`, then push again — do not reach for `--no-verify` or retry
+  unchanged. Branch deletions and tag pushes stay ungated. Escape hatch:
+  `FANOUT_SKIP_PUSH_CHECK=1`. Edits are auto-formatted by a `PostToolUse`
+  hook (`scripts/agent-format-on-edit.sh`, per-file `golangci-lint fmt` /
+  `oxfmt` fast paths only).
 
 ## Test Conventions
 

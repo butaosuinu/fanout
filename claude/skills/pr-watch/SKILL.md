@@ -337,9 +337,13 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 4. `git rebase FETCH_HEAD` で今 fetch した base に rebase する。
 5. import 併合など確信できる hunk だけ自動解決する。意味的判断が必要な衝突は
    `git rebase --abort` して、具体的な hunk と理由を添えてエスカレーションする。
-6. rebase 完了後、push 直前に remote tip が `pr_head_before_work` から動いていないことを
+6. rebase 完了後、リポジトリの canonical full gate を rebase 後の HEAD に対して 1 回
+   通す(プロジェクトが `make check` のような umbrella target を定義していればそれを
+   優先し、無ければ AGENTS.md / CLAUDE.md / build ファイルから解決する)。自動解決した
+   hunk が build を壊すのはこの時点で捕まえる。
+7. push 直前に remote tip が `pr_head_before_work` から動いていないことを
    確認し、保存した SHA を期待値にした `--force-with-lease` で push する。
-7. push したら、その pass では古い CI/log/thread を使わず終了する。必要なら次 pass で
+8. push したら、その pass では古い CI/log/thread を使わず終了する。必要なら次 pass で
    状態を取り直す。
 
 ### E. CI 失敗
@@ -356,7 +360,10 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
   エスカレーションする。
 - 原因を特定してから修正する。CI を通すためにテスト削除、workflow 緩和、skip 追加を
   してはいけない。
-- 修正後は focused test を実行し、commit して、明示 refspec で push する。
+- 修正中は focused test で解消を確認し、commit する。push の前に、リポジトリの
+  canonical full gate を最終 commit に対して 1 回通す(D と同じ解決方法)。gate が
+  通ってから明示 refspec で push する。CI がローカルで再現する lint / test で落ちて
+  いるとき、focused test だけで push し直すと同じ CI 失敗を繰り返す。
 - flaky やインフラ起因なら 1 回だけ再実行を促す。再現するならコードを無理に触らず
   エスカレーションする。
 
@@ -368,7 +375,8 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
   skip する。
 - 新しいレビュアー返信があれば、top-level comment ではなく latest comment の要求を読む。
 - 仕様判断や方針確認が必要な指摘は無理に直さず、判断点を整理してユーザーに確認する。
-- 修正したら test、commit、push の順に進める。
+- 修正したら focused test → commit → canonical full gate(E と同じ 1 回)→ push の順に
+  進める。
 - 返信は push 後に行う。インライン返信は top-level comment の `fullDatabaseId` を使う。
 - thread resolve は基本的にレビュアーへ委ねる。自分で resolve するのは確信がある場合のみ。
 
@@ -616,6 +624,9 @@ done
 - 明示指示なしに auto-merge しない。
 - 他者 PR、保護ブランチ、push 権限が曖昧な fork に force push しない。
 - CI を通すためにテストや必須チェックを弱めない。
+- リポジトリの push ゲート(pre-push 系 hook や PreToolUse gate)を `--no-verify` や
+  hooks 設定の書き換えで回避しない。push が deny されたら、指示されたコマンド
+  (canonical full gate)を最終 commit で通してから push し直す。
 - GitHub の古い thread や push 前の CI log を根拠に、push 後も同じ pass で修正を続けない。
 - approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
 - unchanged cheap snapshot をモデルに何度も読ませない。

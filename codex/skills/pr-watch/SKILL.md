@@ -128,9 +128,14 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
    top-level comments as needed.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
-4. Run focused tests. Do not weaken tests, required checks, or workflows.
-5. Commit intentionally and push with an explicit refspec. Use guarded
-   `--force-with-lease=<ref>:<saved-sha>` only for an authorized history rewrite.
+4. Run focused tests while editing. Do not weaken tests, required checks, or
+   workflows.
+5. Commit intentionally. Before each push, run the repository's canonical full
+   gate once against the final commit (prefer an umbrella target such as
+   `make check` when the project defines one; otherwise resolve it from
+   AGENTS.md, CLAUDE.md, or the build files). Then push with an explicit
+   refspec. Use guarded `--force-with-lease=<ref>:<saved-sha>` only for an
+   authorized history rewrite.
 6. Reply to review feedback only after the fix is pushed. In this repository,
    write automatic review comments in Japanese.
 7. After any push, discard old logs/thread state and return to a fresh cheap
@@ -154,6 +159,10 @@ inspected.
 - Never use plain `--force` or an unqualified `--force-with-lease`.
 - Never overwrite another author's PR, a protected branch, or a fork with
   unclear ownership.
+- Never bypass a repository push gate (a pre-push hook or a PreToolUse deny)
+  with `--no-verify` or by rewriting the hooks configuration. A denied push
+  means the pushed tip has not passed the repository gate; run the canonical
+  full gate on the final commit and push again.
 
 ## Limits and stop conditions
 
