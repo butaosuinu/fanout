@@ -119,6 +119,9 @@ run_push_gate() {
   [ "$status" -eq 0 ]
   run_push_gate 'git push origin tag v1.0.0' "$repo"
   [ "$status" -eq 0 ]
+  # An unqualified destination from a tag source infers refs/tags/.
+  run_push_gate 'git push origin v1.0.0:release-tag' "$repo"
+  [ "$status" -eq 0 ]
   run_push_gate 'git push -o ci.skip origin v1.0.0' "$repo"
   [ "$status" -eq 0 ]
   run_push_gate 'git push --dry-run origin HEAD' "$repo"
@@ -395,6 +398,52 @@ run_push_gate() {
   git -C "$repo" config remote.origin.mirror true
 
   run_push_gate 'git push origin' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: a ref-mutating command before the push in one call is denied" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_marker "$repo"
+
+  # The gate resolves refs before the call runs; the commit would move HEAD.
+  run_push_gate 'git commit -am wip && git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"単独のコマンド"* ]]
+  run_push_gate 'git rebase origin/main && git push --force-with-lease origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # A push standalone (or after non-mutating commands) still passes.
+  run_push_gate 'git status && git push origin HEAD' "$repo"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: substitutions, comments, and odd heredoc delimiters stay safe" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_marker "$repo"
+
+  # A substituted -C path is untraceable: fail closed even with a marker.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C \\\"\$(git rev-parse --show-toplevel)\\\" push origin HEAD\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  local repo2="$BATS_TEST_TMPDIR/repo2"
+  setup_hook_repo "$repo2"
+
+  # An apostrophe in a comment must not swallow the next line's push.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"# don't retry\\ngit push origin HEAD\"},\"cwd\":\"$repo2\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  # A hyphenated heredoc delimiter still terminates the body.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat <<'END-JSON'\\n{}\\nEND-JSON\\ngit push origin HEAD\"},\"cwd\":\"$repo2\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  run_push_gate 'GIT_DIR=/other/.git git push origin HEAD' "$repo2"
+  [ "$status" -eq 2 ]
+  run_push_gate 'git --config-env=remote.origin.push=SPEC push origin' "$repo2"
   [ "$status" -eq 2 ]
 }
 

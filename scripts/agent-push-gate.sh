@@ -78,6 +78,9 @@ parse_push_segment() {
   while [ $# -gt 0 ]; do
     case "$1" in
     FANOUT_SKIP_PUSH_CHECK=1) SEG_BYPASS=1 ;;
+    # Environment overrides that re-point git's repository/ref resolution
+    # make the push untraceable: fail closed.
+    GIT_DIR=* | GIT_WORK_TREE=* | GIT_COMMON_DIR=* | GIT_INDEX_FILE=* | GIT_NAMESPACE=* | GIT_OBJECT_DIRECTORY=* | GIT_CONFIG*=*) SEG_REPO_SWITCH=1 ;;
     [A-Za-z_]*=*) ;;
     env)
       # Consume env's own options so `env -i git push` is still a push.
@@ -138,11 +141,13 @@ parse_push_segment() {
       [ $# -gt 0 ] || return 1
       # An inline config override can redirect what a push sends
       # (remote.*.push / push.* / mirror / pushRemote); fail closed on those.
-      case "$1" in
-      push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=*)
-        SEG_REPO_SWITCH=1
-        ;;
-      esac
+      if push_affecting_config "$1"; then SEG_REPO_SWITCH=1; fi
+      ;;
+    -c?*)
+      if push_affecting_config "${1#-c}"; then SEG_REPO_SWITCH=1; fi
+      ;;
+    --config-env=*)
+      if push_affecting_config "${1#--config-env=}"; then SEG_REPO_SWITCH=1; fi
       ;;
     --namespace)
       shift
@@ -167,14 +172,65 @@ abs_dir() {
   esac
 }
 
+# push_affecting_config KEY[=VALUE] — config that changes what a push sends.
+push_affecting_config() {
+  case "$1" in
+  push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=*)
+    return 0
+    ;;
+  esac
+  return 1
+}
+
+# seg_ref_mutating SEGMENT — true when SEGMENT is a git command that can move
+# local refs (or HEAD) before a later push in the same tool call. The gate
+# resolves refs before the call runs, so a push after one of these cannot be
+# validated.
+seg_ref_mutating() {
+  # shellcheck disable=SC2086 # word splitting is the tokenizer here
+  set -- $1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    [A-Za-z_]*=*) ;;
+    env | command | exec | nohup) ;;
+    if | then | elif | else | fi | do | done | while | until | ! | time) ;;
+    *) break ;;
+    esac
+    shift
+  done
+  [ "${1##*/}" = "git" ] || return 1
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -C | -c | --git-dir | --work-tree | --namespace | --config-env)
+      shift
+      [ $# -gt 0 ] || return 1
+      ;;
+    -*) ;;
+    *) break ;;
+    esac
+    shift
+  done
+  case "${1:-}" in
+  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout) return 0 ;;
+  esac
+  return 1
+}
+
 base_dir="$(resolve_project_dir "$input")"
 segments="$(strip_shell_noise "$cmd")"
 
 cmd_bypass=0
+ref_mut=0
 seg_dir="$base_dir" # follows `cd` segments so later pushes gate the right repo
 
 while IFS= read -r seg; do
   case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+
+  if seg_ref_mutating "$seg"; then
+    ref_mut=1
+    continue
+  fi
 
   # shellcheck disable=SC2086
   set -- $seg
@@ -341,11 +397,19 @@ while IFS= read -r seg; do
       if [ -n "$tag_ref" ]; then
         case "$dst" in
         "" | refs/tags/*) continue ;; # release flow: tag pushed as a tag
+        refs/*) ;;                    # explicit non-tag destination: gated
+        *) continue ;;                # unqualified dst: git infers refs/tags/ from the tag source
         esac
       fi
       required+=("$src")
     done
     [ "${#required[@]}" -eq 0 ] && continue
+  fi
+
+  # Refs are resolved before this tool call runs; a commit/rebase earlier in
+  # the same call would move them afterwards, making the validation stale.
+  if [ "${#required[@]}" -gt 0 ] && [ "$ref_mut" = "1" ]; then
+    deny "同一コマンド内で ref を変更するコマンド (commit / rebase 等) の後に push しています。gate は実行前の状態しか検証できないため拒否します。commit 後に make check を通し、push は単独のコマンドとして実行してください。"
   fi
 
   for src in "${required[@]}"; do

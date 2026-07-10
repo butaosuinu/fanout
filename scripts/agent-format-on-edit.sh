@@ -17,9 +17,11 @@ lib="$(cd "$(dirname "$0")" && pwd)/agent-hooks-lib.sh"
 # shellcheck source=scripts/agent-hooks-lib.sh
 . "$lib"
 
-dir="$(resolve_project_dir "$input")"
+cwd_base="$(resolve_project_dir "$input")"
 # The session may run from a subdirectory; the version pin, web/ tree, and
-# .cache fallback all live at the repository root.
+# .cache fallback all live at the repository root, but relative edit paths
+# resolve against the payload cwd.
+dir="$cwd_base"
 top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$top" ] && dir="$top"
 
@@ -81,7 +83,7 @@ go_bin_resolved=0
 for file in "${files[@]}"; do
   case "$file" in
   /*) ;;
-  *) file="$dir/$file" ;;
+  *) file="$cwd_base/$file" ;;
   esac
   [ -f "$file" ] || continue
   case "$file" in

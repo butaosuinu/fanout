@@ -74,14 +74,44 @@ resolve_project_dir() {
 # executable `git push`.
 strip_shell_noise() {
   awk '
+    # subst_span: consume a $(…) / `…` span starting at `start`; queue the
+    # raw inner text as its own segment (via the global `extra`) and return
+    # the index just past the closer. The outer word gets a placeholder, so
+    # a push whose path/refspec depends on a substitution fails closed.
+    function subst_span(line, start, n, kind,    depth, k, ch, inner) {
+      inner = ""
+      if (kind == "`") {
+        k = start
+        while (k <= n && substr(line, k, 1) != "`") {
+          inner = inner substr(line, k, 1)
+          k++
+        }
+        extra = extra "\n" inner "\n"
+        return k + 1
+      }
+      depth = 1
+      k = start
+      while (k <= n) {
+        ch = substr(line, k, 1)
+        if (ch == "(") depth++
+        else if (ch == ")") {
+          depth--
+          if (depth == 0) break
+        }
+        inner = inner ch
+        k++
+      }
+      extra = extra "\n" inner "\n"
+      return k + 1
+    }
     BEGIN {
       hd = 0; hdword = ""; hdq = 0
       sq = 0; dq = 0
-      pdepth = 0; btres = 0
-      buf = ""; S = sprintf("%c", 1)
+      buf = ""; extra = ""; S = sprintf("%c", 1)
     }
     {
       line = $0
+      prev = ""
       if (hd) {
         stripped = line
         sub(/^\t+/, "", stripped)
@@ -110,18 +140,20 @@ strip_shell_noise() {
             i += 2
             continue
           }
-          # $(…) and `…` inside "…" still execute: break the segment and
-          # rescan the substitution as code, then resume the string state at
-          # the matching closer so the rest of the line keeps its quoting.
+          # $(…) and `…` inside "…" still execute: substitute a placeholder
+          # into the outer word (so its structure survives — an untraceable
+          # placeholder path later fails closed) and queue the inner text as
+          # its own segment for scanning.
           if (c == "$" && substr(line, i + 1, 1) == "(") {
-            pdepth++
-            resume[pdepth] = 1
-            dq = 0
-            buf = buf "\n"
-            i += 2
+            i = subst_span(line, i + 2, n, "(")
+            buf = buf "__FANOUT_SUBST__"
             continue
           }
-          if (c == "`") { btres = 1; dq = 0; buf = buf "\n"; i++; continue }
+          if (c == "`") {
+            i = subst_span(line, i + 1, n, "`")
+            buf = buf "__FANOUT_SUBST__"
+            continue
+          }
           if (c == "\"") { dq = 0 }
           else if (c == " " || c == "\t") buf = buf S
           else buf = buf c
@@ -130,12 +162,21 @@ strip_shell_noise() {
         }
         if (c == "\047") { sq = 1; i++; continue }
         if (c == "\"") { dq = 1; i++; continue }
+        # A word-boundary # starts a comment: the shell ignores the rest of
+        # the line, including any apostrophes in it.
+        if (c == "#" && (prev == "" || prev == " " || prev == "\t")) break
         if (c == "\\") {
           if (i == n) { joinnext = 1; i++; continue } # line continuation
           e = substr(line, i + 1, 1)
           if (e == " " || e == "\t") buf = buf S
           else buf = buf e
           i += 2
+          continue
+        }
+        if (c == "$" && substr(line, i + 1, 1) == "(") {
+          i = subst_span(line, i + 2, n, "(")
+          buf = buf "__FANOUT_SUBST__"
+          prev = "_"
           continue
         }
         if (c == "<" && substr(line, i + 1, 1) == "<" && substr(line, i + 2, 1) != "<") {
@@ -147,7 +188,7 @@ strip_shell_noise() {
             j++
           }
           w = ""
-          while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_]/) {
+          while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_.-]/) {
             w = w substr(line, j, 1)
             j++
           }
@@ -157,24 +198,15 @@ strip_shell_noise() {
           i++
           continue
         }
-        if (c == "(") { pdepth++; buf = buf "\n"; i++; continue }
-        if (c == ")") {
-          if (pdepth > 0) {
-            if (resume[pdepth]) { dq = 1; delete resume[pdepth] }
-            pdepth--
-          }
-          buf = buf "\n"
-          i++
-          continue
-        }
         if (c == "`") {
-          if (btres) { dq = 1; btres = 0 }
-          buf = buf "\n"
-          i++
+          i = subst_span(line, i + 1, n, "`")
+          buf = buf "__FANOUT_SUBST__"
+          prev = "_"
           continue
         }
-        if (c ~ /[;|&{}]/) { buf = buf "\n"; i++; continue }
+        if (c ~ /[;|&(){}]/) { buf = buf "\n"; prev = "\n"; i++; continue }
         buf = buf c
+        prev = c
         i++
       }
       # A quoted span continuing past the line end keeps the word joined; a
@@ -182,7 +214,7 @@ strip_shell_noise() {
       if (sq || dq) buf = buf S
       else if (!joinnext) buf = buf "\n"
     }
-    END { printf "%s", buf }
+    END { printf "%s%s", buf, extra }
   ' <<<"$1"
 }
 
