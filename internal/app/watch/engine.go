@@ -268,6 +268,17 @@ func (e *Engine) PlanCycle() (Report, error) {
 			})
 			continue
 		}
+		// Plan-owned issues skip on state alone, before capacity deferral and
+		// the GitHub child count: a full session budget or a transient count
+		// failure must not keep reporting a plan-owned issue as deferred or
+		// failing every cycle.
+		if planOwned[issue.Number] {
+			if candidate.retryKind != "" {
+				delete(e.runningRetries, issue.Number)
+			}
+			report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyFanned})
+			continue
+		}
 		if remaining == 0 {
 			report.Deferred = append(report.Deferred, Deferred{Issue: issue, Reason: DeferMaxSessions})
 			continue
@@ -620,6 +631,15 @@ func hasLivePaneForParent(store state.Store, issueNum int, alive func(state.Pane
 		}
 	}
 	return false, nil
+}
+
+// PaneWorktreeMatchesIssue reports whether a recorded pane's slug or worktree
+// directory name ends in the issue number: the fallback identity for legacy or
+// other-parent rows whose IssueNum does not match directly. The TUI issue-plan
+// guard shares it so the plan lane refuses exactly what this lane treats as
+// already fanned.
+func PaneWorktreeMatchesIssue(pane state.Pane, issueNum int) bool {
+	return paneWorktreeMatchesIssue(pane, issueNum)
 }
 
 func paneWorktreeMatchesIssue(pane state.Pane, issueNum int) bool {

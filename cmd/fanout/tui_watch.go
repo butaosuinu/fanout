@@ -394,6 +394,12 @@ func hasRecordedIssuePane(projectRoot string, store state.Store, issueNum int) b
 		if pane.IssueNum == issueNum {
 			return true
 		}
+		// The worktree-suffix fallback matches legacy and other-parent rows the
+		// watcher's alreadyFanned treats as fanned, so the standalone and plan
+		// lanes refuse the same set of issues.
+		if pane.IssueNum > 0 && watch.PaneWorktreeMatchesIssue(pane, issueNum) {
+			return true
+		}
 	}
 	// Plan-lane rows bind to their issue only through the coordinator slug or
 	// the saved spec's declared source. Without this, a standalone launch for

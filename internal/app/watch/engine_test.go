@@ -215,6 +215,26 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
+			// Plan-owned skips must fire on state alone, before the session
+			// budget defers the issue and before any GitHub child count runs.
+			name: "plan-owned issue skips before max-sessions deferral and counting",
+			cfg:  Config{MaxSessions: 1},
+			fake: &fakeWatchIO{
+				issues:     []ghissue.Issue{issue(101)},
+				store:      state.Store{Panes: []state.Pane{{IssueNum: 900, PaneID: "%live"}}},
+				alive:      map[string]bool{"%live": true},
+				planLinked: map[int]bool{101: true},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "count calls", fake.countCalls, nil)
+				if len(report.Deferred) != 0 {
+					t.Fatalf("deferred = %#v, want none for a plan-owned issue", report.Deferred)
+				}
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned})
+			},
+		},
+		{
 			// The plan link must beat the LaunchParent early-return: a failing
 			// parent launch would back off into the three-strike disable.
 			name: "plan-owned issue with open children skips instead of parent launch",

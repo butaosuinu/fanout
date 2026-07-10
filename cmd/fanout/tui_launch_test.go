@@ -197,6 +197,13 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 			wantErr: "issue #123 already has a fanout pane",
 		},
 		{
+			// A legacy/other-parent row identified only by its worktree suffix is
+			// fanned in the normal lanes, so the plan lane refuses it too.
+			name:    "worktree-suffix fallback row blocks",
+			panes:   []state.Pane{{Parent: "900", IssueNum: 999, Slug: "api-client-123", WorktreePath: "/repo/.fanout/worktrees/api-client-123"}},
+			wantErr: "issue #123 already has a fanout pane",
+		},
+		{
 			name:    "prompt coordinator rows never block an issue launch",
 			panes:   []state.Pane{{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-prompt-1"}},
 			wantErr: "",
