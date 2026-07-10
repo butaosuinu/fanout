@@ -30,6 +30,12 @@ lib="$(cd "$(dirname "$0")" && pwd)/agent-hooks-lib.sh"
 dir="$(resolve_project_dir "$input")"
 cd "$dir" 2>/dev/null || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+# The session may stop with its cwd in a subdirectory; the gate belongs to
+# the repository root.
+top="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$top" ] || exit 0
+cd "$top" 2>/dev/null || exit 0
+dir="$top"
 command -v make >/dev/null 2>&1 || exit 0
 [ -f Makefile ] || exit 0
 

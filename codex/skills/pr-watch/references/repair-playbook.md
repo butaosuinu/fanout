@@ -153,8 +153,11 @@ git rebase FETCH_HEAD
 
 Resolve only mechanical conflicts whose intent is clear. For behavioral or
 product ambiguity, `git rebase --abort` and report the file/hunk and decision
-needed. After tests pass, re-fetch the PR head, compare it with the saved SHA,
-and use the qualified lease command above.
+needed. After tests pass, run the repository's canonical full gate once
+against the rebased HEAD (same resolution as in Repair CI) — auto-resolved
+hunks that break the build surface here, not on CI. Then re-fetch the PR
+head, compare it with the saved SHA, and use the qualified lease command
+above.
 
 `BEHIND` alone is not always a repair trigger. If branch protection does not
 require the latest base and GitHub reports mergeable with green checks, avoid a

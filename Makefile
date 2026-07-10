@@ -239,10 +239,12 @@ test: build-web go-test test-web test-tier1 test-tier2
 
 # Serialize even when the caller passes -j: go-test must see build-web's fresh
 # go:embed inputs. One submake also de-duplicates the shared phony prerequisites.
-# check-marker runs last (-j1), so the push-gate marker is only written when
-# every gate goal passed.
+# check-marker is a separate recipe line, not a goal of the same submake: a
+# failed gate line stops the recipe even under `make -k`, so the push-gate
+# marker is only written when every gate goal passed.
 check:
-	+$(MAKE) -j1 --no-print-directory test lint lint-web check-marker
+	+$(MAKE) -j1 --no-print-directory test lint lint-web
+	+$(MAKE) --no-print-directory check-marker
 
 # Internal: records the validated HEAD into the per-worktree marker
 # $(git rev-parse --git-dir)/fanout-check-passed, which scripts/agent-push-gate.sh

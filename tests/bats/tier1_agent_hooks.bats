@@ -61,17 +61,33 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
-@test "push gate: allows git push when marker matches HEAD" {
+@test "push gate: allows git push when marker matches the pushed tip" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
+  git -C "$repo" branch feature-branch
   write_marker "$repo"
 
   run_push_gate 'git push origin HEAD' "$repo"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 
+  # A named refspec is validated against its own tip, which here equals HEAD.
   run_push_gate 'git push -u origin feature-branch' "$repo"
   [ "$status" -eq 0 ]
+}
+
+@test "push gate: validates the refspec tip, not the checked-out HEAD" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" branch stale-branch
+  printf 'more\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm "second"
+  write_marker "$repo" # marker == new HEAD, not stale-branch
+
+  run_push_gate 'git push origin HEAD' "$repo"
+  [ "$status" -eq 0 ]
+  run_push_gate 'git push origin stale-branch' "$repo"
+  [ "$status" -eq 2 ]
 }
 
 @test "push gate: denies a stale marker after a new commit" {
@@ -99,9 +115,63 @@ run_push_gate() {
   [ "$status" -eq 0 ]
   run_push_gate 'git push origin v1.0.0' "$repo"
   [ "$status" -eq 0 ]
+  run_push_gate 'git push origin refs/tags/v1.0.0' "$repo"
+  [ "$status" -eq 0 ]
+  run_push_gate 'git push origin tag v1.0.0' "$repo"
+  [ "$status" -eq 0 ]
+  run_push_gate 'git push -o ci.skip origin v1.0.0' "$repo"
+  [ "$status" -eq 0 ]
+  run_push_gate 'git push --dry-run origin HEAD' "$repo"
+  [ "$status" -eq 0 ]
 
   # A branch smuggled next to a deletion still needs the marker.
   run_push_gate 'git push origin main :old-branch' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: tag exemptions do not cover branch updates" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" tag tmp
+
+  # --tags / --follow-tags alongside a branch refspec still gate the branch.
+  run_push_gate 'git push --tags origin main' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'git push --follow-tags origin main' "$repo"
+  [ "$status" -eq 2 ]
+  # A tag pushed to a branch destination is a branch update.
+  run_push_gate 'git push origin tmp:refs/heads/feature' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: follows cd and git -C to the pushed repository" {
+  local repo_a="$BATS_TEST_TMPDIR/repo-a"
+  local repo_b="$BATS_TEST_TMPDIR/repo-b"
+  setup_hook_repo "$repo_a"
+  setup_hook_repo "$repo_b"
+  write_marker "$repo_a" # only repo A is validated
+
+  # Payload cwd is the validated repo A, but the push targets repo B.
+  run_push_gate "cd $repo_b && git push origin HEAD" "$repo_a"
+  [ "$status" -eq 2 ]
+  run_push_gate "git -C $repo_b push origin HEAD" "$repo_a"
+  [ "$status" -eq 2 ]
+
+  write_marker "$repo_b"
+  run_push_gate "cd $repo_b && git push origin HEAD" "$repo_a"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: payload cwd wins over CLAUDE_PROJECT_DIR" {
+  local repo_a="$BATS_TEST_TMPDIR/repo-a"
+  local repo_b="$BATS_TEST_TMPDIR/repo-b"
+  setup_hook_repo "$repo_a"
+  setup_hook_repo "$repo_b"
+  write_marker "$repo_a" # session root is validated, the pushed repo is not
+
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push origin HEAD\"},\"cwd\":\"$repo_b\"}"
+  run bash -c 'printf "%s" "$1" | env -u FANOUT_SKIP_PUSH_CHECK CLAUDE_PROJECT_DIR="$2" bash "$0" 2>&1' \
+    "$PUSH_GATE" "$payload" "$repo_a"
   [ "$status" -eq 2 ]
 }
 
@@ -115,6 +185,16 @@ run_push_gate() {
 
   run_push_gate 'FANOUT_SKIP_PUSH_CHECK=1 git push origin HEAD' "$repo"
   [ "$status" -eq 0 ]
+  run_push_gate 'export FANOUT_SKIP_PUSH_CHECK=1 && git push origin HEAD' "$repo"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: a mere mention of the escape hatch does not bypass" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+
+  run_push_gate 'echo FANOUT_SKIP_PUSH_CHECK=1 > note.txt; git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
 }
 
 @test "push gate: ignores non-push commands and quoted push-like strings" {
@@ -128,6 +208,24 @@ run_push_gate() {
   local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m \\\"docs: explain git push flow\\\"\"},\"cwd\":\"$repo\"}"
   run_hook "$PUSH_GATE" "$payload"
   [ "$status" -eq 0 ]
+
+  # A heredoc body mentioning git push is content, not a command.
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat > doc.md <<'EOF'\\ngit push origin main\\nEOF\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: quote and subshell tricks cannot hide a real push" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+
+  # Apostrophes inside double quotes must not pair up and swallow the push.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git commit -m \\\"isn't done\\\" && git push origin main && echo \\\"won't stop\\\"\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  run_push_gate '(git push origin main)' "$repo"
+  [ "$status" -eq 2 ]
 }
 
 @test "push gate: fails closed when extraction fails but the payload mentions git push" {
@@ -147,6 +245,18 @@ stop_payload() {
 
 write_failing_check_makefile() {
   printf 'check:\n\t@echo boom from stub check >&2; exit 1\n' >"$1/Makefile"
+}
+
+@test "stop gate: runs from a subdirectory by walking to the repo root" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_failing_check_makefile "$repo"
+  git -C "$repo" add Makefile && git -C "$repo" commit -qm makefile
+  mkdir -p "$repo/web"
+
+  run_hook "$STOP_GATE" "$(stop_payload "$repo/web")"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"boom from stub check"* ]]
 }
 
 @test "stop gate: skips when stop_hook_active is true" {
@@ -301,4 +411,9 @@ format_payload() {
 
   run bash -c '. "$0"; json_field "$1" cwd' "$HOOKS_LIB" "$payload"
   [ "$output" = "/tmp/x" ]
+
+  # \uXXXX decodes to a placeholder so adjacent tokens never merge.
+  local upayload='{"tool_input":{"command":"echo A\u0022B"}}'
+  run bash -c '. "$0"; json_field "$1" command' "$HOOKS_LIB" "$upayload"
+  [ "$output" = "echo A_B" ]
 }

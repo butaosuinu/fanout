@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/agent-push-gate.sh",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent-push-gate.sh\"",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/agent-format-on-edit.sh",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent-format-on-edit.sh\"",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/agent-stop-gate.sh",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent-stop-gate.sh\"",
             "timeout": 900,
             "statusMessage": "Running make check (quality gate)"
           }

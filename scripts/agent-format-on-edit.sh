@@ -32,7 +32,15 @@ case "$file" in
   [ -f "$dir/.golangci-lint-version" ] || exit 0
   version="$(tr -d '[:space:]' <"$dir/.golangci-lint-version")"
   cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
-  bin="$cache_root/tools/golangci-lint-$version"
+  # Same resolution order as the Makefile: explicit override, local shared
+  # cache, then the repo-local .cache the CI branch uses.
+  bin="${GOLANGCI_LINT_BIN:-}"
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    bin="$cache_root/tools/golangci-lint-$version"
+  fi
+  if [ ! -x "$bin" ]; then
+    bin="$dir/.cache/tools/golangci-lint-$version"
+  fi
   [ -x "$bin" ] || exit 0
   "$bin" fmt "$file" >/dev/null 2>&1 || true
   ;;
