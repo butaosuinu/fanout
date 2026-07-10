@@ -20,6 +20,8 @@ composition root。層ルールの正典実装は `internal/arch/arch_test.go` �
 `infra` に直接手を伸ばせる。強制するのは `internal/arch` の Go テスト
 (`TestLayerImportDirection` ほか)。`.golangci.yml` は depguard をノイズが
 多いとして無効化しているため、層制約の CI ガードはこのテストだけである。
+外部のアーキテクチャテストツール(go-arch-lint / arch-go など)も 2026-07 の
+調査で不採用にした。経緯と再評価の条件は `docs/arch-test-tools.ja.md`。
 
 ## 依存図
 
