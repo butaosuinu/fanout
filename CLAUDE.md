@@ -24,9 +24,10 @@ govulncheck (network; deliberately not part of `lint`).
 
 The Claude Code integration files (`claude/commands/*.md` slash commands and
 `claude/skills/*/SKILL.md` skills) and Codex CLI integration files
-(`codex/skills/*/SKILL.md`) are bundled in the repo as the source of truth.
-`make install` places them under `~/.claude/` and `~/.codex/`. Do not edit
-installed copies directly.
+(`codex/skills/*/` skill resources, `codex/agents/*`, and `codex/tools/*`) are
+bundled in the repo as the source of truth. `make install` places them under
+the matching `~/.claude/` and `~/.codex/` directories. Do not edit installed
+copies directly.
 
 The user-facing surface is in `README.md` and `README.ja.md`. Read those before
 changing behavior; this file covers repo-local architecture and maintenance

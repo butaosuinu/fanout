@@ -1,0 +1,7 @@
+interface:
+  display_name: "fanout-plan"
+  short_description: "Decompose plans into isolated fanout tasks"
+  default_prompt: "Use $fanout-plan to decompose this plan, preview the task spec, and launch it after approval."
+
+policy:
+  allow_implicit_invocation: true

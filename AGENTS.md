@@ -18,7 +18,9 @@ Source-of-truth integration files:
 
 - Claude Code: `claude/commands/*.md` and `claude/skills/*/SKILL.md`,
   installed under `~/.claude/`.
-- Codex CLI: `codex/skills/*/SKILL.md`, installed under `~/.codex/skills/`.
+- Codex CLI: `codex/skills/*/` (skill instructions, references, and scripts),
+  `codex/agents/*`, and `codex/tools/*`, installed under the matching
+  `~/.codex/` directories.
 
 Do not edit installed copies under home directories directly. Edit the repo
 versions and rerun `make install` or `make link`.

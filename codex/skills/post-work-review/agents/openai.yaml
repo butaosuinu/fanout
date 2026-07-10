@@ -1,7 +1,7 @@
 interface:
   display_name: "post-work-review"
   short_description: "Run a bounded isolated reviewer gate"
-  default_prompt: "Use $post-work-review when I ask for an isolated final review of the current diff. Prepare one broad review bundle, invoke exactly one post-work-reviewer subagent, then use at most two post-work-verifier calls after fixes. Never split review by file or run codex review in the default path."
+  default_prompt: "Use $post-work-review to run the bounded isolated final-review gate for the current Git work."
 
 policy:
   allow_implicit_invocation: true
