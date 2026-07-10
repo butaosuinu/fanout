@@ -401,6 +401,7 @@ JSON_CACHE_ROOT=""
 JSON_CACHE_FILES=()
 JSON_CACHE_DIRS=()
 JSON_HELPER=""
+JSON_HELPER_ERROR=""
 
 json_cache_cleanup() {
   if [ -n "$JSON_CACHE_ROOT" ]; then
@@ -447,7 +448,8 @@ ensure_json_helper() {
     *) resolved="$(command -v "$candidate" 2>/dev/null || true)" ;;
   esac
   if [ -z "$resolved" ] || [ ! -f "$resolved" ] || [ ! -x "$resolved" ]; then
-    die "post-work-review JSON helper is not executable: $candidate (install the companion fanout executable or set POST_WORK_REVIEW_JSON_HELPER/FANOUT_BIN)"
+    JSON_HELPER_ERROR="post-work-review JSON helper is not executable: $candidate (install the companion fanout executable or set POST_WORK_REVIEW_JSON_HELPER/FANOUT_BIN)"
+    return 1
   fi
   JSON_HELPER="$resolved"
 }
@@ -472,14 +474,15 @@ json_cache_add() {
   mkdir "$cache" || die "failed to create reviewer JSON cache entry"
   # Resolve outside the redirected parser call so a missing helper remains a
   # distinct environment error instead of looking like malformed reviewer JSON.
-  ensure_json_helper
+  ensure_json_helper || return 1
   helper_stdout="$cache/helper.stdout"
   helper_stderr="$cache/helper.stderr"
   json_parse_result "$file" "$cache" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
   if ! grep -Fxq 'post_work_review_json_helper_version=1' "$helper_stdout"; then
     rm -f "$helper_stdout" "$helper_stderr"
-    die "post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
+    JSON_HELPER_ERROR="post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
+    return 1
   fi
   rm -f "$helper_stdout" "$helper_stderr"
   JSON_CACHE_FILES[index]="$file"
@@ -706,7 +709,13 @@ validate_result() {
   file="$2"
   check_target="${3:-target}"
   [ -f "$file" ] || die "review JSON not found: $file"
-  json_validate "$file" >/dev/null 2>&1 || die "invalid reviewer JSON"
+  JSON_HELPER_ERROR=""
+  if ! json_validate "$file" >/dev/null 2>&1; then
+    if [ -n "$JSON_HELPER_ERROR" ]; then
+      die "$JSON_HELPER_ERROR"
+    fi
+    die "invalid reviewer JSON"
+  fi
 
   backend="$(json_scalar "$file" backend 2>/dev/null || true)"
   [ "$backend" = "$BACKEND" ] || die "review backend mismatch"
