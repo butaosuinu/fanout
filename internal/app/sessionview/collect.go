@@ -272,7 +272,7 @@ func (g GH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return g.runner.IssueWithPRs(g.owner, g.repo, num)
 }
 
-// BranchPRs fetches PR refs by head branch for issue-less task rows.
+// BranchPRs fetches PR refs by head branch for branch-owning issue-less rows.
 func (g GH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
 	return g.runner.PRsForBranch(branch)
 }

@@ -810,6 +810,106 @@ func TestBuildPlanModePassthrough(t *testing.T) {
 	}
 }
 
+func TestBranchPRLookupKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		pane       state.Pane
+		wantBranch string
+		wantOK     bool
+	}{
+		{
+			name:       "manual prompt session",
+			pane:       state.Pane{Parent: "@manual", IssueNum: -1, BranchName: "  fanout/manual  "},
+			wantBranch: "fanout/manual",
+			wantOK:     true,
+		},
+		{
+			name:       "plan task",
+			pane:       state.Pane{Parent: "plan:alpha", IssueNum: 0, TaskID: "task-a", BranchName: "fanout/task-a"},
+			wantBranch: "fanout/task-a",
+			wantOK:     true,
+		},
+		{
+			name: "positive issue",
+			pane: state.Pane{IssueNum: 12, BranchName: "fanout/issue-12"},
+		},
+		{
+			name: "empty branch",
+			pane: state.Pane{Parent: "@manual", IssueNum: -1, BranchName: "  "},
+		},
+		{
+			name: "shell",
+			pane: state.Pane{IssueNum: -1, Kind: state.PaneKindShell, BranchName: "fanout/shell"},
+		},
+		{
+			name: "attached agent",
+			pane: state.Pane{IssueNum: -1, Kind: state.PaneKindAttachedAgent, BranchName: "fanout/source"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotBranch, gotOK := BranchPRLookupKey(tt.pane)
+			if gotBranch != tt.wantBranch || gotOK != tt.wantOK {
+				t.Fatalf("BranchPRLookupKey() = %q, %v, want %q, %v", gotBranch, gotOK, tt.wantBranch, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestBuildManualPromptSessionsUseBranchPRs(t *testing.T) {
+	planMode := pane("@manual", -2, "%1")
+	planMode.TaskID = ""
+	planMode.BranchName = "  fanout/manual-shared  "
+	planMode.CodexPlanMode = true
+	normalMode := pane("@manual", -1, "%2")
+	normalMode.TaskID = ""
+	normalMode.BranchName = "fanout/manual-shared"
+	normalMode.CodexPlanMode = false
+
+	branchCalls := 0
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(normalMode, planMode),
+		LivePanes: livePanesAt(),
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
+			t.Fatalf("IssuePRs(%d) called for @manual row", num)
+			return "", nil, nil
+		},
+		BranchPRs: func(branch string) ([]ghissue.PRRef, error) {
+			branchCalls++
+			if branch != "fanout/manual-shared" {
+				t.Fatalf("BranchPRs branch = %q, want fanout/manual-shared", branch)
+			}
+			return []ghissue.PRRef{{Number: 702, State: "OPEN", CIStatus: " PASS "}}, nil
+		},
+		Waves: wavesNone,
+	}
+
+	snap := Build("o/n", "/root", c)
+	if branchCalls != 1 {
+		t.Fatalf("BranchPRs calls = %d, want one cached call for normalized shared branch", branchCalls)
+	}
+	panes := snap.Sessions[0].Panes
+	if len(panes) != 2 {
+		t.Fatalf("panes = %+v, want two @manual panes", panes)
+	}
+	for _, pv := range panes {
+		if pv.TaskID != "" || pv.IssueState != IssueStateUnknown || len(pv.PRs) != 1 || pv.PRs[0].Number != 702 {
+			t.Fatalf("manual pane should carry branch PR state: %+v", pv)
+		}
+		if pv.CIStatus != "pass" {
+			t.Fatalf("manual pane CIStatus = %q, want pass", pv.CIStatus)
+		}
+		if pv.Derived.PRSummary != "#702 open" || pv.Derived.PrimaryPRNumber != 702 || pv.Derived.PrimaryPRState != "open" || pv.Derived.CI != "pass" {
+			t.Fatalf("manual pane derived PR/CI = %+v", pv.Derived)
+		}
+	}
+	if !panes[0].PlanMode || panes[1].PlanMode {
+		t.Fatalf("PlanMode passthrough = %v,%v, want true,false", panes[0].PlanMode, panes[1].PlanMode)
+	}
+}
+
 func TestBuildTaskIDPaneUsesBranchPRs(t *testing.T) {
 	first := pane("plan:alpha", 0, "%1")
 	first.TaskID = "task-b"
@@ -865,26 +965,40 @@ func TestBuildTaskIDPaneUsesBranchPRs(t *testing.T) {
 	}
 }
 
-func TestBuildTaskIDBranchPRFailureDegradesGitHub(t *testing.T) {
-	task := pane("plan:alpha", 0, "%1")
-	task.TaskID = "task-a"
-	task.BranchName = "fanout/task-a"
-	c := Collectors{
-		Now:       fixedNow,
-		LoadState: storeOf(task),
-		LivePanes: livePanesAt(),
-		BranchPRs: func(branch string) ([]ghissue.PRRef, error) {
-			return nil, errors.New("gh pr list failed")
-		},
-		Waves: wavesNone,
-	}
-	snap := Build("o/n", "/root", c)
-	if !snap.Degraded.GitHub || !strings.Contains(snap.Degraded.Reason, "gh pr list failed") {
-		t.Fatalf("branch PR failure should degrade GitHub, got %+v", snap.Degraded)
-	}
-	pv := snap.Sessions[0].Panes[0]
-	if pv.IssueState != IssueStateUnknown || pv.PRs == nil || len(pv.PRs) != 0 {
-		t.Fatalf("failed task pane = %+v, want UNKNOWN and non-nil empty PRs", pv)
+func TestBuildIssueLessBranchPRFailureDegradesGitHub(t *testing.T) {
+	planTask := pane("plan:alpha", 0, "%1")
+	planTask.TaskID = "task-a"
+	planTask.BranchName = "fanout/task-a"
+	manual := pane("@manual", -1, "%1")
+	manual.TaskID = ""
+	manual.BranchName = "fanout/manual"
+
+	for _, tt := range []struct {
+		name string
+		pane state.Pane
+	}{
+		{name: "plan task", pane: planTask},
+		{name: "manual prompt session", pane: manual},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Collectors{
+				Now:       fixedNow,
+				LoadState: storeOf(tt.pane),
+				LivePanes: livePanesAt(),
+				BranchPRs: func(branch string) ([]ghissue.PRRef, error) {
+					return nil, errors.New("gh pr list failed")
+				},
+				Waves: wavesNone,
+			}
+			snap := Build("o/n", "/root", c)
+			if !snap.Degraded.GitHub || !strings.Contains(snap.Degraded.Reason, "gh pr list failed") {
+				t.Fatalf("branch PR failure should degrade GitHub, got %+v", snap.Degraded)
+			}
+			pv := snap.Sessions[0].Panes[0]
+			if pv.IssueState != IssueStateUnknown || pv.PRs == nil || len(pv.PRs) != 0 {
+				t.Fatalf("failed issue-less pane = %+v, want UNKNOWN and non-nil empty PRs", pv)
+			}
+		})
 	}
 }
 

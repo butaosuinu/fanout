@@ -142,6 +142,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 サーバは `127.0.0.1` にのみバインドして GET 専用の endpoint だけを公開し、起動毎にランダムトークンを生成して URL に埋め込みます(単一ユーザ端末では `--no-token` で外せます)。
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
+Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
 ### F12 / prefix + D
 

@@ -153,6 +153,48 @@ describe("snapshot 描画", () => {
     expect(screen.queryByText("#0")).not.toBeInTheDocument();
   });
 
+  it("Prompt Session は branch に紐づく PR リンクと CI を表示する", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "manual output"));
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("@manual", [
+          makePane({
+            issueNum: -1,
+            sourceKey: "manual-prompt",
+            displayName: "Prompt session",
+            slug: "manual-1-prompt-session-pane",
+            agent: "codex",
+            paneId: "%9",
+            branchName: "fanout/manual-1-prompt-session-pane",
+            issueState: "UNKNOWN",
+            prs: [{ number: 701, state: "OPEN", mergedAt: null, ci: "pass" }],
+            ciStatus: "pass",
+          }),
+        ]),
+      ]),
+    );
+
+    const row = screen.getByText("Prompt session").closest("tr")!;
+    expect(within(row).getByText("#-1")).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "#-1" })).not.toBeInTheDocument();
+    expect(row.querySelector('a[href$="/issues/-1"]')).toBeNull();
+    expect(within(row).getByRole("link", { name: "#701 OPEN" })).toHaveAttribute(
+      "href",
+      "https://github.com/octo/fanout/pull/701",
+    );
+    expect(within(row).getByText("pass", { selector: ".tag" })).toBeInTheDocument();
+
+    await user.click(within(row).getByText("Prompt session"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(within(drawer).getByRole("link", { name: "#701 OPEN" })).toHaveAttribute(
+      "href",
+      "https://github.com/octo/fanout/pull/701",
+    );
+    expect(within(drawer).getByText("ci pass", { selector: ".tag" })).toBeInTheDocument();
+  });
+
   it("degraded フラグで banner を表示し、正常時は隠す", () => {
     render(<App />);
     streamSnapshot(makeSnapshot([], { degraded: { tmux: true, github: true } }));

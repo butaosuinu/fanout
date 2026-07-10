@@ -44,7 +44,7 @@ func (g *countingGH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
 		g.branchCalls = map[string]int{}
 	}
 	g.branchCalls[branch]++
-	return []ghissue.PRRef{{Number: 700, State: "MERGED"}}, nil
+	return []ghissue.PRRef{{Number: 700, State: "MERGED", CIStatus: "pass"}}, nil
 }
 
 func (g *countingGH) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
@@ -175,6 +175,41 @@ func TestPollerRefreshGHPopulatesBranchCacheAndBuildReadsIt(t *testing.T) {
 	}
 	if snap.Degraded.GitHub {
 		t.Fatal("GitHub should not be degraded on branch PR success")
+	}
+}
+
+func TestPollerRefreshGHPopulatesManualPromptModePRAndCI(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"@manual","issueNum":-1,"branchName":"fanout/prompt-session","slug":"prompt-session","paneId":"%1","agent":"codex","codexPlanMode":true}
+	]}`)
+
+	gh := &countingGH{}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.refreshGH()
+	snap := p.build()
+
+	if len(gh.calls) != 0 {
+		t.Fatalf("IssuePRs calls = %v, want none for the manual row", gh.calls)
+	}
+	if gh.branchCalls["fanout/prompt-session"] != 1 {
+		t.Fatalf("BranchPRs(fanout/prompt-session) calls = %d, want 1", gh.branchCalls["fanout/prompt-session"])
+	}
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 1 {
+		t.Fatalf("unexpected snapshot shape: %+v", snap.Sessions)
+	}
+	got := snap.Sessions[0].Panes[0]
+	if got.IssueNum != -1 || got.TaskID != "" || !got.PlanMode {
+		t.Fatalf("manual prompt-mode identity = issue:%d task:%q plan:%v", got.IssueNum, got.TaskID, got.PlanMode)
+	}
+	if len(got.PRs) != 1 || got.PRs[0].Number != 700 || !got.HasMergedPR {
+		t.Fatalf("manual prompt-mode PR state = %+v", got)
+	}
+	if got.CIStatus != "pass" || got.Derived.CI != "pass" || got.Derived.PrimaryPRNumber != 700 {
+		t.Fatalf("manual prompt-mode derived PR/CI = ci:%q derived:%+v", got.CIStatus, got.Derived)
+	}
+	if snap.Degraded.GitHub {
+		t.Fatal("GitHub should not be degraded on manual branch PR success")
 	}
 }
 
@@ -356,18 +391,21 @@ func TestDistinctIssueNumsSkipsSyntheticManualPanes(t *testing.T) {
 	}
 }
 
-func TestDistinctTaskBranchesUsesIssueLessTaskRows(t *testing.T) {
-	got := distinctTaskBranches(state.Store{Panes: []state.Pane{
+func TestDistinctIssueLessBranchesUsesBranchOwners(t *testing.T) {
+	got := distinctIssueLessBranches(state.Store{Panes: []state.Pane{
 		{Parent: "plan:a", IssueNum: 0, TaskID: "task-a", BranchName: " fanout/task-a "},
 		{Parent: "plan:a", IssueNum: 0, TaskID: "task-b", BranchName: "fanout/task-a"},
-		{Parent: "plan:a", IssueNum: 0, TaskID: "task-c", BranchName: "fanout/task-c"},
-		{Parent: "plan:a", IssueNum: 0, TaskID: "", BranchName: "fanout/no-task"},
+		{Parent: "@manual", IssueNum: -1, BranchName: " fanout/manual ", CodexPlanMode: true},
+		{Parent: "@manual", IssueNum: -2, BranchName: "fanout/manual"}, // duplicate
 		{Parent: "100", IssueNum: 101, TaskID: "task-issue", BranchName: "fanout/issue"},
+		{Parent: "@manual", IssueNum: -3, BranchName: ""},
+		{Parent: "@manual", IssueNum: -4, Kind: state.PaneKindShell, BranchName: "fanout/shell"},
+		{Parent: "@manual", IssueNum: -5, Kind: state.PaneKindAttachedAgent, BranchName: "fanout/attached"},
 	}})
 
-	want := []string{"fanout/task-a", "fanout/task-c"}
+	want := []string{"fanout/manual", "fanout/task-a"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("distinctTaskBranches() = %#v, want %#v", got, want)
+		t.Fatalf("distinctIssueLessBranches() = %#v, want %#v", got, want)
 	}
 }
 

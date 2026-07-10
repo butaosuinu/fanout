@@ -271,7 +271,7 @@ func (p *poller) refreshGH() {
 	// hourly GitHub API budget (the exact failure the wave throttle exists
 	// to prevent).
 	p.refreshIssuePRs(gh, distinctIssueNums(store))
-	p.refreshBranchPRs(gh, distinctTaskBranches(store))
+	p.refreshBranchPRs(gh, distinctIssueLessBranches(store))
 	// Phase 2: one wave-graph fetch per distinct normalized parent. The recorded
 	// issue numbers seed FetchWaveGraph's child set for @manual/Project parents
 	// and backfill unlinked children for numeric ones.
@@ -529,12 +529,12 @@ func distinctIssueNums(store state.Store) []int {
 	return nums
 }
 
-func distinctTaskBranches(store state.Store) []string {
+func distinctIssueLessBranches(store state.Store) []string {
 	seen := map[string]bool{}
 	var branches []string
 	for _, p := range store.Panes {
-		branch := strings.TrimSpace(p.BranchName)
-		if p.IssueNum > 0 || p.TaskID == "" || branch == "" {
+		branch, ok := sessionview.BranchPRLookupKey(p)
+		if !ok {
 			continue
 		}
 		if !seen[branch] {
