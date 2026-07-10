@@ -75,7 +75,7 @@ fanout 123 --branch-prefix fanout/release/
 
 `PreToolUse(Bash)` hook(`.claude/hooks/pre-pr-review-gate.sh`、コミット済みの `.claude/settings.json` に登録)が、現在の HEAD が `/post-work-review` を通過するまで `gh pr create` をブロックします。
 Claude の legacy review marker では既定の PR base だけを許可します。
-Codex が reviewed-base metadata を記録した場合は、PR base との一致も確認します。
+Codex が reviewed-base metadata を記録した場合は、PR base と現在の `base...head` diff hash を metadata の値と照合します。
 metadata が不正または stale なら deny します。
 `/post-work-review` を実行してから、レビュー済みの base を指定して `gh pr create` を再実行してください(一度だけバイパスしたいときは、コマンドの先頭に次を付けます)。
 

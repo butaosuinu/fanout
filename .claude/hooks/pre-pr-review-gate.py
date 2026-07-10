@@ -488,6 +488,32 @@ def main():
                 break
         return value or None
 
+    def branch_diff_hash(base_ref, target):
+        if not base_ref or not target:
+            return None
+        diff_options = ["--no-ext-diff", "--no-textconv",
+                        "--ignore-submodules=none", "--no-color", "--binary"]
+        for revisions in ([base_ref + "..." + target], [base_ref, target]):
+            try:
+                diff = subprocess.run(
+                    ["git", "diff"] + diff_options + revisions + ["--"],
+                    cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            except Exception:
+                return None
+            if diff.returncode != 0:
+                continue
+            try:
+                hashed = subprocess.run(
+                    ["git", "hash-object", "--stdin"], cwd=cwd,
+                    input=diff.stdout, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL)
+            except Exception:
+                return None
+            if hashed.returncode == 0:
+                return hashed.stdout.decode("ascii", errors="ignore").strip() or None
+            return None
+        return None
+
     review_metadata, review_metadata_present = read_review_metadata()
 
     defbr = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).stdout.strip()
@@ -537,7 +563,8 @@ def main():
                 review_metadata.get("head") == target and
                 review_metadata.get("scope") == "branch" and
                 review_metadata.get("clean") == "true" and
-                review_metadata.get("stop_reason") == ""
+                review_metadata.get("stop_reason") == "" and
+                bool(review_metadata.get("diff_hash"))
             )
             if not metadata_valid:
                 emit_deny("post-work-review の marker metadata が不完全か PR head と一致しません。\n"
@@ -551,6 +578,11 @@ def main():
                           "marker meta の base に合わせて --base を指定するか、対象 base に対して /post-work-review し直してください。\n%s"
                           % (base or "未指定・既定ブランチを解決不可",
                              reviewed_base or "marker meta から解決不可", HATCH))
+            current_diff_hash = branch_diff_hash(reviewed_base, target)
+            if current_diff_hash != review_metadata.get("diff_hash"):
+                emit_deny("marker_reason=review_diff_changed\n"
+                          "PR head とレビュー済み base の diff が post-work-review 後に変わっています。\n"
+                          "対象 base に対して /post-work-review をやり直してください。\n%s" % HATCH)
         elif not (defbr and (base or defbr) == defbr):
             shown = ("既定ブランチ (%s)" % defbr) if defbr else "既定ブランチ(ローカルで解決不可)"
             emit_deny("gh pr create の base (%s) が%sと異なる/確認できないため、Claude の marker-only review と PR の diff 範囲がずれる可能性があります。\n"

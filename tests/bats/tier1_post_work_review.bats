@@ -44,13 +44,16 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   command -v python3 >/dev/null 2>&1 || skip "python3 is required"
 
   local repo="$BATS_TEST_TMPDIR/pr-gate-review-modes"
-  local gitdir head hook
+  local gitdir head hook release_hash main_hash
   setup_review_repo "$repo"
   git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
   make_branch_change "$repo"
   git -C "$repo" config init.defaultBranch main
   gitdir="$(gitdir_for "$repo")"
   head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head^"
+  release_hash="$(branch_diff_hash "$repo" origin/release/v1 "$head")"
+  main_hash="$(branch_diff_hash "$repo" main "$head")"
   hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
   printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
 
@@ -84,6 +87,7 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
     printf 'scope=branch\n'
     printf 'base=origin/release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
   } >"$gitdir/post-work-review-passed.meta"
@@ -102,12 +106,26 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'head=%s\n' "$head"
     printf 'scope=branch\n'
     printf 'base=origin/release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
   } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
+
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  [[ "$output" == *"marker_reason=review_diff_changed"* ]] || return 1
+
+  git -C "$repo" update-ref -d refs/remotes/origin/release/v1
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  [[ "$output" == *"marker_reason=review_diff_changed"* ]] || return 1
+  git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head^"
 
   run run_pr_gate "$repo" "gh pr create --base main" "$hook"
   [ "$status" -eq 0 ] || return 1
@@ -128,6 +146,20 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'backend=bounded-isolated-reviewer\n'
     printf 'head=%s\n' "$head"
     printf 'scope=branch\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  # Metadata for this HEAD also fails closed without the reviewed diff hash.
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
     printf 'clean=true\n'
     printf 'stop_reason=\n'
   } >"$gitdir/post-work-review-passed.meta"
@@ -141,6 +173,7 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'head=%s\n' "$head"
     printf 'scope=branch\n'
     printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
   } >"$gitdir/post-work-review-passed.meta"
@@ -160,6 +193,7 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
     printf 'head=%s\n' "$head"
     printf 'scope=branch\n'
     printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
     printf 'clean=true\n'
     printf 'stop_reason=\n'
   } >"$gitdir/post-work-review-passed.meta"
@@ -236,7 +270,25 @@ run_pr_gate() {
   local python
   python="$(command -v python3)"
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' "$command" "$repo" | \
-    PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
+}
+
+branch_diff_hash() {
+  local repo="$1"
+  local base="$2"
+  local target="$3"
+  local diff_file="$BATS_TEST_TMPDIR/pr-gate-current.diff"
+
+  if git -C "$repo" diff --no-ext-diff --no-textconv --ignore-submodules=none \
+    --no-color --binary "$base"..."$target" -- >"$diff_file" 2>/dev/null; then
+    :
+  elif git -C "$repo" diff --no-ext-diff --no-textconv --ignore-submodules=none \
+    --no-color --binary "$base" "$target" -- >"$diff_file" 2>/dev/null; then
+    :
+  else
+    return 1
+  fi
+  git -C "$repo" hash-object "$diff_file"
 }
 
 run_review_base() {
