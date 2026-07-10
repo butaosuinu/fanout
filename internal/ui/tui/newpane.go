@@ -42,13 +42,19 @@ type LaunchRequest struct {
 	AgentOverrides map[string]string
 }
 
-// LaunchFunc creates a manual fanout pane for a TUI request. It returns an
-// optional notice (e.g. a tolerated base-refresh skip) to surface on success.
-type LaunchFunc func(LaunchRequest) (notice string, err error)
+// LaunchResult reports the panes created by a successful TUI launch. Pane IDs
+// stay in creation order so the TUI can focus the first pane deterministically.
+type LaunchResult struct {
+	Notice         string
+	CreatedPaneIDs []string
+}
+
+// LaunchFunc creates a manual fanout pane for a TUI request.
+type LaunchFunc func(LaunchRequest) (LaunchResult, error)
 
 // IssueLaunchFunc starts a session for one GitHub issue: a fan-out when the
 // issue has OPEN children, a single pane otherwise.
-type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (notice string, err error)
+type IssueLaunchFunc func(issueNum int, defaultAgent string, overrides map[string]string) (LaunchResult, error)
 
 // IssueOpenFunc opens a GitHub issue in an external browser surface.
 type IssueOpenFunc func(issueNum int) error
@@ -201,7 +207,7 @@ func RunNewPanePrompt(opts NewPanePromptOptions) (LaunchRequest, bool, error) {
 		ListOpenIssues:    opts.ListOpenIssues,
 		ListIssueChildren: opts.ListIssueChildren,
 		OpenIssue:         opts.OpenIssue,
-		LaunchPane:        func(LaunchRequest) (string, error) { return "", nil },
+		LaunchPane:        func(LaunchRequest) (LaunchResult, error) { return LaunchResult{}, nil },
 		keyboard:          keyboard,
 	})
 	m.promptOnly = true
@@ -731,8 +737,13 @@ func (m *model) submitNewPane() tea.Cmd {
 	}
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
-		notice, err := launch(req)
-		return launchPaneMsg{notice: notice, count: len(agents), err: err}
+		result, err := launch(req)
+		return launchPaneMsg{
+			notice:         result.Notice,
+			count:          launchPaneCount(len(agents), result.CreatedPaneIDs),
+			createdPaneIDs: result.CreatedPaneIDs,
+			err:            err,
+		}
 	}
 }
 
@@ -783,9 +794,21 @@ func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 	m.notice = "creating new agent pane..."
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
-		notice, err := launch(req)
-		return launchPaneMsg{notice: notice, count: len(req.Agents), err: err}
+		result, err := launch(req)
+		return launchPaneMsg{
+			notice:         result.Notice,
+			count:          launchPaneCount(len(req.Agents), result.CreatedPaneIDs),
+			createdPaneIDs: result.CreatedPaneIDs,
+			err:            err,
+		}
 	}
+}
+
+func launchPaneCount(fallback int, createdPaneIDs []string) int {
+	if len(createdPaneIDs) > 0 {
+		return len(createdPaneIDs)
+	}
+	return fallback
 }
 
 func (m model) newPaneView() string {

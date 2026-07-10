@@ -41,7 +41,10 @@ inside tmux, let it use the current pane.
 Use the console to inspect `.fanout/state.json` panes, live tmux state,
 issue/PR state, merge progress, blockers, and Sessions. Important actions:
 
-- `n`: open the prompt picker and create manual Claude or Codex panes.
+- `n`: open the prompt picker and create manual Claude or Codex panes. A
+  successful Prompt, plan coordinator, or Issue launch focuses the first newly
+  created pane in actual creation order; `F11` or `prefix + T` returns to the
+  console.
 - `a`: attach another agent pane to the selected worktree.
 - `A`: open a shell in the selected worktree.
 - `t`: open a shell at the project root.
@@ -51,7 +54,9 @@ issue/PR state, merge progress, blockers, and Sessions. Important actions:
 - `q`: leave the console without killing child panes.
 
 Manual Codex panes start in app-server-backed Codex Plan Mode; manual Claude
-panes start normally. Attached panes do not count toward merge progress.
+panes start normally. Automatic focus does not apply to attached panes, shells,
+watcher launches, or ordinary CLI fan-outs. Attached panes do not count toward
+merge progress.
 
 The TUI observes GitHub transitions and can notify when a child merges, CI
 starts failing, or an OPEN blocker appears. Configure channels through fanout

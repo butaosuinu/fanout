@@ -305,15 +305,16 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got *call
+			createdPaneIDs := []string{"%7", "%8"}
 			opts := Options{}
 			if tt.wired {
-				opts.LaunchIssue = func(num int, agent string, overrides map[string]string) (string, error) {
+				opts.LaunchIssue = func(num int, agent string, overrides map[string]string) (LaunchResult, error) {
 					got = &call{kind: "issue", target: strconv.Itoa(num), agent: agent, overrides: overrides}
-					return "", nil
+					return LaunchResult{CreatedPaneIDs: createdPaneIDs}, nil
 				}
-				opts.LaunchPane = func(req LaunchRequest) (string, error) {
+				opts.LaunchPane = func(req LaunchRequest) (LaunchResult, error) {
 					got = &call{kind: "prompt", target: req.Prompt, agent: req.Agents[0]}
-					return "", nil
+					return LaunchResult{CreatedPaneIDs: createdPaneIDs}, nil
 				}
 			}
 			m := newModel(opts)
@@ -331,8 +332,12 @@ func TestLaunchRequestDispatchesByMode(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("wired launcher returned nil command")
 			}
-			if msg, ok := cmd().(launchPaneMsg); !ok || msg.err != nil {
+			msg, ok := cmd().(launchPaneMsg)
+			if !ok || msg.err != nil {
 				t.Fatalf("cmd() = %#v, want launchPaneMsg without error", msg)
+			}
+			if !reflect.DeepEqual(msg.createdPaneIDs, createdPaneIDs) {
+				t.Fatalf("created pane IDs = %#v, want %#v", msg.createdPaneIDs, createdPaneIDs)
 			}
 			if !reflect.DeepEqual(got, tt.wantCall) {
 				t.Fatalf("launcher call = %#v, want %#v", got, tt.wantCall)

@@ -23,7 +23,7 @@ import (
 )
 
 func newTUILaunchPaneFunc(projectRoot, session, commandName string, hookConfig hooks.Config) fanouttui.LaunchFunc {
-	return func(req fanouttui.LaunchRequest) (string, error) {
+	return func(req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
 		return launchManualPaneFromTUI(projectRoot, session, commandName, hookConfig, req)
 	}
 }
@@ -34,21 +34,21 @@ func newTUIAttachAgentFunc(projectRoot, session, commandName string, hookConfig 
 	}
 }
 
-func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
+func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
 	if req.PlanFanout {
 		return launchPlanPromptFromTUI(projectRoot, session, commandName, hookConfig, req)
 	}
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
-		return "", fmt.Errorf("prompt is required")
+		return fanouttui.LaunchResult{}, fmt.Errorf("prompt is required")
 	}
 	agentNames := normalizeTUIAgents(req.Agents)
 	for _, agentName := range agentNames {
 		if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-			return "", validateErr
+			return fanouttui.LaunchResult{}, validateErr
 		}
 		if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-			return "", validateErr
+			return fanouttui.LaunchResult{}, validateErr
 		}
 	}
 	var stdout, stderr bytes.Buffer
@@ -56,7 +56,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	cfg := manualPaneConfigForTUIAgent(agentNames[0])
 	_, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
-		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
+		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
 	if recorder != nil {
 		defer func() {
@@ -69,21 +69,29 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		Target:      tuiLaunchTarget(session),
 		ProjectRoot: projectRoot,
 	}
-	createdCount := 0
+	createdPaneIDs := make([]string, 0, len(agentNames))
 	for _, agentName := range agentNames {
 		cfg = manualPaneConfigForTUIAgent(agentName)
 		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, recorder.Store, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
 		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
-		if launcher.LaunchOK(paneReq) {
-			createdCount++
+		if result, ok := launcher.LaunchWithResult(paneReq); ok {
+			if result.PaneID != "" {
+				createdPaneIDs = append(createdPaneIDs, result.PaneID)
+			}
 			continue
 		}
-		if createdCount > 0 {
-			return partialManualLaunchNotice(createdCount, stderr), nil
+		if len(createdPaneIDs) > 0 {
+			return fanouttui.LaunchResult{
+				Notice:         partialManualLaunchNotice(len(createdPaneIDs), stderr),
+				CreatedPaneIDs: createdPaneIDs,
+			}, nil
 		}
-		return "", bufferedLaunchError(stdout, stderr, "create pane")
+		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "create pane")
 	}
-	return bufferedLaunchNotice(stderr), nil
+	return fanouttui.LaunchResult{
+		Notice:         bufferedLaunchNotice(stderr),
+		CreatedPaneIDs: createdPaneIDs,
+	}, nil
 }
 
 // launchPlanPromptFromTUI launches one coordinator pane at the project root
@@ -92,31 +100,31 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 // runs as a normal agent (never Codex Plan Mode) directly on the project root:
 // running `fanout plan` inside a worktree would resolve the git root there and
 // nest state under the coordinator's worktree.
-func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (string, error) {
+func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
-		return "", fmt.Errorf("prompt is required")
+		return fanouttui.LaunchResult{}, fmt.Errorf("prompt is required")
 	}
 	agentNames := normalizeTUIAgents(req.Agents)
 	if len(agentNames) != 1 {
-		return "", fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
+		return fanouttui.LaunchResult{}, fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-		return "", validateErr
+		return fanouttui.LaunchResult{}, validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return "", validateErr
+		return fanouttui.LaunchResult{}, validateErr
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
-		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+		return fanouttui.LaunchResult{}, fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	defer func() {
 		_ = recorder.Unlock()
@@ -132,14 +140,18 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	livenessKey, err := panelaunch.NewShellPaneKey()
 	if err != nil {
-		return "", err
+		return fanouttui.LaunchResult{}, err
 	}
 	paneReq := newPlanPromptPaneRequest(projectRoot, recorder.Store, hookConfig, prompt, agentName, livenessKey)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
-	if !launcher.Attach(paneReq, projectRoot) {
-		return "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
+	if !ok {
+		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
-	return fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt), nil
+	return fanouttui.LaunchResult{
+		Notice:         fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt),
+		CreatedPaneIDs: []string{result.PaneID},
+	}, nil
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:

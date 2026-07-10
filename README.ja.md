@@ -34,10 +34,11 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   や一覧から選んだ OPEN issue から開始でき、`Ctrl+O` で選択中の issue を
   ブラウザで開けます。子ごとに agent も選べます(あるタスクは claude、別のタ
   スクは codex、のように)。prompt モードのチェックボックスを入れると、
-  そのプロンプトを `/fanout plan` で並列タスクに分解します。`s` キーで設定
-  popup を開けます。どのペインからでも `F11` または `prefix + T` でコンソールに
-  戻れます。マウスや `prefix` のペイン移動でフォーカスしたペインにも、選択行が
-  追従します。
+  そのプロンプトを `/fanout plan` で並列タスクに分解します。`n` から Prompt、
+  plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の
+  新規ペインへフォーカスが移ります。`s` キーで設定 popup を開けます。どのペイン
+  からでも `F11` または `prefix + T` でコンソールに戻れます。マウスや `prefix` の
+  ペイン移動でフォーカスしたペインにも、選択行が追従します。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ
