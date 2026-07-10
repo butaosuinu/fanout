@@ -9,6 +9,7 @@
 load helpers
 
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
+export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN}"
 
 @test "post-work-review shard-7: Codex skill revalidates the exact HEAD before verifying broad-review fixes" {
   local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
@@ -38,6 +39,31 @@ POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
   [[ "$marker_step" == *'git rev-parse HEAD > "$marker"'* ]] || return 1
   ! grep -Fq 'POST_WORK_REVIEW_BASE' "$skill" || return 1
   ! grep -Fq 'bounded-isolated-reviewer' "$skill" || return 1
+}
+
+@test "post-work-review shard-7: distributed skills stay repository-agnostic" {
+  local claude_skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
+  local codex_skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
+  local unwanted
+
+  for unwanted in \
+    'git diff main..HEAD' \
+    '`make check`' \
+    '`make test`' \
+    '`make lint`' \
+    '`make lint-web`' \
+    'docs/review-checklist.ja.md' \
+    '.claude/hooks/pre-pr-review-gate.sh' \
+    'fanout の並列ペイン' \
+    '[[feedback_reviewer_role]]'; do
+    ! grep -Fq "$unwanted" "$claude_skill" || return 1
+  done
+  for unwanted in '`make check`' 'make install-integrations'; do
+    ! grep -Fq "$unwanted" "$codex_skill" || return 1
+  done
+  grep -Fq 'canonical full check' "$claude_skill"
+  grep -Fq '包括的な単一コマンド' "$claude_skill"
+  grep -Fq 'focused check' "$claude_skill"
 }
 
 @test "post-work-review shard-7: PR gate supports Codex metadata and Claude marker-only reviews" {
@@ -681,32 +707,24 @@ prepare_branch_review() {
 @test "post-work-review shard-7: parses each reviewer result once per driver command" {
   local repo="$BATS_TEST_TMPDIR/review-json-batch"
   local json_file="$BATS_TEST_TMPDIR/json-batch.json"
-  local parser_bin="$BATS_TEST_TMPDIR/json-parser-bin"
+  local helper_wrapper="$BATS_TEST_TMPDIR/fanout-json-helper"
   local count_file="$BATS_TEST_TMPDIR/json-parser-count"
-  local parser_name real_parser
+  local real_helper="$POST_WORK_REVIEW_JSON_HELPER"
   setup_review_repo "$repo"
   make_branch_change "$repo"
   run_review_base "$repo" prepare
   [ "$status" -eq 0 ]
   write_broad_result_json "$repo" "session-json-batch" false false false "" "$json_file"
 
-  if real_parser="$(command -v ruby)"; then
-    parser_name="ruby"
-  else
-    real_parser="$(command -v python3)"
-    parser_name="python3"
-  fi
-  [ -n "$real_parser" ]
-  mkdir -p "$parser_bin"
-  cat >"$parser_bin/$parser_name" <<'EOF'
+  cat >"$helper_wrapper" <<'EOF'
 #!/usr/bin/env bash
 printf 'parse\n' >>"$JSON_PARSER_COUNT_FILE"
-exec "$REAL_JSON_PARSER" "$@"
+exec "$REAL_JSON_HELPER" "$@"
 EOF
-  chmod +x "$parser_bin/$parser_name"
-  export REAL_JSON_PARSER="$real_parser"
+  chmod +x "$helper_wrapper"
+  export REAL_JSON_HELPER="$real_helper"
   export JSON_PARSER_COUNT_FILE="$count_file"
-  export PATH="$parser_bin:$PATH"
+  export POST_WORK_REVIEW_JSON_HELPER="$helper_wrapper"
 
   : >"$count_file"
   run_review "$repo" record broad "$json_file"
@@ -750,30 +768,83 @@ EOF
   [ -z "$(git -C "$repo" status --porcelain -uall)" ]
 }
 
-@test "post-work-review shard-10: falls back to Python when Ruby is unavailable" {
-  local repo="$BATS_TEST_TMPDIR/review-json-python"
-  local json_file="$BATS_TEST_TMPDIR/json-python.json"
+@test "post-work-review shard-10: uses FANOUT_BIN without Ruby or Python" {
+  local repo="$BATS_TEST_TMPDIR/review-json-fanout-bin"
+  local json_file="$BATS_TEST_TMPDIR/json-fanout-bin.json"
+  local runtime_bin="$BATS_TEST_TMPDIR/forbidden-json-runtimes"
+  local runtime_log="$BATS_TEST_TMPDIR/forbidden-json-runtimes.log"
   setup_review_repo "$repo"
   make_branch_change "$repo"
   run_review_base "$repo" prepare
   [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "session-json-python" false false false "" "$json_file"
+  write_broad_result_json "$repo" "session-json-fanout-bin" false false false "" "$json_file"
 
-  run bash -c '
-    command() {
-      if [ "$1" = "-v" ] && [ "$2" = "ruby" ]; then
-        return 1
-      fi
-      builtin command "$@"
-    }
-    export -f command
-    cd "$1" || exit 1
-    bash "$2" record broad "$3"
-  ' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file"
+  mkdir -p "$runtime_bin"
+  for runtime in ruby python3; do
+    cat >"$runtime_bin/$runtime" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$0" >>"$FORBIDDEN_RUNTIME_LOG"
+exit 99
+EOF
+    chmod +x "$runtime_bin/$runtime"
+  done
+  export FORBIDDEN_RUNTIME_LOG="$runtime_log"
+  export PATH="$runtime_bin:$PATH"
+  export FANOUT_BIN
+  unset POST_WORK_REVIEW_JSON_HELPER
+
+  run_review "$repo" record broad "$json_file"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"recorded=true"* ]]
+  [ ! -e "$runtime_log" ]
   cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
+}
+
+@test "post-work-review shard-10: fails closed when the JSON helper is missing" {
+  local repo="$BATS_TEST_TMPDIR/review-json-helper-missing"
+  local json_file="$BATS_TEST_TMPDIR/json-helper-missing.json"
+  local gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-helper-missing" false false false "" "$json_file"
+  gitdir="$(gitdir_for "$repo")"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" FANOUT_BIN="$5" bash "$2" record broad "$3" 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$BATS_TEST_TMPDIR/missing-helper" "$FANOUT_BIN"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-10: fails closed when the JSON helper rejects a result" {
+  local repo="$BATS_TEST_TMPDIR/review-json-helper-failure"
+  local json_file="$BATS_TEST_TMPDIR/json-helper-failure.json"
+  local helper="$BATS_TEST_TMPDIR/failing-json-helper"
+  local gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-json-helper-failure" false false false "" "$json_file"
+  gitdir="$(gitdir_for "$repo")"
+  cat >"$helper" <<'EOF'
+#!/usr/bin/env bash
+exit 42
+EOF
+  chmod +x "$helper"
+
+  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" bash "$2" record broad "$3" 2>&1' \
+    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$helper"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
 @test "post-work-review shard-7: prepare clears stale marker files" {

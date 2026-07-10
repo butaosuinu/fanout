@@ -400,6 +400,7 @@ env_set() {
 JSON_CACHE_ROOT=""
 JSON_CACHE_FILES=()
 JSON_CACHE_DIRS=()
+JSON_HELPER=""
 
 json_cache_cleanup() {
   if [ -n "$JSON_CACHE_ROOT" ]; then
@@ -429,99 +430,37 @@ json_cache_dir_for() {
   return 1
 }
 
+ensure_json_helper() {
+  local candidate resolved
+  [ -n "$JSON_HELPER" ] && return 0
+
+  if [ -n "${POST_WORK_REVIEW_JSON_HELPER:-}" ]; then
+    candidate="$POST_WORK_REVIEW_JSON_HELPER"
+  elif [ -n "${FANOUT_BIN:-}" ]; then
+    candidate="$FANOUT_BIN"
+  else
+    candidate="fanout"
+  fi
+
+  case "$candidate" in
+    */*) resolved="$candidate" ;;
+    *) resolved="$(command -v "$candidate" 2>/dev/null || true)" ;;
+  esac
+  if [ -z "$resolved" ] || [ ! -f "$resolved" ] || [ ! -x "$resolved" ]; then
+    die "post-work-review JSON helper is not executable: $candidate (install the companion fanout executable or set POST_WORK_REVIEW_JSON_HELPER/FANOUT_BIN)"
+  fi
+  JSON_HELPER="$resolved"
+}
+
 json_parse_result() {
   local file out
   file="$1"
   out="$2"
-  if command -v ruby >/dev/null 2>&1; then
-    ruby -rjson -rdigest/sha1 -e '
-def scalar(v)
-  return "true" if v == true
-  return "false" if v == false
-  return "null" if v.nil?
-  return JSON.generate(v) if v.is_a?(Array) || v.is_a?(Hash)
-  v.to_s
-end
-def clean(v)
-  v.to_s.gsub(/[[:space:]]+/, " ").strip
-end
-file, out = ARGV
-data = JSON.parse(File.read(file))
-keys = %w[backend review_type reviewer_agent reviewer_provenance reviewer_session_id same_agent_review reviewer_isolated reviewer_sandbox_mode hooks_only_success head diff_hash finding_count truncated all_previous_findings_fixed new_regressions]
-if data.is_a?(Hash)
-  keys.each do |key|
-    File.binwrite(File.join(out, key), scalar(data[key])) if data.key?(key)
-  end
-  findings = data["findings"]
-  if findings.is_a?(Array)
-    File.write(File.join(out, "findings_count"), findings.length.to_s)
-    required = %w[severity file line title description recommendation]
-    missing = findings.count do |finding|
-      !finding.is_a?(Hash) || required.any? { |key| !finding.key?(key) || finding[key].nil? || finding[key].to_s.strip.empty? }
-    end
-    File.write(File.join(out, "findings_missing_required_count"), missing.to_s)
-    File.open(File.join(out, "findings.tsv"), "wb") do |io|
-      findings.each_with_index do |finding, index|
-        finding = {} unless finding.is_a?(Hash)
-        severity = clean(finding["severity"])
-        path = clean(finding["file"])
-        line = clean(finding["line"])
-        title = clean(finding["title"])
-        description = clean(finding["description"])
-        recommendation = clean(finding["recommendation"])
-        fingerprint = Digest::SHA1.hexdigest([path, line, title, description].join("\0"))
-        io.write([index + 1, severity, path, line, title, fingerprint, description, recommendation].join("\t"))
-        io.write("\n")
-      end
-    end
-  end
-end
-File.write(File.join(out, "valid"), "")
-' "$file" "$out"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c '
-import hashlib,json,os,re,sys
-def scalar(value):
-    if value is True: return "true"
-    if value is False: return "false"
-    if value is None: return "null"
-    if isinstance(value,(list,dict)): return json.dumps(value,separators=(",",":"))
-    return str(value)
-def clean(value):
-    return re.sub(r"\s+"," ","" if value is None else str(value)).strip()
-file,out=sys.argv[1:3]
-with open(file,encoding="utf-8") as source:
-    data=json.load(source)
-keys=["backend","review_type","reviewer_agent","reviewer_provenance","reviewer_session_id","same_agent_review","reviewer_isolated","reviewer_sandbox_mode","hooks_only_success","head","diff_hash","finding_count","truncated","all_previous_findings_fixed","new_regressions"]
-if isinstance(data,dict):
-    for key in keys:
-        if key in data:
-            with open(os.path.join(out,key),"w",encoding="utf-8") as target:
-                target.write(scalar(data[key]))
-    findings=data.get("findings")
-    if isinstance(findings,list):
-        with open(os.path.join(out,"findings_count"),"w",encoding="utf-8") as target:
-            target.write(str(len(findings)))
-        required=["severity","file","line","title","description","recommendation"]
-        missing=sum(1 for finding in findings if not isinstance(finding,dict) or any(key not in finding or finding[key] is None or str(finding[key]).strip()=="" for key in required))
-        with open(os.path.join(out,"findings_missing_required_count"),"w",encoding="utf-8") as target:
-            target.write(str(missing))
-        with open(os.path.join(out,"findings.tsv"),"w",encoding="utf-8") as target:
-            for index,finding in enumerate(findings,1):
-                finding=finding if isinstance(finding,dict) else {}
-                severity=clean(finding.get("severity")); path=clean(finding.get("file")); line=clean(finding.get("line")); title=clean(finding.get("title")); description=clean(finding.get("description")); recommendation=clean(finding.get("recommendation"))
-                fingerprint=hashlib.sha1("\0".join([path,line,title,description]).encode()).hexdigest()
-                target.write("\t".join([str(index),severity,path,line,title,fingerprint,description,recommendation])+"\n")
-with open(os.path.join(out,"valid"),"w",encoding="utf-8"):
-    pass
-' "$file" "$out"
-  else
-    die "ruby or python3 is required to parse reviewer JSON"
-  fi
+  "$JSON_HELPER" __post-work-review-json "$file" "$out"
 }
 
 json_cache_add() {
-  local file cache index status
+  local file cache index status helper_stdout helper_stderr
   file="$1"
   if cache="$(json_cache_dir_for "$file")"; then
     [ -f "$cache/valid" ]
@@ -531,8 +470,18 @@ json_cache_add() {
   index="${#JSON_CACHE_FILES[@]}"
   cache="$JSON_CACHE_ROOT/$index"
   mkdir "$cache" || die "failed to create reviewer JSON cache entry"
-  json_parse_result "$file" "$cache" >/dev/null 2>&1
+  # Resolve outside the redirected parser call so a missing helper remains a
+  # distinct environment error instead of looking like malformed reviewer JSON.
+  ensure_json_helper
+  helper_stdout="$cache/helper.stdout"
+  helper_stderr="$cache/helper.stderr"
+  json_parse_result "$file" "$cache" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
+  if ! grep -Fxq 'post_work_review_json_helper_version=1' "$helper_stdout"; then
+    rm -f "$helper_stdout" "$helper_stderr"
+    die "post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
+  fi
+  rm -f "$helper_stdout" "$helper_stderr"
   JSON_CACHE_FILES[index]="$file"
   JSON_CACHE_DIRS[index]="$cache"
   return "$status"

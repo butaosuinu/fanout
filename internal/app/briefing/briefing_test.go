@@ -272,12 +272,16 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	if !strings.Contains(got, "The PR review gate is disabled for this fanout run") {
 		t.Fatalf("RenderTask(..., PRReviewGate=false) missing bypass notice:\n%s", got)
 	}
-	if !strings.Contains(got, "canonical full validation") ||
-		!strings.Contains(got, "prefer `make check` when the") ||
-		!strings.Contains(got, "once on the exact HEAD") {
+	if !strings.Contains(got, "single canonical full validation") ||
+		!strings.Contains(got, "repository's own instructions and build configuration") ||
+		!strings.Contains(got, "run it once on the exact HEAD") ||
+		!strings.Contains(got, "Do not also run the individual") ||
+		!strings.Contains(got, "full lint/test targets") {
 		t.Fatalf("RenderTask(..., PRReviewGate=false) missing final full validation:\n%s", got)
 	}
 	for _, unwanted := range []string{
+		"`make check`",
+		"docs/review-checklist.ja.md",
 		"run the `/code-review` slash command",
 		"Optional: Agent Teams",
 	} {

@@ -40,10 +40,15 @@ if [ ! -x "$driver" ] && [ -n "${CODEX_HOME:-}" ]; then
 fi
 if [ ! -x "$driver" ]; then
   echo "post-work-review driver not installed: $driver"
-  echo "Run make install-integrations from the fanout repo, then retry."
+  echo "Reinstall this skill and its companion fanout executable, then retry."
   exit 1
 fi
 ```
+
+The driver uses the `fanout` executable distributed with this skill to parse
+reviewer results. Keep `fanout` on `PATH`, or set `FANOUT_BIN` to that
+executable before running the driver. A source-only integration install must
+provide the executable separately.
 
 The driver stores state under the worktree git metadata directory. If the
 sandbox blocks `.git/post-work-review` or `.git/post-work-review-passed`, rerun
@@ -58,11 +63,11 @@ assume a shell-like `$post-work-review` prefix reached the driver.
 Inspect `git status --short` before `prepare`, then choose one validation path:
 
 - **Clean committed branch (final gate):** resolve the project's one canonical
-  full validation command from `AGENTS.md`, `CLAUDE.md`, or the build files.
-  Prefer an umbrella target such as `make check` over composing separate lint,
-  test, and typecheck commands. Run that command exactly once for the candidate
-  HEAD; do not also run its component targets. If it fails, stop before
-  `prepare`. Fix only failures caused by the branch, run focused checks while
+  full validation command from its contributor instructions or build
+  configuration. If the project declares an aggregate command, run it exactly
+  once for the candidate HEAD; do not also run its component targets. If
+  validation fails, stop before `prepare`. Fix only failures caused by the
+  branch, run focused checks while
   editing, commit the fixes, then restart the final gate on the new HEAD.
   After the canonical command passes, record that exact commit as
   `validated_head="$(git rev-parse HEAD)"`.

@@ -99,6 +99,12 @@ func BuildResolvedResumeCommand(name string) (string, error) {
 	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(def.LaunchArgs, def.ResumeArgs), ""), nil
 }
 
+// WithFanoutBin pins helper calls made by the launched agent to the same fanout
+// executable that created its pane.
+func WithFanoutBin(command, fanoutPath string) string {
+	return "FANOUT_BIN=" + ShellQuote(fanoutPath) + " " + command
+}
+
 // buildCommand assembles a shell command from an executable, per-agent flags,
 // and an optional prompt, quoting every token.
 func buildCommand(executable string, args []string, prompt string) string {

@@ -247,10 +247,10 @@ func renderCodexPlanBriefingWithHeader(header, title, body, inspectRequirement s
 
 const reviewGateBypassSection = `
 The PR review gate is disabled for this fanout run. After committing the
-candidate changes, resolve and run the project's canonical full validation
-command once on the exact HEAD you will push; prefer ` + "`make check`" + ` when the
-project defines it. Do not also run the full individual lint/test targets
-unless you are diagnosing a failure. If ` + "`gh pr create`" + ` is denied before
+candidate changes, resolve the project's single canonical full validation
+command from the repository's own instructions and build configuration, then
+run it once on the exact HEAD you will push. Do not also run the individual
+full lint/test targets unless you are diagnosing a failure. If ` + "`gh pr create`" + ` is denied before
 ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
 `
 

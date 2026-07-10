@@ -13,6 +13,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -747,6 +748,47 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
 	if got != want {
 		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := "FANOUT_BIN=" + agent.ShellQuote(executable) + " "
+
+	for _, tc := range []struct {
+		name string
+		cfg  *cliflags.Config
+		req  Request
+	}{
+		{
+			name: "normal agent",
+			cfg:  &cliflags.Config{Agent: "claude"},
+			req:  Request{Agent: "claude", Prompt: "review"},
+		},
+		{
+			name: "Codex Plan Mode",
+			cfg:  &cliflags.Config{Agent: "codex", CodexPlanMode: new(true)},
+			req: Request{
+				Agent:               "codex",
+				Prompt:              "plan",
+				CodexPlanMode:       true,
+				CodexPlanStatusPath: "/tmp/status.json",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeExecutable(t, tc.req.Agent)
+			got, buildErr := buildAgentCommand(tc.cfg, tc.req, "fanout-go")
+			if buildErr != nil {
+				t.Fatal(buildErr)
+			}
+			if !strings.HasPrefix(got, wantPrefix) {
+				t.Fatalf("buildAgentCommand() = %q, want prefix %q", got, wantPrefix)
+			}
+		})
 	}
 }
 

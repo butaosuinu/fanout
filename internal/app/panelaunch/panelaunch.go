@@ -372,12 +372,21 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 		if err != nil {
 			return "", fmt.Errorf("resolve fanout executable: %w", err)
 		}
-		return "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + codexapp.LaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath), nil
+		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + codexapp.LaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath)
+		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
 	if cfg.DryRun {
 		return agent.BuildCommand(req.Agent, req.Prompt)
 	}
-	return agent.BuildResolvedCommand(req.Agent, req.Prompt)
+	command, err := agent.BuildResolvedCommand(req.Agent, req.Prompt)
+	if err != nil {
+		return "", err
+	}
+	fanoutPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve fanout executable: %w", err)
+	}
+	return agent.WithFanoutBin(command, fanoutPath), nil
 }
 
 func logPaneRequest(req Request, lg *log.Logger) {
