@@ -174,6 +174,26 @@ func TestRunCycleTableDriven(t *testing.T) {
 			},
 		},
 		{
+			// Plan-lane rows carry no positive IssueNum; the plan link must skip
+			// the issue before any trigger->running label swap, or every cycle
+			// mutates GitHub labels just to hit the late ErrAlreadyFanned.
+			name: "plan-owned issues skip before any label mutation",
+			fake: &fakeWatchIO{
+				issues:       []ghissue.Issue{issue(101), issue(102)},
+				openChildren: map[int]int{101: 0, 102: 0},
+				store: state.Store{Panes: []state.Pane{
+					{Parent: "@manual", IssueNum: -1, Slug: "plan-issue-101-1", PaneID: "%1"},
+					{Parent: "plan:issue-102-add-search", TaskID: "base", Slug: "issue-102-add-search-base", PaneID: "%2"},
+				}},
+			},
+			check: func(t *testing.T, report Report, fake *fakeWatchIO) {
+				t.Helper()
+				assertInts(t, "standalone launches", fake.standalone, nil)
+				assertSwaps(t, fake.swaps, nil)
+				assertSkipReasons(t, report, []SkipReason{SkipAlreadyFanned, SkipAlreadyFanned})
+			},
+		},
+		{
 			name: "standalone already fanned during launch requeues trigger label",
 			fake: &fakeWatchIO{
 				issues:        []ghissue.Issue{issue(101)},

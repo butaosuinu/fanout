@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
@@ -230,57 +229,11 @@ func guardIssuePlanCoordinator(store state.Store, issueNum int) error {
 // directions and in both lifecycle phases.
 func issuePlanRecorded(store state.Store, issueNum int) bool {
 	for _, pane := range store.Panes {
-		if num, ok := planPaneIssueNum(pane); ok && num == issueNum {
+		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok && num == issueNum {
 			return true
 		}
 	}
 	return false
-}
-
-// planPaneIssueNum returns the GitHub issue a plan-lane row is linked to: a
-// coordinator through its own slug under the manual parent, or a plan task
-// through its plan parent ref. ok is false for every other row.
-func planPaneIssueNum(pane state.Pane) (int, bool) {
-	if pane.Parent == panelaunch.ManualParentRef {
-		return planIssueSlugIssueNum(pane.Slug)
-	}
-	return planParentIssueNum(pane.Parent)
-}
-
-// planIssueSlugIssueNum parses the issue number back out of a planIssueSlug
-// ("plan-issue-<issue>-<n>"); ok is false for every other slug shape, including
-// the prompt coordinator's "plan-prompt-<n>".
-func planIssueSlugIssueNum(slug string) (int, bool) {
-	rest, found := strings.CutPrefix(slug, "plan-issue-")
-	if !found {
-		return 0, false
-	}
-	return parseLeadingIssueNum(rest)
-}
-
-// planParentIssueNum parses the issue number from a plan parent ref whose slug
-// follows the coordinator briefing's "issue-<num>-<short-kebab-title>" naming
-// ("plan:issue-474-add-search"). The link is convention-based — the plan lane
-// itself stays issue-less — so a plan named differently just loses this dedupe
-// hint and degrades to the pre-existing no-link behavior.
-func planParentIssueNum(parent string) (int, bool) {
-	rest, found := strings.CutPrefix(parent, "plan:issue-")
-	if !found {
-		return 0, false
-	}
-	return parseLeadingIssueNum(rest)
-}
-
-func parseLeadingIssueNum(rest string) (int, bool) {
-	numStr, _, found := strings.Cut(rest, "-")
-	if !found {
-		return 0, false
-	}
-	num, err := strconv.Atoi(numStr)
-	if err != nil || num <= 0 {
-		return 0, false
-	}
-	return num, true
 }
 
 // newPlanPromptPaneRequest builds the plan fan-out coordinator's pane request:
@@ -324,7 +277,7 @@ func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig h
 		Title:               title,
 		Body:                issue.Body,
 		ShortTitle:          panelaunch.ShortIssueTitle(title),
-		Slug:                planIssueSlug(issue.Number, number),
+		Slug:                panelaunch.PlanIssueSlug(issue.Number, number),
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(coordinatorAgent, briefingPath),
 		Agent:               coordinatorAgent,
@@ -363,15 +316,6 @@ func planIssuePromptPath(projectRoot string, issueNum, number int) string {
 		number = -number
 	}
 	return filepath.Join(briefing.Dir(projectRoot), fmt.Sprintf("fanout-%s-plan-issue-%d-%d.md", filepath.Base(projectRoot), issueNum, number))
-}
-
-// planIssueSlug keys the coordinator's state row by issue for the dedupe guard
-// and by the synthetic pane number for uniqueness across relaunches.
-func planIssueSlug(issueNum, number int) string {
-	if number < 0 {
-		number = -number
-	}
-	return fmt.Sprintf("plan-issue-%d-%d", issueNum, number)
 }
 
 func planPromptSlug(number int) string {

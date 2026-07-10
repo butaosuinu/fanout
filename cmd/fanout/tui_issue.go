@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
@@ -66,7 +67,7 @@ func recordedIssueNumbers(projectRoot string) map[int]bool {
 		}
 		// Plan-lane rows (a coordinator, or the tasks it fanned out) reference
 		// their issue only through slugs.
-		if num, ok := planPaneIssueNum(pane); ok {
+		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok {
 			recorded[num] = true
 		}
 	}

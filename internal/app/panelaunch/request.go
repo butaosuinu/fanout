@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
@@ -446,6 +447,63 @@ func parentDisplay(parent string) string {
 // PlanParentRef is the state parent key of an issue-less plan: "plan:<slug>".
 func PlanParentRef(slug string) string {
 	return "plan:" + slug
+}
+
+// PlanIssueSlug keys an issue-sourced plan coordinator's state row by issue
+// number for the dedupe guards and by the synthetic pane number for uniqueness
+// across relaunches: "plan-issue-<issue>-<n>".
+func PlanIssueSlug(issueNum, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("plan-issue-%d-%d", issueNum, number)
+}
+
+// PlanPaneIssueNum returns the GitHub issue a plan-lane row is linked to: an
+// issue-sourced coordinator through its own PlanIssueSlug under the manual
+// parent, or a plan task through a plan parent ref that follows the coordinator
+// briefing's "issue-<num>-<short-kebab-title>" naming ("plan:issue-474-add-
+// search"). The task link is convention-based — the plan lane itself stays
+// issue-less — so a plan named differently just loses the dedupe hint and
+// degrades to the pre-existing no-link behavior. ok is false for every other
+// row, including the prompt coordinator's "plan-prompt-<n>".
+func PlanPaneIssueNum(pane state.Pane) (int, bool) {
+	if pane.Parent == ManualParentRef {
+		rest, found := strings.CutPrefix(pane.Slug, "plan-issue-")
+		if !found {
+			return 0, false
+		}
+		return parseLeadingIssueNum(rest)
+	}
+	rest, found := strings.CutPrefix(pane.Parent, "plan:issue-")
+	if !found {
+		return 0, false
+	}
+	return parseLeadingIssueNum(rest)
+}
+
+// PlanLinkedIssueNums collects the issues owned by plan-lane rows so the issue
+// fan-out lanes can treat them as already fanned.
+func PlanLinkedIssueNums(store state.Store) map[int]bool {
+	out := map[int]bool{}
+	for _, pane := range store.Panes {
+		if num, ok := PlanPaneIssueNum(pane); ok {
+			out[num] = true
+		}
+	}
+	return out
+}
+
+func parseLeadingIssueNum(rest string) (int, bool) {
+	numStr, _, found := strings.Cut(rest, "-")
+	if !found {
+		return 0, false
+	}
+	num, err := strconv.Atoi(numStr)
+	if err != nil || num <= 0 {
+		return 0, false
+	}
+	return num, true
 }
 
 // PlanTaskSlug resolves a plan task's worktree slug: the explicit task slug,

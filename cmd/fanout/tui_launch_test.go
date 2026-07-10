@@ -190,39 +190,6 @@ func TestGuardIssuePlanCoordinator(t *testing.T) {
 	}
 }
 
-// TestPlanPaneIssueNum pins the issue links both dedupe directions rely on
-// (guardIssuePlanCoordinator, hasRecordedIssuePane, recordedIssueNumbers): a
-// coordinator's own slug under the manual parent, and a plan task's parent ref
-// following the briefing's issue-<num>-<title> naming.
-func TestPlanPaneIssueNum(t *testing.T) {
-	tests := []struct {
-		name string
-		pane state.Pane
-		want int
-		ok   bool
-	}{
-		{name: "issue coordinator slug parses", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-123-4"}, want: 123, ok: true},
-		{name: "prompt coordinator slug is not an issue link", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-prompt-4"}, ok: false},
-		{name: "missing launch suffix is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-123"}, ok: false},
-		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue-abc-1"}, ok: false},
-		{name: "empty issue segment is rejected", pane: state.Pane{Parent: panelaunch.ManualParentRef, Slug: "plan-issue--1"}, ok: false},
-		{name: "plan task parent following the naming links", pane: state.Pane{Parent: "plan:issue-474-add-search", Slug: "issue-474-add-search-base"}, want: 474, ok: true},
-		{name: "plan parent without the issue prefix has no link", pane: state.Pane{Parent: "plan:launch-plan", Slug: "launch-plan-base"}, ok: false},
-		// A work pane whose generated slug happens to start with plan-issue-
-		// (issue #999 titled "Plan issue 123 migration") must not alias #123.
-		{name: "non-manual pane slug is never parsed", pane: state.Pane{Parent: "700", IssueNum: 999, Slug: "plan-issue-123-migration"}, ok: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, ok := planPaneIssueNum(tt.pane)
-			if got != tt.want || ok != tt.ok {
-				t.Fatalf("planPaneIssueNum(%+v) = %d, %v, want %d, %v", tt.pane, got, ok, tt.want, tt.ok)
-			}
-		})
-	}
-}
-
 // TestHasRecordedIssuePaneSeesPlanSessions pins the reverse dedupe: while a
 // coordinator or its surviving plan task rows exist, the normal issue lane
 // (launchStandaloneIssuePane and the watcher) must not start a second session

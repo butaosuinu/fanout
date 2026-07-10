@@ -66,11 +66,16 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
 	worktreeFallbackFanned := ExistingWorktreeFanned(cfg, rt.Info.ProjectRoot, loaded.Children, otherParentFanned)
+	// Issues owned by a plan session (an issue-sourced coordinator or its plan
+	// task rows) count as fanned: their rows carry no positive IssueNum, so the
+	// parent-keyed sets above cannot see them, and launching a plain child pane
+	// would decompose the same work twice.
+	planOwnedFanned := panelaunch.PlanLinkedIssueNums(store)
 
 	plan := BuildPlan(
 		cfg,
 		loaded.Children,
-		fanset.Union(sameParentFanned, worktreeFallbackFanned),
+		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
 			if err := rt.GH.HydrateBodyLabels(issue); err != nil {

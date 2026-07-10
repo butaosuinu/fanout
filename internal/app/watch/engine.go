@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -578,6 +579,13 @@ func alreadyFanned(store state.Store, action Action) bool {
 			return true
 		}
 		if pane.IssueNum > 0 && paneWorktreeMatchesIssue(pane, action.Issue.Number) {
+			return true
+		}
+		// Plan-lane rows carry no positive IssueNum; without this link a
+		// plan-owned issue that keeps its trigger label would be relabeled
+		// trigger->running->trigger on every cycle before the standalone
+		// launch's late ErrAlreadyFanned fallback.
+		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok && num == action.Issue.Number {
 			return true
 		}
 	}

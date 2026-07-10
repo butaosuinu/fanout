@@ -825,3 +825,51 @@ func gitCmdTest(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
+
+// TestPlanPaneIssueNum pins the issue links the fan-out dedupe relies on
+// (run.Issues' fanned set, watch's alreadyFanned, and the TUI guards): a
+// coordinator's own PlanIssueSlug under the manual parent, and a plan task's
+// parent ref following the coordinator briefing's issue-<num>-<title> naming.
+func TestPlanPaneIssueNum(t *testing.T) {
+	tests := []struct {
+		name string
+		pane state.Pane
+		want int
+		ok   bool
+	}{
+		{name: "issue coordinator slug parses", pane: state.Pane{Parent: ManualParentRef, Slug: PlanIssueSlug(123, -4)}, want: 123, ok: true},
+		{name: "prompt coordinator slug is not an issue link", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-prompt-4"}, ok: false},
+		{name: "missing launch suffix is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-123"}, ok: false},
+		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-abc-1"}, ok: false},
+		{name: "empty issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue--1"}, ok: false},
+		{name: "plan task parent following the naming links", pane: state.Pane{Parent: "plan:issue-474-add-search", Slug: "issue-474-add-search-base"}, want: 474, ok: true},
+		{name: "plan parent without the issue prefix has no link", pane: state.Pane{Parent: "plan:launch-plan", Slug: "launch-plan-base"}, ok: false},
+		// A work pane whose generated slug happens to start with plan-issue-
+		// (issue #999 titled "Plan issue 123 migration") must not alias #123.
+		{name: "non-manual pane slug is never parsed", pane: state.Pane{Parent: "700", IssueNum: 999, Slug: "plan-issue-123-migration"}, ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := PlanPaneIssueNum(tt.pane)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("PlanPaneIssueNum(%+v) = %d, %v, want %d, %v", tt.pane, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// TestPlanLinkedIssueNums pins the fanned-set contribution: plan-lane rows map
+// to their issues, everything else contributes nothing.
+func TestPlanLinkedIssueNums(t *testing.T) {
+	store := state.Store{Panes: []state.Pane{
+		{Parent: ManualParentRef, IssueNum: -1, Slug: PlanIssueSlug(123, -1)},
+		{Parent: "plan:issue-474-add-search", TaskID: "base", Slug: "issue-474-add-search-base"},
+		{Parent: "700", IssueNum: 701, Slug: "child-701"},
+	}}
+	got := PlanLinkedIssueNums(store)
+	want := map[int]bool{123: true, 474: true}
+	if len(got) != len(want) || !got[123] || !got[474] {
+		t.Fatalf("PlanLinkedIssueNums(store) = %v, want %v", got, want)
+	}
+}
