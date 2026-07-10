@@ -21,24 +21,43 @@ file="$(json_field "$input" file_path)"
 [ -n "$file" ] || exit 0
 
 dir="$(resolve_project_dir "$input")"
+# The session may run from a subdirectory; the version pin, web/ tree, and
+# .cache fallback all live at the repository root.
+top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$top" ] && dir="$top"
 case "$file" in
 /*) ;;
 *) file="$dir/$file" ;;
 esac
 [ -f "$file" ] || exit 0
 
+# trusted_cache_root DIR — refuse a symlinked or foreign-owned shared cache
+# before executing a binary out of it (same checks as the Makefile's
+# prepare-dev-cache; the hook runs with the agent user's privileges).
+trusted_cache_root() {
+  local owner
+  [ -L "$1" ] && return 1
+  [ -d "$1" ] || return 1
+  owner="$(stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null)" || return 1
+  [ "$owner" = "$(id -u)" ]
+}
+
 case "$file" in
 *.go)
   [ -f "$dir/.golangci-lint-version" ] || exit 0
   version="$(tr -d '[:space:]' <"$dir/.golangci-lint-version")"
-  cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
   # Same resolution order as the Makefile: explicit override, local shared
-  # cache, then the repo-local .cache the CI branch uses.
+  # cache (owner-validated), then the repo-local .cache the CI branch uses.
   bin="${GOLANGCI_LINT_BIN:-}"
   if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-    bin="$cache_root/tools/golangci-lint-$version"
+    cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
+    if trusted_cache_root "$cache_root"; then
+      bin="$cache_root/tools/golangci-lint-$version"
+    else
+      bin=""
+    fi
   fi
-  if [ ! -x "$bin" ]; then
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
     bin="$dir/.cache/tools/golangci-lint-$version"
   fi
   [ -x "$bin" ] || exit 0

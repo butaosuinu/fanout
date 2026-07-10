@@ -61,16 +61,20 @@ resolve_project_dir() {
 }
 
 # strip_shell_noise CMD — normalize a shell command string for word scanning:
-# single-/double-quoted spans become spaces (double quotes honor backslash
-# escapes, so an apostrophe inside "..." cannot mis-pair), heredoc bodies are
-# dropped up to their terminator, backslash escapes outside quotes become
-# spaces, and command separators (; | & ( ) { } ` and newlines) become
-# newlines — one simple command per output line. This is a gate heuristic,
-# not a shell: unknown constructs must degrade toward keeping words visible
-# (fail closed), never toward hiding an executable `git push`.
+# heredoc bodies are dropped up to their terminator and command separators
+# (; | & ( ) { } ` and unquoted newlines) become newlines — one simple
+# command per output line. Quoted spans (and backslash-escaped characters)
+# are NOT dropped: their content is kept as part of the surrounding word,
+# with embedded whitespace/newlines replaced by the \001 sentinel, so a
+# quoted path stays one traceable token (`git -C "$repo" push` keeps its -C
+# value) while quoted prose can never form new command words (`"git push"`
+# stays one word). unsentinel() restores the spaces when a word is used as a
+# path. This is a gate heuristic, not a shell: unknown constructs must
+# degrade toward keeping words visible (fail closed), never toward hiding an
+# executable `git push`.
 strip_shell_noise() {
   awk '
-    BEGIN { hd = 0; hdword = "" }
+    BEGIN { hd = 0; hdword = ""; sq = 0; dq = 0; buf = ""; S = sprintf("%c", 1) }
     {
       line = $0
       if (hd) {
@@ -79,27 +83,40 @@ strip_shell_noise() {
         if (stripped == hdword) hd = 0
         next
       }
-      out = ""
       n = length(line)
       i = 1
-      sq = 0
-      dq = 0
       while (i <= n) {
         c = substr(line, i, 1)
         if (sq) {
-          if (c == "\047") sq = 0
+          if (c == "\047") { sq = 0 }
+          else if (c == " " || c == "\t") buf = buf S
+          else buf = buf c
           i++
           continue
         }
         if (dq) {
-          if (c == "\\") { i += 2; continue }
-          if (c == "\"") dq = 0
+          if (c == "\\") {
+            e = substr(line, i + 1, 1)
+            if (e == " " || e == "\t") buf = buf S
+            else buf = buf e
+            i += 2
+            continue
+          }
+          if (c == "\"") { dq = 0 }
+          else if (c == " " || c == "\t") buf = buf S
+          else buf = buf c
           i++
           continue
         }
-        if (c == "\047") { sq = 1; out = out " "; i++; continue }
-        if (c == "\"") { dq = 1; out = out " "; i++; continue }
-        if (c == "\\") { out = out " "; i += 2; continue }
+        if (c == "\047") { sq = 1; i++; continue }
+        if (c == "\"") { dq = 1; i++; continue }
+        if (c == "\\") {
+          e = substr(line, i + 1, 1)
+          if (e == " " || e == "\t") buf = buf S
+          else if (e != "") buf = buf e
+          i += 2
+          continue
+        }
         if (c == "<" && substr(line, i + 1, 1) == "<" && substr(line, i + 2, 1) != "<") {
           j = i + 2
           if (substr(line, j, 1) == "-") j++
@@ -109,18 +126,26 @@ strip_shell_noise() {
             w = w substr(line, j, 1)
             j++
           }
-          if (w != "") { hd = 1; hdword = w; out = out " "; i = j; continue }
-          out = out c
+          if (w != "") { hd = 1; hdword = w; buf = buf " "; i = j; continue }
+          buf = buf c
           i++
           continue
         }
-        if (c ~ /[;|&(){}`]/) { out = out "\n"; i++; continue }
-        out = out c
+        if (c ~ /[;|&(){}`]/) { buf = buf "\n"; i++; continue }
+        buf = buf c
         i++
       }
-      print out
+      # A quoted span continuing past the line end keeps the word joined.
+      if (sq || dq) buf = buf S
+      else buf = buf "\n"
     }
+    END { printf "%s", buf }
   ' <<<"$1"
+}
+
+# unsentinel WORD — restore the whitespace strip_shell_noise encoded as \001.
+unsentinel() {
+  printf '%s' "${1//$'\001'/ }"
 }
 
 # marker_path DIR — the per-worktree `make check` marker. `git rev-parse

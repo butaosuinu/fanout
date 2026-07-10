@@ -69,6 +69,8 @@ parse_push_segment() {
     FANOUT_SKIP_PUSH_CHECK=1) SEG_BYPASS=1 ;;
     [A-Za-z_]*=*) ;;
     env | command | exec | nohup) ;;
+    # Shell control words: `if git push …; then` must still gate the push.
+    if | then | elif | else | fi | do | done | while | until | ! | time) ;;
     *) break ;;
     esac
     shift
@@ -122,7 +124,7 @@ while IFS= read -r seg; do
   fi
   if [ "${1:-}" = "cd" ] || [ "${1:-}" = "pushd" ]; then
     if [ -n "${2:-}" ]; then
-      seg_dir="$(abs_dir "$seg_dir" "$2")"
+      seg_dir="$(abs_dir "$seg_dir" "$(unsentinel "$2")")"
     else
       seg_dir="$HOME"
     fi
@@ -136,11 +138,12 @@ while IFS= read -r seg; do
   push_dir="$seg_dir"
   while IFS= read -r c_path; do
     [ -n "$c_path" ] || continue
-    push_dir="$(abs_dir "$push_dir" "$c_path")"
+    push_dir="$(abs_dir "$push_dir" "$(unsentinel "$c_path")")"
   done <<<"$SEG_GIT_C"
 
   gated=1
   tags_flag=0
+  all_flag=0
   deletions=0
   non_flag=0
   skip_next=0
@@ -155,6 +158,7 @@ while IFS= read -r seg; do
     case "$w" in
     --delete | -d) gated=0 ;;
     --dry-run | -n) gated=0 ;; # side-effect-free probe push
+    --all | --branches | --mirror) all_flag=1 ;;
     --tags) tags_flag=1 ;;
     -o | --push-option | --receive-pack | --exec | --repo) skip_next=1 ;;
     \>* | [0-9]\>* | \<*)
@@ -180,11 +184,24 @@ while IFS= read -r seg; do
   done <<<"$SEG_ARGS"
   [ "$gated" = "1" ] || continue
 
-  git -C "$push_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+  # A detected push whose repository cannot be resolved (a `cd` to a missing
+  # path, an unexpanded variable) is unverifiable — fail closed.
+  if ! git -C "$push_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    deny "push 先リポジトリを解決できませんでした ($push_dir)。変数や存在しないパスを経由した push は検証できないため安全側で拒否します。"
+  fi
   recorded="$(marker_sha "$push_dir")"
 
   required=()
-  if [ "${#refspecs[@]}" -eq 0 ]; then
+  if [ "$all_flag" = "1" ]; then
+    # --all / --branches / --mirror push every local branch tip.
+    while IFS= read -r tip; do
+      [ -n "$tip" ] || continue
+      required+=("$tip")
+    done < <(git -C "$push_dir" for-each-ref refs/heads --format='%(objectname)' 2>/dev/null | sort -u)
+    if [ "${#required[@]}" -eq 0 ]; then
+      deny "--all/--mirror push の branch tip を列挙できませんでした ($push_dir)。"
+    fi
+  elif [ "${#refspecs[@]}" -eq 0 ]; then
     if [ "$deletions" -gt 0 ] || [ "$tags_flag" = "1" ]; then
       continue # deletion-only push or pure `git push --tags [remote]`
     fi

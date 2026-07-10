@@ -226,6 +226,58 @@ run_push_gate() {
 
   run_push_gate '(git push origin main)' "$repo"
   [ "$status" -eq 2 ]
+
+  run_push_gate 'if git push origin HEAD; then echo pushed; fi' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: quoted paths keep cd and git -C traceable" {
+  local repo_a="$BATS_TEST_TMPDIR/repo-a"
+  local repo_b="$BATS_TEST_TMPDIR/repo-b"
+  setup_hook_repo "$repo_a"
+  setup_hook_repo "$repo_b"
+  write_marker "$repo_a" # only repo A is validated
+
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git -C \\\"$repo_b\\\" push origin HEAD\"},\"cwd\":\"$repo_a\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cd \\\"$repo_b\\\" && git push origin HEAD\"},\"cwd\":\"$repo_a\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  write_marker "$repo_b"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 0 ]
+}
+
+@test "push gate: fails closed when the pushed repository cannot be resolved" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_marker "$repo"
+
+  run_push_gate 'cd /nonexistent-fanout-dir && git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'cd $WORKTREE && git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+}
+
+@test "push gate: --all and --mirror validate every branch tip" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  git -C "$repo" branch old-branch
+  printf 'more\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm "second"
+  write_marker "$repo" # old-branch's tip is one commit behind the marker
+
+  run_push_gate 'git push --all origin' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'git push --mirror origin' "$repo"
+  [ "$status" -eq 2 ]
+
+  git -C "$repo" branch -f old-branch HEAD
+  run_push_gate 'git push --all origin' "$repo"
+  [ "$status" -eq 0 ]
 }
 
 @test "push gate: fails closed when extraction fails but the payload mentions git push" {
@@ -391,13 +443,36 @@ format_payload() {
   [ -x "$cache_root/tools/golangci-lint-$version" ] || skip "pinned golangci-lint not cached locally"
 
   local repo="$BATS_TEST_TMPDIR/repo"
-  mkdir -p "$repo"
+  mkdir -p "$repo/sub"
+  git -C "$repo" init -q
   cp "$REPO_ROOT/.golangci-lint-version" "$REPO_ROOT/.golangci.yml" "$repo/"
   printf 'package main\n\nfunc main() {\nprintln( "x" )\n}\n' >"$repo/bad.go"
 
   run_hook "$FORMAT_HOOK" "$(format_payload "$repo/bad.go" "$repo")"
   [ "$status" -eq 0 ]
   [[ "$(cat "$repo/bad.go")" == *'println("x")'* ]]
+
+  # A subdirectory cwd resolves the repo root for the version pin.
+  printf 'package main\n\nfunc main() {\nprintln( "y" )\n}\n' >"$repo/bad.go"
+  run_hook "$FORMAT_HOOK" "$(format_payload "$repo/bad.go" "$repo/sub")"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$repo/bad.go")" == *'println("y")'* ]]
+}
+
+@test "format-on-edit: refuses a foreign or symlinked shared cache" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$repo"
+  cp "$REPO_ROOT/.golangci-lint-version" "$repo/"
+  printf 'package main\n\nfunc main() {\nprintln( "x" )\n}\n' >"$repo/bad.go"
+
+  # A symlinked cache root is rejected, so the file stays untouched even if
+  # the link points at a real, populated cache.
+  local real_cache="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
+  ln -s "$real_cache" "$BATS_TEST_TMPDIR/evil-cache"
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u GOLANGCI_LINT_BIN FANOUT_DEV_CACHE_DIR="$2" bash "$0" 2>&1' \
+    "$FORMAT_HOOK" "$(format_payload "$repo/bad.go" "$repo")" "$BATS_TEST_TMPDIR/evil-cache"
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$repo/bad.go")" == *'println( "x" )'* ]]
 }
 
 # --- hooks lib -----------------------------------------------------------------
