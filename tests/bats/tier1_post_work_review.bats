@@ -10,154 +10,22 @@ load helpers
 
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
 
-@test "post-work-review shard-7: Claude skill uses the bounded driver and installs read-only agents" {
-  local skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
-  local source_agents="$REPO_ROOT/claude/skills/post-work-review/agents"
-  local claude_dir="$BATS_TEST_TMPDIR/claude"
-  local codex_dir="$BATS_TEST_TMPDIR/codex"
-  local agent frontmatter
+@test "post-work-review shard-7: Codex skill revalidates the exact HEAD before verifying broad-review fixes" {
+  local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
+  local workflow
 
-  grep -Fq 'bounded-isolated-reviewer' "$skill"
-  grep -Fq 'tools/post-work-review.sh' "$skill"
-  grep -Fq 'POST_WORK_REVIEW_BASE=<base>' "$skill"
-  grep -Fq 'to every driver command' "$skill"
-  grep -Fq 'subagent_type: "post-work-reviewer"' "$skill"
-  grep -Fq 'subagent_type: "post-work-verifier"' "$skill"
-  ! grep -Fq 'codex-companion.mjs' "$skill"
-  ! grep -Fq 'Skill(skill="code-review")' "$skill"
-
-  for agent in post-work-reviewer post-work-verifier; do
-    frontmatter="$(awk 'NR == 1 { next } /^---$/ { exit } { print }' "$source_agents/$agent.md")"
-    [[ "$frontmatter" == *"name: $agent"* ]]
-    [[ "$frontmatter" == *"tools: Read, Grep, Glob"* ]]
-    [[ "$frontmatter" == *"permissionMode: plan"* ]]
-    [[ "$frontmatter" != *"Bash"* ]]
-    [[ "$frontmatter" != *"Write"* ]]
-    [[ "$frontmatter" != *"Edit"* ]]
-    grep -Fq 'Never return the literal' "$source_agents/$agent.md"
-    grep -Fq '`<fresh subagent id>` placeholder.' "$source_agents/$agent.md"
-  done
-
-  run make -C "$REPO_ROOT" --no-print-directory \
-    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" install-integrations
-  [ "$status" -eq 0 ]
-  cmp "$source_agents/post-work-reviewer.md" "$claude_dir/agents/post-work-reviewer.md"
-  cmp "$source_agents/post-work-verifier.md" "$claude_dir/agents/post-work-verifier.md"
-
-  run make -C "$REPO_ROOT" --no-print-directory \
-    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" link-integrations
-  [ "$status" -eq 0 ]
-  [ -L "$claude_dir/agents/post-work-reviewer.md" ]
-  [ -L "$claude_dir/agents/post-work-verifier.md" ]
-
-  grep -Fq 'copy_agent_files "$tmp/extract/claude/skills/post-work-review/agents"' \
-    "$REPO_ROOT/install.sh"
-  grep -Fq '"$claude_dir/agents/post-work-reviewer.md"' "$REPO_ROOT/install.sh"
-
-  run make -C "$REPO_ROOT" --no-print-directory \
-    CLAUDE_DIR="$claude_dir" CODEX_DIR="$codex_dir" uninstall-integrations
-  [ "$status" -eq 0 ]
-  [ ! -e "$claude_dir/agents/post-work-reviewer.md" ]
-  [ ! -e "$claude_dir/agents/post-work-verifier.md" ]
-}
-
-@test "post-work-review shard-7: skills revalidate the exact HEAD before verifying broad-review fixes" {
-  local skill workflow
-
-  for skill in \
-    "$REPO_ROOT/codex/skills/post-work-review/SKILL.md" \
-    "$REPO_ROOT/claude/skills/post-work-review/SKILL.md"; do
-    workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
-    [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
-    [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
-    [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
-    [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
-    [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
-    [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
-    [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
-    [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
-    ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
-    grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
-    grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
-  done
-}
-
-@test "post-work-review shard-7: PR gate requires the reviewed base from marker metadata" {
-  command -v python3 >/dev/null 2>&1 || skip "python3 is required"
-
-  local repo="$BATS_TEST_TMPDIR/pr-gate-reviewed-base"
-  local gitdir head hook
-  setup_review_repo "$repo"
-  git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
-  make_branch_change "$repo"
-  git -C "$repo" config init.defaultBranch main
-  gitdir="$(gitdir_for "$repo")"
-  head="$(git -C "$repo" rev-parse HEAD)"
-  hook="$REPO_ROOT/.claude/hooks/pre-pr-review-gate.py"
-  printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
-  {
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=origin/release/v1\n'
-  } >"$gitdir/post-work-review-passed.meta"
-
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [ -z "$output" ] || return 1
-
-  run run_pr_gate "$repo" "gh pr create --base origin/release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  run run_pr_gate "$repo" "gh pr create --base main" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  rm "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-  {
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=origin/release/v1\n'
-  } >"$gitdir/post-work-review-passed.meta"
-
-  run run_pr_gate "$repo" "gh pr create" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  git -C "$repo" config branch.feature.gh-merge-base release/v1
-  run run_pr_gate "$repo" "gh pr create" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [ -z "$output" ] || return 1
-
-  git -C "$repo" config --unset branch.feature.gh-merge-base
-  {
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-  } >"$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [ -z "$output" ] || return 1
-
-  {
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-  } >"$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  {
-    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-  } >"$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
+  [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
+  [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
+  [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
+  [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
+  [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
+  [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
+  [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
+  [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
+  ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
+  grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
+  grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
 }
 
 setup_review_repo() {
@@ -205,16 +73,6 @@ run_review() {
   local repo="$1"
   shift
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
-}
-
-run_pr_gate() {
-  local repo="$1"
-  local command="$2"
-  local hook="$3"
-  local python
-  python="$(command -v python3)"
-  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' "$command" "$repo" | \
-    PATH=/usr/bin:/bin:/usr/sbin:/sbin "$python" "$hook"
 }
 
 run_review_base() {

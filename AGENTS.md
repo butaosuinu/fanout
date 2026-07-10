@@ -17,9 +17,8 @@ and runs `test`, `lint`, and `lint-web`. `make fmt` formats (gofumpt/goimports),
 
 Source-of-truth integration files:
 
-- Claude Code: `claude/commands/*.md`, `claude/skills/*/SKILL.md`, and the
-  review agents under `claude/skills/post-work-review/agents/`, installed under
-  `~/.claude/`.
+- Claude Code: `claude/commands/*.md` and `claude/skills/*/SKILL.md`,
+  installed under `~/.claude/`.
 - Codex CLI: `codex/skills/*/` (skill instructions, references, and scripts),
   `codex/agents/*`, and `codex/tools/*`, installed under the matching
   `~/.codex/` directories.

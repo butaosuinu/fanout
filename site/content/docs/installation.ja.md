@@ -44,7 +44,6 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
 - `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
-- `$CLAUDE_DIR/agents/`(read-only の `post-work-reviewer` と `post-work-verifier`)
 - `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群)と `$CODEX_DIR/agents/`(post-work reviewer / verifier)、`$CODEX_DIR/tools/`
 
 install と update はこれらすべてを上書きします。
@@ -99,9 +98,9 @@ curl インストールは prebuilt バイナリを配置するので、Go も N
 - `--version <tag>`: 指定した tag をインストールする
 - `--no-skills`: バイナリのみ更新する
 
-> install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill、review agent を含む)を上書きします。
+> install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill を含む)を上書きします。
 > カスタマイズした copy は先に退避してください。
-> Claude Code と Codex CLI は起動時に連携ファイルを読み込むため、更新後は実行中のセッションを再起動してください。
+> Codex CLI は起動時に skill を読み込むため、更新後は実行中の Codex セッションを再起動してください。
 
 exit code の一覧は[CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
 

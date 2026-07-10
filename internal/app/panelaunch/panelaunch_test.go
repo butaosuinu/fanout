@@ -455,7 +455,7 @@ func TestNewIssueRequestQualifiesDefaultSlugForSharedChild(t *testing.T) {
 }
 
 func TestNewIssueRequestPassesResolvedBaseBranchToBriefing(t *testing.T) {
-	cfg := &cliflags.Config{ParentRef: "200", Agent: "claude", BaseBranch: "release/v1"}
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", BaseBranch: "release/v1"}
 	issue := ghissue.Issue{Number: 501, Title: "Release child", Body: "body"}
 
 	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)

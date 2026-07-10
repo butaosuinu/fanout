@@ -155,11 +155,11 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 
 ## エージェント連携
 
-`make install`(およびインストールスクリプト)は、`/fanout` slash command、skill、
-read-only の post-work-review agent を `~/.claude/` と `~/.codex/` に配置します。
-これにより Claude Code と Codex は fanout が使える場面を認識し、`--dry-run` で
-プレビューしてから、確認のあとに実行できます。fanout 自身は LLM を呼びません —
-skill が issue の文脈から flag を生成します。詳しくは
+`make install`(およびインストールスクリプト)は、`/fanout` slash command と
+一連の skill を `~/.claude/` と `~/.codex/` に配置します。これにより Claude Code
+と Codex は fanout が使える場面を認識し、`--dry-run` でプレビューしてから、確認の
+あとに実行できます。fanout 自身は LLM を呼びません — skill が issue の文脈から
+flag を生成します。詳しくは
 [エージェント連携のドキュメント](https://butaosuinu.github.io/fanout/ja/docs/agents/)
 を参照してください。
 
