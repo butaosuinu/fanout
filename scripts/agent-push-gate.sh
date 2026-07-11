@@ -35,6 +35,14 @@
 # - config that only re-points the REMOTE of a validated tip
 #   (`-c branch.<name>.remote=…`) is not tracked: the pushed commit itself
 #   was validated.
+#
+# Wrapper/option coverage is intentionally broad but not exhaustive: the
+# scanner transparently steps over env (incl. -C/-S/-u/--unset), command,
+# exec, nohup, and timeout (with its DURATION), treats bash/sh/eval/env -S
+# splices and `--git-dir`/`--work-tree`/`--namespace`/GIT_* repo switches as
+# fail-closed, and flags ref-moving git subcommands before a same-call push.
+# A genuinely novel wrapper is a false-allow gap the backstops cover, not a
+# security boundary.
 set -u
 
 [ "${FANOUT_SKIP_PUSH_CHECK:-}" = "1" ] && exit 0
@@ -99,12 +107,27 @@ parse_push_segment() {
           shift # the option; its value falls to the shift below
           ;;
         -C* | -S* | --chdir=* | --split-string=*) SEG_REPO_SWITCH=1 ;;
-        -u) shift ;;
+        -u | --unset) shift ;; # takes a value (the next word)
+        --unset=*) ;;
         --) shift; break ;;
         -*) ;;
         *) break ;;
         esac
         shift
+      done
+      continue
+      ;;
+    timeout | */timeout)
+      # timeout [OPTION]... DURATION COMMAND …: skip options and DURATION so
+      # `timeout 30 git push` is still a push.
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -s | --signal | -k | --kill-after) shift; [ $# -gt 0 ] && shift ;;
+        --) shift; [ $# -gt 0 ] && shift; break ;;
+        -*) shift ;;
+        *) shift; break ;; # DURATION operand
+        esac
       done
       continue
       ;;
@@ -169,9 +192,14 @@ parse_push_segment() {
     --config-env=*)
       if push_affecting_config "${1#--config-env=}"; then SEG_REPO_SWITCH=1; fi
       ;;
-    --namespace)
-      shift
-      [ $# -gt 0 ] || return 1
+    --namespace | --namespace=*)
+      # --namespace re-points refs under refs/namespaces/<name>/: untraceable.
+      SEG_REPO_SWITCH=1
+      case "$1" in --namespace)
+        shift
+        [ $# -gt 0 ] || return 1
+        ;;
+      esac
       ;;
     -*) ;;
     *) break ;;
@@ -216,6 +244,18 @@ seg_inner_shell_push() {
     [A-Za-z_]*=*) ;;
     command | exec | nohup | time | */nohup | */time) ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
+    timeout | */timeout)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -s | --signal | -k | --kill-after) shift; [ $# -gt 0 ] && shift ;;
+        --) shift; [ $# -gt 0 ] && shift; break ;;
+        -*) shift ;;
+        *) shift; break ;;
+        esac
+      done
+      continue
+      ;;
     env | */env)
       shift
       while [ $# -gt 0 ]; do
@@ -317,6 +357,18 @@ seg_gh_pr_create() {
       continue
       ;;
     command | exec | nohup | time | */nohup | */time) ;;
+    timeout | */timeout)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -s | --signal | -k | --kill-after) shift; [ $# -gt 0 ] && shift ;;
+        --) shift; [ $# -gt 0 ] && shift; break ;;
+        -*) shift ;;
+        *) shift; break ;;
+        esac
+      done
+      continue
+      ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
     *) break ;;
     esac
@@ -360,8 +412,34 @@ seg_ref_mutating() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    env | command | exec | nohup | */env | */nohup) ;;
+    command | exec | nohup | */nohup) ;;
     if | then | elif | else | fi | do | done | while | until | ! | time) ;;
+    env | */env)
+      # Consume env's options so `env -C repo git commit` is still a mutation.
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -C | --chdir | -S | --split-string | -u | --unset) shift; [ $# -gt 0 ] && shift ;;
+        -C* | -S* | --chdir=* | --split-string=* | --unset=*) shift ;;
+        --) shift; break ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
+    timeout | */timeout)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -s | --signal | -k | --kill-after) shift; [ $# -gt 0 ] && shift ;;
+        --) shift; [ $# -gt 0 ] && shift; break ;;
+        -*) shift ;;
+        *) shift; break ;;
+        esac
+      done
+      continue
+      ;;
     *) break ;;
     esac
     shift
@@ -383,9 +461,10 @@ seg_ref_mutating() {
     shift
   done
   case "${1:-}" in
-  # config and tag do not move branch tips, but they change what a later
-  # push in the same call sends (push refspecs / a re-pointed tag source).
-  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout | fetch | branch | update-ref | config | tag) return 0 ;;
+  # config, tag, and symbolic-ref do not move branch tips, but they change
+  # what a later push in the same call sends (push refspecs, a re-pointed tag
+  # source, or a switched HEAD symref).
+  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout | fetch | branch | update-ref | config | tag | symbolic-ref) return 0 ;;
   esac
   return 1
 }
@@ -632,8 +711,9 @@ while IFS= read -r seg; do
       if [ -n "$tag_ref" ]; then
         case "$dst" in
         "" | refs/tags/*) continue ;; # release flow: tag pushed as a tag
-        refs/*) ;;                    # explicit non-tag destination: gated
-        *) continue ;;                # unqualified dst: git infers refs/tags/ from the tag source
+        # An unqualified <dst> can expand to an existing remote branch, so a
+        # tag source with a non-refs/tags destination stays gated.
+        *) ;;
         esac
       fi
       required+=("$src")

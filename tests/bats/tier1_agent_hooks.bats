@@ -119,9 +119,9 @@ run_push_gate() {
   [ "$status" -eq 0 ]
   run_push_gate 'git push origin tag v1.0.0' "$repo"
   [ "$status" -eq 0 ]
-  # An unqualified destination from a tag source infers refs/tags/.
+  # An unqualified dst can expand to an existing remote branch, so it is gated.
   run_push_gate 'git push origin v1.0.0:release-tag' "$repo"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 2 ]
   run_push_gate 'git push -o ci.skip origin v1.0.0' "$repo"
   [ "$status" -eq 0 ]
   run_push_gate 'git push --dry-run origin HEAD' "$repo"
@@ -474,6 +474,40 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
+@test "push gate: timeout, env --unset, --namespace, and symbolic-ref stay gated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  # No marker: each form must be seen as an unvalidated push (or a mutation)
+  # and denied, proving the wrapper/option is not silently skipped.
+
+  # timeout wraps the real push.
+  run_push_gate 'timeout 30 git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'timeout -s KILL 5 git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # env --unset takes a value; the push must still be seen.
+  run_push_gate 'env --unset FOO git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # --namespace re-points the ref space: fail closed.
+  run_push_gate 'git --namespace foo push origin main' "$repo"
+  [ "$status" -eq 2 ]
+
+  # symbolic-ref before a push changes the source ref.
+  run_push_gate 'git symbolic-ref HEAD refs/heads/stale && git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # env -C before a commit is still a ref mutation ahead of the push.
+  run_push_gate "env -C $repo git commit -am wip && git push origin HEAD" "$repo"
+  [ "$status" -eq 2 ]
+
+  # A tag pushed to an unqualified (branch-like) destination is gated.
+  git -C "$repo" tag rel
+  run_push_gate 'git push origin rel:main' "$repo"
+  [ "$status" -eq 2 ]
+}
+
 @test "push gate: eval, config-then-push, tag-then-push, and wrapped gh pr create stay gated" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
@@ -610,6 +644,25 @@ write_failing_check_makefile() {
   git -C "$repo" checkout -qb feature
   git -C "$repo" push -qu origin feature
   printf 'wip\n' >>"$repo/tracked.txt" # dirty, but HEAD is already pushed
+
+  run_hook "$STOP_GATE" "$(stop_payload "$repo")"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"push 済みの HEAD"* ]]
+}
+
+@test "stop gate: blocks a dirty stop when HEAD is any remote tip without upstream" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local remote="$BATS_TEST_TMPDIR/remote.git"
+  setup_hook_repo "$repo"
+  write_failing_check_makefile "$repo"
+  git -C "$repo" add Makefile && git -C "$repo" commit -qm makefile
+  git init -q --bare "$remote"
+  git -C "$repo" remote add origin "$remote"
+  git -C "$repo" checkout -qb feature
+  # Push without -u: no upstream is configured, but the tip reaches origin.
+  git -C "$repo" push -q origin feature
+  git -C "$repo" fetch -q origin
+  printf 'wip\n' >>"$repo/tracked.txt"
 
   run_hook "$STOP_GATE" "$(stop_payload "$repo")"
   [ "$status" -eq 2 ]

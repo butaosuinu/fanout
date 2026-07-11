@@ -65,8 +65,17 @@ fi
 # backstop — block with instructions instead of running make check on a
 # dirty tree.
 if [ -n "$(git status --porcelain -uall 2>/dev/null)" ]; then
+  # `git push origin HEAD` sets no upstream, so also check whether this exact
+  # commit is any remote-tracking tip — the backstop must fire whenever the
+  # unvalidated HEAD already reached a remote.
+  pushed=0
   upstream="$(git rev-parse -q --verify '@{upstream}' 2>/dev/null)"
   if [ -n "$upstream" ] && [ "$upstream" = "$head" ]; then
+    pushed=1
+  elif git for-each-ref --format='%(objectname)' refs/remotes 2>/dev/null | grep -qxF "$head"; then
+    pushed=1
+  fi
+  if [ "$pushed" = "1" ]; then
     {
       echo "fanout stop gate: push 済みの HEAD $head は make check 未検証ですが、working tree が dirty なため検証を実行できません。"
       echo "作業中の変更を commit または stash してから、clean tree で make check を成功させてください。"
