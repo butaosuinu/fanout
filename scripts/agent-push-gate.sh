@@ -131,6 +131,9 @@ parse_push_segment() {
     esac
     shift
   done
+  # bash >= 4.4 with set -u errors on ${1##…} when $1 is unset (bash 3.2
+  # tolerates it); guard the arity first.
+  [ $# -gt 0 ] || return 1
   [ "${1##*/}" = "git" ] || return 1
   shift
   while [ $# -gt 0 ]; do
@@ -210,6 +213,9 @@ seg_ref_mutating() {
     esac
     shift
   done
+  # bash >= 4.4 with set -u errors on ${1##…} when $1 is unset (bash 3.2
+  # tolerates it); guard the arity first.
+  [ $# -gt 0 ] || return 1
   [ "${1##*/}" = "git" ] || return 1
   shift
   while [ $# -gt 0 ]; do

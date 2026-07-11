@@ -174,6 +174,8 @@ var prefixRules = []struct {
 	{".github/workflows/", Rule{ID: "github-workflows", Class: ClassH, Source: SourceExtra, Note: "CI 定義"}},
 	{".github/", Rule{ID: "github-rest", Class: ClassM, Source: SourceExtra, Note: "GitHub 設定"}},
 	{".claude/", Rule{ID: "claude-settings", Class: ClassH, Source: SourceExtra, Note: "PR review gate 等の作業設定"}},
+	{".codex/", Rule{ID: "codex-settings", Class: ClassH, Source: SourceExtra, Note: "Codex hooks 配線 (push gate / stop gate)"}},
+	{"scripts/", Rule{ID: "agent-hooks", Class: ClassH, Source: SourceExtra, Note: "エージェント hook の品質ゲート実体"}},
 	{"codex/tools/", Rule{ID: "codex-tools", Class: ClassH, Source: SourceExtra, Note: "install される実行シェル"}},
 	{"claude/", Rule{ID: "claude-prompts", Class: ClassM, Source: SourceExtra, Note: "配布エージェントプロンプト"}},
 	{"codex/", Rule{ID: "codex-prompts", Class: ClassM, Source: SourceExtra, Note: "配布エージェントプロンプト"}},
