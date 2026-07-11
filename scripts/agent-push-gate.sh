@@ -190,7 +190,7 @@ abs_dir() {
 # push_affecting_config KEY[=VALUE] — config that changes what a push sends.
 push_affecting_config() {
   case "$1" in
-  push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=*)
+  push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=* | remote.pushdefault=* | remote.pushDefault=*)
     return 0
     ;;
   esac
@@ -198,8 +198,9 @@ push_affecting_config() {
 }
 
 # seg_inner_shell_push SEGMENT — true when SEGMENT hands a command string to
-# an inner shell (`bash -c …` / `sh -lc …`) that mentions a git push. The
-# scanner cannot follow the inner shell, so the caller fails closed.
+# an inner shell (`bash -c …` / `sh -lc …`) or to `env -S '…'` that mentions
+# a git push. The scanner cannot follow the spliced string, so the caller
+# fails closed.
 seg_inner_shell_push() {
   local has_c=0 w joined
   # shellcheck disable=SC2086 # word splitting is the tokenizer here
@@ -207,23 +208,52 @@ seg_inner_shell_push() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    env | command | exec | nohup | time) ;;
+    command | exec | nohup | time) ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
+    env)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -S | --split-string)
+          has_c=1
+          shift
+          break # the spliced string follows; keep it for the scan below
+          ;;
+        -S* | --split-string=*)
+          has_c=1
+          break # value embedded in the token; keep it for the scan below
+          ;;
+        -u | -C | --chdir)
+          shift
+          [ $# -gt 0 ] && shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     *) break ;;
     esac
     shift
   done
-  [ $# -gt 0 ] || return 1
-  case "${1##*/}" in
-  bash | sh | zsh | dash | ksh) ;;
-  *) return 1 ;;
-  esac
-  shift
-  for w in "$@"; do
-    case "$w" in
-    -*c*) has_c=1 ;;
+  if [ "$has_c" = "0" ]; then
+    [ $# -gt 0 ] || return 1
+    case "${1##*/}" in
+    bash | sh | zsh | dash | ksh) ;;
+    *) return 1 ;;
     esac
-  done
+    shift
+    for w in "$@"; do
+      case "$w" in
+      -*c*) has_c=1 ;;
+      esac
+    done
+  fi
   [ "$has_c" = "1" ] || return 1
   joined="$(unsentinel "$*")"
   case "$joined" in
@@ -320,11 +350,12 @@ base_dir="$(resolve_project_dir "$input")"
 segments="$(strip_shell_noise "$cmd")"
 
 cmd_bypass=0
+cmd_repo_switch=0
 ref_mut=0
 
 # First pass — command-wide facts. Substitution bodies are queued after the
 # outer segments, so positional scanning would see a `git commit` inside
-# `$(…)` only after the push; ref mutation and an exported bypass are
+# `$(…)` only after the push; ref mutation and exported state are
 # command-wide either way.
 while IFS= read -r seg; do
   case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
@@ -334,12 +365,20 @@ while IFS= read -r seg; do
   fi
   # shellcheck disable=SC2086
   set -- $seg
-  if [ "${1:-}" = "export" ] && [ "${2:-}" = "FANOUT_SKIP_PUSH_CHECK=1" ]; then
-    cmd_bypass=1
+  if [ "${1:-}" = "export" ]; then
+    shift
+    for w in "$@"; do
+      case "$w" in
+      FANOUT_SKIP_PUSH_CHECK=1) cmd_bypass=1 ;;
+      # Exported repo-pointing env vars redirect every later git call.
+      GIT_DIR=* | GIT_WORK_TREE=* | GIT_COMMON_DIR=* | GIT_INDEX_FILE=* | GIT_NAMESPACE=* | GIT_OBJECT_DIRECTORY=* | GIT_CONFIG*=*) cmd_repo_switch=1 ;;
+      esac
+    done
   fi
 done <<<"$segments"
 
 seg_dir="$base_dir" # follows `cd` segments so later pushes gate the right repo
+dir_stack=()        # pushd/popd
 
 while IFS= read -r seg; do
   case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
@@ -361,11 +400,32 @@ while IFS= read -r seg; do
 
   # shellcheck disable=SC2086
   set -- $seg
-  if [ "${1:-}" = "cd" ] || [ "${1:-}" = "pushd" ]; then
+  if [ "${1:-}" = "cd" ]; then
     if [ -n "${2:-}" ]; then
       seg_dir="$(abs_dir "$seg_dir" "$(unsentinel "$2")")"
     else
       seg_dir="$HOME"
+    fi
+    continue
+  fi
+  if [ "${1:-}" = "pushd" ]; then
+    if [ -n "${2:-}" ]; then
+      dir_stack+=("$seg_dir")
+      seg_dir="$(abs_dir "$seg_dir" "$(unsentinel "$2")")"
+    elif [ "${#dir_stack[@]}" -gt 0 ]; then
+      # bare pushd swaps the top two directory-stack entries
+      top_idx=$((${#dir_stack[@]} - 1))
+      swap="${dir_stack[$top_idx]}"
+      dir_stack[top_idx]="$seg_dir"
+      seg_dir="$swap"
+    fi
+    continue
+  fi
+  if [ "${1:-}" = "popd" ]; then
+    if [ "${#dir_stack[@]}" -gt 0 ]; then
+      top_idx=$((${#dir_stack[@]} - 1))
+      seg_dir="${dir_stack[$top_idx]}"
+      unset "dir_stack[$top_idx]"
     fi
     continue
   fi
@@ -538,6 +598,9 @@ while IFS= read -r seg; do
   # the same call would move them afterwards, making the validation stale.
   if [ "${#required[@]}" -gt 0 ] && [ "$ref_mut" = "1" ]; then
     deny "同一コマンド内で ref を変更するコマンド (commit / rebase 等) の後に push しています。gate は実行前の状態しか検証できないため拒否します。commit 後に make check を通し、push は単独のコマンドとして実行してください。"
+  fi
+  if [ "${#required[@]}" -gt 0 ] && [ "$cmd_repo_switch" = "1" ]; then
+    deny "同一コマンド内で GIT_DIR / GIT_WORK_TREE 等が export されており、push 先リポジトリを追跡できません。export せずに対象リポジトリ内から git push を実行してください。"
   fi
 
   for src in "${required[@]}"; do

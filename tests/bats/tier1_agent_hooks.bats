@@ -474,6 +474,36 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
+@test "push gate: exported repo vars, env -S, pushDefault, and popd stay gated" {
+  local repo_a="$BATS_TEST_TMPDIR/repo-a"
+  local repo_b="$BATS_TEST_TMPDIR/repo-b"
+  setup_hook_repo "$repo_a"
+  setup_hook_repo "$repo_b"
+  write_marker "$repo_a"
+
+  # Exported GIT_DIR redirects every later git call: fail closed.
+  run_push_gate 'export GIT_DIR=/other/.git GIT_WORK_TREE=/other; git push origin HEAD' "$repo_a"
+  [ "$status" -eq 2 ]
+
+  # env -S splices a command string the scanner cannot follow.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'git push origin HEAD'\"},\"cwd\":\"$repo_a\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env -S 'ls -la'\"},\"cwd\":\"$repo_a\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 0 ]
+
+  # An inline remote.pushDefault override redirects the implicit refspec.
+  run_push_gate 'git -c remote.pushDefault=evil push origin HEAD' "$repo_a"
+  [ "$status" -eq 2 ]
+
+  # popd returns to the original (unvalidated) repo before the push.
+  run_push_gate "pushd $repo_a && popd && git push origin HEAD" "$repo_b"
+  [ "$status" -eq 2 ]
+  run_push_gate "pushd $repo_a && git push origin HEAD && popd" "$repo_b"
+  [ "$status" -eq 0 ]
+}
+
 @test "push gate: fails closed when extraction fails but the payload mentions git push" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
