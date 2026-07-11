@@ -371,7 +371,7 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexPla
 func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
 	if req.CodexPlanMode {
 		if req.Agent != "codex" {
-			return "", fmt.Errorf("--codex-plan-mode requires --agent codex")
+			return "", fmt.Errorf("codex plan mode requires agent codex; pane resolves to %s", req.Agent)
 		}
 		if cfg.DryRun {
 			return codexapp.LaunchCommand(commandName, "codex", req.Prompt, req.CodexPlanStatusPath), nil

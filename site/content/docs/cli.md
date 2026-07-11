@@ -207,7 +207,7 @@ explicitly skipped.
 
 ## Settings flags
 
-These paired switches toggle fanout's opinionated behaviors for one run — the child-briefing instructions and tmux keybindings fanout injects, flipped on or off in place. A CLI flag always wins over the environment-variable and config-file layers. What each behavior actually injects — and the full resolution order — is documented in [Settings]({{< relref "/docs/settings" >}}).
+These paired switches toggle fanout's child launch mode, briefing instructions, and tmux keybindings for one run. A CLI flag always wins over the environment-variable and config-file layers. The full resolution order and scope of each setting are documented in [Settings]({{< relref "/docs/settings" >}}).
 
 | Flag | Argument | Description |
 |---|---|---|
@@ -215,7 +215,7 @@ These paired switches toggle fanout's opinionated behaviors for one run — the 
 | `--pr-review-gate` / `--no-pr-review-gate` | — | Keep the default PR review-gate expectation, or add a Claude briefing note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the hook blocks PR creation. Default: on. |
 | `--briefing-code-review` / `--no-briefing-code-review` | — | Include or omit the Claude-only `/code-review` briefing instruction. Default: on. |
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Include or omit the Claude-only Agent Teams hint in child briefings. Default: on. |
-| `--codex-plan-mode` / `--no-codex-plan-mode` | — | For `--agent codex`, start an app-server Plan Mode thread and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. The launch is recorded after the initial Plan turn is accepted; plan generation and approval waiting have no startup timeout. Default: off. Details in [Agent Integrations]({{< relref "/docs/agents" >}}). |
+| `--codex-plan-mode` / `--no-codex-plan-mode` | — | Override the resolved `codexPlanMode` setting for a normal issue / Project child fan-out. When enabled, start each Codex child with an app-server Plan Mode thread and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. The launch is recorded after the initial Plan turn is accepted; plan generation and approval waiting have no startup timeout. The built-in default is off. Details and excluded launch paths are in [Agent Integrations]({{< relref "/docs/agents" >}}). |
 | `--pr-visualization` / `--no-pr-visualization` | — | Include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. Default: on. |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key after a live fan-out. Default: on. |
 
@@ -401,6 +401,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_PR_REVIEW_GATE` | Environment layer for the PR review-gate note (`prReviewGate`). |
 | `FANOUT_BRIEFING_CODE_REVIEW` | Environment layer for the Claude `/code-review` instruction (`briefingCodeReview`). |
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
+| `FANOUT_CODEX_PLAN_MODE` | Environment layer for starting normal issue / Project children in Codex Plan Mode (`codexPlanMode`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
 | `FANOUT_CONSOLE_KEYBIND` | Environment layer for the console-return tmux keybindings (`consoleKeybind`). |

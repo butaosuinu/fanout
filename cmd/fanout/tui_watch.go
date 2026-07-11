@@ -172,11 +172,13 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {
+	codexPlanMode := false
 	return &cliflags.Config{
 		Parent:          parent,
 		ParentRef:       strconv.Itoa(parent),
 		ParentMode:      cliflags.ModeIssue,
 		Agent:           watcherAgent(resolvedSettings),
+		CodexPlanMode:   &codexPlanMode,
 		Limit:           limit,
 		SleepBetween:    cliflags.DefaultSleepBetween,
 		PopupTimeoutSec: cliflags.DefaultPopupTimeout,

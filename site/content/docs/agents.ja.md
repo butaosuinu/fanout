@@ -70,8 +70,11 @@ Codex セッション終了後に background watcher は残りません。
 
 ## Codex Plan Mode
 
-子を起動する前に、Codex に実装計画を提案させてから先に進めたいことがあります。
-batch の子起動では `--codex-plan-mode` でこの Plan Mode を有効にできます(既定は off)。
+通常の issue / Project の子 fan-out は、起動前に `codexPlanMode` 設定を解決します。
+user config または repo config に保存するか、`FANOUT_CODEX_PLAN_MODE` を設定します。
+CLI の 1 run だけ上書きするには `--codex-plan-mode` / `--no-codex-plan-mode` を使います。
+ビルトイン既定値は `false` で、優先順位は CLI > env > repo > user > default です。
+TUI の設定 popup では Launch グループに同じキーが表示されます。
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
@@ -81,8 +84,13 @@ Plan Mode の子は interactive な Codex TUI として起動し、関連する�
 その turn ではファイル編集や commit、push、PR 作成をしません。
 ペインは Plan Mode の会話のまま残るので、そこから続行できます。
 
+この設定は通常の CLI issue / Project fan-out と、OPEN な子を持つ issue を選んだ TUI Issue モードに適用します。
 選択された子はすべて `codex` に解決される必要があります。
 `claude` の子が混ざっているとペイン作成前に失敗します。
+
+watcher、子のない issue の単独ペイン、`fanout plan` task、plan coordinator はこの設定を無視します。
+manual と attach の `codex` ペインは、この設定に関係なく従来どおり Plan Mode で起動します。
+対応する `claude` ペインは通常モードで起動します。
 
 ## briefing の仕組み
 

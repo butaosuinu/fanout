@@ -3960,6 +3960,19 @@ func TestSettingsReloadInvalidatesOlderWatchTicks(t *testing.T) {
 	}
 }
 
+func TestSettingsViewIncludesCodexPlanMode(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModel(Options{ProjectRoot: t.TempDir()})
+	m.width = 100
+	m.height = 40
+	m.openSettingsForm(fanoutsettings.ConfigScopeUser)
+
+	view := m.settingsView()
+	if !strings.Contains(view, "Launch") || !strings.Contains(view, "codexPlanMode") {
+		t.Fatalf("settings view missing Codex Plan Mode row:\n%s", view)
+	}
+}
+
 func TestSettingsRowMasksSensitiveValues(t *testing.T) {
 	row := settingsRow{
 		spec:  fanoutsettings.ConfigKey{Key: "slackWebhookURL", Kind: fanoutsettings.ValueString, Sensitive: true},

@@ -41,6 +41,7 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 // pane ids created before completion or a fail-fast launch error.
 func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) (IssueExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg), lg.Warn)
+	launchCfg := effectiveIssueLaunchConfig(cfg, resolvedSettings)
 	hookConfig := hooks.LoadUserConfig(lg)
 
 	loaded, code := loadChildren(cfg, rt.GH, lg)
@@ -120,7 +121,7 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		return IssueExecutionResult{}, exitcode.OK
 	}
-	if err := validateIssueAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
+	if err := validateIssueAgents(launchCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
 		return IssueExecutionResult{}, exitcode.Env
 	}
@@ -139,7 +140,7 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 		teamCtx = buildTeamContext(rt.Info.ProjectRoot, cfg.ParentRef, plan.Targets)
 	}
 
-	result := executePlan(cfg, lg, rt.Info, rt.GH, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
+	result := executePlan(launchCfg, lg, rt.Info, rt.GH, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
@@ -166,6 +167,17 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.Env
 	}
 	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.OK
+}
+
+// effectiveIssueLaunchConfig overlays resolved launch settings onto a shallow
+// copy of the parsed issue config. Keep the parsed config untouched so output
+// such as --limit rerun hints only repeats flags the caller explicitly passed.
+// Plan tasks, manual/attached panes, and watcher standalone panes use their own
+// launch paths and intentionally do not pass through this helper.
+func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.Settings) *cliflags.Config {
+	launchCfg := *cfg
+	launchCfg.CodexPlanMode = new(resolvedSettings.CodexPlanMode)
+	return &launchCfg
 }
 
 func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {

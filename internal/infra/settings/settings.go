@@ -24,6 +24,7 @@ type Settings struct {
 	PRReviewGate           bool
 	BriefingCodeReview     bool
 	AgentTeamsHint         bool
+	CodexPlanMode          bool
 	PRVisualization        bool
 	DashboardKeybind       bool
 	ConsoleKeybind         bool
@@ -88,6 +89,7 @@ type CLIOverrides struct {
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
+	CodexPlanMode      *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
 }
@@ -97,6 +99,7 @@ type overrides struct {
 	PRReviewGate           *bool
 	BriefingCodeReview     *bool
 	AgentTeamsHint         *bool
+	CodexPlanMode          *bool
 	PRVisualization        *bool
 	DashboardKeybind       *bool
 	ConsoleKeybind         *bool
@@ -117,6 +120,7 @@ var configKeys = []ConfigKey{
 	{Key: "briefingCodeReview", Group: "Briefing", Label: "Claude code review", Kind: ValueBool, Env: "FANOUT_BRIEFING_CODE_REVIEW", Default: "true", RepoEditable: true},
 	{Key: "agentTeamsHint", Group: "Briefing", Label: "Agent Teams hint", Kind: ValueBool, Env: "FANOUT_AGENT_TEAMS_HINT", Default: "true", RepoEditable: true},
 	{Key: "prVisualization", Group: "Briefing", Label: "PR visualization", Kind: ValueBool, Env: "FANOUT_PR_VISUALIZATION", Default: "true", RepoEditable: true},
+	{Key: "codexPlanMode", Group: "Launch", Label: "Codex child Plan Mode", Kind: ValueBool, Env: "FANOUT_CODEX_PLAN_MODE", Default: "false", RepoEditable: true},
 	{Key: "dashboardKeybind", Group: "TUI", Label: "Dashboard keybind", Kind: ValueBool, Env: "FANOUT_DASHBOARD_KEYBIND", Default: "true", RepoEditable: true},
 	{Key: "consoleKeybind", Group: "TUI", Label: "Console keybind", Kind: ValueBool, Env: "FANOUT_CONSOLE_KEYBIND", Default: "true", RepoEditable: true},
 	{Key: "watcher", Group: "Watcher", Label: "Watcher", Kind: ValueBool, Env: "FANOUT_WATCHER", Default: "false", RepoEditable: false},
@@ -289,6 +293,9 @@ func apply(s *Settings, o overrides) {
 	if o.AgentTeamsHint != nil {
 		s.AgentTeamsHint = *o.AgentTeamsHint
 	}
+	if o.CodexPlanMode != nil {
+		s.CodexPlanMode = *o.CodexPlanMode
+	}
 	if o.PRVisualization != nil {
 		s.PRVisualization = *o.PRVisualization
 	}
@@ -333,6 +340,7 @@ func cliOverrides(cli CLIOverrides) overrides {
 		PRReviewGate:       cli.PRReviewGate,
 		BriefingCodeReview: cli.BriefingCodeReview,
 		AgentTeamsHint:     cli.AgentTeamsHint,
+		CodexPlanMode:      cli.CodexPlanMode,
 		PRVisualization:    cli.PRVisualization,
 		DashboardKeybind:   cli.DashboardKeybind,
 	}
@@ -564,6 +572,7 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"prReviewGate":       func(v *bool) { out.PRReviewGate = v },
 		"briefingCodeReview": func(v *bool) { out.BriefingCodeReview = v },
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
+		"codexPlanMode":      func(v *bool) { out.CodexPlanMode = v },
 		"prVisualization":    func(v *bool) { out.PRVisualization = v },
 		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
 		"consoleKeybind":     func(v *bool) { out.ConsoleKeybind = v },
@@ -644,6 +653,7 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_PR_REVIEW_GATE", func(v *bool) { out.PRReviewGate = v })
 	read("FANOUT_BRIEFING_CODE_REVIEW", func(v *bool) { out.BriefingCodeReview = v })
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
+	read("FANOUT_CODEX_PLAN_MODE", func(v *bool) { out.CodexPlanMode = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
 	read("FANOUT_CONSOLE_KEYBIND", func(v *bool) { out.ConsoleKeybind = v })
