@@ -9,6 +9,30 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.11.0 (2026-07-11)
+
+- **Issue mode の plan fan-out。** 新規 Session popup の Issue mode に Prompt mode と同じ plan fan-out を追加し、選択した issue を issue-less な `fanout plan` task に分解できるようにしました。
+  coordinator と task agent は別々に選択でき、選択中の issue に OPEN な子がある場合はチェックボックスを無効化します。
+  [Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **Codex Plan Mode の起動安定化。** fanout は app-server で Plan Mode thread を作成して interactive Codex TUI を接続し、初回 Plan turn が受理されてから launch を記録するようになりました。
+  plan 生成と承認待ちには startup timeout を設けません。
+  [Agent Integrations]({{< relref "/docs/agents" >}}) を参照。
+- **GPT-5.6 向け Codex 連携。** 同梱する 5 個の Codex skill は、主な判断手順を `SKILL.md` に置き、必要なときだけ reference や script を読む構成になりました。
+  `$post-work-review` は固定した read-only の reviewer と verifier を使い、指定モデルを利用できない場合は停止します。
+  `$pr-watch` は同じ状態の再通知を抑える foreground watcher で監視します。
+  [Agent Integrations]({{< relref "/docs/agents" >}}) を参照。
+- **新規 Session 起動後のフォーカス。** `n` popup から Prompt、plan coordinator、Issue Session を起動すると、実際の作成順で先頭の新規ペインへフォーカスするようになりました。
+  agent 追加（`a`）、shell（`A` / `t`）、watcher、通常の CLI 起動では、従来どおりフォーカスを移しません。
+  [Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **Prompt Session の PR 状態。** Prompt Session の記録済み branch に PR がある場合、Web ダッシュボードがそのリンクと CI 状態を表示するようになりました。
+  [Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **貢献者向け品質ゲート。** リポジトリの正典ローカルゲートを `make check` に統一し、`post-work-review` の結果をレビュー対象の base と diff に結び付けました。
+  リポジトリ内の Claude と Codex の hook は、clean な対象 commit がゲートを通過するまで branch push を止め、Codex Stop hook も backstop として検証します。
+  release tag の push は対象外です。
+  `docs/review-checklist.ja.md` を参照。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.11.0)
+
 ## v0.10.0 (2026-07-09)
 
 - **Agent-state テレメトリ。** `@fanout_agent_state` 契約を 6 値の語彙(`running` / `working` / `plan` / `blocked` / `idle` / `done`)に拡張しました。起動ラッパーと Codex Plan Mode が状態を発行し、TUI / web の glyph とバッジに反映されます。agent がプランを提示・入力待ち・終了したときにコンソールが通知音を鳴らします。[Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
