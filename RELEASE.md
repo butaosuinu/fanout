@@ -1,10 +1,11 @@
 # Releasing fanout
 
-Cutting a release is **CI-driven**: the only manual step is pushing an annotated
-`vX.Y.Z` tag. Pushing the tag triggers `.github/workflows/release.yml`, which
-builds the four platform archives, generates `SHA256SUMS`, and publishes the
-GitHub Release with auto-generated notes. There is no `make release` target and
-no goreleaser config — the workflow is the whole pipeline.
+Publishing a release is **CI-driven**: after the release docs land on `main`,
+the only manual publication step is pushing an annotated `vX.Y.Z` tag. Pushing
+the tag triggers `.github/workflows/release.yml`, which builds the four platform
+archives, generates `SHA256SUMS`, and publishes the GitHub Release with
+auto-generated notes. There is no `make release` target and no goreleaser config
+— the workflow is the whole pipeline.
 
 ## What the tag push does for you
 
@@ -38,16 +39,26 @@ no goreleaser config — the workflow is the whole pipeline.
    Bump per semver (`v0.MINOR.PATCH` while pre-1.0: features bump MINOR, fixes
    bump PATCH).
 
-2. **Preflight.** Release off the latest `origin/main` and make sure it is green:
+2. **Prepare the release docs.** Add the release date and highlights to
+   `site/content/docs/changelog.{md,ja.md}`, then update the pinned
+   `FANOUT_VERSION` example in `site/content/docs/installation.{md,ja.md}`.
+   Merge the docs through a normal PR; its squash commit becomes the intended
+   tag target. No source version edit is needed.
+
+3. **Preflight.** Release off the latest `origin/main` and make sure it is green:
 
    ```bash
+   git fetch origin main --tags
    gh run list --branch main --workflow test.yml --limit 1 \
      --json headSha,conclusion          # conclusion == "success" on main's tip
-   make test && make lint && make vuln   # optional local re-check (vuln needs network)
+   gh run list --branch main --workflow vuln.yml --limit 1 \
+     --json headSha,conclusion          # conclusion == "success" on the same tip
+   make check                            # optional deterministic local re-check
+   make vuln                             # optional; needs the network-backed vuln DB
    git tag -l vX.Y.Z                     # must be empty — tag not yet used
    ```
 
-3. **Tag and push.** Use an **annotated** tag pointing at `origin/main`, matching
+4. **Tag and push.** Use an **annotated** tag pointing at `origin/main`, matching
    how every prior tag was cut:
 
    ```bash
@@ -60,14 +71,15 @@ no goreleaser config — the workflow is the whole pipeline.
    review gate (`.claude/hooks/pre-pr-review-gate.sh`) only intercepts
    `gh pr create`; **a tag push is not gated.**
 
-4. **Watch the build.**
+5. **Watch the build.**
 
    ```bash
-   gh run watch "$(gh run list --workflow release.yml --limit 1 \
-     --json databaseId -q '.[0].databaseId')" --exit-status
+   until run_id="$(gh run list --workflow release.yml --branch vX.Y.Z --limit 1 \
+     --json databaseId -q '.[0].databaseId')" && [ -n "$run_id" ]; do sleep 5; done
+   gh run watch "$run_id" --exit-status
    ```
 
-5. **Verify the Release.**
+6. **Verify the Release.**
 
    ```bash
    gh release view vX.Y.Z

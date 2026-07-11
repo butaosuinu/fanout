@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # 配置先や Release tag を指定
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.10.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.11.0 sh
 ```
 
 `install.sh` は OS/arch を自動判定し、最新 Release(または `FANOUT_VERSION` で指定した tag)から `fanout` バイナリと Claude/Codex 連携ファイルを取得して配置します。
@@ -85,7 +85,7 @@ make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を s
 make uninstall      # インストール済みのパスを削除
 ```
 
-ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 10+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
+ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 
 ## 更新を保つ

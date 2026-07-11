@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # Custom destination or pinned release tag
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.10.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.11.0 sh
 ```
 
 `install.sh` auto-detects your OS/arch, then fetches and installs the `fanout` binary and the Claude/Codex integration files from the latest Release (or the tag given via `FANOUT_VERSION`).
@@ -84,7 +84,7 @@ make link           # symlinks the Go binary as $(BINDIR)/fanout + symlinks inte
 make uninstall      # removes installed paths
 ```
 
-Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 10+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
+Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 
 ## Keeping it updated
 

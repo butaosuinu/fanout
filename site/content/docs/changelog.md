@@ -9,6 +9,28 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.11.0 (2026-07-11)
+
+- **Issue-mode plan fan-out.** The new-session popup gained the same plan fan-out control in Issue mode as in Prompt mode, decomposing a selected issue into issue-less `fanout plan` tasks with separate coordinator and task-agent choices.
+  The control is disabled while the selected issue has OPEN children.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Reliable Codex Plan Mode startup.** fanout now creates the Plan Mode thread through app-server, attaches the interactive Codex TUI, and records the launch only after the initial Plan turn is accepted.
+  Plan generation and approval waiting no longer have a startup timeout.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+- **Codex integrations for GPT-5.6.** The five bundled Codex skills now keep their main decision flow in `SKILL.md` and load references or scripts only when needed.
+  `$post-work-review` uses pinned read-only reviewer and verifier models and stops instead of substituting unavailable models, while `$pr-watch` uses a foreground watcher that suppresses unchanged snapshots.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+- **Focus after new-session launch.** Successful Prompt, plan coordinator, and Issue launches from `n` now move focus to the first pane actually created.
+  Agent attach (`a`), shell (`A` / `t`), watcher, and ordinary CLI launches leave focus unchanged.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Prompt Session PR status.** When a Prompt Session's recorded branch has a PR, the web dashboard now shows its link and CI status.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Contributor quality gates.** The repository now uses `make check` as its canonical local gate, binds `post-work-review` results to the reviewed base and diff, and blocks branch pushes unless the exact clean tip has passed the gate.
+  Repo-local Claude and Codex hooks enforce the push check, with a Codex Stop hook as a backstop; release-tag pushes remain exempt.
+  See `docs/review-checklist.ja.md`.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.11.0)
+
 ## v0.10.0 (2026-07-09)
 
 - **Agent-state telemetry.** The `@fanout_agent_state` contract expanded to a six-value vocabulary (`running` / `working` / `plan` / `blocked` / `idle` / `done`), emitted by the launch wrapper and Codex Plan Mode and surfaced as TUI / web glyphs and badges. The console now sounds a notification when an agent presents a plan, waits for input, or exits. See [Monitoring]({{< relref "/docs/monitoring" >}}).
