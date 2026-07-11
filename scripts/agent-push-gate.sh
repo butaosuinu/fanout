@@ -87,7 +87,7 @@ parse_push_segment() {
     # make the push untraceable: fail closed.
     GIT_DIR=* | GIT_WORK_TREE=* | GIT_COMMON_DIR=* | GIT_INDEX_FILE=* | GIT_NAMESPACE=* | GIT_OBJECT_DIRECTORY=* | GIT_CONFIG*=*) SEG_REPO_SWITCH=1 ;;
     [A-Za-z_]*=*) ;;
-    env)
+    env | */env)
       # Consume env's own options so `env -i git push` is still a push.
       # env -C hops directories and env -S splices a command string; the
       # scan cannot follow either, so a push behind them fails closed.
@@ -108,7 +108,7 @@ parse_push_segment() {
       done
       continue
       ;;
-    command | exec | nohup)
+    command | exec | nohup | */nohup)
       # Consume the wrapper's own options and `--` so `command -- git push`
       # is still a push.
       shift
@@ -193,9 +193,10 @@ abs_dir() {
 }
 
 # push_affecting_config KEY[=VALUE] — config that changes what a push sends.
+# include.path can pull any of the other keys in from a file, so it counts.
 push_affecting_config() {
   case "$1" in
-  push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=* | remote.pushdefault=* | remote.pushDefault=*)
+  push.* | *.push=* | *.push | *.pushurl=* | *.mirror=* | *.mirror | *.pushremote=* | *.pushRemote=* | remote.pushdefault=* | remote.pushDefault=* | include.path=* | includeIf.* | includeif.*)
     return 0
     ;;
   esac
@@ -213,9 +214,9 @@ seg_inner_shell_push() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    command | exec | nohup | time) ;;
+    command | exec | nohup | time | */nohup | */time) ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
-    env)
+    env | */env)
       shift
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -280,16 +281,28 @@ seg_inner_shell_push() {
 # marker).
 seg_gh_pr_create() {
   local pos1="" pos2=""
+  SEG_GH_UNSAFE=0
   # shellcheck disable=SC2086 # word splitting is the tokenizer here
   set -- $1
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    env)
+    env | */env)
       shift
       while [ $# -gt 0 ]; do
         case "$1" in
-        -u | -C | --chdir)
+        -C | --chdir | -S | --split-string)
+          # gh would run in a directory (or via a splice) the gate cannot
+          # follow: the caller fails closed.
+          SEG_GH_UNSAFE=1
+          shift
+          [ $# -gt 0 ] && shift
+          ;;
+        -C* | -S* | --chdir=* | --split-string=*)
+          SEG_GH_UNSAFE=1
+          shift
+          ;;
+        -u)
           shift
           [ $# -gt 0 ] && shift
           ;;
@@ -303,7 +316,7 @@ seg_gh_pr_create() {
       done
       continue
       ;;
-    command | exec | nohup | time) ;;
+    command | exec | nohup | time | */nohup | */time) ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
     *) break ;;
     esac
@@ -347,7 +360,7 @@ seg_ref_mutating() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    env | command | exec | nohup) ;;
+    env | command | exec | nohup | */env | */nohup) ;;
     if | then | elif | else | fi | do | done | while | until | ! | time) ;;
     *) break ;;
     esac
@@ -419,6 +432,9 @@ while IFS= read -r seg; do
   fi
 
   if seg_gh_pr_create "$seg"; then
+    if [ "$SEG_GH_UNSAFE" = "1" ]; then
+      deny "env -C / -S 経由の gh pr create はゲートが対象リポジトリを追跡できないため拒否します。対象リポジトリ内から直接 gh pr create を実行してください。"
+    fi
     gh_dir="$seg_dir"
     if git -C "$gh_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
       gh_head="$(head_sha "$gh_dir")"

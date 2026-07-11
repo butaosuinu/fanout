@@ -529,6 +529,16 @@ run_push_gate() {
   # An inline remote.pushDefault override redirects the implicit refspec.
   run_push_gate 'git -c remote.pushDefault=evil push origin HEAD' "$repo_a"
   [ "$status" -eq 2 ]
+  # include.path can pull push-affecting config in from a file.
+  run_push_gate 'git -c include.path=/tmp/evil push origin HEAD' "$repo_a"
+  [ "$status" -eq 2 ]
+
+  # A path-prefixed env wrapper is still env.
+  run_push_gate '/usr/bin/env git push origin HEAD' "$repo_b"
+  [ "$status" -eq 2 ]
+  # env -C before gh pr create leaves the target repo untraceable.
+  run_push_gate 'env -C /elsewhere gh pr create --fill' "$repo_a"
+  [ "$status" -eq 2 ]
 
   # popd returns to the original (unvalidated) repo before the push.
   run_push_gate "pushd $repo_a && popd && git push origin HEAD" "$repo_b"
