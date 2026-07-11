@@ -39,9 +39,6 @@ dir="$top"
 command -v make >/dev/null 2>&1 || exit 0
 [ -f Makefile ] || exit 0
 
-# Uncommitted work cannot be pushed; do not burn minutes on mid-work stops.
-[ -n "$(git status --porcelain -uall 2>/dev/null)" ] && exit 0
-
 head="$(head_sha "$dir")" || exit 0
 [ -n "$head" ] || exit 0
 
@@ -59,6 +56,23 @@ if [ -z "$default_ref" ]; then
   done
 fi
 if [ -n "$default_ref" ] && git merge-base --is-ancestor HEAD "$default_ref" 2>/dev/null; then
+  exit 0
+fi
+
+# Uncommitted work cannot be pushed; do not burn minutes on mid-work stops.
+# Exception: when this unvalidated HEAD is already the pushed upstream tip
+# (a push slipped past the PreToolUse gate), a silent skip would erase the
+# backstop — block with instructions instead of running make check on a
+# dirty tree.
+if [ -n "$(git status --porcelain -uall 2>/dev/null)" ]; then
+  upstream="$(git rev-parse -q --verify '@{upstream}' 2>/dev/null)"
+  if [ -n "$upstream" ] && [ "$upstream" = "$head" ]; then
+    {
+      echo "fanout stop gate: push 済みの HEAD $head は make check 未検証ですが、working tree が dirty なため検証を実行できません。"
+      echo "作業中の変更を commit または stash してから、clean tree で make check を成功させてください。"
+    } >&2
+    exit 2
+  fi
   exit 0
 fi
 

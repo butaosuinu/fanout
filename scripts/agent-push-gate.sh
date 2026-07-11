@@ -197,6 +197,87 @@ push_affecting_config() {
   return 1
 }
 
+# seg_inner_shell_push SEGMENT — true when SEGMENT hands a command string to
+# an inner shell (`bash -c …` / `sh -lc …`) that mentions a git push. The
+# scanner cannot follow the inner shell, so the caller fails closed.
+seg_inner_shell_push() {
+  local has_c=0 w joined
+  # shellcheck disable=SC2086 # word splitting is the tokenizer here
+  set -- $1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    [A-Za-z_]*=*) ;;
+    env | command | exec | nohup | time) ;;
+    if | then | elif | else | fi | do | done | while | until | !) ;;
+    *) break ;;
+    esac
+    shift
+  done
+  [ $# -gt 0 ] || return 1
+  case "${1##*/}" in
+  bash | sh | zsh | dash | ksh) ;;
+  *) return 1 ;;
+  esac
+  shift
+  for w in "$@"; do
+    case "$w" in
+    -*c*) has_c=1 ;;
+    esac
+  done
+  [ "$has_c" = "1" ] || return 1
+  joined="$(unsentinel "$*")"
+  case "$joined" in
+  *git*push*) return 0 ;;
+  esac
+  return 1
+}
+
+# seg_gh_pr_create SEGMENT — true when SEGMENT is a `gh pr create|new`. gh
+# pushes the current branch itself when it is not fully pushed, so PR
+# creation is a push path (Codex has no other gate on it; for Claude this
+# runs alongside the pre-pr-review gate, whose flow already produced the
+# marker).
+seg_gh_pr_create() {
+  local pos1="" pos2=""
+  # shellcheck disable=SC2086 # word splitting is the tokenizer here
+  set -- $1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    [A-Za-z_]*=*) ;;
+    env | command | exec | nohup | time) ;;
+    if | then | elif | else | fi | do | done | while | until | !) ;;
+    *) break ;;
+    esac
+    shift
+  done
+  [ $# -gt 0 ] || return 1
+  [ "${1##*/}" = "gh" ] || return 1
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    -R | --repo)
+      shift
+      [ $# -gt 0 ] || return 1
+      ;;
+    -*) ;;
+    *)
+      if [ -z "$pos1" ]; then
+        pos1="$1"
+      elif [ -z "$pos2" ]; then
+        pos2="$1"
+        break
+      fi
+      ;;
+    esac
+    shift
+  done
+  [ "$pos1" = "pr" ] || return 1
+  case "$pos2" in
+  create | new) return 0 ;;
+  esac
+  return 1
+}
+
 # seg_ref_mutating SEGMENT — true when SEGMENT is a git command that can move
 # local refs (or HEAD) before a later push in the same tool call. The gate
 # resolves refs before the call runs, so a push after one of these cannot be
@@ -263,6 +344,21 @@ seg_dir="$base_dir" # follows `cd` segments so later pushes gate the right repo
 while IFS= read -r seg; do
   case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
 
+  if seg_inner_shell_push "$seg"; then
+    deny "インナーシェル (bash -c / sh -c) 経由の push はゲートが検証できないため拒否します。git push を直接実行してください。"
+  fi
+
+  if seg_gh_pr_create "$seg"; then
+    gh_dir="$seg_dir"
+    if git -C "$gh_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      gh_head="$(head_sha "$gh_dir")"
+      if [ -n "$gh_head" ] && [ "$(marker_sha "$gh_dir")" != "$gh_head" ]; then
+        deny "gh pr create は未 push の branch を自動 push します。HEAD $gh_head は make check 未検証です。"
+      fi
+    fi
+    continue
+  fi
+
   # shellcheck disable=SC2086
   set -- $seg
   if [ "${1:-}" = "cd" ] || [ "${1:-}" = "pushd" ]; then
@@ -290,6 +386,7 @@ while IFS= read -r seg; do
   gated=1
   tags_flag=0
   all_flag=0
+  mirror_flag=0
   deletions=0
   non_flag=0
   skip_next=0
@@ -311,7 +408,8 @@ while IFS= read -r seg; do
     case "$w" in
     --delete | -d) gated=0 ;;
     --dry-run | -n) gated=0 ;; # side-effect-free probe push
-    --all | --branches | --mirror) all_flag=1 ;;
+    --all | --branches) all_flag=1 ;;
+    --mirror) mirror_flag=1 ;;
     --tags) tags_flag=1 ;;
     -o | --push-option | --receive-pack | --exec) skip_next=1 ;;
     # --repo supplies the repository, so the next positional is a refspec.
@@ -359,15 +457,21 @@ while IFS= read -r seg; do
   fi
   recorded="$(marker_sha "$push_dir")"
 
+  # --mirror sends every ref (backups, remotes, notes), which the marker
+  # cannot vouch for: fail closed.
+  if [ "$mirror_flag" = "1" ] && [ "$gated" = "1" ]; then
+    deny "--mirror push は refs/heads 以外の全 ref も送るため gate で検証できません。"
+  fi
+
   required=()
   if [ "$all_flag" = "1" ]; then
-    # --all / --branches / --mirror push every local branch tip.
+    # --all / --branches push every local branch tip.
     while IFS= read -r tip; do
       [ -n "$tip" ] || continue
       required+=("$tip")
     done < <(git -C "$push_dir" for-each-ref refs/heads --format='%(objectname)' 2>/dev/null | sort -u)
     if [ "${#required[@]}" -eq 0 ]; then
-      deny "--all/--mirror push の branch tip を列挙できませんでした ($push_dir)。"
+      deny "--all push の branch tip を列挙できませんでした ($push_dir)。"
     fi
   elif [ "${#refspecs[@]}" -eq 0 ]; then
     if [ "$deletions" -gt 0 ] || [ "$tags_flag" = "1" ]; then
@@ -388,10 +492,7 @@ while IFS= read -r seg; do
     cfg_specs="$(git -C "$push_dir" config --get-all "remote.$remote_w.push" 2>/dev/null)"
     if [ "$(git -C "$push_dir" config --bool "remote.$remote_w.mirror" 2>/dev/null)" = "true" ]; then
       # remote.<name>.mirror makes a bare `git push` mirror every ref.
-      while IFS= read -r tip; do
-        [ -n "$tip" ] || continue
-        required+=("$tip")
-      done < <(git -C "$push_dir" for-each-ref refs/heads --format='%(objectname)' 2>/dev/null | sort -u)
+      deny "remote.$remote_w.mirror=true の push は全 ref を送るため gate で検証できません。"
     elif [ -n "$cfg_specs" ]; then
       while IFS= read -r spec; do
         [ -n "$spec" ] || continue

@@ -265,7 +265,7 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
-@test "push gate: --all and --mirror validate every branch tip" {
+@test "push gate: --all validates every branch tip and --mirror fails closed" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
   git -C "$repo" branch old-branch
@@ -275,12 +275,14 @@ run_push_gate() {
 
   run_push_gate 'git push --all origin' "$repo"
   [ "$status" -eq 2 ]
-  run_push_gate 'git push --mirror origin' "$repo"
-  [ "$status" -eq 2 ]
 
   git -C "$repo" branch -f old-branch HEAD
   run_push_gate 'git push --all origin' "$repo"
   [ "$status" -eq 0 ]
+
+  # --mirror sends refs beyond refs/heads: always fail closed.
+  run_push_gate 'git push --mirror origin' "$repo"
+  [ "$status" -eq 2 ]
 }
 
 @test "push gate: shell continuation and substitution forms are still pushes" {
@@ -388,17 +390,42 @@ run_push_gate() {
   [ "$status" -eq 0 ]
 }
 
-@test "push gate: a mirror remote validates every branch tip" {
+@test "push gate: a mirror remote fails closed" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_hook_repo "$repo"
-  git -C "$repo" branch stale-branch
-  printf 'more\n' >>"$repo/tracked.txt"
-  git -C "$repo" commit -aqm "second"
   write_marker "$repo"
   git -C "$repo" config remote.origin.mirror true
 
+  # Even a marker-matching HEAD cannot vouch for every mirrored ref.
   run_push_gate 'git push origin' "$repo"
   [ "$status" -eq 2 ]
+}
+
+@test "push gate: inner shells and gh pr create are gated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+
+  # A push handed to an inner shell cannot be verified: fail closed.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -lc 'git push origin HEAD'\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sh -c \\\"git push origin main\\\"\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+  run_push_gate 'bash -c ls' "$repo"
+  [ "$status" -eq 0 ]
+
+  # gh pr create pushes the branch itself when it is not fully pushed.
+  run_push_gate 'gh pr create --fill' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'gh pr view 12' "$repo"
+  [ "$status" -eq 0 ]
+  run_push_gate 'gh pr comment 12 --body create' "$repo"
+  [ "$status" -eq 0 ]
+
+  write_marker "$repo"
+  run_push_gate 'gh pr create --fill' "$repo"
+  [ "$status" -eq 0 ]
 }
 
 @test "push gate: a ref-mutating command before the push in one call is denied" {
@@ -497,6 +524,23 @@ write_failing_check_makefile() {
 
   run_hook "$STOP_GATE" "$(stop_payload "$repo")"
   [ "$status" -eq 0 ]
+}
+
+@test "stop gate: blocks a dirty stop when the pushed upstream tip is unvalidated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local remote="$BATS_TEST_TMPDIR/remote.git"
+  setup_hook_repo "$repo"
+  write_failing_check_makefile "$repo"
+  git -C "$repo" add Makefile && git -C "$repo" commit -qm makefile
+  git init -q --bare "$remote"
+  git -C "$repo" remote add origin "$remote"
+  git -C "$repo" checkout -qb feature
+  git -C "$repo" push -qu origin feature
+  printf 'wip\n' >>"$repo/tracked.txt" # dirty, but HEAD is already pushed
+
+  run_hook "$STOP_GATE" "$(stop_payload "$repo")"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"push 済みの HEAD"* ]]
 }
 
 @test "stop gate: skips when marker matches HEAD" {

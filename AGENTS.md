@@ -230,7 +230,9 @@ touching only class-A packages can rely on AI review.
   only a successful `make check` on a clean tree writes (`check-marker`). When
   a push is denied, commit the candidate, run `make check`, then push again;
   never bypass with `--no-verify`. Branch deletions and tag pushes stay
-  ungated. Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Codex additionally runs
+  ungated; `gh pr create` (gh pushes an unpushed branch itself) requires the
+  same marker, and untraceable forms (`bash -c '… git push …'`, `--mirror`)
+  fail closed. Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Codex additionally runs
   `scripts/agent-stop-gate.sh` on `Stop` as a backstop (its PreToolUse
   interception is incomplete upstream): at turn end with a clean, unvalidated
   HEAD it runs `make check` and blocks the stop on failure — the
