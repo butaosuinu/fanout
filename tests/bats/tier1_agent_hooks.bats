@@ -506,6 +506,23 @@ run_push_gate() {
   git -C "$repo" tag rel
   run_push_gate 'git push origin rel:main' "$repo"
   [ "$status" -eq 2 ]
+
+  # time wraps the real push (POSIX -p and GNU value options).
+  run_push_gate 'time git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'time -p git push origin HEAD' "$repo"
+  [ "$status" -eq 2 ]
+
+  # env --unset before an inner shell must still expose the push.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"env --unset FOO bash -c 'git push origin HEAD'\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  # A ref mutation before gh pr create in one call is stale.
+  git -C "$repo" checkout -qb pr-branch
+  git -C "$repo" rev-parse HEAD >"$repo/.git/fanout-check-passed"
+  run_push_gate 'git commit --allow-empty -m wip && gh pr create --fill' "$repo"
+  [ "$status" -eq 2 ]
 }
 
 @test "push gate: eval, config-then-push, tag-then-push, and wrapped gh pr create stay gated" {

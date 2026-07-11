@@ -35,6 +35,11 @@
 # - config that only re-points the REMOTE of a validated tip
 #   (`-c branch.<name>.remote=…`) is not tracked: the pushed commit itself
 #   was validated.
+# - a git alias whose expansion contains `push` (`git myalias`, defined in an
+#   out-of-band gitconfig) is not resolved — the scanner cannot read the
+#   alias body. Defining a push alias inline (`git config alias.x '…push…'`)
+#   is caught as a same-call config mutation; an externally-defined alias is
+#   a backstop case.
 #
 # Wrapper/option coverage is intentionally broad but not exhaustive: the
 # scanner transparently steps over env (incl. -C/-S/-u/--unset), command,
@@ -145,7 +150,19 @@ parse_push_segment() {
       continue
       ;;
     # Shell control words: `if git push …; then` must still gate the push.
-    if | then | elif | else | fi | do | done | while | until | ! | time) ;;
+    if | then | elif | else | fi | do | done | while | until | !) ;;
+    time | */time)
+      # `time [-p] git push` runs the push; skip time's options.
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -o | --output | -f | --format) shift; [ $# -gt 0 ] && shift ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     # Leading redirections (`>log git push …`) are valid shell.
     \>* | [0-9]\>* | \<*)
       case "$1" in
@@ -242,7 +259,18 @@ seg_inner_shell_push() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    command | exec | nohup | time | */nohup | */time) ;;
+    command | exec | nohup | */nohup) ;;
+    time | */time)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -o | --output | -f | --format) shift; [ $# -gt 0 ] && shift ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
     timeout | */timeout)
       shift
@@ -269,10 +297,11 @@ seg_inner_shell_push() {
           has_c=1
           break # value embedded in the token; keep it for the scan below
           ;;
-        -u | -C | --chdir)
+        -u | --unset | -C | --chdir)
           shift
           [ $# -gt 0 ] && shift
           ;;
+        --unset=* | -C* | --chdir=*) ;;
         --)
           shift
           break
@@ -356,7 +385,18 @@ seg_gh_pr_create() {
       done
       continue
       ;;
-    command | exec | nohup | time | */nohup | */time) ;;
+    command | exec | nohup | */nohup) ;;
+    time | */time)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -o | --output | -f | --format) shift; [ $# -gt 0 ] && shift ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     timeout | */timeout)
       shift
       while [ $# -gt 0 ]; do
@@ -413,7 +453,18 @@ seg_ref_mutating() {
     case "$1" in
     [A-Za-z_]*=*) ;;
     command | exec | nohup | */nohup) ;;
-    if | then | elif | else | fi | do | done | while | until | ! | time) ;;
+    if | then | elif | else | fi | do | done | while | until | !) ;;
+    time | */time)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -o | --output | -f | --format) shift; [ $# -gt 0 ] && shift ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
     env | */env)
       # Consume env's options so `env -C repo git commit` is still a mutation.
       shift
@@ -513,6 +564,9 @@ while IFS= read -r seg; do
   if seg_gh_pr_create "$seg"; then
     if [ "$SEG_GH_UNSAFE" = "1" ]; then
       deny "env -C / -S 経由の gh pr create はゲートが対象リポジトリを追跡できないため拒否します。対象リポジトリ内から直接 gh pr create を実行してください。"
+    fi
+    if [ "$ref_mut" = "1" ]; then
+      deny "同一コマンド内で ref を変更するコマンド (commit / rebase 等) の後に gh pr create を実行しています。gh は未 push branch を push するため、ゲートは実行前の状態しか検証できません。commit 後に make check を通し、gh pr create は単独のコマンドとして実行してください。"
     fi
     gh_dir="$seg_dir"
     if git -C "$gh_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
