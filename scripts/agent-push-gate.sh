@@ -24,12 +24,17 @@
 # not count). If the command cannot be extracted at all but the raw payload
 # mentions `git push` in a Bash call, the gate fails closed.
 #
-# Known accepted limits of the linear scan: subshell scoping and
-# short-circuit control flow are not modeled — `(cd /x); git push` gates
-# against /x, and a bypass behind `false &&` still counts as set. The Codex
-# stop gate and CI remain the backstops for what the heuristic misses; the
-# gate exists to stop forgetting, not a deliberate evader (that is what the
-# sanctioned FANOUT_SKIP_PUSH_CHECK=1 is for).
+# Known accepted limits of the linear scan (by design — the gate exists to
+# stop forgetting, not a deliberate evader; that is what the sanctioned
+# FANOUT_SKIP_PUSH_CHECK=1 is for, and the Codex stop gate and CI remain the
+# backstops):
+# - subshell scoping and short-circuit control flow are not modeled —
+#   `(cd /x); git push` gates against /x, and a bypass behind `false &&`
+#   still counts as set (lexical order of exports is likewise ignored).
+# - a script fed to a shell via stdin (`bash <<EOF … EOF`) is not scanned.
+# - config that only re-points the REMOTE of a validated tip
+#   (`-c branch.<name>.remote=…`) is not tracked: the pushed commit itself
+#   was validated.
 set -u
 
 [ "${FANOUT_SKIP_PUSH_CHECK:-}" = "1" ] && exit 0
@@ -244,20 +249,26 @@ seg_inner_shell_push() {
   if [ "$has_c" = "0" ]; then
     [ $# -gt 0 ] || return 1
     case "${1##*/}" in
-    bash | sh | zsh | dash | ksh) ;;
+    bash | sh | zsh | dash | ksh)
+      shift
+      for w in "$@"; do
+        case "$w" in
+        -*c*) has_c=1 ;;
+        esac
+      done
+      ;;
+    eval)
+      # eval executes its (usually quoted) arguments in the current shell.
+      shift
+      has_c=1
+      ;;
     *) return 1 ;;
     esac
-    shift
-    for w in "$@"; do
-      case "$w" in
-      -*c*) has_c=1 ;;
-      esac
-    done
   fi
   [ "$has_c" = "1" ] || return 1
   joined="$(unsentinel "$*")"
   case "$joined" in
-  *git*push*) return 0 ;;
+  *git*push* | *gh*pr*create* | *gh*pr*new*) return 0 ;;
   esac
   return 1
 }
@@ -274,7 +285,25 @@ seg_gh_pr_create() {
   while [ $# -gt 0 ]; do
     case "$1" in
     [A-Za-z_]*=*) ;;
-    env | command | exec | nohup | time) ;;
+    env)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+        -u | -C | --chdir)
+          shift
+          [ $# -gt 0 ] && shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        -*) shift ;;
+        *) break ;;
+        esac
+      done
+      continue
+      ;;
+    command | exec | nohup | time) ;;
     if | then | elif | else | fi | do | done | while | until | !) ;;
     *) break ;;
     esac
@@ -341,7 +370,9 @@ seg_ref_mutating() {
     shift
   done
   case "${1:-}" in
-  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout | fetch | branch | update-ref) return 0 ;;
+  # config and tag do not move branch tips, but they change what a later
+  # push in the same call sends (push refspecs / a re-pointed tag source).
+  commit | merge | rebase | cherry-pick | revert | reset | am | pull | switch | checkout | fetch | branch | update-ref | config | tag) return 0 ;;
   esac
   return 1
 }

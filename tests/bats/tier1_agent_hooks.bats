@@ -474,6 +474,39 @@ run_push_gate() {
   [ "$status" -eq 2 ]
 }
 
+@test "push gate: eval, config-then-push, tag-then-push, and wrapped gh pr create stay gated" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_hook_repo "$repo"
+  write_marker "$repo"
+
+  # eval executes its quoted arguments in the current shell.
+  local payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"eval 'git push origin HEAD'\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+
+  # Mutating config or a tag before a gated push in one call is stale.
+  run_push_gate 'git config remote.origin.push refs/heads/x:refs/heads/x; git push origin' "$repo"
+  [ "$status" -eq 2 ]
+  run_push_gate 'git tag -f moveme HEAD && git push origin moveme:refs/heads/x' "$repo"
+  [ "$status" -eq 2 ]
+  # Same-call tag creation is unverifiable at gate time; split commands work.
+  run_push_gate 'git tag v9.9.9 && git push origin v9.9.9' "$repo"
+  [ "$status" -eq 2 ]
+  git -C "$repo" tag v9.9.9
+  run_push_gate 'git push origin v9.9.9' "$repo"
+  [ "$status" -eq 0 ]
+
+  # gh pr create behind an inner shell or env prefix is still PR creation.
+  git -C "$repo" checkout -qb unpushed
+  printf 'x\n' >>"$repo/tracked.txt"
+  git -C "$repo" commit -aqm second # marker is now stale
+  payload="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"bash -lc 'gh pr create --fill'\"},\"cwd\":\"$repo\"}"
+  run_hook "$PUSH_GATE" "$payload"
+  [ "$status" -eq 2 ]
+  run_push_gate 'env -u FOO gh pr create --fill' "$repo"
+  [ "$status" -eq 2 ]
+}
+
 @test "push gate: exported repo vars, env -S, pushDefault, and popd stay gated" {
   local repo_a="$BATS_TEST_TMPDIR/repo-a"
   local repo_b="$BATS_TEST_TMPDIR/repo-b"
