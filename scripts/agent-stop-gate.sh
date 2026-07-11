@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# fanout stop gate — Codex-only Stop-hook backstop for the push gate.
+#
+# Codex's PreToolUse interception is documented as incomplete ("only the
+# simple ones"), so a push can slip past scripts/agent-push-gate.sh. This hook
+# runs at turn end: if the committed HEAD was never validated by `make check`,
+# it runs the gate and, on failure, blocks the stop (exit 2) so the agent
+# fixes the findings before finishing. Claude Code does not register this hook
+# — its Bash interception is complete, the push gate alone covers it.
+#
+# Cost control: the gate is skipped when the tree is dirty (uncommitted work
+# cannot reach CI), when the marker already matches HEAD (the normal
+# make-check-before-push flow), and when HEAD is on the origin default branch
+# (read-only sessions). stop_hook_active guards against continuation loops.
+# Escape hatch: FANOUT_SKIP_STOP_GATE=1.
+set -u
+
+input="$(cat)"
+
+if grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true' <<<"$input"; then
+  exit 0
+fi
+[ "${FANOUT_SKIP_STOP_GATE:-}" = "1" ] && exit 0
+
+lib="$(cd "$(dirname "$0")" && pwd)/agent-hooks-lib.sh"
+[ -f "$lib" ] || exit 0
+# shellcheck source=scripts/agent-hooks-lib.sh
+. "$lib"
+
+dir="$(resolve_project_dir "$input")"
+cd "$dir" 2>/dev/null || exit 0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+# The session may stop with its cwd in a subdirectory; the gate belongs to
+# the repository root.
+top="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$top" ] || exit 0
+cd "$top" 2>/dev/null || exit 0
+dir="$top"
+command -v make >/dev/null 2>&1 || exit 0
+[ -f Makefile ] || exit 0
+
+head="$(head_sha "$dir")" || exit 0
+[ -n "$head" ] || exit 0
+
+# Already validated: `make check` wrote the marker for this exact commit.
+[ "$(marker_sha "$dir")" = "$head" ] && exit 0
+
+# Read-only sessions on the default branch: CI already validated this commit.
+default_ref="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+if [ -z "$default_ref" ]; then
+  for candidate in origin/main origin/master; do
+    if git rev-parse -q --verify "$candidate" >/dev/null 2>&1; then
+      default_ref="$candidate"
+      break
+    fi
+  done
+fi
+if [ -n "$default_ref" ] && git merge-base --is-ancestor HEAD "$default_ref" 2>/dev/null; then
+  exit 0
+fi
+
+# Uncommitted work cannot be pushed; do not burn minutes on mid-work stops.
+# Exception: when this unvalidated HEAD is already the pushed upstream tip
+# (a push slipped past the PreToolUse gate), a silent skip would erase the
+# backstop — block with instructions instead of running make check on a
+# dirty tree.
+if [ -n "$(git status --porcelain -uall 2>/dev/null)" ]; then
+  # `git push origin HEAD` sets no upstream, so also check whether this exact
+  # commit is any remote-tracking tip — the backstop must fire whenever the
+  # unvalidated HEAD already reached a remote.
+  pushed=0
+  upstream="$(git rev-parse -q --verify '@{upstream}' 2>/dev/null)"
+  if [ -n "$upstream" ] && [ "$upstream" = "$head" ]; then
+    pushed=1
+  elif git for-each-ref --format='%(objectname)' refs/remotes 2>/dev/null | grep -qxF "$head"; then
+    pushed=1
+  fi
+  if [ "$pushed" = "1" ]; then
+    {
+      echo "fanout stop gate: push 済みの HEAD $head は make check 未検証ですが、working tree が dirty なため検証を実行できません。"
+      echo "作業中の変更を commit または stash してから、clean tree で make check を成功させてください。"
+    } >&2
+    exit 2
+  fi
+  exit 0
+fi
+
+gitdir="$(git rev-parse --git-dir)"
+case "$gitdir" in
+/*) log="$gitdir/fanout-check.log" ;;
+*) log="$dir/$gitdir/fanout-check.log" ;;
+esac
+
+if make check >"$log" 2>&1; then
+  exit 0
+fi
+
+{
+  echo "fanout stop gate: HEAD $head は make check に失敗しています。指摘を修正し、commit して、make check が通ってから終了してください。"
+  echo "ログ全文: $log (末尾 150 行を以下に表示)"
+  echo "-----"
+  tail -n 150 "$log"
+} >&2
+exit 2

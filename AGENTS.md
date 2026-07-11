@@ -224,6 +224,24 @@ touching only class-A packages can rely on AI review.
   driver, invoked per `codex/skills/post-work-review`) against that final HEAD
   before `gh pr create`. The gate owns `make check`, and its marker is tied to
   the exact commit reviewed, so committing anything afterward invalidates it.
+- `git push` to a branch is gated by `scripts/agent-push-gate.sh`, wired as a
+  `PreToolUse` hook for both agents (`.codex/hooks.json` for Codex,
+  `.claude/settings.json` for Claude Code). The pushed tip must equal the
+  per-worktree marker `$(git rev-parse --git-dir)/fanout-check-passed`, which
+  only a successful `make check` on a clean tree writes (`check-marker`). When
+  a push is denied, commit the candidate, run `make check`, then push again;
+  never bypass with `--no-verify`. Branch deletions and tag pushes stay
+  ungated; `gh pr create` (gh pushes an unpushed branch itself) requires the
+  same marker, and untraceable forms (`bash -c '… git push …'`, `--mirror`)
+  fail closed. Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Codex additionally runs
+  `scripts/agent-stop-gate.sh` on `Stop` as a backstop (its PreToolUse
+  interception is incomplete upstream): at turn end with a clean, unvalidated
+  HEAD it runs `make check` and blocks the stop on failure — the
+  marker makes this free when the push flow was followed. Escape hatch:
+  `FANOUT_SKIP_STOP_GATE=1`. Edits are auto-formatted by
+  `scripts/agent-format-on-edit.sh` (`PostToolUse`, per-file fast paths only).
+  Codex prompts once per checkout path to trust these repo hooks; accept the
+  prompt in a new worktree or the hooks are silently skipped.
 
 ## Documentation Writing
 

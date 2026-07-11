@@ -1,5 +1,7 @@
 .claude/settings.local.json
-.codex/
+# .codex/ holds machine-local Codex state except the tracked repo hooks
+.codex/*
+!.codex/hooks.json
 .dmux/
 .fanout/
 !.fanout/

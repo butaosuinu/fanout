@@ -153,8 +153,11 @@ git rebase FETCH_HEAD
 
 Resolve only mechanical conflicts whose intent is clear. For behavioral or
 product ambiguity, `git rebase --abort` and report the file/hunk and decision
-needed. After tests pass, re-fetch the PR head, compare it with the saved SHA,
-and use the qualified lease command above.
+needed. After tests pass, run the repository's canonical full gate once
+against the rebased HEAD (same resolution as in Repair CI) — auto-resolved
+hunks that break the build surface here, not on CI. Then re-fetch the PR
+head, compare it with the saved SHA, and use the qualified lease command
+above.
 
 `BEHIND` alone is not always a repair trigger. If branch protection does not
 require the latest base and GitHub reports mergeable with green checks, avoid a
@@ -179,7 +182,12 @@ failure is clearly flaky or infrastructure-owned, request one rerun. Stop if it
 recurs. For external CI, follow the check link; if the log is inaccessible,
 report the provider and URL as blocked rather than guessing.
 
-Commit and push a real code fix with an explicit refspec:
+Commit the real code fix first, then run the repository's canonical full gate
+once against that final commit (prefer an umbrella target such as `make check`
+when the project defines one; otherwise resolve it from AGENTS.md, CLAUDE.md,
+or the build files). A CI failure that reproduces locally recurs on the next
+push unless the full gate passed. Repositories may enforce this with a push
+gate; never bypass it with `--no-verify`. Then push with an explicit refspec:
 
 ```bash
 git push "$head_remote" HEAD:"$head"
@@ -198,8 +206,9 @@ For an actionable request:
 
 1. Trace the behavior in the current head and confirm the issue.
 2. Implement the narrow fix.
-3. Run focused tests and the relevant repository gate.
-4. Commit and push.
+3. Run focused tests while editing.
+4. Commit, run the repository's canonical full gate once against the final
+   commit (same resolution as in Repair CI), then push.
 5. Reply after GitHub sees the pushed commit.
 
 Use the top-level inline comment's `fullDatabaseId` to reply in-thread. In this

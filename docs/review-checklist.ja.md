@@ -28,6 +28,10 @@ diff へ自問する。
   レビューゲートをバイパスする場合は、PR 作成前に `make check` を直接実行する。
 - `make test`、`make lint`、`make lint-web` は失敗の切り分けに使う。
   同じ最終ゲートで個別に重ねて実行しない。
+- branch への `git push` は agent hook でゲートされる。clean tree での
+  `make check` 成功が marker を書き、push はそのまま通る。deny されたら
+  `make check` を通し直す。`--no-verify` での回避は禁止。緊急回避は
+  `FANOUT_SKIP_PUSH_CHECK=1`。
 - dry-run / status 出力を変えたら `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で
   golden を regen して diff を目視する。
 
