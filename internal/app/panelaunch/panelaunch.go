@@ -527,6 +527,12 @@ func rollbackState(recorder StateRecorder, req Request, lg *log.Logger) {
 	}
 }
 
+// KillAttachedPane silently tears down a pane created by AttachWithResult and
+// reconciles its window layout. An empty paneID is a no-op.
+func KillAttachedPane(target, paneID string) {
+	failCleanup("", target, paneID, nil, nil)
+}
+
 // failCleanup tears down a partially created launch: it kills the pane (when
 // one exists), reconciles the window layout, and removes a created worktree
 // (when prepared is non-nil). A nil lg makes every step silent best-effort

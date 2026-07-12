@@ -978,6 +978,75 @@ func TestPlanPaneIssueNum(t *testing.T) {
 	}
 }
 
+func TestOrchestratorIssueSlug(t *testing.T) {
+	tests := []struct {
+		name     string
+		issueNum int
+		number   int
+		want     string
+	}{
+		{name: "formats positive pane number", issueNum: 123, number: 4, want: "orchestrator-issue-123-4"},
+		{name: "normalizes negative pane number", issueNum: 123, number: -4, want: "orchestrator-issue-123-4"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := OrchestratorIssueSlug(tt.issueNum, tt.number); got != tt.want {
+				t.Fatalf("OrchestratorIssueSlug(%d, %d) = %q, want %q", tt.issueNum, tt.number, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOrchestratorPaneIssueNum(t *testing.T) {
+	tests := []struct {
+		name       string
+		pane       state.Pane
+		want       int
+		ok         bool
+		planParser bool
+	}{
+		{name: "orchestrator slug parses", pane: state.Pane{Parent: ManualParentRef, Slug: OrchestratorIssueSlug(123, -1)}, want: 123, ok: true},
+		{name: "numeric parent is rejected", pane: state.Pane{Parent: "500", Slug: "orchestrator-issue-123-1"}, ok: false},
+		{name: "watch parent is rejected", pane: state.Pane{Parent: "@watch", Slug: "orchestrator-issue-123-1"}, ok: false},
+		{name: "plan slug is distinct", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-123-1"}, ok: false, planParser: true},
+		{name: "longer issue number does not alias", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-1234-1"}, want: 1234, ok: true},
+		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-abc-1"}, ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := OrchestratorPaneIssueNum(tt.pane)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("OrchestratorPaneIssueNum(%+v) = %d, %v, want %d, %v", tt.pane, got, ok, tt.want, tt.ok)
+			}
+
+			_, planOK := PlanPaneIssueNum(tt.pane)
+			if planOK != tt.planParser {
+				t.Fatalf("PlanPaneIssueNum(%+v) ok = %v, want %v", tt.pane, planOK, tt.planParser)
+			}
+		})
+	}
+}
+
+func TestKillAttachedPaneIgnoresEmptyPaneID(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "tmux-called")
+	tmuxPath := filepath.Join(binDir, "tmux")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TMUX_CALLS\"\n"
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_CALLS", marker)
+
+	KillAttachedPane("%caller", "")
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("tmux was called for an empty pane ID: %v", err)
+	}
+}
+
 // TestPlanLinkedIssueNums pins the fanned-set contribution: coordinator rows
 // link through their slug, plan task rows only through a saved spec whose
 // plan.source declares the issue — an issue-like plan slug alone never links,
