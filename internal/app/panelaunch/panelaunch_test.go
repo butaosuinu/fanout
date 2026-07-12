@@ -805,6 +805,17 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	}
 }
 
+func TestBuildAgentCommandRejectsNonCodexPlanModeRequest(t *testing.T) {
+	_, err := buildAgentCommand(
+		&cliflags.Config{DryRun: true},
+		Request{Agent: "claude", CodexPlanMode: true},
+		"fanout-go",
+	)
+	if err == nil || !strings.Contains(err.Error(), "codex plan mode requires agent codex; pane resolves to claude") {
+		t.Fatalf("buildAgentCommand() error = %v, want resolved-agent rejection", err)
+	}
+}
+
 func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {

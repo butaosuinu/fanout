@@ -67,7 +67,7 @@ func validateAgentTargets(cfg *cliflags.Config, targets []agentTarget) error {
 			return fmt.Errorf("%s: agent is required; pass --agent <name>, --agent %s=<name>, or set FANOUT_AGENT", target.Label, target.Target)
 		}
 		if cfg.CodexPlanModeEnabled() && target.Name != "codex" {
-			return fmt.Errorf("--codex-plan-mode requires --agent codex")
+			return fmt.Errorf("codex plan mode requires every selected child to use agent codex; %s resolves to %s", target.Label, target.Name)
 		}
 		if seen[target.Name] {
 			continue

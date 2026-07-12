@@ -59,6 +59,30 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 	}
 }
 
+func TestEffectiveIssueLaunchConfigUsesResolvedCodexPlanModeWithoutMutatingParsedConfig(t *testing.T) {
+	cfg := &cliflags.Config{
+		Agent:          "codex",
+		AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "codex"}},
+	}
+	resolved := settings.Defaults()
+	resolved.CodexPlanMode = true
+
+	got := effectiveIssueLaunchConfig(cfg, resolved)
+
+	if !got.CodexPlanModeEnabled() {
+		t.Fatal("effective CodexPlanModeEnabled() = false, want resolved true")
+	}
+	if cfg.CodexPlanMode != nil {
+		t.Fatalf("parsed CodexPlanMode = %v, want nil so rerun hints preserve only explicit flags", cfg.CodexPlanMode)
+	}
+	if got == cfg {
+		t.Fatal("effectiveIssueLaunchConfig() returned the parsed config instead of a copy")
+	}
+	if !reflect.DeepEqual(got.AgentOverrides, cfg.AgentOverrides) {
+		t.Fatalf("AgentOverrides = %v, want shallow-copy value %v", got.AgentOverrides, cfg.AgentOverrides)
+	}
+}
+
 func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")

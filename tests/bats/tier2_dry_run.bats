@@ -135,6 +135,32 @@ load helpers
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
+@test "codexPlanMode user setting starts Codex children in Plan Mode" {
+  use_fixture scenario-sub-issue-only
+  mkdir -p "$XDG_CONFIG_HOME/fanout"
+  printf '%s\n' '{"codexPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+  run_fanout_dry 100 --agent codex
+  assert_success
+  assert_golden scenario-sub-issue-only-codex-plan
+}
+
+@test "FANOUT_CODEX_PLAN_MODE starts Codex children in Plan Mode" {
+  use_fixture scenario-sub-issue-only
+  export FANOUT_CODEX_PLAN_MODE=1
+  run_fanout_dry 100 --agent codex
+  assert_success
+  assert_golden scenario-sub-issue-only-codex-plan
+}
+
+@test "--no-codex-plan-mode overrides an enabled user setting" {
+  use_fixture scenario-sub-issue-only
+  mkdir -p "$XDG_CONFIG_HOME/fanout"
+  printf '%s\n' '{"codexPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+  run_fanout_dry 100 --agent codex --no-codex-plan-mode
+  assert_success
+  assert_golden scenario-sub-issue-only-codex
+}
+
 @test "--team variant of scenario-sub-issue-only: briefing grows and registry seed is printed" {
   # Reuses the scenario-sub-issue-only fixture. --team must add the sibling
   # coordination section to every briefing (size lines diverge from

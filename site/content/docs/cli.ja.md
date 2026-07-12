@@ -206,7 +206,9 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 
 ## settings 系フラグ
 
-これらのペアになったスイッチは、fanout の opinionated な挙動をその run だけ切り替えます。子 briefing に注入する指示やダッシュボードのキーバインドを、その場で on/off するためのフラグです。CLI flag は常に環境変数や設定ファイルのレイヤより優先されます。各挙動が実際に何を注入するか、および解決順序の全体は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
+これらのペアになったスイッチは、子の起動モード、briefing の指示、tmux キーバインドをその run だけ切り替えます。
+CLI flag は常に環境変数や設定ファイルのレイヤより優先されます。
+各設定の適用範囲と解決順序は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
@@ -214,7 +216,7 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 | `--pr-review-gate` / `--no-pr-review-gate` | — | 既定の PR レビューゲート前提を維持するか、hook が PR 作成をブロックした場合に `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` を許可する注記を Claude briefing に加えるか。既定: on。 |
 | `--briefing-code-review` / `--no-briefing-code-review` | — | Claude 専用の `/code-review` briefing 指示を含めるか外すか。既定: on。 |
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Claude 専用の Agent Teams ヒントを子 briefing に含めるか外すか。既定: on。 |
-| `--codex-plan-mode` / `--no-codex-plan-mode` | — | `--agent codex` のとき、positional の `codex "<prompt>"` ではなく app-server で Plan Mode thread を作成し、interactive Codex TUI を接続する。初期 Plan turn の受理後に launch を記録し、plan 生成と承認待ちには startup timeout を設けない。既定: off。詳細は[エージェント連携]({{< relref "/docs/agents" >}})。 |
+| `--codex-plan-mode` / `--no-codex-plan-mode` | — | 通常の issue / Project の子 fan-out について、解決済みの `codexPlanMode` 設定を上書きする。有効時は、positional の `codex "<prompt>"` ではなく app-server で各 Codex child の Plan Mode thread を作成し、interactive Codex TUI を接続する。初期 Plan turn の受理後に launch を記録し、plan 生成と承認待ちには startup timeout を設けない。ビルトイン既定値: off。詳細と対象外の起動経路は[エージェント連携]({{< relref "/docs/agents" >}})。 |
 | `--pr-visualization` / `--no-pr-visualization` | — | auto-PR の子 briefing に構造化 PR 本文とゲート付き Mermaid の指示を含めるか外すか。既定: on。 |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `F12` / `prefix + D` ダッシュボードキーと `prefix + M` 同一 worktree 操作キーを登録する（またはスキップする）。既定: on。 |
 
@@ -405,6 +407,7 @@ fanout check-update
 | `FANOUT_PR_REVIEW_GATE` | PR レビューゲート注記（`prReviewGate`）の環境変数レイヤ。 |
 | `FANOUT_BRIEFING_CODE_REVIEW` | Claude `/code-review` 指示（`briefingCodeReview`）の環境変数レイヤ。 |
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
+| `FANOUT_CODEX_PLAN_MODE` | 通常の issue / Project の子を Codex Plan Mode で起動する設定（`codexPlanMode`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |

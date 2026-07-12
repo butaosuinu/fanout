@@ -3,6 +3,7 @@ package run
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
@@ -41,6 +42,25 @@ func TestValidateTaskAgentsSkipsInstalledCheckForLimitDeferredAgents(t *testing.
 	)
 	if err != nil {
 		t.Fatalf("validateTaskAgents() returned error: %v", err)
+	}
+}
+
+func TestValidateIssueAgentsReportsNonCodexTargetInPlanMode(t *testing.T) {
+	cfg := &cliflags.Config{
+		Agent:          "codex",
+		AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "claude"}},
+		CodexPlanMode:  new(true),
+		DryRun:         true,
+	}
+
+	err := validateIssueAgents(cfg, []ghissue.Issue{{Number: 101}, {Number: 102}}, nil)
+
+	if err == nil {
+		t.Fatal("validateIssueAgents() error = nil, want mixed-agent rejection")
+	}
+	want := "codex plan mode requires every selected child to use agent codex; #102 resolves to claude"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("validateIssueAgents() error = %q, want %q", err, want)
 	}
 }
 

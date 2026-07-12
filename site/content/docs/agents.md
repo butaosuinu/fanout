@@ -53,7 +53,7 @@ Invoke the fanout skill by asking Codex to fan out a parent issue (for example, 
 
 ## Codex Plan Mode
 
-Say you want Codex to propose an implementation plan before any child moves forward. Batch child launches enable this Plan Mode with `--codex-plan-mode` (off by default).
+Normal issue / Project child fan-outs resolve the `codexPlanMode` setting before launch. Set it in user or repo config, use `FANOUT_CODEX_PLAN_MODE`, or override it for one CLI run with `--codex-plan-mode` / `--no-codex-plan-mode`. The built-in default is `false`; the usual CLI > env > repo > user > default precedence applies. The TUI settings popup exposes the same key in its Launch group.
 
 ```bash
 fanout 123 --agent codex --codex-plan-mode
@@ -61,7 +61,9 @@ fanout 123 --agent codex --codex-plan-mode
 
 Plan Mode children launch as an interactive Codex TUI, investigate relevant context, and present the implementation plan wrapped in `<proposed_plan>`. That turn does not edit files, commit, push, or open a PR. The pane remains in the Plan Mode conversation, so you can continue from there.
 
-Every selected child must resolve to `codex`: mixing in a `claude` child fails before any pane is created.
+The setting covers ordinary CLI issue / Project fan-outs and TUI Issue mode when the selected issue has OPEN children. Every selected child must resolve to `codex`: mixing in a `claude` child fails before any pane is created.
+
+Watcher launches, childless-issue standalone panes, `fanout plan` tasks, and plan coordinators ignore this setting. Manual and attached `codex` panes already start in Plan Mode regardless of it; their `claude` counterparts start normally.
 
 ## How the briefing works
 

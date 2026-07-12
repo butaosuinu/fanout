@@ -658,14 +658,23 @@ JSON
   use_fixture scenario-sub-issue-only
   run_fanout 100 --agent claude --codex-plan-mode --dry-run
   [ "$status" -eq 1 ]
-  [[ "$output" == *"--codex-plan-mode requires --agent codex"* ]]
+  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
 }
 
 @test "--codex-plan-mode rejects non-codex per-issue override: exit 1" {
   use_fixture scenario-sub-issue-only
   run_fanout 100 --agent codex --agent 101=claude --codex-plan-mode --dry-run
   [ "$status" -eq 1 ]
-  [[ "$output" == *"--codex-plan-mode requires --agent codex"* ]]
+  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
+}
+
+@test "FANOUT_CODEX_PLAN_MODE rejects a non-codex child before launch" {
+  use_fixture scenario-sub-issue-only
+  export FANOUT_CODEX_PLAN_MODE=1
+  run_fanout 100 --agent codex --agent 101=claude --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
+  [[ "$output" == *"#101 resolves to claude"* ]]
 }
 
 @test "outside tmux: explicit error" {
