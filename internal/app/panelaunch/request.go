@@ -478,6 +478,40 @@ func PlanPaneIssueNum(pane state.Pane) (int, bool) {
 	return parseLeadingIssueNum(rest)
 }
 
+// OrchestratorIssueSlug keys a TUI issue orchestrator lane's attached-agent
+// row by issue number and the synthetic pane number for uniqueness across
+// relaunches: "orchestrator-issue-<issue>-<n>". Only that lane creates these
+// rows, so the slug is explicit provenance. Its "orchestrator-issue-" prefix
+// is disjoint from "plan-issue-", and neither parser accepts the other lane.
+func OrchestratorIssueSlug(issueNum, number int) string {
+	if number < 0 {
+		number = -number
+	}
+	return fmt.Sprintf("orchestrator-issue-%d-%d", issueNum, number)
+}
+
+// OrchestratorPaneIssueNum returns the GitHub issue linked to a TUI issue
+// orchestrator row, parsed from its provenance slug under the manual parent.
+// Only the complete "orchestrator-issue-<issue>-<numeric pane>" form matches.
+func OrchestratorPaneIssueNum(pane state.Pane) (int, bool) {
+	if pane.Parent != ManualParentRef {
+		return 0, false
+	}
+	rest, found := strings.CutPrefix(pane.Slug, "orchestrator-issue-")
+	if !found {
+		return 0, false
+	}
+	issueNum, ok := parseLeadingIssueNum(rest)
+	if !ok {
+		return 0, false
+	}
+	_, paneNum, found := strings.Cut(rest, "-")
+	if !found || !naming.AllDigits(paneNum) {
+		return 0, false
+	}
+	return issueNum, true
+}
+
 // PlanLinkedIssueNums collects the issues owned by plan-lane rows so the issue
 // fan-out lanes can treat them as already fanned: coordinator rows through
 // PlanPaneIssueNum, and plan task rows through the saved spec's declared
