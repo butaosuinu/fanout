@@ -258,7 +258,7 @@ func issuePlanRecorded(projectRoot string, store state.Store, issueNum int) bool
 // too broad to detect tmux pane id reuse, so liveness matches on the key.
 func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt, agentName, livenessKey string) panelaunch.Request {
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
-	title := "plan: " + panelaunch.FirstPromptLine(prompt)
+	title := panelaunch.ShortIssueTitle("plan: " + panelaunch.FirstPromptLine(prompt))
 	briefingPath := planPromptPath(projectRoot, number)
 	return panelaunch.Request{
 		ParentRef:           panelaunch.ManualParentRef,
