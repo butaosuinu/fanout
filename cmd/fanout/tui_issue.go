@@ -218,11 +218,12 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result 
 		return fanouttui.LaunchResult{}, err
 	}
 	notice := fmt.Sprintf("fanned out #%d: created %d pane(s)", issueNum, created)
-	if orchestratorPaneID != "" && created > 0 {
+	switch {
+	case orchestratorPaneID != "" && created > 0:
 		notice = fmt.Sprintf("fanned out #%d: started orchestrator + %d child pane(s)", issueNum, created)
-	} else if orchestratorPaneID != "" {
+	case orchestratorPaneID != "":
 		notice = fmt.Sprintf("started orchestrator for #%d; children already have panes", issueNum)
-	} else if created <= 0 {
+	case created <= 0:
 		notice = fmt.Sprintf("#%d: no new panes (children already have one)", issueNum)
 	}
 	if result.Watch.Deferred {
