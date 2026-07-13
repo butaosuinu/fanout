@@ -508,12 +508,16 @@ func launchOwnerProjectRoot(defaultRoot, sourceProjectRoot string) string {
 
 func manualPaneOptionsForTUI(prompt, agentName string) panelaunch.ManualOptions {
 	title := panelaunch.FirstPromptLine(prompt)
+	oversized := len(prompt) > panelaunch.MaxInlineManualPromptBytes
+	if oversized {
+		title = panelaunch.ShortIssueTitle(title)
+	}
 	opts := panelaunch.ManualOptions{
 		Title:  title,
 		Agent:  agentName,
 		Prompt: title,
 	}
-	if strings.Contains(prompt, "\n") {
+	if strings.Contains(prompt, "\n") || oversized {
 		opts.Body = prompt
 	}
 	return opts

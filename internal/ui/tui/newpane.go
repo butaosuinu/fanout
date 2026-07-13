@@ -93,8 +93,10 @@ type NewPanePromptOptions struct {
 const newPanePopupOpeningNotice = "opening new pane popup..."
 
 const (
-	newPanePromptDefaultRows = 6
-	newPanePromptMinRows     = 3
+	newPanePromptDefaultRows    = 6
+	newPanePromptMinRows        = 3
+	newPanePromptEditorMaxCells = 1000
+	newPanePromptEditorMaxLines = 99
 )
 
 // AttachTarget describes the recorded pane/worktree a new agent should share.
@@ -148,8 +150,14 @@ const (
 )
 
 type newPaneForm struct {
-	prompt     textarea.Model
-	agentCount map[string]int
+	prompt textarea.Model
+	// stagedPrompt holds a bracketed paste that is too large for Bubbles'
+	// textarea to render safely. The textarea stays empty while staged so View
+	// work remains bounded; submit still forwards the complete payload.
+	stagedPrompt      string
+	stagedPromptLines int
+	stagedPromptBytes int
+	agentCount        map[string]int
 	// promptAgentCount stashes the prompt-mode launch counts while a
 	// single-agent context (issue mode, plan fan-out) collapses agentCount to
 	// one selection; returning to plain prompt mode restores it. nil when
@@ -356,9 +364,10 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt.Placeholder = "Prompt"
 	prompt.Prompt = ""
 	prompt.ShowLineNumbers = false
-	// Long prompts are valid input; SetHeight controls only the visible viewport.
-	prompt.CharLimit = 0
-	prompt.MaxHeight = 0
+	// Bubbles rebuilds every stored line and soft-wrap before clipping to the
+	// viewport. Oversized bracketed pastes are staged outside the textarea.
+	prompt.CharLimit = newPanePromptEditorMaxCells
+	prompt.MaxHeight = newPanePromptEditorMaxLines
 	prompt.SetWidth(width)
 	prompt.SetHeight(newPanePromptDefaultRows)
 	prompt.KeyMap.InsertNewline = key.NewBinding(
@@ -377,6 +386,58 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 		workerIndex: defaultAgentIndex(defaultAgent),
 		focus:       newPaneFieldMain,
 	}
+}
+
+func (m model) updateNewPanePromptPaste(msg tea.KeyMsg) (model, tea.Cmd) {
+	prompt := m.newPane.prompt
+	if m.newPane.stagedPrompt != "" {
+		prompt.Reset()
+	}
+	// Apply the paste once without editor limits so Bubbles' sanitizer and
+	// cursor insertion semantics produce the exact payload we will submit.
+	prompt.CharLimit = 0
+	prompt.MaxHeight = 0
+	prompt, cmd := prompt.Update(msg)
+	if prompt.Length() > newPanePromptEditorMaxCells || prompt.LineCount() > newPanePromptEditorMaxLines {
+		value := prompt.Value()
+		m.newPane.prompt.Reset()
+		m.newPane.stagedPrompt = value
+		m.newPane.stagedPromptLines = strings.Count(value, "\n") + 1
+		m.newPane.stagedPromptBytes = len(value)
+		m.endCompletion()
+		return m, nil
+	}
+
+	prompt.CharLimit = newPanePromptEditorMaxCells
+	prompt.MaxHeight = newPanePromptEditorMaxLines
+	m.newPane.prompt = prompt
+	m.clearStagedPrompt()
+	m.endCompletion()
+	return m, cmd
+}
+
+func (m *model) clearStagedPrompt() {
+	m.newPane.stagedPrompt = ""
+	m.newPane.stagedPromptLines = 0
+	m.newPane.stagedPromptBytes = 0
+}
+
+func (m model) newPanePromptValue() string {
+	if m.newPane.stagedPrompt != "" {
+		return m.newPane.stagedPrompt
+	}
+	return m.newPane.prompt.Value()
+}
+
+func (m model) newPanePromptInputView() string {
+	if m.newPane.stagedPrompt == "" {
+		return m.newPane.prompt.View()
+	}
+	return fmt.Sprintf(
+		"Pasted prompt: %d lines / %d bytes\nCtrl+U clears; another paste replaces it",
+		m.newPane.stagedPromptLines,
+		m.newPane.stagedPromptBytes,
+	)
 }
 
 func (m *model) fitNewPanePromptHeight() {
@@ -467,6 +528,16 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.newPane.step == newPaneStepAssign {
 		return m.updateNewPaneAssign(msg)
 	}
+	if m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt {
+		if msg.String() == "ctrl+u" && m.newPane.stagedPrompt != "" {
+			m.clearStagedPrompt()
+			m.newPane.prompt.Reset()
+			return m, nil
+		}
+		if msg.Paste {
+			return m.updateNewPanePromptPaste(msg)
+		}
+	}
 	// While the @-completion popup is open it owns navigation/confirm/cancel
 	// keys; anything it does not handle (printable chars, backspace, cursor
 	// moves) falls through to normal editing with the updated completion state
@@ -543,6 +614,9 @@ func (m model) updateNewPane(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch {
 	case m.newPane.focus == newPaneFieldMain && m.newPane.mode == newPaneModePrompt:
+		if m.newPane.stagedPrompt != "" {
+			return m, nil
+		}
 		m.newPane.prompt, cmd = m.newPane.prompt.Update(msg)
 		// Open completion when '@' is typed at a word boundary. Inspecting the
 		// textarea after the insert keeps this robust to soft-wrapping.
@@ -779,7 +853,7 @@ func (m *model) submitNewPane() tea.Cmd {
 	if m.newPane.mode != newPaneModePrompt {
 		return m.submitNewPanePicker()
 	}
-	prompt := strings.TrimSpace(m.newPane.prompt.Value())
+	prompt := strings.TrimSpace(m.newPanePromptValue())
 	if prompt == "" {
 		m.setNewPaneErr("prompt is required")
 		return nil
@@ -938,7 +1012,7 @@ func (m model) newPaneView() string {
 			sections = append(sections, m.newPaneFieldView(newPaneFieldAgent, "Agent", m.agentSelectorView(), false))
 		}
 	default:
-		promptSection := m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPane.prompt.View(), true)
+		promptSection := m.newPaneFieldView(newPaneFieldMain, "Prompt", m.newPanePromptInputView(), true)
 		if m.newPane.focus == newPaneFieldMain && m.newPane.completing {
 			if popup := m.completionPopupView(); popup != "" {
 				promptSection += "\n" + popup

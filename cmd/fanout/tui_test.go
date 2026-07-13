@@ -835,6 +835,29 @@ func TestManualPaneOptionsForTUIMultilinePromptUsesBriefingBody(t *testing.T) {
 	}
 }
 
+func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
+	prompt := strings.Repeat("x", panelaunch.MaxInlineManualPromptBytes+1)
+	opts := manualPaneOptionsForTUI(prompt, "codex")
+	wantTitle := strings.Repeat("x", 60)
+
+	if opts.Title != wantTitle || opts.Prompt != wantTitle {
+		t.Fatalf("long prompt title/prompt lengths = %d/%d, want bounded title length %d", len(opts.Title), len(opts.Prompt), len(wantTitle))
+	}
+	if opts.Body != prompt {
+		t.Fatalf("long prompt body length = %d, want %d", len(opts.Body), len(prompt))
+	}
+
+	cfg := manualPaneConfigForTUIAgent("codex")
+	cfg.DryRun = true
+	req := panelaunch.NewManualRequest(cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), opts)
+	if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
+		t.Fatalf("long Codex prompt briefing = path %q body length %d, want non-empty path containing %d-byte prompt", req.BriefingPath, len(req.BriefingBody), len(prompt))
+	}
+	if strings.Contains(req.Prompt, prompt) || !strings.Contains(req.Prompt, req.BriefingPath) {
+		t.Fatalf("long Codex prompt remained embedded in the launch argument: %d bytes", len(req.Prompt))
+	}
+}
+
 func TestManualPaneConfigForTUIAgentEnablesCodexPlanMode(t *testing.T) {
 	codex := manualPaneConfigForTUIAgent("codex")
 	if codex.Agent != "codex" || !codex.CodexPlanModeEnabled() {
