@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
@@ -37,10 +36,11 @@ func guardIssueOrchestrator(projectRoot string, store state.Store, issueNum int)
 	return nil
 }
 
-// launchIssueOrchestrator attaches one normal agent to the project root before
-// its child fan-out. The locked guard prevents duplicate orchestrator rows.
-func launchIssueOrchestrator(projectRoot, session, commandName string, hookConfig hooks.Config, issue ghissue.Issue, agentName string) (panelaunch.Request, string, bool, error) {
-	req, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, agentName,
+// launchIssueOrchestratorPrepared attaches one normal agent to the project
+// root after child planning and agent validation. The caller's locked recorder
+// keeps the orchestrator row and child rows in one launch transaction.
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string) (panelaunch.Request, string, bool, error) {
+	req, paneID, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName, store, recorder,
 		func(store state.Store) error {
 			return guardIssueOrchestrator(projectRoot, store, issue.Number)
 		},
@@ -62,7 +62,6 @@ func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hook
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("orchestrator: #%d %s", issue.Number, issue.Title)
 	briefingPath := orchestratorIssueBriefingPath(projectRoot, issue.Number, number)
-	shortTitle := strings.Join(strings.Fields(panelaunch.ShortIssueTitle(issue.Title)), " ")
 	return panelaunch.Request{
 		ParentRef:           panelaunch.ManualParentRef,
 		Number:              number,
@@ -71,7 +70,7 @@ func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hook
 		ShortTitle:          panelaunch.ShortIssueTitle(title),
 		Slug:                panelaunch.OrchestratorIssueSlug(issue.Number, number),
 		DisplayNameOverride: title,
-		Prompt:              fmt.Sprintf("orchestrate fanout for #%d: %s. read %s and begin.", issue.Number, shortTitle, briefingPath),
+		Prompt:              fmt.Sprintf("orchestrate fanout for #%d. read %s and begin.", issue.Number, briefingPath),
 		Agent:               agentName,
 		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
@@ -90,14 +89,25 @@ func orchestratorIssueBriefingPath(projectRoot string, issueNum, number int) str
 
 // cleanupIssueOrchestrator rolls back a newly created parent pane when the
 // child fan-out failed before creating any child pane.
-func cleanupIssueOrchestrator(projectRoot, session string, req panelaunch.Request, paneID string) {
-	panelaunch.KillAttachedPane(tuiLaunchTarget(session), paneID)
+func cleanupIssueOrchestrator(projectRoot, session string, req panelaunch.Request, paneID string) (err error) {
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
-		return
+		return err
 	}
-	// Cleanup is best-effort; the original child fan-out error remains primary.
-	_ = recorder.RemovePane(req.ParentRef, req.Number)
-	// Cleanup is best-effort; there is no useful recovery after the pane is gone.
-	_ = recorder.Unlock()
+	defer func() {
+		if unlockErr := recorder.Unlock(); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("unlock fanout state: %w", unlockErr))
+		}
+	}()
+	if recorded, ok := recorder.Find(req.ParentRef, req.Number); ok &&
+		(recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey) {
+		return fmt.Errorf("recorded orchestrator identity changed for %s/%d", req.ParentRef, req.Number)
+	}
+	if err := panelaunch.KillAttachedPane(tuiLaunchTarget(session), paneID, req.ShellKey); err != nil {
+		return err
+	}
+	if err := recorder.RemovePane(req.ParentRef, req.Number); err != nil {
+		return fmt.Errorf("remove orchestrator state: %w", err)
+	}
+	return nil
 }

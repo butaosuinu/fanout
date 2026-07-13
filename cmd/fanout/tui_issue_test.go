@@ -332,7 +332,7 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 
 func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
-	installTUISequentialTmuxShim(t)
+	installTUISequentialTmuxShim(t, repo)
 	installTUIParentLaunchGHScript(t)
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
@@ -392,7 +392,7 @@ func TestLaunchIssueSessionFromTUISkipsSecondOrchestrator(t *testing.T) {
 	if err = locked.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	installTUISequentialTmuxShim(t)
+	installTUISequentialTmuxShim(t, repo)
 	installTUIParentLaunchGHScript(t)
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
@@ -430,43 +430,16 @@ func TestLaunchIssueSessionFromTUISkipsSecondOrchestrator(t *testing.T) {
 
 func TestLaunchIssueSessionFromTUICleansOrchestratorWhenFanoutCreatesNothing(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
-	tmuxLogPath := installTUISequentialTmuxShim(t)
-	installTUIWatcherGHScript(t, `
-case "$args" in
-"issue view 500 --json number,title,state,body,labels")
-  printf '{"number":500,"title":"parent","state":"OPEN","body":"parent body","labels":[]}'
-  ;;
-"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
-  count_file="${GH_FAKE_ARGS}.subissue-count"
-  count=0
-  if [[ -f "$count_file" ]]; then
-    count="$(cat "$count_file")"
-  fi
-  count=$((count + 1))
-  printf '%s' "$count" > "$count_file"
-  if [[ "$count" -eq 1 ]]; then
-    printf '[[{"number":501,"title":"child","state":"open"}]]'
-  else
-    printf 'temporary sub-issue failure\n' >&2
-    exit 1
-  fi
-  ;;
-"issue view 500 --json body -q .body")
-  printf 'parent body\n'
-  ;;
-*)
-  printf 'unexpected gh args: %s\n' "$args" >&2
-  exit 64
-  ;;
-esac
-`)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	t.Setenv("TMUX_SHIM_FAIL_SPLIT", "92")
+	installTUIParentLaunchGHScript(t)
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
 	if err == nil {
 		t.Fatalf("launchIssueSessionFromTUI() = %#v, nil; want fan-out error", result)
 	}
-	if !strings.Contains(err.Error(), "temporary sub-issue failure") {
-		t.Fatalf("launchIssueSessionFromTUI() error = %v, want original fan-out failure", err)
+	if !strings.Contains(err.Error(), "tmux split-window") {
+		t.Fatalf("launchIssueSessionFromTUI() error = %v, want original child launch failure", err)
 	}
 	if !reflect.DeepEqual(result, fanouttui.LaunchResult{}) {
 		t.Fatalf("result = %#v, want empty result", result)
@@ -481,6 +454,41 @@ esac
 	tmuxLog := readTUITmuxLog(t, tmuxLogPath)
 	if !tmuxLogHasCommand(tmuxLog, "kill-pane\n-t\n%91") {
 		t.Fatalf("tmux log missing orchestrator cleanup:\n%s", tmuxLog)
+	}
+}
+
+func TestLaunchIssueSessionFromTUIPreflightsChildAgentsBeforeOrchestrator(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	installTUIParentLaunchGHScript(t)
+	installFakeExecutable(t, "codex")
+	t.Setenv("FANOUT_CODEX_PLAN_MODE", "true")
+	resolved := settings.Defaults()
+	resolved.CodexPlanMode = true
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", resolved, hooks.EmptyConfig(), 500, "codex", map[string]string{"501": "claude"})
+	if err == nil || !strings.Contains(err.Error(), "codex plan mode requires every selected child to use agent codex") {
+		t.Fatalf("launchIssueSessionFromTUI() = %#v, %v; want child-agent validation error", result, err)
+	}
+	if !reflect.DeepEqual(result, fanouttui.LaunchResult{}) {
+		t.Fatalf("result = %#v, want empty result", result)
+	}
+	if body, readErr := os.ReadFile(tmuxLogPath); readErr == nil {
+		if strings.Contains(string(body), "split-window") {
+			t.Fatalf("tmux split ran before child-agent validation:\n%s", body)
+		}
+	} else if !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(store.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want no launch side effects", store.Panes)
+	}
+	if _, statErr := os.Stat(orchestratorIssueBriefingPath(repo, 500, -1)); !os.IsNotExist(statErr) {
+		t.Fatalf("orchestrator briefing exists before validation: %v", statErr)
 	}
 }
 
@@ -525,12 +533,16 @@ esac
 `)
 }
 
-func installTUISequentialTmuxShim(t *testing.T) string {
+func installTUISequentialTmuxShim(t *testing.T, repo string) string {
 	t.Helper()
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "tmux-args.txt")
 	counterPath := filepath.Join(dir, "tmux-counter.txt")
+	shellKeyPath := filepath.Join(dir, "tmux-shell-key.txt")
 	if err := os.WriteFile(counterPath, []byte("90\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shellKeyPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	script := `#!/usr/bin/env bash
@@ -541,6 +553,10 @@ case "${1:-}" in
   split-window)
     read -r current < "$TMUX_SHIM_COUNTER"
     current=$((current + 1))
+    if [[ "${TMUX_SHIM_FAIL_SPLIT:-}" == "$current" ]]; then
+      printf 'split failed for %%%d\n' "$current" >&2
+      exit 17
+    fi
     printf '%s\n' "$current" > "$TMUX_SHIM_COUNTER"
     printf '%%%d\n' "$current"
     ;;
@@ -550,7 +566,33 @@ case "${1:-}" in
     fi
     ;;
   list-panes)
-    if [[ "$*" == *fanout_role* ]]; then
+    if [[ "$*" == *pane_current_path* ]]; then
+      read -r current < "$TMUX_SHIM_COUNTER"
+      pane=91
+      while (( pane <= current )); do
+        printf '%%%d\t%s\n' "$pane" "$TMUX_SHIM_LIVE_PATH"
+        pane=$((pane + 1))
+      done
+    elif [[ "$*" == *pane_title* ]]; then
+      read -r current < "$TMUX_SHIM_COUNTER"
+      pane=91
+      while (( pane <= current )); do
+        printf '%%%d\tpane-%d\n' "$pane" "$pane"
+        pane=$((pane + 1))
+      done
+    elif [[ "$*" == *fanout_shell_key* ]]; then
+      read -r current < "$TMUX_SHIM_COUNTER"
+      shell_key="$(sed -n '1p' "$TMUX_SHIM_SHELL_KEY")"
+      pane=91
+      while (( pane <= current )); do
+        if (( pane == 91 )); then
+          printf '%%%d\t%s\n' "$pane" "$shell_key"
+        else
+          printf '%%%d\t\n' "$pane"
+        fi
+        pane=$((pane + 1))
+      done
+    elif [[ "$*" == *fanout_role* ]]; then
       printf '%%0\t0\t1\tconsole\t\n'
       read -r current < "$TMUX_SHIM_COUNTER"
       pane=91
@@ -562,7 +604,12 @@ case "${1:-}" in
       done
     fi
     ;;
-  select-pane|set-option|select-layout|set-window-option|bind-key|kill-pane)
+  set-option)
+    if [[ "${5:-}" == "@fanout_shell_key" ]]; then
+      printf '%s\n' "${6:-}" > "$TMUX_SHIM_SHELL_KEY"
+    fi
+    ;;
+  select-pane|select-layout|set-window-option|bind-key|kill-pane)
     ;;
   *)
     ;;
@@ -574,6 +621,9 @@ esac
 	}
 	t.Setenv("TMUX_SHIM_ARGS", argsPath)
 	t.Setenv("TMUX_SHIM_COUNTER", counterPath)
+	t.Setenv("TMUX_SHIM_SHELL_KEY", shellKeyPath)
+	t.Setenv("TMUX_SHIM_LIVE_PATH", repo)
+	t.Setenv("TMUX_SHIM_FAIL_SPLIT", "")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsPath
 }

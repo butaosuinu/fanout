@@ -527,12 +527,37 @@ func rollbackState(recorder StateRecorder, req Request, lg *log.Logger) {
 	}
 }
 
-// KillAttachedPane silently tears down the tmux pane created by
-// AttachWithResult and reconciles its window layout. It does not remove the
-// recorded state row; callers must roll that back separately using the
-// original request identity. An empty paneID is a no-op.
-func KillAttachedPane(target, paneID string) {
-	failCleanup("", target, paneID, nil, nil)
+// KillAttachedPane tears down the keyed tmux pane created by AttachWithResult
+// only when its live @fanout_shell_key still matches the recorded identity. It
+// does not remove the state row; callers may do that only after this succeeds.
+// An empty paneID is a no-op, and an already-gone pane is considered stopped.
+func KillAttachedPane(target, paneID, shellKey string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return nil
+	}
+	shellKey = strings.TrimSpace(shellKey)
+	if shellKey == "" {
+		return fmt.Errorf("attached pane shell key is required")
+	}
+	livePanes, err := tmuxrun.ListLivePanes()
+	if err != nil {
+		return fmt.Errorf("list attached pane identity: %w", err)
+	}
+	for _, live := range livePanes {
+		if live.ID != paneID {
+			continue
+		}
+		if live.ShellKey != shellKey {
+			return fmt.Errorf("attached pane %s identity changed", paneID)
+		}
+		if err := tmuxrun.KillPane(paneID); err != nil {
+			return err
+		}
+		// The pane is confirmed gone; layout repair is cosmetic best-effort.
+		_ = panelayout.Apply(target, panelayout.Close)
+		return nil
+	}
+	return nil
 }
 
 // failCleanup tears down a partially created launch: it kills the pane (when

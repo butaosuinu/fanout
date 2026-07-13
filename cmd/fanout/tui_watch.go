@@ -131,7 +131,7 @@ func launchWatchParent(projectRoot, session, commandName string, resolvedSetting
 // against a synthesized runtime targeting the TUI session. The watcher and
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
-	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
+	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, nil)
 	return result.Watch, err
 }
 
@@ -143,7 +143,7 @@ type parentIssueFanoutResult struct {
 // launchParentIssueFanoutWithResult preserves the exact pane ids returned by
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
 // deliberately discards them so it cannot steal focus.
-func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config) (parentIssueFanoutResult, error) {
+func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, ready run.IssueReadyFunc) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
@@ -162,7 +162,7 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 		},
 		GH: gh,
 	}
-	execution, code := run.IssuesWithResult(cfg, launchLogger, rt, commandName, bindDashboardKey)
+	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, ready)
 	result := parentIssueFanoutResult{CreatedPaneIDs: execution.CreatedPaneIDs}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")

@@ -186,14 +186,23 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			CreatedPaneIDs: []string{paneID},
 		}, nil
 	}
-	orchestratorReq, orchestratorPaneID, orchestratorCreated, err := launchIssueOrchestrator(projectRoot, session, commandName, hookConfig, detail, defaultAgent)
-	if err != nil {
-		return fanouttui.LaunchResult{}, err
+	var orchestratorReq panelaunch.Request
+	var orchestratorPaneID string
+	var orchestratorCreated bool
+	ready := func(store state.Store, recorder panelaunch.StateRecorder) error {
+		var launchErr error
+		orchestratorReq, orchestratorPaneID, orchestratorCreated, launchErr = launchIssueOrchestratorPrepared(
+			projectRoot, session, commandName, store, recorder, hookConfig, detail, defaultAgent,
+		)
+		return launchErr
 	}
-	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
+	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, ready)
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
-		cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID)
-		orchestratorPaneID = ""
+		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
+		} else {
+			orchestratorPaneID = ""
+		}
 	}
 	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
 }

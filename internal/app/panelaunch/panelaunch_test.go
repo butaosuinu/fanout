@@ -1043,7 +1043,9 @@ func TestKillAttachedPaneIgnoresEmptyPaneID(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_CALLS", marker)
 
-	KillAttachedPane("%caller", "")
+	if err := KillAttachedPane("%caller", "", ""); err != nil {
+		t.Fatalf("KillAttachedPane() error = %v, want nil", err)
+	}
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("tmux was called for an empty pane ID: %v", err)

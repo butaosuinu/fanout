@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,9 +31,12 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 	if !strings.Contains(req.Prompt, req.BriefingPath) {
 		t.Fatalf("req.Prompt %q does not reference briefing path %q", req.Prompt, req.BriefingPath)
 	}
-	wantPrompt := "orchestrate fanout for #500: Coordinate child changes. read " + req.BriefingPath + " and begin."
+	wantPrompt := "orchestrate fanout for #500. read " + req.BriefingPath + " and begin."
 	if req.Prompt != wantPrompt {
 		t.Fatalf("req.Prompt = %q, want %q", req.Prompt, wantPrompt)
+	}
+	if strings.Contains(req.Prompt, issue.Title) {
+		t.Fatalf("req.Prompt = %q, must keep the untrusted issue title inside the briefing", req.Prompt)
 	}
 	if strings.HasPrefix(req.Prompt, "[fanout #") {
 		t.Fatalf("req.Prompt = %q, must not use the child fanout identity tag", req.Prompt)
@@ -122,4 +127,108 @@ func TestHasRecordedIssuePaneSeesOrchestrator(t *testing.T) {
 	if hasRecordedIssuePane(t.TempDir(), store, 12) {
 		t.Fatal("hasRecordedIssuePane(..., 12) = true, want exact issue matching")
 	}
+}
+
+func TestCleanupIssueOrchestratorRetainsStateWhenPaneCleanupFails(t *testing.T) {
+	tests := []struct {
+		name        string
+		liveKey     string
+		killFails   bool
+		wantErr     string
+		wantKillRun bool
+	}{
+		{
+			name:    "reused pane id keeps the state row",
+			liveKey: "shell-reused",
+			wantErr: "identity changed",
+		},
+		{
+			name:        "kill failure keeps the state row",
+			liveKey:     "shell-orchestrator",
+			killFails:   true,
+			wantErr:     "tmux kill-pane",
+			wantKillRun: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			req := panelaunch.Request{
+				ParentRef: panelaunch.ManualParentRef,
+				Number:    -1,
+				ShellKey:  "shell-orchestrator",
+			}
+			locked, err := state.LockProject(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := locked.RecordPane(state.Pane{
+				Parent:   req.ParentRef,
+				IssueNum: req.Number,
+				PaneID:   "%91",
+				ShellKey: req.ShellKey,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := locked.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+
+			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
+			err = cleanupIssueOrchestrator(repo, "fanout-test", req, "%91")
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("cleanupIssueOrchestrator() error = %v, want %q", err, tt.wantErr)
+			}
+			store, loadErr := state.LoadProject(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if _, ok := store.Find(req.ParentRef, req.Number); !ok {
+				t.Fatalf("state panes = %+v, want orchestrator row retained", store.Panes)
+			}
+			body, readErr := os.ReadFile(tmuxLog)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			killRan := strings.Contains(string(body), "kill-pane\n-t\n%91\n---\n")
+			if killRan != tt.wantKillRun {
+				t.Fatalf("kill-pane ran = %v, want %v; tmux log:\n%s", killRan, tt.wantKillRun, body)
+			}
+		})
+	}
+}
+
+func installIssueOrchestratorCleanupTmuxShim(t *testing.T, liveKey string, killFails bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux-args.txt")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$TMUX_CLEANUP_LOG"
+printf '%s\n' '---' >> "$TMUX_CLEANUP_LOG"
+case "${1:-} ${2:-} ${3:-}" in
+"list-panes -a -F")
+  case "${4:-}" in
+  *pane_current_path*) printf '%%91\t/repo\n' ;;
+  *pane_title*) printf '%%91\torchestrator\n' ;;
+  *fanout_shell_key*) printf '%%91\t%s\n' "$TMUX_LIVE_SHELL_KEY" ;;
+  esac
+  ;;
+"kill-pane -t %91")
+  if [[ "$TMUX_KILL_FAILS" == "true" ]]; then
+    exit 7
+  fi
+  ;;
+esac
+`
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_CLEANUP_LOG", logPath)
+	t.Setenv("TMUX_LIVE_SHELL_KEY", liveKey)
+	t.Setenv("TMUX_KILL_FAILS", fmt.Sprintf("%t", killFails))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type executionResult struct {
@@ -29,6 +30,12 @@ type IssueExecutionResult struct {
 	CreatedPaneIDs []string
 }
 
+// IssueReadyFunc runs after the child plan and its effective agents validate,
+// while the live state recorder remains locked, but before any child pane is
+// created. Callers can atomically attach a parent coordinator to the same
+// state transaction without duplicating issue planning.
+type IssueReadyFunc func(state.Store, panelaunch.StateRecorder) error
+
 // Issues runs the issue / Project fan-out lane against an already-resolved
 // runtime. cmd owns parsing, dependency checks, and runtime resolution before
 // calling this; bindKeys is the cmd-side dashboard keybinding hook.
@@ -40,6 +47,13 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 // IssuesWithResult runs the issue / Project fan-out lane and returns the exact
 // pane ids created before completion or a fail-fast launch error.
 func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) (IssueExecutionResult, exitcode.Code) {
+	return IssuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil)
+}
+
+// IssuesWithResultWhenReady is IssuesWithResult with one optional pre-execute
+// callback. The TUI parent lane uses it to launch its project-root orchestrator
+// only after the exact child plan and agent assignments are known-valid.
+func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg), lg.Warn)
 	launchCfg := effectiveIssueLaunchConfig(cfg, resolvedSettings)
 	hookConfig := hooks.LoadUserConfig(lg)
@@ -118,11 +132,17 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 		return IssueExecutionResult{}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
+		if !callIssueReady(ready, store, recorder, lg) {
+			return IssueExecutionResult{}, exitcode.Env
+		}
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		return IssueExecutionResult{}, exitcode.OK
 	}
 	if err := validateIssueAgents(launchCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
+		return IssueExecutionResult{}, exitcode.Env
+	}
+	if !callIssueReady(ready, store, recorder, lg) {
 		return IssueExecutionResult{}, exitcode.Env
 	}
 
@@ -167,6 +187,20 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.Env
 	}
 	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.OK
+}
+
+func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.LockedStore, lg *log.Logger) bool {
+	if ready == nil {
+		return true
+	}
+	if recorder != nil {
+		store = recorder.Store
+	}
+	if err := ready(store, recorder); err != nil {
+		lg.Err("%s", err.Error())
+		return false
+	}
+	return true
 }
 
 // effectiveIssueLaunchConfig overlays resolved launch settings onto a shallow
