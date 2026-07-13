@@ -492,6 +492,7 @@ func OrchestratorIssueSlug(issueNum, number int) string {
 
 // OrchestratorPaneIssueNum returns the GitHub issue linked to a TUI issue
 // orchestrator row, parsed from its provenance slug under the manual parent.
+// Only the complete "orchestrator-issue-<issue>-<numeric pane>" form matches.
 func OrchestratorPaneIssueNum(pane state.Pane) (int, bool) {
 	if pane.Parent != ManualParentRef {
 		return 0, false
@@ -500,7 +501,15 @@ func OrchestratorPaneIssueNum(pane state.Pane) (int, bool) {
 	if !found {
 		return 0, false
 	}
-	return parseLeadingIssueNum(rest)
+	issueNum, ok := parseLeadingIssueNum(rest)
+	if !ok {
+		return 0, false
+	}
+	_, paneNum, found := strings.Cut(rest, "-")
+	if !found || !naming.AllDigits(paneNum) {
+		return 0, false
+	}
+	return issueNum, true
 }
 
 // PlanLinkedIssueNums collects the issues owned by plan-lane rows so the issue

@@ -1012,6 +1012,9 @@ func TestOrchestratorPaneIssueNum(t *testing.T) {
 		{name: "plan slug is distinct", pane: state.Pane{Parent: ManualParentRef, Slug: "plan-issue-123-1"}, ok: false, planParser: true},
 		{name: "longer issue number does not alias", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-1234-1"}, want: 1234, ok: true},
 		{name: "non-numeric issue segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-abc-1"}, ok: false},
+		{name: "non-numeric pane segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-123-codex-a1"}, ok: false},
+		{name: "empty pane segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-123-"}, ok: false},
+		{name: "extra pane segment is rejected", pane: state.Pane{Parent: ManualParentRef, Slug: "orchestrator-issue-123-1-extra"}, ok: false},
 	}
 
 	for _, tt := range tests {

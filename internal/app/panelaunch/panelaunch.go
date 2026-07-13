@@ -527,8 +527,10 @@ func rollbackState(recorder StateRecorder, req Request, lg *log.Logger) {
 	}
 }
 
-// KillAttachedPane silently tears down a pane created by AttachWithResult and
-// reconciles its window layout. An empty paneID is a no-op.
+// KillAttachedPane silently tears down the tmux pane created by
+// AttachWithResult and reconciles its window layout. It does not remove the
+// recorded state row; callers must roll that back separately using the
+// original request identity. An empty paneID is a no-op.
 func KillAttachedPane(target, paneID string) {
 	failCleanup("", target, paneID, nil, nil)
 }
