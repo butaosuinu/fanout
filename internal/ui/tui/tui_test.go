@@ -4717,6 +4717,82 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	}
 }
 
+func TestNewPaneFormSubmitsLongPastedPrompt(t *testing.T) {
+	longPrompt := strings.Repeat("long pasted prompt line\n", 200) + "final line 201"
+	if lines := strings.Count(longPrompt, "\n") + 1; lines <= 200 || len(longPrompt) <= 1000 {
+		t.Fatalf("test prompt = %d lines / %d bytes, want more than 200 lines and 1000 bytes", lines, len(longPrompt))
+	}
+
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
+			got = req
+			return LaunchResult{}, nil
+		},
+	})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longPrompt), Paste: true})
+	m = updated.(model)
+	if value := m.newPane.stagedPrompt; value != longPrompt {
+		t.Fatalf("staged prompt was truncated: got %d bytes, want %d", len(value), len(longPrompt))
+	}
+	if value := m.newPane.prompt.Value(); value != "" {
+		t.Fatalf("textarea retained %d bytes of a staged prompt, want empty", len(value))
+	}
+	if view := m.newPaneView(); !strings.Contains(view, "Pasted prompt: 201 lines") || strings.Contains(view, "long pasted prompt line") {
+		t.Fatalf("staged prompt view should show only its summary:\n%s", view)
+	}
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+	if got.Prompt != longPrompt {
+		t.Fatalf("submitted prompt was truncated: got %d bytes, want %d", len(got.Prompt), len(longPrompt))
+	}
+}
+
+func TestNewPaneFormStagesOversizedSingleLinePaste(t *testing.T) {
+	longPrompt := strings.Repeat("x", 100_000)
+	m := newModel(Options{DefaultAgent: "codex"})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longPrompt), Paste: true})
+	m = updated.(model)
+	if m.newPane.stagedPrompt != longPrompt {
+		t.Fatalf("staged prompt length = %d, want %d", len(m.newPane.stagedPrompt), len(longPrompt))
+	}
+	view := m.newPaneView()
+	if !strings.Contains(view, "Pasted prompt: 1 lines / 100000 bytes") || strings.Contains(view, longPrompt[:100]) {
+		t.Fatalf("oversized single-line view should stay bounded:\n%s", view)
+	}
+}
+
+func TestNewPaneFormStagedPasteCanBeReplacedAndCleared(t *testing.T) {
+	longPrompt := strings.Repeat("x", newPanePromptEditorMaxCells+1)
+	m := newModel(Options{DefaultAgent: "codex"})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longPrompt), Paste: true})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("replacement"), Paste: true})
+	m = updated.(model)
+	if m.newPane.stagedPrompt != "" || m.newPane.prompt.Value() != "replacement" {
+		t.Fatalf("replacement paste = staged %q textarea %q", m.newPane.stagedPrompt, m.newPane.prompt.Value())
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longPrompt), Paste: true})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	m = updated.(model)
+	if m.newPane.stagedPrompt != "" || m.newPane.prompt.Value() != "" {
+		t.Fatalf("Ctrl+U did not clear staged prompt: staged %d bytes textarea %q", len(m.newPane.stagedPrompt), m.newPane.prompt.Value())
+	}
+}
+
 func TestNewPaneFormAcceptsCJKPromptInput(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{

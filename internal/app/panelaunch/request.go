@@ -22,6 +22,11 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
+// MaxInlineManualPromptBytes keeps a raw manual prompt far below Linux's
+// per-argument exec limit after plan-template expansion and two shell-quoting
+// layers. Larger prompts travel through a briefing file.
+const MaxInlineManualPromptBytes = 4 * 1024
+
 // fanoutTagPrefix opens the one-line child prompt tag "[fanout #N of #P]".
 // Its format pairs with team.FanoutTagRE / team.ParseFanoutTag
 // (internal/infra/team/detect.go); keep the two in sync.
@@ -157,7 +162,14 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 		if strings.TrimSpace(body) == "" {
 			body = prompt
 		}
-		prompt = briefing.RenderManualPlan(title, body)
+		planPrompt := briefing.RenderManualPlan(title, body)
+		if len(body) > MaxInlineManualPromptBytes {
+			briefingPath = briefing.Path(projectRoot, number)
+			briefingBody = planPrompt
+			prompt = manualPromptWithBriefingAction(ShortIssueTitle(title), briefingPath, "investigate, then propose a plan")
+		} else {
+			prompt = planPrompt
+		}
 	} else if opts.Body != "" {
 		briefingPath = briefing.Path(projectRoot, number)
 		briefingBody = opts.Body
@@ -213,12 +225,23 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if shortPrompt == "" {
 		shortPrompt = title
 	}
+	oversized := len(body) > MaxInlineManualPromptBytes
+	if oversized {
+		shortPrompt = ShortIssueTitle(shortPrompt)
+	}
 	briefingPath := ""
 	briefingBody := ""
 	switch {
 	case cfg.CodexPlanModeEnabled():
-		prompt = briefing.RenderManualPlan(title, body)
-	case strings.Contains(prompt, "\n"):
+		planPrompt := briefing.RenderManualPlan(title, body)
+		if oversized {
+			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
+			briefingBody = planPrompt
+			prompt = manualPromptWithBriefingAction(shortPrompt, briefingPath, "investigate, then propose a plan")
+		} else {
+			prompt = planPrompt
+		}
+	case strings.Contains(prompt, "\n") || oversized:
 		briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
 		briefingBody = body
 		prompt = manualPromptWithBriefing(shortPrompt, briefingPath)

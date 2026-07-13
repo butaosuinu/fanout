@@ -25,6 +25,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -280,7 +281,7 @@ func TestNewManualRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
 	})
 
 	if req.BriefingPath != "" || req.BriefingBody != "" {
-		t.Fatalf("manual Codex Plan Mode should not use briefing file: path %q body %q", req.BriefingPath, req.BriefingBody)
+		t.Fatalf("small manual Codex Plan Mode prompt should stay inline: path %q body %q", req.BriefingPath, req.BriefingBody)
 	}
 	if !strings.Contains(req.Prompt, "Body:\nInspect API\n\nCheck handlers") {
 		t.Fatalf("manual plan prompt did not preserve multiline prompt:\n%s", req.Prompt)
@@ -294,6 +295,60 @@ func TestNewManualRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "Body:\nInspect API\n\nCheck handlers") {
 		t.Fatalf("manual plan command did not preserve multiline prompt:\n%s", cmd)
+	}
+}
+
+func TestMaxInlineManualPromptFitsLinuxSingleArgumentBudget(t *testing.T) {
+	codexPlanMode := true
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &codexPlanMode}
+	prompt := strings.Repeat("'", MaxInlineManualPromptBytes)
+	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
+		Title:  prompt,
+		Agent:  "codex",
+		Prompt: prompt,
+	})
+	command, err := buildAgentCommand(cfg, req, "fanout-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := tmuxrun.BuildPaneLaunchCommand(command)
+	const linuxMaxArgStringBytes = 32 * 4096
+	if got := len(wrapper) + 1; got >= linuxMaxArgStringBytes {
+		t.Fatalf("wrapped inline prompt = %d bytes including NUL, want less than Linux single-argument budget %d", got, linuxMaxArgStringBytes)
+	}
+}
+
+func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
+	prompt := strings.Repeat("x", MaxInlineManualPromptBytes+1)
+	target := AttachTarget{
+		SourceParent:     ManualParentRef,
+		SourceLabel:      "source",
+		SourceBranchName: "feature/source",
+	}
+
+	for _, tc := range []struct {
+		name           string
+		cfg            *cliflags.Config
+		wantPlanPrompt bool
+	}{
+		{name: "claude", cfg: &cliflags.Config{Agent: "claude", DryRun: true}},
+		{name: "codex plan mode", cfg: func() *cliflags.Config {
+			planMode := true
+			return &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &planMode}
+		}(), wantPlanPrompt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := NewAttachedRequest(tc.cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), prompt, "/repo/worktree", target)
+			if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
+				t.Fatalf("briefing = path %q body length %d, want path containing full %d-byte prompt", req.BriefingPath, len(req.BriefingBody), len(prompt))
+			}
+			if strings.Contains(req.Prompt, prompt) || !strings.Contains(req.Prompt, req.BriefingPath) {
+				t.Fatalf("launch prompt should reference briefing without embedding payload: %d bytes", len(req.Prompt))
+			}
+			if got := strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>"); got != tc.wantPlanPrompt {
+				t.Fatalf("briefing plan instructions = %t, want %t", got, tc.wantPlanPrompt)
+			}
+		})
 	}
 }
 

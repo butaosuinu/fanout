@@ -68,6 +68,22 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	}
 }
 
+func TestNewPlanPromptPaneRequestBoundsLongSingleLineTitle(t *testing.T) {
+	prompt := strings.Repeat("x", 150_000)
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, "codex", "shell-coordinator-key")
+	wantTitle := "plan: " + strings.Repeat("x", 54)
+
+	if req.Title != wantTitle || req.DisplayNameOverride != wantTitle || req.ShortTitle != wantTitle {
+		t.Fatalf("plan title/display/short lengths = %d/%d/%d, want bounded %d-byte title", len(req.Title), len(req.DisplayNameOverride), len(req.ShortTitle), len(wantTitle))
+	}
+	if req.Body != prompt || req.BriefingBody != prompt {
+		t.Fatalf("long prompt body/briefing lengths = %d/%d, want %d", len(req.Body), len(req.BriefingBody), len(prompt))
+	}
+	if strings.Contains(req.Prompt, prompt) {
+		t.Fatalf("launch prompt embeds the %d-byte briefing", len(prompt))
+	}
+}
+
 // TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief pins the issue-sourced
 // plan coordinator pane request: a plain (non-Codex-Plan-Mode) agent whose
 // one-line prompt invokes the fanout-plan skill on the issue-derived coordinator
