@@ -163,16 +163,16 @@ func TestCleanupIssueOrchestratorRetainsStateWhenPaneCleanupFails(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := locked.RecordPane(state.Pane{
+			if recordErr := locked.RecordPane(state.Pane{
 				Parent:   req.ParentRef,
 				IssueNum: req.Number,
 				PaneID:   "%91",
 				ShellKey: req.ShellKey,
-			}); err != nil {
-				t.Fatal(err)
+			}); recordErr != nil {
+				t.Fatal(recordErr)
 			}
-			if err := locked.Unlock(); err != nil {
-				t.Fatal(err)
+			if unlockErr := locked.Unlock(); unlockErr != nil {
+				t.Fatal(unlockErr)
 			}
 
 			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
