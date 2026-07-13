@@ -20,5 +20,10 @@ this contract and those driver-generated sections.
   exist in the reviewed repository and are in scope: failure cleanup and state
   transitions, recorded pane/worktree identity, git diff path edge cases,
   counter budgets, paginated decisions, display width, and paired docs.
+- Set `reviewer_session_id` to the exact canonical UUID in `CODEX_THREAD_ID`.
+  Do not substitute a task name, assigned role, prompt text, path, or invented
+  value. The driver verifies the actual child session metadata; self-reported
+  role, model, sandbox, and isolation fields are not attestation.
 - Return JSON only, exactly matching the bundle's driver-generated schema. Do
-  not add Markdown or explanatory text.
+  not add Markdown, explanatory text, or a task-completion message before or
+  after the JSON.

@@ -110,6 +110,7 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 			agentsDir := filepath.Join(root, "codex", "agents")
 			tomlData := mustReadRepoFile(t, agentsDir, want.name+".toml")
 			for key, expected := range map[string]string{
+				"name":                   want.name,
 				"model":                  want.model,
 				"model_reasoning_effort": want.effort,
 				"sandbox_mode":           "read-only",
@@ -124,6 +125,16 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 			if !bytes.Equal(instructions, mirror) {
 				t.Errorf("developer_instructions does not byte-match codex/agents/%s.md", want.name)
 			}
+			for _, required := range []string{
+				"`reviewer_session_id`",
+				"`CODEX_THREAD_ID`",
+				"Do not substitute a task name",
+				"Return JSON only",
+			} {
+				if !bytes.Contains(instructions, []byte(required)) {
+					t.Errorf("developer_instructions missing session contract %q", required)
+				}
+			}
 		})
 	}
 
@@ -131,6 +142,13 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 	for _, required := range []string{
 		"If either is unavailable",
 		"never substitute another role or model",
+		"custom_agent_selection_unavailable",
+		"custom_role_selector=false",
+		"agent_type: \"post-work-reviewer\"",
+		"agent_type: \"post-work-verifier\"",
+		"fork_turns: \"none\"",
+		"task_name",
+		"every stored result has passed the driver's",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing fail-closed contract %q", required)

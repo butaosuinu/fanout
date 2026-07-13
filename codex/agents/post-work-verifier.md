@@ -18,5 +18,10 @@ only this contract and those driver-generated sections.
   hunt for unrelated issues.
 - Report only still-unfixed prior findings or obvious fix-introduced
   regressions, and obey the bundle's finding cap and truncation rules.
+- Set `reviewer_session_id` to the exact canonical UUID in `CODEX_THREAD_ID`.
+  Do not substitute a task name, assigned role, prompt text, path, or invented
+  value. The driver verifies the actual child session metadata; self-reported
+  role, model, sandbox, and isolation fields are not attestation.
 - Return JSON only, exactly matching the bundle's driver-generated schema. Do
-  not add Markdown or explanatory text.
+  not add Markdown, explanatory text, or a task-completion message before or
+  after the JSON.

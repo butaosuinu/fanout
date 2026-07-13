@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="3"
+VERSION="4"
+ATTESTATION_VERSION="1"
+JSON_HELPER_VERSION="2"
 BACKEND="bounded-isolated-reviewer"
 REVIEWER_AGENT="post-work-reviewer"
 VERIFIER_AGENT="post-work-verifier"
@@ -92,6 +94,38 @@ agent_path() {
 
 now_utc() {
   date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
+}
+
+is_canonical_uuid() {
+  [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+}
+
+codex_root_dir() {
+  if [ -n "${CODEX_DIR:-}" ]; then
+    printf '%s\n' "$CODEX_DIR"
+  elif [ -n "${CODEX_HOME:-}" ]; then
+    printf '%s\n' "$CODEX_HOME"
+  else
+    printf '%s/.codex\n' "$HOME"
+  fi
+}
+
+resolve_attestation_environment() {
+  local codex_root
+  PARENT_THREAD_ID="${CODEX_THREAD_ID:-}"
+  is_canonical_uuid "$PARENT_THREAD_ID" || \
+    die "CODEX_THREAD_ID must be the parent session canonical UUID"
+
+  codex_root="$(codex_root_dir)"
+  SESSIONS_ROOT="$codex_root/sessions"
+  REVIEWER_AGENT_CONFIG="$codex_root/agents/$REVIEWER_AGENT.toml"
+  VERIFIER_AGENT_CONFIG="$codex_root/agents/$VERIFIER_AGENT.toml"
+  [ -d "$SESSIONS_ROOT" ] && [ -r "$SESSIONS_ROOT" ] || \
+    die "Codex sessions root is unavailable: $SESSIONS_ROOT"
+  [ -f "$REVIEWER_AGENT_CONFIG" ] && [ -r "$REVIEWER_AGENT_CONFIG" ] || \
+    die "reviewer agent config is unavailable: $REVIEWER_AGENT_CONFIG"
+  [ -f "$VERIFIER_AGENT_CONFIG" ] && [ -r "$VERIFIER_AGENT_CONFIG" ] || \
+    die "verifier agent config is unavailable: $VERIFIER_AGENT_CONFIG"
 }
 
 has_dirty_tree() {
@@ -397,6 +431,13 @@ env_set() {
   mv "$tmp" "$file" || die "failed to update review env"
 }
 
+ensure_current_review_state() {
+  [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] || \
+    die "post-work-review state version mismatch; run reset and prepare again"
+  [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "$ATTESTATION_VERSION" ] || \
+    die "post-work-review attestation state is unavailable; run reset and prepare again"
+}
+
 JSON_CACHE_ROOT=""
 JSON_CACHE_FILES=()
 JSON_CACHE_DIRS=()
@@ -458,7 +499,48 @@ json_parse_result() {
   local file out
   file="$1"
   out="$2"
-  "$JSON_HELPER" __post-work-review-json "$file" "$out"
+  "$JSON_HELPER" __post-work-review-json project "$file" "$out"
+}
+
+agent_config_for() {
+  case "$1" in
+    broad) env_get reviewer_agent_config ;;
+    verify) env_get verifier_agent_config ;;
+    *) die "invalid result kind: $1" ;;
+  esac
+}
+
+json_attest_result() {
+  local kind file out used_sessions
+  kind="$1"
+  file="$2"
+  out="$3"
+  used_sessions="${4:-}"
+  if [ -n "$used_sessions" ]; then
+    "$JSON_HELPER" __post-work-review-json attest \
+      "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
+      "$(env_get prepared_at)" "$(agent_config_for "$kind")" "$used_sessions"
+  else
+    "$JSON_HELPER" __post-work-review-json attest \
+      "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
+      "$(env_get prepared_at)" "$(agent_config_for "$kind")"
+  fi
+}
+
+attestation_fail() {
+  local reason message
+  reason="$1"
+  message="$2"
+  if [ -f "$(review_env_path)" ]; then
+    env_set stop_reason "$reason"
+  fi
+  rm -f "$(marker_path)" "$(marker_meta_path)"
+  printf 'clean=false\n'
+  printf 'findings=0\n'
+  printf 'stop_reason=%s\n' "$reason"
+  printf 'marker_eligible=false\n'
+  printf 'error=%s\n' "$message" >&2
+  exit 1
 }
 
 json_cache_add() {
@@ -479,7 +561,7 @@ json_cache_add() {
   helper_stderr="$cache/helper.stderr"
   json_parse_result "$file" "$cache" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
-  if ! grep -Fxq 'post_work_review_json_helper_version=1' "$helper_stdout"; then
+  if ! grep -Fxq "post_work_review_json_helper_version=$JSON_HELPER_VERSION" "$helper_stdout"; then
     rm -rf -- "$cache"
     JSON_HELPER_ERROR="post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
     return 1
@@ -488,6 +570,64 @@ json_cache_add() {
   JSON_CACHE_FILES[index]="$file"
   JSON_CACHE_DIRS[index]="$cache"
   return "$status"
+}
+
+json_cache_attest() {
+  local kind file used_sessions cache index status helper_stdout helper_stderr error_kind error_message
+  kind="$1"
+  file="$2"
+  used_sessions="${3:-}"
+  if cache="$(json_cache_dir_for "$file")"; then
+    [ -f "$cache/attestation_valid" ] && return 0
+  else
+    ensure_json_helper || attestation_fail \
+      "reviewer_attestation_unavailable" "$JSON_HELPER_ERROR"
+    json_cache_init
+    index="${#JSON_CACHE_FILES[@]}"
+    cache="$JSON_CACHE_ROOT/$index"
+    mkdir "$cache" || die "failed to create reviewer JSON cache entry"
+    JSON_CACHE_FILES[index]="$file"
+    JSON_CACHE_DIRS[index]="$cache"
+  fi
+
+  helper_stdout="$cache/helper.stdout"
+  helper_stderr="$cache/helper.stderr"
+  json_attest_result "$kind" "$file" "$cache" "$used_sessions" >"$helper_stdout" 2>"$helper_stderr"
+  status=$?
+  if ! grep -Fxq "post_work_review_json_helper_version=$JSON_HELPER_VERSION" "$helper_stdout"; then
+    rm -f "$helper_stdout" "$helper_stderr"
+    attestation_fail "reviewer_attestation_unavailable" \
+      "post-work-review JSON helper is incompatible or failed before attestation: $JSON_HELPER"
+  fi
+  rm -f "$helper_stdout"
+  if [ "$status" -ne 0 ] || [ ! -f "$cache/attestation_valid" ]; then
+    error_kind="$(cat "$cache/attestation_error_kind" 2>/dev/null || echo unavailable)"
+    error_message="$(cat "$cache/attestation_error" 2>/dev/null || cat "$helper_stderr" 2>/dev/null || echo 'reviewer attestation failed')"
+    rm -f "$helper_stderr"
+    case "$error_kind" in
+      reused) attestation_fail "reviewer_session_reused" "$error_message" ;;
+      mismatch) attestation_fail "reviewer_attestation_mismatch" "$error_message" ;;
+      *) attestation_fail "reviewer_attestation_unavailable" "$error_message" ;;
+    esac
+  fi
+  rm -f "$helper_stderr"
+}
+
+write_used_sessions_file() {
+  local path i
+  json_cache_init
+  USED_SESSIONS_FILE="$JSON_CACHE_ROOT/used-session-ids"
+  : >"$USED_SESSIONS_FILE" || die "failed to create used reviewer session list"
+  path="$(result_path broad 1)"
+  if [ -f "$path" ]; then
+    printf '%s\n' "$(json_attested_scalar "$path" attested_session_id)" >>"$USED_SESSIONS_FILE"
+  fi
+  for i in 1 2; do
+    path="$(result_path verify "$i")"
+    if [ -f "$path" ]; then
+      printf '%s\n' "$(json_attested_scalar "$path" attested_session_id)" >>"$USED_SESSIONS_FILE"
+    fi
+  done
 }
 
 json_cache_alias() {
@@ -507,16 +647,12 @@ json_cache_prepare_stored_results() {
   local path i
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
-    if ! json_cache_add "$path"; then
-      [ -z "$JSON_HELPER_ERROR" ] || die "$JSON_HELPER_ERROR"
-    fi
+    json_cache_attest broad "$path"
   fi
   for i in 1 2; do
     path="$(result_path verify "$i")"
     if [ -f "$path" ]; then
-      if ! json_cache_add "$path"; then
-        [ -z "$JSON_HELPER_ERROR" ] || die "$JSON_HELPER_ERROR"
-      fi
+      json_cache_attest verify "$path"
     fi
   done
 }
@@ -557,6 +693,12 @@ json_findings_tsv() {
   local cached
   cached="$(json_cache_file "$1" findings.tsv)" || return 1
   awk -v result="$2" '{ print result "\t" $0 }' "$cached"
+}
+
+json_attested_scalar() {
+  local cached
+  cached="$(json_cache_file "$1" "$2")" || return 1
+  cat "$cached"
 }
 
 result_path() {
@@ -709,11 +851,14 @@ write_markdown_fenced_file() {
 validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
   local sandbox_mode head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
+  local actual_session actual_role actual_sandbox attestation_version used_sessions
   kind="$1"
   file="$2"
   check_target="${3:-target}"
+  used_sessions="${4:-}"
   [ -f "$file" ] || die "review JSON not found: $file"
   JSON_HELPER_ERROR=""
+  json_cache_attest "$kind" "$file" "$used_sessions"
   if ! json_validate "$file" >/dev/null 2>&1; then
     if [ -n "$JSON_HELPER_ERROR" ]; then
       die "$JSON_HELPER_ERROR"
@@ -738,6 +883,16 @@ validate_result() {
   if [ -z "$session" ] || [ "$session" = "null" ]; then
     die "reviewer_session_id is required"
   fi
+  attestation_version="$(json_attested_scalar "$file" attestation_version 2>/dev/null || true)"
+  [ "$attestation_version" = "$ATTESTATION_VERSION" ] || \
+    attestation_fail "reviewer_attestation_unavailable" "reviewer attestation version mismatch"
+  actual_session="$(json_attested_scalar "$file" attested_session_id 2>/dev/null || true)"
+  actual_role="$(json_attested_scalar "$file" attested_agent_role 2>/dev/null || true)"
+  actual_sandbox="$(json_attested_scalar "$file" attested_sandbox_mode 2>/dev/null || true)"
+  [ "$session" = "$actual_session" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "reviewer_session_id does not match the attested child session"
+  [ "$actual_role" = "$expected_agent" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested agent role mismatch"
 
   same_agent="$(json_scalar "$file" same_agent_review 2>/dev/null || true)"
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
@@ -745,6 +900,8 @@ validate_result() {
   [ "$isolated" = "true" ] || die "non-isolated reviewer is rejected"
   sandbox_mode="$(json_scalar "$file" reviewer_sandbox_mode 2>/dev/null || true)"
   [ "$sandbox_mode" = "read-only" ] || die "reviewer_sandbox_mode must be read-only"
+  [ "$actual_sandbox" = "read-only" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested reviewer sandbox must be read-only"
   hooks_only="$(json_scalar "$file" hooks_only_success 2>/dev/null || true)"
   [ "$hooks_only" = "false" ] || die "hooks-only success is rejected"
 
@@ -880,7 +1037,7 @@ summary_values() {
   total_calls="$(total_reviewer_calls)"
   clean="unknown"
   findings=0
-  stop=""
+  stop="$(env_get stop_reason 2>/dev/null || true)"
   marker="false"
   invalid_count=0
 
@@ -900,7 +1057,12 @@ summary_values() {
     target_changed_reason="$(review_target_changed_reason || true)"
   fi
 
-  if [ "$invalid_count" -gt 0 ] || [ "$duplicate_sessions" -gt 0 ]; then
+  if [ -n "$stop" ]; then
+    clean="false"
+  elif [ "$duplicate_sessions" -gt 0 ]; then
+    clean="false"
+    stop="reviewer_session_reused"
+  elif [ "$invalid_count" -gt 0 ]; then
     clean="false"
     stop="invalid_review_result"
   elif [ -n "$target_changed_reason" ]; then
@@ -985,8 +1147,34 @@ print_budget_lines() {
   printf 'max_findings_per_round=%s\n' "$MAX_FINDINGS_PER_ROUND"
 }
 
+print_attested_call_lines() {
+  local call path i kind
+  call=0
+  path="$(result_path broad 1)"
+  if [ -f "$path" ]; then
+    call=$((call + 1))
+    printf 'review_call_%s_kind=broad\n' "$call"
+    printf 'review_call_%s_session_id=%s\n' "$call" "$(json_attested_scalar "$path" attested_session_id)"
+    printf 'review_call_%s_agent_role=%s\n' "$call" "$(json_attested_scalar "$path" attested_agent_role)"
+    printf 'review_call_%s_model=%s\n' "$call" "$(json_attested_scalar "$path" attested_model)"
+    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(json_attested_scalar "$path" attested_sandbox_mode)"
+  fi
+  for i in 1 2; do
+    path="$(result_path verify "$i")"
+    [ -f "$path" ] || continue
+    call=$((call + 1))
+    kind="verify"
+    printf 'review_call_%s_kind=%s\n' "$call" "$kind"
+    printf 'review_call_%s_session_id=%s\n' "$call" "$(json_attested_scalar "$path" attested_session_id)"
+    printf 'review_call_%s_agent_role=%s\n' "$call" "$(json_attested_scalar "$path" attested_agent_role)"
+    printf 'review_call_%s_model=%s\n' "$call" "$(json_attested_scalar "$path" attested_model)"
+    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(json_attested_scalar "$path" attested_sandbox_mode)"
+  done
+}
+
 print_state_lines() {
   printf 'post_work_review_version=%s\n' "$VERSION"
+  printf 'post_work_review_attestation_version=%s\n' "$ATTESTATION_VERSION"
   printf 'backend=%s\n' "$(env_get backend 2>/dev/null || echo "$BACKEND")"
   printf 'scope=%s\n' "$(env_get scope 2>/dev/null || echo unknown)"
   printf 'base=%s\n' "$(env_get base 2>/dev/null || echo unknown)"
@@ -1004,6 +1192,7 @@ print_state_lines() {
   printf 'broad_review_calls=%s\n' "${SUMMARY_BROAD_CALLS:-$(broad_review_calls)}"
   printf 'verify_review_calls=%s\n' "${SUMMARY_VERIFY_CALLS:-$(verify_review_calls)}"
   printf 'total_reviewer_calls=%s\n' "${SUMMARY_TOTAL_CALLS:-$(total_reviewer_calls)}"
+  print_attested_call_lines
 }
 
 stop_existing_review_state() {
@@ -1023,8 +1212,13 @@ write_review_env() {
   file="$(review_env_path)"
   {
     printf 'post_work_review_version=%s\n' "$VERSION"
+    printf 'post_work_review_attestation_version=%s\n' "$ATTESTATION_VERSION"
     printf 'backend=%s\n' "$BACKEND"
     printf 'prepared_at=%s\n' "$PREPARED_AT"
+    printf 'parent_thread_id=%s\n' "$PARENT_THREAD_ID"
+    printf 'sessions_root=%s\n' "$SESSIONS_ROOT"
+    printf 'reviewer_agent_config=%s\n' "$REVIEWER_AGENT_CONFIG"
+    printf 'verifier_agent_config=%s\n' "$VERIFIER_AGENT_CONFIG"
     printf 'scope=%s\n' "$SCOPE"
     printf 'base=%s\n' "$BASE"
     printf 'head=%s\n' "$HEAD_SHA"
@@ -1032,6 +1226,7 @@ write_review_env() {
     printf 'changed_files=%s\n' "$CHANGED_FILE_COUNT"
     printf 'fix_rounds=0\n'
     printf 'pending_verify=0\n'
+    printf 'stop_reason=\n'
     printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
     printf 'findings_tsv=%s\n' "$(agent_path "$(findings_tsv_path)")"
   } >"$file"
@@ -1061,7 +1256,7 @@ write_review_bundle() {
     printf -- '- Do not run tests, linters, formatters, typecheck, project checks, local LLMs, or codex review.\n\n'
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
+    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
     printf '```\n\n'
     printf 'Each finding must include severity, file, line, title, description, and recommendation.\n\n'
     printf '## Changed files\n\n'
@@ -1102,7 +1297,7 @@ write_verify_bundle() {
     printf -- '- Set truncated=true if more than %s in-scope findings are present.\n\n' "$MAX_FINDINGS_PER_ROUND"
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh subagent id>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
+    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
     printf '```\n\n'
     printf '## Prior findings\n\n'
     write_markdown_fenced_file tsv "$(findings_tsv_path)"
@@ -1160,10 +1355,17 @@ cmd_prepare() {
   ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
+  resolve_attestation_environment
   state="$(state_dir_abs)"
   results="$(results_dir)"
-  json_cache_prepare_stored_results
-  if [ -f "$(review_env_path)" ] && [ "$(broad_review_calls)" -ge "$BROAD_REVIEW_MAX" ]; then
+  if [ -f "$(review_env_path)" ] && \
+    [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ]; then
+    ensure_current_review_state
+    json_cache_prepare_stored_results
+  fi
+  if [ -f "$(review_env_path)" ] && \
+    [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] && \
+    [ "$(broad_review_calls)" -ge "$BROAD_REVIEW_MAX" ]; then
     latest_findings="$(latest_finding_count)"
     if any_result_truncated; then
       stop_existing_review_state "$latest_findings" "review_truncated"
@@ -1210,6 +1412,7 @@ cmd_prepare_verify() {
   root="$(repo_root)"
   cd "$root" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  ensure_current_review_state
   json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
   [ "$broad_calls" -eq 1 ] || die "broad review result not found"
@@ -1274,7 +1477,7 @@ cmd_prepare_verify() {
 }
 
 cmd_record() {
-  local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds
+  local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds used_sessions
   kind="${1:-}"
   review_json="${2:-}"
   [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "record kind must be broad or verify"
@@ -1283,6 +1486,7 @@ cmd_record() {
   ensure_read_only_subagent_sandbox_available
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  ensure_current_review_state
   mkdir -p "$(results_dir)" || die "failed to create results dir"
   json_cache_prepare_stored_results
 
@@ -1308,10 +1512,12 @@ cmd_record() {
   esac
 
   ensure_current_target_matches_review
-  validate_result "$kind" "$review_json"
+  write_used_sessions_file
+  used_sessions="$USED_SESSIONS_FILE"
+  validate_result "$kind" "$review_json" target "$used_sessions"
   session="$(json_scalar "$review_json" reviewer_session_id)"
   if reviewer_session_used "$session"; then
-    die "reviewer_session_id already recorded"
+    attestation_fail "reviewer_session_reused" "reviewer_session_id already recorded"
   fi
   dest="$(result_path "$kind" "$index")"
   cp "$review_json" "$dest" || die "failed to store review result"
@@ -1328,6 +1534,11 @@ cmd_record() {
   printf 'result=%s\n' "$(display_path "$dest")"
   printf 'finding_count=%s\n' "$(json_scalar "$dest" finding_count)"
   printf 'truncated=%s\n' "$(json_scalar "$dest" truncated)"
+  printf 'attestation_version=%s\n' "$(json_attested_scalar "$dest" attestation_version)"
+  printf 'attested_session_id=%s\n' "$(json_attested_scalar "$dest" attested_session_id)"
+  printf 'attested_agent_role=%s\n' "$(json_attested_scalar "$dest" attested_agent_role)"
+  printf 'attested_model=%s\n' "$(json_attested_scalar "$dest" attested_model)"
+  printf 'attested_sandbox_mode=%s\n' "$(json_attested_scalar "$dest" attested_sandbox_mode)"
   printf 'broad_review_calls=%s\n' "$SUMMARY_BROAD_CALLS"
   printf 'verify_review_calls=%s\n' "$SUMMARY_VERIFY_CALLS"
   printf 'total_reviewer_calls=%s\n' "$SUMMARY_TOTAL_CALLS"
@@ -1337,6 +1548,7 @@ cmd_summarize() {
   ensure_repo
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  ensure_current_review_state
   json_cache_prepare_stored_results
   rewrite_findings_tsv
   summary_values
@@ -1363,6 +1575,7 @@ cmd_status() {
     printf 'marker_eligible=false\n'
     exit 0
   fi
+  ensure_current_review_state
   json_cache_prepare_stored_results
   rewrite_findings_tsv
   summary_values
@@ -1398,6 +1611,7 @@ cmd_mark() {
   ensure_repo
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || mark_reject "review_state_missing"
+  ensure_current_review_state
   json_cache_prepare_stored_results
   backend="$(env_get backend || true)"
   [ "$backend" = "$BACKEND" ] || mark_reject "backend_not_bounded_isolated_reviewer"
@@ -1443,6 +1657,7 @@ cmd_mark() {
   printf '%s\n' "$current_head" >"$marker" || mark_reject "marker_write_failed"
   {
     printf 'post_work_review_version=%s\n' "$VERSION"
+    printf 'post_work_review_attestation_version=%s\n' "$ATTESTATION_VERSION"
     printf 'marked_at=%s\n' "$(now_utc)"
     printf 'backend=%s\n' "$BACKEND"
     printf 'head=%s\n' "$current_head"
@@ -1452,6 +1667,7 @@ cmd_mark() {
     printf 'broad_review_calls=%s\n' "$SUMMARY_BROAD_CALLS"
     printf 'verify_review_calls=%s\n' "$SUMMARY_VERIFY_CALLS"
     printf 'total_reviewer_calls=%s\n' "$SUMMARY_TOTAL_CALLS"
+    print_attested_call_lines
     printf 'clean=true\n'
     printf 'stop_reason=\n'
     printf 'findings_tsv=%s\n' "$(env_get findings_tsv)"

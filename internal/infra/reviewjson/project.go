@@ -51,6 +51,14 @@ type projectedFile struct {
 // Project parses inputPath and writes the driver's cache files into outputDir.
 // The empty "valid" file is written last, after every other output succeeds.
 func Project(inputPath, outputDir string) error {
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("read reviewer JSON: %w", err)
+	}
+	return project(data, outputDir)
+}
+
+func project(data []byte, outputDir string) error {
 	info, err := os.Stat(outputDir)
 	if err != nil {
 		return fmt.Errorf("stat cache directory: %w", err)
@@ -65,10 +73,6 @@ func Project(inputPath, outputDir string) error {
 		return fmt.Errorf("clear stale valid marker: %w", removeErr)
 	}
 
-	data, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("read reviewer JSON: %w", err)
-	}
 	if !utf8.Valid(data) {
 		return errors.New("reviewer JSON is not valid UTF-8")
 	}

@@ -1,0 +1,859 @@
+package reviewjson
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
+)
+
+const (
+	// AttestationVersion identifies the rollout metadata contract consumed by
+	// the post-work-review driver.
+	AttestationVersion = "1"
+
+	attestationValidFile = "attestation_valid"
+)
+
+var attestationCacheFiles = []string{
+	"attestation_version",
+	"attested_session_id",
+	"attested_parent_thread_id",
+	"attested_agent_role",
+	"attested_model",
+	"attested_sandbox_mode",
+	"attestation_error",
+	"attestation_error_kind",
+	attestationValidFile,
+}
+
+// AttestationErrorKind separates missing evidence, contradictory evidence, and
+// a verified session identifier already consumed by another review call.
+type AttestationErrorKind string
+
+const (
+	AttestationUnavailable AttestationErrorKind = "unavailable"
+	AttestationMismatch    AttestationErrorKind = "mismatch"
+	AttestationReused      AttestationErrorKind = "reused"
+)
+
+// AttestationError is returned whenever a reviewer rollout cannot be trusted.
+type AttestationError struct {
+	Kind   AttestationErrorKind
+	detail string
+	cause  error
+}
+
+func (e *AttestationError) Error() string {
+	if e.cause != nil {
+		return fmt.Sprintf("attestation %s: %s: %v", e.Kind, e.detail, e.cause)
+	}
+	return fmt.Sprintf("attestation %s: %s", e.Kind, e.detail)
+}
+
+func (e *AttestationError) Unwrap() error {
+	return e.cause
+}
+
+// Attest projects resultPath and verifies that it is the exact output of one
+// fresh native custom-agent rollout. Attestation cache files are written only
+// from rollout metadata; attestation_valid is written last.
+func Attest(
+	resultPath string,
+	outputDir string,
+	sessionsRoot string,
+	parentThreadID string,
+	preparedAt string,
+	agentConfigPath string,
+	usedSessionIDsPath string,
+) error {
+	if err := clearAttestationCache(outputDir); err != nil {
+		return unavailable("clear stale attestation cache", err)
+	}
+
+	attestation, err := buildAttestation(
+		resultPath,
+		outputDir,
+		sessionsRoot,
+		parentThreadID,
+		preparedAt,
+		agentConfigPath,
+		usedSessionIDsPath,
+	)
+	if err != nil {
+		attestationErr := asAttestationError(err)
+		if writeErr := writeAttestationFailure(outputDir, attestationErr); writeErr != nil {
+			return unavailable("record attestation failure", errors.Join(attestationErr, writeErr))
+		}
+		return attestationErr
+	}
+
+	if err := writeAttestationSuccess(outputDir, attestation); err != nil {
+		attestationErr := unavailable("write attestation cache", err)
+		if writeErr := writeAttestationFailure(outputDir, attestationErr); writeErr != nil {
+			return unavailable("record attestation write failure", errors.Join(attestationErr, writeErr))
+		}
+		return attestationErr
+	}
+	return nil
+}
+
+type attestation struct {
+	sessionID      string
+	parentThreadID string
+	agentRole      string
+	model          string
+	sandboxMode    string
+}
+
+func buildAttestation(
+	resultPath string,
+	outputDir string,
+	sessionsRoot string,
+	parentThreadID string,
+	preparedAt string,
+	agentConfigPath string,
+	usedSessionIDsPath string,
+) (attestation, error) {
+	resultData, err := os.ReadFile(resultPath)
+	if err != nil {
+		return attestation{}, unavailable("read reviewer JSON", err)
+	}
+	if err := project(resultData, outputDir); err != nil {
+		return attestation{}, unavailable("project reviewer JSON", err)
+	}
+	if !isCanonicalUUID(parentThreadID) {
+		return attestation{}, unavailable("parent thread ID is not a canonical UUID", nil)
+	}
+	preparedTime, err := time.Parse(time.RFC3339Nano, preparedAt)
+	if err != nil {
+		return attestation{}, unavailable("prepared_at is not RFC3339", err)
+	}
+
+	config, err := readAgentConfig(agentConfigPath)
+	if err != nil {
+		return attestation{}, unavailable("read agent config", err)
+	}
+	if config.name != "post-work-reviewer" && config.name != "post-work-verifier" {
+		return attestation{}, unavailable("agent config name is not a post-work-review role", nil)
+	}
+	if config.sandboxMode != "read-only" {
+		return attestation{}, unavailable("agent config sandbox_mode is not read-only", nil)
+	}
+
+	sessionID, err := reviewerSessionID(resultData)
+	if err != nil {
+		return attestation{}, err
+	}
+	if !isCanonicalUUID(sessionID) {
+		return attestation{}, mismatch("reviewer_session_id is not a canonical UUID")
+	}
+	if sessionID == parentThreadID {
+		return attestation{}, mismatch("reviewer session ID equals the parent thread ID")
+	}
+	if usedSessionIDsPath != "" {
+		used, err := readUsedSessionIDs(usedSessionIDsPath)
+		if err != nil {
+			return attestation{}, unavailable("read used reviewer session IDs", err)
+		}
+		if _, exists := used[sessionID]; exists {
+			return attestation{}, reused("reviewer session UUID was already used")
+		}
+	}
+
+	rolloutPath, err := findUniqueRollout(sessionsRoot, sessionID)
+	if err != nil {
+		return attestation{}, err
+	}
+	metadata, err := readRollout(rolloutPath)
+	if err != nil {
+		return attestation{}, err
+	}
+	if err := validateRollout(
+		metadata,
+		resultData,
+		sessionID,
+		parentThreadID,
+		preparedTime,
+		config,
+	); err != nil {
+		return attestation{}, err
+	}
+
+	return attestation{
+		sessionID:      metadata.sessionID,
+		parentThreadID: metadata.parentThreadID,
+		agentRole:      metadata.agentRole,
+		model:          config.model,
+		sandboxMode:    config.sandboxMode,
+	}, nil
+}
+
+func reviewerSessionID(data []byte) (string, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil || root == nil {
+		return "", unavailable("reviewer JSON is not an object", err)
+	}
+	raw, ok := root["reviewer_session_id"]
+	if !ok {
+		return "", unavailable("reviewer JSON is missing reviewer_session_id", nil)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", unavailable("reviewer_session_id is not a string", err)
+	}
+	return value, nil
+}
+
+type agentConfig struct {
+	name        string
+	model       string
+	sandboxMode string
+}
+
+func readAgentConfig(path string) (agentConfig, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return agentConfig{}, err
+	}
+	defer func() {
+		// The file is read-only and the parse result is already available; a
+		// close error cannot make that result less trustworthy.
+		_ = file.Close()
+	}()
+
+	wanted := map[string]*string{
+		"name":         nil,
+		"model":        nil,
+		"sandbox_mode": nil,
+	}
+	seen := make(map[string]bool, len(wanted))
+	topLevel := true
+	multilineDelimiter := ""
+	reader := bufio.NewReader(file)
+	lineNumber := 0
+	for {
+		line, readErr := reader.ReadString('\n')
+		if line != "" {
+			lineNumber++
+			if !utf8.ValidString(line) {
+				return agentConfig{}, fmt.Errorf("line %d is not valid UTF-8", lineNumber)
+			}
+			if multilineDelimiter != "" {
+				if strings.Contains(line, multilineDelimiter) {
+					multilineDelimiter = ""
+				}
+			} else {
+				rawTrimmed := strings.TrimSpace(line)
+				if !strings.HasPrefix(rawTrimmed, "#") {
+					if separator := strings.IndexByte(rawTrimmed, '='); separator >= 0 {
+						rawValue := strings.TrimSpace(rawTrimmed[separator+1:])
+						switch {
+						case strings.HasPrefix(rawValue, `"""`):
+							if strings.Count(rawValue, `"""`) == 1 {
+								multilineDelimiter = `"""`
+							}
+							continue
+						case strings.HasPrefix(rawValue, `'''`):
+							if strings.Count(rawValue, `'''`) == 1 {
+								multilineDelimiter = `'''`
+							}
+							continue
+						}
+					}
+				}
+				cleaned, cleanErr := stripTOMLComment(line)
+				if cleanErr != nil {
+					return agentConfig{}, fmt.Errorf("line %d: %w", lineNumber, cleanErr)
+				}
+				trimmed := strings.TrimSpace(cleaned)
+				switch {
+				case trimmed == "":
+				case strings.HasPrefix(trimmed, "["):
+					if !strings.HasSuffix(trimmed, "]") {
+						return agentConfig{}, fmt.Errorf("line %d has an unparseable table header", lineNumber)
+					}
+					topLevel = false
+				default:
+					key, rawValue, splitErr := splitTOMLAssignment(trimmed)
+					if splitErr != nil {
+						return agentConfig{}, fmt.Errorf("line %d: %w", lineNumber, splitErr)
+					}
+					if strings.HasPrefix(rawValue, `"""`) {
+						if strings.Count(rawValue, `"""`) == 1 {
+							multilineDelimiter = `"""`
+						}
+						continue
+					}
+					if strings.HasPrefix(rawValue, `'''`) {
+						if strings.Count(rawValue, `'''`) == 1 {
+							multilineDelimiter = `'''`
+						}
+						continue
+					}
+					if !topLevel {
+						continue
+					}
+					if _, ok := wanted[key]; !ok {
+						continue
+					}
+					if seen[key] {
+						return agentConfig{}, fmt.Errorf("duplicate top-level %s", key)
+					}
+					value, valueErr := parseSimpleTOMLString(rawValue)
+					if valueErr != nil {
+						return agentConfig{}, fmt.Errorf("top-level %s: %w", key, valueErr)
+					}
+					seen[key] = true
+					valueCopy := value
+					wanted[key] = &valueCopy
+				}
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return agentConfig{}, readErr
+			}
+			break
+		}
+	}
+	if multilineDelimiter != "" {
+		return agentConfig{}, errors.New("unterminated multiline string")
+	}
+	for _, key := range []string{"name", "model", "sandbox_mode"} {
+		if wanted[key] == nil {
+			return agentConfig{}, fmt.Errorf("missing top-level %s", key)
+		}
+	}
+	return agentConfig{
+		name:        *wanted["name"],
+		model:       *wanted["model"],
+		sandboxMode: *wanted["sandbox_mode"],
+	}, nil
+}
+
+func stripTOMLComment(line string) (string, error) {
+	inBasicString := false
+	inLiteralString := false
+	escaped := false
+	for i, r := range line {
+		switch {
+		case inBasicString:
+			if escaped {
+				escaped = false
+				continue
+			}
+			if r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == '"' {
+				inBasicString = false
+			}
+		case inLiteralString:
+			if r == '\'' {
+				inLiteralString = false
+			}
+		case r == '"':
+			inBasicString = true
+		case r == '\'':
+			inLiteralString = true
+		case r == '#':
+			return line[:i], nil
+		}
+	}
+	if inBasicString || inLiteralString || escaped {
+		return "", errors.New("unterminated string")
+	}
+	return line, nil
+}
+
+func splitTOMLAssignment(line string) (string, string, error) {
+	separator := strings.IndexByte(line, '=')
+	if separator < 1 {
+		return "", "", errors.New("expected key = value")
+	}
+	key := strings.TrimSpace(line[:separator])
+	value := strings.TrimSpace(line[separator+1:])
+	if key == "" || value == "" {
+		return "", "", errors.New("expected non-empty key and value")
+	}
+	return key, value, nil
+}
+
+func parseSimpleTOMLString(raw string) (string, error) {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return "", errors.New("expected a basic quoted string")
+	}
+	value := raw[1 : len(raw)-1]
+	if value == "" {
+		return "", errors.New("value is empty")
+	}
+	if strings.ContainsAny(value, "\\\"\r\n") || !utf8.ValidString(value) {
+		return "", errors.New("escaped, multiline, or invalid UTF-8 values are unsupported")
+	}
+	return value, nil
+}
+
+func isCanonicalUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, char := range []byte(value) {
+		switch i {
+		case 8, 13, 18, 23:
+			if char != '-' {
+				return false
+			}
+		default:
+			if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func readUsedSessionIDs(path string) (map[string]struct{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !utf8.Valid(data) {
+		return nil, errors.New("used session IDs file is not valid UTF-8")
+	}
+	used := make(map[string]struct{})
+	lines := strings.Split(string(data), "\n")
+	for index, line := range lines {
+		if line == "" && index == len(lines)-1 {
+			continue
+		}
+		if !isCanonicalUUID(line) {
+			return nil, fmt.Errorf("line %d is not a canonical UUID", index+1)
+		}
+		used[line] = struct{}{}
+	}
+	return used, nil
+}
+
+func findUniqueRollout(sessionsRoot, sessionID string) (string, error) {
+	var matches []string
+	err := filepath.WalkDir(sessionsRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), sessionID+".jsonl") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", unavailable("scan Codex sessions root", err)
+	}
+	switch len(matches) {
+	case 0:
+		return "", unavailable("rollout not found for reviewer session UUID", nil)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", unavailable(
+			fmt.Sprintf("rollout is ambiguous for reviewer session UUID (%d matches)", len(matches)),
+			nil,
+		)
+	}
+}
+
+type rolloutMetadata struct {
+	sessionID            string
+	parentThreadID       string
+	spawnParentThreadID  string
+	threadSource         string
+	agentRole            string
+	sessionCreatedAt     time.Time
+	turnContexts         []rolloutTurnContext
+	taskCompleteCount    int
+	lastAgentMessage     string
+	lastAgentMessageSeen bool
+}
+
+type rolloutTurnContext struct {
+	model       string
+	sandboxMode string
+}
+
+type rolloutRecord struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+func readRollout(path string) (rolloutMetadata, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return rolloutMetadata{}, unavailable("read rollout", err)
+	}
+	defer func() {
+		// Parsing has consumed the file before return. There is no recovery path
+		// for a close failure on a read-only descriptor.
+		_ = file.Close()
+	}()
+
+	decoder := json.NewDecoder(file)
+	var metadata rolloutMetadata
+	sessionMetaCount := 0
+	for recordNumber := 1; ; recordNumber++ {
+		var record rolloutRecord
+		if err := decoder.Decode(&record); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return rolloutMetadata{}, unavailable(
+				fmt.Sprintf("malformed rollout record %d", recordNumber),
+				err,
+			)
+		}
+		switch record.Type {
+		case "session_meta":
+			sessionMetaCount++
+			parsed, err := parseSessionMeta(record.Payload)
+			if err != nil {
+				return rolloutMetadata{}, err
+			}
+			metadata.sessionID = parsed.sessionID
+			metadata.parentThreadID = parsed.parentThreadID
+			metadata.spawnParentThreadID = parsed.spawnParentThreadID
+			metadata.threadSource = parsed.threadSource
+			metadata.agentRole = parsed.agentRole
+			metadata.sessionCreatedAt = parsed.sessionCreatedAt
+		case "turn_context":
+			context, err := parseTurnContext(record.Payload)
+			if err != nil {
+				return rolloutMetadata{}, err
+			}
+			metadata.turnContexts = append(metadata.turnContexts, context)
+		case "event_msg":
+			complete, message, messageSeen, err := parseTaskComplete(record.Payload)
+			if err != nil {
+				return rolloutMetadata{}, err
+			}
+			if complete {
+				metadata.taskCompleteCount++
+				metadata.lastAgentMessage = message
+				metadata.lastAgentMessageSeen = messageSeen
+			}
+		}
+	}
+	if sessionMetaCount != 1 {
+		return rolloutMetadata{}, unavailable(
+			fmt.Sprintf("rollout contains %d session_meta records, want 1", sessionMetaCount),
+			nil,
+		)
+	}
+	return metadata, nil
+}
+
+type sessionMetaPayload struct {
+	ID             json.RawMessage `json:"id"`
+	ParentThreadID json.RawMessage `json:"parent_thread_id"`
+	Timestamp      json.RawMessage `json:"timestamp"`
+	ThreadSource   json.RawMessage `json:"thread_source"`
+	Source         *struct {
+		Subagent *struct {
+			ThreadSpawn *struct {
+				ParentThreadID json.RawMessage `json:"parent_thread_id"`
+				AgentRole      json.RawMessage `json:"agent_role"`
+			} `json:"thread_spawn"`
+		} `json:"subagent"`
+	} `json:"source"`
+}
+
+func parseSessionMeta(raw json.RawMessage) (rolloutMetadata, error) {
+	var payload sessionMetaPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return rolloutMetadata{}, unavailable("malformed session_meta payload", err)
+	}
+	id, err := requiredJSONString(payload.ID, "session_meta.id")
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	parentID, err := requiredJSONString(payload.ParentThreadID, "session_meta.parent_thread_id")
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	timestamp, err := requiredJSONString(payload.Timestamp, "session_meta.timestamp")
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return rolloutMetadata{}, unavailable("session_meta.timestamp is not RFC3339", err)
+	}
+	threadSource, err := requiredJSONString(payload.ThreadSource, "session_meta.thread_source")
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	if payload.Source == nil || payload.Source.Subagent == nil || payload.Source.Subagent.ThreadSpawn == nil {
+		return rolloutMetadata{}, unavailable("session_meta.source.subagent.thread_spawn is missing", nil)
+	}
+	spawn := payload.Source.Subagent.ThreadSpawn
+	spawnParentID, err := requiredJSONString(
+		spawn.ParentThreadID,
+		"session_meta.source.subagent.thread_spawn.parent_thread_id",
+	)
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	agentRole, err := attestedJSONString(
+		spawn.AgentRole,
+		"session_meta.source.subagent.thread_spawn.agent_role",
+	)
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	return rolloutMetadata{
+		sessionID:           id,
+		parentThreadID:      parentID,
+		spawnParentThreadID: spawnParentID,
+		threadSource:        threadSource,
+		agentRole:           agentRole,
+		sessionCreatedAt:    createdAt,
+	}, nil
+}
+
+type turnContextPayload struct {
+	Model         json.RawMessage `json:"model"`
+	SandboxPolicy *struct {
+		Type json.RawMessage `json:"type"`
+	} `json:"sandbox_policy"`
+}
+
+func parseTurnContext(raw json.RawMessage) (rolloutTurnContext, error) {
+	var payload turnContextPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return rolloutTurnContext{}, unavailable("malformed turn_context payload", err)
+	}
+	model, err := attestedJSONString(payload.Model, "turn_context.model")
+	if err != nil {
+		return rolloutTurnContext{}, err
+	}
+	if payload.SandboxPolicy == nil {
+		return rolloutTurnContext{}, unavailable("turn_context.sandbox_policy is missing", nil)
+	}
+	sandboxMode, err := attestedJSONString(
+		payload.SandboxPolicy.Type,
+		"turn_context.sandbox_policy.type",
+	)
+	if err != nil {
+		return rolloutTurnContext{}, err
+	}
+	return rolloutTurnContext{model: model, sandboxMode: sandboxMode}, nil
+}
+
+func parseTaskComplete(raw json.RawMessage) (bool, string, bool, error) {
+	var payload struct {
+		Type             string          `json:"type"`
+		LastAgentMessage json.RawMessage `json:"last_agent_message"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false, "", false, unavailable("malformed event_msg payload", err)
+	}
+	if payload.Type != "task_complete" {
+		return false, "", false, nil
+	}
+	message, err := requiredJSONString(payload.LastAgentMessage, "task_complete.last_agent_message")
+	if err != nil {
+		return true, "", false, err
+	}
+	return true, message, true, nil
+}
+
+func requiredJSONString(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", unavailable(field+" is missing", nil)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", unavailable(field+" is not a string", err)
+	}
+	if value == "" {
+		return "", unavailable(field+" is empty", nil)
+	}
+	return value, nil
+}
+
+func attestedJSONString(raw json.RawMessage, field string) (string, error) {
+	if len(raw) == 0 {
+		return "", unavailable(field+" is missing", nil)
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", mismatch(field + " is null")
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", unavailable(field+" is not a string", err)
+	}
+	if value == "" {
+		return "", mismatch(field + " is empty")
+	}
+	return value, nil
+}
+
+func validateRollout(
+	metadata rolloutMetadata,
+	resultData []byte,
+	sessionID string,
+	parentThreadID string,
+	preparedAt time.Time,
+	config agentConfig,
+) error {
+	if metadata.sessionID != sessionID {
+		return mismatch("session_meta.id does not match reviewer_session_id")
+	}
+	if !isCanonicalUUID(metadata.sessionID) {
+		return mismatch("session_meta.id is not a canonical UUID")
+	}
+	if metadata.parentThreadID != parentThreadID {
+		return mismatch("session_meta.parent_thread_id does not match the prepared parent")
+	}
+	if metadata.spawnParentThreadID != parentThreadID {
+		return mismatch("thread_spawn.parent_thread_id does not match the prepared parent")
+	}
+	if metadata.threadSource != "subagent" {
+		return mismatch("session_meta.thread_source is not subagent")
+	}
+	if metadata.agentRole != config.name {
+		return mismatch("child agent_role does not match the agent config")
+	}
+	if !metadata.sessionCreatedAt.After(preparedAt) {
+		return mismatch("reviewer session was not created after prepare")
+	}
+	if len(metadata.turnContexts) == 0 {
+		return unavailable("rollout contains no turn_context records", nil)
+	}
+	for _, context := range metadata.turnContexts {
+		if context.model != config.model {
+			return mismatch("child model does not match the agent config")
+		}
+		if context.sandboxMode != config.sandboxMode {
+			return mismatch("child sandbox policy does not match the agent config")
+		}
+	}
+	if metadata.taskCompleteCount != 1 {
+		return mismatch(fmt.Sprintf(
+			"rollout contains %d task_complete records, want 1",
+			metadata.taskCompleteCount,
+		))
+	}
+	if !metadata.lastAgentMessageSeen {
+		return unavailable("task_complete.last_agent_message is missing", nil)
+	}
+	if !transcriptMatches(resultData, metadata.lastAgentMessage) {
+		return mismatch("reviewer JSON does not match task_complete.last_agent_message")
+	}
+	return nil
+}
+
+func transcriptMatches(resultData []byte, message string) bool {
+	if bytes.Equal(resultData, []byte(message)) {
+		return true
+	}
+	return len(resultData) > 0 && resultData[len(resultData)-1] == '\n' &&
+		bytes.Equal(resultData[:len(resultData)-1], []byte(message))
+}
+
+func clearAttestationCache(outputDir string) error {
+	info, err := os.Stat(outputDir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("reviewer JSON cache path is not a directory")
+	}
+	for _, name := range attestationCacheFiles {
+		err := os.Remove(filepath.Join(outputDir, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func writeAttestationFailure(outputDir string, attestationErr *AttestationError) error {
+	if err := os.Remove(filepath.Join(outputDir, attestationValidFile)); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := atomicfs.WriteFile(
+		filepath.Join(outputDir, "attestation_error"),
+		[]byte(attestationErr.Error()),
+		0o600,
+	); err != nil {
+		return err
+	}
+	return atomicfs.WriteFile(
+		filepath.Join(outputDir, "attestation_error_kind"),
+		[]byte(attestationErr.Kind),
+		0o600,
+	)
+}
+
+func writeAttestationSuccess(outputDir string, value attestation) error {
+	files := []projectedFile{
+		{name: "attestation_version", data: []byte(AttestationVersion)},
+		{name: "attested_session_id", data: []byte(value.sessionID)},
+		{name: "attested_parent_thread_id", data: []byte(value.parentThreadID)},
+		{name: "attested_agent_role", data: []byte(value.agentRole)},
+		{name: "attested_model", data: []byte(value.model)},
+		{name: "attested_sandbox_mode", data: []byte(value.sandboxMode)},
+	}
+	for _, file := range files {
+		if err := atomicfs.WriteFile(filepath.Join(outputDir, file.name), file.data, 0o600); err != nil {
+			return fmt.Errorf("write %s: %w", file.name, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(outputDir, "attestation_error")); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(filepath.Join(outputDir, "attestation_error_kind")); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return atomicfs.WriteFile(filepath.Join(outputDir, attestationValidFile), nil, 0o600)
+}
+
+func unavailable(detail string, cause error) *AttestationError {
+	return &AttestationError{Kind: AttestationUnavailable, detail: detail, cause: cause}
+}
+
+func mismatch(detail string) *AttestationError {
+	return &AttestationError{Kind: AttestationMismatch, detail: detail}
+}
+
+func reused(detail string) *AttestationError {
+	return &AttestationError{Kind: AttestationReused, detail: detail}
+}
+
+func asAttestationError(err error) *AttestationError {
+	var attestationErr *AttestationError
+	if errors.As(err, &attestationErr) {
+		return attestationErr
+	}
+	return unavailable("unexpected attestation failure", err)
+}

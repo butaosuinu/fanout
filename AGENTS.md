@@ -125,7 +125,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
   repo config from enabling the watcher or notification targets), and
-  `reviewjson` (reviewer JSON validation and cache projection) are class
+  `reviewjson` (reviewer JSON validation, cache projection, and Codex child
+  session attestation) are class
   H; `ghissue` (GitHub reads and mutations: label swaps, dashboard
   comments), `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened

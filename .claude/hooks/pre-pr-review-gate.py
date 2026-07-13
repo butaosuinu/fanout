@@ -42,6 +42,13 @@ VALUE_FLAGS = {"--head", "-H", "--base", "-B", "--repo", "-R", "--title", "-t",
                "--assignee", "-a", "--label", "-l", "--milestone", "-m",
                "--project", "-p", "--template", "-T"}
 
+POST_WORK_REVIEW_VERSION = "4"
+POST_WORK_REVIEW_ATTESTATION_VERSION = "1"
+_REVIEW_SESSION_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+_REVIEW_CALL_FIELDS = ("kind", "session_id", "agent_role", "model", "sandbox_mode")
+
 
 def emit_allow():
     sys.exit(0)
@@ -54,6 +61,61 @@ def emit_deny(reason):
         "permissionDecisionReason": reason,
     }}))
     sys.exit(0)
+
+
+def codex_review_metadata_valid(metadata, target):
+    """Validate the attested, bounded Codex review marker contract."""
+    if not (
+        metadata.get("post_work_review_version") == POST_WORK_REVIEW_VERSION
+        and metadata.get("post_work_review_attestation_version")
+        == POST_WORK_REVIEW_ATTESTATION_VERSION
+        and metadata.get("backend") == "bounded-isolated-reviewer"
+        and metadata.get("head") == target
+        and metadata.get("scope") == "branch"
+        and metadata.get("clean") == "true"
+        and metadata.get("stop_reason") == ""
+        and bool(metadata.get("diff_hash"))
+    ):
+        return False
+
+    try:
+        broad_calls = int(metadata.get("broad_review_calls", ""))
+        verify_calls = int(metadata.get("verify_review_calls", ""))
+        total_calls = int(metadata.get("total_reviewer_calls", ""))
+    except ValueError:
+        return False
+    if not (
+        broad_calls == 1
+        and 0 <= verify_calls <= 2
+        and total_calls == broad_calls + verify_calls
+        and 1 <= total_calls <= 3
+    ):
+        return False
+
+    expected_call_keys = set()
+    session_ids = set()
+    for index in range(1, total_calls + 1):
+        prefix = "review_call_%d_" % index
+        expected_call_keys.update(prefix + field for field in _REVIEW_CALL_FIELDS)
+        if any(not metadata.get(prefix + field) for field in _REVIEW_CALL_FIELDS):
+            return False
+        expected_kind = "broad" if index == 1 else "verify"
+        expected_role = "post-work-reviewer" if index == 1 else "post-work-verifier"
+        if (
+            metadata[prefix + "kind"] != expected_kind
+            or metadata[prefix + "agent_role"] != expected_role
+            or metadata[prefix + "sandbox_mode"] != "read-only"
+        ):
+            return False
+        session_id = metadata[prefix + "session_id"]
+        if not _REVIEW_SESSION_ID_RE.fullmatch(session_id) or session_id in session_ids:
+            return False
+        session_ids.add(session_id)
+
+    for key in metadata:
+        if key.startswith("review_call_") and key not in expected_call_keys:
+            return False
+    return True
 
 
 def is_assignment(tok):
@@ -558,15 +620,7 @@ def main():
         # Claude's legacy skill removes that sibling file before writing its
         # exact-HEAD marker, so marker-only mode remains default-base-only.
         if review_metadata_present:
-            metadata_valid = (
-                review_metadata.get("backend") == "bounded-isolated-reviewer" and
-                review_metadata.get("head") == target and
-                review_metadata.get("scope") == "branch" and
-                review_metadata.get("clean") == "true" and
-                review_metadata.get("stop_reason") == "" and
-                bool(review_metadata.get("diff_hash"))
-            )
-            if not metadata_valid:
+            if not codex_review_metadata_valid(review_metadata, target):
                 emit_deny("post-work-review の marker metadata が不完全か PR head と一致しません。\n"
                           "対象 HEAD で /post-work-review をやり直してください。\n%s" % HATCH)
             reviewed_base = review_metadata.get("base")

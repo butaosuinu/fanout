@@ -22,6 +22,9 @@ main agent validates and fixes the work; it must not review its own code.
   hooks-only, or manual self-review as clean.
 - Use those configured roles and models as installed. If either is unavailable
   or fails to start, stop non-clean; never substitute another role or model.
+- Select each role with the native subagent tool's `agent_type` field and set
+  `fork_turns: "none"`. A `task_name`, prompt text, or installed agent file is
+  not proof that the requested custom agent ran.
 - Keep reviewer calls read-only: they must not run tests, linters, formatters,
   typechecks, project checks, local LLMs, or `codex review`.
 - Enforce `broad_review_max=1`, `verify_review_max=2`,
@@ -89,20 +92,61 @@ validation fixes uncommitted so the same bundle includes all reviewed work.
 These restart rules apply before the initial `prepare`; after a broad result
 has recorded findings, keep its driver state and follow step 3 instead.
 
+## Validate custom-agent selection
+
+After validation succeeds, but before running `prepare`, inspect the visible
+input schema for the native `spawn_agent` tool. Require an explicit
+`agent_type` field and a `fork_turns` field that accepts `"none"`. Do not infer
+custom-agent support from `task_name`, the message or prompt, an agent config
+file, or a returned task label.
+
+If the required selector is absent or unusable, do not spawn a reviewer and do
+not run `prepare`. Stop non-clean and report the full visible `spawn_agent`
+input schema, including field names and types, with these exact values:
+
+```text
+clean=false
+stop_reason=custom_agent_selection_unavailable
+custom_role_selector=false
+marker_written=false
+```
+
+Do not fall back to a generic subagent, another role, prompt-based role
+impersonation, self-review, a local LLM, or `codex review`.
+
+When the schema supports the contract, create every child with
+`fork_turns: "none"`. Use these exact selectors:
+
+```text
+agent_type: "post-work-reviewer"
+agent_type: "post-work-verifier"
+```
+
+The broad call receives only the exact `review_bundle`; a verifier call
+receives only the exact `verify_bundle`. `task_name` is optional display
+metadata and never role evidence. The driver must attest the child's actual
+session metadata before accepting the result.
+
 ## Run the gate
 
 1. Run `bash "$driver" prepare`. Read only its key/value output and pass the
    reported `review_bundle=` as the sole input to exactly one fresh
-   `post-work-reviewer`. Require JSON only, save its exact output outside the
-   repository, and run `bash "$driver" record broad <review-json-file>`. Stop
-   if `record` rejects it; never repair reviewer JSON. The result must report
-   `reviewer_sandbox_mode: "read-only"`.
+   `post-work-reviewer` using `agent_type: "post-work-reviewer"` and
+   `fork_turns: "none"`. Require JSON only and save the exact bytes returned by
+   the child outside the repository without extracting, repairing, or
+   reformatting them. Run
+   `bash "$driver" record broad <review-json-file>`. Stop if `record` rejects
+   the result or its session attestation. The result's `reviewer_session_id`
+   must be the child's actual canonical UUID from `CODEX_THREAD_ID`; a
+   `task_name`, role label, prompt, or arbitrary string is not a session ID.
 2. Run `bash "$driver" summarize`. Stop non-clean on `stop_reason=`. If
    `clean=true`, run `bash "$driver" mark` only when
-   `marker_eligible=true`. Before `mark`, require a clean worktree and confirm
-   that the current HEAD equals the last exact HEAD that passed canonical full
-   validation. If no actionable-finding verifier path applies and either
-   condition fails, stop without marking.
+   `marker_eligible=true` and every stored result has passed the driver's
+   session attestation. Never use self-reported role, model, sandbox, or
+   isolation fields as attestation. Before `mark`, require a clean worktree
+   and confirm that the current HEAD equals the last exact HEAD that passed
+   canonical full validation. If no actionable-finding verifier path applies
+   and either condition fails, stop without marking.
 3. If actionable findings remain, fix only those findings from the stored
    results and `findings.tsv`. Run focused validation while editing. For branch
    scope, commit the fixes, run the canonical full validation command exactly
@@ -112,14 +156,16 @@ has recorded findings, keep its driver state and follow step 3 instead.
    existing driver state with `bash "$driver" prepare-verify`. For dirty
    uncommitted scope, run focused validation only because that scope cannot
    receive a marker, then continue the same driver state with `prepare-verify`.
-   Pass `verify_bundle=` to one fresh `post-work-verifier`; it may check only
-   prior findings and obvious fix-introduced regressions.
+   Pass `verify_bundle=` as the sole input to one fresh verifier using
+   `agent_type: "post-work-verifier"` and `fork_turns: "none"`; it may check
+   only prior findings and obvious fix-introduced regressions.
 4. Save the verifier's exact JSON outside the repository, run
-   `bash "$driver" record verify <review-json-file>`, then `summarize`. If it
-   is clean, mark only under the exact-HEAD condition in step 2. If it remains
-   non-clean without a stop reason, allow one final fix/validation/verifier
-   round using the same sequence in step 3 and the existing driver state.
-   Never exceed two verifier calls.
+   `bash "$driver" record verify <review-json-file>`, then `summarize`. Do not
+   extract, repair, or reformat the child output. If it is clean, mark only
+   after driver attestation and under the exact-HEAD condition in step 2. If
+   it remains non-clean without a stop reason, allow one final
+   fix/validation/verifier round using the same sequence in step 3 and the
+   existing driver state. Never exceed two verifier calls.
 5. Stop non-clean without marking when a cap is exhausted, `truncated=true`, a
    finding fingerprint repeats after a fix round, or any `stop_reason=` is
    reported.
@@ -128,4 +174,6 @@ has recorded findings, keep its driver state and follow step 3 instead.
 
 Report the canonical or focused validation command and result, reviewed scope,
 broad/verifier call counts, fixes made, final `clean=`, final `stop_reason=`,
-and whether `.git/post-work-review-passed` was written.
+actual attested child UUID/role/model/sandbox metadata when available, and
+whether `.git/post-work-review-passed` was written. If custom-agent selection
+is unavailable, include the visible `spawn_agent` input schema in the report.

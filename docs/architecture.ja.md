@@ -53,7 +53,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher 有効化・通知先設定を遮断する安全ゲート | H |
-| infra | `reviewjson` | reviewer JSON の検証と PR review marker 用 cache への射影 | H |
+| infra | `reviewjson` | reviewer JSON の検証、cache への射影、Codex child session の attestation | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
@@ -62,7 +62,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane 以外の端末出力を読まない境界) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
+| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache/attestation・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |

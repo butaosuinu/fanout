@@ -26,7 +26,8 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
   ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
   grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
-  grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
+  [[ "$(awk '{$1=$1; printf "%s ", $0}' "$skill")" == \
+    *"current HEAD equals the last exact HEAD that passed canonical full"* ]] || return 1
 }
 
 @test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
@@ -64,6 +65,58 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   grep -Fq 'canonical full check' "$claude_skill"
   grep -Fq '包括的な単一コマンド' "$claude_skill"
   grep -Fq 'focused check' "$claude_skill"
+}
+
+write_pr_gate_codex_metadata() {
+  local file="$1"
+  local head="$2"
+  local base="$3"
+  local diff_hash="$4"
+  local verify_calls="${5:-0}"
+  local version="${6:-4}"
+  local attestation_version="${7:-1}"
+  local total_calls=$((1 + verify_calls))
+
+  {
+    printf 'post_work_review_version=%s\n' "$version"
+    printf 'post_work_review_attestation_version=%s\n' "$attestation_version"
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=%s\n' "$base"
+    printf 'diff_hash=%s\n' "$diff_hash"
+    printf 'broad_review_calls=1\n'
+    printf 'verify_review_calls=%s\n' "$verify_calls"
+    printf 'total_reviewer_calls=%s\n' "$total_calls"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+    printf 'review_call_1_kind=broad\n'
+    printf 'review_call_1_session_id=11111111-1111-4111-8111-111111111111\n'
+    printf 'review_call_1_agent_role=post-work-reviewer\n'
+    printf 'review_call_1_model=gpt-5.6-sol\n'
+    printf 'review_call_1_sandbox_mode=read-only\n'
+    if [ "$verify_calls" -ge 1 ]; then
+      printf 'review_call_2_kind=verify\n'
+      printf 'review_call_2_session_id=22222222-2222-4222-8222-222222222222\n'
+      printf 'review_call_2_agent_role=post-work-verifier\n'
+      printf 'review_call_2_model=gpt-5.6-terra\n'
+      printf 'review_call_2_sandbox_mode=read-only\n'
+    fi
+    if [ "$verify_calls" -ge 2 ]; then
+      printf 'review_call_3_kind=verify\n'
+      printf 'review_call_3_session_id=33333333-3333-4333-8333-333333333333\n'
+      printf 'review_call_3_agent_role=post-work-verifier\n'
+      printf 'review_call_3_model=gpt-5.6-terra\n'
+      printf 'review_call_3_sandbox_mode=read-only\n'
+    fi
+  } >"$file"
+}
+
+remove_pr_gate_metadata_field() {
+  local file="$1"
+  local field="$2"
+  grep -v "^${field}=" "$file" >"${file}.tmp"
+  mv "${file}.tmp" "$file"
 }
 
 @test "post-work-review shard-7: PR gate supports Codex metadata and Claude marker-only reviews" {
@@ -110,15 +163,9 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
 
   # A present but stale metadata file fails closed until the legacy writer
   # removes it before recording its marker.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
-    printf 'scope=branch\n'
-    printf 'base=release/v1\n'
-    printf 'diff_hash=%s\n' "$release_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" \
+    "$(git -C "$repo" rev-parse HEAD^)" release/v1 "$release_hash"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
@@ -129,19 +176,58 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   [ -z "$output" ] || return 1
 
   # Codex metadata matching the target HEAD permits exactly its reviewed base.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=release/v1\n'
-    printf 'diff_hash=%s\n' "$release_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 
+  # The v4 Codex marker requires an attestation version plus complete,
+  # consistently numbered metadata for every broad/verifier call.
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+
+  local required_field
+  for required_field in \
+    post_work_review_attestation_version \
+    broad_review_calls \
+    review_call_1_session_id \
+    review_call_2_model \
+    review_call_3_sandbox_mode; do
+    write_pr_gate_codex_metadata \
+      "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
+    remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" "$required_field"
+    run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+  done
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 0 3
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
+  printf 'review_call_2_kind=verify\n' >>"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 1
+  printf 'review_call_2_session_id=11111111-1111-4111-8111-111111111111\n' \
+    >>"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
   git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
@@ -170,55 +256,31 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   git -C "$repo" config --unset branch.feature.gh-merge-base
 
   # Metadata may also store the remote-qualified spelling from the driver.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=origin/release/v1\n'
-    printf 'diff_hash=%s\n' "$release_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" origin/release/v1 "$release_hash"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 
   # Metadata for this HEAD fails closed when its reviewed base is missing.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'diff_hash=%s\n' "$release_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
+  remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" base
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
 
   # Metadata for this HEAD also fails closed without the reviewed diff hash.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
+  remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" diff_hash
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
 
   # The exact-HEAD marker remains mandatory in both modes.
-  {
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-    printf 'diff_hash=%s\n' "$main_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
@@ -230,15 +292,9 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
 
   # Present but malformed Codex metadata never falls back to legacy mode.
   printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
-  {
-    printf 'backend=unexpected-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=main\n'
-    printf 'diff_hash=%s\n' "$main_hash"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-  } >"$gitdir/post-work-review-passed.meta"
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
+  printf 'backend=unexpected-reviewer\n' >>"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
@@ -260,6 +316,12 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
 
 setup_review_repo() {
   local repo="$1"
+  export CODEX_THREAD_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  export CODEX_HOME="$BATS_TEST_TMPDIR/codex-home"
+  export CODEX_DIR="$CODEX_HOME"
+  mkdir -p "$CODEX_HOME/agents" "$CODEX_HOME/sessions/2026/07/14"
+  cp "$REPO_ROOT/codex/agents/post-work-reviewer.toml" "$CODEX_HOME/agents/"
+  cp "$REPO_ROOT/codex/agents/post-work-verifier.toml" "$CODEX_HOME/agents/"
   mkdir -p "$repo"
   git -C "$repo" init -q
   git -C "$repo" config user.email "fanout-test@example.com"
@@ -343,6 +405,48 @@ finding_one() {
   printf '{"severity":"major","file":"tracked.txt","line":1,"title":"Bug remains","description":"The feature still writes the bad value.","recommendation":"Write the fixed value."}'
 }
 
+attested_session_uuid() {
+  local label="$1"
+  local digest
+  digest="$(printf '%s' "$label" | git hash-object --stdin)"
+  printf '%s-%s-4%s-8%s-%s\n' \
+    "${digest:0:8}" "${digest:8:4}" "${digest:12:3}" "${digest:15:3}" "${digest:18:12}"
+}
+
+attested_session_path() {
+  printf '%s/sessions/2026/07/14/rollout-2026-07-14T00-00-00-%s.jsonl\n' \
+    "$CODEX_HOME" "$1"
+}
+
+write_attested_session() {
+  local session_id="$1"
+  local role="$2"
+  local model="$3"
+  local sandbox_mode="$4"
+  local result_file="$5"
+  local task_name="${6:-review_task}"
+  local session_file message role_json timestamp
+  session_file="$(attested_session_path "$session_id")"
+  message="$(cat "$result_file")"
+  message="${message//\\/\\\\}"
+  message="${message//\"/\\\"}"
+  if [ "$role" = "null" ]; then
+    role_json="null"
+  else
+    role_json="\"$role\""
+  fi
+  timestamp="2099-01-01T00:00:00Z"
+  {
+    printf '{"timestamp":"%s","type":"session_meta","payload":{"session_id":"%s","id":"%s","parent_thread_id":"%s","timestamp":"%s","source":{"subagent":{"thread_spawn":{"parent_thread_id":"%s","depth":1,"agent_path":"/root/%s","agent_role":%s}}},"thread_source":"subagent","agent_role":%s}}\n' \
+      "$timestamp" "$CODEX_THREAD_ID" "$session_id" "$CODEX_THREAD_ID" "$timestamp" \
+      "$CODEX_THREAD_ID" "$task_name" "$role_json" "$role_json"
+    printf '{"timestamp":"%s","type":"turn_context","payload":{"model":"%s","sandbox_policy":{"type":"%s"}}}\n' \
+      "$timestamp" "$model" "$sandbox_mode"
+    printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"%s"}}\n' \
+      "$timestamp" "$message"
+  } >"$session_file"
+}
+
 write_broad_result_json() {
   local repo="$1"
   local session_id="$2"
@@ -351,7 +455,9 @@ write_broad_result_json() {
   local truncated="$5"
   local findings="$6"
   local out_file="$7"
-  local head diff_hash count
+  local head diff_hash count session_label
+  session_label="$session_id"
+  session_id="$(attested_session_uuid "$session_label")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
   if [ "$#" -ge 8 ]; then
@@ -364,6 +470,7 @@ write_broad_result_json() {
   cat >"$out_file" <<EOF
 {"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
 EOF
+  write_attested_session "$session_id" "post-work-reviewer" "gpt-5.6-sol" "read-only" "$out_file"
 }
 
 write_verify_result_json() {
@@ -373,7 +480,9 @@ write_verify_result_json() {
   local new_regressions="$4"
   local findings="$5"
   local out_file="$6"
-  local head diff_hash count
+  local head diff_hash count session_label
+  session_label="$session_id"
+  session_id="$(attested_session_uuid "$session_label")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
   if [ -n "$findings" ]; then
@@ -384,6 +493,7 @@ write_verify_result_json() {
   cat >"$out_file" <<EOF
 {"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
 EOF
+  write_attested_session "$session_id" "post-work-verifier" "gpt-5.6-terra" "read-only" "$out_file"
 }
 
 record_clean_broad() {
@@ -700,7 +810,13 @@ prepare_branch_review() {
   grep -Fxq "head=$(git -C "$repo" rev-parse HEAD)" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base=main" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "post_work_review_version=4" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "post_work_review_attestation_version=1" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "review_call_1_kind=broad" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "review_call_1_agent_role=post-work-reviewer" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "review_call_1_model=gpt-5.6-sol" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "review_call_1_sandbox_mode=read-only" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
 }
 
@@ -943,7 +1059,10 @@ EOF
 
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"invalid reviewer JSON"* ]]
+  [[ "$output" == *"stop_reason=reviewer_attestation_unavailable"* ]]
+  [[ "$output" == *"project reviewer JSON"* ]]
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 }
 
 @test "post-work-review shard-8: record rejects stale review targets" {
@@ -1015,15 +1134,14 @@ EOF
   grep -Fq -- "- reviewer_agent: post-work-verifier" "$(state_dir_for "$repo")/verify-bundle.md"
   ! grep -Fq "verifier_agent" "$(state_dir_for "$repo")/verify-bundle.md"
 
-  write_verify_result_json "$repo" "session-broad" true false "" "$verify_json"
+  write_verify_result_json "$repo" "session-reused-verify" true false "" "$verify_json"
+  sed "s/$(attested_session_uuid session-reused-verify)/$(attested_session_uuid session-broad)/" \
+    "$verify_json" >"$verify_json.tmp"
+  mv "$verify_json.tmp" "$verify_json"
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"reviewer_session_id already recorded"* ]]
-
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"fix_rounds=2"* ]]
-  grep -Fq "+fixed" "$(state_dir_for "$repo")/verify-bundle.md"
+  [[ "$output" == *"stop_reason=reviewer_session_reused"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 }
 
 @test "post-work-review shard-4: rejects failed verifier results without findings" {
@@ -1328,4 +1446,126 @@ EOF
   run_review "$diff_repo" mark
   [ "$status" -eq 1 ]
   [[ "$output" == *"marker_reason=diff_changed_since_review"* ]]
+}
+
+@test "post-work-review shard-1: rejects read-only claims backed by workspace-write metadata" {
+  local repo="$BATS_TEST_TMPDIR/attest-workspace-write"
+  local result="$BATS_TEST_TMPDIR/attest-workspace-write.json"
+  local session_id
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "attest-workspace-write" false false false "" "$result"
+  session_id="$(attested_session_uuid attest-workspace-write)"
+  write_attested_session "$session_id" post-work-reviewer gpt-5.6-sol workspace-write "$result"
+
+  run_review "$repo" record broad "$result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-2: rejects reviewer claims when actual agent role is null" {
+  local repo="$BATS_TEST_TMPDIR/attest-null-role"
+  local result="$BATS_TEST_TMPDIR/attest-null-role.json"
+  local session_id
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "attest-null-role" false false false "" "$result"
+  session_id="$(attested_session_uuid attest-null-role)"
+  write_attested_session "$session_id" null gpt-5.6-sol read-only "$result"
+
+  run_review "$repo" record broad "$result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-3: task name cannot impersonate the custom reviewer role" {
+  local repo="$BATS_TEST_TMPDIR/attest-task-name"
+  local result="$BATS_TEST_TMPDIR/attest-task-name.json"
+  local session_id
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "attest-task-name" false false false "" "$result"
+  session_id="$(attested_session_uuid attest-task-name)"
+  write_attested_session "$session_id" null gpt-5.6-sol read-only "$result" post_work_reviewer
+
+  run_review "$repo" record broad "$result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-4: rejects actual reviewer model mismatch" {
+  local repo="$BATS_TEST_TMPDIR/attest-model"
+  local result="$BATS_TEST_TMPDIR/attest-model.json"
+  local session_id
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "attest-model" false false false "" "$result"
+  session_id="$(attested_session_uuid attest-model)"
+  write_attested_session "$session_id" post-work-reviewer gpt-5.6-terra read-only "$result"
+
+  run_review "$repo" record broad "$result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-5: rejects non-UUID reviewer session identifiers" {
+  local repo="$BATS_TEST_TMPDIR/attest-arbitrary-session"
+  local result="$BATS_TEST_TMPDIR/attest-arbitrary-session.json"
+  local session_id
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "attest-arbitrary-session" false false false "" "$result"
+  session_id="$(attested_session_uuid attest-arbitrary-session)"
+  sed "s|$session_id|/root/post_work_reviewer|" "$result" >"$result.tmp"
+  mv "$result.tmp" "$result"
+
+  run_review "$repo" record broad "$result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+}
+
+@test "post-work-review shard-6: rejects broad session UUID reuse by a verifier" {
+  local repo="$BATS_TEST_TMPDIR/attest-session-reuse"
+  local broad_result="$BATS_TEST_TMPDIR/attest-session-reuse-broad.json"
+  local verify_result="$BATS_TEST_TMPDIR/attest-session-reuse-verify.json"
+  local broad_session verify_session finding
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding="$(finding_one)"
+  write_broad_result_json "$repo" "attest-reused-broad" false false false "$finding" "$broad_result"
+  run_review "$repo" record broad "$broad_result"
+  [ "$status" -eq 0 ]
+
+  printf 'fixed\n' >"$repo/tracked.txt"
+  git -C "$repo" add tracked.txt
+  git -C "$repo" commit -qm "fix finding"
+  run_review_base "$repo" prepare-verify
+  [ "$status" -eq 0 ]
+  write_verify_result_json "$repo" "attest-fresh-verifier" true false "" "$verify_result"
+  broad_session="$(attested_session_uuid attest-reused-broad)"
+  verify_session="$(attested_session_uuid attest-fresh-verifier)"
+  sed "s/$verify_session/$broad_session/" "$verify_result" >"$verify_result.tmp"
+  mv "$verify_result.tmp" "$verify_result"
+
+  run_review "$repo" record verify "$verify_result"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_session_reused"* ]]
+  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 }
