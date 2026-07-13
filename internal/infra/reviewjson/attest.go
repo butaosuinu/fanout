@@ -125,24 +125,24 @@ func buildAttestation(
 	agentConfigPath string,
 	usedSessionIDsPath string,
 ) (attestation, error) {
-	resultData, err := os.ReadFile(resultPath)
-	if err != nil {
-		return attestation{}, unavailable("read reviewer JSON", err)
+	resultData, resultReadErr := os.ReadFile(resultPath)
+	if resultReadErr != nil {
+		return attestation{}, unavailable("read reviewer JSON", resultReadErr)
 	}
-	if err := project(resultData, outputDir); err != nil {
-		return attestation{}, unavailable("project reviewer JSON", err)
+	if projectErr := project(resultData, outputDir); projectErr != nil {
+		return attestation{}, unavailable("project reviewer JSON", projectErr)
 	}
 	if !isCanonicalUUID(parentThreadID) {
 		return attestation{}, unavailable("parent thread ID is not a canonical UUID", nil)
 	}
-	preparedTime, err := time.Parse(time.RFC3339Nano, preparedAt)
-	if err != nil {
-		return attestation{}, unavailable("prepared_at is not RFC3339", err)
+	preparedTime, parseErr := time.Parse(time.RFC3339Nano, preparedAt)
+	if parseErr != nil {
+		return attestation{}, unavailable("prepared_at is not RFC3339", parseErr)
 	}
 
-	config, err := readAgentConfig(agentConfigPath)
-	if err != nil {
-		return attestation{}, unavailable("read agent config", err)
+	config, configErr := readAgentConfig(agentConfigPath)
+	if configErr != nil {
+		return attestation{}, unavailable("read agent config", configErr)
 	}
 	if config.name != "post-work-reviewer" && config.name != "post-work-verifier" {
 		return attestation{}, unavailable("agent config name is not a post-work-review role", nil)
@@ -151,9 +151,9 @@ func buildAttestation(
 		return attestation{}, unavailable("agent config sandbox_mode is not read-only", nil)
 	}
 
-	sessionID, err := reviewerSessionID(resultData)
-	if err != nil {
-		return attestation{}, err
+	sessionID, sessionIDErr := reviewerSessionID(resultData)
+	if sessionIDErr != nil {
+		return attestation{}, sessionIDErr
 	}
 	if !isCanonicalUUID(sessionID) {
 		return attestation{}, mismatch("reviewer_session_id is not a canonical UUID")
@@ -162,32 +162,32 @@ func buildAttestation(
 		return attestation{}, mismatch("reviewer session ID equals the parent thread ID")
 	}
 	if usedSessionIDsPath != "" {
-		used, err := readUsedSessionIDs(usedSessionIDsPath)
-		if err != nil {
-			return attestation{}, unavailable("read used reviewer session IDs", err)
+		used, usedSessionIDsErr := readUsedSessionIDs(usedSessionIDsPath)
+		if usedSessionIDsErr != nil {
+			return attestation{}, unavailable("read used reviewer session IDs", usedSessionIDsErr)
 		}
 		if _, exists := used[sessionID]; exists {
 			return attestation{}, reused("reviewer session UUID was already used")
 		}
 	}
 
-	rolloutPath, err := findUniqueRollout(sessionsRoot, sessionID)
-	if err != nil {
-		return attestation{}, err
+	rolloutPath, rolloutPathErr := findUniqueRollout(sessionsRoot, sessionID)
+	if rolloutPathErr != nil {
+		return attestation{}, rolloutPathErr
 	}
-	metadata, err := readRollout(rolloutPath)
-	if err != nil {
-		return attestation{}, err
+	metadata, rolloutErr := readRollout(rolloutPath)
+	if rolloutErr != nil {
+		return attestation{}, rolloutErr
 	}
-	if err := validateRollout(
+	if validateErr := validateRollout(
 		metadata,
 		resultData,
 		sessionID,
 		parentThreadID,
 		preparedTime,
 		config,
-	); err != nil {
-		return attestation{}, err
+	); validateErr != nil {
+		return attestation{}, validateErr
 	}
 
 	return attestation{
@@ -256,8 +256,8 @@ func readAgentConfig(path string) (agentConfig, error) {
 			} else {
 				rawTrimmed := strings.TrimSpace(line)
 				if !strings.HasPrefix(rawTrimmed, "#") {
-					if separator := strings.IndexByte(rawTrimmed, '='); separator >= 0 {
-						rawValue := strings.TrimSpace(rawTrimmed[separator+1:])
+					if _, value, found := strings.Cut(rawTrimmed, "="); found {
+						rawValue := strings.TrimSpace(value)
 						switch {
 						case strings.HasPrefix(rawValue, `"""`):
 							if strings.Count(rawValue, `"""`) == 1 {
@@ -416,7 +416,7 @@ func isCanonicalUUID(value string) bool {
 				return false
 			}
 		default:
-			if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
 				return false
 			}
 		}
