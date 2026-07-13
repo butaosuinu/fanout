@@ -402,6 +402,9 @@ func hasRecordedIssuePane(projectRoot string, store state.Store, issueNum int) b
 		if pane.IssueNum > 0 && watch.PaneWorktreeMatchesIssue(pane, issueNum) {
 			return true
 		}
+		if num, ok := panelaunch.OrchestratorPaneIssueNum(pane); ok && num == issueNum {
+			return true
+		}
 	}
 	// Plan-lane rows bind to their issue only through the coordinator slug or
 	// the saved spec's declared source. Without this, a standalone launch for

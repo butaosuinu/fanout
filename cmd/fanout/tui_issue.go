@@ -70,6 +70,9 @@ func recordedIssueNumbers(projectRoot string) map[int]bool {
 		if num, ok := panelaunch.PlanPaneIssueNum(pane); ok {
 			recorded[num] = true
 		}
+		if num, ok := panelaunch.OrchestratorPaneIssueNum(pane); ok {
+			recorded[num] = true
+		}
 	}
 	return recorded
 }
@@ -156,8 +159,8 @@ func validGitHubPathPart(part string) bool {
 }
 
 // launchIssueSessionFromTUI starts a session for one issue picked in the TUI:
-// a full fan-out when the issue has OPEN children (the watcher's parent lane),
-// a single pane otherwise (the watcher's standalone lane).
+// a project-root orchestrator followed by a full fan-out when the issue has
+// OPEN children, or a single pane otherwise (the watcher's standalone lane).
 func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
 	if issueNum <= 0 {
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
@@ -183,32 +186,49 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			CreatedPaneIDs: []string{paneID},
 		}, nil
 	}
+	orchestratorReq, orchestratorPaneID, orchestratorCreated, err := launchIssueOrchestrator(projectRoot, session, commandName, hookConfig, detail, defaultAgent)
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
 	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg)
-	return finishTUIIssueParentLaunch(issueNum, result, err)
+	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
+		cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID)
+		orchestratorPaneID = ""
+	}
+	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
 }
 
-func finishTUIIssueParentLaunch(issueNum int, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
+func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
 	created := len(result.CreatedPaneIDs)
+	createdPaneIDs := result.CreatedPaneIDs
+	if orchestratorPaneID != "" {
+		createdPaneIDs = append([]string{orchestratorPaneID}, result.CreatedPaneIDs...)
+	}
 	if err != nil {
 		if created > 0 {
 			// The fail-fast loop may have created panes before the failure;
 			// report a partial success so the TUI reloads state and focuses the
 			// first running agent while preserving the failure in its notice.
-			return fanouttui.LaunchResult{
-				Notice:         fmt.Sprintf("created %d pane(s), then failed: %v", created, err),
-				CreatedPaneIDs: result.CreatedPaneIDs,
-			}, nil
+			notice := fmt.Sprintf("created %d pane(s), then failed: %v", created, err)
+			if orchestratorPaneID != "" {
+				notice = fmt.Sprintf("started orchestrator + %d child pane(s), then failed: %v", created, err)
+			}
+			return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
 		}
 		return fanouttui.LaunchResult{}, err
 	}
 	notice := fmt.Sprintf("fanned out #%d: created %d pane(s)", issueNum, created)
-	if created <= 0 {
+	if orchestratorPaneID != "" && created > 0 {
+		notice = fmt.Sprintf("fanned out #%d: started orchestrator + %d child pane(s)", issueNum, created)
+	} else if orchestratorPaneID != "" {
+		notice = fmt.Sprintf("started orchestrator for #%d; children already have panes", issueNum)
+	} else if created <= 0 {
 		notice = fmt.Sprintf("#%d: no new panes (children already have one)", issueNum)
 	}
 	if result.Watch.Deferred {
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
-	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: result.CreatedPaneIDs}, nil
+	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
 }
 
 // fetchLaunchableIssue is the shared launch preamble for the TUI issue lanes:
