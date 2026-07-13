@@ -529,6 +529,13 @@ func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 			result: tuiNewPanePopupResult{Prompt: "Ship search", PlanFanout: true, Agents: []string{"claude"}},
 		},
 		{
+			name: "prompt mode preserves long pasted prompts",
+			result: tuiNewPanePopupResult{
+				Prompt: strings.Repeat("long pasted prompt line\n", 200) + "final line 201",
+				Agents: []string{"codex"},
+			},
+		},
+		{
 			name: "issue mode plan fan-out carries the worker agent",
 			result: tuiNewPanePopupResult{
 				Mode:         "issue",

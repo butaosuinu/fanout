@@ -4717,6 +4717,38 @@ func TestNewPaneFormSubmitsMultilinePrompt(t *testing.T) {
 	}
 }
 
+func TestNewPaneFormSubmitsLongPastedPrompt(t *testing.T) {
+	longPrompt := strings.Repeat("long pasted prompt line\n", 200) + "final line 201"
+	if lines := strings.Count(longPrompt, "\n") + 1; lines <= 200 || len(longPrompt) <= 1000 {
+		t.Fatalf("test prompt = %d lines / %d bytes, want more than 200 lines and 1000 bytes", lines, len(longPrompt))
+	}
+
+	var got LaunchRequest
+	m := newModel(Options{
+		DefaultAgent: "codex",
+		LaunchPane: func(req LaunchRequest) (LaunchResult, error) {
+			got = req
+			return LaunchResult{}, nil
+		},
+	})
+	m.openNewPaneForm()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(longPrompt), Paste: true})
+	m = updated.(model)
+	if value := m.newPane.prompt.Value(); value != longPrompt {
+		t.Fatalf("pasted prompt was truncated: got %d bytes, want %d", len(value), len(longPrompt))
+	}
+
+	cmd := m.submitNewPane()
+	if cmd == nil {
+		t.Fatal("submitNewPane returned nil command")
+	}
+	_ = cmd()
+	if got.Prompt != longPrompt {
+		t.Fatalf("submitted prompt was truncated: got %d bytes, want %d", len(got.Prompt), len(longPrompt))
+	}
+}
+
 func TestNewPaneFormAcceptsCJKPromptInput(t *testing.T) {
 	var got LaunchRequest
 	m := newModel(Options{

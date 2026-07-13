@@ -356,7 +356,9 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	prompt.Placeholder = "Prompt"
 	prompt.Prompt = ""
 	prompt.ShowLineNumbers = false
-	prompt.CharLimit = 1000
+	// Long prompts are valid input; SetHeight controls only the visible viewport.
+	prompt.CharLimit = 0
+	prompt.MaxHeight = 0
 	prompt.SetWidth(width)
 	prompt.SetHeight(newPanePromptDefaultRows)
 	prompt.KeyMap.InsertNewline = key.NewBinding(

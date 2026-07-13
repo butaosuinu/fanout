@@ -292,6 +292,7 @@ func TestAcceptCompletionPreservesPrecedingText(t *testing.T) {
 
 func TestAcceptCompletionRefusesWhenOverCharLimit(t *testing.T) {
 	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
+	m.newPane.prompt.CharLimit = 1000
 	// Fill the prompt to just under CharLimit, then start an @-token.
 	limit := m.newPane.prompt.CharLimit
 	m.newPane.prompt.SetValue(strings.Repeat("x", limit-3) + " ")
@@ -368,6 +369,7 @@ func TestFileIndexExcludesSpacePaths(t *testing.T) {
 
 func TestAcceptCompletionRefusesOverCharLimitFullWidth(t *testing.T) {
 	m := openCompletionModel(t, []string{"internal/ui/tui/newpane.go"})
+	m.newPane.prompt.CharLimit = 1000
 	// Full-width fill: rune count (499) is far under CharLimit but display width
 	// (~997) is near it, so a rune-count guard would wrongly allow the insert.
 	m.newPane.prompt.SetValue(strings.Repeat("あ", 498) + " ")
