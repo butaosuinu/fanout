@@ -2,6 +2,7 @@ package reviewjson
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,14 +15,21 @@ import (
 )
 
 const (
-	testParentSessionID = "019f5c42-734b-77d2-b935-0f8326bfd572"
-	testReviewSessionID = "019f5c78-2577-70f3-bc26-d6f83b2b5d72"
-	testOtherSessionID  = "019f5c78-2577-70f3-bc26-d6f83b2b5d73"
-	testPreparedAt      = "2026-07-13T17:13:25Z"
-	testCreatedAt       = "2026-07-13T17:13:25.763Z"
-	testReviewerRole    = "post-work-reviewer"
-	testReviewerModel   = "gpt-5.6-sol"
-	testReviewerEffort  = "xhigh"
+	testParentSessionID       = "019f5c42-734b-77d2-b935-0f8326bfd572"
+	testReviewSessionID       = "019f5c78-2577-70f3-bc26-d6f83b2b5d72"
+	testOtherSessionID        = "019f5c78-2577-70f3-bc26-d6f83b2b5d73"
+	testPreparedAt            = "2026-07-13T17:13:25Z"
+	testCreatedAt             = "2026-07-13T17:13:25.763Z"
+	testReviewerRole          = "post-work-reviewer"
+	testReviewerModel         = "gpt-5.6-sol"
+	testReviewerEffort        = "xhigh"
+	testControllerTurnID      = "019f5c42-734b-77d2-b935-0f8326bfd573"
+	testControllerContextAt   = "2026-07-13T17:13:25.250Z"
+	testSpawnAuthorizedAt     = "2026-07-13T17:13:25.500Z"
+	testAuthorizationCallAt   = "2026-07-13T17:13:25.400Z"
+	testAuthorizationOutputAt = "2026-07-13T17:13:25.600Z"
+	testSpawnCallAt           = "2026-07-13T17:13:25.700Z"
+	testSpawnOutputAt         = "2026-07-13T17:13:25.900Z"
 )
 
 func TestAttestWritesActualMetadataAfterProjection(t *testing.T) {
@@ -37,33 +45,40 @@ func TestAttestWritesActualMetadataAfterProjection(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest() error = %v", err)
 	}
 
 	want := map[string]string{
-		"valid":                           "",
-		"attestation_valid":               "",
-		"attestation_version":             AttestationVersion,
-		"attested_session_id":             testReviewSessionID,
-		"attested_parent_thread_id":       testParentSessionID,
-		"attested_agent_role":             testReviewerRole,
-		"attested_model":                  testReviewerModel,
-		"attested_sandbox_mode":           "read-only",
-		"attested_approval_policy":        "never",
-		"attested_history_mode":           attestedNoHistoryMode,
-		"attested_reviewer_spawn_calls":   "1",
-		"reviewer_session_id":             testReviewSessionID,
-		"findings_count":                  "0",
-		"finding_count":                   "0",
-		"reviewer_sandbox_mode":           "read-only",
-		"reviewer_agent":                  testReviewerRole,
-		"reviewer_provenance":             "native-subagent-tool",
-		"same_agent_review":               "false",
-		"reviewer_isolated":               "true",
-		"hooks_only_success":              "false",
-		"findings_missing_required_count": "0",
+		"valid":                              "",
+		"attestation_valid":                  "",
+		"attestation_version":                AttestationVersion,
+		"attested_session_id":                testReviewSessionID,
+		"attested_parent_thread_id":          testParentSessionID,
+		"attested_agent_role":                testReviewerRole,
+		"attested_model":                     testReviewerModel,
+		"attested_sandbox_mode":              "read-only",
+		"attested_approval_policy":           "never",
+		"attested_history_mode":              attestedNoHistoryMode,
+		"attested_reviewer_spawn_calls":      "1",
+		"attested_controller_turn_id":        testControllerTurnID,
+		"attested_controller_context_sha256": testControllerContextSHA256(),
+		"attested_controller_sandbox_mode":   controllerReadOnlySandbox,
+		"attested_spawn_authorized_at":       testSpawnAuthorizedAt,
+		"reviewer_session_id":                testReviewSessionID,
+		"findings_count":                     "0",
+		"finding_count":                      "0",
+		"reviewer_sandbox_mode":              "read-only",
+		"reviewer_agent":                     testReviewerRole,
+		"reviewer_provenance":                "native-subagent-tool",
+		"same_agent_review":                  "false",
+		"reviewer_isolated":                  "true",
+		"hooks_only_success":                 "false",
+		"findings_missing_required_count":    "0",
 	}
 	for name, expected := range want {
 		got, err := os.ReadFile(filepath.Join(fixture.cacheDir, name))
@@ -82,24 +97,455 @@ func TestAttestWritesActualMetadataAfterProjection(t *testing.T) {
 	}
 }
 
-func TestAttestAcceptsV1CodeModeSpawnWrapper(t *testing.T) {
+func TestAttestControllerReturnsLatestReadOnlyTurnContext(t *testing.T) {
 	t.Parallel()
+	const (
+		latestTurnID = "019f5c42-734b-77d2-b935-0f8326bfd574"
+		latestAt     = "2026-07-13T17:13:25.400Z"
+	)
 	fixture := newAttestationFixture(t)
 	options := defaultRolloutOptions(fixture.resultMessage)
-	options.parentCodeMode = true
-	fixture.writeRollout(options)
+	options.extraParentControllerContexts = []testControllerTurnContext{{
+		timestamp:   latestAt,
+		turnID:      latestTurnID,
+		sandboxMode: controllerReadOnlySandbox,
+	}}
+	fixture.writeParentRollout(options)
 
-	if err := Attest(
-		fixture.resultPath,
-		fixture.cacheDir,
-		fixture.sessionsRoot,
-		testParentSessionID,
-		testPreparedAt,
-		fixture.agentConfigPath,
-		fixture.bundlePath,
-		"",
-	); err != nil {
-		t.Fatalf("Attest() error = %v", err)
+	got, err := AttestController(fixture.sessionsRoot, testParentSessionID)
+	if err != nil {
+		t.Fatalf("AttestController() error = %v", err)
+	}
+	if got.TurnID != latestTurnID {
+		t.Errorf("TurnID = %q, want %q", got.TurnID, latestTurnID)
+	}
+	if got.ContextSHA256 != controllerContextSHA256(
+		latestAt,
+		latestTurnID,
+		controllerReadOnlySandbox,
+	) {
+		t.Errorf("ContextSHA256 = %q, want latest raw payload digest", got.ContextSHA256)
+	}
+	if got.SandboxMode != controllerReadOnlySandbox {
+		t.Errorf("SandboxMode = %q, want read-only", got.SandboxMode)
+	}
+	wantTimestamp, err := time.Parse(time.RFC3339Nano, latestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Timestamp.Equal(wantTimestamp) {
+		t.Errorf("Timestamp = %s, want %s", got.Timestamp, wantTimestamp)
+	}
+}
+
+func TestAttestControllerFailsClosed(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		mutate   func(*rolloutOptions)
+		wantKind AttestationErrorKind
+		want     string
+	}{
+		{
+			name: "missing turn context",
+			mutate: func(options *rolloutOptions) {
+				options.includeParentTurnContext = false
+			},
+			wantKind: AttestationUnavailable,
+			want:     "no controller turn_context",
+		},
+		{
+			name: "noncanonical turn ID",
+			mutate: func(options *rolloutOptions) {
+				options.parentControllerTurnID = "not-a-uuid"
+			},
+			wantKind: AttestationMismatch,
+			want:     "not a canonical UUID",
+		},
+		{
+			name: "workspace write sandbox",
+			mutate: func(options *rolloutOptions) {
+				options.parentControllerSandboxMode = "workspace-write"
+			},
+			wantKind: AttestationMismatch,
+			want:     "sandbox is not read-only",
+		},
+		{
+			name: "invalid timestamp",
+			mutate: func(options *rolloutOptions) {
+				options.parentControllerContextAt = "not-rfc3339"
+			},
+			wantKind: AttestationUnavailable,
+			want:     "timestamp is not RFC3339",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newAttestationFixture(t)
+			options := defaultRolloutOptions(fixture.resultMessage)
+			test.mutate(&options)
+			fixture.writeParentRollout(options)
+
+			_, err := AttestController(fixture.sessionsRoot, testParentSessionID)
+			if err == nil {
+				t.Fatal("AttestController() unexpectedly succeeded")
+			}
+			var attestationErr *AttestationError
+			if !errors.As(err, &attestationErr) {
+				t.Fatalf("AttestController() error = %T %v, want *AttestationError", err, err)
+			}
+			if attestationErr.Kind != test.wantKind {
+				t.Errorf("AttestationError.Kind = %q, want %q", attestationErr.Kind, test.wantKind)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Errorf("AttestController() error = %q, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAttestBindsSpawnToAuthorizedControllerTurn(t *testing.T) {
+	t.Parallel()
+	versions := []struct {
+		name    string
+		options func(*attestationFixture) rolloutOptions
+	}{
+		{
+			name: "v1",
+			options: func(fixture *attestationFixture) rolloutOptions {
+				return defaultRolloutOptions(fixture.resultMessage)
+			},
+		},
+		{
+			name: "v2",
+			options: func(fixture *attestationFixture) rolloutOptions {
+				return v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+			},
+		},
+	}
+	tests := []struct {
+		name           string
+		mutate         func(*rolloutOptions)
+		expectedTurnID string
+		expectedDigest func(rolloutOptions) string
+		authorizedAt   string
+		wantKind       AttestationErrorKind
+		want           string
+	}{
+		{
+			name: "missing spawn turn ID",
+			mutate: func(options *rolloutOptions) {
+				options.includeParentSpawnTurnID = false
+			},
+			wantKind: AttestationUnavailable,
+			want:     "controller turn ID is missing",
+		},
+		{
+			name: "spawn turn ID mismatch",
+			mutate: func(options *rolloutOptions) {
+				options.parentSpawnTurnID = testOtherSessionID
+			},
+			wantKind: AttestationMismatch,
+			want:     "turn ID does not match authorization",
+		},
+		{
+			name: "workspace write controller",
+			mutate: func(options *rolloutOptions) {
+				options.parentControllerSandboxMode = "workspace-write"
+			},
+			expectedDigest: func(options rolloutOptions) string {
+				return controllerContextSHA256(
+					options.parentControllerContextAt,
+					options.parentControllerTurnID,
+					options.parentControllerSandboxMode,
+				)
+			},
+			wantKind: AttestationMismatch,
+			want:     "controller sandbox is not read-only",
+		},
+		{
+			name:         "authorization after spawn",
+			authorizedAt: "2026-07-13T17:13:26Z",
+			wantKind:     AttestationMismatch,
+			want:         "not created after spawn authorization",
+		},
+		{
+			name: "authorization call missing",
+			mutate: func(options *rolloutOptions) {
+				options.includeParentAuthorizationCall = false
+			},
+			wantKind: AttestationUnavailable,
+			want:     "no tool invocation containing spawn authorization",
+		},
+		{
+			name: "authorization output missing",
+			mutate: func(options *rolloutOptions) {
+				options.includeParentAuthorizationOutput = false
+			},
+			wantKind: AttestationUnavailable,
+			want:     "no tool invocation containing spawn authorization",
+		},
+		{
+			name: "multiple authorization intervals",
+			mutate: func(options *rolloutOptions) {
+				options.duplicateParentAuthorization = true
+			},
+			wantKind: AttestationUnavailable,
+			want:     "2 tool invocations containing spawn authorization",
+		},
+		{
+			name: "authorization call turn mismatch",
+			mutate: func(options *rolloutOptions) {
+				options.parentAuthorizationTurnID = testOtherSessionID
+			},
+			wantKind: AttestationMismatch,
+			want:     "turn ID does not match the controller turn",
+		},
+		{
+			name: "authorization output turn mismatch",
+			mutate: func(options *rolloutOptions) {
+				options.parentAuthorizationOutputTurnID = testOtherSessionID
+			},
+			wantKind: AttestationMismatch,
+			want:     "turn ID does not match the controller turn",
+		},
+		{
+			name: "intervening tool invocation",
+			mutate: func(options *rolloutOptions) {
+				options.includeInterveningParentTool = true
+			},
+			wantKind: AttestationMismatch,
+			want:     "another tool invocation appears between",
+		},
+	}
+	for _, version := range versions {
+		version := version
+		for _, test := range tests {
+			test := test
+			t.Run(version.name+"/"+test.name, func(t *testing.T) {
+				t.Parallel()
+				fixture := newAttestationFixture(t)
+				options := version.options(fixture)
+				if test.mutate != nil {
+					test.mutate(&options)
+				}
+				fixture.writeRollout(options)
+				expectedTurnID := test.expectedTurnID
+				if expectedTurnID == "" {
+					expectedTurnID = testControllerTurnID
+				}
+				expectedDigest := testControllerContextSHA256()
+				if test.expectedDigest != nil {
+					expectedDigest = test.expectedDigest(options)
+				}
+				authorizedAt := test.authorizedAt
+				if authorizedAt == "" {
+					authorizedAt = testSpawnAuthorizedAt
+				}
+
+				err := Attest(
+					fixture.resultPath,
+					fixture.cacheDir,
+					fixture.sessionsRoot,
+					testParentSessionID,
+					testPreparedAt,
+					fixture.agentConfigPath,
+					fixture.bundlePath,
+					expectedTurnID,
+					expectedDigest,
+					authorizedAt,
+					"",
+				)
+				assertAttestationFailure(
+					t,
+					fixture.cacheDir,
+					err,
+					test.wantKind,
+					test.want,
+				)
+			})
+		}
+	}
+}
+
+func TestValidateSpawnAuthorizationOrderingUsesSpawnCallRecord(t *testing.T) {
+	t.Parallel()
+	parseTime := func(value string) time.Time {
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	invocations := []parentToolInvocation{
+		{
+			callID:             "call_authorize",
+			createdAt:          parseTime(testAuthorizationCallAt),
+			turnID:             testControllerTurnID,
+			recordNumber:       1,
+			outputAt:           parseTime(testAuthorizationOutputAt),
+			outputTurnID:       testControllerTurnID,
+			outputRecordNumber: 3,
+			hasOutput:          true,
+		},
+		{
+			callID:       "call_spawn",
+			createdAt:    parseTime(testCreatedAt),
+			turnID:       testControllerTurnID,
+			recordNumber: 4,
+			// The spawn output is deliberately absent. Ordering is proven by
+			// the invocation record; child binding validates the output later.
+		},
+	}
+	err := validateSpawnAuthorizationOrdering(
+		invocations,
+		parentSpawnCall{callID: "call_spawn", recordNumber: 4},
+		testControllerTurnID,
+		parseTime(testSpawnAuthorizedAt),
+	)
+	if err != nil {
+		t.Fatalf("validateSpawnAuthorizationOrdering() error = %v", err)
+	}
+}
+
+func TestValidateSpawnAuthorizationOrderingNormalizesRolloutMilliseconds(t *testing.T) {
+	t.Parallel()
+	parseTime := func(value string) time.Time {
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	invocations := []parentToolInvocation{
+		{
+			callID:             "call_authorize",
+			createdAt:          parseTime("2026-07-13T17:13:25.500Z"),
+			turnID:             testControllerTurnID,
+			recordNumber:       1,
+			outputAt:           parseTime("2026-07-13T17:13:25.500Z"),
+			outputTurnID:       testControllerTurnID,
+			outputRecordNumber: 2,
+			hasOutput:          true,
+		},
+		{
+			callID:       "call_spawn",
+			createdAt:    parseTime(testSpawnCallAt),
+			turnID:       testControllerTurnID,
+			recordNumber: 3,
+		},
+	}
+
+	err := validateSpawnAuthorizationOrdering(
+		invocations,
+		parentSpawnCall{callID: "call_spawn", recordNumber: 3},
+		testControllerTurnID,
+		parseTime("2026-07-13T17:13:25.500900000Z"),
+	)
+	if err != nil {
+		t.Fatalf("validateSpawnAuthorizationOrdering() error = %v", err)
+	}
+}
+
+func TestAttestRequiresChildSessionAfterMatchedParentSpawn(t *testing.T) {
+	t.Parallel()
+	versions := []struct {
+		name    string
+		options func(*attestationFixture) rolloutOptions
+	}{
+		{
+			name: "v1",
+			options: func(fixture *attestationFixture) rolloutOptions {
+				return defaultRolloutOptions(fixture.resultMessage)
+			},
+		},
+		{
+			name: "v2",
+			options: func(fixture *attestationFixture) rolloutOptions {
+				return v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+			},
+		},
+	}
+	tests := []struct {
+		name      string
+		createdAt string
+		wantError bool
+	}{
+		{name: "after spawn", createdAt: testCreatedAt},
+		{name: "before spawn", createdAt: "2026-07-13T17:13:25.650Z", wantError: true},
+		{name: "equal to spawn", createdAt: testSpawnCallAt, wantError: true},
+	}
+	for _, version := range versions {
+		version := version
+		for _, test := range tests {
+			test := test
+			t.Run(version.name+"/"+test.name, func(t *testing.T) {
+				t.Parallel()
+				fixture := newAttestationFixture(t)
+				options := version.options(fixture)
+				options.createdAt = test.createdAt
+				fixture.writeRollout(options)
+
+				err := Attest(
+					fixture.resultPath,
+					fixture.cacheDir,
+					fixture.sessionsRoot,
+					testParentSessionID,
+					testPreparedAt,
+					fixture.agentConfigPath,
+					fixture.bundlePath,
+					testControllerTurnID,
+					testControllerContextSHA256(),
+					testSpawnAuthorizedAt,
+					"",
+				)
+				if !test.wantError {
+					if err != nil {
+						t.Fatalf("Attest() error = %v", err)
+					}
+					return
+				}
+				assertAttestationFailure(
+					t,
+					fixture.cacheDir,
+					err,
+					AttestationMismatch,
+					"reviewer session was not created after the parent spawn",
+				)
+			})
+		}
+	}
+}
+
+func TestAttestAcceptsV1CodeModeSpawnWrapper(t *testing.T) {
+	t.Parallel()
+	for _, directText := range []bool{false, true} {
+		directText := directText
+		t.Run(fmt.Sprintf("direct_text_%t", directText), func(t *testing.T) {
+			t.Parallel()
+			fixture := newAttestationFixture(t)
+			options := defaultRolloutOptions(fixture.resultMessage)
+			options.parentCodeMode = true
+			options.parentCodeModeDirectText = directText
+			fixture.writeRollout(options)
+
+			if err := Attest(
+				fixture.resultPath,
+				fixture.cacheDir,
+				fixture.sessionsRoot,
+				testParentSessionID,
+				testPreparedAt,
+				fixture.agentConfigPath,
+				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
+				"",
+			); err != nil {
+				t.Fatalf("Attest() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -199,6 +645,9 @@ o.return / tools.exec_command({
 				testPreparedAt,
 				fixture.agentConfigPath,
 				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
 				"",
 			)
 			assertAttestationFailure(
@@ -708,6 +1157,9 @@ func TestAttestAcceptsVerifierAgentConfig(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest() error = %v", err)
@@ -750,6 +1202,9 @@ func TestAttestRejectsAgentConfigThatCanApproveEscalation(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	)
 	assertAttestationFailure(
@@ -780,6 +1235,9 @@ func TestAttestAcceptsV2NoHistorySpawnWithPlaintextChildTask(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest() error = %v", err)
@@ -808,6 +1266,9 @@ func TestAttestAcceptsUniqueLegacyV2OutputWithoutStartedActivity(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest() error = %v", err)
@@ -836,8 +1297,10 @@ func TestAttestBindsRepeatedV2TaskNameToStartedChildSession(t *testing.T) {
 		sessionID:              testOtherSessionID,
 		agentPath:              first.agentPath,
 		taskName:               taskName,
-		createdAt:              "2026-07-13T17:13:26.763Z",
+		createdAt:              "2026-07-13T17:13:26.700Z",
 		includeStartedActivity: true,
+		authorizationCallAt:    "2026-07-13T17:13:26.400Z",
+		authorizationOutputAt:  "2026-07-13T17:13:26.600Z",
 	}}
 
 	secondResult := strings.ReplaceAll(
@@ -865,6 +1328,9 @@ func TestAttestBindsRepeatedV2TaskNameToStartedChildSession(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest(first) error = %v", err)
@@ -886,6 +1352,9 @@ func TestAttestBindsRepeatedV2TaskNameToStartedChildSession(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		"2026-07-13T17:13:26.500Z",
 		"",
 	); err != nil {
 		t.Fatalf("Attest(second) error = %v", err)
@@ -927,6 +1396,9 @@ func TestAttestRejectsRepeatedV2TaskNameWithoutStartedActivity(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	)
 	assertAttestationFailure(
@@ -962,6 +1434,9 @@ func TestAttestRejectsV2CandidateWhenChildActivityBelongsToOutputlessCall(t *tes
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	)
 	assertAttestationFailure(
@@ -988,6 +1463,9 @@ func TestAttestRejectsDuplicateStartedActivityForSpawnCall(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	)
 	assertAttestationFailure(
@@ -1147,6 +1625,9 @@ func TestAttestRejectsUnattestedSpawnIsolation(t *testing.T) {
 				testPreparedAt,
 				fixture.agentConfigPath,
 				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
 				"",
 			)
 			assertAttestationFailure(t, fixture.cacheDir, err, test.kind, test.wantErr)
@@ -1306,6 +1787,9 @@ func TestAttestRejectsContradictoryRolloutMetadata(t *testing.T) {
 				testPreparedAt,
 				fixture.agentConfigPath,
 				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
 				"",
 			)
 			wantKind := test.kind
@@ -1343,6 +1827,9 @@ func TestAttestRejectsLegacyBundleMtimeWithoutPostPrepareEvidence(t *testing.T) 
 				testPreparedAt,
 				fixture.agentConfigPath,
 				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
 				"",
 			)
 			assertAttestationFailure(
@@ -1370,6 +1857,9 @@ func TestAttestRejectsNonCanonicalOrReusedReviewerSessionID(t *testing.T) {
 			testPreparedAt,
 			fixture.agentConfigPath,
 			fixture.bundlePath,
+			testControllerTurnID,
+			testControllerContextSHA256(),
+			testSpawnAuthorizedAt,
 			"",
 		)
 		assertAttestationFailure(t, fixture.cacheDir, err, AttestationMismatch, "canonical UUID")
@@ -1387,6 +1877,9 @@ func TestAttestRejectsNonCanonicalOrReusedReviewerSessionID(t *testing.T) {
 			testPreparedAt,
 			fixture.agentConfigPath,
 			fixture.bundlePath,
+			testControllerTurnID,
+			testControllerContextSHA256(),
+			testSpawnAuthorizedAt,
 			"",
 		)
 		assertAttestationFailure(t, fixture.cacheDir, err, AttestationMismatch, "equals the parent")
@@ -1408,6 +1901,9 @@ func TestAttestRejectsNonCanonicalOrReusedReviewerSessionID(t *testing.T) {
 			testPreparedAt,
 			fixture.agentConfigPath,
 			fixture.bundlePath,
+			testControllerTurnID,
+			testControllerContextSHA256(),
+			testSpawnAuthorizedAt,
 			usedPath,
 		)
 		assertAttestationFailure(t, fixture.cacheDir, err, AttestationReused, "already used")
@@ -1425,6 +1921,9 @@ func TestAttestRejectsNonCanonicalOrReusedReviewerSessionID(t *testing.T) {
 			testPreparedAt,
 			fixture.agentConfigPath,
 			fixture.bundlePath,
+			testControllerTurnID,
+			testControllerContextSHA256(),
+			testSpawnAuthorizedAt,
 			filepath.Join(t.TempDir(), "missing"),
 		)
 		assertAttestationFailure(t, fixture.cacheDir, err, AttestationUnavailable, "used reviewer session IDs")
@@ -1447,6 +1946,9 @@ func TestAttestRejectsMoreThanOneTerminalLF(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	)
 	assertAttestationFailure(t, fixture.cacheDir, err, AttestationMismatch, "does not match task_complete")
@@ -1510,6 +2012,9 @@ func TestAttestClassifiesUnavailableEvidence(t *testing.T) {
 				testPreparedAt,
 				fixture.agentConfigPath,
 				fixture.bundlePath,
+				testControllerTurnID,
+				testControllerContextSHA256(),
+				testSpawnAuthorizedAt,
 				"",
 			)
 			assertAttestationFailure(t, fixture.cacheDir, err, AttestationUnavailable, test.wantErr)
@@ -1532,6 +2037,9 @@ func TestAttestReadsRolloutRecordsLargerThanScannerLimit(t *testing.T) {
 		testPreparedAt,
 		fixture.agentConfigPath,
 		fixture.bundlePath,
+		testControllerTurnID,
+		testControllerContextSHA256(),
+		testSpawnAuthorizedAt,
 		"",
 	); err != nil {
 		t.Fatalf("Attest() error = %v", err)
@@ -1657,48 +2165,73 @@ name = "also-not-top-level"
 }
 
 type rolloutOptions struct {
-	sessionID                      string
-	parentThreadID                 string
-	spawnParentThreadID            string
-	threadSource                   string
-	agentRole                      any
-	includeTopAgentRole            bool
-	overrideTopAgentRole           bool
-	topAgentRole                   any
-	agentPath                      string
-	multiAgentVersion              string
-	includeForkedFrom              bool
-	forkedFromID                   any
-	model                          any
-	reasoningEffort                any
-	sandboxMode                    any
-	approvalPolicy                 any
-	createdAt                      string
-	includeTurnContext             bool
-	extraTurnContexts              []rolloutTurnContext
-	taskMessages                   []any
-	userInputs                     [][]string
-	agentInputs                    []testAgentInput
-	parentMessage                  any
-	parentAgentType                any
-	parentNamespace                string
-	parentCodeMode                 bool
-	extraResponseItems             []map[string]any
-	parentExtraArguments           map[string]any
-	includeForkContext             bool
-	parentForkContext              any
-	includeForkTurns               bool
-	parentForkTurns                any
-	parentTaskName                 any
-	unrecordedParentMessage        any
-	duplicateParentSpawn           bool
-	missingParentOutput            bool
-	largeUnknownRecord             string
-	rolloutFileSessionID           string
-	includeParentStartedActivity   bool
-	duplicateParentStartedActivity bool
-	parentStartedSessionID         string
-	extraParentSpawns              []testParentSpawn
+	sessionID                        string
+	parentThreadID                   string
+	spawnParentThreadID              string
+	threadSource                     string
+	agentRole                        any
+	includeTopAgentRole              bool
+	overrideTopAgentRole             bool
+	topAgentRole                     any
+	agentPath                        string
+	multiAgentVersion                string
+	includeForkedFrom                bool
+	forkedFromID                     any
+	model                            any
+	reasoningEffort                  any
+	sandboxMode                      any
+	approvalPolicy                   any
+	createdAt                        string
+	includeTurnContext               bool
+	extraTurnContexts                []rolloutTurnContext
+	taskMessages                     []any
+	userInputs                       [][]string
+	agentInputs                      []testAgentInput
+	parentMessage                    any
+	parentAgentType                  any
+	parentNamespace                  string
+	parentCodeMode                   bool
+	parentCodeModeDirectText         bool
+	includeParentTurnContext         bool
+	parentControllerTurnID           any
+	parentControllerSandboxMode      any
+	parentControllerContextAt        string
+	extraParentControllerContexts    []testControllerTurnContext
+	includeParentSpawnTurnID         bool
+	parentSpawnTurnID                any
+	includeParentAuthorizationCall   bool
+	includeParentAuthorizationOutput bool
+	parentAuthorizationCallAt        string
+	parentAuthorizationOutputAt      string
+	parentAuthorizationTurnID        any
+	parentAuthorizationOutputTurnID  any
+	parentSpawnCallAt                string
+	parentSpawnOutputAt              string
+	duplicateParentAuthorization     bool
+	includeInterveningParentTool     bool
+	interveningParentToolTurnID      any
+	extraResponseItems               []map[string]any
+	parentExtraArguments             map[string]any
+	includeForkContext               bool
+	parentForkContext                any
+	includeForkTurns                 bool
+	parentForkTurns                  any
+	parentTaskName                   any
+	unrecordedParentMessage          any
+	duplicateParentSpawn             bool
+	missingParentOutput              bool
+	largeUnknownRecord               string
+	rolloutFileSessionID             string
+	includeParentStartedActivity     bool
+	duplicateParentStartedActivity   bool
+	parentStartedSessionID           string
+	extraParentSpawns                []testParentSpawn
+}
+
+type testControllerTurnContext struct {
+	timestamp   string
+	turnID      any
+	sandboxMode any
 }
 
 type testParentSpawn struct {
@@ -1709,6 +2242,8 @@ type testParentSpawn struct {
 	createdAt              string
 	includeStartedActivity bool
 	missingOutput          bool
+	authorizationCallAt    string
+	authorizationOutputAt  string
 }
 
 type testAgentInput struct {
@@ -1720,26 +2255,41 @@ type testAgentInput struct {
 
 func defaultRolloutOptions(resultMessage string) rolloutOptions {
 	return rolloutOptions{
-		sessionID:           testReviewSessionID,
-		parentThreadID:      testParentSessionID,
-		spawnParentThreadID: testParentSessionID,
-		threadSource:        "subagent",
-		agentRole:           testReviewerRole,
-		includeTopAgentRole: true,
-		agentPath:           "/root/post_work_reviewer",
-		multiAgentVersion:   "v1",
-		model:               testReviewerModel,
-		reasoningEffort:     testReviewerEffort,
-		sandboxMode:         "read-only",
-		approvalPolicy:      "never",
-		createdAt:           testCreatedAt,
-		includeTurnContext:  true,
-		taskMessages:        []any{resultMessage},
-		parentAgentType:     testReviewerRole,
-		parentNamespace:     "multi_agent_v1",
-		includeForkContext:  true,
-		parentForkContext:   false,
-		parentTaskName:      "post_work_reviewer",
+		sessionID:                        testReviewSessionID,
+		parentThreadID:                   testParentSessionID,
+		spawnParentThreadID:              testParentSessionID,
+		threadSource:                     "subagent",
+		agentRole:                        testReviewerRole,
+		includeTopAgentRole:              true,
+		agentPath:                        "/root/post_work_reviewer",
+		multiAgentVersion:                "v1",
+		model:                            testReviewerModel,
+		reasoningEffort:                  testReviewerEffort,
+		sandboxMode:                      "read-only",
+		approvalPolicy:                   "never",
+		createdAt:                        testCreatedAt,
+		includeTurnContext:               true,
+		taskMessages:                     []any{resultMessage},
+		parentAgentType:                  testReviewerRole,
+		parentNamespace:                  "multi_agent_v1",
+		includeParentTurnContext:         true,
+		parentControllerTurnID:           testControllerTurnID,
+		parentControllerSandboxMode:      controllerReadOnlySandbox,
+		parentControllerContextAt:        testControllerContextAt,
+		includeParentSpawnTurnID:         true,
+		parentSpawnTurnID:                testControllerTurnID,
+		includeParentAuthorizationCall:   true,
+		includeParentAuthorizationOutput: true,
+		parentAuthorizationCallAt:        testAuthorizationCallAt,
+		parentAuthorizationOutputAt:      testAuthorizationOutputAt,
+		parentAuthorizationTurnID:        testControllerTurnID,
+		parentAuthorizationOutputTurnID:  testControllerTurnID,
+		parentSpawnCallAt:                testSpawnCallAt,
+		parentSpawnOutputAt:              testSpawnOutputAt,
+		interveningParentToolTurnID:      testControllerTurnID,
+		includeForkContext:               true,
+		parentForkContext:                false,
+		parentTaskName:                   "post_work_reviewer",
 	}
 }
 
@@ -1963,14 +2513,18 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 		if err != nil {
 			fixture.t.Fatal(err)
 		}
+		projection := "JSON.stringify(r)"
+		if options.parentCodeModeDirectText {
+			projection = "r"
+		}
 		input := fmt.Sprintf(`
 const r = await tools.multi_agent_v1__spawn_agent({
   agent_type: %s,
   message: %s,
   fork_context: %s
 });
-text(JSON.stringify(r));
-`, agentTypeData, messageData, forkContextData)
+text(%s);
+`, agentTypeData, messageData, forkContextData, projection)
 		spawnPayload = map[string]any{
 			"type":    "custom_tool_call",
 			"name":    "exec",
@@ -1992,6 +2546,11 @@ text(JSON.stringify(r));
 			},
 		}
 	}
+	if options.includeParentSpawnTurnID {
+		spawnPayload["internal_chat_message_metadata_passthrough"] = map[string]any{
+			"turn_id": options.parentSpawnTurnID,
+		}
+	}
 	records := []map[string]any{
 		{
 			"timestamp": "2026-07-13T17:12:00Z",
@@ -2001,12 +2560,68 @@ text(JSON.stringify(r));
 				"timestamp": "2026-07-13T17:12:00Z",
 			},
 		},
-		{
-			"timestamp": options.createdAt,
-			"type":      "response_item",
-			"payload":   spawnPayload,
-		},
 	}
+	if options.includeParentTurnContext {
+		records = append(records, controllerTurnContextRecord(
+			options.parentControllerContextAt,
+			options.parentControllerTurnID,
+			options.parentControllerSandboxMode,
+		))
+	}
+	for _, context := range options.extraParentControllerContexts {
+		records = append(records, controllerTurnContextRecord(
+			context.timestamp,
+			context.turnID,
+			context.sandboxMode,
+		))
+	}
+	if options.includeParentAuthorizationCall {
+		records = append(records, parentToolInvocationRecord(
+			"call_authorize_1",
+			options.parentAuthorizationCallAt,
+			options.parentAuthorizationTurnID,
+		))
+	}
+	if options.duplicateParentAuthorization {
+		records = append(records, parentToolInvocationRecord(
+			"call_authorize_2",
+			"2026-07-13T17:13:25.450Z",
+			options.parentAuthorizationTurnID,
+		))
+	}
+	if options.includeParentAuthorizationOutput {
+		records = append(records, parentToolOutputRecord(
+			"call_authorize_1",
+			options.parentAuthorizationOutputAt,
+			options.parentAuthorizationOutputTurnID,
+		))
+	}
+	if options.duplicateParentAuthorization {
+		records = append(records, parentToolOutputRecord(
+			"call_authorize_2",
+			"2026-07-13T17:13:25.650Z",
+			options.parentAuthorizationOutputTurnID,
+		))
+	}
+	if options.includeInterveningParentTool {
+		records = append(records,
+			parentToolInvocationRecord(
+				"call_intervening",
+				"2026-07-13T17:13:25.675Z",
+				options.interveningParentToolTurnID,
+			),
+			parentToolOutputRecord(
+				"call_intervening",
+				"2026-07-13T17:13:25.700Z",
+				options.interveningParentToolTurnID,
+			),
+		)
+	}
+	records = append(records, map[string]any{
+		"timestamp": options.parentSpawnCallAt,
+		"type":      "response_item",
+		"payload":   spawnPayload,
+	})
 	if options.includeParentStartedActivity {
 		sessionID := options.sessionID
 		if options.parentStartedSessionID != "" {
@@ -2029,7 +2644,7 @@ text(JSON.stringify(r));
 	}
 	if !options.missingParentOutput {
 		records = append(records, map[string]any{
-			"timestamp": options.createdAt,
+			"timestamp": options.parentSpawnOutputAt,
 			"type":      "response_item",
 			"payload":   spawnOutputPayload,
 		})
@@ -2079,6 +2694,20 @@ text(JSON.stringify(r));
 		)
 	}
 	for _, extra := range options.extraParentSpawns {
+		if extra.authorizationCallAt != "" {
+			records = append(records, parentToolInvocationRecord(
+				"call_authorize_"+extra.callID,
+				extra.authorizationCallAt,
+				options.parentSpawnTurnID,
+			))
+		}
+		if extra.authorizationOutputAt != "" {
+			records = append(records, parentToolOutputRecord(
+				"call_authorize_"+extra.callID,
+				extra.authorizationOutputAt,
+				options.parentSpawnTurnID,
+			))
+		}
 		extraArguments := make(map[string]any, len(arguments))
 		maps.Copy(extraArguments, arguments)
 		extraArguments["task_name"] = extra.taskName
@@ -2099,6 +2728,9 @@ text(JSON.stringify(r));
 				"namespace": options.parentNamespace,
 				"call_id":   extra.callID,
 				"arguments": string(extraArgumentData),
+				"internal_chat_message_metadata_passthrough": map[string]any{
+					"turn_id": options.parentSpawnTurnID,
+				},
 			},
 		})
 		if extra.includeStartedActivity {
@@ -2162,6 +2794,73 @@ func turnContextRecord(model, reasoningEffort, sandbox, approvalPolicy any) map[
 			},
 		},
 	}
+}
+
+func controllerTurnContextRecord(timestamp string, turnID, sandbox any) map[string]any {
+	return map[string]any{
+		"timestamp": timestamp,
+		"type":      "turn_context",
+		"payload": map[string]any{
+			"turn_id": turnID,
+			"sandbox_policy": map[string]any{
+				"type": sandbox,
+			},
+		},
+	}
+}
+
+func parentToolInvocationRecord(callID, timestamp string, turnID any) map[string]any {
+	return map[string]any{
+		"timestamp": timestamp,
+		"type":      "response_item",
+		"payload": map[string]any{
+			"type":      "function_call",
+			"name":      "exec_command",
+			"namespace": "functions",
+			"call_id":   callID,
+			"arguments": "{}",
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"turn_id": turnID,
+			},
+		},
+	}
+}
+
+func parentToolOutputRecord(callID, timestamp string, turnID any) map[string]any {
+	return map[string]any{
+		"timestamp": timestamp,
+		"type":      "response_item",
+		"payload": map[string]any{
+			"type":    "function_call_output",
+			"call_id": callID,
+			"output":  "{}",
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"turn_id": turnID,
+			},
+		},
+	}
+}
+
+func testControllerContextSHA256() string {
+	return controllerContextSHA256(
+		testControllerContextAt,
+		testControllerTurnID,
+		controllerReadOnlySandbox,
+	)
+}
+
+func controllerContextSHA256(timestamp string, turnID, sandbox any) string {
+	record := controllerTurnContextRecord(
+		timestamp,
+		turnID,
+		sandbox,
+	)
+	payload, err := json.Marshal(record["payload"])
+	if err != nil {
+		panic(err)
+	}
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest)
 }
 
 func parentStartedActivityRecord(callID, sessionID, agentPath, timestamp string) map[string]any {

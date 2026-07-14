@@ -20,6 +20,14 @@ main agent validates and fixes the work; it must not review its own code.
   weakens sandboxing. Only driver bookkeeping and exact reviewer-result capture
   may use scoped escalation while the controller is read-only; never escalate
   subagent review work.
+- Treat the controller rollout as the authority for that permission profile.
+  `prepare` must attest its current `turn_context` before writing a bundle.
+  Immediately before every native spawn, run the driver's `authorize-spawn`
+  command and require `review_controller_sandbox_mode=read-only`. Spawn in the
+  same controller turn without another command in between. The driver binds
+  the authorized turn ID, context SHA-256, and authorization timestamp to the
+  actual spawn record and final marker; a manual permission-profile claim is
+  not evidence.
 - Require each installed custom agent to set top-level
   `approval_policy = "never"`. The driver attests that policy from every child
   turn context and binds the attested approval policy into each call receipt
@@ -239,19 +247,28 @@ must attest the child's actual session metadata before accepting the result.
    its driver header, backend, review type, and required sections to be present.
    Require `review_bundle_sha256=` to be one lowercase 64-character SHA-256
    digest, and require the companion digest command for the bundle path to
-   return the same value immediately before spawning.
+   return the same value. After all bundle checks, run
+   `bash "$driver" authorize-spawn broad`; require `spawn_authorized=true`,
+   the expected kind and call index, a canonical
+   `review_controller_turn_id`, a lowercase 64-character
+   `review_controller_context_sha256`, and
+   `review_controller_sandbox_mode=read-only`. Make the native spawn the next
+   controller command in the same turn. Do not reuse or overwrite an
+   authorization.
    On failure, do not spawn and report `clean=false`,
    `stop_reason=review_bundle_invalid`, and `marker_written=false`. Do not read
    and inline the bundle in the controller; the custom reviewer repeats these
    checks and reads the file directly. If the child returns
    `REVIEW_BUNDLE_INVALID`, stop with the same non-clean reason; do not call
    `record`, retry the broad review, or fall back to inline content. Otherwise,
-   require JSON only and save the exact bytes returned by the child outside the
-   repository without extracting, repairing, or reformatting them. If
-   read-only sandboxing blocks that private temporary-file write, use scoped
-   escalation only for this exact-result capture. Run
-   `bash "$driver" record broad <review-json-file>`. Stop if `record` rejects
-   the result or its session attestation. The result's `reviewer_session_id`
+   require JSON only. Do not transcribe the result, ask the model to encode it,
+   or construct base64 from the displayed text. Run
+   `bash "$driver" record-session broad <child-session-uuid>` so the companion
+   helper extracts `task_complete.last_agent_message` directly from the unique
+   child rollout and feeds those UTF-8 bytes to the existing record path. If
+   read-only sandboxing blocks this driver bookkeeping, use scoped escalation
+   only for that exact driver command. Stop if `record-session` rejects the
+   result or its session attestation. The result's `reviewer_session_id`
    must be the child's actual canonical UUID from `CODEX_THREAD_ID`; a
    `task_name`, role label, prompt, or arbitrary string is not a session ID.
    The result's `bundle_sha256` must equal the digest printed by `prepare`; a
@@ -287,11 +304,14 @@ must attest the child's actual session metadata before accepting the result.
    findings and obvious fix-introduced regressions.
    Also require the current round's `verify_bundle_sha256_<N>=` value to be a
    lowercase 64-character SHA-256 digest, and require the companion digest
-   command to return the same value immediately before spawning. The verifier
-   result must return that exact value as `bundle_sha256`.
-4. Save the verifier's exact JSON outside the repository, run
-   `bash "$driver" record verify <review-json-file>`, then `summarize`. Do not
-   extract, repair, or reformat the child output. If it is clean, mark only
+   command to return the same value. After all verifier-bundle checks, run
+   `bash "$driver" authorize-spawn verify` and apply the same exact-output,
+   same-turn, next-command requirements before spawning. The verifier result
+   must return that exact value as `bundle_sha256`.
+4. Run `bash "$driver" record-session verify <child-session-uuid>`, then
+   `summarize`. Do not transcribe, encode, repair, or reformat the child output;
+   the driver extracts the exact final message from the child rollout. If it is
+   clean, mark only
    after driver attestation and under the exact-HEAD condition in step 2. If
    it remains non-clean without a stop reason, allow one final
    fix/validation/verifier round using the same sequence in step 3 and the

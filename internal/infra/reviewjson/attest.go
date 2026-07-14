@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ import (
 const (
 	// AttestationVersion identifies the rollout metadata contract consumed by
 	// the post-work-review driver.
-	AttestationVersion = "3"
+	AttestationVersion = "4"
 
 	attestedNoHistoryMode = "no-history"
 
@@ -38,6 +39,10 @@ var attestationCacheFiles = []string{
 	"attested_approval_policy",
 	"attested_history_mode",
 	"attested_reviewer_spawn_calls",
+	"attested_controller_turn_id",
+	"attested_controller_context_sha256",
+	"attested_controller_sandbox_mode",
+	"attested_spawn_authorized_at",
 	"attestation_error",
 	"attestation_error_kind",
 	attestationValidFile,
@@ -82,6 +87,9 @@ func Attest(
 	preparedAt string,
 	agentConfigPath string,
 	expectedBundlePath string,
+	expectedControllerTurnID string,
+	expectedControllerContextSHA256 string,
+	spawnAuthorizedAt string,
 	usedSessionIDsPath string,
 ) error {
 	if err := clearAttestationCache(outputDir); err != nil {
@@ -96,6 +104,9 @@ func Attest(
 		preparedAt,
 		agentConfigPath,
 		expectedBundlePath,
+		expectedControllerTurnID,
+		expectedControllerContextSHA256,
+		spawnAuthorizedAt,
 		usedSessionIDsPath,
 	)
 	if err != nil {
@@ -117,14 +128,18 @@ func Attest(
 }
 
 type attestation struct {
-	sessionID      string
-	parentThreadID string
-	agentRole      string
-	model          string
-	sandboxMode    string
-	approvalPolicy string
-	historyMode    string
-	reviewerSpawns int
+	sessionID               string
+	parentThreadID          string
+	agentRole               string
+	model                   string
+	sandboxMode             string
+	approvalPolicy          string
+	historyMode             string
+	reviewerSpawns          int
+	controllerTurnID        string
+	controllerContextSHA256 string
+	controllerSandboxMode   string
+	spawnAuthorizedAt       string
 }
 
 func buildAttestation(
@@ -135,6 +150,9 @@ func buildAttestation(
 	preparedAt string,
 	agentConfigPath string,
 	expectedBundlePath string,
+	expectedControllerTurnID string,
+	expectedControllerContextSHA256 string,
+	spawnAuthorizedAt string,
 	usedSessionIDsPath string,
 ) (attestation, error) {
 	resultData, resultReadErr := os.ReadFile(resultPath)
@@ -160,6 +178,23 @@ func buildAttestation(
 	preparedTime, parseErr := time.Parse(time.RFC3339Nano, preparedAt)
 	if parseErr != nil {
 		return attestation{}, unavailable("prepared_at is not RFC3339", parseErr)
+	}
+	if !isCanonicalUUID(expectedControllerTurnID) {
+		return attestation{}, unavailable(
+			"expected controller turn ID is not a canonical UUID",
+			nil,
+		)
+	}
+	if len(expectedControllerContextSHA256) != 64 ||
+		strings.Trim(expectedControllerContextSHA256, "0123456789abcdef") != "" {
+		return attestation{}, unavailable(
+			"expected controller context SHA-256 is not lowercase hexadecimal",
+			nil,
+		)
+	}
+	spawnAuthorizedTime, parseErr := time.Parse(time.RFC3339Nano, spawnAuthorizedAt)
+	if parseErr != nil {
+		return attestation{}, unavailable("spawn_authorized_at is not RFC3339", parseErr)
 	}
 
 	config, configErr := readAgentConfig(agentConfigPath)
@@ -234,6 +269,7 @@ func buildAttestation(
 		return attestation{}, parentRolloutPathErr
 	}
 	reviewerSpawns := 0
+	var controllerContext ControllerContextAttestation
 	if spawnErr := validateParentSpawn(
 		parentRolloutPath,
 		metadata,
@@ -242,20 +278,28 @@ func buildAttestation(
 		expectedBundlePath,
 		preparedTime,
 		freshAfter,
+		expectedControllerTurnID,
+		expectedControllerContextSHA256,
+		spawnAuthorizedTime,
 		&reviewerSpawns,
+		&controllerContext,
 	); spawnErr != nil {
 		return attestation{}, spawnErr
 	}
 
 	return attestation{
-		sessionID:      metadata.sessionID,
-		parentThreadID: metadata.parentThreadID,
-		agentRole:      metadata.agentRole,
-		model:          config.model,
-		sandboxMode:    config.sandboxMode,
-		approvalPolicy: config.approvalPolicy,
-		historyMode:    attestedNoHistoryMode,
-		reviewerSpawns: reviewerSpawns,
+		sessionID:               metadata.sessionID,
+		parentThreadID:          metadata.parentThreadID,
+		agentRole:               metadata.agentRole,
+		model:                   config.model,
+		sandboxMode:             config.sandboxMode,
+		approvalPolicy:          config.approvalPolicy,
+		historyMode:             attestedNoHistoryMode,
+		reviewerSpawns:          reviewerSpawns,
+		controllerTurnID:        controllerContext.TurnID,
+		controllerContextSHA256: controllerContext.ContextSHA256,
+		controllerSandboxMode:   controllerContext.SandboxMode,
+		spawnAuthorizedAt:       spawnAuthorizedAt,
 	}, nil
 }
 
@@ -1741,10 +1785,37 @@ func optionalJSONString(raw json.RawMessage) (string, bool) {
 }
 
 type parentSpawnCall struct {
-	callID    string
-	namespace string
-	createdAt time.Time
-	arguments map[string]json.RawMessage
+	callID               string
+	namespace            string
+	createdAt            time.Time
+	arguments            map[string]json.RawMessage
+	controllerTurnID     string
+	controllerContext    ControllerContextAttestation
+	hasControllerContext bool
+	recordNumber         int
+}
+
+type parentToolInvocation struct {
+	callID             string
+	createdAt          time.Time
+	turnID             string
+	recordNumber       int
+	outputAt           time.Time
+	outputTurnID       string
+	outputRecordNumber int
+	hasOutput          bool
+}
+
+type parentToolOutput struct {
+	createdAt    time.Time
+	turnID       string
+	recordNumber int
+	hasTimestamp bool
+}
+
+type parentRolloutEvidence struct {
+	activities  map[string]parentSpawnActivity
+	invocations []parentToolInvocation
 }
 
 type parentSpawnActivity struct {
@@ -1760,12 +1831,18 @@ func validateParentSpawn(
 	expectedBundlePath string,
 	countAfter time.Time,
 	freshAfter time.Time,
+	expectedControllerTurnID string,
+	expectedControllerContextSHA256 string,
+	spawnAuthorizedAt time.Time,
 	reviewerSpawns *int,
+	attestedController *ControllerContextAttestation,
 ) error {
-	calls, outputs, activities, readErr := readParentSpawnRecords(path, parentThreadID)
+	calls, outputs, evidence, readErr := readParentSpawnRecords(path, parentThreadID)
 	if readErr != nil {
 		return readErr
 	}
+	activities := evidence.activities
+	invocations := evidence.invocations
 	wantNamespace := map[string]string{
 		"v1": "multi_agent_v1",
 		"v2": "collaboration",
@@ -1848,6 +1925,47 @@ func validateParentSpawn(
 	if !call.createdAt.After(freshAfter) {
 		return mismatch("parent spawn was not created after the review bundle")
 	}
+	if !call.createdAt.After(spawnAuthorizedAt) {
+		return mismatch("parent spawn was not created after spawn authorization")
+	}
+	if !child.sessionCreatedAt.After(call.createdAt) {
+		return mismatch("reviewer session was not created after the parent spawn")
+	}
+	if call.controllerTurnID == "" {
+		return unavailable("parent spawn controller turn ID is missing", nil)
+	}
+	if !isCanonicalUUID(call.controllerTurnID) {
+		return mismatch("parent spawn controller turn ID is not a canonical UUID")
+	}
+	if call.controllerTurnID != expectedControllerTurnID {
+		return mismatch("parent spawn controller turn ID does not match authorization")
+	}
+	if !call.hasControllerContext {
+		return unavailable("parent spawn has no enclosing controller turn_context", nil)
+	}
+	if call.controllerContext.TurnID != call.controllerTurnID {
+		return mismatch("parent spawn turn ID does not match its controller turn_context")
+	}
+	if call.controllerContext.ContextSHA256 != expectedControllerContextSHA256 {
+		return mismatch("parent spawn controller context digest does not match authorization")
+	}
+	if call.controllerContext.SandboxMode != controllerReadOnlySandbox {
+		return mismatch("parent spawn controller sandbox is not read-only")
+	}
+	if !spawnAuthorizedAt.After(call.controllerContext.Timestamp) {
+		return mismatch("spawn authorization was not created after the controller turn_context")
+	}
+	if !call.createdAt.After(call.controllerContext.Timestamp) {
+		return mismatch("parent spawn was not created after its controller turn_context")
+	}
+	if err := validateSpawnAuthorizationOrdering(
+		invocations,
+		call,
+		expectedControllerTurnID,
+		spawnAuthorizedAt,
+	); err != nil {
+		return err
+	}
 	actualRole, err := spawnJSONString(call.arguments, "agent_type")
 	if err != nil {
 		return err
@@ -1907,7 +2025,70 @@ func validateParentSpawn(
 			matchingSpawnCalls,
 		))
 	}
+	*attestedController = call.controllerContext
 	return nil
+}
+
+func validateSpawnAuthorizationOrdering(
+	invocations []parentToolInvocation,
+	spawn parentSpawnCall,
+	expectedControllerTurnID string,
+	spawnAuthorizedAt time.Time,
+) error {
+	// Codex rollout timestamps are currently emitted at millisecond precision,
+	// while the driver records authorization at nanosecond precision. Compare
+	// the enclosing call/output interval at the rollout's effective precision
+	// so an output recorded later in the same millisecond is not rejected.
+	authorizationMillisecond := spawnAuthorizedAt.Truncate(time.Millisecond)
+	candidates := make([]parentToolInvocation, 0, 1)
+	for _, invocation := range invocations {
+		if !invocation.hasOutput || invocation.createdAt.After(authorizationMillisecond) ||
+			invocation.outputAt.Before(authorizationMillisecond) {
+			continue
+		}
+		candidates = append(candidates, invocation)
+	}
+	if len(candidates) == 0 {
+		return unavailable(
+			"parent rollout has no tool invocation containing spawn authorization",
+			nil,
+		)
+	}
+	if len(candidates) != 1 {
+		return unavailable(fmt.Sprintf(
+			"parent rollout has %d tool invocations containing spawn authorization, want 1",
+			len(candidates),
+		), nil)
+	}
+	authorization := candidates[0]
+	if authorization.outputRecordNumber <= authorization.recordNumber {
+		return mismatch("spawn authorization tool output does not follow its invocation")
+	}
+	if authorization.turnID == "" || authorization.outputTurnID == "" {
+		return unavailable("spawn authorization tool turn ID is missing", nil)
+	}
+	if !isCanonicalUUID(authorization.turnID) ||
+		!isCanonicalUUID(authorization.outputTurnID) {
+		return mismatch("spawn authorization tool turn ID is not a canonical UUID")
+	}
+	if authorization.turnID != expectedControllerTurnID ||
+		authorization.outputTurnID != expectedControllerTurnID {
+		return mismatch("spawn authorization tool turn ID does not match the controller turn")
+	}
+
+	for _, invocation := range invocations {
+		if invocation.recordNumber <= authorization.outputRecordNumber {
+			continue
+		}
+		if invocation.callID != spawn.callID {
+			return mismatch("another tool invocation appears between spawn authorization and spawn")
+		}
+		if invocation.turnID != expectedControllerTurnID {
+			return mismatch("spawn invocation turn ID does not match the authorization turn")
+		}
+		return nil
+	}
+	return unavailable("parent rollout has no tool invocation after spawn authorization", nil)
 }
 
 func validateSpawnArgumentFields(arguments map[string]json.RawMessage, version string) error {
@@ -1948,7 +2129,12 @@ func childHasPlaintextPathInput(child rolloutMetadata, expectedBundlePath string
 func readParentSpawnRecords(
 	path string,
 	parentThreadID string,
-) ([]parentSpawnCall, map[string]string, map[string]parentSpawnActivity, error) {
+) (
+	[]parentSpawnCall,
+	map[string]string,
+	*parentRolloutEvidence,
+	error,
+) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, nil, nil, unavailable("read parent rollout", err)
@@ -1964,7 +2150,11 @@ func readParentSpawnRecords(
 	codeModeCalls := make(map[string]struct{})
 	outputs := make(map[string]string)
 	activities := make(map[string]parentSpawnActivity)
+	toolCallsByID := make(map[string]parentToolInvocation)
+	toolOutputsByID := make(map[string]parentToolOutput)
 	parentMetaCount := 0
+	var currentControllerContext ControllerContextAttestation
+	hasControllerContext := false
 	for recordNumber := 1; ; recordNumber++ {
 		var record rolloutRecord
 		if err := decoder.Decode(&record); err != nil {
@@ -1991,6 +2181,15 @@ func readParentSpawnRecords(
 			if id != parentThreadID {
 				return nil, nil, nil, mismatch("parent session_meta.id does not match the prepared parent")
 			}
+			continue
+		}
+		if record.Type == "turn_context" {
+			context, err := parseControllerTurnContextRecord(record, false)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			currentControllerContext = context
+			hasControllerContext = true
 			continue
 		}
 		if record.Type == "event_msg" {
@@ -2023,9 +2222,74 @@ func readParentSpawnRecords(
 			Arguments json.RawMessage `json:"arguments"`
 			Input     json.RawMessage `json:"input"`
 			Output    json.RawMessage `json:"output"`
+			Metadata  *struct {
+				TurnID json.RawMessage `json:"turn_id"`
+			} `json:"internal_chat_message_metadata_passthrough"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			return nil, nil, nil, unavailable("malformed parent response_item payload", err)
+		}
+		if payload.Type == "function_call" || payload.Type == "custom_tool_call" {
+			timestamp, err := requiredJSONString(record.Timestamp, "parent tool invocation timestamp")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+			if err != nil {
+				return nil, nil, nil, unavailable(
+					"parent tool invocation timestamp is not RFC3339",
+					err,
+				)
+			}
+			callID, err := requiredJSONString(payload.CallID, "parent tool invocation call_id")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if _, exists := toolCallsByID[callID]; exists {
+				return nil, nil, nil, unavailable("parent rollout has duplicate tool call_id", nil)
+			}
+			turnID := ""
+			if payload.Metadata != nil {
+				turnID, _ = optionalJSONString(payload.Metadata.TurnID)
+			}
+			toolCallsByID[callID] = parentToolInvocation{
+				callID:       callID,
+				createdAt:    createdAt,
+				turnID:       turnID,
+				recordNumber: recordNumber,
+			}
+		}
+		if payload.Type == "function_call_output" || payload.Type == "custom_tool_call_output" {
+			callID, ok := optionalJSONString(payload.CallID)
+			if ok {
+				if _, exists := toolOutputsByID[callID]; exists {
+					return nil, nil, nil, unavailable(
+						"parent rollout has duplicate tool output call_id",
+						nil,
+					)
+				}
+				timestamp, err := requiredJSONString(record.Timestamp, "parent tool output timestamp")
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+				if err != nil {
+					return nil, nil, nil, unavailable(
+						"parent tool output timestamp is not RFC3339",
+						err,
+					)
+				}
+				turnID := ""
+				if payload.Metadata != nil {
+					turnID, _ = optionalJSONString(payload.Metadata.TurnID)
+				}
+				toolOutputsByID[callID] = parentToolOutput{
+					createdAt:    createdAt,
+					turnID:       turnID,
+					recordNumber: recordNumber,
+					hasTimestamp: true,
+				}
+			}
 		}
 		switch payload.Type {
 		case "function_call":
@@ -2055,11 +2319,19 @@ func readParentSpawnRecords(
 			if _, exists := callsByID[callID]; exists {
 				return nil, nil, nil, unavailable("parent rollout has duplicate spawn call_id", nil)
 			}
+			controllerTurnID := ""
+			if payload.Metadata != nil {
+				controllerTurnID, _ = optionalJSONString(payload.Metadata.TurnID)
+			}
 			callsByID[callID] = parentSpawnCall{
-				callID:    callID,
-				namespace: payload.Namespace,
-				createdAt: createdAt,
-				arguments: arguments,
+				callID:               callID,
+				namespace:            payload.Namespace,
+				createdAt:            createdAt,
+				arguments:            arguments,
+				controllerTurnID:     controllerTurnID,
+				controllerContext:    currentControllerContext,
+				hasControllerContext: hasControllerContext,
+				recordNumber:         recordNumber,
 			}
 		case "custom_tool_call":
 			if payload.Name != "exec" {
@@ -2100,11 +2372,19 @@ func readParentSpawnRecords(
 					nil,
 				)
 			}
+			controllerTurnID := ""
+			if payload.Metadata != nil {
+				controllerTurnID, _ = optionalJSONString(payload.Metadata.TurnID)
+			}
 			callsByID[callID] = parentSpawnCall{
-				callID:    callID,
-				namespace: "multi_agent_v1",
-				createdAt: createdAt,
-				arguments: arguments,
+				callID:               callID,
+				namespace:            "multi_agent_v1",
+				createdAt:            createdAt,
+				arguments:            arguments,
+				controllerTurnID:     controllerTurnID,
+				controllerContext:    currentControllerContext,
+				hasControllerContext: hasControllerContext,
+				recordNumber:         recordNumber,
 			}
 			codeModeCalls[callID] = struct{}{}
 		case "function_call_output":
@@ -2157,7 +2437,23 @@ func readParentSpawnRecords(
 	for _, call := range callsByID {
 		calls = append(calls, call)
 	}
-	return calls, outputs, activities, nil
+	invocations := make([]parentToolInvocation, 0, len(toolCallsByID))
+	for callID, invocation := range toolCallsByID {
+		if output, ok := toolOutputsByID[callID]; ok && output.hasTimestamp {
+			invocation.outputAt = output.createdAt
+			invocation.outputTurnID = output.turnID
+			invocation.outputRecordNumber = output.recordNumber
+			invocation.hasOutput = true
+		}
+		invocations = append(invocations, invocation)
+	}
+	sort.Slice(invocations, func(i, j int) bool {
+		return invocations[i].recordNumber < invocations[j].recordNumber
+	})
+	return calls, outputs, &parentRolloutEvidence{
+		activities:  activities,
+		invocations: invocations,
+	}, nil
 }
 
 const v1CodeModeSpawnTool = "tools.multi_agent_v1__spawn_agent"
@@ -2221,20 +2517,20 @@ func parseV1CodeModeSpawnWrapper(input string) (map[string]json.RawMessage, bool
 		return nil, true, errors.New("wrapper text call is missing its argument list")
 	}
 	parser.skipWhitespace()
-	if !parser.consume("JSON.stringify") {
-		return nil, true, errors.New("wrapper does not JSON-encode the spawn result")
+	jsonStringified := parser.consume("JSON.stringify")
+	if jsonStringified {
+		parser.skipWhitespace()
+		if !parser.consume("(") {
+			return nil, true, errors.New("wrapper JSON.stringify call is missing its argument list")
+		}
+		parser.skipWhitespace()
 	}
-	parser.skipWhitespace()
-	if !parser.consume("(") {
-		return nil, true, errors.New("wrapper JSON.stringify call is missing its argument list")
-	}
-	parser.skipWhitespace()
 	projectedVariable, ok := parser.identifier()
 	if !ok || projectedVariable != variable {
 		return nil, true, errors.New("wrapper projects a different result variable")
 	}
 	parser.skipWhitespace()
-	if !parser.consume(")") {
+	if jsonStringified && !parser.consume(")") {
 		return nil, true, errors.New("wrapper JSON.stringify call is not closed")
 	}
 	parser.skipWhitespace()
@@ -3112,6 +3408,10 @@ func writeAttestationSuccess(outputDir string, value attestation) error {
 		{name: "attested_approval_policy", data: []byte(value.approvalPolicy)},
 		{name: "attested_history_mode", data: []byte(value.historyMode)},
 		{name: "attested_reviewer_spawn_calls", data: []byte(strconv.Itoa(value.reviewerSpawns))},
+		{name: "attested_controller_turn_id", data: []byte(value.controllerTurnID)},
+		{name: "attested_controller_context_sha256", data: []byte(value.controllerContextSHA256)},
+		{name: "attested_controller_sandbox_mode", data: []byte(value.controllerSandboxMode)},
+		{name: "attested_spawn_authorized_at", data: []byte(value.spawnAuthorizedAt)},
 	}
 	for _, file := range files {
 		if err := atomicfs.WriteFile(filepath.Join(outputDir, file.name), file.data, 0o600); err != nil {

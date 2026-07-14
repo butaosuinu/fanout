@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -139,7 +140,94 @@ func TestCmdPostWorkReviewJSONRejectsOldProtocol(t *testing.T) {
 		t.Fatalf("stdout = %q, want helper version line", got)
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("expected timestamp")) {
-		t.Fatalf("stderr = %q, want v4 usage", stderr.String())
+		t.Fatalf("stderr = %q, want v5 usage", stderr.String())
+	}
+}
+
+func TestCmdPostWorkReviewJSONControllerFailsClosed(t *testing.T) {
+	t.Parallel()
+	const parentID = "019f5c42-734b-77d2-b935-0f8326bfd572"
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "sessions")
+	sessions := filepath.Join(sessionsRoot, "2026", "07", "13")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := strings.Join([]string{
+		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`, parentID),
+		`{"timestamp":"2026-07-13T17:13:25.200Z","type":"turn_context","payload":{"turn_id":"019f5c42-734b-77d2-b935-0f8326bfd573","sandbox_policy":{"type":"workspace-write"}}}`,
+	}, "\n") + "\n"
+	path := filepath.Join(sessions, "rollout-2026-07-13T17-13-24-"+parentID+".jsonl")
+	if err := os.WriteFile(path, []byte(rollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdPostWorkReviewJSON(
+		[]string{"controller", sessionsRoot, parentID},
+		&stdout,
+		&stderr,
+	); code != exitcode.Env {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d", code, exitcode.Env)
+	}
+	if got := stdout.String(); got != postWorkReviewJSONVersionLine+"\n" {
+		t.Fatalf("stdout = %q, want helper version line only", got)
+	}
+	if !strings.Contains(stderr.String(), "sandbox is not read-only") {
+		t.Fatalf("stderr = %q, want controller sandbox failure", stderr.String())
+	}
+}
+
+func TestCmdPostWorkReviewJSONExtractPreservesUnicode(t *testing.T) {
+	t.Parallel()
+	const (
+		sessionID = "019f5c78-2577-70f3-bc26-d6f83b2b5d75"
+		message   = "修正済み — JSONをそのまま保持"
+	)
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "sessions")
+	sessions := filepath.Join(sessionsRoot, "2026", "07", "13")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := strings.Join([]string{
+		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`, sessionID),
+		fmt.Sprintf(
+			`{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":%q}}`,
+			message,
+		),
+	}, "\n") + "\n"
+	path := filepath.Join(sessions, "rollout-2026-07-13T17-13-25-"+sessionID+".jsonl")
+	if err := os.WriteFile(path, []byte(rollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(dir, "review.json")
+
+	var stdout, stderr bytes.Buffer
+	if code := cmdPostWorkReviewJSON(
+		[]string{"extract", sessionsRoot, sessionID, outputPath},
+		&stdout,
+		&stderr,
+	); code != exitcode.OK {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	wantStdout := postWorkReviewJSONVersionLine + "\nextracted_session_id=" + sessionID + "\n"
+	if got := stdout.String(); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != message {
+		t.Fatalf("extracted bytes = %q, want %q", data, message)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("output mode = %o, want 600", got)
 	}
 }
 
@@ -148,6 +236,7 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 	const (
 		parentID = "019f5c42-734b-77d2-b935-0f8326bfd572"
 		childID  = "019f5c78-2577-70f3-bc26-d6f83b2b5d72"
+		turnID   = "019f5c42-734b-77d2-b935-0f8326bfd573"
 	)
 	dir := t.TempDir()
 	cache := filepath.Join(dir, "cache")
@@ -194,14 +283,43 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 		bundle,
 	)
 	spawnOutput := fmt.Sprintf(`{"agent_id":%q}`, childID)
+	controllerPayload := fmt.Sprintf(
+		`{"turn_id":%q,"sandbox_policy":{"type":"read-only"}}`,
+		turnID,
+	)
+	controllerDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(controllerPayload)))
 	parentRollout := strings.Join([]string{
 		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`, parentID),
-		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.500Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"call-review","arguments":%q}}`, spawnArguments),
-		fmt.Sprintf(`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-review","output":%q}}`, spawnOutput),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.200Z","type":"turn_context","payload":%s}`, controllerPayload),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.300Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","namespace":"functions","call_id":"call-authorize","arguments":"{}","internal_chat_message_metadata_passthrough":{"turn_id":%q}}}`, turnID),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.450Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-authorize","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":%q}}}`, turnID),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.500Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"call-review","arguments":%q,"internal_chat_message_metadata_passthrough":{"turn_id":%q}}}`, spawnArguments, turnID),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.800Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-review","output":%q}}`, spawnOutput),
 	}, "\n") + "\n"
 	parentRolloutPath := filepath.Join(sessions, "rollout-2026-07-13T17-13-24-"+parentID+".jsonl")
 	if err := os.WriteFile(parentRolloutPath, []byte(parentRollout), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	var controllerStdout, controllerStderr bytes.Buffer
+	controllerArgs := []string{"controller", filepath.Join(dir, "sessions"), parentID}
+	if code := cmdPostWorkReviewJSON(
+		controllerArgs,
+		&controllerStdout,
+		&controllerStderr,
+	); code != exitcode.OK {
+		t.Fatalf(
+			"controller cmdPostWorkReviewJSON() = %d, want %d; stderr=%s",
+			code,
+			exitcode.OK,
+			controllerStderr.String(),
+		)
+	}
+	controllerWant := postWorkReviewJSONVersionLine + "\n" +
+		"review_controller_turn_id=" + turnID + "\n" +
+		"review_controller_context_sha256=" + controllerDigest + "\n" +
+		"review_controller_sandbox_mode=read-only\n"
+	if got := controllerStdout.String(); got != controllerWant {
+		t.Fatalf("controller stdout = %q, want %q", got, controllerWant)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -214,6 +332,9 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 		"2026-07-13T17:13:25Z",
 		agentConfig,
 		bundle,
+		turnID,
+		controllerDigest,
+		"2026-07-13T17:13:25.400Z",
 	}
 	if code := cmdPostWorkReviewJSON(args, &stdout, &stderr); code != exitcode.OK {
 		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())

@@ -46,6 +46,12 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   [[ "$flattened" == *'must not rerun canonical validation'* ]] || return 1
   [[ "$flattened" == *'Never use `codex exec`, including as the controller'* ]] || return 1
   [[ "$flattened" == *'exact reviewer-result capture'* ]] || return 1
+  [[ "$flattened" == *'`authorize-spawn`'* ]] || return 1
+  [[ "$flattened" == *'authorize-spawn broad'* ]] || return 1
+  [[ "$flattened" == *'authorize-spawn verify'* ]] || return 1
+  [[ "$flattened" == *'record-session broad <child-session-uuid>'* ]] || return 1
+  [[ "$flattened" == *'record-session verify <child-session-uuid>'* ]] || return 1
+  [[ "$flattened" == *'Do not transcribe the result'* ]] || return 1
   [[ "$flattened" == *'Never inline bundle contents into the native tool call'* ]] || return 1
   [[ "$flattened" == *'absolute path value reported after `review_bundle=` as the entire `message`'* ]] || return 1
   [[ "$flattened" == *'Pass only the absolute path value after `verify_bundle=` as the verifier'* ]] || return 1
@@ -115,8 +121,8 @@ write_pr_gate_codex_metadata() {
   local base="$3"
   local diff_hash="$4"
   local verify_calls="${5:-0}"
-  local version="${6:-5}"
-  local attestation_version="${7:-3}"
+  local version="${6:-6}"
+  local attestation_version="${7:-4}"
   local total_calls=$((1 + verify_calls))
 
   {
@@ -127,6 +133,9 @@ write_pr_gate_codex_metadata() {
     printf 'scope=branch\n'
     printf 'base=%s\n' "$base"
     printf 'diff_hash=%s\n' "$diff_hash"
+    printf 'review_controller_prepare_turn_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n'
+    printf 'review_controller_prepare_context_sha256=%064d\n' 9
+    printf 'review_controller_prepare_sandbox_mode=read-only\n'
     printf 'broad_review_calls=1\n'
     printf 'verify_review_calls=%s\n' "$verify_calls"
     printf 'total_reviewer_calls=%s\n' "$total_calls"
@@ -140,6 +149,10 @@ write_pr_gate_codex_metadata() {
     printf 'review_call_1_approval_policy=never\n'
     printf 'review_call_1_history_mode=no-history\n'
     printf 'review_call_1_bundle_sha256=%064d\n' 0
+    printf 'review_call_1_controller_turn_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n'
+    printf 'review_call_1_controller_context_sha256=%064d\n' 3
+    printf 'review_call_1_controller_sandbox_mode=read-only\n'
+    printf 'review_call_1_spawn_authorized_at=2026-07-15T00:00:00.000000001Z\n'
     if [ "$verify_calls" -ge 1 ]; then
       printf 'review_call_2_kind=verify\n'
       printf 'review_call_2_session_id=22222222-2222-4222-8222-222222222222\n'
@@ -149,6 +162,10 @@ write_pr_gate_codex_metadata() {
       printf 'review_call_2_approval_policy=never\n'
       printf 'review_call_2_history_mode=no-history\n'
       printf 'review_call_2_bundle_sha256=%064d\n' 1
+      printf 'review_call_2_controller_turn_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\n'
+      printf 'review_call_2_controller_context_sha256=%064d\n' 4
+      printf 'review_call_2_controller_sandbox_mode=read-only\n'
+      printf 'review_call_2_spawn_authorized_at=2026-07-15T00:00:01.000000001Z\n'
     fi
     if [ "$verify_calls" -ge 2 ]; then
       printf 'review_call_3_kind=verify\n'
@@ -159,6 +176,10 @@ write_pr_gate_codex_metadata() {
       printf 'review_call_3_approval_policy=never\n'
       printf 'review_call_3_history_mode=no-history\n'
       printf 'review_call_3_bundle_sha256=%064d\n' 2
+      printf 'review_call_3_controller_turn_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc\n'
+      printf 'review_call_3_controller_context_sha256=%064d\n' 5
+      printf 'review_call_3_controller_sandbox_mode=read-only\n'
+      printf 'review_call_3_spawn_authorized_at=2026-07-15T00:00:02.000000001Z\n'
     fi
   } >"$file"
 }
@@ -233,7 +254,7 @@ remove_pr_gate_metadata_field() {
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 
-  # The v5 Codex marker requires an attestation version plus complete,
+  # The v6 Codex marker requires an attestation version plus complete,
   # consistently numbered metadata for every broad/verifier call.
   write_pr_gate_codex_metadata \
     "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
@@ -244,13 +265,20 @@ remove_pr_gate_metadata_field() {
   local required_field
   for required_field in \
     post_work_review_attestation_version \
+    review_controller_prepare_turn_id \
+    review_controller_prepare_context_sha256 \
+    review_controller_prepare_sandbox_mode \
     broad_review_calls \
     review_call_1_session_id \
     review_call_2_model \
     review_call_3_sandbox_mode \
     review_call_3_approval_policy \
     review_call_3_history_mode \
-    review_call_3_bundle_sha256; do
+    review_call_3_bundle_sha256 \
+    review_call_3_controller_turn_id \
+    review_call_3_controller_context_sha256 \
+    review_call_3_controller_sandbox_mode \
+    review_call_3_spawn_authorized_at; do
     write_pr_gate_codex_metadata \
       "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
     remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" "$required_field"
@@ -261,6 +289,24 @@ remove_pr_gate_metadata_field() {
 
   write_pr_gate_codex_metadata \
     "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 0 3
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
+  sed 's/review_call_1_controller_sandbox_mode=read-only/review_call_1_controller_sandbox_mode=workspace-write/' \
+    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
+  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ] || return 1
+  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
+
+  write_pr_gate_codex_metadata \
+    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
+  sed 's/review_call_1_spawn_authorized_at=.*/review_call_1_spawn_authorized_at=invalid/' \
+    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
+  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
@@ -397,6 +443,7 @@ remove_pr_gate_metadata_field() {
 
 setup_review_repo() {
   local repo="$1"
+  local parent_file controller_turn
   export CODEX_THREAD_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   export CODEX_HOME="$BATS_TEST_TMPDIR/codex-home"
   export CODEX_DIR="$CODEX_HOME"
@@ -404,6 +451,14 @@ setup_review_repo() {
   mkdir -p "$CODEX_HOME/agents" "$CODEX_HOME/sessions/2026/07/14"
   cp "$REPO_ROOT/codex/agents/post-work-reviewer.toml" "$CODEX_HOME/agents/"
   cp "$REPO_ROOT/codex/agents/post-work-verifier.toml" "$CODEX_HOME/agents/"
+  parent_file="$(attested_parent_session_path)"
+  controller_turn="$(review_controller_turn_id)"
+  {
+    printf '{"timestamp":"2026-07-14T00:00:00Z","type":"session_meta","payload":{"id":"%s"}}\n' \
+      "$CODEX_THREAD_ID"
+    printf '{"timestamp":"2026-07-14T00:00:01Z","type":"turn_context","payload":{"turn_id":"%s","model":"gpt-5.6-luna","effort":"ultra","approval_policy":"on-request","sandbox_policy":{"type":"read-only"}}}\n' \
+      "$controller_turn"
+  } >"$parent_file"
   mkdir -p "$repo"
   git -C "$repo" init -q
   git -C "$repo" config user.email "fanout-test@example.com"
@@ -446,6 +501,35 @@ env_value() {
 bundle_sha256_for() {
   "$POST_WORK_REVIEW_JSON_HELPER" __post-work-review-json digest "$1" |
     awk -F= '$1 == "bundle_sha256" { print $2; found=1 } END { exit(found ? 0 : 1) }'
+}
+
+authorize_review_spawn() {
+  local repo="$1"
+  local kind="$2"
+  local index key call_timestamp authorized_at call_id parent_file controller_turn
+  index=1
+  [ "$kind" = "verify" ] && index="$(env_value "$repo" fix_rounds)"
+  if [ "$kind" = "broad" ]; then
+    key="broad_spawn_authorized_at"
+    call_timestamp="$(env_value "$repo" prepared_at)"
+  else
+    key="verify_spawn_${index}_authorized_at"
+    call_timestamp="$(env_value "$repo" "verify_prepared_at_$index")"
+  fi
+  if ! env_value "$repo" "$key" >/dev/null 2>&1; then
+    (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" authorize-spawn "$kind") \
+      >"$BATS_TEST_TMPDIR/authorize-${kind}-${index}.out" || return 1
+    authorized_at="$(env_value "$repo" "$key")"
+    call_id="call-authorize-${kind}-${index}"
+    parent_file="$(attested_parent_session_path)"
+    controller_turn="$(review_controller_turn_id)"
+    {
+      printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","name":"exec_command","namespace":"functions","call_id":"%s","arguments":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
+        "$call_timestamp" "$call_id" "$controller_turn"
+      printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","call_id":"%s","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
+        "$authorized_at" "$call_id" "$controller_turn"
+    } >>"$parent_file"
+  fi
 }
 
 set_env_value() {
@@ -524,6 +608,10 @@ attested_parent_session_path() {
   attested_session_path "$CODEX_THREAD_ID"
 }
 
+review_controller_turn_id() {
+  printf '%s\n' "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+}
+
 write_attested_session() {
   local session_id="$1"
   local role="$2"
@@ -535,8 +623,9 @@ write_attested_session() {
   local requested_role="${8:-$role}"
   local timestamp="${9:-2099-01-01T00:00:00Z}"
   local write_parent="${10:-true}"
+  local spawn_timestamp="2098-12-31T23:59:59Z"
   local reasoning_effort="xhigh"
-  local session_file parent_file message role_json bundle_json spawn_arguments spawn_arguments_json call_id
+  local session_file parent_file message role_json bundle_json spawn_arguments spawn_arguments_json call_id controller_turn
   [ "$requested_role" = "post-work-verifier" ] && reasoning_effort="high"
   session_file="$(attested_session_path "$session_id")"
   message="$(cat "$result_file")"
@@ -570,14 +659,15 @@ write_attested_session() {
       "$timestamp" "$CODEX_THREAD_ID" >"$parent_file"
   fi
   call_id="call-${session_id//-/}"
+  controller_turn="$(review_controller_turn_id)"
   spawn_arguments="{\"agent_type\":\"$requested_role\",\"fork_context\":false,\"message\":\"$bundle_json\"}"
   spawn_arguments_json="${spawn_arguments//\\/\\\\}"
   spawn_arguments_json="${spawn_arguments_json//\"/\\\"}"
   {
-    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"%s","arguments":"%s"}}\n' \
-      "$timestamp" "$call_id" "$spawn_arguments_json"
+    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"%s","arguments":"%s","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
+      "$spawn_timestamp" "$call_id" "$spawn_arguments_json" "$controller_turn"
     printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","call_id":"%s","output":"{\\\"agent_id\\\":\\\"%s\\\"}"}}\n' \
-      "$timestamp" "$call_id" "$session_id"
+      "$spawn_timestamp" "$call_id" "$session_id"
   } >>"$parent_file"
 }
 
@@ -607,6 +697,7 @@ write_broad_result_json() {
   cat >"$out_file" <<EOF
 {"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","bundle_sha256":"$bundle_sha256","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
 EOF
+  authorize_review_spawn "$repo" broad || return 1
   write_attested_session "$session_id" "post-work-reviewer" "gpt-5.6-sol" "read-only" \
     "$out_file" review_task "$(env_value "$repo" review_bundle)" post-work-reviewer
 }
@@ -635,6 +726,7 @@ write_verify_result_json() {
   cat >"$out_file" <<EOF
 {"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","bundle_sha256":"$bundle_sha256","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
 EOF
+  authorize_review_spawn "$repo" verify || return 1
   write_attested_session "$session_id" "post-work-verifier" "gpt-5.6-terra" "read-only" \
     "$out_file" review_task "$(env_value "$repo" verify_bundle)" post-work-verifier
 }
@@ -693,6 +785,149 @@ prepare_branch_review() {
     "$(bundle_sha256_for "$state/review-bundle.md")" ] || return 1
   grep -Fq '"bundle_sha256":"<lowercase SHA-256 of the exact bundle bytes>"' \
     "$state/review-bundle.md" || return 1
+}
+
+@test "post-work-review shard-10: prepare attests the current read-only controller context" {
+  local repo="$BATS_TEST_TMPDIR/review-controller-prepare"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 0 ]
+  [ "$(env_value "$repo" review_controller_prepare_turn_id)" = \
+    "$(review_controller_turn_id)" ] || return 1
+  [[ "$(env_value "$repo" review_controller_prepare_context_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [ "$(env_value "$repo" review_controller_prepare_sandbox_mode)" = "read-only" ] || return 1
+}
+
+@test "post-work-review shard-10: prepare rejects a workspace-write controller before bundle creation" {
+  local repo="$BATS_TEST_TMPDIR/review-controller-prepare-write"
+  local parent
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  parent="$(attested_parent_session_path)"
+  sed 's/"sandbox_policy":{"type":"read-only"}/"sandbox_policy":{"type":"workspace-write"}/' \
+    "$parent" >"$parent.tmp"
+  mv "$parent.tmp" "$parent"
+
+  run_review_base "$repo" prepare
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"review controller attestation failed"* ]] || return 1
+  [ ! -e "$(state_dir_for "$repo")/review-bundle.md" ]
+}
+
+@test "post-work-review shard-10: authorize-spawn binds one read-only controller turn" {
+  local repo="$BATS_TEST_TMPDIR/review-controller-authorize"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+
+  run_review "$repo" authorize-spawn broad
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spawn_authorized=true"* ]] || return 1
+  [[ "$output" == *"review_controller_turn_id=$(review_controller_turn_id)"* ]] || return 1
+  [[ "$output" == *"review_controller_sandbox_mode=read-only"* ]] || return 1
+  [[ "$(env_value "$repo" broad_spawn_controller_context_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
+
+  run_review "$repo" authorize-spawn broad
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"spawn authorization already exists"* ]] || return 1
+}
+
+@test "post-work-review shard-10: authorize-spawn rejects a newly writable controller turn" {
+  local repo="$BATS_TEST_TMPDIR/review-controller-authorize-write"
+  local parent
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  parent="$(attested_parent_session_path)"
+  printf '%s\n' \
+    '{"timestamp":"2026-07-14T00:00:02Z","type":"turn_context","payload":{"turn_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","model":"gpt-5.6-luna","effort":"ultra","approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"}}}' \
+    >>"$parent"
+
+  run_review "$repo" authorize-spawn broad
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"review controller attestation failed"* ]] || return 1
+  if env_value "$repo" broad_spawn_authorized_at >/dev/null 2>&1; then
+    return 1
+  fi
+}
+
+@test "post-work-review shard-10: record-session preserves child UTF-8 without model re-encoding" {
+  local repo="$BATS_TEST_TMPDIR/review-record-session-unicode"
+  local result="$BATS_TEST_TMPDIR/review-record-session-unicode.json"
+  local finding session_id stored gitdir
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  finding='{"severity":"major","file":"tracked.txt","line":1,"title":"Unicode survives","description":"controller—reviewer間の証跡","recommendation":"Keep exact UTF-8."}'
+  write_broad_result_json "$repo" "record-session-unicode" false false false \
+    "$finding" "$result"
+  session_id="$(attested_session_uuid record-session-unicode)"
+
+  run_review "$repo" record-session broad "$session_id"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"recorded=true"* ]] || return 1
+  stored="$(state_dir_for "$repo")/results/broad-001.json"
+  grep -Fq 'controller—reviewer間の証跡' "$stored" || return 1
+  iconv -f UTF-8 -t UTF-8 "$stored" >/dev/null || return 1
+  gitdir="$(gitdir_for "$repo")"
+  [ -z "$(find "$gitdir" -maxdepth 1 -type d -name 'post-work-review-json.*' -print -quit)" ]
+}
+
+@test "post-work-review shard-10: record-session fails closed for an unknown child UUID" {
+  local repo="$BATS_TEST_TMPDIR/review-record-session-missing"
+  local missing="ffffffff-ffff-4fff-8fff-ffffffffffff"
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ]
+  run_review "$repo" authorize-spawn broad
+  [ "$status" -eq 0 ]
+
+  run_review "$repo" record-session broad "$missing"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stop_reason=reviewer_attestation_unavailable"* ]] || return 1
+  [ ! -e "$(state_dir_for "$repo")/calls/broad-001.env" ]
+  [ -z "$(find "$(gitdir_for "$repo")" -maxdepth 1 -type d -name 'post-work-review-json.*' -print -quit)" ]
+}
+
+@test "post-work-review shard-10: record rejects a tool call inserted after spawn authorization" {
+  local repo="$BATS_TEST_TMPDIR/review-controller-intervening-tool"
+  local result="$BATS_TEST_TMPDIR/review-controller-intervening-tool.json"
+  local parent controller_turn
+  setup_review_repo "$repo"
+  make_branch_change "$repo"
+  run_review_base "$repo" prepare
+  [ "$status" -eq 0 ] || return 1
+  authorize_review_spawn "$repo" broad || return 1
+
+  parent="$(attested_parent_session_path)"
+  controller_turn="$(review_controller_turn_id)"
+  {
+    printf '{"timestamp":"2098-01-01T00:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","namespace":"functions","call_id":"call-intervening","arguments":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
+      "$controller_turn"
+    printf '{"timestamp":"2098-01-01T00:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-intervening","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
+      "$controller_turn"
+  } >>"$parent"
+  write_broad_result_json "$repo" "controller-intervening-tool" false false false \
+    "" "$result"
+
+  run_review "$repo" record broad "$result"
+
+  [ "$status" -eq 1 ] || return 1
+  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]] || return 1
+  [[ "$output" == *"another tool invocation appears between spawn authorization and spawn"* ]] || return 1
+  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
 }
 
 @test "post-work-review shard-8: prepare paths are usable from caller subdirectories" {
@@ -754,6 +989,7 @@ prepare_branch_review() {
   make_branch_change "$repo"
   run_review_base "$repo" prepare
   [ "$status" -eq 0 ] || return 1
+  authorize_review_spawn "$repo" broad || return 1
 
   state="$(state_dir_for "$repo")"
   bundle="$state/review-bundle.md"
@@ -1040,8 +1276,8 @@ prepare_branch_review() {
   grep -Fxq "head=$(git -C "$repo" rev-parse HEAD)" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base=main" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "post_work_review_version=5" "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "post_work_review_attestation_version=3" "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Fxq "post_work_review_version=6" "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Fxq "post_work_review_attestation_version=4" "$gitdir/post-work-review-passed.meta" || return 1
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "review_call_1_kind=broad" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "review_call_1_agent_role=post-work-reviewer" "$gitdir/post-work-review-passed.meta"
@@ -1050,6 +1286,16 @@ prepare_branch_review() {
   grep -Fxq "review_call_1_approval_policy=never" "$gitdir/post-work-review-passed.meta" || return 1
   grep -Fxq "review_call_1_history_mode=no-history" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "review_call_1_bundle_sha256=$(env_value "$repo" review_bundle_sha256)" \
+    "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Fxq "review_controller_prepare_sandbox_mode=read-only" \
+    "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Fxq "review_call_1_controller_turn_id=$(review_controller_turn_id)" \
+    "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Eq '^review_call_1_controller_context_sha256=[0-9a-f]{64}$' \
+    "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Fxq "review_call_1_controller_sandbox_mode=read-only" \
+    "$gitdir/post-work-review-passed.meta" || return 1
+  grep -Eq '^review_call_1_spawn_authorized_at=.*Z$' \
     "$gitdir/post-work-review-passed.meta" || return 1
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
 }
@@ -1270,7 +1516,7 @@ EOF
   [ -f "$receipt" ]
   [ ! -e "$state/results/broad-001.json" ]
   grep -Fxq "kind=broad" "$receipt"
-  grep -Fxq "attestation_version=3" "$receipt" || return 1
+  grep -Fxq "attestation_version=4" "$receipt" || return 1
   grep -Fxq "session_id=$session_id" "$receipt"
   grep -Fxq "agent_role=post-work-reviewer" "$receipt"
   grep -Fxq "model=gpt-5.6-sol" "$receipt"
@@ -1278,6 +1524,10 @@ EOF
   grep -Fxq "approval_policy=never" "$receipt" || return 1
   grep -Fxq "history_mode=no-history" "$receipt"
   grep -Fxq "bundle_sha256=$(env_value "$repo" review_bundle_sha256)" "$receipt" || return 1
+  grep -Fxq "controller_turn_id=$(review_controller_turn_id)" "$receipt" || return 1
+  grep -Eq '^controller_context_sha256=[0-9a-f]{64}$' "$receipt" || return 1
+  grep -Fxq "controller_sandbox_mode=read-only" "$receipt" || return 1
+  grep -Eq '^spawn_authorized_at=.*Z$' "$receipt" || return 1
 
   # Simulate interruption after the atomic receipt rename but before the
   # driver persists invalid_review_result.
@@ -2321,23 +2571,23 @@ EOF
   [ "$status" -eq 0 ]
   run_review_base "$repo" prepare
   [ "$status" -eq 0 ]
-  [ "$(env_value "$repo" post_work_review_attestation_version)" = "3" ] || return 1
+  [ "$(env_value "$repo" post_work_review_attestation_version)" = "4" ] || return 1
   [[ "$(env_value "$repo" review_bundle_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
 }
 
 @test "post-work-review shard-12: rejects a hidden verifier spawn in current state" {
-  local repo="$BATS_TEST_TMPDIR/attest-v3-hidden-verifier"
-  local result="$BATS_TEST_TMPDIR/attest-v3-hidden-verifier.json"
+  local repo="$BATS_TEST_TMPDIR/attest-v4-hidden-verifier"
+  local result="$BATS_TEST_TMPDIR/attest-v4-hidden-verifier.json"
   local state verifier_session
   setup_review_repo "$repo"
   make_branch_change "$repo"
   run_review_base "$repo" prepare
   [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-v3-hidden-verifier" false false false "" "$result"
+  write_broad_result_json "$repo" "attest-v4-hidden-verifier" false false false "" "$result"
   run_review "$repo" record broad "$result"
   [ "$status" -eq 0 ]
   state="$(state_dir_for "$repo")"
-  verifier_session="$(attested_session_uuid attest-v3-hidden-verifier-call)"
+  verifier_session="$(attested_session_uuid attest-v4-hidden-verifier-call)"
   write_attested_session "$verifier_session" post-work-verifier gpt-5.6-terra read-only \
     "$result" review_task "$state/hidden-verify-bundle.md" post-work-verifier
 

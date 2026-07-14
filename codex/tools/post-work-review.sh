@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="5"
-ATTESTATION_VERSION="3"
-JSON_HELPER_VERSION="4"
+VERSION="6"
+ATTESTATION_VERSION="4"
+JSON_HELPER_VERSION="5"
 BACKEND="bounded-isolated-reviewer"
 REVIEWER_AGENT="post-work-reviewer"
 VERIFIER_AGENT="post-work-verifier"
@@ -482,10 +482,20 @@ publish_verify_round() {
 }
 
 ensure_current_review_state() {
+  local controller_turn controller_digest controller_sandbox
   [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] || \
     die "post-work-review state version mismatch; run reset and prepare again"
   [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "$ATTESTATION_VERSION" ] || \
     die "post-work-review attestation state is unavailable; run reset and prepare again"
+  controller_turn="$(env_get review_controller_prepare_turn_id 2>/dev/null || true)"
+  controller_digest="$(env_get review_controller_prepare_context_sha256 2>/dev/null || true)"
+  controller_sandbox="$(env_get review_controller_prepare_sandbox_mode 2>/dev/null || true)"
+  is_canonical_uuid "$controller_turn" || \
+    die "review controller prepare attestation is unavailable; run reset and prepare again"
+  [[ "$controller_digest" =~ ^[0-9a-f]{64}$ ]] || \
+    die "review controller prepare context digest is unavailable; run reset and prepare again"
+  [ "$controller_sandbox" = "read-only" ] || \
+    die "review controller prepare sandbox is not read-only; run reset and prepare again"
 }
 
 JSON_CACHE_ROOT=""
@@ -585,6 +595,104 @@ json_bundle_sha256() {
   printf '%s\n' "$value"
 }
 
+json_attest_review_controller() {
+  local sessions_root parent_thread_id output status turn_id context_sha256 sandbox_mode
+  sessions_root="$1"
+  parent_thread_id="$2"
+  ensure_json_helper || die "$JSON_HELPER_ERROR"
+  output="$("$JSON_HELPER" __post-work-review-json controller \
+    "$sessions_root" "$parent_thread_id" 2>/dev/null)"
+  status=$?
+  printf '%s\n' "$output" | grep -Fxq \
+    "post_work_review_json_helper_version=$JSON_HELPER_VERSION" || \
+    die "post-work-review JSON helper is incompatible before controller attestation"
+  [ "$status" -eq 0 ] || die "review controller attestation failed"
+  turn_id="$(printf '%s\n' "$output" | awk -F= '$1 == "review_controller_turn_id" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    die "review controller attestation did not return a turn ID"
+  context_sha256="$(printf '%s\n' "$output" | awk -F= '$1 == "review_controller_context_sha256" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    die "review controller attestation did not return a context digest"
+  sandbox_mode="$(printf '%s\n' "$output" | awk -F= '$1 == "review_controller_sandbox_mode" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    die "review controller attestation did not return a sandbox mode"
+  is_canonical_uuid "$turn_id" || die "review controller attestation returned an invalid turn ID"
+  [[ "$context_sha256" =~ ^[0-9a-f]{64}$ ]] || \
+    die "review controller attestation returned an invalid context digest"
+  [ "$sandbox_mode" = "read-only" ] || \
+    die "review controller attestation did not prove a read-only sandbox"
+  REVIEW_CONTROLLER_TURN_ID="$turn_id"
+  REVIEW_CONTROLLER_CONTEXT_SHA256="$context_sha256"
+  REVIEW_CONTROLLER_SANDBOX_MODE="$sandbox_mode"
+}
+
+json_extract_session_result() {
+  local sessions_root session_id out output status extracted_session
+  sessions_root="$1"
+  session_id="$2"
+  out="$3"
+  ensure_json_helper || attestation_fail \
+    "reviewer_attestation_unavailable" "$JSON_HELPER_ERROR"
+  output="$("$JSON_HELPER" __post-work-review-json extract \
+    "$sessions_root" "$session_id" "$out" 2>/dev/null)"
+  status=$?
+  printf '%s\n' "$output" | grep -Fxq \
+    "post_work_review_json_helper_version=$JSON_HELPER_VERSION" || \
+    attestation_fail "reviewer_attestation_unavailable" \
+      "post-work-review JSON helper is incompatible before result extraction"
+  [ "$status" -eq 0 ] || attestation_fail \
+    "reviewer_attestation_unavailable" \
+    "post-work-review JSON helper failed to extract the reviewer result"
+  extracted_session="$(printf '%s\n' "$output" | awk -F= '$1 == "extracted_session_id" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    attestation_fail "reviewer_attestation_unavailable" \
+      "post-work-review JSON helper did not return extracted_session_id"
+  [ "$extracted_session" = "$session_id" ] || \
+    attestation_fail "reviewer_attestation_mismatch" \
+      "post-work-review JSON helper extracted a different reviewer session"
+  [ -s "$out" ] && [ -f "$out" ] && [ ! -L "$out" ] || \
+    attestation_fail "reviewer_attestation_unavailable" \
+      "extracted reviewer result is not a non-empty regular file"
+}
+
+spawn_authorization_key_prefix() {
+  local kind index
+  kind="$1"
+  index="${2:-1}"
+  case "$kind" in
+    broad) printf 'broad_spawn\n' ;;
+    verify) printf 'verify_spawn_%s\n' "$index" ;;
+    *) die "invalid spawn authorization kind: $kind" ;;
+  esac
+}
+
+spawn_authorization_value() {
+  local kind index field prefix
+  kind="$1"
+  index="$2"
+  field="$3"
+  prefix="$(spawn_authorization_key_prefix "$kind" "$index")"
+  env_get "${prefix}_${field}"
+}
+
+publish_spawn_authorization() {
+  local kind index prefix file tmp field
+  kind="$1"
+  index="$2"
+  prefix="$(spawn_authorization_key_prefix "$kind" "$index")"
+  file="$(review_env_path)"
+  for field in authorized_at controller_turn_id controller_context_sha256 controller_sandbox_mode; do
+    if env_get "${prefix}_${field}" >/dev/null 2>&1; then
+      die "spawn authorization already exists for $kind-$index"
+    fi
+  done
+  tmp="$file.tmp.$$"
+  {
+    cat "$file"
+    printf '%s_authorized_at=%s\n' "$prefix" "$SPAWN_AUTHORIZED_AT"
+    printf '%s_controller_turn_id=%s\n' "$prefix" "$REVIEW_CONTROLLER_TURN_ID"
+    printf '%s_controller_context_sha256=%s\n' "$prefix" "$REVIEW_CONTROLLER_CONTEXT_SHA256"
+    printf '%s_controller_sandbox_mode=%s\n' "$prefix" "$REVIEW_CONTROLLER_SANDBOX_MODE"
+  } >"$tmp" || die "failed to stage spawn authorization"
+  mv "$tmp" "$file" || die "failed to publish spawn authorization"
+}
+
 expected_bundle_sha256() {
   local kind index
   kind="$1"
@@ -624,6 +732,7 @@ agent_config_for() {
 
 json_attest_result() {
   local kind file out used_sessions call_index prepared_at bundle
+  local controller_turn_id controller_context_sha256 spawn_authorized_at
   kind="$1"
   file="$2"
   out="$3"
@@ -641,14 +750,26 @@ json_attest_result() {
       ;;
     *) die "invalid result kind: $kind" ;;
   esac
+  controller_turn_id="$(spawn_authorization_value "$kind" "$call_index" controller_turn_id 2>/dev/null || true)"
+  controller_context_sha256="$(spawn_authorization_value "$kind" "$call_index" controller_context_sha256 2>/dev/null || true)"
+  spawn_authorized_at="$(spawn_authorization_value "$kind" "$call_index" authorized_at 2>/dev/null || true)"
+  is_canonical_uuid "$controller_turn_id" || die "review spawn authorization turn ID is unavailable"
+  [[ "$controller_context_sha256" =~ ^[0-9a-f]{64}$ ]] || \
+    die "review spawn authorization context digest is unavailable"
+  [ "$(spawn_authorization_value "$kind" "$call_index" controller_sandbox_mode 2>/dev/null || true)" = "read-only" ] || \
+    die "review spawn authorization sandbox is not read-only"
+  [ -n "$spawn_authorized_at" ] || die "review spawn authorization timestamp is unavailable"
   if [ -n "$used_sessions" ]; then
     "$JSON_HELPER" __post-work-review-json attest \
       "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
-      "$prepared_at" "$(agent_config_for "$kind")" "$bundle" "$used_sessions"
+      "$prepared_at" "$(agent_config_for "$kind")" "$bundle" \
+      "$controller_turn_id" "$controller_context_sha256" "$spawn_authorized_at" \
+      "$used_sessions"
   else
     "$JSON_HELPER" __post-work-review-json attest \
       "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
-      "$prepared_at" "$(agent_config_for "$kind")" "$bundle"
+      "$prepared_at" "$(agent_config_for "$kind")" "$bundle" \
+      "$controller_turn_id" "$controller_context_sha256" "$spawn_authorized_at"
   fi
 }
 
@@ -873,7 +994,7 @@ call_slot_used() {
 }
 
 write_call_receipt() {
-  local kind index result receipt tmp bundle_sha256 approval_policy
+  local kind index result receipt tmp bundle_sha256 approval_policy controller_sandbox
   kind="$1"
   index="$2"
   result="$3"
@@ -881,6 +1002,8 @@ write_call_receipt() {
   [[ "$bundle_sha256" =~ ^[0-9a-f]{64}$ ]] || die "prepared bundle_sha256 is unavailable"
   approval_policy="$(json_attested_scalar "$result" attested_approval_policy 2>/dev/null || true)"
   [ "$approval_policy" = "never" ] || die "attested reviewer approval policy must be never"
+  controller_sandbox="$(json_attested_scalar "$result" attested_controller_sandbox_mode 2>/dev/null || true)"
+  [ "$controller_sandbox" = "read-only" ] || die "attested review controller sandbox must be read-only"
   receipt="$(call_receipt_path "$kind" "$index")"
   tmp="$receipt.tmp.$$"
   mkdir -p "$(calls_dir)" || die "failed to create review calls dir"
@@ -897,6 +1020,10 @@ write_call_receipt() {
       printf 'approval_policy=%s\n' "$approval_policy"
       printf 'history_mode=%s\n' "$(json_attested_scalar "$result" attested_history_mode)"
       printf 'bundle_sha256=%s\n' "$bundle_sha256"
+      printf 'controller_turn_id=%s\n' "$(json_attested_scalar "$result" attested_controller_turn_id)"
+      printf 'controller_context_sha256=%s\n' "$(json_attested_scalar "$result" attested_controller_context_sha256)"
+      printf 'controller_sandbox_mode=%s\n' "$controller_sandbox"
+      printf 'spawn_authorized_at=%s\n' "$(json_attested_scalar "$result" attested_spawn_authorized_at)"
     } >"$tmp"
   ) || die "failed to write review call receipt"
   mv "$tmp" "$receipt" || die "failed to store review call receipt"
@@ -965,7 +1092,9 @@ recorded_call_receipts_match() {
   local kind index max receipt result expected receipt_digest result_digest
   local receipt_kind receipt_attestation receipt_session result_session receipt_role result_role
   local receipt_model result_model receipt_sandbox result_sandbox receipt_approval result_approval
-  local receipt_history result_history
+  local receipt_history result_history receipt_controller_turn result_controller_turn
+  local receipt_controller_digest result_controller_digest receipt_controller_sandbox result_controller_sandbox
+  local receipt_authorized_at result_authorized_at
   for kind in broad verify; do
     max=1
     [ "$kind" = "verify" ] && max=2
@@ -992,6 +1121,14 @@ recorded_call_receipts_match() {
         result_sandbox="$(json_attested_scalar "$result" attested_sandbox_mode 2>/dev/null || true)"
         receipt_history="$(call_receipt_scalar "$receipt" history_mode 2>/dev/null || true)"
         result_history="$(json_attested_scalar "$result" attested_history_mode 2>/dev/null || true)"
+        receipt_controller_turn="$(call_receipt_scalar "$receipt" controller_turn_id 2>/dev/null || true)"
+        result_controller_turn="$(json_attested_scalar "$result" attested_controller_turn_id 2>/dev/null || true)"
+        receipt_controller_digest="$(call_receipt_scalar "$receipt" controller_context_sha256 2>/dev/null || true)"
+        result_controller_digest="$(json_attested_scalar "$result" attested_controller_context_sha256 2>/dev/null || true)"
+        receipt_controller_sandbox="$(call_receipt_scalar "$receipt" controller_sandbox_mode 2>/dev/null || true)"
+        result_controller_sandbox="$(json_attested_scalar "$result" attested_controller_sandbox_mode 2>/dev/null || true)"
+        receipt_authorized_at="$(call_receipt_scalar "$receipt" spawn_authorized_at 2>/dev/null || true)"
+        result_authorized_at="$(json_attested_scalar "$result" attested_spawn_authorized_at 2>/dev/null || true)"
         [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
         [ "$receipt_kind" = "$kind" ] || return 1
         [ "$receipt_attestation" = "$ATTESTATION_VERSION" ] || return 1
@@ -1002,6 +1139,14 @@ recorded_call_receipts_match() {
         [ "$receipt_digest" = "$expected" ] && [ "$result_digest" = "$expected" ] || return 1
         [ "$receipt_approval" = "never" ] && [ "$result_approval" = "never" ] || return 1
         [ "$receipt_history" = "no-history" ] && [ "$result_history" = "no-history" ] || return 1
+        is_canonical_uuid "$receipt_controller_turn" || return 1
+        [ "$receipt_controller_turn" = "$result_controller_turn" ] || return 1
+        [[ "$receipt_controller_digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+        [ "$receipt_controller_digest" = "$result_controller_digest" ] || return 1
+        [ "$receipt_controller_sandbox" = "read-only" ] && \
+          [ "$result_controller_sandbox" = "read-only" ] || return 1
+        [ -n "$receipt_authorized_at" ] && \
+          [ "$receipt_authorized_at" = "$result_authorized_at" ] || return 1
       fi
       index=$((index + 1))
     done
@@ -1131,6 +1276,7 @@ validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
   local sandbox_mode head diff_hash result_head result_diff bundle_sha256 expected_sha256 finding_count actual_count missing_required truncated all_fixed new_regressions
   local actual_session actual_role actual_sandbox actual_approval actual_history attestation_version used_sessions call_index
+  local actual_controller_turn actual_controller_digest actual_controller_sandbox actual_authorized_at
   kind="$1"
   file="$2"
   check_target="${3:-target}"
@@ -1171,6 +1317,10 @@ validate_result() {
   actual_sandbox="$(json_attested_scalar "$file" attested_sandbox_mode 2>/dev/null || true)"
   actual_approval="$(json_attested_scalar "$file" attested_approval_policy 2>/dev/null || true)"
   actual_history="$(json_attested_scalar "$file" attested_history_mode 2>/dev/null || true)"
+  actual_controller_turn="$(json_attested_scalar "$file" attested_controller_turn_id 2>/dev/null || true)"
+  actual_controller_digest="$(json_attested_scalar "$file" attested_controller_context_sha256 2>/dev/null || true)"
+  actual_controller_sandbox="$(json_attested_scalar "$file" attested_controller_sandbox_mode 2>/dev/null || true)"
+  actual_authorized_at="$(json_attested_scalar "$file" attested_spawn_authorized_at 2>/dev/null || true)"
   [ "$session" = "$actual_session" ] || \
     attestation_fail "reviewer_attestation_mismatch" "reviewer_session_id does not match the attested child session"
   [ "$actual_role" = "$expected_agent" ] || \
@@ -1179,6 +1329,17 @@ validate_result() {
     attestation_fail "reviewer_attestation_mismatch" "attested reviewer history mode must be no-history"
   [ "$actual_approval" = "never" ] || \
     attestation_fail "reviewer_attestation_mismatch" "attested reviewer approval policy must be never"
+  [ "$actual_controller_turn" = \
+    "$(spawn_authorization_value "$kind" "$call_index" controller_turn_id 2>/dev/null || true)" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested review controller turn mismatch"
+  [ "$actual_controller_digest" = \
+    "$(spawn_authorization_value "$kind" "$call_index" controller_context_sha256 2>/dev/null || true)" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested review controller context mismatch"
+  [ "$actual_controller_sandbox" = "read-only" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested review controller sandbox must be read-only"
+  [ "$actual_authorized_at" = \
+    "$(spawn_authorization_value "$kind" "$call_index" authorized_at 2>/dev/null || true)" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested spawn authorization timestamp mismatch"
 
   same_agent="$(json_scalar "$file" same_agent_review 2>/dev/null || true)"
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
@@ -1471,6 +1632,10 @@ attested_call_scalar() {
     sandbox_mode) result_key="attested_sandbox_mode" ;;
     approval_policy) result_key="attested_approval_policy" ;;
     history_mode) result_key="attested_history_mode" ;;
+    controller_turn_id) result_key="attested_controller_turn_id" ;;
+    controller_context_sha256) result_key="attested_controller_context_sha256" ;;
+    controller_sandbox_mode) result_key="attested_controller_sandbox_mode" ;;
+    spawn_authorized_at) result_key="attested_spawn_authorized_at" ;;
     bundle_sha256)
       json_scalar "$result" bundle_sha256
       return
@@ -1493,6 +1658,10 @@ print_attested_call_lines() {
     printf 'review_call_%s_approval_policy=%s\n' "$call" "$(attested_call_scalar broad 1 approval_policy)"
     printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar broad 1 history_mode)"
     printf 'review_call_%s_bundle_sha256=%s\n' "$call" "$(attested_call_scalar broad 1 bundle_sha256)"
+    printf 'review_call_%s_controller_turn_id=%s\n' "$call" "$(attested_call_scalar broad 1 controller_turn_id)"
+    printf 'review_call_%s_controller_context_sha256=%s\n' "$call" "$(attested_call_scalar broad 1 controller_context_sha256)"
+    printf 'review_call_%s_controller_sandbox_mode=%s\n' "$call" "$(attested_call_scalar broad 1 controller_sandbox_mode)"
+    printf 'review_call_%s_spawn_authorized_at=%s\n' "$call" "$(attested_call_scalar broad 1 spawn_authorized_at)"
   fi
   for i in 1 2; do
     call_slot_used verify "$i" || continue
@@ -1507,6 +1676,10 @@ print_attested_call_lines() {
     printf 'review_call_%s_approval_policy=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" approval_policy)"
     printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" history_mode)"
     printf 'review_call_%s_bundle_sha256=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" bundle_sha256)"
+    printf 'review_call_%s_controller_turn_id=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" controller_turn_id)"
+    printf 'review_call_%s_controller_context_sha256=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" controller_context_sha256)"
+    printf 'review_call_%s_controller_sandbox_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" controller_sandbox_mode)"
+    printf 'review_call_%s_spawn_authorized_at=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" spawn_authorized_at)"
   done
 }
 
@@ -1520,6 +1693,12 @@ print_state_lines() {
   printf 'head=%s\n' "$(env_get head 2>/dev/null || echo unknown)"
   printf 'diff_hash=%s\n' "$(env_get diff_hash 2>/dev/null || echo unknown)"
   printf 'changed_files=%s\n' "$(env_get changed_files 2>/dev/null || echo 0)"
+  printf 'review_controller_prepare_turn_id=%s\n' \
+    "$(env_get review_controller_prepare_turn_id 2>/dev/null || echo unknown)"
+  printf 'review_controller_prepare_context_sha256=%s\n' \
+    "$(env_get review_controller_prepare_context_sha256 2>/dev/null || echo unknown)"
+  printf 'review_controller_prepare_sandbox_mode=%s\n' \
+    "$(env_get review_controller_prepare_sandbox_mode 2>/dev/null || echo unknown)"
   printf 'fix_rounds=%s\n' "$(env_get fix_rounds 2>/dev/null || echo 0)"
   printf 'pending_verify=%s\n' "$(env_get pending_verify 2>/dev/null || echo 0)"
   printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
@@ -1581,6 +1760,9 @@ write_review_env() {
     printf 'prepared_at=%s\n' "$PREPARED_AT"
     printf 'parent_thread_id=%s\n' "$PARENT_THREAD_ID"
     printf 'sessions_root=%s\n' "$SESSIONS_ROOT"
+    printf 'review_controller_prepare_turn_id=%s\n' "$REVIEW_CONTROLLER_TURN_ID"
+    printf 'review_controller_prepare_context_sha256=%s\n' "$REVIEW_CONTROLLER_CONTEXT_SHA256"
+    printf 'review_controller_prepare_sandbox_mode=%s\n' "$REVIEW_CONTROLLER_SANDBOX_MODE"
     printf 'reviewer_agent_config=%s\n' "$REVIEWER_AGENT_CONFIG"
     printf 'verifier_agent_config=%s\n' "$VERIFIER_AGENT_CONFIG"
     printf 'scope=%s\n' "$SCOPE"
@@ -1742,6 +1924,7 @@ cmd_prepare() {
       stop_existing_review_state "$latest_findings" "review_budget_exhausted"
     fi
   fi
+  json_attest_review_controller "$SESSIONS_ROOT" "$PARENT_THREAD_ID"
   rm -rf "$state"
   rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
   mkdir -p "$results" "$calls" || die "failed to create post-work-review state"
@@ -1853,6 +2036,70 @@ cmd_prepare_verify() {
   print_state_lines
 }
 
+cmd_authorize_spawn() {
+  local kind broad_calls verify_calls total_calls index
+  kind="${1:-}"
+  [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || \
+    die "authorize-spawn kind must be broad or verify"
+  ensure_repo
+  ensure_read_only_subagent_sandbox_available
+  cd "$(repo_root)" || die "failed to enter repo root"
+  [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  ensure_current_review_state
+  json_cache_prepare_stored_results
+  stop_if_review_state_stopped
+
+  broad_calls="$(broad_review_calls)"
+  verify_calls="$(verify_review_calls)"
+  total_calls="$(total_reviewer_calls)"
+  [ "$total_calls" -lt "$MAX_TOTAL_REVIEWER_CALLS" ] || die "review budget exhausted"
+  case "$kind" in
+    broad)
+      [ "$broad_calls" -eq 0 ] || die "broad review budget exhausted"
+      index=1
+      ;;
+    verify)
+      [ "$broad_calls" -eq 1 ] || die "broad review must be recorded before verify"
+      [ "$verify_calls" -lt "$VERIFY_REVIEW_MAX" ] || die "verify review budget exhausted"
+      [ "$(env_get pending_verify 2>/dev/null || echo 0)" = "1" ] || \
+        die "verify bundle is not pending"
+      index=$((verify_calls + 1))
+      ;;
+  esac
+
+  ensure_current_target_matches_review
+  ensure_current_bundle_sha256_matches "$kind" "$index"
+  json_attest_review_controller \
+    "$(env_get sessions_root)" "$(env_get parent_thread_id)"
+  SPAWN_AUTHORIZED_AT="$(json_now_utc)"
+  publish_spawn_authorization "$kind" "$index"
+
+  printf 'spawn_authorized=true\n'
+  printf 'kind=%s\n' "$kind"
+  printf 'call_index=%s\n' "$index"
+  printf 'review_controller_turn_id=%s\n' "$REVIEW_CONTROLLER_TURN_ID"
+  printf 'review_controller_context_sha256=%s\n' "$REVIEW_CONTROLLER_CONTEXT_SHA256"
+  printf 'review_controller_sandbox_mode=%s\n' "$REVIEW_CONTROLLER_SANDBOX_MODE"
+  printf 'spawn_authorized_at=%s\n' "$SPAWN_AUTHORIZED_AT"
+}
+
+cmd_record_session() {
+  local kind session_id captured
+  kind="${1:-}"
+  session_id="${2:-}"
+  [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || \
+    die "record-session kind must be broad or verify"
+  is_canonical_uuid "$session_id" || die "record-session requires a canonical child session UUID"
+  ensure_repo
+  cd "$(repo_root)" || die "failed to enter repo root"
+  [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  ensure_current_review_state
+  json_cache_init
+  captured="$JSON_CACHE_ROOT/${kind}-${session_id}.json"
+  json_extract_session_result "$(env_get sessions_root)" "$session_id" "$captured"
+  cmd_record "$kind" "$captured"
+}
+
 cmd_record() {
   local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds used_sessions call_allowance spawn_source
   kind="${1:-}"
@@ -1932,6 +2179,14 @@ cmd_record() {
   printf 'attested_model=%s\n' "$(json_attested_scalar "$dest" attested_model)"
   printf 'attested_sandbox_mode=%s\n' "$(json_attested_scalar "$dest" attested_sandbox_mode)"
   printf 'attested_history_mode=%s\n' "$(json_attested_scalar "$dest" attested_history_mode)"
+  printf 'attested_controller_turn_id=%s\n' \
+    "$(json_attested_scalar "$dest" attested_controller_turn_id)"
+  printf 'attested_controller_context_sha256=%s\n' \
+    "$(json_attested_scalar "$dest" attested_controller_context_sha256)"
+  printf 'attested_controller_sandbox_mode=%s\n' \
+    "$(json_attested_scalar "$dest" attested_controller_sandbox_mode)"
+  printf 'attested_spawn_authorized_at=%s\n' \
+    "$(json_attested_scalar "$dest" attested_spawn_authorized_at)"
   printf 'broad_review_calls=%s\n' "$SUMMARY_BROAD_CALLS"
   printf 'verify_review_calls=%s\n' "$SUMMARY_VERIFY_CALLS"
   printf 'total_reviewer_calls=%s\n' "$SUMMARY_TOTAL_CALLS"
@@ -2060,6 +2315,12 @@ cmd_mark() {
     printf 'scope=%s\n' "$scope"
     printf 'base=%s\n' "$(env_get base)"
     printf 'diff_hash=%s\n' "$current_hash"
+    printf 'review_controller_prepare_turn_id=%s\n' \
+      "$(env_get review_controller_prepare_turn_id)"
+    printf 'review_controller_prepare_context_sha256=%s\n' \
+      "$(env_get review_controller_prepare_context_sha256)"
+    printf 'review_controller_prepare_sandbox_mode=%s\n' \
+      "$(env_get review_controller_prepare_sandbox_mode)"
     printf 'broad_review_calls=%s\n' "$SUMMARY_BROAD_CALLS"
     printf 'verify_review_calls=%s\n' "$SUMMARY_VERIFY_CALLS"
     printf 'total_reviewer_calls=%s\n' "$SUMMARY_TOTAL_CALLS"
@@ -2091,6 +2352,10 @@ usage() {
 usage:
   bash codex/tools/post-work-review.sh prepare
   bash codex/tools/post-work-review.sh prepare-verify
+  bash codex/tools/post-work-review.sh authorize-spawn broad
+  bash codex/tools/post-work-review.sh authorize-spawn verify
+  bash codex/tools/post-work-review.sh record-session broad <child-session-uuid>
+  bash codex/tools/post-work-review.sh record-session verify <child-session-uuid>
   bash codex/tools/post-work-review.sh record broad <review-json-file>
   bash codex/tools/post-work-review.sh record verify <review-json-file>
   bash codex/tools/post-work-review.sh summarize
@@ -2106,6 +2371,14 @@ case "${1:-}" in
     ;;
   prepare-verify)
     cmd_prepare_verify
+    ;;
+  authorize-spawn)
+    shift
+    cmd_authorize_spawn "$@"
+    ;;
+  record-session)
+    shift
+    cmd_record_session "$@"
     ;;
   record)
     shift

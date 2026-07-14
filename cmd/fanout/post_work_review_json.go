@@ -11,7 +11,7 @@ import (
 
 const (
 	postWorkReviewJSONCommand     = "__post-work-review-json"
-	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=4"
+	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=5"
 	postWorkReviewTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 )
 
@@ -44,10 +44,30 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 		fmt.Fprintf(stdout, "bundle_sha256=%s\n", digest)
 		return exitcode.OK
 	}
-	if (len(args) == 8 || len(args) == 9) && args[0] == "attest" {
+	if len(args) == 3 && args[0] == "controller" {
+		controller, err := reviewjson.AttestController(args[1], args[2])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s controller: %v\n", postWorkReviewJSONCommand, err)
+			return exitcode.Env
+		}
+		fmt.Fprintf(stdout, "review_controller_turn_id=%s\n", controller.TurnID)
+		fmt.Fprintf(stdout, "review_controller_context_sha256=%s\n", controller.ContextSHA256)
+		fmt.Fprintf(stdout, "review_controller_sandbox_mode=%s\n", controller.SandboxMode)
+		return exitcode.OK
+	}
+	if len(args) == 4 && args[0] == "extract" {
+		sessionID, err := reviewjson.ExtractLastAgentMessage(args[1], args[2], args[3])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s extract: %v\n", postWorkReviewJSONCommand, err)
+			return exitcode.Env
+		}
+		fmt.Fprintf(stdout, "extracted_session_id=%s\n", sessionID)
+		return exitcode.OK
+	}
+	if (len(args) == 11 || len(args) == 12) && args[0] == "attest" {
 		usedSessionIDsPath := ""
-		if len(args) == 9 {
-			usedSessionIDsPath = args[8]
+		if len(args) == 12 {
+			usedSessionIDsPath = args[11]
 		}
 		if err := reviewjson.Attest(
 			args[1],
@@ -57,6 +77,9 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 			args[5],
 			args[6],
 			args[7],
+			args[8],
+			args[9],
+			args[10],
 			usedSessionIDsPath,
 		); err != nil {
 			fmt.Fprintf(stderr, "%s attest: %v\n", postWorkReviewJSONCommand, err)
@@ -71,7 +94,7 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 func fprintfPostWorkReviewJSONUsage(stderr io.Writer) {
 	fmt.Fprintf(
 		stderr,
-		"%s: expected timestamp, digest <bundle-file>, project <review-json-file> <cache-dir>, or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> <expected-bundle-path> [<used-session-ids-file>]\n",
+		"%s: expected timestamp, digest <bundle-file>, project <review-json-file> <cache-dir>, controller <sessions-root> <parent-thread-id>, extract <sessions-root> <session-id> <output-file>, or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> <expected-bundle-path> <expected-controller-turn-id> <expected-controller-context-sha256> <spawn-authorized-at> [<used-session-ids-file>]\n",
 		postWorkReviewJSONCommand,
 	)
 }

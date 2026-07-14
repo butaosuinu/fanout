@@ -42,15 +42,19 @@ VALUE_FLAGS = {"--head", "-H", "--base", "-B", "--repo", "-R", "--title", "-t",
                "--assignee", "-a", "--label", "-l", "--milestone", "-m",
                "--project", "-p", "--template", "-T"}
 
-POST_WORK_REVIEW_VERSION = "5"
-POST_WORK_REVIEW_ATTESTATION_VERSION = "3"
+POST_WORK_REVIEW_VERSION = "6"
+POST_WORK_REVIEW_ATTESTATION_VERSION = "4"
 _REVIEW_SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
 _REVIEW_BUNDLE_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_REVIEW_TIMESTAMP_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z"
+)
 _REVIEW_CALL_FIELDS = (
     "kind", "session_id", "agent_role", "model", "sandbox_mode", "approval_policy",
-    "history_mode", "bundle_sha256")
+    "history_mode", "bundle_sha256", "controller_turn_id",
+    "controller_context_sha256", "controller_sandbox_mode", "spawn_authorized_at")
 
 
 def emit_allow():
@@ -78,6 +82,11 @@ def codex_review_metadata_valid(metadata, target):
         and metadata.get("clean") == "true"
         and metadata.get("stop_reason") == ""
         and bool(metadata.get("diff_hash"))
+        and metadata.get("review_controller_prepare_sandbox_mode") == "read-only"
+        and _REVIEW_SESSION_ID_RE.fullmatch(
+            metadata.get("review_controller_prepare_turn_id", ""))
+        and _REVIEW_BUNDLE_SHA256_RE.fullmatch(
+            metadata.get("review_controller_prepare_context_sha256", ""))
     ):
         return False
 
@@ -110,12 +119,20 @@ def codex_review_metadata_valid(metadata, target):
             or metadata[prefix + "sandbox_mode"] != "read-only"
             or metadata[prefix + "approval_policy"] != "never"
             or metadata[prefix + "history_mode"] != "no-history"
+            or metadata[prefix + "controller_sandbox_mode"] != "read-only"
         ):
             return False
         session_id = metadata[prefix + "session_id"]
         if not _REVIEW_SESSION_ID_RE.fullmatch(session_id) or session_id in session_ids:
             return False
         if not _REVIEW_BUNDLE_SHA256_RE.fullmatch(metadata[prefix + "bundle_sha256"]):
+            return False
+        if not _REVIEW_SESSION_ID_RE.fullmatch(metadata[prefix + "controller_turn_id"]):
+            return False
+        if not _REVIEW_BUNDLE_SHA256_RE.fullmatch(
+                metadata[prefix + "controller_context_sha256"]):
+            return False
+        if not _REVIEW_TIMESTAMP_RE.fullmatch(metadata[prefix + "spawn_authorized_at"]):
             return False
         session_ids.add(session_id)
 
