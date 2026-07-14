@@ -2,8 +2,8 @@
 set -u
 
 VERSION="4"
-ATTESTATION_VERSION="1"
-JSON_HELPER_VERSION="2"
+ATTESTATION_VERSION="2"
+JSON_HELPER_VERSION="3"
 BACKEND="bounded-isolated-reviewer"
 REVIEWER_AGENT="post-work-reviewer"
 VERIFIER_AGENT="post-work-verifier"
@@ -44,6 +44,10 @@ state_dir_abs() {
 
 results_dir() {
   printf '%s/results\n' "$(state_dir_abs)"
+}
+
+calls_dir() {
+  printf '%s/calls\n' "$(state_dir_abs)"
 }
 
 review_env_path() {
@@ -431,11 +435,84 @@ env_set() {
   mv "$tmp" "$file" || die "failed to update review env"
 }
 
+publish_verify_round() {
+  local fix_rounds prepared_at_key prepared_at file tmp verify_bundle
+  fix_rounds="$1"
+  prepared_at_key="$2"
+  prepared_at="$3"
+  file="$(review_env_path)"
+  tmp="$file.tmp.$$"
+  verify_bundle="$(agent_path "$(verify_bundle_path)")"
+  awk -F= \
+    -v head="$HEAD_SHA" \
+    -v diff_hash="$DIFF_HASH" \
+    -v changed_files="$CHANGED_FILE_COUNT" \
+    -v fix_rounds="$fix_rounds" \
+    -v verify_bundle="$verify_bundle" \
+    -v prepared_at_key="$prepared_at_key" \
+    -v prepared_at="$prepared_at" '
+      $1 == "head" { print "head=" head; seen_head=1; next }
+      $1 == "diff_hash" { print "diff_hash=" diff_hash; seen_diff=1; next }
+      $1 == "changed_files" { print "changed_files=" changed_files; seen_changed=1; next }
+      $1 == "fix_rounds" { print "fix_rounds=" fix_rounds; seen_rounds=1; next }
+      $1 == "pending_verify" { print "pending_verify=1"; seen_pending=1; next }
+      $1 == "verify_bundle" { print "verify_bundle=" verify_bundle; seen_bundle=1; next }
+      $1 == prepared_at_key { print prepared_at_key "=" prepared_at; seen_prepared=1; next }
+      { print }
+      END {
+        if (!seen_head) print "head=" head
+        if (!seen_diff) print "diff_hash=" diff_hash
+        if (!seen_changed) print "changed_files=" changed_files
+        if (!seen_rounds) print "fix_rounds=" fix_rounds
+        if (!seen_pending) print "pending_verify=1"
+        if (!seen_bundle) print "verify_bundle=" verify_bundle
+        if (!seen_prepared) print prepared_at_key "=" prepared_at
+      }
+    ' "$file" >"$tmp" || die "failed to stage verify review env"
+  mv "$tmp" "$file" || die "failed to publish verify review env"
+}
+
 ensure_current_review_state() {
   [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] || \
     die "post-work-review state version mismatch; run reset and prepare again"
+  if [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "1" ] && \
+    [ "$ATTESTATION_VERSION" = "2" ]; then
+    migrate_attestation_v1_state
+  fi
   [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "$ATTESTATION_VERSION" ] || \
     die "post-work-review attestation state is unavailable; run reset and prepare again"
+}
+
+migrate_attestation_v1_state() {
+  local broad_result existing_stop reviewer_spawns
+  existing_stop="$(env_get stop_reason 2>/dev/null || true)"
+  if [ -n "$existing_stop" ]; then
+    attestation_fail "$existing_stop" \
+      "legacy review state is terminal; run reset and prepare again"
+  fi
+  broad_result="$(result_path broad 1)"
+  if [ ! -f "$broad_result" ] || [ -f "$(result_path verify 1)" ] || \
+    [ -f "$(result_path verify 2)" ] || [ "$(env_get pending_verify 2>/dev/null || echo 0)" != "0" ] || \
+    [ -f "$(call_receipt_path broad 1)" ] || [ -f "$(call_receipt_path verify 1)" ] || \
+    [ -f "$(call_receipt_path verify 2)" ]; then
+    attestation_fail "reviewer_attestation_unavailable" \
+      "legacy attestation state cannot be migrated safely; run reset and prepare again"
+  fi
+
+  # The v2 attestor proves that exactly one fresh native spawn used this
+  # bundle path. This reconstructs the old broad-call budget without trusting
+  # the v1 driver's incomplete bookkeeping. Verifier rounds cannot be migrated
+  # because v1 did not store their per-round preparation timestamps.
+  rm -f "$(marker_path)" "$(marker_meta_path)" || \
+    die "failed to clear pre-v2 review marker"
+  env_set stop_reason "reviewer_attestation_unavailable"
+  validate_result broad "$broad_result" target "" 1
+  reviewer_spawns="$(json_attested_scalar "$broad_result" attested_reviewer_spawn_calls 2>/dev/null || true)"
+  [ "$reviewer_spawns" = "1" ] || \
+    attestation_fail "reviewer_attestation_mismatch" \
+      "legacy review state has unrecorded reviewer or verifier spawns"
+  env_set post_work_review_attestation_version "$ATTESTATION_VERSION"
+  env_set stop_reason ""
 }
 
 JSON_CACHE_ROOT=""
@@ -502,6 +579,22 @@ json_parse_result() {
   "$JSON_HELPER" __post-work-review-json project "$file" "$out"
 }
 
+json_now_utc() {
+  local output status value
+  ensure_json_helper || die "$JSON_HELPER_ERROR"
+  output="$("$JSON_HELPER" __post-work-review-json timestamp 2>/dev/null)"
+  status=$?
+  [ "$status" -eq 0 ] || die "post-work-review JSON helper failed to generate a timestamp"
+  printf '%s\n' "$output" | grep -Fxq \
+    "post_work_review_json_helper_version=$JSON_HELPER_VERSION" || \
+    die "post-work-review JSON helper is incompatible before timestamp generation"
+  value="$(printf '%s\n' "$output" | awk -F= '$1 == "timestamp" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    die "post-work-review JSON helper did not return a timestamp"
+  [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$ ]] || \
+    die "post-work-review JSON helper returned an invalid timestamp"
+  printf '%s\n' "$value"
+}
+
 agent_config_for() {
   case "$1" in
     broad) env_get reviewer_agent_config ;;
@@ -511,19 +604,32 @@ agent_config_for() {
 }
 
 json_attest_result() {
-  local kind file out used_sessions
+  local kind file out used_sessions call_index prepared_at bundle
   kind="$1"
   file="$2"
   out="$3"
   used_sessions="${4:-}"
+  call_index="${5:-1}"
+  case "$kind" in
+    broad)
+      prepared_at="$(env_get prepared_at)"
+      bundle="$(review_bundle_path)"
+      ;;
+    verify)
+      prepared_at="$(env_get "verify_prepared_at_$call_index")" || \
+        die "verify round preparation timestamp is unavailable"
+      bundle="$(verify_bundle_path)"
+      ;;
+    *) die "invalid result kind: $kind" ;;
+  esac
   if [ -n "$used_sessions" ]; then
     "$JSON_HELPER" __post-work-review-json attest \
       "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
-      "$(env_get prepared_at)" "$(agent_config_for "$kind")" "$used_sessions"
+      "$prepared_at" "$(agent_config_for "$kind")" "$bundle" "$used_sessions"
   else
     "$JSON_HELPER" __post-work-review-json attest \
       "$file" "$out" "$(env_get sessions_root)" "$(env_get parent_thread_id)" \
-      "$(env_get prepared_at)" "$(agent_config_for "$kind")"
+      "$prepared_at" "$(agent_config_for "$kind")" "$bundle"
   fi
 }
 
@@ -573,10 +679,11 @@ json_cache_add() {
 }
 
 json_cache_attest() {
-  local kind file used_sessions cache index status helper_stdout helper_stderr error_kind error_message
+  local kind file used_sessions call_index cache index status helper_stdout helper_stderr error_kind error_message
   kind="$1"
   file="$2"
   used_sessions="${3:-}"
+  call_index="${4:-1}"
   if cache="$(json_cache_dir_for "$file")"; then
     [ -f "$cache/attestation_valid" ] && return 0
   else
@@ -592,7 +699,7 @@ json_cache_attest() {
 
   helper_stdout="$cache/helper.stdout"
   helper_stderr="$cache/helper.stderr"
-  json_attest_result "$kind" "$file" "$cache" "$used_sessions" >"$helper_stdout" 2>"$helper_stderr"
+  json_attest_result "$kind" "$file" "$cache" "$used_sessions" "$call_index" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
   if ! grep -Fxq "post_work_review_json_helper_version=$JSON_HELPER_VERSION" "$helper_stdout"; then
     rm -f "$helper_stdout" "$helper_stderr"
@@ -614,17 +721,25 @@ json_cache_attest() {
 }
 
 write_used_sessions_file() {
-  local path i
+  local path receipt session i
   json_cache_init
   USED_SESSIONS_FILE="$JSON_CACHE_ROOT/used-session-ids"
   : >"$USED_SESSIONS_FILE" || die "failed to create used reviewer session list"
   path="$(result_path broad 1)"
-  if [ -f "$path" ]; then
+  receipt="$(call_receipt_path broad 1)"
+  if [ -f "$receipt" ]; then
+    session="$(call_receipt_scalar "$receipt" session_id)" || die "invalid broad review call receipt"
+    printf '%s\n' "$session" >>"$USED_SESSIONS_FILE"
+  elif [ -f "$path" ]; then
     printf '%s\n' "$(json_attested_scalar "$path" attested_session_id)" >>"$USED_SESSIONS_FILE"
   fi
   for i in 1 2; do
     path="$(result_path verify "$i")"
-    if [ -f "$path" ]; then
+    receipt="$(call_receipt_path verify "$i")"
+    if [ -f "$receipt" ]; then
+      session="$(call_receipt_scalar "$receipt" session_id)" || die "invalid verify review call receipt"
+      printf '%s\n' "$session" >>"$USED_SESSIONS_FILE"
+    elif [ -f "$path" ]; then
       printf '%s\n' "$(json_attested_scalar "$path" attested_session_id)" >>"$USED_SESSIONS_FILE"
     fi
   done
@@ -647,12 +762,12 @@ json_cache_prepare_stored_results() {
   local path i
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
-    json_cache_attest broad "$path"
+    json_cache_attest broad "$path" "" 1
   fi
   for i in 1 2; do
     path="$(result_path verify "$i")"
     if [ -f "$path" ]; then
-      json_cache_attest verify "$path"
+      json_cache_attest verify "$path" "" "$i"
     fi
   done
 }
@@ -712,21 +827,113 @@ result_path() {
   esac
 }
 
+call_receipt_path() {
+  local kind index
+  kind="$1"
+  index="$2"
+  case "$kind" in
+    broad) printf '%s/broad-%03d.env\n' "$(calls_dir)" "$index" ;;
+    verify) printf '%s/verify-%03d.env\n' "$(calls_dir)" "$index" ;;
+    *) die "invalid call receipt kind: $kind" ;;
+  esac
+}
+
+call_receipt_scalar() {
+  local file key
+  file="$1"
+  key="$2"
+  [ -f "$file" ] || return 1
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; found=1; exit } END { exit(found ? 0 : 1) }' "$file"
+}
+
+call_slot_used() {
+  local kind index
+  kind="$1"
+  index="$2"
+  [ -f "$(call_receipt_path "$kind" "$index")" ] || [ -f "$(result_path "$kind" "$index")" ]
+}
+
+write_call_receipt() {
+  local kind index result receipt tmp
+  kind="$1"
+  index="$2"
+  result="$3"
+  receipt="$(call_receipt_path "$kind" "$index")"
+  tmp="$receipt.tmp.$$"
+  mkdir -p "$(calls_dir)" || die "failed to create review calls dir"
+  [ ! -e "$receipt" ] || die "review call slot is already consumed: $kind-$index"
+  (
+    umask 077
+    {
+      printf 'kind=%s\n' "$kind"
+      printf 'attestation_version=%s\n' "$(json_attested_scalar "$result" attestation_version)"
+      printf 'session_id=%s\n' "$(json_attested_scalar "$result" attested_session_id)"
+      printf 'agent_role=%s\n' "$(json_attested_scalar "$result" attested_agent_role)"
+      printf 'model=%s\n' "$(json_attested_scalar "$result" attested_model)"
+      printf 'sandbox_mode=%s\n' "$(json_attested_scalar "$result" attested_sandbox_mode)"
+      printf 'history_mode=%s\n' "$(json_attested_scalar "$result" attested_history_mode)"
+    } >"$tmp"
+  ) || die "failed to write review call receipt"
+  mv "$tmp" "$receipt" || die "failed to store review call receipt"
+}
+
 broad_review_calls() {
-  [ -f "$(result_path broad 1)" ] && echo 1 || echo 0
+  call_slot_used broad 1 && echo 1 || echo 0
 }
 
 verify_review_calls() {
   local count i
   count=0
   for i in 1 2; do
-    [ -f "$(result_path verify "$i")" ] && count=$((count + 1))
+    call_slot_used verify "$i" && count=$((count + 1))
   done
   echo "$count"
 }
 
 total_reviewer_calls() {
   echo $(( $(broad_review_calls) + $(verify_review_calls) ))
+}
+
+stored_reviewer_spawn_count_matches() {
+  local allowance broad_result actual recorded maximum
+  allowance="${1:-0}"
+  broad_result="$(result_path broad 1)"
+  [ -f "$broad_result" ] || return 0
+  actual="$(json_attested_scalar "$broad_result" attested_reviewer_spawn_calls 2>/dev/null || true)"
+  is_number "$actual" || return 1
+  recorded="$(total_reviewer_calls)"
+  maximum=$((recorded + allowance))
+  [ "$actual" -ge "$recorded" ] && [ "$actual" -le "$maximum" ]
+}
+
+enforce_reviewer_spawn_count() {
+  local source expected actual
+  source="$1"
+  expected="$2"
+  actual="$(json_attested_scalar "$source" attested_reviewer_spawn_calls 2>/dev/null || true)"
+  if ! is_number "$actual" || [ "$actual" -ne "$expected" ]; then
+    attestation_fail "reviewer_attestation_mismatch" \
+      "attested native reviewer call count does not match recorded review calls"
+  fi
+}
+
+unmatched_attested_call_count() {
+  local count kind index max receipt result
+  count=0
+  for kind in broad verify; do
+    max=1
+    [ "$kind" = "verify" ] && max=2
+    index=1
+    while [ "$index" -le "$max" ]; do
+      receipt="$(call_receipt_path "$kind" "$index")"
+      result="$(result_path "$kind" "$index")"
+      if [ -f "$receipt" ] && [ ! -f "$result" ]; then
+        count=$((count + 1))
+      fi
+      index=$((index + 1))
+    done
+  done
+  echo "$count"
 }
 
 latest_verify_result() {
@@ -851,14 +1058,15 @@ write_markdown_fenced_file() {
 validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
   local sandbox_mode head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
-  local actual_session actual_role actual_sandbox attestation_version used_sessions
+  local actual_session actual_role actual_sandbox actual_history attestation_version used_sessions call_index
   kind="$1"
   file="$2"
   check_target="${3:-target}"
   used_sessions="${4:-}"
+  call_index="${5:-1}"
   [ -f "$file" ] || die "review JSON not found: $file"
   JSON_HELPER_ERROR=""
-  json_cache_attest "$kind" "$file" "$used_sessions"
+  json_cache_attest "$kind" "$file" "$used_sessions" "$call_index"
   if ! json_validate "$file" >/dev/null 2>&1; then
     if [ -n "$JSON_HELPER_ERROR" ]; then
       die "$JSON_HELPER_ERROR"
@@ -889,10 +1097,13 @@ validate_result() {
   actual_session="$(json_attested_scalar "$file" attested_session_id 2>/dev/null || true)"
   actual_role="$(json_attested_scalar "$file" attested_agent_role 2>/dev/null || true)"
   actual_sandbox="$(json_attested_scalar "$file" attested_sandbox_mode 2>/dev/null || true)"
+  actual_history="$(json_attested_scalar "$file" attested_history_mode 2>/dev/null || true)"
   [ "$session" = "$actual_session" ] || \
     attestation_fail "reviewer_attestation_mismatch" "reviewer_session_id does not match the attested child session"
   [ "$actual_role" = "$expected_agent" ] || \
     attestation_fail "reviewer_attestation_mismatch" "attested agent role mismatch"
+  [ "$actual_history" = "no-history" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested reviewer history mode must be no-history"
 
   same_agent="$(json_scalar "$file" same_agent_review 2>/dev/null || true)"
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
@@ -1030,7 +1241,7 @@ review_target_changed_reason() {
 summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
   local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions i path
-  local target_changed_reason
+  local target_changed_reason unmatched_calls spawn_count_mismatch
   json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -1040,15 +1251,18 @@ summary_values() {
   stop="$(env_get stop_reason 2>/dev/null || true)"
   marker="false"
   invalid_count=0
+  unmatched_calls="$(unmatched_attested_call_count)"
+  spawn_count_mismatch=0
+  stored_reviewer_spawn_count_matches 0 || spawn_count_mismatch=1
 
   for i in 1 2; do
     path="$(result_path verify "$i")"
     [ -f "$path" ] || continue
-    validate_result verify "$path" static >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
+    validate_result verify "$path" static "" "$i" >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
   done
   path="$(result_path broad 1)"
   if [ -f "$path" ]; then
-    validate_result broad "$path" static >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
+    validate_result broad "$path" static "" 1 >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
   fi
   duplicate_sessions="$(duplicate_reviewer_session_count)"
   if [ "${SUMMARY_SKIP_TARGET_CHECK:-}" = "1" ]; then
@@ -1059,6 +1273,12 @@ summary_values() {
 
   if [ -n "$stop" ]; then
     clean="false"
+  elif [ "$unmatched_calls" -gt 0 ]; then
+    clean="false"
+    stop="invalid_review_result"
+  elif [ "$spawn_count_mismatch" -gt 0 ]; then
+    clean="false"
+    stop="reviewer_attestation_mismatch"
   elif [ "$duplicate_sessions" -gt 0 ]; then
     clean="false"
     stop="reviewer_session_reused"
@@ -1147,28 +1367,51 @@ print_budget_lines() {
   printf 'max_findings_per_round=%s\n' "$MAX_FINDINGS_PER_ROUND"
 }
 
+attested_call_scalar() {
+  local kind index key receipt result result_key
+  kind="$1"
+  index="$2"
+  key="$3"
+  receipt="$(call_receipt_path "$kind" "$index")"
+  if [ -f "$receipt" ]; then
+    call_receipt_scalar "$receipt" "$key"
+    return
+  fi
+  result="$(result_path "$kind" "$index")"
+  case "$key" in
+    session_id) result_key="attested_session_id" ;;
+    agent_role) result_key="attested_agent_role" ;;
+    model) result_key="attested_model" ;;
+    sandbox_mode) result_key="attested_sandbox_mode" ;;
+    history_mode) result_key="attested_history_mode" ;;
+    *) die "invalid attested call key: $key" ;;
+  esac
+  json_attested_scalar "$result" "$result_key"
+}
+
 print_attested_call_lines() {
-  local call path i kind
+  local call i kind index
   call=0
-  path="$(result_path broad 1)"
-  if [ -f "$path" ]; then
+  if call_slot_used broad 1; then
     call=$((call + 1))
     printf 'review_call_%s_kind=broad\n' "$call"
-    printf 'review_call_%s_session_id=%s\n' "$call" "$(json_attested_scalar "$path" attested_session_id)"
-    printf 'review_call_%s_agent_role=%s\n' "$call" "$(json_attested_scalar "$path" attested_agent_role)"
-    printf 'review_call_%s_model=%s\n' "$call" "$(json_attested_scalar "$path" attested_model)"
-    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(json_attested_scalar "$path" attested_sandbox_mode)"
+    printf 'review_call_%s_session_id=%s\n' "$call" "$(attested_call_scalar broad 1 session_id)"
+    printf 'review_call_%s_agent_role=%s\n' "$call" "$(attested_call_scalar broad 1 agent_role)"
+    printf 'review_call_%s_model=%s\n' "$call" "$(attested_call_scalar broad 1 model)"
+    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(attested_call_scalar broad 1 sandbox_mode)"
+    printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar broad 1 history_mode)"
   fi
   for i in 1 2; do
-    path="$(result_path verify "$i")"
-    [ -f "$path" ] || continue
+    call_slot_used verify "$i" || continue
     call=$((call + 1))
     kind="verify"
+    index="$i"
     printf 'review_call_%s_kind=%s\n' "$call" "$kind"
-    printf 'review_call_%s_session_id=%s\n' "$call" "$(json_attested_scalar "$path" attested_session_id)"
-    printf 'review_call_%s_agent_role=%s\n' "$call" "$(json_attested_scalar "$path" attested_agent_role)"
-    printf 'review_call_%s_model=%s\n' "$call" "$(json_attested_scalar "$path" attested_model)"
-    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(json_attested_scalar "$path" attested_sandbox_mode)"
+    printf 'review_call_%s_session_id=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" session_id)"
+    printf 'review_call_%s_agent_role=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" agent_role)"
+    printf 'review_call_%s_model=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" model)"
+    printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" sandbox_mode)"
+    printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" history_mode)"
   done
 }
 
@@ -1205,6 +1448,22 @@ stop_existing_review_state() {
   printf 'stop_reason=%s\n' "$reason"
   printf 'marker_eligible=false\n'
   exit 1
+}
+
+stop_if_review_state_stopped() {
+  local allowance reason
+  allowance="${1:-0}"
+  reason="$(env_get stop_reason 2>/dev/null || true)"
+  if [ -z "$reason" ] && [ "$(unmatched_attested_call_count)" -gt 0 ]; then
+    reason="invalid_review_result"
+  fi
+  if [ -n "$reason" ]; then
+    summary_values
+    stop_existing_review_state "${SUMMARY_FINDINGS:-0}" "$reason"
+  fi
+  stored_reviewer_spawn_count_matches "$allowance" || \
+    attestation_fail "reviewer_attestation_mismatch" \
+      "attested native reviewer call count does not match recorded review calls"
 }
 
 write_review_env() {
@@ -1288,8 +1547,8 @@ write_verify_bundle() {
     printf -- '- reviewer_agent: %s\n' "$VERIFIER_AGENT"
     printf -- '- scope: %s\n' "$(env_get scope)"
     printf -- '- base: %s\n' "$(env_get base)"
-    printf -- '- head: %s\n' "$(env_get head)"
-    printf -- '- diff_hash: %s\n' "$(env_get diff_hash)"
+    printf -- '- head: %s\n' "$HEAD_SHA"
+    printf -- '- diff_hash: %s\n' "$DIFF_HASH"
     printf -- '- max_findings: %s\n' "$MAX_FINDINGS_PER_ROUND"
     printf -- '- Return findings only for still-unfixed prior findings or obvious fix-introduced regressions.\n'
     printf -- '- Set all_previous_findings_fixed=true only if every prior finding is resolved.\n'
@@ -1297,7 +1556,7 @@ write_verify_bundle() {
     printf -- '- Set truncated=true if more than %s in-scope findings are present.\n\n' "$MAX_FINDINGS_PER_ROUND"
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$(env_get head)" "$(env_get diff_hash)"
+    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
     printf '```\n\n'
     printf '## Prior findings\n\n'
     write_markdown_fenced_file tsv "$(findings_tsv_path)"
@@ -1350,7 +1609,7 @@ write_initial_findings_tsv() {
 }
 
 cmd_prepare() {
-  local root state results scope_pair untracked_file diff_file latest_findings pending_verify
+  local root state results calls scope_pair untracked_file diff_file latest_findings pending_verify
   ensure_repo
   ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
@@ -1358,10 +1617,12 @@ cmd_prepare() {
   resolve_attestation_environment
   state="$(state_dir_abs)"
   results="$(results_dir)"
+  calls="$(calls_dir)"
   if [ -f "$(review_env_path)" ] && \
     [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ]; then
     ensure_current_review_state
     json_cache_prepare_stored_results
+    stop_if_review_state_stopped
   fi
   if [ -f "$(review_env_path)" ] && \
     [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] && \
@@ -1377,9 +1638,8 @@ cmd_prepare() {
   fi
   rm -rf "$state"
   rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
-  mkdir -p "$results" || die "failed to create post-work-review state"
+  mkdir -p "$results" "$calls" || die "failed to create post-work-review state"
 
-  PREPARED_AT="$(now_utc)"
   scope_pair="$(detect_scope)"
   SCOPE="${scope_pair%%|*}"
   BASE="${scope_pair#*|}"
@@ -1396,8 +1656,9 @@ cmd_prepare() {
   CHANGED_FILE_COUNT="$(count_lines "$(changed_files_path)")"
   cp "$diff_file" "$state/last-reviewed.diff" || die "failed to store review diff"
   write_initial_findings_tsv
+  write_review_bundle || die "failed to write review bundle"
+  PREPARED_AT="$(json_now_utc)"
   write_review_env
-  write_review_bundle
 
   SUMMARY_BROAD_CALLS=0
   SUMMARY_VERIFY_CALLS=0
@@ -1406,7 +1667,7 @@ cmd_prepare() {
 }
 
 cmd_prepare_verify() {
-  local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff
+  local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff index prepared_at_key prepared_at
   ensure_repo
   ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
@@ -1414,13 +1675,21 @@ cmd_prepare_verify() {
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
   ensure_current_review_state
   json_cache_prepare_stored_results
+  stop_if_review_state_stopped
+  [ "$(env_get pending_verify 2>/dev/null || echo 0)" != "1" ] || \
+    die "verify round already pending"
   broad_calls="$(broad_review_calls)"
-  [ "$broad_calls" -eq 1 ] || die "broad review result not found"
+  [ "$broad_calls" -eq 1 ] && [ -f "$(result_path broad 1)" ] || die "broad review result not found"
   if any_result_truncated; then
     rewrite_findings_tsv
     stop_existing_review_state "$(latest_finding_count)" "review_truncated"
   fi
   verify_calls="$(verify_review_calls)"
+  index=$((verify_calls + 1))
+  prepared_at_key="verify_prepared_at_$index"
+  if env_get "$prepared_at_key" >/dev/null 2>&1; then
+    die "verify round preparation timestamp already exists"
+  fi
   total_calls="$(total_reviewer_calls)"
   if [ "$verify_calls" -ge "$VERIFY_REVIEW_MAX" ] || [ "$total_calls" -ge "$MAX_TOTAL_REVIEWER_CALLS" ]; then
     summary_values
@@ -1464,20 +1733,16 @@ cmd_prepare_verify() {
   cp "$current_diff" "$pending_diff" || die "failed to store pending review diff"
 
   fix_rounds=$((fix_rounds + 1))
-  env_set head "$HEAD_SHA"
-  env_set diff_hash "$DIFF_HASH"
-  env_set changed_files "$CHANGED_FILE_COUNT"
-  env_set fix_rounds "$fix_rounds"
-  env_set pending_verify 1
-  env_set verify_bundle "$(agent_path "$(verify_bundle_path)")"
-  write_verify_bundle
+  write_verify_bundle || die "failed to write verify bundle"
+  prepared_at="$(json_now_utc)"
+  publish_verify_round "$fix_rounds" "$prepared_at_key" "$prepared_at"
 
   summary_values
   print_state_lines
 }
 
 cmd_record() {
-  local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds used_sessions
+  local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds used_sessions call_allowance spawn_source
   kind="${1:-}"
   review_json="${2:-}"
   [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "record kind must be broad or verify"
@@ -1489,6 +1754,9 @@ cmd_record() {
   ensure_current_review_state
   mkdir -p "$(results_dir)" || die "failed to create results dir"
   json_cache_prepare_stored_results
+  call_allowance=0
+  [ "$kind" = "verify" ] && call_allowance=1
+  stop_if_review_state_stopped "$call_allowance"
 
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -1501,7 +1769,8 @@ cmd_record() {
       index=1
       ;;
     verify)
-      [ "$broad_calls" -eq 1 ] || die "broad review must be recorded before verify"
+      [ "$broad_calls" -eq 1 ] && [ -f "$(result_path broad 1)" ] || \
+        die "broad review must be recorded before verify"
       [ "$verify_calls" -lt "$VERIFY_REVIEW_MAX" ] || die "verify review budget exhausted"
       [ -f "$(verify_bundle_path)" ] || die "verify bundle not prepared"
       [ -f "$(pending_reviewed_diff_path)" ] || die "pending verify diff not found"
@@ -1514,7 +1783,14 @@ cmd_record() {
   ensure_current_target_matches_review
   write_used_sessions_file
   used_sessions="$USED_SESSIONS_FILE"
-  validate_result "$kind" "$review_json" target "$used_sessions"
+  json_cache_attest "$kind" "$review_json" "$used_sessions" "$index"
+  write_call_receipt "$kind" "$index" "$review_json"
+  spawn_source="$review_json"
+  [ "$kind" = "verify" ] && spawn_source="$(result_path broad 1)"
+  enforce_reviewer_spawn_count "$spawn_source" "$(total_reviewer_calls)"
+  env_set stop_reason "invalid_review_result"
+  rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
+  validate_result "$kind" "$review_json" target "$used_sessions" "$index"
   session="$(json_scalar "$review_json" reviewer_session_id)"
   if reviewer_session_used "$session"; then
     attestation_fail "reviewer_session_reused" "reviewer_session_id already recorded"
@@ -1527,6 +1803,7 @@ cmd_record() {
     env_set pending_verify 0
   fi
   rewrite_findings_tsv
+  env_set stop_reason ""
   summary_values
 
   printf 'recorded=true\n'
@@ -1539,6 +1816,7 @@ cmd_record() {
   printf 'attested_agent_role=%s\n' "$(json_attested_scalar "$dest" attested_agent_role)"
   printf 'attested_model=%s\n' "$(json_attested_scalar "$dest" attested_model)"
   printf 'attested_sandbox_mode=%s\n' "$(json_attested_scalar "$dest" attested_sandbox_mode)"
+  printf 'attested_history_mode=%s\n' "$(json_attested_scalar "$dest" attested_history_mode)"
   printf 'broad_review_calls=%s\n' "$SUMMARY_BROAD_CALLS"
   printf 'verify_review_calls=%s\n' "$SUMMARY_VERIFY_CALLS"
   printf 'total_reviewer_calls=%s\n' "$SUMMARY_TOTAL_CALLS"
@@ -1613,6 +1891,9 @@ cmd_mark() {
   [ -f "$(review_env_path)" ] || mark_reject "review_state_missing"
   ensure_current_review_state
   json_cache_prepare_stored_results
+  stored_reviewer_spawn_count_matches 0 || \
+    attestation_fail "reviewer_attestation_mismatch" \
+      "attested native reviewer call count does not match recorded review calls"
   backend="$(env_get backend || true)"
   [ "$backend" = "$BACKEND" ] || mark_reject "backend_not_bounded_isolated_reviewer"
 

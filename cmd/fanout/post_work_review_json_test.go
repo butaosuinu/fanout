@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 )
@@ -72,6 +73,27 @@ func TestCmdPostWorkReviewJSONFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCmdPostWorkReviewJSONTimestamp(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+
+	if code := cmdPostWorkReviewJSON([]string{"timestamp"}, &stdout, &stderr); code != exitcode.OK {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+	if len(lines) != 2 || lines[0] != postWorkReviewJSONVersionLine ||
+		!strings.HasPrefix(lines[1], "timestamp=") {
+		t.Fatalf("stdout = %q, want version and timestamp lines", stdout.String())
+	}
+	value := strings.TrimPrefix(lines[1], "timestamp=")
+	if _, err := time.Parse(postWorkReviewTimestampLayout, value); err != nil {
+		t.Fatalf("timestamp = %q: %v", value, err)
+	}
+	if len(value) != len("2006-01-02T15:04:05.000000000Z") {
+		t.Fatalf("timestamp = %q, want fixed nanosecond precision", value)
+	}
+}
+
 func TestCmdPostWorkReviewJSONRejectsOldProtocol(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer
@@ -82,8 +104,8 @@ func TestCmdPostWorkReviewJSONRejectsOldProtocol(t *testing.T) {
 	if got := stdout.String(); got != postWorkReviewJSONVersionLine+"\n" {
 		t.Fatalf("stdout = %q, want helper version line", got)
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("expected project")) {
-		t.Fatalf("stderr = %q, want v2 usage", stderr.String())
+	if !bytes.Contains(stderr.Bytes(), []byte("expected timestamp")) {
+		t.Fatalf("stderr = %q, want v3 usage", stderr.String())
 	}
 }
 
@@ -103,25 +125,48 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := fmt.Sprintf(`{"reviewer_session_id":%q,"findings":[]}`, childID)
+	bundle := filepath.Join(dir, "review-bundle.md")
 	input := filepath.Join(dir, "review.json")
+	if err := os.WriteFile(bundle, []byte("review bundle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bundleReadyAt := time.Date(2026, 7, 13, 17, 13, 25, 100_000_000, time.UTC)
+	if err := os.Chtimes(bundle, bundleReadyAt, bundleReadyAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(input, []byte(result), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	agentConfig := filepath.Join(dir, "agent.toml")
 	if err := os.WriteFile(
 		agentConfig,
-		[]byte("name = \"post-work-reviewer\"\nmodel = \"gpt-5.6-sol\"\nsandbox_mode = \"read-only\"\n"),
+		[]byte("name = \"post-work-reviewer\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"xhigh\"\nsandbox_mode = \"read-only\"\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
 	rollout := strings.Join([]string{
-		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"parent_thread_id":%q,"timestamp":"2026-07-13T17:13:25.763Z","thread_source":"subagent","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"agent_role":"post-work-reviewer"}}}}}`, childID, parentID, parentID),
-		`{"type":"turn_context","payload":{"model":"gpt-5.6-sol","sandbox_policy":{"type":"read-only"}}}`,
+		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"parent_thread_id":%q,"timestamp":"2026-07-13T17:13:25.763Z","thread_source":"subagent","agent_role":"post-work-reviewer","multi_agent_version":"v1","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"agent_role":"post-work-reviewer"}}}}}`, childID, parentID, parentID),
+		fmt.Sprintf(`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`, bundle),
+		`{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh","sandbox_policy":{"type":"read-only"}}}`,
 		fmt.Sprintf(`{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":%q}}`, result),
 	}, "\n") + "\n"
 	rolloutPath := filepath.Join(sessions, "rollout-2026-07-13T17-13-25-"+childID+".jsonl")
 	if err := os.WriteFile(rolloutPath, []byte(rollout), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spawnArguments := fmt.Sprintf(
+		`{"agent_type":"post-work-reviewer","fork_context":false,"message":%q}`,
+		bundle,
+	)
+	spawnOutput := fmt.Sprintf(`{"agent_id":%q}`, childID)
+	parentRollout := strings.Join([]string{
+		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`, parentID),
+		fmt.Sprintf(`{"timestamp":"2026-07-13T17:13:25.500Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"call-review","arguments":%q}}`, spawnArguments),
+		fmt.Sprintf(`{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-review","output":%q}}`, spawnOutput),
+	}, "\n") + "\n"
+	parentRolloutPath := filepath.Join(sessions, "rollout-2026-07-13T17-13-24-"+parentID+".jsonl")
+	if err := os.WriteFile(parentRolloutPath, []byte(parentRollout), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,6 +179,7 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 		parentID,
 		"2026-07-13T17:13:25Z",
 		agentConfig,
+		bundle,
 	}
 	if code := cmdPostWorkReviewJSON(args, &stdout, &stderr); code != exitcode.OK {
 		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
@@ -143,5 +189,9 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cache, "attestation_valid")); err != nil {
 		t.Fatalf("Stat(attestation_valid) error = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(cache, "attested_history_mode")); err != nil ||
+		string(got) != "no-history" {
+		t.Fatalf("attested_history_mode = %q, %v", got, err)
 	}
 }

@@ -43,11 +43,12 @@ VALUE_FLAGS = {"--head", "-H", "--base", "-B", "--repo", "-R", "--title", "-t",
                "--project", "-p", "--template", "-T"}
 
 POST_WORK_REVIEW_VERSION = "4"
-POST_WORK_REVIEW_ATTESTATION_VERSION = "1"
+POST_WORK_REVIEW_ATTESTATION_VERSION = "2"
 _REVIEW_SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
-_REVIEW_CALL_FIELDS = ("kind", "session_id", "agent_role", "model", "sandbox_mode")
+_REVIEW_CALL_FIELDS = (
+    "kind", "session_id", "agent_role", "model", "sandbox_mode", "history_mode")
 
 
 def emit_allow():
@@ -105,6 +106,7 @@ def codex_review_metadata_valid(metadata, target):
             metadata[prefix + "kind"] != expected_kind
             or metadata[prefix + "agent_role"] != expected_role
             or metadata[prefix + "sandbox_mode"] != "read-only"
+            or metadata[prefix + "history_mode"] != "no-history"
         ):
             return False
         session_id = metadata[prefix + "session_id"]

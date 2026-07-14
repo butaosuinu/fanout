@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/reviewjson"
@@ -10,7 +11,8 @@ import (
 
 const (
 	postWorkReviewJSONCommand     = "__post-work-review-json"
-	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=2"
+	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=3"
+	postWorkReviewTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 )
 
 func isPostWorkReviewJSONRequest(args []string) bool {
@@ -29,10 +31,14 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 		}
 		return exitcode.OK
 	}
-	if (len(args) == 7 || len(args) == 8) && args[0] == "attest" {
+	if len(args) == 1 && args[0] == "timestamp" {
+		fmt.Fprintf(stdout, "timestamp=%s\n", time.Now().UTC().Format(postWorkReviewTimestampLayout))
+		return exitcode.OK
+	}
+	if (len(args) == 8 || len(args) == 9) && args[0] == "attest" {
 		usedSessionIDsPath := ""
-		if len(args) == 8 {
-			usedSessionIDsPath = args[7]
+		if len(args) == 9 {
+			usedSessionIDsPath = args[8]
 		}
 		if err := reviewjson.Attest(
 			args[1],
@@ -41,6 +47,7 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 			args[4],
 			args[5],
 			args[6],
+			args[7],
 			usedSessionIDsPath,
 		); err != nil {
 			fmt.Fprintf(stderr, "%s attest: %v\n", postWorkReviewJSONCommand, err)
@@ -55,7 +62,7 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 func fprintfPostWorkReviewJSONUsage(stderr io.Writer) {
 	fmt.Fprintf(
 		stderr,
-		"%s: expected project <review-json-file> <cache-dir> or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> [<used-session-ids-file>]\n",
+		"%s: expected timestamp, project <review-json-file> <cache-dir>, or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> <expected-bundle-path> [<used-session-ids-file>]\n",
 		postWorkReviewJSONCommand,
 	)
 }

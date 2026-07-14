@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,7 +21,9 @@ import (
 const (
 	// AttestationVersion identifies the rollout metadata contract consumed by
 	// the post-work-review driver.
-	AttestationVersion = "1"
+	AttestationVersion = "2"
+
+	attestedNoHistoryMode = "no-history"
 
 	attestationValidFile = "attestation_valid"
 )
@@ -32,6 +35,8 @@ var attestationCacheFiles = []string{
 	"attested_agent_role",
 	"attested_model",
 	"attested_sandbox_mode",
+	"attested_history_mode",
+	"attested_reviewer_spawn_calls",
 	"attestation_error",
 	"attestation_error_kind",
 	attestationValidFile,
@@ -75,6 +80,7 @@ func Attest(
 	parentThreadID string,
 	preparedAt string,
 	agentConfigPath string,
+	expectedBundlePath string,
 	usedSessionIDsPath string,
 ) error {
 	if err := clearAttestationCache(outputDir); err != nil {
@@ -88,6 +94,7 @@ func Attest(
 		parentThreadID,
 		preparedAt,
 		agentConfigPath,
+		expectedBundlePath,
 		usedSessionIDsPath,
 	)
 	if err != nil {
@@ -114,6 +121,8 @@ type attestation struct {
 	agentRole      string
 	model          string
 	sandboxMode    string
+	historyMode    string
+	reviewerSpawns int
 }
 
 func buildAttestation(
@@ -123,6 +132,7 @@ func buildAttestation(
 	parentThreadID string,
 	preparedAt string,
 	agentConfigPath string,
+	expectedBundlePath string,
 	usedSessionIDsPath string,
 ) (attestation, error) {
 	resultData, resultReadErr := os.ReadFile(resultPath)
@@ -134,6 +144,16 @@ func buildAttestation(
 	}
 	if !isCanonicalUUID(parentThreadID) {
 		return attestation{}, unavailable("parent thread ID is not a canonical UUID", nil)
+	}
+	if expectedBundlePath == "" || !filepath.IsAbs(expectedBundlePath) {
+		return attestation{}, unavailable("expected review bundle path is not absolute", nil)
+	}
+	bundleInfo, bundleInfoErr := os.Lstat(expectedBundlePath)
+	if bundleInfoErr != nil {
+		return attestation{}, unavailable("inspect expected review bundle", bundleInfoErr)
+	}
+	if bundleInfo.Mode()&os.ModeSymlink != 0 || !bundleInfo.Mode().IsRegular() {
+		return attestation{}, unavailable("expected review bundle is not a regular file", nil)
 	}
 	preparedTime, parseErr := time.Parse(time.RFC3339Nano, preparedAt)
 	if parseErr != nil {
@@ -179,15 +199,47 @@ func buildAttestation(
 	if rolloutErr != nil {
 		return attestation{}, rolloutErr
 	}
+	freshAfter := preparedTime
+	// Legacy v1 broad states stored only a second-resolution timestamp captured
+	// before the bundle write. New states store a nanosecond timestamp after the
+	// write, and verifier bundles reuse one path across rounds, so their current
+	// mtime must not invalidate an older stored result.
+	if !strings.Contains(preparedAt, ".") {
+		if !bundleInfo.ModTime().After(preparedTime) {
+			return attestation{}, unavailable(
+				"legacy bundle mtime does not prove completion after prepared_at",
+				nil,
+			)
+		}
+		freshAfter = bundleInfo.ModTime()
+	}
 	if validateErr := validateRollout(
 		metadata,
 		resultData,
 		sessionID,
 		parentThreadID,
-		preparedTime,
+		freshAfter,
 		config,
+		expectedBundlePath,
 	); validateErr != nil {
 		return attestation{}, validateErr
+	}
+	parentRolloutPath, parentRolloutPathErr := findUniqueRollout(sessionsRoot, parentThreadID)
+	if parentRolloutPathErr != nil {
+		return attestation{}, parentRolloutPathErr
+	}
+	reviewerSpawns := 0
+	if spawnErr := validateParentSpawn(
+		parentRolloutPath,
+		metadata,
+		parentThreadID,
+		config.name,
+		expectedBundlePath,
+		preparedTime,
+		freshAfter,
+		&reviewerSpawns,
+	); spawnErr != nil {
+		return attestation{}, spawnErr
 	}
 
 	return attestation{
@@ -196,6 +248,8 @@ func buildAttestation(
 		agentRole:      metadata.agentRole,
 		model:          config.model,
 		sandboxMode:    config.sandboxMode,
+		historyMode:    attestedNoHistoryMode,
+		reviewerSpawns: reviewerSpawns,
 	}, nil
 }
 
@@ -216,9 +270,10 @@ func reviewerSessionID(data []byte) (string, error) {
 }
 
 type agentConfig struct {
-	name        string
-	model       string
-	sandboxMode string
+	name            string
+	model           string
+	reasoningEffort string
+	sandboxMode     string
 }
 
 func readAgentConfig(path string) (agentConfig, error) {
@@ -233,9 +288,10 @@ func readAgentConfig(path string) (agentConfig, error) {
 	}()
 
 	wanted := map[string]*string{
-		"name":         nil,
-		"model":        nil,
-		"sandbox_mode": nil,
+		"name":                   nil,
+		"model":                  nil,
+		"model_reasoning_effort": nil,
+		"sandbox_mode":           nil,
 	}
 	seen := make(map[string]bool, len(wanted))
 	topLevel := true
@@ -330,15 +386,16 @@ func readAgentConfig(path string) (agentConfig, error) {
 	if multilineDelimiter != "" {
 		return agentConfig{}, errors.New("unterminated multiline string")
 	}
-	for _, key := range []string{"name", "model", "sandbox_mode"} {
+	for _, key := range []string{"name", "model", "model_reasoning_effort", "sandbox_mode"} {
 		if wanted[key] == nil {
 			return agentConfig{}, fmt.Errorf("missing top-level %s", key)
 		}
 	}
 	return agentConfig{
-		name:        *wanted["name"],
-		model:       *wanted["model"],
-		sandboxMode: *wanted["sandbox_mode"],
+		name:            *wanted["name"],
+		model:           *wanted["model"],
+		reasoningEffort: *wanted["model_reasoning_effort"],
+		sandboxMode:     *wanted["sandbox_mode"],
 	}, nil
 }
 
@@ -486,21 +543,35 @@ type rolloutMetadata struct {
 	spawnParentThreadID  string
 	threadSource         string
 	agentRole            string
+	agentPath            string
+	multiAgentVersion    string
+	forkedFromID         string
 	sessionCreatedAt     time.Time
 	turnContexts         []rolloutTurnContext
+	userInputs           []rolloutInput
+	agentInputs          []rolloutInput
+	encryptedAgentInputs int
 	taskCompleteCount    int
 	lastAgentMessage     string
 	lastAgentMessageSeen bool
 }
 
 type rolloutTurnContext struct {
-	model       string
-	sandboxMode string
+	model           string
+	reasoningEffort string
+	sandboxMode     string
+}
+
+type rolloutInput struct {
+	texts     []string
+	author    string
+	recipient string
 }
 
 type rolloutRecord struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
+	Timestamp json.RawMessage `json:"timestamp"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 func readRollout(path string) (rolloutMetadata, error) {
@@ -540,6 +611,9 @@ func readRollout(path string) (rolloutMetadata, error) {
 			metadata.spawnParentThreadID = parsed.spawnParentThreadID
 			metadata.threadSource = parsed.threadSource
 			metadata.agentRole = parsed.agentRole
+			metadata.agentPath = parsed.agentPath
+			metadata.multiAgentVersion = parsed.multiAgentVersion
+			metadata.forkedFromID = parsed.forkedFromID
 			metadata.sessionCreatedAt = parsed.sessionCreatedAt
 		case "turn_context":
 			context, err := parseTurnContext(record.Payload)
@@ -547,6 +621,20 @@ func readRollout(path string) (rolloutMetadata, error) {
 				return rolloutMetadata{}, err
 			}
 			metadata.turnContexts = append(metadata.turnContexts, context)
+		case "response_item":
+			userInput, agentInput, encryptedAgentInput, err := parseRolloutInput(record.Payload)
+			if err != nil {
+				return rolloutMetadata{}, err
+			}
+			if userInput != nil {
+				metadata.userInputs = append(metadata.userInputs, *userInput)
+			}
+			if agentInput != nil {
+				metadata.agentInputs = append(metadata.agentInputs, *agentInput)
+			}
+			if encryptedAgentInput {
+				metadata.encryptedAgentInputs++
+			}
 		case "event_msg":
 			complete, message, messageSeen, err := parseTaskComplete(record.Payload)
 			if err != nil {
@@ -569,15 +657,20 @@ func readRollout(path string) (rolloutMetadata, error) {
 }
 
 type sessionMetaPayload struct {
-	ID             json.RawMessage `json:"id"`
-	ParentThreadID json.RawMessage `json:"parent_thread_id"`
-	Timestamp      json.RawMessage `json:"timestamp"`
-	ThreadSource   json.RawMessage `json:"thread_source"`
-	Source         *struct {
+	ID                json.RawMessage `json:"id"`
+	ParentThreadID    json.RawMessage `json:"parent_thread_id"`
+	ForkedFromID      json.RawMessage `json:"forked_from_id"`
+	Timestamp         json.RawMessage `json:"timestamp"`
+	ThreadSource      json.RawMessage `json:"thread_source"`
+	AgentRole         json.RawMessage `json:"agent_role"`
+	AgentPath         json.RawMessage `json:"agent_path"`
+	MultiAgentVersion json.RawMessage `json:"multi_agent_version"`
+	Source            *struct {
 		Subagent *struct {
 			ThreadSpawn *struct {
 				ParentThreadID json.RawMessage `json:"parent_thread_id"`
 				AgentRole      json.RawMessage `json:"agent_role"`
+				AgentPath      json.RawMessage `json:"agent_path"`
 			} `json:"thread_spawn"`
 		} `json:"subagent"`
 	} `json:"source"`
@@ -619,12 +712,57 @@ func parseSessionMeta(raw json.RawMessage) (rolloutMetadata, error) {
 	if err != nil {
 		return rolloutMetadata{}, err
 	}
-	agentRole, err := attestedJSONString(
+	spawnAgentRole, err := attestedJSONString(
 		spawn.AgentRole,
 		"session_meta.source.subagent.thread_spawn.agent_role",
 	)
 	if err != nil {
 		return rolloutMetadata{}, err
+	}
+	agentRole, err := attestedJSONString(payload.AgentRole, "session_meta.agent_role")
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	if agentRole != spawnAgentRole {
+		return rolloutMetadata{}, mismatch("session_meta agent_role fields disagree")
+	}
+	multiAgentVersion, err := attestedJSONString(
+		payload.MultiAgentVersion,
+		"session_meta.multi_agent_version",
+	)
+	if err != nil {
+		return rolloutMetadata{}, err
+	}
+	if multiAgentVersion != "v1" && multiAgentVersion != "v2" {
+		return rolloutMetadata{}, mismatch("session_meta.multi_agent_version is not v1 or v2")
+	}
+	forkedFromID := ""
+	if len(payload.ForkedFromID) != 0 &&
+		!bytes.Equal(bytes.TrimSpace(payload.ForkedFromID), []byte("null")) {
+		forkedFromID, err = attestedJSONString(
+			payload.ForkedFromID,
+			"session_meta.forked_from_id",
+		)
+		if err != nil {
+			return rolloutMetadata{}, err
+		}
+	}
+	agentPath := ""
+	if multiAgentVersion == "v2" {
+		agentPath, err = attestedJSONString(payload.AgentPath, "session_meta.agent_path")
+		if err != nil {
+			return rolloutMetadata{}, err
+		}
+		spawnAgentPath, pathErr := attestedJSONString(
+			spawn.AgentPath,
+			"session_meta.source.subagent.thread_spawn.agent_path",
+		)
+		if pathErr != nil {
+			return rolloutMetadata{}, pathErr
+		}
+		if spawnAgentPath != agentPath {
+			return rolloutMetadata{}, mismatch("child agent_path fields disagree")
+		}
 	}
 	return rolloutMetadata{
 		sessionID:           id,
@@ -632,13 +770,17 @@ func parseSessionMeta(raw json.RawMessage) (rolloutMetadata, error) {
 		spawnParentThreadID: spawnParentID,
 		threadSource:        threadSource,
 		agentRole:           agentRole,
+		agentPath:           agentPath,
+		multiAgentVersion:   multiAgentVersion,
+		forkedFromID:        forkedFromID,
 		sessionCreatedAt:    createdAt,
 	}, nil
 }
 
 type turnContextPayload struct {
-	Model         json.RawMessage `json:"model"`
-	SandboxPolicy *struct {
+	Model           json.RawMessage `json:"model"`
+	ReasoningEffort json.RawMessage `json:"effort"`
+	SandboxPolicy   *struct {
 		Type json.RawMessage `json:"type"`
 	} `json:"sandbox_policy"`
 }
@@ -652,6 +794,13 @@ func parseTurnContext(raw json.RawMessage) (rolloutTurnContext, error) {
 	if err != nil {
 		return rolloutTurnContext{}, err
 	}
+	reasoningEffort, err := attestedJSONString(
+		payload.ReasoningEffort,
+		"turn_context.effort",
+	)
+	if err != nil {
+		return rolloutTurnContext{}, err
+	}
 	if payload.SandboxPolicy == nil {
 		return rolloutTurnContext{}, unavailable("turn_context.sandbox_policy is missing", nil)
 	}
@@ -662,7 +811,408 @@ func parseTurnContext(raw json.RawMessage) (rolloutTurnContext, error) {
 	if err != nil {
 		return rolloutTurnContext{}, err
 	}
-	return rolloutTurnContext{model: model, sandboxMode: sandboxMode}, nil
+	return rolloutTurnContext{
+		model:           model,
+		reasoningEffort: reasoningEffort,
+		sandboxMode:     sandboxMode,
+	}, nil
+}
+
+func parseRolloutInput(
+	raw json.RawMessage,
+) (*rolloutInput, *rolloutInput, bool, error) {
+	var payload struct {
+		Type      string          `json:"type"`
+		Role      string          `json:"role"`
+		Author    json.RawMessage `json:"author"`
+		Recipient json.RawMessage `json:"recipient"`
+		Content   []struct {
+			Type             string          `json:"type"`
+			Text             json.RawMessage `json:"text"`
+			EncryptedContent json.RawMessage `json:"encrypted_content"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, nil, false, unavailable("malformed response_item payload", err)
+	}
+	if payload.Type != "message" && payload.Type != "agent_message" {
+		return nil, nil, false, nil
+	}
+	if payload.Type == "message" && payload.Role != "user" {
+		return nil, nil, false, nil
+	}
+	input := rolloutInput{}
+	encrypted := false
+	for index, item := range payload.Content {
+		switch item.Type {
+		case "input_text":
+			text, err := requiredJSONString(
+				item.Text,
+				fmt.Sprintf("response_item.content[%d].text", index),
+			)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			input.texts = append(input.texts, text)
+		case "encrypted_content":
+			if len(item.EncryptedContent) == 0 ||
+				bytes.Equal(bytes.TrimSpace(item.EncryptedContent), []byte("null")) {
+				return nil, nil, false, unavailable(
+					fmt.Sprintf("response_item.content[%d].encrypted_content is missing", index),
+					nil,
+				)
+			}
+			encrypted = true
+		default:
+			return nil, nil, false, unavailable(
+				fmt.Sprintf("response_item.content[%d] has unsupported type %q", index, item.Type),
+				nil,
+			)
+		}
+	}
+	if payload.Type == "message" {
+		return &input, nil, false, nil
+	}
+	input.author, _ = optionalJSONString(payload.Author)
+	input.recipient, _ = optionalJSONString(payload.Recipient)
+	return nil, &input, encrypted, nil
+}
+
+func optionalJSONString(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		return "", false
+	}
+	return value, true
+}
+
+type parentSpawnCall struct {
+	callID    string
+	namespace string
+	createdAt time.Time
+	arguments map[string]json.RawMessage
+}
+
+func validateParentSpawn(
+	path string,
+	child rolloutMetadata,
+	parentThreadID string,
+	agentRole string,
+	expectedBundlePath string,
+	countAfter time.Time,
+	freshAfter time.Time,
+	reviewerSpawns *int,
+) error {
+	calls, outputs, err := readParentSpawnRecords(path, parentThreadID)
+	if err != nil {
+		return err
+	}
+	wantNamespace := map[string]string{
+		"v1": "multi_agent_v1",
+		"v2": "collaboration",
+	}[child.multiAgentVersion]
+	matchingSpawnCalls := 0
+	var matched []parentSpawnCall
+	for _, call := range calls {
+		spawnRole, roleOK := optionalJSONString(call.arguments["agent_type"])
+		message, messageOK := optionalJSONString(call.arguments["message"])
+		nativeNamespace := call.namespace == "multi_agent_v1" || call.namespace == "collaboration"
+		if nativeNamespace && call.createdAt.After(countAfter) && roleOK &&
+			(spawnRole == "post-work-reviewer" || spawnRole == "post-work-verifier") {
+			(*reviewerSpawns)++
+		}
+		if call.namespace == wantNamespace && call.createdAt.After(countAfter) &&
+			((roleOK && spawnRole == agentRole) ||
+				(messageOK && strings.Contains(message, expectedBundlePath))) {
+			matchingSpawnCalls++
+		}
+		output, ok := outputs[call.callID]
+		if !ok {
+			continue
+		}
+		var result struct {
+			AgentID  json.RawMessage `json:"agent_id"`
+			TaskName json.RawMessage `json:"task_name"`
+		}
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			continue
+		}
+		switch child.multiAgentVersion {
+		case "v1":
+			agentID, ok := optionalJSONString(result.AgentID)
+			if ok && agentID == child.sessionID {
+				matched = append(matched, call)
+			}
+		case "v2":
+			taskName, ok := optionalJSONString(result.TaskName)
+			if ok && taskName == child.agentPath {
+				matched = append(matched, call)
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return unavailable("parent rollout has no spawn output corresponding to the child", nil)
+	}
+	if len(matched) != 1 {
+		return unavailable(
+			fmt.Sprintf("parent rollout has %d spawn outputs corresponding to the child", len(matched)),
+			nil,
+		)
+	}
+	call := matched[0]
+	if call.namespace != wantNamespace {
+		return mismatch("parent spawn namespace does not match the child multi-agent version")
+	}
+	if err := validateSpawnArgumentFields(call.arguments, child.multiAgentVersion); err != nil {
+		return err
+	}
+	if !call.createdAt.After(freshAfter) {
+		return mismatch("parent spawn was not created after the review bundle")
+	}
+	actualRole, err := spawnJSONString(call.arguments, "agent_type")
+	if err != nil {
+		return err
+	}
+	if actualRole != agentRole {
+		return mismatch("parent spawn agent_type does not match the child role")
+	}
+	message, err := spawnJSONString(call.arguments, "message")
+	if err != nil {
+		return err
+	}
+	if child.multiAgentVersion == "v1" && message != expectedBundlePath {
+		return mismatch("parent V1 spawn message is not the expected bundle path")
+	}
+	if child.multiAgentVersion == "v2" && message != expectedBundlePath &&
+		!childHasPlaintextPathInput(child, expectedBundlePath) {
+		return mismatch("parent V2 spawn message and child task input do not attest the bundle path")
+	}
+
+	switch child.multiAgentVersion {
+	case "v1":
+		forkContext, err := spawnJSONBool(call.arguments, "fork_context")
+		if err != nil {
+			return err
+		}
+		if forkContext {
+			return mismatch("parent V1 spawn fork_context is not false")
+		}
+		if _, exists := call.arguments["fork_turns"]; exists {
+			return mismatch("parent V1 spawn unexpectedly contains fork_turns")
+		}
+	case "v2":
+		forkTurns, err := spawnJSONString(call.arguments, "fork_turns")
+		if err != nil {
+			return err
+		}
+		if forkTurns != "none" {
+			return mismatch("parent V2 spawn fork_turns is not none")
+		}
+		if _, exists := call.arguments["fork_context"]; exists {
+			return mismatch("parent V2 spawn unexpectedly contains fork_context")
+		}
+		taskName, err := spawnJSONString(call.arguments, "task_name")
+		if err != nil {
+			return err
+		}
+		parentPath, ok := parentAgentPath(child.agentPath)
+		if !ok || parentPath+"/"+taskName != child.agentPath {
+			return mismatch("parent V2 spawn task_name does not match child agent_path")
+		}
+	default:
+		return mismatch("session_meta.multi_agent_version is not v1 or v2")
+	}
+	if agentRole == "post-work-reviewer" && matchingSpawnCalls != 1 {
+		return mismatch(fmt.Sprintf(
+			"parent rollout has %d fresh native spawn calls for the review bundle, want 1",
+			matchingSpawnCalls,
+		))
+	}
+	return nil
+}
+
+func validateSpawnArgumentFields(arguments map[string]json.RawMessage, version string) error {
+	allowed := map[string]struct{}{
+		"agent_type": {},
+		"message":    {},
+	}
+	switch version {
+	case "v1":
+		allowed["fork_context"] = struct{}{}
+	case "v2":
+		allowed["fork_turns"] = struct{}{}
+		allowed["task_name"] = struct{}{}
+	default:
+		return mismatch("session_meta.multi_agent_version is not v1 or v2")
+	}
+	for field := range arguments {
+		if _, ok := allowed[field]; !ok {
+			return mismatch("parent spawn contains unsupported argument " + field)
+		}
+	}
+	return nil
+}
+
+func childHasPlaintextPathInput(child rolloutMetadata, expectedBundlePath string) bool {
+	for _, input := range child.agentInputs {
+		if len(input.texts) == 1 && input.texts[0] == expectedBundlePath {
+			return true
+		}
+	}
+	if len(child.userInputs) == 0 {
+		return false
+	}
+	last := child.userInputs[len(child.userInputs)-1]
+	return len(last.texts) == 1 && last.texts[0] == expectedBundlePath
+}
+
+func readParentSpawnRecords(
+	path string,
+	parentThreadID string,
+) ([]parentSpawnCall, map[string]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, unavailable("read parent rollout", err)
+	}
+	defer func() {
+		// Parsing has consumed the file before return; a close failure cannot
+		// change the attested records.
+		_ = file.Close()
+	}()
+
+	decoder := json.NewDecoder(file)
+	callsByID := make(map[string]parentSpawnCall)
+	outputs := make(map[string]string)
+	parentMetaCount := 0
+	for recordNumber := 1; ; recordNumber++ {
+		var record rolloutRecord
+		if err := decoder.Decode(&record); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, nil, unavailable(
+				fmt.Sprintf("malformed parent rollout record %d", recordNumber),
+				err,
+			)
+		}
+		if record.Type == "session_meta" {
+			parentMetaCount++
+			var payload struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if err := json.Unmarshal(record.Payload, &payload); err != nil {
+				return nil, nil, unavailable("malformed parent session_meta payload", err)
+			}
+			id, err := requiredJSONString(payload.ID, "parent session_meta.id")
+			if err != nil {
+				return nil, nil, err
+			}
+			if id != parentThreadID {
+				return nil, nil, mismatch("parent session_meta.id does not match the prepared parent")
+			}
+			continue
+		}
+		if record.Type != "response_item" {
+			continue
+		}
+		var payload struct {
+			Type      string          `json:"type"`
+			Name      string          `json:"name"`
+			Namespace string          `json:"namespace"`
+			CallID    json.RawMessage `json:"call_id"`
+			Arguments json.RawMessage `json:"arguments"`
+			Output    json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal(record.Payload, &payload); err != nil {
+			return nil, nil, unavailable("malformed parent response_item payload", err)
+		}
+		switch payload.Type {
+		case "function_call":
+			if payload.Name != "spawn_agent" {
+				continue
+			}
+			timestamp, err := requiredJSONString(record.Timestamp, "parent spawn timestamp")
+			if err != nil {
+				return nil, nil, err
+			}
+			createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+			if err != nil {
+				return nil, nil, unavailable("parent spawn timestamp is not RFC3339", err)
+			}
+			callID, err := requiredJSONString(payload.CallID, "parent spawn call_id")
+			if err != nil {
+				return nil, nil, err
+			}
+			argumentsText, err := requiredJSONString(payload.Arguments, "parent spawn arguments")
+			if err != nil {
+				return nil, nil, err
+			}
+			var arguments map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(argumentsText), &arguments); err != nil || arguments == nil {
+				return nil, nil, unavailable("parent spawn arguments are not a JSON object", err)
+			}
+			if _, exists := callsByID[callID]; exists {
+				return nil, nil, unavailable("parent rollout has duplicate spawn call_id", nil)
+			}
+			callsByID[callID] = parentSpawnCall{
+				callID:    callID,
+				namespace: payload.Namespace,
+				createdAt: createdAt,
+				arguments: arguments,
+			}
+		case "function_call_output":
+			callID, ok := optionalJSONString(payload.CallID)
+			if !ok {
+				continue
+			}
+			output, ok := optionalJSONString(payload.Output)
+			if !ok {
+				continue
+			}
+			if _, exists := outputs[callID]; exists {
+				return nil, nil, unavailable("parent rollout has duplicate function_call_output", nil)
+			}
+			outputs[callID] = output
+		}
+	}
+	if parentMetaCount != 1 {
+		return nil, nil, unavailable(
+			fmt.Sprintf("parent rollout contains %d session_meta records, want 1", parentMetaCount),
+			nil,
+		)
+	}
+	calls := make([]parentSpawnCall, 0, len(callsByID))
+	for _, call := range callsByID {
+		calls = append(calls, call)
+	}
+	return calls, outputs, nil
+}
+
+func spawnJSONString(arguments map[string]json.RawMessage, field string) (string, error) {
+	raw, ok := arguments[field]
+	if !ok {
+		return "", mismatch("parent spawn " + field + " is missing")
+	}
+	value, ok := optionalJSONString(raw)
+	if !ok {
+		return "", mismatch("parent spawn " + field + " is not a non-empty string")
+	}
+	return value, nil
+}
+
+func spawnJSONBool(arguments map[string]json.RawMessage, field string) (bool, error) {
+	raw, ok := arguments[field]
+	if !ok {
+		return false, mismatch("parent spawn " + field + " is missing")
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, mismatch("parent spawn " + field + " is not a boolean")
+	}
+	return value, nil
 }
 
 func parseTaskComplete(raw json.RawMessage) (bool, string, bool, error) {
@@ -721,6 +1271,7 @@ func validateRollout(
 	parentThreadID string,
 	preparedAt time.Time,
 	config agentConfig,
+	expectedBundlePath string,
 ) error {
 	if metadata.sessionID != sessionID {
 		return mismatch("session_meta.id does not match reviewer_session_id")
@@ -740,6 +1291,12 @@ func validateRollout(
 	if metadata.agentRole != config.name {
 		return mismatch("child agent_role does not match the agent config")
 	}
+	if metadata.forkedFromID != "" {
+		return mismatch("session_meta.forked_from_id proves inherited history")
+	}
+	if err := validateTaskInput(metadata, expectedBundlePath); err != nil {
+		return err
+	}
 	if !metadata.sessionCreatedAt.After(preparedAt) {
 		return mismatch("reviewer session was not created after prepare")
 	}
@@ -749,6 +1306,9 @@ func validateRollout(
 	for _, context := range metadata.turnContexts {
 		if context.model != config.model {
 			return mismatch("child model does not match the agent config")
+		}
+		if context.reasoningEffort != config.reasoningEffort {
+			return mismatch("child reasoning effort does not match the agent config")
 		}
 		if context.sandboxMode != config.sandboxMode {
 			return mismatch("child sandbox policy does not match the agent config")
@@ -767,6 +1327,72 @@ func validateRollout(
 		return mismatch("reviewer JSON does not match task_complete.last_agent_message")
 	}
 	return nil
+}
+
+func validateTaskInput(metadata rolloutMetadata, expectedBundlePath string) error {
+	isExactPath := func(input rolloutInput) bool {
+		return len(input.texts) == 1 && input.texts[0] == expectedBundlePath
+	}
+	switch metadata.multiAgentVersion {
+	case "v1":
+		if len(metadata.agentInputs) != 0 || metadata.encryptedAgentInputs != 0 {
+			return mismatch("V1 child contains unexpected inter-agent task input")
+		}
+		matchingPathInputs := 0
+		lastMatches := false
+		for index, input := range metadata.userInputs {
+			if isExactPath(input) {
+				matchingPathInputs++
+				lastMatches = index == len(metadata.userInputs)-1
+			}
+		}
+		if matchingPathInputs != 1 || !lastMatches {
+			return mismatch("V1 child has no unique final path-only task input")
+		}
+	case "v2":
+		if metadata.encryptedAgentInputs != 0 {
+			return mismatch("V2 child task input is encrypted and cannot attest the bundle path")
+		}
+		if len(metadata.agentInputs) == 1 {
+			input := metadata.agentInputs[0]
+			if !isExactPath(input) {
+				return mismatch("V2 child task input is not the expected bundle path")
+			}
+			if input.recipient != metadata.agentPath {
+				return mismatch("V2 child task recipient does not match child agent_path")
+			}
+			parentPath, ok := parentAgentPath(metadata.agentPath)
+			if !ok || input.author != parentPath {
+				return mismatch("V2 child task author does not match parent agent_path")
+			}
+			return nil
+		}
+		if len(metadata.agentInputs) != 0 {
+			return mismatch("V2 child contains multiple task inputs")
+		}
+		matchingPathInputs := 0
+		lastMatches := false
+		for index, input := range metadata.userInputs {
+			if isExactPath(input) {
+				matchingPathInputs++
+				lastMatches = index == len(metadata.userInputs)-1
+			}
+		}
+		if matchingPathInputs != 1 || !lastMatches {
+			return mismatch("V2 child has no unique final path-only task input")
+		}
+	default:
+		return mismatch("session_meta.multi_agent_version is not v1 or v2")
+	}
+	return nil
+}
+
+func parentAgentPath(childPath string) (string, bool) {
+	separator := strings.LastIndexByte(childPath, '/')
+	if separator <= 0 || separator == len(childPath)-1 {
+		return "", false
+	}
+	return childPath[:separator], true
 }
 
 func transcriptMatches(resultData []byte, message string) bool {
@@ -821,6 +1447,8 @@ func writeAttestationSuccess(outputDir string, value attestation) error {
 		{name: "attested_agent_role", data: []byte(value.agentRole)},
 		{name: "attested_model", data: []byte(value.model)},
 		{name: "attested_sandbox_mode", data: []byte(value.sandboxMode)},
+		{name: "attested_history_mode", data: []byte(value.historyMode)},
+		{name: "attested_reviewer_spawn_calls", data: []byte(strconv.Itoa(value.reviewerSpawns))},
 	}
 	for _, file := range files {
 		if err := atomicfs.WriteFile(filepath.Join(outputDir, file.name), file.data, 0o600); err != nil {
