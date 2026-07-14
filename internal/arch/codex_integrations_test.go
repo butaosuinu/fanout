@@ -149,7 +149,8 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 				"`reviewer_session_id`",
 				"`CODEX_THREAD_ID`",
 				"git rev-parse --absolute-git-dir",
-				"sole user message to equal that path byte-for-byte",
+				"native spawn task input to equal that path byte-for-byte",
+				"do not count that bootstrap context as native task input",
 				"non-empty regular file that is not a symbolic link",
 				"never replace omitted content with a placeholder",
 				want.bundle,
@@ -162,6 +163,9 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 				if !bytes.Contains(instructions, []byte(required)) {
 					t.Errorf("developer_instructions missing session contract %q", required)
 				}
+			}
+			if bytes.Contains(instructions, []byte("sole user message")) {
+				t.Error("developer_instructions still requires a sole user message")
 			}
 		})
 	}
@@ -182,7 +186,9 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		"Never inline bundle contents",
 		"entire `message`",
 		"task_name: \"post_work_review_broad\"",
-		"task_name: \"post_work_review_verify\"",
+		"task_name: \"post_work_review_verify_1\"",
+		"task_name: \"post_work_review_verify_2\"",
+		"Never reuse a MultiAgentV2 verifier `task_name`",
 		"MultiAgentV2 requires `task_name` as display metadata",
 		"does not accept `task_name`",
 		"task_name",

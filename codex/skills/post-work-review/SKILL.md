@@ -166,14 +166,27 @@ message: "<absolute review_bundle path>"
 fork_turns: "none"
 ```
 
-MultiAgentV2 verifier call:
+MultiAgentV2 first verifier call:
 
 ```text
 agent_type: "post-work-verifier"
-task_name: "post_work_review_verify"
+task_name: "post_work_review_verify_1"
 message: "<absolute verify_bundle path>"
 fork_turns: "none"
 ```
+
+If the final verifier call is needed, use the same shape with the second call's
+unique display name:
+
+```text
+agent_type: "post-work-verifier"
+task_name: "post_work_review_verify_2"
+message: "<absolute verify_bundle path>"
+fork_turns: "none"
+```
+
+Never reuse a MultiAgentV2 verifier `task_name`; the unique call index binds
+each child `agent_path` to one parent spawn output during re-attestation.
 
 MultiAgentV1 broad call:
 

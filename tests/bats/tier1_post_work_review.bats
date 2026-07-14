@@ -52,7 +52,9 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   [[ "$flattened" == *'message: "<absolute review_bundle path>"'* ]] || return 1
   [[ "$flattened" == *'message: "<absolute verify_bundle path>"'* ]] || return 1
   [[ "$flattened" == *'task_name: "post_work_review_broad"'* ]] || return 1
-  [[ "$flattened" == *'task_name: "post_work_review_verify"'* ]] || return 1
+  [[ "$flattened" == *'task_name: "post_work_review_verify_1"'* ]] || return 1
+  [[ "$flattened" == *'task_name: "post_work_review_verify_2"'* ]] || return 1
+  [[ "$flattened" == *'Never reuse a MultiAgentV2 verifier `task_name`'* ]] || return 1
   [[ "$flattened" == *'MultiAgentV2 requires `task_name` as display metadata'* ]] || return 1
   [[ "$flattened" == *'MultiAgentV1 does not accept `task_name`'* ]] || return 1
   [[ "$flattened" == *'stop_reason=review_bundle_invalid'* ]] || return 1

@@ -896,6 +896,11 @@ type parentSpawnCall struct {
 	arguments map[string]json.RawMessage
 }
 
+type parentSpawnActivity struct {
+	sessionID string
+	agentPath string
+}
+
 func validateParentSpawn(
 	path string,
 	child rolloutMetadata,
@@ -906,7 +911,7 @@ func validateParentSpawn(
 	freshAfter time.Time,
 	reviewerSpawns *int,
 ) error {
-	calls, outputs, readErr := readParentSpawnRecords(path, parentThreadID)
+	calls, outputs, activities, readErr := readParentSpawnRecords(path, parentThreadID)
 	if readErr != nil {
 		return readErr
 	}
@@ -916,6 +921,7 @@ func validateParentSpawn(
 	}[child.multiAgentVersion]
 	matchingSpawnCalls := 0
 	var matched []parentSpawnCall
+	var v2Candidates []parentSpawnCall
 	for _, call := range calls {
 		spawnRole, roleOK := optionalJSONString(call.arguments["agent_type"])
 		message, messageOK := optionalJSONString(call.arguments["message"])
@@ -949,8 +955,27 @@ func validateParentSpawn(
 		case "v2":
 			taskName, ok := optionalJSONString(result.TaskName)
 			if ok && taskName == child.agentPath {
-				matched = append(matched, call)
+				v2Candidates = append(v2Candidates, call)
 			}
+		}
+	}
+	if child.multiAgentVersion == "v2" {
+		for _, candidate := range v2Candidates {
+			activity, ok := activities[candidate.callID]
+			if !ok {
+				continue
+			}
+			if activity.sessionID == child.sessionID && activity.agentPath == child.agentPath {
+				matched = append(matched, candidate)
+			}
+		}
+		if len(activities) == 0 {
+			// Older V2 rollouts may not persist sub_agent_activity. Preserve the
+			// single-output fallback, but never guess between repeated task names.
+			matched = append(matched, v2Candidates...)
+		}
+		if len(activities) != 0 && len(matched) == 0 {
+			return mismatch("parent V2 spawn activity does not match the child session")
 		}
 	}
 	if len(matched) == 0 {
@@ -1072,10 +1097,10 @@ func childHasPlaintextPathInput(child rolloutMetadata, expectedBundlePath string
 func readParentSpawnRecords(
 	path string,
 	parentThreadID string,
-) ([]parentSpawnCall, map[string]string, error) {
+) ([]parentSpawnCall, map[string]string, map[string]parentSpawnActivity, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, unavailable("read parent rollout", err)
+		return nil, nil, nil, unavailable("read parent rollout", err)
 	}
 	defer func() {
 		// Parsing has consumed the file before return; a close failure cannot
@@ -1086,6 +1111,7 @@ func readParentSpawnRecords(
 	decoder := json.NewDecoder(file)
 	callsByID := make(map[string]parentSpawnCall)
 	outputs := make(map[string]string)
+	activities := make(map[string]parentSpawnActivity)
 	parentMetaCount := 0
 	for recordNumber := 1; ; recordNumber++ {
 		var record rolloutRecord
@@ -1093,7 +1119,7 @@ func readParentSpawnRecords(
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, nil, unavailable(
+			return nil, nil, nil, unavailable(
 				fmt.Sprintf("malformed parent rollout record %d", recordNumber),
 				err,
 			)
@@ -1104,14 +1130,33 @@ func readParentSpawnRecords(
 				ID json.RawMessage `json:"id"`
 			}
 			if err := json.Unmarshal(record.Payload, &payload); err != nil {
-				return nil, nil, unavailable("malformed parent session_meta payload", err)
+				return nil, nil, nil, unavailable("malformed parent session_meta payload", err)
 			}
 			id, err := requiredJSONString(payload.ID, "parent session_meta.id")
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			if id != parentThreadID {
-				return nil, nil, mismatch("parent session_meta.id does not match the prepared parent")
+				return nil, nil, nil, mismatch("parent session_meta.id does not match the prepared parent")
+			}
+			continue
+		}
+		if record.Type == "event_msg" {
+			activity, started, err := parseParentSpawnActivity(record.Payload)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if started {
+				if _, exists := activities[activity.callID]; exists {
+					return nil, nil, nil, unavailable(
+						"parent rollout has duplicate started activity for spawn call_id",
+						nil,
+					)
+				}
+				activities[activity.callID] = parentSpawnActivity{
+					sessionID: activity.sessionID,
+					agentPath: activity.agentPath,
+				}
 			}
 			continue
 		}
@@ -1127,7 +1172,7 @@ func readParentSpawnRecords(
 			Output    json.RawMessage `json:"output"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
-			return nil, nil, unavailable("malformed parent response_item payload", err)
+			return nil, nil, nil, unavailable("malformed parent response_item payload", err)
 		}
 		switch payload.Type {
 		case "function_call":
@@ -1136,26 +1181,26 @@ func readParentSpawnRecords(
 			}
 			timestamp, err := requiredJSONString(record.Timestamp, "parent spawn timestamp")
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
 			if err != nil {
-				return nil, nil, unavailable("parent spawn timestamp is not RFC3339", err)
+				return nil, nil, nil, unavailable("parent spawn timestamp is not RFC3339", err)
 			}
 			callID, err := requiredJSONString(payload.CallID, "parent spawn call_id")
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			argumentsText, err := requiredJSONString(payload.Arguments, "parent spawn arguments")
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			var arguments map[string]json.RawMessage
 			if err := json.Unmarshal([]byte(argumentsText), &arguments); err != nil || arguments == nil {
-				return nil, nil, unavailable("parent spawn arguments are not a JSON object", err)
+				return nil, nil, nil, unavailable("parent spawn arguments are not a JSON object", err)
 			}
 			if _, exists := callsByID[callID]; exists {
-				return nil, nil, unavailable("parent rollout has duplicate spawn call_id", nil)
+				return nil, nil, nil, unavailable("parent rollout has duplicate spawn call_id", nil)
 			}
 			callsByID[callID] = parentSpawnCall{
 				callID:    callID,
@@ -1173,13 +1218,13 @@ func readParentSpawnRecords(
 				continue
 			}
 			if _, exists := outputs[callID]; exists {
-				return nil, nil, unavailable("parent rollout has duplicate function_call_output", nil)
+				return nil, nil, nil, unavailable("parent rollout has duplicate function_call_output", nil)
 			}
 			outputs[callID] = output
 		}
 	}
 	if parentMetaCount != 1 {
-		return nil, nil, unavailable(
+		return nil, nil, nil, unavailable(
 			fmt.Sprintf("parent rollout contains %d session_meta records, want 1", parentMetaCount),
 			nil,
 		)
@@ -1188,7 +1233,54 @@ func readParentSpawnRecords(
 	for _, call := range callsByID {
 		calls = append(calls, call)
 	}
-	return calls, outputs, nil
+	return calls, outputs, activities, nil
+}
+
+type parsedParentSpawnActivity struct {
+	callID    string
+	sessionID string
+	agentPath string
+}
+
+func parseParentSpawnActivity(raw json.RawMessage) (parsedParentSpawnActivity, bool, error) {
+	var payload struct {
+		Type          string          `json:"type"`
+		Kind          string          `json:"kind"`
+		EventID       json.RawMessage `json:"event_id"`
+		AgentThreadID json.RawMessage `json:"agent_thread_id"`
+		AgentPath     json.RawMessage `json:"agent_path"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return parsedParentSpawnActivity{}, false, nil
+	}
+	if payload.Type != "sub_agent_activity" || payload.Kind != "started" {
+		return parsedParentSpawnActivity{}, false, nil
+	}
+	callID, err := requiredJSONString(payload.EventID, "parent started activity event_id")
+	if err != nil {
+		return parsedParentSpawnActivity{}, false, err
+	}
+	sessionID, err := requiredJSONString(
+		payload.AgentThreadID,
+		"parent started activity agent_thread_id",
+	)
+	if err != nil {
+		return parsedParentSpawnActivity{}, false, err
+	}
+	if !isCanonicalUUID(sessionID) {
+		return parsedParentSpawnActivity{}, false, mismatch(
+			"parent started activity agent_thread_id is not a canonical UUID",
+		)
+	}
+	agentPath, err := requiredJSONString(payload.AgentPath, "parent started activity agent_path")
+	if err != nil {
+		return parsedParentSpawnActivity{}, false, err
+	}
+	return parsedParentSpawnActivity{
+		callID:    callID,
+		sessionID: sessionID,
+		agentPath: agentPath,
+	}, true, nil
 }
 
 func spawnJSONString(arguments map[string]json.RawMessage, field string) (string, error) {

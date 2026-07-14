@@ -152,6 +152,212 @@ func TestAttestAcceptsV2NoHistorySpawnWithPlaintextChildTask(t *testing.T) {
 	}
 }
 
+func TestAttestAcceptsUniqueLegacyV2OutputWithoutStartedActivity(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	options := v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+	options.includeParentStartedActivity = false
+	fixture.writeRollout(options)
+
+	if err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	); err != nil {
+		t.Fatalf("Attest() error = %v", err)
+	}
+}
+
+func TestAttestBindsRepeatedV2TaskNameToStartedChildSession(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	config := "name = \"post-work-verifier\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n"
+	if err := os.WriteFile(fixture.agentConfigPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const taskName = "post_work_review_verify"
+	first := v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+	first.agentRole = "post-work-verifier"
+	first.model = "gpt-5.6-terra"
+	first.reasoningEffort = "high"
+	first.parentAgentType = "post-work-verifier"
+	first.parentTaskName = taskName
+	first.agentPath = "/root/" + taskName
+	first.agentInputs[0].recipient = first.agentPath
+	first.extraParentSpawns = []testParentSpawn{{
+		callID:                 "call_spawn_2",
+		sessionID:              testOtherSessionID,
+		agentPath:              first.agentPath,
+		taskName:               taskName,
+		createdAt:              "2026-07-13T17:13:26.763Z",
+		includeStartedActivity: true,
+	}}
+
+	secondResult := strings.ReplaceAll(
+		fixture.resultMessage,
+		testReviewSessionID,
+		testOtherSessionID,
+	)
+	second := first
+	second.sessionID = testOtherSessionID
+	second.rolloutFileSessionID = testOtherSessionID
+	second.createdAt = "2026-07-13T17:13:26.763Z"
+	second.taskMessages = []any{secondResult}
+	second.extraParentSpawns = nil
+
+	dir := filepath.Join(fixture.sessionsRoot, "2026", "07", "13")
+	fixture.writeRolloutAt(first, dir)
+	fixture.writeRolloutAt(second, dir)
+	fixture.writeParentRollout(first)
+
+	if err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	); err != nil {
+		t.Fatalf("Attest(first) error = %v", err)
+	}
+
+	secondResultPath := filepath.Join(filepath.Dir(fixture.resultPath), "review-second.json")
+	if err := os.WriteFile(secondResultPath, []byte(secondResult+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondCacheDir := filepath.Join(filepath.Dir(fixture.cacheDir), "cache-second")
+	if err := os.Mkdir(secondCacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Attest(
+		secondResultPath,
+		secondCacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	); err != nil {
+		t.Fatalf("Attest(second) error = %v", err)
+	}
+
+	for name, cacheDir := range map[string]string{
+		"first":  fixture.cacheDir,
+		"second": secondCacheDir,
+	} {
+		got, err := os.ReadFile(filepath.Join(cacheDir, "attested_reviewer_spawn_calls"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s spawn count) error = %v", name, err)
+		}
+		if string(got) != "2" {
+			t.Errorf("%s attested_reviewer_spawn_calls = %q, want 2", name, got)
+		}
+	}
+}
+
+func TestAttestRejectsRepeatedV2TaskNameWithoutStartedActivity(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	options := v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+	options.includeParentStartedActivity = false
+	options.extraParentSpawns = []testParentSpawn{{
+		callID:    "call_spawn_2",
+		sessionID: testOtherSessionID,
+		agentPath: options.agentPath,
+		taskName:  options.parentTaskName.(string),
+		createdAt: "2026-07-13T17:13:26.763Z",
+	}}
+	fixture.writeRollout(options)
+
+	err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	)
+	assertAttestationFailure(
+		t,
+		fixture.cacheDir,
+		err,
+		AttestationUnavailable,
+		"2 spawn outputs corresponding to the child",
+	)
+}
+
+func TestAttestRejectsV2CandidateWhenChildActivityBelongsToOutputlessCall(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	options := v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+	options.includeParentStartedActivity = false
+	options.extraParentSpawns = []testParentSpawn{{
+		callID:                 "call_spawn_2",
+		sessionID:              testReviewSessionID,
+		agentPath:              options.agentPath,
+		taskName:               options.parentTaskName.(string),
+		createdAt:              "2026-07-13T17:13:26.763Z",
+		includeStartedActivity: true,
+		missingOutput:          true,
+	}}
+	fixture.writeRollout(options)
+
+	err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	)
+	assertAttestationFailure(
+		t,
+		fixture.cacheDir,
+		err,
+		AttestationMismatch,
+		"activity does not match the child session",
+	)
+}
+
+func TestAttestRejectsDuplicateStartedActivityForSpawnCall(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	options := v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+	options.duplicateParentStartedActivity = true
+	fixture.writeRollout(options)
+
+	err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	)
+	assertAttestationFailure(
+		t,
+		fixture.cacheDir,
+		err,
+		AttestationUnavailable,
+		"duplicate started activity",
+	)
+}
+
 func TestAttestRejectsUnattestedSpawnIsolation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -259,6 +465,15 @@ func TestAttestRejectsUnattestedSpawnIsolation(t *testing.T) {
 			},
 			kind:    AttestationMismatch,
 			wantErr: "task_name",
+		},
+		{
+			name: "V2 started activity session differs",
+			change: func(options *rolloutOptions, fixture *attestationFixture) {
+				*options = v2RolloutOptions(fixture.resultMessage, fixture.bundlePath)
+				options.parentStartedSessionID = testOtherSessionID
+			},
+			kind:    AttestationMismatch,
+			wantErr: "activity does not match the child session",
 		},
 		{
 			name: "V2 encrypted child input",
@@ -792,40 +1007,55 @@ name = "also-not-top-level"
 }
 
 type rolloutOptions struct {
-	sessionID               string
-	parentThreadID          string
-	spawnParentThreadID     string
-	threadSource            string
-	agentRole               any
-	includeTopAgentRole     bool
-	overrideTopAgentRole    bool
-	topAgentRole            any
-	agentPath               string
-	multiAgentVersion       string
-	includeForkedFrom       bool
-	forkedFromID            any
-	model                   any
-	reasoningEffort         any
-	sandboxMode             any
-	createdAt               string
-	includeTurnContext      bool
-	extraTurnContexts       []rolloutTurnContext
-	taskMessages            []any
-	userInputs              [][]string
-	agentInputs             []testAgentInput
-	parentMessage           any
-	parentAgentType         any
-	parentNamespace         string
-	parentExtraArguments    map[string]any
-	includeForkContext      bool
-	parentForkContext       any
-	includeForkTurns        bool
-	parentForkTurns         any
-	parentTaskName          any
-	unrecordedParentMessage any
-	duplicateParentSpawn    bool
-	missingParentOutput     bool
-	largeUnknownRecord      string
+	sessionID                      string
+	parentThreadID                 string
+	spawnParentThreadID            string
+	threadSource                   string
+	agentRole                      any
+	includeTopAgentRole            bool
+	overrideTopAgentRole           bool
+	topAgentRole                   any
+	agentPath                      string
+	multiAgentVersion              string
+	includeForkedFrom              bool
+	forkedFromID                   any
+	model                          any
+	reasoningEffort                any
+	sandboxMode                    any
+	createdAt                      string
+	includeTurnContext             bool
+	extraTurnContexts              []rolloutTurnContext
+	taskMessages                   []any
+	userInputs                     [][]string
+	agentInputs                    []testAgentInput
+	parentMessage                  any
+	parentAgentType                any
+	parentNamespace                string
+	parentExtraArguments           map[string]any
+	includeForkContext             bool
+	parentForkContext              any
+	includeForkTurns               bool
+	parentForkTurns                any
+	parentTaskName                 any
+	unrecordedParentMessage        any
+	duplicateParentSpawn           bool
+	missingParentOutput            bool
+	largeUnknownRecord             string
+	rolloutFileSessionID           string
+	includeParentStartedActivity   bool
+	duplicateParentStartedActivity bool
+	parentStartedSessionID         string
+	extraParentSpawns              []testParentSpawn
+}
+
+type testParentSpawn struct {
+	callID                 string
+	sessionID              string
+	agentPath              string
+	taskName               string
+	createdAt              string
+	includeStartedActivity bool
+	missingOutput          bool
 }
 
 type testAgentInput struct {
@@ -866,6 +1096,7 @@ func v2RolloutOptions(resultMessage, bundlePath string) rolloutOptions {
 	options.includeForkContext = false
 	options.includeForkTurns = true
 	options.parentForkTurns = "none"
+	options.includeParentStartedActivity = true
 	options.userInputs = [][]string{{"startup AGENTS context", "startup environment context"}}
 	options.agentInputs = []testAgentInput{{
 		author:    "/root",
@@ -883,7 +1114,11 @@ func (fixture *attestationFixture) writeRollout(options rolloutOptions) {
 
 func (fixture *attestationFixture) writeRolloutAt(options rolloutOptions, dir string) {
 	fixture.t.Helper()
-	path := fixture.rolloutPath(dir)
+	fileSessionID := testReviewSessionID
+	if options.rolloutFileSessionID != "" {
+		fileSessionID = options.rolloutFileSessionID
+	}
+	path := fixture.rolloutPathForSession(dir, fileSessionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -1062,6 +1297,26 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 			},
 		},
 	}
+	if options.includeParentStartedActivity {
+		sessionID := options.sessionID
+		if options.parentStartedSessionID != "" {
+			sessionID = options.parentStartedSessionID
+		}
+		records = append(records, parentStartedActivityRecord(
+			"call_spawn_1",
+			sessionID,
+			options.agentPath,
+			options.createdAt,
+		))
+		if options.duplicateParentStartedActivity {
+			records = append(records, parentStartedActivityRecord(
+				"call_spawn_1",
+				sessionID,
+				options.agentPath,
+				options.createdAt,
+			))
+		}
+	}
 	if !options.missingParentOutput {
 		records = append(records, map[string]any{
 			"timestamp": options.createdAt,
@@ -1117,6 +1372,49 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 			},
 		)
 	}
+	for _, extra := range options.extraParentSpawns {
+		extraArguments := make(map[string]any, len(arguments))
+		maps.Copy(extraArguments, arguments)
+		extraArguments["task_name"] = extra.taskName
+		extraArgumentData, err := json.Marshal(extraArguments)
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		extraOutputData, err := json.Marshal(map[string]any{"task_name": extra.agentPath})
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		records = append(records, map[string]any{
+			"timestamp": extra.createdAt,
+			"type":      "response_item",
+			"payload": map[string]any{
+				"type":      "function_call",
+				"name":      "spawn_agent",
+				"namespace": options.parentNamespace,
+				"call_id":   extra.callID,
+				"arguments": string(extraArgumentData),
+			},
+		})
+		if extra.includeStartedActivity {
+			records = append(records, parentStartedActivityRecord(
+				extra.callID,
+				extra.sessionID,
+				extra.agentPath,
+				extra.createdAt,
+			))
+		}
+		if !extra.missingOutput {
+			records = append(records, map[string]any{
+				"timestamp": extra.createdAt,
+				"type":      "response_item",
+				"payload": map[string]any{
+					"type":    "function_call_output",
+					"call_id": extra.callID,
+					"output":  string(extraOutputData),
+				},
+			})
+		}
+	}
 	var data strings.Builder
 	for _, record := range records {
 		encoded, err := json.Marshal(record)
@@ -1133,7 +1431,12 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 
 func (fixture *attestationFixture) rolloutPath(dir string) string {
 	fixture.t.Helper()
-	return filepath.Join(dir, "rollout-2026-07-13T17-13-25-"+testReviewSessionID+".jsonl")
+	return fixture.rolloutPathForSession(dir, testReviewSessionID)
+}
+
+func (fixture *attestationFixture) rolloutPathForSession(dir, sessionID string) string {
+	fixture.t.Helper()
+	return filepath.Join(dir, "rollout-2026-07-13T17-13-25-"+sessionID+".jsonl")
 }
 
 func (fixture *attestationFixture) parentRolloutPath(dir string) string {
@@ -1150,6 +1453,20 @@ func turnContextRecord(model, reasoningEffort, sandbox any) map[string]any {
 			"sandbox_policy": map[string]any{
 				"type": sandbox,
 			},
+		},
+	}
+}
+
+func parentStartedActivityRecord(callID, sessionID, agentPath, timestamp string) map[string]any {
+	return map[string]any{
+		"timestamp": timestamp,
+		"type":      "event_msg",
+		"payload": map[string]any{
+			"type":            "sub_agent_activity",
+			"event_id":        callID,
+			"agent_thread_id": sessionID,
+			"agent_path":      agentPath,
+			"kind":            "started",
 		},
 	}
 }
