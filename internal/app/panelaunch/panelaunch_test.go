@@ -871,6 +871,32 @@ func TestBuildAgentCommandRejectsNonCodexPlanModeRequest(t *testing.T) {
 	}
 }
 
+func TestBuildAgentCommandWaitsForAgentStartGate(t *testing.T) {
+	got, err := buildAgentCommand(
+		&cliflags.Config{Agent: "claude", DryRun: true},
+		Request{Agent: "claude", Prompt: "review", AgentStartGate: "gate; touch /tmp/untrusted"},
+		"fanout-go",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := "tmux wait-for -L 'gate; touch /tmp/untrusted' && tmux wait-for -U 'gate; touch /tmp/untrusted'"
+	if !strings.HasPrefix(got, wait+" && ") || !strings.Contains(got, "claude") {
+		t.Fatalf("buildAgentCommand() = %q, want quoted gate before agent", got)
+	}
+}
+
+func TestBuildAgentCommandRejectsStartGateInCodexPlanMode(t *testing.T) {
+	_, err := buildAgentCommand(
+		&cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: new(true)},
+		Request{Agent: "codex", CodexPlanMode: true, AgentStartGate: "gate"},
+		"fanout-go",
+	)
+	if err == nil || !strings.Contains(err.Error(), "agent start gate is not supported in Codex Plan Mode") {
+		t.Fatalf("buildAgentCommand() error = %v, want start-gate rejection", err)
+	}
+}
+
 func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -1098,7 +1124,9 @@ func TestKillAttachedPaneIgnoresEmptyPaneID(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_CALLS", marker)
 
-	KillAttachedPane("%caller", "")
+	if err := KillAttachedPane("%caller", "", ""); err != nil {
+		t.Fatalf("KillAttachedPane() error = %v, want nil", err)
+	}
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("tmux was called for an empty pane ID: %v", err)

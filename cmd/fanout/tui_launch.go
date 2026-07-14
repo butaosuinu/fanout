@@ -147,8 +147,6 @@ func launchPlanCoordinator(projectRoot, session, commandName, agentName string, 
 		return panelaunch.Request{}, "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
-	var stdout, stderr bytes.Buffer
-	launchLogger := log.NewWith(&stdout, &stderr, false)
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
 		return panelaunch.Request{}, "", err
@@ -156,8 +154,18 @@ func launchPlanCoordinator(projectRoot, session, commandName, agentName string, 
 	defer func() {
 		_ = recorder.Unlock()
 	}()
+	return launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName, recorder.Store, recorder, guard, buildReq)
+}
+
+// launchPlanCoordinatorLocked is the state-lock-held half of
+// launchPlanCoordinator. The issue parent lane already owns the child fan-out
+// lock when its validated plan becomes ready, so it reuses that recorder
+// instead of attempting a nested lock.
+func launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
-		if guardErr := guard(recorder.Store); guardErr != nil {
+		if guardErr := guard(store); guardErr != nil {
 			return panelaunch.Request{}, "", guardErr
 		}
 	}
@@ -174,7 +182,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, agentName string, 
 	if err != nil {
 		return panelaunch.Request{}, "", err
 	}
-	paneReq := buildReq(recorder.Store, livenessKey)
+	paneReq := buildReq(store, livenessKey)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {

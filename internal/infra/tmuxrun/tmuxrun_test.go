@@ -981,6 +981,37 @@ func TestSetPaneShellKey(t *testing.T) {
 	})
 }
 
+func TestWaitForLockCommandQuotesChannel(t *testing.T) {
+	got := WaitForLockCommand("gate; touch /tmp/untrusted")
+	want := "tmux wait-for -L 'gate; touch /tmp/untrusted' && tmux wait-for -U 'gate; touch /tmp/untrusted'"
+	if got != want {
+		t.Fatalf("WaitForLockCommand() = %q, want %q", got, want)
+	}
+	if got := WaitForLockCommand("  "); got != "" {
+		t.Fatalf("WaitForLockCommand(empty) = %q, want empty", got)
+	}
+}
+
+func TestWaitChannelLockAndUnlock(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func(string) error
+		flag string
+	}{
+		{name: "lock", run: LockWaitChannel, flag: "-L"},
+		{name: "unlock", run: UnlockWaitChannel, flag: "-U"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
+`)
+			if err := tt.run("fanout-start-shell-token"); err != nil {
+				t.Fatalf("wait channel %s failed: %v", tt.name, err)
+			}
+			assertTmuxArgs(t, argsPath, []string{"wait-for", tt.flag, "fanout-start-shell-token"})
+		})
+	}
+}
+
 func TestSetPaneAgentState(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
