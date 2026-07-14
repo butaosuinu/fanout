@@ -147,6 +147,10 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		"agent_type: \"post-work-reviewer\"",
 		"agent_type: \"post-work-verifier\"",
 		"fork_turns: \"none\"",
+		"fork_context: false",
+		"review_controller_not_read_only",
+		"Never use `codex exec`, including as the controller",
+		"exact reviewer-result capture",
 		"task_name",
 		"every stored result has passed the driver's",
 	} {

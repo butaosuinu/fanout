@@ -12,18 +12,23 @@ main agent validates and fixes the work; it must not review its own code.
 
 - Use the `bounded-isolated-reviewer` backend. Never use local LLMs or
   `codex review`.
-- Require enforceable `read-only` sandboxing for reviewer/verifier subagents.
-  Stop non-clean before `prepare` if the current Codex runtime weakens or
-  disables agent sandbox settings, including `--yolo`, `danger-full-access`,
-  or an equivalent override. Never escalate subagent review work.
+- At every reviewer or verifier spawn, require the review controller's current
+  permission profile to be enforceably `read-only`. Codex reapplies that live
+  profile after it loads a custom agent, so the agent file's
+  `sandbox_mode = "read-only"` is not sufficient by itself. Stop non-clean
+  before `prepare` if `--yolo`, `danger-full-access`, or an equivalent override
+  weakens sandboxing. Only driver bookkeeping and exact reviewer-result capture
+  may use scoped escalation while the controller is read-only; never escalate
+  subagent review work.
 - Use exactly one fresh `post-work-reviewer` call for the complete bundle, then
   at most two fresh `post-work-verifier` calls after fixes. Never split by
   file, start another broad review after fixes, or accept same-agent,
   hooks-only, or manual self-review as clean.
 - Use those configured roles and models as installed. If either is unavailable
   or fails to start, stop non-clean; never substitute another role or model.
-- Select each role with the native subagent tool's `agent_type` field and set
-  `fork_turns: "none"`. A `task_name`, prompt text, or installed agent file is
+- Select each role with the native subagent tool's `agent_type` field. With
+  MultiAgentV2, set `fork_turns: "none"`; with MultiAgentV1, set
+  `fork_context: false`. A `task_name`, prompt text, or installed agent file is
   not proof that the requested custom agent ran.
 - Keep reviewer calls read-only: they must not run tests, linters, formatters,
   typechecks, project checks, local LLMs, or `codex review`.
@@ -92,13 +97,31 @@ validation fixes uncommitted so the same bundle includes all reviewed work.
 These restart rules apply before the initial `prepare`; after a broad result
 has recorded findings, keep its driver state and follow step 3 instead.
 
+After validation, keep `validated_head` and the validation command/result as
+handoff data. If the current thread already has a compatible custom-agent
+schema, switch its permission profile to read-only, then recheck that the tree
+is clean and HEAD still equals `validated_head`; do not rerun the canonical
+command. If a fresh thread is required to load installed agents or obtain a
+compatible schema, start a fresh **interactive** read-only Codex controller and
+pass it the same handoff data. The fresh controller must perform the same
+tree/HEAD checks before `prepare` and must not rerun canonical validation.
+Never use `codex exec`, including as the controller, anywhere in the review
+execution path.
+
 ## Validate custom-agent selection
 
 After validation succeeds, but before running `prepare`, inspect the visible
 input schema for the native `spawn_agent` tool. Require an explicit
-`agent_type` field and a `fork_turns` field that accepts `"none"`. Do not infer
-custom-agent support from `task_name`, the message or prompt, an agent config
-file, or a returned task label.
+`agent_type` field and one of these native no-history controls:
+
+- MultiAgentV2: a `fork_turns` field that accepts `"none"`.
+- MultiAgentV1: a boolean `fork_context` field that accepts `false`.
+
+Do not infer custom-agent support from `task_name`, the message or prompt, an
+agent config file, or a returned task label. Installing an agent definition
+does not refresh an already-running thread's tool schema. If needed, start a
+fresh interactive Codex controller after installation and inspect that new
+thread. Do not use `codex review` as the reviewer.
 
 If the required selector is absent or unusable, do not spawn a reviewer and do
 not run `prepare`. Stop non-clean and report the full visible `spawn_agent`
@@ -111,15 +134,38 @@ custom_role_selector=false
 marker_written=false
 ```
 
+After the schema passes, inspect the controller's current permission profile.
+If it is not enforceably read-only, do not spawn a reviewer and do not run
+`prepare`. Stop non-clean and report:
+
+```text
+clean=false
+stop_reason=review_controller_not_read_only
+custom_role_selector=true
+marker_written=false
+```
+
 Do not fall back to a generic subagent, another role, prompt-based role
 impersonation, self-review, a local LLM, or `codex review`.
 
-When the schema supports the contract, create every child with
-`fork_turns: "none"`. Use these exact selectors:
+When the schema supports the contract, use the matching call shape for every
+child. Do not pass `model` or reasoning overrides; the installed custom agent
+definition owns them.
+
+MultiAgentV2:
 
 ```text
 agent_type: "post-work-reviewer"
 agent_type: "post-work-verifier"
+fork_turns: "none"
+```
+
+MultiAgentV1:
+
+```text
+agent_type: "post-work-reviewer"
+agent_type: "post-work-verifier"
+fork_context: false
 ```
 
 The broad call receives only the exact `review_bundle`; a verifier call
@@ -131,10 +177,12 @@ session metadata before accepting the result.
 
 1. Run `bash "$driver" prepare`. Read only its key/value output and pass the
    reported `review_bundle=` as the sole input to exactly one fresh
-   `post-work-reviewer` using `agent_type: "post-work-reviewer"` and
-   `fork_turns: "none"`. Require JSON only and save the exact bytes returned by
-   the child outside the repository without extracting, repairing, or
-   reformatting them. Run
+   `post-work-reviewer` using `agent_type: "post-work-reviewer"` and the
+   preflighted no-history control (`fork_turns: "none"` or
+   `fork_context: false`). Require JSON only and save the exact bytes returned
+   by the child outside the repository without extracting, repairing, or
+   reformatting them. If read-only sandboxing blocks that private temporary-file
+   write, use scoped escalation only for this exact-result capture. Run
    `bash "$driver" record broad <review-json-file>`. Stop if `record` rejects
    the result or its session attestation. The result's `reviewer_session_id`
    must be the child's actual canonical UUID from `CODEX_THREAD_ID`; a
@@ -156,9 +204,12 @@ session metadata before accepting the result.
    existing driver state with `bash "$driver" prepare-verify`. For dirty
    uncommitted scope, run focused validation only because that scope cannot
    receive a marker, then continue the same driver state with `prepare-verify`.
+   Return the review controller to an enforceably read-only permission profile
+   and recheck it before spawning the verifier.
    Pass `verify_bundle=` as the sole input to one fresh verifier using
-   `agent_type: "post-work-verifier"` and `fork_turns: "none"`; it may check
-   only prior findings and obvious fix-introduced regressions.
+   `agent_type: "post-work-verifier"` and the same preflighted no-history
+   control; it may check only prior findings and obvious fix-introduced
+   regressions.
 4. Save the verifier's exact JSON outside the repository, run
    `bash "$driver" record verify <review-json-file>`, then `summarize`. Do not
    extract, repair, or reformat the child output. If it is clean, mark only

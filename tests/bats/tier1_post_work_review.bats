@@ -30,6 +30,26 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
     *"current HEAD equals the last exact HEAD that passed canonical full"* ]] || return 1
 }
 
+@test "post-work-review shard-7: Codex skill requires native isolated V1 or V2 custom roles" {
+  local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
+  local flattened
+
+  flattened="$(awk '{$1=$1; printf "%s ", $0}' "$skill")"
+  [[ "$flattened" == *'MultiAgentV2: a `fork_turns` field that accepts `"none"`.'* ]] || return 1
+  [[ "$flattened" == *'MultiAgentV1: a boolean `fork_context` field that accepts `false`.'* ]] || return 1
+  [[ "$flattened" == *'At every reviewer or verifier spawn, require the review controller'* ]] || return 1
+  [[ "$flattened" == *'permission profile to be enforceably `read-only`'* ]] || return 1
+  [[ "$flattened" == *'stop_reason=review_controller_not_read_only'* ]] || return 1
+  [[ "$flattened" == *'custom_role_selector=true'* ]] || return 1
+  [[ "$flattened" == *'Do not pass `model` or reasoning overrides'* ]] || return 1
+  [[ "$flattened" == *'start a fresh **interactive** read-only Codex controller'* ]] || return 1
+  [[ "$flattened" == *'must not rerun canonical validation'* ]] || return 1
+  [[ "$flattened" == *'Never use `codex exec`, including as the controller'* ]] || return 1
+  [[ "$flattened" == *'exact reviewer-result capture'* ]] || return 1
+  grep -Fq 'agent_type: "post-work-reviewer"' "$skill" || return 1
+  grep -Fq 'agent_type: "post-work-verifier"' "$skill" || return 1
+}
+
 @test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
   local skill="$REPO_ROOT/claude/skills/post-work-review/SKILL.md"
   local marker_step
