@@ -73,6 +73,7 @@ func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hook
 		Prompt:              fmt.Sprintf("orchestrate fanout for #%d. read %s and begin.", issue.Number, briefingPath),
 		Agent:               agentName,
 		ShellKey:            livenessKey,
+		AgentStartGate:      "fanout-orchestrator-start-" + livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        briefing.RenderIssueOrchestrator(issue.Number, issue.Title, issue.Body),

@@ -142,7 +142,7 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		lg.Err("%s", err.Error())
 		return IssueExecutionResult{}, exitcode.Env
 	}
-	if !callIssueReady(ready, store, recorder, lg) {
+	if len(plan.Targets) > 0 && !callIssueReady(ready, store, recorder, lg) {
 		return IssueExecutionResult{}, exitcode.Env
 	}
 

@@ -68,8 +68,12 @@ type Request struct {
 	// the root contains every fanout pane, so the path-containment liveness
 	// check cannot protect such rows against tmux pane id reuse.
 	ShellKey string
-	Hooks    hooks.Config
-	Worktree worktree.Plan
+	// AgentStartGate is an optional tmux wait-for lock. AttachWithResult locks
+	// it before splitting the pane; the pane is recorded immediately, but its
+	// agent command waits until the caller invokes ReleaseAgentStartGate.
+	AgentStartGate string
+	Hooks          hooks.Config
+	Worktree       worktree.Plan
 }
 
 // Result identifies the tmux pane created by a successful launch. PaneID is
@@ -260,9 +264,26 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
+	gateLocked := false
+	if req.AgentStartGate != "" {
+		if err := tmuxrun.LockWaitChannel(req.AgentStartGate); err != nil {
+			l.Log.Err("%s: lock agent start gate: %v", paneLogLabel(req), err)
+			return Result{}, false
+		}
+		gateLocked = true
+	}
+	unlockGateAfterFailure := func() {
+		if !gateLocked {
+			return
+		}
+		if err := tmuxrun.UnlockWaitChannel(req.AgentStartGate); err != nil {
+			l.Log.Warn("%s: unlock agent start gate after failed launch: %v", paneLogLabel(req), err)
+		}
+	}
 
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
+		unlockGateAfterFailure()
 		return Result{}, false
 	}
 	codexPlanStatus := codexapp.Status{}
@@ -272,6 +293,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		if planErr != nil {
 			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
 			failCleanup("", l.Info.Target, paneID, nil, nil)
+			unlockGateAfterFailure()
 			return Result{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
@@ -282,6 +304,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			failCleanup("", l.Info.Target, paneID, nil, nil)
+			unlockGateAfterFailure()
 			return Result{}, false
 		}
 	}
@@ -370,6 +393,9 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexPla
 
 func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
 	if req.CodexPlanMode {
+		if strings.TrimSpace(req.AgentStartGate) != "" {
+			return "", fmt.Errorf("agent start gate is not supported in Codex Plan Mode")
+		}
 		if req.Agent != "codex" {
 			return "", fmt.Errorf("codex plan mode requires agent codex; pane resolves to %s", req.Agent)
 		}
@@ -388,7 +414,11 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
 	if cfg.DryRun {
-		return agent.BuildCommand(req.Agent, req.Prompt)
+		command, err := agent.BuildCommand(req.Agent, req.Prompt)
+		if err != nil {
+			return "", err
+		}
+		return withAgentStartGate(command, req.AgentStartGate), nil
 	}
 	command, err := agent.BuildResolvedCommand(req.Agent, req.Prompt)
 	if err != nil {
@@ -398,7 +428,21 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 	if err != nil {
 		return "", fmt.Errorf("resolve fanout executable: %w", err)
 	}
-	return agent.WithFanoutBin(command, fanoutPath), nil
+	return withAgentStartGate(agent.WithFanoutBin(command, fanoutPath), req.AgentStartGate), nil
+}
+
+func withAgentStartGate(command, gate string) string {
+	wait := tmuxrun.WaitForLockCommand(gate)
+	if wait == "" {
+		return command
+	}
+	return wait + " && " + command
+}
+
+// ReleaseAgentStartGate lets a successfully attached gated pane start its
+// agent. Callers must wait until the state the agent consumes is committed.
+func ReleaseAgentStartGate(req Request) error {
+	return tmuxrun.UnlockWaitChannel(req.AgentStartGate)
 }
 
 func logPaneRequest(req Request, lg *log.Logger) {

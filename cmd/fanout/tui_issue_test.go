@@ -286,6 +286,13 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 			wantPaneIDs:        []string{"%90", "%91"},
 		},
 		{
+			name:               "orchestrator-only cleanup failure remains partial success",
+			orchestratorPaneID: "%90",
+			launchErr:          partialErr,
+			wantNotice:         "started orchestrator, then failed: launch child #502: boom",
+			wantPaneIDs:        []string{"%90"},
+		},
+		{
 			name:               "deferred suffix is unchanged with orchestrator",
 			orchestratorPaneID: "%90",
 			result: parentIssueFanoutResult{
@@ -332,7 +339,8 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 
 func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
-	installTUISequentialTmuxShim(t, repo)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	t.Setenv("TMUX_SHIM_REQUIRE_CHILD_STATE_BEFORE_GATE_RELEASE", "1")
 	installTUIParentLaunchGHScript(t)
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
@@ -369,6 +377,18 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	}
 	if _, err := os.Stat(orchestratorIssueBriefingPath(repo, 500, -1)); err != nil {
 		t.Fatalf("orchestrator briefing: %v", err)
+	}
+	tmuxLog := readTUITmuxLog(t, tmuxLogPath)
+	gateLock := strings.Index(tmuxLog, "wait-for\n-L\nfanout-orchestrator-start-")
+	firstSplit := strings.Index(tmuxLog, "split-window\n")
+	lastSplit := strings.LastIndex(tmuxLog, "split-window\n")
+	gateRelease := strings.Index(tmuxLog, "wait-for\n-U\nfanout-orchestrator-start-")
+	if gateLock < 0 || firstSplit < 0 || lastSplit == firstSplit || gateRelease < 0 ||
+		!(gateLock < firstSplit && firstSplit < lastSplit && lastSplit < gateRelease) {
+		t.Fatalf("tmux gate order = lock %d, first split %d, last split %d, release %d:\n%s", gateLock, firstSplit, lastSplit, gateRelease, tmuxLog)
+	}
+	if !strings.Contains(tmuxLog, "tmux wait-for -L") {
+		t.Fatalf("orchestrator split command does not wait on the start gate:\n%s", tmuxLog)
 	}
 }
 
@@ -457,6 +477,72 @@ func TestLaunchIssueSessionFromTUICleansOrchestratorWhenFanoutCreatesNothing(t *
 	}
 }
 
+func TestLaunchIssueSessionFromTUIReturnsOrchestratorWhenCleanupFails(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	t.Setenv("TMUX_SHIM_FAIL_SPLIT", "92")
+	t.Setenv("TMUX_SHIM_FAIL_KILL", "%91")
+	installTUIParentLaunchGHScript(t)
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
+	if err != nil {
+		t.Fatalf("launchIssueSessionFromTUI() error = %v, want partial success", err)
+	}
+	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91"}) {
+		t.Fatalf("created pane ids = %#v, want remaining orchestrator %%91", result.CreatedPaneIDs)
+	}
+	for _, want := range []string{"started orchestrator, then failed", "tmux split-window", "cleanup issue orchestrator", "tmux kill-pane"} {
+		if !strings.Contains(result.Notice, want) {
+			t.Fatalf("notice = %q, want %q", result.Notice, want)
+		}
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(store.Panes) != 1 || store.Panes[0].PaneID != "%91" {
+		t.Fatalf("state panes = %+v, want remaining orchestrator %%91", store.Panes)
+	}
+	tmuxLog := readTUITmuxLog(t, tmuxLogPath)
+	if strings.Contains(tmuxLog, "wait-for\n-U\nfanout-orchestrator-start-") {
+		t.Fatalf("cleanup failure released the orchestrator gate:\n%s", tmuxLog)
+	}
+}
+
+func TestLaunchIssueSessionFromTUISkipsOrchestratorWhenEveryChildBlocked(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	installTUIBlockedParentLaunchGHScript(t)
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedPaneIDs) != 0 {
+		t.Fatalf("created pane ids = %#v, want none while every child is blocked", result.CreatedPaneIDs)
+	}
+	if !strings.Contains(result.Notice, "blocked/deferred children remain") {
+		t.Fatalf("notice = %q, want deferred context", result.Notice)
+	}
+	if body, readErr := os.ReadFile(tmuxLogPath); readErr == nil {
+		if strings.Contains(string(body), "split-window") || strings.Contains(string(body), "wait-for") {
+			t.Fatalf("tmux ran for an all-blocked parent:\n%s", body)
+		}
+	} else if !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(store.Panes) != 0 {
+		t.Fatalf("state panes = %+v, want no launch side effects", store.Panes)
+	}
+	if _, statErr := os.Stat(orchestratorIssueBriefingPath(repo, 500, -1)); !os.IsNotExist(statErr) {
+		t.Fatalf("orchestrator briefing exists for an all-blocked parent: %v", statErr)
+	}
+}
+
 func TestLaunchIssueSessionFromTUIPreflightsChildAgentsBeforeOrchestrator(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
@@ -524,6 +610,33 @@ case "$args" in
   ;;
 "issue view 501 --json body,labels")
   printf '{"body":"child body","labels":[]}'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+}
+
+func installTUIBlockedParentLaunchGHScript(t *testing.T) {
+	t.Helper()
+	installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 500 --json number,title,state,body,labels")
+  printf '{"number":500,"title":"parent","state":"OPEN","body":"parent body","labels":[]}'
+  ;;
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[{"number":501,"title":"child","state":"open"}]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf 'parent body\n'
+  ;;
+"issue view 501 --json body,labels")
+  printf '%s' '{"body":"## Blocked by\n- #601","labels":[]}'
+  ;;
+"issue view 601 --json state -q .state")
+  printf 'OPEN\n'
   ;;
 *)
   printf 'unexpected gh args: %s\n' "$args" >&2
@@ -609,7 +722,21 @@ case "${1:-}" in
       printf '%s\n' "${6:-}" > "$TMUX_SHIM_SHELL_KEY"
     fi
     ;;
-  select-pane|select-layout|set-window-option|bind-key|kill-pane)
+  wait-for)
+    if [[ "${2:-}" == "-U" && "${TMUX_SHIM_REQUIRE_CHILD_STATE_BEFORE_GATE_RELEASE:-}" == "1" ]]; then
+      if ! grep -Eq '"issueNum"[[:space:]]*:[[:space:]]*501' "$TMUX_SHIM_LIVE_PATH/.fanout/state.json"; then
+        printf 'child state missing before gate release\n' >&2
+        exit 29
+      fi
+    fi
+    ;;
+  kill-pane)
+    if [[ "${TMUX_SHIM_FAIL_KILL:-}" == "${3:-}" ]]; then
+      printf 'kill failed for %s\n' "${3:-}" >&2
+      exit 23
+    fi
+    ;;
+  select-pane|select-layout|set-window-option|bind-key)
     ;;
   *)
     ;;

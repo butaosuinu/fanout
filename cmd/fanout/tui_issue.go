@@ -202,6 +202,18 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
+			if releaseErr := panelaunch.ReleaseAgentStartGate(orchestratorReq); releaseErr != nil {
+				err = errors.Join(err, fmt.Errorf("release cleaned issue orchestrator gate: %w", releaseErr))
+			}
+		}
+	} else if orchestratorCreated {
+		if releaseErr := panelaunch.ReleaseAgentStartGate(orchestratorReq); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release issue orchestrator gate: %w", releaseErr))
+			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
+			} else {
+				orchestratorPaneID = ""
+			}
 		}
 	}
 	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
@@ -214,13 +226,15 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result 
 		createdPaneIDs = append([]string{orchestratorPaneID}, result.CreatedPaneIDs...)
 	}
 	if err != nil {
-		if created > 0 {
+		if len(createdPaneIDs) > 0 {
 			// The fail-fast loop may have created panes before the failure;
 			// report a partial success so the TUI reloads state and focuses the
 			// first running agent while preserving the failure in its notice.
 			notice := fmt.Sprintf("created %d pane(s), then failed: %v", created, err)
-			if orchestratorPaneID != "" {
+			if orchestratorPaneID != "" && created > 0 {
 				notice = fmt.Sprintf("started orchestrator + %d child pane(s), then failed: %v", created, err)
+			} else if orchestratorPaneID != "" {
+				notice = fmt.Sprintf("started orchestrator, then failed: %v", err)
 			}
 			return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
 		}
