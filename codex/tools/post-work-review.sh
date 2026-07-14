@@ -124,12 +124,15 @@ resolve_attestation_environment() {
   SESSIONS_ROOT="$codex_root/sessions"
   REVIEWER_AGENT_CONFIG="$codex_root/agents/$REVIEWER_AGENT.toml"
   VERIFIER_AGENT_CONFIG="$codex_root/agents/$VERIFIER_AGENT.toml"
-  [ -d "$SESSIONS_ROOT" ] && [ -r "$SESSIONS_ROOT" ] || \
+  if [ ! -d "$SESSIONS_ROOT" ] || [ ! -r "$SESSIONS_ROOT" ]; then
     die "Codex sessions root is unavailable: $SESSIONS_ROOT"
-  [ -f "$REVIEWER_AGENT_CONFIG" ] && [ -r "$REVIEWER_AGENT_CONFIG" ] || \
+  fi
+  if [ ! -f "$REVIEWER_AGENT_CONFIG" ] || [ ! -r "$REVIEWER_AGENT_CONFIG" ]; then
     die "reviewer agent config is unavailable: $REVIEWER_AGENT_CONFIG"
-  [ -f "$VERIFIER_AGENT_CONFIG" ] && [ -r "$VERIFIER_AGENT_CONFIG" ] || \
+  fi
+  if [ ! -f "$VERIFIER_AGENT_CONFIG" ] || [ ! -r "$VERIFIER_AGENT_CONFIG" ]; then
     die "verifier agent config is unavailable: $VERIFIER_AGENT_CONFIG"
+  fi
 }
 
 has_dirty_tree() {
@@ -1679,7 +1682,9 @@ cmd_prepare_verify() {
   [ "$(env_get pending_verify 2>/dev/null || echo 0)" != "1" ] || \
     die "verify round already pending"
   broad_calls="$(broad_review_calls)"
-  [ "$broad_calls" -eq 1 ] && [ -f "$(result_path broad 1)" ] || die "broad review result not found"
+  if [ "$broad_calls" -ne 1 ] || [ ! -f "$(result_path broad 1)" ]; then
+    die "broad review result not found"
+  fi
   if any_result_truncated; then
     rewrite_findings_tsv
     stop_existing_review_state "$(latest_finding_count)" "review_truncated"
@@ -1769,8 +1774,9 @@ cmd_record() {
       index=1
       ;;
     verify)
-      [ "$broad_calls" -eq 1 ] && [ -f "$(result_path broad 1)" ] || \
+      if [ "$broad_calls" -ne 1 ] || [ ! -f "$(result_path broad 1)" ]; then
         die "broad review must be recorded before verify"
+      fi
       [ "$verify_calls" -lt "$VERIFY_REVIEW_MAX" ] || die "verify review budget exhausted"
       [ -f "$(verify_bundle_path)" ] || die "verify bundle not prepared"
       [ -f "$(pending_reviewed_diff_path)" ] || die "pending verify diff not found"

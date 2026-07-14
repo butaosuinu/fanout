@@ -1178,7 +1178,7 @@ EOF
 
   run_review "$repo" mark
   [ "$status" -eq 1 ]
-  [[ "$output" == *"marker_reason=review_not_clean"* ]]
+  [[ "$output" == *"marker_reason=last_review_not_clean"* ]]
   [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 
   setup_review_repo "$hooks_repo"
