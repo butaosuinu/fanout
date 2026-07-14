@@ -906,9 +906,9 @@ func validateParentSpawn(
 	freshAfter time.Time,
 	reviewerSpawns *int,
 ) error {
-	calls, outputs, err := readParentSpawnRecords(path, parentThreadID)
-	if err != nil {
-		return err
+	calls, outputs, readErr := readParentSpawnRecords(path, parentThreadID)
+	if readErr != nil {
+		return readErr
 	}
 	wantNamespace := map[string]string{
 		"v1": "multi_agent_v1",

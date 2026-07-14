@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1017,9 +1018,7 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 		"message":    message,
 		"agent_type": options.parentAgentType,
 	}
-	for key, value := range options.parentExtraArguments {
-		arguments[key] = value
-	}
+	maps.Copy(arguments, options.parentExtraArguments)
 	if options.multiAgentVersion == "v1" {
 		if options.includeForkContext {
 			arguments["fork_context"] = options.parentForkContext
@@ -1076,9 +1075,7 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 	}
 	if options.unrecordedParentMessage != nil {
 		extraArguments := make(map[string]any, len(arguments))
-		for key, value := range arguments {
-			extraArguments[key] = value
-		}
+		maps.Copy(extraArguments, arguments)
 		extraArguments["message"] = options.unrecordedParentMessage
 		extraArgumentData, err := json.Marshal(extraArguments)
 		if err != nil {
