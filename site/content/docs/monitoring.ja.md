@@ -95,6 +95,7 @@ repo config の安全ルールも `config.json` と同じです。repo config �
 `n` は Mode 行つきの tmux popup を開き、Prompt / Issue を切り替えます。
 
 この popup から Prompt、plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の新規ペインへフォーカスが移ります。
+Issue fan-out で orchestrator ペインを作成した場合は、作成順でそのペインが先頭です。
 `F11` または `prefix + T` でコンソールに戻れます。
 agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元のフォーカスを維持します。
 
@@ -106,7 +107,14 @@ manual の `codex` ペインは `codexPlanMode` に関係なく、app-server 経
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
 issue を選んで既定の `claude` / `codex` を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
-OPEN な子を持つ issue は `--unblocked-only` 相当でファンアウトし、blocked な子は deferred のまま残ります。
+親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで先に起動します。
+子は子ごとに割り当てた agent でファンアウトします。
+briefing は orchestrator に、子スコープの実装を引き取らず、`fanout <N> --status` を定期的に実行して状態を確認し、親スコープ作業を担当するよう指示します。
+全 child の merge 後は統合を行って最終集約コメントを投稿し、`--merge` / `--cleanup` で lifecycle 操作を進めます。
+子の fan-out は `--unblocked-only` 相当なので、blocked な子は deferred のままです。
+初回選択時に全 child が blocked なら、ペインは作成されません。
+child の unblock 後に再選択すると orchestrator と child のペインを作成します。
+orchestrator が作成済みなら、その後の再選択では重複せず、新たに unblock された子だけをファンアウトします。
 `codexPlanMode` が有効なら、その起動に含まれる子をすべて `codex` に割り当てる必要があります。
 agent が混在する割り当ては、ペイン作成前に失敗します。
 子のない issue は `codexPlanMode` の影響を受けず、`@watch` 配下の通常の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
