@@ -98,12 +98,32 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		t.Fatalf("repoRoot() = %v, want nil", err)
 	}
 	wants := []struct {
-		name   string
-		model  string
-		effort string
+		name       string
+		model      string
+		effort     string
+		bundle     string
+		header     string
+		reviewType string
+		sentinel   string
 	}{
-		{name: "post-work-reviewer", model: "gpt-5.6-sol", effort: "xhigh"},
-		{name: "post-work-verifier", model: "gpt-5.6-terra", effort: "high"},
+		{
+			name:       "post-work-reviewer",
+			model:      "gpt-5.6-sol",
+			effort:     "xhigh",
+			bundle:     "review-bundle.md",
+			header:     "# post-work-review broad review bundle",
+			reviewType: "- review_type: broad",
+			sentinel:   "REVIEW_BUNDLE_INVALID",
+		},
+		{
+			name:       "post-work-verifier",
+			model:      "gpt-5.6-terra",
+			effort:     "high",
+			bundle:     "verify-bundle.md",
+			header:     "# post-work-review verification bundle",
+			reviewType: "- review_type: verify",
+			sentinel:   "VERIFY_BUNDLE_INVALID",
+		},
 	}
 	for _, want := range wants {
 		t.Run(want.name, func(t *testing.T) {
@@ -128,6 +148,14 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 			for _, required := range []string{
 				"`reviewer_session_id`",
 				"`CODEX_THREAD_ID`",
+				"git rev-parse --absolute-git-dir",
+				"sole user message to equal that path byte-for-byte",
+				"non-empty regular file that is not a symbolic link",
+				"never replace omitted content with a placeholder",
+				want.bundle,
+				want.header,
+				want.reviewType,
+				want.sentinel,
 				"Do not substitute a task name",
 				"Return JSON only",
 			} {
@@ -151,6 +179,12 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		"review_controller_not_read_only",
 		"Never use `codex exec`, including as the controller",
 		"exact reviewer-result capture",
+		"Never inline bundle contents",
+		"entire `message`",
+		"task_name: \"post_work_review_broad\"",
+		"task_name: \"post_work_review_verify\"",
+		"MultiAgentV2 requires `task_name` as display metadata",
+		"does not accept `task_name`",
 		"task_name",
 		"every stored result has passed the driver's",
 	} {

@@ -46,6 +46,18 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   [[ "$flattened" == *'must not rerun canonical validation'* ]] || return 1
   [[ "$flattened" == *'Never use `codex exec`, including as the controller'* ]] || return 1
   [[ "$flattened" == *'exact reviewer-result capture'* ]] || return 1
+  [[ "$flattened" == *'Never inline bundle contents into the native tool call'* ]] || return 1
+  [[ "$flattened" == *'absolute path value reported after `review_bundle=` as the entire `message`'* ]] || return 1
+  [[ "$flattened" == *'Pass only the absolute path value after `verify_bundle=` as the verifier'* ]] || return 1
+  [[ "$flattened" == *'message: "<absolute review_bundle path>"'* ]] || return 1
+  [[ "$flattened" == *'message: "<absolute verify_bundle path>"'* ]] || return 1
+  [[ "$flattened" == *'task_name: "post_work_review_broad"'* ]] || return 1
+  [[ "$flattened" == *'task_name: "post_work_review_verify"'* ]] || return 1
+  [[ "$flattened" == *'MultiAgentV2 requires `task_name` as display metadata'* ]] || return 1
+  [[ "$flattened" == *'MultiAgentV1 does not accept `task_name`'* ]] || return 1
+  [[ "$flattened" == *'stop_reason=review_bundle_invalid'* ]] || return 1
+  [[ "$flattened" == *'stop_reason=verify_bundle_invalid'* ]] || return 1
+  [[ "$flattened" == *'do not call `record`'* ]] || return 1
   grep -Fq 'agent_type: "post-work-reviewer"' "$skill" || return 1
   grep -Fq 'agent_type: "post-work-verifier"' "$skill" || return 1
 }
@@ -580,8 +592,18 @@ prepare_branch_review() {
   state="$(state_dir_for "$repo")"
   state="$(cd "$state" && pwd -P)"
   bundle_path="$(printf '%s\n' "$output" | awk -F= '$1 == "review_bundle" { print $2; exit }')"
+  case "$bundle_path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
   [ "$bundle_path" = "$state/review-bundle.md" ]
-  [ -f "$bundle_path" ]
+  [ -s "$bundle_path" ]
+  [ ! -L "$bundle_path" ]
+  [ "$(sed -n '1p' "$bundle_path")" = "# post-work-review broad review bundle" ]
+  grep -Fxq -- "- backend: bounded-isolated-reviewer" "$bundle_path"
+  grep -Fxq -- "- review_type: broad" "$bundle_path"
+  grep -Fxq "## Required JSON shape" "$bundle_path"
+  grep -Fxq "## Diff" "$bundle_path"
 }
 
 @test "post-work-review shard-12: rejects no-sandbox Codex overrides" {
@@ -1128,6 +1150,7 @@ EOF
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
   local verify_json="$BATS_TEST_TMPDIR/verify.json"
+  local state verify_bundle
   local finding
   setup_review_repo "$repo"
   make_branch_change "$repo"
@@ -1151,8 +1174,25 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"verify_bundle="* ]]
   [[ "$output" == *"fix_rounds=1"* ]]
-  grep -Fq -- "- reviewer_agent: post-work-verifier" "$(state_dir_for "$repo")/verify-bundle.md"
-  ! grep -Fq "verifier_agent" "$(state_dir_for "$repo")/verify-bundle.md"
+  state="$(state_dir_for "$repo")"
+  state="$(cd "$state" && pwd -P)"
+  verify_bundle="$(printf '%s\n' "$output" | awk -F= '$1 == "verify_bundle" { print $2; exit }')"
+  case "$verify_bundle" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [ "$verify_bundle" = "$state/verify-bundle.md" ]
+  [ -s "$verify_bundle" ]
+  [ ! -L "$verify_bundle" ]
+  [ "$(sed -n '1p' "$verify_bundle")" = "# post-work-review verification bundle" ]
+  grep -Fxq -- "- backend: bounded-isolated-reviewer" "$verify_bundle"
+  grep -Fxq -- "- review_type: verify" "$verify_bundle"
+  grep -Fxq "## Required JSON shape" "$verify_bundle"
+  grep -Fxq "## Prior findings" "$verify_bundle"
+  grep -Fxq "## Current fix diff" "$verify_bundle"
+  grep -Fxq "## Current scoped diff" "$verify_bundle"
+  grep -Fq -- "- reviewer_agent: post-work-verifier" "$verify_bundle"
+  ! grep -Fq "verifier_agent" "$verify_bundle"
 
   write_verify_result_json "$repo" "session-reused-verify" true false "" "$verify_json"
   sed "s/$(attested_session_uuid session-reused-verify)/$(attested_session_uuid session-broad)/" \

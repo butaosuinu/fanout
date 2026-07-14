@@ -30,6 +30,11 @@ main agent validates and fixes the work; it must not review its own code.
   MultiAgentV2, set `fork_turns: "none"`; with MultiAgentV1, set
   `fork_context: false`. A `task_name`, prompt text, or installed agent file is
   not proof that the requested custom agent ran.
+- Pass only the absolute bundle path printed by the driver as the child
+  `message`. Never inline bundle contents into the native tool call; large
+  diffs may be truncated or replaced by a placeholder before the child starts.
+  The installed custom agent validates the path against the worktree's absolute
+  Git directory and reads the complete bundle directly.
 - Keep reviewer calls read-only: they must not run tests, linters, formatters,
   typechecks, project checks, local LLMs, or `codex review`.
 - Enforce `broad_review_max=1`, `verify_review_max=2`,
@@ -152,37 +157,69 @@ When the schema supports the contract, use the matching call shape for every
 child. Do not pass `model` or reasoning overrides; the installed custom agent
 definition owns them.
 
-MultiAgentV2:
+MultiAgentV2 broad call:
 
 ```text
 agent_type: "post-work-reviewer"
-agent_type: "post-work-verifier"
+task_name: "post_work_review_broad"
+message: "<absolute review_bundle path>"
 fork_turns: "none"
 ```
 
-MultiAgentV1:
+MultiAgentV2 verifier call:
+
+```text
+agent_type: "post-work-verifier"
+task_name: "post_work_review_verify"
+message: "<absolute verify_bundle path>"
+fork_turns: "none"
+```
+
+MultiAgentV1 broad call:
 
 ```text
 agent_type: "post-work-reviewer"
-agent_type: "post-work-verifier"
+message: "<absolute review_bundle path>"
 fork_context: false
 ```
 
-The broad call receives only the exact `review_bundle`; a verifier call
-receives only the exact `verify_bundle`. `task_name` is optional display
-metadata and never role evidence. The driver must attest the child's actual
-session metadata before accepting the result.
+MultiAgentV1 verifier call:
+
+```text
+agent_type: "post-work-verifier"
+message: "<absolute verify_bundle path>"
+fork_context: false
+```
+
+The broad call's `message` is only the exact absolute path value printed after
+`review_bundle=`; a verifier call's `message` is only the value printed after
+`verify_bundle=`. Do not pass the file contents, the key name, or a wrapper
+prompt. MultiAgentV2 requires `task_name` as display metadata. MultiAgentV1
+does not accept `task_name`. In neither version is it role evidence. The driver
+must attest the child's actual session metadata before accepting the result.
 
 ## Run the gate
 
 1. Run `bash "$driver" prepare`. Read only its key/value output and pass the
-   reported `review_bundle=` as the sole input to exactly one fresh
+   absolute path value reported after `review_bundle=` as the entire `message`
+   to exactly one fresh
    `post-work-reviewer` using `agent_type: "post-work-reviewer"` and the
    preflighted no-history control (`fork_turns: "none"` or
-   `fork_context: false`). Require JSON only and save the exact bytes returned
-   by the child outside the repository without extracting, repairing, or
-   reformatting them. If read-only sandboxing blocks that private temporary-file
-   write, use scoped escalation only for this exact-result capture. Run
+   `fork_context: false`). Before spawning, require that the value is an
+   absolute path equal to
+   `$(git rev-parse --absolute-git-dir)/post-work-review/review-bundle.md`, and
+   that it is a readable, non-empty regular file, not a symbolic link. Require
+   its driver header, backend, review type, and required sections to be present.
+   On failure, do not spawn and report `clean=false`,
+   `stop_reason=review_bundle_invalid`, and `marker_written=false`. Do not read
+   and inline the bundle in the controller; the custom reviewer repeats these
+   checks and reads the file directly. If the child returns
+   `REVIEW_BUNDLE_INVALID`, stop with the same non-clean reason; do not call
+   `record`, retry the broad review, or fall back to inline content. Otherwise,
+   require JSON only and save the exact bytes returned by the child outside the
+   repository without extracting, repairing, or reformatting them. If
+   read-only sandboxing blocks that private temporary-file write, use scoped
+   escalation only for this exact-result capture. Run
    `bash "$driver" record broad <review-json-file>`. Stop if `record` rejects
    the result or its session attestation. The result's `reviewer_session_id`
    must be the child's actual canonical UUID from `CODEX_THREAD_ID`; a
@@ -206,10 +243,14 @@ session metadata before accepting the result.
    receive a marker, then continue the same driver state with `prepare-verify`.
    Return the review controller to an enforceably read-only permission profile
    and recheck it before spawning the verifier.
-   Pass `verify_bundle=` as the sole input to one fresh verifier using
-   `agent_type: "post-work-verifier"` and the same preflighted no-history
-   control; it may check only prior findings and obvious fix-introduced
-   regressions.
+   Pass only the absolute path value after `verify_bundle=` as the verifier's
+   entire `message`, using `agent_type: "post-work-verifier"` and the same
+   preflighted no-history control. Apply the same path, regular-file, symlink,
+   and driver-content checks for `verify-bundle.md`. On failure, or if the child
+   returns `VERIFY_BUNDLE_INVALID`, stop with `clean=false`,
+   `stop_reason=verify_bundle_invalid`, and `marker_written=false`; do not call
+   `record`, retry, or inline the file. The verifier may check only prior
+   findings and obvious fix-introduced regressions.
 4. Save the verifier's exact JSON outside the repository, run
    `bash "$driver" record verify <review-json-file>`, then `summarize`. Do not
    extract, repair, or reformat the child output. If it is clean, mark only
