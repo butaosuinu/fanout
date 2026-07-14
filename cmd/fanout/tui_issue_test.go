@@ -384,7 +384,7 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	lastSplit := strings.LastIndex(tmuxLog, "split-window\n")
 	gateRelease := strings.Index(tmuxLog, "wait-for\n-U\nfanout-orchestrator-start-")
 	if gateLock < 0 || firstSplit < 0 || lastSplit == firstSplit || gateRelease < 0 ||
-		!(gateLock < firstSplit && firstSplit < lastSplit && lastSplit < gateRelease) {
+		gateLock >= firstSplit || firstSplit >= lastSplit || lastSplit >= gateRelease {
 		t.Fatalf("tmux gate order = lock %d, first split %d, last split %d, release %d:\n%s", gateLock, firstSplit, lastSplit, gateRelease, tmuxLog)
 	}
 	if !strings.Contains(tmuxLog, "tmux wait-for -L") {
