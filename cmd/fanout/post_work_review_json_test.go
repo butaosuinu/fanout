@@ -94,6 +94,40 @@ func TestCmdPostWorkReviewJSONTimestamp(t *testing.T) {
 	}
 }
 
+func TestCmdPostWorkReviewJSONDigest(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "review-bundle.md")
+	if err := os.WriteFile(bundle, []byte("review bundle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	if code := cmdPostWorkReviewJSON([]string{"digest", bundle}, &stdout, &stderr); code != exitcode.OK {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d; stderr=%s", code, exitcode.OK, stderr.String())
+	}
+	const digest = "e0b082ea1630370a8a6ba7e08afdbdbada22a1831a34f6fa7d531cda988f25c9"
+	want := postWorkReviewJSONVersionLine + "\nbundle_sha256=" + digest + "\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestCmdPostWorkReviewJSONDigestFailsClosed(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+
+	if code := cmdPostWorkReviewJSON([]string{"digest", filepath.Join(t.TempDir(), "missing")}, &stdout, &stderr); code != exitcode.Env {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d", code, exitcode.Env)
+	}
+	if got := stdout.String(); got != postWorkReviewJSONVersionLine+"\n" {
+		t.Fatalf("stdout = %q, want helper version line", got)
+	}
+	if !strings.Contains(stderr.String(), "digest") {
+		t.Fatalf("stderr = %q, want digest failure", stderr.String())
+	}
+}
+
 func TestCmdPostWorkReviewJSONRejectsOldProtocol(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer
@@ -105,7 +139,7 @@ func TestCmdPostWorkReviewJSONRejectsOldProtocol(t *testing.T) {
 		t.Fatalf("stdout = %q, want helper version line", got)
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("expected timestamp")) {
-		t.Fatalf("stderr = %q, want v3 usage", stderr.String())
+		t.Fatalf("stderr = %q, want v4 usage", stderr.String())
 	}
 }
 
@@ -140,7 +174,7 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 	agentConfig := filepath.Join(dir, "agent.toml")
 	if err := os.WriteFile(
 		agentConfig,
-		[]byte("name = \"post-work-reviewer\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"xhigh\"\nsandbox_mode = \"read-only\"\n"),
+		[]byte("name = \"post-work-reviewer\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"xhigh\"\nsandbox_mode = \"read-only\"\napproval_policy = \"never\"\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -148,7 +182,7 @@ func TestCmdPostWorkReviewJSONAttest(t *testing.T) {
 	rollout := strings.Join([]string{
 		fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"parent_thread_id":%q,"timestamp":"2026-07-13T17:13:25.763Z","thread_source":"subagent","agent_role":"post-work-reviewer","multi_agent_version":"v1","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"agent_role":"post-work-reviewer"}}}}}`, childID, parentID, parentID),
 		fmt.Sprintf(`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`, bundle),
-		`{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh","sandbox_policy":{"type":"read-only"}}}`,
+		`{"type":"turn_context","payload":{"model":"gpt-5.6-sol","effort":"xhigh","approval_policy":"never","sandbox_policy":{"type":"read-only"}}}`,
 		fmt.Sprintf(`{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":%q}}`, result),
 	}, "\n") + "\n"
 	rolloutPath := filepath.Join(sessions, "rollout-2026-07-13T17-13-25-"+childID+".jsonl")

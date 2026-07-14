@@ -5,10 +5,12 @@ package reviewjson
 import (
 	"bytes"
 	"crypto/sha1" //nolint:gosec // Finding fingerprints are stable identifiers, not security hashes.
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,10 +30,59 @@ var scalarKeys = []string{
 	"hooks_only_success",
 	"head",
 	"diff_hash",
+	"bundle_sha256",
 	"finding_count",
 	"truncated",
 	"all_previous_findings_fixed",
 	"new_regressions",
+}
+
+// BundleSHA256 returns the lowercase SHA-256 digest of one exact regular-file
+// snapshot. It rejects symlinks and a path that changes identity while read.
+func BundleSHA256(path string) (string, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect review bundle: %w", err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return "", errors.New("review bundle is not a regular file")
+	}
+	if before.Size() == 0 {
+		return "", errors.New("review bundle is empty")
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open review bundle: %w", err)
+	}
+	defer func() {
+		// The digest is already decided; a close error cannot change the bytes
+		// read from the regular file.
+		_ = file.Close()
+	}()
+
+	opened, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat open review bundle: %w", err)
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return "", errors.New("review bundle changed before it was opened")
+	}
+
+	hash := sha256.New()
+	if _, copyErr := io.Copy(hash, file); copyErr != nil {
+		return "", fmt.Errorf("hash review bundle: %w", copyErr)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("reinspect review bundle: %w", err)
+	}
+	if after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() ||
+		!os.SameFile(opened, after) || before.Size() != after.Size() ||
+		!before.ModTime().Equal(after.ModTime()) {
+		return "", errors.New("review bundle changed while it was hashed")
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 var requiredFindingKeys = []string{

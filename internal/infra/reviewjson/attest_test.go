@@ -1,6 +1,7 @@
 package reviewjson
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,7 @@ func TestAttestWritesActualMetadataAfterProjection(t *testing.T) {
 		"attested_agent_role":             testReviewerRole,
 		"attested_model":                  testReviewerModel,
 		"attested_sandbox_mode":           "read-only",
+		"attested_approval_policy":        "never",
 		"attested_history_mode":           attestedNoHistoryMode,
 		"attested_reviewer_spawn_calls":   "1",
 		"reviewer_session_id":             testReviewSessionID,
@@ -80,10 +82,614 @@ func TestAttestWritesActualMetadataAfterProjection(t *testing.T) {
 	}
 }
 
+func TestAttestAcceptsV1CodeModeSpawnWrapper(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	options := defaultRolloutOptions(fixture.resultMessage)
+	options.parentCodeMode = true
+	fixture.writeRollout(options)
+
+	if err := Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	); err != nil {
+		t.Fatalf("Attest() error = %v", err)
+	}
+}
+
+func TestAttestRejectsReviewerSandboxPermissionOverride(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "legacy function call",
+			payload: map[string]any{
+				"type":      "function_call",
+				"name":      "exec_command",
+				"arguments": `{"cmd":"make check","sandbox_permissions":"require_escalated"}`,
+			},
+		},
+		{
+			name: "code mode unquoted key",
+			payload: map[string]any{
+				"type": "custom_tool_call",
+				"name": "exec",
+				"input": `const r = await tools.exec_command({
+  cmd: "make check",
+  sandbox_permissions: "require_escalated"
+}); text(r.output);`,
+			},
+		},
+		{
+			name: "code mode quoted key",
+			payload: map[string]any{
+				"type": "custom_tool_call",
+				"name": "exec",
+				"input": `const r = await tools.exec_command({
+  cmd: "make check",
+  "sandbox_permissions": "require_escalated"
+}); text(r.output);`,
+			},
+		},
+		{
+			name: "template interpolation",
+			payload: map[string]any{
+				"type":  "custom_tool_call",
+				"name":  "exec",
+				"input": "const value = `${tools.exec_command({sandbox_permissions: \"require_escalated\"})}`; text(value);",
+			},
+		},
+		{
+			name: "division after a keyword-named property call",
+			payload: map[string]any{
+				"type": "custom_tool_call",
+				"name": "exec",
+				"input": `const o = {for: () => 1};
+o.for() / tools.exec_command({
+  cmd: "make check",
+  sandbox_permissions: "require_escalated"
+}) / 1;`,
+			},
+		},
+		{
+			name: "division after a keyword-named property",
+			payload: map[string]any{
+				"type": "custom_tool_call",
+				"name": "exec",
+				"input": `const o = {return: 1};
+o.return / tools.exec_command({
+  cmd: "make check",
+  sandbox_permissions: "require_escalated"
+}) / 1;`,
+			},
+		},
+		{
+			name: "division after a trailing-dot number",
+			payload: map[string]any{
+				"type": "custom_tool_call",
+				"name": "exec",
+				"input": `1. / tools.exec_command({
+  cmd: "make check",
+  sandbox_permissions: "require_escalated"
+}) / 1;`,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newAttestationFixture(t)
+			options := defaultRolloutOptions(fixture.resultMessage)
+			options.extraResponseItems = []map[string]any{test.payload}
+			fixture.writeRollout(options)
+
+			err := Attest(
+				fixture.resultPath,
+				fixture.cacheDir,
+				fixture.sessionsRoot,
+				testParentSessionID,
+				testPreparedAt,
+				fixture.agentConfigPath,
+				fixture.bundlePath,
+				"",
+			)
+			assertAttestationFailure(
+				t,
+				fixture.cacheDir,
+				err,
+				AttestationMismatch,
+				"sandbox permission override",
+			)
+		})
+	}
+}
+
+func TestSandboxOverrideParserIgnoresNonExecutableText(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		`const r = await tools.exec_command({cmd: "rg 'sandbox_permissions require_escalated'"}); text(r.output);`,
+		"// sandbox_permissions: \"require_escalated\"\nconst r = await tools.exec_command({cmd: \"git diff\"}); text(r.output);",
+		"const query = `sandbox_permissions: \\\"require_escalated\\\"`;\nconst r = await tools.exec_command({cmd: query}); text(r.output);",
+		`const marker = /sandbox_permissions/; const r = await tools.exec_command({cmd: "git diff"}); text(r.output);`,
+		`const marker = /tools\.exec_command/; const r = await tools.exec_command({cmd: "git diff"}); text(r.output);`,
+		`const matcher = () => { return /tools\.exec_command/; }; const r = await tools.exec_command({cmd: "git diff"}); text(r.output);`,
+		`if (true) /tools\.exec_command/.test("tools.exec_command"); const r = await tools.exec_command({cmd: "git diff"}); text(r.output);`,
+		`const sandbox_permissions = "documentation token"; const r = await tools.exec_command({cmd: "git diff"}); text(r.output);`,
+		`const wd = "/tmp/worktree";
+const p = "/tmp/review-bundle.md";
+const rs = await Promise.all([
+  tools.exec_command({cmd:` + "`stat -f '%HT %z %Sp' '${p}'`" + `,workdir:wd,yield_time_ms:10000,max_output_tokens:2000}),
+  tools.exec_command({cmd:` + "`head -n 1 '${p}'`" + `,workdir:wd,yield_time_ms:10000,max_output_tokens:2000})
+]);
+rs.forEach((r,i)=>text(JSON.stringify({i,exit_code:r.exit_code,output:r.output})));`,
+		`const rs = await Promise.all([tools.exec_command({cmd: "pwd"})]); text(rs[0].output);`,
+		`const value = ((a, b) => b)(0, [0]);
+const r = await tools.exec_command({cmd: "pwd"});
+text(String(value[0]) + r.output);`,
+	}
+	for _, input := range inputs {
+		payload, err := json.Marshal(map[string]any{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": input,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requested, err := parseSandboxOverrideRequest(payload)
+		if err != nil {
+			t.Fatalf("parseSandboxOverrideRequest() error = %v", err)
+		}
+		if requested {
+			t.Fatalf("parseSandboxOverrideRequest() requested = true for %q", input)
+		}
+	}
+}
+
+func TestSandboxOverrideParserRejectsMalformedToolCalls(t *testing.T) {
+	t.Parallel()
+	tests := []map[string]any{
+		{
+			"type":      "function_call",
+			"name":      "exec_command",
+			"arguments": `{"cmd":`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.exec_command({cmd: "git diff"}); /*`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": "const value = `${tools.exec_command({cmd: \\\"git diff\\\"})`;",
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const key = "sandbox_permissions";
+const args = {cmd: "git diff"};
+args[key] = "require_escalated";
+const r = await tools.exec_command(args); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.exec_command({["sandbox_" + "permissions"]: "require_escalated", cmd: "git diff"}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.exec_command({sandbox\u005fpermissions: "require_escalated", cmd: "git diff"}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const invoke = tools.exec_command; const r = await invoke({cmd: "git diff"}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await to\u006fls.exec\u005fcommand({cmd: "git diff", sandbox_permissions: "require_escalated"}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await globalThis["to" + "ols"]["exec_" + "command"]({cmd: "git diff", sandbox_permissions: "require_escalated"}); text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const r = await (() => {})["con" + "structor"]("return tools")()["exec_" + "command"]({
+  cmd: "go test ./...",
+  sandbox_permissions: "require_escalated"
+}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.apply_patch("*** Begin Patch"); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.exec_command({cmd: "git diff", toJSON: () => ({sandbox_permissions: "require_escalated"})}); text(r.output);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const r = await tools.exec_command({"__proto__": {sandbox_permissions: "require_escalated"}, cmd: "git diff"}); text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const {"constructor": F} = () => {};
+const t = F("return tools")();
+const r = await t.exec_command({cmd: "go test ./...", sandbox_permissions: "require_escalated"});
+text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const {"constr\u0075ctor": F} = () => {};
+const t = F("return tools")();
+const r = await t.exec_command({cmd: "go test ./...", sandbox_permissions: "require_escalated"});
+text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const proto = Object.getPrototypeOf(() => {});
+const F = Object.getOwnPropertyDescriptor(proto, "con" + "structor").value;
+const t = F("return tools")();
+const run = Object.getOwnPropertyDescriptor(t, "exec_" + "command").value;
+const r = await run({cmd: "go test ./...", sandbox_permissions: "require_escalated"});
+text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const t = (() => {})?.["con" + "structor"]("return tools")();
+const r = await t?.["exec_" + "command"]({cmd: "go test ./...", sandbox_permissions: "require_escalated"});
+text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `let x = 0, foo = 1, bar = 1000;
+const r = await tools.exec_command({
+  cmd: x++ / foo ? "pwd" : "pwd",
+  sandbox_permissions: "require_escalated",
+  yield_time_ms: bar / 1
+}); text(r.output);`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `class C {
+  #for() { return 1; }
+  static run(c) {
+    return c.#for() / tools.exec_command({cmd: "true", sandbox_permissions: "require_escalated"}) / 1;
+  }
+}
+C.run(new C);`,
+		},
+		{
+			"type":  "custom_tool_call",
+			"name":  "exec",
+			"input": `const π = 1; π / tools.exec_command({cmd: "true", sandbox_permissions: "require_escalated"}) / 1;`,
+		},
+		{
+			"type": "custom_tool_call",
+			"name": "exec",
+			"input": `const {safe, ["con" + "structor"]: F} = () => {};
+const t = F("return tools")();
+const run = t["exec_" + "command"];
+const r = await run({cmd: "true", sandbox_permissions: "require_escalated"});
+text(r.output);`,
+		},
+	}
+	for _, test := range tests {
+		payload, err := json.Marshal(test)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseSandboxOverrideRequest(payload); err == nil {
+			t.Fatalf("parseSandboxOverrideRequest(%s) error = nil, want non-nil", payload)
+		}
+	}
+}
+
+func TestParseV1CodeModeSpawnWrapperRejectsNoncanonicalJavaScript(t *testing.T) {
+	t.Parallel()
+	const canonical = `const r = await tools.multi_agent_v1__spawn_agent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/review-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "dynamic agent type",
+			input: strings.Replace(canonical, `"post-work-reviewer"`, "agentType", 1),
+		},
+		{
+			name:  "dynamic message",
+			input: strings.Replace(canonical, `"/tmp/review-bundle.md"`, "bundlePath", 1),
+		},
+		{
+			name:  "dynamic fork context",
+			input: strings.Replace(canonical, "fork_context: false", "fork_context: inherited", 1),
+		},
+		{
+			name:  "different projected variable",
+			input: strings.Replace(canonical, "JSON.stringify(r)", "JSON.stringify(other)", 1),
+		},
+		{
+			name:  "extra statement",
+			input: canonical + "\nnotify(r);",
+		},
+		{
+			name:  "unsupported argument",
+			input: strings.Replace(canonical, "fork_context: false", "fork_context: false, task_name: \"review\"", 1),
+		},
+		{
+			name:  "missing argument",
+			input: strings.Replace(canonical, "  fork_context: false\n", "", 1),
+		},
+		{
+			name:  "trailing comma",
+			input: strings.Replace(canonical, "fork_context: false\n", "fork_context: false,\n", 1),
+		},
+		{
+			name:  "single quoted literal",
+			input: strings.Replace(canonical, `"post-work-reviewer"`, `'post-work-reviewer'`, 1),
+		},
+		{
+			name: "escaped spawn identifier",
+			input: `const r = await tools.multi_agent_v1__spawn_\u0061gent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+		{
+			name: "computed spawn access",
+			input: `const r = await tools["multi_agent_v1__spawn_agent"]({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+		{
+			name: "spawn hidden in division after an update",
+			input: `let x = 0;
+const ignored = x++ / await tools.multi_agent_v1__spawn_agent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+}) / 1;
+text(String(ignored));`,
+		},
+		{
+			name: "spawn hidden in division after a keyword-named property",
+			input: `const o = {return: 1};
+const ignored = o.return / tools.multi_agent_v1__spawn_agent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+}) / 1;
+text(String(ignored));`,
+		},
+		{
+			name: "spawn hidden in division after a trailing-dot number",
+			input: `const ignored = 1. / tools.multi_agent_v1__spawn_agent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+}) / 1;
+text(String(ignored));`,
+		},
+		{
+			name: "spawn hidden after a private identifier",
+			input: `class C {
+  #for() { return 1; }
+  static run(c) {
+    return c.#for() / tools.multi_agent_v1__spawn_agent({
+      agent_type: "post-work-reviewer",
+      message: "/tmp/other-bundle.md",
+      fork_context: false
+    }) / 1;
+  }
+}
+text(String(C.run(new C)));`,
+		},
+		{
+			name: "spawn hidden after a non-ASCII identifier",
+			input: `const π = 1;
+const ignored = π / tools.multi_agent_v1__spawn_agent({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+}) / 1;
+text(String(ignored));`,
+		},
+		{
+			name: "spawn hidden behind computed constructor access",
+			input: `const F = (() => {})["con" + "structor"];
+const t = F("return tools")();
+const spawn = t["multi_agent_v1__spawn_" + "agent"];
+const r = await spawn({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+		{
+			name: "spawn hidden behind a quoted constructor key",
+			input: `const {"constructor": F} = () => {};
+const t = F("return tools")();
+const spawn = t["multi_agent_v1__spawn_" + "agent"];
+const r = await spawn({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+		{
+			name: "spawn hidden behind a later computed object key",
+			input: `const {safe, ["con" + "structor"]: F} = () => {};
+const t = F("return tools")();
+const spawn = t["multi_agent_v1__spawn_" + "agent"];
+const r = await spawn({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+		{
+			name: "spawn hidden behind optional computed access",
+			input: `const F = (() => {})?.["constructor"];
+const t = F("return tools")();
+const spawn = t?.["multi_agent_v1__spawn_agent"];
+const r = await spawn({
+  agent_type: "post-work-reviewer",
+  message: "/tmp/other-bundle.md",
+  fork_context: false
+});
+text(JSON.stringify(r));`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, isSpawn, err := parseV1CodeModeSpawnWrapper(test.input)
+			if !isSpawn {
+				t.Fatal("parseV1CodeModeSpawnWrapper() did not identify the native spawn attempt")
+			}
+			if err == nil {
+				t.Fatal("parseV1CodeModeSpawnWrapper() error = nil, want non-nil")
+			}
+		})
+	}
+}
+
+func TestParseV1CodeModeSpawnWrapperIgnoresUnrelatedControllerTools(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		`const r = await tools.exec_command({cmd: "rg spawn_agent"}); text(JSON.stringify(r));`,
+		`text(JSON.stringify(ALL_TOOLS.filter(x => /spawn_agent/i.test(x.name))));`,
+		`const r = await tools.multi_agent_v1__wait_agent({agent_id: "reviewer"}); text(JSON.stringify(r));`,
+		`const r = await tools.update_plan({plan: []}); text(JSON.stringify(r));`,
+		`const rs = await Promise.all([tools.exec_command({cmd: "pwd"})]); text(rs[0].output);`,
+		`const value = ((a, b) => b)(0, [0]); text(String(value[0]));`,
+	}
+	for _, input := range inputs {
+		arguments, isSpawn, err := parseV1CodeModeSpawnWrapper(input)
+		if err != nil {
+			t.Fatalf("parseV1CodeModeSpawnWrapper(%q) error = %v", input, err)
+		}
+		if isSpawn || arguments != nil {
+			t.Fatalf(
+				"parseV1CodeModeSpawnWrapper(%q) = (%v, %t), want (nil, false)",
+				input,
+				arguments,
+				isSpawn,
+			)
+		}
+	}
+}
+
+func TestParseV1CodeModeSpawnOutputRejectsNoncanonicalBlocks(t *testing.T) {
+	t.Parallel()
+	block := func(text string) map[string]any {
+		return map[string]any{"type": "input_text", "text": text}
+	}
+	status := block("Script completed\nWall time 0.2 seconds\nOutput:\n")
+	tests := []struct {
+		name   string
+		output any
+	}{
+		{
+			name: "extra block",
+			output: []any{
+				status,
+				block(`{"agent_id":"` + testReviewSessionID + `","nickname":"Gibbs"}`),
+				block(`{"agent_id":"` + testReviewSessionID + `"}`),
+			},
+		},
+		{
+			name: "unknown result field",
+			output: []any{
+				status,
+				block(`{"agent_id":"` + testReviewSessionID + `","task_name":"review"}`),
+			},
+		},
+		{
+			name: "duplicate result field",
+			output: []any{
+				status,
+				block(`{"agent_id":"` + testOtherSessionID + `","agent_id":"` + testReviewSessionID + `"}`),
+			},
+		},
+		{
+			name: "noncanonical status",
+			output: []any{
+				block("Script completed\nOutput:\n"),
+				block(`{"agent_id":"` + testReviewSessionID + `"}`),
+			},
+		},
+		{
+			name: "non-input-text result",
+			output: []any{
+				status,
+				map[string]any{"type": "output_text", "text": `{"agent_id":"` + testReviewSessionID + `"}`},
+			},
+		},
+		{
+			name: "extra block field",
+			output: []any{
+				status,
+				map[string]any{
+					"type": "input_text", "text": `{"agent_id":"` + testReviewSessionID + `"}`, "extra": true,
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := json.Marshal(test.output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseV1CodeModeSpawnOutput(data); err == nil {
+				t.Fatal("parseV1CodeModeSpawnOutput() error = nil, want non-nil")
+			}
+		})
+	}
+}
+
 func TestAttestAcceptsVerifierAgentConfig(t *testing.T) {
 	t.Parallel()
 	fixture := newAttestationFixture(t)
-	config := "name = \"post-work-verifier\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n"
+	config := "name = \"post-work-verifier\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\napproval_policy = \"never\"\n"
 	if err := os.WriteFile(fixture.agentConfigPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +724,41 @@ func TestAttestAcceptsVerifierAgentConfig(t *testing.T) {
 			t.Errorf("cache %s = %q, want %q", name, got, expected)
 		}
 	}
+}
+
+func TestAttestRejectsAgentConfigThatCanApproveEscalation(t *testing.T) {
+	t.Parallel()
+	fixture := newAttestationFixture(t)
+	config, err := os.ReadFile(fixture.agentConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = bytes.ReplaceAll(
+		config,
+		[]byte(`approval_policy = "never"`),
+		[]byte(`approval_policy = "on-request"`),
+	)
+	if writeErr := os.WriteFile(fixture.agentConfigPath, config, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	err = Attest(
+		fixture.resultPath,
+		fixture.cacheDir,
+		fixture.sessionsRoot,
+		testParentSessionID,
+		testPreparedAt,
+		fixture.agentConfigPath,
+		fixture.bundlePath,
+		"",
+	)
+	assertAttestationFailure(
+		t,
+		fixture.cacheDir,
+		err,
+		AttestationUnavailable,
+		"approval_policy is not never",
+	)
 }
 
 func TestAttestAcceptsV2NoHistorySpawnWithPlaintextChildTask(t *testing.T) {
@@ -176,7 +817,7 @@ func TestAttestAcceptsUniqueLegacyV2OutputWithoutStartedActivity(t *testing.T) {
 func TestAttestBindsRepeatedV2TaskNameToStartedChildSession(t *testing.T) {
 	t.Parallel()
 	fixture := newAttestationFixture(t)
-	config := "name = \"post-work-verifier\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n"
+	config := "name = \"post-work-verifier\"\nmodel = \"gpt-5.6-terra\"\nmodel_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\napproval_policy = \"never\"\n"
 	if err := os.WriteFile(fixture.agentConfigPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -574,6 +1215,13 @@ func TestAttestRejectsContradictoryRolloutMetadata(t *testing.T) {
 			wantErr: "reasoning effort",
 		},
 		{
+			name: "approval policy permits escalation",
+			change: func(options *rolloutOptions) {
+				options.approvalPolicy = "on-request"
+			},
+			wantErr: "approval policy",
+		},
+		{
 			name: "metadata UUID differs",
 			change: func(options *rolloutOptions) {
 				options.sessionID = testOtherSessionID
@@ -622,6 +1270,7 @@ func TestAttestRejectsContradictoryRolloutMetadata(t *testing.T) {
 					model:           "gpt-5.6-terra",
 					reasoningEffort: testReviewerEffort,
 					sandboxMode:     "read-only",
+					approvalPolicy:  "never",
 				})
 			},
 			wantErr: "model",
@@ -973,6 +1622,7 @@ func newAttestationFixtureWithSessionID(t *testing.T, sessionID string) *attesta
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"
+approval_policy = "never"
 developer_instructions = """
 name = "forged-inside-instructions"
 Return JSON only.
@@ -1022,6 +1672,7 @@ type rolloutOptions struct {
 	model                          any
 	reasoningEffort                any
 	sandboxMode                    any
+	approvalPolicy                 any
 	createdAt                      string
 	includeTurnContext             bool
 	extraTurnContexts              []rolloutTurnContext
@@ -1031,6 +1682,8 @@ type rolloutOptions struct {
 	parentMessage                  any
 	parentAgentType                any
 	parentNamespace                string
+	parentCodeMode                 bool
+	extraResponseItems             []map[string]any
 	parentExtraArguments           map[string]any
 	includeForkContext             bool
 	parentForkContext              any
@@ -1078,6 +1731,7 @@ func defaultRolloutOptions(resultMessage string) rolloutOptions {
 		model:               testReviewerModel,
 		reasoningEffort:     testReviewerEffort,
 		sandboxMode:         "read-only",
+		approvalPolicy:      "never",
 		createdAt:           testCreatedAt,
 		includeTurnContext:  true,
 		taskMessages:        []any{resultMessage},
@@ -1167,6 +1821,7 @@ func (fixture *attestationFixture) writeRolloutAt(options rolloutOptions, dir st
 			options.model,
 			options.reasoningEffort,
 			options.sandboxMode,
+			options.approvalPolicy,
 		))
 	}
 	for _, context := range options.extraTurnContexts {
@@ -1174,6 +1829,7 @@ func (fixture *attestationFixture) writeRolloutAt(options rolloutOptions, dir st
 			context.model,
 			context.reasoningEffort,
 			context.sandboxMode,
+			context.approvalPolicy,
 		))
 	}
 	userInputs := options.userInputs
@@ -1213,6 +1869,12 @@ func (fixture *attestationFixture) writeRolloutAt(options rolloutOptions, dir st
 				"recipient": input.recipient,
 				"content":   content,
 			},
+		})
+	}
+	for _, payload := range options.extraResponseItems {
+		records = append(records, map[string]any{
+			"type":    "response_item",
+			"payload": payload,
 		})
 	}
 	for _, message := range options.taskMessages {
@@ -1276,6 +1938,60 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
+	spawnPayload := map[string]any{
+		"type":      "function_call",
+		"name":      "spawn_agent",
+		"namespace": options.parentNamespace,
+		"call_id":   "call_spawn_1",
+		"arguments": string(argumentData),
+	}
+	spawnOutputPayload := map[string]any{
+		"type":    "function_call_output",
+		"call_id": "call_spawn_1",
+		"output":  string(outputData),
+	}
+	if options.parentCodeMode {
+		agentTypeData, err := json.Marshal(arguments["agent_type"])
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		messageData, err := json.Marshal(arguments["message"])
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		forkContextData, err := json.Marshal(arguments["fork_context"])
+		if err != nil {
+			fixture.t.Fatal(err)
+		}
+		input := fmt.Sprintf(`
+const r = await tools.multi_agent_v1__spawn_agent({
+  agent_type: %s,
+  message: %s,
+  fork_context: %s
+});
+text(JSON.stringify(r));
+`, agentTypeData, messageData, forkContextData)
+		spawnPayload = map[string]any{
+			"type":    "custom_tool_call",
+			"name":    "exec",
+			"call_id": "call_spawn_1",
+			"input":   input,
+		}
+		spawnOutputPayload = map[string]any{
+			"type":    "custom_tool_call_output",
+			"call_id": "call_spawn_1",
+			"output": []map[string]any{
+				{
+					"type": "input_text",
+					"text": "Script completed\nWall time 0.2 seconds\nOutput:\n",
+				},
+				{
+					"type": "input_text",
+					"text": string(outputData),
+				},
+			},
+		}
+	}
 	records := []map[string]any{
 		{
 			"timestamp": "2026-07-13T17:12:00Z",
@@ -1288,13 +2004,7 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 		{
 			"timestamp": options.createdAt,
 			"type":      "response_item",
-			"payload": map[string]any{
-				"type":      "function_call",
-				"name":      "spawn_agent",
-				"namespace": options.parentNamespace,
-				"call_id":   "call_spawn_1",
-				"arguments": string(argumentData),
-			},
+			"payload":   spawnPayload,
 		},
 	}
 	if options.includeParentStartedActivity {
@@ -1321,11 +2031,7 @@ func (fixture *attestationFixture) writeParentRollout(options rolloutOptions) {
 		records = append(records, map[string]any{
 			"timestamp": options.createdAt,
 			"type":      "response_item",
-			"payload": map[string]any{
-				"type":    "function_call_output",
-				"call_id": "call_spawn_1",
-				"output":  string(outputData),
-			},
+			"payload":   spawnOutputPayload,
 		})
 	}
 	if options.unrecordedParentMessage != nil {
@@ -1444,12 +2150,13 @@ func (fixture *attestationFixture) parentRolloutPath(dir string) string {
 	return filepath.Join(dir, "rollout-2026-07-13T17-12-00-"+testParentSessionID+".jsonl")
 }
 
-func turnContextRecord(model, reasoningEffort, sandbox any) map[string]any {
+func turnContextRecord(model, reasoningEffort, sandbox, approvalPolicy any) map[string]any {
 	return map[string]any{
 		"type": "turn_context",
 		"payload": map[string]any{
-			"model":  model,
-			"effort": reasoningEffort,
+			"model":           model,
+			"effort":          reasoningEffort,
+			"approval_policy": approvalPolicy,
 			"sandbox_policy": map[string]any{
 				"type": sandbox,
 			},

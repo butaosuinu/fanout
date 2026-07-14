@@ -20,6 +20,7 @@ func TestProjectWritesCompatibleCache(t *testing.T) {
   "review_type": "broad",
   "reviewer_agent": "\ud83d\ude80",
   "same_agent_review": false,
+	"bundle_sha256": "e0b082ea1630370a8a6ba7e08afdbdbada22a1831a34f6fa7d531cda988f25c9",
   "finding_count": 1,
   "truncated": false,
   "new_regressions": null,
@@ -45,6 +46,7 @@ func TestProjectWritesCompatibleCache(t *testing.T) {
 		"review_type":                     "broad",
 		"reviewer_agent":                  "🚀",
 		"same_agent_review":               "false",
+		"bundle_sha256":                   "e0b082ea1630370a8a6ba7e08afdbdbada22a1831a34f6fa7d531cda988f25c9",
 		"finding_count":                   "1",
 		"truncated":                       "false",
 		"new_regressions":                 "null",
@@ -65,6 +67,52 @@ func TestProjectWritesCompatibleCache(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cache, "reviewer_provenance")); !os.IsNotExist(err) {
 		t.Errorf("missing scalar cache file exists or Stat failed: %v", err)
+	}
+}
+
+func TestBundleSHA256(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bundle := filepath.Join(dir, "review-bundle.md")
+	if err := os.WriteFile(bundle, []byte("review bundle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := BundleSHA256(bundle)
+	if err != nil {
+		t.Fatalf("BundleSHA256() error = %v", err)
+	}
+	const want = "e0b082ea1630370a8a6ba7e08afdbdbada22a1831a34f6fa7d531cda988f25c9"
+	if got != want {
+		t.Fatalf("BundleSHA256() = %q, want %q", got, want)
+	}
+}
+
+func TestBundleSHA256RejectsInvalidFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "regular.md")
+	if err := os.WriteFile(regular, []byte("bundle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty.md")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(dir, "bundle-link.md")
+	if err := os.Symlink(regular, symlink); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "missing.md"),
+		dir,
+		empty,
+		symlink,
+	} {
+		if _, err := BundleSHA256(path); err == nil {
+			t.Errorf("BundleSHA256(%q) error = nil, want rejection", path)
+		}
 	}
 }
 

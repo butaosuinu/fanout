@@ -21,7 +21,7 @@ import (
 const (
 	// AttestationVersion identifies the rollout metadata contract consumed by
 	// the post-work-review driver.
-	AttestationVersion = "2"
+	AttestationVersion = "3"
 
 	attestedNoHistoryMode = "no-history"
 
@@ -35,6 +35,7 @@ var attestationCacheFiles = []string{
 	"attested_agent_role",
 	"attested_model",
 	"attested_sandbox_mode",
+	"attested_approval_policy",
 	"attested_history_mode",
 	"attested_reviewer_spawn_calls",
 	"attestation_error",
@@ -121,6 +122,7 @@ type attestation struct {
 	agentRole      string
 	model          string
 	sandboxMode    string
+	approvalPolicy string
 	historyMode    string
 	reviewerSpawns int
 }
@@ -169,6 +171,9 @@ func buildAttestation(
 	}
 	if config.sandboxMode != "read-only" {
 		return attestation{}, unavailable("agent config sandbox_mode is not read-only", nil)
+	}
+	if config.approvalPolicy != "never" {
+		return attestation{}, unavailable("agent config approval_policy is not never", nil)
 	}
 
 	sessionID, sessionIDErr := reviewerSessionID(resultData)
@@ -248,6 +253,7 @@ func buildAttestation(
 		agentRole:      metadata.agentRole,
 		model:          config.model,
 		sandboxMode:    config.sandboxMode,
+		approvalPolicy: config.approvalPolicy,
 		historyMode:    attestedNoHistoryMode,
 		reviewerSpawns: reviewerSpawns,
 	}, nil
@@ -274,6 +280,7 @@ type agentConfig struct {
 	model           string
 	reasoningEffort string
 	sandboxMode     string
+	approvalPolicy  string
 }
 
 func readAgentConfig(path string) (agentConfig, error) {
@@ -292,6 +299,7 @@ func readAgentConfig(path string) (agentConfig, error) {
 		"model":                  nil,
 		"model_reasoning_effort": nil,
 		"sandbox_mode":           nil,
+		"approval_policy":        nil,
 	}
 	seen := make(map[string]bool, len(wanted))
 	topLevel := true
@@ -386,7 +394,13 @@ func readAgentConfig(path string) (agentConfig, error) {
 	if multilineDelimiter != "" {
 		return agentConfig{}, errors.New("unterminated multiline string")
 	}
-	for _, key := range []string{"name", "model", "model_reasoning_effort", "sandbox_mode"} {
+	for _, key := range []string{
+		"name",
+		"model",
+		"model_reasoning_effort",
+		"sandbox_mode",
+		"approval_policy",
+	} {
 		if wanted[key] == nil {
 			return agentConfig{}, fmt.Errorf("missing top-level %s", key)
 		}
@@ -396,6 +410,7 @@ func readAgentConfig(path string) (agentConfig, error) {
 		model:           *wanted["model"],
 		reasoningEffort: *wanted["model_reasoning_effort"],
 		sandboxMode:     *wanted["sandbox_mode"],
+		approvalPolicy:  *wanted["approval_policy"],
 	}, nil
 }
 
@@ -560,6 +575,7 @@ type rolloutTurnContext struct {
 	model           string
 	reasoningEffort string
 	sandboxMode     string
+	approvalPolicy  string
 }
 
 type rolloutInput struct {
@@ -622,6 +638,15 @@ func readRollout(path string) (rolloutMetadata, error) {
 			}
 			metadata.turnContexts = append(metadata.turnContexts, context)
 		case "response_item":
+			sandboxOverride, err := parseSandboxOverrideRequest(record.Payload)
+			if err != nil {
+				return rolloutMetadata{}, err
+			}
+			if sandboxOverride {
+				return rolloutMetadata{}, mismatch(
+					"reviewer rollout requested a sandbox permission override",
+				)
+			}
 			userInput, agentInput, encryptedAgentInput, err := parseRolloutInput(record.Payload)
 			if err != nil {
 				return rolloutMetadata{}, err
@@ -780,6 +805,7 @@ func parseSessionMeta(raw json.RawMessage) (rolloutMetadata, error) {
 type turnContextPayload struct {
 	Model           json.RawMessage `json:"model"`
 	ReasoningEffort json.RawMessage `json:"effort"`
+	ApprovalPolicy  json.RawMessage `json:"approval_policy"`
 	SandboxPolicy   *struct {
 		Type json.RawMessage `json:"type"`
 	} `json:"sandbox_policy"`
@@ -811,10 +837,18 @@ func parseTurnContext(raw json.RawMessage) (rolloutTurnContext, error) {
 	if err != nil {
 		return rolloutTurnContext{}, err
 	}
+	approvalPolicy, err := attestedJSONString(
+		payload.ApprovalPolicy,
+		"turn_context.approval_policy",
+	)
+	if err != nil {
+		return rolloutTurnContext{}, err
+	}
 	return rolloutTurnContext{
 		model:           model,
 		reasoningEffort: reasoningEffort,
 		sandboxMode:     sandboxMode,
+		approvalPolicy:  approvalPolicy,
 	}, nil
 }
 
@@ -876,6 +910,823 @@ func parseRolloutInput(
 	input.author, _ = optionalJSONString(payload.Author)
 	input.recipient, _ = optionalJSONString(payload.Recipient)
 	return nil, &input, encrypted, nil
+}
+
+func parseSandboxOverrideRequest(raw json.RawMessage) (bool, error) {
+	var payload struct {
+		Type      string          `json:"type"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		Input     json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false, unavailable("malformed response_item payload", err)
+	}
+	switch {
+	case payload.Type == "function_call" && payload.Name == "exec_command":
+		argumentsText, err := requiredJSONString(
+			payload.Arguments,
+			"reviewer exec_command arguments",
+		)
+		if err != nil {
+			return false, err
+		}
+		var arguments map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(argumentsText), &arguments); err != nil || arguments == nil {
+			return false, unavailable("reviewer exec_command arguments are not a JSON object", err)
+		}
+		_, requested := arguments["sandbox_permissions"]
+		return requested, nil
+	case payload.Type == "custom_tool_call" && payload.Name == "exec":
+		input, err := requiredJSONString(payload.Input, "reviewer code-mode exec input")
+		if err != nil {
+			return false, err
+		}
+		requested, _, err := scanJSExecCommands(input, 0, false)
+		return requested, err
+	default:
+		return false, nil
+	}
+}
+
+// scanJSExecCommands accepts only direct tools.exec_command calls with a
+// literal top-level argument object. Dynamic tool aliases, computed tool
+// access, and non-literal argument objects cannot prove that sandbox escape
+// fields were absent and therefore fail closed.
+func scanJSExecCommands(
+	input string,
+	start int,
+	stopAtClosingBrace bool,
+) (bool, int, error) {
+	braceDepth := 0
+	lastCanEndExpression := false
+	lastToken := ""
+	controlParenPending := false
+	controlParens := make([]bool, 0, 4)
+	delimiters := make([]byte, 0, 8)
+	for offset := start; offset < len(input); {
+		switch input[offset] {
+		case ' ', '\t', '\r', '\n':
+			offset++
+		case '/':
+			next, comment, err := skipJSComment(input, offset)
+			if err != nil {
+				return false, 0, err
+			}
+			if comment {
+				offset = next
+				continue
+			}
+			if !lastCanEndExpression {
+				offset, err = scanJSRegexLiteral(input, offset)
+				if err != nil {
+					return false, 0, err
+				}
+				lastCanEndExpression = true
+				lastToken = "value"
+				continue
+			}
+			lastCanEndExpression = false
+			lastToken = "/"
+			offset++
+		case '\\':
+			return false, 0, unavailable(
+				"reviewer code-mode exec uses an identifier escape",
+				nil,
+			)
+		case '\'', '"':
+			value, escaped, next, err := scanJSQuotedString(input, offset)
+			if err != nil {
+				return false, 0, err
+			}
+			computed, err := jsStringIsComputedToolName(input, next)
+			if err != nil {
+				return false, 0, err
+			}
+			if computed && (escaped || value == "tools" || value == "exec_command") {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses computed tool access",
+					nil,
+				)
+			}
+			objectKey, err := jsStringIsObjectKey(input, next)
+			if err != nil {
+				return false, 0, err
+			}
+			if objectKey && (escaped || isJSDangerousProperty(value)) {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses a dangerous object key",
+					nil,
+				)
+			}
+			lastCanEndExpression = true
+			lastToken = "value"
+			offset = next
+		case '`':
+			requested, next, err := scanJSTemplate(input, offset+1)
+			if err != nil {
+				return false, 0, err
+			}
+			if requested {
+				return true, next, nil
+			}
+			lastCanEndExpression = true
+			lastToken = "value"
+			offset = next
+		case '{':
+			braceDepth++
+			delimiters = append(delimiters, '{')
+			lastCanEndExpression = false
+			lastToken = "{"
+			offset++
+		case '}':
+			if stopAtClosingBrace && braceDepth == 0 {
+				return false, offset + 1, nil
+			}
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '{')
+			if !matched {
+				return false, 0, unavailable(
+					"reviewer code-mode exec has mismatched delimiters",
+					nil,
+				)
+			}
+			lastCanEndExpression = true
+			lastToken = "}"
+			offset++
+		case '[':
+			if lastCanEndExpression {
+				next, numeric, err := scanJSStaticNumericIndex(input, offset)
+				if err != nil {
+					return false, 0, err
+				}
+				if numeric {
+					lastCanEndExpression = true
+					lastToken = "]"
+					offset = next
+					continue
+				}
+			}
+			if lastCanEndExpression || lastToken == "{" ||
+				(lastToken == "," && jsDelimiterTop(delimiters) == '{') {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses computed member access",
+					nil,
+				)
+			}
+			lastCanEndExpression = false
+			lastToken = "["
+			delimiters = append(delimiters, '[')
+			offset++
+		case ']':
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '[')
+			if !matched {
+				return false, 0, unavailable(
+					"reviewer code-mode exec has mismatched delimiters",
+					nil,
+				)
+			}
+			lastCanEndExpression = true
+			lastToken = "]"
+			offset++
+		case '(':
+			delimiters = append(delimiters, '(')
+			controlParens = append(controlParens, controlParenPending)
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = "("
+			offset++
+		case ')':
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '(')
+			if !matched {
+				return false, 0, unavailable(
+					"reviewer code-mode exec has mismatched delimiters",
+					nil,
+				)
+			}
+			controlParen := false
+			if len(controlParens) > 0 {
+				controlParen = controlParens[len(controlParens)-1]
+				controlParens = controlParens[:len(controlParens)-1]
+			}
+			lastCanEndExpression = !controlParen
+			controlParenPending = false
+			lastToken = ")"
+			offset++
+		case '?':
+			if offset+1 < len(input) && input[offset+1] == '.' {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses optional member access",
+					nil,
+				)
+			}
+			lastCanEndExpression = false
+			lastToken = "?"
+			offset++
+		case '+', '-':
+			if offset+1 < len(input) && input[offset+1] == input[offset] {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses an update operator",
+					nil,
+				)
+			}
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = string(input[offset])
+			offset++
+		case '=', ',', ':', ';', '!', '&', '|', '*', '%', '^', '~', '<', '>':
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = string(input[offset])
+			offset++
+		default:
+			if input[offset] == '#' {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses a private identifier",
+					nil,
+				)
+			}
+			if input[offset] >= 0x80 {
+				return false, 0, unavailable(
+					"reviewer code-mode exec uses a non-ASCII identifier",
+					nil,
+				)
+			}
+			if isJSIdentifierStart(input[offset]) {
+				propertyIdentifier := lastToken == "."
+				end := offset + 1
+				for end < len(input) && isJSIdentifierContinue(input[end]) {
+					end++
+				}
+				switch input[offset:end] {
+				case "tools":
+					controlParenPending = false
+					requested, methodEnd, err := inspectJSToolsReference(input, end)
+					if err != nil {
+						return false, 0, err
+					}
+					if requested {
+						return true, methodEnd, nil
+					}
+					lastCanEndExpression = true
+					lastToken = "identifier"
+					offset = methodEnd
+					continue
+				case "exec_command":
+					return false, 0, unavailable(
+						"reviewer code-mode exec calls exec_command through an alias",
+						nil,
+					)
+				case "eval", "Function", "AsyncFunction", "GeneratorFunction",
+					"global", "globalThis", "window", "self", "this", "process",
+					"require", "module", "import", "Object", "Reflect", "Proxy", "constructor",
+					"prototype", "__proto__":
+					return false, 0, unavailable(
+						"reviewer code-mode exec uses dynamic JavaScript access",
+						nil,
+					)
+				}
+				if propertyIdentifier {
+					controlParenPending = false
+					lastCanEndExpression = true
+				} else {
+					switch input[offset:end] {
+					case "if", "while", "for", "with":
+						controlParenPending = true
+						lastCanEndExpression = false
+					case "const", "let", "var", "return", "throw", "case", "new",
+						"delete", "void", "typeof", "instanceof", "in", "of",
+						"yield", "await", "else", "do":
+						controlParenPending = false
+						lastCanEndExpression = false
+					default:
+						controlParenPending = false
+						lastCanEndExpression = true
+					}
+				}
+				lastToken = "identifier"
+				offset = end
+				continue
+			}
+			switch {
+			case input[offset] >= '0' && input[offset] <= '9':
+				controlParenPending = false
+				lastCanEndExpression = true
+				lastToken = "value"
+			case input[offset] == '.':
+				controlParenPending = false
+				lastToken = "."
+			default:
+				controlParenPending = false
+				lastCanEndExpression = false
+				lastToken = string(input[offset])
+			}
+			offset++
+		}
+	}
+	if stopAtClosingBrace {
+		return false, 0, unavailable(
+			"reviewer code-mode exec has an unterminated template interpolation",
+			nil,
+		)
+	}
+	return false, len(input), nil
+}
+
+func inspectJSToolsReference(input string, start int) (bool, int, error) {
+	offset, err := skipJSTrivia(input, start)
+	if err != nil {
+		return false, 0, err
+	}
+	if offset >= len(input) || input[offset] != '.' {
+		return false, 0, unavailable("reviewer code-mode exec aliases tools", nil)
+	}
+	offset, err = skipJSTrivia(input, offset+1)
+	if err != nil {
+		return false, 0, err
+	}
+	if offset >= len(input) || !isJSIdentifierStart(input[offset]) {
+		return false, 0, unavailable("reviewer code-mode exec has a dynamic tool name", nil)
+	}
+	methodStart := offset
+	offset++
+	for offset < len(input) && isJSIdentifierContinue(input[offset]) {
+		offset++
+	}
+	if input[methodStart:offset] != "exec_command" {
+		return false, 0, unavailable(
+			"reviewer code-mode exec calls an unsupported tool",
+			nil,
+		)
+	}
+	openParen, err := skipJSTrivia(input, offset)
+	if err != nil {
+		return false, 0, err
+	}
+	if openParen >= len(input) || input[openParen] != '(' {
+		return false, 0, unavailable("reviewer code-mode exec aliases exec_command", nil)
+	}
+	requested, err := inspectJSExecCommandArguments(input, openParen)
+	return requested, offset, err
+}
+
+func inspectJSExecCommandArguments(input string, openParen int) (bool, error) {
+	offset, err := skipJSTrivia(input, openParen+1)
+	if err != nil {
+		return false, err
+	}
+	if offset >= len(input) || input[offset] != '{' {
+		return false, unavailable(
+			"reviewer code-mode exec_command arguments are not a literal object",
+			nil,
+		)
+	}
+	requested, objectEnd, err := inspectJSExecCommandObject(input, offset)
+	if err != nil || requested {
+		return requested, err
+	}
+	offset, err = skipJSTrivia(input, objectEnd)
+	if err != nil {
+		return false, err
+	}
+	if offset >= len(input) || input[offset] != ')' {
+		return false, unavailable(
+			"reviewer code-mode exec_command has noncanonical arguments",
+			nil,
+		)
+	}
+	return false, nil
+}
+
+func inspectJSExecCommandObject(input string, openBrace int) (bool, int, error) {
+	offset := openBrace + 1
+	seen := make(map[string]struct{})
+	for {
+		var key string
+		var escaped bool
+		var err error
+		offset, err = skipJSTrivia(input, offset)
+		if err != nil {
+			return false, 0, err
+		}
+		if offset >= len(input) {
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command object is unterminated",
+				nil,
+			)
+		}
+		if input[offset] == '}' {
+			return false, offset + 1, nil
+		}
+		switch {
+		case input[offset] == '[' || strings.HasPrefix(input[offset:], "..."):
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command uses a dynamic object key",
+				nil,
+			)
+		case input[offset] == '\'' || input[offset] == '"':
+			key, escaped, offset, err = scanJSQuotedString(input, offset)
+			if err != nil {
+				return false, 0, err
+			}
+			if escaped {
+				return false, 0, unavailable(
+					"reviewer code-mode exec_command uses an escaped object key",
+					nil,
+				)
+			}
+		case isJSIdentifierStart(input[offset]):
+			start := offset
+			offset++
+			for offset < len(input) && isJSIdentifierContinue(input[offset]) {
+				offset++
+			}
+			key = input[start:offset]
+		default:
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command object key is not static",
+				nil,
+			)
+		}
+		if _, exists := seen[key]; exists {
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command object key is duplicated",
+				nil,
+			)
+		}
+		seen[key] = struct{}{}
+		offset, err = skipJSTrivia(input, offset)
+		if err != nil {
+			return false, 0, err
+		}
+		if offset >= len(input) || input[offset] != ':' {
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command object key has no literal value",
+				nil,
+			)
+		}
+		if key == "sandbox_permissions" {
+			return true, offset + 1, nil
+		}
+		switch key {
+		case "cmd", "workdir", "yield_time_ms", "max_output_tokens", "shell", "login", "tty":
+		default:
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command uses an unsupported argument",
+				nil,
+			)
+		}
+		delimiter, next, err := scanJSObjectValue(input, offset+1)
+		if err != nil {
+			return false, 0, err
+		}
+		switch delimiter {
+		case ',':
+			offset = next
+		case '}':
+			return false, next, nil
+		default:
+			return false, 0, unavailable(
+				"reviewer code-mode exec_command object value is unterminated",
+				nil,
+			)
+		}
+	}
+}
+
+func scanJSObjectValue(input string, start int) (byte, int, error) {
+	offset, err := skipJSTrivia(input, start)
+	if err != nil {
+		return 0, 0, err
+	}
+	valueStart := offset
+	closers := make([]byte, 0, 4)
+	for offset < len(input) {
+		switch input[offset] {
+		case '\'', '"':
+			_, _, offset, err = scanJSQuotedString(input, offset)
+			if err != nil {
+				return 0, 0, err
+			}
+			continue
+		case '`':
+			_, offset, err = scanJSTemplate(input, offset+1)
+			if err != nil {
+				return 0, 0, err
+			}
+			continue
+		case '/':
+			next, comment, commentErr := skipJSComment(input, offset)
+			if commentErr != nil {
+				return 0, 0, commentErr
+			}
+			if comment {
+				offset = next
+				continue
+			}
+			if jsRegexCanStart(input, offset) {
+				offset, err = scanJSRegexLiteral(input, offset)
+				if err != nil {
+					return 0, 0, err
+				}
+				continue
+			}
+		case '(', '[', '{':
+			closer := map[byte]byte{'(': ')', '[': ']', '{': '}'}[input[offset]]
+			closers = append(closers, closer)
+			offset++
+			continue
+		case ')', ']':
+			if len(closers) == 0 || closers[len(closers)-1] != input[offset] {
+				return 0, 0, unavailable(
+					"reviewer code-mode exec_command object value is malformed",
+					nil,
+				)
+			}
+			closers = closers[:len(closers)-1]
+			offset++
+			continue
+		case '}':
+			if len(closers) == 0 {
+				if offset == valueStart {
+					return 0, 0, unavailable(
+						"reviewer code-mode exec_command object value is missing",
+						nil,
+					)
+				}
+				return '}', offset + 1, nil
+			}
+			if closers[len(closers)-1] != '}' {
+				return 0, 0, unavailable(
+					"reviewer code-mode exec_command object value is malformed",
+					nil,
+				)
+			}
+			closers = closers[:len(closers)-1]
+			offset++
+			continue
+		case ',':
+			if len(closers) == 0 {
+				if offset == valueStart {
+					return 0, 0, unavailable(
+						"reviewer code-mode exec_command object value is missing",
+						nil,
+					)
+				}
+				return ',', offset + 1, nil
+			}
+		}
+		offset++
+	}
+	return 0, 0, unavailable(
+		"reviewer code-mode exec_command object value is unterminated",
+		nil,
+	)
+}
+
+func scanJSQuotedString(input string, start int) (string, bool, int, error) {
+	quote := input[start]
+	contentStart := start + 1
+	escaped := false
+	for offset := contentStart; offset < len(input); offset++ {
+		switch input[offset] {
+		case quote:
+			return input[contentStart:offset], escaped, offset + 1, nil
+		case '\\':
+			escaped = true
+			offset++
+			if offset >= len(input) {
+				return "", false, 0, unavailable(
+					"reviewer code-mode exec has an unterminated string escape",
+					nil,
+				)
+			}
+		case '\r', '\n':
+			return "", false, 0, unavailable(
+				"reviewer code-mode exec has an unterminated quoted string",
+				nil,
+			)
+		}
+	}
+	return "", false, 0, unavailable(
+		"reviewer code-mode exec has an unterminated quoted string",
+		nil,
+	)
+}
+
+func scanJSTemplate(input string, start int) (bool, int, error) {
+	for offset := start; offset < len(input); offset++ {
+		switch input[offset] {
+		case '\\':
+			offset++
+			if offset >= len(input) {
+				return false, 0, unavailable(
+					"reviewer code-mode exec has an unterminated template escape",
+					nil,
+				)
+			}
+		case '`':
+			return false, offset + 1, nil
+		case '$':
+			if offset+1 >= len(input) || input[offset+1] != '{' {
+				continue
+			}
+			requested, next, err := scanJSExecCommands(input, offset+2, true)
+			if err != nil {
+				return false, 0, err
+			}
+			if requested {
+				return true, next, nil
+			}
+			offset = next - 1
+		}
+	}
+	return false, 0, unavailable(
+		"reviewer code-mode exec has an unterminated template literal",
+		nil,
+	)
+}
+
+func jsStringIsComputedToolName(input string, start int) (bool, error) {
+	offset, err := skipJSTrivia(input, start)
+	if err != nil {
+		return false, err
+	}
+	return offset < len(input) && input[offset] == ']', nil
+}
+
+func scanJSStaticNumericIndex(input string, openBracket int) (int, bool, error) {
+	offset, err := skipJSTrivia(input, openBracket+1)
+	if err != nil {
+		return 0, false, err
+	}
+	start := offset
+	for offset < len(input) && input[offset] >= '0' && input[offset] <= '9' {
+		offset++
+	}
+	if offset == start {
+		return 0, false, nil
+	}
+	offset, err = skipJSTrivia(input, offset)
+	if err != nil {
+		return 0, false, err
+	}
+	if offset >= len(input) || input[offset] != ']' {
+		return 0, false, nil
+	}
+	return offset + 1, true, nil
+}
+
+func jsDelimiterTop(delimiters []byte) byte {
+	if len(delimiters) == 0 {
+		return 0
+	}
+	return delimiters[len(delimiters)-1]
+}
+
+func popJSDelimiter(delimiters []byte, expected byte) ([]byte, bool) {
+	if jsDelimiterTop(delimiters) != expected {
+		return delimiters, false
+	}
+	return delimiters[:len(delimiters)-1], true
+}
+
+func jsStringIsObjectKey(input string, start int) (bool, error) {
+	offset, err := skipJSTrivia(input, start)
+	if err != nil {
+		return false, err
+	}
+	return offset < len(input) && input[offset] == ':', nil
+}
+
+func isJSDangerousProperty(value string) bool {
+	switch value {
+	case "constructor", "prototype", "__proto__", "tools", "exec_command":
+		return true
+	default:
+		return false
+	}
+}
+
+func skipJSTrivia(input string, start int) (int, error) {
+	for offset := start; offset < len(input); {
+		switch input[offset] {
+		case ' ', '\t', '\r', '\n':
+			offset++
+		case '/':
+			next, comment, err := skipJSComment(input, offset)
+			if err != nil {
+				return 0, err
+			}
+			if !comment {
+				return offset, nil
+			}
+			offset = next
+		default:
+			return offset, nil
+		}
+	}
+	return len(input), nil
+}
+
+func skipJSComment(input string, start int) (int, bool, error) {
+	if start+1 >= len(input) || input[start] != '/' {
+		return start, false, nil
+	}
+	switch input[start+1] {
+	case '/':
+		if newline := strings.IndexByte(input[start+2:], '\n'); newline >= 0 {
+			return start + 2 + newline + 1, true, nil
+		}
+		return len(input), true, nil
+	case '*':
+		if closing := strings.Index(input[start+2:], "*/"); closing >= 0 {
+			return start + 2 + closing + 2, true, nil
+		}
+		return 0, true, unavailable(
+			"reviewer code-mode exec has an unterminated block comment",
+			nil,
+		)
+	default:
+		return start, false, nil
+	}
+}
+
+func jsRegexCanStart(input string, slash int) bool {
+	offset := slash - 1
+	for offset >= 0 {
+		switch input[offset] {
+		case ' ', '\t', '\r', '\n':
+			offset--
+		default:
+			const beforeExpression = "=([{,:;!&|?+-*%^~<>"
+			if strings.ContainsRune(beforeExpression, rune(input[offset])) {
+				return true
+			}
+			if !isJSIdentifierContinue(input[offset]) {
+				return false
+			}
+			end := offset + 1
+			for offset >= 0 && isJSIdentifierContinue(input[offset]) {
+				offset--
+			}
+			switch input[offset+1 : end] {
+			case "return", "throw", "case", "delete", "void", "typeof",
+				"instanceof", "in", "of", "yield", "await":
+				return true
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func scanJSRegexLiteral(input string, start int) (int, error) {
+	inClass := false
+	for offset := start + 1; offset < len(input); offset++ {
+		switch input[offset] {
+		case '\\':
+			offset++
+			if offset >= len(input) {
+				return 0, unavailable(
+					"reviewer code-mode exec has an unterminated regex escape",
+					nil,
+				)
+			}
+		case '[':
+			if !inClass {
+				inClass = true
+			}
+		case ']':
+			if inClass {
+				inClass = false
+			}
+		case '/':
+			if inClass {
+				continue
+			}
+			offset++
+			for offset < len(input) && isJSIdentifierContinue(input[offset]) {
+				offset++
+			}
+			return offset, nil
+		case '\r', '\n':
+			return 0, unavailable(
+				"reviewer code-mode exec has an unterminated regex literal",
+				nil,
+			)
+		}
+	}
+	return 0, unavailable(
+		"reviewer code-mode exec has an unterminated regex literal",
+		nil,
+	)
 }
 
 func optionalJSONString(raw json.RawMessage) (string, bool) {
@@ -1110,6 +1961,7 @@ func readParentSpawnRecords(
 
 	decoder := json.NewDecoder(file)
 	callsByID := make(map[string]parentSpawnCall)
+	codeModeCalls := make(map[string]struct{})
 	outputs := make(map[string]string)
 	activities := make(map[string]parentSpawnActivity)
 	parentMetaCount := 0
@@ -1169,6 +2021,7 @@ func readParentSpawnRecords(
 			Namespace string          `json:"namespace"`
 			CallID    json.RawMessage `json:"call_id"`
 			Arguments json.RawMessage `json:"arguments"`
+			Input     json.RawMessage `json:"input"`
 			Output    json.RawMessage `json:"output"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
@@ -1208,10 +2061,62 @@ func readParentSpawnRecords(
 				createdAt: createdAt,
 				arguments: arguments,
 			}
+		case "custom_tool_call":
+			if payload.Name != "exec" {
+				continue
+			}
+			input, ok := optionalJSONString(payload.Input)
+			if !ok {
+				continue
+			}
+			arguments, isSpawn, err := parseV1CodeModeSpawnWrapper(input)
+			if err != nil {
+				return nil, nil, nil, unavailable(
+					"parent V1 code-mode spawn wrapper is not canonical",
+					err,
+				)
+			}
+			if !isSpawn {
+				continue
+			}
+			timestamp, err := requiredJSONString(record.Timestamp, "parent spawn timestamp")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+			if err != nil {
+				return nil, nil, nil, unavailable("parent spawn timestamp is not RFC3339", err)
+			}
+			callID, err := requiredJSONString(payload.CallID, "parent spawn call_id")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if _, exists := callsByID[callID]; exists {
+				return nil, nil, nil, unavailable("parent rollout has duplicate spawn call_id", nil)
+			}
+			if _, exists := outputs[callID]; exists {
+				return nil, nil, nil, unavailable(
+					"parent V1 code-mode spawn output precedes its call",
+					nil,
+				)
+			}
+			callsByID[callID] = parentSpawnCall{
+				callID:    callID,
+				namespace: "multi_agent_v1",
+				createdAt: createdAt,
+				arguments: arguments,
+			}
+			codeModeCalls[callID] = struct{}{}
 		case "function_call_output":
 			callID, ok := optionalJSONString(payload.CallID)
 			if !ok {
 				continue
+			}
+			if _, isCodeMode := codeModeCalls[callID]; isCodeMode {
+				return nil, nil, nil, unavailable(
+					"parent V1 code-mode spawn uses a legacy function_call_output",
+					nil,
+				)
 			}
 			output, ok := optionalJSONString(payload.Output)
 			if !ok {
@@ -1219,6 +2124,25 @@ func readParentSpawnRecords(
 			}
 			if _, exists := outputs[callID]; exists {
 				return nil, nil, nil, unavailable("parent rollout has duplicate function_call_output", nil)
+			}
+			outputs[callID] = output
+		case "custom_tool_call_output":
+			callID, ok := optionalJSONString(payload.CallID)
+			if !ok {
+				continue
+			}
+			if _, isCodeMode := codeModeCalls[callID]; !isCodeMode {
+				continue
+			}
+			output, err := parseV1CodeModeSpawnOutput(payload.Output)
+			if err != nil {
+				return nil, nil, nil, unavailable(
+					"parent V1 code-mode spawn output is not canonical",
+					err,
+				)
+			}
+			if _, exists := outputs[callID]; exists {
+				return nil, nil, nil, unavailable("parent rollout has duplicate spawn output", nil)
 			}
 			outputs[callID] = output
 		}
@@ -1234,6 +2158,646 @@ func readParentSpawnRecords(
 		calls = append(calls, call)
 	}
 	return calls, outputs, activities, nil
+}
+
+const v1CodeModeSpawnTool = "tools.multi_agent_v1__spawn_agent"
+
+// parseV1CodeModeSpawnWrapper accepts only the complete code-mode wrapper
+// emitted for a native V1 spawn. Keeping this grammar narrower than JavaScript
+// prevents dynamic expressions or adjacent statements from becoming spawn
+// attestation evidence.
+func parseV1CodeModeSpawnWrapper(input string) (map[string]json.RawMessage, bool, error) {
+	isSpawn, _, err := scanV1SpawnToolAccess(input, 0, false)
+	if err != nil {
+		return nil, true, err
+	}
+	if !isSpawn {
+		return nil, false, nil
+	}
+
+	parser := v1SpawnWrapperParser{input: input}
+	parser.skipWhitespace()
+	if !parser.consume("const") || !parser.consumeWhitespace() {
+		return nil, true, errors.New("wrapper must start with a const declaration")
+	}
+	variable, ok := parser.identifier()
+	if !ok {
+		return nil, true, errors.New("wrapper result variable is missing")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("=") {
+		return nil, true, errors.New("wrapper const declaration has no assignment")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("await") || !parser.consumeWhitespace() {
+		return nil, true, errors.New("wrapper spawn call is not directly awaited")
+	}
+	if !parser.consume(v1CodeModeSpawnTool) {
+		return nil, true, errors.New("wrapper does not call the native V1 spawn tool")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("(") {
+		return nil, true, errors.New("wrapper spawn call is missing its argument list")
+	}
+	parser.skipWhitespace()
+	arguments, err := parser.spawnArguments()
+	if err != nil {
+		return nil, true, err
+	}
+	parser.skipWhitespace()
+	if !parser.consume(")") {
+		return nil, true, errors.New("wrapper spawn call is not closed")
+	}
+	parser.skipWhitespace()
+	if !parser.consume(";") {
+		return nil, true, errors.New("wrapper spawn call has no terminating semicolon")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("text") {
+		return nil, true, errors.New("wrapper does not project the spawn result with text")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("(") {
+		return nil, true, errors.New("wrapper text call is missing its argument list")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("JSON.stringify") {
+		return nil, true, errors.New("wrapper does not JSON-encode the spawn result")
+	}
+	parser.skipWhitespace()
+	if !parser.consume("(") {
+		return nil, true, errors.New("wrapper JSON.stringify call is missing its argument list")
+	}
+	parser.skipWhitespace()
+	projectedVariable, ok := parser.identifier()
+	if !ok || projectedVariable != variable {
+		return nil, true, errors.New("wrapper projects a different result variable")
+	}
+	parser.skipWhitespace()
+	if !parser.consume(")") {
+		return nil, true, errors.New("wrapper JSON.stringify call is not closed")
+	}
+	parser.skipWhitespace()
+	if !parser.consume(")") {
+		return nil, true, errors.New("wrapper text call is not closed")
+	}
+	parser.skipWhitespace()
+	if !parser.consume(";") {
+		return nil, true, errors.New("wrapper text call has no terminating semicolon")
+	}
+	parser.skipWhitespace()
+	if !parser.atEnd() {
+		return nil, true, errors.New("wrapper contains an extra statement")
+	}
+	return arguments, true, nil
+}
+
+func scanV1SpawnToolAccess(
+	input string,
+	start int,
+	stopAtClosingBrace bool,
+) (bool, int, error) {
+	braceDepth := 0
+	lastCanEndExpression := false
+	lastToken := ""
+	controlParenPending := false
+	controlParens := make([]bool, 0, 4)
+	delimiters := make([]byte, 0, 8)
+	for offset := start; offset < len(input); {
+		switch input[offset] {
+		case ' ', '\t', '\r', '\n':
+			offset++
+		case '/':
+			next, comment, err := skipJSComment(input, offset)
+			if err != nil {
+				return false, 0, err
+			}
+			if comment {
+				offset = next
+				continue
+			}
+			if !lastCanEndExpression {
+				offset, err = scanJSRegexLiteral(input, offset)
+				if err != nil {
+					return false, 0, err
+				}
+				lastCanEndExpression = true
+				lastToken = "value"
+				continue
+			}
+			lastCanEndExpression = false
+			lastToken = "/"
+			offset++
+		case '\\':
+			return false, 0, errors.New("wrapper uses an identifier escape")
+		case '+', '-':
+			if offset+1 < len(input) && input[offset+1] == input[offset] {
+				return false, 0, errors.New("wrapper uses an update operator")
+			}
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = string(input[offset])
+			offset++
+		case '\'', '"':
+			value, escaped, next, err := scanJSQuotedString(input, offset)
+			if err != nil {
+				return false, 0, err
+			}
+			objectKey, err := jsStringIsObjectKey(input, next)
+			if err != nil {
+				return false, 0, err
+			}
+			if objectKey && (escaped || isJSDangerousProperty(value)) {
+				return false, 0, errors.New("wrapper uses a dangerous object key")
+			}
+			lastCanEndExpression = true
+			lastToken = "value"
+			offset = next
+		case '`':
+			found, next, err := scanV1SpawnTemplate(input, offset+1)
+			if err != nil {
+				return false, 0, err
+			}
+			if found {
+				return true, next, nil
+			}
+			lastCanEndExpression = true
+			lastToken = "value"
+			offset = next
+		case '{':
+			braceDepth++
+			delimiters = append(delimiters, '{')
+			lastCanEndExpression = false
+			lastToken = "{"
+			offset++
+		case '}':
+			if stopAtClosingBrace && braceDepth == 0 {
+				return false, offset + 1, nil
+			}
+			if braceDepth > 0 {
+				braceDepth--
+			}
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '{')
+			if !matched {
+				return false, 0, errors.New("wrapper has mismatched delimiters")
+			}
+			lastCanEndExpression = true
+			lastToken = "}"
+			offset++
+		case '[':
+			if lastCanEndExpression {
+				next, numeric, err := scanJSStaticNumericIndex(input, offset)
+				if err != nil {
+					return false, 0, err
+				}
+				if numeric {
+					lastCanEndExpression = true
+					lastToken = "]"
+					offset = next
+					continue
+				}
+			}
+			if lastCanEndExpression || lastToken == "{" ||
+				(lastToken == "," && jsDelimiterTop(delimiters) == '{') {
+				return false, 0, errors.New("wrapper uses computed member access")
+			}
+			lastCanEndExpression = false
+			lastToken = "["
+			delimiters = append(delimiters, '[')
+			offset++
+		case ']':
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '[')
+			if !matched {
+				return false, 0, errors.New("wrapper has mismatched delimiters")
+			}
+			lastCanEndExpression = true
+			lastToken = "]"
+			offset++
+		case '(':
+			delimiters = append(delimiters, '(')
+			controlParens = append(controlParens, controlParenPending)
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = "("
+			offset++
+		case ')':
+			var matched bool
+			delimiters, matched = popJSDelimiter(delimiters, '(')
+			if !matched {
+				return false, 0, errors.New("wrapper has mismatched delimiters")
+			}
+			controlParen := false
+			if len(controlParens) > 0 {
+				controlParen = controlParens[len(controlParens)-1]
+				controlParens = controlParens[:len(controlParens)-1]
+			}
+			lastCanEndExpression = !controlParen
+			controlParenPending = false
+			lastToken = ")"
+			offset++
+		case '?':
+			if offset+1 < len(input) && input[offset+1] == '.' {
+				return false, 0, errors.New("wrapper uses optional member access")
+			}
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = "?"
+			offset++
+		case '=', ',', ':', ';', '!', '&', '|', '*', '%', '^', '~', '<', '>':
+			controlParenPending = false
+			lastCanEndExpression = false
+			lastToken = string(input[offset])
+			offset++
+		default:
+			if input[offset] == '#' {
+				return false, 0, errors.New("wrapper uses a private identifier")
+			}
+			if input[offset] >= 0x80 {
+				return false, 0, errors.New("wrapper uses a non-ASCII identifier")
+			}
+			if !isJSIdentifierStart(input[offset]) {
+				switch {
+				case input[offset] >= '0' && input[offset] <= '9':
+					controlParenPending = false
+					lastCanEndExpression = true
+					lastToken = "value"
+				case input[offset] == '.':
+					controlParenPending = false
+					lastToken = "."
+				default:
+					controlParenPending = false
+					lastCanEndExpression = false
+					lastToken = string(input[offset])
+				}
+				offset++
+				continue
+			}
+			end := offset + 1
+			for end < len(input) && isJSIdentifierContinue(input[end]) {
+				end++
+			}
+			identifier := input[offset:end]
+			propertyIdentifier := lastToken == "."
+			switch identifier {
+			case "tools":
+				controlParenPending = false
+				found, next, err := inspectV1ToolsReference(input, end)
+				if err != nil {
+					return false, 0, err
+				}
+				if found {
+					return true, next, nil
+				}
+				lastCanEndExpression = true
+				lastToken = "identifier"
+				offset = next
+				continue
+			case "eval", "Function", "AsyncFunction", "GeneratorFunction",
+				"global", "globalThis", "window", "self", "this", "process",
+				"require", "module", "import", "Object", "Reflect", "Proxy",
+				"constructor", "prototype", "__proto__":
+				return false, 0, errors.New("wrapper uses dynamic JavaScript access")
+			}
+			if strings.HasPrefix(identifier, "multi_agent_v1__spawn") {
+				return false, 0, errors.New("wrapper aliases the native V1 spawn tool")
+			}
+			if propertyIdentifier {
+				controlParenPending = false
+				lastCanEndExpression = true
+			} else {
+				switch identifier {
+				case "if", "while", "for", "with":
+					controlParenPending = true
+					lastCanEndExpression = false
+				case "const", "let", "var", "return", "throw", "case", "new",
+					"delete", "void", "typeof", "instanceof", "in", "of",
+					"yield", "await", "else", "do":
+					controlParenPending = false
+					lastCanEndExpression = false
+				default:
+					controlParenPending = false
+					lastCanEndExpression = true
+				}
+			}
+			lastToken = "identifier"
+			offset = end
+			continue
+		}
+	}
+	if stopAtClosingBrace {
+		return false, 0, errors.New("wrapper has an unterminated template interpolation")
+	}
+	return false, len(input), nil
+}
+
+func inspectV1ToolsReference(input string, start int) (bool, int, error) {
+	offset, err := skipJSTrivia(input, start)
+	if err != nil {
+		return false, 0, err
+	}
+	if offset >= len(input) || input[offset] != '.' {
+		return false, 0, errors.New("wrapper uses dynamic or aliased tools access")
+	}
+	offset, err = skipJSTrivia(input, offset+1)
+	if err != nil {
+		return false, 0, err
+	}
+	if offset >= len(input) || !isJSIdentifierStart(input[offset]) {
+		return false, 0, errors.New("wrapper uses a dynamic tool name")
+	}
+	methodStart := offset
+	offset++
+	for offset < len(input) && isJSIdentifierContinue(input[offset]) {
+		offset++
+	}
+	method := input[methodStart:offset]
+	if method == "multi_agent_v1__spawn_agent" {
+		return true, offset, nil
+	}
+	if strings.HasPrefix(method, "multi_agent_v1__spawn") {
+		return false, 0, errors.New("wrapper uses a noncanonical native V1 spawn tool name")
+	}
+	return false, offset, nil
+}
+
+func scanV1SpawnTemplate(input string, start int) (bool, int, error) {
+	for offset := start; offset < len(input); offset++ {
+		switch input[offset] {
+		case '\\':
+			offset++
+			if offset >= len(input) {
+				return false, 0, errors.New("wrapper has an unterminated template escape")
+			}
+		case '`':
+			return false, offset + 1, nil
+		case '$':
+			if offset+1 >= len(input) || input[offset+1] != '{' {
+				continue
+			}
+			found, next, err := scanV1SpawnToolAccess(input, offset+2, true)
+			if err != nil {
+				return false, 0, err
+			}
+			if found {
+				return true, next, nil
+			}
+			offset = next - 1
+		}
+	}
+	return false, 0, errors.New("wrapper has an unterminated template literal")
+}
+
+type v1SpawnWrapperParser struct {
+	input  string
+	offset int
+}
+
+func (p *v1SpawnWrapperParser) atEnd() bool {
+	return p.offset == len(p.input)
+}
+
+func (p *v1SpawnWrapperParser) consume(value string) bool {
+	if !strings.HasPrefix(p.input[p.offset:], value) {
+		return false
+	}
+	p.offset += len(value)
+	return true
+}
+
+func (p *v1SpawnWrapperParser) consumeWhitespace() bool {
+	start := p.offset
+	p.skipWhitespace()
+	return p.offset > start
+}
+
+func (p *v1SpawnWrapperParser) skipWhitespace() {
+	for p.offset < len(p.input) {
+		switch p.input[p.offset] {
+		case ' ', '\t', '\r', '\n':
+			p.offset++
+		default:
+			return
+		}
+	}
+}
+
+func (p *v1SpawnWrapperParser) identifier() (string, bool) {
+	if p.offset >= len(p.input) || !isJSIdentifierStart(p.input[p.offset]) {
+		return "", false
+	}
+	start := p.offset
+	p.offset++
+	for p.offset < len(p.input) && isJSIdentifierContinue(p.input[p.offset]) {
+		p.offset++
+	}
+	return p.input[start:p.offset], true
+}
+
+func isJSIdentifierStart(value byte) bool {
+	return value == '_' || value == '$' || value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z'
+}
+
+func isJSIdentifierContinue(value byte) bool {
+	return isJSIdentifierStart(value) || value >= '0' && value <= '9'
+}
+
+func (p *v1SpawnWrapperParser) spawnArguments() (map[string]json.RawMessage, error) {
+	if !p.consume("{") {
+		return nil, errors.New("wrapper spawn arguments are not an object literal")
+	}
+	p.skipWhitespace()
+	arguments := make(map[string]json.RawMessage, 3)
+	for {
+		field, ok := p.identifier()
+		if !ok {
+			return nil, errors.New("wrapper spawn argument name is missing")
+		}
+		if _, exists := arguments[field]; exists {
+			return nil, fmt.Errorf("wrapper spawn argument %s is duplicated", field)
+		}
+		p.skipWhitespace()
+		if !p.consume(":") {
+			return nil, fmt.Errorf("wrapper spawn argument %s has no literal value", field)
+		}
+		p.skipWhitespace()
+		switch field {
+		case "agent_type", "message":
+			literal, err := p.jsonStringLiteral()
+			if err != nil {
+				return nil, fmt.Errorf("wrapper spawn argument %s: %w", field, err)
+			}
+			arguments[field] = literal
+		case "fork_context":
+			switch {
+			case p.consume("false"):
+				arguments[field] = json.RawMessage("false")
+			case p.consume("true"):
+				arguments[field] = json.RawMessage("true")
+			default:
+				return nil, errors.New("wrapper spawn argument fork_context is not a boolean literal")
+			}
+		default:
+			return nil, fmt.Errorf("wrapper spawn contains unsupported argument %s", field)
+		}
+		p.skipWhitespace()
+		switch {
+		case p.consume(","):
+			p.skipWhitespace()
+			if strings.HasPrefix(p.input[p.offset:], "}") {
+				return nil, errors.New("wrapper spawn argument object has a trailing comma")
+			}
+		case p.consume("}"):
+			for _, required := range []string{"agent_type", "message", "fork_context"} {
+				if _, exists := arguments[required]; !exists {
+					return nil, fmt.Errorf("wrapper spawn argument %s is missing", required)
+				}
+			}
+			return arguments, nil
+		default:
+			return nil, errors.New("wrapper spawn arguments are not comma-separated")
+		}
+	}
+}
+
+func (p *v1SpawnWrapperParser) jsonStringLiteral() (json.RawMessage, error) {
+	if p.offset >= len(p.input) || p.input[p.offset] != '"' {
+		return nil, errors.New("value is not a JSON string literal")
+	}
+	start := p.offset
+	p.offset++
+	for p.offset < len(p.input) {
+		switch p.input[p.offset] {
+		case '"':
+			p.offset++
+			literal := json.RawMessage(p.input[start:p.offset])
+			var value string
+			if err := json.Unmarshal(literal, &value); err != nil {
+				return nil, errors.New("value is not a valid JSON string literal")
+			}
+			return literal, nil
+		case '\\':
+			p.offset += 2
+		default:
+			p.offset++
+		}
+	}
+	return nil, errors.New("JSON string literal is not closed")
+}
+
+func parseV1CodeModeSpawnOutput(raw json.RawMessage) (string, error) {
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) != 2 {
+		return "", errors.New("output must contain exactly two blocks")
+	}
+	status, err := parseCanonicalInputTextBlock(blocks[0])
+	if err != nil || !isCanonicalExecStatus(status) {
+		return "", errors.New("output status block is not canonical")
+	}
+	resultText, err := parseCanonicalInputTextBlock(blocks[1])
+	if err != nil {
+		return "", errors.New("output result block is not canonical input_text")
+	}
+	result, err := decodeUniqueJSONObject([]byte(resultText))
+	if err != nil {
+		return "", errors.New("output result block is not a JSON object")
+	}
+	for field := range result {
+		if field != "agent_id" && field != "nickname" {
+			return "", fmt.Errorf("output result contains unsupported field %s", field)
+		}
+	}
+	agentID, err := requiredJSONString(result["agent_id"], "parent spawn output agent_id")
+	if err != nil {
+		return "", errors.New("output result agent_id is missing")
+	}
+	if nickname, exists := result["nickname"]; exists {
+		if _, nicknameErr := requiredJSONString(nickname, "parent spawn output nickname"); nicknameErr != nil {
+			return "", errors.New("output result nickname is not a non-empty string")
+		}
+	}
+	normalized, err := json.Marshal(struct {
+		AgentID string `json:"agent_id"`
+	}{AgentID: agentID})
+	if err != nil {
+		return "", fmt.Errorf("normalize output result: %w", err)
+	}
+	return string(normalized), nil
+}
+
+func parseCanonicalInputTextBlock(raw json.RawMessage) (string, error) {
+	block, err := decodeUniqueJSONObject(raw)
+	if err != nil || len(block) != 2 {
+		return "", errors.New("block is not a two-field object")
+	}
+	typeName, err := requiredJSONString(block["type"], "output block type")
+	if err != nil || typeName != "input_text" {
+		return "", errors.New("block type is not input_text")
+	}
+	return requiredJSONString(block["text"], "output block text")
+}
+
+func decodeUniqueJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, errors.New("value is not a JSON object")
+	}
+	result := make(map[string]json.RawMessage)
+	for decoder.More() {
+		fieldToken, err := decoder.Token()
+		if err != nil {
+			return nil, errors.New("JSON object field name is malformed")
+		}
+		field, ok := fieldToken.(string)
+		if !ok {
+			return nil, errors.New("JSON object field name is not a string")
+		}
+		if _, exists := result[field]; exists {
+			return nil, fmt.Errorf("JSON object field %s is duplicated", field)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New("JSON object field value is malformed")
+		}
+		result[field] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, errors.New("JSON object is not closed")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("JSON object has trailing data")
+	}
+	return result, nil
+}
+
+func isCanonicalExecStatus(value string) bool {
+	const (
+		prefix = "Script completed\nWall time "
+		suffix = " seconds\nOutput:\n"
+	)
+	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, suffix) {
+		return false
+	}
+	duration := strings.TrimSuffix(strings.TrimPrefix(value, prefix), suffix)
+	if duration == "" {
+		return false
+	}
+	dotSeen := false
+	digitSeen := false
+	for index := range len(duration) {
+		switch {
+		case duration[index] >= '0' && duration[index] <= '9':
+			digitSeen = true
+		case duration[index] == '.' && !dotSeen && index > 0 && index < len(duration)-1:
+			dotSeen = true
+		default:
+			return false
+		}
+	}
+	return digitSeen
 }
 
 type parsedParentSpawnActivity struct {
@@ -1408,6 +2972,9 @@ func validateRollout(
 		if context.sandboxMode != config.sandboxMode {
 			return mismatch("child sandbox policy does not match the agent config")
 		}
+		if context.approvalPolicy != config.approvalPolicy {
+			return mismatch("child approval policy does not match the agent config")
+		}
 	}
 	if metadata.taskCompleteCount != 1 {
 		return mismatch(fmt.Sprintf(
@@ -1542,6 +3109,7 @@ func writeAttestationSuccess(outputDir string, value attestation) error {
 		{name: "attested_agent_role", data: []byte(value.agentRole)},
 		{name: "attested_model", data: []byte(value.model)},
 		{name: "attested_sandbox_mode", data: []byte(value.sandboxMode)},
+		{name: "attested_approval_policy", data: []byte(value.approvalPolicy)},
 		{name: "attested_history_mode", data: []byte(value.historyMode)},
 		{name: "attested_reviewer_spawn_calls", data: []byte(strconv.Itoa(value.reviewerSpawns))},
 	}

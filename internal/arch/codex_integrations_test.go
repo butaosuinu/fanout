@@ -134,6 +134,7 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 				"model":                  want.model,
 				"model_reasoning_effort": want.effort,
 				"sandbox_mode":           "read-only",
+				"approval_policy":        "never",
 			} {
 				if got := tomlStringValue(t, tomlData, key); got != expected {
 					t.Errorf("%s = %q, want %q", key, got, expected)
@@ -153,6 +154,18 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 				"do not count that bootstrap context as native task input",
 				"non-empty regular file that is not a symbolic link",
 				"never replace omitted content with a placeholder",
+				"fanout __post-work-review-json digest",
+				"before reading any bundle bytes",
+				"bundle_sha256",
+				"approval or attempt escalation",
+				"tools.exec_command({...})",
+				"static object literal",
+				"Do not alias `tools` or `exec_command`",
+				"computed member access",
+				"dynamic keys or spread",
+				"`eval`/`Function`/reflection",
+				"other `tools` method",
+				"method; attestation rejects",
 				want.bundle,
 				want.header,
 				want.reviewType,
@@ -193,6 +206,14 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		"does not accept `task_name`",
 		"task_name",
 		"every stored result has passed the driver's",
+		"review_bundle_sha256=",
+		"verify_bundle_sha256_<N>=",
+		"bundle_sha256",
+		"approval_policy = \"never\"",
+		"attested approval policy",
+		"does not replace rollout inspection",
+		"sandbox permission override request",
+		"noncanonical code-mode exec",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing fail-closed contract %q", required)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="4"
-ATTESTATION_VERSION="2"
-JSON_HELPER_VERSION="3"
+VERSION="5"
+ATTESTATION_VERSION="3"
+JSON_HELPER_VERSION="4"
 BACKEND="bounded-isolated-reviewer"
 REVIEWER_AGENT="post-work-reviewer"
 VERIFIER_AGENT="post-work-verifier"
@@ -439,10 +439,12 @@ env_set() {
 }
 
 publish_verify_round() {
-  local fix_rounds prepared_at_key prepared_at file tmp verify_bundle
+  local fix_rounds prepared_at_key prepared_at bundle_sha256_key bundle_sha256 file tmp verify_bundle
   fix_rounds="$1"
   prepared_at_key="$2"
   prepared_at="$3"
+  bundle_sha256_key="$4"
+  bundle_sha256="$5"
   file="$(review_env_path)"
   tmp="$file.tmp.$$"
   verify_bundle="$(agent_path "$(verify_bundle_path)")"
@@ -453,7 +455,9 @@ publish_verify_round() {
     -v fix_rounds="$fix_rounds" \
     -v verify_bundle="$verify_bundle" \
     -v prepared_at_key="$prepared_at_key" \
-    -v prepared_at="$prepared_at" '
+    -v prepared_at="$prepared_at" \
+    -v bundle_sha256_key="$bundle_sha256_key" \
+    -v bundle_sha256="$bundle_sha256" '
       $1 == "head" { print "head=" head; seen_head=1; next }
       $1 == "diff_hash" { print "diff_hash=" diff_hash; seen_diff=1; next }
       $1 == "changed_files" { print "changed_files=" changed_files; seen_changed=1; next }
@@ -461,6 +465,7 @@ publish_verify_round() {
       $1 == "pending_verify" { print "pending_verify=1"; seen_pending=1; next }
       $1 == "verify_bundle" { print "verify_bundle=" verify_bundle; seen_bundle=1; next }
       $1 == prepared_at_key { print prepared_at_key "=" prepared_at; seen_prepared=1; next }
+      $1 == bundle_sha256_key { print bundle_sha256_key "=" bundle_sha256; seen_bundle_sha256=1; next }
       { print }
       END {
         if (!seen_head) print "head=" head
@@ -470,6 +475,7 @@ publish_verify_round() {
         if (!seen_pending) print "pending_verify=1"
         if (!seen_bundle) print "verify_bundle=" verify_bundle
         if (!seen_prepared) print prepared_at_key "=" prepared_at
+        if (!seen_bundle_sha256) print bundle_sha256_key "=" bundle_sha256
       }
     ' "$file" >"$tmp" || die "failed to stage verify review env"
   mv "$tmp" "$file" || die "failed to publish verify review env"
@@ -478,44 +484,8 @@ publish_verify_round() {
 ensure_current_review_state() {
   [ "$(env_get post_work_review_version 2>/dev/null || true)" = "$VERSION" ] || \
     die "post-work-review state version mismatch; run reset and prepare again"
-  if [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "1" ] && \
-    [ "$ATTESTATION_VERSION" = "2" ]; then
-    migrate_attestation_v1_state
-  fi
   [ "$(env_get post_work_review_attestation_version 2>/dev/null || true)" = "$ATTESTATION_VERSION" ] || \
     die "post-work-review attestation state is unavailable; run reset and prepare again"
-}
-
-migrate_attestation_v1_state() {
-  local broad_result existing_stop reviewer_spawns
-  existing_stop="$(env_get stop_reason 2>/dev/null || true)"
-  if [ -n "$existing_stop" ]; then
-    attestation_fail "$existing_stop" \
-      "legacy review state is terminal; run reset and prepare again"
-  fi
-  broad_result="$(result_path broad 1)"
-  if [ ! -f "$broad_result" ] || [ -f "$(result_path verify 1)" ] || \
-    [ -f "$(result_path verify 2)" ] || [ "$(env_get pending_verify 2>/dev/null || echo 0)" != "0" ] || \
-    [ -f "$(call_receipt_path broad 1)" ] || [ -f "$(call_receipt_path verify 1)" ] || \
-    [ -f "$(call_receipt_path verify 2)" ]; then
-    attestation_fail "reviewer_attestation_unavailable" \
-      "legacy attestation state cannot be migrated safely; run reset and prepare again"
-  fi
-
-  # The v2 attestor proves that exactly one fresh native spawn used this
-  # bundle path. This reconstructs the old broad-call budget without trusting
-  # the v1 driver's incomplete bookkeeping. Verifier rounds cannot be migrated
-  # because v1 did not store their per-round preparation timestamps.
-  rm -f "$(marker_path)" "$(marker_meta_path)" || \
-    die "failed to clear pre-v2 review marker"
-  env_set stop_reason "reviewer_attestation_unavailable"
-  validate_result broad "$broad_result" target "" 1
-  reviewer_spawns="$(json_attested_scalar "$broad_result" attested_reviewer_spawn_calls 2>/dev/null || true)"
-  [ "$reviewer_spawns" = "1" ] || \
-    attestation_fail "reviewer_attestation_mismatch" \
-      "legacy review state has unrecorded reviewer or verifier spawns"
-  env_set post_work_review_attestation_version "$ATTESTATION_VERSION"
-  env_set stop_reason ""
 }
 
 JSON_CACHE_ROOT=""
@@ -596,6 +566,52 @@ json_now_utc() {
   [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$ ]] || \
     die "post-work-review JSON helper returned an invalid timestamp"
   printf '%s\n' "$value"
+}
+
+json_bundle_sha256() {
+  local path output status value
+  path="$1"
+  ensure_json_helper || die "$JSON_HELPER_ERROR"
+  output="$("$JSON_HELPER" __post-work-review-json digest "$path" 2>/dev/null)"
+  status=$?
+  printf '%s\n' "$output" | grep -Fxq \
+    "post_work_review_json_helper_version=$JSON_HELPER_VERSION" || \
+    die "post-work-review JSON helper is incompatible before bundle hashing"
+  [ "$status" -eq 0 ] || die "post-work-review JSON helper failed to hash the review bundle"
+  value="$(printf '%s\n' "$output" | awk -F= '$1 == "bundle_sha256" { sub(/^[^=]*=/, ""); print; found=1 } END { exit(found ? 0 : 1) }')" || \
+    die "post-work-review JSON helper did not return bundle_sha256"
+  [[ "$value" =~ ^[0-9a-f]{64}$ ]] || \
+    die "post-work-review JSON helper returned an invalid bundle_sha256"
+  printf '%s\n' "$value"
+}
+
+expected_bundle_sha256() {
+  local kind index
+  kind="$1"
+  index="${2:-1}"
+  case "$kind" in
+    broad) env_get review_bundle_sha256 ;;
+    verify) env_get "verify_bundle_sha256_$index" ;;
+    *) die "invalid result kind: $kind" ;;
+  esac
+}
+
+bundle_path_for() {
+  case "$1" in
+    broad) review_bundle_path ;;
+    verify) verify_bundle_path ;;
+    *) die "invalid result kind: $1" ;;
+  esac
+}
+
+ensure_current_bundle_sha256_matches() {
+  local kind index expected current
+  kind="$1"
+  index="${2:-1}"
+  expected="$(expected_bundle_sha256 "$kind" "$index" 2>/dev/null || true)"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "prepared bundle_sha256 is unavailable"
+  current="$(json_bundle_sha256 "$(bundle_path_for "$kind")")"
+  [ "$current" = "$expected" ] || die "review bundle changed since prepare: bundle_sha256"
 }
 
 agent_config_for() {
@@ -857,10 +873,14 @@ call_slot_used() {
 }
 
 write_call_receipt() {
-  local kind index result receipt tmp
+  local kind index result receipt tmp bundle_sha256 approval_policy
   kind="$1"
   index="$2"
   result="$3"
+  bundle_sha256="$(expected_bundle_sha256 "$kind" "$index" 2>/dev/null || true)"
+  [[ "$bundle_sha256" =~ ^[0-9a-f]{64}$ ]] || die "prepared bundle_sha256 is unavailable"
+  approval_policy="$(json_attested_scalar "$result" attested_approval_policy 2>/dev/null || true)"
+  [ "$approval_policy" = "never" ] || die "attested reviewer approval policy must be never"
   receipt="$(call_receipt_path "$kind" "$index")"
   tmp="$receipt.tmp.$$"
   mkdir -p "$(calls_dir)" || die "failed to create review calls dir"
@@ -874,7 +894,9 @@ write_call_receipt() {
       printf 'agent_role=%s\n' "$(json_attested_scalar "$result" attested_agent_role)"
       printf 'model=%s\n' "$(json_attested_scalar "$result" attested_model)"
       printf 'sandbox_mode=%s\n' "$(json_attested_scalar "$result" attested_sandbox_mode)"
+      printf 'approval_policy=%s\n' "$approval_policy"
       printf 'history_mode=%s\n' "$(json_attested_scalar "$result" attested_history_mode)"
+      printf 'bundle_sha256=%s\n' "$bundle_sha256"
     } >"$tmp"
   ) || die "failed to write review call receipt"
   mv "$tmp" "$receipt" || die "failed to store review call receipt"
@@ -937,6 +959,53 @@ unmatched_attested_call_count() {
     done
   done
   echo "$count"
+}
+
+recorded_call_receipts_match() {
+  local kind index max receipt result expected receipt_digest result_digest
+  local receipt_kind receipt_attestation receipt_session result_session receipt_role result_role
+  local receipt_model result_model receipt_sandbox result_sandbox receipt_approval result_approval
+  local receipt_history result_history
+  for kind in broad verify; do
+    max=1
+    [ "$kind" = "verify" ] && max=2
+    index=1
+    while [ "$index" -le "$max" ]; do
+      receipt="$(call_receipt_path "$kind" "$index")"
+      result="$(result_path "$kind" "$index")"
+      if [ -e "$receipt" ] || [ -e "$result" ]; then
+        [ -f "$receipt" ] && [ -f "$result" ] || return 1
+        expected="$(expected_bundle_sha256 "$kind" "$index" 2>/dev/null || true)"
+        receipt_digest="$(call_receipt_scalar "$receipt" bundle_sha256 2>/dev/null || true)"
+        result_digest="$(json_scalar "$result" bundle_sha256 2>/dev/null || true)"
+        receipt_approval="$(call_receipt_scalar "$receipt" approval_policy 2>/dev/null || true)"
+        result_approval="$(json_attested_scalar "$result" attested_approval_policy 2>/dev/null || true)"
+        receipt_kind="$(call_receipt_scalar "$receipt" kind 2>/dev/null || true)"
+        receipt_attestation="$(call_receipt_scalar "$receipt" attestation_version 2>/dev/null || true)"
+        receipt_session="$(call_receipt_scalar "$receipt" session_id 2>/dev/null || true)"
+        result_session="$(json_attested_scalar "$result" attested_session_id 2>/dev/null || true)"
+        receipt_role="$(call_receipt_scalar "$receipt" agent_role 2>/dev/null || true)"
+        result_role="$(json_attested_scalar "$result" attested_agent_role 2>/dev/null || true)"
+        receipt_model="$(call_receipt_scalar "$receipt" model 2>/dev/null || true)"
+        result_model="$(json_attested_scalar "$result" attested_model 2>/dev/null || true)"
+        receipt_sandbox="$(call_receipt_scalar "$receipt" sandbox_mode 2>/dev/null || true)"
+        result_sandbox="$(json_attested_scalar "$result" attested_sandbox_mode 2>/dev/null || true)"
+        receipt_history="$(call_receipt_scalar "$receipt" history_mode 2>/dev/null || true)"
+        result_history="$(json_attested_scalar "$result" attested_history_mode 2>/dev/null || true)"
+        [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+        [ "$receipt_kind" = "$kind" ] || return 1
+        [ "$receipt_attestation" = "$ATTESTATION_VERSION" ] || return 1
+        [ -n "$receipt_session" ] && [ "$receipt_session" = "$result_session" ] || return 1
+        [ -n "$receipt_role" ] && [ "$receipt_role" = "$result_role" ] || return 1
+        [ -n "$receipt_model" ] && [ "$receipt_model" = "$result_model" ] || return 1
+        [ -n "$receipt_sandbox" ] && [ "$receipt_sandbox" = "$result_sandbox" ] || return 1
+        [ "$receipt_digest" = "$expected" ] && [ "$result_digest" = "$expected" ] || return 1
+        [ "$receipt_approval" = "never" ] && [ "$result_approval" = "never" ] || return 1
+        [ "$receipt_history" = "no-history" ] && [ "$result_history" = "no-history" ] || return 1
+      fi
+      index=$((index + 1))
+    done
+  done
 }
 
 latest_verify_result() {
@@ -1060,8 +1129,8 @@ write_markdown_fenced_file() {
 
 validate_result() {
   local kind file check_target expected_agent backend review_type provenance session same_agent isolated hooks_only
-  local sandbox_mode head diff_hash result_head result_diff finding_count actual_count missing_required truncated all_fixed new_regressions
-  local actual_session actual_role actual_sandbox actual_history attestation_version used_sessions call_index
+  local sandbox_mode head diff_hash result_head result_diff bundle_sha256 expected_sha256 finding_count actual_count missing_required truncated all_fixed new_regressions
+  local actual_session actual_role actual_sandbox actual_approval actual_history attestation_version used_sessions call_index
   kind="$1"
   file="$2"
   check_target="${3:-target}"
@@ -1100,6 +1169,7 @@ validate_result() {
   actual_session="$(json_attested_scalar "$file" attested_session_id 2>/dev/null || true)"
   actual_role="$(json_attested_scalar "$file" attested_agent_role 2>/dev/null || true)"
   actual_sandbox="$(json_attested_scalar "$file" attested_sandbox_mode 2>/dev/null || true)"
+  actual_approval="$(json_attested_scalar "$file" attested_approval_policy 2>/dev/null || true)"
   actual_history="$(json_attested_scalar "$file" attested_history_mode 2>/dev/null || true)"
   [ "$session" = "$actual_session" ] || \
     attestation_fail "reviewer_attestation_mismatch" "reviewer_session_id does not match the attested child session"
@@ -1107,6 +1177,8 @@ validate_result() {
     attestation_fail "reviewer_attestation_mismatch" "attested agent role mismatch"
   [ "$actual_history" = "no-history" ] || \
     attestation_fail "reviewer_attestation_mismatch" "attested reviewer history mode must be no-history"
+  [ "$actual_approval" = "never" ] || \
+    attestation_fail "reviewer_attestation_mismatch" "attested reviewer approval policy must be never"
 
   same_agent="$(json_scalar "$file" same_agent_review 2>/dev/null || true)"
   [ "$same_agent" = "false" ] || die "same-agent review is rejected"
@@ -1118,6 +1190,12 @@ validate_result() {
     attestation_fail "reviewer_attestation_mismatch" "attested reviewer sandbox must be read-only"
   hooks_only="$(json_scalar "$file" hooks_only_success 2>/dev/null || true)"
   [ "$hooks_only" = "false" ] || die "hooks-only success is rejected"
+
+  expected_sha256="$(expected_bundle_sha256 "$kind" "$call_index" 2>/dev/null || true)"
+  [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || die "prepared bundle_sha256 is unavailable"
+  bundle_sha256="$(json_scalar "$file" bundle_sha256 2>/dev/null || true)"
+  [[ "$bundle_sha256" =~ ^[0-9a-f]{64}$ ]] || die "bundle_sha256 must be a lowercase SHA-256 digest"
+  [ "$bundle_sha256" = "$expected_sha256" ] || die "review bundle_sha256 mismatch"
 
   if [ "$check_target" = "target" ]; then
     head="$(env_get head || true)"
@@ -1244,7 +1322,7 @@ review_target_changed_reason() {
 summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
   local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions i path
-  local target_changed_reason unmatched_calls spawn_count_mismatch
+  local target_changed_reason unmatched_calls spawn_count_mismatch receipt_mismatch
   json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
@@ -1255,6 +1333,8 @@ summary_values() {
   marker="false"
   invalid_count=0
   unmatched_calls="$(unmatched_attested_call_count)"
+  receipt_mismatch=0
+  recorded_call_receipts_match || receipt_mismatch=1
   spawn_count_mismatch=0
   stored_reviewer_spawn_count_matches 0 || spawn_count_mismatch=1
 
@@ -1277,6 +1357,9 @@ summary_values() {
   if [ -n "$stop" ]; then
     clean="false"
   elif [ "$unmatched_calls" -gt 0 ]; then
+    clean="false"
+    stop="invalid_review_result"
+  elif [ "$receipt_mismatch" -gt 0 ]; then
     clean="false"
     stop="invalid_review_result"
   elif [ "$spawn_count_mismatch" -gt 0 ]; then
@@ -1386,7 +1469,12 @@ attested_call_scalar() {
     agent_role) result_key="attested_agent_role" ;;
     model) result_key="attested_model" ;;
     sandbox_mode) result_key="attested_sandbox_mode" ;;
+    approval_policy) result_key="attested_approval_policy" ;;
     history_mode) result_key="attested_history_mode" ;;
+    bundle_sha256)
+      json_scalar "$result" bundle_sha256
+      return
+      ;;
     *) die "invalid attested call key: $key" ;;
   esac
   json_attested_scalar "$result" "$result_key"
@@ -1402,7 +1490,9 @@ print_attested_call_lines() {
     printf 'review_call_%s_agent_role=%s\n' "$call" "$(attested_call_scalar broad 1 agent_role)"
     printf 'review_call_%s_model=%s\n' "$call" "$(attested_call_scalar broad 1 model)"
     printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(attested_call_scalar broad 1 sandbox_mode)"
+    printf 'review_call_%s_approval_policy=%s\n' "$call" "$(attested_call_scalar broad 1 approval_policy)"
     printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar broad 1 history_mode)"
+    printf 'review_call_%s_bundle_sha256=%s\n' "$call" "$(attested_call_scalar broad 1 bundle_sha256)"
   fi
   for i in 1 2; do
     call_slot_used verify "$i" || continue
@@ -1414,11 +1504,14 @@ print_attested_call_lines() {
     printf 'review_call_%s_agent_role=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" agent_role)"
     printf 'review_call_%s_model=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" model)"
     printf 'review_call_%s_sandbox_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" sandbox_mode)"
+    printf 'review_call_%s_approval_policy=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" approval_policy)"
     printf 'review_call_%s_history_mode=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" history_mode)"
+    printf 'review_call_%s_bundle_sha256=%s\n' "$call" "$(attested_call_scalar "$kind" "$index" bundle_sha256)"
   done
 }
 
 print_state_lines() {
+  local i
   printf 'post_work_review_version=%s\n' "$VERSION"
   printf 'post_work_review_attestation_version=%s\n' "$ATTESTATION_VERSION"
   printf 'backend=%s\n' "$(env_get backend 2>/dev/null || echo "$BACKEND")"
@@ -1430,9 +1523,15 @@ print_state_lines() {
   printf 'fix_rounds=%s\n' "$(env_get fix_rounds 2>/dev/null || echo 0)"
   printf 'pending_verify=%s\n' "$(env_get pending_verify 2>/dev/null || echo 0)"
   printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
+  printf 'review_bundle_sha256=%s\n' "$(env_get review_bundle_sha256 2>/dev/null || echo unknown)"
   if [ -f "$(verify_bundle_path)" ]; then
     printf 'verify_bundle=%s\n' "$(agent_path "$(verify_bundle_path)")"
   fi
+  for i in 1 2; do
+    if env_get "verify_bundle_sha256_$i" >/dev/null 2>&1; then
+      printf 'verify_bundle_sha256_%s=%s\n' "$i" "$(env_get "verify_bundle_sha256_$i")"
+    fi
+  done
   printf 'findings_tsv=%s\n' "$(agent_path "$(findings_tsv_path)")"
   print_budget_lines
   printf 'broad_review_calls=%s\n' "${SUMMARY_BROAD_CALLS:-$(broad_review_calls)}"
@@ -1464,6 +1563,9 @@ stop_if_review_state_stopped() {
     summary_values
     stop_existing_review_state "${SUMMARY_FINDINGS:-0}" "$reason"
   fi
+  recorded_call_receipts_match || \
+    attestation_fail "invalid_review_result" \
+      "review call receipt does not match the attested call contract"
   stored_reviewer_spawn_count_matches "$allowance" || \
     attestation_fail "reviewer_attestation_mismatch" \
       "attested native reviewer call count does not match recorded review calls"
@@ -1490,6 +1592,7 @@ write_review_env() {
     printf 'pending_verify=0\n'
     printf 'stop_reason=\n'
     printf 'review_bundle=%s\n' "$(agent_path "$(review_bundle_path)")"
+    printf 'review_bundle_sha256=%s\n' "$REVIEW_BUNDLE_SHA256"
     printf 'findings_tsv=%s\n' "$(agent_path "$(findings_tsv_path)")"
   } >"$file"
 }
@@ -1518,7 +1621,7 @@ write_review_bundle() {
     printf -- '- Do not run tests, linters, formatters, typecheck, project checks, local LLMs, or codex review.\n\n'
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
+    printf '{"backend":"%s","review_type":"broad","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","bundle_sha256":"<lowercase SHA-256 of the exact bundle bytes>","truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$REVIEWER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
     printf '```\n\n'
     printf 'Each finding must include severity, file, line, title, description, and recommendation.\n\n'
     printf '## Changed files\n\n'
@@ -1559,7 +1662,7 @@ write_verify_bundle() {
     printf -- '- Set truncated=true if more than %s in-scope findings are present.\n\n' "$MAX_FINDINGS_PER_ROUND"
     printf '## Required JSON shape\n\n'
     printf '```json\n'
-    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
+    printf '{"backend":"%s","review_type":"verify","reviewer_agent":"%s","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"<fresh CODEX_THREAD_ID UUID>","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"%s","diff_hash":"%s","bundle_sha256":"<lowercase SHA-256 of the exact bundle bytes>","all_previous_findings_fixed":true,"new_regressions":false,"truncated":false,"finding_count":0,"findings":[]}\n' "$BACKEND" "$VERIFIER_AGENT" "$HEAD_SHA" "$DIFF_HASH"
     printf '```\n\n'
     printf '## Prior findings\n\n'
     write_markdown_fenced_file tsv "$(findings_tsv_path)"
@@ -1660,6 +1763,7 @@ cmd_prepare() {
   cp "$diff_file" "$state/last-reviewed.diff" || die "failed to store review diff"
   write_initial_findings_tsv
   write_review_bundle || die "failed to write review bundle"
+  REVIEW_BUNDLE_SHA256="$(json_bundle_sha256 "$(review_bundle_path)")"
   PREPARED_AT="$(json_now_utc)"
   write_review_env
 
@@ -1670,7 +1774,7 @@ cmd_prepare() {
 }
 
 cmd_prepare_verify() {
-  local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff index prepared_at_key prepared_at
+  local root state broad_calls verify_calls total_calls fix_rounds latest_findings old_diff current_diff fix_diff pending_diff index prepared_at_key prepared_at bundle_sha256_key bundle_sha256
   ensure_repo
   ensure_read_only_subagent_sandbox_available
   root="$(repo_root)"
@@ -1739,8 +1843,11 @@ cmd_prepare_verify() {
 
   fix_rounds=$((fix_rounds + 1))
   write_verify_bundle || die "failed to write verify bundle"
+  bundle_sha256="$(json_bundle_sha256 "$(verify_bundle_path)")"
   prepared_at="$(json_now_utc)"
-  publish_verify_round "$fix_rounds" "$prepared_at_key" "$prepared_at"
+  bundle_sha256_key="verify_bundle_sha256_$index"
+  publish_verify_round "$fix_rounds" "$prepared_at_key" "$prepared_at" \
+    "$bundle_sha256_key" "$bundle_sha256"
 
   summary_values
   print_state_lines
@@ -1796,6 +1903,7 @@ cmd_record() {
   enforce_reviewer_spawn_count "$spawn_source" "$(total_reviewer_calls)"
   env_set stop_reason "invalid_review_result"
   rm -f "$(marker_path)" "$(marker_meta_path)" || die "failed to clear old review marker"
+  ensure_current_bundle_sha256_matches "$kind" "$index"
   validate_result "$kind" "$review_json" target "$used_sessions" "$index"
   session="$(json_scalar "$review_json" reviewer_session_id)"
   if reviewer_session_used "$session"; then
@@ -1817,6 +1925,7 @@ cmd_record() {
   printf 'result=%s\n' "$(display_path "$dest")"
   printf 'finding_count=%s\n' "$(json_scalar "$dest" finding_count)"
   printf 'truncated=%s\n' "$(json_scalar "$dest" truncated)"
+  printf 'bundle_sha256=%s\n' "$(json_scalar "$dest" bundle_sha256)"
   printf 'attestation_version=%s\n' "$(json_attested_scalar "$dest" attestation_version)"
   printf 'attested_session_id=%s\n' "$(json_attested_scalar "$dest" attested_session_id)"
   printf 'attested_agent_role=%s\n' "$(json_attested_scalar "$dest" attested_agent_role)"

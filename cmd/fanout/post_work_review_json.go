@@ -11,7 +11,7 @@ import (
 
 const (
 	postWorkReviewJSONCommand     = "__post-work-review-json"
-	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=3"
+	postWorkReviewJSONVersionLine = "post_work_review_json_helper_version=4"
 	postWorkReviewTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 )
 
@@ -33,6 +33,15 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 	}
 	if len(args) == 1 && args[0] == "timestamp" {
 		fmt.Fprintf(stdout, "timestamp=%s\n", time.Now().UTC().Format(postWorkReviewTimestampLayout))
+		return exitcode.OK
+	}
+	if len(args) == 2 && args[0] == "digest" {
+		digest, err := reviewjson.BundleSHA256(args[1])
+		if err != nil {
+			fmt.Fprintf(stderr, "%s digest: %v\n", postWorkReviewJSONCommand, err)
+			return exitcode.Env
+		}
+		fmt.Fprintf(stdout, "bundle_sha256=%s\n", digest)
 		return exitcode.OK
 	}
 	if (len(args) == 8 || len(args) == 9) && args[0] == "attest" {
@@ -62,7 +71,7 @@ func cmdPostWorkReviewJSON(args []string, stdout, stderr io.Writer) exitcode.Cod
 func fprintfPostWorkReviewJSONUsage(stderr io.Writer) {
 	fmt.Fprintf(
 		stderr,
-		"%s: expected timestamp, project <review-json-file> <cache-dir>, or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> <expected-bundle-path> [<used-session-ids-file>]\n",
+		"%s: expected timestamp, digest <bundle-file>, project <review-json-file> <cache-dir>, or attest <review-json-file> <cache-dir> <sessions-root> <parent-thread-id> <prepared-at> <agent-toml> <expected-bundle-path> [<used-session-ids-file>]\n",
 		postWorkReviewJSONCommand,
 	)
 }

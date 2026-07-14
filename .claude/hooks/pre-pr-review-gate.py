@@ -42,13 +42,15 @@ VALUE_FLAGS = {"--head", "-H", "--base", "-B", "--repo", "-R", "--title", "-t",
                "--assignee", "-a", "--label", "-l", "--milestone", "-m",
                "--project", "-p", "--template", "-T"}
 
-POST_WORK_REVIEW_VERSION = "4"
-POST_WORK_REVIEW_ATTESTATION_VERSION = "2"
+POST_WORK_REVIEW_VERSION = "5"
+POST_WORK_REVIEW_ATTESTATION_VERSION = "3"
 _REVIEW_SESSION_ID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 )
+_REVIEW_BUNDLE_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _REVIEW_CALL_FIELDS = (
-    "kind", "session_id", "agent_role", "model", "sandbox_mode", "history_mode")
+    "kind", "session_id", "agent_role", "model", "sandbox_mode", "approval_policy",
+    "history_mode", "bundle_sha256")
 
 
 def emit_allow():
@@ -106,11 +108,14 @@ def codex_review_metadata_valid(metadata, target):
             metadata[prefix + "kind"] != expected_kind
             or metadata[prefix + "agent_role"] != expected_role
             or metadata[prefix + "sandbox_mode"] != "read-only"
+            or metadata[prefix + "approval_policy"] != "never"
             or metadata[prefix + "history_mode"] != "no-history"
         ):
             return False
         session_id = metadata[prefix + "session_id"]
         if not _REVIEW_SESSION_ID_RE.fullmatch(session_id) or session_id in session_ids:
+            return False
+        if not _REVIEW_BUNDLE_SHA256_RE.fullmatch(metadata[prefix + "bundle_sha256"]):
             return False
         session_ids.add(session_id)
 

@@ -20,6 +20,14 @@ main agent validates and fixes the work; it must not review its own code.
   weakens sandboxing. Only driver bookkeeping and exact reviewer-result capture
   may use scoped escalation while the controller is read-only; never escalate
   subagent review work.
+- Require each installed custom agent to set top-level
+  `approval_policy = "never"`. The driver attests that policy from every child
+  turn context and binds the attested approval policy into each call receipt
+  and final marker. Stop non-clean if the policy is missing or differs; never
+  ask a reviewer or verifier to approve an escalation.
+- `approval_policy = "never"` does not replace rollout inspection. The attestor
+  must still reject every sandbox permission override request and every
+  noncanonical code-mode exec. Treat either as a terminal attestation failure.
 - Use exactly one fresh `post-work-reviewer` call for the complete bundle, then
   at most two fresh `post-work-verifier` calls after fixes. Never split by
   file, start another broad review after fixes, or accept same-agent,
@@ -35,6 +43,12 @@ main agent validates and fixes the work; it must not review its own code.
   diffs may be truncated or replaced by a placeholder before the child starts.
   The installed custom agent validates the path against the worktree's absolute
   Git directory and reads the complete bundle directly.
+- Preserve the bundle SHA-256 printed by `prepare` or `prepare-verify`. Before
+  spawning, use the companion `fanout __post-work-review-json digest` command
+  to require that the current exact bundle bytes still match it. The child
+  repeats that digest before and after its complete read and returns it as the
+  required `bundle_sha256` result field; the driver binds both the current file
+  and the attested child result to the prepared digest at `record` time.
 - Keep reviewer calls read-only: they must not run tests, linters, formatters,
   typechecks, project checks, local LLMs, or `codex review`.
 - Enforce `broad_review_max=1`, `verify_review_max=2`,
@@ -223,6 +237,9 @@ must attest the child's actual session metadata before accepting the result.
    `$(git rev-parse --absolute-git-dir)/post-work-review/review-bundle.md`, and
    that it is a readable, non-empty regular file, not a symbolic link. Require
    its driver header, backend, review type, and required sections to be present.
+   Require `review_bundle_sha256=` to be one lowercase 64-character SHA-256
+   digest, and require the companion digest command for the bundle path to
+   return the same value immediately before spawning.
    On failure, do not spawn and report `clean=false`,
    `stop_reason=review_bundle_invalid`, and `marker_written=false`. Do not read
    and inline the bundle in the controller; the custom reviewer repeats these
@@ -237,6 +254,10 @@ must attest the child's actual session metadata before accepting the result.
    the result or its session attestation. The result's `reviewer_session_id`
    must be the child's actual canonical UUID from `CODEX_THREAD_ID`; a
    `task_name`, role label, prompt, or arbitrary string is not a session ID.
+   The result's `bundle_sha256` must equal the digest printed by `prepare`; a
+   missing, malformed, or different digest is a terminal invalid result.
+   The child's attested approval policy must be `never`; self-reported
+   read-only fields do not satisfy this requirement.
 2. Run `bash "$driver" summarize`. Stop non-clean on `stop_reason=`. If
    `clean=true`, run `bash "$driver" mark` only when
    `marker_eligible=true` and every stored result has passed the driver's
@@ -264,6 +285,10 @@ must attest the child's actual session metadata before accepting the result.
    `stop_reason=verify_bundle_invalid`, and `marker_written=false`; do not call
    `record`, retry, or inline the file. The verifier may check only prior
    findings and obvious fix-introduced regressions.
+   Also require the current round's `verify_bundle_sha256_<N>=` value to be a
+   lowercase 64-character SHA-256 digest, and require the companion digest
+   command to return the same value immediately before spawning. The verifier
+   result must return that exact value as `bundle_sha256`.
 4. Save the verifier's exact JSON outside the repository, run
    `bash "$driver" record verify <review-json-file>`, then `summarize`. Do not
    extract, repair, or reformat the child output. If it is clean, mark only
