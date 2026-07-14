@@ -1251,7 +1251,10 @@ func parseParentSpawnActivity(raw json.RawMessage) (parsedParentSpawnActivity, b
 		AgentPath     json.RawMessage `json:"agent_path"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return parsedParentSpawnActivity{}, false, nil
+		return parsedParentSpawnActivity{}, false, unavailable(
+			"malformed parent event_msg payload",
+			err,
+		)
 	}
 	if payload.Type != "sub_agent_activity" || payload.Kind != "started" {
 		return parsedParentSpawnActivity{}, false, nil
