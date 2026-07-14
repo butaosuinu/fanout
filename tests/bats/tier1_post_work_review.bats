@@ -1069,7 +1069,7 @@ EOF
     bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$helper"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before attestation"* ]] || return 1
   [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
@@ -1099,7 +1099,7 @@ EOF
     bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$incompatible_helper"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before attestation"* ]] || return 1
   [[ "$output" != *"File exists"* ]]
   [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
 }
