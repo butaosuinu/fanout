@@ -73,6 +73,7 @@ func TestCodexSkillResources(t *testing.T) {
 	}{
 		{rel: "codex/skills/fanout/references/batch-workflow.md"},
 		{rel: "codex/skills/fanout/references/cli-modes.md"},
+		{rel: "codex/tools/post-work-review.sh", executable: true},
 		{rel: "codex/skills/pr-watch/references/repair-playbook.md"},
 		{rel: "codex/skills/pr-watch/scripts/watch-pr.sh", executable: true},
 	}
@@ -98,39 +99,18 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 		t.Fatalf("repoRoot() = %v, want nil", err)
 	}
 	wants := []struct {
-		name       string
-		model      string
-		effort     string
-		bundle     string
-		header     string
-		reviewType string
-		sentinel   string
+		name   string
+		model  string
+		effort string
 	}{
-		{
-			name:       "post-work-reviewer",
-			model:      "gpt-5.6-sol",
-			effort:     "xhigh",
-			bundle:     "review-bundle.md",
-			header:     "# post-work-review broad review bundle",
-			reviewType: "- review_type: broad",
-			sentinel:   "REVIEW_BUNDLE_INVALID",
-		},
-		{
-			name:       "post-work-verifier",
-			model:      "gpt-5.6-terra",
-			effort:     "high",
-			bundle:     "verify-bundle.md",
-			header:     "# post-work-review verification bundle",
-			reviewType: "- review_type: verify",
-			sentinel:   "VERIFY_BUNDLE_INVALID",
-		},
+		{name: "post-work-reviewer", model: "gpt-5.6-sol", effort: "xhigh"},
+		{name: "post-work-verifier", model: "gpt-5.6-terra", effort: "high"},
 	}
 	for _, want := range wants {
 		t.Run(want.name, func(t *testing.T) {
 			agentsDir := filepath.Join(root, "codex", "agents")
 			tomlData := mustReadRepoFile(t, agentsDir, want.name+".toml")
 			for key, expected := range map[string]string{
-				"name":                   want.name,
 				"model":                  want.model,
 				"model_reasoning_effort": want.effort,
 				"sandbox_mode":           "read-only",
@@ -146,74 +126,16 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 			if !bytes.Equal(instructions, mirror) {
 				t.Errorf("developer_instructions does not byte-match codex/agents/%s.md", want.name)
 			}
-			for _, required := range []string{
-				"`reviewer_session_id`",
-				"`CODEX_THREAD_ID`",
-				"git rev-parse --absolute-git-dir",
-				"native spawn task input to equal that path byte-for-byte",
-				"do not count that bootstrap context as native task input",
-				"non-empty regular file that is not a symbolic link",
-				"never replace omitted content with a placeholder",
-				"fanout __post-work-review-json digest",
-				"before reading any bundle bytes",
-				"bundle_sha256",
-				"approval or attempt escalation",
-				"tools.exec_command({...})",
-				"static object literal",
-				"Do not alias `tools` or `exec_command`",
-				"computed member access",
-				"dynamic keys or spread",
-				"`eval`/`Function`/reflection",
-				"other `tools` method",
-				"method; attestation rejects",
-				want.bundle,
-				want.header,
-				want.reviewType,
-				want.sentinel,
-				"Do not substitute a task name",
-				"Return JSON only",
-			} {
-				if !bytes.Contains(instructions, []byte(required)) {
-					t.Errorf("developer_instructions missing session contract %q", required)
-				}
-			}
-			if bytes.Contains(instructions, []byte("sole user message")) {
-				t.Error("developer_instructions still requires a sole user message")
-			}
 		})
 	}
 
 	skill := mustReadRepoFile(t, root, "codex", "skills", "post-work-review", "SKILL.md")
 	for _, required := range []string{
-		"If either is unavailable",
-		"never substitute another role or model",
-		"custom_agent_selection_unavailable",
-		"custom_role_selector=false",
-		"agent_type: \"post-work-reviewer\"",
-		"agent_type: \"post-work-verifier\"",
-		"fork_turns: \"none\"",
-		"fork_context: false",
-		"review_controller_not_read_only",
-		"Never use `codex exec`, including as the controller",
-		"exact reviewer-result capture",
-		"Never inline bundle contents",
-		"entire `message`",
-		"task_name: \"post_work_review_broad\"",
-		"task_name: \"post_work_review_verify_1\"",
-		"task_name: \"post_work_review_verify_2\"",
-		"Never reuse a MultiAgentV2 verifier `task_name`",
-		"MultiAgentV2 requires `task_name` as display metadata",
-		"does not accept `task_name`",
-		"task_name",
-		"every stored result has passed the driver's",
-		"review_bundle_sha256=",
-		"verify_bundle_sha256_<N>=",
-		"bundle_sha256",
-		"approval_policy = \"never\"",
-		"attested approval policy",
-		"does not replace rollout inspection",
-		"sandbox permission override request",
-		"noncanonical code-mode exec",
+		"`agent_type`",
+		"`fork_context: false`",
+		"`fork_turns: \"none\"`",
+		"`record-session`",
+		"unsupported_native_custom_agent",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing fail-closed contract %q", required)

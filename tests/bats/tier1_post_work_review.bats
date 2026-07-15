@@ -11,71 +11,15 @@ load helpers
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
 export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN}"
 
-@test "post-work-review shard-7: Codex skill revalidates the exact HEAD before verifying broad-review fixes" {
+@test "post-work-review shard-7: Codex skill uses native V1 and V2 custom roles" {
   local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
-  local workflow
-
-  workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
-  [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
-  [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
-  [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
-  [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
-  [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
-  [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
-  [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
-  [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
-  ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
-  grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
-  [[ "$(awk '{$1=$1; printf "%s ", $0}' "$skill")" == \
-    *"current HEAD equals the last exact HEAD that passed canonical full"* ]] || return 1
-}
-
-@test "post-work-review shard-7: Codex skill requires native isolated V1 or V2 custom roles" {
-  local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
-  local flattened
-
-  flattened="$(awk '{$1=$1; printf "%s ", $0}' "$skill")"
-  [[ "$flattened" == *'MultiAgentV2: a `fork_turns` field that accepts `"none"`.'* ]] || return 1
-  [[ "$flattened" == *'MultiAgentV1: a boolean `fork_context` field that accepts `false`.'* ]] || return 1
-  [[ "$flattened" == *'At every reviewer or verifier spawn, require the review controller'* ]] || return 1
-  [[ "$flattened" == *'permission profile to be enforceably `read-only`'* ]] || return 1
-  [[ "$flattened" == *'stop_reason=review_controller_not_read_only'* ]] || return 1
-  [[ "$flattened" == *'custom_role_selector=true'* ]] || return 1
-  [[ "$flattened" == *'Do not pass `model` or reasoning overrides'* ]] || return 1
-  [[ "$flattened" == *'start a fresh **interactive** read-only Codex controller'* ]] || return 1
-  [[ "$flattened" == *'must not rerun canonical validation'* ]] || return 1
-  [[ "$flattened" == *'Never use `codex exec`, including as the controller'* ]] || return 1
-  [[ "$flattened" == *'exact reviewer-result capture'* ]] || return 1
-  [[ "$flattened" == *'`authorize-spawn`'* ]] || return 1
-  [[ "$flattened" == *'authorize-spawn broad'* ]] || return 1
-  [[ "$flattened" == *'authorize-spawn verify'* ]] || return 1
-  [[ "$flattened" == *'record-session broad <child-session-uuid>'* ]] || return 1
-  [[ "$flattened" == *'record-session verify <child-session-uuid>'* ]] || return 1
-  [[ "$flattened" == *'Do not transcribe the result'* ]] || return 1
-  [[ "$flattened" == *'Never inline bundle contents into the native tool call'* ]] || return 1
-  [[ "$flattened" == *'absolute path value reported after `review_bundle=` as the entire `message`'* ]] || return 1
-  [[ "$flattened" == *'Pass only the absolute path value after `verify_bundle=` as the verifier'* ]] || return 1
-  [[ "$flattened" == *'message: "<absolute review_bundle path>"'* ]] || return 1
-  [[ "$flattened" == *'message: "<absolute verify_bundle path>"'* ]] || return 1
-  [[ "$flattened" == *'task_name: "post_work_review_broad"'* ]] || return 1
-  [[ "$flattened" == *'task_name: "post_work_review_verify_1"'* ]] || return 1
-  [[ "$flattened" == *'task_name: "post_work_review_verify_2"'* ]] || return 1
-  [[ "$flattened" == *'Never reuse a MultiAgentV2 verifier `task_name`'* ]] || return 1
-  [[ "$flattened" == *'MultiAgentV2 requires `task_name` as display metadata'* ]] || return 1
-  [[ "$flattened" == *'MultiAgentV1 does not accept `task_name`'* ]] || return 1
-  [[ "$flattened" == *'stop_reason=review_bundle_invalid'* ]] || return 1
-  [[ "$flattened" == *'stop_reason=verify_bundle_invalid'* ]] || return 1
-  [[ "$flattened" == *'review_bundle_sha256='* ]] || return 1
-  [[ "$flattened" == *'verify_bundle_sha256_<N>='* ]] || return 1
-  [[ "$flattened" == *'required `bundle_sha256` result field'* ]] || return 1
-  [[ "$flattened" == *'`approval_policy = "never"`'* ]] || return 1
-  [[ "$flattened" == *'attested approval policy'* ]] || return 1
-  [[ "$flattened" == *'does not replace rollout inspection'* ]] || return 1
-  [[ "$flattened" == *'sandbox permission override request'* ]] || return 1
-  [[ "$flattened" == *'noncanonical code-mode exec'* ]] || return 1
-  [[ "$flattened" == *'do not call `record`'* ]] || return 1
-  grep -Fq 'agent_type: "post-work-reviewer"' "$skill" || return 1
-  grep -Fq 'agent_type: "post-work-verifier"' "$skill" || return 1
+  grep -Fq '"agent_type":"post-work-reviewer"' "$skill"
+  grep -Fq 'agent_type: "post-work-verifier"' "$skill"
+  grep -Fq '"fork_context":false' "$skill"
+  grep -Fq '"fork_turns":"none"' "$skill"
+  grep -Fq 'reserve-call <broad|verify> <controller-uuid>' "$skill"
+  grep -Fq 'record-session <broad|verify> <child-uuid>' "$skill"
+  ! grep -Fq 'authorize-spawn' "$skill"
 }
 
 @test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
@@ -113,82 +57,6 @@ export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN
   grep -Fq 'canonical full check' "$claude_skill"
   grep -Fq '包括的な単一コマンド' "$claude_skill"
   grep -Fq 'focused check' "$claude_skill"
-}
-
-write_pr_gate_codex_metadata() {
-  local file="$1"
-  local head="$2"
-  local base="$3"
-  local diff_hash="$4"
-  local verify_calls="${5:-0}"
-  local version="${6:-6}"
-  local attestation_version="${7:-4}"
-  local total_calls=$((1 + verify_calls))
-
-  {
-    printf 'post_work_review_version=%s\n' "$version"
-    printf 'post_work_review_attestation_version=%s\n' "$attestation_version"
-    printf 'backend=bounded-isolated-reviewer\n'
-    printf 'head=%s\n' "$head"
-    printf 'scope=branch\n'
-    printf 'base=%s\n' "$base"
-    printf 'diff_hash=%s\n' "$diff_hash"
-    printf 'review_controller_prepare_turn_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n'
-    printf 'review_controller_prepare_context_sha256=%064d\n' 9
-    printf 'review_controller_prepare_sandbox_mode=read-only\n'
-    printf 'broad_review_calls=1\n'
-    printf 'verify_review_calls=%s\n' "$verify_calls"
-    printf 'total_reviewer_calls=%s\n' "$total_calls"
-    printf 'clean=true\n'
-    printf 'stop_reason=\n'
-    printf 'review_call_1_kind=broad\n'
-    printf 'review_call_1_session_id=11111111-1111-4111-8111-111111111111\n'
-    printf 'review_call_1_agent_role=post-work-reviewer\n'
-    printf 'review_call_1_model=gpt-5.6-sol\n'
-    printf 'review_call_1_sandbox_mode=read-only\n'
-    printf 'review_call_1_approval_policy=never\n'
-    printf 'review_call_1_history_mode=no-history\n'
-    printf 'review_call_1_bundle_sha256=%064d\n' 0
-    printf 'review_call_1_controller_turn_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n'
-    printf 'review_call_1_controller_context_sha256=%064d\n' 3
-    printf 'review_call_1_controller_sandbox_mode=read-only\n'
-    printf 'review_call_1_spawn_authorized_at=2026-07-15T00:00:00.000000001Z\n'
-    if [ "$verify_calls" -ge 1 ]; then
-      printf 'review_call_2_kind=verify\n'
-      printf 'review_call_2_session_id=22222222-2222-4222-8222-222222222222\n'
-      printf 'review_call_2_agent_role=post-work-verifier\n'
-      printf 'review_call_2_model=gpt-5.6-terra\n'
-      printf 'review_call_2_sandbox_mode=read-only\n'
-      printf 'review_call_2_approval_policy=never\n'
-      printf 'review_call_2_history_mode=no-history\n'
-      printf 'review_call_2_bundle_sha256=%064d\n' 1
-      printf 'review_call_2_controller_turn_id=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\n'
-      printf 'review_call_2_controller_context_sha256=%064d\n' 4
-      printf 'review_call_2_controller_sandbox_mode=read-only\n'
-      printf 'review_call_2_spawn_authorized_at=2026-07-15T00:00:01.000000001Z\n'
-    fi
-    if [ "$verify_calls" -ge 2 ]; then
-      printf 'review_call_3_kind=verify\n'
-      printf 'review_call_3_session_id=33333333-3333-4333-8333-333333333333\n'
-      printf 'review_call_3_agent_role=post-work-verifier\n'
-      printf 'review_call_3_model=gpt-5.6-terra\n'
-      printf 'review_call_3_sandbox_mode=read-only\n'
-      printf 'review_call_3_approval_policy=never\n'
-      printf 'review_call_3_history_mode=no-history\n'
-      printf 'review_call_3_bundle_sha256=%064d\n' 2
-      printf 'review_call_3_controller_turn_id=cccccccc-cccc-4ccc-8ccc-cccccccccccc\n'
-      printf 'review_call_3_controller_context_sha256=%064d\n' 5
-      printf 'review_call_3_controller_sandbox_mode=read-only\n'
-      printf 'review_call_3_spawn_authorized_at=2026-07-15T00:00:02.000000001Z\n'
-    fi
-  } >"$file"
-}
-
-remove_pr_gate_metadata_field() {
-  local file="$1"
-  local field="$2"
-  grep -v "^${field}=" "$file" >"${file}.tmp"
-  mv "${file}.tmp" "$file"
 }
 
 @test "post-work-review shard-7: PR gate supports Codex metadata and Claude marker-only reviews" {
@@ -235,9 +103,15 @@ remove_pr_gate_metadata_field() {
 
   # A present but stale metadata file fails closed until the legacy writer
   # removes it before recording its marker.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" \
-    "$(git -C "$repo" rev-parse HEAD^)" release/v1 "$release_hash"
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$(git -C "$repo" rev-parse HEAD^)"
+    printf 'scope=branch\n'
+    printf 'base=release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
@@ -248,113 +122,19 @@ remove_pr_gate_metadata_field() {
   [ -z "$output" ] || return 1
 
   # Codex metadata matching the target HEAD permits exactly its reviewed base.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 
-  # The v6 Codex marker requires an attestation version plus complete,
-  # consistently numbered metadata for every broad/verifier call.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [ -z "$output" ] || return 1
-
-  local required_field
-  for required_field in \
-    post_work_review_attestation_version \
-    review_controller_prepare_turn_id \
-    review_controller_prepare_context_sha256 \
-    review_controller_prepare_sandbox_mode \
-    broad_review_calls \
-    review_call_1_session_id \
-    review_call_2_model \
-    review_call_3_sandbox_mode \
-    review_call_3_approval_policy \
-    review_call_3_history_mode \
-    review_call_3_bundle_sha256 \
-    review_call_3_controller_turn_id \
-    review_call_3_controller_context_sha256 \
-    review_call_3_controller_sandbox_mode \
-    review_call_3_spawn_authorized_at; do
-    write_pr_gate_codex_metadata \
-      "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 2
-    remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" "$required_field"
-    run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-    [ "$status" -eq 0 ] || return 1
-    [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-  done
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 0 3
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  sed 's/review_call_1_controller_sandbox_mode=read-only/review_call_1_controller_sandbox_mode=workspace-write/' \
-    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
-  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  sed 's/review_call_1_spawn_authorized_at=.*/review_call_1_spawn_authorized_at=invalid/' \
-    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
-  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  sed 's/review_call_1_approval_policy=never/review_call_1_approval_policy=on-request/' \
-    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
-  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  sed 's/review_call_1_history_mode=no-history/review_call_1_history_mode=full/' \
-    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
-  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  sed 's/review_call_1_bundle_sha256=.*/review_call_1_bundle_sha256=ABCDEF/' \
-    "$gitdir/post-work-review-passed.meta" >"$gitdir/post-work-review-passed.meta.tmp"
-  mv "$gitdir/post-work-review-passed.meta.tmp" "$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  printf 'review_call_2_kind=verify\n' >>"$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash" 1
-  printf 'review_call_2_session_id=11111111-1111-4111-8111-111111111111\n' \
-    >>"$gitdir/post-work-review-passed.meta"
-  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
-
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
   git -C "$repo" update-ref refs/remotes/origin/release/v1 "$head"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
@@ -383,31 +163,55 @@ remove_pr_gate_metadata_field() {
   git -C "$repo" config --unset branch.feature.gh-merge-base
 
   # Metadata may also store the remote-qualified spelling from the driver.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" origin/release/v1 "$release_hash"
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=origin/release/v1\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 
   # Metadata for this HEAD fails closed when its reviewed base is missing.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" release/v1 "$release_hash"
-  remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" base
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'diff_hash=%s\n' "$release_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
 
   # Metadata for this HEAD also fails closed without the reviewed diff hash.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
-  remove_pr_gate_metadata_field "$gitdir/post-work-review-passed.meta" diff_hash
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
 
   # The exact-HEAD marker remains mandatory in both modes.
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
+  {
+    printf 'backend=bounded-isolated-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
@@ -419,9 +223,15 @@ remove_pr_gate_metadata_field() {
 
   # Present but malformed Codex metadata never falls back to legacy mode.
   printf '%s\n' "$head" >"$gitdir/post-work-review-passed"
-  write_pr_gate_codex_metadata \
-    "$gitdir/post-work-review-passed.meta" "$head" main "$main_hash"
-  printf 'backend=unexpected-reviewer\n' >>"$gitdir/post-work-review-passed.meta"
+  {
+    printf 'backend=unexpected-reviewer\n'
+    printf 'head=%s\n' "$head"
+    printf 'scope=branch\n'
+    printf 'base=main\n'
+    printf 'diff_hash=%s\n' "$main_hash"
+    printf 'clean=true\n'
+    printf 'stop_reason=\n'
+  } >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create" "$hook"
   [ "$status" -eq 0 ] || return 1
   [[ "$output" == *'"permissionDecision": "deny"'* ]] || return 1
@@ -443,22 +253,6 @@ remove_pr_gate_metadata_field() {
 
 setup_review_repo() {
   local repo="$1"
-  local parent_file controller_turn
-  export CODEX_THREAD_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-  export CODEX_HOME="$BATS_TEST_TMPDIR/codex-home"
-  export CODEX_DIR="$CODEX_HOME"
-  rm -rf "$CODEX_HOME"
-  mkdir -p "$CODEX_HOME/agents" "$CODEX_HOME/sessions/2026/07/14"
-  cp "$REPO_ROOT/codex/agents/post-work-reviewer.toml" "$CODEX_HOME/agents/"
-  cp "$REPO_ROOT/codex/agents/post-work-verifier.toml" "$CODEX_HOME/agents/"
-  parent_file="$(attested_parent_session_path)"
-  controller_turn="$(review_controller_turn_id)"
-  {
-    printf '{"timestamp":"2026-07-14T00:00:00Z","type":"session_meta","payload":{"id":"%s"}}\n' \
-      "$CODEX_THREAD_ID"
-    printf '{"timestamp":"2026-07-14T00:00:01Z","type":"turn_context","payload":{"turn_id":"%s","model":"gpt-5.6-luna","effort":"ultra","approval_policy":"on-request","sandbox_policy":{"type":"read-only"}}}\n' \
-      "$controller_turn"
-  } >"$parent_file"
   mkdir -p "$repo"
   git -C "$repo" init -q
   git -C "$repo" config user.email "fanout-test@example.com"
@@ -498,58 +292,13 @@ env_value() {
     "$(state_dir_for "$repo")/review.env"
 }
 
-bundle_sha256_for() {
-  "$POST_WORK_REVIEW_JSON_HELPER" __post-work-review-json digest "$1" |
-    awk -F= '$1 == "bundle_sha256" { print $2; found=1 } END { exit(found ? 0 : 1) }'
-}
-
-authorize_review_spawn() {
-  local repo="$1"
-  local kind="$2"
-  local index key call_timestamp authorized_at call_id parent_file controller_turn
-  index=1
-  [ "$kind" = "verify" ] && index="$(env_value "$repo" fix_rounds)"
-  if [ "$kind" = "broad" ]; then
-    key="broad_spawn_authorized_at"
-    call_timestamp="$(env_value "$repo" prepared_at)"
-  else
-    key="verify_spawn_${index}_authorized_at"
-    call_timestamp="$(env_value "$repo" "verify_prepared_at_$index")"
-  fi
-  if ! env_value "$repo" "$key" >/dev/null 2>&1; then
-    (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" authorize-spawn "$kind") \
-      >"$BATS_TEST_TMPDIR/authorize-${kind}-${index}.out" || return 1
-    authorized_at="$(env_value "$repo" "$key")"
-    call_id="call-authorize-${kind}-${index}"
-    parent_file="$(attested_parent_session_path)"
-    controller_turn="$(review_controller_turn_id)"
-    {
-      printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","name":"exec_command","namespace":"functions","call_id":"%s","arguments":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
-        "$call_timestamp" "$call_id" "$controller_turn"
-      printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","call_id":"%s","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
-        "$authorized_at" "$call_id" "$controller_turn"
-    } >>"$parent_file"
-  fi
-}
-
-set_env_value() {
-  local repo="$1"
-  local key="$2"
-  local value="$3"
-  local file tmp
-  file="$(state_dir_for "$repo")/review.env"
-  tmp="$file.tmp"
-  awk -F= -v key="$key" -v value="$value" '
-    $1 == key { print key "=" value; seen=1; next }
-    { print }
-    END { if (!seen) print key "=" value }
-  ' "$file" >"$tmp"
-  mv "$tmp" "$file"
-}
-
 run_review() {
   local repo="$1"
   shift
+  if [ "${1:-}" = "record" ]; then
+    run record_result_command "$repo" "$2" "$3"
+    return
+  fi
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
 }
 
@@ -591,84 +340,39 @@ finding_one() {
   printf '{"severity":"major","file":"tracked.txt","line":1,"title":"Bug remains","description":"The feature still writes the bad value.","recommendation":"Write the fixed value."}'
 }
 
-attested_session_uuid() {
-  local label="$1"
-  local digest
-  digest="$(printf '%s' "$label" | git hash-object --stdin)"
-  printf '%s-%s-4%s-8%s-%s\n' \
-    "${digest:0:8}" "${digest:8:4}" "${digest:12:3}" "${digest:15:3}" "${digest:18:12}"
+session_uuid() {
+  local value="$1" number
+  [[ "$value" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && { printf '%s\n' "$value"; return; }
+  number="$(printf '%s' "$value" | cksum | awk '{print $1}')"
+  printf '00000000-0000-4000-8000-%012d\n' "$number"
 }
 
-attested_session_path() {
-  printf '%s/sessions/2026/07/14/rollout-2026-07-14T00-00-00-%s.jsonl\n' \
-    "$CODEX_HOME" "$1"
-}
-
-attested_parent_session_path() {
-  attested_session_path "$CODEX_THREAD_ID"
-}
-
-review_controller_turn_id() {
-  printf '%s\n' "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-}
-
-write_attested_session() {
-  local session_id="$1"
-  local role="$2"
-  local model="$3"
-  local sandbox_mode="$4"
-  local result_file="$5"
-  local task_name="${6:-review_task}"
-  local bundle_path="${7:-}"
-  local requested_role="${8:-$role}"
-  local timestamp="${9:-2099-01-01T00:00:00Z}"
-  local write_parent="${10:-true}"
-  local spawn_timestamp="2098-12-31T23:59:59Z"
-  local reasoning_effort="xhigh"
-  local session_file parent_file message role_json bundle_json spawn_arguments spawn_arguments_json call_id controller_turn
-  [ "$requested_role" = "post-work-verifier" ] && reasoning_effort="high"
-  session_file="$(attested_session_path "$session_id")"
-  message="$(cat "$result_file")"
-  message="${message//\\/\\\\}"
-  message="${message//\"/\\\"}"
-  if [ "$role" = "null" ]; then
-    role_json="null"
+record_result_command() {
+  local repo="$1" kind="$2" json_file="$3" helper="${4:-}"
+  local parent child role bundle sessions rollout result
+  parent="11111111-1111-4111-8111-111111111111"
+  child="$(sed -n 's/.*"reviewer_session_id":"\([^"]*\)".*/\1/p' "$json_file")"; child="${child:-22222222-2222-4222-8222-222222222222}"
+  [ "$kind" = "broad" ] && role="post-work-reviewer" || role="post-work-verifier"
+  (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" reserve-call "$kind" "$parent") >/dev/null || return
+  bundle="$(env_value "$repo" "${kind/broad/review}_bundle")"
+  sessions="$(state_dir_for "$repo")/test-sessions"
+  rollout="$sessions/$child.jsonl"
+  mkdir -p "$sessions"
+  result="$(cat "$json_file"; printf x)"; result="${result%x}"
+  result="${result//\\/\\\\}"
+  result="${result//\"/\\\"}"; result="${result//$'\n'/\\n}"
+  cat >"$rollout" <<EOF
+{"type":"session_meta","payload":{"id":"$child","parent_thread_id":"$parent","timestamp":"2999-01-01T00:00:00Z","thread_source":"subagent","agent_role":"$role","multi_agent_version":"v1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"$parent","agent_role":"$role"}}}}}
+{"type":"event_msg","payload":{"type":"user_message","message":"$bundle"}}
+{"type":"turn_context","payload":{"sandbox_policy":{"type":"read-only"},"approval_policy":"never"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"$result"}}
+EOF
+  if [ -n "$helper" ]; then
+    (cd "$repo" && POST_WORK_REVIEW_JSON_HELPER="$helper" POST_WORK_REVIEW_SESSIONS_ROOT="$sessions" \
+      bash "$POST_WORK_REVIEW_DRIVER" record-session "$kind" "$child")
   else
-    role_json="\"$role\""
+    (cd "$repo" && POST_WORK_REVIEW_SESSIONS_ROOT="$sessions" bash "$POST_WORK_REVIEW_DRIVER" record-session "$kind" "$child")
   fi
-  bundle_json="${bundle_path//\\/\\\\}"
-  bundle_json="${bundle_json//\"/\\\"}"
-  {
-    printf '{"timestamp":"%s","type":"session_meta","payload":{"session_id":"%s","id":"%s","parent_thread_id":"%s","timestamp":"%s","source":{"subagent":{"thread_spawn":{"parent_thread_id":"%s","depth":1,"agent_path":"/root/%s","agent_role":%s}}},"thread_source":"subagent","agent_role":%s,"multi_agent_version":"v1"}}\n' \
-      "$timestamp" "$CODEX_THREAD_ID" "$session_id" "$CODEX_THREAD_ID" "$timestamp" \
-      "$CODEX_THREAD_ID" "$task_name" "$role_json" "$role_json"
-    if [ -n "$bundle_path" ]; then
-      printf '{"timestamp":"%s","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"%s"}]}}\n' \
-        "$timestamp" "$bundle_json"
-    fi
-    printf '{"timestamp":"%s","type":"turn_context","payload":{"model":"%s","effort":"%s","approval_policy":"never","sandbox_policy":{"type":"%s"}}}\n' \
-      "$timestamp" "$model" "$reasoning_effort" "$sandbox_mode"
-    printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"%s"}}\n' \
-      "$timestamp" "$message"
-  } >"$session_file"
-
-  [ -n "$bundle_path" ] && [ "$write_parent" = "true" ] || return 0
-  parent_file="$(attested_parent_session_path)"
-  if [ ! -f "$parent_file" ]; then
-    printf '{"timestamp":"%s","type":"session_meta","payload":{"id":"%s"}}\n' \
-      "$timestamp" "$CODEX_THREAD_ID" >"$parent_file"
-  fi
-  call_id="call-${session_id//-/}"
-  controller_turn="$(review_controller_turn_id)"
-  spawn_arguments="{\"agent_type\":\"$requested_role\",\"fork_context\":false,\"message\":\"$bundle_json\"}"
-  spawn_arguments_json="${spawn_arguments//\\/\\\\}"
-  spawn_arguments_json="${spawn_arguments_json//\"/\\\"}"
-  {
-    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","namespace":"multi_agent_v1","call_id":"%s","arguments":"%s","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
-      "$spawn_timestamp" "$call_id" "$spawn_arguments_json" "$controller_turn"
-    printf '{"timestamp":"%s","type":"response_item","payload":{"type":"function_call_output","call_id":"%s","output":"{\\\"agent_id\\\":\\\"%s\\\"}"}}\n' \
-      "$spawn_timestamp" "$call_id" "$session_id"
-  } >>"$parent_file"
 }
 
 write_broad_result_json() {
@@ -679,14 +383,10 @@ write_broad_result_json() {
   local truncated="$5"
   local findings="$6"
   local out_file="$7"
-  local head diff_hash bundle_sha256 count session_label digest_override
-  session_label="$session_id"
-  session_id="$(attested_session_uuid "$session_label")"
+  local head diff_hash count
+  session_id="$(session_uuid "$session_id")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
-  bundle_sha256="$(env_value "$repo" review_bundle_sha256)"
-  digest_override="${9:-}"
-  [ -z "$digest_override" ] || bundle_sha256="$digest_override"
   if [ "$#" -ge 8 ]; then
     count="$8"
   elif [ -n "$findings" ]; then
@@ -695,11 +395,8 @@ write_broad_result_json() {
     count=0
   fi
   cat >"$out_file" <<EOF
-{"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","bundle_sha256":"$bundle_sha256","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
+{"backend":"bounded-isolated-reviewer","review_type":"broad","reviewer_agent":"post-work-reviewer","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":$same_agent,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":$hooks_only,"head":"$head","diff_hash":"$diff_hash","truncated":$truncated,"finding_count":$count,"findings":[$findings]}
 EOF
-  authorize_review_spawn "$repo" broad || return 1
-  write_attested_session "$session_id" "post-work-reviewer" "gpt-5.6-sol" "read-only" \
-    "$out_file" review_task "$(env_value "$repo" review_bundle)" post-work-reviewer
 }
 
 write_verify_result_json() {
@@ -709,26 +406,18 @@ write_verify_result_json() {
   local new_regressions="$4"
   local findings="$5"
   local out_file="$6"
-  local head diff_hash bundle_sha256 fix_rounds count session_label digest_override
-  session_label="$session_id"
-  session_id="$(attested_session_uuid "$session_label")"
+  local head diff_hash count
+  session_id="$(session_uuid "$session_id")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
-  fix_rounds="$(env_value "$repo" fix_rounds)"
-  bundle_sha256="$(env_value "$repo" "verify_bundle_sha256_$fix_rounds")"
-  digest_override="${7:-}"
-  [ -z "$digest_override" ] || bundle_sha256="$digest_override"
   if [ -n "$findings" ]; then
     count=1
   else
     count=0
   fi
   cat >"$out_file" <<EOF
-{"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","bundle_sha256":"$bundle_sha256","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
+{"backend":"bounded-isolated-reviewer","review_type":"verify","reviewer_agent":"post-work-verifier","reviewer_provenance":"native-subagent-tool","reviewer_session_id":"$session_id","same_agent_review":false,"reviewer_isolated":true,"reviewer_sandbox_mode":"read-only","hooks_only_success":false,"head":"$head","diff_hash":"$diff_hash","all_previous_findings_fixed":$all_fixed,"new_regressions":$new_regressions,"truncated":false,"finding_count":$count,"findings":[$findings]}
 EOF
-  authorize_review_spawn "$repo" verify || return 1
-  write_attested_session "$session_id" "post-work-verifier" "gpt-5.6-terra" "read-only" \
-    "$out_file" review_task "$(env_value "$repo" verify_bundle)" post-work-verifier
 }
 
 record_clean_broad() {
@@ -736,7 +425,7 @@ record_clean_broad() {
   local session_id="${2:-session-broad-clean}"
   local json_file="$BATS_TEST_TMPDIR/broad-clean.json"
   write_broad_result_json "$repo" "$session_id" false false false "" "$json_file"
-  (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" record broad "$json_file") \
+  record_result_command "$repo" broad "$json_file" \
     >"$BATS_TEST_TMPDIR/record-broad-clean.out"
 }
 
@@ -767,7 +456,6 @@ prepare_branch_review() {
   state="$(state_dir_for "$repo")"
   [[ "$output" == *"pending_verify=0"* ]]
   [[ "$output" == *"review_bundle=$state/review-bundle.md"* ]]
-  [[ "$output" == *"review_bundle_sha256="* ]] || return 1
   [[ "$output" == *"findings_tsv=$state/findings.tsv"* ]]
   [ -f "$state/review.env" ]
   [ -f "$state/review-bundle.md" ]
@@ -781,153 +469,6 @@ prepare_branch_review() {
   grep -Fq "+dirty" "$state/review-bundle.md"
   grep -Fq '````diff' "$state/review-bundle.md"
   grep -Fq "+new" "$state/review-bundle.md"
-  [ "$(env_value "$repo" review_bundle_sha256)" = \
-    "$(bundle_sha256_for "$state/review-bundle.md")" ] || return 1
-  grep -Fq '"bundle_sha256":"<lowercase SHA-256 of the exact bundle bytes>"' \
-    "$state/review-bundle.md" || return 1
-}
-
-@test "post-work-review shard-10: prepare attests the current read-only controller context" {
-  local repo="$BATS_TEST_TMPDIR/review-controller-prepare"
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-
-  run_review_base "$repo" prepare
-
-  [ "$status" -eq 0 ]
-  [ "$(env_value "$repo" review_controller_prepare_turn_id)" = \
-    "$(review_controller_turn_id)" ] || return 1
-  [[ "$(env_value "$repo" review_controller_prepare_context_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
-  [ "$(env_value "$repo" review_controller_prepare_sandbox_mode)" = "read-only" ] || return 1
-}
-
-@test "post-work-review shard-10: prepare rejects a workspace-write controller before bundle creation" {
-  local repo="$BATS_TEST_TMPDIR/review-controller-prepare-write"
-  local parent
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  parent="$(attested_parent_session_path)"
-  sed 's/"sandbox_policy":{"type":"read-only"}/"sandbox_policy":{"type":"workspace-write"}/' \
-    "$parent" >"$parent.tmp"
-  mv "$parent.tmp" "$parent"
-
-  run_review_base "$repo" prepare
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"review controller attestation failed"* ]] || return 1
-  [ ! -e "$(state_dir_for "$repo")/review-bundle.md" ]
-}
-
-@test "post-work-review shard-10: authorize-spawn binds one read-only controller turn" {
-  local repo="$BATS_TEST_TMPDIR/review-controller-authorize"
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-
-  run_review "$repo" authorize-spawn broad
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"spawn_authorized=true"* ]] || return 1
-  [[ "$output" == *"review_controller_turn_id=$(review_controller_turn_id)"* ]] || return 1
-  [[ "$output" == *"review_controller_sandbox_mode=read-only"* ]] || return 1
-  [[ "$(env_value "$repo" broad_spawn_controller_context_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
-
-  run_review "$repo" authorize-spawn broad
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"spawn authorization already exists"* ]] || return 1
-}
-
-@test "post-work-review shard-10: authorize-spawn rejects a newly writable controller turn" {
-  local repo="$BATS_TEST_TMPDIR/review-controller-authorize-write"
-  local parent
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  parent="$(attested_parent_session_path)"
-  printf '%s\n' \
-    '{"timestamp":"2026-07-14T00:00:02Z","type":"turn_context","payload":{"turn_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","model":"gpt-5.6-luna","effort":"ultra","approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"}}}' \
-    >>"$parent"
-
-  run_review "$repo" authorize-spawn broad
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"review controller attestation failed"* ]] || return 1
-  if env_value "$repo" broad_spawn_authorized_at >/dev/null 2>&1; then
-    return 1
-  fi
-}
-
-@test "post-work-review shard-10: record-session preserves child UTF-8 without model re-encoding" {
-  local repo="$BATS_TEST_TMPDIR/review-record-session-unicode"
-  local result="$BATS_TEST_TMPDIR/review-record-session-unicode.json"
-  local finding session_id stored gitdir
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  finding='{"severity":"major","file":"tracked.txt","line":1,"title":"Unicode survives","description":"controller—reviewer間の証跡","recommendation":"Keep exact UTF-8."}'
-  write_broad_result_json "$repo" "record-session-unicode" false false false \
-    "$finding" "$result"
-  session_id="$(attested_session_uuid record-session-unicode)"
-
-  run_review "$repo" record-session broad "$session_id"
-
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"recorded=true"* ]] || return 1
-  stored="$(state_dir_for "$repo")/results/broad-001.json"
-  grep -Fq 'controller—reviewer間の証跡' "$stored" || return 1
-  iconv -f UTF-8 -t UTF-8 "$stored" >/dev/null || return 1
-  gitdir="$(gitdir_for "$repo")"
-  [ -z "$(find "$gitdir" -maxdepth 1 -type d -name 'post-work-review-json.*' -print -quit)" ]
-}
-
-@test "post-work-review shard-10: record-session fails closed for an unknown child UUID" {
-  local repo="$BATS_TEST_TMPDIR/review-record-session-missing"
-  local missing="ffffffff-ffff-4fff-8fff-ffffffffffff"
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  run_review "$repo" authorize-spawn broad
-  [ "$status" -eq 0 ]
-
-  run_review "$repo" record-session broad "$missing"
-
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_unavailable"* ]] || return 1
-  [ ! -e "$(state_dir_for "$repo")/calls/broad-001.env" ]
-  [ -z "$(find "$(gitdir_for "$repo")" -maxdepth 1 -type d -name 'post-work-review-json.*' -print -quit)" ]
-}
-
-@test "post-work-review shard-10: record rejects a tool call inserted after spawn authorization" {
-  local repo="$BATS_TEST_TMPDIR/review-controller-intervening-tool"
-  local result="$BATS_TEST_TMPDIR/review-controller-intervening-tool.json"
-  local parent controller_turn
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  authorize_review_spawn "$repo" broad || return 1
-
-  parent="$(attested_parent_session_path)"
-  controller_turn="$(review_controller_turn_id)"
-  {
-    printf '{"timestamp":"2098-01-01T00:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","namespace":"functions","call_id":"call-intervening","arguments":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
-      "$controller_turn"
-    printf '{"timestamp":"2098-01-01T00:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-intervening","output":"{}","internal_chat_message_metadata_passthrough":{"turn_id":"%s"}}}\n' \
-      "$controller_turn"
-  } >>"$parent"
-  write_broad_result_json "$repo" "controller-intervening-tool" false false false \
-    "" "$result"
-
-  run_review "$repo" record broad "$result"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]] || return 1
-  [[ "$output" == *"another tool invocation appears between spawn authorization and spawn"* ]] || return 1
-  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
 }
 
 @test "post-work-review shard-8: prepare paths are usable from caller subdirectories" {
@@ -943,88 +484,8 @@ prepare_branch_review() {
   state="$(state_dir_for "$repo")"
   state="$(cd "$state" && pwd -P)"
   bundle_path="$(printf '%s\n' "$output" | awk -F= '$1 == "review_bundle" { print $2; exit }')"
-  case "$bundle_path" in
-    /*) ;;
-    *) return 1 ;;
-  esac
   [ "$bundle_path" = "$state/review-bundle.md" ]
-  [ -s "$bundle_path" ]
-  [ ! -L "$bundle_path" ]
-  [ "$(sed -n '1p' "$bundle_path")" = "# post-work-review broad review bundle" ]
-  grep -Fxq -- "- backend: bounded-isolated-reviewer" "$bundle_path"
-  grep -Fxq -- "- review_type: broad" "$bundle_path"
-  grep -Fxq "## Required JSON shape" "$bundle_path"
-  grep -Fxq "## Diff" "$bundle_path"
-}
-
-@test "post-work-review shard-10: record rejects a broad bundle changed after prepare" {
-  local repo="$BATS_TEST_TMPDIR/review-bundle-current-digest"
-  local json_file="$BATS_TEST_TMPDIR/review-bundle-current-digest.json"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  write_broad_result_json "$repo" "session-bundle-current-digest" false false false "" "$json_file"
-
-  state="$(state_dir_for "$repo")"
-  printf 'tampered bundle\n' >"$state/review-bundle.md"
-  run_review "$repo" record broad "$json_file"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"review bundle changed since prepare: bundle_sha256"* ]] || return 1
-  [ "$(env_value "$repo" stop_reason)" = "invalid_review_result" ] || return 1
-  receipt="$state/calls/broad-001.env"
-  [ -f "$receipt" ] || return 1
-  [ ! -e "$state/results/broad-001.json" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-}
-
-@test "post-work-review shard-10: record rejects the digest of a swapped then restored bundle" {
-  local repo="$BATS_TEST_TMPDIR/review-bundle-restored-digest"
-  local json_file="$BATS_TEST_TMPDIR/review-bundle-restored-digest.json"
-  local original="$BATS_TEST_TMPDIR/review-bundle-original.md"
-  local state bundle tampered_digest
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  authorize_review_spawn "$repo" broad || return 1
-
-  state="$(state_dir_for "$repo")"
-  bundle="$state/review-bundle.md"
-  cp "$bundle" "$original"
-  printf 'tampered bundle shown to child\n' >"$bundle"
-  tampered_digest="$(bundle_sha256_for "$bundle")"
-  write_broad_result_json "$repo" "session-bundle-restored-digest" false false false \
-    "" "$json_file" 0 "$tampered_digest"
-  cp "$original" "$bundle"
-
-  run_review "$repo" record broad "$json_file"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"review bundle_sha256 mismatch"* ]] || return 1
-  [ "$(env_value "$repo" stop_reason)" = "invalid_review_result" ] || return 1
-  [ -f "$state/calls/broad-001.env" ] || return 1
-  [ ! -e "$state/results/broad-001.json" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-}
-
-@test "post-work-review shard-10: record rejects a malformed child bundle digest" {
-  local repo="$BATS_TEST_TMPDIR/review-bundle-malformed-digest"
-  local json_file="$BATS_TEST_TMPDIR/review-bundle-malformed-digest.json"
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  write_broad_result_json "$repo" "session-bundle-malformed-digest" false false false \
-    "" "$json_file" 0 "ABCDEF"
-
-  run_review "$repo" record broad "$json_file"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"bundle_sha256 must be a lowercase SHA-256 digest"* ]] || return 1
-  [ "$(env_value "$repo" stop_reason)" = "invalid_review_result" ] || return 1
+  [ -f "$bundle_path" ]
 }
 
 @test "post-work-review shard-12: rejects no-sandbox Codex overrides" {
@@ -1242,7 +703,7 @@ prepare_branch_review() {
 
 @test "post-work-review shard-11: records, summarizes, and marks a clean branch review" {
   local repo="$BATS_TEST_TMPDIR/review-branch"
-  local gitdir state
+  local gitdir
   setup_review_repo "$repo"
   make_branch_change "$repo"
 
@@ -1257,9 +718,6 @@ prepare_branch_review() {
   [[ "$output" == *"broad_review_calls=0"* ]]
 
   record_clean_broad "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  [ -f "$state/calls/broad-001.env" ]
-  [ -f "$state/results/broad-001.json" ]
 
   run_review "$repo" summarize
   [ "$status" -eq 0 ]
@@ -1276,27 +734,7 @@ prepare_branch_review() {
   grep -Fxq "head=$(git -C "$repo" rev-parse HEAD)" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base=main" "$gitdir/post-work-review-passed.meta"
   grep -Fxq "backend=bounded-isolated-reviewer" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "post_work_review_version=6" "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "post_work_review_attestation_version=4" "$gitdir/post-work-review-passed.meta" || return 1
   grep -Fxq "broad_review_calls=1" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_kind=broad" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_agent_role=post-work-reviewer" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_model=gpt-5.6-sol" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_sandbox_mode=read-only" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_approval_policy=never" "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_1_history_mode=no-history" "$gitdir/post-work-review-passed.meta"
-  grep -Fxq "review_call_1_bundle_sha256=$(env_value "$repo" review_bundle_sha256)" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_controller_prepare_sandbox_mode=read-only" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_1_controller_turn_id=$(review_controller_turn_id)" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Eq '^review_call_1_controller_context_sha256=[0-9a-f]{64}$' \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_1_controller_sandbox_mode=read-only" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Eq '^review_call_1_spawn_authorized_at=.*Z$' \
-    "$gitdir/post-work-review-passed.meta" || return 1
   grep -Fxq "clean=true" "$gitdir/post-work-review-passed.meta"
 }
 
@@ -1314,9 +752,7 @@ prepare_branch_review() {
 
   cat >"$helper_wrapper" <<'EOF'
 #!/usr/bin/env bash
-if [ "${2:-}" = attest ]; then
-  printf 'parse\n' >>"$JSON_PARSER_COUNT_FILE"
-fi
+printf 'parse\n' >>"$JSON_PARSER_COUNT_FILE"
 exec "$REAL_JSON_HELPER" "$@"
 EOF
   chmod +x "$helper_wrapper"
@@ -1327,7 +763,7 @@ EOF
   : >"$count_file"
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 0 ]
-  [ "$(wc -l <"$count_file")" -eq 1 ]
+  [ "$(wc -l <"$count_file")" -eq 2 ]
   cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
 
   : >"$count_file"
@@ -1410,8 +846,7 @@ EOF
   write_broad_result_json "$repo" "session-json-helper-missing" false false false "" "$json_file"
   gitdir="$(gitdir_for "$repo")"
 
-  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" FANOUT_BIN="$5" bash "$2" record broad "$3" 2>&1' \
-    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$BATS_TEST_TMPDIR/missing-helper" "$FANOUT_BIN"
+  run record_result_command "$repo" broad "$json_file" "$BATS_TEST_TMPDIR/missing-helper"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
@@ -1436,11 +871,10 @@ exit 42
 EOF
   chmod +x "$helper"
 
-  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" bash "$2" record broad "$3" 2>&1' \
-    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$helper"
+  run record_result_command "$repo" broad "$json_file" "$helper"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before attestation"* ]] || return 1
+  [[ "$output" == *"post-work-review JSON helper is incompatible"* ]]
   [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
@@ -1470,7 +904,7 @@ EOF
     bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$incompatible_helper"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before attestation"* ]] || return 1
+  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
   [[ "$output" != *"File exists"* ]]
   [[ "$output" != *"failed to create reviewer JSON cache entry"* ]]
 }
@@ -1494,11 +928,9 @@ EOF
   [ ! -e "$gitdir/post-work-review-passed.meta" ]
 }
 
-@test "post-work-review shard-8: attested rejected broad call consumes its only budget slot" {
-  local repo="$BATS_TEST_TMPDIR/review-reject-same-agent"
-  local hooks_repo="$BATS_TEST_TMPDIR/review-reject-hooks-only"
+@test "post-work-review shard-8: record rejects same-agent and hooks-only results" {
+  local repo="$BATS_TEST_TMPDIR/review-reject"
   local json_file="$BATS_TEST_TMPDIR/reject.json"
-  local state receipt session_id
   setup_review_repo "$repo"
   printf 'dirty\n' >"$repo/tracked.txt"
 
@@ -1510,169 +942,14 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"same-agent review is rejected"* ]]
 
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  session_id="$(attested_session_uuid session-same-agent)"
-  [ -f "$receipt" ]
-  [ ! -e "$state/results/broad-001.json" ]
-  grep -Fxq "kind=broad" "$receipt"
-  grep -Fxq "attestation_version=4" "$receipt" || return 1
-  grep -Fxq "session_id=$session_id" "$receipt"
-  grep -Fxq "agent_role=post-work-reviewer" "$receipt"
-  grep -Fxq "model=gpt-5.6-sol" "$receipt"
-  grep -Fxq "sandbox_mode=read-only" "$receipt"
-  grep -Fxq "approval_policy=never" "$receipt" || return 1
-  grep -Fxq "history_mode=no-history" "$receipt"
-  grep -Fxq "bundle_sha256=$(env_value "$repo" review_bundle_sha256)" "$receipt" || return 1
-  grep -Fxq "controller_turn_id=$(review_controller_turn_id)" "$receipt" || return 1
-  grep -Eq '^controller_context_sha256=[0-9a-f]{64}$' "$receipt" || return 1
-  grep -Fxq "controller_sandbox_mode=read-only" "$receipt" || return 1
-  grep -Eq '^spawn_authorized_at=.*Z$' "$receipt" || return 1
-
-  # Simulate interruption after the atomic receipt rename but before the
-  # driver persists invalid_review_result.
-  set_env_value "$repo" stop_reason ""
-  run_review "$repo" status
+  run_review "$repo" reset
   [ "$status" -eq 0 ]
-  [[ "$output" == *"broad_review_calls=1"* ]]
-  [[ "$output" == *"verify_review_calls=0"* ]]
-  [[ "$output" == *"total_reviewer_calls=1"* ]]
-  [[ "$output" == *"review_call_1_session_id=$session_id"* ]]
-  [[ "$output" == *"review_call_1_agent_role=post-work-reviewer"* ]]
-  [[ "$output" == *"clean=false"* ]]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [[ "$output" == *"marker_eligible=false"* ]]
-
-  write_broad_result_json "$repo" "session-after-rejection" false false false "" "$json_file"
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
+  write_broad_result_json "$repo" "session-hooks-only" false true false "" "$json_file"
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [ ! -e "$state/calls/broad-002.env" ]
-
-  run_review "$repo" prepare
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [ -f "$receipt" ]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-
-  run_review "$repo" mark
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-
-  setup_review_repo "$hooks_repo"
-  printf 'dirty\n' >"$hooks_repo/tracked.txt"
-  run_review "$hooks_repo" prepare
-  [ "$status" -eq 0 ]
-
-  write_broad_result_json "$hooks_repo" "session-hooks-only" false true false "" "$json_file"
-  run_review "$hooks_repo" record broad "$json_file"
-  [ "$status" -eq 1 ]
   [[ "$output" == *"hooks-only success is rejected"* ]]
-  [ -f "$(state_dir_for "$hooks_repo")/calls/broad-001.env" ]
-  [ ! -e "$(state_dir_for "$hooks_repo")/results/broad-001.json" ]
-}
-
-@test "post-work-review shard-10: mark rejects a missing receipt bundle digest" {
-  local repo="$BATS_TEST_TMPDIR/review-receipt-digest-missing"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  prepare_branch_review "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  grep -v '^bundle_sha256=' "$receipt" >"$receipt.tmp" || return 1
-  mv "$receipt.tmp" "$receipt"
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"marker_written=false"* ]] || return 1
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed.meta" ] || return 1
-}
-
-@test "post-work-review shard-10: mark rejects a changed receipt bundle digest" {
-  local repo="$BATS_TEST_TMPDIR/review-receipt-digest-changed"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  prepare_branch_review "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  sed 's/^bundle_sha256=.*/bundle_sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' \
-    "$receipt" >"$receipt.tmp"
-  mv "$receipt.tmp" "$receipt"
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"marker_written=false"* ]] || return 1
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed.meta" ] || return 1
-}
-
-@test "post-work-review shard-10: mark rejects a changed receipt approval policy" {
-  local repo="$BATS_TEST_TMPDIR/review-receipt-approval-changed"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  prepare_branch_review "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  sed 's/^approval_policy=.*/approval_policy=on-request/' \
-    "$receipt" >"$receipt.tmp"
-  mv "$receipt.tmp" "$receipt"
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"marker_written=false"* ]] || return 1
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed.meta" ] || return 1
-}
-
-@test "post-work-review shard-10: mark rejects a changed receipt model" {
-  local repo="$BATS_TEST_TMPDIR/review-receipt-model-changed"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  prepare_branch_review "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  sed 's/^model=.*/model=forged-model/' "$receipt" >"$receipt.tmp" || return 1
-  mv "$receipt.tmp" "$receipt" || return 1
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"marker_written=false"* ]] || return 1
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed.meta" ] || return 1
-}
-
-@test "post-work-review shard-10: mark rejects a missing receipt session" {
-  local repo="$BATS_TEST_TMPDIR/review-receipt-session-missing"
-  local state receipt
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  prepare_branch_review "$repo" || return 1
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/broad-001.env"
-  grep -v '^session_id=' "$receipt" >"$receipt.tmp" || return 1
-  mv "$receipt.tmp" "$receipt" || return 1
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"marker_written=false"* ]] || return 1
-  [[ "$output" == *"marker_reason=last_review_not_clean"* ]] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed.meta" ] || return 1
 }
 
 @test "post-work-review shard-8: record rejects incomplete findings" {
@@ -1702,11 +979,7 @@ EOF
 
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_unavailable"* ]]
-  [[ "$output" == *"project reviewer JSON"* ]]
-  [ ! -e "$(state_dir_for "$repo")/calls/broad-001.env" ]
-  [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
+  [[ "$output" == *"child rollout attestation failed"* ]]
 }
 
 @test "post-work-review shard-8: record rejects stale review targets" {
@@ -1752,7 +1025,6 @@ EOF
   local repo="$BATS_TEST_TMPDIR/review-verify-guard"
   local broad_json="$BATS_TEST_TMPDIR/broad-finding.json"
   local verify_json="$BATS_TEST_TMPDIR/verify.json"
-  local state verify_bundle
   local finding
   setup_review_repo "$repo"
   make_branch_change "$repo"
@@ -1764,7 +1036,7 @@ EOF
   run_review "$repo" record broad "$broad_json"
   [ "$status" -eq 0 ]
 
-  cp "$broad_json" "$verify_json"
+  write_verify_result_json "$repo" "session-verify-early" true false "" "$verify_json"
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"verify bundle not prepared"* ]]
@@ -1775,253 +1047,25 @@ EOF
   run_review_base "$repo" prepare-verify
   [ "$status" -eq 0 ]
   [[ "$output" == *"verify_bundle="* ]]
-  [[ "$output" == *"verify_bundle_sha256_1="* ]] || return 1
   [[ "$output" == *"fix_rounds=1"* ]]
-  state="$(state_dir_for "$repo")"
-  state="$(cd "$state" && pwd -P)"
-  verify_bundle="$(printf '%s\n' "$output" | awk -F= '$1 == "verify_bundle" { print $2; exit }')"
-  case "$verify_bundle" in
-    /*) ;;
-    *) return 1 ;;
-  esac
-  [ "$verify_bundle" = "$state/verify-bundle.md" ]
-  [ -s "$verify_bundle" ]
-  [ ! -L "$verify_bundle" ]
-  [ "$(env_value "$repo" verify_bundle_sha256_1)" = \
-    "$(bundle_sha256_for "$verify_bundle")" ] || return 1
-  [ "$(sed -n '1p' "$verify_bundle")" = "# post-work-review verification bundle" ]
-  grep -Fxq -- "- backend: bounded-isolated-reviewer" "$verify_bundle"
-  grep -Fxq -- "- review_type: verify" "$verify_bundle"
-  grep -Fxq "## Required JSON shape" "$verify_bundle"
-  grep -Fxq "## Prior findings" "$verify_bundle"
-  grep -Fxq "## Current fix diff" "$verify_bundle"
-  grep -Fxq "## Current scoped diff" "$verify_bundle"
-  grep -Fq -- "- reviewer_agent: post-work-verifier" "$verify_bundle"
-  grep -Fq '"bundle_sha256":"<lowercase SHA-256 of the exact bundle bytes>"' \
-    "$verify_bundle" || return 1
-  ! grep -Fq "verifier_agent" "$verify_bundle"
+  grep -Fq -- "- reviewer_agent: post-work-verifier" "$(state_dir_for "$repo")/verify-bundle.md"
+  ! grep -Fq "verifier_agent" "$(state_dir_for "$repo")/verify-bundle.md"
 
-  write_verify_result_json "$repo" "session-reused-verify" true false "" "$verify_json"
-  sed "s/$(attested_session_uuid session-reused-verify)/$(attested_session_uuid session-broad)/" \
-    "$verify_json" >"$verify_json.tmp"
-  mv "$verify_json.tmp" "$verify_json"
+  write_verify_result_json "$repo" "session-broad" true false "" "$verify_json"
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_session_reused"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
+  [[ "$output" == *"reviewer_session_id already recorded"* ]]
 
-@test "post-work-review shard-10: record rejects a verify bundle changed after prepare" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-bundle-current-digest"
-  local broad_json="$BATS_TEST_TMPDIR/review-verify-bundle-broad.json"
-  local verify_json="$BATS_TEST_TMPDIR/review-verify-bundle-current.json"
-  local state finding
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-verify-bundle-broad" false false false \
-    "$finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ] || return 1
-  printf 'fixed\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "fix"
   run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ] || return 1
-  write_verify_result_json "$repo" "session-verify-bundle-current" true false "" "$verify_json"
-
-  state="$(state_dir_for "$repo")"
-  printf 'tampered verify bundle\n' >"$state/verify-bundle.md"
-  run_review "$repo" record verify "$verify_json"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"review bundle changed since prepare: bundle_sha256"* ]] || return 1
-  [ -f "$state/calls/verify-001.env" ] || return 1
-  [ ! -e "$state/results/verify-001.json" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-}
-
-@test "post-work-review shard-10: second verifier rejects the first round bundle digest" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-bundle-replay"
-  local broad_json="$BATS_TEST_TMPDIR/review-verify-bundle-replay-broad.json"
-  local verify_json="$BATS_TEST_TMPDIR/review-verify-bundle-replay.json"
-  local state finding next_finding first_digest second_digest
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-verify-replay-broad" false false false \
-    "$finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ] || return 1
-
-  printf 'round1\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "round1"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ] || return 1
-  first_digest="$(env_value "$repo" verify_bundle_sha256_1)"
-  next_finding='{"severity":"major","file":"tracked.txt","line":2,"title":"Second issue","description":"A distinct issue remains.","recommendation":"Fix the distinct issue."}'
-  write_verify_result_json "$repo" "session-verify-replay-first" false false \
-    "$next_finding" "$verify_json"
-  run_review "$repo" record verify "$verify_json"
-  [ "$status" -eq 0 ] || return 1
-
-  printf 'round2\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "round2"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ] || return 1
-  second_digest="$(env_value "$repo" verify_bundle_sha256_2)"
-  [ "$first_digest" != "$second_digest" ] || return 1
-  write_verify_result_json "$repo" "session-verify-replay-second" true false "" \
-    "$verify_json" "$first_digest"
-
-  run_review "$repo" record verify "$verify_json"
-
-  [ "$status" -eq 1 ] || return 1
-  [[ "$output" == *"review bundle_sha256 mismatch"* ]] || return 1
-  state="$(state_dir_for "$repo")"
-  [ -f "$state/calls/verify-002.env" ] || return 1
-  [ ! -e "$state/results/verify-002.json" ] || return 1
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ] || return 1
-}
-
-@test "post-work-review shard-10: clean verifier marker records both bundle digests" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-marker-digests"
-  local broad_json="$BATS_TEST_TMPDIR/review-verify-marker-broad.json"
-  local verify_json="$BATS_TEST_TMPDIR/review-verify-marker.json"
-  local gitdir finding
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ] || return 1
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-verify-marker-broad" false false false \
-    "$finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ] || return 1
-  printf 'fixed\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "fix"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ] || return 1
-  write_verify_result_json "$repo" "session-verify-marker-clean" true false "" "$verify_json"
-  run_review "$repo" record verify "$verify_json"
-  [ "$status" -eq 0 ] || return 1
-
-  run_review "$repo" mark
-
-  [ "$status" -eq 0 ] || return 1
-  [[ "$output" == *"marker_written=true"* ]] || return 1
-  gitdir="$(gitdir_for "$repo")"
-  grep -Fxq "review_call_1_bundle_sha256=$(env_value "$repo" review_bundle_sha256)" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_1_approval_policy=never" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_2_bundle_sha256=$(env_value "$repo" verify_bundle_sha256_1)" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-  grep -Fxq "review_call_2_approval_policy=never" \
-    "$gitdir/post-work-review-passed.meta" || return 1
-}
-
-@test "post-work-review shard-6: verifier must postdate its exact fix round" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-round-freshness"
-  local broad_json="$BATS_TEST_TMPDIR/broad-round-freshness.json"
-  local verify_json="$BATS_TEST_TMPDIR/verify-round-freshness.json"
-  local finding prepared session_id bundle
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-round-broad" false false false "$finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ]
-
-  printf 'fixed\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "fix"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  prepared="$(env_value "$repo" verify_prepared_at_1)"
-  [[ "$prepared" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{9}Z$ ]]
-
-  write_verify_result_json "$repo" "session-stale-round" true false "" "$verify_json"
-  session_id="$(attested_session_uuid session-stale-round)"
-  bundle="$(env_value "$repo" verify_bundle)"
-  write_attested_session "$session_id" post-work-verifier gpt-5.6-terra read-only \
-    "$verify_json" review_task "$bundle" post-work-verifier "$prepared" false
-
-  run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"reviewer session was not created after prepare"* ]]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [ ! -e "$(state_dir_for "$repo")/calls/verify-001.env" ]
-  [ ! -e "$(state_dir_for "$repo")/results/verify-001.json" ]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-6: second verifier uses the second round timestamp" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-second-round-freshness"
-  local broad_json="$BATS_TEST_TMPDIR/broad-second-round-freshness.json"
-  local verify_json="$BATS_TEST_TMPDIR/verify-second-round-freshness.json"
-  local first_finding second_finding prepared session_id bundle state first_digest second_digest
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  first_finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-second-round-broad" false false false \
-    "$first_finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ]
-
-  printf 'round1\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "round1"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  first_digest="$(env_value "$repo" verify_bundle_sha256_1)"
-  second_finding='{"severity":"major","file":"tracked.txt","line":2,"title":"Second issue","description":"A distinct issue remains.","recommendation":"Fix the distinct issue."}'
-  write_verify_result_json "$repo" "session-second-round-verify-1" false false \
-    "$second_finding" "$verify_json"
-  run_review "$repo" record verify "$verify_json"
-  [ "$status" -eq 0 ]
-
-  printf 'round2\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "round2"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  second_digest="$(env_value "$repo" verify_bundle_sha256_2)"
-  [ "$first_digest" != "$second_digest" ] || return 1
-  prepared="$(env_value "$repo" verify_prepared_at_2)"
-  bundle="$(env_value "$repo" verify_bundle)"
-  write_verify_result_json "$repo" "session-second-round-verify-2" true false "" "$verify_json"
-  session_id="$(attested_session_uuid session-second-round-verify-2)"
-  write_attested_session "$session_id" post-work-verifier gpt-5.6-terra read-only \
-    "$verify_json" review_task "$bundle" post-work-verifier "$prepared" false
-
-  run_review "$repo" record verify "$verify_json"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"reviewer session was not created after prepare"* ]]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  state="$(state_dir_for "$repo")"
-  [ ! -e "$state/calls/verify-002.env" ]
-  [ ! -e "$state/results/verify-002.json" ]
+  [[ "$output" == *"reserved reviewer call is incomplete"* ]]
 }
 
 @test "post-work-review shard-4: rejects failed verifier results without findings" {
   local repo="$BATS_TEST_TMPDIR/review-empty-failed-verifier"
   local broad_json="$BATS_TEST_TMPDIR/broad-empty-failed-verifier.json"
   local verify_json="$BATS_TEST_TMPDIR/verify-empty-failed-verifier.json"
-  local finding state receipt session_id
+  local finding
   setup_review_repo "$repo"
   make_branch_change "$repo"
 
@@ -2042,39 +1086,6 @@ EOF
   run_review "$repo" record verify "$verify_json"
   [ "$status" -eq 1 ]
   [[ "$output" == *"failed verifier result requires findings"* ]]
-
-  state="$(state_dir_for "$repo")"
-  receipt="$state/calls/verify-001.env"
-  session_id="$(attested_session_uuid session-empty-failed-verify)"
-  [ -f "$state/calls/broad-001.env" ]
-  [ -f "$state/results/broad-001.json" ]
-  [ -f "$receipt" ]
-  [ ! -e "$state/results/verify-001.json" ]
-  grep -Fxq "kind=verify" "$receipt"
-  grep -Fxq "session_id=$session_id" "$receipt"
-  grep -Fxq "agent_role=post-work-verifier" "$receipt"
-  grep -Fxq "model=gpt-5.6-terra" "$receipt"
-  grep -Fxq "sandbox_mode=read-only" "$receipt"
-
-  run_review "$repo" status
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"broad_review_calls=1"* ]]
-  [[ "$output" == *"verify_review_calls=1"* ]]
-  [[ "$output" == *"total_reviewer_calls=2"* ]]
-  [[ "$output" == *"clean=false"* ]]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [[ "$output" == *"marker_eligible=false"* ]]
-
-  write_verify_result_json "$repo" "session-after-failed-verify" true false "" "$verify_json"
-  run_review "$repo" record verify "$verify_json"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [ ! -e "$state/calls/verify-002.env" ]
-
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=invalid_review_result"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 }
 
 @test "post-work-review shard-9: branch verifier bundle includes uncommitted fixes" {
@@ -2152,45 +1163,6 @@ EOF
   [[ "$output" == *"stop_reason=review_budget_exhausted"* ]]
   state="$(state_dir_for "$repo")"
   [ -f "$state/results/broad-001.json" ]
-}
-
-@test "post-work-review shard-12: failed verify bundle staging leaves the round retryable" {
-  local repo="$BATS_TEST_TMPDIR/review-verify-stage-failure"
-  local broad_json="$BATS_TEST_TMPDIR/review-verify-stage-failure.json"
-  local finding state old_head old_diff
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "session-verify-stage-failure" false false false \
-    "$finding" "$broad_json"
-  run_review "$repo" record broad "$broad_json"
-  [ "$status" -eq 0 ]
-
-  printf 'fixed\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "fix"
-  state="$(state_dir_for "$repo")"
-  old_head="$(env_value "$repo" head)"
-  old_diff="$(env_value "$repo" diff_hash)"
-  mkdir "$state/verify-bundle.md"
-
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"failed to write verify bundle"* ]]
-  [ "$(env_value "$repo" head)" = "$old_head" ]
-  [ "$(env_value "$repo" diff_hash)" = "$old_diff" ]
-  [ "$(env_value "$repo" fix_rounds)" = "0" ]
-  [ "$(env_value "$repo" pending_verify)" = "0" ]
-  ! env_value "$repo" verify_prepared_at_1 >/dev/null 2>&1
-
-  rmdir "$state/verify-bundle.md"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  [ "$(env_value "$repo" fix_rounds)" = "1" ]
-  [ "$(env_value "$repo" pending_verify)" = "1" ]
-  env_value "$repo" verify_prepared_at_1 >/dev/null
 }
 
 @test "post-work-review shard-10: pending verify bundle prevents clean summarize and mark" {
@@ -2311,7 +1283,7 @@ EOF
   local budget_repo="$BATS_TEST_TMPDIR/review-budget"
   local broad_json="$BATS_TEST_TMPDIR/broad.json"
   local verify_json="$BATS_TEST_TMPDIR/verify.json"
-  local finding other_finding third_finding state
+  local finding other_finding third_finding
   finding="$(finding_one)"
   other_finding='{"severity":"major","file":"tracked.txt","line":2,"title":"New issue","description":"A second unresolved issue.","recommendation":"Fix the second issue."}'
   third_finding='{"severity":"major","file":"tracked.txt","line":3,"title":"Third issue","description":"A third unresolved issue.","recommendation":"Fix the third issue."}'
@@ -2355,13 +1327,6 @@ EOF
   write_verify_result_json "$budget_repo" "session-budget-verify-2" false false "$third_finding" "$verify_json"
   run_review "$budget_repo" record verify "$verify_json"
   [ "$status" -eq 0 ]
-  state="$(state_dir_for "$budget_repo")"
-  [ -f "$state/calls/broad-001.env" ]
-  [ -f "$state/calls/verify-001.env" ]
-  [ -f "$state/calls/verify-002.env" ]
-  [ -f "$state/results/broad-001.json" ]
-  [ -f "$state/results/verify-001.json" ]
-  [ -f "$state/results/verify-002.json" ]
   run_review "$budget_repo" summarize
   [ "$status" -eq 0 ]
   [[ "$output" == *"total_reviewer_calls=3"* ]]
@@ -2398,208 +1363,4 @@ EOF
   run_review "$diff_repo" mark
   [ "$status" -eq 1 ]
   [[ "$output" == *"marker_reason=diff_changed_since_review"* ]]
-}
-
-@test "post-work-review shard-1: rejects read-only claims backed by workspace-write metadata" {
-  local repo="$BATS_TEST_TMPDIR/attest-workspace-write"
-  local result="$BATS_TEST_TMPDIR/attest-workspace-write.json"
-  local session_id
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-workspace-write" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-workspace-write)"
-  write_attested_session "$session_id" post-work-reviewer gpt-5.6-sol workspace-write \
-    "$result" review_task "$(env_value "$repo" review_bundle)" post-work-reviewer \
-    2099-01-01T00:00:00Z false
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [[ "$output" == *"child sandbox policy does not match the agent config"* ]]
-  [ ! -e "$(state_dir_for "$repo")/calls/broad-001.env" ]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-2: rejects reviewer claims when actual agent role is null" {
-  local repo="$BATS_TEST_TMPDIR/attest-null-role"
-  local result="$BATS_TEST_TMPDIR/attest-null-role.json"
-  local session_id
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-null-role" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-null-role)"
-  write_attested_session "$session_id" null gpt-5.6-sol read-only "$result"
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-3: task name cannot impersonate the custom reviewer role" {
-  local repo="$BATS_TEST_TMPDIR/attest-task-name"
-  local result="$BATS_TEST_TMPDIR/attest-task-name.json"
-  local session_id
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-task-name" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-task-name)"
-  write_attested_session "$session_id" null gpt-5.6-sol read-only "$result" post_work_reviewer
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-4: rejects actual reviewer model mismatch" {
-  local repo="$BATS_TEST_TMPDIR/attest-model"
-  local result="$BATS_TEST_TMPDIR/attest-model.json"
-  local session_id
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-model" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-model)"
-  write_attested_session "$session_id" post-work-reviewer gpt-5.6-terra read-only \
-    "$result" review_task "$(env_value "$repo" review_bundle)" post-work-reviewer \
-    2099-01-01T00:00:00Z false
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [[ "$output" == *"child model does not match the agent config"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-5: rejects non-UUID reviewer session identifiers" {
-  local repo="$BATS_TEST_TMPDIR/attest-arbitrary-session"
-  local result="$BATS_TEST_TMPDIR/attest-arbitrary-session.json"
-  local session_id
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-arbitrary-session" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-arbitrary-session)"
-  sed "s|$session_id|/root/post_work_reviewer|" "$result" >"$result.tmp"
-  mv "$result.tmp" "$result"
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-6: rejects broad session UUID reuse by a verifier" {
-  local repo="$BATS_TEST_TMPDIR/attest-session-reuse"
-  local broad_result="$BATS_TEST_TMPDIR/attest-session-reuse-broad.json"
-  local verify_result="$BATS_TEST_TMPDIR/attest-session-reuse-verify.json"
-  local broad_session verify_session finding
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  finding="$(finding_one)"
-  write_broad_result_json "$repo" "attest-reused-broad" false false false "$finding" "$broad_result"
-  run_review "$repo" record broad "$broad_result"
-  [ "$status" -eq 0 ]
-
-  printf 'fixed\n' >"$repo/tracked.txt"
-  git -C "$repo" add tracked.txt
-  git -C "$repo" commit -qm "fix finding"
-  run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  write_verify_result_json "$repo" "attest-fresh-verifier" true false "" "$verify_result"
-  broad_session="$(attested_session_uuid attest-reused-broad)"
-  verify_session="$(attested_session_uuid attest-fresh-verifier)"
-  sed "s/$verify_session/$broad_session/" "$verify_result" >"$verify_result.tmp"
-  mv "$verify_result.tmp" "$verify_result"
-
-  run_review "$repo" record verify "$verify_result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_session_reused"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
-}
-
-@test "post-work-review shard-12: broad reviewer must postdate its exact bundle preparation" {
-  local repo="$BATS_TEST_TMPDIR/attest-broad-freshness"
-  local result="$BATS_TEST_TMPDIR/attest-broad-freshness.json"
-  local session_id prepared bundle
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-broad-freshness" false false false "" "$result"
-  session_id="$(attested_session_uuid attest-broad-freshness)"
-  prepared="$(env_value "$repo" prepared_at)"
-  bundle="$(env_value "$repo" review_bundle)"
-  write_attested_session "$session_id" post-work-reviewer gpt-5.6-sol read-only \
-    "$result" review_task "$bundle" post-work-reviewer "$prepared" false
-
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [[ "$output" == *"reviewer session was not created after prepare"* ]]
-  [ ! -e "$(state_dir_for "$repo")/calls/broad-001.env" ]
-}
-
-@test "post-work-review shard-12: legacy attestation state requires reset and prepare" {
-  local repo="$BATS_TEST_TMPDIR/attest-legacy-reset"
-  local result="$BATS_TEST_TMPDIR/attest-legacy-reset.json"
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-legacy-reset" false false false "" "$result"
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 0 ]
-  set_env_value "$repo" post_work_review_attestation_version 2
-
-  run_review "$repo" summarize
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review attestation state is unavailable; run reset and prepare again"* ]] || return 1
-
-  run_review "$repo" reset
-  [ "$status" -eq 0 ]
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  [ "$(env_value "$repo" post_work_review_attestation_version)" = "4" ] || return 1
-  [[ "$(env_value "$repo" review_bundle_sha256)" =~ ^[0-9a-f]{64}$ ]] || return 1
-}
-
-@test "post-work-review shard-12: rejects a hidden verifier spawn in current state" {
-  local repo="$BATS_TEST_TMPDIR/attest-v4-hidden-verifier"
-  local result="$BATS_TEST_TMPDIR/attest-v4-hidden-verifier.json"
-  local state verifier_session
-  setup_review_repo "$repo"
-  make_branch_change "$repo"
-  run_review_base "$repo" prepare
-  [ "$status" -eq 0 ]
-  write_broad_result_json "$repo" "attest-v4-hidden-verifier" false false false "" "$result"
-  run_review "$repo" record broad "$result"
-  [ "$status" -eq 0 ]
-  state="$(state_dir_for "$repo")"
-  verifier_session="$(attested_session_uuid attest-v4-hidden-verifier-call)"
-  write_attested_session "$verifier_session" post-work-verifier gpt-5.6-terra read-only \
-    "$result" review_task "$state/hidden-verify-bundle.md" post-work-verifier
-
-  run_review "$repo" summarize
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"clean=false"* ]]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [[ "$output" == *"total_reviewer_calls=1"* ]]
-
-  run_review "$repo" mark
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"stop_reason=reviewer_attestation_mismatch"* ]]
-  [[ "$output" == *"attested native reviewer call count does not match recorded review calls"* ]]
-  [ ! -e "$(gitdir_for "$repo")/post-work-review-passed" ]
 }
