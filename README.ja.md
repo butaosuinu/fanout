@@ -33,14 +33,24 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   自動復元を備えたコンソールを開きます。新規 Session popup は自由記述 prompt
   や一覧から選んだ OPEN issue から開始でき、`Ctrl+O` で選択中の issue を
   ブラウザで開けます。子ごとに agent も選べます(あるタスクは claude、別のタ
-  スクは codex、のように)。prompt モードのチェックボックスを入れると、
-  そのプロンプトを `/fanout plan` で並列タスクに分解します。同じチェックボックスは
-  issue モードにもあり、1 つの issue を issue-less な並列タスクに分解し、
-  コーディネータとタスクの agent を別々に選べます。`n` から Prompt、
+  スクは codex、のように)。親 issue の Issue fan-out で orchestrator ペインを作成する
+  ときは、popup の既定 agent で project root に worktree なしで先に起動します。子は
+  子ごとの指定 agent でファンアウトします。briefing は orchestrator に、子スコープの
+  実装を引き取らず、`fanout <N> --status` を定期的に実行して状態を確認し、親スコープ
+  作業を担当するよう指示します。全 child の merge 後は統合を行って最終集約コメントを
+  投稿し、`--merge` / `--cleanup` で lifecycle 操作を進めます。初回選択時に全 child が
+  blocked なら、ペインは作成されません。child の unblock 後に再選択すると orchestrator
+  と child のペインを作成します。orchestrator が作成済みなら、その後の再選択では
+  重複せず、新たに unblock された子だけをファンアウトします。prompt モードの
+  チェックボックスを入れると、そのプロンプトを `/fanout plan` で並列タスクに分解します。
+  同じチェックボックスは issue モードにもあり、1 つの issue を issue-less な並列
+  タスクに分解し、コーディネータとタスクの agent を別々に選べます。`n` から Prompt、
   plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の
-  新規ペインへフォーカスが移ります。`s` キーで設定 popup を開けます。どのペイン
-  からでも `F11` または `prefix + T` でコンソールに戻れます。マウスや `prefix` の
-  ペイン移動でフォーカスしたペインにも、選択行が追従します。
+  新規ペインへフォーカスが移ります。Issue
+  fan-out で orchestrator ペインを作成した場合は、作成順でそのペインが先頭です。
+  `s` キーで設定 popup を開けます。どのペインからでも `F11` または `prefix + T` で
+  コンソールに戻れます。マウスや `prefix` のペイン移動でフォーカスしたペインにも、
+  選択行が追従します。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動く read-only のダッシュボード(ライブ

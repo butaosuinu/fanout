@@ -33,14 +33,26 @@ English and 日本語.
   of missing worktree panes. The new-session popup starts work from a free
   prompt or an OPEN issue picked from a list; `Ctrl+O` opens the selected issue
   in the browser, and per-child agent choices let one task use claude while
-  another uses codex. A prompt-mode checkbox instead decomposes the prompt into
-  parallel tasks via `/fanout plan`; the same checkbox appears in issue mode,
-  decomposing a single issue into parallel issue-less tasks with separately
-  chosen coordinator and task agents. After a Prompt, plan coordinator, or Issue
-  launch from `n` succeeds, focus moves to the first newly created pane in
-  actual creation order. The `s` key opens the settings popup. Return to the
-  console from any pane with `F11` or `prefix + T`; mouse or `prefix` movement
-  keys keep the selected row in sync with the focused pane.
+  another uses codex. When a parent Issue fan-out creates its orchestrator, it
+  starts that pane with the popup's default agent at the project root without a
+  worktree, before any new child panes. The children keep their per-child agent
+  assignments. The briefing tells the orchestrator not to implement
+  child-scoped work and instead to poll `fanout <N> --status`, own parent-scope
+  work, integrate and post the final rollup comment after all children merge,
+  and use `--merge` / `--cleanup` for lifecycle work. An all-blocked first
+  selection creates no panes; re-select after a child unblocks to create the
+  orchestrator and child pane. Once the orchestrator exists, later selections
+  do not create another and fan out only newly unblocked children. A prompt-mode
+  checkbox instead decomposes the prompt into parallel tasks via `/fanout plan`;
+  the same checkbox appears in issue mode, decomposing a single issue into
+  parallel issue-less tasks with separately chosen coordinator and task agents.
+  After a Prompt, plan coordinator, or Issue launch from `n` succeeds, focus
+  moves to the first newly created pane in actual creation order. When an
+  Issue fan-out creates an orchestrator, that pane is first in the creation
+  order. The `s` key
+  opens the settings popup. Return to the console from any pane with `F11` or
+  `prefix + T`; mouse or `prefix` movement keys keep the selected row in sync
+  with the focused pane.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it

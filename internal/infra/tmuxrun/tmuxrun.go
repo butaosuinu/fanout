@@ -349,6 +349,44 @@ func AgentStateSetCommand(state string) string {
 	return `tmux set-option -p -t "$TMUX_PANE" ` + agentStateOption + " " + shellQuote(state) + " 2>/dev/null"
 }
 
+// WaitForLockCommand returns a shell command that waits to acquire channel's
+// tmux lock, releases it immediately, then lets the following command run.
+// The launcher acquires the lock before splitting the pane, so this has no
+// lost-wakeup race when the launcher releases the lock before the pane reaches
+// its wait-for call.
+func WaitForLockCommand(channel string) string {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return ""
+	}
+	quoted := shellQuote(channel)
+	return "tmux wait-for -L " + quoted + " && tmux wait-for -U " + quoted
+}
+
+// LockWaitChannel acquires a tmux wait-for lock before a gated pane is split.
+func LockWaitChannel(channel string) error {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return nil
+	}
+	if err := exec.Command("tmux", "wait-for", "-L", channel).Run(); err != nil {
+		return fmt.Errorf("tmux wait-for -L: %w", err)
+	}
+	return nil
+}
+
+// UnlockWaitChannel releases a tmux wait-for lock so the gated pane can start.
+func UnlockWaitChannel(channel string) error {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return nil
+	}
+	if err := exec.Command("tmux", "wait-for", "-U", channel).Run(); err != nil {
+		return fmt.Errorf("tmux wait-for -U: %w", err)
+	}
+	return nil
+}
+
 // SetPaneAgentState records an agent state on a tmux pane from inside a Go
 // process (the Codex Plan Mode controller runs in the pane itself). Unlike the
 // other SetPane* helpers, missing arguments are a silent no-op: the state is
