@@ -9,6 +9,23 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.12.0 (2026-07-15)
+
+- **Codex Plan Mode の保存設定。** 通常の issue / Project の子 fan-out は、CLI、環境変数、repo config、user config から `codexPlanMode` を解決し、TUI settings popup でも同じ設定を編集できます。
+  OPEN な子を持つ TUI Issue fan-out にも適用し、`codex` 以外が混ざる割り当てはペイン作成前に拒否します。
+  [Agent Integrations]({{< relref "/docs/agents" >}}) と [Settings]({{< relref "/docs/settings" >}}) を参照。
+- **親 issue の orchestrator pane。** OPEN な子を持つ issue を TUI から fan-out すると、project root に orchestrator pane を 1 つ作成してから子 pane を起動します。
+  orchestrator は親スコープの調整と最終集約を担当し、再選択時は重複せず、初回にすべての子が blocked ならペインを作成しません。
+  [Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **長文 prompt の欠落防止。** new-session popup は textarea の上限を超える bracketed paste を外部に保持し、全文を起動処理へ渡すようになりました。
+  長大な起動 payload は必要に応じて briefing file 経由で渡し、Codex Plan Mode と attach 経路でも OS の引数上限を回避します。
+  [Monitoring]({{< relref "/docs/monitoring" >}}) を参照。
+- **`post-work-review` の実 session 検証。** `$post-work-review` は reviewer と verifier の結果を記録する前に、native child rollout の parent、role、read-only sandbox、approval policy、正確な bundle path、session UUID を検証します。
+  呼び出し予約と固定上限を記録し、未完了、重複、検証不能な run は fail-closed します。
+  [Agent Integrations]({{< relref "/docs/agents" >}}) を参照。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.12.0)
+
 ## v0.11.0 (2026-07-11)
 
 - **Issue mode の plan fan-out。** 新規 Session popup の Issue mode に Prompt mode と同じ plan fan-out を追加し、選択した issue を issue-less な `fanout plan` task に分解できるようにしました。
