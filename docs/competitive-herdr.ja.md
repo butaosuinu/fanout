@@ -2,6 +2,9 @@
 
 ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
+この文書は tmux backend に取り込む機能を扱う。
+herdr runtime backend v1 の API と制約は [実機検証](herdr-runtime-backend-spike.ja.md) を参照。
+
 ## herdr とは
 
 [herdr](https://herdr.dev/) は「agent multiplexer」— 複数のコーディングエージェントを 1 つのターミナルで走らせるための、tmux 代替の永続 PTY ランタイム。Rust 製シングルバイナリ(実測 14〜17MB)で、サーバー・クライアント構成をローカル Unix socket でつなぐ。AGPL-3.0 + 商用のデュアルライセンス。GitHub 約 1 万 stars(2026-07 時点)、2026-06-30 に GitHub Trending 1 位。v0.7.1(2026-06-24)時点でリリース 66 回とアクティブに開発されている。
