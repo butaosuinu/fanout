@@ -73,6 +73,7 @@ func TestCodexSkillResources(t *testing.T) {
 	}{
 		{rel: "codex/skills/fanout/references/batch-workflow.md"},
 		{rel: "codex/skills/fanout/references/cli-modes.md"},
+		{rel: "codex/tools/post-work-review.sh", executable: true},
 		{rel: "codex/skills/pr-watch/references/repair-playbook.md"},
 		{rel: "codex/skills/pr-watch/scripts/watch-pr.sh", executable: true},
 	}
@@ -113,6 +114,7 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 				"model":                  want.model,
 				"model_reasoning_effort": want.effort,
 				"sandbox_mode":           "read-only",
+				"approval_policy":        "never",
 			} {
 				if got := tomlStringValue(t, tomlData, key); got != expected {
 					t.Errorf("%s = %q, want %q", key, got, expected)
@@ -129,8 +131,11 @@ func TestCodexReviewAgentConfigs(t *testing.T) {
 
 	skill := mustReadRepoFile(t, root, "codex", "skills", "post-work-review", "SKILL.md")
 	for _, required := range []string{
-		"If either is unavailable",
-		"never substitute another role or model",
+		"`agent_type`",
+		"`fork_context: false`",
+		"`fork_turns: \"none\"`",
+		"`record-session`",
+		"unsupported_native_custom_agent",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing fail-closed contract %q", required)

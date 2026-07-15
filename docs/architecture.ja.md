@@ -53,7 +53,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher 有効化・通知先設定を遮断する安全ゲート | H |
-| infra | `reviewjson` | reviewer JSON の検証と PR review marker 用 cache への射影 | H |
+| infra | `reviewjson` | reviewer JSON の射影と native child session metadata の検証 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
@@ -126,7 +126,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   連携が壊れるため、変更時は 3 参照元すべての追随が要る。
   `__post-work-review-json` は `codex/tools/post-work-review.sh` もリテラルで
   呼び出すため、command 定数と同時に更新する。
-- **reviewer JSON は fail-closed**: cache の `valid` は JSON 全体の検証と
+- **reviewer 結果は fail-closed**: child rollout の role・parent・sandbox・approval・bundle path・session UUID を検証する。cache の `valid` は JSON 全体の検証と
   全 projection file の書き込みが成功した後にだけ作る。欠損または非対応の
   helper で PR review marker を書かない。
 - **ldflags は `-X main.version` 名指し**: バージョン注入変数は

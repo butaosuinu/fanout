@@ -61,8 +61,8 @@ fanout skill は「#123 を fan out して」のように依頼するか、明�
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
 `fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
 
-`$post-work-review` は、広いレビューを read-only の `post-work-reviewer`(`gpt-5.6-sol`、`xhigh`)、修正確認を read-only の `post-work-verifier`(`gpt-5.6-terra`、`high`)へ割り当てます。
-設定したモデルを利用できない場合、別モデルへ暗黙に切り替えず、必須 gate を停止します。
+`$post-work-review` は、広いレビューを read-only・approval なしの `post-work-reviewer`(`gpt-5.6-sol`、`xhigh`)、修正確認を `post-work-verifier`(`gpt-5.6-terra`、`high`)へ割り当てます。
+driver は結果を native child rollout の role・parent・sandbox・approval policy・bundle path・session UUID と結合します。runtime が metadata を公開または強制できなければ gate は停止します。
 
 `$pr-watch` は foreground で動きます。
 helper は変化のない snapshot の出力を省き、linked worktree でも cursor を Git metadata に保存します。

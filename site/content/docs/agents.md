@@ -47,7 +47,7 @@ Codex installs five repo-managed skills under `~/.codex/skills/` (see [Installat
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, and `pr-watch` are also bundled as Codex versions; invoke them as `$fanout-issues` or `$pr-watch`, and they play the same role as the Claude versions.
 
-`$post-work-review` assigns the broad review to the read-only `post-work-reviewer` (`gpt-5.6-sol`, `xhigh`) and fix verification to the read-only `post-work-verifier` (`gpt-5.6-terra`, `high`). If either configured model is unavailable, the required gate stops instead of silently using another model.
+`$post-work-review` assigns the broad review to the read-only, approval-free `post-work-reviewer` (`gpt-5.6-sol`, `xhigh`) and fix verification to `post-work-verifier` (`gpt-5.6-terra`, `high`). The driver binds each result to the native child rollout's role, parent, sandbox, approval policy, bundle path, and session UUID. If the runtime cannot expose or enforce that metadata, the gate stops.
 
 `$pr-watch` runs in the foreground. Its helper suppresses unchanged snapshots and stores its cursor in Git metadata, including in linked worktrees. It does not leave a background watcher after the Codex session ends.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-VERSION="3"
+VERSION="4"
 BACKEND="bounded-isolated-reviewer"
 REVIEWER_AGENT="post-work-reviewer"
 VERIFIER_AGENT="post-work-verifier"
@@ -42,6 +42,10 @@ state_dir_abs() {
 
 results_dir() {
   printf '%s/results\n' "$(state_dir_abs)"
+}
+
+calls_dir() {
+  printf '%s/calls\n' "$(state_dir_abs)"
 }
 
 review_env_path() {
@@ -479,7 +483,7 @@ json_cache_add() {
   helper_stderr="$cache/helper.stderr"
   json_parse_result "$file" "$cache" >"$helper_stdout" 2>"$helper_stderr"
   status=$?
-  if ! grep -Fxq 'post_work_review_json_helper_version=1' "$helper_stdout"; then
+  if ! grep -Fxq 'post_work_review_json_helper_version=2' "$helper_stdout"; then
     rm -rf -- "$cache"
     JSON_HELPER_ERROR="post-work-review JSON helper is incompatible or failed before projection: $JSON_HELPER (install the matching companion fanout executable)"
     return 1
@@ -570,21 +574,54 @@ result_path() {
   esac
 }
 
-broad_review_calls() {
-  [ -f "$(result_path broad 1)" ] && echo 1 || echo 0
+call_dir() {
+  printf '%s/%s-%03d\n' "$(calls_dir)" "$1" "$2"
 }
 
-verify_review_calls() {
-  local count i
+call_count() {
+  local kind limit count i
+  kind="$1"
+  [ "$kind" = "broad" ] && limit="$BROAD_REVIEW_MAX" || limit="$VERIFY_REVIEW_MAX"
   count=0
-  for i in 1 2; do
-    [ -f "$(result_path verify "$i")" ] && count=$((count + 1))
+  for ((i = 1; i <= limit; i++)); do
+    [ -d "$(call_dir "$kind" "$i")" ] && count=$((count + 1))
   done
   echo "$count"
 }
 
+broad_review_calls() {
+  call_count broad
+}
+
+verify_review_calls() {
+  call_count verify
+}
+
 total_reviewer_calls() {
   echo $(( $(broad_review_calls) + $(verify_review_calls) ))
+}
+
+receipt_get() {
+  awk -F= -v key="$2" '$1 == key { sub(/^[^=]*=/, ""); print; found=1; exit } END { exit(found ? 0 : 1) }' "$1"
+}
+
+calls_are_complete() {
+  local kind limit i dir result child stored
+  for kind in broad verify; do
+    [ "$kind" = "broad" ] && limit="$BROAD_REVIEW_MAX" || limit="$VERIFY_REVIEW_MAX"
+    for ((i = 1; i <= limit; i++)); do
+      dir="$(call_dir "$kind" "$i")"
+      result="$(result_path "$kind" "$i")"
+      if [ -d "$dir" ]; then
+        [ -f "$dir/completed" ] && [ ! -e "$dir/pending" ] && [ -f "$result" ] || return 1
+        child="$(receipt_get "$dir/receipt.env" child_session_id 2>/dev/null || true)"
+        stored="$(json_scalar "$result" reviewer_session_id 2>/dev/null || true)"
+        [ -n "$child" ] && [ "$child" = "$stored" ] || return 1
+      else
+        [ ! -e "$result" ] || return 1
+      fi
+    done
+  done
 }
 
 latest_verify_result() {
@@ -872,7 +909,7 @@ review_target_changed_reason() {
 
 summary_values() {
   local broad_calls verify_calls total_calls latest_path latest_count clean findings stop marker
-  local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions i path
+  local repeated all_fixed new_regressions truncated fix_rounds scope changed_files pending_verify invalid_count duplicate_sessions calls_complete i path
   local target_changed_reason
   json_cache_prepare_stored_results
   broad_calls="$(broad_review_calls)"
@@ -894,13 +931,15 @@ summary_values() {
     validate_result broad "$path" static >/dev/null 2>&1 || invalid_count=$((invalid_count + 1))
   fi
   duplicate_sessions="$(duplicate_reviewer_session_count)"
+  calls_complete=true
+  calls_are_complete || calls_complete=false
   if [ "${SUMMARY_SKIP_TARGET_CHECK:-}" = "1" ]; then
     target_changed_reason=""
   else
     target_changed_reason="$(review_target_changed_reason || true)"
   fi
 
-  if [ "$invalid_count" -gt 0 ] || [ "$duplicate_sessions" -gt 0 ]; then
+  if [ "$invalid_count" -gt 0 ] || [ "$duplicate_sessions" -gt 0 ] || [ "$calls_complete" != "true" ]; then
     clean="false"
     stop="invalid_review_result"
   elif [ -n "$target_changed_reason" ]; then
@@ -1164,6 +1203,7 @@ cmd_prepare() {
   results="$(results_dir)"
   json_cache_prepare_stored_results
   if [ -f "$(review_env_path)" ] && [ "$(broad_review_calls)" -ge "$BROAD_REVIEW_MAX" ]; then
+    calls_are_complete || stop_existing_review_state 0 "invalid_review_result"
     latest_findings="$(latest_finding_count)"
     if any_result_truncated; then
       stop_existing_review_state "$latest_findings" "review_truncated"
@@ -1211,6 +1251,7 @@ cmd_prepare_verify() {
   cd "$root" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
   json_cache_prepare_stored_results
+  calls_are_complete || die "a reserved reviewer call is incomplete"
   broad_calls="$(broad_review_calls)"
   [ "$broad_calls" -eq 1 ] || die "broad review result not found"
   if any_result_truncated; then
@@ -1273,49 +1314,100 @@ cmd_prepare_verify() {
   print_state_lines
 }
 
-cmd_record() {
-  local kind review_json broad_calls verify_calls total_calls dest index session fix_rounds
-  kind="${1:-}"
-  review_json="${2:-}"
-  [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "record kind must be broad or verify"
-  [ -n "$review_json" ] || die "review-json-file is required"
+is_uuid() {
+  [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+}
+
+cmd_reserve_call() {
+  local kind="${1:-}" parent="${2:-}" broad_calls verify_calls total_calls index dir role bundle
+  [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "reserve-call kind must be broad or verify"
+  is_uuid "$parent" || die "controller session must be a canonical UUID"
   ensure_repo
   ensure_read_only_subagent_sandbox_available
   cd "$(repo_root)" || die "failed to enter repo root"
   [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
-  mkdir -p "$(results_dir)" || die "failed to create results dir"
   json_cache_prepare_stored_results
+  calls_are_complete || die "a reserved reviewer call is incomplete"
 
   broad_calls="$(broad_review_calls)"
   verify_calls="$(verify_review_calls)"
   total_calls="$(total_reviewer_calls)"
   [ "$total_calls" -lt "$MAX_TOTAL_REVIEWER_CALLS" ] || die "review budget exhausted"
-
   case "$kind" in
     broad)
       [ "$broad_calls" -lt "$BROAD_REVIEW_MAX" ] || die "broad review budget exhausted"
       index=1
+      role="$REVIEWER_AGENT"
+      bundle="$(review_bundle_path)"
       ;;
     verify)
       [ "$broad_calls" -eq 1 ] || die "broad review must be recorded before verify"
       [ "$verify_calls" -lt "$VERIFY_REVIEW_MAX" ] || die "verify review budget exhausted"
       [ -f "$(verify_bundle_path)" ] || die "verify bundle not prepared"
       [ -f "$(pending_reviewed_diff_path)" ] || die "pending verify diff not found"
-      fix_rounds="$(env_get fix_rounds 2>/dev/null || echo 0)"
-      [ "$fix_rounds" -gt "$verify_calls" ] || die "verify result has no prepared fix round"
       index=$((verify_calls + 1))
+      role="$VERIFIER_AGENT"
+      bundle="$(verify_bundle_path)"
       ;;
   esac
-
   ensure_current_target_matches_review
-  validate_result "$kind" "$review_json"
-  session="$(json_scalar "$review_json" reviewer_session_id)"
-  if reviewer_session_used "$session"; then
+  mkdir -p "$(calls_dir)" || die "failed to create calls dir"
+  dir="$(call_dir "$kind" "$index")"
+  mkdir "$dir" || die "$kind review call already reserved"
+  {
+    printf 'kind=%s\nindex=%s\nparent_session_id=%s\n' "$kind" "$index" "$parent"
+    printf 'reserved_at=%s\nexpected_role=%s\nbundle_path=%s\n' "$(now_utc)" "$role" "$bundle"
+  } >"$dir/receipt.env" || die "failed to write call receipt"
+  : >"$dir/pending" || die "failed to mark call pending"
+  printf 'reserved=true\nkind=%s\nindex=%s\n' "$kind" "$index"
+  printf 'agent_type=%s\nbundle=%s\n' "$role" "$bundle"
+}
+
+cmd_record_session() {
+  local kind child index dir receipt parent reserved role bundle dest attested stdout stderr status session
+  kind="${1:-}"
+  child="${2:-}"
+  [ "$kind" = "broad" ] || [ "$kind" = "verify" ] || die "record-session kind must be broad or verify"
+  is_uuid "$child" || die "child session must be a canonical UUID"
+  ensure_repo
+  ensure_read_only_subagent_sandbox_available
+  cd "$(repo_root)" || die "failed to enter repo root"
+  [ -f "$(review_env_path)" ] || die "review state not found; run prepare first"
+  index="$(call_count "$kind")"
+  [ "$index" -gt 0 ] || die "$kind review call was not reserved"
+  dir="$(call_dir "$kind" "$index")"
+  [ -f "$dir/pending" ] || die "$kind review call is not pending"
+  receipt="$dir/receipt.env"
+  parent="$(receipt_get "$receipt" parent_session_id)"
+  reserved="$(receipt_get "$receipt" reserved_at)"
+  role="$(receipt_get "$receipt" expected_role)"
+  bundle="$(receipt_get "$receipt" bundle_path)"
+  ensure_current_target_matches_review
+  json_cache_prepare_stored_results
+  if reviewer_session_used "$child"; then
     die "reviewer_session_id already recorded"
   fi
+  ensure_json_helper || die "$JSON_HELPER_ERROR"
   dest="$(result_path "$kind" "$index")"
-  cp "$review_json" "$dest" || die "failed to store review result"
-  json_cache_alias "$review_json" "$dest" || die "failed to cache review result"
+  [ ! -e "$dest" ] || die "review result already exists"
+  attested="$dir/attested-result.json"
+  stdout="$dir/helper.stdout"
+  stderr="$dir/helper.stderr"
+  "$JSON_HELPER" __post-work-review-json session "${POST_WORK_REVIEW_SESSIONS_ROOT:-${CODEX_DIR:-${CODEX_HOME:-$HOME/.codex}}/sessions}" "$child" "$parent" "$reserved" "$role" "$bundle" "$attested" >"$stdout" 2>"$stderr"
+  status=$?
+  grep -Fxq 'post_work_review_json_helper_version=2' "$stdout" || die "post-work-review JSON helper is incompatible"
+  if [ "$status" -ne 0 ]; then
+    cat "$stderr" >&2
+    die "child rollout attestation failed"
+  fi
+  validate_result "$kind" "$attested"
+  session="$(json_scalar "$attested" reviewer_session_id)"
+  [ "$session" = "$child" ] || die "reviewer_session_id does not match child session"
+  mv "$attested" "$dest" || die "failed to store review result"
+  json_cache_alias "$attested" "$dest" || json_cache_add "$dest" || die "failed to cache review result"
+  printf 'child_session_id=%s\n' "$child" >>"$receipt"
+  rm -f "$dir/pending"
+  : >"$dir/completed" || die "failed to complete call receipt"
   if [ "$kind" = "verify" ]; then
     commit_pending_reviewed_diff
     env_set pending_verify 0
@@ -1479,8 +1571,8 @@ usage() {
 usage:
   bash codex/tools/post-work-review.sh prepare
   bash codex/tools/post-work-review.sh prepare-verify
-  bash codex/tools/post-work-review.sh record broad <review-json-file>
-  bash codex/tools/post-work-review.sh record verify <review-json-file>
+  bash codex/tools/post-work-review.sh reserve-call <broad|verify> <controller-session-uuid>
+  bash codex/tools/post-work-review.sh record-session <broad|verify> <child-session-uuid>
   bash codex/tools/post-work-review.sh summarize
   bash codex/tools/post-work-review.sh status
   bash codex/tools/post-work-review.sh mark
@@ -1495,9 +1587,13 @@ case "${1:-}" in
   prepare-verify)
     cmd_prepare_verify
     ;;
-  record)
+  reserve-call)
     shift
-    cmd_record "$@"
+    cmd_reserve_call "$@"
+    ;;
+  record-session)
+    shift
+    cmd_record_session "$@"
     ;;
   summarize)
     cmd_summarize

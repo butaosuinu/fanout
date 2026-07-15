@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -67,5 +68,24 @@ func TestCmdPostWorkReviewJSONFailsClosed(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cache, "valid")); !os.IsNotExist(err) {
 		t.Fatalf("valid marker exists after failure: %v", err)
+	}
+}
+
+func TestCmdPostWorkReviewJSONSessionDispatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	args := []string{
+		"session", filepath.Join(dir, "missing-sessions"),
+		"019f6259-a638-7e30-a971-b5700a8f6e0a",
+		"019f6257-8e6e-7a00-8604-74db2394d370",
+		"2026-07-15T10:00:00Z", "post-work-reviewer",
+		filepath.Join(dir, "bundle.md"), filepath.Join(dir, "result.json"),
+	}
+	var stdout, stderr bytes.Buffer
+	if code := cmdPostWorkReviewJSON(args, &stdout, &stderr); code != exitcode.Env {
+		t.Fatalf("cmdPostWorkReviewJSON() = %d, want %d", code, exitcode.Env)
+	}
+	if stdout.String() != postWorkReviewJSONVersionLine+"\n" || !strings.Contains(stderr.String(), "scan sessions root") {
+		t.Fatalf("stdout=%q stderr=%q; want v2 session helper failure", stdout.String(), stderr.String())
 	}
 }

@@ -11,22 +11,15 @@ load helpers
 POST_WORK_REVIEW_DRIVER="$REPO_ROOT/codex/tools/post-work-review.sh"
 export POST_WORK_REVIEW_JSON_HELPER="${POST_WORK_REVIEW_JSON_HELPER:-$FANOUT_BIN}"
 
-@test "post-work-review shard-7: Codex skill revalidates the exact HEAD before verifying broad-review fixes" {
+@test "post-work-review shard-7: Codex skill uses native V1 and V2 custom roles" {
   local skill="$REPO_ROOT/codex/skills/post-work-review/SKILL.md"
-  local workflow
-
-  workflow="$(sed -n '/^3\. If actionable findings remain/,/^4\./p' "$skill" | awk '{$1=$1; printf "%s ", $0}')"
-  [[ "$workflow" == *"Run focused validation while editing."* ]] || return 1
-  [[ "$workflow" == *"commit the fixes, run the canonical full validation command exactly"* ]] || return 1
-  [[ "$workflow" == *"once on that new exact HEAD"* ]] || return 1
-  [[ "$workflow" == *'replace `validated_head` only after it'* ]] || return 1
-  [[ "$workflow" == *"Require a clean worktree and the same current HEAD"* ]] || return 1
-  [[ "$workflow" == *'Do not run'*'`prepare` again or start another broad review'* ]] || return 1
-  [[ "$workflow" == *'continue the existing driver state with `bash "$driver" prepare-verify`'* ]] || return 1
-  [[ "$workflow" == *"dirty uncommitted scope"*"focused validation only"* ]] || return 1
-  ! grep -Fq 'Run focused validation for changed files, then' "$skill" || return 1
-  grep -Fq 'validated_head="$(git rev-parse HEAD)"' "$skill" || return 1
-  grep -Fq 'current HEAD equals the last exact HEAD that passed canonical full' "$skill" || return 1
+  grep -Fq '"agent_type":"post-work-reviewer"' "$skill"
+  grep -Fq 'agent_type: "post-work-verifier"' "$skill"
+  grep -Fq '"fork_context":false' "$skill"
+  grep -Fq '"fork_turns":"none"' "$skill"
+  grep -Fq 'reserve-call <broad|verify> <controller-uuid>' "$skill"
+  grep -Fq 'record-session <broad|verify> <child-uuid>' "$skill"
+  ! grep -Fq 'authorize-spawn' "$skill"
 }
 
 @test "post-work-review shard-7: Claude legacy marker clears Codex metadata" {
@@ -302,6 +295,10 @@ env_value() {
 run_review() {
   local repo="$1"
   shift
+  if [ "${1:-}" = "record" ]; then
+    run record_result_command "$repo" "$2" "$3"
+    return
+  fi
   run bash -c 'cd "$1" || exit 1; shift; bash "$@" 2>&1' bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$@"
 }
 
@@ -343,6 +340,41 @@ finding_one() {
   printf '{"severity":"major","file":"tracked.txt","line":1,"title":"Bug remains","description":"The feature still writes the bad value.","recommendation":"Write the fixed value."}'
 }
 
+session_uuid() {
+  local value="$1" number
+  [[ "$value" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && { printf '%s\n' "$value"; return; }
+  number="$(printf '%s' "$value" | cksum | awk '{print $1}')"
+  printf '00000000-0000-4000-8000-%012d\n' "$number"
+}
+
+record_result_command() {
+  local repo="$1" kind="$2" json_file="$3" helper="${4:-}"
+  local parent child role bundle sessions rollout result
+  parent="11111111-1111-4111-8111-111111111111"
+  child="$(sed -n 's/.*"reviewer_session_id":"\([^"]*\)".*/\1/p' "$json_file")"; child="${child:-22222222-2222-4222-8222-222222222222}"
+  [ "$kind" = "broad" ] && role="post-work-reviewer" || role="post-work-verifier"
+  (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" reserve-call "$kind" "$parent") >/dev/null || return
+  bundle="$(env_value "$repo" "${kind/broad/review}_bundle")"
+  sessions="$(state_dir_for "$repo")/test-sessions"
+  rollout="$sessions/$child.jsonl"
+  mkdir -p "$sessions"
+  result="$(cat "$json_file"; printf x)"; result="${result%x}"
+  result="${result//\\/\\\\}"
+  result="${result//\"/\\\"}"; result="${result//$'\n'/\\n}"
+  cat >"$rollout" <<EOF
+{"type":"session_meta","payload":{"id":"$child","parent_thread_id":"$parent","timestamp":"2999-01-01T00:00:00Z","thread_source":"subagent","agent_role":"$role","multi_agent_version":"v1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"$parent","agent_role":"$role"}}}}}
+{"type":"event_msg","payload":{"type":"user_message","message":"$bundle"}}
+{"type":"turn_context","payload":{"sandbox_policy":{"type":"read-only"},"approval_policy":"never"}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"$result"}}
+EOF
+  if [ -n "$helper" ]; then
+    (cd "$repo" && POST_WORK_REVIEW_JSON_HELPER="$helper" POST_WORK_REVIEW_SESSIONS_ROOT="$sessions" \
+      bash "$POST_WORK_REVIEW_DRIVER" record-session "$kind" "$child")
+  else
+    (cd "$repo" && POST_WORK_REVIEW_SESSIONS_ROOT="$sessions" bash "$POST_WORK_REVIEW_DRIVER" record-session "$kind" "$child")
+  fi
+}
+
 write_broad_result_json() {
   local repo="$1"
   local session_id="$2"
@@ -352,6 +384,7 @@ write_broad_result_json() {
   local findings="$6"
   local out_file="$7"
   local head diff_hash count
+  session_id="$(session_uuid "$session_id")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
   if [ "$#" -ge 8 ]; then
@@ -374,6 +407,7 @@ write_verify_result_json() {
   local findings="$5"
   local out_file="$6"
   local head diff_hash count
+  session_id="$(session_uuid "$session_id")"
   head="$(env_value "$repo" head)"
   diff_hash="$(env_value "$repo" diff_hash)"
   if [ -n "$findings" ]; then
@@ -391,7 +425,7 @@ record_clean_broad() {
   local session_id="${2:-session-broad-clean}"
   local json_file="$BATS_TEST_TMPDIR/broad-clean.json"
   write_broad_result_json "$repo" "$session_id" false false false "" "$json_file"
-  (cd "$repo" && bash "$POST_WORK_REVIEW_DRIVER" record broad "$json_file") \
+  record_result_command "$repo" broad "$json_file" \
     >"$BATS_TEST_TMPDIR/record-broad-clean.out"
 }
 
@@ -729,7 +763,7 @@ EOF
   : >"$count_file"
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 0 ]
-  [ "$(wc -l <"$count_file")" -eq 1 ]
+  [ "$(wc -l <"$count_file")" -eq 2 ]
   cmp "$json_file" "$(state_dir_for "$repo")/results/broad-001.json"
 
   : >"$count_file"
@@ -812,8 +846,7 @@ EOF
   write_broad_result_json "$repo" "session-json-helper-missing" false false false "" "$json_file"
   gitdir="$(gitdir_for "$repo")"
 
-  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" FANOUT_BIN="$5" bash "$2" record broad "$3" 2>&1' \
-    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$BATS_TEST_TMPDIR/missing-helper" "$FANOUT_BIN"
+  run record_result_command "$repo" broad "$json_file" "$BATS_TEST_TMPDIR/missing-helper"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *"post-work-review JSON helper is not executable"* ]]
@@ -838,11 +871,10 @@ exit 42
 EOF
   chmod +x "$helper"
 
-  run bash -c 'cd "$1" || exit 1; POST_WORK_REVIEW_JSON_HELPER="$4" bash "$2" record broad "$3" 2>&1' \
-    bash "$repo" "$POST_WORK_REVIEW_DRIVER" "$json_file" "$helper"
+  run record_result_command "$repo" broad "$json_file" "$helper"
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"post-work-review JSON helper is incompatible or failed before projection"* ]]
+  [[ "$output" == *"post-work-review JSON helper is incompatible"* ]]
   [ ! -e "$(state_dir_for "$repo")/results/broad-001.json" ]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
@@ -910,6 +942,10 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"same-agent review is rejected"* ]]
 
+  run_review "$repo" reset
+  [ "$status" -eq 0 ]
+  run_review "$repo" prepare
+  [ "$status" -eq 0 ]
   write_broad_result_json "$repo" "session-hooks-only" false true false "" "$json_file"
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
@@ -943,7 +979,7 @@ EOF
 
   run_review "$repo" record broad "$json_file"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"invalid reviewer JSON"* ]]
+  [[ "$output" == *"child rollout attestation failed"* ]]
 }
 
 @test "post-work-review shard-8: record rejects stale review targets" {
@@ -1021,9 +1057,8 @@ EOF
   [[ "$output" == *"reviewer_session_id already recorded"* ]]
 
   run_review_base "$repo" prepare-verify
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"fix_rounds=2"* ]]
-  grep -Fq "+fixed" "$(state_dir_for "$repo")/verify-bundle.md"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"reserved reviewer call is incomplete"* ]]
 }
 
 @test "post-work-review shard-4: rejects failed verifier results without findings" {
