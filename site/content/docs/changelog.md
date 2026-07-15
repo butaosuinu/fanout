@@ -9,6 +9,23 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.12.0 (2026-07-15)
+
+- **Configurable Codex Plan Mode.** Normal issue / Project child fan-outs now resolve `codexPlanMode` through CLI, environment, repo config, or user config, and the TUI settings popup exposes the same switch.
+  TUI Issue fan-outs with OPEN children honor it, while mixed non-Codex assignments fail before any pane is created.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Settings]({{< relref "/docs/settings" >}}).
+- **Parent-issue orchestrator pane.** A TUI Issue fan-out with OPEN children now creates a single project-root orchestrator before its child panes.
+  The orchestrator owns parent-scope coordination and final rollup work; repeated selections reuse it, and an all-blocked first selection creates no panes.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Long prompts without truncation.** The new-session popup now preserves oversized bracketed pastes outside the textarea limits and submits their full contents.
+  Large launch payloads use briefing files where needed, including Codex Plan Mode and attach paths, avoiding OS argument limits.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Verified post-work-review sessions.** `$post-work-review` now records reviewer and verifier results only after checking the native child rollout's parent, role, read-only sandbox, approval policy, exact bundle path, and session UUID.
+  Call reservations and fixed budgets fail closed on incomplete, duplicate, or unverifiable runs.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.12.0)
+
 ## v0.11.0 (2026-07-11)
 
 - **Issue-mode plan fan-out.** The new-session popup gained the same plan fan-out control in Issue mode as in Prompt mode, decomposing a selected issue into issue-less `fanout plan` tasks with separate coordinator and task-agent choices.
