@@ -107,6 +107,9 @@ func inspectChildRollout(path, child, parent, role, bundle string, reserved time
 				text(spawn, "parent_thread_id") != parent || text(meta, "thread_source") != "subagent" {
 				return "", errors.New("child rollout does not belong to the reserved parent session")
 			}
+			if meta["forked_from_id"] != nil {
+				return "", errors.New("child rollout inherited parent history")
+			}
 			if text(meta, "agent_role") != role || text(spawn, "agent_role") != role {
 				return "", errors.New("child rollout has an unexpected native agent role")
 			}

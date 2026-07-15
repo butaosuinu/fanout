@@ -16,13 +16,13 @@ const (
 )
 
 type rolloutFixture struct {
-	version, role, parent, sandbox, approval, task, created, result string
-	completes                                                       int
-	encrypted, inherited                                            bool
+	version, role, parent, sandbox, approval, task, created, result, forkedFrom string
+	completes                                                                   int
+	encrypted                                                                   bool
 }
 
 func validFixture(bundle, version string) rolloutFixture {
-	return rolloutFixture{version, "post-work-reviewer", parentID, "read-only", "never", bundle, "2026-07-15T10:00:01Z", `{"reviewer_session_id":"` + childID + `","findings":[]}`, 1, false, false}
+	return rolloutFixture{version, "post-work-reviewer", parentID, "read-only", "never", bundle, "2026-07-15T10:00:01Z", `{"reviewer_session_id":"` + childID + `","findings":[]}`, "null", 1, false}
 }
 
 func writeRollout(t *testing.T, root string, f rolloutFixture) {
@@ -31,17 +31,14 @@ func writeRollout(t *testing.T, root string, f rolloutFixture) {
 	if f.role == "" {
 		role = "null"
 	}
-	meta := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"parent_thread_id":%q,"timestamp":%q,"thread_source":"subagent","agent_role":%s,"multi_agent_version":%q,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"agent_role":%s}}}}}`, childID, f.parent, f.created, role, f.version, f.parent, role)
+	meta := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"parent_thread_id":%q,"timestamp":%q,"thread_source":"subagent","agent_role":%s,"multi_agent_version":%q,"forked_from_id":%s,"source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"agent_role":%s}}}}}`, childID, f.parent, f.created, role, f.version, f.forkedFrom, f.parent, role)
 	task := fmt.Sprintf(`{"type":"event_msg","payload":{"type":"user_message","message":%q}}`, f.task)
 	if f.version == "v2" {
 		content := fmt.Sprintf(`{"type":"input_text","text":%q}`, f.task)
 		if f.encrypted {
 			content = `{"type":"encrypted_content","encrypted_content":"opaque"}`
 		}
-		task = `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"runtime context"},` + content + `]}}`
-	}
-	if f.inherited {
-		task = `{"type":"event_msg","payload":{"type":"user_message","message":"inherited"}}` + "\n" + task
+		task = `{"type":"response_item","payload":{"type":"agent_message","content":[{"type":"input_text","text":"runtime context"},` + content + `]}}`
 	}
 	context := fmt.Sprintf(`{"type":"turn_context","payload":{"sandbox_policy":{"type":%q},"approval_policy":%q}}`, f.sandbox, f.approval)
 	complete := fmt.Sprintf(`{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":%q}}`+"\n", f.result)
@@ -86,7 +83,7 @@ func TestCaptureSessionFailsClosed(t *testing.T) {
 		{"approval", "read-only", func(f *rolloutFixture) { f.approval = "on-request" }},
 		{"path", "bundle path", func(f *rolloutFixture) { f.task += ".other" }},
 		{"encrypted", "bundle path", func(f *rolloutFixture) { f.version, f.encrypted = "v2", true }},
-		{"inherited history", "bundle path", func(f *rolloutFixture) { f.inherited = true }},
+		{"inherited history", "inherited parent history", func(f *rolloutFixture) { f.version, f.forkedFrom = "v2", fmt.Sprintf("%q", parentID) }},
 		{"missing complete", "terminal metadata", func(f *rolloutFixture) { f.completes = 0 }},
 		{"duplicate complete", "terminal metadata", func(f *rolloutFixture) { f.completes = 2 }},
 		{"malformed result", "result is invalid", func(f *rolloutFixture) { f.result = "{" }},
