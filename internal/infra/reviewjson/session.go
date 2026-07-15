@@ -16,9 +16,10 @@ import (
 var sessionUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type childSession struct {
-	version, message          string
-	meta, contexts, completes int
-	taskMatched               bool
+	version, message                  string
+	meta, contexts, completes         int
+	eventMessages, responseTaskInputs int
+	eventMatched                      bool
 }
 
 type sessionRecord struct {
@@ -141,7 +142,8 @@ func inspectChildRollout(path, child, parent, role, bundle string, reserved time
 				return "", fmt.Errorf("parse event_msg: %w", err)
 			}
 			if event.Type == "user_message" {
-				state.taskMatched = state.taskMatched || event.Message == bundle
+				state.eventMessages++
+				state.eventMatched = state.eventMatched || event.Message == bundle
 			}
 			if event.Type == "task_complete" {
 				state.completes++
@@ -154,7 +156,9 @@ func inspectChildRollout(path, child, parent, role, bundle string, reserved time
 	if state.meta != 1 || state.contexts == 0 || state.completes != 1 {
 		return "", errors.New("child rollout has incomplete or duplicate terminal metadata")
 	}
-	if !state.taskMatched {
+	v1Task := state.version == "v1" && state.eventMessages == 1 && state.eventMatched
+	v2Task := state.version == "v2" && state.eventMessages == 0 && state.responseTaskInputs == 1
+	if !v1Task && !v2Task {
 		return "", errors.New("child rollout does not contain the exact plaintext bundle path")
 	}
 	var result map[string]any
@@ -177,7 +181,9 @@ func recordTaskInput(raw json.RawMessage, bundle string, state *childSession) er
 		return nil
 	}
 	for _, block := range item.Content {
-		state.taskMatched = state.taskMatched || block.Type == "input_text" && block.Text == bundle
+		if block.Type == "input_text" && block.Text == bundle {
+			state.responseTaskInputs++
+		}
 	}
 	return nil
 }

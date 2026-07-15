@@ -18,11 +18,11 @@ const (
 type rolloutFixture struct {
 	version, role, parent, sandbox, approval, task, created, result string
 	completes                                                       int
-	encrypted                                                       bool
+	encrypted, inherited                                            bool
 }
 
 func validFixture(bundle, version string) rolloutFixture {
-	return rolloutFixture{version, "post-work-reviewer", parentID, "read-only", "never", bundle, "2026-07-15T10:00:01Z", `{"reviewer_session_id":"` + childID + `","findings":[]}`, 1, false}
+	return rolloutFixture{version, "post-work-reviewer", parentID, "read-only", "never", bundle, "2026-07-15T10:00:01Z", `{"reviewer_session_id":"` + childID + `","findings":[]}`, 1, false, false}
 }
 
 func writeRollout(t *testing.T, root string, f rolloutFixture) {
@@ -39,6 +39,9 @@ func writeRollout(t *testing.T, root string, f rolloutFixture) {
 			content = `{"type":"encrypted_content","encrypted_content":"opaque"}`
 		}
 		task = `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"runtime context"},` + content + `]}}`
+	}
+	if f.inherited {
+		task = `{"type":"event_msg","payload":{"type":"user_message","message":"inherited"}}` + "\n" + task
 	}
 	context := fmt.Sprintf(`{"type":"turn_context","payload":{"sandbox_policy":{"type":%q},"approval_policy":%q}}`, f.sandbox, f.approval)
 	complete := fmt.Sprintf(`{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":%q}}`+"\n", f.result)
@@ -83,6 +86,7 @@ func TestCaptureSessionFailsClosed(t *testing.T) {
 		{"approval", "read-only", func(f *rolloutFixture) { f.approval = "on-request" }},
 		{"path", "bundle path", func(f *rolloutFixture) { f.task += ".other" }},
 		{"encrypted", "bundle path", func(f *rolloutFixture) { f.version, f.encrypted = "v2", true }},
+		{"inherited history", "bundle path", func(f *rolloutFixture) { f.inherited = true }},
 		{"missing complete", "terminal metadata", func(f *rolloutFixture) { f.completes = 0 }},
 		{"duplicate complete", "terminal metadata", func(f *rolloutFixture) { f.completes = 2 }},
 		{"malformed result", "result is invalid", func(f *rolloutFixture) { f.result = "{" }},
