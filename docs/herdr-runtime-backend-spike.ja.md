@@ -165,8 +165,9 @@ clean な focused child を削除すると、focus は repository root workspace
 `workspace close` を先に実行すると checkout は残る。
 続く `worktree remove --workspace <closed-id>` は `workspace_not_found` になる。
 この場合は path と fanout state の task 所有一致に加え、checkout の実体所有権を照合してから、残った checkout を `worktree open` で削除用に再登録して `worktree remove` する。
-実体所有権は同じ git common dir に属すること、記録済み branch が checkout されていること、workspace の worktree provenance の 3 点で確認する(HEAD の進行は許容する)。
-元 checkout の削除後に同じ path へ作られた無関係な worktree は、この照合で除外して削除しない。
+実体所有権は、fanout が create / adopt 時に checkout の git dir(`git rev-parse --git-dir` 配下)へ書き込み state row にも保存した作成時 nonce の一致で確認する(HEAD の進行は許容する)。
+git common dir・branch・path の一致は nonce の前提条件にすぎず、単独では所有権の証明にしない — 元 checkout の削除後に同じ path・branch で作り直された worktree は nonce を持たないため、この照合で除外して削除しない。
+nonce が欠落または不一致の checkout は fail closed にし、自動 cleanup では触らない。
 削除用の再登録は作業 pane の再採用ではないため、branch の HEAD 一致ゲートを適用しない。
 
 cleanup の順序を次で固定する。
@@ -423,7 +424,7 @@ fanout の notify backend は維持し、herdr の in-app notification は設定
 ## Socket schema と JSON 契約
 
 `herdr api schema --json` は protocol `16`、schema version `1` を返した。
-各 request は `method` と `params` を必須にする。
+request は top-level の `id` を必須とし、各 `oneOf` variant がさらに `method` と `params` を必須にする。
 
 ```json
 {
@@ -436,6 +437,7 @@ fanout の notify backend は維持し、herdr の in-app notification は設定
 }
 ```
 
+上は `oneOf` variant の抜粋であり、実際の request はこれに加えて top-level `required` の `id` を含める。
 fanout が v1 で直接使う shape を schema の `required` と optional field に分ける。
 
 ```text
@@ -515,6 +517,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 
 - backend は明示的に起動済みの named herdr session を使う。
 - backend 選択は親単位で sticky にする: 対象親に既存の state row があれば同じ backend を再利用し、`--backend` / env が既存親の backend と矛盾する場合は分裂させず fail closed にする(明示的な移行はユーザー操作)。
+  stickiness の単位は実際の issue / Project / plan の親に限る。`@manual` のような synthetic parent は互いに独立した launch の集まりであり、行 identity 単位で扱って stickiness を適用しない。
 - worktree は root coordinator と sibling child workspace で配置する。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
