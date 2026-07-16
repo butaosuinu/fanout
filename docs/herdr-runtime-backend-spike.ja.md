@@ -7,8 +7,8 @@
 fanout の herdr backend v1 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
 worktree の作成、既存 checkout の採用、削除は herdr に委譲できるが、naming、base 解決、dirty と divergence の検査、idempotency は fanout に残す。
-Claude の nudge authority と完了判定には fanout-owned state emitter を使い、herdr の public status だけでは判定しない。
-Codex は nudge 対象外とし、pane 消滅時の完了判定には fanout の state row を使う。
+Claude hook の signal は agent process から偽造できるため telemetry に限定し、nudge authority または完了判定には使わない。
+herdr backend v1 の自動 nudge は agent 種別にかかわらず無効にし、pane 消滅は `stale` とする。
 
 ## 採用判断
 
@@ -19,7 +19,7 @@ Codex は nudge 対象外とし、pane 消滅時の完了判定には fanout の
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | safety gate 後に `worktree create/open/remove` へ委譲する | branch、path、base を指定でき、plugin event も発火する |
 | agent 起動 | `agent start` に bare argv、`--cwd`、`--env` を渡す | shell wrapper は終了検出を wrapper に張り付ける |
-| nudge | fanout-owned state emitter が `idle` を確定した Claude pane への `pane run` に限定する | `done` は未確認の idle であり、Codex には submit authority がない |
+| nudge | v1 では無効 | hook signal は authority ではなく、状態検査と submit を原子的に実行する CAS もない |
 | identity | routing、checkout、terminal、会話、process を別々に照合する | cold restart では `terminal_id` が変わっても公式 session resume が成功する |
 | 通知 | best-effort の in-app 通知としてだけ使う | detached 時も `shown:true` で、表示完了の応答ではない |
 
@@ -87,7 +87,7 @@ fanout-owned epoch は fanout が session lifecycle も所有する後続版で�
 | read | `pane read`、`agent read`、`pane get` | text または `pane_read`、`pane_info` | 実行中 cwd は telemetry の `foreground_cwd` に出る |
 | read | `pane process-info --pane ...` | `pane_process_info` | 想定した agent process の argv と cwd を確認する |
 | focus | `agent focus <name>`、`workspace focus <id>` | 対象 agent または workspace を focus | 任意 pane ID への exact focus は CLI にない |
-| send | `pane run <pane> <text>` | text と Enter を一操作で送る | status 検査との race は残る |
+| send | `pane run <pane> <text>` | text と Enter を一操作で送る | 明示的な手動操作に限り、自動 nudge には使わない |
 | close | `worktree remove --workspace ... [--force] --json` | `worktree_removed` | workspace を先に閉じない |
 | close | `workspace close`、`pane close` | `ok` | checkout は `workspace close` では消えない |
 | wait | `api snapshot` の bounded polling | `session_snapshot` | current-state predicate として使い、event wait は v1 では採用しない |
@@ -145,17 +145,18 @@ fanout は herdr を呼ぶ前に次を実行する。
   mutation 前失敗後または検証済み rollback 後に launch を中止する場合は、pre-state の不変または復元と intent 削除を同じ state save で確定する。
   rollback 後に fallback へ進む場合は intent を削除せず、後述の operation / phase へ同じ state save で遷移させる。
   mutation の有無または rollback 完了が不明な場合は intent を残して fail closed にする。
-  `agent start` の前に agent launch nonce と emitter nonce を生成し、hook へ注入する emitter binding、agent launch nonce の衝突耐性のある hash を含む session 一意の deterministic agent name、発行する argv / env fingerprint、API で再観測できる argv / cwd を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
+  `agent start` の前に agent launch nonce と emitter nonce を生成し、hook へ注入する telemetry routing binding、agent launch nonce の衝突耐性のある hash を含む session 一意の deterministic agent name、発行する argv / env fingerprint、API で再観測できる argv / cwd を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
   env fingerprint は発行内容の監査にだけ使い、lost-response recovery の照合条件には使わない。
   成功応答を受けたら returned PaneRef、terminal identity、応答の argv を加えて phase `agent-started` を保存する。
   phase `worktree-ready` で同名 agent が存在せず、child checkout が clean かつ HEAD == 記録済み base SHA の場合だけ `agent start` へ進める。
   phase `agent-starting` の再実行は、expected session / workspace と nonce 所有 worktree 上に同名 agent が一つだけあり、その pane の `process-info` が intent と同じ argv / cwd の process を一つだけ返す場合に限る。
   この場合は観測した PaneRef、terminal identity、PID を含む process identity を新たに束縛して `agent-started` へ進める。
   phase `agent-started` の再実行は、pane が生存していれば保存済み PaneRef と terminal identity が現在値と一致し、`process-info` の argv / cwd も intent と一致する場合だけ process identity を束縛して final row へ進める。
-  pane がすでに消滅している場合は、保存済み agent start 応答と同じ emitter nonce の pending `done` が両方ある場合だけ、returned PaneRef を束縛した `done` row を確定できる。
+  保存済み agent start 応答があり pane がすでに消滅している場合は、returned PaneRef を束縛した `stale` row を確定する。
+  同じ emitter nonce の pending `done` があっても agent-reported telemetry として保存するだけで、`stale` を `done` に変えない。
   `agent-starting` 後に agent が存在しない場合も mutation の有無を証明できないため自動で再発行せず fail closed にする。
   worktree、agent、process の照合失敗、欠落、重複は自動では触らず fail closed にする。
-  final row の確定、pending emitter signal の反映、intent の削除は state lock 下の同じ state save で実行する。
+  final row の確定、pending emitter telemetry の反映、intent の削除は state lock 下の同じ state save で実行する。
 - `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD を照合する。
 - `worktree create` の事後条件違反をそのまま fallback の条件にしない。
   今回の呼び出しが作ったと証明できる workspace と checkout だけを rollback 対象にする。
@@ -297,25 +298,28 @@ server log は exit status を記録するが public API 契約ではないた�
 
 ただし herdr が追跡する process は wrapper になり、agent record は `unknown` のまま残った。
 fanout は bare argv を採用し、tmux backend の「agent 終了後も shell を残す」契約を herdr backend には持ち込まない。
-#427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI を呼ぶ runtime 非依存の state emitter として agent 状態を `state.json` へ記録する。
+#427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を `state.json` へ記録する。
 tmux pane option は使わない。
 launch 時に owner の絶対 `FANOUT_STATE_PATH`、state row key、launch ごとの opaque emitter nonce、backend、session / workspace / agent identity を hook 環境へ注入する。
 row key は `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)` とする。
 emitter nonce は state row にも保存し、再 launch ごとに更新する。
+これらの値は agent が起動する tool と checkout 内 script に継承されるため、secret、capability、event provenance の証明にはならない。
+agent process は正規 hook と同じ emitter call を偽造できる。
+emitter signal は `reported_state` telemetry にだけ保存し、authoritative lifecycle state、nudge、完了判定、cleanup の根拠には使わない。
 launch は planning から final row の確定、intent の削除、または fail-closed 状態の保存まで同じ state lock を保持し、signal が生成されたことを理由に lock を解放しない。
 同期 hook の emitter command は lock を待ち、その間も agent process と pane を生存させる。
 launcher は hook の完了を待たずに `agent start` 応答を処理する。
-emitter は同じ lock を取得した後の state で分岐し、final row があれば通常の binding update、matching intent だけがあれば pending 保存を実行する。
-`agent start` の応答前に届いた signal は public state を更新せず、key、nonce、backend、session / workspace / agent identity が provisional intent と完全一致する場合だけ state lock 下で pending signal として保存する。
-pending `done` は同じ nonce の先行 signal より優先し、final row 確定前は query 結果へ出さない。
-`agent start` の応答後、返された PaneRef を同じ nonce に束縛し、pending signal を検証して final row へ反映する。
-応答を回復できない intent の pending signal は final row へ昇格させない。
-emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ更新する。
+emitter は同じ lock を取得した後の state で分岐し、final row があれば `reported_state` update、matching intent だけがあれば pending 保存を実行する。
+`agent start` の応答前に届いた signal は authoritative state を更新せず、key、nonce、backend、session / workspace / agent identity が provisional intent と完全一致する場合だけ state lock 下で pending telemetry として保存する。
+pending `done` は同じ nonce の先行 telemetry より優先するが、final row 確定前は query 結果へ出さない。
+`agent start` の応答後、返された PaneRef を同じ nonce に束縛し、pending telemetry を検証して final row の `reported_state` へ反映する。
+応答を回復できない intent の pending telemetry は final row へ移さない。
+emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新する。
 0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
 cwd や slug から更新先を再解決しない。
-Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done` とし、`done` なしの pane 消滅は `stale` とする。
-Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に fanout の state row が残っていれば `done` とする。
-この Codex の写像は正常終了と外部からの kill を区別できず、identity 不一致は従来どおり `stale` とする。
+Claude の `SessionEnd` 由来の `done` も診断用 telemetry に留める。
+Claude と Codex は pane 消滅時に正常終了と外部からの kill を区別できないため、state row の有無にかかわらず `stale` とする。
+identity 不一致も `stale` とする。
 
 ### cold restart
 
@@ -347,7 +351,7 @@ focus されていない agent の `idle` が public `done` へ変わる遷移�
 
 attach 前の `idle` は公式 integration の resume placeholder であり、live agent が focus されていない状態で `idle` を報告した値ではない。
 通常の「focus されていない idle は public `done`」という状態遷移には含めない。
-この placeholder は nudge の候補にも process の生存証拠にも使わない。
+この placeholder は process の生存証拠に使わず、自動 nudge は別途 v1 全体で無効にする。
 
 attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴が復元された。
 `pane process-info --pane w4:p2` は foreground process の argv が `codex resume 019f6908-3bc1-7c83-98df-d8ea91694d2c` であることも返した。
@@ -398,27 +402,15 @@ herdr の `done` は process exit ではなく、agent が処理を終えて `id
 実際、focus されていない pane に `working`、`idle` の順で報告すると snapshot は `working`、`done` と遷移し、`terminal_id` と focus は変わらなかった。
 focus 後は `done` から `idle` へ変わる。
 
-v1 は focus されておらず、public status が `idle` または `done` である pane を送信候補にする。
-この候補規則から、focus 中の `idle` を含む全 focus 状態と、`working`、`blocked`、`unknown`、record 欠落を除外する。
-候補に対して、保存済み PaneRef との識別情報の一致と `idle` の確定根拠を確認する。
-`idle` の確定根拠は、Claude argv に注入した `--settings` lifecycle hook が fanout CLI 経由で `state.json` に記録した fanout-owned signal の `idle` に限定する。
-この runtime 非依存 emitter は #427 で追加し、`SessionEnd` は `done` として記録する。
-`terminal_id` を rebind した時点で、fanout は emitter nonce と保存済み fanout-owned signal の nudge authority を無効化し、rebind 事象を記録する。
-信号を binding に帰属させる刻印は使わない — `terminal_id` は pane env に無く、ambient の `HERDR_*` ID は restart を跨いで不変のため、帰属は信号の中身では判定できない。
-旧 hook の書き込みが state lock 待ちで rebind 後に到着する可能性を除外できないため、v1 は同じ row の nudge authority を rebind 後に回復しない。
-rebind 後の hook write は世代不一致として拒否し、public state は runtime snapshot から算出する。
-nudge と fanout-owned state update は、新しい fanout launch と emitter nonce が作られるまで fail closed にする。
-Codex は herdr v1 の fanout-owned emitter を持たないため nudge 対象外にする。
-`agent explain --json` は診断に使えるが、screen manifest の明示的な idle rule も未知の permission UI を除外できないため、送信許可には使わない。
-`default_known_agent_idle_fallback` も同様に拒否する。
-
-送信直前に snapshot と fanout state を再取得し、public status、focus、`terminal_id`、`agent_session`、worktree provenance を再照合する。
-fanout-owned signal の key、emitter nonce、backend、PaneRef が現在の row と一致し、launch 後に rebind がなく、状態が `idle` であることを検証する。
-attach 前の再開待ちに現れる `agent_session` ref は、想定した process を確認するまで resume placeholder として送信候補から除外する。
-すべて一致して送信可能と確認できた pane にだけ、`pane run` で text と Enter を一操作で送る。
-herdr 0.7.3 には状態条件付き send または CAS がないため、再照合と submit の間の race は残る。
-`idle` の確定根拠がない場合、nudge は Enter も通知も送らず no-op にする。
-peer message の bus への保存は nudge より前に完了しており、この no-op の副作用ではない。
+herdr backend v1 の自動 nudge は Claude と Codex の両方で無効にする。
+public `idle` / `done`、hook telemetry、`agent explain --json`、screen manifest のどれも送信許可には使わない。
+hook telemetry は agent process から偽造でき、screen detection は未知の permission UI を除外できない。
+`terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
+herdr 0.7.3 には状態条件付き send または CAS がないため、この race を fail closed にできない。
+fanout は peer message または watcher を契機に `pane run` を自動実行せず、Enter を送らない。
+peer message の bus への保存は維持し、best-effort notification は入力を伴わない通知としてだけ使える。
+ユーザーが対象 pane を確認して明示的に実行する `pane run` は手動操作として扱う。
+自動 nudge の再導入には、runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が必要になる。
 
 ### focus と wait
 
@@ -544,7 +536,7 @@ fanout は snapshot の ref を読むだけにし、同じ ref を重複報告�
 ref が欠落、不一致、重複した場合は fail closed にする。
 
 raw Socket の `events.subscribe` は常駐 client を増やすため v1 では使わない。
-`agent.send`、`pane.send_input`、`pane.focus` も schema にはあるが、今回の v1 操作は `pane run`、`agent focus`、`workspace focus` で足りる。
+`agent.send`、`pane.send_input`、`pane.focus` も schema にはあるが、今回の v1 操作は手動の `pane run`、`agent focus`、`workspace focus` で足りる。
 
 ## version と JSON 対応
 
@@ -593,24 +585,26 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   path と provenance の一致後に marker を書けた資源だけを rollback 対象とし、branch / HEAD 違反からの rollback 完了後だけ git fallback へ進める。
 - agent は bare argv、明示 `--cwd`、fanout 固有値と呼び出し元 `PATH` を渡す明示 `--env` で起動する。
   launch 名は repo と親参照に agent launch nonce の hash を加え、同じ intent では安定し session 全体で一意になる決定論的名前を `core/naming` で生成する。
-  `agent start` 前に agent launch nonce、emitter nonce と binding、agent name、argv / env fingerprint、argv / cwd を intent の phase `agent-starting` として保存する。
+  `agent start` 前に agent launch nonce、emitter nonce と telemetry routing binding、agent name、argv / env fingerprint、argv / cwd を intent の phase `agent-starting` として保存する。
   応答喪失時は expected session / workspace と nonce 所有 worktree 上の一意な同名 agent について `process-info` の argv / cwd を照合し、観測した PaneRef、terminal identity、process identity を束縛する。
-  保存済み応答後に pane が消滅した場合は同じ emitter nonce の pending `done` があるときだけ final row を確定し、agent の欠落、重複、識別不一致は fail closed にする。
+  保存済み応答後に pane が消滅した場合は returned PaneRef を束縛した `stale` row を確定し、pending `done` は telemetry としてだけ保存する。
+  応答未保存の agent 欠落、重複、識別不一致は fail closed にする。
 - CLI 呼び出しは保存済みの検証済み socket path を明示的に選択し、mutation 前に session identity を再確認する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
-- #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
+- #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
   tmux pane option は使わない。
   hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH`、state row key、launch ごとの opaque emitter nonce、backend、session / workspace / agent identity を hook 環境へ注入する。
+  注入値は tool と checkout 内 script に継承されるため secret / capability / provenance ではなく、agent process は signal を偽造できる。
+  signal は表示と診断用 telemetry に限定し、authoritative lifecycle state、nudge、完了判定、cleanup に使わない。
   row key は `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)` とし、manual / watch 等の synthetic launch も後者で扱う。
   launch lock は final row、intent 削除、または fail-closed 状態の保存まで保持し、同期 hook は lock 待ちの間も pane を生存させ、launcher は hook 完了を待たずに `agent start` 応答を処理する。
-  emitter は同じ lock の取得後に final row なら通常更新、matching intent だけなら pending 保存へ分岐する。
-  `agent start` 応答前の signal は public state を更新せず、provisional intent と完全一致する場合だけ pending 保存し、返された PaneRef を nonce へ束縛する final state save で検証して反映する。
-  応答を回復できない intent の pending signal は final row へ昇格させない。
-  emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ更新し、cwd や slug から再解決しない。
+  emitter は同じ lock の取得後に final row なら `reported_state` update、matching intent だけなら pending 保存へ分岐する。
+  `agent start` 応答前の signal は authoritative state を更新せず、provisional intent と完全一致する場合だけ pending telemetry とし、返された PaneRef を nonce へ束縛する final state save で `reported_state` へ反映する。
+  応答を回復できない intent の pending telemetry は final row へ移さない。
+  emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新し、cwd や slug から再解決しない。
   0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
-  Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
-  Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
-  identity 不一致は agent 種別にかかわらず `stale` とする。
+  `SessionEnd` の `done` も telemetry に留め、Claude / Codex とも pane 消滅時は正常終了と kill を区別できないため `stale` とする。
+  identity 不一致も agent 種別にかかわらず `stale` とする。
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
 - `unknown` record を無条件に running へ写像しない。
   public pane の存在、保存した `terminal_id` との一致、完全一致する一意な `agent_session`、workspace の worktree provenance、想定した agent process を別々に判定する。
@@ -618,13 +612,12 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - `terminal_id` が変わっても、一致する `agent_session` があれば論理上の会話を再対応付けできる。
   `agent_session` ref が欠落、不一致、重複した場合は再対応付けせず、ref 一致後も想定した agent process を確認するまで running にしない。
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
+  これは herdr runtime の表示遷移であり、fanout child の terminal completion または nudge authority には使わない。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
-- nudge は focus されていない `idle` または `done` を候補にし、識別情報と fanout-owned state emitter の `idle` を再確認して送信可能と判断した Claude pane にだけ `pane run` で送る。
-  fanout-owned signal は key、emitter nonce、backend、launch-bound PaneRef が現在の row と runtime に一致し、launch 後に `terminal_id` rebind がない場合だけ使う。
-  rebind 時は emitter nonce も無効化し、同じ row の state update と nudge authority を回復せず、process 未確認の resume placeholder は候補から除外する。
-  screen manifest と `agent explain` は送信許可に使わない。
-  authority がない場合は通知も送らず no-op にし、Codex は nudge 対象外にする。
-  status 検査との race は許容する。
+- herdr backend v1 の自動 nudge は agent 種別にかかわらず無効にする。
+  public status、hook telemetry、screen manifest、`agent explain` のどれも送信許可に使わず、peer message または watcher を契機に `pane run` を呼ばない。
+  message bus への保存と入力を伴わない best-effort notification は維持できる。
+  自動 nudge の再導入には atomic conditional send / CAS または terminal UI を操作しない out-of-band queue と、agent process から分離した event provenance を要求する。
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
