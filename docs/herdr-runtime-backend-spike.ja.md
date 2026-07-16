@@ -7,7 +7,7 @@
 fanout の herdr backend v1 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
 worktree の作成、既存 checkout の採用、削除は herdr に委譲できるが、naming、base 解決、dirty と divergence の検査、idempotency は fanout に残す。
-agent の nudge と session identity には herdr 単独で満たせない条件があるため、後述の制約を実装へ引き継ぐ。
+agent の nudge と process の生存確認には herdr 単独で満たせない条件があるため、後述の制約を実装へ引き継ぐ。
 
 ## 採用判断
 
@@ -18,8 +18,8 @@ agent の nudge と session identity には herdr 単独で満たせない条件
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | safety gate 後に `worktree create/open/remove` へ委譲する | branch、path、base を指定でき、plugin event も発火する |
 | agent 起動 | `agent start` に bare argv、`--cwd`、`--env` を渡す | shell wrapper は終了検出を wrapper に張り付ける |
-| nudge | confirmed-idle への `pane run` に限定する | `agent send` は queue せず、blocked 中にも文字列を送る |
-| liveness | public pane ID、cwd、`terminal_id` を照合する | cold restart と fresh state で public ID だけでは元 process を識別できない |
+| nudge | 送信可能と確認できた pane への `pane run` に限定する | `done` は未確認の idle であり、status だけでは permission 待ちを除外できない |
+| identity | routing、checkout、terminal、会話、process を別々に照合する | cold restart では `terminal_id` が変わっても公式 session resume が成功する |
 | 通知 | best-effort の in-app 通知としてだけ使う | detached 時も `shown:true` で、表示完了の応答ではない |
 
 ## 検証条件
@@ -27,6 +27,9 @@ agent の nudge と session identity には herdr 単独で満たせない条件
 検証用の git repository、bare remote、linked worktree、named herdr session を `/private/tmp` に作った。
 ユーザーの default herdr session は停止も削除もしていない。
 plugin event の検証では `XDG_CONFIG_HOME` と `XDG_STATE_HOME` も `/private/tmp` へ向け、plugin registry と state を隔離した。
+
+追加検証では公式 `v0.7.3` macOS arm64 リリースバイナリ（SHA-256 `b31345392d004ec1f1b2c821e1ad601019fa8385fe1e4c6931321eb58a920773`）を `/private/tmp` に置き、named session と state を隔離した。
+herdr 公式 Codex integration v6 の再開試験だけは、すでに信頼済みのこの worktree を cwd に使った。
 
 fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
@@ -56,20 +59,26 @@ server の cold restart でも public ID は維持されたが、全 pane の `t
 session 名と public ID だけを state key にすると stale mapping が別 process へ一致する。
 
 herdr から比較可能な session epoch は取得できない。
-v1 は session 名を namespace として保存し、各 PaneRef に `terminal_id` を保存する。
-public ID または cwd が一致しても `terminal_id` が変わった行は、元 agent process との対応を失ったものとして扱う。
+v1 は session 名を namespace として保存し、各 PaneRef に `terminal_id` と `agent_session` を保存する。
+
+`terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
+同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
+`terminal_id` が変わった場合は、保存済みの `{source, agent, kind, value}` と完全一致する一意な `agent_session` があれば、論理上の会話を新しい terminal へ再対応付けできる。
+`agent_session` ref が欠落、不一致、重複した場合は再対応付けせず fail closed にする。
+この ref は attach 前の再開待ちにも現れるため、process の生存を示す証拠には使わない。
 fanout-owned epoch は fanout が session lifecycle も所有する後続版でなければ検証に使えない。
 
 ## 操作面
 
 | fanout 操作 | 採用 CLI | 結果 | 制約 |
 |---|---|---|---|
-| launch | `workspace create --cwd ... --no-focus` | `workspace_created` | 最初の workspace は focus 対象がないため focused になる |
+| launch | `workspace create --cwd ... --no-focus` | `workspace_created` | 最初の workspace は focus 対象がないため focus される |
 | launch | `worktree create --workspace ... --branch ... --base ... --path ... --no-focus --json` | `worktree_created` | fanout の preflight 後に呼ぶ |
 | launch | `agent start <name> --workspace ... --cwd ... --env ... --no-focus -- <argv...>` | `agent_started` | `--json` flag はないが JSON envelope を返す |
 | list | `api snapshot` | `session_snapshot` | `session.snapshot` の CLI wrapper |
 | list | `worktree list --workspace ... --json`、`agent list` | `worktree_list`、`agent_list` | `worktree list` は基準 workspace を明示する |
-| read | `pane read`、`agent read`、`pane get` | text または `pane_read`、`pane_info` | 実行中 cwd は `foreground_cwd` を見る |
+| read | `pane read`、`agent read`、`pane get` | text または `pane_read`、`pane_info` | 実行中 cwd は telemetry の `foreground_cwd` に出る |
+| read | `pane process-info --pane ...` | `pane_process_info` | 想定した agent process の argv と cwd を確認する |
 | focus | `agent focus <name>`、`workspace focus <id>` | 対象 agent または workspace を focus | 任意 pane ID への exact focus は CLI にない |
 | send | `pane send-text`、`agent send` | literal text を送る | Enter は送らず、queue もしない |
 | send | `pane run <pane> <text>` | text と Enter を一操作で送る | status 検査との race は残る |
@@ -108,8 +117,22 @@ fanout は herdr を呼ぶ前に次を実行する。
 - source checkout の dirty と divergence を検査し、既存の fail-closed 契約を保つ。
 - branch、path、base SHA、state mapping を照合する。
 - 既存 branch の HEAD が期待する base SHA と違う場合は、herdr に渡さず fail closed にする。
-- 既存 checkout は `worktree open` で採用する。
-- `worktree create` の postcondition が fanout の branch、path、HEAD 契約と一致しない場合だけ、fanout が git worktree を作り、`worktree open` で herdr に採用させる。
+- 既存 checkout は、fanout state が同じ task の所有を示し、branch、path、HEAD がすべて一致する場合だけ `worktree open` で再採用する。
+- `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD を照合する。
+- `worktree create` の事後条件違反をそのまま fallback の条件にしない。
+  今回の呼び出しが作ったと証明できる workspace と checkout だけを rollback 対象にする。
+  `worktree remove` 後に workspace と target path がなく、branch がどの worktree にも checkout されていないことを確認する。
+  作成前に存在しない branch は、作成直後に記録した OID を old OID とする compare-and-delete で削除する。
+  branch ref が変わっていれば削除せず fail closed にする。
+  fanout-owned workspace、checkout、branch、state mapping が呼び出し前の状態へ戻ったことを再検証する。
+  plugin event の発火は rollback しない。
+  所有を証明できない場合、rollback に失敗した場合、または既存資源を削除する必要がある場合は fail closed にする。
+- fanout による git worktree 作成と続く `worktree open` への fallback は、herdr が mutation 前に失敗した場合に実行できる。
+  mutation 後は rollback が完了し、target path が存在せず、branch が不存在または期待する HEAD にある場合だけ実行する。
+
+rollback では `worktree remove --workspace <id> --json` を force なしで使う。
+dirty または untracked file がある場合は、今回の呼び出し後に plugin や別 process が書いた可能性を除外できないため fail closed にする。
+自動 rollback では `--force` を使わない。
 
 ### workspace 配置
 
@@ -166,7 +189,11 @@ HERDR_PANE_ID=w1:p2
 HERDR_WORKSPACE_ID=w1
 ```
 
-fanout は PATH と `FANOUT_*` を `--env KEY=VALUE` で渡し、agent binary を bare argv の先頭に置く。
+generic workspace shell でも、`workspace create --env FANOUT_PROBE=v073-ok` の値と `HERDR_ENV`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、pane、tab、workspace ID が届いた。
+外側 tmux の `TMUX` と `TMUX_PANE` も同時に継承した。
+
+fanout は PATH と fanout 固有の値だけを `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
+agent binary は bare argv の先頭に置く。
 
 ### process exit
 
@@ -184,21 +211,37 @@ fanout は bare argv を採用し、tmux backend の「agent 終了後も shell 
 
 ### cold restart
 
-cold restart 前後の結果は次のとおり。
+公式 session ref を持たない shell と wrapper の cold restart 前後は次のとおりだった。
 
 | 項目 | restart 前 | restart 後 |
 |---|---|---|
 | workspace、tab、pane public ID | `w1` から `w7` | 同じ ID |
 | cwd、layout、worktree provenance | 記録あり | 維持 |
 | `terminal_id` | 各 pane の元 ID | 全 pane で新しい ID |
-| live agent process | shell、wrapper | restore shell に置換 |
+| live process | shell、wrapper | restore shell に置換 |
 | `agent list` の name | `shell-agent`、`wrapped-shell` | name は残る |
-| agent status | idle または unknown | unknown |
+| agent status | `idle` または `unknown` | `unknown` |
 | `report-metadata` | title、display agent、state label あり | 消失 |
 
+次に `resume_agents_on_restore=true` と herdr 公式 Codex integration v6 を使い、Codex session `019f6908-3bc1-7c83-98df-d8ea91694d2c` を実際に resume した。
+
+| 項目 | restart 前 | attach 前 | attach 後 |
+|---|---|---|---|
+| public pane ID | `w4:p2` | `w4:p2` | `w4:p2` |
+| cwd | この worktree | 同じ | 同じ |
+| `agent_session` | `herdr:codex`、`codex`、`id`、上記 ID | 完全一致 | 完全一致 |
+| `terminal_id` | `term_656b2482088076` | `term_656b25521cdc25` | attach 前と同じ |
+| agent status | `done` | `idle` | `working` |
+| process | `codex` | resume 待ち | `codex resume <id>` |
+
+attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴が復元された。
+`pane process-info --pane w4:p2` は foreground process の argv が `codex resume 019f6908-3bc1-7c83-98df-d8ea91694d2c` であることも返した。
+この実測から、`terminal_id` の変化だけでは論理上の会話の喪失を判定できない。
+一方、attach 前の `agent_session` ref と `idle` だけでは process の生存を判定できない。
+
 「agent record がないなら done」だけでは restart 後を判定できない。
-name が残った unknown record も元 agent process の生存を示さない。
-#427 は `unknown` を無条件に `running` へ写像せず、保存した `terminal_id` との一致を先に確認する。
+name が残った `unknown` record も、一致する ref を持つ再開待ちの record も、現在の agent process の生存を単独では示さない。
+#427 は `unknown` を無条件に `running` へ写像せず、terminal 実体、会話の識別、process の生存を別々に判定する。
 
 ## read、入力、focus、wait
 
@@ -214,9 +257,14 @@ name が残った unknown record も元 agent process の生存を示さない�
 ログと agent 出力の読み取りには `recent-unwrapped`、TUI の視覚確認には `visible` を使う。
 `pane read` は raw text を出力し、`agent read` は `pane_read` result に text、source、revision、truncated を入れる。
 
-`pane get` の `cwd` は保存された shell cwd を表す。
-foreground で `(cd /; sleep 15)` を実行している間も `cwd` は元 repository のままで、`foreground_cwd` は `/` になった。
-実行中 process の cwd 照合には `foreground_cwd` を使い、restore 後の checkout 照合には `cwd` も使う。
+`pane get` の `cwd` は label、follow-cwd、session restore に使われる pane または workspace の cwd を表す。
+`foreground_cwd` は現在 PTY を制御する foreground process の cwd を表す。
+実際、foreground で `(cd /; sleep 15)` を実行している間も `cwd` は元 repository のままで、`foreground_cwd` は `/` になった。
+
+`foreground_cwd` は表示と診断の telemetry とし、PaneRef の識別または生存判定には使わない。
+PaneRef の routing は backend、session namespace、workspace ID、pane ID で行う。
+記録した launch との一致は `terminal_id`、task との対応は workspace の `repo_key` と `checkout_path` を含む worktree provenance で別々に検証する。
+worktree provenance がない generic workspace では、fanout state に保存した checkout path と pane の `cwd` を補助照合に使う。
 
 ### send と nudge
 
@@ -230,7 +278,22 @@ blocked 状態へ送った文字列は画面に入り、Enter は送らずに `c
 `pane run` は text と Enter を一操作で送り、command を実行した。
 ただし status read と submit の間の race は残る。
 親設計の「`agent send` を preferred nudge にする」は採用しない。
-v1 は直前に idle を確認できた場合だけ `pane run` で atomic submit する。
+
+herdr の `done` は process exit ではなく、agent が処理を終えて `idle` になった後にまだ focus されていない状態である。
+実際、focus されていない pane に `working`、`idle` の順で報告すると snapshot は `working`、`done` と遷移し、`terminal_id` と focus は変わらなかった。
+focus 後は `done` から `idle` へ変わる。
+
+v1 は focus されておらず、public status が `idle` または `done` である pane を送信候補にする。
+focus 中の `done`、`working`、`blocked`、`unknown`、record 欠落は候補にしない。
+候補に対して、保存済み PaneRef との識別情報の一致と `idle` の確定根拠を確認する。
+`idle` の確定根拠は、permission 待ちを含む lifecycle 全体を扱う fanout-owned signal の `idle` に限定する。
+`agent explain --json` は診断に使えるが、screen manifest の明示的な idle rule も未知の permission UI を除外できないため、送信許可には使わない。
+`default_known_agent_idle_fallback` も同様に拒否する。
+
+送信直前に snapshot を再取得し、public status、focus、`terminal_id`、`agent_session`、worktree provenance を再照合する。
+すべて一致して送信可能と確認できた pane にだけ、`pane run` で text と Enter を一操作で送る。
+herdr 0.7.3 には状態条件付き send または CAS がないため、再照合と submit の間の race は残る。
+`idle` の確定根拠がない場合は Enter を送らず、peer message を bus に残して通知だけを試みる。
 
 ### focus と wait
 
@@ -239,7 +302,7 @@ v1 は直前に idle を確認できた場合だけ `pane run` で atomic submit
 
 `wait output` は出力遷移を待ち、`output_matched` と matched line、read result、revision を返した。
 `agent wait --status idle` は current state がすでに idle でも即時成功せず、後続 event を待った。
-unfocused agent が idle を報告した場合は done event が返り、`agent focus` 後に idle へ変わった。
+focus されていない agent が `idle` を報告した場合は `done` event が返り、`agent focus` 後に `idle` へ変わった。
 
 snapshot 後に event wait を登録すると、二つの操作の間に起きた遷移を逃す lost-wakeup race がある。
 CLI-first の v1 は bounded snapshot polling を使い、CLI の一回待機を current-state predicate と組み合わせない。
@@ -250,8 +313,12 @@ event 駆動へ移す後続版は raw Socket で subscription を確立してか
 ### backend 検出
 
 `agent start` の direct process には `HERDR_ENV=1` が届いた。
-一方、検証環境の generic workspace shell では `HERDR_ENV` と `workspace create --env FANOUT_PROBE=1` の値が見えず、外側 tmux の `TMUX` と `TMUX_PANE` だけを継承した。
-この shell から fanout を起動すると tmux と誤検出するため、`--backend herdr` または `FANOUT_BACKEND=herdr` を明示する。
+generic workspace shell でも `HERDR_ENV=1`、session、socket、pane、tab、workspace ID と `workspace create --env FANOUT_PROBE=v073-ok` の値が届いた。
+当初の検査では `grep` の pattern が `^(FANOUT|HERDR|TMUX)=` だったため、`FANOUT_PROBE`、`HERDR_ENV`、`TMUX_PANE` をすべて落とす偽陰性になった。
+公式 v0.7.3 バイナリで `^(FANOUT|HERDR|TMUX)(_|=)` を使って再測定し、この誤りを訂正した。
+
+fanout は `HERDR_ENV=1` を tmux の env より先に判定し、generic workspace shell から backend を自動検出する。
+`--backend` と `FANOUT_BACKEND` は明示的な上書きとして残す。
 
 herdr pane 内で nested tmux server を起動すると、nested tmux の global env に `HERDR_ENV=1`、`HERDR_PANE_ID`、`HERDR_WORKSPACE_ID` と `TMUX` が同時に入った。
 `HERDR_ENV` を `TMUX` より先に判定しても「最も内側の runtime」を選んだことにはならない。
@@ -321,9 +388,17 @@ agent.start:
   required: [name, argv]
   optional: [cwd, env, focus=false, split, tab_id, workspace_id]
 
+pane.report_agent_session:
+  required: [pane_id, source, agent]
+  optional: [seq, agent_session_id, agent_session_path, session_start_source]
+
 pane.read:
   required: [pane_id, source]
   optional: [format="text", lines, strip_ansi=true]
+
+pane.process_info:
+  required: []
+  optional: [pane_id]
 
 agent.send:
   required: [target, text]
@@ -351,6 +426,8 @@ success と error の envelope は次の形だった。
 
 `herdr api snapshot` は raw method `session.snapshot` を CLI から呼び、workspace、tab、pane、layout、agent、focused ID を一つの `session_snapshot` で返す。
 worktree provenance は workspace に入るが、parent workspace ID と session UUID は入らない。
+pane と agent の `agent_session` は optional で、存在する場合は `source`、`agent`、`kind`、`value` を必須にする。
+`kind` は `id` または `path` である。
 
 raw Socket の `events.subscribe` は常駐 client を増やすため v1 では使わない。
 `pane.send_input` と `pane.focus` も schema にはあるが、今回の v1 操作は `pane run`、`agent focus`、`workspace focus` で足りる。
@@ -367,7 +444,9 @@ v1 は done focus 修正を含み、今回の全操作を確認した `herdr >= 
 | `workspace create/list/focus/close` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `worktree create/open/list/remove` | 0.7.1 | 明示 `--json` |
 | `agent start/list/read/focus/send/wait` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `pane report-agent-session` | 0.7.3 baseline | success 時は標準出力なし。公式 integration が Socket method を直接使う |
 | `pane get/run/send-text/send-keys/close` | 0.7.3 baseline | mutation と get は JSON envelope。`--json` は付けない |
+| `pane process-info` | 0.7.3 baseline | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
 | `pane read` | 0.7.3 baseline | text または ANSI を直接出力する |
 | `wait output/agent-status` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `api snapshot` | 0.7.2 | JSON envelope を標準出力へ返す。`--json` は付けない |
@@ -386,11 +465,19 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - backend は明示的に起動済みの named herdr session を使う。
 - worktree は root coordinator と sibling child workspace で配置する。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
+- `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
 - agent は bare argv、明示 `--cwd`、明示 `--env` で起動する。
-- `unknown` record を無条件に running へ写像せず、`terminal_id`、public ID、cwd を合わせて判定する。
-- nudge は confirmed-idle の場合だけ `pane run` で送り、status 検査との race を許容する。
+- PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
+- `unknown` record を無条件に running へ写像しない。
+  public pane の存在、保存した `terminal_id` との一致、完全一致する一意な `agent_session`、workspace の worktree provenance、想定した agent process を別々に判定する。
+  `foreground_cwd` は識別に使わず、worktree provenance がない場合だけ保存された `cwd` を補助照合に使う。
+- `terminal_id` が変わっても、一致する `agent_session` があれば論理上の会話を再対応付けできる。
+  `agent_session` ref が欠落、不一致、重複した場合は再対応付けせず、ref 一致後も想定した agent process を確認するまで running にしない。
+- nudge は focus されていない `idle` または `done` を候補にし、識別情報と fanout-owned lifecycle signal の `idle` を再確認して送信可能と判断した pane にだけ `pane run` で送る。
+  screen manifest と `agent explain` は送信許可に使わない。
+  status 検査との race は許容する。
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
-- generic herdr shell では `--backend herdr` を明示し、nested tmux では `--backend tmux` を明示できるようにする。
+- generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
 - in-app notification を配信保証のある channel として扱わない。
 
