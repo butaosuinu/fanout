@@ -95,13 +95,14 @@ fanout-owned epoch は fanout が session lifecycle も所有する後続版で�
 generic pane の exact focus が必要になった場合、Socket API の `pane.focus` を追加候補にする。
 child workspace が一つの agent pane を持つ v1 では `agent focus` と `workspace focus` で足りる。
 
-`workspace close` と `pane close` にも `worktree remove` と同等の precondition を課す。
-同名 session の再作成で session 名・socket・public ID は再利用されるため、mutation 直前に snapshot を再取得し、保存済み `terminal_id` と agent / workspace provenance が state row と一致することを照合してから close を発行する。
-不一致または照合不能は fail closed にし、stale row からの close が無関係な process を終了させないようにする。
+`workspace close` と `pane close` は snapshot 照合と mutation が別 CLI 接続になり、照合済み `terminal_id` を close request の precondition として渡す手段が 0.7.3 にない。
+同名 session の再作成で session 名・socket・public ID は再利用されるため、照合と close の間の TOCTOU は CLI では閉じられない。
+v1 は generic / attached pane への自動 `workspace close` / `pane close` を行わない — cleanup は nonce gate 済みの `worktree remove` までとし、close は明示的な手動操作、または条件付き mutation を提供する将来の Socket 経路に限る。
 
 root coordinator の `workspace create` も副作用を持つ launch 操作として provisional intent の対象にする。
-create 前に owner row key、backend / session identity、root cwd を intent へ保存し、成功応答の workspace ID を intent に束縛してから通常 state へ確定する。
-応答喪失または crash 後の再実行は、検証済み session に root cwd と provenance が一致する coordinator workspace が一つだけあればそれを決定的に採用し、複数または不一致は fail closed にして重複作成しない。
+create 前に owner row key、backend / session identity、root cwd、intent 固有の coordinator nonce を intent へ保存し、`workspace create --label <nonce>` で作成して、成功応答の workspace ID を intent に束縛してから通常 state へ確定する。
+herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別しない。
+応答喪失または crash 後の再実行は、pre-state 後に現れた intent nonce と同じ label の workspace が一つだけの場合にそれを回復対象とし、それ以外は fail closed にして既存のユーザー workspace を誤採用も重複作成もしない。
 
 ## worktree の配置と lifecycle
 
@@ -156,7 +157,9 @@ fanout は herdr を呼ぶ前に次を実行する。
   `agent start` の前に agent launch nonce と emitter nonce を生成し、hook へ注入する telemetry routing binding、agent launch nonce の衝突耐性のある hash を含む session 一意の deterministic agent name、発行する argv / env fingerprint、API で再観測できる argv / cwd を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
   env fingerprint は発行内容の監査にだけ使い、lost-response recovery の照合条件には使わない。
   成功応答を受けたら returned PaneRef、terminal identity、応答の argv を加えて phase `agent-started` を保存する。
-  phase `worktree-ready` で同名 agent が存在せず、child checkout が clean かつ HEAD == 記録済み base SHA の場合だけ `agent start` へ進める。
+  phase `worktree-ready` の確定時に、`worktree.created` setup plugin が生成した tracked / untracked file を含む checkout の post-plugin 状態を許容 baseline として intent へ記録する(HEAD == 記録済み base SHA は維持)。
+  phase `worktree-ready` で同名 agent が存在せず、checkout が記録済み baseline と一致し HEAD == 記録済み base SHA の場合だけ `agent start` へ進める — plugin の成果物を clean gate で拒否しない。
+  baseline 記録の時点で plugin hook が完了している保証はないため、baseline 取得直前に bounded な再取得で状態が安定していることを確認し、不安定なら fail closed にする。
   phase `agent-starting` の再実行は、expected session / workspace と nonce 所有 worktree 上に同名 agent が一つだけあり、その pane の `process-info` が intent と同じ argv / cwd の process を一つだけ返す場合に限る。
   この場合は観測した PaneRef、terminal identity、PID を含む process identity を新たに束縛して `agent-started` へ進める。
   phase `agent-started` の再実行は、pane が生存していれば保存済み PaneRef と terminal identity が現在値と一致し、`process-info` の argv / cwd も intent と一致する場合だけ process identity を束縛して final row へ進める。
@@ -170,8 +173,10 @@ fanout は herdr を呼ぶ前に次を実行する。
   今回の呼び出しが作ったと証明できる workspace と checkout だけを rollback 対象にする。
   応答 checkout path が intent path と違う場合は marker を書かず、資源へ自動では触れずに fail closed とする。
   `worktree remove` 後に workspace と target path がなく、branch がどの worktree にも checkout されていないことを確認する。
-  作成前に存在しない branch は、作成直後に記録した OID を old OID とする compare-and-delete で削除する。
-  branch ref が変わっていれば削除せず fail closed にする。
+  新規 branch は herdr に作らせず、fanout が `worktree create` の前に atomic な ref 予約(old OID を空とする `update-ref` 相当。既存なら失敗)で base SHA に作成し、予約成功を intent へ記録する。
+  preflight と create の間に別 process が同名 branch を作った場合は予約が失敗し、既存 branch 採用の実測挙動(113-115 行)による他者 branch の巻き込みを防ぐ。
+  rollback で削除してよい branch は intent が予約を証明するものに限り、予約時 OID を old OID とする compare-and-delete で削除する。
+  branch ref が変わっている場合と、fanout が作成したと証明できない branch は削除せず fail closed にする。
   fanout-owned workspace、checkout、branch、state mapping が呼び出し前の状態へ戻ったことを再検証する。
   plugin event の発火は rollback しない。
   所有を証明できない場合、rollback に失敗した場合、または既存資源を削除する必要がある場合は fail closed にする。
@@ -581,7 +586,8 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   legacy row の空 backend は tmux に正規化する。
   実際の issue / Project / plan の親では、既存 rows / intents が一つの backend に一致する場合だけその backend を再利用し、mixed state または `--backend` / env との不一致は fail closed にする(明示的な移行はユーザー操作)。
   stickiness の単位は実際の issue / Project / plan の親に限る。
-  `@manual` のような synthetic parent は互いに独立した launch の集まりであり、row identity とその intent の単位で backend を固定する。
+  親 issue の orchestrator pane は `@manual` の負番号 row として保存されるが、issue / plan の provenance を実親へ帰属させて同じ stickiness 判定に含める — coordinator 作成後に child launch が失敗した再実行が coordinator の backend を見落とさないようにする。
+  それ以外の `@manual` synthetic launch は互いに独立した launch の集まりであり、row identity とその intent の単位で backend を固定する。
 - worktree は root coordinator と sibling child workspace で配置する。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - create / open / git fallback の mutation 前に provisional intent を保存し、同じ worktree ownership nonce を workspace label と checkout git dir marker の両方で照合する。
