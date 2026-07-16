@@ -91,9 +91,9 @@ func writeMsgMessages(req *Request, store *msgstore.Store, self int, parent stri
 	// labels is nil for issue/Project parents (no peers query, no task ids) and
 	// maps synthetic numbers to task ids for plan parents — used by both the
 	// JSON enrichment and the human table.
-	labels, code := msgMemberLabels(store, req.Verb, parent, lg)
-	if code != exitcode.OK {
-		return code
+	labels, err := planPeerLabels(store, parent)
+	if err != nil {
+		return msgBackendErr(req.Verb, err, lg)
 	}
 	if req.JSON {
 		return writeMsgJSON(msgMessagesReport{
@@ -112,20 +112,10 @@ func writeMsgMessages(req *Request, store *msgstore.Store, self int, parent stri
 	return exitcode.OK
 }
 
-// msgMemberLabels maps synthetic peer numbers to plan task ids so inbox/board
-// rows render readable FROM/TO. It returns nil for non-plan parents, so numeric
-// issue/Project views keep rendering "#<n>" with no extra DB read.
-func msgMemberLabels(store *msgstore.Store, verb, parent string, lg *log.Logger) (map[int]string, exitcode.Code) {
-	labels, err := planPeerLabels(store, parent)
-	if err != nil {
-		return nil, msgBackendErr(verb, err, lg)
-	}
-	return labels, exitcode.OK
-}
-
-// planPeerLabels is msgMemberLabels without the logging: the error-returning
-// form Watcher.Poll needs (it has no exit code to produce). nil for non-plan
-// parents.
+// planPeerLabels maps synthetic peer numbers to plan task ids so inbox/board
+// rows and watch events render readable FROM/TO. It returns nil for non-plan
+// parents, so numeric issue/Project views keep rendering "#<n>" with no extra
+// DB read.
 func planPeerLabels(store *msgstore.Store, parent string) (map[int]string, error) {
 	if !team.IsPlanParent(parent) {
 		return nil, nil

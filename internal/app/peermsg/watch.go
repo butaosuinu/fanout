@@ -26,6 +26,15 @@ const watchPollsEnv = "FANOUT_WATCH_POLLS"
 // warn and continue, the Nth in a row exits 4.
 const watchMaxFailures = 5
 
+// DefaultWatchInterval and MaxWatchInterval bound the watch poll interval in
+// seconds. The CLI parser (cmd/fanout) validates against them and
+// watchTickInterval clamps in-process callers with the same values, so the
+// two layers cannot drift.
+const (
+	DefaultWatchInterval = 2
+	MaxWatchInterval     = 86400
+)
+
 // WatchEvent is one delivered message with its display labels resolved the
 // way inbox renders them (memberDisplay): plan task ids where known, "#<n>"
 // otherwise, and "board" as the recipient of a board post. Consumers are
@@ -64,7 +73,8 @@ func sanitizeWatchLine(s string) string {
 		case r < 0x20 || r == 0x7F, // C0 + DEL
 			r >= 0x80 && r <= 0x9F,     // C1 (CSI, OSC, ...)
 			r >= 0x202A && r <= 0x202E, // bidi embeddings/overrides
-			r >= 0x2066 && r <= 0x2069: // bidi isolates
+			r >= 0x2066 && r <= 0x2069, // bidi isolates
+			r == 0x2028 || r == 0x2029: // Unicode line/paragraph separators
 			return ' '
 		}
 		return r
@@ -74,6 +84,7 @@ func sanitizeWatchLine(s string) string {
 // Watcher follows one pane's inbox (1:1 + board) on the per-parent team DB.
 // It owns its DB handle — Close releases it — so it can outlive the opening
 // call frame; peermsg.Run's own defer db.Close() never applies to it.
+// A Watcher is not goroutine-safe: serialize Poll and Close on one goroutine.
 // Consumers are listed on OpenWatcher.
 type Watcher struct {
 	db     *sql.DB
@@ -106,15 +117,9 @@ func OpenWatcher(req Request, deps Deps, lg *log.Logger) (*Watcher, exitcode.Cod
 // openWatcher is the shared constructor: OpenWatcher resolves identity first,
 // Run's watch path arrives with it already resolved.
 func openWatcher(verb string, self int, parent string, lg *log.Logger) (*Watcher, exitcode.Code) {
-	db, code := openMsgDB(verb, parent, lg)
+	db, store, code := openMsgStore(verb, parent, lg)
 	if code != exitcode.OK {
 		return nil, code
-	}
-	store, err := msgstore.New(db, parent)
-	if err != nil {
-		_ = db.Close()
-		lg.Err("msg %s: %v", verb, err)
-		return nil, exitcode.Backend
 	}
 	return &Watcher{db: db, store: store, self: self, parent: parent}, exitcode.OK
 }
@@ -133,12 +138,28 @@ func openWatcher(verb string, self int, parent string, lg *log.Logger) (*Watcher
 // "#<n>" labels at worst) instead of erroring out messages that are already
 // marked read.
 func (w *Watcher) Poll() ([]WatchEvent, error) {
-	msgs, _, err := w.store.Inbox(w.self, false, true, team.Now())
+	now := team.Now()
+	msgs, marked, err := w.store.Inbox(w.self, false, true, now)
 	if err != nil {
 		return nil, err
 	}
 	if len(msgs) == 0 {
 		return nil, nil
+	}
+	// The rows were selected before the same transaction set read_at, so stamp
+	// the committed value back on: an emitted event must report itself read
+	// (emit = delivered = read), or a stream consumer reconciling against
+	// `msg inbox --all` sees every delivered message as still-unread.
+	if marked != nil {
+		ids := make(map[int64]bool, len(marked.MessageIDs))
+		for _, id := range marked.MessageIDs {
+			ids[id] = true
+		}
+		for i := range msgs {
+			if ids[msgs[i].ID] {
+				msgs[i].ReadAt = &now
+			}
+		}
 	}
 	labels := w.labels
 	if fresh, err := planPeerLabels(w.store, w.parent); err == nil {
@@ -169,7 +190,6 @@ type watchPoller interface {
 // Watcher from the already-resolved identity, announce on stderr (stdout
 // carries message lines only), and follow the inbox until a signal.
 func runMsgWatch(req *Request, self int, parent string, pane msgstore.Peer, deps Deps, lg *log.Logger) exitcode.Code {
-	deps = deps.withDefaults()
 	w, code := openWatcher(req.Verb, self, parent, lg)
 	if code != exitcode.OK {
 		return code
@@ -179,10 +199,22 @@ func runMsgWatch(req *Request, self int, parent string, pane msgstore.Peer, deps
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sig)
+	// Relay the first signal and immediately restore the default disposition:
+	// if the loop is stuck in a blocked stdout write (full pipe, stalled
+	// consumer) it never reaches its select, and without the reset a second
+	// Ctrl-C / SIGTERM would queue unread instead of killing the process. The
+	// relay goroutine may stay blocked on a clean loop exit; the CLI process
+	// terminates right after Run returns, so it never outlives anything.
+	loopSig := make(chan os.Signal, 1)
+	go func() {
+		s := <-sig
+		signal.Reset(os.Interrupt, syscall.SIGTERM)
+		loopSig <- s
+	}()
 
 	fmt.Fprintf(lg.Stderr(), "msg watch: watching as %s under parent %s (interval %ds)\n",
-		peerDisplayLabel(pane), parent, req.Interval)
-	return watchLoop(w, req, sig, deps, lg)
+		peerDisplayLabel(pane), parent, int(watchTickInterval(req.Interval)/time.Second))
+	return watchLoop(w, req, loopSig, deps, lg)
 }
 
 // watchLoop polls immediately once (backlog delivery), then on every tick.
@@ -230,10 +262,10 @@ func watchLoop(w watchPoller, req *Request, sig <-chan os.Signal, deps Deps, lg 
 // overflow (which would go negative and also busy-loop).
 func watchTickInterval(seconds int) time.Duration {
 	if seconds < 1 {
-		seconds = 2
+		seconds = DefaultWatchInterval
 	}
-	if seconds > 86400 {
-		seconds = 86400
+	if seconds > MaxWatchInterval {
+		seconds = MaxWatchInterval
 	}
 	return time.Duration(seconds) * time.Second
 }

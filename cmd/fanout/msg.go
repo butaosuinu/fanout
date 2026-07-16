@@ -156,7 +156,7 @@ func parseMsgFlags(args []string, lg *log.Logger) (*msgFlags, exitcode.Code) {
 		fmt.Fprint(lg.Stdout(), msgUsage)
 		return nil, exitcode.OK
 	}
-	f := &msgFlags{verb: args[0], kind: "note", interval: 2}
+	f := &msgFlags{verb: args[0], kind: "note", interval: peermsg.DefaultWatchInterval}
 	allowed, ok := msgVerbFlags[f.verb]
 	if !ok {
 		lg.Err("msg: unknown verb: %s", f.verb)
@@ -357,8 +357,8 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 		// watch tick into a busy loop); a day-long poll interval is already
 		// past any sensible use.
 		n, err := strconv.Atoi(value)
-		if err != nil || n < 1 || n > 86400 {
-			lg.Err("msg %s: --interval must be an integer between 1 and 86400 (seconds), got: %s", f.verb, value)
+		if err != nil || n < 1 || n > peermsg.MaxWatchInterval {
+			lg.Err("msg %s: --interval must be an integer between 1 and %d (seconds), got: %s", f.verb, peermsg.MaxWatchInterval, value)
 			return exitcode.Invocation
 		}
 		f.interval = n

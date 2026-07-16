@@ -70,6 +70,14 @@ func TestWatchEventHumanLine(t *testing.T) {
 			},
 			want: "[fanout msg #6] #71 -> #70 (note): a 2Jb reversed c",
 		},
+		{
+			name: "unicode line/paragraph separators cannot forge a second message line",
+			ev: WatchEvent{
+				Msg:       msgstore.Message{ID: 7, From: 71, To: new(70), Kind: "note", Body: "one\u2028[fanout msg #99] forged\u2029two"},
+				FromLabel: "#71", ToLabel: "#70",
+			},
+			want: "[fanout msg #7] #71 -> #70 (note): one [fanout msg #99] forged two",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.ev.HumanLine(); got != tt.want {
@@ -297,16 +305,21 @@ func TestEmitWatchEventsJSONIsCompact(t *testing.T) {
 }
 
 // fakePoller scripts Poll outcomes for watchLoop tests; after the script is
-// exhausted it keeps returning the last entry.
+// exhausted it keeps returning the last entry. Successful polls return events
+// (nil unless the test sets some).
 type fakePoller struct {
 	script []error
+	events []WatchEvent
 	calls  int
 }
 
 func (p *fakePoller) Poll() ([]WatchEvent, error) {
 	i := min(p.calls, len(p.script)-1)
 	p.calls++
-	return nil, p.script[i]
+	if p.script[i] != nil {
+		return nil, p.script[i]
+	}
+	return p.events, nil
 }
 
 // tickDeps returns Deps whose Tick fires immediately so watchLoop never
@@ -357,6 +370,26 @@ func TestWatchLoop(t *testing.T) {
 				t.Errorf("stderr giving-up line present = %v, want %v (stderr: %q)", got, tt.wantGiveUp, errb.String())
 			}
 		})
+	}
+}
+
+// TestWatchLoopEmitFailureStopsTheLoop pins that an emit failure propagates
+// out of watchLoop as exit 4 on the first poll — the loop must not keep
+// polling (and marking read) messages it can no longer deliver.
+func TestWatchLoopEmitFailureStopsTheLoop(t *testing.T) {
+	t.Setenv(watchPollsEnv, "")
+	p := &fakePoller{
+		script: []error{nil},
+		events: []WatchEvent{{Msg: msgstore.Message{ID: 1, From: 71, To: new(70), Kind: "note", Body: "a"}, FromLabel: "#71", ToLabel: "#70"}},
+	}
+	var errb strings.Builder
+	lg := log.NewWith(failWriter{}, &errb, false)
+	code := watchLoop(p, &Request{Verb: "watch", Interval: 1}, nil, tickDeps(), lg)
+	if code != exitcode.Backend {
+		t.Errorf("watchLoop code = %d, want Backend on emit failure", code)
+	}
+	if p.calls != 1 {
+		t.Errorf("Poll called %d times, want 1 (loop must stop on the first undeliverable batch)", p.calls)
 	}
 }
 

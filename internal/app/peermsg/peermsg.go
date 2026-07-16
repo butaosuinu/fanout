@@ -12,7 +12,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/msgstore"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -125,6 +124,12 @@ func defaultLoadState() (state.Store, error) {
 // Run executes a parsed msg request: resolve identity, short-circuit nudge,
 // open the per-parent team DB, then run the verb.
 func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
+	// watch is part of the exported in-process surface (see OpenWatcher), so
+	// fill missing seams before anything dereferences them; the other verbs
+	// keep the caller's Deps verbatim.
+	if req.Verb == "watch" {
+		deps = deps.withDefaults()
+	}
 	self, parent, pane, code := resolveMsgIdentity(&req, deps, lg)
 	if code != exitcode.OK {
 		return code
@@ -143,15 +148,10 @@ func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
 		return runMsgWatch(&req, self, parent, pane, deps, lg)
 	}
 
-	db, code := openMsgDB(req.Verb, parent, lg)
+	db, store, code := openMsgStore(req.Verb, parent, lg)
 	if code != exitcode.OK {
 		return code
 	}
 	defer func() { _ = db.Close() }()
-	store, err := msgstore.New(db, parent)
-	if err != nil {
-		lg.Err("msg %s: %v", req.Verb, err)
-		return exitcode.Backend
-	}
 	return runMsgVerb(&req, store, self, parent, pane, lg)
 }
