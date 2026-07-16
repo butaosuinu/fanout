@@ -62,6 +62,11 @@ session 名と public ID だけを state key にすると stale mapping が別 p
 herdr から比較可能な session epoch は取得できない。
 v1 は session 名を namespace として保存し、各 PaneRef に `terminal_id` と `agent_session` を保存する。
 
+herdr 0.7.3 は明示 `--session` が無い場合、継承した `HERDR_SOCKET_PATH` を `HERDR_SESSION` より優先する(Pass 2 レビュー時の 0.7.3 実機確認)。
+herdr pane 内で実行する fanout は常にこの変数を持つため、session 名だけの routing は custom socket や別 session の server に接続し得る。
+public ID は session 間で再利用されるため、誤 routing の `send` や `close` は無関係な pane に届く。
+v1 は検証済みの socket path を session namespace と併せて保存し、各 CLI 呼び出しで明示的に選択し、mutation 前に session identity を再確認する。
+
 `terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
 同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
 `terminal_id` が変わった場合は、保存済みの `{source, agent, kind, value}` と完全一致する一意な `agent_session` があれば、論理上の会話を新しい terminal へ再対応付けできる。
@@ -211,11 +216,14 @@ HERDR_WORKSPACE_ID=w2
 この追加検証では server と CLI の環境から `TMUX` と `FANOUT_BIN` を除き、外側 runtime の値が transcript に混ざらないようにした。
 別の nested tmux 検証では、generic workspace shell に `HERDR_ENV` と `TMUX` が同時に届いた。
 
-fanout は fanout 固有の値だけを `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
-PATH は prepend しない。
+fanout は fanout 固有の値と呼び出し元で解決した `PATH` を `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
 agent executable は fanout の起動環境で解決した絶対パスを bare argv の先頭に置く。
 #427 が注入する lifecycle hook も、同じ時点で解決した fanout executable の絶対パスを呼ぶ。
-これにより agent と hook の起動を herdr server の ambient PATH に依存させない。
+絶対パスだけでは、agent が起動後に実行する `git` や `gh` が server の ambient PATH で解決されるため、server を minimal env で起動した環境では作業が失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
+tmux backend の `BuildResolvedCommand` と同じく、呼び出し元 `PATH` を明示 `--env` で引き継ぎ、agent と hook の実行を herdr server の ambient PATH に依存させない。
+
+`agent.start` の agent 名は workspace 内ではなく session 全体で一意が要求され、重複は `agent_name_taken` で失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
+複数の repo や親が同じ session を共有しても衝突しないよう、v1 の launch 名は repo と親参照を含む決定論的な一意名を `core/naming` で生成する。
 
 ### process exit
 
@@ -503,7 +511,9 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - worktree は root coordinator と sibling child workspace で配置する。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
-- agent は bare argv、明示 `--cwd`、fanout 固有値だけを渡す明示 `--env` で起動する。
+- agent は bare argv、明示 `--cwd`、fanout 固有値と呼び出し元 `PATH` を渡す明示 `--env` で起動する。
+  launch 名は repo と親参照を含む session 全体で一意な決定論的名前を `core/naming` で生成する。
+- CLI 呼び出しは保存済みの検証済み socket path を明示的に選択し、mutation 前に session identity を再確認する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
   tmux pane option は使わない。
