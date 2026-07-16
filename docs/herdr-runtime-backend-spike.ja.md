@@ -123,7 +123,7 @@ fanout は herdr を呼ぶ前に次を実行する。
 - branch、path、base SHA、state mapping を照合する。
 - 既存 branch の HEAD が期待する base SHA と違う場合は、herdr に渡さず fail closed にする。
 - 既存 checkout を作業 pane として再採用する場合は、fanout state が同じ task の所有を示し、branch、path、HEAD がすべて一致するときだけ `worktree open` を使う。
-  cleanup の削除前再登録では、path と fanout state の task 所有一致を要求するが、HEAD 一致は要求しない。
+  cleanup の削除前再登録では、path と fanout state の task 所有一致に加え、state row と checkout git dir の作成時 nonce 一致を要求するが、HEAD 一致は要求しない。
 - `worktree create` を呼ぶ前に、state lock 下で provisional launch intent(slug、branch、path、base SHA)を保存する。
   create 成功から state row 確定までの間にクラッシュしても、再実行は intent と決定論的 naming・worktree provenance の照合で orphan checkout を検証し、一致すれば `worktree open` で再採用できる。
   intent 由来の再採用にも HEAD == 記録済み base SHA を要求する — orphan は agent 未実行のはずであり、HEAD が進んだ checkout は intent の産物と証明できない。
@@ -429,16 +429,17 @@ request は top-level の `id` を必須とし、各 `oneOf` variant がさら�
 ```json
 {
   "properties": {
+    "id": { "type": "string" },
     "method": { "const": "agent.start", "type": "string" },
     "params": { "$ref": "#/schemas/request/$defs/AgentStartParams" }
   },
-  "required": ["method", "params"],
+  "required": ["id", "method", "params"],
   "type": "object"
 }
 ```
 
-上は `oneOf` variant の抜粋であり、実際の request はこれに加えて top-level `required` の `id` を含める。
-fanout が v1 で直接使う shape を schema の `required` と optional field に分ける。
+上は top-level required(`id`)と `oneOf` variant(`method`、`params`)を合成した、request 1 件の実効 shape である。
+以降の一覧は request 全体ではなく各 method の params shape を、schema の `required` と optional field に分けて示す(`session.snapshot` の required が空なのは params に必須項目がないという意味で、request 自体は `id` と `method` を要する)。
 
 ```text
 session.snapshot:
@@ -548,7 +549,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
-  `workspace close` が先行した場合の削除用 `worktree open` は path と task 所有を照合し、作業再採用の HEAD 一致ゲートから除外する。
+  `workspace close` が先行した場合の削除用 `worktree open` は path と task 所有に加え、state row と checkout git dir の作成時 nonce を照合し、欠落または不一致は fail closed にする。作業再採用の HEAD 一致ゲートからは除外する。
 - `report-metadata` は表示専用とし、cold restart 後に消える前提で再送する。
   metadata は `state.json` または liveness 判定に使わない。
   `pane report-metadata` は 0.7.3 で動作するが、sidebar token 表示は 0.7.4 以上を要求する。
