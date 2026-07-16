@@ -519,7 +519,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
 - nudge は focus されていない `idle` または `done` を候補にし、識別情報と fanout-owned state emitter の `idle` を再確認して送信可能と判断した Claude pane にだけ `pane run` で送る。
-  fanout-owned signal は最新の `terminal_id` rebind 後に現在の terminal binding で発行されたものだけを使い、process 未確認の resume placeholder は候補から除外する。
+  fanout-owned signal は、記録済みの最新 `terminal_id` rebind 事象より後に fanout が観測したものだけを使い(binding への刻印は使わない)、process 未確認の resume placeholder は候補から除外する。
   screen manifest と `agent explain` は送信許可に使わない。
   authority がない場合は通知も送らず no-op にし、Codex は nudge 対象外にする。
   status 検査との race は許容する。
