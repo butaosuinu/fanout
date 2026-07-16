@@ -129,15 +129,19 @@ fanout は herdr を呼ぶ前に次を実行する。
   新規 create と git fallback では nonce を mutation 前に生成し、既存 checkout の採用では state row と checkout git dir で一致済みの作成時 nonce を使う。
   同じ launch の再実行では intent の backend / session identity が env / default の backend 選択より優先され、明示指定(`--backend` / env)が intent と矛盾する場合は fail closed にする — workspace mutation 後・row 確定前に crash した launch を、別 backend の再実行が intent recovery より先に拾う事故を防ぐ。
   `worktree create` と `worktree open` は intent の nonce を `--label` に渡す。
+  open 前の pre-state で対象 checkout を指す workspace がない場合は `already_open:false` だけを受理する。
+  `already_open:true` は、pre-state の時点で同じ workspace ID と label が task の state / intent に束縛済みで、全所有条件が一致する場合だけ受理する。
   git fallback は intent 保存後に checkout を作り、git dir marker を書いてから同じ nonce の `worktree open --label` を呼ぶ。
   create / open 成功後は応答または snapshot の `workspace.label` と checkout git dir marker の両方が intent nonce と一致することを要求し、workspace ID、nonce、provenance と phase `worktree-ready` を intent へ保存する。
   label は workspace object の所有しか示さないため、git dir marker の代用にしない。
   phase `worktree-planned` の再実行は、記録済み pre-state と現在値が一致して mutation なしと証明できれば同じ intent と request を再利用する。
   一意な workspace と checkout がすでにあり、label、git dir marker、branch、path、HEAD、provenance が intent と一致する場合は応答喪失として `worktree-ready` へ進める。
+  operation `git-fallback` では、workspace がなくても checkout と git dir marker が intent に一致すれば、同じ nonce の `worktree open --label` から再開できる。
   create 成功から git dir marker 書き込みまでの crash を含め、nonce の両側を証明できない crash window は自動採用せず fail closed にする。
-  mutation 前失敗後に launch を中止する場合は pre-state 不変を再検証して intent を state lock 下で削除し、検証済み rollback 完了時は pre-state 復元と intent 削除を同じ state save で確定する。
+  mutation 前失敗後または検証済み rollback 後に launch を中止する場合は、pre-state の不変または復元と intent 削除を同じ state save で確定する。
+  rollback 後に fallback へ進む場合は intent を削除せず、後述の operation / phase へ同じ state save で遷移させる。
   mutation の有無または rollback 完了が不明な場合は intent を残して fail closed にする。
-  `agent start` の前に agent launch nonce を生成し、その衝突耐性のある hash を含む session 一意の deterministic agent name、発行する argv / env fingerprint、API で再観測できる argv / cwd を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
+  `agent start` の前に agent launch nonce と emitter nonce を生成し、hook へ注入する emitter binding、agent launch nonce の衝突耐性のある hash を含む session 一意の deterministic agent name、発行する argv / env fingerprint、API で再観測できる argv / cwd を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
   env fingerprint は発行内容の監査にだけ使い、lost-response recovery の照合条件には使わない。
   成功応答を受けたら returned PaneRef、terminal identity、応答の argv を加えて phase `agent-started` を保存する。
   phase `worktree-ready` で同名 agent が存在せず、child checkout が clean かつ HEAD == 記録済み base SHA の場合だけ `agent start` へ進める。
@@ -163,7 +167,7 @@ fanout は herdr を呼ぶ前に次を実行する。
   herdr が mutation 前に失敗した場合と、事後条件違反以外のエラーでは fallback せず fail closed にする。
 
 rollback では `worktree remove --workspace <id> --json` を force なしで使う。
-rollback 前にも launch-local nonce、create 応答、worktree provenance を照合し、今回の create が作った資源だけを対象にする。
+rollback 前にも intent の worktree ownership nonce、create 応答、worktree provenance を照合し、今回の create が作った資源だけを対象にする。
 dirty または untracked file がある場合は、今回の呼び出し後に plugin や別 process が書いた可能性を除外できないため fail closed にする。
 自動 rollback では `--force` を使わない。
 
@@ -184,20 +188,22 @@ dirty な child worktree を force なしで削除すると、`dirty_worktree_re
 `--force` では checkout と workspace が消え、branch は残った。
 clean な focused child を削除すると、focus は repository root workspace へ戻った。
 
-state row 起点の cleanup は、通常、force、削除用再登録の全経路で最初の mutation 前に row key、backend / session、workspace identity、repo、branch、path、worktree provenance、作成時 nonce、pre-state を cleanup intent として state lock 下で保存する。
+state row 起点の cleanup は、通常、force、削除用再登録の全経路で最初の mutation 前に row key、backend / session、workspace identity、workspace label、repo、branch、path、worktree provenance、作成時 nonce、pre-state を cleanup intent として state lock 下で保存する。
 各 mutation の直前にも intent、state row、runtime、checkout git dir を再取得し、同じ所有条件を照合する。
 workspace identity は通常経路では state row の保存済み ID、削除用再登録では cleanup intent に束縛した新しい ID とする。
+workspace label は両経路とも作成時 nonce と完全一致させる。
 public workspace ID、path、branch の一致だけを削除権限に使わない。
 nonce が欠落または不一致の場合、または一致する state row が一意でない場合は fail closed にする。
 
 `workspace close` を先に実行すると checkout は残る。
 続く `worktree remove --workspace <closed-id>` は `workspace_not_found` になる。
-この場合は保存済みの旧 workspace ID が検証済み session に存在しないことを確認し、path と fanout state の task 所有一致に加え、checkout の実体所有権を照合する。
+この場合は保存済みの旧 workspace ID が検証済み session に存在せず、対象 checkout を指す workspace が一つもないことを確認し、path と fanout state の task 所有一致に加え、checkout の実体所有権を照合する。
 実体所有権は、fanout が create / adopt 時に checkout の git dir(`git rev-parse --git-dir` 配下)へ書き込み state row にも保存した作成時 nonce の一致で確認する(HEAD の進行は許容する)。
 git common dir・branch・path の一致は nonce の前提条件にすぎず、単独では所有権の証明にしない — 元 checkout の削除後に同じ path・branch で作り直された worktree は nonce を持たないため、この照合で除外して削除しない。
 nonce が欠落または不一致の checkout は fail closed にし、自動 cleanup では触らない。
 削除用再登録では cleanup intent の operation を `removal-reopen` として確定してから、同じ nonce を渡す `worktree open --label` を呼ぶ。
-open 応答を失った場合も、旧 ID が不在で label、git dir marker、provenance が一致する workspace が一つだけなら、その新しい workspace ID を回復できる。
+初回応答は `already_open:false` だけを受理する。
+open 応答を失った場合だけ、pre-state 後に現れた workspace が一つで、旧 ID の不在、label、git dir marker、provenance が一致すれば、その新しい workspace ID を回復できる。
 open 応答または回復した新 ID は cleanup intent の一時 removal binding として保存し、通常の state row の旧 IDを上書きしない。
 remove の直前に旧 ID が引き続き不在で、新 ID の workspace が一意に同じ nonce 所有 checkout を指すことと全所有条件を再照合する。
 open が mutation 前に失敗した場合は runtime / git の不変を確認して同じ cleanup intent を再利用または削除し、remove 完了時は資源消滅の検証、state row 更新、intent 削除を同じ state save で確定する。
@@ -570,9 +576,13 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - create / open / git fallback の mutation 前に provisional intent を保存し、同じ worktree ownership nonce を workspace label と checkout git dir marker の両方で照合する。
   response loss は phase と事後条件から回復し、mutation の有無を証明できない場合は intent を残して fail closed にする。
+  `worktree open` の `already_open:true` は pre-state で同じ workspace ID / label が task に束縛済みの場合だけ受理する。
 - `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
 - agent は bare argv、明示 `--cwd`、fanout 固有値と呼び出し元 `PATH` を渡す明示 `--env` で起動する。
   launch 名は repo と親参照に agent launch nonce の hash を加え、同じ intent では安定し session 全体で一意になる決定論的名前を `core/naming` で生成する。
+  `agent start` 前に agent launch nonce、emitter nonce と binding、agent name、argv / env fingerprint、argv / cwd を intent の phase `agent-starting` として保存する。
+  応答喪失時は expected session / workspace と nonce 所有 worktree 上の一意な同名 agent について `process-info` の argv / cwd を照合し、観測した PaneRef、terminal identity、process identity を束縛する。
+  保存済み応答後に pane が消滅した場合は同じ emitter nonce の pending `done` があるときだけ final row を確定し、agent の欠落、重複、識別不一致は fail closed にする。
 - CLI 呼び出しは保存済みの検証済み socket path を明示的に選択し、mutation 前に session identity を再確認する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
@@ -603,9 +613,11 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
-  通常、force、削除用再登録の全経路で remove 直前に backend / session / workspace identity、repo、branch、path、provenance、state row と checkout git dir の作成時 nonce を照合し、欠落または不一致は fail closed にする。
-  `workspace close` が先行した場合は旧 workspace ID の不在と nonce 所有 checkout を確認し、cleanup intent を保存してから同じ nonce の `worktree open --label` を呼ぶ。
-  open 応答の新 workspace ID を一時 removal binding として保存し、remove 直前に旧 ID の不在、新 ID、nonce、全所有条件を再照合する。
+  通常、force、削除用再登録の全経路で最初の mutation 前に cleanup intent を保存する。
+  通常、force、削除用再登録の全経路で remove 直前に backend / session / workspace identity、workspace label、repo、branch、path、provenance、state row と checkout git dir の作成時 nonce を照合し、欠落または不一致は fail closed にする。
+  `workspace close` が先行した場合は旧 workspace ID の不在、対象 checkout を指す workspace が 0 件であること、nonce 所有 checkout を確認し、cleanup intent を operation `removal-reopen` へ遷移させてから同じ nonce の `worktree open --label` を呼ぶ。
+  初回 open は `already_open:false` を要求する。
+  open 応答または応答喪失から回復した新 workspace ID を一時 removal binding として保存し、remove 直前に旧 ID の不在、新 ID、nonce、全所有条件を再照合する。
   削除用再登録は作業再採用の HEAD 一致ゲートから除外する。
 - `report-metadata` は表示専用とし、cold restart 後に消える前提で再送する。
   metadata は `state.json` または liveness 判定に使わない。
