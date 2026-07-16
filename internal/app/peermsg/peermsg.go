@@ -72,6 +72,30 @@ func DefaultDeps() Deps {
 	}
 }
 
+// withDefaults fills nil seams from DefaultDeps. The exported watch entry
+// points apply it so an in-process caller passing a zero-value or partial
+// Deps (a valid pattern for every seam it does not exercise) degrades to the
+// production wiring instead of panicking on a nil function call.
+func (d Deps) withDefaults() Deps {
+	def := DefaultDeps()
+	if d.DetectIdentity == nil {
+		d.DetectIdentity = def.DetectIdentity
+	}
+	if d.ListLivePanes == nil {
+		d.ListLivePanes = def.ListLivePanes
+	}
+	if d.SendLine == nil {
+		d.SendLine = def.SendLine
+	}
+	if d.LoadState == nil {
+		d.LoadState = def.LoadState
+	}
+	if d.Tick == nil {
+		d.Tick = def.Tick
+	}
+	return d
+}
+
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 
 // defaultLoadState resolves and loads the owner checkout's .fanout/state.json

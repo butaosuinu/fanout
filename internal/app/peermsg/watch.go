@@ -52,11 +52,19 @@ func (e WatchEvent) HumanLine() string {
 		e.Msg.ID, e.FromLabel, e.ToLabel, e.Msg.Kind, msgTableBody(e.Msg.Body)))
 }
 
-// sanitizeWatchLine blanks C0 control bytes and DEL. Without their ESC/BEL
+// sanitizeWatchLine blanks the runes a terminal (or a text-rendering agent
+// surface) could interpret as control state: C0 bytes, DEL, C1 controls
+// (U+0080-U+009F — xterm-family terminals honor the single-rune CSI U+009B and
+// OSC U+009D in UTF-8 mode), and Unicode bidi embedding/override/isolate
+// characters (visual reordering can spoof the from/to framing). Without the
 // introducers the printable remainder of any escape sequence is inert.
 func sanitizeWatchLine(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7F {
+		switch {
+		case r < 0x20 || r == 0x7F, // C0 + DEL
+			r >= 0x80 && r <= 0x9F,     // C1 (CSI, OSC, ...)
+			r >= 0x202A && r <= 0x202E, // bidi embeddings/overrides
+			r >= 0x2066 && r <= 0x2069: // bidi isolates
 			return ' '
 		}
 		return r
@@ -72,6 +80,10 @@ type Watcher struct {
 	store  *msgstore.Store
 	self   int
 	parent string
+	// labels caches the last successful plan task-id resolution so a transient
+	// Peers failure after the mark-read commit degrades to stale labels instead
+	// of dropping already-marked messages.
+	labels map[int]string
 }
 
 // OpenWatcher resolves the watching pane's identity (explicit --self/--parent
@@ -84,7 +96,7 @@ type Watcher struct {
 // constructor through Run.
 func OpenWatcher(req Request, deps Deps, lg *log.Logger) (*Watcher, exitcode.Code) {
 	req.Verb = "watch"
-	self, parent, _, code := resolveMsgIdentity(&req, deps, lg)
+	self, parent, _, code := resolveMsgIdentity(&req, deps.withDefaults(), lg)
 	if code != exitcode.OK {
 		return nil, code
 	}
@@ -114,17 +126,23 @@ func openWatcher(verb string, self int, parent string, lg *log.Logger) (*Watcher
 //
 // The ADR trade-off (Refs #496): reusing that transaction means messages are
 // committed read before the caller writes them anywhere, so a crash between
-// Poll returning and the output landing loses the batch. Labels are resolved
-// BEFORE the marking read so at least no fallible step remains between the
-// commit and the return.
+// Poll returning and the output landing loses the batch. Plan task-id labels
+// are therefore resolved best-effort AFTER the commit — resolving them fresh
+// each poll picks up a sender that registered just before sending, and a
+// transient Peers failure falls back to the previous poll's cache (degraded
+// "#<n>" labels at worst) instead of erroring out messages that are already
+// marked read.
 func (w *Watcher) Poll() ([]WatchEvent, error) {
-	labels, err := planPeerLabels(w.store, w.parent)
-	if err != nil {
-		return nil, err
-	}
 	msgs, _, err := w.store.Inbox(w.self, false, true, team.Now())
 	if err != nil {
 		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	labels := w.labels
+	if fresh, err := planPeerLabels(w.store, w.parent); err == nil {
+		labels, w.labels = fresh, fresh
 	}
 	events := make([]WatchEvent, len(msgs))
 	for i, m := range msgs {
@@ -151,6 +169,7 @@ type watchPoller interface {
 // Watcher from the already-resolved identity, announce on stderr (stdout
 // carries message lines only), and follow the inbox until a signal.
 func runMsgWatch(req *Request, self int, parent string, pane msgstore.Peer, deps Deps, lg *log.Logger) exitcode.Code {
+	deps = deps.withDefaults()
 	w, code := openWatcher(req.Verb, self, parent, lg)
 	if code != exitcode.OK {
 		return code
@@ -171,7 +190,7 @@ func runMsgWatch(req *Request, self int, parent string, pane msgstore.Peer, deps
 // watchMaxFailures-th consecutive failure exits 4. A signal exits 0.
 func watchLoop(w watchPoller, req *Request, sig <-chan os.Signal, deps Deps, lg *log.Logger) exitcode.Code {
 	maxPolls := watchMaxPolls()
-	interval := time.Duration(req.Interval) * time.Second
+	interval := watchTickInterval(req.Interval)
 	failures := 0
 	for polls := 1; ; polls++ {
 		events, err := w.Poll()
@@ -204,6 +223,21 @@ func watchLoop(w watchPoller, req *Request, sig <-chan os.Signal, deps Deps, lg 
 	}
 }
 
+// watchTickInterval clamps the poll interval for in-process callers of the
+// exported Request (the CLI parser enforces 1-86400 before it gets here): a
+// zero-value Interval falls to the documented default instead of busy-looping
+// on time.After(0), and the ceiling keeps the duration far from int64
+// overflow (which would go negative and also busy-loop).
+func watchTickInterval(seconds int) time.Duration {
+	if seconds < 1 {
+		seconds = 2
+	}
+	if seconds > 86400 {
+		seconds = 86400
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // watchMaxPolls reads the test-only poll bound; 0 means unbounded.
 func watchMaxPolls() int {
 	n, err := strconv.Atoi(os.Getenv(watchPollsEnv))
@@ -217,19 +251,28 @@ func watchMaxPolls() int {
 // --json one compact JSON object per line (json.Marshal — deliberately not the
 // indented writeMsgJSON form, so a line-oriented consumer never has to join
 // fragments). The JSON schema is the shared msgMessageView.
+//
+// Write errors are fatal (exit 4), not warnings: the batch is already marked
+// read, so a persistently broken stdout (ENOSPC, closed pipe without SIGPIPE)
+// silently discarding every future message would be worse than stopping —
+// unread state is preserved for everything not yet polled.
 func emitWatchEvents(req *Request, events []WatchEvent, lg *log.Logger) exitcode.Code {
 	for _, e := range events {
-		if !req.JSON {
-			fmt.Fprintln(lg.Stdout(), e.HumanLine())
-			continue
+		line := ""
+		if req.JSON {
+			out, err := json.Marshal(msgMessageView{Message: e.Msg, FromTask: e.fromTask, ToTask: e.toTask})
+			if err != nil {
+				lg.Err("msg watch: failed to encode message: %v", err)
+				return exitcode.Backend
+			}
+			line = string(out)
+		} else {
+			line = e.HumanLine()
 		}
-		v := msgMessageView{Message: e.Msg, FromTask: e.fromTask, ToTask: e.toTask}
-		out, err := json.Marshal(v)
-		if err != nil {
-			lg.Err("msg watch: failed to encode message: %v", err)
+		if _, err := fmt.Fprintln(lg.Stdout(), line); err != nil {
+			lg.Err("msg watch: failed to write to stdout: %v", err)
 			return exitcode.Backend
 		}
-		fmt.Fprintln(lg.Stdout(), string(out))
 	}
 	return exitcode.OK
 }

@@ -62,6 +62,14 @@ func TestWatchEventHumanLine(t *testing.T) {
 			},
 			want: "[fanout msg #5] #71 -> #70 (no te): ok ]0;title  [2Kdone",
 		},
+		{
+			name: "C1 controls and bidi overrides are blanked (single-rune CSI, RTL spoofing)",
+			ev: WatchEvent{
+				Msg:       msgstore.Message{ID: 6, From: 71, To: new(70), Kind: "note", Body: "a\u009b2Jb\u202ereversed\u202cc"},
+				FromLabel: "#71", ToLabel: "#70",
+			},
+			want: "[fanout msg #6] #71 -> #70 (note): a 2Jb reversed c",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.ev.HumanLine(); got != tt.want {
@@ -165,6 +173,97 @@ func TestWatcherPollPlanLabels(t *testing.T) {
 	line := out.String()
 	if !strings.Contains(line, `"fromTask":"task-b"`) || !strings.Contains(line, `"toTask":"task-a"`) {
 		t.Errorf("JSON line = %q, want fromTask/toTask task ids", line)
+	}
+}
+
+// TestWatcherPollLateRegistration pins the label-resolution ordering: labels
+// are resolved after the mark-read commit, so a sender that registers before
+// the poll (even after sending) is labeled, while a still-unregistered sender
+// degrades to its raw synthetic number — delivered, never lost.
+func TestWatcherPollLateRegistration(t *testing.T) {
+	const parent = "plan:demo"
+	numA := team.TaskPeerNum(parent, "task-a")
+	numB := team.TaskPeerNum(parent, "task-b")
+	w := newTestWatcher(t, numA, parent)
+	now := "2026-06-13T00:00:00Z"
+
+	// send lands before the sender's register: degraded numeric label.
+	if _, err := w.store.Send(numB, numA, "note", "sent before register", now); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	events, err := w.Poll()
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(events) != 1 || strings.HasPrefix(events[0].FromLabel, "task-") {
+		t.Fatalf("events = %+v, want 1 event with a raw numeric FromLabel", events)
+	}
+
+	// once registered, the next message resolves to the task id.
+	if _, err = w.store.Register(msgstore.Peer{Issue: numB, TaskID: "task-b"}, now); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if _, err = w.store.Send(numB, numA, "note", "sent after register", now); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	events, err = w.Poll()
+	if err != nil {
+		t.Fatalf("second Poll() error = %v", err)
+	}
+	if len(events) != 1 || events[0].FromLabel != "task-b" {
+		t.Fatalf("events = %+v, want 1 event from task-b", events)
+	}
+}
+
+// failWriter fails every write, standing in for a full disk or a closed
+// no-SIGPIPE stdout sink.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// TestEmitWatchEventsWriteFailureIsFatal guarantees a broken stdout exits 4
+// instead of silently discarding already-marked-read messages forever.
+func TestEmitWatchEventsWriteFailureIsFatal(t *testing.T) {
+	events := []WatchEvent{{Msg: msgstore.Message{ID: 1, From: 71, To: new(70), Kind: "note", Body: "a"}, FromLabel: "#71", ToLabel: "#70"}}
+	for _, tt := range []struct {
+		name string
+		req  Request
+	}{
+		{name: "human line write failure", req: Request{Verb: "watch"}},
+		{name: "json line write failure", req: Request{Verb: "watch", JSON: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var errb strings.Builder
+			lg := log.NewWith(failWriter{}, &errb, false)
+			if code := emitWatchEvents(&tt.req, events, lg); code != exitcode.Backend {
+				t.Errorf("emitWatchEvents code = %d, want Backend", code)
+			}
+			if !strings.Contains(errb.String(), "failed to write to stdout") {
+				t.Errorf("stderr = %q, want a write-failure error", errb.String())
+			}
+		})
+	}
+}
+
+// TestWatchTickInterval pins the in-process clamp: the CLI enforces 1-86400
+// at parse time, but exported-Request callers get the documented default for
+// a zero value and never a negative (overflowed) duration.
+func TestWatchTickInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		seconds int
+		want    time.Duration
+	}{
+		{name: "zero value falls to the default", seconds: 0, want: 2 * time.Second},
+		{name: "negative falls to the default", seconds: -7, want: 2 * time.Second},
+		{name: "in-range passes through", seconds: 5, want: 5 * time.Second},
+		{name: "above the ceiling clamps instead of overflowing", seconds: 9999999999, want: 86400 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := watchTickInterval(tt.seconds); got != tt.want {
+				t.Errorf("watchTickInterval(%d) = %v, want %v", tt.seconds, got, tt.want)
+			}
+		})
 	}
 }
 
