@@ -328,13 +328,16 @@ v1 は focus されておらず、public status が `idle` または `done` で�
 候補に対して、保存済み PaneRef との識別情報の一致と `idle` の確定根拠を確認する。
 `idle` の確定根拠は、Claude argv に注入した `--settings` lifecycle hook が fanout CLI 経由で `state.json` に記録した fanout-owned signal の `idle` に限定する。
 この runtime 非依存 emitter は #427 で追加し、`SessionEnd` は `done` として記録する。
-`terminal_id` を rebind した時点で既存の fanout-owned signal は nudge authority を失い、現在の terminal binding で発行された新しい fanout-owned signal だけを採用する。
+`terminal_id` を rebind した時点で、fanout は `state.json` に保存済みの fanout-owned signal の nudge authority を無効化し、rebind 事象を記録する。
+信号を binding に帰属させる刻印は使わない — `terminal_id` は pane env に無く、ambient の `HERDR_*` ID は restart を跨いで不変のため、帰属は信号の中身では判定できない。
+authority は、記録済み rebind 事象より後に fanout が観測した新しい fanout-owned signal だけが回復する。
+旧 process は restart で終了しており、herdr は event を restart 越しに再送しないため、rebind 後に到着する信号は現 binding 下の process に由来する。
 Codex は herdr v1 の fanout-owned emitter を持たないため nudge 対象外にする。
 `agent explain --json` は診断に使えるが、screen manifest の明示的な idle rule も未知の permission UI を除外できないため、送信許可には使わない。
 `default_known_agent_idle_fallback` も同様に拒否する。
 
 送信直前に snapshot と fanout state を再取得し、public status、focus、`terminal_id`、`agent_session`、worktree provenance を再照合する。
-fanout-owned signal は最新の rebind 後に現在の terminal binding で発行され、状態が `idle` であることを検証する。
+fanout-owned signal が記録済みの最新 rebind 事象より後に観測されたものであり、状態が `idle` であることを検証する。
 attach 前の再開待ちに現れる `agent_session` ref は、想定した process を確認するまで resume placeholder として送信候補から除外する。
 すべて一致して送信可能と確認できた pane にだけ、`pane run` で text と Enter を一操作で送る。
 herdr 0.7.3 には状態条件付き send または CAS がないため、再照合と submit の間の race は残る。
