@@ -102,9 +102,16 @@ seed_msg_db() {
 # lines to stdout, so these tests bypass run_fanout's 2>&1 fold and split the
 # streams explicitly.
 run_watch() {
-  local cmd
+  local cmd errfile
   printf -v cmd '%q ' "$FANOUT_BIN" msg watch "$@"
-  run bash -c "FANOUT_WATCH_POLLS=1 $cmd 2>/dev/null"
+  printf -v errfile '%q' "$BATS_TEST_TMPDIR/watch-stderr.txt"
+  run bash -c "FANOUT_WATCH_POLLS=1 $cmd 2>$errfile"
+  # stderr is split off so goldens see pure stdout; surface it when the run
+  # fails so exit-code failures keep their diagnostic.
+  if [ "$status" -ne 0 ]; then
+    echo "--- watch stderr:"
+    cat "$BATS_TEST_TMPDIR/watch-stderr.txt"
+  fi
 }
 
 @test "msg watch human golden: one line per delivered message, stdout only" {

@@ -51,14 +51,14 @@ type WatchEvent struct {
 }
 
 // HumanLine flattens the event to the one-line form watch emits per message
-// (and the codex bridge injects into an agent turn): the body is collapsed to
-// a single line the way the inbox table renders it, and control bytes are
-// blanked so a peer-controlled body or kind cannot smuggle terminal escape
+// (and the codex bridge injects into an agent turn): sanitizeWatchLine
+// collapses the body to a single line (\r/\n are C0 runes) and blanks control
+// bytes so a peer-controlled body or kind cannot smuggle terminal escape
 // sequences (or forge "[fanout msg #N]" framing via cursor movement) into the
 // watching terminal or an agent prompt.
 func (e WatchEvent) HumanLine() string {
 	return sanitizeWatchLine(fmt.Sprintf("[fanout msg #%d] %s -> %s (%s): %s",
-		e.Msg.ID, e.FromLabel, e.ToLabel, e.Msg.Kind, msgTableBody(e.Msg.Body)))
+		e.Msg.ID, e.FromLabel, e.ToLabel, e.Msg.Kind, e.Msg.Body))
 }
 
 // sanitizeWatchLine blanks the runes a terminal (or a text-rendering agent
@@ -68,13 +68,18 @@ func (e WatchEvent) HumanLine() string {
 // characters (visual reordering can spoof the from/to framing). Without the
 // introducers the printable remainder of any escape sequence is inert.
 func sanitizeWatchLine(s string) string {
+	// Zero-width joiners/non-joiners and soft hyphens stay: they carry no
+	// hidden content of their own and blanking them breaks emoji sequences and
+	// Indic scripts. The tag block, by contrast, encodes an entire invisible
+	// text channel and has no legitimate use in a message line.
 	return strings.Map(func(r rune) rune {
 		switch {
 		case r < 0x20 || r == 0x7F, // C0 + DEL
-			r >= 0x80 && r <= 0x9F,     // C1 (CSI, OSC, ...)
-			r >= 0x202A && r <= 0x202E, // bidi embeddings/overrides
-			r >= 0x2066 && r <= 0x2069, // bidi isolates
-			r == 0x2028 || r == 0x2029: // Unicode line/paragraph separators
+			r >= 0x80 && r <= 0x9F,       // C1 (CSI, OSC, ...)
+			r >= 0x202A && r <= 0x202E,   // bidi embeddings/overrides
+			r >= 0x2066 && r <= 0x2069,   // bidi isolates
+			r == 0x2028 || r == 0x2029,   // Unicode line/paragraph separators
+			r >= 0xE0000 && r <= 0xE007F: // tag characters (invisible text)
 			return ' '
 		}
 		return r
@@ -222,6 +227,12 @@ func runMsgWatch(req *Request, self int, parent string, pane msgstore.Peer, deps
 // watchMaxFailures-th consecutive failure exits 4. A signal exits 0.
 func watchLoop(w watchPoller, req *Request, sig <-chan os.Signal, deps Deps, lg *log.Logger) exitcode.Code {
 	maxPolls := watchMaxPolls()
+	if maxPolls > 0 {
+		// The bound silently turns a blocking follower into a finite run, so a
+		// leaked env var (.envrc, CI job) must not masquerade as a healthy
+		// watch: announce it on stderr.
+		lg.Warn("msg watch: %s=%d is set (test-only), exiting after %d poll(s)", watchPollsEnv, maxPolls, maxPolls)
+	}
 	interval := watchTickInterval(req.Interval)
 	failures := 0
 	for polls := 1; ; polls++ {

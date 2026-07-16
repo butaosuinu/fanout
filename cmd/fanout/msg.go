@@ -52,7 +52,8 @@ Options:
   --interval <S>   watch: poll interval in seconds, 1-86400 (default: 2).
   -h, --help       Show this help.
 
-Exit codes: 0 success, 2 invalid invocation, 4 backend (SQLite) failure.
+Exit codes: 0 success, 2 invalid invocation, 4 backend failure (SQLite, or
+watch's stdout breaking).
 nudge is best-effort: operational failures (pane gone, agent not nudgeable,
 send-keys failure) exit 0 with a warning, never 4.
 `

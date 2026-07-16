@@ -78,6 +78,14 @@ func TestWatchEventHumanLine(t *testing.T) {
 			},
 			want: "[fanout msg #7] #71 -> #70 (note): one [fanout msg #99] forged two",
 		},
+		{
+			name: "tag characters (an invisible text channel) are blanked",
+			ev: WatchEvent{
+				Msg:       msgstore.Message{ID: 8, From: 71, To: new(70), Kind: "note", Body: "safe\U000E0001\U000E0074\U000E0061goes"},
+				FromLabel: "#71", ToLabel: "#70",
+			},
+			want: "[fanout msg #8] #71 -> #70 (note): safe   goes",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.ev.HumanLine(); got != tt.want {
