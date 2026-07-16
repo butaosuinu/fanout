@@ -125,8 +125,9 @@ fanout は herdr を呼ぶ前に次を実行する。
 - 既存 checkout を作業 pane として再採用する場合は、fanout state が同じ task の所有を示し、branch、path、HEAD がすべて一致するときだけ `worktree open` を使う。
   cleanup の削除前再登録では、path と fanout state の task 所有一致を要求するが、HEAD 一致は要求しない。
 - `worktree create` を呼ぶ前に、state lock 下で provisional launch intent(slug、branch、path、base SHA)を保存する。
-  create 成功から state row 確定までの間にクラッシュしても、再実行は intent と決定論的 naming・worktree provenance の照合で orphan checkout を検証し、一致すれば `worktree open` で再採用できる(HEAD 一致ゲートは intent 由来の再採用には適用しない)。
-  照合に失敗した orphan は自動では触らず fail closed にする。
+  create 成功から state row 確定までの間にクラッシュしても、再実行は intent と決定論的 naming・worktree provenance の照合で orphan checkout を検証し、一致すれば `worktree open` で再採用できる。
+  intent 由来の再採用にも HEAD == 記録済み base SHA を要求する — orphan は agent 未実行のはずであり、HEAD が進んだ checkout は intent の産物と証明できない。
+  照合または HEAD 一致に失敗した orphan は自動では触らず fail closed にする。
 - `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD を照合する。
 - `worktree create` の事後条件違反をそのまま fallback の条件にしない。
   今回の呼び出しが作ったと証明できる workspace と checkout だけを rollback 対象にする。
@@ -523,7 +524,8 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
   tmux pane option は使わない。
-  hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH` と安定した row identity(parent 参照 + slug または task key)を hook 環境へ注入し、emitter は cwd 解決に依存しない。
+  hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH` と state 実装上の row key — issue mode は `(parent, issueNum)`、plan mode は `(plan:<slug>, taskId)` — を hook 環境へ注入する。
+  emitter は cwd や slug からの再解決を行わず、注入された key だけで row を特定する。
   Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
   Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
   identity 不一致は agent 種別にかかわらず `stale` とする。
