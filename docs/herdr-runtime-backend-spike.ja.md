@@ -124,7 +124,8 @@ fanout は herdr を呼ぶ前に次を実行する。
 - 既存 branch の HEAD が期待する base SHA と違う場合は、herdr に渡さず fail closed にする。
 - 既存 checkout を作業 pane として再採用する場合は、fanout state が同じ task の所有を示し、branch、path、HEAD がすべて一致するときだけ `worktree open` を使う。
   cleanup の削除前再登録では、path と fanout state の task 所有一致に加え、state row と checkout git dir の作成時 nonce 一致を要求するが、HEAD 一致は要求しない。
-- `worktree create` を呼ぶ前に、state lock 下で provisional launch intent(slug、branch、path、base SHA)を保存する。
+- `worktree create` を呼ぶ前に、state lock 下で provisional launch intent(owner row key、backend、検証済み herdr session / socket identity、slug、branch、path、base SHA)を保存する。
+  同じ launch の再実行では intent の backend / session identity が env / default の backend 選択より優先され、明示指定(`--backend` / env)が intent と矛盾する場合は fail closed にする — create 後・row 確定前に crash した launch を、別 backend の再実行が intent recovery より先に拾う事故を防ぐ。
   create 成功から state row 確定までの間にクラッシュしても、再実行は intent と決定論的 naming・worktree provenance の照合で orphan checkout を検証し、一致すれば `worktree open` で再採用できる。
   intent 由来の再採用にも HEAD == 記録済み base SHA を要求する — orphan は agent 未実行のはずであり、HEAD が進んだ checkout は intent の産物と証明できない。
   照合または HEAD 一致に失敗した orphan は自動では触らず fail closed にする。
@@ -439,7 +440,7 @@ request は top-level の `id` を必須とし、各 `oneOf` variant がさら�
 ```
 
 上は top-level required(`id`)と `oneOf` variant(`method`、`params`)を合成した、request 1 件の実効 shape である。
-以降の一覧は request 全体ではなく各 method の params shape を、schema の `required` と optional field に分けて示す(`session.snapshot` の required が空なのは params に必須項目がないという意味で、request 自体は `id` と `method` を要する)。
+以降の一覧は request 全体ではなく各 method の params shape を、schema の `required` と optional field に分けて示す(`session.snapshot` の required が空なのは params に必須項目がないという意味で、request 自体は `id`、`method`、`params` を要する)。
 
 ```text
 session.snapshot:
@@ -528,7 +529,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
   tmux pane option は使わない。
-  hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH` と state 実装上の row key — issue mode は `(parent, issueNum)`、plan mode は `(plan:<slug>, taskId)` — を hook 環境へ注入する。
+  hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH` と state 実装上の row key — `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)`(manual / watch 等の synthetic launch を含む) — を hook 環境へ注入する。
   emitter は cwd や slug からの再解決を行わず、注入された key だけで row を特定する。
   Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
   Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
