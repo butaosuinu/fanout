@@ -124,6 +124,9 @@ fanout は herdr を呼ぶ前に次を実行する。
 - 既存 branch の HEAD が期待する base SHA と違う場合は、herdr に渡さず fail closed にする。
 - 既存 checkout を作業 pane として再採用する場合は、fanout state が同じ task の所有を示し、branch、path、HEAD がすべて一致するときだけ `worktree open` を使う。
   cleanup の削除前再登録では、path と fanout state の task 所有一致を要求するが、HEAD 一致は要求しない。
+- `worktree create` を呼ぶ前に、state lock 下で provisional launch intent(slug、branch、path、base SHA)を保存する。
+  create 成功から state row 確定までの間にクラッシュしても、再実行は intent と決定論的 naming・worktree provenance の照合で orphan checkout を検証し、一致すれば `worktree open` で再採用できる(HEAD 一致ゲートは intent 由来の再採用には適用しない)。
+  照合に失敗した orphan は自動では触らず fail closed にする。
 - `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD を照合する。
 - `worktree create` の事後条件違反をそのまま fallback の条件にしない。
   今回の呼び出しが作ったと証明できる workspace と checkout だけを rollback 対象にする。
@@ -160,7 +163,9 @@ clean な focused child を削除すると、focus は repository root workspace
 
 `workspace close` を先に実行すると checkout は残る。
 続く `worktree remove --workspace <closed-id>` は `workspace_not_found` になる。
-この場合は path と fanout state の task 所有一致を確認し、残った checkout を `worktree open` で削除用に再登録してから `worktree remove` する。
+この場合は path と fanout state の task 所有一致に加え、checkout の実体所有権を照合してから、残った checkout を `worktree open` で削除用に再登録して `worktree remove` する。
+実体所有権は同じ git common dir に属すること、記録済み branch が checkout されていること、workspace の worktree provenance の 3 点で確認する(HEAD の進行は許容する)。
+元 checkout の削除後に同じ path へ作られた無関係な worktree は、この照合で除外して削除しない。
 削除用の再登録は作業 pane の再採用ではないため、branch の HEAD 一致ゲートを適用しない。
 
 cleanup の順序を次で固定する。
@@ -508,6 +513,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 #423、#425 から #429、#494 は次の制約を前提にする。
 
 - backend は明示的に起動済みの named herdr session を使う。
+- backend 選択は親単位で sticky にする: 対象親に既存の state row があれば同じ backend を再利用し、`--backend` / env が既存親の backend と矛盾する場合は分裂させず fail closed にする(明示的な移行はユーザー操作)。
 - worktree は root coordinator と sibling child workspace で配置する。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
@@ -517,6 +523,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
   tmux pane option は使わない。
+  hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH` と安定した row identity(parent 参照 + slug または task key)を hook 環境へ注入し、emitter は cwd 解決に依存しない。
   Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
   Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
   identity 不一致は agent 種別にかかわらず `stale` とする。
