@@ -17,11 +17,11 @@ herdr runtime backend v1 の API と制約は [実機検証](herdr-runtime-backe
 
 対応エージェントは 14 以上(Claude Code / Codex / Droid / Amp / OpenCode / Cursor / Copilot CLI ほか)。GitHub 連携・PR ライフサイクル・issue 駆動の作業割り当ては持たない。
 
-## レイヤーが違い、runtime は選択できる
+## レイヤーが違い、ランタイムは選択できる
 
-herdr は実行環境レイヤー(tmux の代替)、fanout は GitHub issue → worktree → pane → PR を配線するワークフローレイヤーであり、機能面の直接競合は狭い。
+herdr は実行環境レイヤー(tmux の代替)、fanout は GitHub issue → worktree → ペイン → PR を配線するワークフローレイヤーであり、機能面の直接競合は狭い。
 fanout v1 の設計では tmux を既定 backend、herdr を opt-in backend として扱う。
-tmux と herdr は一つの親 fan-out の runtime としては排他で、backend stickiness により途中で分割しない契約にする。
+tmux と herdr は一つの親 fan-out のランタイムとしては排他で、backend stickiness により途中で分割しない契約にする。
 実装後の fanout state には両 backend の行が共存できる。
 ユーザーが fanout と herdr のどちらか一方を製品として選ぶ関係ではない。
 herdr が issue 駆動やレビューゲートを足せば fanout の領域への侵食が始まる。
@@ -49,7 +49,7 @@ tmux backend にはこの 3 点を tmux の上で提供する価値が残る(後
 
 中期の脅威は herdr のエージェント自己オーケストレーション路線。SKILL.md + Socket API は「エージェントがヘルパーを生やし、待ち、回収する」方向で、fanout の skill 層(fan-out 判断は LLM、CLI は決定論)と思想が近い。herdr がここに GitHub 連携を足すと正面衝突するが、現時点の herdr は issue・PR・レビューに一切触れていない。
 
-fanout 側の守りは、runtime を選べることと、GitHub 駆動ワークフロー(briefing 生成・wave・review gate・PR lifecycle・可観測性)の積み上げが herdr にはないことにある。
+fanout 側の守りは、ランタイムを選べることと、GitHub 駆動ワークフロー(briefing 生成・wave・review gate・PR lifecycle・可観測性)の積み上げが herdr にはないことにある。
 攻めに使える差は、herdr がローカル完結なのに対し fanout は「issue が入力、マージ済み PR が出力」という閉ループを持つ点で、ロードマップ(`docs/roadmap.ja.md`)の閉ループハーネス方針そのものが差別化になる。
 
 ## fanout に取り込む機能

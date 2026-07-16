@@ -185,7 +185,15 @@ payload は workspace、active tab、checkout path、branch、`already_open:fals
 bare argv へ明示した PATH prefix と `FANOUT_*` env はそのまま届いた。
 実装契約では PATH を prepend しない。
 
-追加検証では `worktree open` で作った child workspace `w3` に `agent start worktree-env-probe --workspace w3 --cwd <opened-checkout>` で process を起動した。
+追加検証では `worktree open` で作った child workspace `w3` に次の process を起動した。
+
+```console
+/private/tmp/herdr-0.7.3 agent start worktree-env-probe --workspace w3 \
+  --cwd /private/tmp/h424-remeasure-a424/repos/opened-wt-final \
+  --env FANOUT_AGENT_PROBE=worktree-w3-a424 --no-focus -- \
+  /bin/sh -c 'env | LC_ALL=C sort | grep -E "^(FANOUT|HERDR|TMUX)(_|=)"; sleep 120'
+```
+
 herdr が設定する session、socket、pane、tab、workspace の env は指定した child workspace と一致した。
 
 ```text
@@ -205,7 +213,9 @@ HERDR_WORKSPACE_ID=w3
 
 fanout は fanout 固有の値だけを `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
 PATH は prepend しない。
-agent binary は bare argv の先頭に置く。
+agent executable は fanout の起動環境で解決した絶対パスを bare argv の先頭に置く。
+#427 が注入する lifecycle hook も、同じ時点で解決した fanout executable の絶対パスを呼ぶ。
+これにより agent と hook の起動を herdr server の ambient PATH に依存させない。
 
 ### process exit
 
@@ -245,6 +255,9 @@ Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅�
 | `agent list` の name | `shell-agent`、`wrapped-shell` | name は残る |
 | agent status | `idle` または `unknown` | `unknown` |
 | `report-metadata` | title、display agent、state label あり | 消失 |
+
+`idle` を記録した shell pane は restart 前の snapshot で focus 中だった。
+focus されていない agent の `idle` が public `done` へ変わる遷移とは別の観測である。
 
 次に `resume_agents_on_restore=true` と herdr 公式 Codex integration v6 を使い、Codex session `019f6908-3bc1-7c83-98df-d8ea91694d2c` を実際に resume した。
 
@@ -465,6 +478,7 @@ v1 は done focus 修正を含み、今回の全操作を確認した `herdr >= 
 | `pane get/run/close` | 0.7.3 baseline | mutation と get は JSON envelope。`--json` は付けない |
 | `pane process-info` | 0.7.3 baseline | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
 | `pane read` | 0.7.3 baseline | text または ANSI を直接出力する |
+| `pane report-metadata` | 0.7.3（sidebar token 表示は 0.7.4） | 成功時は出力なし（`--json` 非対応） |
 | `wait output/agent-status` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `api snapshot` | 0.7.2 | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `api schema --json` | 0.7.2 | 明示 `--json` |
@@ -484,10 +498,11 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - `worktree create` の事後条件違反後は fanout-owned 資源を rollback して呼び出し前の状態を再検証し、rollback できない場合は fail closed にする。
 - agent は bare argv、明示 `--cwd`、fanout 固有値だけを渡す明示 `--env` で起動する。
+  agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` を更新する runtime 非依存の state emitter を追加する。
   tmux pane option は使わない。
-  `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
-  herdr v1 の fanout-owned emitter を持たない Codex は pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
+  Claude は `SessionEnd` 由来の `done` が記録済みなら pane 消滅後も `done`、記録がなければ `stale` とする。
+  Codex は herdr v1 の fanout-owned emitter を持たないため、pane 消滅時に state row が残っていれば `done` とするが、正常終了と kill は区別できない。
   identity 不一致は agent 種別にかかわらず `stale` とする。
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
 - `unknown` record を無条件に running へ写像しない。
@@ -518,6 +533,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - [Agents](https://herdr.dev/docs/agents/)
 - [Configuration](https://herdr.dev/docs/configuration/)
 - [Session state](https://herdr.dev/docs/session-state/)
+- 関連分析: [herdr 競合分析](competitive-herdr.ja.md)
 - 親設計: [#423](https://github.com/butaosuinu/fanout/issues/423)
 - 親設計の承認: [#424 spike 反映](https://github.com/butaosuinu/fanout/issues/423#issuecomment-4986704437)
 - 検証 issue: [#424](https://github.com/butaosuinu/fanout/issues/424)
