@@ -91,7 +91,7 @@ func writeMsgMessages(req *Request, store *msgstore.Store, self int, parent stri
 	// labels is nil for issue/Project parents (no peers query, no task ids) and
 	// maps synthetic numbers to task ids for plan parents — used by both the
 	// JSON enrichment and the human table.
-	labels, code := msgMemberLabels(store, parent, lg)
+	labels, code := msgMemberLabels(store, req.Verb, parent, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -115,13 +115,24 @@ func writeMsgMessages(req *Request, store *msgstore.Store, self int, parent stri
 // msgMemberLabels maps synthetic peer numbers to plan task ids so inbox/board
 // rows render readable FROM/TO. It returns nil for non-plan parents, so numeric
 // issue/Project views keep rendering "#<n>" with no extra DB read.
-func msgMemberLabels(store *msgstore.Store, parent string, lg *log.Logger) (map[int]string, exitcode.Code) {
+func msgMemberLabels(store *msgstore.Store, verb, parent string, lg *log.Logger) (map[int]string, exitcode.Code) {
+	labels, err := planPeerLabels(store, parent)
+	if err != nil {
+		return nil, msgBackendErr(verb, err, lg)
+	}
+	return labels, exitcode.OK
+}
+
+// planPeerLabels is msgMemberLabels without the logging: the error-returning
+// form Watcher.Poll needs (it has no exit code to produce). nil for non-plan
+// parents.
+func planPeerLabels(store *msgstore.Store, parent string) (map[int]string, error) {
 	if !team.IsPlanParent(parent) {
-		return nil, exitcode.OK
+		return nil, nil
 	}
 	peers, err := store.Peers()
 	if err != nil {
-		return nil, msgBackendErr("inbox", err, lg)
+		return nil, err
 	}
 	labels := make(map[int]string, len(peers))
 	for _, p := range peers {
@@ -129,7 +140,7 @@ func msgMemberLabels(store *msgstore.Store, parent string, lg *log.Logger) (map[
 			labels[p.Issue] = p.TaskID
 		}
 	}
-	return labels, exitcode.OK
+	return labels, nil
 }
 
 // memberDisplay renders a peer number as its plan task id when known, else as

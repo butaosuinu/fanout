@@ -182,6 +182,53 @@ msg_env() {
   [[ "$output" == *"--to is not supported"* ]]
 }
 
+@test "msg watch with a zero interval exits 2" {
+  msg_env
+  run_fanout msg watch --interval 0 --self 70 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval must be an integer between 1 and 86400 (seconds)"* ]]
+}
+
+@test "msg watch with a non-integer interval exits 2" {
+  msg_env
+  run_fanout msg watch --interval abc --self 70 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval must be an integer between 1 and 86400 (seconds)"* ]]
+}
+
+@test "msg watch with --interval missing its value exits 2" {
+  msg_env
+  run_fanout msg watch --self 70 --parent 68 --interval
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval requires an argument"* ]]
+}
+
+@test "msg watch rejects a stray positional argument: exit 2" {
+  msg_env
+  run_fanout msg watch hello --self 70 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unexpected argument: hello"* ]]
+}
+
+@test "msg watch rejects a verb-foreign flag: exit 2" {
+  msg_env
+  run_fanout msg watch --to 5 --self 70 --parent 68
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--to is not supported"* ]]
+}
+
+@test "msg watch without detectable pane asks for --self/--parent: exit 2" {
+  msg_env
+  # FANOUT_WATCH_POLLS caps the otherwise-blocking watch loop: if a future
+  # change makes detection succeed here, the test fails on the exit code
+  # instead of hanging the suite.
+  export FANOUT_WATCH_POLLS=1
+  run_fanout msg watch
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"could not detect this pane"* ]]
+  [[ "$output" == *"pass --self <issue|task-id> and --parent <ref>"* ]]
+}
+
 @test "msg nudge for an unrecorded peer is a best-effort no-op success" {
   msg_env
   # A recipient absent from state.json never touches tmux: nudge is best-effort

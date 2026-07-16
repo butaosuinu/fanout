@@ -1,0 +1,3 @@
+[fanout msg #1] #71 -> #70 (note): first note to 70
+[fanout msg #2] #71 -> #70 (blocker): waiting on your schema
+[fanout msg #3] #71 -> board (note): board update from 71

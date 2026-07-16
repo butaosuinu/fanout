@@ -96,6 +96,60 @@ seed_msg_db() {
   assert_golden msg-send-echo json
 }
 
+# FANOUT_WATCH_POLLS bounds `msg watch` (normally a blocking follower) to N
+# polls and a clean exit 0 — a test-only escape hatch, deliberately absent
+# from the usage text. Watch writes its startup notice to stderr and message
+# lines to stdout, so these tests bypass run_fanout's 2>&1 fold and split the
+# streams explicitly.
+run_watch() {
+  local cmd
+  printf -v cmd '%q ' "$FANOUT_BIN" msg watch "$@"
+  run bash -c "FANOUT_WATCH_POLLS=1 $cmd 2>/dev/null"
+}
+
+@test "msg watch human golden: one line per delivered message, stdout only" {
+  msg_env
+  seed_msg_db
+  run_watch --self 70 --parent 68
+  assert_success
+  assert_golden msg-watch human
+}
+
+@test "msg watch --json golden: compact JSON Lines, then a drained inbox" {
+  msg_env
+  seed_msg_db
+  run_watch --self 70 --parent 68 --json
+  assert_success
+  assert_golden msg-watch json
+
+  # emit = delivered = read: the very next inbox read is empty (same golden as
+  # the inbox --mark-read drain — reused unchanged on purpose).
+  run_fanout msg inbox --self 70 --parent 68 --json
+  assert_success
+  assert_golden msg-inbox-drained json
+}
+
+@test "msg watch --json golden under a plan parent: fromTask/toTask appear" {
+  msg_env
+  run_fanout msg register --self task-a --parent plan:demo
+  assert_success
+  run_fanout msg register --self task-b --parent plan:demo
+  assert_success
+  run_fanout msg send --to task-a --self task-b --parent plan:demo hello from b
+  assert_success
+  run_watch --self task-a --parent plan:demo --json
+  assert_success
+  assert_golden msg-watch-plan json
+}
+
+@test "msg watch announces itself on stderr, never stdout" {
+  msg_env
+  seed_msg_db
+  run bash -c "FANOUT_WATCH_POLLS=1 \"$FANOUT_BIN\" msg watch --self 70 --parent 68 2>&1 >/dev/null"
+  assert_success
+  [[ "$output" == *"msg watch: watching as #70 under parent 68 (interval 2s)"* ]]
+}
+
 @test "msg with zero identity flags detects the pane from state.json" {
   msg_env
   # worktreePath stays "" on purpose: IdentifyPane skips rows whose recorded

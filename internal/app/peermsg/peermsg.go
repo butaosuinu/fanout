@@ -8,6 +8,7 @@ package peermsg
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -37,6 +38,9 @@ type Request struct {
 	All      bool
 	MarkRead bool
 	Body     string
+	// Interval is watch's poll interval in seconds (default 2, validated >= 1
+	// by the CLI parser); unused by every other verb.
+	Interval int
 }
 
 // Deps are the IO seams Run drives. Tests inject fakes so no live
@@ -52,6 +56,9 @@ type Deps struct {
 	// read-only — the recipient's recorded pane id lives there, not in the
 	// messages DB.
 	LoadState func() (state.Store, error)
+	// Tick paces the watch poll loop; production is time.After, tests inject
+	// an immediately-ready channel.
+	Tick func(d time.Duration) <-chan time.Time
 }
 
 // DefaultDeps wires the production implementations.
@@ -61,6 +68,7 @@ func DefaultDeps() Deps {
 		ListLivePanes:  tmuxrun.ListLivePanes,
 		SendLine:       tmuxrun.SendLiteralLine,
 		LoadState:      defaultLoadState,
+		Tick:           time.After,
 	}
 }
 
@@ -103,6 +111,12 @@ func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
 	// openMsgDB.
 	if req.Verb == "nudge" {
 		return runMsgNudge(&req, parent, deps, lg)
+	}
+
+	// watch loops with its own DB handle (Watcher.Close), so it must not run
+	// under this function's defer db.Close(); short it out like nudge.
+	if req.Verb == "watch" {
+		return runMsgWatch(&req, self, parent, pane, deps, lg)
 	}
 
 	db, code := openMsgDB(req.Verb, parent, lg)
