@@ -24,11 +24,11 @@ agent の nudge と session identity には herdr 単独で満たせない条件
 
 ## 検証条件
 
-検証用の git repository、bare remote、linked worktree、named Herdr session を `/private/tmp` に作った。
-ユーザーの default Herdr session は停止も削除もしていない。
+検証用の git repository、bare remote、linked worktree、named herdr session を `/private/tmp` に作った。
+ユーザーの default herdr session は停止も削除もしていない。
 plugin event の検証では `XDG_CONFIG_HOME` と `XDG_STATE_HOME` も `/private/tmp` へ向け、plugin registry と state を隔離した。
 
-fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の Herdr pane で起動して確認した。
+fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
 
 ## 起動と session 境界
@@ -55,7 +55,7 @@ server の cold restart でも public ID は維持されたが、全 pane の `t
 削除前の `w1:p1` は `terminal_id:"term_656aa954d42c11"`、fresh state の `w1:p1` は `terminal_id:"term_656aae4d0cc691"` だった。
 session 名と public ID だけを state key にすると stale mapping が別 process へ一致する。
 
-Herdr から比較可能な session epoch は取得できない。
+herdr から比較可能な session epoch は取得できない。
 v1 は session 名を namespace として保存し、各 PaneRef に `terminal_id` を保存する。
 public ID または cwd が一致しても `terminal_id` が変わった行は、元 agent process との対応を失ったものとして扱う。
 fanout-owned epoch は fanout が session lifecycle も所有する後続版でなければ検証に使えない。
@@ -107,9 +107,9 @@ fanout は herdr を呼ぶ前に次を実行する。
 - base ref を immutable commit SHA へ解決する。
 - source checkout の dirty と divergence を検査し、既存の fail-closed 契約を保つ。
 - branch、path、base SHA、state mapping を照合する。
-- 既存 branch の HEAD が期待する base SHA と違う場合は、Herdr に渡さず fail closed にする。
+- 既存 branch の HEAD が期待する base SHA と違う場合は、herdr に渡さず fail closed にする。
 - 既存 checkout は `worktree open` で採用する。
-- `worktree create` の postcondition が fanout の branch、path、HEAD 契約と一致しない場合だけ、fanout が git worktree を作り、`worktree open` で Herdr に採用させる。
+- `worktree create` の postcondition が fanout の branch、path、HEAD 契約と一致しない場合だけ、fanout が git worktree を作り、`worktree open` で herdr に採用させる。
 
 ### workspace 配置
 
@@ -144,7 +144,7 @@ cleanup の順序を次で固定する。
 CLI 経由の create と remove で両 hook が各一回実行され、plugin log は `status:"succeeded"`、`exit_code:0` を返した。
 
 作成 event は `workspace` と `worktree`、削除 event は `workspace_id`、最終 `workspace`、`worktree`、`forced` を含んだ。
-fanout が worktree 実体化を Herdr へ委譲すれば、worktree setup plugin と共存できる。
+fanout が worktree 実体化を herdr へ委譲すれば、worktree setup plugin と共存できる。
 fanout が fallback で git worktree を直接作る場合は、続く `worktree open` が `worktree.opened` を発火し、`worktree.created` は発火しない。
 
 ## pane と agent の lifecycle
@@ -155,7 +155,7 @@ fanout が fallback で git worktree を直接作る場合は、続く `worktree
 `--cwd <child-checkout>` は必須である。
 
 bare argv へ明示した PATH prefix と `FANOUT_*` env はそのまま届いた。
-Herdr が設定する session、pane、workspace の env も同じ process で確認した。
+herdr が設定する session、pane、workspace の env も同じ process で確認した。
 
 ```text
 PATH=/private/tmp/fanout-path:/usr/bin:/bin
@@ -171,7 +171,7 @@ fanout は PATH と `FANOUT_*` を `--env KEY=VALUE` で渡し、agent binary �
 ### process exit
 
 bare `/usr/bin/false` は `agent_started` を返した後に終了し、pane と agent record は消えた。
-Herdr には exit status と終了後 shell が残らなかった。
+herdr には exit status と終了後 shell が残らなかった。
 
 次の wrapper は exit status を表示して shell を残せた。
 
@@ -179,8 +179,8 @@ Herdr には exit status と終了後 shell が残らなかった。
 /bin/sh -lc '/usr/bin/false; rc=$?; printf "WRAPPED_EXIT=%s\n" "$rc"; exec /bin/sh'
 ```
 
-ただし Herdr が追跡する process は wrapper になり、agent record は `unknown` のまま残った。
-fanout は bare argv を採用し、tmux backend の「agent 終了後も shell を残す」契約を Herdr backend には持ち込まない。
+ただし herdr が追跡する process は wrapper になり、agent record は `unknown` のまま残った。
+fanout は bare argv を採用し、tmux backend の「agent 終了後も shell を残す」契約を herdr backend には持ち込まない。
 
 ### cold restart
 
@@ -253,10 +253,10 @@ event 駆動へ移す後続版は raw Socket で subscription を確立してか
 一方、検証環境の generic workspace shell では `HERDR_ENV` と `workspace create --env FANOUT_PROBE=1` の値が見えず、外側 tmux の `TMUX` と `TMUX_PANE` だけを継承した。
 この shell から fanout を起動すると tmux と誤検出するため、`--backend herdr` または `FANOUT_BACKEND=herdr` を明示する。
 
-Herdr pane 内で nested tmux server を起動すると、nested tmux の global env に `HERDR_ENV=1`、`HERDR_PANE_ID`、`HERDR_WORKSPACE_ID` と `TMUX` が同時に入った。
+herdr pane 内で nested tmux server を起動すると、nested tmux の global env に `HERDR_ENV=1`、`HERDR_PANE_ID`、`HERDR_WORKSPACE_ID` と `TMUX` が同時に入った。
 `HERDR_ENV` を `TMUX` より先に判定しても「最も内側の runtime」を選んだことにはならない。
 
-`HERDR_ENV` と `TMUX` の両方がある場合は Herdr を既定にしつつ、nested tmux の利用者が `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできる契約にする。
+`HERDR_ENV` と `TMUX` の両方がある場合は herdr を既定にしつつ、nested tmux の利用者が `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできる契約にする。
 自動で内側を判定する場合は process ancestry の検査が別途必要になる。
 
 ### metadata と OSC
@@ -267,7 +267,7 @@ metadata は cold restart 後に消えるため、fanout の永続 state には�
 
 ### Shift+Enter
 
-attach 中の Herdr client に Shift+Enter の `ESC [ 13 ; 2 u` を送ると、pane 側は `ESC [ 27 ; 2 ; 13 ~` を受信した。
+attach 中の herdr client に Shift+Enter の `ESC [ 13 ; 2 u` を送ると、pane 側は `ESC [ 27 ; 2 ; 13 ~` を受信した。
 fanout の TUI parser は後者を Shift+Enter として処理する。
 
 実際の `__tui-new-pane-popup` に `line-one`、Shift+Enter、`line-two` を入力した結果は次のとおり。
@@ -279,7 +279,7 @@ fanout の TUI parser は後者を Shift+Enter として処理する。
 }
 ```
 
-Herdr pane 内でも fanout の複数行 prompt を使える。
+herdr pane 内でも fanout の複数行 prompt を使える。
 
 ### notification
 
@@ -288,7 +288,7 @@ default config の `delivery="off"` では `notification show` が `shown:false`
 attach 中は PTY 出力に title と body の toast 描画を確認した。
 
 detached 時の `shown:true` は server が request を受理したことを示すが、利用者の画面へ表示済みであることは示さない。
-fanout の notify backend は維持し、Herdr の in-app notification は設定済み利用者向けの best-effort channel とする。
+fanout の notify backend は維持し、herdr の in-app notification は設定済み利用者向けの best-effort channel とする。
 
 ## Socket schema と JSON 契約
 
@@ -383,14 +383,14 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 
 #423 と #425 から #429 は次の制約を前提にする。
 
-- backend は明示的に起動済みの named Herdr session を使う。
+- backend は明示的に起動済みの named herdr session を使う。
 - worktree は root coordinator と sibling child workspace で配置する。
-- fanout が worktree safety gate と idempotency を所有し、Herdr は checkout と workspace の実体化を担当する。
+- fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
 - agent は bare argv、明示 `--cwd`、明示 `--env` で起動する。
 - `unknown` record を無条件に running へ写像せず、`terminal_id`、public ID、cwd を合わせて判定する。
 - nudge は confirmed-idle の場合だけ `pane run` で送り、status 検査との race を許容する。
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
-- generic Herdr shell では `--backend herdr` を明示し、nested tmux では `--backend tmux` を明示できるようにする。
+- generic herdr shell では `--backend herdr` を明示し、nested tmux では `--backend tmux` を明示できるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
 - in-app notification を配信保証のある channel として扱わない。
 
