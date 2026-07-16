@@ -18,7 +18,7 @@ agent の nudge と session identity には herdr 単独で満たせない条件
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | safety gate 後に `worktree create/open/remove` へ委譲する | branch、path、base を指定でき、plugin event も発火する |
 | agent 起動 | `agent start` に bare argv、`--cwd`、`--env` を渡す | shell wrapper は終了検出を wrapper に張り付ける |
-| nudge | v1 では無効、または confirmed-idle への atomic submit に限定する | `agent send` は queue せず、blocked 中にも文字列を送る |
+| nudge | confirmed-idle への `pane run` に限定する | `agent send` は queue せず、blocked 中にも文字列を送る |
 | liveness | public pane ID、cwd、`terminal_id` を照合する | cold restart と fresh state で public ID だけでは元 process を識別できない |
 | 通知 | best-effort の in-app 通知としてだけ使う | detached 時も `shown:true` で、表示完了の応答ではない |
 
@@ -230,6 +230,7 @@ blocked 状態へ送った文字列は画面に入り、Enter は送らずに `c
 `pane run` は text と Enter を一操作で送り、command を実行した。
 ただし status read と submit の間の race は残る。
 親設計の「`agent send` を preferred nudge にする」は採用しない。
+v1 は直前に idle を確認できた場合だけ `pane run` で atomic submit する。
 
 ### focus と wait
 
@@ -387,7 +388,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - fanout が worktree safety gate と idempotency を所有し、Herdr は checkout と workspace の実体化を担当する。
 - agent は bare argv、明示 `--cwd`、明示 `--env` で起動する。
 - `unknown` record を無条件に running へ写像せず、`terminal_id`、public ID、cwd を合わせて判定する。
-- nudge は `agent send` の queue を前提にしない。
+- nudge は confirmed-idle の場合だけ `pane run` で送り、status 検査との race を許容する。
 - CLI-first の wait は bounded snapshot polling にし、snapshot と event wait を直列に組み合わせない。
 - generic Herdr shell では `--backend herdr` を明示し、nested tmux では `--backend tmux` を明示できるようにする。
 - cleanup は `worktree remove` を `workspace close` より先に実行する。
@@ -401,4 +402,5 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - [Configuration](https://herdr.dev/docs/configuration/)
 - [Session state](https://herdr.dev/docs/session-state/)
 - 親設計: [#423](https://github.com/butaosuinu/fanout/issues/423)
+- 親設計の承認: [#424 spike 反映](https://github.com/butaosuinu/fanout/issues/423#issuecomment-4986704437)
 - 検証 issue: [#424](https://github.com/butaosuinu/fanout/issues/424)
