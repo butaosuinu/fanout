@@ -89,11 +89,19 @@ fanout-owned epoch は fanout が session lifecycle も所有する後続版で�
 | focus | `agent focus <name>`、`workspace focus <id>` | 対象 agent または workspace を focus | 任意 pane ID への exact focus は CLI にない |
 | send | `pane run <pane> <text>` | text と Enter を一操作で送る | 明示的な手動操作に限り、自動 nudge には使わない |
 | close | `worktree remove --workspace ... [--force] --json` | `worktree_removed` | workspace を先に閉じない |
-| close | `workspace close`、`pane close` | `ok` | checkout は `workspace close` では消えない |
+| close | `workspace close`、`pane close` | `ok` | checkout は `workspace close` では消えない。mutation 直前に terminal identity を再照合する |
 | wait | `api snapshot` の bounded polling | `session_snapshot` | current-state predicate として使い、event wait は v1 では採用しない |
 
 generic pane の exact focus が必要になった場合、Socket API の `pane.focus` を追加候補にする。
 child workspace が一つの agent pane を持つ v1 では `agent focus` と `workspace focus` で足りる。
+
+`workspace close` と `pane close` にも `worktree remove` と同等の precondition を課す。
+同名 session の再作成で session 名・socket・public ID は再利用されるため、mutation 直前に snapshot を再取得し、保存済み `terminal_id` と agent / workspace provenance が state row と一致することを照合してから close を発行する。
+不一致または照合不能は fail closed にし、stale row からの close が無関係な process を終了させないようにする。
+
+root coordinator の `workspace create` も副作用を持つ launch 操作として provisional intent の対象にする。
+create 前に owner row key、backend / session identity、root cwd を intent へ保存し、成功応答の workspace ID を intent に束縛してから通常 state へ確定する。
+応答喪失または crash 後の再実行は、検証済み session に root cwd と provenance が一致する coordinator workspace が一つだけあればそれを決定的に採用し、複数または不一致は fail closed にして重複作成しない。
 
 ## worktree の配置と lifecycle
 
