@@ -185,29 +185,29 @@ payload は workspace、active tab、checkout path、branch、`already_open:fals
 bare argv へ明示した PATH prefix と `FANOUT_*` env はそのまま届いた。
 実装契約では PATH を prepend しない。
 
-追加検証では `worktree open` で作った child workspace `w3` に次の process を起動した。
+fresh state の追加検証では、source workspace `w1` から `worktree open` で作った child workspace `w2` に次の process を起動した。
 
 ```console
-/private/tmp/herdr-0.7.3 agent start worktree-env-probe --workspace w3 \
-  --cwd /private/tmp/h424-remeasure-a424/repos/opened-wt-final \
-  --env FANOUT_AGENT_PROBE=worktree-w3-a424 --no-focus -- \
+/private/tmp/herdr-0.7.3 agent start worktree-env-probe \
+  --env FANOUT_AGENT_PROBE=worktree-order-fresh-a424 --workspace w2 \
+  --cwd /private/tmp/h424-env-order-fresh/repos/child --no-focus -- \
   /bin/sh -c 'env | LC_ALL=C sort | grep -E "^(FANOUT|HERDR|TMUX)(_|=)"; sleep 120'
 ```
 
 herdr が設定する session、socket、pane、tab、workspace の env は指定した child workspace と一致した。
 
 ```text
-FANOUT_AGENT_PROBE=worktree-w3-a424
-HERDR_CONFIG_PATH=/private/tmp/h424-remeasure-a424/config.toml
+FANOUT_AGENT_PROBE=worktree-order-fresh-a424
+HERDR_CONFIG_PATH=/private/tmp/h424-env-order-fresh/config.toml
 HERDR_ENV=1
-HERDR_SESSION=h424-remeasure-a424
-HERDR_SOCKET_PATH=/private/tmp/h424-remeasure-a424/xdg-config/herdr/sessions/h424-remeasure-a424/herdr.sock
-HERDR_PANE_ID=w3:p2
-HERDR_TAB_ID=w3:t1
-HERDR_WORKSPACE_ID=w3
+HERDR_PANE_ID=w2:p2
+HERDR_SESSION=h424-env-order-fresh
+HERDR_SOCKET_PATH=/private/tmp/h424-env-order-fresh/xdg-config/herdr/sessions/h424-env-order-fresh/herdr.sock
+HERDR_TAB_ID=w2:t1
+HERDR_WORKSPACE_ID=w2
 ```
 
-`workspace get`、`pane get`、`tab get` の相互参照も `w3`、`w3:p2`、`w3:t1` で一致し、cwd と `foreground_cwd` は child checkout だった。
+`workspace get`、`pane get`、`tab get` の相互参照も `w2`、`w2:p2`、`w2:t1` で一致し、cwd と `foreground_cwd` は child checkout だった。
 この追加検証では server と CLI の環境から `TMUX` と `FANOUT_BIN` を除き、外側 runtime の値が transcript に混ざらないようにした。
 別の nested tmux 検証では、generic workspace shell に `HERDR_ENV` と `TMUX` が同時に届いた。
 
@@ -328,11 +328,14 @@ v1 は focus されておらず、public status が `idle` または `done` で�
 候補に対して、保存済み PaneRef との識別情報の一致と `idle` の確定根拠を確認する。
 `idle` の確定根拠は、Claude argv に注入した `--settings` lifecycle hook が fanout CLI 経由で `state.json` に記録した fanout-owned signal の `idle` に限定する。
 この runtime 非依存 emitter は #427 で追加し、`SessionEnd` は `done` として記録する。
+`terminal_id` を rebind した時点で既存の fanout-owned signal は nudge authority を失い、現在の terminal binding で発行された新しい fanout-owned signal だけを採用する。
 Codex は herdr v1 の fanout-owned emitter を持たないため nudge 対象外にする。
 `agent explain --json` は診断に使えるが、screen manifest の明示的な idle rule も未知の permission UI を除外できないため、送信許可には使わない。
 `default_known_agent_idle_fallback` も同様に拒否する。
 
-送信直前に snapshot を再取得し、public status、focus、`terminal_id`、`agent_session`、worktree provenance を再照合する。
+送信直前に snapshot と fanout state を再取得し、public status、focus、`terminal_id`、`agent_session`、worktree provenance を再照合する。
+fanout-owned signal は最新の rebind 後に現在の terminal binding で発行され、状態が `idle` であることを検証する。
+attach 前の再開待ちに現れる `agent_session` ref は、想定した process を確認するまで resume placeholder として送信候補から除外する。
 すべて一致して送信可能と確認できた pane にだけ、`pane run` で text と Enter を一操作で送る。
 herdr 0.7.3 には状態条件付き send または CAS がないため、再照合と submit の間の race は残る。
 `idle` の確定根拠がない場合、nudge は Enter も通知も送らず no-op にする。
@@ -513,6 +516,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
 - nudge は focus されていない `idle` または `done` を候補にし、識別情報と fanout-owned state emitter の `idle` を再確認して送信可能と判断した Claude pane にだけ `pane run` で送る。
+  fanout-owned signal は最新の `terminal_id` rebind 後に現在の terminal binding で発行されたものだけを使い、process 未確認の resume placeholder は候補から除外する。
   screen manifest と `agent explain` は送信許可に使わない。
   authority がない場合は通知も送らず no-op にし、Codex は nudge 対象外にする。
   status 検査との race は許容する。
