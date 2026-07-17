@@ -1,128 +1,118 @@
 ---
 name: post-work-review
-description: Run the bounded isolated reviewer gate on current Git work before a commit or PR. Use for final review, post-review, "review して仕上げて", "コミット前確認", "二重チェック", or explicit post-work-review requests.
+description: Run a fresh native subagent review on current Git work before a commit or PR. Use for final review, post-review, "review して仕上げて", "コミット前確認", "二重チェック", or explicit post-work-review requests.
 ---
 
 # Post-work review
 
-Run the installed driver and delegate review to fresh native custom subagents.
-The main agent validates and fixes the work; it must not review its own code.
+Use Codex's native generic subagents for one broad review and, after fixes, a
+fresh verification review. The parent agent interprets their natural-language
+findings. Do not parse reviewer output or require a result schema.
 
-## Runtime contract
+## Boundary
 
-- Use only the native `spawn_agent` tool. Never substitute `codex review`,
-  `codex exec`, a local LLM, a prompt-only role, or a renamed `task_name`.
-- Before `prepare`, inspect the model-visible `spawn_agent` schema. A
-  supported V1 call exposes `agent_type` and uses `fork_context: false`; a
-  supported V2 call exposes `agent_type` and uses `fork_turns: "none"`.
-  If the schema cannot select a custom `agent_type`, stop non-clean with
-  `stop_reason=unsupported_native_custom_agent`.
-- Select `agent_type: "post-work-reviewer"` for the one broad call and
-  `agent_type: "post-work-verifier"` for verification calls. Pass the
-  absolute bundle path as the sole task message.
-- The installed custom agent definitions must set `sandbox_mode = "read-only"`
-  and `approval_policy = "never"`. The child rollout metadata, not the result
-  JSON, proves that these settings and the custom role were applied.
-- If a workspace-write controller cannot enforce the child's configured
-  read-only/never policy, use a fresh controller started with read-only sandbox
-  and approval policy never for the native spawn step. The writable main agent
-  keeps ownership of driver state and fixes. If that split is unavailable,
-  stop before reserving a call with
-  `stop_reason=unsupported_read_only_custom_agent`.
-- Reviewer calls are read-only. They must not edit, request approval, escalate,
-  or run tests, linters, formatters, typechecks, project checks, local LLMs, or
-  `codex review`.
-- Allow one broad reservation and at most two verifier reservations. A failed
-  or unrecorded spawn still consumes its reservation. Never start a second
-  broad review.
+- Tell the user that the reviewed repository content is sent to the Codex
+  model before spawning a reviewer.
+- Use `spawn_agent` and `wait_agent` directly. Set `fork_turns: "none"` so each
+  reviewer starts without the parent's conversation history.
+- `task_name` labels the task; it does not select a custom role. Do not use
+  custom agents, `agent_type`, `codex exec`, `codex review`, app-server, or an
+  external controller.
+- A native subagent inherits the parent session's sandbox, approval policy, and
+  network restrictions. Reviewer instructions below prohibit edits, approval
+  requests, and network use, but this is not a stronger child-only sandbox. If
+  enforced read-only access is required, start the parent session read-only
+  before invoking this skill.
+- Reviewer messages must allow only read-only local inspection such as
+  `git diff`, `rg`, and `sed`. Explicitly prohibit builds, typechecks,
+  generators, package managers, tests, formatters, file writes, web/browser
+  tools, MCP/connectors, external services, nested agents, agent messaging,
+  approval requests, and escalation.
+- If native subagent spawning or waiting is unavailable, no concurrency slot is
+  available, or the reviewer fails to complete, stop with a clear error. Do not
+  use a fallback reviewer and do not write the review marker.
 
-## Resolve the driver
+## Prepare the target
 
-```bash
-codex_dir="${CODEX_DIR:-$HOME/.codex}"
-driver="$codex_dir/tools/post-work-review.sh"
-if [ ! -x "$driver" ] && [ -n "${CODEX_HOME:-}" ]; then
-  driver="$CODEX_HOME/tools/post-work-review.sh"
-fi
-if [ ! -x "$driver" ]; then
-  echo "post-work-review driver not installed: $driver"
-  echo "Run make install from fanout, then retry."
-  exit 1
-fi
+1. Finish other writer agents before starting the gate.
+2. Require a Git worktree, a committed candidate, and a clean working tree.
+3. Resolve and record:
+   - repository root;
+   - exact `HEAD` commit;
+   - target base branch and the exact commit resolved from
+     `refs/remotes/origin/<base>`;
+   - the branch review bundle, defined as that recorded base commit through the
+     recorded `HEAD`, including submodule changes.
+4. Run `scripts/mark-reviewed-head.sh clear` from this skill directory before
+   the first spawn. This removes any stale success marker.
+5. Resolve the project's canonical full validation command from repository
+   instructions, but do not run it yet.
+
+Stop if the base cannot be resolved, the tree is dirty, or the target changes
+during preparation.
+
+## Broad review
+
+Spawn exactly one generic subagent with a payload shaped like this:
+
+```json
+{
+  "task_name": "post_work_review_<head-prefix>_<unique>",
+  "fork_turns": "none",
+  "message": "Review the recorded <base-commit>...<head-commit> bundle at the recorded repository. Read repository instructions first. Use only read-only local inspection commands. Do not edit files or run tests, builds, typechecks, linters, formatters, generators, or package managers. Do not use web, browser, MCP/connectors, external-service, or network tools. Do not spawn or message agents, request approval, or escalate. Inspect the diff and relevant surrounding code. Report only blocker or major correctness, security, data-loss, or contract findings. For each finding include severity, file:line, reason, and a concrete recommendation. If none exist, explicitly say no blocker or major findings."
+}
 ```
 
-Keep the matching `fanout` executable on `PATH`, or set `FANOUT_BIN`.
-Driver state lives under the worktree Git metadata directory. Apply only a
-scoped escalation if that location is not writable.
+Replace the recorded placeholders in the message with the absolute repository
+root, base branch, full base commit, and full HEAD SHA. Replace every task-name
+placeholder: use lowercase hexadecimal characters for `<head-prefix>`, a
+decimal verifier round for `<round>`, and an unused lowercase alphanumeric
+suffix for `<unique>`. The final name must match `[a-z0-9_]+`; never reuse a
+name from a completed agent in the same parent session. Wait until the
+subagent finishes; repeated waits are allowed. Do not accept an interrupted,
+failed, ambiguous, or missing completion as clean.
 
-If the request or briefing supplies `POST_WORK_REVIEW_BASE=<base>`, pass it
-to every driver command.
+The parent reads the response as ordinary review feedback. It may reject a
+finding only with concrete evidence from the target diff or repository. Do not
+turn wording variations into a machine validation problem.
 
-## Validate the candidate
+## Fix and verify
 
-Inspect `git status --short`, then choose one path:
+If the broad review has actionable findings:
 
-- For a clean committed branch, run the repository's canonical aggregate
-  validation command exactly once for the candidate HEAD. Do not also run its
-  component targets. Record `validated_head="$(git rev-parse HEAD)"` only
-  after it passes.
-- For a dirty uncommitted review, run focused checks only. This scope can be
-  reviewed but cannot receive the exact-HEAD marker.
+1. Apply the fixes in the parent session and run focused checks for edited
+   files.
+2. Commit the fixes and record the new clean `HEAD`.
+3. Spawn a new generic subagent with an unused task name shaped as
+   `post_work_verify_<head-prefix>_<round>_<unique>` and
+   `fork_turns: "none"`. Include the prior findings, the exact recorded base
+   commit, the new exact HEAD, and the new bundle in its message.
+4. Give the verifier every read-only restriction from the broad reviewer,
+   including no external tools or nested agents. Tell it to check only whether
+   the prior findings are resolved plus obvious regressions caused by those
+   fixes.
 
-If validation changes a committed candidate, commit it and restart before
-`prepare`. After broad findings have been recorded, keep the driver state and
-use the verifier loop below.
+Use at most two verifier rounds. Never rerun the broad review in the same gate.
+If findings remain after the second verifier, stop and report them without a
+marker.
 
-## Run one native call
+## Validate and mark
 
-The writable main agent runs the driver commands. The controller UUID supplied
-to `reserve-call` must be the canonical `CODEX_THREAD_ID` of the controller
-that will invoke `spawn_agent`.
+After the broad reviewer, or the latest verifier, is clean:
 
-1. Run `bash "$driver" reserve-call <broad|verify> <controller-uuid>`.
-2. Use the reported role and absolute bundle path in exactly one native call:
+1. Confirm the worktree is still clean and `HEAD` still equals the reviewed
+   target.
+2. Run the single canonical full validation command once. Do not duplicate it
+   with separate full lint and test commands.
+3. Confirm the tree and `HEAD` again.
+4. Run:
 
-   - V1 broad:
-     `{"agent_type":"post-work-reviewer","message":"<bundle>","fork_context":false}`
-   - V2 broad:
-     `{"agent_type":"post-work-reviewer","task_name":"post_work_reviewer","message":"<bundle>","fork_turns":"none"}`
-   - Replace the role with `post-work-verifier` and the task name with
-     `post_work_verifier` for a verifier.
+   ```sh
+   scripts/mark-reviewed-head.sh mark <reviewed-head> <base-branch> <reviewed-base-head>
+   ```
 
-3. Wait for completion and obtain the canonical child UUID returned by the
-   native tool. Do not copy or repair the child's JSON.
-4. Run
-   `bash "$driver" record-session <broad|verify> <child-uuid>`.
-
-`record-session` reads the child rollout, extracts
-`task_complete.last_agent_message`, and rejects the result unless the rollout
-has a fresh child UUID, the reserved parent, the expected role, read-only
-sandbox, approval policy never, and the exact bundle task. It also requires the
-result's `reviewer_session_id` to equal the child UUID. Stop non-clean on any
-rejection.
-
-## Run the gate
-
-1. Run `bash "$driver" prepare`, then run one broad native call as above.
-2. Run `bash "$driver" summarize`. Stop on any non-empty `stop_reason=`.
-   If `clean=true`, continue to the marker checks.
-3. If findings remain, fix only the recorded findings. Run focused checks while
-   editing. For branch scope, commit the fixes, run the canonical validation
-   command exactly once on that new HEAD, and update `validated_head` only
-   after it passes.
-4. Run `bash "$driver" prepare-verify`, then one fresh verifier native call.
-   Summarize again. If findings remain without a stop reason, repeat the fix,
-   validation, `prepare-verify`, and fresh verifier sequence once more.
-5. Stop without marking on a pending call, invalid rollout or result,
-   exhausted budget, `truncated=true`, a repeated finding fingerprint, or any
-   non-empty stop reason.
-6. Run `bash "$driver" mark` only when `clean=true`,
-   `marker_eligible=true`, the worktree is clean, and current HEAD equals the
-   last canonically validated HEAD. Never commit after marking.
-
-## Report
-
-Report the validation command and result, reviewed scope, broad/verifier
-reservation counts, child UUIDs and verified metadata, fixes made, final
-`clean=`, final `stop_reason=`, and whether
-`.git/post-work-review-passed` was written.
+The helper validates only Git facts: clean exact HEAD, remote base, and bundle
+hash. The marker means the parent accepted the native subagent's result for
+that target; it is not proof of a custom role, model, or child-only sandbox.
+Any later commit, base movement, diff change, validation failure, reviewer
+failure, or unclear result leaves the gate incomplete and requires a fresh run.

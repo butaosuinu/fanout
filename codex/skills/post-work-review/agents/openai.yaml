@@ -1,7 +1,7 @@
 interface:
   display_name: "post-work-review"
-  short_description: "Run a bounded isolated reviewer gate"
-  default_prompt: "Use $post-work-review to run the bounded isolated final-review gate for the current Git work."
+  short_description: "Run a fresh native subagent review"
+  default_prompt: "Use $post-work-review to run the native subagent final-review gate for the current Git work."
 
 policy:
   allow_implicit_invocation: true

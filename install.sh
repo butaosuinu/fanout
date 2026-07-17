@@ -105,9 +105,16 @@ install_data() {
 
 # Uninstall runs before the release tarball is fetched/extracted, so the list of
 # integrations to remove cannot be derived from the source the way
-# install_integrations does. Keep this enumeration in sync with whatever
-# claude/commands, claude/skills, codex/skills, codex/tools, and codex/agents
-# the repo ships.
+# install_integrations does. Keep this enumeration in sync with the bundled
+# commands and skills.
+remove_retired_codex_review_files() {
+  rm -f "$codex_dir/tools/post-work-review.sh"
+  rm -f "$codex_dir/agents/post-work-reviewer.toml" \
+    "$codex_dir/agents/post-work-reviewer.md" \
+    "$codex_dir/agents/post-work-verifier.toml" \
+    "$codex_dir/agents/post-work-verifier.md"
+}
+
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md" \
     "$claude_dir/commands/session-retro.md"
@@ -117,11 +124,7 @@ remove_integrations() {
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
     "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
     "$codex_dir/skills/pr-watch"
-  rm -f "$codex_dir/tools/post-work-review.sh"
-  rm -f "$codex_dir/agents/post-work-reviewer.toml" \
-    "$codex_dir/agents/post-work-reviewer.md" \
-    "$codex_dir/agents/post-work-verifier.toml" \
-    "$codex_dir/agents/post-work-verifier.md"
+  remove_retired_codex_review_files
 }
 
 copy_skill_dirs() {
@@ -139,30 +142,6 @@ copy_skill_dirs() {
   done
 }
 
-copy_tool_files() {
-  src_root="$1"
-  dest_root="$2"
-  [ -d "$src_root" ] || return 0
-  mkdir -p "$dest_root"
-  for src in "$src_root"/*; do
-    [ -f "$src" ] || continue
-    install_exec "$src" "$dest_root/$(basename "$src")"
-  done
-}
-
-copy_agent_files() {
-  src_root="$1"
-  dest_root="$2"
-  [ -d "$src_root" ] || return 0
-  mkdir -p "$dest_root"
-  for src in "$src_root"/*; do
-    [ -f "$src" ] || continue
-    dest="$dest_root/$(basename "$src")"
-    rm -f "$dest"
-    install_data "$src" "$dest"
-  done
-}
-
 install_integrations() {
   [ "$install_skills" -eq 1 ] || return 0
 
@@ -176,8 +155,7 @@ install_integrations() {
 
   copy_skill_dirs "$tmp/extract/claude/skills" "$claude_dir/skills"
   copy_skill_dirs "$tmp/extract/codex/skills" "$codex_dir/skills"
-  copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
-  copy_agent_files "$tmp/extract/codex/agents" "$codex_dir/agents"
+  remove_retired_codex_review_files
 }
 
 normalize_os() {

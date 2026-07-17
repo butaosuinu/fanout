@@ -53,7 +53,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
-| infra | `reviewjson` | reviewer JSON の射影と native child session metadata の検証 | H |
 | infra | `herdrrun` | herdr 0.7.3 の named session・socket・API tuple 検証と read-only snapshot 投影 | H |
 | core | `backend` | runtime backend 契約・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
@@ -64,7 +63,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane 以外の端末出力を読まない境界) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `runtime_backend.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・runtime backend 選択・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
+| cmd | `main.go` / `runtime_backend.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` | dispatch・runtime backend 選択・self-exec・launch 配線・pane identity 検証・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
@@ -122,18 +121,14 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
   `__tui-help-popup` / `__tui-close-popup` / `__codex-plan-tui` /
-  `__codex-team-tui` / `__post-work-review-json` は
+  `__codex-team-tui` は
   `TestSelfExecSubcommandNames` が文字列を固定する(`__tui-settings-popup` は
   dispatch と popup 起動に実在するがテスト未登録)。dispatch・popup 起動・
   `infra/codexapp/launch.go` の起動コマンド生成は単一定数を参照する
   (launch.go のリテラル埋め込みは #501 で解消。`codex_plan_tui.go` /
   `codex_team_tui.go` の usage 文字列にはリテラルが残る)。`__codex-plan-tui` /
   `__codex-team-tui` を変えると実行中バイナリの Plan Mode / team ブリッジ連携が
-  壊れる。`__post-work-review-json` は `codex/tools/post-work-review.sh` も
-  リテラルで呼び出すため、command 定数と同時に更新する。
-- **reviewer 結果は fail-closed**: child rollout の role・parent・sandbox・approval・bundle path・session UUID を検証する。cache の `valid` は JSON 全体の検証と
-  全 projection file の書き込みが成功した後にだけ作る。欠損または非対応の
-  helper で PR review marker を書かない。
+  壊れる。
 - **ldflags は `-X main.version` 名指し**: バージョン注入変数は
   `cmd/fanout/main.go` の変数名に固定されており、リネームするとリリース
   ビルドが壊れる。

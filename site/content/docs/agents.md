@@ -47,7 +47,11 @@ Codex installs five repo-managed skills under `~/.codex/skills/` (see [Installat
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, and `pr-watch` are also bundled as Codex versions; invoke them as `$fanout-issues` or `$pr-watch`, and they play the same role as the Claude versions.
 
-`$post-work-review` assigns the broad review to the read-only, approval-free `post-work-reviewer` (`gpt-5.6-sol`, `xhigh`) and fix verification to `post-work-verifier` (`gpt-5.6-terra`, `high`). The driver binds each result to the native child rollout's role, parent, sandbox, approval policy, bundle path, and session UUID. If the runtime cannot expose or enforce that metadata, the gate stops.
+`$post-work-review` starts an ordinary native Codex subagent with `fork_turns: "none"` for a fresh broad review. The parent interprets its natural-language findings. After fixes, the parent starts a different fresh subagent to verify those findings and obvious fix regressions. There is no custom agent, model pin, app-server controller, or result parser.
+
+The reviewer receives the target repository path and diff scope, so repository content is sent to the Codex model. A native subagent inherits the parent session's sandbox, approval policy, and network restrictions. The skill tells reviewers not to edit, request approval, or use the network, but it cannot create a stricter child-only sandbox. Start Codex read-only first when enforced read-only access is required. If native spawning or waiting is unavailable, the gate stops without a fallback.
+
+After the parent accepts a clean result, the skill runs the repository's canonical validation once and records the exact clean HEAD, PR base commit, and diff hash. A later commit, base movement, or review-diff change invalidates the marker.
 
 `$pr-watch` runs in the foreground. Its helper suppresses unchanged snapshots and stores its cursor in Git metadata, including in linked worktrees. It does not leave a background watcher after the Codex session ends.
 

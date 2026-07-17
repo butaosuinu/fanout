@@ -73,7 +73,7 @@ func TestCodexSkillResources(t *testing.T) {
 	}{
 		{rel: "codex/skills/fanout/references/batch-workflow.md"},
 		{rel: "codex/skills/fanout/references/cli-modes.md"},
-		{rel: "codex/tools/post-work-review.sh", executable: true},
+		{rel: "codex/skills/post-work-review/scripts/mark-reviewed-head.sh", executable: true},
 		{rel: "codex/skills/pr-watch/references/repair-playbook.md"},
 		{rel: "codex/skills/pr-watch/scripts/watch-pr.sh", executable: true},
 	}
@@ -93,52 +93,39 @@ func TestCodexSkillResources(t *testing.T) {
 	}
 }
 
-func TestCodexReviewAgentConfigs(t *testing.T) {
+func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {
 		t.Fatalf("repoRoot() = %v, want nil", err)
 	}
-	wants := []struct {
-		name   string
-		model  string
-		effort string
-	}{
-		{name: "post-work-reviewer", model: "gpt-5.6-sol", effort: "xhigh"},
-		{name: "post-work-verifier", model: "gpt-5.6-terra", effort: "high"},
-	}
-	for _, want := range wants {
-		t.Run(want.name, func(t *testing.T) {
-			agentsDir := filepath.Join(root, "codex", "agents")
-			tomlData := mustReadRepoFile(t, agentsDir, want.name+".toml")
-			for key, expected := range map[string]string{
-				"model":                  want.model,
-				"model_reasoning_effort": want.effort,
-				"sandbox_mode":           "read-only",
-				"approval_policy":        "never",
-			} {
-				if got := tomlStringValue(t, tomlData, key); got != expected {
-					t.Errorf("%s = %q, want %q", key, got, expected)
-				}
-			}
-
-			instructions := tomlDeveloperInstructions(t, tomlData)
-			mirror := mustReadRepoFile(t, agentsDir, want.name+".md")
-			if !bytes.Equal(instructions, mirror) {
-				t.Errorf("developer_instructions does not byte-match codex/agents/%s.md", want.name)
-			}
-		})
-	}
-
 	skill := mustReadRepoFile(t, root, "codex", "skills", "post-work-review", "SKILL.md")
 	for _, required := range []string{
-		"`agent_type`",
-		"`fork_context: false`",
+		"`spawn_agent` and `wait_agent` directly",
 		"`fork_turns: \"none\"`",
-		"`record-session`",
-		"unsupported_native_custom_agent",
+		"post_work_review_<head-prefix>_<unique>",
+		"post_work_verify_<head-prefix>_<round>_<unique>",
+		"[a-z0-9_]+",
+		"Do not edit files",
+		"natural-language",
+		"inherits the parent session's sandbox",
+		"MCP/connectors",
+		"nested agents",
+		"fallback reviewer",
+		"scripts/mark-reviewed-head.sh mark",
+		"not proof of a custom role",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
-			t.Errorf("post-work-review/SKILL.md missing fail-closed contract %q", required)
+			t.Errorf("post-work-review/SKILL.md missing contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"native-call",
+		"model_catalog_json",
+		"reviewer_session_id",
+		"post-work-reviewer.toml",
+	} {
+		if bytes.Contains(skill, []byte(forbidden)) {
+			t.Errorf("post-work-review/SKILL.md retained obsolete contract %q", forbidden)
 		}
 	}
 }
@@ -188,33 +175,6 @@ func parseSkillFrontmatter(t *testing.T, data []byte) map[string]string {
 		t.Fatal("SKILL.md frontmatter is not closed")
 	}
 	return frontmatter
-}
-
-func tomlStringValue(t *testing.T, data []byte, key string) string {
-	t.Helper()
-	for line := range strings.Lines(string(data)) {
-		name, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || strings.TrimSpace(name) != key {
-			continue
-		}
-		return unquoteStaticString(t, strings.TrimSpace(value))
-	}
-	t.Fatalf("TOML key %q not found", key)
-	return ""
-}
-
-func tomlDeveloperInstructions(t *testing.T, data []byte) []byte {
-	t.Helper()
-	const opening = "developer_instructions = \"\"\"\n"
-	_, rest, ok := bytes.Cut(data, []byte(opening))
-	if !ok {
-		t.Fatal("developer_instructions triple-quoted string not found")
-	}
-	end := bytes.LastIndex(rest, []byte("\n\"\"\""))
-	if end < 0 {
-		t.Fatal("developer_instructions triple-quoted string is not closed")
-	}
-	return rest[:end+1]
 }
 
 func unquoteStaticString(t *testing.T, value string) string {

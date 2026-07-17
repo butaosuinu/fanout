@@ -57,7 +57,7 @@ func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	if strings.Contains(got, "structure the PR body") || strings.Contains(got, "Diagram gate") {
 		t.Fatal("PR visualization section present when AutoPullRequest=false")
 	}
-	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to") {
+	if !strings.Contains(got, "with base `release/v1`") {
 		t.Fatalf("Render(..., codex, AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
 }
@@ -73,7 +73,7 @@ func TestPRVisualizationAndReviewSectionsQuoteBaseBranch(t *testing.T) {
 
 	codex := Render(123, "structured PR briefing", "Issue body", "codex", "foo;bar", settings.Defaults(), false, nil)
 	for _, want := range []string{
-		"POST_WORK_REVIEW_BASE='foo;bar'` to every driver command",
+		"with base `'foo;bar'`",
 		"gh pr create --base 'foo;bar'",
 	} {
 		if !strings.Contains(codex, want) {
@@ -103,7 +103,6 @@ func TestCodexReviewSectionDefaultsEmptyBaseBranchToMain(t *testing.T) {
 	got := Render(123, "review briefing", "Issue body", "codex", "", settings.Defaults(), false, nil)
 	for _, want := range []string{
 		"with base `main`",
-		"POST_WORK_REVIEW_BASE=main` to every driver command",
 		"gh pr create --base main",
 	} {
 		if !strings.Contains(got, want) {
@@ -137,13 +136,16 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"After focused checks pass, follow the review, commit, and push sequence below",
 				"$post-work-review",
 				"Commit the candidate changes before the final branch-scope review",
-				"POST_WORK_REVIEW_BASE=release/v1` to every driver command",
-				"canonical full project validation for that exact HEAD",
+				"with base `release/v1`",
+				"fresh generic native subagent",
+				"natural-language findings",
+				"canonical",
+				"full project validation once",
 				"`.git/post-work-review-passed` for the",
-				"stay in the same bounded gate",
-				"`prepare-verify` and a fresh `post-work-verifier`",
-				"Do not start another broad review",
-				"exact HEAD you will push",
+				"different fresh generic verifier subagent",
+				"Do not repeat the broad review",
+				"exact",
+				"HEAD and reviewed base",
 				"Push and open the PR only after the branch review is clean and marked",
 			},
 		},
@@ -233,10 +235,10 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	if !strings.Contains(got, "Only after the committed branch review is clean and marked should you push the") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing no-PR post-work-review gate:\n%s", got)
 	}
-	if !strings.Contains(got, "clean=true`, `findings=0`, and an empty `stop_reason=") {
-		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing bounded clean condition:\n%s", got)
+	if !strings.Contains(got, "parent interprets its") || !strings.Contains(got, "natural-language findings") {
+		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing parent review interpretation:\n%s", got)
 	}
-	if !strings.Contains(got, "POST_WORK_REVIEW_BASE=release/v1` to every driver command") {
+	if !strings.Contains(got, "with base `release/v1`") {
 		t.Fatalf("RenderTask(..., AutoPullRequest=false) missing post-work-review base branch:\n%s", got)
 	}
 	if strings.Contains(got, "gh pr create --base") {
@@ -292,21 +294,20 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	assertIssueLessTaskBriefing(t, got)
 }
 
-func TestCodexReviewFixFlowStaysWithinOneBoundedGate(t *testing.T) {
+func TestCodexReviewFixFlowUsesFreshVerifier(t *testing.T) {
 	for _, autoPullRequest := range []bool{false, true} {
 		cfg := settings.Defaults()
 		cfg.AutoPullRequest = autoPullRequest
 		got := Render(123, "review briefing", "Issue body", "codex", "main", cfg, false, nil)
 		ordered := []string{
-			"stay in the same bounded gate",
-			"run focused checks for the edited files",
-			"commit the fixes",
-			"canonical full validation on the new HEAD",
-			"`prepare-verify`",
-			"`post-work-verifier`",
-			"`mark` for that HEAD only",
-			"after the verifier reports clean",
-			"Do not start another broad review",
+			"broad review finds an issue",
+			"run focused checks",
+			"commit the fix",
+			"different fresh generic verifier subagent",
+			"Do not repeat the broad review",
+			"After the reviewer or verifier is clean",
+			"full project validation once",
+			"writes `.git/post-work-review-passed`",
 		}
 		previous := -1
 		for _, want := range ordered {

@@ -78,6 +78,14 @@ If fanout settings resolve `prReviewGate=false`, child Claude briefings also car
 
 The gate is pinned to HEAD, so adding a new commit re-arms it — review again before the PR (the marker is worktree-local, so fanout's parallel panes don't interfere with each other). Without `python3` the hook fails closed and denies anything that coarsely looks like PR creation, so install `python3` or use `FANOUT_SKIP_PR_REVIEW=1`.
 
+## `post-work-review` reports an `agent_type` error
+
+Current `$post-work-review` does not request `agent_type`. It uses an ordinary native `spawn_agent` call and treats `task_name` only as a task label. If the old error still appears, update fanout, run `make install`, then start a new Codex session. Codex loads skills at session startup; installation also removes the retired custom agents and driver.
+
+The current gate requires native `spawn_agent` and `wait_agent` plus an available concurrency slot. If any of these are unavailable, it stops with an error instead of starting `codex exec`, app-server, or another reviewer fallback.
+
+The child inherits the parent session's permissions. Start the parent read-only if reviewer writes must be prevented by the sandbox. The reviewer still receives repository content through its prompt and repository reads.
+
 ## Project mode returns no items
 
 Project mode lists items through a GraphQL query that requires the `gh` CLI to carry the `read:project` scope (without it the query fails). Add the scope and rerun.

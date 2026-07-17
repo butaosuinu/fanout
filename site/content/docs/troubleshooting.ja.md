@@ -88,6 +88,21 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 ゲートは HEAD に固定されるため新しいコミットを積むと再武装されるので、PR の前にもう一度レビューしてください(marker は worktree ローカルなので、fanout の並列ペイン同士が干渉することはありません)。
 `python3` が無い環境では fail-closed になって PR 作成らしきコマンドを粗い判定で deny するため、`python3` をインストールするか `FANOUT_SKIP_PR_REVIEW=1` を使ってください。
 
+## `post-work-review` で `agent_type` error が出る
+
+現在の `$post-work-review` は `agent_type` を要求しません。
+通常の native `spawn_agent` を使い、`task_name` は task label としてだけ扱います。
+旧 error が残る場合は fanout を更新して `make install` を実行してください。
+その後、新しい Codex session を開始してください。
+Codex は session 起動時に skill を読み込み、install 時に廃止済みの custom agent と driver を削除します。
+
+現在の gate には native `spawn_agent`、`wait_agent`、空き concurrency slot が必要です。
+いずれかを使えない場合は、`codex exec`、app-server、別 reviewer へ fallback せず停止します。
+
+子は親 session の権限を継承します。
+sandbox で reviewer の書き込みを禁止する場合は、親を read-only で開始してください。
+reviewer は prompt と repository read を通じて repository の内容を受け取ります。
+
 ## Project モードで items が取れない
 
 Project モードは GraphQL クエリで Project items を取得するため、`gh` CLI に `read:project` スコープが必要です(無いとクエリが失敗します)。

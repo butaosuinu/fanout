@@ -5,16 +5,11 @@ CODEX_DIR  ?= $(HOME)/.codex
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
-CODEX_TOOL_DIR   := $(CODEX_DIR)/tools
-CODEX_AGENT_DIR  := $(CODEX_DIR)/agents
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
-CODEX_TOOLS     := $(notdir $(wildcard codex/tools/*))
-CODEX_AGENTS    := $(notdir $(wildcard codex/agents/*))
 
 BATS       ?= bats
-BATS_JOBS  ?= 4
 GO         ?= go
 GO_BIN     ?= fanout-go
 
@@ -45,13 +40,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-POST_WORK_REVIEW_BATS := tests/bats/tier1_post_work_review.bats
-# The post-work-review cases are weighted across more shards than workers so
-# the longest git-heavy cases start first and shorter shards fill freed slots.
-POST_WORK_REVIEW_SHARDS := 1 2 3 4 5 6 7 8 9 10 11 12
-POST_WORK_REVIEW_SHARD_TARGETS := $(addprefix test-tier1-post-work-review-shard-,$(POST_WORK_REVIEW_SHARDS))
-
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache $(POST_WORK_REVIEW_SHARD_TARGETS)
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -111,7 +100,7 @@ clean-web:
 	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
 install-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -125,15 +114,12 @@ install-integrations:
 		mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
 		cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
 	done
-	@for tool in $(CODEX_TOOLS); do \
-		install -m 0755 "codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
-	done
-	@for agent in $(CODEX_AGENTS); do \
-		install -m 0644 "codex/agents/$$agent" "$(CODEX_AGENT_DIR)/$$agent"; \
-	done
+	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
+		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
+		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
 
 link-integrations:
-	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)" "$(CODEX_TOOL_DIR)" "$(CODEX_AGENT_DIR)"
+	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
@@ -145,21 +131,17 @@ link-integrations:
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
 	done
-	@for tool in $(CODEX_TOOLS); do \
-		rm -f "$(CODEX_TOOL_DIR)/$$tool"; \
-		ln -sf "$(CURDIR)/codex/tools/$$tool" "$(CODEX_TOOL_DIR)/$$tool"; \
-	done
-	@for agent in $(CODEX_AGENTS); do \
-		rm -f "$(CODEX_AGENT_DIR)/$$agent"; \
-		ln -sf "$(CURDIR)/codex/agents/$$agent" "$(CODEX_AGENT_DIR)/$$agent"; \
-	done
+	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
+		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
+		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
 
 uninstall-integrations:
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
-	@for tool in $(CODEX_TOOLS); do rm -f "$(CODEX_TOOL_DIR)/$$tool"; done
-	@for agent in $(CODEX_AGENTS); do rm -f "$(CODEX_AGENT_DIR)/$$agent"; done
+	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
+		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
+		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
 
 install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
@@ -169,8 +151,6 @@ install: build-go install-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
-	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
-	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
 
 link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
@@ -180,8 +160,6 @@ link: build-go link-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
-	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool -> $(CURDIR)/codex/tools/$$tool"; done
-	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent -> $(CURDIR)/codex/agents/$$agent"; done
 
 uninstall: uninstall-integrations
 	rm -f "$(BINDIR)/fanout"
@@ -190,8 +168,6 @@ uninstall: uninstall-integrations
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
-	@for tool in $(CODEX_TOOLS); do echo "  $(CODEX_TOOL_DIR)/$$tool"; done
-	@for agent in $(CODEX_AGENTS); do echo "  $(CODEX_AGENT_DIR)/$$agent"; done
 
 # --- test / lint -------------------------------------------------------------
 # `make test`         — build the Go binary, run Go unit tests + web UI tests
@@ -248,8 +224,7 @@ check:
 
 # Internal: records the validated HEAD into the per-worktree marker
 # $(git rev-parse --git-dir)/fanout-check-passed, which scripts/agent-push-gate.sh
-# compares against the pushed tip. Clean tree only (same dirty test as
-# codex/tools/post-work-review.sh has_dirty_tree): a dirty tree means the
+# compares against the pushed tip. Clean tree only: a dirty tree means the
 # validated content is not the commit that would be pushed. Running this
 # target without `check` defeats the push gate — for a deliberate bypass use
 # FANOUT_SKIP_PUSH_CHECK=1 instead.
@@ -268,22 +243,7 @@ check-marker:
 		git rev-parse HEAD >"$$(git rev-parse --git-dir)/fanout-check-passed"
 
 test-tier1: build-go check-bats
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_pr_watch.bats tests/bats/tier1_agent_hooks.bats
-	@set -eu; \
-		all=$$($(BATS) --count "$(POST_WORK_REVIEW_BATS)"); \
-		assigned=0; \
-		for shard in $(POST_WORK_REVIEW_SHARDS); do \
-			count=$$($(BATS) --count --filter "post-work-review shard-$$shard:" "$(POST_WORK_REVIEW_BATS)"); \
-			assigned=$$((assigned + count)); \
-		done; \
-		if [ "$$assigned" -ne "$$all" ]; then \
-			echo "error: post-work-review Bats shard coverage is $$assigned/$$all" >&2; \
-			exit 1; \
-		fi
-	+$(MAKE) --no-print-directory -j$(BATS_JOBS) $(POST_WORK_REVIEW_SHARD_TARGETS)
-
-$(POST_WORK_REVIEW_SHARD_TARGETS): test-tier1-post-work-review-shard-%:
-	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) --filter "post-work-review shard-$*:" "$(POST_WORK_REVIEW_BATS)"
+	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier1_flags.bats tests/bats/tier1_msg.bats tests/bats/tier1_pr_watch.bats tests/bats/tier1_agent_hooks.bats tests/bats/tier1_post_work_review.bats
 
 test-tier2: build-go check-bats
 	FANOUT_BIN="$(CURDIR)/$(GO_BIN)" $(BATS) tests/bats/tier2_dry_run.bats tests/bats/tier2_status.bats tests/bats/tier2_msg.bats
@@ -323,7 +283,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/tools/post-work-review.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/skills/post-work-review/scripts/mark-reviewed-head.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt

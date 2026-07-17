@@ -61,8 +61,19 @@ fanout skill は「#123 を fan out して」のように依頼するか、明�
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
 `fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
 
-`$post-work-review` は、広いレビューを read-only・approval なしの `post-work-reviewer`(`gpt-5.6-sol`、`xhigh`)、修正確認を `post-work-verifier`(`gpt-5.6-terra`、`high`)へ割り当てます。
-driver は結果を native child rollout の role・parent・sandbox・approval policy・bundle path・session UUID と結合します。runtime が metadata を公開または強制できなければ gate は停止します。
+`$post-work-review` は `fork_turns: "none"` を指定し、通常の Codex native subagent を fresh な広域レビューとして起動します。
+親は自然言語の指摘を解釈します。
+修正後は別の fresh subagent が、既存指摘の解消と修正による明白な退行だけを確認します。
+custom agent、model 固定、app-server controller、result parser は使いません。
+
+reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
+native subagent は親 session の sandbox、approval policy、network 制限を継承します。
+skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
+強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
+native spawn または wait が使えない場合は fallback せず停止します。
+
+親が clean と判断した後、skill は repository の canonical validation を 1 回実行し、clean な exact HEAD、PR base commit、diff hash を記録します。
+commit、base の移動、review diff の変更で marker は無効です。
 
 `$pr-watch` は foreground で動きます。
 helper は変化のない snapshot の出力を省き、linked worktree でも cursor を Git metadata に保存します。

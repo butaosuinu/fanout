@@ -146,13 +146,9 @@ func criticalReasons(d Diff) []Reason {
 			reasons = append(reasons, Reason{Signal: sigGuardModified, Level: LevelCritical, File: fc.Path, Detail: "層ガード(internal/arch)変更"})
 		}
 		// S5 review-gate-modified: any touch of .claude/ or the post-work-review
-		// gate pieces installed from codex/ and claude/ (they produce the review
+		// gate skills installed from codex/ and claude/ (they produce the review
 		// marker the PR gate checks; weakening them weakens the gate itself).
-		// codex/agents/post-work-* are the reviewer/verifier agent definitions
-		// the gate script drives — same gate, same weight.
 		if touches(fc, ".claude/") ||
-			touches(fc, "codex/tools/post-work-review") ||
-			touches(fc, "codex/agents/post-work-") ||
 			touches(fc, "codex/skills/post-work-review/") ||
 			touches(fc, "claude/skills/post-work-review/") {
 			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})

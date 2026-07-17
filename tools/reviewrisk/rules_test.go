@@ -17,7 +17,6 @@ func TestClassifyPath(t *testing.T) {
 		{name: "infra state is H", path: "internal/infra/state/store.go", want: ClassH, found: true},
 		{name: "infra worktree is H", path: "internal/infra/worktree/add.go", want: ClassH, found: true},
 		{name: "infra settings is H", path: "internal/infra/settings/settings.go", want: ClassH, found: true},
-		{name: "infra reviewjson is H", path: "internal/infra/reviewjson/project.go", want: ClassH, found: true},
 		{name: "infra herdrrun is H", path: "internal/infra/herdrrun/herdrrun.go", want: ClassH, found: true},
 		{name: "infra ghissue is M", path: "internal/infra/ghissue/issue.go", want: ClassM, found: true},
 		{name: "infra atomicfs is M", path: "internal/infra/atomicfs/write.go", want: ClassM, found: true},
@@ -34,7 +33,7 @@ func TestClassifyPath(t *testing.T) {
 		{name: "core exitcode is A", path: "internal/core/exitcode/code.go", want: ClassA, found: true},
 		{name: "core cliview is A", path: "internal/core/cliview/view.go", want: ClassA, found: true},
 
-		// --- cmd/fanout: 10 H files plus the catch-all M ---
+		// --- cmd/fanout: 9 H files plus the catch-all M ---
 		{name: "cmd main is H", path: "cmd/fanout/main.go", want: ClassH, found: true},
 		{name: "cmd runtime backend is H", path: "cmd/fanout/runtime_backend.go", want: ClassH, found: true},
 		{name: "cmd tui_popup is H", path: "cmd/fanout/tui_popup.go", want: ClassH, found: true},
@@ -44,8 +43,8 @@ func TestClassifyPath(t *testing.T) {
 		{name: "cmd codex_team_tui is H", path: "cmd/fanout/codex_team_tui.go", want: ClassH, found: true},
 		{name: "cmd tui_restore is H", path: "cmd/fanout/tui_restore.go", want: ClassH, found: true},
 		{name: "cmd tui_watch is H", path: "cmd/fanout/tui_watch.go", want: ClassH, found: true},
-		{name: "cmd post-work-review JSON is H", path: "cmd/fanout/post_work_review_json.go", want: ClassH, found: true},
 		{name: "cmd rest status.go is M", path: "cmd/fanout/status.go", want: ClassM, found: true},
+		{name: "infra codex app-server is M", path: "internal/infra/codexapp/server.go", want: ClassM, found: true},
 
 		// --- dashboard: every file is enumerated; a new file falls through ---
 		{name: "dashboard server is H", path: "internal/ui/dashboard/server.go", want: ClassH, found: true},
@@ -99,7 +98,6 @@ func TestClassifyPath(t *testing.T) {
 		{name: "workflow is H", path: ".github/workflows/test.yml", want: ClassH, found: true},
 		{name: "github rest is M", path: ".github/CODEOWNERS", want: ClassM, found: true},
 		{name: "claude settings is H", path: ".claude/settings.json", want: ClassH, found: true},
-		{name: "codex tools shell is H", path: "codex/tools/post-work-review.sh", want: ClassH, found: true},
 		{name: "codex prompts are M", path: "codex/skills/rescue/SKILL.md", want: ClassM, found: true},
 		{name: "claude prompts are M", path: "claude/commands/fanout.md", want: ClassM, found: true},
 		{name: "tests bin yardstick is H", path: "tests/bin/gh", want: ClassH, found: true},

@@ -25,7 +25,7 @@ govulncheck (network; deliberately not part of `lint`).
 
 The Claude Code integration files (`claude/commands/*.md` slash commands and
 `claude/skills/*/SKILL.md` skills) and Codex CLI integration files
-(`codex/skills/*/` skill resources, `codex/agents/*`, and `codex/tools/*`) are
+(`codex/skills/*/` skill resources) are
 bundled in the repo as the source of truth. `make install` places them under
 the matching `~/.claude/` and `~/.codex/` directories. Do not edit installed
 copies directly.
@@ -93,7 +93,7 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
   `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` /
-  `tui_watch.go` / `post_work_review_json.go` are class H; the
+  `tui_watch.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
@@ -118,9 +118,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
-  repo config from enabling the watcher or notification targets), and
-  `reviewjson` (reviewer JSON validation and cache projection) are class
-  H; `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
+  repo config from enabling the watcher or notification targets) are class H;
+  `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
   `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`,
   `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
