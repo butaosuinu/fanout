@@ -190,12 +190,14 @@ fanned panes are separate agent sessions (not Agent Teams teammates — that is 
   - `fanout msg peers` — live sibling roster.
   - `fanout msg inbox [--all] [--mark-read]` — unread 1:1 messages + unread board posts (`--mark-read` drains them).
   - `fanout msg board [--all]` — the shared broadcast board.
+  - `fanout msg watch [--interval S]` — block and emit new 1:1 + board messages one per line as they arrive; emitted messages are marked read on delivery (mark-on-emit). Ctrl-C to stop.
   - `fanout msg send --to <N> [--kind K] "<body>"` — 1:1 message to sibling #N.
   - `fanout msg post [--kind K] "<body>"` — post to the shared board.
+  - `fanout msg nudge <N>` — best-effort push: send-keys an inbox hint into sibling #N's pane, only when its agent state can take queued input (never a blocked pane). Never touches the DB; undeliverable nudges warn and exit `0`.
   - `fanout msg mark-read [--id N ...|--all]` — mark 1:1 messages read (`--all` also advances the board cursor).
   - `fanout msg register` — (re-)register this pane in the roster.
-- Common options: `--json` (machine-readable), `--self <N>` / `--parent <ref>` (override pane detection). `kind` is a free-form label (default `note`; no fixed vocabulary). Exit codes: `0` ok, `2` bad invocation, `4` SQLite backend failure.
-- Coordination is **pull-based**: messages persist and a sibling reads them at its own checkpoints; `fanout msg` never interrupts a busy pane. The merged CLI has no "nudge". A good rhythm is to check `fanout msg inbox` once after reading the briefing, post a one-line heads-up before editing shared files, and check the inbox once more before opening the PR.
+- Common options: `--json` (machine-readable), `--self <N>` / `--parent <ref>` (override pane detection). `kind` is a free-form label (default `note`; no fixed vocabulary). Exit codes: `0` ok, `2` bad invocation, `4` backend failure (SQLite, or `watch`'s stdout breaking); `nudge` reports undeliverable targets as a warning with exit `0`.
+- Coordination is **pull-based with one push assist** (`nudge`): messages persist and a sibling reads them at its own checkpoints; `watch` turns that pull into a stream, and claude `--team` briefings instruct the pane to start `fanout msg watch` under the Monitor tool as its first tool action. A watcher replaces only the inbox checks — post a one-line heads-up before editing shared files regardless; without a watcher, also check `fanout msg inbox` once after reading the briefing and once more before opening the PR. A nudge hint can land after the recipient's watcher already drained the message (mark-on-emit): an empty inbox then means the body is in the watcher output.
 - **Plan mode** — `fanout plan --team` uses the same `fanout msg` surface, but peers are addressed by **task id** (`fanout msg send --to <task-id>`) instead of issue number, because issue-less plan tasks have no `#N`. See the fanout-plan skill.
 - **Security**: the DB is a plaintext SQLite file under `/tmp` (`0600`, owner-only). Never put secrets, tokens, or credentials in messages.
 

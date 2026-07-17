@@ -189,13 +189,20 @@ task you are (from the tmux pane and `.fanout/state.json`) and which plan you
 belong to. Peers are addressed by task id:
 
 - `fanout msg peers` — live sibling roster (task ids).
-- `fanout msg inbox [--mark-read]` — unread 1:1 + board messages addressed to you.
+- `fanout msg inbox [--all] [--mark-read]` — unread 1:1 + board messages addressed to you (`--all` includes read ones).
 - `fanout msg board` — the shared broadcast board.
+- `fanout msg watch [--interval S]` — block and emit new messages one per line
+  as they arrive; emitted messages are marked read on delivery (mark-on-emit).
 - `fanout msg send --to <task-id> "<body>"` — 1:1 message to a sibling task.
 - `fanout msg post "<body>"` — post to the shared board.
+- `fanout msg nudge <task-id>` — best-effort inbox hint into a sibling task's
+  pane, only when its agent state can take queued input (never a blocked
+  pane); undeliverable nudges warn and exit `0`.
 
-Coordination is pull-based: messages persist and a sibling reads them at its
-own checkpoints; nothing nudges a busy pane. The DB is a plaintext SQLite file
+Coordination is pull-based with one push assist (`nudge`): messages persist
+and a sibling reads them at its own checkpoints; claude `--team` briefings
+additionally instruct the pane to start `fanout msg watch` under the Monitor
+tool, turning that pull into a stream. The DB is a plaintext SQLite file
 under `/tmp` (`0600`, owner-only) — never put secrets in messages. This is
 distinct from Claude Code Agent Teams (a Claude-only, single-session feature).
 
