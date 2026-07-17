@@ -134,6 +134,28 @@ run_pr_gate() {
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
+@test "review marker rejects dirty submodules hidden by repository config" {
+  local repo="$BATS_TEST_TMPDIR/review-marker-submodule" subrepo="$BATS_TEST_TMPDIR/review-submodule" head base_head gitdir
+  setup_review_repo "$repo"
+  setup_review_repo "$subrepo"
+  git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
+  git -C "$repo" -c protocol.file.allow=always submodule add "$subrepo" vendor/sub >/dev/null
+  git -C "$repo" config -f .gitmodules submodule.vendor/sub.ignore all
+  git -C "$repo" add .gitmodules vendor/sub
+  git -C "$repo" commit -qm "add ignored submodule"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  base_head="$(git -C "$repo" rev-parse HEAD^)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+  printf 'dirty\n' >>"$repo/vendor/sub/tracked.txt"
+
+  [ -z "$(git -C "$repo" status --porcelain -uall)" ]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'working tree is dirty'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
 @test "Claude marker-only reviews remain default-base-only" {
   command -v python3 >/dev/null 2>&1 || skip "python3 is required"
 

@@ -112,6 +112,7 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"nested agents",
 		"fallback reviewer",
 		"scripts/mark-reviewed-head.sh mark",
+		"--ignore-submodules=none",
 		"not proof of a custom role",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {

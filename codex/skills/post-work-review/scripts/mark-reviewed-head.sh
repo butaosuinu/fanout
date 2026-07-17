@@ -23,7 +23,7 @@ case "${1:-}" in
     expected_base_head=$4
     current_head=$(git rev-parse HEAD) || die "cannot resolve HEAD"
     [ "$current_head" = "$expected_head" ] || die "HEAD changed during review"
-    [ -z "$(git status --porcelain -uall)" ] || die "working tree is dirty"
+    [ -z "$(git status --porcelain -uall --ignore-submodules=none)" ] || die "working tree is dirty"
 
     case "$base" in
       refs/remotes/origin/*) base=${base#refs/remotes/origin/} ;;

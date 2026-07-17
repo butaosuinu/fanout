@@ -35,7 +35,8 @@ findings. Do not parse reviewer output or require a result schema.
 ## Prepare the target
 
 1. Finish other writer agents before starting the gate.
-2. Require a Git worktree, a committed candidate, and a clean working tree.
+2. Require a Git worktree, a committed candidate, and a clean working tree as
+   reported by `git status --porcelain -uall --ignore-submodules=none`.
 3. Resolve and record:
    - repository root;
    - exact `HEAD` commit;
