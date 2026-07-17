@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
 - `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
-- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群)と `$CODEX_DIR/agents/`(post-work reviewer / verifier)、`$CODEX_DIR/tools/`
+- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群。`post-work-review` の marker helper も skill 内に同梱)
 
 install と update はこれらすべてを上書きします。
 

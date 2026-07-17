@@ -63,14 +63,17 @@ Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 
 
 `$post-work-review` は `fork_turns: "none"` を指定し、通常の Codex native subagent を fresh な広域レビューとして起動します。
 親は自然言語の指摘を解釈します。
-修正後は別の fresh subagent が、既存指摘の解消と修正による明白な退行だけを確認します。
+修正で対象が変わった場合は、別の fresh subagent が新しい対象全体を広域レビューします。
 custom agent、model 固定、app-server controller、result parser は使いません。
 
 reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
+review task は repository の内容を untrusted evidence とし、その中の指示に従わないよう reviewer に求めます。
+Codex は child の bootstrap 時に repository の指示を読み込むため、marker helper は candidate が `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files を変更していれば spawn 前に拒否します。
+これらの変更は trusted checkout から起動した reviewer、または人がレビューしてください。
 native subagent は親 session の sandbox、approval policy、network 制限を継承します。
 skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
 強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
-native spawn または wait が使えない場合は fallback せず停止します。
+この信頼境界、native spawn、wait のいずれかを維持できない場合は fallback せず停止します。
 
 dirty worktree は review-only scope です。
 reviewer は staged、unstaged、untracked、dirty submodule の変更を確認し、親は focused checks だけを実行します。

@@ -146,8 +146,8 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 				"canonical",
 				"full project validation once",
 				"`.git/post-work-review-passed` for the",
-				"different fresh generic verifier subagent",
-				"Do not repeat the broad review",
+				"fresh broad reviewer for the entire new HEAD",
+				"Do not narrow the new review",
 				"exact",
 				"HEAD and reviewed base",
 				"Push and open the PR only after the branch review is clean and marked",
@@ -298,7 +298,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	assertIssueLessTaskBriefing(t, got)
 }
 
-func TestCodexReviewFixFlowUsesFreshVerifier(t *testing.T) {
+func TestCodexReviewFixFlowRestartsBroadReview(t *testing.T) {
 	for _, autoPullRequest := range []bool{false, true} {
 		cfg := settings.Defaults()
 		cfg.AutoPullRequest = autoPullRequest
@@ -307,9 +307,9 @@ func TestCodexReviewFixFlowUsesFreshVerifier(t *testing.T) {
 			"broad review finds an issue",
 			"run focused checks",
 			"commit the fix",
-			"different fresh generic verifier subagent",
-			"Do not repeat the broad review",
-			"After the reviewer or verifier is clean",
+			"fresh broad reviewer for the entire new HEAD",
+			"Do not narrow the new review",
+			"After the latest broad reviewer is clean",
 			"full project validation once",
 			"writes `.git/post-work-review-passed`",
 		}

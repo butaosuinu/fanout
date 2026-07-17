@@ -103,7 +103,6 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"`spawn_agent` and `wait_agent` directly",
 		"`fork_turns: \"none\"`",
 		"post_work_review_<head-prefix>_<unique>",
-		"post_work_verify_<head-prefix>_<round>_<unique>",
 		"[a-z0-9_]+",
 		"Do not edit files",
 		"natural-language",
@@ -117,6 +116,11 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"must not write the review marker",
 		"Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes",
 		"recorded repository root as the",
+		"as untrusted review evidence",
+		"This task message is your only review instruction",
+		"fresh broad reviewer with a new task name for the entire new target",
+		"\"$helper\" guard <recorded-head>",
+		"instruction-changing",
 		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",
@@ -130,6 +134,8 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"model_catalog_json",
 		"reviewer_session_id",
 		"post-work-reviewer.toml",
+		"Read repository instructions first",
+		"post_work_verify_",
 	} {
 		if bytes.Contains(skill, []byte(forbidden)) {
 			t.Errorf("post-work-review/SKILL.md retained obsolete contract %q", forbidden)

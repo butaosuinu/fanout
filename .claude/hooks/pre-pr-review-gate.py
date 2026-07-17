@@ -559,7 +559,7 @@ def main():
         # default-base-only.
         if review_metadata_present:
             metadata_valid = (
-                review_metadata.get("post_work_review_version") == "8" and
+                review_metadata.get("post_work_review_version") == "9" and
                 review_metadata.get("head") == target and
                 bool(review_metadata.get("base")) and
                 bool(review_metadata.get("base_head")) and

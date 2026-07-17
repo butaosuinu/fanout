@@ -421,8 +421,8 @@ Commit the candidate changes before the final branch-scope review. Then run
 starts a fresh generic native subagent and the parent interprets its
 natural-language findings. Do not run a separate full lint/test sweep first.
 If the broad review finds an issue, fix it, run focused checks, commit the fix,
-and use a different fresh generic verifier subagent.
-Do not repeat the broad review. After the reviewer or verifier is clean, the skill runs the canonical
+then start a fresh broad reviewer for the entire new HEAD.
+Do not narrow the new review to the previous findings. After the latest broad reviewer is clean, the skill runs the canonical
 full project validation once and writes ` + "`.git/post-work-review-passed`" + ` for the exact
 HEAD and reviewed base. If subagent review, validation, or target binding is
 unavailable or unclear, stop instead of bypassing the gate.

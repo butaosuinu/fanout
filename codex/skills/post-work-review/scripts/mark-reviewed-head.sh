@@ -11,29 +11,59 @@ git_dir=$(git rev-parse --absolute-git-dir) || die "cannot resolve Git directory
 marker="$git_dir/post-work-review-passed"
 metadata="$marker.meta"
 
+load_target() {
+  expected_head=$1
+  base=$2
+  expected_base_head=$3
+  current_head=$(git rev-parse HEAD) || die "cannot resolve HEAD"
+  [ "$current_head" = "$expected_head" ] || die "HEAD changed during review"
+
+  case "$base" in
+    refs/remotes/origin/*) base=${base#refs/remotes/origin/} ;;
+    origin/*) base=${base#origin/} ;;
+    refs/heads/*) base=${base#refs/heads/} ;;
+  esac
+  [ -n "$base" ] || die "base branch is empty"
+  base_ref="refs/remotes/origin/$base"
+  current_base_head=$(git rev-parse --verify "$base_ref^{commit}") || die "cannot resolve $base_ref"
+  [ "$current_base_head" = "$expected_base_head" ] || die "base changed during review"
+}
+
+guard_bootstrap_instructions() {
+  set -- \
+    ':(glob)AGENTS.md' \
+    ':(glob)AGENTS.override.md' \
+    ':(glob)**/AGENTS.md' \
+    ':(glob)**/AGENTS.override.md' \
+    ':(glob).codex/**' \
+    ':(glob)**/.codex/**'
+
+  git diff --quiet --no-ext-diff --ignore-submodules=none \
+    "$base_ref...$current_head" -- "$@" ||
+    die "candidate changes Codex bootstrap instructions; use a trusted-checkout or human review"
+  git diff --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
+    die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
+  git diff --cached --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
+    die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
+  [ -z "$(git ls-files --others --exclude-standard -- "$@")" ] ||
+    die "worktree adds Codex bootstrap instructions; use a trusted-checkout or human review"
+}
+
 case "${1:-}" in
   clear)
     [ "$#" -eq 1 ] || die "usage: $0 clear"
     rm -f "$marker" "$metadata"
     ;;
+  guard)
+    [ "$#" -eq 4 ] || die "usage: $0 guard <expected-head> <base-branch> <expected-base-head>"
+    load_target "$2" "$3" "$4"
+    guard_bootstrap_instructions
+    ;;
   mark)
     [ "$#" -eq 4 ] || die "usage: $0 mark <expected-head> <base-branch> <expected-base-head>"
-    expected_head=$2
-    base=$3
-    expected_base_head=$4
-    current_head=$(git rev-parse HEAD) || die "cannot resolve HEAD"
-    [ "$current_head" = "$expected_head" ] || die "HEAD changed during review"
+    load_target "$2" "$3" "$4"
     [ -z "$(git status --porcelain -uall --ignore-submodules=none)" ] || die "working tree is dirty"
-
-    case "$base" in
-      refs/remotes/origin/*) base=${base#refs/remotes/origin/} ;;
-      origin/*) base=${base#origin/} ;;
-      refs/heads/*) base=${base#refs/heads/} ;;
-    esac
-    [ -n "$base" ] || die "base branch is empty"
-    base_ref="refs/remotes/origin/$base"
-    current_base_head=$(git rev-parse --verify "$base_ref^{commit}") || die "cannot resolve $base_ref"
-    [ "$current_base_head" = "$expected_base_head" ] || die "base changed during review"
+    guard_bootstrap_instructions
 
     umask 077
     diff_file=$(mktemp "${TMPDIR:-/tmp}/post-work-review-diff.XXXXXX") ||
@@ -54,7 +84,7 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=8\n'
+      printf 'post_work_review_version=9\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"
@@ -68,6 +98,6 @@ case "${1:-}" in
     trap - EXIT HUP INT TERM
     ;;
   *)
-    die "usage: $0 <clear|mark>"
+    die "usage: $0 <clear|guard|mark>"
     ;;
 esac
