@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -130,6 +131,13 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 	var createdPanes []recreatedPane
 	for idx := 0; idx < len(locked.Panes); idx++ {
 		pane := locked.Panes[idx]
+		// Restore is deliberately tmux-only session management. Herdr v1 is
+		// read-only, so a non-tmux row must never be rebound to a tmux pane,
+		// recreated, or rewritten as a side effect of restoring tmux rows.
+		if backend.NormalizeName(pane.Backend) != backend.Tmux {
+			report.Skipped++
+			continue
+		}
 		identity := restoreDedupeKey(pane)
 		if identity != "" && claimed[identity] {
 			report.Skipped++

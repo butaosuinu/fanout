@@ -10,32 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
-
-// LivePaneInfo is what Build needs to know about one live tmux pane: the cwd
-// of its foreground process, the recorded worktree path option, and its pane
-// title (surfaced as PaneView.TmuxTitle when the pane is alive).
-type LivePaneInfo struct {
-	// Path is the pane's current working directory.
-	Path string
-	// WorktreePath is @fanout_worktree_path, set by fanout for panes whose
-	// foreground process may leave pane_current_path stale.
-	WorktreePath string
-	// Title is the tmux pane title; "" when tmux reports none.
-	Title string
-	// AgentState は pane user option @fanout_agent_state の生値。許可 6 値
-	// (running / working / plan / blocked / idle / done)への正規化は
-	// normalizeAgentState が行う。running / done は fanout の起動ラッパー、
-	// それ以外は agent hooks が設定する。未設定(旧版 fanout やラッパー外で
-	// 起動した pane)や取得失敗時は ""。
-	AgentState string
-	// ShellKey is the pane's @fanout_shell_key liveness token.
-	ShellKey string
-}
 
 // Collectors are the injectable IO boundary. The web dashboard's poller and the
 // future TUI supply real implementations; tests supply fakes. Build owns no IO
@@ -51,13 +31,11 @@ type LivePaneInfo struct {
 //     unresolved); the pane shows UNKNOWN and Degraded.GitHub is set.
 type Collectors struct {
 	LoadState func() (state.Store, error)
-	// LivePanes maps each live tmux pane id to its current working path,
-	// recorded worktree path option, and title. A pane counts as alive only
-	// when its id is present AND the live/current or option path is at/under
-	// its recorded worktree — pane ids are reused across tmux server restarts,
-	// so id-only matching would falsely revive stale rows.
-	LivePanes func() (map[string]LivePaneInfo, error)
-	IssuePRs  func(num int) (issueState string, prs []ghissue.PRRef, err error)
+	// ListLive observes panes through the selected runtime backend. A pane counts
+	// as alive only when its backend-native reference is present and its identity
+	// metadata still agrees with the persisted row.
+	ListLive func() ([]backend.LivePane, error)
+	IssuePRs func(num int) (issueState string, prs []ghissue.PRRef, err error)
 	// BranchPRs mirrors IssuePRs for branch-owning issue-less pane rows (for
 	// example plan tasks and @manual Prompt Sessions), keyed by normalized head
 	// branch. A nil PR slice with nil error is a cache miss, while a non-nil
@@ -92,7 +70,7 @@ func BranchPRLookupKey(p state.Pane) (string, bool) {
 }
 
 // Build assembles a Snapshot. It never returns an error: a read-only dashboard
-// must keep rendering state.json even when tmux or gh is unavailable, so every
+// must keep rendering state.json even when the runtime or gh is unavailable, so every
 // collector failure degrades into a Degraded flag plus best-effort partial data.
 func Build(repo, projectRoot string, c Collectors) Snapshot {
 	now := time.Now
@@ -112,14 +90,14 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		return snap
 	}
 
-	live := map[string]LivePaneInfo{}
-	if c.LivePanes == nil {
+	live := map[livePaneKey]backend.LivePane{}
+	if c.ListLive == nil {
 		snap.Degraded.Tmux = true
-	} else if set, err := c.LivePanes(); err != nil {
+	} else if set, err := c.ListLive(); err != nil {
 		snap.Degraded.Tmux = true
-		snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "tmux: "+err.Error())
+		snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
 	} else {
-		live = set
+		live = indexLivePanes(set)
 	}
 
 	// One gh read per distinct issue number or branch, cached across sessions.
@@ -244,7 +222,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 		for _, p := range panes {
 			issueState, prs := fetchPanePRs(p)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
-			alive := paneAlive(live, p)
+			current, alive := livePaneForState(live, p)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:           p.IssueNum,
@@ -255,6 +233,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				Agent:              p.Agent,
 				BranchName:         p.BranchName,
 				PaneID:             p.PaneID,
+				Backend:            p.Backend,
 				ShellKey:           p.ShellKey,
 				SourceParent:       p.SourceParent,
 				SourceIssueNum:     p.SourceIssueNum,
@@ -281,8 +260,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				Blocked:            wi.Blocked,
 			}
 			if alive {
-				pv.TmuxTitle = live[p.PaneID].Title
-				pv.AgentState = normalizeAgentState(live[p.PaneID].AgentState)
+				pv.TmuxTitle = current.Title
+				pv.AgentState = normalizeAgentState(string(current.AgentState))
 			} else if snap.Degraded.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
@@ -514,31 +493,61 @@ func SyntheticTmuxState(issueState string, blocked bool) string {
 	}
 }
 
-// paneAlive reports whether a recorded pane is live. Keyed panes match on pane
-// id plus @fanout_shell_key. Legacy agent rows fall back to their recorded
-// worktree; legacy shell rows without a key are never treated as live.
-func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
-	if pane.PaneID == "" {
-		return false
+type livePaneKey struct {
+	backend backend.Name
+	pane    string
+}
+
+func indexLivePanes(panes []backend.LivePane) map[livePaneKey]backend.LivePane {
+	live := make(map[livePaneKey]backend.LivePane, len(panes))
+	for _, pane := range panes {
+		key := livePaneKey{backend: backend.NormalizeName(pane.Ref.Backend), pane: pane.Ref.Pane}
+		live[key] = pane
 	}
-	cur, ok := live[pane.PaneID]
+	return live
+}
+
+// livePaneForState reports whether a recorded pane is live and returns the
+// matching backend-neutral observation. Runtime and pane identity must match.
+// Agent panes also require the live path to remain at/under their recorded
+// worktree. Tmux shell panes use ShellKey instead because their repo-root path
+// is too broad to protect against pane-id reuse.
+func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (backend.LivePane, bool) {
+	if pane.PaneID == "" {
+		return backend.LivePane{}, false
+	}
+	name := backend.NormalizeName(pane.Backend)
+	cur, ok := live[livePaneKey{backend: name, pane: pane.PaneID}]
 	if !ok {
-		return false
+		return backend.LivePane{}, false
+	}
+	if name == backend.Herdr {
+		// #425 exposes the read-only snapshot seam but does not yet persist the
+		// terminal/session identity required to prove herdr liveness. Treat every
+		// herdr row as unverified until #427 installs that full fail-closed matcher;
+		// pane/workspace/path equality alone is insufficient after a same-name
+		// session restart.
+		return backend.LivePane{}, false
 	}
 	if pane.IsShell() || pane.ShellKey != "" {
-		return pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+		return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
 	}
 	worktree := pane.WorktreePath
 	if strings.TrimSpace(worktree) == "" {
-		return true
+		return cur, true
 	}
 	wt := filepath.Clean(worktree)
 	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
 		opt := filepath.Clean(optionPath)
-		return opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+		return cur, opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
 	}
-	cp := filepath.Clean(cur.Path)
-	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+	cp := filepath.Clean(cur.CurrentPath)
+	return cur, cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {
+	_, alive := livePaneForState(live, pane)
+	return alive
 }
 
 // tmuxStateOf mirrors the TUI's tmux-state strings so `state:` filters behave
@@ -723,6 +732,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		name,
 		pv.Slug,
 		pv.PaneID,
+		string(pv.Backend),
 		pv.TmuxState,
 		pv.TmuxTitle,
 		pv.AgentState,
@@ -745,7 +755,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		pv.Prompt,
 	}, "\n"))
 
-	canFocus := canFocusPane(pv.PaneID, pv.TmuxState)
+	canFocus := backend.NormalizeName(pv.Backend) == backend.Tmux && canFocusPane(pv.PaneID, pv.TmuxState)
 	return PaneDerived{
 		Name:             name,
 		PRSummary:        prSummary,

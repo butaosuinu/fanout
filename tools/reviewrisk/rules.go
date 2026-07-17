@@ -5,7 +5,7 @@ import "strings"
 // Rule values reused across several exact-match paths that share one doc row.
 var (
 	ruleCmdH       = Rule{ID: "cmd-h-files", Class: ClassH, Source: SourceDocTable, Note: "dispatch・self-exec・launch・review cache・state 書き換えを伴う cmd エントリ"}
-	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/tmux ポーリング・SSE・embed"}
+	ruleDashboardM = Rule{ID: "dashboard-m-files", Class: ClassM, Source: SourceDocTable, Note: "state/runtime ポーリング・SSE・embed"}
 	ruleTuiA       = Rule{ID: "tui-a-files", Class: ClassA, Source: SourceDocTable, Note: "TUI の View 層(描画・整形)"}
 	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "web 依存・埋め込みバンドルの生成系"}
 	ruleWebConfig  = Rule{ID: "extra-web-config", Class: ClassM, Source: SourceExtra, Note: "web ビルド設定"}
@@ -20,6 +20,7 @@ var (
 var fileRules = map[string]Rule{
 	// cmd/fanout H set: dispatch/self-exec/launch/review cache wiring and state rewrites.
 	"cmd/fanout/main.go":                  ruleCmdH,
+	"cmd/fanout/runtime_backend.go":       ruleCmdH,
 	"cmd/fanout/tui_popup.go":             ruleCmdH,
 	"cmd/fanout/tui_launch.go":            ruleCmdH,
 	"cmd/fanout/worktree_action.go":       ruleCmdH,
@@ -103,14 +104,16 @@ var prefixRules = []struct {
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
 	{"internal/infra/reviewjson/", Rule{ID: "infra-reviewjson", Class: ClassH, Source: SourceDocTable, Note: "reviewer JSON の検証・cache 射影"}},
+	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr named session・socket・API tuple 検証と read-only snapshot 投影"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
 	{"internal/infra/gitstat/", Rule{ID: "infra-gitstat", Class: ClassM, Source: SourceDocTable, Note: "git 差分・状態取得"}},
 	{"internal/infra/tmuxrun/", Rule{ID: "infra-tmuxrun", Class: ClassM, Source: SourceDocTable, Note: "tmux 直接操作"}},
+	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への薄い adapter"}},
 	{"internal/infra/msgstore/", Rule{ID: "infra-msgstore", Class: ClassM, Source: SourceDocTable, Note: "send/post/inbox/board"}},
 	{"internal/infra/notify/", Rule{ID: "infra-notify", Class: ClassM, Source: SourceDocTable, Note: "通知送出"}},
-	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・tmux ターゲット解決"}},
+	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・選択済み backend の起動コンテキスト解決"}},
 	{"internal/infra/displayname/", Rule{ID: "infra-displayname", Class: ClassM, Source: SourceDocTable, Note: "表示名生成"}},
 	{"internal/infra/codexapp/", Rule{ID: "infra-codexapp", Class: ClassM, Source: SourceDocTable, Note: "Codex app-server クライアント"}},
 	{"internal/infra/atomicfs/", Rule{ID: "infra-atomicfs", Class: ClassM, Source: SourceDocTable, Note: "原子的ファイル書き込み"}},
@@ -130,11 +133,14 @@ var prefixRules = []struct {
 
 	// app M.
 	{"internal/app/panelayout/", Rule{ID: "app-panelayout", Class: ClassM, Source: SourceDocTable, Note: "ペインレイアウト計算"}},
-	{"internal/app/sessionview/", Rule{ID: "app-sessionview", Class: ClassM, Source: SourceDocTable, Note: "state+tmux+gh の Snapshot"}},
+	{"internal/app/sessionview/", Rule{ID: "app-sessionview", Class: ClassM, Source: SourceDocTable, Note: "state+runtime backend+gh の Snapshot"}},
 	{"internal/app/run/", Rule{ID: "app-run", Class: ClassM, Source: SourceDocTable, Note: "executePlan の実行ロジック"}},
 	{"internal/app/statusreport/", Rule{ID: "app-statusreport", Class: ClassM, Source: SourceDocTable, Note: "--status レポート生成"}},
 	{"internal/app/peermsg/", Rule{ID: "app-peermsg", Class: ClassM, Source: SourceDocTable, Note: "fanout msg の実行層"}},
 	{"internal/app/cliflags/", Rule{ID: "app-cliflags", Class: ClassM, Source: SourceDocTable, Note: "フラグ検証(main の分岐)"}},
+
+	// core H.
+	{"internal/core/backend/", Rule{ID: "core-backend", Class: ClassH, Source: SourceDocTable, Note: "runtime backend 契約・親 stickiness・選択の fail-closed 判定"}},
 
 	// core M.
 	{"internal/core/agent/", Rule{ID: "core-agent", Class: ClassM, Source: SourceDocTable, Note: "エージェント名解決・CLI 検証"}},

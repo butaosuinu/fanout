@@ -1,12 +1,13 @@
-// Package sessionview turns fanout's persisted pane state, live tmux pane
+// Package sessionview turns fanout's persisted pane state, live runtime pane
 // liveness, and GitHub issue/PR state into a single read-only Snapshot grouped
 // by parent ("Session"). It is the shared data layer the web dashboard renders
 // now and the future resident TUI will render later — neither one duplicates
 // the aggregation logic. The package is pure plus dependency-injected IO
-// (see Collectors) so it can be unit-tested without a live gh/tmux/git.
+// (see Collectors) so it can be unit-tested without live GitHub, runtime, or git.
 package sessionview
 
 import (
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 )
@@ -41,22 +42,23 @@ type WorktreeStat struct {
 	DirtyState  string
 }
 
-// PaneView is one recorded pane augmented with tmux liveness, gh state, and git
+// PaneView is one recorded pane augmented with runtime liveness, gh state, and git
 // worktree status.
 type PaneView struct {
-	IssueNum       int    `json:"issueNum"`
-	TaskID         string `json:"taskId,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Slug           string `json:"slug"`
-	DisplayName    string `json:"displayName"`
-	Agent          string `json:"agent"`
-	BranchName     string `json:"branchName"`
-	PaneID         string `json:"paneId"`
-	ShellKey       string `json:"shellKey,omitempty"`
-	SourceParent   string `json:"sourceParent,omitempty"`
-	SourceIssueNum int    `json:"sourceIssueNum,omitempty"`
-	SourceTaskID   string `json:"sourceTaskId,omitempty"`
-	WorktreePath   string `json:"worktreePath"`
+	IssueNum       int          `json:"issueNum"`
+	TaskID         string       `json:"taskId,omitempty"`
+	Kind           string       `json:"kind,omitempty"`
+	Slug           string       `json:"slug"`
+	DisplayName    string       `json:"displayName"`
+	Agent          string       `json:"agent"`
+	BranchName     string       `json:"branchName"`
+	PaneID         string       `json:"paneId"`
+	Backend        backend.Name `json:"backend,omitempty"`
+	ShellKey       string       `json:"shellKey,omitempty"`
+	SourceParent   string       `json:"sourceParent,omitempty"`
+	SourceIssueNum int          `json:"sourceIssueNum,omitempty"`
+	SourceTaskID   string       `json:"sourceTaskId,omitempty"`
+	WorktreePath   string       `json:"worktreePath"`
 	// SourceProjectRoot はこの pane を記録した worktree の root。複数 worktree を
 	// またいで集約した場合のみ非空(MergedStateLoader が設定し state row から
 	// passthrough)で、TUI が write(close/merge/cleanup)を所有元 state.json へ
@@ -74,7 +76,7 @@ type PaneView struct {
 	// グローバル安定な GitHub issue 行(issueNum>0)では空。
 	SourceKey   string          `json:"sourceKey,omitempty"`
 	CreatedAt   string          `json:"createdAt"`
-	Alive       bool            `json:"alive"`      // PaneID is among the live tmux panes
+	Alive       bool            `json:"alive"`      // PaneRef is present and verified in the live runtime snapshot
 	IssueState  string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
 	PRs         []ghissue.PRRef `json:"prs"`
 	HasMergedPR bool            `json:"hasMergedPr"`

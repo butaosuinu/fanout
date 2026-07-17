@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -285,6 +287,56 @@ func TestRestoreRecordedPanesDoesNotRecreateLivePaneWithPathMismatch(t *testing.
 	}
 	if report.Skipped != 1 || report.Restored != 0 || report.Rebound != 0 {
 		t.Fatalf("report = %+v, want one skipped pane and no restore", report)
+	}
+}
+
+func TestRestoreRecordedPanesSkipsHerdrRowWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "herdr-child")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := installRestoreTmuxAndAgentScripts(t, "codex")
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:           "423",
+		IssueNum:         425,
+		Backend:          backend.Herdr,
+		PaneID:           "w1:p1",
+		HerdrWorkspaceID: "w1",
+		HerdrAgentID:     "fanout-child",
+		HerdrSession:     "fanout-test",
+		HerdrSocketPath:  "/private/tmp/fanout-test/herdr.sock",
+		Agent:            "codex",
+		WorktreePath:     wt,
+	}})
+	statePath := state.Path(root)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Skipped != 1 || report.Changed() {
+		t.Fatalf("report = %+v, want one unchanged skipped row", report)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("herdr restore changed state bytes:\n--- before ---\n%s\n--- after ---\n%s", before, after)
+	}
+	if logBody, err := os.ReadFile(logPath); err == nil {
+		if len(logBody) != 0 {
+			t.Fatalf("herdr restore invoked tmux: %q", logBody)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 

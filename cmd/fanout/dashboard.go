@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/browser"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/ui/dashboard"
@@ -118,6 +119,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		}
 	}
 
+	runtimeBackend := tmuxbackend.New()
 	srv, err := dashboard.New(dashboard.Options{
 		ProjectRoot: root,
 		Port:        flags.port,
@@ -125,6 +127,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		// Resolved lazily on the poller's gh goroutine so a slow `gh repo view`
 		// never delays binding localhost or the state-only paint.
 		ResolveGH: dashboardGHResolver(root, lg),
+		ListLive:  runtimeBackend.ListLive,
 	})
 	if err != nil {
 		lg.Err("dashboard: bind 127.0.0.1: %v", err)

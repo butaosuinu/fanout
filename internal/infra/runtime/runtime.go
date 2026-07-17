@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 )
 
@@ -16,11 +17,23 @@ type Info struct {
 	ProjectRoot string
 }
 
-// Resolve discovers the git repository root and tmux target fanout should split.
-func Resolve(sessionOverride string) (*Info, error) {
+// Resolve discovers the git repository root and the selected backend's launch
+// context. Only tmux requires an invoking tmux pane; herdr routing is validated
+// by the herdr backend against its named session and socket.
+func Resolve(name backend.Name, sessionOverride string) (*Info, error) {
 	root, err := gitroot.Toplevel("")
 	if err != nil {
 		return nil, err
+	}
+	name = backend.NormalizeName(name)
+	if _, err := backend.ParseName(string(name)); err != nil {
+		return nil, err
+	}
+	if name == backend.Herdr {
+		if sessionOverride != "" {
+			return nil, fmt.Errorf("--session is only supported by the tmux backend")
+		}
+		return &Info{Session: strings.TrimSpace(os.Getenv("HERDR_SESSION")), ProjectRoot: root}, nil
 	}
 	session, err := tmuxSession()
 	if err != nil {

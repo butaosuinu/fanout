@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -29,6 +31,8 @@ type paneCloseCall struct {
 	worktreePath string
 	shellKey     string
 }
+
+var closeTmuxPane = tmuxrun.ClosePaneIfOwned
 
 func stubPaneClose(t *testing.T, fn func(string, string, string) (tmuxrun.ClosePaneResult, error)) *[]paneCloseCall {
 	t.Helper()
@@ -63,8 +67,27 @@ func stubRelayout(t *testing.T) *[]relayoutCall {
 // close, then relayout the accumulated set once.
 func closeAndRelayout(panes []state.Pane) {
 	windows := map[string]struct{}{}
-	closePaneRecords(Options{Hooks: hooks.EmptyConfig()}, panes, ClosePaneOnly, nopLogger{}, windows)
+	closePaneRecords(fakeRuntimeOptions(), panes, ClosePaneOnly, nopLogger{}, windows)
 	relayoutClosedWindows(windows, nopLogger{})
+}
+
+func fakeRuntimeOptions() Options {
+	return Options{
+		Hooks: hooks.EmptyConfig(),
+		CloseOwned: func(req backend.CloseRequest) (backend.CloseResult, error) {
+			result, err := closeTmuxPane(req.Ref.Pane, req.WorktreePath, req.ShellKey)
+			mapped := backend.CloseResult{ContainerID: result.WindowID}
+			switch result.Status {
+			case tmuxrun.ClosePaneClosed:
+				mapped.Status = backend.CloseConfirmed
+			case tmuxrun.ClosePaneStale:
+				mapped.Status = backend.CloseStale
+			case tmuxrun.ClosePaneFailed:
+				mapped.Status = backend.CloseFailed
+			}
+			return mapped, err
+		},
+	}
 }
 
 func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
@@ -117,8 +140,8 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 	calls := stubRelayout(t)
 
 	windows := map[string]struct{}{}
-	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%1", IssueNum: 1, WorktreePath: "/missing/one"}}, nopLogger{}, windows)
-	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%2", IssueNum: 2, WorktreePath: "/missing/two"}}, nopLogger{}, windows)
+	cleanupPaneRecords(fakeRuntimeOptions(), []state.Pane{{PaneID: "%1", IssueNum: 1}}, nopLogger{}, windows)
+	cleanupPaneRecords(fakeRuntimeOptions(), []state.Pane{{PaneID: "%2", IssueNum: 2}}, nopLogger{}, windows)
 	relayoutClosedWindows(windows, nopLogger{})
 
 	if len(*calls) != 1 || (*calls)[0].id != "@7" {
@@ -322,5 +345,127 @@ func TestCloseWithModePaneFailurePreservesStateAndWorktree(t *testing.T) {
 	}
 	if _, ok := store.Find("81", 82); !ok {
 		t.Fatal("state row was removed after pane close failure")
+	}
+}
+
+func TestClosePaneRecordsRoutesLegacyStateThroughBackendPort(t *testing.T) {
+	installFakeTmux(t, "@1", false)
+	var closed []backend.PaneRef
+	opts := fakeRuntimeOptions()
+	opts.ClosePane = func(ref backend.PaneRef) error {
+		closed = append(closed, ref)
+		return nil
+	}
+
+	ok := closePaneRecords(opts, []state.Pane{{PaneID: "%9", IssueNum: 9}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
+	if !ok {
+		t.Fatal("closePaneRecords() = false, want true")
+	}
+	want := []backend.PaneRef{{Backend: backend.Tmux, Pane: "%9"}}
+	if !reflect.DeepEqual(closed, want) {
+		t.Fatalf("closed refs = %#v, want %#v", closed, want)
+	}
+}
+
+func TestClosePaneRecordsUsesBackendLivePaneForShellIdentity(t *testing.T) {
+	installFakeTmux(t, "@2", false)
+	ref := backend.PaneRef{Backend: backend.Tmux, Pane: "%2"}
+	var closed []backend.PaneRef
+	opts := fakeRuntimeOptions()
+	opts.ListLive = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: ref, ShellKey: "shell-2"}}, nil
+	}
+	opts.ClosePane = func(got backend.PaneRef) error {
+		closed = append(closed, got)
+		return nil
+	}
+
+	ok := closePaneRecords(opts, []state.Pane{{PaneID: "%2", IssueNum: -1, Kind: state.PaneKindShell, ShellKey: "shell-2"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
+	if !ok {
+		t.Fatal("closePaneRecords() = false, want true")
+	}
+	if !reflect.DeepEqual(closed, []backend.PaneRef{ref}) {
+		t.Fatalf("closed refs = %#v, want %#v", closed, []backend.PaneRef{ref})
+	}
+}
+
+func TestPaneRefFromStateNormalizesLegacyTmuxAndPreservesHerdrWorkspace(t *testing.T) {
+	tests := []struct {
+		name string
+		pane state.Pane
+		want backend.PaneRef
+	}{
+		{
+			name: "legacy tmux",
+			pane: state.Pane{PaneID: "%12"},
+			want: backend.PaneRef{Backend: backend.Tmux, Pane: "%12"},
+		},
+		{
+			name: "herdr",
+			pane: state.Pane{Backend: backend.Herdr, PaneID: "w2:p1", HerdrWorkspaceID: "w2"},
+			want: backend.PaneRef{Backend: backend.Herdr, Workspace: "w2", Pane: "w2:p1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := paneRefFromState(tt.pane); got != tt.want {
+				t.Fatalf("paneRefFromState() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
+	projectRoot := t.TempDir()
+	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	statePath := state.Path(projectRoot)
+	locked, err := state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{
+		Parent:           "423",
+		IssueNum:         425,
+		Backend:          backend.Herdr,
+		PaneID:           "w2:p1",
+		HerdrWorkspaceID: "w2",
+		WorktreePath:     worktreePath,
+	}
+	if err := locked.RecordPane(pane); err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	closeCalls := 0
+	opts := Options{
+		ProjectRoot: projectRoot,
+		StatePath:   statePath,
+		Hooks:       hooks.EmptyConfig(),
+		ClosePane: func(backend.PaneRef) error {
+			closeCalls++
+			return backend.Unsupported(backend.Herdr, "close")
+		},
+	}
+	if got := CloseWithMode(opts, "423", 425, CloseWorktree, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	if closeCalls != 0 {
+		t.Fatalf("ClosePane calls = %d, want 0 for fail-closed herdr v1", closeCalls)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree changed before unsupported close was rejected: %v", err)
+	}
+	store, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := store.Find("423", 425); !ok || got.Backend != backend.Herdr || got.PaneID != "w2:p1" {
+		t.Fatalf("state row changed before unsupported close was rejected: %#v (found=%v)", got, ok)
 	}
 }

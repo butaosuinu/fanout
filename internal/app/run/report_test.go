@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -43,6 +44,7 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 	cfg := &cliflags.Config{
 		ParentRef:          "700",
 		Agent:              "claude",
+		Backend:            backend.Tmux,
 		AutoPullRequest:    new(false),
 		PRReviewGate:       new(true),
 		BriefingCodeReview: new(false),
@@ -53,7 +55,7 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
-	want := "  fanout-go 700 --include '702,703' --only '702,703' --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --pr-visualization --agent claude\n"
+	want := "  fanout-go 700 --include '702,703' --only '702,703' --no-auto-pr --pr-review-gate --no-briefing-code-review --no-agent-teams-hint --pr-visualization --agent claude --backend tmux\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("summary output did not preserve settings flags:\nwant %q\noutput:\n%s", want, got)
 	}
@@ -143,6 +145,7 @@ func TestPrintTaskSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *test
 	cfg := PlanCommandConfig{
 		SpecArg:      "launch-plan",
 		Agent:        "claude",
+		Backend:      backend.Tmux,
 		SleepBetween: cliflags.DefaultSleepBetween,
 		AgentOverrides: []cliflags.AgentOverride{
 			{Target: "base-types", Name: "codex"},
@@ -153,7 +156,7 @@ func TestPrintTaskSummaryPreservesDeferredAgentOverridesInLimitRerunHint(t *test
 	printTaskSummary(plan, TaskExecutionResult{}, cfg, lg, log.Palette{}, "fanout-go")
 
 	got := out.String()
-	want := "  fanout-go plan launch-plan --only api-client --agent claude --agent 'api-client=codex'\n"
+	want := "  fanout-go plan launch-plan --only api-client --agent claude --agent 'api-client=codex' --backend tmux\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("task summary output did not preserve deferred --agent override:\nwant %q\noutput:\n%s", want, got)
 	}

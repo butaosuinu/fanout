@@ -7,6 +7,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -39,8 +40,8 @@ func guardIssueOrchestrator(projectRoot string, store state.Store, issueNum int)
 // launchIssueOrchestratorPrepared attaches one normal agent to the project
 // root after child planning and agent validation. The caller's locked recorder
 // keeps the orchestrator row and child rows in one launch transaction.
-func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string) (panelaunch.Request, string, bool, error) {
-	req, paneID, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName, store, recorder,
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string) (panelaunch.Request, string, bool, error) {
+	req, paneID, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, agentName, store, recorder,
 		func(store state.Store) error {
 			return guardIssueOrchestrator(projectRoot, store, issue.Number)
 		},
@@ -90,7 +91,7 @@ func orchestratorIssueBriefingPath(projectRoot string, issueNum, number int) str
 
 // cleanupIssueOrchestrator rolls back a newly created parent pane when the
 // child fan-out failed before creating any child pane.
-func cleanupIssueOrchestrator(projectRoot, session string, req panelaunch.Request, paneID string) (err error) {
+func cleanupIssueOrchestrator(projectRoot, session string, runtimeBackend backend.Backend, req panelaunch.Request, paneID string) (err error) {
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
 		return err
@@ -104,7 +105,7 @@ func cleanupIssueOrchestrator(projectRoot, session string, req panelaunch.Reques
 		(recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey) {
 		return fmt.Errorf("recorded orchestrator identity changed for %s/%d", req.ParentRef, req.Number)
 	}
-	if err := panelaunch.KillAttachedPane(tuiLaunchTarget(session), paneID, req.ShellKey); err != nil {
+	if err := panelaunch.KillAttachedPane(runtimeBackend, tuiLaunchTarget(session), paneID, req.ShellKey); err != nil {
 		return err
 	}
 	if err := recorder.RemovePane(req.ParentRef, req.Number); err != nil {

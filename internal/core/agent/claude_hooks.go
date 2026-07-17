@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// claudeHookSettingsJSON is the inline JSON injected into every claude launch
-// via `--settings`. It wires Claude Code lifecycle hooks that report the
-// agent's state on the pane's @fanout_agent_state user option, refining the
-// coarse running/done bracket the tmuxrun launch wrapper records:
+// claudeHookSettingsJSON is the inline JSON injected into every tmux-backed
+// Claude launch via `--settings`. It wires Claude Code lifecycle hooks that
+// report the agent's state on the pane's @fanout_agent_state user option,
+// refining the coarse running/done bracket the tmuxrun launch wrapper records:
 // UserPromptSubmit / PreToolUse / PostToolUse -> working, Notification ->
 // blocked (a permission or input wait became user-visible), Stop -> idle.
 // PreToolUse fires before the permission check, so recovery from blocked is

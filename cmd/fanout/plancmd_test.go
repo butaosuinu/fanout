@@ -9,9 +9,11 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestPlanTaskSlugQualifiesDefaultAndHonorsExplicit(t *testing.T) {
@@ -42,6 +44,163 @@ func TestCheckPlanDepsDoesNotRequireGhForUnblockedOnly(t *testing.T) {
 
 	if missing := missingDeps(depNeeds{git: true, tmux: true}); len(missing) != 0 {
 		t.Fatalf("missingDeps(plan launch needs) = %v, want no gh requirement", missing)
+	}
+}
+
+func TestCmdPlanUsesActualParentForBackendStickinessBeforeMutation(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Chdir(repo)
+
+	specPath := filepath.Join(repo, "sticky-plan.json")
+	specBody := `{
+  "version": 1,
+  "plan": {"slug": "sticky-plan", "title": "Sticky plan"},
+  "tasks": [{"id": "task-one", "title": "Task one", "briefing": "Do it"}]
+}`
+	if err := os.WriteFile(specPath, []byte(specBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Store.Panes = append(locked.Store.Panes, state.Pane{
+		Parent:  panelaunch.PlanParentRef("sticky-plan"),
+		TaskID:  "task-one",
+		Backend: backend.Herdr,
+		PaneID:  "w1:p1",
+	})
+	if err := locked.Save(); err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	excludeBefore, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(state.Path(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	tmuxPath := filepath.Join(binDir, "tmux")
+	if err := os.WriteFile(tmuxPath, []byte("#!/bin/sh\nprintf 'tmux 3.6a\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := cmdPlan(
+		[]string{specPath, "--backend", "tmux", "--agent", "claude"},
+		log.NewWith(&stdout, &stderr, false),
+		"fanout",
+	)
+	if code != exitcode.Env {
+		t.Fatalf("cmdPlan() = %d, want %d; stderr=%q", code, exitcode.Env, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "runtime backend for parent plan:sticky-plan is herdr; --backend requests tmux") {
+		t.Fatalf("stderr = %q, want sticky backend conflict", stderr.String())
+	}
+
+	excludeAfter, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(excludeAfter, excludeBefore) {
+		t.Fatalf("plan backend preflight mutated git exclude:\n%s", excludeAfter)
+	}
+	stateAfter, err := os.ReadFile(state.Path(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatalf("plan backend preflight mutated state:\n%s", stateAfter)
+	}
+}
+
+func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Chdir(repo)
+
+	issueSpec := filepath.Join(repo, "issue-plan.json")
+	if err := os.WriteFile(issueSpec, []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Launch","source":"issue #425"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: issueSpec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "425" {
+		t.Fatalf("resolvePlanLaunchParent(issue source) = %q, want 425", got)
+	}
+
+	ordinarySpec := filepath.Join(repo, "ordinary-plan.json")
+	if err := os.WriteFile(ordinarySpec, []byte(`{"version":1,"plan":{"slug":"issue-425-migration","title":"Migration","source":"path-or-conversation-label"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: ordinarySpec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "plan:issue-425-migration" {
+		t.Fatalf("resolvePlanLaunchParent(non-issue source) = %q, want plan:issue-425-migration", got)
+	}
+}
+
+func TestCmdPlanRejectsDirectHerdrBeforeMutation(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Chdir(repo)
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	specPath := filepath.Join(repo, "herdr-plan.json")
+	specBody := []byte(`{
+  "version": 1,
+  "plan": {"slug": "herdr-plan", "title": "Herdr plan"},
+  "tasks": [{"id": "task-one", "title": "Task one", "briefing": "Do it"}]
+}`)
+	if err := os.WriteFile(specPath, specBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdPlan(
+		[]string{specPath, "--backend", "herdr", "--agent", "claude"},
+		log.NewWith(&stdout, &stderr, false),
+		"fanout",
+	)
+	if code != exitcode.Env {
+		t.Fatalf("cmdPlan() = %d, want %d; stderr=%q", code, exitcode.Env, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "runtime backend herdr does not support") {
+		t.Fatalf("stderr = %q, want direct herdr unsupported error", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(err) {
+		t.Fatalf("direct herdr plan preflight mutated .fanout: %v", err)
+	}
+	gotSpec, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotSpec, specBody) {
+		t.Fatalf("direct herdr plan preflight mutated spec:\n%s", gotSpec)
 	}
 }
 

@@ -30,6 +30,11 @@ Options:
                       selected child has an override. Unknown agents fail
                       before pane creation; missing agent CLIs fail in live
                       mode.
+  --backend <tmux|herdr>
+                      Select the runtime backend. Parent state is sticky and
+                      rejects a conflicting override. herdr is read-only in
+                      v1, so issue and plan launch commands fail before any
+                      worktree or state mutation.
   --base-branch <branch>
                       Branch to refresh and branch child worktrees from.
                       Default: GitHub default branch, then origin/HEAD, then

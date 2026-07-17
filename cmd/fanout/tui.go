@@ -13,11 +13,13 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -57,6 +59,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		tmuxrun.EnableExtendedKeys()
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	runtimeBackend := tmuxbackend.New()
 	hookConfig := hooks.LoadUserConfig(lg)
 	watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
 	if err != nil {
@@ -106,8 +109,28 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
-		ActivePane:        newTUIActivePaneFunc(os.Getenv("TMUX_PANE")),
-		Notifier:          notifier,
+		ListLive:          runtimeBackend.ListLive,
+		FocusPane: func(paneID string) error {
+			return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
+		},
+		PaneAlive: func(paneID string) bool {
+			panes, listErr := runtimeBackend.ListLive()
+			if listErr != nil {
+				return false
+			}
+			for _, pane := range panes {
+				if pane.Ref.Pane == paneID {
+					return true
+				}
+			}
+			return false
+		},
+		CapturePaneOutput: func(paneID string, lines int) (string, error) {
+			return runtimeBackend.Read(backend.PaneRef{Backend: backend.Tmux, Pane: paneID}, lines)
+		},
+		ClosePane:  runtimeBackend.Close,
+		ActivePane: newTUIActivePaneFunc(os.Getenv("TMUX_PANE")),
+		Notifier:   notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
 		return exitcode.Env

@@ -9,6 +9,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -424,5 +425,186 @@ func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 	}
 	if !strings.Contains(result.Notice, "started plan coordinator (claude)") {
 		t.Fatalf("notice = %q, want coordinator success", result.Notice)
+	}
+}
+
+func TestTUIAgentLaunchesRejectHerdrBeforeMutationDespiteUnrelatedManualRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		launch func(string) error
+	}{
+		{
+			name: "manual prompt",
+			launch: func(repo string) error {
+				_, err := launchManualPaneFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+					Prompt: "inspect workspace",
+					Agents: []string{"claude"},
+				})
+				return err
+			},
+		},
+		{
+			name: "plan prompt",
+			launch: func(repo string) error {
+				_, err := launchPlanPromptFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+					Prompt:     "plan workspace changes",
+					PlanFanout: true,
+					Agents:     []string{"claude"},
+				})
+				return err
+			},
+		},
+		{
+			name: "issue plan",
+			launch: func(repo string) error {
+				installTUIWatcherGHScript(t, `
+case "$args" in
+"issue view 7 --json number,title,state,body,labels")
+  printf '{"number":7,"title":"Plan issue","state":"OPEN","body":"body","labels":[]}'
+  ;;
+"api --paginate --slurp repos/{owner}/{repo}/issues/7/sub_issues?per_page=100")
+  printf '[[]]'
+  ;;
+"issue view 7 --json body -q .body")
+  printf 'body\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+				_, err := launchIssuePlanFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), 7, "claude", "claude")
+				return err
+			},
+		},
+		{
+			name: "attached agent",
+			launch: func(repo string) error {
+				_, err := launchAttachedAgent(repo, "%1", "fanout", hooks.EmptyConfig(), fanouttui.AttachLaunchRequest{
+					Prompt: "inspect source pane",
+					Agents: []string{"claude"},
+					Target: fanouttui.AttachTarget{
+						TargetPath:   repo,
+						Backend:      backend.Herdr,
+						SourceParent: panelaunch.ManualParentRef,
+					},
+				})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			initTUITestGitRepo(t, repo)
+			installFakeExecutable(t, "claude")
+			t.Setenv("HERDR_ENV", "1")
+			t.Setenv("TMUX", "nested-tmux")
+			t.Setenv("FANOUT_BACKEND", "")
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+			locked, err := state.LockProject(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := locked.RecordPane(state.Pane{
+				Parent:       panelaunch.ManualParentRef,
+				IssueNum:     -1,
+				Slug:         "legacy-manual",
+				PaneID:       "%90",
+				WorktreePath: repo,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := locked.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			stateBefore, err := os.ReadFile(state.Path(repo))
+			if err != nil {
+				t.Fatal(err)
+			}
+			excludePath := filepath.Join(repo, ".git", "info", "exclude")
+			excludeBefore, err := os.ReadFile(excludePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = tt.launch(repo)
+			if err == nil || !strings.Contains(err.Error(), "runtime backend herdr does not support") {
+				t.Fatalf("launch error = %v, want herdr unsupported", err)
+			}
+			stateAfter, err := os.ReadFile(state.Path(repo))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(stateAfter) != string(stateBefore) {
+				t.Fatalf("state changed before herdr rejection:\n%s", stateAfter)
+			}
+			excludeAfter, err := os.ReadFile(excludePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(excludeAfter) != string(excludeBefore) {
+				t.Fatalf("git exclude changed before herdr rejection:\n%s", excludeAfter)
+			}
+			for _, path := range []string{
+				filepath.Join(repo, ".fanout", "briefings"),
+				filepath.Join(repo, ".fanout", "worktrees"),
+			} {
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("herdr rejection created %s: %v", path, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestAttachResolverParentUsesSourceProvenance(t *testing.T) {
+	repo := t.TempDir()
+	writeSavedPlanSpec(t, repo, "issue-plan", "issue #425")
+	tests := []struct {
+		name   string
+		target fanouttui.AttachTarget
+		want   string
+	}{
+		{
+			name: "watch row",
+			target: fanouttui.AttachTarget{
+				SourceParent:   panelaunch.WatchParentRef,
+				SourceIssueNum: 425,
+			},
+			want: "425",
+		},
+		{
+			name: "empty parent",
+			want: panelaunch.ManualParentRef,
+		},
+		{
+			name: "manual coordinator provenance",
+			target: fanouttui.AttachTarget{
+				SourceParent:   panelaunch.ManualParentRef,
+				SourceIssueNum: 425,
+			},
+			want: "425",
+		},
+		{
+			name:   "issue sourced plan task",
+			target: fanouttui.AttachTarget{SourceParent: "plan:issue-plan"},
+			want:   "425",
+		},
+		{
+			name:   "ordinary parent",
+			target: fanouttui.AttachTarget{SourceParent: "423"},
+			want:   "423",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := attachResolverParent(repo, tt.target); got != tt.want {
+				t.Fatalf("attachResolverParent(%+v) = %q, want %q", tt.target, got, tt.want)
+			}
+		})
 	}
 }

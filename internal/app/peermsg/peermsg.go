@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 // Request is the parsed, validated form of a `fanout msg` invocation
@@ -48,9 +48,9 @@ type Request struct {
 type Deps struct {
 	// DetectIdentity resolves the invoking pane's identity from fanout state.
 	DetectIdentity func() (team.Identity, error)
-	// ListLivePanes and SendLine are the tmux seams nudge drives.
-	ListLivePanes func() ([]tmuxrun.LivePane, error)
-	SendLine      func(paneID, text string) error
+	// ListLive and SendLine are the backend-neutral runtime seams nudge drives.
+	ListLive func() ([]backend.LivePane, error)
+	SendLine func(backend.PaneRef, string) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json
 	// read-only — the recipient's recorded pane id lives there, not in the
 	// messages DB.
@@ -60,15 +60,19 @@ type Deps struct {
 	Tick func(d time.Duration) <-chan time.Time
 }
 
-// DefaultDeps wires the production implementations.
-func DefaultDeps() Deps {
-	return Deps{
+// DefaultDeps wires production dependencies around the backend selected by the
+// composition root. This package never constructs an infra backend itself.
+func DefaultDeps(runtimeBackend backend.Backend) Deps {
+	deps := Deps{
 		DetectIdentity: team.Detect,
-		ListLivePanes:  tmuxrun.ListLivePanes,
-		SendLine:       tmuxrun.SendLiteralLine,
 		LoadState:      defaultLoadState,
 		Tick:           time.After,
 	}
+	if runtimeBackend != nil {
+		deps.ListLive = runtimeBackend.ListLive
+		deps.SendLine = runtimeBackend.SendLine
+	}
+	return deps
 }
 
 // withDefaults fills nil seams from DefaultDeps. The exported watch entry
@@ -76,15 +80,9 @@ func DefaultDeps() Deps {
 // Deps (a valid pattern for every seam it does not exercise) degrades to the
 // production wiring instead of panicking on a nil function call.
 func (d Deps) withDefaults() Deps {
-	def := DefaultDeps()
+	def := DefaultDeps(nil)
 	if d.DetectIdentity == nil {
 		d.DetectIdentity = def.DetectIdentity
-	}
-	if d.ListLivePanes == nil {
-		d.ListLivePanes = def.ListLivePanes
-	}
-	if d.SendLine == nil {
-		d.SendLine = def.SendLine
 	}
 	if d.LoadState == nil {
 		d.LoadState = def.LoadState

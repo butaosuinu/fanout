@@ -17,7 +17,18 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
+
+func tmuxLifecycleOptions(repo string) lifecycle.Options {
+	runtimeBackend := tmuxbackend.New()
+	return lifecycle.Options{
+		ProjectRoot: repo,
+		StatePath:   state.Path(repo),
+		ClosePane:   runtimeBackend.Close,
+		ListLive:    runtimeBackend.ListLive,
+	}
+}
 
 func TestCmdCloseRemovesWorktreeKillsPaneAndState(t *testing.T) {
 	repo := initLifecycleRepo(t)
@@ -125,7 +136,7 @@ printf '\n' >> "$TMUX_LOG"
 	})
 
 	code := lifecycle.CloseWithMode(
-		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		tmuxLifecycleOptions(repo),
 		"84",
 		101,
 		lifecycle.ClosePaneOnly,
@@ -177,7 +188,7 @@ printf '\n' >> "$TMUX_LOG"
 	})
 
 	code := lifecycle.CloseWithMode(
-		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		tmuxLifecycleOptions(repo),
 		"84",
 		101,
 		lifecycle.CloseEverything,
@@ -225,7 +236,7 @@ printf '\n' >> "$TMUX_LOG"
 	})
 
 	code := lifecycle.CloseWithMode(
-		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		tmuxLifecycleOptions(repo),
 		"84",
 		101,
 		lifecycle.CloseEverything,
@@ -268,7 +279,7 @@ printf '\n' >> "$TMUX_LOG"
 	var stderr bytes.Buffer
 	lg := log.NewWith(io.Discard, &stderr, false)
 	code := lifecycle.CloseWithMode(
-		lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)},
+		tmuxLifecycleOptions(repo),
 		"84",
 		101,
 		lifecycle.CloseEverything,
@@ -1079,7 +1090,7 @@ printf '\n' >> "$TMUX_LOG"
 		WorktreePath: worktreePath,
 	})
 
-	code := lifecycle.CloseTask(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", "api-client", discardLogger())
+	code := lifecycle.CloseTask(tmuxLifecycleOptions(repo), "plan:launch-plan", "api-client", discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("CloseTask code = %d, want %d", code, exitcode.OK)
@@ -1119,7 +1130,7 @@ func TestLifecycleMergeTaskFastForwardsRecordedBranch(t *testing.T) {
 	}
 	writeLifecycleState(t, repo, state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", BranchName: "fanout/api-client"})
 
-	code := lifecycle.MergeTask(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", "api-client", discardLogger())
+	code := lifecycle.MergeTask(tmuxLifecycleOptions(repo), "plan:launch-plan", "api-client", discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("MergeTask code = %d, want %d", code, exitcode.OK)
@@ -1378,7 +1389,7 @@ exit 1
 		state.Pane{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "ui-shell", BranchName: "fanout/ui-shell", PaneID: "%202", WorktreePath: openPath},
 	)
 
-	code := lifecycle.CleanupPlan(lifecycle.Options{ProjectRoot: repo, StatePath: state.Path(repo)}, "plan:launch-plan", discardLogger())
+	code := lifecycle.CleanupPlan(tmuxLifecycleOptions(repo), "plan:launch-plan", discardLogger())
 
 	if code != exitcode.OK {
 		t.Fatalf("CleanupPlan code = %d, want %d", code, exitcode.OK)

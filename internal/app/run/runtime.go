@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
@@ -26,18 +27,36 @@ var sleepBetweenIssues = time.Sleep
 // key constants); the run lanes call it back through this seam.
 type BindKeysFunc func(lg *log.Logger, enabled bool)
 
-// Runtime is the resolved tmux/git/gh context both lanes execute against.
+// Runtime is the resolved backend/git/GitHub context both launch lanes use.
 type Runtime struct {
-	Info *fanoutruntime.Info
-	GH   ghissue.Runner
+	Info             *fanoutruntime.Info
+	GH               ghissue.Runner
+	Backend          backend.Backend
+	BackendSelection backend.Selection
+	// VerifyBackend re-runs parent stickiness against the state held under the
+	// launch lock. cmd closes over the raw CLI/env/config inputs so backend
+	// selection and construction remain in the composition root.
+	VerifyBackend func(parent string, store state.Store) error
 }
 
 // ResolveRuntime resolves the tmux target and git project root, validates the
 // agent selection, and records the invoking pane's project-root hint for the
 // dashboard. It is shared by the issue lane (cmd main) and the plan lane
 // (cmd plan).
-func ResolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*Runtime, exitcode.Code) {
-	info, err := fanoutruntime.Resolve(cfg.Session)
+func ResolveRuntime(cfg *cliflags.Config, selection backend.Selection, runtimeBackend backend.Backend, verify func(string, state.Store) error, lg *log.Logger) (*Runtime, exitcode.Code) {
+	if runtimeBackend == nil {
+		lg.Err("runtime backend is not configured")
+		return nil, exitcode.Env
+	}
+	if runtimeBackend.Name() != selection.Name {
+		lg.Err("runtime backend mismatch: selected %s, constructed %s", selection.Name, runtimeBackend.Name())
+		return nil, exitcode.Env
+	}
+	if err := runtimeBackend.CheckAvailable(); err != nil {
+		lg.Err("runtime backend %s is not available: %v", selection.Name, err)
+		return nil, exitcode.Env
+	}
+	info, err := fanoutruntime.Resolve(selection.Name, cfg.Session)
 	if err != nil {
 		lg.Err("%s", err.Error())
 		return nil, exitcode.Env
@@ -51,20 +70,25 @@ func ResolveRuntime(cfg *cliflags.Config, lg *log.Logger) (*Runtime, exitcode.Co
 		return nil, exitcode.Env
 	}
 
-	lg.Info("tmux session: %s", info.Session)
-	lg.Info("tmux target:  %s", info.Target)
+	if selection.Name == backend.Tmux {
+		lg.Info("tmux session: %s", info.Session)
+		lg.Info("tmux target:  %s", info.Target)
+	}
 	lg.Info("project root: %s", info.ProjectRoot)
 
 	if !gitroot.IsWorkTree(info.ProjectRoot) {
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
-	if !cfg.DryRun {
+	if !cfg.DryRun && selection.Name == backend.Tmux {
 		markCurrentPaneProjectRoot(info.ProjectRoot, lg)
 	}
 	return &Runtime{
-		Info: info,
-		GH:   ghissue.Runner{Cwd: info.ProjectRoot},
+		Info:             info,
+		GH:               ghissue.Runner{Cwd: info.ProjectRoot},
+		Backend:          runtimeBackend,
+		BackendSelection: selection,
+		VerifyBackend:    verify,
 	}, exitcode.OK
 }
 
@@ -81,7 +105,7 @@ func markCurrentPaneProjectRoot(projectRoot string, lg *log.Logger) {
 // settingsOverrides folds the CLI setting toggles into a settings.CLIOverrides
 // literal; both lanes resolve settings through the same mapping.
 func settingsOverrides(cfg *cliflags.Config) settings.CLIOverrides {
-	return settings.CLIOverrides{
+	overrides := settings.CLIOverrides{
 		AutoPullRequest:    cfg.AutoPullRequest,
 		PRReviewGate:       cfg.PRReviewGate,
 		BriefingCodeReview: cfg.BriefingCodeReview,
@@ -90,6 +114,10 @@ func settingsOverrides(cfg *cliflags.Config) settings.CLIOverrides {
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
 	}
+	if cfg.Backend != "" {
+		overrides.RuntimeBackend = new(cfg.Backend)
+	}
+	return overrides
 }
 
 // LoadState opens the fanout state store for a run: read-only for dry-runs,

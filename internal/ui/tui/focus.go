@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 type paneFocusedMsg struct {
@@ -265,22 +265,24 @@ func paneAliveForAction(pane paneView, paneAlive func(string) bool, shellPaneAli
 	return paneAlive(pane.PaneID)
 }
 
-func shellPaneAliveByKey(paneID, shellKey string) bool {
-	paneID = strings.TrimSpace(paneID)
-	shellKey = strings.TrimSpace(shellKey)
-	if paneID == "" || shellKey == "" {
-		return false
-	}
-	panes, err := tmuxrun.ListLivePanes()
-	if err != nil {
-		return false
-	}
-	for _, pane := range panes {
-		if pane.ID == paneID && pane.ShellKey == shellKey {
-			return true
+func shellPaneAliveByKey(listLive func() ([]backend.LivePane, error)) func(string, string) bool {
+	return func(paneID, shellKey string) bool {
+		paneID = strings.TrimSpace(paneID)
+		shellKey = strings.TrimSpace(shellKey)
+		if paneID == "" || shellKey == "" || listLive == nil {
+			return false
 		}
+		panes, err := listLive()
+		if err != nil {
+			return false
+		}
+		for _, pane := range panes {
+			if backend.NormalizeName(pane.Ref.Backend) == backend.Tmux && pane.Ref.Pane == paneID && pane.ShellKey == shellKey {
+				return true
+			}
+		}
+		return false
 	}
-	return false
 }
 
 func tailLines(s string, maxLen int) []string {

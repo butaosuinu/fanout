@@ -52,8 +52,10 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `hooks` | ライフサイクルフック実行 | H |
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
-| infra | `settings` | 設定解決。repo config からの watcher 有効化・通知先設定を遮断する安全ゲート | H |
+| infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
 | infra | `reviewjson` | reviewer JSON の射影と native child session metadata の検証 | H |
+| infra | `herdrrun` | herdr 0.7.3 の named session・socket・API tuple 検証と read-only snapshot 投影 | H |
+| core | `backend` | runtime backend 契約・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
@@ -62,20 +64,21 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane 以外の端末出力を読まない境界) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
+| cmd | `main.go` / `runtime_backend.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・runtime backend 選択・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
+| infra | `tmuxbackend` | backend 契約から `tmuxrun` への薄い adapter | M |
 | infra | `msgstore` | send/post/inbox/board/mark-read | M |
 | infra | `notify` | 通知送出 | M |
-| infra | `runtime` | git root・tmux ターゲット解決 | M |
+| infra | `runtime` | git root・選択済み backend の起動コンテキスト解決 | M |
 | infra | `displayname` | 表示名生成 | M |
 | infra | `codexapp` | Codex app-server クライアント | M |
 | infra | `atomicfs` | 原子的ファイル書き込み(state.json / token 入り dashboard.json の共通経路) | M |
 | infra | `gitroot` | git root 探索(project root・state root・親 repo 判定の入力) | M |
 | app | `panelayout` | ペインレイアウト計算 | M |
-| app | `sessionview` | state + tmux + gh を集約する Snapshot | M |
+| app | `sessionview` | state + runtime backend + gh を集約する Snapshot | M |
 | app | `run` | `executePlan` の実行ロジック | M |
 | app | `statusreport` | `--status` のレポート生成 | M |
 | app | `peermsg` | `fanout msg` の実行層 | M |
@@ -86,7 +89,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | core | `parentref` | 親参照の正規化(state/sessionview の parent key) | M |
 | core | `fanset` | fan-out 対象集合の計算(launch 対象の選別) | M |
 | core | `blockers` | ブロッカー判定(--unblocked-only の起動対象選別・wave 計算の入力) | M |
-| ui | `dashboard`(`poller.go` / `sse.go` / `embed.go`) | state/tmux ポーリング・SSE・embed | M |
+| ui | `dashboard`(`poller.go` / `sse.go` / `embed.go`) | state/runtime ポーリング・SSE・embed | M |
 | ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` / `paneview.go` ほか) | キー処理・フォーム・ポーリングの配線。`paneview.go` は lifecycle 対象 state root の選択入力(`sourceProjectRoot`)を含む | M |
 | core | `exitcode` | 終了コード定義 | A |
 | core | `cliview` | CLI 出力の整形 | A |

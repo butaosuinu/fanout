@@ -7,6 +7,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -91,6 +92,12 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 			}
 		}()
 	}
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
+			lg.Err("runtime backend: %v", err)
+			return IssueExecutionResult{}, exitcode.Env
+		}
+	}
 
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
@@ -160,7 +167,7 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		teamCtx = buildTeamContext(rt.Info.ProjectRoot, cfg.ParentRef, plan.Targets)
 	}
 
-	result := executePlan(launchCfg, lg, rt.Info, rt.GH, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
+	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.GH, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
@@ -214,8 +221,8 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 	return &launchCfg
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: recorder, Palette: c, CommandName: commandName}
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
 	created, failed := executeFailFast(
 		targets,

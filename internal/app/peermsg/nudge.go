@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 // nudgeText is the hint `msg nudge` types into a peer pane. It carries no
@@ -104,43 +104,55 @@ func runMsgNudge(req *Request, parent string, deps Deps, lg *log.Logger) exitcod
 // (tmux down, pane gone/reused, agent not nudgeable, send failure) is a
 // best-effort no-op because the message is already persisted.
 func deliverNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {
-	panes, err := deps.ListLivePanes()
+	ref := paneRef(pane)
+	if backend.NormalizeName(ref.Backend) != backend.Tmux {
+		return "", fmt.Sprintf("automatic nudge is unavailable for %s backend", backend.NormalizeName(ref.Backend)), false
+	}
+	if deps.ListLive == nil || deps.SendLine == nil {
+		return "", "tmux is unavailable", false
+	}
+	panes, err := deps.ListLive()
 	if err != nil {
 		return "", "tmux is unavailable", false
 	}
-	lp, ok := matchLivePane(panes, pane.PaneID, pane.WorktreePath, pane.ShellKey)
+	lp, ok := matchLivePane(panes, ref, pane.WorktreePath, pane.ShellKey)
 	if !ok {
 		return "", "recipient pane is gone or its id was reused", false
 	}
-	if !shouldNudge(lp.AgentState) {
+	observedState := string(lp.AgentState)
+	if !shouldNudge(observedState) {
 		// blocked の agent は生きている — "not running" とは言わず、nudge を
 		// 意図的に見送ったことだけを述べる。
-		return lp.AgentState, fmt.Sprintf("agent is not nudgeable (state %q)", lp.AgentState), false
+		return observedState, fmt.Sprintf("agent is not nudgeable (state %q)", observedState), false
 	}
-	if err := deps.SendLine(pane.PaneID, nudgeText); err != nil {
-		return lp.AgentState, fmt.Sprintf("send-keys failed: %v", err), false
+	if err := deps.SendLine(lp.Ref, nudgeText); err != nil {
+		return observedState, fmt.Sprintf("send-keys failed: %v", err), false
 	}
-	return lp.AgentState, "", true
+	return observedState, "", true
 }
 
-// matchLivePane returns the live pane recorded as paneID only when it is still
-// the recipient's pane. New rows require the per-pane liveness key; legacy
-// rows fall back to the recorded worktree, or to id-only when that path is also
-// absent. This mirrors sessionview.paneAlive so pane-id reuse is handled the
-// same way before nudge sends terminal input.
-func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree, livenessKey string) (tmuxrun.LivePane, bool) {
-	if paneID == "" {
-		return tmuxrun.LivePane{}, false
+// matchLivePane returns the live pane for the backend-native reference only
+// when it is still the recipient's pane. Keyed tmux rows require the per-pane
+// liveness token; legacy rows fall back to their recorded worktree or id-only.
+// This mirrors sessionview's liveness convention so pane-id reuse is handled
+// identically before nudge sends terminal input.
+func matchLivePane(panes []backend.LivePane, ref backend.PaneRef, worktree, livenessKey string) (backend.LivePane, bool) {
+	if ref.Pane == "" {
+		return backend.LivePane{}, false
 	}
+	name := backend.NormalizeName(ref.Backend)
 	for _, lp := range panes {
-		if lp.ID != paneID {
+		if backend.NormalizeName(lp.Ref.Backend) != name || lp.Ref.Pane != ref.Pane {
 			continue
+		}
+		if ref.Workspace != "" && lp.Ref.Workspace != ref.Workspace {
+			return backend.LivePane{}, false
 		}
 		if livenessKey = strings.TrimSpace(livenessKey); livenessKey != "" {
 			if lp.ShellKey == livenessKey {
 				return lp, true
 			}
-			return tmuxrun.LivePane{}, false
+			return backend.LivePane{}, false
 		}
 		if strings.TrimSpace(worktree) == "" {
 			return lp, true
@@ -152,9 +164,18 @@ func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree, livenessKey strin
 		}
 		// id matched but the live pane moved off the recorded worktree: tmux
 		// handed %N to an unrelated pane. Treat it as gone, never nudge it.
-		return tmuxrun.LivePane{}, false
+		return backend.LivePane{}, false
 	}
-	return tmuxrun.LivePane{}, false
+	return backend.LivePane{}, false
+}
+
+func paneRef(pane state.Pane) backend.PaneRef {
+	name := backend.NormalizeName(pane.Backend)
+	ref := backend.PaneRef{Backend: name, Pane: pane.PaneID}
+	if name == backend.Herdr {
+		ref.Workspace = pane.HerdrWorkspaceID
+	}
+	return ref
 }
 
 func writeMsgNudgeResult(req *Request, parent string, report msgNudgeReport, lg *log.Logger) exitcode.Code {

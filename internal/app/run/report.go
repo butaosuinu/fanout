@@ -92,7 +92,7 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 		if cfg.ParentMode == cliflags.ModeProject && cfg.ProjectStatus != cliflags.DefaultProjectStatus {
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
-		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s%s%s\n",
+		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s%s%s%s\n",
 			ShellQuote(commandName), ShellQuote(cfg.ParentRef),
 			statusFlag,
 			ShellQuote(deferredCSV),
@@ -104,6 +104,7 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 			worktreeFlags(cfg),
 			nameFlagsFor(cfg, plan.LimitDeferred),
 			agentFlagsForIssues(cfg, plan.LimitDeferred),
+			optFlag("--backend", string(cfg.Backend)),
 			optFlag("--session", cfg.Session))
 	}
 }

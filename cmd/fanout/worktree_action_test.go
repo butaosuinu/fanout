@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -34,6 +36,7 @@ func TestAttachTargetFromStatePaneCarriesSourceIdentity(t *testing.T) {
 		BranchName:   "fanout/child-101",
 		DisplayName:  "child",
 		WorktreePath: "/repo/.fanout/worktrees/child",
+		Backend:      backend.Herdr,
 	}
 
 	got := attachTargetFromStatePane(pane)
@@ -43,6 +46,9 @@ func TestAttachTargetFromStatePaneCarriesSourceIdentity(t *testing.T) {
 	}
 	if got.SourceBranchName != "fanout/child-101" || got.SourceLabel != "#101" {
 		t.Fatalf("source branch/label = %q/%q", got.SourceBranchName, got.SourceLabel)
+	}
+	if got.Backend != backend.Herdr {
+		t.Fatalf("Backend = %q, want herdr", got.Backend)
 	}
 }
 
@@ -56,6 +62,7 @@ func TestAttachTargetFromAttachedAgentPreservesOriginalSourceIdentity(t *testing
 		WorktreePath:   "/repo/.fanout/worktrees/child",
 		SourceParent:   "100",
 		SourceIssueNum: 101,
+		Backend:        backend.Herdr,
 	}
 
 	got := attachTargetFromStatePane(pane)
@@ -65,6 +72,27 @@ func TestAttachTargetFromAttachedAgentPreservesOriginalSourceIdentity(t *testing
 	}
 	if got.SourceLabel != "#101" {
 		t.Fatalf("SourceLabel = %q, want #101", got.SourceLabel)
+	}
+	if got.Backend != backend.Herdr {
+		t.Fatalf("Backend = %q, want herdr", got.Backend)
+	}
+}
+
+func TestAttachTargetFromSyntheticCoordinatorUsesActualIssueParent(t *testing.T) {
+	for _, slug := range []string{
+		panelaunch.PlanIssueSlug(425, -1),
+		panelaunch.OrchestratorIssueSlug(425, -1),
+	} {
+		t.Run(slug, func(t *testing.T) {
+			got := attachTargetFromStatePane(state.Pane{
+				Parent:   panelaunch.ManualParentRef,
+				IssueNum: -1,
+				Slug:     slug,
+			})
+			if got.SourceParent != "425" || got.SourceIssueNum != 425 || got.SourceLabel != "#425" {
+				t.Fatalf("target = %+v, want actual issue 425 provenance", got)
+			}
+		})
 	}
 }
 

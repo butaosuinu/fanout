@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
@@ -35,6 +36,7 @@ type Config struct {
 	ProjectNumber      int
 	ProjectStatus      string
 	Agent              string
+	Backend            backend.Name
 	BaseBranch         string
 	BranchPrefix       string
 	Limit              int // 0 = unset
@@ -163,6 +165,14 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		},
 		"--base-branch": func(cfg *Config, _ *parseState, v string) error {
 			cfg.BaseBranch = v
+			return nil
+		},
+		"--backend": func(cfg *Config, _ *parseState, v string) error {
+			name, err := backend.ParseName(v)
+			if err != nil {
+				return fmt.Errorf("--backend: %w", err)
+			}
+			cfg.Backend = name
 			return nil
 		},
 		"--branch-prefix": func(cfg *Config, _ *parseState, v string) error {
@@ -393,6 +403,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, "--cleanup")
 		case len(state.rawAgents) > 0:
 			return statusConflict(lg, "--agent")
+		case cfg.Backend != "":
+			return statusConflict(lg, "--backend")
 		case cfg.BaseBranch != "":
 			return statusConflict(lg, "--base-branch")
 		case cfg.BranchPrefix != "":
@@ -456,6 +468,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 		switch {
 		case len(state.rawAgents) > 0:
 			return lifecycleConflict(lg, "--agent")
+		case cfg.Backend != "":
+			return lifecycleConflict(lg, "--backend")
 		case cfg.BaseBranch != "":
 			return lifecycleConflict(lg, "--base-branch")
 		case cfg.BranchPrefix != "":

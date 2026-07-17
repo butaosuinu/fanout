@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -189,27 +190,28 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	var orchestratorReq panelaunch.Request
 	var orchestratorPaneID string
 	var orchestratorCreated bool
-	ready := func(store state.Store, recorder panelaunch.StateRecorder) error {
+	ready := func(store state.Store, recorder panelaunch.StateRecorder, runtimeBackend backend.Backend) error {
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, launchErr = launchIssueOrchestratorPrepared(
-			projectRoot, session, commandName, store, recorder, hookConfig, detail, defaultAgent,
+			projectRoot, session, commandName, runtimeBackend, store, recorder, hookConfig, detail, defaultAgent,
 		)
 		return launchErr
 	}
 	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, ready)
+	runtimeBackend := result.runtimeBackend
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
-		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
-			if releaseErr := panelaunch.ReleaseAgentStartGate(orchestratorReq); releaseErr != nil {
+			if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 				err = errors.Join(err, fmt.Errorf("release cleaned issue orchestrator gate: %w", releaseErr))
 			}
 		}
 	} else if orchestratorCreated {
-		if releaseErr := panelaunch.ReleaseAgentStartGate(orchestratorReq); releaseErr != nil {
+		if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("release issue orchestrator gate: %w", releaseErr))
-			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
 			} else {
 				orchestratorPaneID = ""

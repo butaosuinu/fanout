@@ -24,9 +24,11 @@ type ShellRequest struct {
 	Root bool
 }
 
-// Shell opens a plain shell pane at req.TargetPath and records it as a
-// keyed @manual shell row in l.Info.ProjectRoot's state. It locks that
-// project's state itself; only l.Info is used.
+// Shell opens a plain tmux shell pane at req.TargetPath and records it as a
+// keyed @manual shell row in l.Info.ProjectRoot's state. Plain TUI terminals
+// are part of tmux session management, not backend agent launch, so this path
+// deliberately stays outside backend.Backend. It locks that project's state
+// itself; only l.Info is used.
 func (l *Launcher) Shell(req ShellRequest) error {
 	projectRoot := l.Info.ProjectRoot
 	target := l.Info.Target

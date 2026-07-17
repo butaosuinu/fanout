@@ -8,21 +8,30 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 type Definition struct {
 	Name    string
 	Command string
 	// LaunchArgs are flags injected into every launch and resume command.
-	// claude carries the @fanout_agent_state hook settings; codex has no
-	// launch-time hook mechanism and keeps the bare two-value wrapper signal.
 	LaunchArgs []string
-	ResumeArgs []string
+	// BackendLaunchArgs are flags injected only for the selected runtime.
+	// Claude's tmux entry carries the @fanout_agent_state hook settings;
+	// non-tmux runtimes must not receive commands that target tmux pane state.
+	BackendLaunchArgs map[backend.Name][]string
+	ResumeArgs        []string
 }
 
 var registry = map[string]Definition{
-	"claude": {Name: "claude", Command: "claude", LaunchArgs: []string{"--settings", claudeHookSettingsJSON}, ResumeArgs: []string{"--continue"}},
-	"codex":  {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
+	"claude": {
+		Name:              "claude",
+		Command:           "claude",
+		BackendLaunchArgs: map[backend.Name][]string{backend.Tmux: {"--settings", claudeHookSettingsJSON}},
+		ResumeArgs:        []string{"--continue"},
+	},
+	"codex": {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
 }
 
 // ValidateKnown returns an error if name is not in fanout's MVP registry.
@@ -60,43 +69,99 @@ func ValidateInstalled(name string) error {
 	return err
 }
 
-// BuildCommand returns the shell command sent to the tmux child pane.
+// BuildCommand returns the shell command sent to a tmux child pane.
 func BuildCommand(name, prompt string) (string, error) {
+	return BuildCommandForBackend(name, prompt, backend.Tmux)
+}
+
+// BuildCommandForBackend returns the shell command for the selected runtime.
+func BuildCommandForBackend(name, prompt string, runtimeBackend backend.Name) (string, error) {
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	return buildCommand(def.Command, def.LaunchArgs, prompt), nil
+	args, err := launchArgsForBackend(def, runtimeBackend)
+	if err != nil {
+		return "", err
+	}
+	return buildCommand(def.Command, args, prompt), nil
 }
 
 // BuildResolvedCommand returns the live-launch command using the resolved
 // executable path from the caller's environment.
 func BuildResolvedCommand(name, prompt string) (string, error) {
-	path, err := ResolveExecutable(name)
-	if err != nil {
-		return "", err
-	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, registry[name].LaunchArgs, prompt), nil
+	return BuildResolvedCommandForBackend(name, prompt, backend.Tmux)
 }
 
-// BuildResumeCommand returns the generic resume command for a supported agent.
-func BuildResumeCommand(name string) (string, error) {
+// BuildResolvedCommandForBackend returns the live-launch command for the
+// selected runtime using the resolved executable path from the caller's
+// environment.
+func BuildResolvedCommandForBackend(name, prompt string, runtimeBackend backend.Name) (string, error) {
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	return buildCommand(def.Command, slices.Concat(def.LaunchArgs, def.ResumeArgs), ""), nil
+	args, err := launchArgsForBackend(def, runtimeBackend)
+	if err != nil {
+		return "", err
+	}
+	path, err := ResolveExecutable(name)
+	if err != nil {
+		return "", err
+	}
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, args, prompt), nil
+}
+
+// BuildResumeCommand returns the generic resume command for a supported agent.
+func BuildResumeCommand(name string) (string, error) {
+	return BuildResumeCommandForBackend(name, backend.Tmux)
+}
+
+// BuildResumeCommandForBackend returns the resume command for the selected
+// runtime.
+func BuildResumeCommandForBackend(name string, runtimeBackend backend.Name) (string, error) {
+	def, ok := registry[name]
+	if !ok {
+		return "", ValidateKnown(name)
+	}
+	args, err := launchArgsForBackend(def, runtimeBackend)
+	if err != nil {
+		return "", err
+	}
+	return buildCommand(def.Command, slices.Concat(args, def.ResumeArgs), ""), nil
 }
 
 // BuildResolvedResumeCommand returns the live resume command using the resolved
 // executable path from the caller's environment.
 func BuildResolvedResumeCommand(name string) (string, error) {
+	return BuildResolvedResumeCommandForBackend(name, backend.Tmux)
+}
+
+// BuildResolvedResumeCommandForBackend returns the live resume command for the
+// selected runtime using the resolved executable path from the caller's
+// environment.
+func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Name) (string, error) {
+	def, ok := registry[name]
+	if !ok {
+		return "", ValidateKnown(name)
+	}
+	args, err := launchArgsForBackend(def, runtimeBackend)
+	if err != nil {
+		return "", err
+	}
 	path, err := ResolveExecutable(name)
 	if err != nil {
 		return "", err
 	}
-	def := registry[name]
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(def.LaunchArgs, def.ResumeArgs), ""), nil
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(args, def.ResumeArgs), ""), nil
+}
+
+func launchArgsForBackend(def Definition, runtimeBackend backend.Name) ([]string, error) {
+	name, err := backend.ParseName(string(runtimeBackend))
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(def.LaunchArgs, def.BackendLaunchArgs[name]), nil
 }
 
 // WithFanoutBin pins helper calls made by the launched agent to the same fanout

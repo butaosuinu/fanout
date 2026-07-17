@@ -6,10 +6,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/gitstat"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -59,29 +60,22 @@ func StateLoader(projectRoot string) func() (state.Store, error) {
 // not read twice when projectRoot is a non-canonical path (a symlinked checkout,
 // or a FANOUT_STATE_PATH-inferred root) that differs from git's canonical
 // `worktree list` output but points at the same .fanout/state.json.
-func MergedStateLoader(projectRoot string) func() (state.Store, error) {
-	return mergedStateLoader(projectRoot, liveTmuxPanes)
+func MergedStateLoader(projectRoot string, listLive func() ([]backend.LivePane, error)) func() (state.Store, error) {
+	return mergedStateLoader(projectRoot, listLive)
 }
 
-// liveTmuxPanes returns the live tmux panes keyed by id (path/shell-key included),
-// best effort (nil when tmux is unavailable). Used only to break
-// duplicate-identity ties, with the same path/shell-key-aware check Build uses.
-func liveTmuxPanes() map[string]LivePaneInfo {
-	live, err := LivePanes()()
-	if err != nil {
-		return nil
-	}
-	return live
-}
-
-func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneInfo) func() (state.Store, error) {
+func mergedStateLoader(projectRoot string, listLive func() ([]backend.LivePane, error)) func() (state.Store, error) {
 	return func() (state.Store, error) {
 		roots, _ := worktree.ListRoots(projectRoot) // always returns at least {projectRoot}
 		merged := state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{}}
 		seenIdx := map[string]int{}
 		seenRoot := map[string]bool{}
+		parentBackends := map[string]struct {
+			name backend.Name
+			root string
+		}{}
 
-		var live map[string]LivePaneInfo
+		var live map[livePaneKey]backend.LivePane
 		liveLoaded := false
 		isLive := func(p state.Pane) bool {
 			if p.PaneID == "" {
@@ -89,8 +83,11 @@ func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneI
 			}
 			if !liveLoaded {
 				liveLoaded = true
-				if livePanes != nil {
-					live = livePanes()
+				if listLive != nil {
+					panes, err := listLive()
+					if err == nil {
+						live = indexLivePanes(panes)
+					}
 				}
 			}
 			// Same path/shell-key-aware check as Build: a bare pane-id match would
@@ -117,6 +114,19 @@ func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneI
 			}
 			for _, p := range st.Panes {
 				p.SourceProjectRoot = root
+				if parent, sticky := crossWorktreeBackendParent(root, p); sticky {
+					name := backend.NormalizeName(p.Backend)
+					if prior, ok := parentBackends[parent]; ok && prior.name != name {
+						return state.Store{}, fmt.Errorf(
+							"runtime backend for parent %s has mixed state across %s (%s) and %s (%s)",
+							parent, prior.root, prior.name, root, name,
+						)
+					}
+					parentBackends[parent] = struct {
+						name backend.Name
+						root string
+					}{name: name, root: root}
+				}
 				key := paneIdentityKey(p)
 				if key == "" {
 					p.SourceProjectRoots = []string{root}
@@ -143,6 +153,54 @@ func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneI
 		}
 		return merged, nil
 	}
+}
+
+// crossWorktreeBackendParent returns the actual issue / Project parent that
+// owns a persisted row's backend binding. Watcher rows and issue coordinators
+// use synthetic storage parents, but backend stickiness belongs to their issue
+// provenance. Attached rows retain their source provenance after the original
+// row disappears. Unrelated @manual rows and plans without an explicitly
+// declared issue source remain worktree-local.
+func crossWorktreeBackendParent(projectRoot string, pane state.Pane) (string, bool) {
+	if pane.IsAttachedAgent() {
+		parent := strings.TrimSpace(pane.SourceParent)
+		if parent == "" {
+			parent = strings.TrimSpace(pane.Parent)
+		}
+		if pane.SourceIssueNum > 0 && (parent == panelaunch.WatchParentRef || parent == panelaunch.ManualParentRef || parent == "") {
+			return strconv.Itoa(pane.SourceIssueNum), true
+		}
+		if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok && planSlug != "" {
+			actual := panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
+			if !strings.HasPrefix(actual, "plan:") {
+				return NormalizeParent(actual), true
+			}
+			return "", false
+		}
+		if parent == "" || parent == panelaunch.ManualParentRef || parent == panelaunch.WatchParentRef {
+			return "", false
+		}
+		return NormalizeParent(parent), true
+	}
+	if issueNum, ok := panelaunch.PaneIssueParentNum(pane); ok {
+		return strconv.Itoa(issueNum), true
+	}
+	switch pane.Parent {
+	case panelaunch.ManualParentRef:
+		return "", false
+	}
+	parent := strings.TrimSpace(pane.Parent)
+	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok && planSlug != "" {
+		actual := panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
+		if !strings.HasPrefix(actual, "plan:") {
+			return NormalizeParent(actual), true
+		}
+		return "", false
+	}
+	if parent == "" || parent == panelaunch.WatchParentRef {
+		return "", false
+	}
+	return NormalizeParent(parent), true
 }
 
 // paneIdentityKey returns a pane's identity for cross-worktree de-duplication,
@@ -188,30 +246,6 @@ func resolvePath(path string) string {
 		return resolved
 	}
 	return filepath.Clean(path)
-}
-
-// LivePanes returns a LivePanes collector that maps each live tmux pane id to
-// its current path, recorded worktree path option, and title, so Build can
-// require both an id match and a path under the recorded worktree (robust
-// against server-restart pane-id reuse) and surface the live pane title.
-func LivePanes() func() (map[string]LivePaneInfo, error) {
-	return func() (map[string]LivePaneInfo, error) {
-		panes, err := tmuxrun.ListLivePanes()
-		if err != nil {
-			return nil, err
-		}
-		m := make(map[string]LivePaneInfo, len(panes))
-		for _, p := range panes {
-			m[p.ID] = LivePaneInfo{
-				Path:         p.CurrentPath,
-				WorktreePath: p.WorktreePath,
-				Title:        p.Title,
-				AgentState:   p.AgentState,
-				ShellKey:     p.ShellKey,
-			}
-		}
-		return m, nil
-	}
 }
 
 // GitWorktreeStat returns a collector for per-pane worktree diff/dirty state.

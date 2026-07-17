@@ -11,13 +11,16 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
 const planSubcommand = "plan"
@@ -57,12 +60,18 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		return cmdPlanLifecycle(cfg, lg)
 	}
 
-	if exitOnMissingDeps(missingDeps(depNeeds{git: true, tmux: true}), lg) {
+	if exitOnMissingDeps(missingDeps(depNeeds{git: true}), lg) {
 		return exitcode.Env
 	}
 
 	cliCfg := cfg.CLIConfig()
-	rt, code := run.ResolveRuntime(cliCfg, lg)
+	parentRef, err := resolvePlanLaunchParent(cfg)
+	if err != nil {
+		lg.Err("plan: %v", err)
+		return exitcode.Env
+	}
+	cliCfg.ParentRef = parentRef
+	rt, code := resolveLaunchRuntime(cliCfg, nil, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -72,13 +81,40 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	return code
 }
 
+// resolvePlanLaunchParent reads the plan identity before backend selection so
+// existing plan rows participate in stickiness. Issue-sourced plans resolve to
+// their numeric issue parent; every other plan resolves to plan:<slug>. The
+// read is deliberately mutation-free: a herdr-owned plan must fail before
+// state locking, local git exclude setup, plan copying, or worktree preparation.
+func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (string, error) {
+	projectRoot, err := gitroot.Toplevel("")
+	if err != nil {
+		return "", err
+	}
+	specPath := run.ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
+	spec, err := planspec.LoadWithoutResolvedNameChecks(specPath)
+	if err != nil {
+		return "", err
+	}
+	return panelaunch.PlanRuntimeParentRef(spec.Plan.Slug, spec.Plan.Source), nil
+}
+
 func parsePlanCommand(args []string, lg *log.Logger) (run.PlanCommandConfig, exitcode.Code) {
 	cfg := run.PlanCommandConfig{SleepBetween: cliflags.DefaultSleepBetween, Format: cliflags.DefaultFormat}
 	var limitRaw, sleepRaw string
+	var backendErr error
 	var rawAgents []string
 
 	valueOptions := map[string]func(string){
-		"--agent":         func(v string) { rawAgents = append(rawAgents, v) },
+		"--agent": func(v string) { rawAgents = append(rawAgents, v) },
+		"--backend": func(v string) {
+			name, err := backend.ParseName(v)
+			if err != nil {
+				backendErr = err
+				return
+			}
+			cfg.Backend = name
+		},
 		"--base-branch":   func(v string) { cfg.BaseBranch = v },
 		"--branch-prefix": func(v string) { cfg.BranchPrefix = v },
 		"--close":         func(v string) { cfg.CloseTaskID = v },
@@ -148,6 +184,10 @@ func parsePlanCommand(args []string, lg *log.Logger) (run.PlanCommandConfig, exi
 	if cfg.SpecArg == "" {
 		fmt.Fprint(lg.Stderr(), planUsage)
 		return run.PlanCommandConfig{}, exitcode.Invocation
+	}
+	if backendErr != nil {
+		lg.Err("--backend: %v", backendErr)
+		return run.PlanCommandConfig{}, exitcode.Env
 	}
 	if code := validatePlanActionFlags(cfg, limitRaw, sleepRaw, len(rawAgents) > 0, lg); code != exitcode.OK {
 		return run.PlanCommandConfig{}, code
@@ -242,6 +282,8 @@ func validatePlanActionFlags(cfg run.PlanCommandConfig, limitRaw, sleepRaw strin
 			return planStatusConflict(lg, planLifecycleFlagName(cfg))
 		case hasAgentFlags:
 			return planStatusConflict(lg, "--agent")
+		case cfg.Backend != "":
+			return planStatusConflict(lg, "--backend")
 		case cfg.BaseBranch != "":
 			return planStatusConflict(lg, "--base-branch")
 		case limitRaw != "":
@@ -285,6 +327,8 @@ func validatePlanActionFlags(cfg run.PlanCommandConfig, limitRaw, sleepRaw strin
 		switch {
 		case hasAgentFlags:
 			return planLifecycleConflict(lg, "--agent")
+		case cfg.Backend != "":
+			return planLifecycleConflict(lg, "--backend")
 		case cfg.BaseBranch != "":
 			return planLifecycleConflict(lg, "--base-branch")
 		case cfg.BranchPrefix != "":
@@ -417,10 +461,13 @@ func cmdPlanLifecycle(cfg run.PlanCommandConfig, lg *log.Logger) exitcode.Code {
 	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
 	}
+	runtimeBackend := tmuxbackend.New()
 	lifecycleOpts := lifecycle.Options{
 		ProjectRoot: rt.projectRoot,
 		StatePath:   rt.statePath,
 		Hooks:       hooks.LoadUserConfig(lg),
+		ClosePane:   runtimeBackend.Close,
+		ListLive:    runtimeBackend.ListLive,
 	}
 
 	switch {
@@ -528,6 +575,7 @@ const planUsage = `Usage: fanout plan <spec.json | plan-slug> [options]
 Options:
   --agent <name|task-id=name> Agent to launch (or FANOUT_AGENT). Repeat for
                               per-task overrides.
+  --backend <tmux|herdr>      Select the runtime backend (herdr v1 is read-only)
   --dry-run                   Print worktree/tmux/agent actions without launching
   --status                    Print task status and exit
   --format <json|table>       Output format for --status (default: json)

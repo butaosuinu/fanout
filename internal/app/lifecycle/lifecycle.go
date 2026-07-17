@@ -13,11 +13,11 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -28,6 +28,7 @@ type Options struct {
 	Hooks               hooks.Config
 	WatcherRunningLabel string
 	RemoveIssueLabel    func(issueNum int, label string) error
+	CloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -49,10 +50,10 @@ type statusChild struct {
 type CloseMode int
 
 const (
-	// ClosePaneOnly closes the tmux pane and removes fanout state, leaving the
+	// ClosePaneOnly closes the runtime pane and removes fanout state, leaving the
 	// worktree and branch available outside fanout.
 	ClosePaneOnly CloseMode = iota
-	// CloseWorktree closes the tmux pane, removes the worktree, and leaves the
+	// CloseWorktree closes the runtime pane, removes the worktree, and leaves the
 	// local branch intact. This is the historical --close behavior.
 	CloseWorktree
 	// CloseEverything also deletes the recorded local branch after removing the
@@ -62,7 +63,7 @@ const (
 
 const watcherStandaloneParent = "@watch"
 
-// Close verifies and closes the recorded tmux pane(s), then removes the
+// Close verifies and closes the recorded runtime pane(s), then removes the
 // recorded worktree(s) and all state rows matching parent and issueNum.
 func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	return CloseWithMode(opts, parent, issueNum, CloseWorktree, lg)
@@ -85,6 +86,9 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	}
 	if mode.removesWorktree() {
 		panes = panesSharingManagedWorktrees(locked.Panes, panes)
+	}
+	if !validateCloseOperations(opts, panes, lg) {
+		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -116,7 +120,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	return exitcode.OK
 }
 
-// CloseTask verifies and closes the recorded tmux pane(s), then removes the
+// CloseTask verifies and closes the recorded runtime pane(s), then removes the
 // recorded worktree(s) and all task state rows matching parent and taskID.
 func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 	return CloseTaskWithMode(opts, parent, taskID, CloseWorktree, lg)
@@ -139,6 +143,9 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	}
 	if mode.removesWorktree() {
 		panes = panesSharingManagedWorktrees(locked.Panes, panes)
+	}
+	if !validateCloseOperations(opts, panes, lg) {
+		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
 	defer relayoutClosedWindows(windows, lg)
@@ -237,7 +244,7 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 // Cleanup closes every recorded child for parent whose issue is closed or has
 // at least one merged closed-by PR.
 func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
-	locked, code := lockState("--cleanup", opts, lg)
+	locked, code := lockStateOnly("--cleanup", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -267,6 +274,19 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 	if len(eligible) == 0 {
 		lg.Info("--cleanup: no merged or closed recorded panes for parent %s", parent)
 		return exitcode.OK
+	}
+	for _, issueNum := range sortedUnique(nums) {
+		if !eligible[issueNum] {
+			continue
+		}
+		issuePanes := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
+		if !validateCloseOperations(opts, issuePanes, lg) {
+			return exitcode.Env
+		}
+	}
+	if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
+		lg.Err("--cleanup: prepare local git exclude: %v", err)
+		return exitcode.Env
 	}
 
 	closed := 0
@@ -304,7 +324,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 // CleanupPlan closes every recorded plan task for parent whose recorded branch
 // has at least one MERGED PR.
 func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
-	locked, code := lockState("--cleanup", opts, lg)
+	locked, code := lockStateOnly("--cleanup", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
@@ -343,6 +363,16 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	if len(eligible) == 0 {
 		lg.Info("--cleanup: no merged recorded plan task panes for parent %s", parent)
 		return exitcode.OK
+	}
+	for _, taskID := range sortedTaskIDs(eligible) {
+		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
+		if !validateCloseOperations(opts, taskPanes, lg) {
+			return exitcode.Env
+		}
+	}
+	if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
+		lg.Err("--cleanup: prepare local git exclude: %v", err)
+		return exitcode.Env
 	}
 
 	closed := 0
@@ -384,18 +414,6 @@ func loadState(mode string, opts Options, lg Logger) (state.Store, exitcode.Code
 		return state.Store{}, exitcode.Invocation
 	}
 	return store, exitcode.OK
-}
-
-func lockState(mode string, opts Options, lg Logger) (*state.LockedStore, exitcode.Code) {
-	if opts.ProjectRoot == "" || !dirExists(opts.ProjectRoot) {
-		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
-		return nil, exitcode.Invocation
-	}
-	if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
-		lg.Err("%s: prepare local git exclude: %v", mode, err)
-		return nil, exitcode.Env
-	}
-	return lockStateOnly(mode, opts, lg)
 }
 
 func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, exitcode.Code) {
@@ -457,9 +475,6 @@ func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger, windows map
 // so tests can stub it without a real tmux.
 var relayoutWindow = panelayout.Apply
 
-// closeTmuxPane is a test seam for the identity-aware tmux close.
-var closeTmuxPane = tmuxrun.ClosePaneIfOwned
-
 // closePaneRecords stops every target pane before removing any worktree. This
 // two-phase ordering prevents a partially failed close from deleting a cwd
 // underneath an agent that is still running. The caller removes state only
@@ -485,7 +500,7 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 	// already stopped in this pass are safely classified stale on that retry.
 	for _, pane := range panes {
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-		if !closeOwnedPane(pane, lg, windows) {
+		if !closeOwnedPane(opts, pane, lg, windows) {
 			return false
 		}
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
@@ -511,6 +526,32 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 		}
 	}
 	return true
+}
+
+func validateCloseOperations(opts Options, panes []state.Pane, lg Logger) bool {
+	for _, pane := range panes {
+		ref := paneRefFromState(pane)
+		if ref.Backend != backend.Tmux {
+			lg.Err("%s: runtime backend %s does not support pane close", paneLabel(pane), ref.Backend)
+			return false
+		}
+		if strings.TrimSpace(ref.Pane) == "" {
+			continue
+		}
+		if opts.CloseOwned == nil {
+			lg.Err("%s: identity-aware runtime pane close is not configured", paneLabel(pane))
+			return false
+		}
+	}
+	return true
+}
+
+func paneRefFromState(pane state.Pane) backend.PaneRef {
+	return backend.PaneRef{
+		Backend:   backend.NormalizeName(pane.Backend),
+		Workspace: pane.HerdrWorkspaceID,
+		Pane:      pane.PaneID,
+	}
 }
 
 // relayoutClosedWindows re-tiles each affected window into the fanout grid.
@@ -658,19 +699,22 @@ func localBranchExists(projectRoot, branch string) bool {
 	return err == nil
 }
 
-func closeOwnedPane(pane state.Pane, lg Logger, windows map[string]struct{}) bool {
-	shellKey := strings.TrimSpace(pane.ShellKey)
-	result, err := closeTmuxPane(pane.PaneID, pane.WorktreePath, shellKey)
-	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
+func closeOwnedPane(opts Options, pane state.Pane, lg Logger, windows map[string]struct{}) bool {
+	result, err := opts.CloseOwned(backend.CloseRequest{
+		Ref:          paneRefFromState(pane),
+		WorktreePath: pane.WorktreePath,
+		ShellKey:     strings.TrimSpace(pane.ShellKey),
+	})
+	if err != nil || result.Status == backend.CloseFailed {
 		lg.Err("%s: close tmux pane %s failed; preserving worktree and state: %v", paneLabel(pane), emptyLabel(pane.PaneID), err)
 		return false
 	}
-	if result.Status == tmuxrun.ClosePaneStale {
+	if result.Status == backend.CloseStale {
 		lg.Warn("%s: pane %s is gone or its identity changed; treating state as stale", paneLabel(pane), emptyLabel(pane.PaneID))
 		return true
 	}
-	if result.WindowID != "" {
-		windows[result.WindowID] = struct{}{}
+	if result.ContainerID != "" {
+		windows[result.ContainerID] = struct{}{}
 	}
 	return true
 }

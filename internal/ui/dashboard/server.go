@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
@@ -41,6 +42,8 @@ type Options struct {
 	//   ("",  nil,      err) -> sticky Degraded.GitHub
 	// A nil ResolveGH disables the GitHub tier entirely (state-only, no degrade).
 	ResolveGH func() (repo string, gh GHProvider, err error)
+	// ListLive observes panes through the runtime backend selected by cmd.
+	ListLive func() ([]backend.LivePane, error)
 	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
 	// nil defaults to tmuxrun.CapturePaneOutput; tests inject a fake.
 	CapturePane func(paneID string, lines int) (string, error)
@@ -98,10 +101,12 @@ func New(opts Options) (*Server, error) {
 		verify = verifyLivePane
 	}
 	h := newHub()
+	p := newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h)
+	p.listLive = opts.ListLive
 	s := &Server{
 		listener:    ln,
 		hub:         h,
-		poller:      newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h),
+		poller:      p,
 		token:       opts.Token,
 		base:        fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
 		serveErr:    make(chan error, 1),

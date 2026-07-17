@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
@@ -13,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -61,7 +63,11 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	cfg := manualPaneConfigForTUIAgent(agentNames[0])
-	_, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	if err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
+	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
@@ -70,17 +76,20 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 			_ = recorder.Unlock()
 		}()
 	}
-
-	info := &fanoutruntime.Info{
-		Session:     session,
-		Target:      tuiLaunchTarget(session),
-		ProjectRoot: projectRoot,
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
+			return fanouttui.LaunchResult{}, fmt.Errorf("runtime backend: %w", err)
+		}
 	}
 	createdPaneIDs := make([]string, 0, len(agentNames))
 	for _, agentName := range agentNames {
 		cfg = manualPaneConfigForTUIAgent(agentName)
-		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, recorder.Store, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launchStore := store
+		if recorder != nil {
+			launchStore = recorder.Store
+		}
+		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
@@ -115,7 +124,7 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
-	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, agentName, nil,
+	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, agentName, livenessKey)
 		})
@@ -136,12 +145,17 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 // Codex Plan Mode) directly on the project root: running `fanout plan` inside a
 // worktree would resolve the git root there and nest state under the
 // coordinator's worktree.
-func launchPlanCoordinator(projectRoot, session, commandName, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
+func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", validateErr
+	}
+	cfg := &cliflags.Config{ParentRef: parentRef, Agent: agentName}
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	if err != nil {
+		return panelaunch.Request{}, "", err
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return panelaunch.Request{}, "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
@@ -154,14 +168,19 @@ func launchPlanCoordinator(projectRoot, session, commandName, agentName string, 
 	defer func() {
 		_ = recorder.Unlock()
 	}()
-	return launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName, recorder.Store, recorder, guard, buildReq)
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(parentRef, recorder.Store); err != nil {
+			return panelaunch.Request{}, "", fmt.Errorf("runtime backend: %w", err)
+		}
+	}
+	return launchPlanCoordinatorLocked(projectRoot, session, commandName, rt.Backend, agentName, recorder.Store, recorder, guard, buildReq)
 }
 
 // launchPlanCoordinatorLocked is the state-lock-held half of
 // launchPlanCoordinator. The issue parent lane already owns the child fan-out
 // lock when its validated plan becomes ready, so it reuses that recorder
 // instead of attempting a nested lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
@@ -183,7 +202,7 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName, agentName st
 		return panelaunch.Request{}, "", err
 	}
 	paneReq := buildReq(store, livenessKey)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
 		return panelaunch.Request{}, "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
@@ -223,7 +242,7 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		// Short enough to render unwrapped as the form's one error line.
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
-	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, coordinatorAgent,
+	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
 		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
@@ -371,6 +390,19 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 			return "", validateErr
 		}
 	}
+	resolverParent := attachResolverParent(projectRoot, req.Target)
+	resolvedTarget := req.Target
+	resolvedTarget.SourceParent = resolverParent
+	provisional := []backend.Binding{{
+		Parent:  resolverParent,
+		Backend: backend.NormalizeName(req.Target.Backend),
+	}}
+	cfg := manualPaneConfigForTUIAgent(agentNames[0])
+	cfg.ParentRef = resolverParent
+	rt, err := resolveTUILaunchRuntimeForTarget(projectRoot, "", target, cfg, provisional)
+	if err != nil {
+		return "", err
+	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
@@ -384,17 +416,17 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	defer func() {
 		_ = recorder.Unlock()
 	}()
-
-	info := &fanoutruntime.Info{
-		Session:     "",
-		Target:      target,
-		ProjectRoot: projectRoot,
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(resolverParent, recorder.Store); err != nil {
+			return "", fmt.Errorf("runtime backend: %w", err)
+		}
 	}
 	createdCount := 0
 	for _, agentName := range agentNames {
 		cfg := manualPaneConfigForTUIAgent(agentName)
-		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, req.Target)
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		cfg.ParentRef = resolverParent
+		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, resolvedTarget)
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if launcher.Attach(paneReq, targetPath) {
 			createdCount++
 			continue
@@ -405,6 +437,20 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		return "", bufferedLaunchError(stdout, stderr, "attach agent pane")
 	}
 	return bufferedLaunchNotice(stderr), nil
+}
+
+func attachResolverParent(projectRoot string, target fanouttui.AttachTarget) string {
+	parent := strings.TrimSpace(target.SourceParent)
+	if (parent == panelaunch.WatchParentRef || parent == panelaunch.ManualParentRef || parent == "") && target.SourceIssueNum > 0 {
+		return strconv.Itoa(target.SourceIssueNum)
+	}
+	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok && planSlug != "" {
+		return panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
+	}
+	if parent == "" {
+		return panelaunch.ManualParentRef
+	}
+	return parent
 }
 
 func existingDirectory(rawPath string) (string, error) {
@@ -480,7 +526,7 @@ func bufferedLaunchNotice(stderr bytes.Buffer) string {
 }
 
 func manualPaneConfigForTUIAgent(agentName string) *cliflags.Config {
-	cfg := &cliflags.Config{Agent: agentName}
+	cfg := &cliflags.Config{ParentRef: panelaunch.ManualParentRef, Agent: agentName}
 	if agentName == "codex" {
 		codexPlanMode := true
 		cfg.CodexPlanMode = &codexPlanMode

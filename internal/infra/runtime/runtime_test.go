@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestResolveAcceptsExistingSessionOverride(t *testing.T) {
@@ -14,7 +16,7 @@ func TestResolveAcceptsExistingSessionOverride(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%caller")
 	t.Chdir(repo)
 
-	info, err := Resolve("target")
+	info, err := Resolve(backend.Tmux, "target")
 	if err != nil {
 		t.Fatalf("Resolve() failed: %v", err)
 	}
@@ -39,7 +41,7 @@ func TestResolveTargetsInvokingPaneByDefault(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%caller")
 	t.Chdir(repo)
 
-	info, err := Resolve("")
+	info, err := Resolve(backend.Tmux, "")
 	if err != nil {
 		t.Fatalf("Resolve() failed: %v", err)
 	}
@@ -57,7 +59,7 @@ func TestResolveFallsBackToTmuxPaneID(t *testing.T) {
 	t.Setenv("TMUX_PANE", "")
 	t.Chdir(repo)
 
-	info, err := Resolve("")
+	info, err := Resolve(backend.Tmux, "")
 	if err != nil {
 		t.Fatalf("Resolve() failed: %v", err)
 	}
@@ -72,12 +74,47 @@ func TestResolveRejectsMissingSessionOverride(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%caller")
 	t.Chdir(repo)
 
-	_, err := Resolve("missing")
+	_, err := Resolve(backend.Tmux, "missing")
 	if err == nil {
 		t.Fatal("Resolve() returned nil error")
 	}
 	if !strings.Contains(err.Error(), `tmux session "missing" is not available`) {
 		t.Fatalf("error = %q, want missing session message", err)
+	}
+}
+
+func TestResolveHerdrDoesNotRequireTmux(t *testing.T) {
+	repo := newGitRepo(t)
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("HERDR_SESSION", "named-session")
+	t.Chdir(repo)
+
+	info, err := Resolve(backend.Herdr, "")
+	if err != nil {
+		t.Fatalf("Resolve(herdr) failed: %v", err)
+	}
+	if info.Session != "named-session" || info.Target != "" {
+		t.Fatalf("Resolve(herdr) = %+v, want named session without tmux target", info)
+	}
+}
+
+func TestResolveHerdrRejectsTmuxSessionOverride(t *testing.T) {
+	repo := newGitRepo(t)
+	t.Chdir(repo)
+
+	_, err := Resolve(backend.Herdr, "tmux-target")
+	if err == nil || !strings.Contains(err.Error(), "only supported by the tmux backend") {
+		t.Fatalf("Resolve(herdr, override) error = %v", err)
+	}
+}
+
+func TestResolveRejectsUnknownBackend(t *testing.T) {
+	repo := newGitRepo(t)
+	t.Chdir(repo)
+
+	if _, err := Resolve(backend.Name("screen"), ""); err == nil {
+		t.Fatal("Resolve(screen) = nil error, want unsupported backend")
 	}
 }
 

@@ -481,6 +481,30 @@ func PlanParentRef(slug string) string {
 	return "plan:" + slug
 }
 
+// PlanRuntimeParentRef returns the actual parent used for runtime backend
+// stickiness. An issue-sourced plan shares its source issue's backend binding;
+// every other plan remains scoped to plan:<slug>. The source must declare the
+// issue explicitly — the slug is never treated as provenance.
+func PlanRuntimeParentRef(slug, source string) string {
+	if issueNum := planSourceIssue(source); issueNum > 0 {
+		return strconv.Itoa(issueNum)
+	}
+	return PlanParentRef(slug)
+}
+
+// SavedPlanRuntimeParentRef resolves a recorded plan task row through the
+// saved spec that created it. Missing, unreadable, or non-issue specs stay on
+// plan:<slug>; callers must not infer issue ownership from an issue-like slug.
+func SavedPlanRuntimeParentRef(projectRoot, planSlug string) string {
+	if strings.TrimSpace(projectRoot) == "" {
+		return PlanParentRef(planSlug)
+	}
+	if issueNum := savedPlanSourceIssue(projectRoot, planSlug); issueNum > 0 {
+		return strconv.Itoa(issueNum)
+	}
+	return PlanParentRef(planSlug)
+}
+
 // PlanIssueSlug keys an issue-sourced plan coordinator's state row by issue
 // number for the dedupe guards and by the synthetic pane number for uniqueness
 // across relaunches: "plan-issue-<issue>-<n>".
@@ -542,6 +566,20 @@ func OrchestratorPaneIssueNum(pane state.Pane) (int, bool) {
 	return issueNum, true
 }
 
+// PaneIssueParentNum returns the actual issue parent carried by a row whose
+// storage parent is synthetic. It accepts only watcher identity or the two
+// coordinator slug formats created by fanout; unrelated @manual rows never
+// acquire issue provenance by inference.
+func PaneIssueParentNum(pane state.Pane) (int, bool) {
+	if pane.Parent == WatchParentRef && pane.IssueNum > 0 {
+		return pane.IssueNum, true
+	}
+	if issueNum, ok := PlanPaneIssueNum(pane); ok {
+		return issueNum, true
+	}
+	return OrchestratorPaneIssueNum(pane)
+}
+
 // PlanLinkedIssueNums collects the issues owned by plan-lane rows so the issue
 // fan-out lanes can treat them as already fanned: coordinator rows through
 // PlanPaneIssueNum, and plan task rows through the saved spec's declared
@@ -590,7 +628,11 @@ func savedPlanSourceIssue(projectRoot, planSlug string) int {
 	if unmarshalErr := json.Unmarshal(data, &spec); unmarshalErr != nil {
 		return 0
 	}
-	rest, found := strings.CutPrefix(strings.TrimSpace(spec.Plan.Source), "issue #")
+	return planSourceIssue(spec.Plan.Source)
+}
+
+func planSourceIssue(source string) int {
+	rest, found := strings.CutPrefix(strings.TrimSpace(source), "issue #")
 	if !found {
 		return 0
 	}

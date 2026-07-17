@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
+)
 
 // TestAgentStateGlyph pins the glyph mapping that both the RUN column and the
 // future compact switcher render from (docs/tui-compact-switcher.ja.md 状態グリフ).
@@ -64,5 +68,27 @@ func TestTableRowMatchesColumns(t *testing.T) {
 	}
 	if idx, agentIdx := columnIndex(t, "RUN"), columnIndex(t, "AGENT"); idx != agentIdx+1 {
 		t.Fatalf("RUN column index = %d, want %d (next to AGENT)", idx, agentIdx+1)
+	}
+}
+
+func TestPaneViewRuntimeActionsRequireTmuxBackend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend backend.Name
+		want    bool
+	}{
+		{name: "legacy tmux row", want: true},
+		{name: "explicit tmux row", backend: backend.Tmux, want: true},
+		{name: "herdr row", backend: backend.Herdr, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pane := paneView{Backend: tc.backend, PaneID: "%1", TmuxState: "live"}
+			if got := pane.canFocus(); got != tc.want {
+				t.Fatalf("canFocus() = %v, want %v", got, tc.want)
+			}
+			if got := pane.canPeek(); got != tc.want {
+				t.Fatalf("canPeek() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

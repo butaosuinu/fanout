@@ -70,9 +70,11 @@ func main() {
 	// (deps.go).
 	lifecycle := cfg.CloseNum > 0 || cfg.MergeNum > 0 || cfg.CleanupMode
 	needs := depNeeds{
-		git:  true,
-		gh:   cfg.StatusMode || cfg.CleanupMode || !lifecycle,
-		tmux: !cfg.StatusMode && !lifecycle,
+		git: true,
+		gh:  cfg.StatusMode || cfg.CleanupMode || !lifecycle,
+		// Launch runtime availability is checked after backend selection. Status
+		// and lifecycle keep their existing backend-specific paths for now.
+		tmux: false,
 	}
 	if exitOnMissingDeps(missingDeps(needs), lg) {
 		os.Exit(int(exitcode.Env))
@@ -91,7 +93,7 @@ func main() {
 		os.Exit(int(cmdCleanup(cfg, lg)))
 	}
 
-	rt, code := run.ResolveRuntime(cfg, lg)
+	rt, code := resolveLaunchRuntime(cfg, nil, lg)
 	if code != exitcode.OK {
 		os.Exit(int(code))
 	}

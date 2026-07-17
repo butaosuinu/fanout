@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -74,6 +76,8 @@ type Options struct {
 	PaneAlive         func(string) bool
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
+	ListLive          func() ([]backend.LivePane, error)
+	ClosePane         func(backend.PaneRef) error
 	ListRepoFiles     func(root string) ([]string, error)
 	Notifier          transitionNotifier
 	lifecycle         lifecycleRunner
@@ -285,19 +289,21 @@ func normalizeOptions(opts Options) Options {
 		opts.DefaultAgent = defaultLaunchAgent
 	}
 	if opts.FocusPane == nil {
-		opts.FocusPane = tmuxrun.SelectPane
+		opts.FocusPane = func(string) error { return fmt.Errorf("runtime backend focus is not configured") }
 	}
 	if opts.ZoomPane == nil {
 		opts.ZoomPane = tmuxrun.ZoomPane
 	}
 	if opts.PaneAlive == nil {
-		opts.PaneAlive = tmuxrun.IsPaneAlive
+		opts.PaneAlive = func(string) bool { return false }
 	}
 	if opts.ShellPaneAlive == nil {
-		opts.ShellPaneAlive = shellPaneAliveByKey
+		opts.ShellPaneAlive = shellPaneAliveByKey(opts.ListLive)
 	}
 	if opts.CapturePaneOutput == nil {
-		opts.CapturePaneOutput = tmuxrun.CapturePaneOutput
+		opts.CapturePaneOutput = func(string, int) (string, error) {
+			return "", fmt.Errorf("runtime backend read is not configured")
+		}
 	}
 	if opts.ListRepoFiles == nil {
 		opts.ListRepoFiles = worktree.ListFiles

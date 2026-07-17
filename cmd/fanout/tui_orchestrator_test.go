@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
 func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
@@ -177,7 +178,7 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 			}
 
 			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
-			err = cleanupIssueOrchestrator(repo, "fanout-test", req, "%91")
+			err = cleanupIssueOrchestrator(repo, "fanout-test", tmuxbackend.New(), req, "%91")
 			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("cleanupIssueOrchestrator() error = %v, want %q", err, tt.wantErr)
 			}
