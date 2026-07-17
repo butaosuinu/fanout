@@ -30,6 +30,9 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
 	}
 	if err := codexapp.RunPlanTUI(cfg, os.Stdout, os.Stderr); err != nil {
+		if code, ok := codexapp.SignalErrorExitCode(err); ok {
+			return exitcode.Code(code)
+		}
 		lg.Err("codex plan mode TUI: %v", err)
 		return exitcode.Env
 	}

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -93,30 +94,38 @@ type codexRemoteTUISession struct {
 	freshThread       bool
 	tui               *exec.Cmd
 	tuiDone           chan error
-	tuiStopped        bool
-	drainDone         chan error
+	signals           <-chan os.Signal
 	stopSignalCleanup func()
+
+	mu             sync.Mutex
+	tuiStopped     bool
+	drainDone      chan error
+	observerDone   <-chan struct{}
+	shutdownSignal os.Signal
+	closeOnce      sync.Once
 }
 
 func startCodexRemoteTUISession(cfg codexRemoteTUIConfig) (_ *codexRemoteTUISession, err error) {
 	session := &codexRemoteTUISession{}
 	defer func() {
 		if err != nil {
-			session.Close()
+			err = session.finish(err)
 		}
 	}()
+	session.signals, session.stopSignalCleanup = installCodexControllerSignals()
 
 	session.server, err = startAppServer(cfg.CodexPath)
 	if err != nil {
 		return nil, err
 	}
-	session.stopSignalCleanup = installCodexAppServerSignalCleanup(session.server)
 
-	session.client, err = connectAppServer(session.server, codexRemoteAppConnectTimeout)
+	session.client, err = connectAppServerWithSignals(session.server, codexRemoteAppConnectTimeout, session.signals)
 	if err != nil {
 		return nil, err
 	}
-	if err = initializeCodexClient(session.client, cfg.Version, cfg.ClientName); err != nil {
+	if _, err = waitForCodexOperation(session.signals, func() (struct{}, error) {
+		return struct{}{}, initializeCodexClient(session.client, cfg.Version, cfg.ClientName)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -136,12 +145,14 @@ func startCodexRemoteTUISession(cfg codexRemoteTUIConfig) (_ *codexRemoteTUISess
 	if err != nil {
 		return nil, err
 	}
-	session.drainDone = completedAppServerDrain()
-	if session.drainDone, err = waitForCodexRemoteTUIStartup(session.tuiDone, session.drainDone, session.server); err != nil {
+	session.setDrainDone(completedAppServerDrain())
+	drainDone := session.currentDrainDone()
+	if drainDone, err = waitForCodexRemoteTUIStartup(session.tuiDone, drainDone, session.server, session.signals); err != nil {
 		return nil, err
 	}
+	session.setDrainDone(drainDone)
 	if session.freshThread {
-		session.thread, err = waitForCodexRemoteTUIThread(session.tuiDone, session.client, session.server, cfg.SetAgentState, codexRemoteTUIThreadStartupTimeout)
+		session.thread, err = waitForCodexRemoteTUIThread(session.tuiDone, session.client, session.server, cfg.SetAgentState, codexRemoteTUIThreadStartupTimeout, session.signals)
 		if err != nil {
 			return nil, err
 		}
@@ -153,20 +164,106 @@ func (s *codexRemoteTUISession) Close() {
 	if s == nil {
 		return
 	}
-	if s.tui != nil && !s.tuiStopped {
-		stopProcess(s.tui, s.tuiDone)
-		s.tuiStopped = true
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		tuiStopped := s.tuiStopped
+		drainDone := s.drainDone
+		observerDone := s.observerDone
+		shutdownSignal := s.shutdownSignal
+		s.mu.Unlock()
+
+		if s.tui != nil && !tuiStopped {
+			stopProcess(s.tui, s.tuiDone, isInterruptSignal(shutdownSignal))
+			s.setTUIStopped(true)
+		}
+		if s.client != nil {
+			awaitDrainAfterTUIExit(s.client, drainDone)
+			s.client.Close()
+		}
+		observerExited := waitForObserverExit(observerDone, processShutdownTimeout)
+		if s.server != nil {
+			s.server.Close()
+		}
+		if !observerExited {
+			_ = waitForObserverExit(observerDone, processShutdownTimeout)
+		}
+		if s.stopSignalCleanup != nil {
+			s.stopSignalCleanup()
+		}
+	})
+}
+
+func (s *codexRemoteTUISession) finish(err error) error {
+	if s == nil {
+		return err
 	}
-	if s.client != nil {
-		awaitDrainAfterTUIExit(s.client, s.drainDone)
-		s.client.Close()
+	if sig := signalFromError(err); sig != nil {
+		s.setShutdownSignal(sig)
+	} else {
+		select {
+		case sig := <-s.signals:
+			s.setShutdownSignal(sig)
+			err = newCodexSignalError(sig)
+		default:
+		}
 	}
-	if s.stopSignalCleanup != nil {
-		s.stopSignalCleanup()
+	s.Close()
+	// A signal can arrive while Close is waiting for the remote TUI or
+	// app-server. Capture that race before deciding whether the pane group needs
+	// the final fallback kill.
+	select {
+	case sig := <-s.signals:
+		s.setShutdownSignal(sig)
+	default:
 	}
-	if s.server != nil {
-		s.server.Close()
+	if sig := s.currentShutdownSignal(); requiresPaneGroupFallback(sig) {
+		forceCurrentPaneProcessGroup()
 	}
+	if sig := s.currentShutdownSignal(); sig != nil {
+		return newCodexSignalError(sig)
+	}
+	return err
+}
+
+func (s *codexRemoteTUISession) setTUIStopped(stopped bool) {
+	s.mu.Lock()
+	s.tuiStopped = stopped
+	s.mu.Unlock()
+}
+
+func (s *codexRemoteTUISession) setDrainDone(done chan error) {
+	s.mu.Lock()
+	s.drainDone = done
+	s.mu.Unlock()
+}
+
+func (s *codexRemoteTUISession) currentDrainDone() chan error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainDone
+}
+
+func (s *codexRemoteTUISession) setObserverDone(done <-chan struct{}) {
+	s.mu.Lock()
+	s.observerDone = done
+	s.mu.Unlock()
+}
+
+func (s *codexRemoteTUISession) setShutdownSignal(sig os.Signal) {
+	if sig == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.shutdownSignal == nil {
+		s.shutdownSignal = sig
+	}
+	s.mu.Unlock()
+}
+
+func (s *codexRemoteTUISession) currentShutdownSignal() os.Signal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shutdownSignal
 }
 
 // RunPlanTUI runs the fanout Codex Plan Mode controller: it starts an
@@ -177,7 +274,8 @@ func (s *codexRemoteTUISession) Close() {
 func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	ready := false
 	defer func() {
-		if err != nil && !ready {
+		_, signaled := SignalErrorExitCode(err)
+		if err != nil && !ready && !signaled {
 			_ = writeStatus(cfg.StatusFile, Status{
 				Status: statusFailed,
 				Error:  err.Error(),
@@ -202,7 +300,7 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { err = session.finish(err) }()
 
 	thread := session.thread
 	freshThread := session.freshThread
@@ -216,20 +314,24 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 	}
 
 	if freshThread {
-		thread, err = configureCodexPlanThread(session.client, thread, cwd)
+		thread, err = waitForCodexOperation(session.signals, func() (codexThreadInfo, error) {
+			return configureCodexPlanThread(session.client, thread, cwd)
+		})
 		if err != nil {
 			return err
 		}
 		reportCodexPlanAgentState(setState, "working")
 		var turnStart codexPlanTurnStartResult
-		turnStart, err = startCodexPlanTurn(session.client, thread, cwd, cfg.Prompt)
+		turnStart, err = waitForCodexOperation(session.signals, func() (codexPlanTurnStartResult, error) {
+			return startCodexPlanTurn(session.client, thread, cwd, cfg.Prompt)
+		})
 		if err != nil {
 			return err
 		}
 		if turnStart.Completed {
-			session.drainDone = completedAppServerDrain()
+			session.setDrainDone(completedAppServerDrain())
 		} else {
-			session.drainDone = drainCodexAppServerDuringStartupCmd(session.client, setState, thread.ID, turnStart.TurnID)
+			session.setDrainDone(drainCodexAppServerDuringStartupCmd(session.client, setState, thread.ID, turnStart.TurnID))
 		}
 	}
 
@@ -242,13 +344,14 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(session.tuiDone, session.drainDone, session.client, setState, cfg.CapturePlanScreen, freshThread, false)
-	session.drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
-	session.tuiStopped = tuiExited
+	tuiExited, err := waitForCodexTUIAfterReady(session.tuiDone, session.currentDrainDone(), session.client, setState, cfg.CapturePlanScreen, freshThread, false, session.signals)
+	session.setDrainDone(nil) // consumed or awaited inside waitForCodexTUIAfterReady
+	session.setTUIStopped(tuiExited)
 	return err
 }
 
-func waitForCodexRemoteTUIStartup(tuiDone <-chan error, drainDone chan error, server *appServer) (chan error, error) {
+func waitForCodexRemoteTUIStartup(tuiDone <-chan error, drainDone chan error, server *appServer, signalChannels ...<-chan os.Signal) (chan error, error) {
+	signals := firstSignalChannel(signalChannels)
 	startupTimer := time.NewTimer(codexRemoteTUIStartupGrace)
 	defer startupTimer.Stop()
 	for waitingStartup := true; waitingStartup; {
@@ -270,6 +373,8 @@ func waitForCodexRemoteTUIStartup(tuiDone <-chan error, drainDone chan error, se
 			return nil, fmt.Errorf("codex app-server exited during TUI startup%s", serverLogSuffix(server))
 		case <-startupTimer.C:
 			waitingStartup = false
+		case sig := <-signals:
+			return nil, newCodexSignalError(sig)
 		}
 	}
 	if drainDone == nil {
@@ -278,7 +383,8 @@ func waitForCodexRemoteTUIStartup(tuiDone <-chan error, drainDone chan error, se
 	return drainDone, nil
 }
 
-func waitForCodexRemoteTUIThread(tuiDone <-chan error, client appServerStartupClient, server *appServer, setState func(string), timeout time.Duration) (codexThreadInfo, error) {
+func waitForCodexRemoteTUIThread(tuiDone <-chan error, client appServerStartupClient, server *appServer, setState func(string), timeout time.Duration, signalChannels ...<-chan os.Signal) (codexThreadInfo, error) {
+	signals := firstSignalChannel(signalChannels)
 	type threadWaitResult struct {
 		thread codexThreadInfo
 		err    error
@@ -311,6 +417,8 @@ func waitForCodexRemoteTUIThread(tuiDone <-chan error, client appServerStartupCl
 		return codexThreadInfo{}, fmt.Errorf("codex app-server exited before TUI reported its active thread%s", serverLogSuffix(server))
 	case <-timer.C:
 		return codexThreadInfo{}, fmt.Errorf("codex TUI did not report an active thread within %s", timeout)
+	case sig := <-signals:
+		return codexThreadInfo{}, newCodexSignalError(sig)
 	}
 }
 
@@ -749,7 +857,10 @@ func startCodexRemoteTUI(codexPath, remoteAddr, resumeID string, stdout, stderr 
 		return nil, nil, fmt.Errorf("start codex TUI remote attach: %w", err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		done <- cmd.Wait()
+		close(done)
+	}()
 	return cmd, done, nil
 }
 
@@ -768,7 +879,8 @@ func codexRemoteTUIResumeID(thread codexThreadInfo) string {
 	return thread.SessionID
 }
 
-func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), capturePlanScreen func() (string, error), initialPlanTurn, watchingAppServer bool) (bool, error) {
+func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, client *client, setState func(string), capturePlanScreen func() (string, error), initialPlanTurn, watchingAppServer bool, signalChannels ...<-chan os.Signal) (bool, error) {
+	signals := firstSignalChannel(signalChannels)
 	screenTracker := newCodexPlanScreenTracker(capturePlanScreen, setState, initialPlanTurn)
 	screenTicks := screenTracker.ticks()
 	defer screenTracker.stop()
@@ -798,6 +910,8 @@ func waitForCodexTUIAfterReady(tuiDone <-chan error, drainDone <-chan error, cli
 			drainDone = nil
 		case <-screenTicks:
 			screenTracker.poll()
+		case sig := <-signals:
+			return false, newCodexSignalError(sig)
 		}
 	}
 }

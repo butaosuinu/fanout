@@ -61,6 +61,9 @@ func cmdCodexTeamTUI(args []string, lg *log.Logger) exitcode.Code {
 		return messages, nil
 	}
 	if err := codexapp.RunTeamTUI(opts.config, os.Stdout, os.Stderr); err != nil {
+		if code, ok := codexapp.SignalErrorExitCode(err); ok {
+			return exitcode.Code(code)
+		}
 		lg.Err("codex team TUI: %v", err)
 		return exitcode.Env
 	}

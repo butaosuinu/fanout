@@ -1,14 +1,19 @@
 package lifecycle
 
 import (
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 type nopLogger struct{}
@@ -19,20 +24,22 @@ func (nopLogger) Warn(string, ...any) {}
 func (nopLogger) Err(string, ...any)  {}
 func (nopLogger) Stderr() io.Writer   { return io.Discard }
 
-// installFakeTmux puts a tmux shim on PATH. display-message prints windowID (or
-// exits 1 when fail is set); every other subcommand is a silent no-op.
-func installFakeTmux(t *testing.T, windowID string, fail bool) {
+type paneCloseCall struct {
+	paneID       string
+	worktreePath string
+	shellKey     string
+}
+
+func stubPaneClose(t *testing.T, fn func(string, string, string) (tmuxrun.ClosePaneResult, error)) *[]paneCloseCall {
 	t.Helper()
-	dir := t.TempDir()
-	dm := "printf '%s\\n' '" + windowID + "'"
-	if fail {
-		dm = "exit 1"
+	var calls []paneCloseCall
+	orig := closeTmuxPane
+	closeTmuxPane = func(paneID, worktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
+		calls = append(calls, paneCloseCall{paneID, worktreePath, shellKey})
+		return fn(paneID, worktreePath, shellKey)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n  display-message) " + dm + " ;;\n  *) : ;;\nesac\n"
-	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() { closeTmuxPane = orig })
+	return &calls
 }
 
 type relayoutCall struct {
@@ -61,10 +68,12 @@ func closeAndRelayout(panes []state.Pane) {
 }
 
 func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
-	installFakeTmux(t, "@1", false)
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+	})
 	calls := stubRelayout(t)
 
-	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: 1}, {PaneID: "%2", IssueNum: 2}})
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: 1, WorktreePath: "/wt/shared"}, {PaneID: "%2", IssueNum: 2, WorktreePath: "/wt/shared"}})
 	// Both panes share window @1, so it is re-laid-out exactly once.
 	if len(*calls) != 1 {
 		t.Fatalf("relayout calls = %+v, want one", *calls)
@@ -75,10 +84,12 @@ func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
 }
 
 func TestClosePaneRecordsSkipsRelayoutWhenWindowUnknown(t *testing.T) {
-	installFakeTmux(t, "", true) // display-message fails: window can't be resolved
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+	})
 	calls := stubRelayout(t)
 
-	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: 1}})
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: 1, WorktreePath: "/wt/one"}})
 	if len(*calls) != 0 {
 		t.Fatalf("relayout calls = %+v, want none", *calls)
 	}
@@ -86,7 +97,9 @@ func TestClosePaneRecordsSkipsRelayoutWhenWindowUnknown(t *testing.T) {
 
 func TestClosePaneRecordsCapturesWindowBeforeKill(t *testing.T) {
 	// A pane with no recorded id can't be resolved to a window, so no relayout.
-	installFakeTmux(t, "@1", false)
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneStale}, nil
+	})
 	calls := stubRelayout(t)
 
 	closeAndRelayout([]state.Pane{{PaneID: "", IssueNum: 1}})
@@ -98,12 +111,14 @@ func TestClosePaneRecordsCapturesWindowBeforeKill(t *testing.T) {
 func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 	// Two panes cleaned in separate cleanupPaneRecords calls but sharing one
 	// window must relayout that window exactly once (the Cleanup-loop pattern).
-	installFakeTmux(t, "@7", false)
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@7"}, nil
+	})
 	calls := stubRelayout(t)
 
 	windows := map[string]struct{}{}
-	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%1", IssueNum: 1}}, nopLogger{}, windows)
-	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%2", IssueNum: 2}}, nopLogger{}, windows)
+	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%1", IssueNum: 1, WorktreePath: "/missing/one"}}, nopLogger{}, windows)
+	cleanupPaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%2", IssueNum: 2, WorktreePath: "/missing/two"}}, nopLogger{}, windows)
 	relayoutClosedWindows(windows, nopLogger{})
 
 	if len(*calls) != 1 || (*calls)[0].id != "@7" {
@@ -115,22 +130,185 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 // identity-checked kill: when no live pane carries its liveness key, the close
 // skips both the kill and the relayout instead of killing by pane id.
 func TestClosePaneRecordsKeyVerifiesKeyedAttachedAgent(t *testing.T) {
-	installFakeTmux(t, "@1", false)
+	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneStale}, nil
+	})
 	calls := stubRelayout(t)
 
 	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, ShellKey: "shell-coordinator"}})
 	if len(*calls) != 0 {
 		t.Fatalf("relayout calls = %+v, want none when the liveness key cannot be confirmed", *calls)
 	}
+	if len(*closeCalls) != 1 || (*closeCalls)[0].shellKey != "shell-coordinator" {
+		t.Fatalf("close calls = %+v, want keyed identity", *closeCalls)
+	}
 }
 
-// An attached agent without a liveness key keeps the direct pane-id kill.
-func TestClosePaneRecordsKillsUnkeyedAttachedAgentByPaneID(t *testing.T) {
-	installFakeTmux(t, "@1", false)
+func TestClosePaneRecordsPreservesLegacyShellWithoutKey(t *testing.T) {
+	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+	})
+	pane := state.Pane{
+		PaneID:       "%1",
+		IssueNum:     -1,
+		Kind:         state.PaneKindShell,
+		WorktreePath: "/repo",
+	}
+
+	if closePaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{pane}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("closePaneRecords() succeeded without a shell liveness key")
+	}
+	if len(*closeCalls) != 0 {
+		t.Fatalf("close calls = %+v, want none for an unverified legacy shell", *closeCalls)
+	}
+}
+
+// An attached agent without a liveness key uses the same recorded-worktree
+// identity as an ordinary agent pane.
+func TestClosePaneRecordsVerifiesUnkeyedAttachedAgentWorktree(t *testing.T) {
+	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+	})
 	calls := stubRelayout(t)
 
-	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent}})
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, WorktreePath: "/wt/source"}})
 	if len(*calls) != 1 {
 		t.Fatalf("relayout calls = %+v, want one for an unkeyed attached agent", *calls)
+	}
+	if len(*closeCalls) != 1 || (*closeCalls)[0].worktreePath != "/wt/source" || (*closeCalls)[0].shellKey != "" {
+		t.Fatalf("close calls = %+v, want worktree identity", *closeCalls)
+	}
+}
+
+func TestClosePaneRecordsStopsAllPanesBeforeRemovingWorktrees(t *testing.T) {
+	eventsPath := filepath.Join(t.TempDir(), "events")
+	appendEvent := func(event string) {
+		f, err := os.OpenFile(eventsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(event + "\n"); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubPaneClose(t, func(paneID, _, _ string) (tmuxrun.ClosePaneResult, error) {
+		appendEvent("close " + paneID)
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+	})
+
+	binDir := t.TempDir()
+	gitScript := "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"$LIFECYCLE_EVENTS\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(gitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LIFECYCLE_EVENTS", eventsPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	projectRoot := t.TempDir()
+	wt1 := filepath.Join(t.TempDir(), "one")
+	wt2 := filepath.Join(t.TempDir(), "two")
+	if err := os.MkdirAll(wt1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	panes := []state.Pane{
+		{PaneID: "%1", IssueNum: 1, WorktreePath: wt1},
+		{PaneID: "%2", IssueNum: 1, WorktreePath: wt2},
+	}
+	if !closePaneRecords(Options{ProjectRoot: projectRoot, Hooks: hooks.EmptyConfig()}, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("closePaneRecords() failed")
+	}
+	body, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Split(strings.TrimSpace(string(body)), "\n")
+	want := []string{
+		"close %1",
+		"close %2",
+		"git -C " + projectRoot + " worktree remove " + wt1 + " --force",
+		"git -C " + projectRoot + " worktree remove " + wt2 + " --force",
+	}
+	if strings.Join(events, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestClosePaneRecordsFailurePreservesEveryWorktree(t *testing.T) {
+	closed := 0
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		closed++
+		if closed == 2 {
+			return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("tmux unavailable")
+		}
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+	})
+	wt1 := filepath.Join(t.TempDir(), "one")
+	wt2 := filepath.Join(t.TempDir(), "two")
+	if err := os.MkdirAll(wt1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	panes := []state.Pane{
+		{PaneID: "%1", IssueNum: 1, WorktreePath: wt1},
+		{PaneID: "%2", IssueNum: 1, WorktreePath: wt2},
+	}
+	if closePaneRecords(Options{ProjectRoot: t.TempDir(), Hooks: hooks.EmptyConfig()}, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("closePaneRecords() succeeded, want failure")
+	}
+	for _, path := range []string{wt1, wt2} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("worktree %s was removed after pane close failure: %v", path, err)
+		}
+	}
+}
+
+func TestCloseWithModePaneFailurePreservesStateAndWorktree(t *testing.T) {
+	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("pane still live")
+	})
+	projectRoot := t.TempDir()
+	if err := exec.Command("git", "init", "-q", projectRoot).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	statePath := state.Path(projectRoot)
+	locked, err := state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{Parent: "81", IssueNum: 82, PaneID: "%5", WorktreePath: worktreePath}
+	if err := locked.RecordPane(pane); err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := CloseWithMode(Options{ProjectRoot: projectRoot, StatePath: statePath, Hooks: hooks.EmptyConfig()}, "81", 82, CloseWorktree, nopLogger{})
+	if code != exitcode.Env {
+		t.Fatalf("CloseWithMode() = %d, want Env", code)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree was removed after pane close failure: %v", err)
+	}
+	store, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.Find("81", 82); !ok {
+		t.Fatal("state row was removed after pane close failure")
 	}
 }

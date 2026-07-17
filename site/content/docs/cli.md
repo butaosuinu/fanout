@@ -248,7 +248,7 @@ The lifecycle commands operate on entries recorded in `.fanout/state.json`; they
 `.fanout/state.json` holds `schemaVersion` plus one row per pane. Every row carries `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Keys omitted when empty: `taskId`, `kind`, `shellKey`, `baseBranch`, `wave`, `agentStatus`, the Codex metadata (`codexPlanMode`, `codexThreadId`, `codexSessionId`), and the attach source (`sourceParent`, `sourceIssueNum`, `sourceTaskId`). TUI shell terminals are recorded with `kind: "shell"` (closing one removes only the tmux pane and the state row; `shellKey` ties the row to its live tmux pane), and agents attached to an existing worktree with `kind: "attached-agent"`.
 
 - `fanout <parent> --merge <NUM>` runs `git -C <project-root> merge --ff-only <recorded-branch>`. If the merge is not a fast-forward, fanout reports the git error and does not start an editor or conflict-resolution flow.
-- `fanout <parent> --close <NUM>` removes the recorded worktree with `git worktree remove <path> --force`, kills the recorded tmux pane when it is still present, removes the state entry, and runs `git worktree prune`.
+- `fanout <parent> --close <NUM>` verifies the recorded tmux pane by `shellKey` or `worktreePath`, closes and rechecks it, then removes the worktree with `git worktree remove <path> --force`, removes the state entry, and runs `git worktree prune`. If pane ownership cannot be verified or the pane remains live, fanout keeps the worktree and state entry for a retry.
 - `fanout <parent> --cleanup` closes every recorded child whose issue is `CLOSED` or whose closed-by PR list contains a `MERGED` PR. Pending children remain recorded.
 
 ```bash
@@ -298,7 +298,7 @@ Supported events:
 | `before_worktree_remove` | Blocking, before `git worktree remove` during `--close` / `--cleanup`. |
 | `worktree_removed` | Background, after a recorded worktree is removed. |
 | `before_pane_close` | Background, before a recorded pane is closed. |
-| `pane_closed` | Background, after the pane close attempt. |
+| `pane_closed` | Background, after the pane is confirmed closed or stale. |
 | `pre_merge` | Blocking, before `git merge --ff-only`. |
 | `post_merge` | Background, after a successful fast-forward merge. |
 

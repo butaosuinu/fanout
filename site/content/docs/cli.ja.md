@@ -253,7 +253,7 @@ TUI の shell terminal は `kind: "shell"` で記録されるため、close は 
 既存 worktree に追加した agent は `kind: "attached-agent"` で記録されます。
 
 - `fanout <parent> --merge <NUM>` は、記録済み branch を `git -C <project-root> merge --ff-only <recorded-branch>` で取り込む。fast-forward できない場合は git エラーを報告するだけで、エディタや conflict 解決フローは起動しない。
-- `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux ペインが残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
+- `fanout <parent> --close <NUM>` は、記録済み tmux ペインを `shellKey` または `worktreePath` で照合し、停止を再確認してから worktree と state entry を削除する。照合できない場合やペインが残る場合は失敗し、再実行できるように worktree と state entry を残す。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に `MERGED` を含む記録済み子をまとめて後始末する。保留中の子は記録されたまま残る。
 
 ```bash
@@ -304,7 +304,7 @@ fan-out 中（`worktree_created`、`before_pane_create`）と上記の lifecycle
 | `before_worktree_remove` | Blocking。`--close` / `--cleanup` の `git worktree remove` 前。 |
 | `worktree_removed` | Background。記録済み worktree の削除後。 |
 | `before_pane_close` | Background。記録済みペインを閉じる前。 |
-| `pane_closed` | Background。ペイン close 試行後。 |
+| `pane_closed` | Background。ペインの停止または stale を確認した後。 |
 | `pre_merge` | Blocking。`git merge --ff-only` 前。 |
 | `post_merge` | Background。fast-forward merge 成功後。 |
 

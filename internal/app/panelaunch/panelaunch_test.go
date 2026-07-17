@@ -517,9 +517,13 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	gitCmdTest(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.invalid", "commit", "-m", "initial")
 
 	installFakeExecutable(t, "codex")
-	tmuxCalls := filepath.Join(t.TempDir(), "tmux.calls")
-	t.Setenv("TMUX_CALLS", tmuxCalls)
 	installFakeTmux(t, "%271")
+	var closedPaneID, closedWorktreePath string
+	stubClosePaneForCleanup(t, func(paneID, worktreePath, _ string) (tmuxrun.ClosePaneResult, error) {
+		closedPaneID = paneID
+		closedWorktreePath = worktreePath
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@7"}, nil
+	})
 
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "codex", BaseBranch: "main", NoRefresh: true}
 	teamCtx := &briefing.TeamContext{ParentLabel: "#100", DBPath: "/tmp/team.db"}
@@ -546,12 +550,8 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	if _, err := os.Stat(req.Worktree.WorktreePath); !os.IsNotExist(err) {
 		t.Fatalf("worktree still exists after failed startup: %s (%v)", req.Worktree.WorktreePath, err)
 	}
-	calls, err := os.ReadFile(tmuxCalls)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(calls), "kill-pane -t %271") {
-		t.Fatalf("tmux calls did not kill failed pane:\n%s", calls)
+	if closedPaneID != "%271" || closedWorktreePath != req.Worktree.WorktreePath {
+		t.Fatalf("safe close identity = (%q, %q), want (%q, %q)", closedPaneID, closedWorktreePath, "%271", req.Worktree.WorktreePath)
 	}
 	branch := exec.Command("git", "branch", "--list", req.BranchName)
 	branch.Dir = repo
@@ -561,6 +561,26 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	}
 	if strings.TrimSpace(string(out)) != "" {
 		t.Fatalf("branch remains after failed startup: %s", out)
+	}
+}
+
+func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T) {
+	worktreePath := t.TempDir()
+	prepared := worktree.Result{Plan: worktree.Plan{
+		ProjectRoot:  t.TempDir(),
+		WorktreePath: worktreePath,
+	}}
+	stubClosePaneForCleanup(t, func(paneID, expectedWorktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
+		if paneID != "%271" || expectedWorktreePath != worktreePath || shellKey != "" {
+			t.Fatalf("safe close identity = (%q, %q, %q)", paneID, expectedWorktreePath, shellKey)
+		}
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
+	})
+
+	failCleanup("#101", "%caller", "%271", worktreePath, "", &prepared, nil)
+
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree was removed after unconfirmed pane close: %v", err)
 	}
 }
 
@@ -1123,6 +1143,13 @@ func installFakeExecutable(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (tmuxrun.ClosePaneResult, error)) {
+	t.Helper()
+	original := closePaneForCleanup
+	closePaneForCleanup = fn
+	t.Cleanup(func() { closePaneForCleanup = original })
 }
 
 func installFakeTmux(t *testing.T, paneID string) {

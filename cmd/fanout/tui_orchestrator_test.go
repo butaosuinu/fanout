@@ -129,25 +129,26 @@ func TestHasRecordedIssuePaneSeesOrchestrator(t *testing.T) {
 	}
 }
 
-func TestCleanupIssueOrchestratorRetainsStateWhenPaneCleanupFails(t *testing.T) {
+func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) {
 	tests := []struct {
-		name        string
-		liveKey     string
-		killFails   bool
-		wantErr     string
-		wantKillRun bool
+		name          string
+		liveKey       string
+		killFails     bool
+		wantErr       string
+		wantKillRun   bool
+		wantStateKept bool
 	}{
 		{
-			name:    "reused pane id keeps the state row",
+			name:    "reused pane id removes stale state without killing the live pane",
 			liveKey: "shell-reused",
-			wantErr: "identity changed",
 		},
 		{
-			name:        "kill failure keeps the state row",
-			liveKey:     "shell-orchestrator",
-			killFails:   true,
-			wantErr:     "tmux kill-pane",
-			wantKillRun: true,
+			name:          "kill failure keeps the state row",
+			liveKey:       "shell-orchestrator",
+			killFails:     true,
+			wantErr:       "tmux kill-pane",
+			wantKillRun:   true,
+			wantStateKept: true,
 		},
 	}
 
@@ -177,15 +178,19 @@ func TestCleanupIssueOrchestratorRetainsStateWhenPaneCleanupFails(t *testing.T) 
 
 			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
 			err = cleanupIssueOrchestrator(repo, "fanout-test", req, "%91")
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("cleanupIssueOrchestrator() error = %v, want %q", err, tt.wantErr)
+			}
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("cleanupIssueOrchestrator() error = %v, want nil", err)
 			}
 			store, loadErr := state.LoadProject(repo)
 			if loadErr != nil {
 				t.Fatal(loadErr)
 			}
-			if _, ok := store.Find(req.ParentRef, req.Number); !ok {
-				t.Fatalf("state panes = %+v, want orchestrator row retained", store.Panes)
+			_, stateKept := store.Find(req.ParentRef, req.Number)
+			if stateKept != tt.wantStateKept {
+				t.Fatalf("orchestrator state kept = %v, want %v; panes = %+v", stateKept, tt.wantStateKept, store.Panes)
 			}
 			body, readErr := os.ReadFile(tmuxLog)
 			if readErr != nil {
@@ -209,16 +214,21 @@ printf '%s\n' "$@" >> "$TMUX_CLEANUP_LOG"
 printf '%s\n' '---' >> "$TMUX_CLEANUP_LOG"
 case "${1:-} ${2:-} ${3:-}" in
 "list-panes -a -F")
+	if [[ ! -s "$TMUX_CLEANUP_ACTIVE" ]]; then
+		exit 0
+	fi
   case "${4:-}" in
   *pane_current_path*) printf '%%91\t/repo\n' ;;
   *pane_title*) printf '%%91\torchestrator\n' ;;
   *fanout_shell_key*) printf '%%91\t%s\n' "$TMUX_LIVE_SHELL_KEY" ;;
+	*fanout_project_root*|*fanout_worktree_path*) printf '%%91\t/repo\n' ;;
   esac
   ;;
 "kill-pane -t %91")
   if [[ "$TMUX_KILL_FAILS" == "true" ]]; then
     exit 7
   fi
+	: > "$TMUX_CLEANUP_ACTIVE"
   ;;
 esac
 `
@@ -227,6 +237,11 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("TMUX_CLEANUP_LOG", logPath)
+	activePath := filepath.Join(dir, "active")
+	if err := os.WriteFile(activePath, []byte("active\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_CLEANUP_ACTIVE", activePath)
 	t.Setenv("TMUX_LIVE_SHELL_KEY", liveKey)
 	t.Setenv("TMUX_KILL_FAILS", fmt.Sprintf("%t", killFails))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

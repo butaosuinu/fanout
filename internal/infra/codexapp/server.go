@@ -2,11 +2,11 @@ package codexapp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +25,8 @@ type appServer struct {
 
 	mu  sync.Mutex
 	err error
+
+	closeOnce sync.Once
 }
 
 type lockedBuffer struct {
@@ -147,34 +149,31 @@ func (s *appServer) Close() {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return
 	}
-	if ok, _ := s.Exited(); ok {
-		return
-	}
-	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
-	_ = s.cmd.Process.Kill()
-	select {
-	case <-s.done:
-	case <-time.After(2 * time.Second):
-	}
-}
-
-func installCodexAppServerSignalCleanup(server *appServer) func() {
-	sigCh := make(chan os.Signal, 1)
-	stopCh := make(chan struct{})
-	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		select {
-		case sig := <-sigCh:
-			server.Close()
-			signal.Stop(sigCh)
-			os.Exit(signalExitCode(sig))
-		case <-stopCh:
+	s.closeOnce.Do(func() {
+		processGroup := s.cmd.Process.Pid
+		launcherExited, _ := s.Exited()
+		if !launcherExited {
+			// Signal the Node launcher first. The Codex wrapper forwards SIGTERM to
+			// its native child; killing the group immediately would skip that path.
+			_ = s.cmd.Process.Signal(syscall.SIGTERM)
+			launcherExited = waitForAppServerExit(s.done, processShutdownTimeout)
 		}
-	}()
-	return func() {
-		signal.Stop(sigCh)
-		close(stopCh)
-	}
+		if launcherExited && waitForProcessGroupExit(processGroup, interruptShutdownGrace) {
+			return
+		}
+		// The launcher may have exited before installing its forwarding handler.
+		// app-server has a dedicated process group, so give a surviving native
+		// child its own graceful TERM window before escalating.
+		_ = syscall.Kill(-processGroup, syscall.SIGTERM)
+		if waitForProcessGroupExit(processGroup, processShutdownTimeout) {
+			_ = waitForAppServerExit(s.done, processShutdownTimeout)
+			return
+		}
+		_ = syscall.Kill(-processGroup, syscall.SIGKILL)
+		_ = s.cmd.Process.Kill()
+		_ = waitForAppServerExit(s.done, processShutdownTimeout)
+		_ = waitForProcessGroupExit(processGroup, processShutdownTimeout)
+	})
 }
 
 func signalExitCode(sig os.Signal) int {
@@ -196,18 +195,82 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-func stopProcess(cmd *exec.Cmd, done chan error) {
+func stopProcess(cmd *exec.Cmd, done <-chan error, interruptAlreadyDelivered bool) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	select {
-	case <-done:
+	if processDone(done) {
 		return
-	default:
+	}
+	if interruptAlreadyDelivered && waitForProcessExit(done, interruptShutdownGrace) {
+		return
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	if waitForProcessExit(done, processShutdownTimeout) {
+		return
 	}
 	_ = cmd.Process.Kill()
+	_ = waitForProcessExit(done, processShutdownTimeout)
+}
+
+func waitForProcessExit(done <-chan error, timeout time.Duration) bool {
+	if done == nil {
+		return false
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+		return true
+	case <-timer.C:
+		return false
 	}
+}
+
+func processDone(done <-chan error) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitForAppServerExit(done <-chan struct{}, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func waitForProcessGroupExit(processGroup int, timeout time.Duration) bool {
+	if processGroup <= 0 || processGroupExited(processGroup) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if processGroupExited(processGroup) {
+				return true
+			}
+		case <-timer.C:
+			return processGroupExited(processGroup)
+		}
+	}
+}
+
+func processGroupExited(processGroup int) bool {
+	err := syscall.Kill(-processGroup, 0)
+	return errors.Is(err, syscall.ESRCH)
 }
