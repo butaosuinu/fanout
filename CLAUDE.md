@@ -152,7 +152,8 @@ packages can rely on AI review.
   fanout-driven initial turn (only on the `thread/settings/update`-unsupported
   fallback path; the seed path hands the prompt to the interactive TUI and is
   unobservable by design), and the codex team bridge in the same package
-  reports working/idle/blocked around injected turns. Messages persist to the
+  reports working/idle/blocked across the whole bridged session (turn
+  lifecycle and approval requests, not just injected turns). Messages persist to the
   SQLite bus and are read by pull (`inbox` / `board`) or by the per-agent push
   lanes (`--team` only; see `docs/session-messaging-push.ja.md`):
   `fanout msg watch` — a blocking follower that marks messages read on emit —
@@ -218,13 +219,14 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `internal/app/sessionview` (unknown or forged values fall to `""`); it drives
   the TUI/web state glyphs and badges (`internal/ui/tui`, web) and the `run:`
   filter. The launch wrapper in `internal/infra/tmuxrun` writes only `running` /
-  `done`; the richer values come from agent hooks (emitter wiring is a separate
-  task). `fanout msg nudge` (`internal/app/peermsg`) is the only push that
+  `done`; the richer values come from claude launch hooks and the codexapp
+  controllers (Plan Mode / team bridge — see the telemetry note above).
+  `fanout msg nudge` (`internal/app/peermsg`) is the only push that
   writes to tmux input: it send-keys a hint only when the peer can take queued
   input (`running` / `working` / `plan` / `idle`), and is a no-op for `blocked`
   (a focused permission dialog), `done`, and unset. The `--team` push delivery
   lanes (`fanout msg watch` under claude's Monitor tool, the codex team
-  bridge) never write to tmux — see `docs/session-messaging-push.ja.md`.
+  bridge) never write to tmux input — see `docs/session-messaging-push.ja.md`.
 - `--sleep` is a rate-limit between successful child launches. It is not a
   retry/backoff knob.
 

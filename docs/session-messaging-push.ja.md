@@ -93,10 +93,11 @@ fallback は 3 系統ある。
   終わる。watcher が死んだら 1 回だけ再起動し、`fanout msg inbox --all` を
   1 回実行して喪失分を回収する。Monitor が使えなければ従来の checkpoint 方式
   (pull)に戻る。
-- **Codex**: ブリッジのポーリングや `turn/start` の失敗は stderr に警告を出し
-  (メッセージは既読である旨と `fanout msg inbox --all` での確認を案内)、
-  失敗回数の上限なしに interactive セッションを続ける。restore されたペインは
-  ブリッジなしの `codex resume` になり、pull で読む。
+- **Codex**: ポーリングの失敗は警告だけ出して継続する。読み取りはロール
+  バックされ、メッセージは未読のまま次のポーリングで再取得される。
+  `turn/start` の失敗は「既読済み。`fanout msg inbox --all` で確認」の警告を
+  出して interactive セッションを続ける。どちらも失敗回数の上限はない。
+  restore されたペインはブリッジなしの `codex resume` になり、pull で読む。
 - **共通**: emit 済み = 既読なので、取りこぼしの回収はどの経路でも
   `inbox --all`。
 
