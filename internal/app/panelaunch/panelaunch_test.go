@@ -507,6 +507,63 @@ func TestLaunchFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
 	}
 }
 
+func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmdTest(t, repo, "add", "README.md")
+	gitCmdTest(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.invalid", "commit", "-m", "initial")
+
+	installFakeExecutable(t, "codex")
+	tmuxCalls := filepath.Join(t.TempDir(), "tmux.calls")
+	t.Setenv("TMUX_CALLS", tmuxCalls)
+	installFakeTmux(t, "%271")
+
+	cfg := &cliflags.Config{ParentRef: "100", Agent: "codex", BaseBranch: "main", NoRefresh: true}
+	teamCtx := &briefing.TeamContext{ParentLabel: "#100", DBPath: "/tmp/team.db"}
+	req := NewIssueRequest(cfg, repo, ghissue.Issue{Number: 101, Title: "Team child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, teamCtx)
+	req.CodexTeamStatusPath = filepath.Join(t.TempDir(), "team-status.json")
+	if err := codexapp.WriteFailedStatus(req.CodexTeamStatusPath, fmt.Errorf("watcher boom")); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	launcher := &Launcher{
+		Cfg:         cfg,
+		Log:         log.NewWith(io.Discard, &stderr, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
+		Palette:     log.Palette{},
+		CommandName: "fanout",
+	}
+	if launcher.LaunchOK(req) {
+		t.Fatal("LaunchOK() = true, want startup failure")
+	}
+	if !strings.Contains(stderr.String(), "start Codex team TUI in pane %271: watcher boom") {
+		t.Fatalf("stderr = %q, want team startup failure", stderr.String())
+	}
+	if _, err := os.Stat(req.Worktree.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists after failed startup: %s (%v)", req.Worktree.WorktreePath, err)
+	}
+	calls, err := os.ReadFile(tmuxCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "kill-pane -t %271") {
+		t.Fatalf("tmux calls did not kill failed pane:\n%s", calls)
+	}
+	branch := exec.Command("git", "branch", "--list", req.BranchName)
+	branch.Dir = repo
+	out, err := branch.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("branch remains after failed startup: %s", out)
+	}
+}
+
 func TestLaunchRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
 	repo := t.TempDir()
 	cfg := &cliflags.Config{
@@ -669,6 +726,7 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 		ParentRef:  "100",
 		Agent:      "claude",
 		BaseBranch: "main",
+		DryRun:     true,
 		AgentOverrides: []cliflags.AgentOverride{
 			{Target: "501", Name: "codex"},
 		},
@@ -691,6 +749,9 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 
 	if got.Agent != "codex" {
 		t.Fatalf("Agent = %q, want codex from issue override", got.Agent)
+	}
+	if !got.CodexTeamMode || got.CodexTeamStatusPath != "/tmp/fanout-codex-team-project_root-501.json" {
+		t.Fatalf("codex team mode/status = %t/%q", got.CodexTeamMode, got.CodexTeamStatusPath)
 	}
 	for _, want := range []string{
 		"## Coordinating with your sibling panes",
@@ -722,11 +783,15 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 func TestNewIssueRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
+	teamCtx := &briefing.TeamContext{ParentLabel: "#200", DBPath: "/tmp/team.db"}
 
-	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, teamCtx)
 
 	if !got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = false, want true")
+	}
+	if got.CodexTeamMode || got.CodexTeamStatusPath != "" {
+		t.Fatalf("Codex team bridge = %t status %q, want Plan Mode precedence", got.CodexTeamMode, got.CodexTeamStatusPath)
 	}
 	if !strings.Contains(got.Prompt, "read "+briefing.Path("/repo", 501)+" and investigate, then propose a plan.") {
 		t.Fatalf("prompt = %q, want plan action", got.Prompt)
@@ -741,6 +806,25 @@ func TestNewIssueRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 		if strings.Contains(got.BriefingBody, unexpected) {
 			t.Fatalf("plan briefing contains implementation instruction %q:\n%s", unexpected, got.BriefingBody)
 		}
+	}
+}
+
+func TestNewTaskRequestCodexTeamUsesTaskIdentityAndStatusPath(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "body"}
+	teamCtx := &briefing.TeamContext{ParentLabel: "plan:launch-plan", DBPath: "/tmp/team.db"}
+
+	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), teamCtx)
+
+	if !got.CodexTeamMode {
+		t.Fatal("CodexTeamMode = false, want true")
+	}
+	if got.CodexTeamStatusPath != "/tmp/fanout-codex-team-repo-api-client.json" {
+		t.Fatalf("CodexTeamStatusPath = %q", got.CodexTeamStatusPath)
+	}
+	if member := codexTeamMember(got); member != "api-client" {
+		t.Fatalf("codexTeamMember() = %q, want api-client", member)
 	}
 }
 
@@ -871,6 +955,27 @@ func TestBuildAgentCommandRejectsNonCodexPlanModeRequest(t *testing.T) {
 	}
 }
 
+func TestBuildAgentCommandStartsCodexTeamTUIControllerInDryRun(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true}
+	req := Request{
+		ParentRef:           "100",
+		Number:              501,
+		Prompt:              "[fanout #501 of #100] begin",
+		Agent:               "codex",
+		CodexTeamMode:       true,
+		CodexTeamStatusPath: "/tmp/fanout-codex-team-repo-501.json",
+	}
+
+	got, err := buildAgentCommand(cfg, req, "fanout-go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fanout-go __codex-team-tui --codex codex --prompt '[fanout #501 of #100] begin' --self 501 --parent 100 --status-file /tmp/fanout-codex-team-repo-501.json"
+	if got != want {
+		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildAgentCommandWaitsForAgentStartGate(t *testing.T) {
 	got, err := buildAgentCommand(
 		&cliflags.Config{Agent: "claude", DryRun: true},
@@ -922,6 +1027,18 @@ func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 				Prompt:              "plan",
 				CodexPlanMode:       true,
 				CodexPlanStatusPath: "/tmp/status.json",
+			},
+		},
+		{
+			name: "Codex team TUI",
+			cfg:  &cliflags.Config{Agent: "codex"},
+			req: Request{
+				ParentRef:           "100",
+				Number:              501,
+				Agent:               "codex",
+				Prompt:              "work",
+				CodexTeamMode:       true,
+				CodexTeamStatusPath: "/tmp/status.json",
 			},
 		},
 	} {
@@ -1012,7 +1129,7 @@ func installFakeTmux(t *testing.T, paneID string) {
 	t.Helper()
 	binDir := t.TempDir()
 	path := filepath.Join(binDir, "tmux")
-	script := "#!/bin/sh\nif [ \"$1\" = \"split-window\" ]; then\n  printf '%s\\n' '" + paneID + "'\nfi\n"
+	script := "#!/bin/sh\nif [ -n \"$TMUX_CALLS\" ]; then\n  printf '%s\\n' \"$*\" >> \"$TMUX_CALLS\"\nfi\nif [ \"$1\" = \"split-window\" ]; then\n  printf '%s\\n' '" + paneID + "'\nfi\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

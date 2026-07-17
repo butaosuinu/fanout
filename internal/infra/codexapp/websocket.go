@@ -1,8 +1,7 @@
 // Package codexapp is the self-contained Codex app-server client
 // infrastructure: a hand-rolled WebSocket transport, the JSON-RPC framing,
-// app-server subprocess management, the Plan Mode TUI controller, the status
-// file handshake, and the launch command builders for the hidden
-// `fanout __codex-plan-tui` subcommand.
+// app-server subprocess management, the Plan and team TUI controllers, their
+// status-file handshakes, and the hidden launch command builders.
 package codexapp
 
 import (

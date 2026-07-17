@@ -1,11 +1,27 @@
 package codexapp
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestWriteFailedStatusReportsPreControllerFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := WriteFailedStatus(path, errors.New("open watcher")); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := readStatus(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != statusFailed || status.Error != "open watcher" {
+		t.Fatalf("status = %+v, want failed/open watcher", status)
+	}
+}
 
 func TestWaitForCodexPlanTUIReadyReadsReadyStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")

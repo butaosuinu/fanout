@@ -182,6 +182,13 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	if cfg.Team {
 		teamCtx = buildTaskTeamContext(rt.Info.ProjectRoot, parentRef, plan.Targets)
 	}
+	codexTeamPreseeded := cfg.Team && !cfg.DryRun && planHasCodexTeamBridge(cliCfg, plan.Targets)
+	if codexTeamPreseeded {
+		if err := preseedTaskTeamRegistry(teamCtx.DBPath, parentRef, plan.Targets, cliCfg); err != nil {
+			lg.Err("team: %v", err)
+			return TaskExecutionResult{}, exitcode.Env
+		}
+	}
 
 	result := executeTaskPlan(cliCfg, lg, rt, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
@@ -198,6 +205,11 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 			fmt.Fprintf(lg.Stdout(), "%s# would seed team registry: %d peer(s) -> %s%s\n", c.Dim, len(result.CreatedIDs), teamCtx.DBPath, c.Reset)
 		} else {
 			seedTaskTeamRegistry(lg, teamCtx.DBPath, recorder.Store, parentRef, result.CreatedIDs)
+		}
+	}
+	if codexTeamPreseeded {
+		if err := cleanupUncreatedTaskPeers(teamCtx.DBPath, parentRef, plan.Targets, result.CreatedIDs); err != nil {
+			lg.Warn("team: cleanup provisional peers: %v", err)
 		}
 	}
 

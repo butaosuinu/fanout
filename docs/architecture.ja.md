@@ -62,7 +62,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane 以外の端末出力を読まない境界) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
-| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
+| cmd | `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` / `post_work_review_json.go` | dispatch・self-exec・launch 配線・pane identity 検証・reviewer JSON cache・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |

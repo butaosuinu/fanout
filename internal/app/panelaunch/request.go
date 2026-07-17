@@ -74,6 +74,9 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
 	if req.CodexPlanMode {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
+	} else if teamCtx != nil && agentName == "codex" {
+		req.CodexTeamMode = true
+		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, strconv.Itoa(issue.Number), cfg.DryRun)
 	}
 	return req
 }
@@ -121,6 +124,10 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 	}
 	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
+	if teamCtx != nil && agentName == "codex" && !req.CodexPlanMode {
+		req.CodexTeamMode = true
+		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, task.ID, cfg.DryRun)
+	}
 	return req
 }
 

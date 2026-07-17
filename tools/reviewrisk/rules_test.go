@@ -31,12 +31,13 @@ func TestClassifyPath(t *testing.T) {
 		{name: "core exitcode is A", path: "internal/core/exitcode/code.go", want: ClassA, found: true},
 		{name: "core cliview is A", path: "internal/core/cliview/view.go", want: ClassA, found: true},
 
-		// --- cmd/fanout: 8 H files plus the catch-all M ---
+		// --- cmd/fanout: 9 H files plus the catch-all M ---
 		{name: "cmd main is H", path: "cmd/fanout/main.go", want: ClassH, found: true},
 		{name: "cmd tui_popup is H", path: "cmd/fanout/tui_popup.go", want: ClassH, found: true},
 		{name: "cmd tui_launch is H", path: "cmd/fanout/tui_launch.go", want: ClassH, found: true},
 		{name: "cmd worktree_action is H", path: "cmd/fanout/worktree_action.go", want: ClassH, found: true},
 		{name: "cmd codex_plan_tui is H", path: "cmd/fanout/codex_plan_tui.go", want: ClassH, found: true},
+		{name: "cmd codex_team_tui is H", path: "cmd/fanout/codex_team_tui.go", want: ClassH, found: true},
 		{name: "cmd tui_restore is H", path: "cmd/fanout/tui_restore.go", want: ClassH, found: true},
 		{name: "cmd tui_watch is H", path: "cmd/fanout/tui_watch.go", want: ClassH, found: true},
 		{name: "cmd post-work-review JSON is H", path: "cmd/fanout/post_work_review_json.go", want: ClassH, found: true},
