@@ -11,9 +11,8 @@ issue #496 の ADR を集約した決定記録で、実装は #497 / #500 / #501
 
 `fanout msg` は parent ごとの SQLite バスによる pull 型協調で、push 補助は
 `nudge`(tmux send-keys の固定 hint)1 つだった。兄弟ペインは作業の節目で
-`inbox` を読む前提のため、長い作業中に届いたメッセージへの反応が遅い。
-[agmsg](https://github.com/fujibee/agmsg) と同型の push 配信を fanout に
-載せる。
+`inbox` を読む前提のため、長い作業中に届いたメッセージへの反応が遅い。この
+遅延を埋めるため、新着を到着ごとに各エージェントへ届ける push 配信を足す。
 
 ## 決定
 
@@ -31,8 +30,8 @@ follower。SQLite ポーリングで動き、間隔は既定 2 秒(`--interval` 
 `--team` の claude ペイン briefing に「セッション最初のツール操作として
 Monitor(command mode、persistent)で `fanout msg watch` を 1 回だけ起動し、
 待たずに作業を続行する」指示を追加する。Monitor は Claude Code のセッション内
-ツールで、fanout が外部から強制起動する手段はない。そのため agmsg と同じく
-エージェント自身に起動させる(priming)。launch hooks(`internal/core/agent`)
+ツールで、fanout が外部から強制起動する手段はない。そのためエージェント自身に
+起動させる(priming)。launch hooks(`internal/core/agent`)
 は変更しない。起動中の watcher は作業節目の `inbox` / `board` チェックを
 置き換える(共有ファイルを触る前の一行 heads-up は残る)。
 
