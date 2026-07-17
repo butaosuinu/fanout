@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +238,54 @@ func TestTeamBridgeAcceptedInjectionWarnsWhenTurnLaterFails(t *testing.T) {
 				t.Fatalf("sent requests after terminal %s = %d, want bridge to continue", status, got)
 			}
 		})
+	}
+}
+
+func TestTeamBridgeWarnsInFlightMessageIDsWhenObserverCloses(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		name := "pending-response"
+		if accepted {
+			name = "accepted-turn"
+		}
+		t.Run(name, func(t *testing.T) {
+			now := time.Unix(475, 0)
+			var stderr bytes.Buffer
+			client := newFakeTeamAppClient()
+			bridge := newTestTeamBridge(client, &now, func() ([]InboundMessage, error) {
+				return []InboundMessage{{Line: "[fanout msg #47] task-a -> task-b (note): batch"}}, nil
+			})
+			bridge.stderr = &stderr
+			bridge.lastTurnCompleted = now.Add(-time.Hour)
+
+			bridge.poll()
+			if accepted {
+				requestID := bridge.pendingStart.requestID
+				bridge.handleMessage(teamTurnStartResponse(t, requestID, "turn-injected", "inProgress"))
+			}
+			client.receiveC <- teamReceivedMessage{err: io.EOF}
+			tuiExited, runErr := bridge.run()
+			if tuiExited || !errors.Is(runErr, io.EOF) {
+				t.Fatalf("run() = exited:%t err:%v, want observer EOF", tuiExited, runErr)
+			}
+			for _, want := range []string{"[fanout msg #47]", "observer closed", "fanout msg inbox --all"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr missing %q: %s", want, stderr.String())
+				}
+			}
+		})
+	}
+}
+
+func TestCodexTeamInitialPromptMarksManualCheckpointsRead(t *testing.T) {
+	prompt := codexTeamInitialPrompt("Read the task briefing and begin.")
+	for _, want := range []string{
+		"Read the task briefing and begin.",
+		"`fanout msg inbox --mark-read`",
+		"Do not run the separate non-marking checks",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("initial prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 
