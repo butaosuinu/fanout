@@ -3,6 +3,7 @@ package panelaunch
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,18 +68,7 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := tmuxrun.SetPaneShellKey(paneID, shellKey); err != nil {
-		_ = tmuxrun.KillPane(paneID)
-		return err
-	}
-	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
-	// keep the terminal usable when tmux metadata/layout updates fail.
-	_ = tmuxrun.SetPaneTitle(paneID, title)
-	_ = tmuxrun.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
-	_ = tmuxrun.EnablePaneBorderTitles(paneID)
-	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
-	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
-	if err := recorder.RecordPane(state.Pane{
+	entry := state.Pane{
 		Parent:       ManualParentRef,
 		IssueNum:     number,
 		Kind:         state.PaneKindShell,
@@ -89,12 +79,39 @@ func (l *Launcher) Shell(req ShellRequest) error {
 		DisplayName:  title,
 		WorktreePath: targetPath,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		_ = tmuxrun.KillPane(paneID)
-		// Reconcile any spacer a concurrent resize relayout may have created for
-		// this now-killed pane, so no blank pane is left behind.
-		_ = panelayout.Apply(target, panelayout.Close)
-		return fmt.Errorf("write fanout state: %w", err)
+	}
+	if err := setPaneLivenessKey(paneID, shellKey); err != nil {
+		stampErr := fmt.Errorf("set terminal pane liveness key: %w", err)
+		if cleanupErr := cleanupFreshPane(target, paneID); cleanupErr != nil {
+			recoveryErr := recorder.RecordPane(entry)
+			if recoveryErr != nil {
+				recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", paneID, recoveryErr)
+			}
+			return errors.Join(stampErr, fmt.Errorf("stop unstamped terminal pane %s: %w", paneID, cleanupErr), recoveryErr)
+		}
+		return stampErr
+	}
+	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
+	// keep the terminal usable when tmux metadata/layout updates fail.
+	_ = tmuxrun.SetPaneTitle(paneID, title)
+	_ = tmuxrun.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
+	_ = tmuxrun.EnablePaneBorderTitles(paneID)
+	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
+	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
+	if err := recorder.RecordPane(entry); err != nil {
+		writeErr := fmt.Errorf("write fanout state: %w", err)
+		if failCleanup(title, target, paneID, targetPath, shellKey, nil, nil) {
+			removeErr := recorder.RemovePane(ManualParentRef, number)
+			if removeErr != nil {
+				removeErr = fmt.Errorf("remove stopped terminal pane from fanout state: %w", removeErr)
+			}
+			return errors.Join(writeErr, removeErr)
+		}
+		recoveryErr := recorder.RecordPane(entry)
+		if recoveryErr != nil {
+			recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", paneID, recoveryErr)
+		}
+		return errors.Join(writeErr, fmt.Errorf("terminal pane %s remains live", paneID), recoveryErr)
 	}
 	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
 	// never leaves the window arranged around a pane that no longer exists or an
@@ -103,11 +120,12 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	return nil
 }
 
-// NewShellPaneKey generates a random @fanout_shell_key liveness token.
+// NewShellPaneKey generates a random @fanout_shell_key liveness token. The
+// historical name is retained, but the token now identifies every fanout pane.
 func NewShellPaneKey() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("generate terminal identity: %w", err)
+		return "", fmt.Errorf("generate pane identity: %w", err)
 	}
 	return "shell-" + hex.EncodeToString(b[:]), nil
 }

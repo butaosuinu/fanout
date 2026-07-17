@@ -2320,6 +2320,73 @@ func TestPeekSelectedShellPaneRevalidatesShellKey(t *testing.T) {
 	}
 }
 
+func TestPeekSelectedKeyedPaneRevalidatesLivenessKey(t *testing.T) {
+	for _, keyMatches := range []bool{false, true} {
+		name := "mismatch"
+		if keyMatches {
+			name = "match"
+		}
+		t.Run(name, func(t *testing.T) {
+			captureCalled := false
+			paneAliveCalled := false
+			var gotPaneID, gotKey string
+			m := newModel(Options{
+				CapturePaneOutput: func(paneID string, lines int) (string, error) {
+					captureCalled = true
+					if paneID != "%8" || lines != peekLines {
+						t.Fatalf("CapturePaneOutput(%q, %d), want (%%8, %d)", paneID, lines, peekLines)
+					}
+					return "child output", nil
+				},
+				PaneAlive: func(string) bool {
+					paneAliveCalled = true
+					return true
+				},
+				ShellPaneAlive: func(paneID, key string) bool {
+					gotPaneID = paneID
+					gotKey = key
+					return keyMatches
+				},
+			})
+			m.detail.Width = 80
+			m.detail.Height = 9
+			m.allPanes = []paneView{{
+				IssueNum:  8,
+				Name:      "child",
+				PaneID:    "%8",
+				ShellKey:  "child-key",
+				TmuxState: "live",
+			}}
+			m.refreshRows()
+
+			cmd := m.peekSelectedCmd(true)
+			if cmd == nil {
+				t.Fatal("peekSelectedCmd() returned nil, want liveness-key check command")
+			}
+			msg, ok := cmd().(panePeekLoadedMsg)
+			if !ok {
+				t.Fatalf("peekSelectedCmd() msg = %T, want panePeekLoadedMsg", msg)
+			}
+			if gotPaneID != "%8" || gotKey != "child-key" {
+				t.Fatalf("ShellPaneAlive saw (%q, %q), want (%%8, child-key)", gotPaneID, gotKey)
+			}
+			if paneAliveCalled {
+				t.Fatal("PaneAlive was called for a keyed row; want liveness-key revalidation")
+			}
+			if captureCalled != keyMatches {
+				t.Fatalf("CapturePaneOutput called = %v, want %v", captureCalled, keyMatches)
+			}
+			if keyMatches {
+				if msg.err != nil || msg.output != "child output" {
+					t.Fatalf("peek msg = %#v, want captured child output", msg)
+				}
+			} else if !errors.Is(msg.err, errPaneNotAlive) {
+				t.Fatalf("peek err = %v, want errPaneNotAlive", msg.err)
+			}
+		})
+	}
+}
+
 func TestKeySelectionChangeStartsPeekCapture(t *testing.T) {
 	var capturedPane string
 	m := newModel(Options{

@@ -51,9 +51,9 @@ func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
 // requireLivePane is the request-validation chain GET /api/peek and
 // GET /api/plan share: pane-id shape (400), snapshot liveness via livePaneView
 // (404), and a recorded identity usable for request-time verification. Agent
-// rows need a worktree path; shell rows need a shellKey because their
-// WorktreePath can be the broad project root. On ok=false the JSON error
-// response has already been written.
+// rows need a worktree path; shell rows need a shellKey because they have no
+// worktree of their own. On ok=false the JSON error response has already been
+// written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
 	if !paneIDRe.MatchString(paneID) {
 		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
@@ -103,9 +103,9 @@ func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, pv ses
 }
 
 // verifyLivePane is the default Options.VerifyPane: it re-resolves the pane id
-// against tmux at request time. Agent panes require the pane's current path to
-// sit at/under the recorded worktree; shell panes require the recorded
-// @fanout_shell_key. The snapshot's Alive flag can be up to one cheap-tick
+// against tmux at request time. Keyed panes require the recorded
+// @fanout_shell_key; legacy unkeyed agent panes fall back to their recorded
+// worktree for this read-only operation. The snapshot's Alive flag can be up to one cheap-tick
 // stale, which is enough for a tmux restart to hand %N to an unrelated pane;
 // this check shrinks that reuse window from seconds to the instant before
 // capture.
@@ -122,14 +122,14 @@ func verifyPaneAgainstLive(pv sessionview.PaneView, panes []tmuxrun.LivePane) er
 		if pane.ID != pv.PaneID {
 			continue
 		}
-		if pv.Kind == state.PaneKindShell {
-			if strings.TrimSpace(pv.ShellKey) == "" {
-				return fmt.Errorf("pane %s has no recorded shell key", pv.PaneID)
-			}
+		if strings.TrimSpace(pv.ShellKey) != "" {
 			if pane.ShellKey != pv.ShellKey {
-				return fmt.Errorf("pane %s is no longer the recorded shell terminal", pv.PaneID)
+				return fmt.Errorf("pane %s is no longer the recorded fanout pane", pv.PaneID)
 			}
 			return nil
+		}
+		if pv.Kind == state.PaneKindShell {
+			return fmt.Errorf("pane %s has no recorded shell key", pv.PaneID)
 		}
 		worktree := pv.WorktreePath
 		if worktree == "" || (pane.CurrentPath != worktree &&

@@ -201,10 +201,8 @@ func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
 }
 
 func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane, projectRootFallback bool) (bool, string) {
-	// Any row recorded with a ShellKey (shell terminals, the plan fan-out
-	// coordinator at the repo root) is identified by @fanout_shell_key: its
-	// WorktreePath contains every fanout pane, so the path checks below cannot
-	// detect a reused pane id.
+	// Any row recorded with a ShellKey is identified by @fanout_shell_key. The
+	// pane id and worktree path can both be reused by another live pane.
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
 		shellKey := strings.TrimSpace(pane.ShellKey)
 		if shellKey == "" {

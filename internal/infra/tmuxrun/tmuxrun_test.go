@@ -388,6 +388,90 @@ func TestListLivePanesFailsWhenPathCallFails(t *testing.T) {
 	}
 }
 
+func TestListLivePanesForIdentityAcceptsCompleteLegacyAndKeyedRows(t *testing.T) {
+	installLivePanesShim(t,
+		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\n'`,
+		`printf '%%9\tnine\n%%10\tten\n'`,
+		`printf '%%9\trunning\n'`,
+		`printf '%%9\tkey-nine\n%%10\t\n'`)
+
+	panes, err := ListLivePanesForIdentity()
+	if err != nil {
+		t.Fatalf("ListLivePanesForIdentity() failed: %v", err)
+	}
+	want := []LivePane{
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine", AgentState: "running", ShellKey: "key-nine"},
+		{ID: "%10", CurrentPath: "/wt/ten", Title: "ten"},
+	}
+	if !reflect.DeepEqual(panes, want) {
+		t.Fatalf("ListLivePanesForIdentity() = %#v, want %#v", panes, want)
+	}
+}
+
+func TestListLivePanesForIdentityFailsClosedOnIncompleteOrAmbiguousIdentity(t *testing.T) {
+	tests := []struct {
+		name      string
+		pathBody  string
+		titleBody string
+		keyBody   string
+		wantError string
+	}{
+		{
+			name:      "title listing fails",
+			pathBody:  `printf '%%9\t/wt/nine\n'`,
+			titleBody: `exit 7`,
+			keyBody:   `printf '%%9\tkey-nine\n'`,
+			wantError: "titles",
+		},
+		{
+			name:      "liveness key listing fails",
+			pathBody:  `printf '%%9\t/wt/nine\n'`,
+			titleBody: `printf '%%9\tnine\n'`,
+			keyBody:   `exit 7`,
+			wantError: "liveness keys",
+		},
+		{
+			name:      "path id is duplicated",
+			pathBody:  `printf '%%9\t/wt/nine\n%%9\t/forged\n'`,
+			titleBody: `printf '%%9\tnine\n'`,
+			keyBody:   `printf '%%9\tkey-nine\n'`,
+			wantError: "ambiguous pane_current_path rows for %9",
+		},
+		{
+			name:      "title id is duplicated",
+			pathBody:  `printf '%%9\t/wt/nine\n'`,
+			titleBody: `printf '%%9\tnine\n%%9\tforged\n'`,
+			keyBody:   `printf '%%9\tkey-nine\n'`,
+			wantError: "missing or ambiguous pane_title row for %9",
+		},
+		{
+			name:      "liveness key row is missing",
+			pathBody:  `printf '%%9\t/wt/nine\n'`,
+			titleBody: `printf '%%9\tnine\n'`,
+			keyBody:   `printf ''`,
+			wantError: "missing or ambiguous @fanout_shell_key row for %9",
+		},
+		{
+			name:      "pane set changes between listings",
+			pathBody:  `printf '%%9\t/wt/nine\n'`,
+			titleBody: `printf '%%9\tnine\n%%10\tten\n'`,
+			keyBody:   `printf '%%9\tkey-nine\n%%10\tkey-ten\n'`,
+			wantError: "inconsistent pane_title row for %10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installLivePanesShim(t, tt.pathBody, tt.titleBody, `printf ''`, tt.keyBody)
+
+			_, err := ListLivePanesForIdentity()
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("ListLivePanesForIdentity() error = %v, want containing %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestParseLivePanePaths(t *testing.T) {
 	input := "%1\t/wt/one\n" +
 		"%2\t/wt/two\twith\ttabs\n" + // path is the last field, so its tabs survive
@@ -1794,7 +1878,14 @@ func installClosePaneShim(t *testing.T, killBody string) string {
 	t.Setenv("CLOSE_PANE_GONE", gonePath)
 	script := `case "$1" in
 list-panes)
+	if [ -n "${CLOSE_PANE_LC_ALL_PATH:-}" ]; then
+		printf '%s' "${LC_ALL:-}" > "$CLOSE_PANE_LC_ALL_PATH"
+	fi
 	if [ -f "$CLOSE_PANE_GONE" ]; then
+		if [ -n "${CLOSE_PANE_GONE_ERROR:-}" ]; then
+			printf '%s\n' "$CLOSE_PANE_GONE_ERROR" >&2
+			exit "${CLOSE_PANE_GONE_EXIT_CODE:-1}"
+		fi
 		exit 0
 	fi
 	if [ -n "${CLOSE_PANE_FAIL_FIELD:-}" ]; then
@@ -1831,13 +1922,13 @@ esac
 	return killedPath
 }
 
-func TestClosePaneIfOwnedClosesMatchingWorktreeAndRechecks(t *testing.T) {
+func TestClosePaneIfOwnedClosesMatchingKeyAndRechecks(t *testing.T) {
 	killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/tmp/unrelated-cwd")
 	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
-	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-target")
 
-	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
 	if err != nil {
 		t.Fatalf("ClosePaneIfOwned() failed: %v", err)
 	}
@@ -1849,13 +1940,115 @@ func TestClosePaneIfOwnedClosesMatchingWorktreeAndRechecks(t *testing.T) {
 	}
 }
 
+func TestClosePaneIfOwnedClosesFinalPaneWhenServerExits(t *testing.T) {
+	installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
+	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-target")
+	t.Setenv("CLOSE_PANE_GONE_ERROR", "no server running on /tmp/tmux-test/default")
+
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
+	if err != nil || result.Status != ClosePaneClosed || result.WindowID != "@9" {
+		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want final pane closed in @9", result, err)
+	}
+}
+
+func TestCloseFreshPaneRequiresStrictAbsenceAfterKill(t *testing.T) {
+	t.Run("confirmed gone", func(t *testing.T) {
+		installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+		if err := CloseFreshPane("%5"); err != nil {
+			t.Fatalf("CloseFreshPane() failed: %v", err)
+		}
+	})
+
+	t.Run("kill fails and pane remains live", func(t *testing.T) {
+		installClosePaneShim(t, `exit 7`)
+		err := CloseFreshPane("%5")
+		if err == nil || !strings.Contains(err.Error(), "remained live") {
+			t.Fatalf("CloseFreshPane() error = %v, want live-pane error", err)
+		}
+	})
+
+	t.Run("final pane removes server", func(t *testing.T) {
+		installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+		t.Setenv("CLOSE_PANE_GONE_ERROR", "no server running on /tmp/tmux-test/default")
+		if err := CloseFreshPane("%5"); err != nil {
+			t.Fatalf("CloseFreshPane() final-pane error: %v", err)
+		}
+	})
+}
+
+func TestClosePaneIfOwnedTreatsAbsentTmuxScopeAsStaleOnRetry(t *testing.T) {
+	tests := []string{
+		"no server running on /tmp/tmux-test/default",
+		"error connecting to /tmp/tmux-test/default (No such file or directory)",
+		"no current target",
+		"no sessions",
+	}
+	for _, message := range tests {
+		t.Run(message, func(t *testing.T) {
+			killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+			if err := os.WriteFile(os.Getenv("CLOSE_PANE_GONE"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			lcAllPath := filepath.Join(t.TempDir(), "lc-all")
+			t.Setenv("CLOSE_PANE_LC_ALL_PATH", lcAllPath)
+			t.Setenv("CLOSE_PANE_GONE_ERROR", message)
+
+			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
+			if err != nil || result.Status != ClosePaneStale {
+				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
+			}
+			if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
+				t.Fatalf("kill-pane was invoked for absent tmux scope: %v", err)
+			}
+			body, err := os.ReadFile(lcAllPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != "C" {
+				t.Fatalf("LC_ALL = %q, want C", body)
+			}
+		})
+	}
+}
+
+func TestClosePaneIfOwnedFailsClosedOnOtherConnectionErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		message  string
+		exitCode string
+	}{
+		{name: "permission denied", message: "error connecting to /tmp/tmux-test/default (Permission denied)", exitCode: "1"},
+		{name: "absence text with unexpected exit", message: "no server running on /tmp/tmux-test/default", exitCode: "7"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+			if err := os.WriteFile(os.Getenv("CLOSE_PANE_GONE"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CLOSE_PANE_GONE_ERROR", tt.message)
+			t.Setenv("CLOSE_PANE_GONE_EXIT_CODE", tt.exitCode)
+
+			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
+			if err == nil || result.Status != ClosePaneFailed {
+				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
+			}
+			if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
+				t.Fatalf("kill-pane was invoked after a real inspection error: %v", err)
+			}
+		})
+	}
+}
+
 func TestClosePaneIfOwnedDoesNotKillReusedPane(t *testing.T) {
 	killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
 	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/someone-else")
-	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-someone-else")
 
-	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
 	if err != nil {
 		t.Fatalf("ClosePaneIfOwned() failed: %v", err)
 	}
@@ -1867,30 +2060,47 @@ func TestClosePaneIfOwnedDoesNotKillReusedPane(t *testing.T) {
 	}
 }
 
-func TestClosePaneIfOwnedTreatsDescendantWorktreeStampAsStale(t *testing.T) {
+func TestClosePaneIfOwnedFailsClosedWhenLiveLivenessKeyIsUnavailable(t *testing.T) {
 	killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
-	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target/nested")
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
-	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err != nil || result.Status != ClosePaneStale {
-		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
+	if err == nil || result.Status != ClosePaneFailed {
+		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want unknown identity failure", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
-		t.Fatalf("pane with mismatched explicit stamp was killed, stat error = %v", err)
+		t.Fatalf("pane with unavailable liveness key was killed, stat error = %v", err)
 	}
 }
 
-func TestClosePaneIfOwnedFallsBackToCurrentPathWhenStampMissing(t *testing.T) {
-	installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+func TestClosePaneIfOwnedFailsClosedForLegacyLivePaneDespiteExactWorktree(t *testing.T) {
+	killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
+	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
+	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
+
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
+	if err == nil || result.Status != ClosePaneFailed {
+		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
+	}
+	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy live pane was killed, stat error = %v", err)
+	}
+}
+
+func TestClosePaneIfOwnedDoesNotUseCurrentPathAsLegacyOwnership(t *testing.T) {
+	killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target/nested")
 	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "")
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err != nil || result.Status != ClosePaneClosed {
-		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want closed", result, err)
+	if err == nil || result.Status != ClosePaneFailed {
+		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
+	}
+	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy live pane was killed, stat error = %v", err)
 	}
 }
 
@@ -1910,19 +2120,14 @@ func TestClosePaneIfOwnedFailsClosedWhenStampAndCurrentPathCannotVerifyIdentity(
 }
 
 func TestClosePaneIfOwnedFailsClosedOnStrictListingFailures(t *testing.T) {
-	for _, field := range []string{"pane_current_path", "pane_title", "fanout_worktree_path", "fanout_shell_key"} {
+	for _, field := range []string{"pane_current_path", "pane_title", "fanout_shell_key"} {
 		t.Run(field, func(t *testing.T) {
 			killedPath := installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"`)
 			t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
 			t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
 			t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 			t.Setenv("CLOSE_PANE_FAIL_FIELD", field)
-			shellKey := ""
-			if field == "fanout_shell_key" {
-				shellKey = "shell-token"
-			}
-
-			result, err := ClosePaneIfOwned("%5", "/wt/target", shellKey)
+			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
 			if err == nil || result.Status != ClosePaneFailed {
 				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 			}
@@ -1953,9 +2158,9 @@ func TestClosePaneIfOwnedTreatsConcurrentGoneAfterKillErrorAsStale(t *testing.T)
 	installClosePaneShim(t, `touch "$CLOSE_PANE_GONE"; exit 1`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
 	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
-	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 
-	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
 	if err != nil || result.Status != ClosePaneStale {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
 	}
@@ -1965,9 +2170,9 @@ func TestClosePaneIfOwnedFailsWhenPaneRemainsAfterKill(t *testing.T) {
 	installClosePaneShim(t, `:`)
 	t.Setenv("CLOSE_PANE_CURRENT_PATH", "/wt/target")
 	t.Setenv("CLOSE_PANE_WORKTREE_PATH", "/wt/target")
-	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
+	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 
-	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
+	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
 	if err == nil || result.Status != ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}

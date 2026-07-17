@@ -151,8 +151,9 @@ func mergedStateLoader(projectRoot string, livePanes func() map[string]LivePaneI
 // identity are globally stable within a repo:
 //   - A positive GitHub issue number: assigned by GitHub, unique repo-wide, so
 //     the same (parent, issueNum) in two worktrees is the same child.
-//   - A shell terminal's shell key: a random 16-byte token (newShellPaneKey),
-//     unique per pane, so it never collides across stores.
+//   - A shell terminal's shell key: a random 16-byte token, unique per pane, so
+//     it never collides across stores. Other pane keys deliberately do not
+//     change the issue/manual/task de-duplication rules below.
 //
 // Everything else is assigned locally and can legitimately repeat across
 // worktrees, so it is kept distinct (key ""):

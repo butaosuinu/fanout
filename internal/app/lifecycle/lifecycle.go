@@ -659,16 +659,7 @@ func localBranchExists(projectRoot, branch string) bool {
 }
 
 func closeOwnedPane(pane state.Pane, lg Logger, windows map[string]struct{}) bool {
-	shellKey := ""
-	if pane.IsShell() {
-		shellKey = strings.TrimSpace(pane.ShellKey)
-		if shellKey == "" {
-			lg.Err("%s: no shellKey recorded; preserving state to avoid pane id reuse", paneLabel(pane))
-			return false
-		}
-	} else if strings.TrimSpace(pane.ShellKey) != "" {
-		shellKey = strings.TrimSpace(pane.ShellKey)
-	}
+	shellKey := strings.TrimSpace(pane.ShellKey)
 	result, err := closeTmuxPane(pane.PaneID, pane.WorktreePath, shellKey)
 	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
 		lg.Err("%s: close tmux pane %s failed; preserving worktree and state: %v", paneLabel(pane), emptyLabel(pane.PaneID), err)

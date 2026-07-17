@@ -82,6 +82,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		BranchName:          "fanout/state-idempotency-83",
 		Prompt:              "[fanout #83 of #81] state-idempotency-83: read .fanout/briefings/fanout-fanout-83.md and begin.",
 		Agent:               "codex",
+		ShellKey:            "shell-state-pane",
 		Wave:                "wave5",
 		CodexPlanMode:       true,
 		Worktree:            worktree.Plan{BaseBranch: "main"},
@@ -94,6 +95,9 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 
 	if got.Parent != "81" || got.IssueNum != 83 || got.PaneID != "%42" {
 		t.Fatalf("state pane identity = %+v", got)
+	}
+	if got.ShellKey != "shell-state-pane" {
+		t.Fatalf("shellKey = %q, want shell-state-pane", got.ShellKey)
 	}
 	if got.DisplayName != "State Idempotency" {
 		t.Fatalf("displayName = %q, want State Idempotency", got.DisplayName)
@@ -417,12 +421,16 @@ func TestLaunchWithResultDryRunHasNoPaneID(t *testing.T) {
 func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
 	installFakeExecutable(t, "claude")
 	installFakeTmux(t, "%314")
+	tmuxCalls := filepath.Join(t.TempDir(), "tmux-calls")
+	t.Setenv("TMUX_CALLS", tmuxCalls)
 	targetPath := t.TempDir()
 	cfg := &cliflags.Config{Agent: "claude"}
+	recorder := &captureStateRecorder{}
 	launcher := &Launcher{
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Recorder:    recorder,
 		Palette:     log.Palette{},
 		CommandName: "fanout",
 	}
@@ -443,7 +451,126 @@ func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
 	if result.PaneID != "%314" {
 		t.Fatalf("PaneID = %q, want %%314", result.PaneID)
 	}
+	if len(recorder.panes) != 1 || !strings.HasPrefix(recorder.panes[0].ShellKey, "shell-") {
+		t.Fatalf("recorded panes = %+v, want generated liveness key", recorder.panes)
+	}
+	body, err := os.ReadFile(tmuxCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "set-option -p -t %314 @fanout_shell_key "+recorder.panes[0].ShellKey) {
+		t.Fatalf("tmux calls = %q, want recorded liveness key stamp", body)
+	}
 }
+
+func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T) {
+	installFakeExecutable(t, "claude")
+	installFakeTmux(t, "%315")
+	stubPaneLivenessOps(t,
+		func(string, string) error { return fmt.Errorf("stamp failed") },
+		func(string) error { return fmt.Errorf("pane still live") },
+	)
+	targetPath := t.TempDir()
+	recorder := &captureStateRecorder{}
+	launcher := &Launcher{
+		Cfg:         &cliflags.Config{Agent: "claude"},
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Recorder:    recorder,
+		CommandName: "fanout",
+	}
+	req := Request{ParentRef: ManualParentRef, Number: -1, Slug: "attached-pane", Prompt: "inspect", Agent: "claude", Hooks: hooks.EmptyConfig()}
+
+	result, ok := launcher.AttachWithResult(req, targetPath)
+
+	if ok || result.PaneID != "" {
+		t.Fatalf("AttachWithResult() = %+v, %v, want failed launch", result, ok)
+	}
+	if len(recorder.panes) != 1 {
+		t.Fatalf("recorded panes = %+v, want one recovery row", recorder.panes)
+	}
+	got := recorder.panes[0]
+	if got.PaneID != "%315" || got.Kind != state.PaneKindAttachedAgent || !strings.HasPrefix(got.ShellKey, "shell-") {
+		t.Fatalf("recovery pane = %+v, want keyed attached pane %%315", got)
+	}
+}
+
+func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
+	installFakeExecutable(t, "codex")
+	installFakeTmux(t, "%316")
+	stubClosePaneForCleanup(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
+	})
+	targetPath := t.TempDir()
+	statusPath := filepath.Join(t.TempDir(), "codex-status.json")
+	if err := codexapp.WriteFailedStatus(statusPath, fmt.Errorf("startup failed")); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &captureStateRecorder{}
+	launcher := &Launcher{
+		Cfg:         &cliflags.Config{Agent: "codex"},
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Recorder:    recorder,
+		CommandName: "fanout",
+	}
+	req := Request{
+		ParentRef:           ManualParentRef,
+		Number:              -1,
+		Slug:                "codex-plan",
+		Prompt:              "plan",
+		Agent:               "codex",
+		CodexPlanMode:       true,
+		CodexPlanStatusPath: statusPath,
+		Hooks:               hooks.EmptyConfig(),
+	}
+
+	_, ok := launcher.AttachWithResult(req, targetPath)
+
+	if ok {
+		t.Fatal("AttachWithResult() = true, want startup failure")
+	}
+	if len(recorder.panes) != 1 || recorder.panes[0].PaneID != "%316" || recorder.panes[0].Kind != state.PaneKindAttachedAgent {
+		t.Fatalf("recorded panes = %+v, want live failed-startup pane %%316", recorder.panes)
+	}
+}
+
+func TestShellRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+	installFakeTmux(t, "%317")
+	stubPaneLivenessOps(t,
+		func(string, string) error { return fmt.Errorf("stamp failed") },
+		func(string) error { return fmt.Errorf("pane still live") },
+	)
+	launcher := &Launcher{Info: &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo}}
+
+	err := launcher.Shell(ShellRequest{TargetPath: repo, Root: true})
+
+	if err == nil || !strings.Contains(err.Error(), "pane still live") {
+		t.Fatalf("Shell() error = %v, want failed cleanup", err)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(store.Panes) != 1 || store.Panes[0].PaneID != "%317" || store.Panes[0].Kind != state.PaneKindShell {
+		t.Fatalf("state panes = %+v, want live shell recovery row %%317", store.Panes)
+	}
+}
+
+type captureStateRecorder struct {
+	panes []state.Pane
+}
+
+func (r *captureStateRecorder) RecordPane(pane state.Pane) error {
+	r.panes = append(r.panes, pane)
+	return nil
+}
+
+func (*captureStateRecorder) RemovePane(string, int) error { return nil }
+
+func (*captureStateRecorder) RemoveTaskPane(string, string) error { return nil }
 
 func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Config, projectRoot string, req Request) {
 	t.Helper()
@@ -518,10 +645,13 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 
 	installFakeExecutable(t, "codex")
 	installFakeTmux(t, "%271")
-	var closedPaneID, closedWorktreePath string
-	stubClosePaneForCleanup(t, func(paneID, worktreePath, _ string) (tmuxrun.ClosePaneResult, error) {
+	tmuxCalls := filepath.Join(t.TempDir(), "tmux-calls")
+	t.Setenv("TMUX_CALLS", tmuxCalls)
+	var closedPaneID, closedWorktreePath, closedShellKey string
+	stubClosePaneForCleanup(t, func(paneID, worktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
 		closedPaneID = paneID
 		closedWorktreePath = worktreePath
+		closedShellKey = shellKey
 		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@7"}, nil
 	})
 
@@ -553,6 +683,16 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	if closedPaneID != "%271" || closedWorktreePath != req.Worktree.WorktreePath {
 		t.Fatalf("safe close identity = (%q, %q), want (%q, %q)", closedPaneID, closedWorktreePath, "%271", req.Worktree.WorktreePath)
 	}
+	if !strings.HasPrefix(closedShellKey, "shell-") {
+		t.Fatalf("safe close shell key = %q, want generated pane key", closedShellKey)
+	}
+	tmuxBody, err := os.ReadFile(tmuxCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tmuxBody), "set-option -p -t %271 @fanout_shell_key "+closedShellKey) {
+		t.Fatalf("tmux calls = %q, want generated liveness key stamp", tmuxBody)
+	}
 	branch := exec.Command("git", "branch", "--list", req.BranchName)
 	branch.Dir = repo
 	out, err := branch.Output()
@@ -577,7 +717,9 @@ func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T
 		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
 	})
 
-	failCleanup("#101", "%caller", "%271", worktreePath, "", &prepared, nil)
+	if failCleanup("#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
+		t.Fatal("failCleanup() = true, want unconfirmed pane close")
+	}
 
 	if _, err := os.Stat(worktreePath); err != nil {
 		t.Fatalf("worktree was removed after unconfirmed pane close: %v", err)
@@ -1150,6 +1292,18 @@ func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (tmux
 	original := closePaneForCleanup
 	closePaneForCleanup = fn
 	t.Cleanup(func() { closePaneForCleanup = original })
+}
+
+func stubPaneLivenessOps(t *testing.T, set func(string, string) error, closeFresh func(string) error) {
+	t.Helper()
+	originalSet := setPaneLivenessKey
+	originalCloseFresh := closeFreshPane
+	setPaneLivenessKey = set
+	closeFreshPane = closeFresh
+	t.Cleanup(func() {
+		setPaneLivenessKey = originalSet
+		closeFreshPane = originalCloseFresh
+	})
 }
 
 func installFakeTmux(t *testing.T, paneID string) {

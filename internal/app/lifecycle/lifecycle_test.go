@@ -144,9 +144,9 @@ func TestClosePaneRecordsKeyVerifiesKeyedAttachedAgent(t *testing.T) {
 	}
 }
 
-func TestClosePaneRecordsPreservesLegacyShellWithoutKey(t *testing.T) {
+func TestClosePaneRecordsPreservesLiveLegacyShellWithoutKey(t *testing.T) {
 	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("live pane has no liveness key")
 	})
 	pane := state.Pane{
 		PaneID:       "%1",
@@ -158,25 +158,37 @@ func TestClosePaneRecordsPreservesLegacyShellWithoutKey(t *testing.T) {
 	if closePaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{pane}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("closePaneRecords() succeeded without a shell liveness key")
 	}
-	if len(*closeCalls) != 0 {
-		t.Fatalf("close calls = %+v, want none for an unverified legacy shell", *closeCalls)
+	if len(*closeCalls) != 1 || (*closeCalls)[0].shellKey != "" {
+		t.Fatalf("close calls = %+v, want one fail-closed legacy check", *closeCalls)
 	}
 }
 
-// An attached agent without a liveness key uses the same recorded-worktree
-// identity as an ordinary agent pane.
-func TestClosePaneRecordsVerifiesUnkeyedAttachedAgentWorktree(t *testing.T) {
+func TestClosePaneRecordsPreservesLiveLegacyAttachedAgentWithoutKey(t *testing.T) {
 	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("live pane has no liveness key")
 	})
 	calls := stubRelayout(t)
 
-	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, WorktreePath: "/wt/source"}})
-	if len(*calls) != 1 {
-		t.Fatalf("relayout calls = %+v, want one for an unkeyed attached agent", *calls)
+	if closePaneRecords(Options{Hooks: hooks.EmptyConfig()}, []state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, WorktreePath: "/wt/source"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("closePaneRecords() succeeded for a live legacy attached pane")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("relayout calls = %+v, want none for a failed legacy close", *calls)
 	}
 	if len(*closeCalls) != 1 || (*closeCalls)[0].worktreePath != "/wt/source" || (*closeCalls)[0].shellKey != "" {
-		t.Fatalf("close calls = %+v, want worktree identity", *closeCalls)
+		t.Fatalf("close calls = %+v, want one fail-closed legacy check", *closeCalls)
+	}
+}
+
+func TestClosePaneRecordsPassesOrdinaryPaneLivenessKey(t *testing.T) {
+	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+	})
+	stubRelayout(t)
+
+	closeAndRelayout([]state.Pane{{PaneID: "%1", IssueNum: 1, ShellKey: "shell-child", WorktreePath: "/wt/child"}})
+	if len(*closeCalls) != 1 || (*closeCalls)[0].shellKey != "shell-child" {
+		t.Fatalf("close calls = %+v, want ordinary pane liveness key", *closeCalls)
 	}
 }
 

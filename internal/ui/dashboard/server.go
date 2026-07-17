@@ -49,8 +49,8 @@ type Options struct {
 	// tmuxrun.CapturePlanSource; tests inject a fake.
 	CapturePlan func(paneID string, lines int) (string, error)
 	// VerifyPane re-checks, at request time, that the snapshot pane is still
-	// the same live tmux pane. Agent panes verify paneID + worktree path; shell
-	// panes verify paneID + shellKey. nil defaults to a
+	// the same live tmux pane. Keyed panes verify paneID + shellKey; legacy
+	// unkeyed agent panes verify paneID + worktree path. nil defaults to a
 	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
 	VerifyPane func(sessionview.PaneView) error
 }

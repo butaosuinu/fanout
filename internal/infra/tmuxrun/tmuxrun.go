@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -447,8 +446,8 @@ type LivePane struct {
 	// working に細分化する。旧版 fanout やラッパー外で起動した pane では未設定で ""。
 	// listing が失敗したとき・join 済み id に対応する行が無いときも空。
 	AgentState string
-	// ShellKey is @fanout_shell_key for TUI shell panes. It lets callers match
-	// shell rows without trusting broad repo-root WorktreePath prefixes.
+	// ShellKey is the pane's @fanout_shell_key liveness token. New fanout panes
+	// use it instead of trusting a reusable pane id or shared worktree path.
 	ShellKey string
 	// ProjectRoot is @fanout_project_root, the state owner root fanout records
 	// on created panes so keybindings still resolve correctly when
@@ -500,16 +499,49 @@ type LivePane struct {
 // Distinct from ListPanes(target), which returns richer PaneInfo for a single
 // target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
 func ListLivePanes() ([]LivePane, error) {
+	return listLivePanes(false)
+}
+
+// ListLivePanesForIdentity returns the same live-pane projection as
+// ListLivePanes, but fails unless every pane has one unambiguous path, title,
+// and liveness-key row from a consistent tmux sweep. Mutating callers use this
+// variant before deciding that a recorded pane is dead: degrading a failed or
+// forged identity field to an empty value could otherwise launch a duplicate
+// pane and leave the original process tree untracked.
+func ListLivePanesForIdentity() ([]LivePane, error) {
+	return listLivePanes(true)
+}
+
+func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 	pathOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePanePathFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
 	}
 	panes := parseLivePanePaths(string(pathOut))
+	idCounts := make(map[string]int, len(panes))
+	for _, pane := range panes {
+		idCounts[pane.ID]++
+	}
+	if strictIdentity {
+		for id, count := range idCounts {
+			if count != 1 {
+				return nil, fmt.Errorf("tmux list-panes -a: ambiguous pane_current_path rows for %s", id)
+			}
+		}
+	}
 	titleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneTitleFormat).Output()
 	if err != nil {
+		if strictIdentity {
+			return nil, fmt.Errorf("tmux list-panes -a titles: %w", err)
+		}
 		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
 	}
 	titles := parseLivePaneField(string(titleOut))
+	if strictIdentity {
+		if err := validateLivePaneIdentityField(idCounts, titles, "pane_title"); err != nil {
+			return nil, err
+		}
+	}
 	// 第 3 の listing: 各 pane の @fanout_agent_state(起動ラッパーが agent
 	// 実行前後に設定する pane user option)。ダッシュボードが agent 実行中/完了
 	// の表示判定に使う。タイトル同様この値は表示専用で liveness の根拠ではない
@@ -526,6 +558,13 @@ func ListLivePanes() ([]LivePane, error) {
 	shellKeys := map[string]string{}
 	if shellKeyOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneShellKeyFormat).Output(); err == nil {
 		shellKeys = parseLivePaneField(string(shellKeyOut))
+	} else if strictIdentity {
+		return nil, fmt.Errorf("tmux list-panes -a liveness keys: %w", err)
+	}
+	if strictIdentity {
+		if err := validateLivePaneIdentityField(idCounts, shellKeys, shellKeyOption); err != nil {
+			return nil, err
+		}
 	}
 	projectRoots := map[string]string{}
 	if projectRootOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneProjectRootFormat).Output(); err == nil {
@@ -547,10 +586,6 @@ func ListLivePanes() ([]LivePane, error) {
 	// newline-bearing pane_current_path forged an extra row reusing a REAL id
 	// (which would pass the title-listing check below). Conservatively drop
 	// such ids entirely — we cannot tell the genuine row from the forgery.
-	idCounts := make(map[string]int, len(panes))
-	for _, pane := range panes {
-		idCounts[pane.ID]++
-	}
 	var joined []LivePane
 	for _, pane := range panes {
 		if idCounts[pane.ID] != 1 {
@@ -572,6 +607,20 @@ func ListLivePanes() ([]LivePane, error) {
 		joined = append(joined, pane)
 	}
 	return joined, nil
+}
+
+func validateLivePaneIdentityField(pathIDs map[string]int, fields map[string]string, fieldName string) error {
+	for id := range pathIDs {
+		if _, ok := fields[id]; !ok {
+			return fmt.Errorf("tmux list-panes -a: missing or ambiguous %s row for %s", fieldName, id)
+		}
+	}
+	for id := range fields {
+		if _, ok := pathIDs[id]; !ok {
+			return fmt.Errorf("tmux list-panes -a: inconsistent %s row for %s", fieldName, id)
+		}
+	}
+	return nil
 }
 
 // parseLivePanePaths parses livePanePathFormat lines into LivePanes with empty
@@ -863,7 +912,8 @@ func SetPaneWorktreePath(paneID, worktreePath string) error {
 	return nil
 }
 
-// SetPaneShellKey records a shell-pane liveness token on a tmux pane.
+// SetPaneShellKey records a fanout pane's unique liveness token. The tmux
+// option name is retained for compatibility with existing panes and state.
 func SetPaneShellKey(paneID, shellKey string) error {
 	if strings.TrimSpace(paneID) == "" {
 		return fmt.Errorf("pane id is required")
@@ -1501,6 +1551,29 @@ func KillPane(paneID string) error {
 	return nil
 }
 
+// CloseFreshPane stops a pane whose id was returned by the caller's immediately
+// preceding split. It does not assume kill-pane success: a strict all-session
+// listing must confirm the id is absent, including when killing the final pane
+// removes the tmux server. If the id is still live or cannot be inspected, the
+// caller must retain a recovery record instead of discarding the pane.
+func CloseFreshPane(paneID string) error {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return nil
+	}
+	killErr := KillPane(paneID)
+	live, inspectErr := listClosePaneIdentity(paneID, false)
+	if inspectErr != nil {
+		return errors.Join(killErr, fmt.Errorf("verify fresh pane %s stopped: %w", paneID, inspectErr))
+	}
+	for _, pane := range live {
+		if pane.ID == paneID {
+			return errors.Join(killErr, fmt.Errorf("fresh pane %s remained live after kill-pane", paneID))
+		}
+	}
+	return nil
+}
+
 // ClosePaneStatus classifies an identity-checked pane close.
 type ClosePaneStatus int
 
@@ -1525,16 +1598,16 @@ type ClosePaneResult struct {
 	WindowID string
 }
 
-// ClosePaneIfOwned closes paneID only when its live identity still matches the
-// recorded identity. Shell panes and keyed attached-agent panes pass shellKey;
-// ordinary agent panes pass expectedWorktreePath. A missing pane or a reused id
-// is stale success. A tmux listing failure is a hard failure: callers must not
-// remove the worktree or state row when ownership cannot be established.
+// ClosePaneIfOwned closes paneID only when its live @fanout_shell_key matches
+// shellKey. expectedWorktreePath remains in the signature for callers that also
+// use it for diagnostics, but paths never prove ownership: multiple fanout
+// panes may share one worktree. A legacy row without a key is stale only when
+// the pane is confirmed absent; a live matching id fails closed.
 //
 // kill-pane failures are rechecked because tmux can report an error after the
 // pane has concurrently disappeared. Conversely, even a successful kill is
 // rechecked before the caller is allowed to remove durable state.
-func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneResult, error) {
+func ClosePaneIfOwned(paneID, _expectedWorktreePath, shellKey string) (ClosePaneResult, error) {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
 		return ClosePaneResult{Status: ClosePaneStale}, nil
@@ -1544,7 +1617,7 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 	if err != nil {
 		return ClosePaneResult{Status: ClosePaneFailed}, fmt.Errorf("list pane identity: %w", err)
 	}
-	identity := classifyOwnedPane(live, paneID, expectedWorktreePath, shellKey)
+	identity := classifyOwnedPane(live, paneID, shellKey)
 	if identity == ownedPaneUnknown {
 		return ClosePaneResult{Status: ClosePaneFailed}, fmt.Errorf("pane %s identity cannot be verified from tmux", paneID)
 	}
@@ -1562,7 +1635,7 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 		}
 		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("recheck pane identity: %w", err)
 	}
-	identity = classifyOwnedPane(live, paneID, expectedWorktreePath, shellKey)
+	identity = classifyOwnedPane(live, paneID, shellKey)
 	if identity == ownedPaneUnknown {
 		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("pane %s identity cannot be verified after kill-pane", paneID)
 	}
@@ -1583,14 +1656,22 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 // pane close. Unlike ListLivePanes it never degrades failed field queries to
 // empty values: absence is safe only when both canonical path and title
 // listings reliably omit the target, and duplicate target rows are ambiguous.
+// A confirmed absent tmux server/session is an empty listing; all other tmux
+// failures remain hard errors.
 func listClosePaneIdentity(paneID string, shellIdentity bool) ([]LivePane, error) {
-	pathOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePanePathFormat).Output()
+	pathOut, absent, err := closePaneListOutput(livePanePathFormat)
 	if err != nil {
 		return nil, fmt.Errorf("tmux list pane paths: %w", err)
 	}
-	titleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneTitleFormat).Output()
+	if absent {
+		return nil, nil
+	}
+	titleOut, absent, err := closePaneListOutput(livePaneTitleFormat)
 	if err != nil {
 		return nil, fmt.Errorf("tmux list pane titles: %w", err)
+	}
+	if absent {
+		return nil, nil
 	}
 	currentPath, pathCount := strictPaneField(string(pathOut), paneID)
 	title, titleCount := strictPaneField(string(titleOut), paneID)
@@ -1602,26 +1683,57 @@ func listClosePaneIdentity(paneID string, shellIdentity bool) ([]LivePane, error
 	}
 
 	pane := LivePane{ID: paneID, CurrentPath: currentPath, Title: title}
-	identityFormat := livePaneWorktreePathFormat
-	identityName := worktreePathOption
-	if shellIdentity {
-		identityFormat = livePaneShellKeyFormat
-		identityName = shellKeyOption
+	if !shellIdentity {
+		return []LivePane{pane}, nil
 	}
-	identityOut, err := exec.Command("tmux", "list-panes", "-a", "-F", identityFormat).Output()
+	identityOut, absent, err := closePaneListOutput(livePaneShellKeyFormat)
 	if err != nil {
-		return nil, fmt.Errorf("tmux list pane %s: %w", identityName, err)
+		return nil, fmt.Errorf("tmux list pane %s: %w", shellKeyOption, err)
+	}
+	if absent {
+		return nil, nil
 	}
 	identity, identityCount := strictPaneField(string(identityOut), paneID)
 	if identityCount != 1 {
-		return nil, fmt.Errorf("pane %s %s identity is ambiguous (rows=%d)", paneID, identityName, identityCount)
+		return nil, fmt.Errorf("pane %s %s identity is ambiguous (rows=%d)", paneID, shellKeyOption, identityCount)
 	}
-	if shellIdentity {
-		pane.ShellKey = identity
-	} else {
-		pane.WorktreePath = identity
-	}
+	pane.ShellKey = identity
 	return []LivePane{pane}, nil
+}
+
+func closePaneListOutput(format string) ([]byte, bool, error) {
+	cmd := exec.Command("tmux", "list-panes", "-a", "-F", format)
+	cmd.Env = envWithCLocale(os.Environ())
+	out, err := cmd.Output()
+	if err == nil {
+		return out, false, nil
+	}
+	if tmuxServerAbsent(err) {
+		return nil, true, nil
+	}
+	return nil, false, err
+}
+
+func tmuxServerAbsent(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		return false
+	}
+	message := strings.TrimSpace(string(exitErr.Stderr))
+	return strings.HasPrefix(message, "no server running on ") ||
+		(strings.HasPrefix(message, "error connecting to ") && strings.HasSuffix(message, " (No such file or directory)")) ||
+		message == "no current target" || message == "no sessions"
+}
+
+func envWithCLocale(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "LC_ALL=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "LC_ALL=C")
 }
 
 // strictPaneField returns the target's field and its exact row count. tmux
@@ -1651,45 +1763,25 @@ const (
 	ownedPaneUnknown
 )
 
-// classifyOwnedPane mirrors the dashboard's pane liveness convention: keyed
-// panes match @fanout_shell_key; ordinary panes require an exact
-// @fanout_worktree_path stamp and fall back to a foreground process cwd
-// at/under the recorded worktree. A missing worktree option plus a cwd outside
-// the recorded tree is unknown rather than stale: the pane may be genuine but
-// temporarily reporting another cwd, so lifecycle must preserve its state.
-func classifyOwnedPane(live []LivePane, paneID, expectedWorktreePath, shellKey string) ownedPaneIdentity {
+// classifyOwnedPane requires the per-pane liveness token for any live target.
+// Worktree paths are not identities because attached agents can share them.
+// Legacy keyless rows can be removed only after the target id is absent.
+func classifyOwnedPane(live []LivePane, paneID, shellKey string) ownedPaneIdentity {
 	for _, pane := range live {
 		if pane.ID != paneID {
 			continue
 		}
-		if shellKey = strings.TrimSpace(shellKey); shellKey != "" {
-			if pane.ShellKey == shellKey {
-				return ownedPaneMatched
-			}
-			return ownedPaneStale
-		}
-		expectedWorktreePath = strings.TrimSpace(expectedWorktreePath)
-		if expectedWorktreePath == "" {
+		shellKey = strings.TrimSpace(shellKey)
+		if shellKey == "" {
 			return ownedPaneUnknown
 		}
-		want := filepath.Clean(expectedWorktreePath)
-		actual := strings.TrimSpace(pane.WorktreePath)
-		if actual != "" {
-			got := filepath.Clean(actual)
-			if got == want {
-				return ownedPaneMatched
-			}
-			return ownedPaneStale
-		}
-		actual = strings.TrimSpace(pane.CurrentPath)
-		if actual == "" {
+		if strings.TrimSpace(pane.ShellKey) == "" {
 			return ownedPaneUnknown
 		}
-		got := filepath.Clean(actual)
-		if got == want || strings.HasPrefix(got, want+string(filepath.Separator)) {
+		if pane.ShellKey == shellKey {
 			return ownedPaneMatched
 		}
-		return ownedPaneUnknown
+		return ownedPaneStale
 	}
 	return ownedPaneAbsent
 }
