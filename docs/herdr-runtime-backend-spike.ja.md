@@ -1,8 +1,11 @@
 # herdr runtime backend 実機検証
 
 ステータス: v1 契約確定。
-検証日: 2026-07-16。
-対象: `herdr 0.7.3` stable、protocol `16`、schema version `1`。
+v0.7.4 metadata token reporting と sidebar row layout は追試済み。
+v0.7.4 core runtime matrix は未実施で、core runtime allowlist は変更しない。
+core runtime の検証日は 2026-07-16、v0.7.4 追試日は 2026-07-17。
+core runtime の対象は stable CLI / server `0.7.3`、protocol `16`、schema version `1`。
+metadata token reporting と sidebar row layout の対象は stable CLI / server `0.7.4`、protocol `16`、schema version `1`。
 
 fanout の herdr backend v1 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
@@ -34,6 +37,10 @@ plugin event の検証では `XDG_CONFIG_HOME` と `XDG_STATE_HOME` も `/privat
 
 追加検証では公式 `v0.7.3` macOS arm64 リリースバイナリ（SHA-256 `b31345392d004ec1f1b2c821e1ad601019fa8385fe1e4c6931321eb58a920773`）を `/private/tmp` に置き、named session と state を隔離した。
 herdr 公式 Codex integration v6 の再開試験だけは、すでに信頼済みのこの worktree を cwd に使った。
+
+sidebar 追試では公式 `v0.7.4` macOS arm64 リリースバイナリ（SHA-256 `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7`）を `/private/tmp` に置き、named session、config、state を隔離した。
+インストール済みの `herdr 0.7.4` はこのリリースバイナリと byte 単位で一致した。
+隔離 session の `status --json` は client / server version `0.7.4` と protocol `16`、`api snapshot` は version `0.7.4` と protocol `16`、`api schema --json` は schema version `1` を返した。
 
 fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
@@ -455,9 +462,52 @@ herdr pane 内で nested tmux server を起動すると、nested tmux の global
 
 ### metadata と OSC
 
-`pane report-metadata` で title、display agent、idle の state label を設定できた。
+0.7.3 の `pane report-metadata` で presentation fields の title、display agent、state label を設定できた。
 agent pane から OSC title sequence を出しても、これらの metadata field は変わらなかった。
-metadata は cold restart 後に消える表示専用データであり、`state.json` または liveness 判定には使わない。
+OSC 由来の `terminal_title` / `terminal_title_stripped` は server-owned の sidebar built-in token であり、presentation field の title と区別する。
+
+0.7.4 は pane token と workspace metadata reporting を追加した。
+0.7.3 の `pane report-metadata ... --token issue=424` は `unknown option: --token` で失敗し、0.7.4 の同じ flag は成功した。
+
+| resource | CLI | Socket method | sidebar での参照 |
+|---|---|---|---|
+| pane | `pane report-metadata <pane_id> --source <id> --token <name>=<value>` | `pane.report_metadata` | Agent row の `$name` |
+| workspace | `workspace report-metadata <workspace_id> --source <id> --token <name>=<value>` | `workspace.report_metadata` | Space row の `$name` |
+
+0.7.4 の `api schema --json` は両 method の `tokens`、`seq`、`ttl_ms` を返し、`tokens` は 1 report あたり最大 16 key、key は `^[A-Za-z0-9_-]{1,32}$`、`ttl_ms` は 1 から 86400000 と定義していた。
+token map は patch であり、CLI の `--token` または Socket の string value で設定、CLI の `--clear-token` または Socket の `null` で削除し、未指定 key は維持する。
+pane / workspace はそれぞれ最大 32 key を保持し、value は trim と control character 除去後の 80 文字までで、空になれば削除する。
+同じ key は最後に受理された reporter の値が勝つため、fanout は `fanout_` prefix で衝突を避ける。
+同じ source の古い `seq` は success を返しても反映されず、実測では `seq=3` の `ci=success` を後続の `seq=2` が上書きしなかった。
+`--clear-token branch` は `branch` だけを削除した。
+
+sidebar layout は次の config で設定できた。
+
+```toml
+[ui.sidebar.agents]
+row_gap = 0
+rows = [["state_icon", "workspace", "tab"], ["$fanout_parent", "$fanout_pr", "$fanout_ci"], ["agent"]]
+
+[ui.sidebar.agents.rows_by_agent]
+codex = [["state_icon", "workspace"], ["$fanout_parent", "$fanout_pr"], ["agent"]]
+
+[ui.sidebar.spaces]
+row_gap = 1
+rows = [["state_icon", "workspace"], ["$fanout_issue", "$fanout_ci"], ["branch", "git_status"]]
+```
+
+`rows` の内側の配列が 1 表示行であり、`rows_by_agent` は canonical agent ID に一致した Agent の `rows` 全体を置換する。
+`rows` は最大 16 行、各行は最大 16 token で、展開した desktop sidebar にだけ適用する。
+`row_gap` は entry 間の空行数で、既定値は 0、1 にすると従来の entry 間隔へ戻る。
+Space 内で連続する indented worktree child は `row_gap` にかかわらず packed のままになる。
+実機では 2 つの Space entry に `#424 · success` と `#425 · pending` が描画され、`row_gap = 1` の空行も入った。
+Agent entry には pane token の `#423 · #499 · success` と agent 名 `sidebar-probe` が別の row に描画された。
+reporter は token 値だけを提供し、row と styling は herdr とユーザーが所有する。
+
+pane / workspace token は `api snapshot` に返ったが、cold restart 後の snapshot から消えた。
+v1 は cold restart 後に metadata token を自動再送せず、欠落を許容して row を `stale` とする。
+再送は `terminal_id` または workspace generation を token patch の precondition にできる後続 API まで有効にしない。
+metadata は表示専用データとし、`state.json`、liveness、nudge authority、完了判定には使わない。
 
 ### Shift+Enter
 
@@ -564,39 +614,46 @@ raw Socket の `events.subscribe` は常駐 client を増やすため v1 では�
 ## version と JSON 対応
 
 stable public workspace、tab、pane ID の契約は 0.7.0、既存 local branch の worktree create/open は 0.7.1、`session.snapshot` と `api schema --json` は 0.7.2 で入った。
-herdr backend v1 の compatibility allowlist は、stable CLI `0.7.3`、server protocol `16`、schema version `1` の組だけとする。
-最初の mutation 前に `herdr --version` と `api schema --json` を照合し、prerelease、解釈不能な version、または allowlist にない CLI version / protocol / schema は fail closed にする。
+herdr backend v1 の core runtime compatibility allowlist は、stable CLI / server `0.7.3`、protocol `16`、schema version `1` の組だけとする。
+fanout が発行する各 mutation の直前に `herdr --version`、`status --json`、`api schema --json` を照合し、prerelease、解釈不能な version、または allowlist にない CLI / server version、protocol、schema は fail closed にする。
 semver の `>=` から互換性を推定しない。
 後続 version は同じ実機 matrix を通し、exact version と protocol / schema の組を明示的に allowlist へ追加した場合だけ受理する。
-`pane report-metadata` は 0.7.3 で実測済みだが、sidebar token 表示を含む 0.7.4 はこの spike の allowlist 外とし、#494 で exact version を別途検証するまで有効にしない。
+0.7.4 の exact tuple `(CLI/server 0.7.4, protocol 16, schema version 1)` は metadata token reporting と sidebar row layout だけで実測済みとする。
+この追試は core runtime matrix の代わりにならず、tuple を core runtime allowlist へ追加しない。
+#494 は #426 が同じ named session に作る pane / workspace binding へ報告するため、0.7.4 の core runtime matrix と exact tuple の allowlist entry に加え、#426 が operation-scoped safety 条件を満たす identity-bound resource を作れるまで有効にしない。
+#426 がその条件を満たせない場合は #494 も自動 launch へ接続しない。
+同じ protocol / schema でも 0.7.3 は `--token` を拒否したため、core runtime の上位互換を推定しない。
 
 | 実測コマンド | 導入 / 実測 version（runtime acceptance range ではない） | JSON 対応 |
 |---|---:|---|
-| `herdr --version` | 0.7.3 baseline | text のみ |
-| `status --json`、`session list --json` | 0.7.3 baseline | 明示 `--json` |
+| `herdr --version` | 0.7.3 core baseline、0.7.4 metadata token 追試 | text のみ |
+| `status --json` | 0.7.3 core baseline、0.7.4 metadata token 追試 | 明示 `--json` |
+| `session list --json` | 0.7.3 core baseline | 明示 `--json` |
 | `workspace create/list/focus/close` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `worktree create/open/list/remove` | 0.7.1 | 明示 `--json` |
 | `agent start/list/read/focus` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `pane get/run/close` | 0.7.3 baseline | mutation と get は JSON envelope。`--json` は付けない |
 | `pane process-info` | 0.7.3 baseline | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
 | `pane read` | 0.7.3 baseline | text または ANSI を直接出力する |
-| `pane report-metadata` | 0.7.3（sidebar token 表示は 0.7.4） | 成功時は出力なし（`--json` 非対応） |
-| `api snapshot` | 0.7.2 | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `api schema --json` | 0.7.2 | 明示 `--json` |
+| `pane report-metadata` の presentation fields / seq / TTL | 0.7.3 | 成功時は出力なし（`--json` 非対応） |
+| `pane report-metadata` の token patch | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
+| `workspace report-metadata` の token / seq / TTL | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
+| `api snapshot` | 0.7.2、token projection は 0.7.4 | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `api schema --json` | 0.7.2、metadata token schema は 0.7.4 | 明示 `--json` |
 | `notification show` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `plugin link/list/log list` | 0.7.3 baseline | `list` は `--json` 対応。他は JSON envelope |
 
-この表は機能導入時期と 0.7.3 の実測 provenance を示すだけで、上位 version の互換性を認めない。
+この表は機能導入時期と 0.7.3 core / 0.7.4 metadata token の実測 provenance を示すだけで、core runtime の上位 version 互換性を認めない。
 
-version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3) を参照する。
+version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4) を参照する。
 
 ## 後続 issue への契約
 
 #423、#425 から #429、#494 は次の制約を前提にする。
 
 - backend は明示的に起動済みの named herdr session を使う。
-- runtime compatibility allowlist は stable CLI `0.7.3`、protocol `16`、schema version `1` の組だけとする。
-  最初の mutation 前に version と schema を照合し、prerelease、解釈不能な値、allowlist 外の組は fail closed にする。
+- core runtime compatibility allowlist は stable CLI / server `0.7.3`、protocol `16`、schema version `1` の組だけとする。
+  fanout が発行する各 mutation の直前に client / server version、protocol、schema を照合し、prerelease、解釈不能な値、allowlist 外の組は fail closed にする。
   上位 version は semver から互換性を推定せず、同じ実機 matrix と exact tuple の allowlist entry を追加した後にだけ受理する。
 - backend 選択の resolver は final state rows と provisional intents の両方を入力にする。
   legacy row の空 backend は tmux に正規化する。
@@ -665,10 +722,15 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   `worktree remove`、`workspace close`、`pane close`、`--force`、削除用の `worktree open` を fanout から自動実行しない。
   remove / close request に nonce または session epoch の precondition を渡せず、検査から mutation までの TOCTOU を閉じられないためである。
   削除用再登録は setup hook を再実行するため、hook 抑止と operation-scoped completion receipt の両方が使える後続版まで採用しない。
-- `report-metadata` は表示専用とし、cold restart 後に消える前提で再送する。
-  metadata は `state.json` または liveness 判定に使わない。
-  `pane report-metadata` は allowlist の 0.7.3 で動作するが、sidebar token 表示を含む 0.7.4 は #494 が exact version tuple を別途検証するまで有効にしない。
-  #494 は issue 番号、slug、親参照、PR と CI の状態を pane または workspace の metadata として報告し、sidebar layout は herdr とユーザーが所有する。
+- `report-metadata` は表示専用とし、cold restart 後の欠落を許容する。
+  metadata は `state.json`、liveness、nudge authority、完了判定に使わない。
+  v1 は cold restart 後に metadata token を自動再送せず、row を `stale` とする。
+  再送は `terminal_id` または workspace generation を token patch の precondition にできる後続 API まで有効にしない。
+  0.7.3 の presentation fields と 0.7.4 の pane / workspace metadata token reporting は別の version provenance として扱う。
+  #494 は 0.7.4 の core runtime matrix と exact tuple の allowlist entry に加え、#426 が operation-scoped safety 条件を満たす identity-bound resource を作れるまで有効にしない。
+  #494 の `report-metadata` call は対象 `pane_id` または `workspace_id`、固定 `source`、空でない token patch、必要な `seq` / `ttl_ms` だけで構成し、title、display agent、state label を書き換えない。
+  #494 は実装前に `fanout_issue`、`fanout_slug`、`fanout_parent`、`fanout_pr`、`fanout_ci` の pane / workspace 配置、固定 source、sequence の永続化、TTL、値欠落時の clear を一意に決める。
+  `rows`、`rows_by_agent`、`row_gap` と styling は herdr とユーザーが所有し、fanout は config を書き換えない。
 - in-app notification を配信保証のある channel として扱わない。
 
 ## 参考
@@ -677,6 +739,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - [Socket API](https://herdr.dev/docs/socket-api/)
 - [Agents](https://herdr.dev/docs/agents/)
 - [Configuration](https://herdr.dev/docs/configuration/)
+- [Config reference](https://herdr.dev/docs/config-reference/)
 - [Session state](https://herdr.dev/docs/session-state/)
 - 関連分析: [herdr 競合分析](competitive-herdr.ja.md)
 - 親設計: [#423](https://github.com/butaosuinu/fanout/issues/423)

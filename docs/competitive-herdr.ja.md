@@ -7,7 +7,11 @@ herdr runtime backend v1 の API と制約は [実機検証](herdr-runtime-backe
 
 ## herdr とは
 
-[herdr](https://herdr.dev/) は「agent multiplexer」— 複数のコーディングエージェントを 1 つのターミナルで走らせるための、tmux 代替の永続 PTY ランタイム。Rust 製シングルバイナリ(実測 14〜17MB)で、サーバー・クライアント構成をローカル Unix socket でつなぐ。AGPL-3.0 + 商用のデュアルライセンス。GitHub 約 1 万 stars(2026-07 時点)、2026-06-30 に GitHub Trending 1 位。v0.7.1(2026-06-24)時点でリリース 66 回とアクティブに開発されている。
+[herdr](https://herdr.dev/) は「agent multiplexer」— 複数のコーディングエージェントを 1 つのターミナルで走らせるための、tmux 代替の永続 PTY ランタイム。
+Rust 製シングルバイナリ(実測 14〜17MB)で、サーバー・クライアント構成をローカル Unix socket でつなぐ。
+AGPL-3.0 + 商用のデュアルライセンス。
+GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending では 1 位だった。
+2026-07-15 UTC に v0.7.4 が公開された。
 
 中核は 3 つ。
 
@@ -38,7 +42,7 @@ herdr が issue 駆動やレビューゲートを足せば fanout の領域へ�
 | 依存関係 | blocker / wave、`--unblocked-only` | なし |
 | エージェント間協調 | `fanout msg`(SQLite bus、pull 型) | Socket API 経由の read / send |
 | 無人化 | label watcher(opt-in) | なし |
-| UI | TUI コンソール + read-only web dashboard | マウス対応 TUI(web なし) |
+| UI | TUI コンソール + read-only web dashboard | マウス対応 TUI(web なし)で、v0.7.4 は展開した Space / Agent entry を `rows` と `row_gap` で設定でき、Agent には `rows_by_agent`、custom metadata には `$name` token を使える |
 | 対応エージェント | claude / codex(#361 opencode、#241 cursor/copilot が進行中) | 14+、未知のエージェントもヒューリスティクスで検出 |
 
 ## 脅威評価
@@ -97,10 +101,13 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 - **Socket API / デーモン化**: fanout のエージェント向けインターフェースは CLI(`msg` / `--status` / 将来の `wait`)+ state.json で足りる。常駐サーバーは read-only dashboard の境界(GET のみ・mutation なし)を崩す誘因になる
 - **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。状態は hooks / notify の明示信号だけから取る。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
 - **SSH リモートアタッチ・マウス対応 TUI**: tmux 自体の機能(attach / mouse mode)で代替できる。fanout が再実装する層ではない
+- **sidebar layout の再実装**: fanout は pane / workspace の表示専用 token 値だけを報告する。
+  Space / Agent の `rows` と `row_gap`、Agent の `rows_by_agent`、styling は herdr とユーザーが所有し、fanout は herdr config を書き換えない
 
 ## 参考
 
 - https://herdr.dev/ / https://github.com/ogulcancelik/herdr
+- v0.7.4 release / sidebar config: https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4 / https://herdr.dev/docs/config-reference/
 - Socket API: https://herdr.dev/docs/socket-api/ — `pane.*` / `agent.*` / `events.subscribe/wait` / worktree 操作
 - Agent skill: https://herdr.dev/docs/agent-skill/ — SKILL.md によるエージェント自己オーケストレーション
 - Integrations: https://herdr.dev/docs/integrations/ — lifecycle authority 型(状態を直接報告)と session identity 型(復元用 session 参照)の 2 系統
