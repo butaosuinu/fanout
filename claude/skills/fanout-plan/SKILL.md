@@ -189,7 +189,7 @@ task you are (from the tmux pane and `.fanout/state.json`) and which plan you
 belong to. Peers are addressed by task id:
 
 - `fanout msg peers` — live sibling roster (task ids).
-- `fanout msg inbox [--mark-read]` — unread 1:1 + board messages addressed to you.
+- `fanout msg inbox [--all] [--mark-read]` — unread 1:1 + board messages addressed to you (`--all` includes read ones).
 - `fanout msg board` — the shared broadcast board.
 - `fanout msg watch [--interval S]` — block and emit new messages one per line
   as they arrive; emitted messages are marked read on delivery (mark-on-emit).
