@@ -141,10 +141,10 @@ func TestTeamBridgeBatchesIdleMessagesIntoOneQuotedTurn(t *testing.T) {
 	if !ok {
 		t.Fatalf("params type = %T, want map", request["params"])
 	}
-	if _, ok := params["model"]; ok {
+	if _, exists := params["model"]; exists {
 		t.Fatalf("team turn params unexpectedly override model: %#v", params)
 	}
-	if _, ok := params["collaborationMode"]; ok {
+	if _, exists := params["collaborationMode"]; exists {
 		t.Fatalf("team turn params unexpectedly set collaborationMode: %#v", params)
 	}
 	input, ok := params["input"].([]map[string]any)
