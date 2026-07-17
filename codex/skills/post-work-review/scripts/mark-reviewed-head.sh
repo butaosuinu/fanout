@@ -35,7 +35,9 @@ guard_bootstrap_instructions() {
     ':(glob)AGENTS.override.md' \
     ':(glob)**/AGENTS.md' \
     ':(glob)**/AGENTS.override.md' \
+    ':(glob).codex' \
     ':(glob).codex/**' \
+    ':(glob)**/.codex' \
     ':(glob)**/.codex/**'
 
   git diff --quiet --no-ext-diff --ignore-submodules=none \
