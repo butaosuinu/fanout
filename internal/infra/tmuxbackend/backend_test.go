@@ -35,7 +35,7 @@ func readCalls(t *testing.T, path string) [][]string {
 		t.Fatal(err)
 	}
 	var calls [][]string
-	for _, block := range strings.Split(strings.TrimSpace(string(body)), "CALL\n") {
+	for block := range strings.SplitSeq(strings.TrimSpace(string(body)), "CALL\n") {
 		block = strings.TrimSpace(block)
 		if block == "" {
 			continue

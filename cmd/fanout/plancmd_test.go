@@ -62,11 +62,11 @@ func TestCmdPlanUsesActualParentForBackendStickinessBeforeMutation(t *testing.T)
 		t.Fatal(err)
 	}
 
-	locked, err := state.LockProject(repo)
-	if err != nil {
-		t.Fatal(err)
+	locked, lockErr := state.LockProject(repo)
+	if lockErr != nil {
+		t.Fatal(lockErr)
 	}
-	locked.Store.Panes = append(locked.Store.Panes, state.Pane{
+	locked.Panes = append(locked.Panes, state.Pane{
 		Parent:  panelaunch.PlanParentRef("sticky-plan"),
 		TaskID:  "task-one",
 		Backend: backend.Herdr,
@@ -81,13 +81,13 @@ func TestCmdPlanUsesActualParentForBackendStickinessBeforeMutation(t *testing.T)
 	}
 
 	excludePath := filepath.Join(repo, ".git", "info", "exclude")
-	excludeBefore, err := os.ReadFile(excludePath)
-	if err != nil {
-		t.Fatal(err)
+	excludeBefore, readErr := os.ReadFile(excludePath)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
-	stateBefore, err := os.ReadFile(state.Path(repo))
-	if err != nil {
-		t.Fatal(err)
+	stateBefore, readErr := os.ReadFile(state.Path(repo))
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 
 	binDir := t.TempDir()
@@ -115,16 +115,16 @@ func TestCmdPlanUsesActualParentForBackendStickinessBeforeMutation(t *testing.T)
 		t.Fatalf("stderr = %q, want sticky backend conflict", stderr.String())
 	}
 
-	excludeAfter, err := os.ReadFile(excludePath)
-	if err != nil {
-		t.Fatal(err)
+	excludeAfter, readErr := os.ReadFile(excludePath)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	if !bytes.Equal(excludeAfter, excludeBefore) {
 		t.Fatalf("plan backend preflight mutated git exclude:\n%s", excludeAfter)
 	}
-	stateAfter, err := os.ReadFile(state.Path(repo))
-	if err != nil {
-		t.Fatal(err)
+	stateAfter, readErr := os.ReadFile(state.Path(repo))
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	if !bytes.Equal(stateAfter, stateBefore) {
 		t.Fatalf("plan backend preflight mutated state:\n%s", stateAfter)
@@ -140,9 +140,9 @@ func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
 	if err := os.WriteFile(issueSpec, []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Launch","source":"issue #425"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: issueSpec})
-	if err != nil {
-		t.Fatal(err)
+	got, resolveErr := resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: issueSpec})
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
 	}
 	if got != "425" {
 		t.Fatalf("resolvePlanLaunchParent(issue source) = %q, want 425", got)
@@ -152,9 +152,9 @@ func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
 	if err := os.WriteFile(ordinarySpec, []byte(`{"version":1,"plan":{"slug":"issue-425-migration","title":"Migration","source":"path-or-conversation-label"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err = resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: ordinarySpec})
-	if err != nil {
-		t.Fatal(err)
+	got, resolveErr = resolvePlanLaunchParent(run.PlanCommandConfig{SpecArg: ordinarySpec})
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
 	}
 	if got != "plan:issue-425-migration" {
 		t.Fatalf("resolvePlanLaunchParent(non-issue source) = %q, want plan:issue-425-migration", got)

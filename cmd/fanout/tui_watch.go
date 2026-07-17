@@ -29,7 +29,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		return nil, 0, "", nil
 	}
 	preflightCfg := &cliflags.Config{ParentRef: tuiWatcherPreflightRef}
-	if _, err := resolveTUILaunchRuntime(projectRoot, session, preflightCfg, nil); err != nil {
+	if _, err := resolveTUILaunchRuntime(projectRoot, session, preflightCfg); err != nil {
 		return nil, 0, "", err
 	}
 	gh := ghissue.Runner{Cwd: projectRoot}
@@ -44,7 +44,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
-			if _, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil); err != nil {
+			if _, err := resolveTUILaunchRuntime(projectRoot, session, cfg); err != nil {
 				return err
 			}
 			return gh.SwapIssueLabels(issue.Number, removeLabel, addLabel)
@@ -104,7 +104,7 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return "", err
 	}
@@ -168,7 +168,7 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 	}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return parentIssueFanoutResult{}, err
 	}

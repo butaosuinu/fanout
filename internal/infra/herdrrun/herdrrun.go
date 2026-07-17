@@ -157,8 +157,8 @@ func (b *Backend) probe() (probeResult, error) {
 		return probeResult{}, fmt.Errorf("herdr status --json: %w", err)
 	}
 	var status statusJSON
-	if err := decodeOne(statusOut, &status); err != nil {
-		return probeResult{}, fmt.Errorf("parse herdr status --json: %w", err)
+	if decodeErr := decodeOne(statusOut, &status); decodeErr != nil {
+		return probeResult{}, fmt.Errorf("parse herdr status --json: %w", decodeErr)
 	}
 	verified, err := validateStatus(status, initial)
 	if err != nil {

@@ -505,9 +505,9 @@ esac
 			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-			locked, err := state.LockProject(repo)
-			if err != nil {
-				t.Fatal(err)
+			locked, lockErr := state.LockProject(repo)
+			if lockErr != nil {
+				t.Fatal(lockErr)
 			}
 			if err := locked.RecordPane(state.Pane{
 				Parent:       panelaunch.ManualParentRef,

@@ -63,7 +63,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	cfg := manualPaneConfigForTUIAgent(agentNames[0])
-	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
@@ -153,7 +153,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 		return panelaunch.Request{}, "", validateErr
 	}
 	cfg := &cliflags.Config{ParentRef: parentRef, Agent: agentName}
-	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg, nil)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return panelaunch.Request{}, "", err
 	}

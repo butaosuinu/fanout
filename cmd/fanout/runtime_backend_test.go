@@ -104,7 +104,7 @@ func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = locked.Unlock() })
-	locked.Store.Panes = append(locked.Store.Panes, state.Pane{
+	locked.Panes = append(locked.Panes, state.Pane{
 		Parent:  "425",
 		Backend: backend.Herdr,
 		PaneID:  "w1:p1",

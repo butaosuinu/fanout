@@ -185,8 +185,7 @@ func crossWorktreeBackendParent(projectRoot string, pane state.Pane) (string, bo
 	if issueNum, ok := panelaunch.PaneIssueParentNum(pane); ok {
 		return strconv.Itoa(issueNum), true
 	}
-	switch pane.Parent {
-	case panelaunch.ManualParentRef:
+	if pane.Parent == panelaunch.ManualParentRef {
 		return "", false
 	}
 	parent := strings.TrimSpace(pane.Parent)

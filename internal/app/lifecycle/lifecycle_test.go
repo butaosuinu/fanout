@@ -422,9 +422,9 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	statePath := state.Path(projectRoot)
-	locked, err := state.Lock(statePath)
-	if err != nil {
-		t.Fatal(err)
+	locked, lockErr := state.Lock(statePath)
+	if lockErr != nil {
+		t.Fatal(lockErr)
 	}
 	pane := state.Pane{
 		Parent:           "423",
@@ -434,12 +434,12 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 		HerdrWorkspaceID: "w2",
 		WorktreePath:     worktreePath,
 	}
-	if err := locked.RecordPane(pane); err != nil {
+	if recordErr := locked.RecordPane(pane); recordErr != nil {
 		_ = locked.Unlock()
-		t.Fatal(err)
+		t.Fatal(recordErr)
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 
 	closeCalls := 0
@@ -458,8 +458,8 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	if closeCalls != 0 {
 		t.Fatalf("ClosePane calls = %d, want 0 for fail-closed herdr v1", closeCalls)
 	}
-	if _, err := os.Stat(worktreePath); err != nil {
-		t.Fatalf("worktree changed before unsupported close was rejected: %v", err)
+	if _, statErr := os.Stat(worktreePath); statErr != nil {
+		t.Fatalf("worktree changed before unsupported close was rejected: %v", statErr)
 	}
 	store, err := state.Load(statePath)
 	if err != nil {

@@ -73,8 +73,8 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 // target. The TUI session bootstrap remains tmux-specific; issue, Project,
 // plan, and watcher launches still resolve parent ownership before they can
 // lock state or create launch artifacts.
-func resolveTUILaunchRuntime(projectRoot, session string, cfg *cliflags.Config, provisionalIntents []backend.Binding) (*run.Runtime, error) {
-	return resolveTUILaunchRuntimeForTarget(projectRoot, session, tuiLaunchTarget(session), cfg, provisionalIntents)
+func resolveTUILaunchRuntime(projectRoot, session string, cfg *cliflags.Config) (*run.Runtime, error) {
+	return resolveTUILaunchRuntimeForTarget(projectRoot, session, tuiLaunchTarget(session), cfg, nil)
 }
 
 func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *cliflags.Config, provisionalIntents []backend.Binding) (*run.Runtime, error) {
@@ -115,8 +115,8 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
-	if err := validateLaunchBackend(selection); err != nil {
-		return launchBackendResolution{}, err
+	if validateErr := validateLaunchBackend(selection); validateErr != nil {
+		return launchBackendResolution{}, validateErr
 	}
 	runtimeBackend, err := constructRuntimeBackend(selection.Name, inputs)
 	if err != nil {

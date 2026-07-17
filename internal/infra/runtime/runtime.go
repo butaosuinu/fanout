@@ -26,8 +26,8 @@ func Resolve(name backend.Name, sessionOverride string) (*Info, error) {
 		return nil, err
 	}
 	name = backend.NormalizeName(name)
-	if _, err := backend.ParseName(string(name)); err != nil {
-		return nil, err
+	if _, parseErr := backend.ParseName(string(name)); parseErr != nil {
+		return nil, parseErr
 	}
 	if name == backend.Herdr {
 		if sessionOverride != "" {

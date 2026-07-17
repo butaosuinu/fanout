@@ -477,10 +477,17 @@ func ensurePaneLivenessKey(req *Request) error {
 }
 
 func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
-	return buildAgentCommandForBackend(cfg, req, commandName, backend.Tmux)
+	return buildAgentCommandForRuntime(cfg, req, commandName, backend.Tmux)
 }
 
 func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
+	if backend.NormalizeName(runtimeBackend) == backend.Tmux {
+		return buildAgentCommand(cfg, req, commandName)
+	}
+	return buildAgentCommandForRuntime(cfg, req, commandName, runtimeBackend)
+}
+
+func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
 	if req.CodexPlanMode {
 		if strings.TrimSpace(req.AgentStartGate) != "" {
 			return "", fmt.Errorf("agent start gate is not supported in Codex Plan Mode")

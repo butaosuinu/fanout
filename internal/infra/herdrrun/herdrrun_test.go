@@ -380,8 +380,11 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 		{
 			name: "missing required agents collection",
 			mutate: func(snapshot string) string {
-				start := strings.Index(snapshot, `      "agents":[`)
-				return snapshot[:start] + "      \"unused\":[]\n    }\n  }\n}\n"
+				prefix, _, ok := strings.Cut(snapshot, `      "agents":[`)
+				if !ok {
+					t.Fatal("snapshot fixture is missing agents collection")
+				}
+				return prefix + "      \"unused\":[]\n    }\n  }\n}\n"
 			},
 			wantErr: "missing a required collection",
 		},
