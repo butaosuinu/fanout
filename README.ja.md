@@ -114,6 +114,30 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
 [ワークフローのドキュメント](https://butaosuinu.github.io/fanout/ja/docs/workflow/)
 を参照してください。
 
+## 兄弟ペインメッセージング (fanout msg)
+
+`--team` を付けた run は兄弟ペインメッセージングにオプトインします。各子の
+標準 briefing に協調セクションが加わり、ペインは parent ごとの SQLite バスを
+使う peer registry に登録されます(`fanout msg peers` / `inbox` / `board` /
+`send` / `post` / `nudge`)。Codex Plan Mode の子は最小の Plan briefing のまま
+協調セクションが付きませんが、registry には登録されます。
+
+メッセージはバスに永続化され、各ペインが自分のチェックポイントで読みます。
+その pull の上に、エージェント別の push レーンが載ります。
+
+- `fanout msg watch` はバスを追いかけ、新着(1:1 と board)を 1 行 1
+  メッセージで流します。emit したメッセージは既読になります(mark-on-emit)。
+- `claude` ペインは briefing の指示で、最初のツール操作として Monitor ツール
+  (persistent)の下で `fanout msg watch` を起動し、そのまま作業を続けます。
+- `--team` で新規起動した非 Plan Mode の `codex` ペインは app-server ブリッジ
+  経由になり、thread が idle のときに未読メッセージを turn へ注入します。
+  restore したペインはブリッジなしで再開し、pull で読みます。
+- どちらのレーンも使えないときは pull(`inbox` / `board`)と `nudge` に
+  戻ります。`nudge` は best-effort の hint で、`blocked` ペインには送りません。
+
+下の watcher モードとは別物です。あちらが見るのは GitHub のラベルで、
+メッセージではありません。
+
 ## watcher モード
 
 watcher は引数なしの TUI コンソールが開いている間だけ動きます。既定は off で、

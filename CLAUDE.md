@@ -92,8 +92,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   skill so `fanout plan`'s git root stays at the repo, never Codex Plan
   Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` /
-  `post_work_review_json.go` are class H; the
+  `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` /
+  `tui_watch.go` / `post_work_review_json.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
@@ -151,9 +151,15 @@ packages can rely on AI review.
   controller in `internal/infra/codexapp` reports working/plan around the
   fanout-driven initial turn (only on the `thread/settings/update`-unsupported
   fallback path; the seed path hands the prompt to the interactive TUI and is
-  unobservable by design). Messaging is pull-based with one push assist:
-  `fanout msg send` only persists the message; the separate `fanout msg nudge`
-  verb pushes an inbox hint to the recipient pane, and only when `shouldNudge`
+  unobservable by design), and the codex team bridge in the same package
+  reports working/idle/blocked around injected turns. Messages persist to the
+  SQLite bus and are read by pull (`inbox` / `board`) or by the per-agent push
+  lanes (`--team` only; see `docs/session-messaging-push.ja.md`):
+  `fanout msg watch` — a blocking follower that marks messages read on emit —
+  feeds claude panes via the Monitor tool, and the codex team bridge injects
+  unread rows into an idle `turn/start`. `fanout msg send` only persists the
+  message; the separate `fanout msg nudge` verb pushes an inbox hint to the
+  recipient pane, and only when `shouldNudge`
   (`internal/app/peermsg`) allows its state — `running` / `working` / `plan` /
   `idle` qualify (matching the Behavior Boundaries list below). The allowlist
   never includes blocked — a blocked pane shows a permission/input dialog and
@@ -213,10 +219,12 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   the TUI/web state glyphs and badges (`internal/ui/tui`, web) and the `run:`
   filter. The launch wrapper in `internal/infra/tmuxrun` writes only `running` /
   `done`; the richer values come from agent hooks (emitter wiring is a separate
-  task). `fanout msg nudge` (`internal/app/peermsg`) is the one exception to
-  pull-based messaging: it send-keys a hint only when the peer can take queued
+  task). `fanout msg nudge` (`internal/app/peermsg`) is the only push that
+  writes to tmux input: it send-keys a hint only when the peer can take queued
   input (`running` / `working` / `plan` / `idle`), and is a no-op for `blocked`
-  (a focused permission dialog), `done`, and unset.
+  (a focused permission dialog), `done`, and unset. The `--team` push delivery
+  lanes (`fanout msg watch` under claude's Monitor tool, the codex team
+  bridge) never write to tmux — see `docs/session-messaging-push.ja.md`.
 - `--sleep` is a rate-limit between successful child launches. It is not a
   retry/backoff knob.
 
