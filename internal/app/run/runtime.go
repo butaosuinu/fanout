@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -53,7 +54,15 @@ func ResolveRuntime(cfg *cliflags.Config, selection backend.Selection, runtimeBa
 		return nil, exitcode.Env
 	}
 	if err := runtimeBackend.CheckAvailable(); err != nil {
-		lg.Err("runtime backend %s is not available: %v", selection.Name, err)
+		if selection.Name == backend.Tmux {
+			// Preserve the established tmux prerequisite diagnostic. Backend
+			// selection must happen first, but a selected tmux backend still
+			// reports availability through the shared missing-dependency shape.
+			lg.Err("missing dependencies:")
+			fmt.Fprintf(lg.Stderr(), "  - %s\n", err)
+		} else {
+			lg.Err("runtime backend %s is not available: %v", selection.Name, err)
+		}
 		return nil, exitcode.Env
 	}
 	info, err := fanoutruntime.Resolve(selection.Name, cfg.Session)
