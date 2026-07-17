@@ -84,10 +84,8 @@ func mergedStateLoader(projectRoot string, listLive func() ([]backend.LivePane, 
 			if !liveLoaded {
 				liveLoaded = true
 				if listLive != nil {
-					panes, err := listLive()
-					if err == nil {
-						live = indexLivePanes(panes)
-					}
+					panes, _ := listLive()
+					live = indexLivePanes(panes)
 				}
 			}
 			// Same path/shell-key-aware check as Build: a bare pane-id match would

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
@@ -42,6 +44,14 @@ type launchBackendResolution struct {
 	backend   backend.Backend
 	verify    func(parent string, locked state.Store) error
 }
+
+type runtimeReadRoute struct {
+	name            backend.Name
+	herdrSession    string
+	herdrSocketPath string
+}
+
+var runtimeListLiveForProject = runtimeListLiveCollector
 
 const tuiWatcherPreflightRef = "@watcher"
 
@@ -153,10 +163,12 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 }
 
 // runtimeBackendBindings projects final rows from the current state plus every
-// linked worktree state that can represent an independent fanout owner. Parent
-// stickiness is repository-wide: choosing from only the invoking worktree could
-// create a conflicting backend row that the merged TUI detects only after the
-// mutation. The current store is supplied by the caller so the lock-time check
+// linked worktree state that can represent an independent fanout owner. Actual
+// issue / Project stickiness is repository-wide: choosing from only the
+// invoking worktree could create a conflicting backend row that the merged TUI
+// detects only after the mutation. A plan without issue provenance remains
+// worktree-local because sibling worktrees may use the same slug for unrelated
+// specs. The current store is supplied by the caller so the lock-time check
 // observes the exact state protected by that caller's launch lock.
 func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.Binding, error) {
 	rows := backendBindings(projectRoot, current)
@@ -179,7 +191,12 @@ func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.
 		if loadErr != nil {
 			return nil, fmt.Errorf("load runtime backend bindings from %s: %w", root, loadErr)
 		}
-		rows = append(rows, backendBindings(root, store)...)
+		for _, binding := range backendBindings(root, store) {
+			if strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
+				continue
+			}
+			rows = append(rows, binding)
+		}
 	}
 	return rows, nil
 }
@@ -296,4 +313,145 @@ func constructRuntimeBackend(name backend.Name, inputs runtimeBackendInputs) (ba
 	default:
 		return nil, fmt.Errorf("unknown runtime backend %q", name)
 	}
+}
+
+// runtimeListLiveCollector builds the read-only runtime observation port used
+// by the dashboard and TUI. Persisted rows route to their own backend; distinct
+// herdr named-session/socket tuples remain separate. With no persisted herdr
+// route, the normal settings/env/context resolver can opt the read surface into
+// the ambient named session even though herdr v1 launch remains unsupported.
+//
+// includeTmux keeps the TUI's host runtime observable even when the ambient
+// selection is herdr. Targeted TUI actions continue to use the tmux adapter.
+func runtimeListLiveCollector(projectRoot string, includeTmux bool) func() ([]backend.LivePane, error) {
+	var mu sync.Mutex
+	return func() ([]backend.LivePane, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		routes, routeErr := runtimeReadRoutes(projectRoot, includeTmux)
+		return collectRuntimeLive(routes, routeErr, func(route runtimeReadRoute) ([]backend.LivePane, error) {
+			runtimeBackend, err := constructRuntimeBackend(route.name, runtimeBackendInputs{
+				herdrSession:    route.herdrSession,
+				herdrSocketPath: route.herdrSocketPath,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return runtimeBackend.ListLive()
+		})
+	}
+}
+
+func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute, error) {
+	routes := make([]runtimeReadRoute, 0, 3)
+	seenRoutes := map[string]bool{}
+	addRoute := func(route runtimeReadRoute) {
+		key := string(route.name) + "\x00" + route.herdrSession + "\x00" + route.herdrSocketPath
+		if seenRoutes[key] {
+			return
+		}
+		seenRoutes[key] = true
+		routes = append(routes, route)
+	}
+	if includeTmux {
+		addRoute(runtimeReadRoute{name: backend.Tmux})
+	}
+
+	roots, listErr := worktree.ListRoots(projectRoot)
+	var routeErr error
+	if listErr != nil {
+		routeErr = errors.Join(routeErr, fmt.Errorf("list linked worktrees for runtime observation: %w", listErr))
+	}
+	seenRoots := map[string]bool{}
+	hasHerdrRow := false
+	for _, root := range roots {
+		key := canonicalRuntimeRoot(root)
+		if seenRoots[key] {
+			continue
+		}
+		seenRoots[key] = true
+		store, err := state.LoadProject(root)
+		if err != nil {
+			if key == canonicalRuntimeRoot(projectRoot) {
+				routeErr = errors.Join(routeErr, err)
+			}
+			continue
+		}
+		for i, pane := range store.Panes {
+			switch name := backend.NormalizeName(pane.Backend); name {
+			case backend.Tmux:
+				addRoute(runtimeReadRoute{name: backend.Tmux})
+			case backend.Herdr:
+				hasHerdrRow = true
+				session := strings.TrimSpace(pane.HerdrSession)
+				socketPath := strings.TrimSpace(pane.HerdrSocketPath)
+				if session == "" || socketPath == "" {
+					routeErr = errors.Join(routeErr, fmt.Errorf(
+						"saved herdr runtime route at %s pane %d requires herdrSession and herdrSocketPath",
+						state.Path(root), i,
+					))
+					continue
+				}
+				addRoute(runtimeReadRoute{name: backend.Herdr, herdrSession: session, herdrSocketPath: socketPath})
+			default:
+				routeErr = errors.Join(routeErr, fmt.Errorf(
+					"saved runtime route at %s pane %d has unknown backend %q",
+					state.Path(root), i, name,
+				))
+			}
+		}
+	}
+
+	inputs := loadRuntimeBackendInputs(&cliflags.Config{}, projectRoot, state.Store{}, nil)
+	selection, err := resolveBackendSelection("", inputs)
+	if err != nil {
+		routeErr = errors.Join(routeErr, err)
+	} else {
+		switch selection.Name {
+		case backend.Tmux:
+			addRoute(runtimeReadRoute{name: backend.Tmux})
+		case backend.Herdr:
+			if !hasHerdrRow {
+				addRoute(runtimeReadRoute{
+					name:            backend.Herdr,
+					herdrSession:    strings.TrimSpace(inputs.herdrSession),
+					herdrSocketPath: strings.TrimSpace(inputs.herdrSocketPath),
+				})
+			}
+		}
+	}
+	return routes, routeErr
+}
+
+// collectRuntimeLive keeps useful observations when one of several independent
+// runtime routes is unavailable and returns the joined error alongside that
+// partial result. Read-only views can render the successful routes while still
+// marking the runtime snapshot degraded.
+func collectRuntimeLive(
+	routes []runtimeReadRoute,
+	routeErr error,
+	list func(runtimeReadRoute) ([]backend.LivePane, error),
+) ([]backend.LivePane, error) {
+	panes := make([]backend.LivePane, 0)
+	joined := routeErr
+	for _, route := range routes {
+		got, err := list(route)
+		if err != nil {
+			joined = errors.Join(joined, fmt.Errorf("list live panes via %s: %w", runtimeReadRouteLabel(route), err))
+			continue
+		}
+		panes = append(panes, got...)
+	}
+	return panes, joined
+}
+
+func runtimeReadRouteLabel(route runtimeReadRoute) string {
+	if route.name != backend.Herdr {
+		return string(route.name)
+	}
+	if route.herdrSession == "" {
+		return string(route.name)
+	}
+	return fmt.Sprintf("%s session %q", route.name, route.herdrSession)
 }

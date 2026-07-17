@@ -42,7 +42,8 @@ type Options struct {
 	//   ("",  nil,      err) -> sticky Degraded.GitHub
 	// A nil ResolveGH disables the GitHub tier entirely (state-only, no degrade).
 	ResolveGH func() (repo string, gh GHProvider, err error)
-	// ListLive observes panes through the runtime backend selected by cmd.
+	// ListLive observes panes through the runtime backend routes selected by cmd;
+	// partial observations may accompany an error from another route.
 	ListLive func() ([]backend.LivePane, error)
 	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
 	// nil defaults to tmuxrun.CapturePaneOutput; tests inject a fake.

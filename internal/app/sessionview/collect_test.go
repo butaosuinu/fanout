@@ -1,6 +1,7 @@
 package sessionview
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,10 +155,14 @@ func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	// stale home row a bare pane-id match would consider "live".
 	recordPaneAt(t, top, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%reused", WorktreePath: "/home/wt", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%live", WorktreePath: "/sib/wt", Agent: "claude"})
-	live := livePanesWith(map[string]LivePaneInfo{
+	livePanes := livePanesWith(map[string]LivePaneInfo{
 		"%reused": {Path: "/unrelated/elsewhere"},
 		"%live":   {Path: "/sib/wt"},
 	})
+	live := func() ([]backend.LivePane, error) {
+		panes, err := livePanes()
+		return panes, errors.Join(err, errors.New("unrelated herdr route failed"))
+	}
 
 	store, err := mergedStateLoader(top, live)()
 	if err != nil {

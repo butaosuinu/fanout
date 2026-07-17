@@ -139,18 +139,58 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	t.Setenv("TMUX_PANE", "%tui")
 	installTUIDashboardTmuxShim(t)
 	original := runTUI
+	originalListLive := runtimeListLiveForProject
+	compositeCalls := 0
+	var compositeIncludeTmux bool
+	runtimeListLiveForProject = func(root string, includeTmux bool) func() ([]backend.LivePane, error) {
+		if canonicalRuntimeRoot(root) != canonicalRuntimeRoot(repo) {
+			t.Fatalf("runtime collector root = %q, want %q", root, repo)
+		}
+		compositeIncludeTmux = includeTmux
+		return func() ([]backend.LivePane, error) {
+			compositeCalls++
+			return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w1:p1"}}}, nil
+		}
+	}
 	var opts fanouttui.Options
 	runTUI = func(o fanouttui.Options) error {
 		opts = o
 		return nil
 	}
-	defer func() { runTUI = original }()
+	defer func() {
+		runTUI = original
+		runtimeListLiveForProject = originalListLive
+	}()
 
 	if code := cmdTUI("fanout", discardLogger()); code != exitcode.OK {
 		t.Fatalf("cmdTUI() = %d, want OK", code)
 	}
-	if opts.ListLive == nil || opts.FocusPane == nil || opts.PaneAlive == nil || opts.CapturePaneOutput == nil || opts.ClosePane == nil {
+	if opts.ListLive == nil || opts.LifecycleListLive == nil || opts.ShellPaneAlive == nil || opts.FocusPane == nil || opts.PaneAlive == nil || opts.CapturePaneOutput == nil || opts.ClosePane == nil {
 		t.Fatal("runtime backend ports are incomplete")
+	}
+	observed, err := opts.ListLive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compositeIncludeTmux || len(observed) != 1 || observed[0].Ref.Backend != backend.Herdr {
+		t.Fatalf("composite ListLive = %+v (includeTmux=%v), want herdr observation with tmux host", observed, compositeIncludeTmux)
+	}
+	if _, err := opts.LifecycleListLive(); err != nil {
+		t.Fatal(err)
+	}
+	_ = opts.ShellPaneAlive("%2", "shell-key")
+	_ = opts.PaneAlive("%2")
+	if err := opts.FocusPane("%2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opts.CapturePaneOutput("%2", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.ClosePane(backend.PaneRef{Backend: backend.Tmux, Pane: "%2"}); err != nil {
+		t.Fatal(err)
+	}
+	if compositeCalls != 1 {
+		t.Fatalf("composite ListLive calls = %d, want only the display observation call", compositeCalls)
 	}
 }
 

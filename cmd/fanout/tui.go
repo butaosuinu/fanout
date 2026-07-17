@@ -60,6 +60,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 	runtimeBackend := tmuxbackend.New()
+	listLive := runtimeListLiveForProject(projectRoot, true)
 	hookConfig := hooks.LoadUserConfig(lg)
 	watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
 	if err != nil {
@@ -109,7 +110,9 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
 		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
 		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
-		ListLive:          runtimeBackend.ListLive,
+		ListLive:          listLive,
+		LifecycleListLive: runtimeBackend.ListLive,
+		ShellPaneAlive:    runtimeShellPaneAlive(runtimeBackend.ListLive),
 		FocusPane: func(paneID string) error {
 			return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
 		},
@@ -136,6 +139,26 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func runtimeShellPaneAlive(listLive func() ([]backend.LivePane, error)) func(paneID, shellKey string) bool {
+	return func(paneID, shellKey string) bool {
+		paneID = strings.TrimSpace(paneID)
+		shellKey = strings.TrimSpace(shellKey)
+		if paneID == "" || shellKey == "" || listLive == nil {
+			return false
+		}
+		panes, err := listLive()
+		if err != nil {
+			return false
+		}
+		for _, pane := range panes {
+			if backend.NormalizeName(pane.Ref.Backend) == backend.Tmux && pane.Ref.Pane == paneID && pane.ShellKey == shellKey {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, lg *log.Logger) fanouttui.SettingsReloadFunc {

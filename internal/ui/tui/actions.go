@@ -205,6 +205,10 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 	// home checkout while state ops route to each owning worktree.
 	watcherLabel := m.opts.WatcherRunningLabel
 	removeLabel := ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel
+	lifecycleListLive := m.opts.LifecycleListLive
+	if lifecycleListLive == nil {
+		lifecycleListLive = m.opts.ListLive
+	}
 	lifecycleOpts := func(root string) lifecycle.Options {
 		return lifecycle.Options{
 			ProjectRoot:         root,
@@ -213,7 +217,7 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 			WatcherRunningLabel: watcherLabel,
 			RemoveIssueLabel:    removeLabel,
 			ClosePane:           m.opts.ClosePane,
-			ListLive:            m.opts.ListLive,
+			ListLive:            lifecycleListLive,
 		}
 	}
 	paneOpts := lifecycleOpts(paneRoot)

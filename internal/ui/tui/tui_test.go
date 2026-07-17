@@ -2984,11 +2984,20 @@ func TestLifecycleCmdRoutesToPaneSourceProjectRoot(t *testing.T) {
 
 func TestLifecycleCmdPassesRuntimeBackendPorts(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	displayCalls := 0
+	lifecycleCalls := 0
 	m := newModel(Options{
 		ProjectRoot: "/repo",
 		ClosePane:   func(backend.PaneRef) error { return nil },
-		ListLive:    func() ([]backend.LivePane, error) { return nil, nil },
-		lifecycle:   runner,
+		ListLive: func() ([]backend.LivePane, error) {
+			displayCalls++
+			return nil, errors.New("unrelated herdr route failed")
+		},
+		LifecycleListLive: func() ([]backend.LivePane, error) {
+			lifecycleCalls++
+			return nil, nil
+		},
+		lifecycle: runner,
 	})
 
 	pane := paneView{Parent: "84", IssueNum: 101, Name: "child"}
@@ -2998,6 +3007,12 @@ func TestLifecycleCmdPassesRuntimeBackendPorts(t *testing.T) {
 	}
 	if !runner.closePaneConfigured || !runner.listLiveConfigured {
 		t.Fatalf("runtime ports configured = close:%v list:%v, want both true", runner.closePaneConfigured, runner.listLiveConfigured)
+	}
+	if _, err := runner.listLive(); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycleCalls != 1 || displayCalls != 0 {
+		t.Fatalf("ListLive calls = lifecycle:%d display:%d, want isolated lifecycle route", lifecycleCalls, displayCalls)
 	}
 }
 
@@ -3472,6 +3487,7 @@ type fakeLifecycleRunner struct {
 	watcherRunningLabel string
 	closePaneConfigured bool
 	listLiveConfigured  bool
+	listLive            func() ([]backend.LivePane, error)
 	cleanupRoots        []string
 	closeRoots          []string
 }
@@ -3499,6 +3515,7 @@ func (f *fakeLifecycleRunner) CloseWithMode(opts lifecycle.Options, parent strin
 	f.closeMode = mode
 	f.closePaneConfigured = opts.ClosePane != nil
 	f.listLiveConfigured = opts.ListLive != nil
+	f.listLive = opts.ListLive
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close\n")
 	return f.code
@@ -3516,6 +3533,7 @@ func (f *fakeLifecycleRunner) CloseTaskWithMode(opts lifecycle.Options, parent, 
 	f.closeMode = mode
 	f.closePaneConfigured = opts.ClosePane != nil
 	f.listLiveConfigured = opts.ListLive != nil
+	f.listLive = opts.ListLive
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close task\n")
 	return f.code

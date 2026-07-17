@@ -31,9 +31,11 @@ import (
 //     unresolved); the pane shows UNKNOWN and Degraded.GitHub is set.
 type Collectors struct {
 	LoadState func() (state.Store, error)
-	// ListLive observes panes through the selected runtime backend. A pane counts
-	// as alive only when its backend-native reference is present and its identity
-	// metadata still agrees with the persisted row.
+	// ListLive observes panes through the runtime backend routes selected by the
+	// composition root. A pane counts as alive only when its backend-native
+	// reference is present and its identity metadata still agrees with the
+	// persisted row. A partial result may accompany an error when another route
+	// is unavailable; Build retains those observations and marks runtime degraded.
 	ListLive func() ([]backend.LivePane, error)
 	IssuePRs func(num int) (issueState string, prs []ghissue.PRRef, err error)
 	// BranchPRs mirrors IssuePRs for branch-owning issue-less pane rows (for
@@ -93,11 +95,13 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	live := map[livePaneKey]backend.LivePane{}
 	if c.ListLive == nil {
 		snap.Degraded.Tmux = true
-	} else if set, err := c.ListLive(); err != nil {
-		snap.Degraded.Tmux = true
-		snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
 	} else {
+		set, err := c.ListLive()
 		live = indexLivePanes(set)
+		if err != nil {
+			snap.Degraded.Tmux = true
+			snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
+		}
 	}
 
 	// One gh read per distinct issue number or branch, cached across sessions.

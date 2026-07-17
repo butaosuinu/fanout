@@ -77,6 +77,11 @@ type Options struct {
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
 	ListLive          func() ([]backend.LivePane, error)
+	// LifecycleListLive is the runtime-specific identity check used immediately
+	// before a keyed close. It defaults to ListLive; the mixed-backend TUI wires
+	// the tmux route separately so an unrelated herdr observation failure cannot
+	// block an otherwise safe tmux close.
+	LifecycleListLive func() ([]backend.LivePane, error)
 	ClosePane         func(backend.PaneRef) error
 	ListRepoFiles     func(root string) ([]string, error)
 	Notifier          transitionNotifier

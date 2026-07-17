@@ -480,6 +480,28 @@ func TestBuildDegradesWhenTmuxFails(t *testing.T) {
 	}
 }
 
+func TestBuildUsesPartialRuntimeSnapshotWhenCollectorDegrades(t *testing.T) {
+	recorded := pane("1", 2, "%1")
+	live := livePanesAt("%1")
+	c := Collectors{
+		Now:       fixedNow,
+		LoadState: storeOf(recorded),
+		ListLive: func() ([]backend.LivePane, error) {
+			panes, err := live()
+			return panes, errors.Join(err, errors.New("herdr session offline"))
+		},
+		IssuePRs: func(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+		Waves:    wavesNone,
+	}
+	snap := Build("o/n", "/root", c)
+	if !snap.Degraded.Tmux || !strings.Contains(snap.Degraded.Reason, "herdr session offline") {
+		t.Fatalf("degraded = %+v, want partial runtime error", snap.Degraded)
+	}
+	if !snap.Sessions[0].Panes[0].Alive {
+		t.Fatal("successful tmux observation should remain live in a degraded mixed snapshot")
+	}
+}
+
 func TestBuildDegradesWhenGitHubFails(t *testing.T) {
 	calls := 0
 	c := Collectors{
