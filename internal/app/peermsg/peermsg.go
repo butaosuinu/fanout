@@ -8,10 +8,10 @@ package peermsg
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/msgstore"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -37,6 +37,9 @@ type Request struct {
 	All      bool
 	MarkRead bool
 	Body     string
+	// Interval is watch's poll interval in seconds (default 2, validated >= 1
+	// by the CLI parser); unused by every other verb.
+	Interval int
 }
 
 // Deps are the IO seams Run drives. Tests inject fakes so no live
@@ -52,6 +55,9 @@ type Deps struct {
 	// read-only — the recipient's recorded pane id lives there, not in the
 	// messages DB.
 	LoadState func() (state.Store, error)
+	// Tick paces the watch poll loop; production is time.After, tests inject
+	// an immediately-ready channel.
+	Tick func(d time.Duration) <-chan time.Time
 }
 
 // DefaultDeps wires the production implementations.
@@ -61,7 +67,32 @@ func DefaultDeps() Deps {
 		ListLivePanes:  tmuxrun.ListLivePanes,
 		SendLine:       tmuxrun.SendLiteralLine,
 		LoadState:      defaultLoadState,
+		Tick:           time.After,
 	}
+}
+
+// withDefaults fills nil seams from DefaultDeps. The exported watch entry
+// points apply it so an in-process caller passing a zero-value or partial
+// Deps (a valid pattern for every seam it does not exercise) degrades to the
+// production wiring instead of panicking on a nil function call.
+func (d Deps) withDefaults() Deps {
+	def := DefaultDeps()
+	if d.DetectIdentity == nil {
+		d.DetectIdentity = def.DetectIdentity
+	}
+	if d.ListLivePanes == nil {
+		d.ListLivePanes = def.ListLivePanes
+	}
+	if d.SendLine == nil {
+		d.SendLine = def.SendLine
+	}
+	if d.LoadState == nil {
+		d.LoadState = def.LoadState
+	}
+	if d.Tick == nil {
+		d.Tick = def.Tick
+	}
+	return d
 }
 
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
@@ -93,6 +124,12 @@ func defaultLoadState() (state.Store, error) {
 // Run executes a parsed msg request: resolve identity, short-circuit nudge,
 // open the per-parent team DB, then run the verb.
 func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
+	// watch is part of the exported in-process surface (see OpenWatcher), so
+	// fill missing seams before anything dereferences them; the other verbs
+	// keep the caller's Deps verbatim.
+	if req.Verb == "watch" {
+		deps = deps.withDefaults()
+	}
 	self, parent, pane, code := resolveMsgIdentity(&req, deps, lg)
 	if code != exitcode.OK {
 		return code
@@ -105,15 +142,16 @@ func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
 		return runMsgNudge(&req, parent, deps, lg)
 	}
 
-	db, code := openMsgDB(req.Verb, parent, lg)
+	// watch loops with its own DB handle (Watcher.Close), so it must not run
+	// under this function's defer db.Close(); short it out like nudge.
+	if req.Verb == "watch" {
+		return runMsgWatch(&req, self, parent, pane, deps, lg)
+	}
+
+	db, store, code := openMsgStore(req.Verb, parent, lg)
 	if code != exitcode.OK {
 		return code
 	}
 	defer func() { _ = db.Close() }()
-	store, err := msgstore.New(db, parent)
-	if err != nil {
-		lg.Err("msg %s: %v", req.Verb, err)
-		return exitcode.Backend
-	}
 	return runMsgVerb(&req, store, self, parent, pane, lg)
 }

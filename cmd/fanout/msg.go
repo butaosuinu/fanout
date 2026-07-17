@@ -19,6 +19,9 @@ Read verbs:
   peers                          List registered peers.
   inbox [--all] [--mark-read]    Unread 1:1 messages + unread board posts.
   board [--all]                  Unread board posts (cursor-based).
+  watch [--interval S]           Block and emit new inbox messages (1:1 +
+                                 board) one per line as they arrive; emitted
+                                 messages are marked read. Ctrl-C to stop.
 
 Write verbs:
   send --to <N> [--kind K] <body...>   Send a 1:1 message (body words are joined).
@@ -46,9 +49,11 @@ Options:
   --id <N>         mark-read: message id (repeatable).
   --all            inbox/board: include read messages; mark-read: mark everything.
   --mark-read      inbox: mark the displayed messages read.
+  --interval <S>   watch: poll interval in seconds, 1-86400 (default: 2).
   -h, --help       Show this help.
 
-Exit codes: 0 success, 2 invalid invocation, 4 backend (SQLite) failure.
+Exit codes: 0 success, 2 invalid invocation, 4 backend failure (SQLite, or
+watch's stdout breaking).
 nudge is best-effort: operational failures (pane gone, agent not nudgeable,
 send-keys failure) exit 0 with a warning, never 4.
 `
@@ -70,6 +75,7 @@ type msgFlags struct {
 	all      bool
 	markRead bool
 	body     string
+	interval int // watch: poll seconds; defaulted to 2 at parse start
 }
 
 // request converts the parsed argv into the peermsg execution request.
@@ -87,6 +93,7 @@ func (f *msgFlags) request() peermsg.Request {
 		All:      f.all,
 		MarkRead: f.markRead,
 		Body:     f.body,
+		Interval: f.interval,
 	}
 }
 
@@ -102,6 +109,7 @@ var msgVerbFlags = map[string]map[string]bool{
 	"post":      {"--kind": true},
 	"mark-read": {"--id": true, "--all": true},
 	"register":  {},
+	"watch":     {"--interval": true},
 	// nudge's target is a positional <N>, not --to; universal
 	// --json/--self/--parent still apply.
 	"nudge": {},
@@ -149,7 +157,7 @@ func parseMsgFlags(args []string, lg *log.Logger) (*msgFlags, exitcode.Code) {
 		fmt.Fprint(lg.Stdout(), msgUsage)
 		return nil, exitcode.OK
 	}
-	f := &msgFlags{verb: args[0], kind: "note"}
+	f := &msgFlags{verb: args[0], kind: "note", interval: peermsg.DefaultWatchInterval}
 	allowed, ok := msgVerbFlags[f.verb]
 	if !ok {
 		lg.Err("msg: unknown verb: %s", f.verb)
@@ -344,6 +352,17 @@ func setMsgFlagValue(f *msgFlags, flag, value string, lg *log.Logger) exitcode.C
 			return exitcode.Invocation
 		}
 		f.ids = append(f.ids, n)
+	case "--interval":
+		// The upper bound keeps time.Duration(interval)*time.Second far from
+		// int64 overflow (which would yield a negative duration and turn the
+		// watch tick into a busy loop); a day-long poll interval is already
+		// past any sensible use.
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > peermsg.MaxWatchInterval {
+			lg.Err("msg %s: --interval must be an integer between 1 and %d (seconds), got: %s", f.verb, peermsg.MaxWatchInterval, value)
+			return exitcode.Invocation
+		}
+		f.interval = n
 	}
 	return exitcode.OK
 }

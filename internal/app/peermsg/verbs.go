@@ -38,6 +38,24 @@ func openMsgDB(verb, parent string, lg *log.Logger) (*sql.DB, exitcode.Code) {
 	return db, exitcode.OK
 }
 
+// openMsgStore opens the per-parent team DB and claims the store on it — the
+// shared sequence behind Run's verb dispatch and the watch Watcher. On any
+// failure the DB handle is already closed; on success the caller owns closing
+// the returned db.
+func openMsgStore(verb, parent string, lg *log.Logger) (*sql.DB, *msgstore.Store, exitcode.Code) {
+	db, code := openMsgDB(verb, parent, lg)
+	if code != exitcode.OK {
+		return nil, nil, code
+	}
+	store, err := msgstore.New(db, parent)
+	if err != nil {
+		_ = db.Close()
+		lg.Err("msg %s: %v", verb, err)
+		return nil, nil, exitcode.Backend
+	}
+	return db, store, exitcode.OK
+}
+
 func runMsgVerb(req *Request, store *msgstore.Store, self int, parent string, pane msgstore.Peer, lg *log.Logger) exitcode.Code {
 	now := team.Now()
 	switch req.Verb {

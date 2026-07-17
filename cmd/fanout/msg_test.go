@@ -148,6 +148,33 @@ func TestParseMsgFlags(t *testing.T) {
 				t.Errorf("parsed = %+v", f)
 			}
 		}},
+		{name: "watch defaults the interval to 2", args: []string{"watch", "--self", "70", "--parent", "68"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.interval != 2 {
+				t.Errorf("interval = %d, want 2", f.interval)
+			}
+		}},
+		{name: "watch parses --interval", args: []string{"watch", "--interval", "5"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.interval != 5 {
+				t.Errorf("interval = %d, want 5", f.interval)
+			}
+		}},
+		{name: "watch parses an inline --interval value", args: []string{"watch", "--interval=3"}, code: exitcode.OK, want: func(t *testing.T, f *msgFlags) {
+			t.Helper()
+			if f.interval != 3 {
+				t.Errorf("interval = %d, want 3", f.interval)
+			}
+		}},
+		{name: "watch rejects a zero interval", args: []string{"watch", "--interval", "0"}, code: exitcode.Invocation},
+		// 86401 pins the overflow guard: a huge interval would wrap
+		// time.Duration negative and busy-loop the watch tick.
+		{name: "watch rejects an interval above one day", args: []string{"watch", "--interval", "86401"}, code: exitcode.Invocation},
+		{name: "watch rejects a negative interval", args: []string{"watch", "--interval", "-1"}, code: exitcode.Invocation},
+		{name: "watch rejects a non-integer interval", args: []string{"watch", "--interval", "abc"}, code: exitcode.Invocation},
+		{name: "watch rejects a positional argument", args: []string{"watch", "hello"}, code: exitcode.Invocation},
+		{name: "watch does not accept --to", args: []string{"watch", "--to", "5"}, code: exitcode.Invocation},
+		{name: "--interval is watch-only", args: []string{"inbox", "--interval", "2"}, code: exitcode.Invocation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, code := parseMsgFlags(tc.args, msgTestLogger())
