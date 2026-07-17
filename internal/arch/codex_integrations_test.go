@@ -123,6 +123,7 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"instruction-changing",
 		"helper is a symlink",
 		"inside the recorded",
+		"Current `make link` copies this skill",
 		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",

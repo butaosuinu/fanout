@@ -129,7 +129,12 @@ link-integrations:
 	done
 	@for skill in $(CODEX_SKILLS); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
-		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
+		if [ "$$skill" = post-work-review ]; then \
+			mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
+			cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
+		else \
+			ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
+		fi; \
 	done
 	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
 		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
@@ -159,7 +164,13 @@ link: build-go link-integrations
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; done
+	@for skill in $(CODEX_SKILLS); do \
+		if [ "$$skill" = post-work-review ]; then \
+			echo "  $(CODEX_SKILL_DIR)/$$skill (copied trust boundary)"; \
+		else \
+			echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; \
+		fi; \
+	done
 
 uninstall: uninstall-integrations
 	rm -f "$(BINDIR)/fanout"

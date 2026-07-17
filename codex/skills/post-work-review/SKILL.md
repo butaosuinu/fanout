@@ -58,9 +58,10 @@ reviewer output or require a result schema.
 4. Resolve this skill package and `scripts/mark-reviewed-head.sh` to lexical
    and physical absolute paths. Stop if the package, any path component, or the
    helper is a symlink, or if its physical path is inside the recorded
-   repository. A package installed with `make link` is development-only and
-   cannot review the checkout it links to; use an independently copied
-   `make install` package or a trusted checkout. The helper repeats this check.
+   repository. Current `make link` copies this skill instead of linking it;
+   rerun it after skill edits. Stop on an older linked install and use an
+   independently copied `make install` / `make link` package or a trusted
+   checkout. The helper repeats this check.
 5. Run `"$helper" clear` with the recorded repository root as the working
    directory before the first spawn. This removes any stale marker.
 6. From that same working directory, run

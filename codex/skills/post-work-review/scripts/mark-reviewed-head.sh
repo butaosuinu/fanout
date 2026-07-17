@@ -19,11 +19,23 @@ script_dir_physical=$(CDPATH='' cd "$script_dir" && pwd -P) || die "cannot resol
 script_path="$script_dir_physical/$(basename "$script_path")"
 repo_root=$(git rev-parse --show-toplevel) || die "cannot resolve repository root"
 repo_root=$(CDPATH='' cd "$repo_root" && pwd -P) || die "cannot resolve repository root"
+[ "$(pwd -P)" = "$repo_root" ] || die "helper must run from the repository root"
 case "$script_path" in
   "$repo_root" | "$repo_root"/*)
     die "helper must be installed outside the reviewed repository"
     ;;
 esac
+
+for bootstrap_path in "$repo_root/AGENTS.md" "$repo_root/AGENTS.override.md" "$repo_root/.codex"; do
+  [ ! -L "$bootstrap_path" ] ||
+    die "Codex bootstrap paths must not be symlinks: $bootstrap_path"
+done
+if [ -d "$repo_root/.codex" ]; then
+  codex_symlink=$(find "$repo_root/.codex" -type l -print -quit) ||
+    die "cannot inspect repository .codex directory"
+  [ -z "$codex_symlink" ] || die "repository .codex files must not be symlinks: $codex_symlink"
+fi
+
 git_dir=$(git rev-parse --absolute-git-dir) || die "cannot resolve Git directory"
 marker="$git_dir/post-work-review-passed"
 metadata="$marker.meta"
@@ -103,7 +115,7 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=9\n'
+      printf 'post_work_review_version=10\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"

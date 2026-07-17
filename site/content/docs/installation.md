@@ -80,13 +80,13 @@ codesign -s - /path/to/fanout
 
 ```bash
 make install        # builds the Go binary as $(BINDIR)/fanout + copies integrations
-make link           # symlinks the Go binary as $(BINDIR)/fanout + symlinks integrations
+make link           # symlinks the binary and integrations except post-work-review
 make uninstall      # removes installed paths
 ```
 
-Run `make install` before using `$post-work-review` on this checkout. The gate
-rejects a skill or marker helper symlinked into the repository; `make link` is
-for development only.
+`make link` still copies `post-work-review` outside the checkout as a trust
+boundary. Run `make link` again after editing that skill; its installed copy
+does not update live.
 
 Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 

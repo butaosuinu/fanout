@@ -81,12 +81,12 @@ codesign -s - /path/to/fanout
 
 ```bash
 make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
-make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を symlink
+make link           # binary と post-work-review 以外の連携を symlink
 make uninstall      # インストール済みのパスを削除
 ```
 
-この checkout で `$post-work-review` を使う前に `make install` を実行してください。
-gate は repository 内への skill / marker helper symlink を拒否します。`make link` は開発専用です。
+`make link` でも trust boundary として `post-work-review` は checkout 外へ copy します。
+この skill を編集したら `make link` を再実行してください。installed copy は自動更新されません。
 
 ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。

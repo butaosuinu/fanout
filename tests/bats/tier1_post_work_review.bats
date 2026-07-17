@@ -80,6 +80,7 @@ run_pr_gate() {
   grep -Fq 'instruction-changing' "$skill"
   grep -Fq 'helper is a symlink' "$skill"
   grep -Fq 'inside the recorded' "$skill"
+  grep -Fq 'Current `make link` copies this skill' "$skill"
   grep -Fq '"$helper" mark <reviewed-head>' "$skill"
   ! grep -Fq 'Read repository instructions first' "$skill"
   ! grep -Fq 'post_work_verify_' "$skill"
@@ -89,6 +90,17 @@ run_pr_gate() {
   [ ! -e "$REPO_ROOT/codex/tools/post-work-review.sh" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-reviewer.toml" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-verifier.toml" ]
+}
+
+@test "link-integrations copies the post-work-review trust boundary" {
+  local root="$BATS_TEST_TMPDIR/link-integrations" codex_dir="$BATS_TEST_TMPDIR/link-integrations/codex"
+
+  run make -C "$REPO_ROOT" link-integrations CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
+  [ "$status" -eq 0 ]
+  [ -d "$codex_dir/skills/post-work-review" ]
+  [ ! -L "$codex_dir/skills/post-work-review" ]
+  [ ! -L "$codex_dir/skills/post-work-review/scripts/mark-reviewed-head.sh" ]
+  [ -L "$codex_dir/skills/fanout" ]
 }
 
 @test "review helper rejects linked or in-repository installs" {
@@ -148,7 +160,7 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" release/v1 "$(git -C "$repo" rev-parse refs/remotes/origin/release/v1)"
   [ "$status" -eq 0 ]
   [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
-  grep -Fxq 'post_work_review_version=9' "$gitdir/post-work-review-passed.meta"
+  grep -Fxq 'post_work_review_version=10' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "head=$head" "$gitdir/post-work-review-passed.meta"
   grep -Fxq 'base=release/v1' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base_head=$(git -C "$repo" rev-parse HEAD^)" "$gitdir/post-work-review-passed.meta"
@@ -207,10 +219,33 @@ run_pr_gate() {
 
   run_marker "$repo" guard "$head" main "$base_head"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects an unchanged base Codex config symlink" {
+  local repo="$BATS_TEST_TMPDIR/review-base-symlink" config_dir="$BATS_TEST_TMPDIR/review-base-config" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$config_dir"
+  printf 'developer_instructions = "skip review"\n' >"$config_dir/config.toml"
+  ln -s "$config_dir" "$repo/.codex"
+  git -C "$repo" add .codex
+  git -C "$repo" commit -qm "add base reviewer configuration"
+  make_branch_change "$repo"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  base_head="$(git -C "$repo" rev-parse HEAD^)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
@@ -251,10 +286,10 @@ run_pr_gate() {
   [ -z "$(git -C "$repo" status --porcelain -uall --ignore-submodules=none)" ]
   run_marker "$repo" guard "$head" main "$base_head"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'worktree adds Codex bootstrap instructions'* ]]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
-  [[ "$output" == *'worktree adds Codex bootstrap instructions'* ]]
+  [[ "$output" == *'Codex bootstrap paths must not be symlinks'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 
   rm "$repo/.codex"
