@@ -40,22 +40,22 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 	if err != nil {
 		t.Fatalf("team.Open: %v", err)
 	}
-	if err := team.EnsureSchema(db); err != nil {
-		t.Fatalf("team.EnsureSchema: %v", err)
+	if schemaErr := team.EnsureSchema(db); schemaErr != nil {
+		t.Fatalf("team.EnsureSchema: %v", schemaErr)
 	}
 	store, err := msgstore.New(db, parent)
 	if err != nil {
 		t.Fatalf("msgstore.New: %v", err)
 	}
-	if _, err := store.Send(
+	if _, sendErr := store.Send(
 		team.TaskPeerNum(parent, "task-b"),
 		team.TaskPeerNum(parent, "task-a"),
 		"note", "sent before the final pane starts", team.Now(),
-	); err != nil {
-		t.Fatalf("Send: %v", err)
+	); sendErr != nil {
+		t.Fatalf("Send: %v", sendErr)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close sender db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("close sender db: %v", closeErr)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -67,10 +67,10 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 	if code != exitcode.OK {
 		t.Fatalf("OpenWatcher code = %d, want OK; stderr=%s", code, stderr.String())
 	}
-	events, err := watcher.Poll()
+	events, pollErr := watcher.Poll()
 	watcher.Close()
-	if err != nil {
-		t.Fatalf("Poll: %v", err)
+	if pollErr != nil {
+		t.Fatalf("Poll: %v", pollErr)
 	}
 	if len(events) != 1 {
 		t.Fatalf("Poll events = %d, want 1", len(events))
@@ -80,8 +80,8 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 		t.Fatalf("HumanLine = %q, want reply-addressable task ids", line)
 	}
 
-	if err := cleanupUncreatedTaskPeers(dbPath, parent, tasks, []string{"task-a"}); err != nil {
-		t.Fatalf("cleanupUncreatedTaskPeers: %v", err)
+	if cleanupErr := cleanupUncreatedTaskPeers(dbPath, parent, tasks, []string{"task-a"}); cleanupErr != nil {
+		t.Fatalf("cleanupUncreatedTaskPeers: %v", cleanupErr)
 	}
 	db, err = team.Open(dbPath)
 	if err != nil {
@@ -107,14 +107,14 @@ func TestPreseedTaskTeamRegistryRejectsWrongDBOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("team.Open: %v", err)
 	}
-	if err := team.EnsureSchema(db); err != nil {
-		t.Fatalf("team.EnsureSchema: %v", err)
+	if schemaErr := team.EnsureSchema(db); schemaErr != nil {
+		t.Fatalf("team.EnsureSchema: %v", schemaErr)
 	}
-	if _, err := msgstore.New(db, "plan:other"); err != nil {
-		t.Fatalf("claim other owner: %v", err)
+	if _, ownerErr := msgstore.New(db, "plan:other"); ownerErr != nil {
+		t.Fatalf("claim other owner: %v", ownerErr)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close owner db: %v", err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("close owner db: %v", closeErr)
 	}
 
 	cfg := &cliflags.Config{Agent: "codex"}
