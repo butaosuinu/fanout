@@ -534,7 +534,7 @@ func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 		if strictIdentity {
 			return nil, fmt.Errorf("tmux list-panes -a titles: %w", err)
 		}
-		return panes, nil //nolint:nilerr // titles are cosmetic; degrade to empty titles instead of failing the liveness sweep
+		return panes, nil // Titles are cosmetic in the display-only sweep.
 	}
 	titles := parseLivePaneField(string(titleOut))
 	if strictIdentity {

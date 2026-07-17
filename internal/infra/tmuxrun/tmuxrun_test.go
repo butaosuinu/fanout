@@ -1999,8 +1999,8 @@ func TestClosePaneIfOwnedTreatsAbsentTmuxScopeAsStaleOnRetry(t *testing.T) {
 			if err != nil || result.Status != ClosePaneStale {
 				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
 			}
-			if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
-				t.Fatalf("kill-pane was invoked for absent tmux scope: %v", err)
+			if _, statErr := os.Stat(killedPath); !os.IsNotExist(statErr) {
+				t.Fatalf("kill-pane was invoked for absent tmux scope: %v", statErr)
 			}
 			body, err := os.ReadFile(lcAllPath)
 			if err != nil {
