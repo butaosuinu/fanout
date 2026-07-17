@@ -93,7 +93,9 @@ Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`ma
 `fanout update` calls the same curl install path above, updating the binary and the Claude/Codex integrations together.
 
 - `--version <tag>`: install the given tag
-- `--no-skills`: update only the binary
+- `--no-skills`: update only the binary. If the retired Codex
+  `post-work-review.sh` driver is installed, this stops before replacement;
+  rerun without `--no-skills` to migrate the integrations.
 
 > Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills — so back up customized copies first. Codex CLI loads skills at startup; restart running Codex sessions after an update.
 

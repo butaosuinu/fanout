@@ -115,6 +115,14 @@ remove_retired_codex_review_files() {
     "$codex_dir/agents/post-work-verifier.md"
 }
 
+guard_binary_only_review_compat() {
+  [ "$install_skills" -eq 0 ] || return 0
+  driver="$codex_dir/tools/post-work-review.sh"
+  if [ -e "$driver" ] || [ -L "$driver" ]; then
+    die "--no-skills cannot preserve the retired Codex post-work-review driver with this binary. Rerun without --no-skills to update the integrations."
+  fi
+}
+
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md" \
     "$claude_dir/commands/session-retro.md"
@@ -232,6 +240,8 @@ if [ "$uninstall" -eq 1 ]; then
   info "removed $bin_dir/fanout"
   exit 0
 fi
+
+guard_binary_only_review_compat
 
 os=$(normalize_os)
 arch=$(normalize_arch)

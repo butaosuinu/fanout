@@ -96,7 +96,9 @@ curl インストールは prebuilt バイナリを配置するので、Go も N
 `fanout update` は上の curl インストールと同じ経路を呼び出し、本体と Claude/Codex 連携をまとめて更新します。
 
 - `--version <tag>`: 指定した tag をインストールする
-- `--no-skills`: バイナリのみ更新する
+- `--no-skills`: バイナリのみ更新する。廃止済みの Codex
+  `post-work-review.sh` driver が残っている場合は置換前に停止するため、
+  `--no-skills` を外して連携ファイルを移行する
 
 > install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill を含む)を上書きします。
 > カスタマイズした copy は先に退避してください。

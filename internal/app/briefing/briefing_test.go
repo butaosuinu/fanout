@@ -90,12 +90,16 @@ func TestPRVisualizationAndReviewSectionsQuoteBaseBranch(t *testing.T) {
 }
 
 func TestCodexAutoPRNormalizesOriginBaseForGitHub(t *testing.T) {
-	got := Render(123, "review briefing", "Issue body", "codex", "origin/release/v1", settings.Defaults(), false, nil)
-	if !strings.Contains(got, "gh pr create --base release/v1") {
-		t.Fatalf("Render(..., codex) missing normalized PR base branch:\n%s", got)
-	}
-	if strings.Contains(got, "gh pr create --base origin/release/v1") {
-		t.Fatalf("Render(..., codex) kept remote prefix in PR base branch:\n%s", got)
+	for _, base := range []string{"origin/release/v1", "refs/remotes/origin/release/v1", "refs/heads/release/v1"} {
+		got := Render(123, "review briefing", "Issue body", "codex", base, settings.Defaults(), false, nil)
+		for _, want := range []string{"with base `release/v1`", "gh pr create --base release/v1"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("Render(..., codex, baseBranch=%q) missing normalized review base %q:\n%s", base, want, got)
+			}
+		}
+		if strings.Contains(got, "with base `"+base+"`") || strings.Contains(got, "gh pr create --base "+base) {
+			t.Fatalf("Render(..., codex, baseBranch=%q) kept base prefix:\n%s", base, got)
+		}
 	}
 }
 

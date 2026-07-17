@@ -64,12 +64,27 @@ run_pr_gate() {
   grep -Fq 'staged, unstaged, untracked, and dirty' "$skill"
   grep -Fq 'run focused checks only' "$skill"
   grep -Fq 'must not write the review marker' "$skill"
+  grep -Fq 'Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes' "$skill"
+  grep -Fq 'recorded repository root as the' "$skill"
+  grep -Fq '"$helper" mark <reviewed-head>' "$skill"
   ! grep -Fq 'native-call' "$skill"
   ! grep -Fq 'model_catalog_json' "$skill"
   ! grep -Fq 'reviewer_session_id' "$skill"
   [ ! -e "$REPO_ROOT/codex/tools/post-work-review.sh" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-reviewer.toml" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-verifier.toml" ]
+}
+
+@test "binary-only install rejects the retired Codex review driver" {
+  local home="$BATS_TEST_TMPDIR/no-skills-home" codex_dir="$BATS_TEST_TMPDIR/no-skills-home/.codex"
+  mkdir -p "$codex_dir/tools"
+  printf '#!/bin/sh\n' >"$codex_dir/tools/post-work-review.sh"
+
+  run env HOME="$home" CODEX_DIR="$codex_dir" BIN_DIR="$home/bin" sh "$REPO_ROOT/install.sh" --no-skills
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'retired Codex post-work-review driver'* ]]
+  [[ "$output" == *'Rerun without --no-skills'* ]]
+  [ ! -e "$home/bin/fanout" ]
 }
 
 @test "review marker binds the clean exact HEAD, base, and diff" {

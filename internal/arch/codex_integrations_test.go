@@ -115,7 +115,9 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"staged, unstaged, untracked, and dirty",
 		"run focused checks only",
 		"must not write the review marker",
-		"scripts/mark-reviewed-head.sh mark",
+		"Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes",
+		"recorded repository root as the",
+		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",
 	} {

@@ -401,9 +401,7 @@ func prVisualizationSection(footer prFooter, baseBranch string) string {
 }
 
 func codexReviewSection(autoPullRequest bool, baseBranch string) string {
-	if baseBranch == "" {
-		baseBranch = "main"
-	}
+	baseBranch = pullRequestBaseBranch(baseBranch)
 	quotedBase := agent.ShellQuote(baseBranch)
 	section := fmt.Sprintf(codexReviewSectionTemplate, quotedBase)
 	if autoPullRequest {

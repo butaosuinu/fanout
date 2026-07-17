@@ -41,13 +41,16 @@ findings. Do not parse reviewer output or require a result schema.
    - For a clean committed branch, record the target base branch, the exact
      commit at `refs/remotes/origin/<base>`, and the branch review bundle from
      that base commit through the recorded `HEAD`, including submodule changes.
+     Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes
+     before constructing the remote-tracking ref.
    - For a dirty uncommitted review, record a worktree bundle relative to the
      recorded `HEAD`. It must cover staged, unstaged, untracked, and dirty
      submodule changes: include Git status, binary tracked diffs, complete
      untracked-file contents, and dirty-submodule status/diffs. Record a digest
      of that complete bundle. This is review-only scope.
-4. Run `scripts/mark-reviewed-head.sh clear` from this skill directory before
-   the first spawn. This removes any stale success marker.
+4. Resolve `scripts/mark-reviewed-head.sh` to an absolute path from this skill
+   package. Run `"$helper" clear` with the recorded repository root as the
+   working directory before the first spawn. This removes any stale marker.
 5. For branch scope, resolve the project's canonical full validation command
    from repository instructions, but do not run it yet. For uncommitted scope,
    run focused checks only; it must not write the review marker.
@@ -125,7 +128,8 @@ For branch scope:
 4. Run:
 
    ```sh
-   scripts/mark-reviewed-head.sh mark <reviewed-head> <base-branch> <reviewed-base-head>
+   # Run from the recorded repository root; $helper is the absolute skill path.
+   "$helper" mark <reviewed-head> <base-branch> <reviewed-base-head>
    ```
 
 The helper validates only Git facts: clean exact HEAD, remote base, and bundle
