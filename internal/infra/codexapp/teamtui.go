@@ -78,6 +78,7 @@ type teamBridge struct {
 	activeTurnID      string
 	lastTurnCompleted time.Time
 	pendingStart      *teamPendingStart
+	activeInjection   *teamPendingStart
 	pendingApprovals  map[string]struct{}
 	nextTurnRequest   int
 }
@@ -279,7 +280,18 @@ func (b *teamBridge) handleMessage(msg appServerMessage) {
 		if !completion.Matched || !teamCompletionMatchesActiveTurn(msg, b.activeTurnID) {
 			return
 		}
+		injection := b.activeInjection
+		if injection == nil {
+			// A terminal notification can race ahead of the turn/start response.
+			// In that ordering the pending request still owns the injected batch.
+			injection = b.pendingStart
+		}
+		if injection != nil && completion.Status != "completed" {
+			b.warnTurnStartFailure(injection.messages, fmt.Sprintf("turn ended with status %q", completion.Status))
+		}
 		b.activeTurnID = ""
+		b.pendingStart = nil
+		b.activeInjection = nil
 		b.pendingApprovals = make(map[string]struct{})
 		b.lastTurnCompleted = b.now()
 		reportCodexPlanAgentState(b.setAgentState, "idle")
@@ -307,6 +319,7 @@ func (b *teamBridge) handlePendingStartResponse(msg appServerMessage) bool {
 		b.lastTurnCompleted = b.now()
 		b.reportCurrentState()
 	default:
+		b.activeInjection = pending
 		if b.activeTurnID == "" {
 			b.activeTurnID = teamActiveTurnID(turnID)
 		}
@@ -316,7 +329,7 @@ func (b *teamBridge) handlePendingStartResponse(msg appServerMessage) bool {
 }
 
 func (b *teamBridge) poll() {
-	if b.activeTurnID != "" || b.pendingStart != nil || len(b.pendingApprovals) > 0 || b.lastTurnCompleted.IsZero() {
+	if b.activeTurnID != "" || b.pendingStart != nil || b.activeInjection != nil || len(b.pendingApprovals) > 0 || b.lastTurnCompleted.IsZero() {
 		return
 	}
 	now := b.now()
@@ -346,7 +359,7 @@ func (b *teamBridge) reportCurrentState() {
 	switch {
 	case len(b.pendingApprovals) > 0:
 		reportCodexPlanAgentState(b.setAgentState, "blocked")
-	case b.activeTurnID != "" || b.pendingStart != nil:
+	case b.activeTurnID != "" || b.pendingStart != nil || b.activeInjection != nil:
 		reportCodexPlanAgentState(b.setAgentState, "working")
 	default:
 		reportCodexPlanAgentState(b.setAgentState, "idle")

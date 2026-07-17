@@ -203,6 +203,43 @@ func TestTeamBridgeTurnStartFailureWarnsWithMessageIDsAndContinues(t *testing.T)
 	}
 }
 
+func TestTeamBridgeAcceptedInjectionWarnsWhenTurnLaterFails(t *testing.T) {
+	for _, status := range []string{"failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			now := time.Unix(450, 0)
+			var stderr bytes.Buffer
+			client := newFakeTeamAppClient()
+			bridge := newTestTeamBridge(client, &now, func() ([]InboundMessage, error) {
+				return []InboundMessage{{Line: "[fanout msg #45] task-a -> task-b (note): batch"}}, nil
+			})
+			bridge.stderr = &stderr
+			bridge.lastTurnCompleted = now.Add(-time.Hour)
+
+			bridge.poll()
+			requestID := bridge.pendingStart.requestID
+			bridge.handleMessage(teamTurnStartResponse(t, requestID, "turn-injected", "inProgress"))
+			if bridge.pendingStart != nil || bridge.activeInjection == nil {
+				t.Fatalf("accepted injection state = pending:%v active:%v, want pending nil and active batch", bridge.pendingStart, bridge.activeInjection)
+			}
+
+			bridge.handleMessage(teamTurnCompletedMessage("thread-1", "turn-injected", status))
+			if bridge.activeInjection != nil {
+				t.Fatal("activeInjection remains after terminal notification")
+			}
+			for _, want := range []string{"[fanout msg #45]", status, "fanout msg inbox --all"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Fatalf("stderr missing %q: %s", want, stderr.String())
+				}
+			}
+			now = now.Add(bridge.idleGrace)
+			bridge.poll()
+			if got := len(client.sent); got != 2 {
+				t.Fatalf("sent requests after terminal %s = %d, want bridge to continue", status, got)
+			}
+		})
+	}
+}
+
 func TestTeamMessagePromptQuotesEveryInputLine(t *testing.T) {
 	prompt := formatTeamMessagePrompt([]InboundMessage{{Line: "[fanout msg #51] first\nsecond"}})
 	if !strings.Contains(prompt, "> [fanout msg #51] first\n> second") {
@@ -270,6 +307,17 @@ func teamTurnStartedMessage(threadID, turnID string) appServerMessage {
 		},
 	})
 	return appServerMessage{Method: "turn/started", Params: params}
+}
+
+func teamTurnStartResponse(t *testing.T, requestID, turnID, status string) appServerMessage {
+	t.Helper()
+	result, err := json.Marshal(map[string]any{
+		"turn": map[string]any{"id": turnID, "status": status},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return appServerMessage{ID: mustJSONRawString(t, requestID), Result: result}
 }
 
 func mustJSONRawString(t *testing.T, value string) json.RawMessage {

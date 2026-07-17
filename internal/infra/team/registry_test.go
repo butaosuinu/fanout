@@ -109,3 +109,79 @@ func TestUpsertPeerKeysPlanTaskBySyntheticNumber(t *testing.T) {
 		t.Errorf("peer task_id = %v, want base-types", taskID)
 	}
 }
+
+func TestDeleteProvisionalTaskPeerRequiresSyntheticNumberAndTaskID(t *testing.T) {
+	db, _ := openTestDB(t)
+	if err := EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	const parent = "plan:launch-plan"
+	pane := state.Pane{Parent: parent, TaskID: "base-types"}
+	if err := UpsertPeer(db, pane, "2026-06-13T01:00:00Z"); err != nil {
+		t.Fatalf("UpsertPeer: %v", err)
+	}
+	if err := DeleteProvisionalTaskPeer(db, parent, "other-task"); err != nil {
+		t.Fatalf("DeleteProvisionalTaskPeer(other-task): %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count); err != nil {
+		t.Fatalf("count peers after guarded delete: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("peers after guarded delete = %d, want 1", count)
+	}
+	if _, err := db.Exec("UPDATE peers SET pane_id = '%9'"); err != nil {
+		t.Fatalf("mark peer live: %v", err)
+	}
+	if err := DeleteProvisionalTaskPeer(db, parent, pane.TaskID); err != nil {
+		t.Fatalf("DeleteProvisionalTaskPeer(live base-types): %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count); err != nil {
+		t.Fatalf("count live peers after delete: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("live peers after provisional delete = %d, want 1", count)
+	}
+	if _, err := db.Exec("UPDATE peers SET pane_id = ''"); err != nil {
+		t.Fatalf("restore provisional peer: %v", err)
+	}
+	if err := DeleteProvisionalTaskPeer(db, parent, pane.TaskID); err != nil {
+		t.Fatalf("DeleteProvisionalTaskPeer(base-types): %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count); err != nil {
+		t.Fatalf("count peers after matching delete: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("peers after matching delete = %d, want 0", count)
+	}
+}
+
+func TestUpsertPeersRollsBackWholeCohort(t *testing.T) {
+	db, _ := openTestDB(t)
+	if err := EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER reject_second_task
+BEFORE INSERT ON peers WHEN NEW.task_id = 'task-b'
+BEGIN SELECT RAISE(FAIL, 'reject task-b'); END`); err != nil {
+		t.Fatalf("create rejecting trigger: %v", err)
+	}
+
+	panes := []state.Pane{
+		{Parent: "plan:demo", TaskID: "task-a"},
+		{Parent: "plan:demo", TaskID: "task-b"},
+	}
+	if err := UpsertPeers(db, panes, "2026-06-13T01:00:00Z"); err == nil {
+		t.Fatal("UpsertPeers succeeded, want trigger failure")
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count); err != nil {
+		t.Fatalf("count peers: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("peers after failed batch = %d, want 0", count)
+	}
+}
