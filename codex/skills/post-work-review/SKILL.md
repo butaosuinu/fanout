@@ -35,22 +35,24 @@ findings. Do not parse reviewer output or require a result schema.
 ## Prepare the target
 
 1. Finish other writer agents before starting the gate.
-2. Require a Git worktree, a committed candidate, and a clean working tree as
-   reported by `git status --porcelain -uall --ignore-submodules=none`.
-3. Resolve and record:
-   - repository root;
-   - exact `HEAD` commit;
-   - target base branch and the exact commit resolved from
-     `refs/remotes/origin/<base>`;
-   - the branch review bundle, defined as that recorded base commit through the
-     recorded `HEAD`, including submodule changes.
+2. Require a Git worktree. Record the repository root, exact `HEAD`, and
+   `git status --porcelain -uall --ignore-submodules=none`.
+3. Select one scope:
+   - For a clean committed branch, record the target base branch, the exact
+     commit at `refs/remotes/origin/<base>`, and the branch review bundle from
+     that base commit through the recorded `HEAD`, including submodule changes.
+   - For a dirty uncommitted review, record a worktree bundle relative to the
+     recorded `HEAD`. It must cover staged, unstaged, untracked, and dirty
+     submodule changes: include Git status, binary tracked diffs, complete
+     untracked-file contents, and dirty-submodule status/diffs. Record a digest
+     of that complete bundle. This is review-only scope.
 4. Run `scripts/mark-reviewed-head.sh clear` from this skill directory before
    the first spawn. This removes any stale success marker.
-5. Resolve the project's canonical full validation command from repository
-   instructions, but do not run it yet.
+5. For branch scope, resolve the project's canonical full validation command
+   from repository instructions, but do not run it yet. For uncommitted scope,
+   run focused checks only; it must not write the review marker.
 
-Stop if the base cannot be resolved, the tree is dirty, or the target changes
-during preparation.
+Stop if the selected target cannot be captured or changes during preparation.
 
 ## Broad review
 
@@ -63,6 +65,11 @@ Spawn exactly one generic subagent with a payload shaped like this:
   "message": "Review the recorded <base-commit>...<head-commit> bundle at the recorded repository. Read repository instructions first. Use only read-only local inspection commands. Do not edit files or run tests, builds, typechecks, linters, formatters, generators, or package managers. Do not use web, browser, MCP/connectors, external-service, or network tools. Do not spawn or message agents, request approval, or escalate. Inspect the diff and relevant surrounding code. Report only blocker or major correctness, security, data-loss, or contract findings. For each finding include severity, file:line, reason, and a concrete recommendation. If none exist, explicitly say no blocker or major findings."
 }
 ```
+
+For uncommitted scope, replace the first sentence of `message` with:
+`Review the recorded uncommitted worktree bundle relative to <head-commit> at
+the recorded repository.` Tell the reviewer to inspect every staged, unstaged,
+untracked, and dirty-submodule change represented by the recorded bundle.
 
 Replace the recorded placeholders in the message with the absolute repository
 root, base branch, full base commit, and full HEAD SHA. Replace every task-name
@@ -83,11 +90,13 @@ If the broad review has actionable findings:
 
 1. Apply the fixes in the parent session and run focused checks for edited
    files.
-2. Commit the fixes and record the new clean `HEAD`.
+2. For branch scope, commit the fixes and record the new clean `HEAD`. For
+   uncommitted scope, leave the candidate uncommitted and record a new complete
+   worktree bundle and digest.
 3. Spawn a new generic subagent with an unused task name shaped as
    `post_work_verify_<head-prefix>_<round>_<unique>` and
-   `fork_turns: "none"`. Include the prior findings, the exact recorded base
-   commit, the new exact HEAD, and the new bundle in its message.
+   `fork_turns: "none"`. Include the prior findings and the new exact branch or
+   worktree target in its message.
 4. Give the verifier every read-only restriction from the broad reviewer,
    including no external tools or nested agents. Tell it to check only whether
    the prior findings are resolved plus obvious regressions caused by those
@@ -100,6 +109,13 @@ marker.
 ## Validate and mark
 
 After the broad reviewer, or the latest verifier, is clean:
+
+For uncommitted scope, regenerate the complete worktree bundle and confirm its
+HEAD and digest still match the reviewed target. Report the review-only result
+and focused checks. Do not run the canonical full validation and do not write a
+review marker. Commit the candidate and rerun branch scope before a PR or push.
+
+For branch scope:
 
 1. Confirm the worktree is still clean and `HEAD` still equals the reviewed
    target.

@@ -51,7 +51,9 @@ Invoke the fanout skill by asking Codex to fan out a parent issue (for example, 
 
 The reviewer receives the target repository path and diff scope, so repository content is sent to the Codex model. A native subagent inherits the parent session's sandbox, approval policy, and network restrictions. The skill tells reviewers not to edit, request approval, or use the network, but it cannot create a stricter child-only sandbox. Start Codex read-only first when enforced read-only access is required. If native spawning or waiting is unavailable, the gate stops without a fallback.
 
-After the parent accepts a clean result, the skill runs the repository's canonical validation once and records the exact clean HEAD, PR base commit, and diff hash. A later commit, base movement, or review-diff change invalidates the marker.
+A dirty worktree uses review-only scope. The reviewer inspects staged, unstaged, untracked, and dirty-submodule changes, while the parent runs focused checks only. This scope never writes a marker; commit the candidate and rerun for the PR gate.
+
+For a clean committed branch, the skill runs the repository's canonical validation once and records the exact clean HEAD, PR base commit, and diff hash. A later commit, base movement, or review-diff change invalidates the marker.
 
 `$pr-watch` runs in the foreground. Its helper suppresses unchanged snapshots and stores its cursor in Git metadata, including in linked worktrees. It does not leave a background watcher after the Codex session ends.
 

@@ -72,7 +72,11 @@ skill は編集、approval 要求、network 使用を禁止しますが、子だ
 強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
 native spawn または wait が使えない場合は fallback せず停止します。
 
-親が clean と判断した後、skill は repository の canonical validation を 1 回実行し、clean な exact HEAD、PR base commit、diff hash を記録します。
+dirty worktree は review-only scope です。
+reviewer は staged、unstaged、untracked、dirty submodule の変更を確認し、親は focused checks だけを実行します。
+この scope では marker を書きません。PR gate には candidate を commit してから再実行してください。
+
+clean な committed branch では、skill は repository の canonical validation を 1 回実行し、clean な exact HEAD、PR base commit、diff hash を記録します。
 commit、base の移動、review diff の変更で marker は無効です。
 
 `$pr-watch` は foreground で動きます。
