@@ -25,7 +25,7 @@ GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending で�
 
 herdr は実行環境レイヤー(tmux の代替)、fanout は GitHub issue → worktree → ペイン → PR を配線するワークフローレイヤーであり、機能面の直接競合は狭い。
 0.7.3 v1 では tmux だけが issue / Project / plan の fan-out workflow を end-to-end で実行する。
-herdr backend v1 は既存 named session の read-only 観測と手動検証に限り、launch は root coordinator の intent、row、`workspace create` より前に fail closed にする。
+herdr backend v1 は既存 named session の snapshot / list による identity / status 観測と手動検証に限り、targeted content read を提供せず、launch は root coordinator の intent、row、`workspace create` より前に fail closed にする。
 自動 mutation が expected immutable session / resource generation を原子的に検査できるか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版で、herdr を opt-in backend とし、親単位の stickiness を適用する。
 その後続版では tmux と herdr を一つの親 fan-out の runtime として排他にし、fanout state に両 backend の行を共存させられる。
 ユーザーが fanout と herdr のどちらか一方を製品として選ぶ関係ではない。
@@ -35,7 +35,7 @@ herdr が issue 駆動やレビューゲートを足せば fanout の領域へ�
 
 | 軸 | fanout | herdr |
 |---|---|---|
-| 実行基盤 | tmux が end-to-end workflow を実行。herdr 0.7.3 v1 は既存 session の read-only 観測 / 手動検証のみ | 自前 PTY ランタイム(tmux 非互換) |
+| 実行基盤 | tmux が end-to-end workflow を実行。herdr 0.7.3 v1 は既存 session の identity / status 観測と手動検証のみで、targeted content read は提供しない | 自前 PTY ランタイム(tmux 非互換) |
 | 起動の駆動源 | GitHub issue / Project / plan spec → briefing 自動生成 | 手動、またはエージェント自身が Socket API で起動 |
 | worktree | 子 issue 単位で自動計画・作成・cleanup | `worktree create/open` コマンド(駆動源なし) |
 | エージェント状態 | `@fanout_agent_state` の running / done の 2 値 | idle / working / blocked / done + カスタムラベル |

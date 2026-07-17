@@ -10,7 +10,8 @@ metadata token reporting と sidebar row layout の対象は stable CLI / server
 
 fanout の herdr backend v1 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
-fanout が実行する v1 の herdr 操作は version / session / schema の検査と snapshot / list / read に限定する。
+fanout が実行する v1 の herdr 操作は version / session / schema の検査と snapshot / list / wait に限定する。
+targeted content read の `pane read` / `agent read` は手動実測面としてだけ残し、fanout v1 は発行しない。
 issue / Project / plan の launch は root coordinator の provisional intent、state row、`workspace create` を含む最初の mutation より前に fail closed にする。
 worktree の作成と既存 checkout の採用は herdr CLI で実行できるが、fanout の自動 launch には採用しない。
 herdr 0.7.3 は setup hook の抑止または registry generation を create / open request に束縛できず、plugin の実行完了 receipt も持たないため、自動 create / open とその直後の agent start を v1 では無効にする。
@@ -19,6 +20,7 @@ Claude hook の signal は agent process から偽造できるため telemetry �
 herdr backend v1 の自動 nudge は agent 種別にかかわらず無効にし、pane 消滅または `terminal_id` の変化は `stale` とする。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
 自動 mutation の再導入には、request が expected immutable session / resource generation を原子的に検査するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する必要がある。
+同じ TOCTOU は targeted content read にも残り、別接続の post-read snapshot は ABA を排除できないため content の公開 authority には使わない。
 
 ## 採用判断
 
@@ -26,6 +28,7 @@ session identity の read と mutation は別の CLI 接続になるため、直
 |---|---|---|
 | server 起動 | read-only experiment は既存の named session を要求する | headless CLI は server を自動起動しなかった |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
+| content read | fanout v1 では無効 | response が immutable session generation と target `terminal_id` を束縛しない |
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | `worktree create/open` は手動操作としてだけ使う | setup hook gate を mutation に束縛できず、自動 remove も安全に実行できない |
 | agent 起動 | `agent start` の bare argv、`--cwd`、`--env` は手動操作としてだけ使う | worktree setup 完了を API で証明できず、自動 launch には採用しない |
@@ -82,6 +85,8 @@ herdr pane 内で実行する fanout は常にこの変数を持つため、sess
 public ID は session 間で再利用されるため、誤 routing の `send` や `close` は無関係な pane に届く。
 v1 の read-only CLI は検証済みの socket path を session namespace と併せて保存し、各呼び出しで明示的に選択する。
 session identity の再確認は routing と read validation にだけ使い、同名 session の差し替えと次の CLI 接続の間の TOCTOU を閉じないため mutation authorization には使わない。
+targeted content read の前後で snapshot を再確認しても、read 中だけ別 session へ差し替わって戻る ABA を検出できない。
+v1 は `pane read` / `agent read` の出力を公開せず、post-read validation 単独を content の authority にしない。
 
 `terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
 同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
@@ -94,7 +99,7 @@ fanout-owned epoch は fanout が session lifecycle も所有する後続版で�
 ## 操作面
 
 次の表は実測した CLI surface を示す。
-fanout v1 が呼ぶのは list / read / wait の read-only 行だけで、mutation 行はユーザーが fanout の外から直接実行する手動操作である。
+fanout v1 が呼ぶのは list / wait の read-only 行だけで、targeted read と mutation の行はユーザーが fanout の外から直接実行する手動操作である。
 
 | 実測操作 | CLI | 結果 | 制約 |
 |---|---|---|---|
@@ -102,15 +107,16 @@ fanout v1 が呼ぶのは list / read / wait の read-only 行だけで、mutati
 | launch | `worktree create --workspace ... --branch ... --base ... --path ... --label <nonce> --no-focus --json` | `worktree_created` | 実測済みの手動操作。fanout の自動 launch には使わない |
 | launch / recover | `worktree open --workspace ... --path ... --label <nonce> --no-focus --json` | `worktree_opened` | 実測済みの手動操作。fanout の自動 launch には使わない |
 | launch | `agent start <name> --workspace ... --cwd ... --env ... --no-focus -- <argv...>` | `agent_started` | 実測済みの手動操作。fanout の自動 launch には使わず、`--json` flag はない |
-| list | `api snapshot` | `session_snapshot` | `session.snapshot` の CLI wrapper |
+| list | `api snapshot` | `session_snapshot` | `session.snapshot` の CLI wrapper。v1 の identity / status 観測に使う |
 | list | `worktree list --workspace ... --json`、`agent list` | `worktree_list`、`agent_list` | `worktree list` は基準 workspace を明示する |
-| read | `pane read`、`agent read`、`pane get` | text または `pane_read`、`pane_info` | 実行中 cwd は telemetry の `foreground_cwd` に出る |
-| read | `pane process-info --pane ...` | `pane_process_info` | 想定した agent process の argv と cwd を確認する |
+| content read | `pane read`、`agent read` | text または `pane_read` | 手動実測のみ。fanout v1 は発行せず、結果を UI、ログ、state、agent / LLM input へ公開しない |
+| structured read | `pane get` | `pane_info` | 手動実測または後続版の identity 検査に限り、fanout v1 は発行しない |
+| structured read | `pane process-info --pane ...` | `pane_process_info` | 手動実測または後続版の process identity 検査に限り、fanout v1 は発行しない |
 | focus | `agent focus <name>`、`workspace focus <id>` | 対象 agent または workspace を focus | 実測済みの手動操作。fanout v1 は発行しない |
 | send | `pane run <pane> <text>` | text と Enter を一操作で送る | 明示的な手動操作に限り、自動 nudge には使わない |
 | close | `worktree remove --workspace ... [--force] --json` | `worktree_removed` | 実測済みの手動操作。fanout の自動 cleanup には使わない |
 | close | `workspace close`、`pane close` | `ok` | 実測済みの手動操作。checkout は `workspace close` では消えない |
-| wait | `api snapshot` の 2 秒間隔 polling | `session_snapshot` | 既定 300 秒では最大 150 snapshot、各 CLI call 最大 5 秒で current-state predicate を評価し、event wait は採用しない |
+| wait | `api snapshot` の 2 秒間隔 polling | `session_snapshot` | `total_timeout` は整数 3 秒以上。既定 300 秒では最大 150 snapshot、各 CLI call 最大 5 秒で current-state predicate を評価する |
 
 generic pane の exact focus が必要になった場合、Socket API の `pane.focus` を手動操作の追加候補にする。
 
@@ -404,17 +410,22 @@ name が残った `unknown` record も、一致する ref を持つ再開待ち�
 | `recent` | scrollback の末尾を表示上の soft wrap のまま返した |
 | `recent-unwrapped` | soft wrap を論理行へ戻した。取得境界が行途中の場合は先頭断片が残る |
 
-ログと agent 出力の読み取りには `recent-unwrapped`、TUI の視覚確認には `visible` を使う。
+手動実測ではログと agent 出力の読み取りに `recent-unwrapped`、TUI の視覚確認に `visible` を使った。
 `pane read` は raw text を出力し、`agent read` は `pane_read` result に text、source、revision、truncated を入れる。
 
-`pane get` の `cwd` は label、follow-cwd、session restore に使われる pane または workspace の cwd を表す。
+これらの response は content と expected immutable session generation / target `terminal_id` を一つの応答へ束縛しない。
+v1 は `pane read` / `agent read` を発行せず、取得結果を UI、ログ、state、agent / LLM input へ公開しない。
+別接続の post-read snapshot が一致しても、read 中だけ session が差し替わる ABA を排除できないため authority にはしない。
+targeted content read の再導入は、request / response が immutable session generation と target terminal identity を原子的に束縛するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版に限る。
+
+手動実測した `pane get` の `cwd` は label、follow-cwd、session restore に使われる pane または workspace の cwd を表す。
 `foreground_cwd` は現在 PTY を制御する foreground process の cwd を表す。
 実際、foreground で `(cd /; sleep 15)` を実行している間も `cwd` は元 repository のままで、`foreground_cwd` は `/` になった。
 `process-info.foreground_processes[].cwd` は候補 PID に結び付いた process cwd であり、cold-restart matcher はこの値だけを使う。
 `pane get.cwd` と snapshot の `foreground_cwd` は process cwd の照合を代替しない。
 
 `foreground_cwd` は表示と診断の telemetry とし、PaneRef の識別または生存判定には使わない。
-PaneRef の routing は backend、session namespace、workspace ID、pane ID で行う。
+targeted structured read を再導入する後続版では、PaneRef の routing を backend、session namespace、workspace ID、pane ID で行う。
 記録した launch との一致は `terminal_id`、task との対応は workspace の `repo_key` と `checkout_path` を含む worktree provenance で別々に検証する。
 worktree provenance がない generic workspace では、fanout state に保存した checkout path と pane の `cwd` を補助照合に使う。
 
@@ -441,7 +452,7 @@ hook telemetry は agent process から偽造でき、screen detection は未知
 `terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
 herdr 0.7.3 には状態条件付き send または CAS がないため、この race を fail closed にできない。
 fanout は peer message または watcher を契機に `pane run` を自動実行せず、Enter を送らない。
-peer message の bus への保存は維持し、best-effort notification は入力を伴わない通知としてだけ使える。
+peer message の bus への保存は維持するが、fanout v1 は herdr の `notification show` を呼ばない。
 ユーザーが対象 pane を確認して明示的に実行する `pane run` は手動操作として扱う。
 自動 nudge の再導入には、runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が必要になる。
 
@@ -458,16 +469,20 @@ snapshot 後に event wait を登録すると、二つの操作の間に起き�
 CLI-first の v1 は次の共有 budget を持つ snapshot polling を使い、CLI の一回待機を current-state predicate と組み合わせない。
 
 - 一回の wait または後続版の cold-restart reconciliation は、最初の `herdr api snapshot` の直前に monotonic clock で一つの deadline を確定する。
-- `total_timeout` は既定 300 秒とし、0 以下を拒否して無期限待機を許可しない。
+- `total_timeout` は 3 秒以上の整数秒で受け取り、既定値を 300 秒として、無期限待機を許可しない。
 - 最初の snapshot は直ちに呼び、次の呼び出しは前回の開始から 2 秒以上空け、遅れた tick を追い掛けず、複数の CLI process を同時実行しない。
 - 各 herdr CLI process の timeout は `min(5 秒, deadline までの残時間)` とする。
 - snapshot の最大呼出し回数は開始時に `ceil(total_timeout / 2 秒)` へ固定し、既定値は 150 回とする。
-- 一つの polling cycle では snapshot を一回だけ呼び、一意な resume 候補を得た場合に限って `pane process-info` と各 OS process identity 検査を一回ずつ実行する。
+  最小値の 3 秒では初回と 2 秒時点の再取得の最大 2 回を許す。
+- v1 の一つの polling cycle では snapshot を一回だけ呼び、snapshot の current-state predicate だけを評価する。
+- 後続版の cold-restart reconciliation cycle に限り、一意な resume 候補を得た場合に `pane process-info` と各 OS process identity 検査を一回ずつ実行する。
 - snapshot、補助検査、parse、interval sleep、retry は同じ deadline を消費し、valid snapshot、状態変化、placeholder、retryable error を観測しても deadline と呼出し上限を更新しない。
 - version / schema の不一致と malformed snapshot は retry せず、直ちに `failed` とする。
 - CLI timeout または non-zero exit は同じ budget 内でだけ retry し、budget 終了時の直近 cycle が失敗していた場合、または compatible snapshot を一度も取得できなかった場合は `failed` とする。
 - terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値に固定する。
-- compatible snapshot と必要な補助検査が predicate を満たした場合は `matched` とし、直近 cycle が valid な compatible snapshot を返したまま deadline または呼出し上限へ達した場合は `timed_out` とする。
+- v1 wait は compatible snapshot が predicate を満たした場合に `matched` とする。
+  後続版の cold-restart reconciliation は compatible snapshot と必要な補助検査が predicate を満たした場合に `matched` とする。
+  直近 cycle が valid な compatible snapshot を返したまま deadline または呼出し上限へ達した場合は `timed_out` とする。
 - caller context の cancellation または SIGINT を受けた場合は interval sleep と実行中の process tree を止めて reap し、`cancelled` を返す。
 - `cancelled` または `failed` の後は別の CLI call と state mutation を開始しない。
 
@@ -689,7 +704,8 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 #423、#425 から #429、#494 は次の制約を前提にする。
 
 - backend は明示的に起動済みの named herdr session を使う。
-- herdr backend v1 は既存 named session の read-only 観測だけを行い、root coordinator 作成、focus、send、notification、metadata、cleanup を含む herdr mutation を発行しない。
+- herdr backend v1 は既存 named session の snapshot / list / wait による identity / status 観測だけを行い、targeted content read を発行しない。
+  root coordinator 作成、focus、send、notification、metadata、cleanup を含む herdr mutation も発行しない。
   issue / Project / plan の launch は coordinator intent / row / workspace を作る前に fail closed にする。
 - core runtime compatibility allowlist は stable CLI / server `0.7.3`、protocol `16`、schema version `1` の組だけとする。
   後続版で mutation を再導入する場合は各 request の直前に client / server version、protocol、schema を照合し、prerelease、解釈不能な値、allowlist 外の組は fail closed にする。
@@ -723,8 +739,11 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   final row の確定では provider、絶対 executable、元 argv、exact `--cwd`、exact session ref を intent から移し、intent 削除と同じ state save で永続化する。
   保存済み応答後に pane が消滅した場合は returned PaneRef を束縛した `stale` row を確定し、pending `done` は telemetry としてだけ保存する。
   応答未保存の agent 欠落、重複、識別不一致は fail closed にする。
-- read-only CLI は保存済みの検証済み socket path を明示的に選択する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
-  session identity の再確認は routing / read validation に限り、後続 mutation の authority にはしない。
+- snapshot / list / wait の read-only CLI は保存済みの検証済み socket path を明示的に選択する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
+  session identity の再確認は routing / identity / status validation に限り、targeted content の公開または後続 mutation の authority にはしない。
+  v1 は `pane read` / `agent read` を発行せず、post-read validation が一致しても content を公開しない。
+  targeted content read の再導入には request / response が immutable session generation と target terminal identity を原子的に束縛するか、fanout-owned authenticated lifecycle を要求する。
+  `pane get` / `pane process-info` は手動実測面またはこの条件を満たす後続版の structured identity 検査に限る。
   後続版の mutation は request-bound immutable session / resource generation または fanout-owned authenticated lifecycle を要求する。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - 自動 launch の前提を満たす後続版で、#427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
@@ -759,7 +778,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   public status、hook telemetry、screen manifest、`agent explain` のどれも送信許可に使わず、peer message または watcher を契機に `pane run` を呼ばない。
   message bus への保存は維持できるが、fanout から herdr の `notification show` は呼ばない。
   自動 nudge の再導入には atomic conditional send / CAS または terminal UI を操作しない out-of-band queue と、agent process から分離した event provenance を要求する。
-- CLI-first の wait と後続版の再開待ちは、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
+- CLI-first の wait と後続版の再開待ちは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
   terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - herdr backend v1 の cleanup は read-only の対象表示に限定し、手動 cleanup 後も state row を自動整理しない。
