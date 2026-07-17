@@ -43,18 +43,23 @@ func (*Backend) CheckAvailable() error {
 // the state consumed by the agent has been committed.
 func (*Backend) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
 	gate := strings.TrimSpace(req.StartGate)
-	if err := tmuxrun.LockWaitChannel(gate); err != nil {
-		return backend.PaneRef{}, err
+	if gate != "" {
+		if err := tmuxrun.LockWaitChannel(gate); err != nil {
+			return backend.PaneRef{}, err
+		}
 	}
 
 	command := req.Command
-	if wait := tmuxrun.WaitForLockCommand(gate); wait != "" {
+	if gate != "" {
+		wait := tmuxrun.WaitForLockCommand(gate)
 		command = wait + " && " + command
 	}
 	paneID, err := tmuxrun.SplitPaneWithAgentCommand(req.Target, req.WorktreePath, command)
 	if err != nil {
-		if unlockErr := tmuxrun.UnlockWaitChannel(gate); unlockErr != nil {
-			return backend.PaneRef{}, errors.Join(err, fmt.Errorf("release start gate after failed launch: %w", unlockErr))
+		if gate != "" {
+			if unlockErr := tmuxrun.UnlockWaitChannel(gate); unlockErr != nil {
+				return backend.PaneRef{}, errors.Join(err, fmt.Errorf("release start gate after failed launch: %w", unlockErr))
+			}
 		}
 		return backend.PaneRef{}, err
 	}

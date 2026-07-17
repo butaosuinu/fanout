@@ -95,6 +95,34 @@ fi
 	}
 }
 
+func TestLaunchWithoutGateSkipsWaitFor(t *testing.T) {
+	logPath := installTmuxShim(t, `
+if [ "$1" = "split-window" ]; then
+  printf '%%42\n'
+fi
+`)
+	b := tmuxbackend.New()
+	req := backend.LaunchRequest{
+		Target:       "%1",
+		WorktreePath: "/tmp/worktree",
+		Command:      "codex prompt",
+	}
+	for attempt := range 2 {
+		if _, err := b.Launch(req); err != nil {
+			t.Fatalf("Launch() attempt %d failed: %v", attempt+1, err)
+		}
+	}
+
+	wantCall := []string{
+		"split-window", "-t", req.Target, "-d", "-h", "-P", "-F", "#{pane_id}",
+		"-c", req.WorktreePath, tmuxrun.BuildPaneLaunchCommand(req.Command),
+	}
+	want := [][]string{wantCall, wantCall}
+	if got := readCalls(t, logPath); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux calls = %#v, want two ungated splits with no wait-for calls: %#v", got, want)
+	}
+}
+
 func TestLaunchUnlocksGateAfterSplitFailure(t *testing.T) {
 	logPath := installTmuxShim(t, `
 if [ "$1" = "split-window" ]; then
