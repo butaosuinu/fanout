@@ -7,6 +7,23 @@ die() {
 }
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a Git worktree"
+case "$0" in
+  /*) script_path=$0 ;;
+  *) die "helper must be invoked by absolute path" ;;
+esac
+[ ! -L "$script_path" ] || die "helper path must not be a symlink"
+script_dir=$(dirname "$script_path")
+script_dir_logical=$(CDPATH='' cd "$script_dir" && pwd -L) || die "cannot resolve helper directory"
+script_dir_physical=$(CDPATH='' cd "$script_dir" && pwd -P) || die "cannot resolve helper directory"
+[ "$script_dir_logical" = "$script_dir_physical" ] || die "helper path must not traverse a symlink"
+script_path="$script_dir_physical/$(basename "$script_path")"
+repo_root=$(git rev-parse --show-toplevel) || die "cannot resolve repository root"
+repo_root=$(CDPATH='' cd "$repo_root" && pwd -P) || die "cannot resolve repository root"
+case "$script_path" in
+  "$repo_root" | "$repo_root"/*)
+    die "helper must be installed outside the reviewed repository"
+    ;;
+esac
 git_dir=$(git rev-parse --absolute-git-dir) || die "cannot resolve Git directory"
 marker="$git_dir/post-work-review-passed"
 metadata="$marker.meta"

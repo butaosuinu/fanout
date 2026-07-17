@@ -85,6 +85,9 @@ make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を s
 make uninstall      # インストール済みのパスを削除
 ```
 
+この checkout で `$post-work-review` を使う前に `make install` を実行してください。
+gate は repository 内への skill / marker helper symlink を拒否します。`make link` は開発専用です。
+
 ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 

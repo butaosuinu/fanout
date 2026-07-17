@@ -121,6 +121,8 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"fresh broad reviewer with a new task name for the entire new target",
 		"\"$helper\" guard <recorded-head>",
 		"instruction-changing",
+		"helper is a symlink",
+		"inside the recorded",
 		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",

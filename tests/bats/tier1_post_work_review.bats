@@ -2,7 +2,15 @@
 
 load helpers
 
-MARK_REVIEWED_HEAD="$REPO_ROOT/codex/skills/post-work-review/scripts/mark-reviewed-head.sh"
+MARK_REVIEWED_HEAD_SOURCE="$REPO_ROOT/codex/skills/post-work-review/scripts/mark-reviewed-head.sh"
+
+setup_file() {
+  local install_dir="$(realpath "$BATS_FILE_TMPDIR")/installed-post-work-review/scripts"
+  mkdir -p "$install_dir"
+  cp "$MARK_REVIEWED_HEAD_SOURCE" "$install_dir/mark-reviewed-head.sh"
+  chmod 0755 "$install_dir/mark-reviewed-head.sh"
+  export MARK_REVIEWED_HEAD="$install_dir/mark-reviewed-head.sh"
+}
 
 setup_review_repo() {
   local repo="$1"
@@ -70,6 +78,8 @@ run_pr_gate() {
   grep -Fq 'fresh broad reviewer with a new task name for the entire new target' "$skill"
   grep -Fq '"$helper" guard <recorded-head>' "$skill"
   grep -Fq 'instruction-changing' "$skill"
+  grep -Fq 'helper is a symlink' "$skill"
+  grep -Fq 'inside the recorded' "$skill"
   grep -Fq '"$helper" mark <reviewed-head>' "$skill"
   ! grep -Fq 'Read repository instructions first' "$skill"
   ! grep -Fq 'post_work_verify_' "$skill"
@@ -79,6 +89,31 @@ run_pr_gate() {
   [ ! -e "$REPO_ROOT/codex/tools/post-work-review.sh" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-reviewer.toml" ]
   [ ! -e "$REPO_ROOT/codex/agents/post-work-verifier.toml" ]
+}
+
+@test "review helper rejects linked or in-repository installs" {
+  local repo="$BATS_TEST_TMPDIR/review-helper-boundary" in_repo linked_file linked_dir
+  setup_review_repo "$repo"
+
+  mkdir -p "$repo/review-skill/scripts"
+  cp "$MARK_REVIEWED_HEAD_SOURCE" "$repo/review-skill/scripts/mark-reviewed-head.sh"
+  chmod 0755 "$repo/review-skill/scripts/mark-reviewed-head.sh"
+  in_repo="$repo/review-skill/scripts/mark-reviewed-head.sh"
+  run bash -c 'cd "$1" && "$2" clear' bash "$repo" "$in_repo"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'helper must be installed outside the reviewed repository'* ]]
+
+  linked_file="$BATS_TEST_TMPDIR/linked-mark-reviewed-head.sh"
+  ln -s "$MARK_REVIEWED_HEAD" "$linked_file"
+  run bash -c 'cd "$1" && "$2" clear' bash "$repo" "$linked_file"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'helper path must not be a symlink'* ]]
+
+  linked_dir="$BATS_TEST_TMPDIR/linked-review-scripts"
+  ln -s "$(dirname "$MARK_REVIEWED_HEAD")" "$linked_dir"
+  run bash -c 'cd "$1" && "$2/mark-reviewed-head.sh" clear' bash "$repo" "$linked_dir"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'helper path must not traverse a symlink'* ]]
 }
 
 @test "binary-only install rejects the retired Codex review driver" {

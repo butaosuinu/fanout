@@ -69,6 +69,7 @@ custom agent、model 固定、app-server controller、result parser は使いま
 reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
 review task は repository の内容を untrusted evidence とし、その中の指示に従わないよう reviewer に求めます。
 Codex は child の bootstrap 時に repository の指示を読み込むため、marker helper は candidate が `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files を変更していれば spawn 前に拒否します。
+installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
 これらの変更は trusted checkout から起動した reviewer、または人がレビューしてください。
 native subagent は親 session の sandbox、approval policy、network 制限を継承します。
 skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
