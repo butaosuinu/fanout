@@ -14,6 +14,10 @@ import (
 // controller inside the child pane.
 const PlanTUICommand = "__codex-plan-tui"
 
+// TeamTUICommand is the hidden fanout subcommand that runs the non-Plan team
+// message bridge inside a Codex child pane.
+const TeamTUICommand = "__codex-team-tui"
+
 // LaunchCommand builds the shell command that starts the Plan Mode controller
 // for a fresh prompt.
 func LaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
@@ -22,9 +26,32 @@ func LaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
 	}
 	args := []string{
 		fanoutPath,
-		"__codex-plan-tui",
+		PlanTUICommand,
 		"--codex", codexPath,
 		"--prompt", prompt,
+		"--status-file", statusPath,
+	}
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = agent.ShellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// TeamLaunchCommand builds the shell command that starts the non-Plan Codex
+// team bridge. self is an issue number or plan task id; passing it explicitly
+// avoids pane-identity detection before the launcher's state row exists.
+func TeamLaunchCommand(fanoutPath, codexPath, prompt, self, parent, statusPath string) string {
+	if strings.TrimSpace(fanoutPath) == "" {
+		fanoutPath = "fanout"
+	}
+	args := []string{
+		fanoutPath,
+		TeamTUICommand,
+		"--codex", codexPath,
+		"--prompt", prompt,
+		"--self", self,
+		"--parent", parent,
 		"--status-file", statusPath,
 	}
 	quoted := make([]string, len(args))
@@ -42,7 +69,7 @@ func ResumeLaunchCommand(fanoutPath, codexPath, threadID, sessionID, statusPath 
 	}
 	args := []string{
 		fanoutPath,
-		"__codex-plan-tui",
+		PlanTUICommand,
 		"--codex", codexPath,
 		"--resume-thread-id", threadID,
 	}
@@ -55,6 +82,19 @@ func ResumeLaunchCommand(fanoutPath, codexPath, threadID, sessionID, statusPath 
 		quoted[i] = agent.ShellQuote(arg)
 	}
 	return strings.Join(quoted, " ")
+}
+
+// TeamStatusPath derives the /tmp status file path for one team bridge launch.
+// member keeps plan tasks (whose numeric pane number is always zero) distinct.
+func TeamStatusPath(projectRoot, member string, dryRun bool) string {
+	repo := safeCodexPlanTempPart(filepath.Base(projectRoot))
+	member = safeCodexPlanTempPart(member)
+	base := fmt.Sprintf("fanout-codex-team-%s-%s", repo, member)
+	if dryRun {
+		return filepath.Join("/tmp", base+".json")
+	}
+	unique := fmt.Sprintf("%s-%d-%d", base, os.Getpid(), time.Now().UnixNano())
+	return filepath.Join("/tmp", unique+".json")
 }
 
 // StatusPath derives the /tmp status file path for one Plan Mode launch. Dry

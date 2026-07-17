@@ -24,6 +24,7 @@ var fileRules = map[string]Rule{
 	"cmd/fanout/tui_launch.go":            ruleCmdH,
 	"cmd/fanout/worktree_action.go":       ruleCmdH,
 	"cmd/fanout/codex_plan_tui.go":        ruleCmdH,
+	"cmd/fanout/codex_team_tui.go":        ruleCmdH,
 	"cmd/fanout/tui_restore.go":           ruleCmdH,
 	"cmd/fanout/tui_watch.go":             ruleCmdH,
 	"cmd/fanout/post_work_review_json.go": ruleCmdH,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ type Request struct {
 	AgentCommand        string
 	CodexPlanMode       bool
 	CodexPlanStatusPath string
+	CodexTeamMode       bool
+	CodexTeamStatusPath string
 	// ShellKey is a @fanout_shell_key liveness token for panes recorded with
 	// the repo root as their worktree path (the plan fan-out coordinator):
 	// the root contains every fanout pane, so the path-containment liveness
@@ -186,19 +189,19 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		failCleanup(paneLogLabel(req), l.Info.Target, "", &prepared, l.Log)
 		return Result{}, false
 	}
-	var codexPlanStatus codexapp.Status
-	if req.CodexPlanMode {
-		var planErr error
-		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
-		if planErr != nil {
-			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
+	var codexTUIStatus codexapp.Status
+	if statusPath := codexTUIStatusPath(req); statusPath != "" {
+		var statusErr error
+		codexTUIStatus, statusErr = codexapp.WaitReady(statusPath, CodexPlanTUIStartupTimeout)
+		if statusErr != nil {
+			l.Log.Err("%s: start %s in pane %s: %v", paneLogLabel(req), codexTUILabel(req), paneID, statusErr)
 			failCleanup(paneLogLabel(req), l.Info.Target, paneID, &prepared, l.Log)
 			return Result{}, false
 		}
-		_ = os.Remove(req.CodexPlanStatusPath)
+		_ = os.Remove(statusPath)
 	}
 	if l.Recorder != nil {
-		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC(), codexPlanStatus)
+		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC(), codexTUIStatus)
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			failCleanup(paneLogLabel(req), l.Info.Target, paneID, &prepared, l.Log)
@@ -211,8 +214,8 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		BranchName:     req.BranchName,
 		Slug:           req.Slug,
 		WorktreePath:   prepared.WorktreePath,
-		CodexThreadID:  codexPlanStatus.ThreadID,
-		CodexSessionID: codexPlanStatus.SessionID,
+		CodexThreadID:  codexTUIStatus.ThreadID,
+		CodexSessionID: codexTUIStatus.SessionID,
 	}); err != nil {
 		l.Log.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		rollbackState(l.Recorder, req, l.Log)
@@ -365,7 +368,7 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 	return paneID, true
 }
 
-func statePane(req Request, paneID, worktreePath string, now time.Time, codexPlanStatus codexapp.Status) state.Pane {
+func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status) state.Pane {
 	return state.Pane{
 		Parent:         req.ParentRef,
 		IssueNum:       req.Number,
@@ -380,8 +383,8 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexPla
 		Agent:          req.Agent,
 		ShellKey:       req.ShellKey,
 		CodexPlanMode:  req.CodexPlanMode,
-		CodexThreadID:  codexPlanStatus.ThreadID,
-		CodexSessionID: codexPlanStatus.SessionID,
+		CodexThreadID:  codexTUIStatus.ThreadID,
+		CodexSessionID: codexTUIStatus.SessionID,
 		DisplayName:    paneTitle(req),
 		WorktreePath:   worktreePath,
 		Prompt:         req.Prompt,
@@ -413,6 +416,28 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + codexapp.LaunchCommand(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath)
 		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
+	if req.CodexTeamMode {
+		if strings.TrimSpace(req.AgentStartGate) != "" {
+			return "", fmt.Errorf("agent start gate is not supported in Codex team mode")
+		}
+		if req.Agent != "codex" {
+			return "", fmt.Errorf("codex team mode requires agent codex; pane resolves to %s", req.Agent)
+		}
+		self := codexTeamMember(req)
+		if cfg.DryRun {
+			return codexapp.TeamLaunchCommand(commandName, "codex", req.Prompt, self, req.ParentRef, req.CodexTeamStatusPath), nil
+		}
+		codexPath, err := agent.ResolveExecutable("codex")
+		if err != nil {
+			return "", err
+		}
+		fanoutPath, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("resolve fanout executable: %w", err)
+		}
+		command := "PATH=" + agent.ShellQuote(os.Getenv("PATH")) + " " + codexapp.TeamLaunchCommand(fanoutPath, codexPath, req.Prompt, self, req.ParentRef, req.CodexTeamStatusPath)
+		return agent.WithFanoutBin(command, fanoutPath), nil
+	}
 	if cfg.DryRun {
 		command, err := agent.BuildCommand(req.Agent, req.Prompt)
 		if err != nil {
@@ -429,6 +454,31 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 		return "", fmt.Errorf("resolve fanout executable: %w", err)
 	}
 	return withAgentStartGate(agent.WithFanoutBin(command, fanoutPath), req.AgentStartGate), nil
+}
+
+func codexTeamMember(req Request) string {
+	if strings.TrimSpace(req.TaskID) != "" {
+		return req.TaskID
+	}
+	return strconv.Itoa(req.Number)
+}
+
+func codexTUIStatusPath(req Request) string {
+	switch {
+	case req.CodexPlanMode:
+		return req.CodexPlanStatusPath
+	case req.CodexTeamMode:
+		return req.CodexTeamStatusPath
+	default:
+		return ""
+	}
+}
+
+func codexTUILabel(req Request) string {
+	if req.CodexPlanMode {
+		return "Codex Plan Mode TUI"
+	}
+	return "Codex team TUI"
 }
 
 func withAgentStartGate(command, gate string) string {
@@ -463,6 +513,9 @@ func logPaneRequest(req Request, lg *log.Logger) {
 	if req.CodexPlanMode {
 		lg.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
 	}
+	if req.CodexTeamMode {
+		lg.Dim("  codex-team -> app-server TUI + idle-turn message bridge")
+	}
 }
 
 func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) {
@@ -471,6 +524,9 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	}
 	if req.CodexPlanMode {
 		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan Mode thread + interactive Codex TUI approval UI\n", c.Dim, c.Reset)
+	}
+	if req.CodexTeamMode {
+		fmt.Fprintf(lg.Stdout(), "  %scodex team%s: app-server TUI + idle-turn message bridge\n", c.Dim, c.Reset)
 	}
 	if req.Worktree.Refresh {
 		details := req.Worktree.RefreshDetails
@@ -508,6 +564,10 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	if req.CodexPlanMode {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
+	}
+	if req.CodexTeamMode {
+		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial turn acceptance before recording state%s\n", c.Dim, c.Reset)
+		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexTeamStatusPath), c.Reset)
 	}
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/state.json with paneId <pane_id>%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)

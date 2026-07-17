@@ -173,6 +173,14 @@ load helpers
   assert_golden scenario-sub-issue-only-team
 }
 
+@test "agent-codex --team variant of scenario-sub-issue-only: app-server team bridge launch" {
+  skip_unless_fanout_go
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --agent codex --team
+  assert_success
+  assert_golden scenario-sub-issue-only-codex-team
+}
+
 @test "Go settings disabled variant of scenario-sub-issue-only: briefing size tracks toggles" {
   skip_unless_fanout_go
   use_fixture scenario-sub-issue-only

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Status values for the Codex Plan TUI status file handshake.
+// Status values for the Codex TUI controller status-file handshake.
 const (
 	statusReady  = "ready"
 	statusFailed = "failed"
@@ -18,10 +18,10 @@ const (
 
 const codexPlanTUIStartupPoll = 200 * time.Millisecond
 
-var errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex Plan TUI startup")
+var errCodexPlanStartupTimeout = errors.New("timed out waiting for Codex TUI startup")
 
-// Status is the JSON payload the Plan Mode controller writes to its status
-// file once the Codex TUI is attached (or startup failed).
+// Status is the JSON payload a Codex TUI controller writes once the remote TUI
+// is attached (or startup failed).
 type Status struct {
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
@@ -53,6 +53,17 @@ func writeStatus(path string, status Status) error {
 	return os.Rename(tmp, path)
 }
 
+// WriteFailedStatus lets a cmd entrypoint report a dependency failure that
+// occurs before its Codex TUI controller can start. This keeps the launcher's
+// WaitReady gate fail-fast instead of waiting for a missing status file.
+func WriteFailedStatus(path string, startupErr error) error {
+	message := "Codex TUI setup failed"
+	if startupErr != nil {
+		message = startupErr.Error()
+	}
+	return writeStatus(path, Status{Status: statusFailed, Error: message})
+}
+
 // readStatus parses the status file at path.
 func readStatus(path string) (Status, error) {
 	body, err := os.ReadFile(path)
@@ -61,7 +72,7 @@ func readStatus(path string) (Status, error) {
 	}
 	var status Status
 	if err := json.Unmarshal(body, &status); err != nil {
-		return Status{}, fmt.Errorf("parse Codex Plan TUI status: %w", err)
+		return Status{}, fmt.Errorf("parse Codex TUI status: %w", err)
 	}
 	return status, nil
 }
@@ -70,7 +81,7 @@ func readStatus(path string) (Status, error) {
 // the timeout elapses.
 func WaitReady(statusPath string, timeout time.Duration) (Status, error) {
 	if strings.TrimSpace(statusPath) == "" {
-		return Status{}, fmt.Errorf("missing Codex Plan TUI status path")
+		return Status{}, fmt.Errorf("missing Codex TUI status path")
 	}
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -82,11 +93,11 @@ func WaitReady(statusPath string, timeout time.Duration) (Status, error) {
 				return status, nil
 			case statusFailed:
 				if status.Error == "" {
-					return Status{}, fmt.Errorf("Codex Plan TUI setup failed") //nolint:staticcheck // ST1005: "Codex Plan TUI" is a proper noun
+					return Status{}, fmt.Errorf("Codex TUI setup failed") //nolint:staticcheck // ST1005: "Codex TUI" is a proper noun
 				}
 				return Status{}, errors.New(status.Error)
 			default:
-				lastErr = fmt.Errorf("unexpected Codex Plan TUI status %q", status.Status)
+				lastErr = fmt.Errorf("unexpected Codex TUI status %q", status.Status)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			lastErr = err

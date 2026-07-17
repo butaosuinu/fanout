@@ -98,7 +98,7 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   pane at the project root so `fanout plan`'s git root stays at the repo,
   never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` / `tui_restore.go` / `tui_watch.go` /
+  `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` /
   `post_work_review_json.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.

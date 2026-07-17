@@ -17,6 +17,7 @@ const (
 	codexRemoteAppConnectTimeout       = 10 * time.Second
 	codexRemoteTUIStartupGrace         = 3 * time.Second
 	codexRemoteTUIThreadStartupTimeout = 10 * time.Second
+	codexPlanTUIClientName             = "fanout-codex-plan-tui"
 	codexPlanApprovalUIPollInterval    = 250 * time.Millisecond
 	codexPlanApprovalUIPrompt          = "Implement this plan?"
 	codexPlanTUIWorkingPrompt          = "esc to interrupt"
@@ -71,6 +72,103 @@ type codexTurnCompletion struct {
 	Status  string
 }
 
+type codexRemoteTUIConfig struct {
+	CodexPath       string
+	ResumeThreadID  string
+	ResumeSessionID string
+	Version         string
+	ClientName      string
+	SetAgentState   func(string)
+	Stdout          io.Writer
+	Stderr          io.Writer
+}
+
+// codexRemoteTUISession owns the app-server observer and the remotely attached
+// interactive TUI shared by the Plan and team controllers. Mode-specific turn
+// handling stays with those controllers.
+type codexRemoteTUISession struct {
+	server            *appServer
+	client            *client
+	thread            codexThreadInfo
+	freshThread       bool
+	tui               *exec.Cmd
+	tuiDone           chan error
+	tuiStopped        bool
+	drainDone         chan error
+	stopSignalCleanup func()
+}
+
+func startCodexRemoteTUISession(cfg codexRemoteTUIConfig) (_ *codexRemoteTUISession, err error) {
+	session := &codexRemoteTUISession{}
+	defer func() {
+		if err != nil {
+			session.Close()
+		}
+	}()
+
+	session.server, err = startAppServer(cfg.CodexPath)
+	if err != nil {
+		return nil, err
+	}
+	session.stopSignalCleanup = installCodexAppServerSignalCleanup(session.server)
+
+	session.client, err = connectAppServer(session.server, codexRemoteAppConnectTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err = initializeCodexClient(session.client, cfg.Version, cfg.ClientName); err != nil {
+		return nil, err
+	}
+
+	session.thread = codexThreadInfo{
+		ID:        strings.TrimSpace(cfg.ResumeThreadID),
+		SessionID: strings.TrimSpace(cfg.ResumeSessionID),
+	}
+	if session.thread.ID != "" && session.thread.SessionID == "" {
+		session.thread.SessionID = session.thread.ID
+	}
+	session.freshThread = session.thread.ID == ""
+	resumeID := codexRemoteTUIResumeID(session.thread)
+	if session.freshThread {
+		resumeID = ""
+	}
+	session.tui, session.tuiDone, err = startCodexRemoteTUI(cfg.CodexPath, session.server.Addr, resumeID, cfg.Stdout, cfg.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	session.drainDone = completedAppServerDrain()
+	if session.drainDone, err = waitForCodexRemoteTUIStartup(session.tuiDone, session.drainDone, session.server); err != nil {
+		return nil, err
+	}
+	if session.freshThread {
+		session.thread, err = waitForCodexRemoteTUIThread(session.tuiDone, session.client, session.server, cfg.SetAgentState, codexRemoteTUIThreadStartupTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return session, nil
+}
+
+func (s *codexRemoteTUISession) Close() {
+	if s == nil {
+		return
+	}
+	if s.tui != nil && !s.tuiStopped {
+		stopProcess(s.tui, s.tuiDone)
+		s.tuiStopped = true
+	}
+	if s.client != nil {
+		awaitDrainAfterTUIExit(s.client, s.drainDone)
+		s.client.Close()
+	}
+	if s.stopSignalCleanup != nil {
+		s.stopSignalCleanup()
+	}
+	if s.server != nil {
+		s.server.Close()
+	}
+}
+
 // RunPlanTUI runs the fanout Codex Plan Mode controller: it starts an
 // app-server, creates a native Plan Mode thread through app-server (or resumes
 // an existing one), attaches the interactive Codex TUI, starts the initial turn,
@@ -87,38 +185,27 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		}
 	}()
 
-	server, err := startAppServer(cfg.CodexPath)
-	if err != nil {
-		return err
-	}
-	defer server.Close()
-	stopSignalCleanup := installCodexAppServerSignalCleanup(server)
-	defer stopSignalCleanup()
-
-	client, err := connectAppServer(server, codexRemoteAppConnectTimeout)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	thread := codexThreadInfo{ID: strings.TrimSpace(cfg.ResumeThreadID), SessionID: strings.TrimSpace(cfg.ResumeSessionID)}
-	if thread.ID != "" && thread.SessionID == "" {
-		thread.SessionID = thread.ID
-	}
 	setState := cfg.SetAgentState
 	if setState == nil {
 		setState = func(string) {}
 	}
-	var drainDone chan error
-	// Every return below must settle a still-live drain goroutine (finish or
-	// bounded-wait) so its in-flight "plan" write cannot outlive the process;
-	// paths that already consumed or awaited the drain nil drainDone first.
-	defer func() { awaitDrainAfterTUIExit(client, drainDone) }()
-	if err = initializeCodexPlanClient(client, cfg.Version); err != nil {
+	session, err := startCodexRemoteTUISession(codexRemoteTUIConfig{
+		CodexPath:       cfg.CodexPath,
+		ResumeThreadID:  cfg.ResumeThreadID,
+		ResumeSessionID: cfg.ResumeSessionID,
+		Version:         cfg.Version,
+		ClientName:      codexPlanTUIClientName,
+		SetAgentState:   setState,
+		Stdout:          stdout,
+		Stderr:          stderr,
+	})
+	if err != nil {
 		return err
 	}
+	defer session.Close()
 
-	freshThread := thread.ID == ""
+	thread := session.thread
+	freshThread := session.freshThread
 	var cwd string
 	if freshThread {
 		var cwdErr error
@@ -128,46 +215,21 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		}
 	}
 
-	resumeID := codexRemoteTUIResumeID(thread)
 	if freshThread {
-		resumeID = ""
-	}
-	tui, tuiDone, err := startCodexRemoteTUI(cfg.CodexPath, server.Addr, resumeID, stdout, stderr)
-	if err != nil {
-		return err
-	}
-	tuiStopped := false
-	defer func() {
-		if !tuiStopped {
-			stopProcess(tui, tuiDone)
-		}
-	}()
-
-	if drainDone == nil {
-		drainDone = completedAppServerDrain()
-	}
-	if drainDone, err = waitForCodexRemoteTUIStartup(tuiDone, drainDone, server); err != nil {
-		return err
-	}
-	if freshThread {
-		thread, err = waitForCodexRemoteTUIThread(tuiDone, client, server, setState, codexRemoteTUIThreadStartupTimeout)
-		if err != nil {
-			return err
-		}
-		thread, err = configureCodexPlanThread(client, thread, cwd)
+		thread, err = configureCodexPlanThread(session.client, thread, cwd)
 		if err != nil {
 			return err
 		}
 		reportCodexPlanAgentState(setState, "working")
 		var turnStart codexPlanTurnStartResult
-		turnStart, err = startCodexPlanTurn(client, thread, cwd, cfg.Prompt)
+		turnStart, err = startCodexPlanTurn(session.client, thread, cwd, cfg.Prompt)
 		if err != nil {
 			return err
 		}
 		if turnStart.Completed {
-			drainDone = completedAppServerDrain()
+			session.drainDone = completedAppServerDrain()
 		} else {
-			drainDone = drainCodexAppServerDuringStartupCmd(client, setState, thread.ID, turnStart.TurnID)
+			session.drainDone = drainCodexAppServerDuringStartupCmd(session.client, setState, thread.ID, turnStart.TurnID)
 		}
 	}
 
@@ -175,14 +237,14 @@ func RunPlanTUI(cfg TUIConfig, stdout, stderr io.Writer) (err error) {
 		Status:    statusReady,
 		ThreadID:  thread.ID,
 		SessionID: thread.SessionID,
-		Remote:    server.Addr,
+		Remote:    session.server.Addr,
 	}); err != nil {
 		return fmt.Errorf("write Codex Plan TUI status: %w", err)
 	}
 	ready = true
-	tuiExited, err := waitForCodexTUIAfterReady(tuiDone, drainDone, client, setState, cfg.CapturePlanScreen, freshThread, false)
-	drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
-	tuiStopped = tuiExited
+	tuiExited, err := waitForCodexTUIAfterReady(session.tuiDone, session.drainDone, session.client, setState, cfg.CapturePlanScreen, freshThread, false)
+	session.drainDone = nil // consumed or awaited inside waitForCodexTUIAfterReady
+	session.tuiStopped = tuiExited
 	return err
 }
 
@@ -279,10 +341,13 @@ func receiveCodexRemoteTUIThread(client appServerStartupClient, setState func(st
 	}
 }
 
-func initializeCodexPlanClient(client sessionClient, version string) error {
+func initializeCodexClient(client sessionClient, version, clientName string) error {
+	if strings.TrimSpace(clientName) == "" {
+		return fmt.Errorf("initialize codex app-server client: client name is required")
+	}
 	if _, err := client.Request("fanout-init", "initialize", map[string]any{
 		"clientInfo": map[string]any{
-			"name":    "fanout-codex-plan-tui",
+			"name":    clientName,
 			"title":   nil,
 			"version": version,
 		},

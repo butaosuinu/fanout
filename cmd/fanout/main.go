@@ -44,6 +44,7 @@ func main() {
 		{isTUIClosePopupRequest, func() exitcode.Code { return cmdTUIClosePopup(os.Args[2:], lg) }},
 		{isTUISettingsPopupRequest, func() exitcode.Code { return cmdTUISettingsPopup(os.Args[2:], lg) }},
 		{isCodexPlanTUIRequest, func() exitcode.Code { return cmdCodexPlanTUI(os.Args[2:], lg) }},
+		{isCodexTeamTUIRequest, func() exitcode.Code { return cmdCodexTeamTUI(os.Args[2:], lg) }},
 		{isPlanRequest, func() exitcode.Code { return cmdPlan(os.Args[2:], lg, commandName) }},
 		{isDashboardRequest, func() exitcode.Code { return cmdDashboard(os.Args[2:], lg) }},
 		{isFocusConsoleRequest, func() exitcode.Code { return cmdFocusConsole(os.Args[2:], lg) }},
