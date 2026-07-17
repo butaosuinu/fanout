@@ -276,6 +276,97 @@ func TestTeamBridgeWarnsInFlightMessageIDsWhenObserverCloses(t *testing.T) {
 	}
 }
 
+func TestTeamBridgeInitialTurnKeepsCompletionBeforeStartResponse(t *testing.T) {
+	now := time.Unix(490, 0)
+	fetchCalls := 0
+	var states []string
+	client := newFakeTeamAppClient()
+	bridge := newTestTeamBridge(client, &now, func() ([]InboundMessage, error) {
+		fetchCalls++
+		return nil, nil
+	})
+	bridge.setAgentState = func(state string) { states = append(states, state) }
+	bridge.tuiDone = make(chan error)
+	received := make(chan teamReceivedMessage, 3)
+	received <- teamReceivedMessage{msg: teamTurnStartedMessage("thread-1", "turn-initial")}
+	received <- teamReceivedMessage{msg: teamTurnCompletedMessage("thread-1", "turn-initial", "completed")}
+	received <- teamReceivedMessage{msg: teamTurnStartResponse(t, teamInitialTurnRequestID, "turn-initial", "inProgress")}
+	bridge.received = received
+
+	if err := bridge.startInitialTurn("Read the task briefing and begin."); err != nil {
+		t.Fatalf("startInitialTurn() error = %v", err)
+	}
+	if bridge.pendingStart == nil || !bridge.pendingStart.initial {
+		t.Fatalf("pendingStart = %#v, want initial request before startup wait", bridge.pendingStart)
+	}
+	tuiExited, err := bridge.waitForInitialTurn()
+	if err != nil || tuiExited {
+		t.Fatalf("waitForInitialTurn() = exited:%t err:%v, want accepted turn", tuiExited, err)
+	}
+	// The completion is sufficient to accept startup. The later response must
+	// not reactivate the already completed initial turn.
+	bridge.handleMessage((<-received).msg)
+	if bridge.activeTurnID != "" {
+		t.Fatalf("activeTurnID = %q, want empty after prior completion", bridge.activeTurnID)
+	}
+	if !bridge.lastTurnCompleted.Equal(now) {
+		t.Fatalf("lastTurnCompleted = %v, want %v", bridge.lastTurnCompleted, now)
+	}
+	if len(states) == 0 || states[len(states)-1] != "idle" {
+		t.Fatalf("states = %v, want final idle", states)
+	}
+	if got := len(client.sent); got != 1 {
+		t.Fatalf("sent requests = %d, want one initial turn/start", got)
+	}
+
+	now = now.Add(bridge.idleGrace)
+	bridge.poll()
+	if fetchCalls != 1 {
+		t.Fatalf("FetchMessages calls after initial turn grace = %d, want 1", fetchCalls)
+	}
+}
+
+func TestTeamBridgeInitialTurnTracksCompletionAfterStartResponse(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			now := time.Unix(495, 0)
+			var states []string
+			client := newFakeTeamAppClient()
+			bridge := newTestTeamBridge(client, &now, func() ([]InboundMessage, error) { return nil, nil })
+			bridge.setAgentState = func(state string) { states = append(states, state) }
+			bridge.tuiDone = make(chan error)
+			received := make(chan teamReceivedMessage, 1)
+			received <- teamReceivedMessage{msg: teamTurnStartResponse(t, teamInitialTurnRequestID, "turn-initial", "inProgress")}
+			bridge.received = received
+
+			if err := bridge.startInitialTurn("Read the task briefing and begin."); err != nil {
+				t.Fatalf("startInitialTurn() error = %v", err)
+			}
+			tuiExited, err := bridge.waitForInitialTurn()
+			if err != nil || tuiExited {
+				t.Fatalf("waitForInitialTurn() = exited:%t err:%v, want accepted turn", tuiExited, err)
+			}
+			if bridge.activeTurnID != "turn-initial" {
+				t.Fatalf("accepted initial turn = %q, want turn-initial", bridge.activeTurnID)
+			}
+
+			handled := bridge.handleMessage(teamTurnCompletedMessage("thread-1", "turn-initial", status))
+			if handled.err != nil {
+				t.Fatalf("completion error = %v, want accepted initial turn to remain interactive", handled.err)
+			}
+			if bridge.activeTurnID != "" {
+				t.Fatalf("terminal initial turn = %q, want cleared", bridge.activeTurnID)
+			}
+			if !bridge.lastTurnCompleted.Equal(now) {
+				t.Fatalf("lastTurnCompleted = %v, want %v", bridge.lastTurnCompleted, now)
+			}
+			if len(states) == 0 || states[len(states)-1] != "idle" {
+				t.Fatalf("states = %v, want final idle", states)
+			}
+		})
+	}
+}
+
 func TestCodexTeamInitialPromptMarksManualCheckpointsRead(t *testing.T) {
 	prompt := codexTeamInitialPrompt("Read the task briefing and begin.")
 	for _, want := range []string{

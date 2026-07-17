@@ -50,19 +50,20 @@ type TeamTUIConfig struct {
 	IdleGrace       time.Duration
 }
 
-type teamTurnStartResult struct {
-	TurnID   string
-	Terminal bool
-}
-
 type teamPendingStart struct {
 	requestID string
 	messages  []InboundMessage
+	initial   bool
 }
 
 type teamReceivedMessage struct {
 	msg appServerMessage
 	err error
+}
+
+type teamHandleResult struct {
+	initialAccepted bool
+	err             error
 }
 
 type teamBridge struct {
@@ -76,6 +77,7 @@ type teamBridge struct {
 	now               func() time.Time
 	polls             <-chan time.Time
 	tuiDone           <-chan error
+	received          <-chan teamReceivedMessage
 	activeTurnID      string
 	lastTurnCompleted time.Time
 	pendingStart      *teamPendingStart
@@ -129,23 +131,36 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("resolve current directory: %w", err)
 	}
-	activeTurnID := ""
-	var lastCompleted time.Time
+	// The team bridge is now the sole app-server reader. The startup sentinel
+	// is not a live drain goroutine and must not be awaited during shutdown.
+	session.drainDone = nil
+	receiverDone := make(chan struct{})
+	defer close(receiverDone)
+	bridge := &teamBridge{
+		client:           session.client,
+		threadID:         session.thread.ID,
+		cwd:              cwd,
+		stderr:           stderr,
+		setAgentState:    setState,
+		fetchMessages:    cfg.FetchMessages,
+		idleGrace:        cfg.IdleGrace,
+		now:              time.Now,
+		tuiDone:          session.tuiDone,
+		received:         receiveTeamAppServerMessages(session.client, receiverDone),
+		pendingApprovals: make(map[string]struct{}),
+	}
 	if session.freshThread {
 		reportCodexPlanAgentState(setState, "working")
-		turnStart, startErr := startCodexTeamTurn(session.client, session.thread.ID, cwd, codexTeamInitialPrompt(cfg.Prompt))
-		if startErr != nil {
+		if startErr := bridge.startInitialTurn(codexTeamInitialPrompt(cfg.Prompt)); startErr != nil {
 			return startErr
 		}
-		if turnStart.Terminal {
-			lastCompleted = time.Now()
-			reportCodexPlanAgentState(setState, "idle")
-		} else {
-			activeTurnID = teamActiveTurnID(turnStart.TurnID)
-			lastCompleted = time.Time{}
+		tuiExited, startErr := bridge.waitForInitialTurn()
+		if startErr != nil {
+			session.tuiStopped = tuiExited
+			return startErr
 		}
 	} else {
-		lastCompleted = time.Now()
+		bridge.lastTurnCompleted = time.Now()
 		reportCodexPlanAgentState(setState, "idle")
 	}
 
@@ -161,42 +176,59 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
-	// The team bridge is now the sole app-server reader. The startup sentinel
-	// is not a live drain goroutine and must not be awaited during shutdown.
-	session.drainDone = nil
-	bridge := &teamBridge{
-		client:            session.client,
-		threadID:          session.thread.ID,
-		cwd:               cwd,
-		stderr:            stderr,
-		setAgentState:     setState,
-		fetchMessages:     cfg.FetchMessages,
-		idleGrace:         cfg.IdleGrace,
-		now:               time.Now,
-		polls:             ticker.C,
-		tuiDone:           session.tuiDone,
-		activeTurnID:      activeTurnID,
-		lastTurnCompleted: lastCompleted,
-		pendingApprovals:  make(map[string]struct{}),
-	}
+	bridge.polls = ticker.C
 	tuiExited, runErr := bridge.run()
 	session.tuiStopped = tuiExited
 	return runErr
 }
 
-func startCodexTeamTurn(client requester, threadID, cwd, prompt string) (teamTurnStartResult, error) {
-	result, err := client.Request(teamInitialTurnRequestID, "turn/start", codexTeamTurnStartParams(threadID, cwd, prompt))
-	if err != nil {
-		return teamTurnStartResult{}, err
+func (b *teamBridge) startInitialTurn(prompt string) error {
+	params := codexTeamTurnStartParams(b.threadID, b.cwd, prompt)
+	b.pendingStart = &teamPendingStart{requestID: teamInitialTurnRequestID, initial: true}
+	if err := sendAppRequest(b.client, teamInitialTurnRequestID, "turn/start", params); err != nil {
+		b.pendingStart = nil
+		return err
 	}
-	status, turnID := codexTurnStartStatus(result)
-	switch status {
-	case "completed":
-		return teamTurnStartResult{TurnID: turnID, Terminal: true}, nil
-	case "failed", "interrupted":
-		return teamTurnStartResult{}, fmt.Errorf("codex initial team turn ended with status %q", status)
-	default:
-		return teamTurnStartResult{TurnID: turnID}, nil
+	return nil
+}
+
+func (b *teamBridge) waitForInitialTurn() (bool, error) {
+	for {
+		select {
+		case tuiErr := <-b.tuiDone:
+			if tuiErr != nil {
+				return true, fmt.Errorf("codex TUI exited before initial team turn was accepted: %w", tuiErr)
+			}
+			return true, fmt.Errorf("codex TUI exited before initial team turn was accepted")
+		case result := <-b.received:
+			if result.err != nil {
+				return false, teamObserverError(result.err)
+			}
+			msg := result.msg
+			if isServerRequest(msg) {
+				if err := handleServerRequest(b.client, msg); err != nil {
+					return false, err
+				}
+				continue
+			}
+			if msg.Method == "error" {
+				message, willRetry := errorNotification(msg.Params)
+				if willRetry {
+					continue
+				}
+				if message == "" {
+					message = "codex app-server reported an error"
+				}
+				return false, errors.New(message)
+			}
+			handled := b.handleMessage(msg)
+			if handled.err != nil {
+				return false, handled.err
+			}
+			if handled.initialAccepted {
+				return false, nil
+			}
+		}
 	}
 }
 
@@ -224,7 +256,11 @@ func codexTeamInitialPrompt(prompt string) string {
 }
 
 func (b *teamBridge) run() (bool, error) {
-	received := receiveTeamAppServerMessages(b.client)
+	received := b.received
+	if received == nil {
+		received = receiveTeamAppServerMessages(b.client, nil)
+		b.received = received
+	}
 	for {
 		select {
 		case tuiErr := <-b.tuiDone:
@@ -232,27 +268,37 @@ func (b *teamBridge) run() (bool, error) {
 			return true, tuiErr
 		case result := <-received:
 			if result.err != nil {
-				if errors.Is(result.err, net.ErrClosed) || errors.Is(result.err, io.ErrClosedPipe) || errors.Is(result.err, io.EOF) {
-					observerErr := fmt.Errorf("codex app-server team observer closed: %w", result.err)
-					b.warnInFlightInjection(observerErr.Error())
-					return false, observerErr
-				}
-				b.warnInFlightInjection(result.err.Error())
-				return false, result.err
+				observerErr := teamObserverError(result.err)
+				b.warnInFlightInjection(observerErr.Error())
+				return false, observerErr
 			}
-			b.handleMessage(result.msg)
+			handled := b.handleMessage(result.msg)
+			if handled.err != nil {
+				return false, handled.err
+			}
 		case <-b.polls:
 			b.poll()
 		}
 	}
 }
 
-func receiveTeamAppServerMessages(receiver appServerReceiver) <-chan teamReceivedMessage {
+func teamObserverError(err error) error {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
+		return fmt.Errorf("codex app-server team observer closed: %w", err)
+	}
+	return err
+}
+
+func receiveTeamAppServerMessages(receiver appServerReceiver, done <-chan struct{}) <-chan teamReceivedMessage {
 	received := make(chan teamReceivedMessage, 1)
 	go func() {
 		for {
 			msg, err := receiver.receive()
-			received <- teamReceivedMessage{msg: msg, err: err}
+			select {
+			case received <- teamReceivedMessage{msg: msg, err: err}:
+			case <-done:
+				return
+			}
 			if err != nil {
 				return
 			}
@@ -261,26 +307,26 @@ func receiveTeamAppServerMessages(receiver appServerReceiver) <-chan teamReceive
 	return received
 }
 
-func (b *teamBridge) handleMessage(msg appServerMessage) {
-	if b.handlePendingStartResponse(msg) {
-		return
+func (b *teamBridge) handleMessage(msg appServerMessage) teamHandleResult {
+	if result, handled := b.handlePendingStartResponse(msg); handled {
+		return result
 	}
 	if isServerRequest(msg) {
 		if serverRequestAgentState(msg.Method) == "blocked" && teamMessageMatchesThread(msg, b.threadID) {
 			b.pendingApprovals[teamRequestIDKey(msg.ID)] = struct{}{}
 			reportCodexPlanAgentState(b.setAgentState, "blocked")
 		}
-		return
+		return teamHandleResult{}
 	}
 	if msg.Method == teamResolvedRequestMethod {
 		if requestID, ok := teamResolvedRequestID(msg, b.threadID); ok {
 			delete(b.pendingApprovals, requestID)
 			b.reportCurrentState()
 		}
-		return
+		return teamHandleResult{}
 	}
 	if !teamMessageMatchesThread(msg, b.threadID) {
-		return
+		return teamHandleResult{}
 	}
 	switch msg.Method {
 	case "turn/started":
@@ -290,10 +336,11 @@ func (b *teamBridge) handleMessage(msg appServerMessage) {
 	case "turn/completed":
 		completion := anyCodexTurnCompletedNotification(msg)
 		if !completion.Matched || !teamCompletionMatchesActiveTurn(msg, b.activeTurnID) {
-			return
+			return teamHandleResult{}
 		}
+		initial := b.pendingStart != nil && b.pendingStart.initial
 		injection := b.activeInjection
-		if injection == nil {
+		if injection == nil && b.pendingStart != nil && !b.pendingStart.initial {
 			// A terminal notification can race ahead of the turn/start response.
 			// In that ordering the pending request still owns the injected batch.
 			injection = b.pendingStart
@@ -307,37 +354,58 @@ func (b *teamBridge) handleMessage(msg appServerMessage) {
 		b.pendingApprovals = make(map[string]struct{})
 		b.lastTurnCompleted = b.now()
 		reportCodexPlanAgentState(b.setAgentState, "idle")
+		if initial {
+			if completion.Status != "completed" {
+				return teamHandleResult{err: fmt.Errorf("codex initial team turn ended with status %q", completion.Status)}
+			}
+			return teamHandleResult{initialAccepted: true}
+		}
 	}
+	return teamHandleResult{}
 }
 
-func (b *teamBridge) handlePendingStartResponse(msg appServerMessage) bool {
+func (b *teamBridge) handlePendingStartResponse(msg appServerMessage) (teamHandleResult, bool) {
 	if b.pendingStart == nil || !messageIDMatches(msg.ID, b.pendingStart.requestID) || msg.Method != "" {
-		return false
+		return teamHandleResult{}, false
 	}
 	pending := b.pendingStart
 	b.pendingStart = nil
 	if len(msg.Error) > 0 {
+		if pending.initial {
+			return teamHandleResult{err: fmt.Errorf("app-server request %s failed: %s", pending.requestID, appServerErrorSummary(msg.Error))}, true
+		}
 		b.warnTurnStartFailure(pending.messages, appServerErrorSummary(msg.Error))
 		b.reportCurrentState()
-		return true
+		return teamHandleResult{}, true
 	}
 	status, turnID := codexTurnStartStatus(msg.Result)
 	switch status {
 	case "completed", "failed", "interrupted":
-		if status != "completed" {
+		if status != "completed" && !pending.initial {
 			b.warnTurnStartFailure(pending.messages, fmt.Sprintf("turn ended with status %q", status))
 		}
 		b.activeTurnID = ""
 		b.lastTurnCompleted = b.now()
 		b.reportCurrentState()
+		if pending.initial {
+			if status != "completed" {
+				return teamHandleResult{err: fmt.Errorf("codex initial team turn ended with status %q", status)}, true
+			}
+			return teamHandleResult{initialAccepted: true}, true
+		}
 	default:
-		b.activeInjection = pending
+		if !pending.initial {
+			b.activeInjection = pending
+		}
 		if b.activeTurnID == "" {
 			b.activeTurnID = teamActiveTurnID(turnID)
 		}
 		b.reportCurrentState()
+		if pending.initial {
+			return teamHandleResult{initialAccepted: true}, true
+		}
 	}
-	return true
+	return teamHandleResult{}, true
 }
 
 func (b *teamBridge) poll() {
@@ -384,7 +452,7 @@ func (b *teamBridge) warnTurnStartFailure(messages []InboundMessage, detail stri
 
 func (b *teamBridge) warnInFlightInjection(detail string) {
 	injection := b.activeInjection
-	if injection == nil {
+	if injection == nil && b.pendingStart != nil && !b.pendingStart.initial {
 		injection = b.pendingStart
 	}
 	if injection != nil {
