@@ -289,20 +289,20 @@ func TestCloseWithModePaneFailurePreservesStateAndWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	pane := state.Pane{Parent: "81", IssueNum: 82, PaneID: "%5", WorktreePath: worktreePath}
-	if err := locked.RecordPane(pane); err != nil {
+	if recordErr := locked.RecordPane(pane); recordErr != nil {
 		_ = locked.Unlock()
-		t.Fatal(err)
+		t.Fatal(recordErr)
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 
 	code := CloseWithMode(Options{ProjectRoot: projectRoot, StatePath: statePath, Hooks: hooks.EmptyConfig()}, "81", 82, CloseWorktree, nopLogger{})
 	if code != exitcode.Env {
 		t.Fatalf("CloseWithMode() = %d, want Env", code)
 	}
-	if _, err := os.Stat(worktreePath); err != nil {
-		t.Fatalf("worktree was removed after pane close failure: %v", err)
+	if _, statErr := os.Stat(worktreePath); statErr != nil {
+		t.Fatalf("worktree was removed after pane close failure: %v", statErr)
 	}
 	store, err := state.Load(statePath)
 	if err != nil {

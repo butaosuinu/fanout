@@ -1558,7 +1558,7 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 	live, err = listClosePaneIdentity(paneID, strings.TrimSpace(shellKey) != "")
 	if err != nil {
 		if killErr != nil {
-			return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane: %v; recheck pane identity: %w", killErr, err)
+			return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane: %w; recheck pane identity: %w", killErr, err)
 		}
 		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("recheck pane identity: %w", err)
 	}
@@ -1568,6 +1568,8 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 	}
 	if identity != ownedPaneMatched {
 		if killErr != nil {
+			// The authoritative recheck supersedes tmux's concurrent kill error.
+			//nolint:nilerr
 			return ClosePaneResult{Status: ClosePaneStale}, nil
 		}
 		return ClosePaneResult{Status: ClosePaneClosed, WindowID: windowID}, nil

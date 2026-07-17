@@ -66,17 +66,13 @@ func TestRemoteTUISessionCloseIsConcurrentSafe(t *testing.T) {
 
 	var callers sync.WaitGroup
 	finishDone := make(chan error, 1)
-	callers.Add(1)
-	go func() {
-		defer callers.Done()
+	callers.Go(func() {
 		finishDone <- session.finish(newCodexSignalError(syscall.SIGINT))
-	}()
+	})
 	for range 7 {
-		callers.Add(1)
-		go func() {
-			defer callers.Done()
+		callers.Go(func() {
 			session.Close()
-		}()
+		})
 	}
 	callers.Wait()
 	if code, ok := SignalErrorExitCode(<-finishDone); !ok || code != 130 {
