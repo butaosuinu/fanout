@@ -45,7 +45,7 @@ guard_bootstrap_instructions() {
     die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
   git diff --cached --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
     die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
-  [ -z "$(git ls-files --others --exclude-standard -- "$@")" ] ||
+  [ -z "$(git ls-files --others -- "$@")" ] ||
     die "worktree adds Codex bootstrap instructions; use a trusted-checkout or human review"
 }
 
