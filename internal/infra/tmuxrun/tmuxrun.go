@@ -1568,8 +1568,7 @@ func ClosePaneIfOwned(paneID, expectedWorktreePath, shellKey string) (ClosePaneR
 	}
 	if identity != ownedPaneMatched {
 		if killErr != nil {
-			// The authoritative recheck supersedes tmux's concurrent kill error.
-			//nolint:nilerr
+			//nolint:nilerr // The authoritative recheck supersedes tmux's concurrent kill error.
 			return ClosePaneResult{Status: ClosePaneStale}, nil
 		}
 		return ClosePaneResult{Status: ClosePaneClosed, WindowID: windowID}, nil
