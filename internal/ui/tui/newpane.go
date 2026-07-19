@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -394,7 +395,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	)
 	prompt.Focus()
 
-	if defaultAgent != "codex" {
+	if agent.ValidateKnown(defaultAgent) != nil {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
@@ -1230,7 +1231,9 @@ func (m model) agentSelectorView() string {
 
 const maxAgentLaunchCount = 3
 
-var launchAgents = []string{"claude", "codex"}
+// launchAgents lists the agents offered by the new-pane form, sourced from the
+// core registry so adding an agent there grows the selector automatically.
+var launchAgents = agent.Supported()
 
 func defaultAgentCounts(defaultAgent string) map[string]int {
 	counts := make(map[string]int, len(launchAgents))

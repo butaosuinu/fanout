@@ -3,12 +3,15 @@ package tui
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/butaosuinu/fanout/internal/core/agent"
 )
 
 func TestRankPickerItems(t *testing.T) {
@@ -1086,5 +1089,23 @@ func TestIssueDefaultAgentSurvivesModeRoundTrip(t *testing.T) {
 	}
 	if total := m.newPane.agentCount["claude"] + m.newPane.agentCount["codex"]; total != 1 {
 		t.Fatalf("issue-mode agent counts sum = %d, want 1", total)
+	}
+}
+
+func TestLaunchAgentsMirrorsCoreRegistry(t *testing.T) {
+	supported := agent.Supported()
+	if !slices.Equal(launchAgents, supported) {
+		t.Fatalf("launchAgents = %v, want registry Supported() %v", launchAgents, supported)
+	}
+	for _, agentName := range launchAgents {
+		if err := agent.ValidateKnown(agentName); err != nil {
+			t.Fatalf("launchAgents entry %q rejected by registry: %v", agentName, err)
+		}
+		if counts := defaultAgentCounts(agentName); counts[agentName] != 1 {
+			t.Fatalf("defaultAgentCounts(%q)[%q] = %d, want 1", agentName, agentName, counts[agentName])
+		}
+		if idx := defaultAgentIndex(agentName); launchAgents[idx] != agentName {
+			t.Fatalf("defaultAgentIndex(%q) = %d, does not resolve back to %q", agentName, idx, agentName)
+		}
 	}
 }
