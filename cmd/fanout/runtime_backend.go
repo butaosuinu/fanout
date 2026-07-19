@@ -221,6 +221,11 @@ func canonicalRuntimeRoot(root string) string {
 
 func validateLaunchBackend(selection backend.Selection) error {
 	if selection.Name == backend.Herdr {
+		// Herdr v1 is observation-only. Reject it before provisional intents,
+		// worktrees, or state rows are created. In particular, the read path must
+		// not fill missing row identity from a snapshot: same-name sessions reuse
+		// public IDs, so doing so would adopt a new terminal instead of reporting
+		// the incomplete row as stale.
 		return backend.Unsupported(backend.Herdr, "issue, Project, and plan launch in v1")
 	}
 	return nil

@@ -44,9 +44,11 @@ type Pane struct {
 	// round trips for existing state.json files.
 	Backend backend.Name `json:"backend,omitempty"`
 	PaneID  string       `json:"paneId"`
-	// Herdr identity is additive so legacy rows still decode. A herdr row that
-	// lacks the terminal, repository, or logical conversation identity needed
-	// for its observed shape remains stale rather than being rebound by name.
+	// Herdr identity is additive so legacy rows still decode. Observation-only
+	// v1 does not create herdr rows through a launch path or fill identity from a
+	// snapshot. A future mutation-enabled launch must persist these authoritative
+	// values; a row that lacks them remains stale rather than being rebound by
+	// name.
 	HerdrWorkspaceID  string                   `json:"herdrWorkspaceId,omitempty"`
 	HerdrTerminalID   string                   `json:"herdrTerminalId,omitempty"`
 	HerdrRepoKey      string                   `json:"herdrRepoKey,omitempty"`

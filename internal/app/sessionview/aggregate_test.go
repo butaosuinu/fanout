@@ -3,6 +3,7 @@ package sessionview
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -992,6 +993,70 @@ func TestBuildHerdrRuntimeFieldsAreAdditiveTmuxAliases(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("pane view JSON missing %s: %s", want, raw)
 		}
+	}
+}
+
+func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
+	root := t.TempDir()
+	row := herdrPane("423", 427, "workspace-a:p1")
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock state: %v", unlockErr)
+		}
+	})
+	if err = locked.RecordPane(row); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := os.ReadFile(state.Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := func(observed backend.LivePane) Snapshot {
+		return Build("o/n", root, Collectors{
+			Now:       fixedNow,
+			LoadState: func() (state.Store, error) { return state.LoadProject(root) },
+			ListLive:  func() ([]backend.LivePane, error) { return []backend.LivePane{observed}, nil },
+			IssuePRs:  func(int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil },
+			Waves:     wavesNone,
+		})
+	}
+
+	matching := liveHerdrPane(row)
+	got := build(matching).Sessions[0].Panes[0]
+	if !got.Alive || got.RuntimeState != "live" {
+		t.Fatalf("matching persisted identity = alive:%t state:%q, want live", got.Alive, got.RuntimeState)
+	}
+
+	restarted := matching
+	restarted.TerminalID = "terminal-after-restart"
+	got = build(restarted).Sessions[0].Panes[0]
+	if got.Alive || got.RuntimeState != "stale" {
+		t.Fatalf("changed terminal identity = alive:%t state:%q, want stale", got.Alive, got.RuntimeState)
+	}
+
+	after, err := os.ReadFile(state.Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("snapshot observation rebound persisted herdr identity:\n--- before ---\n%s\n--- after ---\n%s", before, after)
+	}
+	loaded, err := state.LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, ok := loaded.Find("423", 427)
+	if !ok || persisted.HerdrTerminalID != row.HerdrTerminalID ||
+		persisted.HerdrAgentSession == nil || *persisted.HerdrAgentSession != *row.HerdrAgentSession {
+		t.Fatalf("persisted herdr identity after stale observation = %+v (found=%t)", persisted, ok)
 	}
 }
 
