@@ -193,8 +193,8 @@ touching only class-A packages can rely on AI review.
   identity detection from `.fanout/state.json` (the `[fanout #N of #P]` prompt
   prefix is a fallback) and the peer roster; `internal/infra/msgstore` is the
   send/post/inbox/board/mark-read query layer. The briefing coordination
-  section is shared by `claude` and `codex` panes — distinct from Claude-only
-  Agent Teams. Messages persist to the bus and are read by pull (`inbox` /
+  section is shared by `claude`, `codex`, and `opencode` panes — distinct from
+  Claude-only Agent Teams. Messages persist to the bus and are read by pull (`inbox` /
   `board`) or by the `--team` push lanes (see
   `docs/session-messaging-push.ja.md`): `fanout msg watch` — a blocking
   follower that marks messages read on emit — feeds claude panes via the

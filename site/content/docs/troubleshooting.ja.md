@@ -15,7 +15,7 @@ action mode は `tmux split-window` で子ペインを直接作成するため�
 
 ## "agent is required"
 
-`--agent claude` または `--agent codex` を渡すか、環境変数 `FANOUT_AGENT` を設定してください。
+`--agent claude`、`--agent codex`、または `--agent opencode` を渡すか、環境変数 `FANOUT_AGENT` を設定してください。
 
 ```bash
 fanout 123 --agent claude

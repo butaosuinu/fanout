@@ -123,6 +123,13 @@ watcher、子のない issue の単独ペイン、`fanout plan` task、plan coor
 manual と attach の `codex` ペインは、この設定に関係なく従来どおり Plan Mode で起動します。
 対応する `claude` ペインは通常モードで起動します。
 
+## OpenCode
+
+OpenCode(`opencode`)は同梱 skill のない子 agent として使えます。`--agent opencode` を渡すか、`--agent NUM=opencode` / `--agent task-id=opencode` で対象ごとに混在させてください。
+opencode の位置引数はプロジェクトパスなので、fanout は起動プロンプトを `--prompt` フラグの値として渡します。ペインの resume には `opencode --continue` を使います。
+OpenCode はリポジトリの `AGENTS.md` をネイティブに読むため、子ペインは追加のセットアップなしでプロジェクトのルールを拾います。
+briefing には base の requirements のみが入り、Claude 専用・Codex 専用のセクションは付きません。
+
 ## briefing の仕組み
 
 issue や plan task の子ペインに送られるのは 1 行のプロンプトだけです。

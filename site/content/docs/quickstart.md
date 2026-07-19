@@ -64,7 +64,7 @@ fanout 123
 
 ## Choosing the agent
 
-An agent name must be resolvable: pass `--agent claude`, `--agent codex`, or set `FANOUT_AGENT`.
+An agent name must be resolvable: pass `--agent claude`, `--agent codex`, `--agent opencode`, or set `FANOUT_AGENT`.
 
 ```bash
 fanout 123 --agent claude

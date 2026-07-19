@@ -82,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 tmux セッション内で、作業対象のリポジトリにて:
 
 ```bash
-# 子の agent を一度だけ指定(各 run で --agent claude / --agent codex を渡してもよい)
+# 子の agent を一度だけ指定(各 run で --agent claude / --agent codex / --agent opencode を渡してもよい)
 export FANOUT_AGENT=claude
 
 fanout 123 --dry-run    # コマンドをプレビューし、worktree / ペイン / state / briefing は作らない
@@ -189,8 +189,8 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout dashboard --web` | localhost で read-only Web ダッシュボードを配信 |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |
 
-ファンアウト系のコマンドは子の agent が必要です — `--agent claude` / `--agent codex`
-を渡すか `FANOUT_AGENT` を設定してください(status・dashboard・lifecycle 系の
+ファンアウト系のコマンドは子の agent が必要です — `--agent claude` / `--agent codex` /
+`--agent opencode` を渡すか `FANOUT_AGENT` を設定してください(status・dashboard・lifecycle 系の
 `--status` / `dashboard` / `--merge` には不要)。
 すべての flag・環境変数・exit code は
 [CLI リファレンス](https://butaosuinu.github.io/fanout/ja/docs/cli/)に記載しています。
@@ -216,7 +216,8 @@ flag を生成します。詳しくは
   別途インストールしてください。詳細は
   [herdr backend のドキュメント](https://butaosuinu.github.io/fanout/ja/docs/herdr-backend/)
   を参照してください。
-- 子を起動する agent CLI — **`claude`**(Claude Code)や **`codex`** — を、live
+- 子を起動する agent CLI — **`claude`**(Claude Code)、**`codex`**、
+  **`opencode`**(OpenCode) — を、live
   実行では `PATH` に入れておくこと。インストールが配置するのは fanout 側の
   skill/command だけで、agent 本体はインストールしません(`--dry-run` や
   read-only コマンドには不要)。

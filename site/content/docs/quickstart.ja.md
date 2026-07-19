@@ -71,7 +71,7 @@ fanout 123
 ## エージェントの指定
 
 エージェント名が解決できることが必須です。
-`--agent claude` か `--agent codex` を渡すか、`FANOUT_AGENT` を設定してください。
+`--agent claude`、`--agent codex`、`--agent opencode` のいずれかを渡すか、`FANOUT_AGENT` を設定してください。
 
 ```bash
 fanout 123 --agent claude

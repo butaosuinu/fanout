@@ -75,6 +75,10 @@ The setting covers ordinary CLI issue / Project fan-outs and TUI Issue mode when
 
 Watcher launches, childless-issue standalone panes, `fanout plan` tasks, and plan coordinators ignore this setting. Manual and attached `codex` panes already start in Plan Mode regardless of it; their `claude` counterparts start normally.
 
+## OpenCode
+
+OpenCode (`opencode`) is a supported child agent with no bundled skills: pass `--agent opencode`, or mix it per target with `--agent NUM=opencode` / `--agent task-id=opencode`. fanout passes the launch prompt as the `--prompt` flag value — opencode's positional argument is a project path — and resumes panes with `opencode --continue`. OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. Its briefings carry only the base requirements; the Claude-only and Codex-only sections do not apply.
+
 ## How the briefing works
 
 Each issue or plan-task child pane receives a one-line prompt only. The full issue or task body plus a short Requirements checklist is written to `.fanout/briefings/fanout-<repo>-<NUM>.md` or the task briefing path, and the launch prompt only tells the agent to read that file. Which instructions the briefing includes depends on the toggles in [Settings]({{< relref "/docs/settings" >}}).

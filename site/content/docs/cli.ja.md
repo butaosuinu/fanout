@@ -91,7 +91,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | フラグ | 引数 | 説明 |
 |---|---|---|
-| `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
+| `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude`、`codex`、`opencode`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
 | `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用で、issue / plan の launch は worktree や state の変更前に fail closed する。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |

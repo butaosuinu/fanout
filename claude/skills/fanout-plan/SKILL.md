@@ -142,7 +142,7 @@ calling the CLI; it means "skip confirmation", not a fanout flag.
 
 When task context clearly favors a different supported agent, merge explicit
 per-task overrides into the command with `--agent <task-id>=<name>`. Supported
-agents in this build are `claude` and `codex`; do not emit `gemini`. Use
+agents in this build are `claude`, `codex`, and `opencode`; do not emit `gemini`. Use
 `claude` for broad refactors or large cross-file work, `codex` for focused
 edits, bug fixes, tests, and review follow-up, and fall back to the global
 default for docs-heavy or ambiguous tasks.

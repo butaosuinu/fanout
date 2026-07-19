@@ -179,7 +179,7 @@ recorded and stop polling.
 - `agent is required`: pass a supported default agent, set `FANOUT_AGENT`, or
   cover every selected target with an override.
 - `unknown agent` or `agent "<name>" is not installed`: choose or install
-  `claude` or `codex`.
+  `claude`, `codex`, or `opencode`.
 - `prepare worktree`: report the git failure. Use `--no-refresh` only when a
   stale base is intentional.
 - `sub-issues fetch failed`: check `gh auth status`. Treat HTTP 404 as a
