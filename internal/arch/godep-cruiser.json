@@ -136,6 +136,13 @@
       "comment": "package main is only allowed under cmd/fanout (the one product composition root) or a tools/<tool>/ subdirectory; a bare tools/*.go file is not a valid tool.",
       "from": { "packageName": ["^main$"], "pathNot": ["^cmd/fanout/", "^tools/[^/]+/"] },
       "to": {}
+    },
+    {
+      "name": "no-bare-tree-root-files",
+      "severity": "error",
+      "comment": "no *.go files directly under cmd/, tools/, or a layer root (internal/core|app|infra|ui): every package lives in its own subdirectory, so shared cmd helpers cannot ship outside internal/ and no package can sit at a layer root.",
+      "from": { "packageName": ["."], "path": ["^(cmd|tools|internal/(core|app|infra|ui))/[^/]+\\.go$"] },
+      "to": {}
     }
   ]
 }

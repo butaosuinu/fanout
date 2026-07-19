@@ -160,8 +160,8 @@ func TestInvariantPatternsAppearInDoc(t *testing.T) {
 // TestRepoTreeFullyClassified walks every git-tracked file through classifyPath
 // and asserts none is unclassified. It is the fail-closed backstop: a new
 // top-level file or directory that falls through every rule surfaces here as a
-// concrete path to add a rule for, mirroring internal/arch's
-// TestAllPackagesClassified.
+// concrete path to add a rule for, mirroring the fail-closed allowed matrix of
+// internal/arch's godep-cruiser rules.
 func TestRepoTreeFullyClassified(t *testing.T) {
 	root := repoRootDir(t)
 	out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
