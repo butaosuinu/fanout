@@ -445,6 +445,12 @@ td.c-branch{ color:var(--ink-60); max-width:240px; overflow:hidden; text-overflo
 td.c-diff .add{ color:var(--ok); }
 td.c-diff .del{ color:var(--err); }
 td.c-diff.fault{ color:var(--err); }
+.runtime-ref,
+.runtime-status{ display:block; }
+.runtime-ref{ line-height:1.35; }
+.runtime-backend{ color:var(--ai); font-weight:600; }
+.runtime-pane{ margin-left:7px; color:var(--ink-40); }
+.runtime-status{ color:var(--ink-60); }
 .muted{ color:var(--ink-40); }
 
 /* タグ(状態ピル) */
@@ -472,7 +478,7 @@ a.gh:hover{ text-decoration:underline; text-underline-offset:3px; }
 a.gh-pill:hover{ text-decoration:none; }
 a.gh-pill:hover .tag{ border-color:var(--asagi); color:var(--asagi); }
 
-/* tmux 生死 */
+/* runtime pane 生死 */
 .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:0; }
 .dot.on{ background:var(--asagi); animation:beat 1.8s ease-in-out infinite; }
 .dot.off{ background:var(--suna); }
@@ -581,6 +587,19 @@ html.drawer-resizing{ user-select:none; cursor:col-resize; }
   padding:12px 14px;
   white-space:pre-wrap; overflow-wrap:anywhere;
   max-height:180px; overflow-y:auto;
+}
+.capture-disabled-card{
+  display:flex; align-items:flex-start; gap:10px;
+  padding:11px 13px;
+  border:1px dashed var(--suna); border-radius:10px;
+  background:color-mix(in srgb, var(--paper-2) 72%, transparent);
+  color:var(--ink-40);
+  font-family:var(--f-code); font-size:11.5px; line-height:1.7;
+}
+.capture-disabled-mark{
+  flex:none;
+  padding:0 7px; border:1px solid var(--suna); border-radius:999px;
+  color:var(--ink-40); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
 }
 /* plan — Codex Plan Mode の提案プラン。和紙カード + 浅葱の左罫で、dark terminal
    風の peek(流れる出力)と「文書」を視覚的に区別する */

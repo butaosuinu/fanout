@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -25,6 +26,18 @@ func (nopLogger) Ok(string, ...any)   {}
 func (nopLogger) Warn(string, ...any) {}
 func (nopLogger) Err(string, ...any)  {}
 func (nopLogger) Stderr() io.Writer   { return io.Discard }
+
+type captureLogger struct {
+	errors []string
+}
+
+func (*captureLogger) Info(string, ...any) {}
+func (*captureLogger) Ok(string, ...any)   {}
+func (*captureLogger) Warn(string, ...any) {}
+func (l *captureLogger) Err(format string, args ...any) {
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+func (*captureLogger) Stderr() io.Writer { return io.Discard }
 
 type paneCloseCall struct {
 	paneID       string
@@ -470,5 +483,149 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	}
 	if got, ok := store.Find("423", 425); !ok || got.Backend != backend.Herdr || got.PaneID != "w2:p1" {
 		t.Fatalf("state row changed before unsupported close was rejected: %#v (found=%v)", got, ok)
+	}
+}
+
+func TestCleanupHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
+	projectRoot := t.TempDir()
+	installLifecycleCleanupGH(t)
+	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{
+		Parent:       "423",
+		IssueNum:     425,
+		Backend:      backend.Herdr,
+		PaneID:       "w2:p1",
+		WorktreePath: worktreePath,
+	}
+	recordLifecyclePane(t, projectRoot, pane)
+
+	closeCalls := 0
+	opts := Options{
+		ProjectRoot: projectRoot,
+		StatePath:   state.Path(projectRoot),
+		Hooks:       hooks.EmptyConfig(),
+		CloseOwned: func(backend.CloseRequest) (backend.CloseResult, error) {
+			closeCalls++
+			return backend.CloseResult{}, nil
+		},
+	}
+	lg := &captureLogger{}
+	if got := Cleanup(opts, "423", lg); got != exitcode.Env {
+		t.Fatalf("Cleanup() = %d, want %d; errors=%v", got, exitcode.Env, lg.errors)
+	}
+	assertHerdrCleanupUnchanged(t, projectRoot, worktreePath, "423", 425, "", closeCalls, lg.errors)
+}
+
+func TestCleanupPlanHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
+	projectRoot := t.TempDir()
+	installLifecycleCleanupGH(t)
+	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "task-a")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{
+		Parent:       "plan:demo",
+		IssueNum:     -1,
+		TaskID:       "task-a",
+		BranchName:   "fanout/task-a",
+		Backend:      backend.Herdr,
+		PaneID:       "w2:p2",
+		WorktreePath: worktreePath,
+	}
+	recordLifecyclePane(t, projectRoot, pane)
+
+	closeCalls := 0
+	opts := Options{
+		ProjectRoot: projectRoot,
+		StatePath:   state.Path(projectRoot),
+		Hooks:       hooks.EmptyConfig(),
+		CloseOwned: func(backend.CloseRequest) (backend.CloseResult, error) {
+			closeCalls++
+			return backend.CloseResult{}, nil
+		},
+	}
+	lg := &captureLogger{}
+	if got := CleanupPlan(opts, "plan:demo", lg); got != exitcode.Env {
+		t.Fatalf("CleanupPlan() = %d, want %d; errors=%v", got, exitcode.Env, lg.errors)
+	}
+	assertHerdrCleanupUnchanged(t, projectRoot, worktreePath, "plan:demo", -1, "task-a", closeCalls, lg.errors)
+}
+
+func installLifecycleCleanupGH(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+set -eu
+case "${1:-} ${2:-}" in
+  "repo view")
+    printf '%s\n' 'owner/repo'
+    ;;
+  "api graphql")
+    printf '%s\n' '{"state":"CLOSED","closedByPullRequestsReferences":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}'
+    ;;
+  "pr list")
+    printf '%s\n' '[{"number":1,"state":"MERGED","mergedAt":"2026-07-20T00:00:00Z"}]'
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func recordLifecyclePane(t *testing.T, projectRoot string, pane state.Pane) {
+	t.Helper()
+	locked, err := state.Lock(state.Path(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.RecordPane(pane); err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertHerdrCleanupUnchanged(
+	t *testing.T,
+	projectRoot, worktreePath, parent string,
+	issueNum int,
+	taskID string,
+	closeCalls int,
+	errors []string,
+) {
+	t.Helper()
+	if closeCalls != 0 {
+		t.Fatalf("CloseOwned calls = %d, want 0", closeCalls)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree changed before herdr cleanup rejection: %v", err)
+	}
+	store, err := state.Load(state.Path(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pane state.Pane
+	var ok bool
+	if taskID != "" {
+		pane, ok = store.FindTask(parent, taskID)
+	} else {
+		pane, ok = store.Find(parent, issueNum)
+	}
+	if !ok || pane.Backend != backend.Herdr {
+		t.Fatalf("state row changed before herdr cleanup rejection: %#v (found=%v)", pane, ok)
+	}
+	if !strings.Contains(strings.Join(errors, "\n"), "runtime backend herdr does not support pane close") {
+		t.Fatalf("errors = %v, want explicit herdr close rejection", errors)
 	}
 }

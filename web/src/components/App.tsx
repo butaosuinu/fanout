@@ -132,7 +132,7 @@ export function App() {
                 type="search"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="filter — 自由語 or state:open run:plan agent:claude wave:1 ci:fail dirty:yes"
+                placeholder="filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               />

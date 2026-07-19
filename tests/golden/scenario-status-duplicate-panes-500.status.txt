@@ -4,6 +4,8 @@
     {
       "num": 501,
       "state": "CLOSED",
+      "backend": "tmux",
+      "pane_id": "%9",
       "prs": [
         {
           "number": 901,
@@ -16,6 +18,8 @@
     {
       "num": 502,
       "state": "OPEN",
+      "backend": "tmux",
+      "pane_id": "%11",
       "prs": [],
       "has_merged_pr": false
     }

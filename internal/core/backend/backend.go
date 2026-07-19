@@ -15,6 +15,13 @@ type Name string
 const (
 	Tmux  Name = "tmux"
 	Herdr Name = "herdr"
+
+	// HerdrObservationOnlyReason is the shared operator-facing explanation for
+	// runtime actions disabled by the herdr v1 contract.
+	HerdrObservationOnlyReason = "herdr backend v1 is observation-only"
+	// HerdrContentReadReason is more specific for peek/content surfaces, which
+	// must not issue a targeted herdr read even when the pane is live.
+	HerdrContentReadReason = "herdr backend v1 does not read pane content"
 )
 
 // ParseName validates a configured backend name. An empty value means no

@@ -6,6 +6,7 @@ import {
   fmtBlockers,
   fmtWave,
   openBlockerCount,
+  paneBackend,
   paneCI,
   paneIssueURL,
   paneLabel,
@@ -59,6 +60,7 @@ function PaneRow({
   const wave = fmtWave(pane);
   const runtimeState = paneRuntimeState(pane);
   const runtimeTitle = paneRuntimeTitle(pane);
+  const runtimeBackend = paneBackend(pane);
   const onClick = (e: MouseEvent) => {
     // GitHub リンク(issue / PR)は行選択にしない
     if ((e.target as Element).closest("a")) return;
@@ -106,15 +108,24 @@ function PaneRow({
           <span className="muted">—</span>
         )}
       </td>
-      <td title={runtimeTitle}>
-        <span className={pane.alive ? "dot on" : "dot off"} aria-hidden="true"></span>
-        {pane.alive ? "live" : runtimeState || "stale"}
-        {isKnownAgentState(pane.agentState) && (
-          <>
-            {" "}
-            <AgentStateTag state={pane.agentState} />
-          </>
-        )}
+      <td
+        className="c-runtime"
+        title={[runtimeBackend, pane.paneId, runtimeTitle].filter(Boolean).join(" · ")}
+      >
+        <span className="runtime-ref">
+          <span className="runtime-backend">{runtimeBackend || "—"}</span>
+          <span className="runtime-pane">{pane.paneId || "—"}</span>
+        </span>
+        <span className="runtime-status">
+          <span className={pane.alive ? "dot on" : "dot off"} aria-hidden="true"></span>
+          {pane.alive ? "live" : runtimeState || "stale"}
+          {isKnownAgentState(pane.agentState) && (
+            <>
+              {" "}
+              <AgentStateTag state={pane.agentState} />
+            </>
+          )}
+        </span>
       </td>
       <td>
         <IssueStateTag state={pane.issueState} />

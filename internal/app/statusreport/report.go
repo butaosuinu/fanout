@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -25,6 +26,8 @@ type Report struct {
 type Child struct {
 	Num         int             `json:"num"`
 	State       string          `json:"state"`
+	Backend     backend.Name    `json:"backend,omitempty"`
+	PaneID      string          `json:"pane_id,omitempty"`
 	PRs         []ghissue.PRRef `json:"prs"`
 	HasMergedPR bool            `json:"has_merged_pr"`
 	Body        string          `json:"-"`

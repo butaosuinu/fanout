@@ -271,6 +271,15 @@ func resolveBackendSelection(parent string, inputs runtimeBackendInputs) (backen
 	})
 }
 
+// resolveDisplayBackendSelection resolves the ambient runtime for read-only
+// TUI/dashboard composition. It deliberately has no parent, final rows, or
+// provisional intents: persisted rows still choose their own observation
+// routes, while this selection controls host-specific UI integration.
+func resolveDisplayBackendSelection(projectRoot string) (backend.Selection, error) {
+	inputs := loadRuntimeBackendInputs(&cliflags.Config{}, projectRoot, state.Store{}, nil)
+	return resolveBackendSelection("", inputs)
+}
+
 func backendBindings(projectRoot string, store state.Store) []backend.Binding {
 	rows := make([]backend.Binding, 0, len(store.Panes)*2)
 	planParents := map[string]string{}
@@ -334,8 +343,8 @@ func constructRuntimeBackend(name backend.Name, inputs runtimeBackendInputs) (ba
 // route, the normal settings/env/context resolver can opt the read surface into
 // the ambient named session even though herdr v1 launch remains unsupported.
 //
-// includeTmux keeps the TUI's host runtime observable even when the ambient
-// selection is herdr. Targeted TUI actions continue to use the tmux adapter.
+// includeTmux adds the host tmux route even when no saved row selects it.
+// Persisted rows still contribute their own routes for mixed-backend display.
 func runtimeListLiveCollector(projectRoot string, includeTmux bool) func() ([]backend.LivePane, error) {
 	var mu sync.Mutex
 	return func() ([]backend.LivePane, error) {

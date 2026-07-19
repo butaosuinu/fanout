@@ -105,8 +105,9 @@ func compactSessionHeaderLine(session sessionSummary, width int) string {
 
 // compactPaneLine renders one switcher row: selection marker, ordinal
 // (digit-jump correspondence, blank past 9), agent-state glyph, item label,
-// name, and the pane ID right-aligned. Only Name shrinks when the width is
-// short; below that the trailing pane ID gets clipped.
+// name, and the pane ID right-aligned. Name shrinks first; if backend + item +
+// pane identity still cannot fit, item and pane identity share the remaining
+// width so no single native identifier can consume the row.
 func compactPaneLine(p paneView, ordinal int, selected bool, width int) string {
 	marker := " "
 	if selected {
@@ -116,12 +117,47 @@ func compactPaneLine(p paneView, ordinal int, selected bool, width int) string {
 	if ordinal >= 1 && ordinal <= 9 {
 		ord = strconv.Itoa(ordinal)
 	}
-	prefix := marker + ord + agentStateGlyph(p) + " " + p.itemLabel() + " "
+	fixed := marker + ord + agentStateGlyph(p) + " "
+	runtimeBackend := dash(p.backendLabel())
+	item := p.itemLabel()
 	paneID := dash(p.PaneID)
+	prefix := fixed + runtimeBackend + " " + item + " "
+	if cellWidth(prefix)+cellWidth(paneID)+1 > width {
+		return compactPaneIdentityLine(fixed, runtimeBackend, item, paneID, width)
+	}
 	name := truncateCells(strings.TrimSpace(p.Name), width-cellWidth(prefix)-cellWidth(paneID)-1)
 	line := prefix + name
 	pad := max(width-cellWidth(line)-cellWidth(paneID), 1)
 	line += strings.Repeat(" ", pad) + paneID
+	return truncateCells(line, width)
+}
+
+func compactPaneIdentityLine(fixed, runtimeBackend, item, paneID string, width int) string {
+	// Two separators divide backend/item/pane. Backend is short and safety-
+	// relevant, so preserve it before splitting the remaining cells evenly
+	// between the logical item and backend-native pane identity.
+	fieldBudget := width - cellWidth(fixed) - 2
+	if fieldBudget <= 0 {
+		return truncateCells(fixed, width)
+	}
+	runtimeBackend = truncateCells(runtimeBackend, fieldBudget)
+	fieldBudget -= cellWidth(runtimeBackend)
+	if fieldBudget <= 0 {
+		return truncateCells(fixed+runtimeBackend, width)
+	}
+
+	itemWidth := cellWidth(item)
+	paneWidth := cellWidth(paneID)
+	itemBudget := min(itemWidth, (fieldBudget+1)/2)
+	paneBudget := min(paneWidth, fieldBudget-itemBudget)
+	if unused := fieldBudget - itemBudget - paneBudget; unused > 0 {
+		growItem := min(unused, itemWidth-itemBudget)
+		itemBudget += growItem
+		unused -= growItem
+		paneBudget += min(unused, paneWidth-paneBudget)
+	}
+
+	line := fixed + runtimeBackend + " " + truncateCells(item, itemBudget) + " " + truncateCells(paneID, paneBudget)
 	return truncateCells(line, width)
 }
 

@@ -8,6 +8,7 @@ import {
   blockerLabel,
   fmtWave,
   notStartedNote,
+  paneBackend,
   paneIssueURL,
   paneLabel,
   paneRuntimeState,
@@ -145,9 +146,32 @@ function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
   );
 }
 
-function canCapturePane(pane: PaneView): boolean {
-  const paneBackend = pane.backend?.trim().toLowerCase() || "tmux";
-  return paneBackend === "tmux" && (pane.derived?.canPeek ?? true);
+type CaptureKind = "peek" | "plan";
+
+function captureDisabledReason(pane: PaneView): string | null {
+  const runtimeBackend = paneBackend(pane);
+  if (runtimeBackend === "herdr") {
+    return "herdr backend v1 はペイン内容を読み取らないため利用できません。";
+  }
+  if (runtimeBackend !== "tmux") {
+    return `${runtimeBackend} backend はペイン内容の読み取りに対応していません。`;
+  }
+  if (pane.derived?.canPeek === false) {
+    return "この runtime pane は現在読み取り対象にできません。";
+  }
+  return null;
+}
+
+function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: string }) {
+  return (
+    <section className="d-sec capture-disabled" aria-label={`${kind} disabled`} aria-disabled>
+      <h4>{kind === "peek" ? "peek — 直近の出力" : "plan — 提案中のプラン"}</h4>
+      <div className="capture-disabled-card">
+        <span className="capture-disabled-mark">disabled</span>
+        <span>{reason}</span>
+      </div>
+    </section>
+  );
 }
 
 export function Drawer({
@@ -162,6 +186,8 @@ export function Drawer({
   onClose: () => void;
 }) {
   const { width, gripProps } = useDrawerWidth();
+  const runtimeBackend = paneBackend(pane);
+  const captureReason = captureDisabledReason(pane);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -220,6 +246,8 @@ export function Drawer({
             <dl className="d-kv">
               <dt>agent</dt>
               <dd id="d-agent">{pane.agent || "—"}</dd>
+              <dt>backend</dt>
+              <dd id="d-backend">{runtimeBackend}</dd>
               <dt>pane</dt>
               <dd id="d-pane">{pane.paneId || "—"}</dd>
               <dt>runtime</dt>
@@ -268,8 +296,17 @@ export function Drawer({
               {pane.prompt || "—"}
             </pre>
           </section>
-          {pane.planMode && canCapturePane(pane) && <PlanPanel pane={pane} token={token} />}
-          {canCapturePane(pane) && <PeekPanel pane={pane} token={token} />}
+          {pane.planMode &&
+            (captureReason ? (
+              <CaptureDisabled kind="plan" reason={captureReason} />
+            ) : (
+              <PlanPanel pane={pane} token={token} />
+            ))}
+          {captureReason ? (
+            <CaptureDisabled kind="peek" reason={captureReason} />
+          ) : (
+            <PeekPanel pane={pane} token={token} />
+          )}
         </div>
       )}
     </aside>

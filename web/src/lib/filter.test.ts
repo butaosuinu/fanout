@@ -24,6 +24,7 @@ describe("parseQuery", () => {
 
   it("大文字キー・値は小文字化する", () => {
     expect(parseQuery("STATE:OPEN")).toEqual([{ kind: "key", key: "state", value: "open" }]);
+    expect(parseQuery("BACKEND:HERDR")).toEqual([{ kind: "key", key: "backend", value: "herdr" }]);
   });
 
   it("空文字・空白のみは空", () => {
@@ -41,7 +42,7 @@ describe("matches", () => {
     expect(matches(p, q("logout"))).toBe(false);
   });
 
-  it("state: は tmux 状態に一致すればそれを、さもなくば issue 状態を見る", () => {
+  it("state: は runtime 状態に一致すればそれを、さもなくば issue 状態を見る", () => {
     const live = makePane({ tmuxState: "live", issueState: "CLOSED" });
     expect(matches(live, q("state:live"))).toBe(true);
     expect(matches(live, q("state:closed"))).toBe(true); // tmuxState !== "closed" → issueState
@@ -69,6 +70,20 @@ describe("matches", () => {
   it("agent: は部分一致", () => {
     expect(matches(makePane({ agent: "claude" }), q("agent:clau"))).toBe(true);
     expect(matches(makePane({ agent: "codex" }), q("agent:claude"))).toBe(false);
+  });
+
+  it("backend: は legacy empty を tmux として完全一致する", () => {
+    expect(matches(makePane(), q("backend:tmux"))).toBe(true);
+    expect(matches(makePane({ backend: "" }), q("backend:tmux"))).toBe(true);
+    expect(matches(makePane({ backend: "herdr" }), q("backend:herdr"))).toBe(true);
+    expect(matches(makePane({ backend: "herdr" }), q("backend:tmux"))).toBe(false);
+    expect(matches(makePane({ backend: "", notStarted: true }), q("backend:tmux"))).toBe(false);
+  });
+
+  it("backend と native pane id は fallback 自由語検索の対象になる", () => {
+    const p = makePane({ backend: "herdr", paneId: "w1:p1" });
+    expect(matches(p, q("herdr"))).toBe(true);
+    expect(matches(p, q("w1:p1"))).toBe(true);
   });
 
   it("wave: は数値・waveLabel・wN 表記の 3 通りで一致", () => {

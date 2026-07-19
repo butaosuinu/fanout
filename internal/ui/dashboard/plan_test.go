@@ -136,20 +136,41 @@ func TestPlanRecordedButDeadPaneIs404(t *testing.T) {
 	}
 }
 
+func TestPlanDuplicatePaneIDPrefersLiveTmuxRow(t *testing.T) {
+	fake := &fakeCapture{out: planFixtureOutput}
+	srv := newPlanServer(t, "", fake)
+	srv.verifyPane = func(pv sessionview.PaneView) error {
+		if pv.WorktreePath != "/wt/live" {
+			return fmt.Errorf("verified stale duplicate %q", pv.WorktreePath)
+		}
+		return nil
+	}
+	publishSnapshot(srv, duplicatePaneSnapshot(true))
+
+	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusOK {
+		t.Fatalf("duplicate pane status = %d want 200, body %s", status, body)
+	}
+	if calls, paneID, _ := fake.snapshot(); calls != 1 || paneID != "%5" {
+		t.Fatalf("capture = %d call(s) for %q, want one live %%5 capture", calls, paneID)
+	}
+}
+
 func TestPlanHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 	fake := &fakeCapture{out: planFixtureOutput}
 	srv := newPlanServer(t, "", fake)
 	snap := planSnapshot(true, true)
 	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "w1:p1"
 	publishSnapshot(srv, snap)
 
-	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
+	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "w1:p1"}))
 	if status != http.StatusNotFound {
 		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "not a tmux pane") {
-		t.Fatalf("body = %s want a JSON error rejecting the herdr backend", body)
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], backend.HerdrContentReadReason) {
+		t.Fatalf("body = %s want the explicit herdr content-read reason", body)
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)

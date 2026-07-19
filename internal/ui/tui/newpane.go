@@ -319,6 +319,10 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 		m.notice = "no pane selected"
 		return nil
 	}
+	if reason := m.runtimeActionDisabledReason(&pane, "attach"); reason != "" {
+		m.notice = reason
+		return nil
+	}
 	targetPath := pane.absoluteWorktreePath(m.opts.ProjectRoot)
 	if targetPath == "" {
 		m.notice = fmt.Sprintf("attach skipped for %s: no worktree path", pane.identityLabel())
@@ -864,6 +868,12 @@ func (m *model) adjustNewPaneAgent(key string) {
 }
 
 func (m *model) submitNewPane() tea.Cmd {
+	if !m.promptOnly {
+		if reason := m.runtimeActionDisabledReason(nil, "launch"); reason != "" {
+			m.setNewPaneErr(reason)
+			return nil
+		}
+	}
 	if m.newPane.mode != newPaneModePrompt {
 		return m.submitNewPanePicker()
 	}
@@ -929,6 +939,10 @@ func (m *model) submitNewPane() tea.Cmd {
 }
 
 func (m *model) openNewPanePopupCmd() tea.Cmd {
+	if reason := m.runtimeActionDisabledReason(nil, "launch"); reason != "" {
+		m.notice = reason
+		return nil
+	}
 	prompt := m.opts.NewPanePrompt
 	if prompt == nil {
 		m.openNewPaneForm()
@@ -944,6 +958,10 @@ func (m *model) openNewPanePopupCmd() tea.Cmd {
 }
 
 func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
+	if reason := m.runtimeActionDisabledReason(nil, "launch"); reason != "" {
+		m.notice = reason
+		return nil
+	}
 	switch req.Mode {
 	case LaunchModeIssue:
 		if req.PlanFanout {

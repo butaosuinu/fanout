@@ -863,17 +863,22 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	openBlockers := OpenBlockerCount(pv.Blockers)
 	diffTotal, diffParsed := ParseDiffTotal(pv.DiffSummary)
 	relWorktree := RelativePath(projectRoot, pv.WorktreePath)
+	backendName := ""
+	if !pv.NotStarted {
+		backendName = strings.ToLower(strings.TrimSpace(string(backend.NormalizeName(pv.Backend))))
+	}
 
 	filterValues := map[string]string{
-		"state": strings.ToLower(strings.TrimSpace(firstMatchingState(runtimeState, pv.IssueState))),
-		"run":   strings.ToLower(strings.TrimSpace(pv.AgentState)),
-		"agent": strings.ToLower(strings.TrimSpace(pv.Agent)),
-		"wave":  strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
-		"ci":    strings.ToLower(strings.TrimSpace(ci)),
-		"dirty": yesNo(pv.DirtyState == "dirty"),
-		"live":  yesNo(pv.Alive),
-		"issue": issueFilterValue(pv),
-		"pr":    strings.ToLower(firstNonEmpty(prState, "none")),
+		"state":   strings.ToLower(strings.TrimSpace(firstMatchingState(runtimeState, pv.IssueState))),
+		"backend": backendName,
+		"run":     strings.ToLower(strings.TrimSpace(pv.AgentState)),
+		"agent":   strings.ToLower(strings.TrimSpace(pv.Agent)),
+		"wave":    strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
+		"ci":      strings.ToLower(strings.TrimSpace(ci)),
+		"dirty":   yesNo(pv.DirtyState == "dirty"),
+		"live":    yesNo(pv.Alive),
+		"issue":   issueFilterValue(pv),
+		"pr":      strings.ToLower(firstNonEmpty(prState, "none")),
 	}
 	if pv.Wave <= 0 {
 		filterValues["wave"] = strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.WaveLabel, dependencyWave)))
@@ -888,7 +893,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		name,
 		pv.Slug,
 		pv.PaneID,
-		string(pv.Backend),
+		backendName,
 		runtimeState,
 		runtimeTitle,
 		pv.TmuxState,

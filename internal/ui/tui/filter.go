@@ -8,17 +8,18 @@ import (
 )
 
 type paneFilter struct {
-	terms  []string
-	states []string
-	agents []string
-	waves  []string
-	runs   []string
-	cis    []string
-	dirty  []string
-	live   []string
-	issues []string
-	prs    []string
-	tasks  []string
+	terms    []string
+	states   []string
+	agents   []string
+	waves    []string
+	runs     []string
+	cis      []string
+	dirty    []string
+	live     []string
+	issues   []string
+	prs      []string
+	tasks    []string
+	backends []string
 }
 
 func (m model) updateFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -85,6 +86,8 @@ func parsePaneFilter(query string) paneFilter {
 			filter.prs = append(filter.prs, value)
 		case "task", "t":
 			filter.tasks = append(filter.tasks, value)
+		case "backend", "b":
+			filter.backends = append(filter.backends, value)
 		default:
 			filter.terms = append(filter.terms, token)
 		}
@@ -108,7 +111,7 @@ func splitFilterToken(token string) (string, string, bool) {
 func (f paneFilter) empty() bool {
 	return len(f.terms) == 0 && len(f.states) == 0 && len(f.agents) == 0 && len(f.waves) == 0 &&
 		len(f.runs) == 0 && len(f.cis) == 0 && len(f.dirty) == 0 && len(f.live) == 0 &&
-		len(f.issues) == 0 && len(f.prs) == 0 && len(f.tasks) == 0
+		len(f.issues) == 0 && len(f.prs) == 0 && len(f.tasks) == 0 && len(f.backends) == 0
 }
 
 func (p paneView) matchesFilter(filter paneFilter) bool {
@@ -169,6 +172,11 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 			return false
 		}
 	}
+	for _, runtimeBackend := range filter.backends {
+		if !equalFold(runtimeBackend, p.backendLabel()) {
+			return false
+		}
+	}
 	searchText := strings.ToLower(strings.Join([]string{
 		p.Parent,
 		p.TaskID,
@@ -179,6 +187,7 @@ func (p paneView) matchesFilter(filter paneFilter) bool {
 		p.TaskID,
 		p.Name,
 		p.PaneID,
+		p.backendLabel(),
 		p.TmuxState,
 		p.TmuxTitle,
 		p.AgentState,

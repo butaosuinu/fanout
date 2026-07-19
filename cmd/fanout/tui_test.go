@@ -19,6 +19,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
@@ -42,6 +44,176 @@ func TestTUIAgentOrDefault(t *testing.T) {
 				t.Fatalf("tuiAgentOrDefault(%q) = %q, want %q", tc.raw, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	t.Chdir(repo)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SESSION", "dev-session")
+	t.Setenv("TMUX", "nested-tmux")
+	t.Setenv("TMUX_PANE", "%nested")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("FANOUT_NOTIFICATIONS", "tmux")
+	tmuxLogPath := installTUIDashboardTmuxShim(t)
+	herdrLogPath := installTUIHerdrShim(t)
+
+	originalRunTUI := runTUI
+	originalListLive := runtimeListLiveForProject
+	defer func() {
+		runTUI = originalRunTUI
+		runtimeListLiveForProject = originalListLive
+	}()
+	includeTmux := true
+	runtimeListLiveForProject = func(root string, include bool) func() ([]backend.LivePane, error) {
+		if canonicalRuntimeRoot(root) != canonicalRuntimeRoot(repo) {
+			t.Fatalf("runtime collector root = %q, want %q", root, repo)
+		}
+		includeTmux = include
+		return func() ([]backend.LivePane, error) { return nil, nil }
+	}
+	var opts fanouttui.Options
+	runTUI = func(got fanouttui.Options) error {
+		opts = got
+		if got.Notifier == nil {
+			t.Fatal("Notifier is nil")
+		}
+		if err := got.Notifier.Notify([]fanoutnotify.Event{{Kind: fanoutnotify.EventAgentDone, PaneID: "w1:p1"}}); err != nil {
+			t.Fatalf("herdr notifier: %v", err)
+		}
+		return nil
+	}
+
+	if code := cmdTUI("fanout", discardLogger()); code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+	if opts.BackendSelection != (backend.Selection{Name: backend.Herdr, Reason: backend.ReasonHerdrContext}) {
+		t.Fatalf("BackendSelection = %+v, want herdr from HERDR_ENV", opts.BackendSelection)
+	}
+	if opts.Session != "dev-session" {
+		t.Fatalf("Session = %q, want herdr session label", opts.Session)
+	}
+	if includeTmux {
+		t.Fatal("runtime collector includeTmux = true, want false for herdr host")
+	}
+	if opts.Watcher != nil || opts.RestorePanes != nil || opts.Relayout != nil || opts.ActivePane != nil ||
+		opts.FocusPane != nil || opts.CapturePaneOutput != nil || opts.ClosePane != nil || opts.LifecycleCloseOwned != nil ||
+		opts.NewPanePrompt != nil || opts.HelpPopup != nil || opts.SettingsPopup != nil || opts.LaunchPane != nil ||
+		opts.LaunchIssue != nil || opts.LaunchIssuePlan != nil || opts.LaunchAttach != nil || opts.LaunchShell != nil {
+		t.Fatalf("herdr TUI has tmux/mutation wiring: %+v", opts)
+	}
+	if opts.ReloadSettings == nil {
+		t.Fatal("ReloadSettings is nil, want runtime-neutral notification reload")
+	}
+	runtime, err := opts.ReloadSettings()
+	if err != nil {
+		t.Fatalf("ReloadSettings: %v", err)
+	}
+	if runtime.Watcher != nil || runtime.LaunchIssue != nil {
+		t.Fatalf("herdr reload runtime = %+v, want no watcher/launcher", runtime)
+	}
+	if _, err := os.Stat(tmuxLogPath); !os.IsNotExist(err) {
+		body, _ := os.ReadFile(tmuxLogPath)
+		t.Fatalf("herdr TUI invoked tmux:\n%s", body)
+	}
+	if body, err := os.ReadFile(herdrLogPath); err == nil {
+		if strings.Contains(string(body), "notification\nshow") {
+			t.Fatalf("herdr TUI invoked forbidden `herdr notification show`:\n%s", body)
+		}
+		t.Fatalf("herdr TUI notification path invoked herdr:\n%s", body)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read herdr argv log: %v", err)
+	}
+}
+
+func TestCmdTUIHerdrContextUsesOwnerRootFromChildWorktree(t *testing.T) {
+	owner := t.TempDir()
+	initTUITestGitRepo(t, owner)
+	commitTUITestGitRepo(t, owner)
+	writeTUITestStateFile(t, owner)
+	child := filepath.Join(owner, ".fanout", "worktrees", "child")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initTUITestGitRepo(t, child)
+	commitTUITestGitRepo(t, child)
+	t.Chdir(child)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SESSION", "dev-session")
+	t.Setenv("TMUX", "nested-tmux")
+	t.Setenv("TMUX_PANE", "%nested")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("FANOUT_NOTIFICATIONS", "none")
+	tmuxLogPath := installTUIDashboardTmuxShim(t)
+
+	originalRunTUI := runTUI
+	defer func() { runTUI = originalRunTUI }()
+	var opts fanouttui.Options
+	runTUI = func(got fanouttui.Options) error {
+		opts = got
+		return nil
+	}
+
+	if code := cmdTUI("fanout", discardLogger()); code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK", code)
+	}
+	if canonicalRuntimeRoot(opts.ProjectRoot) != canonicalRuntimeRoot(owner) {
+		t.Fatalf("ProjectRoot = %q, want owner %q", opts.ProjectRoot, owner)
+	}
+	if opts.BackendSelection.Name != backend.Herdr {
+		t.Fatalf("BackendSelection = %+v, want herdr", opts.BackendSelection)
+	}
+	if _, err := os.Stat(tmuxLogPath); !os.IsNotExist(err) {
+		body, _ := os.ReadFile(tmuxLogPath)
+		t.Fatalf("herdr child-worktree startup invoked tmux:\n%s", body)
+	}
+}
+
+func TestCmdTUIUserConfiguredHerdrOutsideContextGuidesWithoutTmux(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	t.Chdir(repo)
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmuxLogPath := installTUIDashboardTmuxShim(t)
+	configPath := settings.UserConfigPath()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"runtimeBackend":"herdr"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRunTUI := runTUI
+	called := false
+	runTUI = func(fanouttui.Options) error {
+		called = true
+		return nil
+	}
+	defer func() { runTUI = originalRunTUI }()
+	var stdout, stderr strings.Builder
+	code := cmdTUI("fanout", log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.Env {
+		t.Fatalf("cmdTUI() = %d, want Env", code)
+	}
+	if called {
+		t.Fatal("runTUI was called outside an existing herdr pane")
+	}
+	for _, want := range []string{"existing herdr pane", "HERDR_ENV=1", "cannot create or attach a session"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
+	}
+	if _, err := os.Stat(tmuxLogPath); !os.IsNotExist(err) {
+		body, _ := os.ReadFile(tmuxLogPath)
+		t.Fatalf("guided herdr startup invoked tmux:\n%s", body)
 	}
 }
 
@@ -308,7 +480,7 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, discardLogger())
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, discardLogger())
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -1857,6 +2029,24 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("TMUX_SHIM_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
+
+func installTUIHerdrShim(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "herdr-args.txt")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >> "$HERDR_SHIM_ARGS"
+printf '%s\n' '---' >> "$HERDR_SHIM_ARGS"
+`
+	path := filepath.Join(dir, "herdr")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_SHIM_ARGS", argsPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsPath
 }

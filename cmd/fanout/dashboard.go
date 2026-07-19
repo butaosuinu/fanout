@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/browser"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -168,13 +169,25 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	keybindEnabled := settings.Resolve(root, settings.CLIOverrides{
 		DashboardKeybind: noKeybindOverride(flags.noKeybind),
 	}, lg.Warn).DashboardKeybind
-	bindDashboardKey(lg, keybindEnabled)
+	selection, selectionErr := resolveDisplayBackendSelection(root)
+	if selectionErr != nil {
+		lg.Warn("dashboard: runtime backend selection unavailable (%v); skipping tmux keybind", selectionErr)
+	} else {
+		bindDashboardKeyForBackend(lg, keybindEnabled, selection)
+	}
 
 	if err := srv.Wait(ctx); err != nil {
 		lg.Err("dashboard: %v", err)
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.Selection) {
+	if selection.Name != backend.Tmux {
+		return
+	}
+	bindDashboardKey(lg, enabled)
 }
 
 // waitDashboardHealthy polls the token-free /healthz endpoint until it answers

@@ -540,10 +540,22 @@ func cmdPlanStatus(cfg run.PlanCommandConfig, spec planspec.Spec, projectRoot, s
 	if code != exitcode.OK {
 		return code
 	}
+	attachPlanRuntimeMetadata(report.Tasks, store, parentRef)
 	if cfg.Format == "table" {
 		return statusreport.WritePlanTable(report, projectRoot, lg)
 	}
 	return statusreport.WritePlanReport(report, lg)
+}
+
+func attachPlanRuntimeMetadata(tasks []statusreport.PlanTask, store state.Store, parent string) {
+	for i := range tasks {
+		pane, ok := store.FindTask(parent, tasks[i].ID)
+		if !ok {
+			continue
+		}
+		tasks[i].Backend = backend.NormalizeName(pane.Backend)
+		tasks[i].PaneID = pane.PaneID
+	}
 }
 
 func planStatusBranch(cfg run.PlanCommandConfig, spec planspec.Spec, store state.Store, parent string, task planspec.Task) string {

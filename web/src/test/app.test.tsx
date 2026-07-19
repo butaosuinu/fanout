@@ -89,6 +89,11 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("Fix login")).toBeInTheDocument();
     expect(screen.getByText("Add docs")).toBeInTheDocument();
     expect(screen.getByText(/telemetry @ \d{2}:\d{2}:\d{2}/)).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "runtime" })).toBeInTheDocument();
+
+    const legacyRow = screen.getByText("Fix login").closest("tr")!;
+    expect(within(legacyRow).getByText("tmux", { exact: true })).toBeInTheDocument();
+    expect(within(legacyRow).getByText("%1", { exact: true })).toBeInTheDocument();
 
     // セッション見出し・issue セルは GitHub リンク
     expect(screen.getByRole("link", { name: "#142" })).toHaveAttribute(
@@ -200,11 +205,11 @@ describe("snapshot 描画", () => {
     streamSnapshot(makeSnapshot([], { degraded: { tmux: true, github: true } }));
     const banner = screen.getByRole("status");
     expect(banner).toHaveTextContent("GitHub データ取得が不安定");
-    expect(banner).toHaveTextContent("tmux が利用できません");
+    expect(banner).toHaveTextContent("runtime が利用できません");
 
     streamSnapshot(makeSnapshot([], { degraded: { runtime: true, tmux: true, github: false } }));
     expect(screen.getByRole("status")).toHaveTextContent("runtime の一部が利用できません");
-    expect(screen.getByRole("status")).not.toHaveTextContent("tmux が利用できません");
+    expect(screen.getByRole("status")).not.toHaveTextContent("runtime が利用できません");
 
     streamSnapshot(
       makeSnapshot([], { degraded: { tmux: false, github: false, reason: "state broken" } }),
@@ -226,11 +231,18 @@ describe("snapshot 描画", () => {
     streamSnapshot(
       makeSnapshot([
         makeSession("427", [
-          makePane({ issueNum: 101, displayName: "Herdr live", backend: "herdr", alive: true }),
+          makePane({
+            issueNum: 101,
+            displayName: "Herdr live",
+            backend: "herdr",
+            paneId: "w1:p1",
+            alive: true,
+          }),
           makePane({
             issueNum: 102,
             displayName: "Herdr stale",
             backend: "herdr",
+            paneId: "w1:p2",
             alive: false,
             tmuxState: "stale",
           }),
@@ -238,6 +250,7 @@ describe("snapshot 描画", () => {
             issueNum: 103,
             displayName: "Herdr unknown",
             backend: "herdr",
+            paneId: "w1:p3",
             alive: false,
             tmuxState: "unknown",
           }),
@@ -245,6 +258,7 @@ describe("snapshot 描画", () => {
             issueNum: 104,
             displayName: "Herdr unsupported",
             backend: "herdr",
+            paneId: "w1:p4",
             alive: false,
             tmuxState: "unknown",
             runtimeState: "unsupported",
@@ -253,14 +267,16 @@ describe("snapshot 描画", () => {
       ]),
     );
 
-    for (const [name, state] of [
-      ["Herdr live", "live"],
-      ["Herdr stale", "stale"],
-      ["Herdr unknown", "unknown"],
-      ["Herdr unsupported", "unsupported"],
+    for (const [name, paneId, state] of [
+      ["Herdr live", "w1:p1", "live"],
+      ["Herdr stale", "w1:p2", "stale"],
+      ["Herdr unknown", "w1:p3", "unknown"],
+      ["Herdr unsupported", "w1:p4", "unsupported"],
     ] as const) {
       const row = screen.getByText(name).closest("tr");
       expect(row).not.toBeNull();
+      expect(within(row!).getByText("herdr", { exact: true })).toBeInTheDocument();
+      expect(within(row!).getByText(paneId, { exact: true })).toBeInTheDocument();
       expect(within(row!).getByText(state, { exact: true })).toBeInTheDocument();
     }
   });
@@ -309,18 +325,48 @@ describe("フィルタ", () => {
     expect(screen.getByText("フィルタに一致するペインがありません")).toBeInTheDocument();
   });
 
+  it("backend dropdown で legacy tmux と herdr row を絞り込む", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("428", [
+          makePane({ issueNum: 101, displayName: "Legacy tmux", backend: "" }),
+          makePane({
+            issueNum: 102,
+            displayName: "Herdr pane",
+            backend: "herdr",
+            paneId: "w1:p1",
+          }),
+        ]),
+      ]),
+    );
+
+    await user.click(screen.getByRole("button", { name: "runtime backend で絞り込み" }));
+    await user.click(screen.getByRole("option", { name: "herdr" }));
+    expect(screen.getByText("Herdr pane")).toBeInTheDocument();
+    expect(screen.queryByText("Legacy tmux")).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("backend:herdr");
+
+    await user.click(screen.getByRole("button", { name: "runtime backend で絞り込み" }));
+    await user.click(screen.getByRole("option", { name: "tmux" }));
+    expect(screen.getByText("Legacy tmux")).toBeInTheDocument();
+    expect(screen.queryByText("Herdr pane")).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox")).toHaveValue("backend:tmux");
+  });
+
   it("trigger クリックで popover が開き、option 選択でトークン書込・閉じて trigger に復帰、同キーは上書き", async () => {
     const user = userEvent.setup();
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    const trigger = screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" });
     expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
 
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    const listbox = screen.getByRole("listbox", { name: "issue / tmux 状態で絞り込み" });
+    const listbox = screen.getByRole("listbox", { name: "issue / runtime 状態で絞り込み" });
     await user.click(within(listbox).getByRole("option", { name: "open" }));
 
     expect(
@@ -363,7 +409,7 @@ describe("フィルタ", () => {
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    const trigger = screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" });
     await user.click(trigger);
     await user.click(screen.getByRole("option", { name: "open" }));
     expect(trigger).toHaveClass("on"); // 適用中スタイル
@@ -389,7 +435,7 @@ describe("フィルタ", () => {
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.click(screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" }));
     expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     await user.click(screen.getByText("Fix login"));
@@ -406,7 +452,7 @@ describe("フィルタ", () => {
     await user.click(screen.getByText("Fix login"));
     await screen.findByRole("complementary", { name: "ペイン詳細" });
 
-    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    const trigger = screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" });
     await user.click(trigger);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -422,7 +468,7 @@ describe("フィルタ", () => {
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    const trigger = screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" });
     act(() => trigger.focus());
     await user.keyboard("{ArrowDown}"); // trigger 上の ↓ で開く
     const opts = within(screen.getByRole("listbox")).getAllByRole("option");
@@ -512,7 +558,7 @@ describe("フィルタ", () => {
     render(<App />);
     streamSnapshot(basicSnapshot());
 
-    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.click(screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" }));
     await user.keyboard("c"); // open → closed へジャンプ
     expect(screen.getByRole("option", { name: "closed" })).toHaveFocus();
     await user.keyboard("{Enter}");
@@ -543,7 +589,7 @@ describe("フィルタ", () => {
     streamSnapshot(basicSnapshot());
 
     await user.type(screen.getByRole("searchbox"), "state:open STATE:CLOSED");
-    const trigger = screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" });
+    const trigger = screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" });
     await user.click(trigger);
     // 最初の同キートークン(open)がアクティブ表示。クリックで同キーを一掃
     await user.click(screen.getByRole("option", { name: "open" }));
@@ -586,6 +632,8 @@ describe("drawer + peek", () => {
     await user.click(screen.getByText("Fix login"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(within(drawer).getByText("fanout/fix-login")).toBeInTheDocument();
+    expect(drawer.querySelector("#d-backend")).toHaveTextContent("tmux");
+    expect(drawer.querySelector("#d-pane")).toHaveTextContent("%1");
     expect(await within(drawer).findByText("boot ok")).toBeInTheDocument();
     expect(within(drawer).getByText(/80 lines · 5s ごとに更新/)).toBeInTheDocument();
 
@@ -666,11 +714,11 @@ describe("drawer + peek", () => {
     server.use(
       http.get("/api/peek", () => {
         peekCalls++;
-        return HttpResponse.json({ paneId: "%5", lines: 80, capturedAt: "", output: "" });
+        return HttpResponse.json({ paneId: "w1:p5", lines: 80, capturedAt: "", output: "" });
       }),
       http.get("/api/plan", () => {
         planCalls++;
-        return HttpResponse.json({ paneId: "%5", capturedAt: "", found: false, plan: "" });
+        return HttpResponse.json({ paneId: "w1:p5", capturedAt: "", found: false, plan: "" });
       }),
     );
     const user = userEvent.setup();
@@ -682,7 +730,7 @@ describe("drawer + peek", () => {
             issueNum: 105,
             displayName: "Herdr child",
             backend: "herdr",
-            paneId: "%5",
+            paneId: "w1:p5",
             alive: true,
             planMode: true,
             ...(includeDerived ? { derived: { canPeek: false } } : {}),
@@ -693,8 +741,15 @@ describe("drawer + peek", () => {
 
     await user.click(screen.getByText("Herdr child"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
-    expect(within(drawer).queryByText("peek — 直近の出力")).not.toBeInTheDocument();
-    expect(within(drawer).queryByText("plan — 提案中のプラン")).not.toBeInTheDocument();
+    expect(drawer.querySelector("#d-backend")).toHaveTextContent("herdr");
+    expect(drawer.querySelector("#d-pane")).toHaveTextContent("w1:p5");
+    expect(within(drawer).getByLabelText("peek disabled")).toHaveAttribute("aria-disabled", "true");
+    expect(within(drawer).getByLabelText("plan disabled")).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(drawer).getAllByText(
+        "herdr backend v1 はペイン内容を読み取らないため利用できません。",
+      ),
+    ).toHaveLength(2);
     expect(peekCalls).toBe(0);
     expect(planCalls).toBe(0);
   });
@@ -940,7 +995,7 @@ describe("未開始(queued)子 issue", () => {
     streamSnapshot(queuedSnapshot());
 
     // GitHub PR 風 popover(#249): trigger を開いて queued option を選ぶ
-    await user.click(screen.getByRole("button", { name: "issue / tmux 状態で絞り込み" }));
+    await user.click(screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" }));
     await user.click(screen.getByRole("option", { name: "queued" }));
     expect(screen.getByText("Queued child")).toBeInTheDocument();
     expect(screen.queryByText("Fix login")).not.toBeInTheDocument();

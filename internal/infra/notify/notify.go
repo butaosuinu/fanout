@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
@@ -125,6 +126,7 @@ func prSuffix(num int) string {
 // slack, or none. Empty means DefaultChannels.
 type Config struct {
 	Channels        string
+	RuntimeBackend  backend.Name
 	TmuxTarget      string
 	NtfyURL         string
 	SlackWebhookURL string
@@ -180,7 +182,11 @@ func New(cfg Config) (*Notifier, error) {
 			}
 			sinks = append(sinks, bellSink{w: w})
 		case ChannelTmux:
-			sinks = append(sinks, tmuxSink{target: cfg.TmuxTarget})
+			// Empty keeps the legacy/default tmux behavior. Herdr v1 has no
+			// notification sink; bell, ntfy, and Slack remain runtime-neutral.
+			if backend.NormalizeName(cfg.RuntimeBackend) == backend.Tmux {
+				sinks = append(sinks, tmuxSink{target: cfg.TmuxTarget})
+			}
 		case ChannelNtfy:
 			if strings.TrimSpace(cfg.NtfyURL) == "" {
 				return nil, fmt.Errorf("ntfy notifications require FANOUT_NTFY_URL or ntfyURL")

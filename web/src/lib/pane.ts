@@ -39,6 +39,15 @@ export function paneRuntimeTitle(p: PaneView): string {
   return p.runtimeTitle || p.tmuxTitle || "";
 }
 
+/* Legacy recorded panes omit backend because an empty persisted value means
+ * tmux. Synthetic not-started rows have no runtime owner, so keep those empty
+ * instead of inventing tmux. */
+export function paneBackend(p: Pick<PaneView, "backend" | "notStarted">): string {
+  const explicit = p.backend?.trim().toLowerCase();
+  if (explicit) return explicit;
+  return p.notStarted ? "" : "tmux";
+}
+
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
  * anything else (UNKNOWN etc.) → "<STATE> #N". */
 export function blockerLabel(b: BlockerStatus): string {

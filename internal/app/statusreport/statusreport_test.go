@@ -1,9 +1,12 @@
 package statusreport
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
 func TestBuildDashboardBody(t *testing.T) {
@@ -186,5 +189,25 @@ func TestPlanTaskStatusBlocked(t *testing.T) {
 				t.Fatalf("planTaskStatusBlocked(%s, %v) = %t, want %t", tt.taskID, tt.merged, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWriteTableIncludesBackendAndPaneColumns(t *testing.T) {
+	var out bytes.Buffer
+	WriteTable(&out, log.Palette{}, TableSpec{
+		Heading:        "fanout status #100",
+		EmptyText:      "empty",
+		FirstColHeader: "ISSUE",
+	}, []TableRow{{
+		Label: "#101", Backend: "herdr", PaneID: "workspace-1:terminal-2",
+		State: "OPEN", PR: "-", PRState: "-", CI: "-", Type: "-", Files: "-", Link: "-",
+	}}, 0, len("+0"), len("-0"))
+
+	got := out.String()
+	if !strings.Contains(got, "ISSUE  BACKEND  PANE") {
+		t.Fatalf("table header does not include backend metadata:\n%s", got)
+	}
+	if !strings.Contains(got, "#101   herdr    workspace-1:terminal-2") {
+		t.Fatalf("table row does not include backend metadata:\n%s", got)
 	}
 }

@@ -41,6 +41,7 @@ const (
 type Options struct {
 	ProjectRoot         string
 	Session             string
+	BackendSelection    backend.Selection
 	StateInterval       time.Duration
 	GHInterval          time.Duration
 	ActivePaneInterval  time.Duration
@@ -266,6 +267,7 @@ func EnhancedKeysDisabled(value string) bool {
 }
 
 func normalizeOptions(opts Options) Options {
+	opts.BackendSelection = normalizeBackendSelection(opts.BackendSelection)
 	if opts.StateInterval <= 0 {
 		opts.StateInterval = defaultStateInterval
 	}

@@ -85,7 +85,8 @@ func (m model) View() string {
 		return m.newPaneView()
 	}
 	layout := m.monitorLayout()
-	header := titleStyle.Render("fanout")
+	backendText := backendSelectionText(m.opts.BackendSelection)
+	header := titleStyle.Render("fanout") + " " + dimStyle.Render(backendText)
 	if layout.Compact {
 		// The full header (session= + project root + HUD) wraps at 40 columns
 		// and eats list rows. Keep the title plus the repo basename so
@@ -94,8 +95,10 @@ func (m model) View() string {
 		// summarizeHUD skips shell/attached rows, session counters do not).
 		if root := strings.TrimSpace(m.opts.ProjectRoot); root != "" {
 			// Truncate by display cells so a long basename cannot wrap the
-			// one-line header monitorLayout budgets for. 7 = "fanout" + space.
-			if base := truncateCells(filepath.Base(root), max(m.width-7, 0)); base != "" {
+			// one-line header monitorLayout budgets for. Backend selection takes
+			// priority because it controls which actions are safe in this console.
+			remaining := max(m.width-cellWidth("fanout "+backendText)-1, 0)
+			if base := truncateCells(filepath.Base(root), remaining); base != "" {
 				header += " " + dimStyle.Render(base)
 			}
 		}
@@ -121,7 +124,7 @@ func (m model) View() string {
 		footer += "\n" + m.renderActionMessage()
 	}
 	if m.stateErr != "" {
-		footer += "\n" + errStyle.Render("state/tmux: "+m.stateErr)
+		footer += "\n" + errStyle.Render("state/runtime: "+m.stateErr)
 	}
 	if m.ghErr != "" {
 		footer += "\n" + warnStyle.Render("gh: "+m.ghErr)

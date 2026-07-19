@@ -2,6 +2,7 @@ import {
   compactWave,
   fmtBlockers,
   fmtWave,
+  paneBackend,
   paneCI,
   paneRuntimeState,
   paneRuntimeTitle,
@@ -24,6 +25,7 @@ export const FILTER_KEYS = new Set([
   "task",
   "pr",
   "run",
+  "backend",
 ]);
 
 export type Term = { kind: "key"; key: string; value: string } | { kind: "word"; word: string };
@@ -55,6 +57,8 @@ export function matches(p: PaneView, terms: Term[]): boolean {
       p.diffSummary,
       p.dirtyState,
       p.issueState,
+      p.paneId,
+      paneBackend(p),
       paneRuntimeTitle(p),
       p.agentState,
       fmtWave(p),
@@ -88,6 +92,10 @@ export function matches(p: PaneView, terms: Term[]): boolean {
             .toLowerCase()
             .includes(t.value)
         )
+          return false;
+        break;
+      case "backend":
+        if ((p.derived?.filterValues?.backend ?? paneBackend(p)).toLowerCase() !== t.value)
           return false;
         break;
       case "wave":

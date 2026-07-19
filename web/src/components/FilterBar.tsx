@@ -9,14 +9,22 @@ const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: read
   [
     {
       key: "state",
-      ariaLabel: "issue / tmux 状態で絞り込み",
+      ariaLabel: "issue / runtime 状態で絞り込み",
       options: [
         ["open", "open"],
         ["closed", "closed"],
         ["live", "live"],
         ["stale", "stale"],
-        ["queued", "queued"], // 未開始(synthetic)行の tmux 状態
+        ["queued", "queued"], // 未開始(synthetic)行の runtime 状態
         ["deferred", "deferred"], // blocker 待ちの未開始行
+      ],
+    },
+    {
+      key: "backend",
+      ariaLabel: "runtime backend で絞り込み",
+      options: [
+        ["tmux", "tmux"],
+        ["herdr", "herdr"],
       ],
     },
     {
@@ -44,7 +52,7 @@ const STATIC_DROPDOWNS: readonly { key: string; ariaLabel: string; options: read
     },
     {
       key: "live",
-      ariaLabel: "tmux ペイン生死で絞り込み",
+      ariaLabel: "runtime ペイン生死で絞り込み",
       options: [
         ["yes", "yes"],
         ["no", "no"],

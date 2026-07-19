@@ -71,6 +71,20 @@ func peekSnapshot(alive bool) sessionview.Snapshot {
 	}
 }
 
+func duplicatePaneSnapshot(planMode bool) sessionview.Snapshot {
+	snap := peekSnapshot(false)
+	snap.Sessions[0].Panes[0].WorktreePath = "/wt/stale"
+	snap.Sessions[0].Panes[0].PlanMode = planMode
+	live := peekSnapshot(true).Sessions[0].Panes[0]
+	live.WorktreePath = "/wt/live"
+	live.PlanMode = planMode
+	snap.Sessions = append(snap.Sessions, sessionview.Session{
+		Parent: "#2",
+		Panes:  []sessionview.PaneView{live},
+	})
+	return snap
+}
+
 // publishSnapshot installs snap as the poller's committed snapshot. Safe at
 // any point in these tests: newPeekServer never starts the poller loop, so no
 // rebuild overwrites the fixture.
@@ -230,23 +244,65 @@ func TestPeekRecordedButDeadPaneIs404(t *testing.T) {
 	}
 }
 
+func TestPeekDuplicatePaneIDPrefersLiveTmuxRow(t *testing.T) {
+	fake := &fakeCapture{out: "live pane output"}
+	srv := newPeekServer(t, "", fake)
+	srv.verifyPane = func(pv sessionview.PaneView) error {
+		if pv.WorktreePath != "/wt/live" {
+			return fmt.Errorf("verified stale duplicate %q", pv.WorktreePath)
+		}
+		return nil
+	}
+	publishSnapshot(srv, duplicatePaneSnapshot(false))
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusOK {
+		t.Fatalf("duplicate pane status = %d want 200, body %s", status, body)
+	}
+	if calls, paneID, _ := fake.snapshot(); calls != 1 || paneID != "%5" {
+		t.Fatalf("capture = %d call(s) for %q, want one live %%5 capture", calls, paneID)
+	}
+}
+
 func TestPeekHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 	fake := &fakeCapture{out: "an unrelated tmux pane's terminal"}
 	srv := newPeekServer(t, "", fake)
-	snap := peekSnapshot(true)
+	snap := peekSnapshot(false)
 	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "w1:p1"
 	publishSnapshot(srv, snap)
 
-	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "w1:p1"}))
 	if status != http.StatusNotFound {
 		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "not a tmux pane") {
-		t.Fatalf("body = %s want a JSON error rejecting the herdr backend", body)
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], backend.HerdrContentReadReason) {
+		t.Fatalf("body = %s want the explicit herdr content-read reason", body)
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)
+	}
+}
+
+func TestPeekUnknownBackendIs404AndSkipsCapture(t *testing.T) {
+	fake := &fakeCapture{out: "an unrelated tmux pane's terminal"}
+	srv := newPeekServer(t, "", fake)
+	snap := peekSnapshot(false)
+	snap.Sessions[0].Panes[0].Backend = backend.Name("zellij")
+	snap.Sessions[0].Panes[0].PaneID = "native:p1"
+	publishSnapshot(srv, snap)
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "native:p1"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown backend status = %d want 404, body %s", status, body)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], `unsupported backend "zellij"`) {
+		t.Fatalf("body = %s want an explicit unsupported-backend error", body)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture ran %d time(s) for an unknown backend", calls)
 	}
 }
 

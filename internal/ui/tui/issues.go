@@ -511,6 +511,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				Agent:              pv.Agent,
 				CreatedAt:          pv.CreatedAt,
 				Prompt:             pv.Prompt,
+				NotStarted:         pv.NotStarted,
 				Derived:            derived,
 			})
 		}
@@ -557,6 +558,7 @@ func applyIssueStatuses(projectRoot string, panes []paneView, issues map[issueKe
 			WaveBadge:   waveBadge(status.Wave, status.HasOpenBlockers),
 			Blockers:    dash(status.Blockers),
 			Blocked:     status.HasOpenBlockers,
+			NotStarted:  true,
 		}
 		view.Derived = derivePaneView(projectRoot, view, status.PRs, status.BlockerRows)
 		out = append(out, view)
@@ -597,6 +599,7 @@ func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, bloc
 		WaveLabel:    view.WaveLabel,
 		Blockers:     blockerRows,
 		Blocked:      view.Blocked,
+		NotStarted:   view.NotStarted,
 	})
 }
 
