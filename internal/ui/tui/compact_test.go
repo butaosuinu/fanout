@@ -144,8 +144,9 @@ func TestViewOverrideResizesStoredTable(t *testing.T) {
 	}
 }
 
-// Pins the exact 40-column switcher row format: marker, ordinal, glyph, item
-// label, name, right-aligned pane ID; only Name shrinks when width is short.
+// Pins the exact 40-column switcher row format: marker, ordinal, glyph,
+// backend, item label, name, and pane ID. Name shrinks first; an oversized
+// item/native identity pair shares the remaining width.
 func TestCompactPaneLineFormat(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -232,6 +233,16 @@ func TestCompactPaneLineFormat(t *testing.T) {
 			ordinal: 6,
 			width:   40,
 			want:    " 6● tmux #105 認証キャッシュ改善      %7",
+		},
+		{
+			name: "herdr plan task budgets long native identity",
+			pane: paneView{
+				TaskID: "api-client", Name: "API client", Backend: "herdr",
+				PaneID: "workspace-2:terminal-3", TmuxState: "live", AgentState: "working",
+			},
+			ordinal: 2,
+			width:   40,
+			want:    " 2◐ herdr api-client workspace-2:term...",
 		},
 	}
 	for _, tt := range tests {

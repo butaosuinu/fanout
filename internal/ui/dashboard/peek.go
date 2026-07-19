@@ -26,27 +26,44 @@ const (
 // it, so the endpoint can never address an arbitrary tmux target.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
-// snapshotPaneView returns the latest committed snapshot row whose runtime-
-// native pane id is paneID. requireLivePane checks backend and Alive before any
-// capture. Requiring Alive (not mere presence in state) closes a pane-id-reuse
-// hole: after a tmux server restart an unrelated pane can take over a recorded
-// id, and only the snapshot's liveness check (pane id plus worktree-path
-// match, see sessionview's paneAlive) ties the id back to this child — a bare id match
-// would let /api/peek or /api/plan capture a stranger's terminal. Defined here
-// rather than in poller.go because the capture endpoints are its only
-// consumers. The zero-value snapshot has nil Sessions, which ranges as empty,
-// so an unpublished snapshot simply reports false.
+// snapshotPaneView selects one latest-snapshot row whose runtime-native pane id
+// is paneID. A live tmux row wins over stale duplicates left by pane-id reuse;
+// without one, a non-tmux row wins so requireLivePane can return its explicit
+// backend error. A stale tmux row remains the final fallback. Defined here
+// rather than in poller.go because the capture endpoints are its only consumers.
 func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	var (
+		staleTmux      sessionview.PaneView
+		staleTmuxFound bool
+		nonTmux        sessionview.PaneView
+		nonTmuxFound   bool
+	)
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
-			if sess.Panes[i].PaneID == paneID {
-				return sess.Panes[i], true
+			pv := sess.Panes[i]
+			if pv.PaneID != paneID {
+				continue
+			}
+			if backend.NormalizeName(pv.Backend) == backend.Tmux {
+				if pv.Alive {
+					return pv, true
+				}
+				if !staleTmuxFound {
+					staleTmux, staleTmuxFound = pv, true
+				}
+				continue
+			}
+			if !nonTmuxFound {
+				nonTmux, nonTmuxFound = pv, true
 			}
 		}
 	}
-	return sessionview.PaneView{}, false
+	if nonTmuxFound {
+		return nonTmux, true
+	}
+	return staleTmux, staleTmuxFound
 }
 
 // requireLivePane is the request-validation chain GET /api/peek and

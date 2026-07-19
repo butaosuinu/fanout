@@ -136,6 +136,26 @@ func TestPlanRecordedButDeadPaneIs404(t *testing.T) {
 	}
 }
 
+func TestPlanDuplicatePaneIDPrefersLiveTmuxRow(t *testing.T) {
+	fake := &fakeCapture{out: planFixtureOutput}
+	srv := newPlanServer(t, "", fake)
+	srv.verifyPane = func(pv sessionview.PaneView) error {
+		if pv.WorktreePath != "/wt/live" {
+			return fmt.Errorf("verified stale duplicate %q", pv.WorktreePath)
+		}
+		return nil
+	}
+	publishSnapshot(srv, duplicatePaneSnapshot(true))
+
+	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusOK {
+		t.Fatalf("duplicate pane status = %d want 200, body %s", status, body)
+	}
+	if calls, paneID, _ := fake.snapshot(); calls != 1 || paneID != "%5" {
+		t.Fatalf("capture = %d call(s) for %q, want one live %%5 capture", calls, paneID)
+	}
+}
+
 func TestPlanHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 	fake := &fakeCapture{out: planFixtureOutput}
 	srv := newPlanServer(t, "", fake)
