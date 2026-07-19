@@ -10,12 +10,25 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 const (
 	repoConfigRelPath = ".fanout/config.json"
 	userConfigRelPath = "fanout/config.json"
+)
+
+// RuntimeBackendSource identifies the settings layer that selected
+// Settings.RuntimeBackend. Context detection and parent stickiness are resolved
+// later by core/backend and therefore do not appear here.
+type RuntimeBackendSource string
+
+const (
+	RuntimeBackendSourceDefault     RuntimeBackendSource = "default"
+	RuntimeBackendSourceUserConfig  RuntimeBackendSource = "user-config"
+	RuntimeBackendSourceEnvironment RuntimeBackendSource = "environment"
+	RuntimeBackendSourceCLI         RuntimeBackendSource = "cli"
 )
 
 // Settings contains the fully resolved settings.
@@ -37,6 +50,8 @@ type Settings struct {
 	Notifications          string
 	NtfyURL                string
 	SlackWebhookURL        string
+	RuntimeBackend         backend.Name
+	RuntimeBackendSource   RuntimeBackendSource
 }
 
 // ConfigScope selects which JSON config file is edited.
@@ -92,6 +107,7 @@ type CLIOverrides struct {
 	CodexPlanMode      *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
+	RuntimeBackend     *backend.Name
 }
 
 type overrides struct {
@@ -112,6 +128,7 @@ type overrides struct {
 	Notifications          *string
 	NtfyURL                *string
 	SlackWebhookURL        *string
+	RuntimeBackend         *backend.Name
 }
 
 var configKeys = []ConfigKey{
@@ -121,6 +138,7 @@ var configKeys = []ConfigKey{
 	{Key: "agentTeamsHint", Group: "Briefing", Label: "Agent Teams hint", Kind: ValueBool, Env: "FANOUT_AGENT_TEAMS_HINT", Default: "true", RepoEditable: true},
 	{Key: "prVisualization", Group: "Briefing", Label: "PR visualization", Kind: ValueBool, Env: "FANOUT_PR_VISUALIZATION", Default: "true", RepoEditable: true},
 	{Key: "codexPlanMode", Group: "Launch", Label: "Codex child Plan Mode", Kind: ValueBool, Env: "FANOUT_CODEX_PLAN_MODE", Default: "false", RepoEditable: true},
+	{Key: "runtimeBackend", Group: "Launch", Label: "Runtime backend", Kind: ValueString, Env: "FANOUT_BACKEND", Default: "tmux", RepoEditable: false},
 	{Key: "dashboardKeybind", Group: "TUI", Label: "Dashboard keybind", Kind: ValueBool, Env: "FANOUT_DASHBOARD_KEYBIND", Default: "true", RepoEditable: true},
 	{Key: "consoleKeybind", Group: "TUI", Label: "Console keybind", Kind: ValueBool, Env: "FANOUT_CONSOLE_KEYBIND", Default: "true", RepoEditable: true},
 	{Key: "watcher", Group: "Watcher", Label: "Watcher", Kind: ValueBool, Env: "FANOUT_WATCHER", Default: "false", RepoEditable: false},
@@ -152,6 +170,8 @@ func Defaults() Settings {
 		WatcherIntervalSeconds: 60,
 		WatcherMaxSessions:     4,
 		Notifications:          "bell",
+		RuntimeBackend:         backend.Tmux,
+		RuntimeBackendSource:   RuntimeBackendSourceDefault,
 	}
 }
 
@@ -159,12 +179,12 @@ func Defaults() Settings {
 // builtin < user file < repo file < environment < CLI.
 func Resolve(projectRoot string, cli CLIOverrides, warnf WarnFunc) Settings {
 	out := Defaults()
-	apply(&out, loadFile(UserConfigPath(), warnf))
+	apply(&out, loadFile(UserConfigPath(), warnf), RuntimeBackendSourceUserConfig)
 	if projectRoot != "" {
-		apply(&out, repoOverrides(RepoConfigPath(projectRoot), warnf))
+		apply(&out, repoOverrides(RepoConfigPath(projectRoot), warnf), "")
 	}
-	apply(&out, envOverrides(warnf))
-	apply(&out, cliOverrides(cli))
+	apply(&out, envOverrides(warnf), RuntimeBackendSourceEnvironment)
+	apply(&out, cliOverrides(cli, warnf), RuntimeBackendSourceCLI)
 	return out
 }
 
@@ -280,7 +300,7 @@ func configFileMode(scope ConfigScope) os.FileMode {
 	return 0o600
 }
 
-func apply(s *Settings, o overrides) {
+func apply(s *Settings, o overrides, runtimeBackendSource RuntimeBackendSource) {
 	if o.AutoPullRequest != nil {
 		s.AutoPullRequest = *o.AutoPullRequest
 	}
@@ -332,10 +352,16 @@ func apply(s *Settings, o overrides) {
 	if o.SlackWebhookURL != nil {
 		s.SlackWebhookURL = *o.SlackWebhookURL
 	}
+	if o.RuntimeBackend != nil {
+		s.RuntimeBackend = *o.RuntimeBackend
+		if runtimeBackendSource != "" {
+			s.RuntimeBackendSource = runtimeBackendSource
+		}
+	}
 }
 
-func cliOverrides(cli CLIOverrides) overrides {
-	return overrides{
+func cliOverrides(cli CLIOverrides, warnf WarnFunc) overrides {
+	out := overrides{
 		AutoPullRequest:    cli.AutoPullRequest,
 		PRReviewGate:       cli.PRReviewGate,
 		BriefingCodeReview: cli.BriefingCodeReview,
@@ -344,6 +370,12 @@ func cliOverrides(cli CLIOverrides) overrides {
 		PRVisualization:    cli.PRVisualization,
 		DashboardKeybind:   cli.DashboardKeybind,
 	}
+	if cli.RuntimeBackend != nil {
+		if name, ok := validatedRuntimeBackend(string(*cli.RuntimeBackend), "settings CLI runtimeBackend", warnf); ok {
+			out.RuntimeBackend = &name
+		}
+	}
+	return out
 }
 
 func repoOverrides(path string, warnf WarnFunc) overrides {
@@ -351,6 +383,10 @@ func repoOverrides(path string, warnf WarnFunc) overrides {
 	if out.Watcher != nil {
 		warn(warnf, "settings %s: watcher is ignored in repo config; use user config or FANOUT_WATCHER", path)
 		out.Watcher = nil
+	}
+	if out.RuntimeBackend != nil {
+		warn(warnf, "settings %s: runtimeBackend is ignored in repo config; use user config, FANOUT_BACKEND, or --backend", path)
+		out.RuntimeBackend = nil
 	}
 	if out.NtfyURL != nil {
 		warn(warnf, "settings %s: ntfyURL is ignored in repo config; use user config or FANOUT_NTFY_URL", path)
@@ -517,6 +553,11 @@ func validateEditableValue(scope ConfigScope, spec ConfigKey, value ConfigValue)
 		}
 		*value.String = normalized
 	}
+	if spec.Key == "runtimeBackend" && value.String != nil {
+		if _, err := backend.ParseName(*value.String); err != nil {
+			return err
+		}
+	}
 	if spec.Key == "watcherIntervalSeconds" && value.Int != nil && *value.Int < 20 {
 		return fmt.Errorf("watcherIntervalSeconds must be at least 20")
 	}
@@ -585,6 +626,11 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"notifications":       func(v *string) { out.Notifications = v },
 		"ntfyURL":             func(v *string) { out.NtfyURL = v },
 		"slackWebhookURL":     func(v *string) { out.SlackWebhookURL = v },
+		"runtimeBackend": func(v *string) {
+			if name, ok := validatedRuntimeBackend(*v, fmt.Sprintf("settings %s: runtimeBackend", path), warnf); ok {
+				out.RuntimeBackend = &name
+			}
+		},
 	}
 	intKeys := map[string]func(*int){
 		"watcherIntervalSeconds": func(v *int) { out.WatcherIntervalSeconds = v },
@@ -671,6 +717,11 @@ func envOverrides(warnf WarnFunc) overrides {
 	readString("FANOUT_NOTIFICATIONS", func(v *string) { out.Notifications = v })
 	readString("FANOUT_NTFY_URL", func(v *string) { out.NtfyURL = v })
 	readString("FANOUT_SLACK_WEBHOOK_URL", func(v *string) { out.SlackWebhookURL = v })
+	if raw, ok := os.LookupEnv("FANOUT_BACKEND"); ok && strings.TrimSpace(raw) != "" {
+		if name, valid := validatedRuntimeBackend(raw, "settings env FANOUT_BACKEND", warnf); valid {
+			out.RuntimeBackend = &name
+		}
+	}
 	readInt := func(name string, set func(*int)) {
 		raw, ok := os.LookupEnv(name)
 		if !ok {
@@ -686,6 +737,15 @@ func envOverrides(warnf WarnFunc) overrides {
 	readInt("FANOUT_WATCHER_INTERVAL_SECONDS", func(v *int) { out.WatcherIntervalSeconds = v })
 	readInt("FANOUT_WATCHER_MAX_SESSIONS", func(v *int) { out.WatcherMaxSessions = v })
 	return out
+}
+
+func validatedRuntimeBackend(raw, source string, warnf WarnFunc) (backend.Name, bool) {
+	name, err := backend.ParseName(raw)
+	if err != nil {
+		warn(warnf, "%s: %v (ignored)", source, err)
+		return "", false
+	}
+	return name, true
 }
 
 func parseBool(raw string) (bool, bool) {

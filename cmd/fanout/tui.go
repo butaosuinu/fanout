@@ -13,11 +13,13 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -57,6 +59,8 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		tmuxrun.EnableExtendedKeys()
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	runtimeBackend := tmuxbackend.New()
+	listLive := runtimeListLiveForProject(projectRoot, true)
 	hookConfig := hooks.LoadUserConfig(lg)
 	watcher, watchInterval, watchLabel, err := newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
 	if err != nil {
@@ -98,21 +102,63 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		LaunchAttach:        newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig),
 		// List providers also feed the in-process fallback form (NewPanePrompt
 		// unavailable); the popup process wires its own copies.
-		ListOpenIssues:    newTUIListOpenIssuesFunc(projectRoot),
-		ListIssueChildren: newTUIListIssueChildrenFunc(projectRoot),
-		LaunchIssue:       newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
-		LaunchIssuePlan:   newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig),
-		OpenIssue:         newTUIOpenIssueFunc(projectRoot),
-		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
-		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
-		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
-		ActivePane:        newTUIActivePaneFunc(os.Getenv("TMUX_PANE")),
-		Notifier:          notifier,
+		ListOpenIssues:      newTUIListOpenIssuesFunc(projectRoot),
+		ListIssueChildren:   newTUIListIssueChildrenFunc(projectRoot),
+		LaunchIssue:         newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
+		LaunchIssuePlan:     newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig),
+		OpenIssue:           newTUIOpenIssueFunc(projectRoot),
+		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
+		RestorePanes:        newTUIRestoreFunc(projectRoot, session, commandName),
+		Relayout:            func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
+		ListLive:            listLive,
+		LifecycleCloseOwned: runtimeBackend.CloseOwned,
+		ShellPaneAlive:      runtimeShellPaneAlive(runtimeBackend.ListLive),
+		FocusPane: func(paneID string) error {
+			return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
+		},
+		PaneAlive: func(paneID string) bool {
+			panes, listErr := runtimeBackend.ListLive()
+			if listErr != nil {
+				return false
+			}
+			for _, pane := range panes {
+				if pane.Ref.Pane == paneID {
+					return true
+				}
+			}
+			return false
+		},
+		CapturePaneOutput: func(paneID string, lines int) (string, error) {
+			return runtimeBackend.Read(backend.PaneRef{Backend: backend.Tmux, Pane: paneID}, lines)
+		},
+		ClosePane:  runtimeBackend.Close,
+		ActivePane: newTUIActivePaneFunc(os.Getenv("TMUX_PANE")),
+		Notifier:   notifier,
 	}); err != nil {
 		lg.Err("tui: %v", err)
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func runtimeShellPaneAlive(listLive func() ([]backend.LivePane, error)) func(paneID, shellKey string) bool {
+	return func(paneID, shellKey string) bool {
+		paneID = strings.TrimSpace(paneID)
+		shellKey = strings.TrimSpace(shellKey)
+		if paneID == "" || shellKey == "" || listLive == nil {
+			return false
+		}
+		panes, err := listLive()
+		if err != nil {
+			return false
+		}
+		for _, pane := range panes {
+			if backend.NormalizeName(pane.Ref.Backend) == backend.Tmux && pane.Ref.Pane == paneID && pane.ShellKey == shellKey {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, lg *log.Logger) fanouttui.SettingsReloadFunc {

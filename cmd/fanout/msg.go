@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/peermsg"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
 const msgUsage = `Usage: fanout msg <verb> [options] [body...]
@@ -143,7 +144,7 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 	if flags == nil {
 		return code // help (OK) or a parse error; either way the message is out
 	}
-	return peermsg.Run(flags.request(), peermsg.DefaultDeps(), lg)
+	return peermsg.Run(flags.request(), peermsg.DefaultDeps(tmuxbackend.New()), lg)
 }
 
 // parseMsgFlags parses `msg` argv. A nil msgFlags means "stop with this

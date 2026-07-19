@@ -12,15 +12,15 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
@@ -28,17 +28,25 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if !resolvedSettings.Watcher {
 		return nil, 0, "", nil
 	}
+	preflightCfg := &cliflags.Config{ParentRef: tuiWatcherPreflightRef}
+	if _, err := resolveTUILaunchRuntime(projectRoot, session, preflightCfg); err != nil {
+		return nil, 0, "", err
+	}
 	gh := ghissue.Runner{Cwd: projectRoot}
 	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
-	livePanes := &watchLivePaneCache{}
+	livePanes := &watchLivePaneCache{list: tmuxbackend.New().ListLiveForIdentity}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
 		CountChildren: func(issue ghissue.Issue) (watch.ChildCounts, error) {
 			return countWatchChildTargets(projectRoot, gh, issue.Number)
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
+			cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
+			if _, err := resolveTUILaunchRuntime(projectRoot, session, cfg); err != nil {
+				return err
+			}
 			return gh.SwapIssueLabels(issue.Number, removeLabel, addLabel)
 		},
 		LoadState: func() (state.Store, error) {
@@ -96,6 +104,10 @@ func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cl
 func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
+	if err != nil {
+		return "", err
+	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -105,16 +117,16 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 			_ = recorder.Unlock()
 		}()
 	}
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
+			return "", fmt.Errorf("runtime backend: %w", err)
+		}
+	}
 	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
 		return "", watch.ErrAlreadyFanned
 	}
-	info := &fanoutruntime.Info{
-		Session:     session,
-		Target:      tuiLaunchTarget(session),
-		ProjectRoot: projectRoot,
-	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return "", bufferedLaunchError(stdout, stderr, "create watch pane")
@@ -138,12 +150,15 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 type parentIssueFanoutResult struct {
 	Watch          watch.ParentLaunchResult
 	CreatedPaneIDs []string
+	runtimeBackend backend.Backend
 }
+
+type tuiIssueReadyFunc func(state.Store, panelaunch.StateRecorder, backend.Backend) error
 
 // launchParentIssueFanoutWithResult preserves the exact pane ids returned by
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
 // deliberately discards them so it cannot steal focus.
-func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, ready run.IssueReadyFunc) (parentIssueFanoutResult, error) {
+func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
@@ -151,23 +166,24 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 	if store, err := state.LoadProject(projectRoot); err == nil && issuePlanRecorded(projectRoot, store, cfg.Parent) {
 		return parentIssueFanoutResult{}, fmt.Errorf("issue #%d already has a plan session; close it before fanning out children", cfg.Parent)
 	}
-	gh := ghissue.Runner{Cwd: projectRoot}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	rt := &run.Runtime{
-		Info: &fanoutruntime.Info{
-			Session:     session,
-			Target:      tuiLaunchTarget(session),
-			ProjectRoot: projectRoot,
-		},
-		GH: gh,
+	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
+	if err != nil {
+		return parentIssueFanoutResult{}, err
 	}
-	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, ready)
-	result := parentIssueFanoutResult{CreatedPaneIDs: execution.CreatedPaneIDs}
+	var runReady run.IssueReadyFunc
+	if ready != nil {
+		runReady = func(store state.Store, recorder panelaunch.StateRecorder) error {
+			return ready(store, recorder, rt.Backend)
+		}
+	}
+	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
+	result := parentIssueFanoutResult{CreatedPaneIDs: execution.CreatedPaneIDs, runtimeBackend: rt.Backend}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
-	result.Watch = watchParentResultAfterLaunch(projectRoot, cfg, gh)
+	result.Watch = watchParentResultAfterLaunch(projectRoot, cfg, rt.GH)
 	return result, nil
 }
 
@@ -217,9 +233,9 @@ func countWatchChildTargets(projectRoot string, gh ghissue.Runner, parent int) (
 }
 
 type watchLivePaneCache struct {
-	list   func() ([]tmuxrun.LivePane, error)
+	list   func() ([]backend.LivePane, error)
 	loaded bool
-	panes  []tmuxrun.LivePane
+	panes  []backend.LivePane
 	err    error
 }
 
@@ -242,7 +258,8 @@ func (c *watchLivePaneCache) Alive(pane state.Pane) (bool, error) {
 	}
 	recordedKey := strings.TrimSpace(pane.ShellKey)
 	for _, live := range panes {
-		if pane.PaneID == live.ID && recordedKey != "" && strings.TrimSpace(live.ShellKey) == "" {
+		if backend.NormalizeName(pane.Backend) == backend.NormalizeName(live.Ref.Backend) &&
+			pane.PaneID == live.Ref.Pane && recordedKey != "" && strings.TrimSpace(live.ShellKey) == "" {
 			return false, fmt.Errorf("pane %s liveness key is unavailable", pane.PaneID)
 		}
 		if watchPaneMatchesLive(pane, live) {
@@ -252,23 +269,22 @@ func (c *watchLivePaneCache) Alive(pane state.Pane) (bool, error) {
 	return false, nil
 }
 
-func (c *watchLivePaneCache) load() ([]tmuxrun.LivePane, error) {
+func (c *watchLivePaneCache) load() ([]backend.LivePane, error) {
 	if c == nil {
-		return tmuxrun.ListLivePanesForIdentity()
+		return nil, fmt.Errorf("runtime backend live-pane collector is not configured")
 	}
 	if !c.loaded {
-		list := c.list
-		if list == nil {
-			list = tmuxrun.ListLivePanesForIdentity
+		if c.list == nil {
+			return nil, fmt.Errorf("runtime backend live-pane collector is not configured")
 		}
-		c.panes, c.err = list()
+		c.panes, c.err = c.list()
 		c.loaded = true
 	}
 	return c.panes, c.err
 }
 
-func watchPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) bool {
-	if pane.PaneID != live.ID {
+func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
+	if backend.NormalizeName(pane.Backend) != backend.NormalizeName(live.Ref.Backend) || pane.PaneID != live.Ref.Pane {
 		return false
 	}
 	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {

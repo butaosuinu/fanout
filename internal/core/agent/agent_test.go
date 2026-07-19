@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 // TestClaudeHookSettingsJSONPinsAgentStateHooks pins the exact inline
@@ -59,6 +61,34 @@ func TestBuildCommandCodexStaysBare(t *testing.T) {
 	}
 }
 
+func TestBuildCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
+	got, err := BuildCommandForBackend("claude", "[fanout #1] go", backend.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "claude '[fanout #1] go'"
+	if got != want {
+		t.Fatalf("BuildCommandForBackend(claude, herdr) = %q, want %q", got, want)
+	}
+}
+
+func TestBuildCommandForBackendKeepsTmuxHooks(t *testing.T) {
+	got, err := BuildCommandForBackend("claude", "prompt", backend.Tmux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "claude --settings " + ShellQuote(claudeHookSettingsJSON) + " prompt"
+	if got != want {
+		t.Fatalf("BuildCommandForBackend(claude, tmux) = %q, want %q", got, want)
+	}
+}
+
+func TestBuildCommandForBackendRejectsUnknownBackend(t *testing.T) {
+	if _, err := BuildCommandForBackend("claude", "prompt", backend.Name("unknown")); err == nil {
+		t.Fatal("BuildCommandForBackend() succeeded with an unknown backend")
+	}
+}
+
 func TestBuildCommandRejectsUnknownAgent(t *testing.T) {
 	if _, err := BuildCommand("bogus", "prompt"); err == nil {
 		t.Fatal("expected unknown agent error")
@@ -84,6 +114,16 @@ func TestBuildResumeCommandUsesAgentResumeArgs(t *testing.T) {
 	}
 }
 
+func TestBuildResumeCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
+	got, err := BuildResumeCommandForBackend("claude", backend.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "claude --continue" {
+		t.Fatalf("BuildResumeCommandForBackend(claude, herdr) = %q, want claude --continue", got)
+	}
+}
+
 func TestBuildResolvedCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.T) {
 	tmp := t.TempDir()
 	binDir := filepath.Join(tmp, "bin with space")
@@ -106,6 +146,28 @@ func TestBuildResolvedCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.
 	}
 }
 
+func TestBuildResolvedCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin with space")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := BuildResolvedCommandForBackend("claude", "prompt", backend.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " prompt"
+	if got != want {
+		t.Fatalf("BuildResolvedCommandForBackend() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildResolvedResumeCommandUsesAbsoluteExecutablePathAndPathPrefix(t *testing.T) {
 	tmp := t.TempDir()
 	binDir := filepath.Join(tmp, "bin with space")
@@ -125,6 +187,28 @@ func TestBuildResolvedResumeCommandUsesAbsoluteExecutablePathAndPathPrefix(t *te
 	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " resume --last"
 	if got != want {
 		t.Fatalf("BuildResolvedResumeCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildResolvedResumeCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin with space")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := BuildResolvedResumeCommandForBackend("claude", backend.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " --continue"
+	if got != want {
+		t.Fatalf("BuildResolvedResumeCommandForBackend() = %q, want %q", got, want)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestLoadMissingReturnsEmptyStore(t *testing.T) {
@@ -188,8 +190,75 @@ func TestLegacyStateRoundTripOmitsTaskID(t *testing.T) {
 	if strings.Contains(string(data), `"taskId"`) {
 		t.Fatalf("legacy round-trip added taskId:\n%s", data)
 	}
+	for _, key := range []string{"backend", "herdrWorkspaceId", "herdrAgentId", "herdrSession", "herdrSocketPath"} {
+		if strings.Contains(string(data), `"`+key+`"`) {
+			t.Fatalf("legacy round-trip added %s:\n%s", key, data)
+		}
+	}
 	if got, want := string(data), legacy+"\n"; got != want {
 		t.Fatalf("legacy round-trip changed bytes:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+
+	if err = locked.RecordPane(Pane{
+		Parent:           "423",
+		IssueNum:         425,
+		Backend:          backend.Herdr,
+		PaneID:           "w1:p1",
+		HerdrWorkspaceID: "w1",
+		HerdrAgentID:     "agent-425",
+		HerdrSession:     "fanout-dev",
+		HerdrSocketPath:  "/tmp/herdr-fanout-dev.sock",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(Pane{Parent: "423", IssueNum: 426, PaneID: "%42"}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	herdrPane, ok := loaded.Find("423", 425)
+	if !ok {
+		t.Fatal("herdr pane not found after round trip")
+	}
+	if herdrPane.Backend != backend.Herdr || herdrPane.PaneID != "w1:p1" ||
+		herdrPane.HerdrWorkspaceID != "w1" || herdrPane.HerdrAgentID != "agent-425" ||
+		herdrPane.HerdrSession != "fanout-dev" || herdrPane.HerdrSocketPath != "/tmp/herdr-fanout-dev.sock" {
+		t.Fatalf("herdr metadata = %+v", herdrPane)
+	}
+	legacyPane, ok := loaded.Find("423", 426)
+	if !ok || legacyPane.Backend != "" {
+		t.Fatalf("legacy backend = %q (found=%v), want empty", legacyPane.Backend, ok)
+	}
+
+	data, err := os.ReadFile(Path(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"backend": "herdr"`,
+		`"herdrWorkspaceId": "w1"`,
+		`"herdrAgentId": "agent-425"`,
+		`"herdrSession": "fanout-dev"`,
+		`"herdrSocketPath": "/tmp/herdr-fanout-dev.sock"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("state missing %s:\n%s", want, data)
+		}
+	}
+	if n := strings.Count(string(data), `"backend"`); n != 1 {
+		t.Fatalf("backend key appears %d times, want only the herdr row:\n%s", n, data)
 	}
 }
 

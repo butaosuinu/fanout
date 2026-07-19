@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
@@ -38,10 +39,19 @@ type Pane struct {
 	// BaseBranch is the resolved base branch the worktree branched from
 	// (e.g. "main"). Legacy rows recorded before this field load as "".
 	BaseBranch string `json:"baseBranch,omitempty"`
-	PaneID     string `json:"paneId"`
+	// Backend is empty for legacy tmux rows. Consumers normalize the empty value
+	// when routing operations; keeping it empty on load preserves byte-identical
+	// round trips for existing state.json files.
+	Backend          backend.Name `json:"backend,omitempty"`
+	PaneID           string       `json:"paneId"`
+	HerdrWorkspaceID string       `json:"herdrWorkspaceId,omitempty"`
+	HerdrAgentID     string       `json:"herdrAgentId,omitempty"`
+	HerdrSession     string       `json:"herdrSession,omitempty"`
+	HerdrSocketPath  string       `json:"herdrSocketPath,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
-	// one live pane. New fanout panes always record it; legacy rows load as "".
-	// The historical JSON name is retained for backward compatibility.
+	// one live pane. Shell panes can share WorktreePath with the repo root or an
+	// agent worktree, so liveness uses this marker instead of path matching.
+	// Legacy rows load it as ""; the historical JSON name stays compatible.
 	ShellKey string `json:"shellKey,omitempty"`
 	// SourceParent/SourceIssueNum/SourceTaskID point at the pane whose worktree an
 	// attached-agent pane shares. They are informational; the attached pane keeps

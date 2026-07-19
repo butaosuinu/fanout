@@ -8,6 +8,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
 func cmdClose(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
@@ -39,10 +40,12 @@ func lifecycleOptions(mode string, removeWatcherRunningLabel bool, lg *log.Logge
 	if code != exitcode.OK {
 		return lifecycle.Options{}, code
 	}
+	runtimeBackend := tmuxbackend.New()
 	opts := lifecycle.Options{
 		ProjectRoot: rt.projectRoot,
 		StatePath:   rt.statePath,
 		Hooks:       hooks.LoadUserConfig(lg),
+		CloseOwned:  runtimeBackend.CloseOwned,
 	}
 	if removeWatcherRunningLabel {
 		resolvedSettings := settings.Resolve(rt.projectRoot, settings.CLIOverrides{}, lg.Warn)

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -18,8 +19,10 @@ type paneView struct {
 	IssueNum       int
 	TaskID         string
 	Kind           string
+	Slug           string
 	Name           string
 	PaneID         string
+	Backend        backend.Name
 	ShellKey       string
 	SourceParent   string
 	SourceIssueNum int
@@ -122,7 +125,7 @@ func (p paneView) tableRow() table.Row {
 }
 
 func (p paneView) canFocus() bool {
-	return strings.TrimSpace(p.PaneID) != "" && p.TmuxState != "stale" && p.TmuxState != "-"
+	return backend.NormalizeName(p.Backend) == backend.Tmux && strings.TrimSpace(p.PaneID) != "" && p.TmuxState != "stale" && p.TmuxState != "-"
 }
 
 func (p paneView) canPeek() bool {

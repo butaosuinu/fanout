@@ -56,6 +56,24 @@ func TestParseCodexPlanModeFlag(t *testing.T) {
 	}
 }
 
+func TestParseBackendFlag(t *testing.T) {
+	cfg := parseOK(t, "100", "--agent", "claude", "--backend", "herdr")
+	if got := string(cfg.Backend); got != "herdr" {
+		t.Fatalf("Backend = %q, want herdr", got)
+	}
+}
+
+func TestParseBackendFlagRejectsUnknownValue(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	res := Parse([]string{"100", "--backend", "screen"}, log.NewWith(&stdout, &stderr, false), io.Discard)
+	if res.Code != exitcode.Env {
+		t.Fatalf("Parse() code = %d, want %d", res.Code, exitcode.Env)
+	}
+	if got := stderr.String(); !strings.Contains(got, "--backend: unknown runtime backend") {
+		t.Fatalf("stderr = %q, want backend validation", got)
+	}
+}
+
 func TestParseAgentOverrides(t *testing.T) {
 	cfg := parseOK(t, "100",
 		"--agent", "claude",

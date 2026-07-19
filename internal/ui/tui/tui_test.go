@@ -17,8 +17,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
@@ -2980,6 +2982,39 @@ func TestLifecycleCmdRoutesToPaneSourceProjectRoot(t *testing.T) {
 	}
 }
 
+func TestLifecycleCmdPassesRuntimeBackendPorts(t *testing.T) {
+	runner := &fakeLifecycleRunner{code: exitcode.OK}
+	displayCalls := 0
+	lifecycleCalls := 0
+	m := newModel(Options{
+		ProjectRoot: "/repo",
+		ListLive: func() ([]backend.LivePane, error) {
+			displayCalls++
+			return nil, errors.New("unrelated herdr route failed")
+		},
+		LifecycleCloseOwned: func(backend.CloseRequest) (backend.CloseResult, error) {
+			lifecycleCalls++
+			return backend.CloseResult{Status: backend.CloseConfirmed}, nil
+		},
+		lifecycle: runner,
+	})
+
+	pane := paneView{Parent: "84", IssueNum: 101, Name: "child"}
+	cmd := m.lifecycleCmd(pendingLifecycleAction{action: actionClose, pane: pane})
+	if _, ok := cmd().(lifecycleDoneMsg); !ok {
+		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
+	}
+	if !runner.closeOwnedConfigured || runner.closeOwned == nil {
+		t.Fatal("identity-aware runtime close port was not configured")
+	}
+	if _, err := runner.closeOwned(backend.CloseRequest{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycleCalls != 1 || displayCalls != 0 {
+		t.Fatalf("runtime calls = lifecycle close:%d display list:%d, want isolated lifecycle route", lifecycleCalls, displayCalls)
+	}
+}
+
 func TestLifecycleCloseRunsAcrossAllOwningRoots(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
 	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
@@ -3436,21 +3471,23 @@ func TestLifecycleRunningDefersQuitKeysUntilDone(t *testing.T) {
 }
 
 type fakeLifecycleRunner struct {
-	code                exitcode.Code
-	projectRoot         string
-	statePath           string
-	closeParent         string
-	closeIssue          int
-	closeTaskParent     string
-	closeTaskID         string
-	closeMode           lifecycle.CloseMode
-	mergeTaskParent     string
-	mergeTaskID         string
-	cleanupParent       string
-	cleanupPlanParent   string
-	watcherRunningLabel string
-	cleanupRoots        []string
-	closeRoots          []string
+	code                 exitcode.Code
+	projectRoot          string
+	statePath            string
+	closeParent          string
+	closeIssue           int
+	closeTaskParent      string
+	closeTaskID          string
+	closeMode            lifecycle.CloseMode
+	mergeTaskParent      string
+	mergeTaskID          string
+	cleanupParent        string
+	cleanupPlanParent    string
+	watcherRunningLabel  string
+	closeOwnedConfigured bool
+	closeOwned           func(backend.CloseRequest) (backend.CloseResult, error)
+	cleanupRoots         []string
+	closeRoots           []string
 }
 
 type fakeTransitionNotifier struct {
@@ -3474,6 +3511,8 @@ func (f *fakeLifecycleRunner) CloseWithMode(opts lifecycle.Options, parent strin
 	f.closeParent = parent
 	f.closeIssue = issueNum
 	f.closeMode = mode
+	f.closeOwnedConfigured = opts.CloseOwned != nil
+	f.closeOwned = opts.CloseOwned
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close\n")
 	return f.code
@@ -3489,6 +3528,8 @@ func (f *fakeLifecycleRunner) CloseTaskWithMode(opts lifecycle.Options, parent, 
 	f.closeTaskParent = parent
 	f.closeTaskID = taskID
 	f.closeMode = mode
+	f.closeOwnedConfigured = opts.CloseOwned != nil
+	f.closeOwned = opts.CloseOwned
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close task\n")
 	return f.code
@@ -4485,6 +4526,7 @@ func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
 		BranchName:   "fanout/child-101",
 		WorktreePath: ".fanout/worktrees/child",
 		worktreeAbs:  "/repo/.fanout/worktrees/child",
+		Backend:      backend.Herdr,
 	}}
 	m.refreshRows()
 
@@ -4498,6 +4540,7 @@ func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
 	}
 	want := AttachTarget{
 		TargetPath:       "/repo/.fanout/worktrees/child",
+		Backend:          backend.Herdr,
 		SourceParent:     "100",
 		SourceIssueNum:   101,
 		SourceBranchName: "fanout/child-101",
@@ -4574,6 +4617,20 @@ func TestAttachAgentKeyPreservesAttachedAgentSourceIdentity(t *testing.T) {
 	}
 	if got := m.newPane.attach.SourceLabel; got != "#101" {
 		t.Fatalf("SourceLabel = %q, want #101", got)
+	}
+}
+
+func TestAttachSourceIdentityUsesActualIssueForSyntheticRows(t *testing.T) {
+	tests := []paneView{
+		{Parent: panelaunch.WatchParentRef, IssueNum: 425},
+		{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: panelaunch.PlanIssueSlug(425, -1)},
+		{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: panelaunch.OrchestratorIssueSlug(425, -1)},
+	}
+	for _, pane := range tests {
+		parent, issueNum, _, label := attachSourceIdentity(pane)
+		if parent != "425" || issueNum != 425 || label != "#425" {
+			t.Fatalf("attachSourceIdentity(%+v) = %q/%d/%q, want 425/425/#425", pane, parent, issueNum, label)
+		}
 	}
 }
 

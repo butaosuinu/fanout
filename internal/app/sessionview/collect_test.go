@@ -1,12 +1,15 @@
 package sessionview
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -77,7 +80,7 @@ func TestMergedStateLoaderUnionsWorktreesAndTagsSource(t *testing.T) {
 	recordPaneAt(t, top, state.Pane{Parent: "100", IssueNum: 101, PaneID: "%1", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "200", IssueNum: 202, PaneID: "%2", Agent: "claude"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -136,7 +139,7 @@ func TestMergedStateLoaderDedupesBySameIdentityHomeWins(t *testing.T) {
 	}
 }
 
-func noLivePanes() map[string]LivePaneInfo { return nil }
+func noLivePanes() ([]backend.LivePane, error) { return nil, nil }
 
 func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	repo := newCommittedRepo(t)
@@ -152,11 +155,13 @@ func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	// stale home row a bare pane-id match would consider "live".
 	recordPaneAt(t, top, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%reused", WorktreePath: "/home/wt", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "220", IssueNum: 221, PaneID: "%live", WorktreePath: "/sib/wt", Agent: "claude"})
-	live := func() map[string]LivePaneInfo {
-		return map[string]LivePaneInfo{
-			"%reused": {Path: "/unrelated/elsewhere"},
-			"%live":   {Path: "/sib/wt"},
-		}
+	livePanes := livePanesWith(map[string]LivePaneInfo{
+		"%reused": {Path: "/unrelated/elsewhere"},
+		"%live":   {Path: "/sib/wt"},
+	})
+	live := func() ([]backend.LivePane, error) {
+		panes, err := livePanes()
+		return panes, errors.Join(err, errors.New("unrelated herdr route failed"))
 	}
 
 	store, err := mergedStateLoader(top, live)()
@@ -187,6 +192,148 @@ func TestMergedStateLoaderPrefersLiveDuplicateOverStaleHome(t *testing.T) {
 	}
 }
 
+func TestMergedStateLoaderRejectsMixedBackendsForGlobalParent(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	recordPaneAt(t, top, state.Pane{
+		Parent: "220", IssueNum: 221, PaneID: "%1", WorktreePath: "/home/wt", Agent: "claude",
+	})
+	recordPaneAt(t, sibTop, state.Pane{
+		Parent: "0220", IssueNum: 222, Backend: backend.Herdr, PaneID: "w1:p1", WorktreePath: "/sib/wt", Agent: "codex",
+	})
+
+	_, err := mergedStateLoader(top, noLivePanes)()
+	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 220 has mixed state") {
+		t.Fatalf("mergedStateLoader() error = %v, want mixed backend failure", err)
+	}
+}
+
+func TestMergedStateLoaderRejectsMixedBackendsForSyntheticActualIssue(t *testing.T) {
+	tests := []struct {
+		name string
+		pane state.Pane
+	}{
+		{
+			name: "watch row",
+			pane: state.Pane{Parent: panelaunch.WatchParentRef, IssueNum: 425},
+		},
+		{
+			name: "plan coordinator",
+			pane: state.Pane{
+				Parent:   panelaunch.ManualParentRef,
+				IssueNum: -1,
+				Slug:     panelaunch.PlanIssueSlug(425, -1),
+			},
+		},
+		{
+			name: "issue orchestrator",
+			pane: state.Pane{
+				Parent:   panelaunch.ManualParentRef,
+				IssueNum: -1,
+				Slug:     panelaunch.OrchestratorIssueSlug(425, -1),
+			},
+		},
+		{
+			name: "attached watcher row after source removal",
+			pane: state.Pane{
+				Parent:         panelaunch.WatchParentRef,
+				IssueNum:       -1,
+				Kind:           state.PaneKindAttachedAgent,
+				SourceParent:   panelaunch.WatchParentRef,
+				SourceIssueNum: 425,
+			},
+		},
+		{
+			name: "attached coordinator row after source removal",
+			pane: state.Pane{
+				Parent:         panelaunch.ManualParentRef,
+				IssueNum:       -2,
+				Kind:           state.PaneKindAttachedAgent,
+				SourceParent:   panelaunch.ManualParentRef,
+				SourceIssueNum: 425,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newCommittedRepo(t)
+			top := gitTopIn(t, repo)
+			sibling := filepath.Join(t.TempDir(), "sib")
+			gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+			sibTop := gitTopIn(t, sibling)
+
+			recordPaneAt(t, top, state.Pane{
+				Parent: "425", IssueNum: 426, PaneID: "%1", WorktreePath: "/home/wt", Agent: "claude",
+			})
+			tt.pane.Backend = backend.Herdr
+			tt.pane.PaneID = "w1:p1"
+			tt.pane.WorktreePath = "/sib/wt"
+			tt.pane.Agent = "codex"
+			recordPaneAt(t, sibTop, tt.pane)
+
+			_, err := mergedStateLoader(top, noLivePanes)()
+			if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 has mixed state") {
+				t.Fatalf("mergedStateLoader() error = %v, want actual-issue mixed backend failure", err)
+			}
+		})
+	}
+}
+
+func TestMergedStateLoaderRejectsMixedBackendForIssueSourcedPlanTask(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	recordPaneAt(t, top, state.Pane{
+		Parent: "425", IssueNum: 426, PaneID: "%1", WorktreePath: "/home/wt", Agent: "claude",
+	})
+	planDir := filepath.Join(sibTop, ".fanout", "plans")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planDir, "launch-plan.json"), []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Launch","source":"issue #425"},"tasks":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recordPaneAt(t, sibTop, state.Pane{
+		Parent: "plan:launch-plan", TaskID: "base", Backend: backend.Herdr, PaneID: "w1:p1", WorktreePath: "/sib/wt", Agent: "codex",
+	})
+
+	_, err := mergedStateLoader(top, noLivePanes)()
+	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 has mixed state") {
+		t.Fatalf("mergedStateLoader() error = %v, want issue-sourced plan mixed backend failure", err)
+	}
+}
+
+func TestMergedStateLoaderDoesNotMixDifferentWatchIssues(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	sibling := filepath.Join(t.TempDir(), "sib")
+	gitInTest(t, repo, "worktree", "add", "-b", "feat-sib", sibling)
+	sibTop := gitTopIn(t, sibling)
+
+	recordPaneAt(t, top, state.Pane{
+		Parent: panelaunch.WatchParentRef, IssueNum: 425, PaneID: "%1", WorktreePath: "/home/wt", Agent: "claude",
+	})
+	recordPaneAt(t, sibTop, state.Pane{
+		Parent: panelaunch.WatchParentRef, IssueNum: 426, Backend: backend.Herdr, PaneID: "w1:p1", WorktreePath: "/sib/wt", Agent: "codex",
+	})
+
+	store, err := mergedStateLoader(top, noLivePanes)()
+	if err != nil {
+		t.Fatalf("different watcher issues must not share backend stickiness: %v", err)
+	}
+	if len(store.Panes) != 2 {
+		t.Fatalf("merged watcher rows = %+v, want both independent issues", store.Panes)
+	}
+}
+
 func TestMergedStateLoaderKeepsReusedPaneIDForDifferentIdentity(t *testing.T) {
 	repo := newCommittedRepo(t)
 	top := gitTopIn(t, repo)
@@ -200,7 +347,7 @@ func TestMergedStateLoaderKeepsReusedPaneIDForDifferentIdentity(t *testing.T) {
 	recordPaneAt(t, top, state.Pane{Parent: "100", IssueNum: 101, PaneID: "%9", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "200", IssueNum: 202, PaneID: "%9", Agent: "codex"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -221,9 +368,9 @@ func TestMergedStateLoaderKeepsManualPanesDistinctAcrossWorktrees(t *testing.T) 
 	// collapse into one with a shared SourceProjectRoots (which would let a close
 	// remove the sibling's pane too).
 	recordPaneAt(t, top, state.Pane{Parent: "@manual", IssueNum: -1, PaneID: "%1", Agent: "claude"})
-	recordPaneAt(t, sibTop, state.Pane{Parent: "@manual", IssueNum: -1, PaneID: "%2", Agent: "codex"})
+	recordPaneAt(t, sibTop, state.Pane{Parent: "@manual", IssueNum: -1, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -254,7 +401,7 @@ func TestMergedStateLoaderKeepsPlanTasksDistinctAcrossWorktrees(t *testing.T) {
 	recordPaneAt(t, top, state.Pane{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%1", Agent: "claude"})
 	recordPaneAt(t, sibTop, state.Pane{Parent: "plan:launch", IssueNum: 0, TaskID: "api", PaneID: "%2", Agent: "codex"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -277,7 +424,7 @@ func TestMergedStateLoaderKeepsDistinctIdentities(t *testing.T) {
 	recordPaneAt(t, root, state.Pane{Parent: "1", IssueNum: 2, PaneID: ""})
 	recordPaneAt(t, root, state.Pane{Parent: "1", IssueNum: 3, PaneID: ""})
 
-	store, err := MergedStateLoader(root)()
+	store, err := MergedStateLoader(root, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -290,7 +437,7 @@ func TestMergedStateLoaderFallsBackToSingleRootOutsideRepo(t *testing.T) {
 	root := t.TempDir() // not a git work tree
 	recordPaneAt(t, root, state.Pane{Parent: "1", IssueNum: 2, PaneID: "%1"})
 
-	store, err := MergedStateLoader(root)()
+	store, err := MergedStateLoader(root, nil)()
 	if err != nil {
 		t.Fatalf("fallback must not error: %v", err)
 	}
@@ -306,7 +453,7 @@ func TestMergedStateLoaderPropagatesHomeError(t *testing.T) {
 	root := t.TempDir()
 	writeCorruptState(t, root)
 
-	if _, err := MergedStateLoader(root)(); err == nil {
+	if _, err := MergedStateLoader(root, nil)(); err == nil {
 		t.Fatal("a corrupt home state.json must surface as an error")
 	}
 }
@@ -321,7 +468,7 @@ func TestMergedStateLoaderSkipsCorruptSibling(t *testing.T) {
 	recordPaneAt(t, top, state.Pane{Parent: "100", IssueNum: 101, PaneID: "%1"})
 	writeCorruptState(t, sibTop)
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("a corrupt sibling store must not fail the merge: %v", err)
 	}
@@ -344,7 +491,7 @@ func TestMergedStateLoaderDoesNotDoubleReadHomeViaSymlink(t *testing.T) {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
 
-	store, err := MergedStateLoader(link)()
+	store, err := MergedStateLoader(link, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}
@@ -371,7 +518,7 @@ func TestMergedStateLoaderExcludesFanoutChildWorktrees(t *testing.T) {
 	// state is recorded in the owner, not the child.
 	recordPaneAt(t, childTop, state.Pane{Parent: "999", IssueNum: 999, PaneID: "%99"})
 
-	store, err := MergedStateLoader(top)()
+	store, err := MergedStateLoader(top, nil)()
 	if err != nil {
 		t.Fatalf("MergedStateLoader: %v", err)
 	}

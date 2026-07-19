@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/core/naming"
@@ -32,6 +33,7 @@ type PlanCommandConfig struct {
 	SpecArg            string
 	SpecPath           string
 	Agent              string
+	Backend            backend.Name
 	AgentOverrides     []cliflags.AgentOverride
 	BaseBranch         string
 	BranchPrefix       string
@@ -122,6 +124,14 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 			}
 		}()
 	}
+	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
+	if rt.VerifyBackend != nil {
+		backendParent := panelaunch.PlanRuntimeParentRef(spec.Plan.Slug, spec.Plan.Source)
+		if err := rt.VerifyBackend(backendParent, store); err != nil {
+			lg.Err("runtime backend: %v", err)
+			return TaskExecutionResult{}, exitcode.Env
+		}
+	}
 	copyLivePlanSpec := func() exitcode.Code {
 		if cfg.DryRun {
 			return exitcode.OK
@@ -134,7 +144,6 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	}
 	cfg.SpecArg = planRerunSpecArg(cfg, spec)
 
-	parentRef := panelaunch.PlanParentRef(spec.Plan.Slug)
 	fanned := fanset.Union(store.FannedTaskIDsForParent(parentRef), existingPlanWorktreeFanned(rt.Info.ProjectRoot, spec))
 	plan := buildTaskPlan(cfg, spec, fanned, func(task planspec.Task) bool {
 		return planTaskComplete(rt.GH, cliCfg, rt.Info.ProjectRoot, store, spec, task, lg)
@@ -225,6 +234,7 @@ func (cfg PlanCommandConfig) CLIConfig() *cliflags.Config {
 	return &cliflags.Config{
 		ParentRef:          planSubcommand,
 		Agent:              cfg.Agent,
+		Backend:            cfg.Backend,
 		AgentOverrides:     cfg.AgentOverrides,
 		BaseBranch:         cfg.BaseBranch,
 		BranchPrefix:       cfg.BranchPrefix,
@@ -470,7 +480,7 @@ func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot strin
 }
 
 func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) TaskExecutionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Recorder: recorder, Palette: c, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: c, CommandName: commandName}
 	created, failed := executeFailFast(
 		targets,
 		taskID,
@@ -561,7 +571,7 @@ func printTaskSummary(plan taskPlan, result TaskExecutionResult, cfg PlanCommand
 	ids := taskIDCSV(plan.LimitDeferred)
 	fmt.Fprintf(lg.Stdout(), "  %s\n", strings.Join(taskIDs(plan.LimitDeferred), " "))
 	cliCfg := cfg.CLIConfig()
-	fmt.Fprintf(lg.Stdout(), "  %s plan %s --only %s%s%s%s%s%s%s%s\n",
+	fmt.Fprintf(lg.Stdout(), "  %s plan %s --only %s%s%s%s%s%s%s%s%s\n",
 		ShellQuote(commandName),
 		ShellQuote(cfg.SpecArg),
 		ShellQuote(ids),
@@ -570,6 +580,7 @@ func printTaskSummary(plan taskPlan, result TaskExecutionResult, cfg PlanCommand
 		settingsFlags(cliCfg),
 		worktreeFlags(cliCfg),
 		agentFlagsForTasks(cfg.Agent, cfg.AgentOverrides, plan.LimitDeferred),
+		optFlag("--backend", string(cfg.Backend)),
 		optFlag("--session", cfg.Session),
 		optFlag("--sleep", sleepFlagValue(cfg.SleepBetween)))
 }

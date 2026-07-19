@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestResolveDefaultsWhenFilesAndEnvAreAbsent(t *testing.T) {
@@ -66,6 +68,8 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 		Notifications:          "bell,ntfy",
 		NtfyURL:                "https://ntfy-user.example/topic",
 		SlackWebhookURL:        "https://hooks.example/slack",
+		RuntimeBackend:         backend.Tmux,
+		RuntimeBackendSource:   RuntimeBackendSourceDefault,
 	}
 	if got != want {
 		t.Fatalf("Resolve() = %#v, want %#v", got, want)
@@ -142,6 +146,103 @@ func TestResolveCodexPlanModePriority(t *testing.T) {
 	if got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = true, want built-in default false")
 	}
+}
+
+func TestResolveRuntimeBackendPriorityAndSource(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	userPath := filepath.Join(xdg, "fanout", "config.json")
+	repoPath := RepoConfigPath(repo)
+	writeConfig(t, userPath, `{"runtimeBackend": "herdr"}`)
+	writeConfig(t, repoPath, `{"runtimeBackend": "tmux"}`)
+	t.Setenv("FANOUT_BACKEND", "tmux")
+	cliBackend := backend.Herdr
+
+	got := Resolve(repo, CLIOverrides{RuntimeBackend: &cliBackend}, nil)
+	if got.RuntimeBackend != backend.Herdr || got.RuntimeBackendSource != RuntimeBackendSourceCLI {
+		t.Fatalf("CLI RuntimeBackend = %q from %q, want herdr from CLI", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+
+	got = Resolve(repo, CLIOverrides{}, nil)
+	if got.RuntimeBackend != backend.Tmux || got.RuntimeBackendSource != RuntimeBackendSourceEnvironment {
+		t.Fatalf("env RuntimeBackend = %q from %q, want tmux from environment", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+
+	if err := os.Unsetenv("FANOUT_BACKEND"); err != nil {
+		t.Fatal(err)
+	}
+	got = Resolve(repo, CLIOverrides{}, nil)
+	if got.RuntimeBackend != backend.Herdr || got.RuntimeBackendSource != RuntimeBackendSourceUserConfig {
+		t.Fatalf("user RuntimeBackend = %q from %q, want herdr from user config", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+
+	if err := os.Remove(userPath); err != nil {
+		t.Fatal(err)
+	}
+	got = Resolve(repo, CLIOverrides{}, nil)
+	if got.RuntimeBackend != backend.Tmux || got.RuntimeBackendSource != RuntimeBackendSourceDefault {
+		t.Fatalf("default RuntimeBackend = %q from %q, want tmux from default", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+}
+
+func TestResolveInvalidRuntimeBackendValuesWarnsAndIgnores(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{"runtimeBackend": "screen"}`)
+	t.Setenv("FANOUT_BACKEND", "wezterm")
+	invalidCLI := backend.Name("zellij")
+
+	var warnings []string
+	got := Resolve(repo, CLIOverrides{RuntimeBackend: &invalidCLI}, func(format string, a ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, a...))
+	})
+	if got.RuntimeBackend != backend.Tmux || got.RuntimeBackendSource != RuntimeBackendSourceDefault {
+		t.Fatalf("RuntimeBackend = %q from %q, want default tmux", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+	for _, want := range []string{
+		"runtimeBackend: unknown runtime backend \"screen\"",
+		"FANOUT_BACKEND: unknown runtime backend \"wezterm\"",
+		"CLI runtimeBackend: unknown runtime backend \"zellij\"",
+	} {
+		assertWarningContains(t, warnings, want)
+	}
+}
+
+func TestResolveEmptyRuntimeBackendEnvironmentIsUnset(t *testing.T) {
+	repo := t.TempDir()
+	setEmptyUserConfig(t)
+	clearEnv(t)
+	t.Setenv("FANOUT_BACKEND", "  ")
+
+	var warnings []string
+	got := Resolve(repo, CLIOverrides{}, func(format string, a ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, a...))
+	})
+	if got.RuntimeBackend != backend.Tmux || got.RuntimeBackendSource != RuntimeBackendSourceDefault {
+		t.Fatalf("RuntimeBackend = %q from %q, want default tmux", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("empty FANOUT_BACKEND warnings = %v, want none", warnings)
+	}
+}
+
+func TestRepoConfigCannotSelectRuntimeBackend(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{"runtimeBackend": "herdr"}`)
+	writeConfig(t, RepoConfigPath(repo), `{"runtimeBackend": "tmux"}`)
+
+	var warnings []string
+	got := Resolve(repo, CLIOverrides{}, func(format string, a ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, a...))
+	})
+	if got.RuntimeBackend != backend.Herdr || got.RuntimeBackendSource != RuntimeBackendSourceUserConfig {
+		t.Fatalf("RuntimeBackend = %q from %q, want user herdr", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+	assertWarningContains(t, warnings, "runtimeBackend is ignored in repo config")
 }
 
 func TestResolveWatcherSettingsPriority(t *testing.T) {
@@ -491,6 +592,63 @@ func TestSaveEditableWritesRepoConfigWorldReadable(t *testing.T) {
 	}
 }
 
+func TestRuntimeBackendConfigMetadataAndUserValidation(t *testing.T) {
+	repo := t.TempDir()
+	setEmptyUserConfig(t)
+	clearEnv(t)
+
+	var (
+		gotSpec ConfigKey
+		found   bool
+	)
+	for _, spec := range ConfigKeys() {
+		if spec.Key == "runtimeBackend" {
+			gotSpec = spec
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("ConfigKeys() does not contain runtimeBackend")
+	}
+	wantSpec := ConfigKey{
+		Key:          "runtimeBackend",
+		Group:        "Launch",
+		Label:        "Runtime backend",
+		Kind:         ValueString,
+		Env:          "FANOUT_BACKEND",
+		Default:      "tmux",
+		RepoEditable: false,
+	}
+	if gotSpec != wantSpec {
+		t.Fatalf("runtimeBackend ConfigKey = %#v, want %#v", gotSpec, wantSpec)
+	}
+
+	path, err := SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
+		"runtimeBackend": StringValue("herdr"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if got.RuntimeBackend != backend.Herdr || got.RuntimeBackendSource != RuntimeBackendSourceUserConfig {
+		t.Fatalf("saved RuntimeBackend = %q from %q, want user herdr", got.RuntimeBackend, got.RuntimeBackendSource)
+	}
+
+	if _, err = SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
+		"runtimeBackend": StringValue("screen"),
+	}); err == nil {
+		t.Fatal("SaveEditable(user invalid runtimeBackend) = nil, want error")
+	}
+	body, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(body), `"runtimeBackend": "herdr"`) {
+		t.Fatalf("valid runtimeBackend changed after rejected save:\n%s", body)
+	}
+}
+
 func TestCodexPlanModeConfigMetadataAndRepoRoundTrip(t *testing.T) {
 	repo := t.TempDir()
 	setEmptyUserConfig(t)
@@ -586,6 +744,13 @@ func TestSaveEditableRejectsUnsafeRepoSettingsWithoutChangingFile(t *testing.T) 
 	if err == nil {
 		t.Fatal("SaveEditable(repo slack notifications) = nil, want error")
 	}
+
+	_, err = SaveEditable(repo, ConfigScopeRepo, map[string]ConfigValue{
+		"runtimeBackend": StringValue("herdr"),
+	})
+	if err == nil {
+		t.Fatal("SaveEditable(repo runtimeBackend) = nil, want error")
+	}
 }
 
 func setEmptyUserConfig(t *testing.T) string {
@@ -615,6 +780,7 @@ func clearEnv(t *testing.T) {
 		"FANOUT_NOTIFICATIONS",
 		"FANOUT_NTFY_URL",
 		"FANOUT_SLACK_WEBHOOK_URL",
+		"FANOUT_BACKEND",
 	} {
 		// t.Setenv registers restoration of the original value (or unset state);
 		// the follow-up Unsetenv leaves the variable unset for the test body.

@@ -141,13 +141,17 @@ force_missing() {
   # If a utility isn't found, we still try — fanout's `command -v` calls
   # will just report it missing, which is acceptable for the few tests
   # that intentionally exclude pgrep/jq.
-  local u src
-  for u in jq awk grep sort tr basename dirname tput head tail cat cut \
+  local u src lookup_path
+  lookup_path="${PATH#"$TEST_BIN_DIR:"}"
+  for u in git jq awk grep sort tr basename dirname tput head tail cat cut \
            wc find mktemp sed uname date readlink realpath env sh bash \
            pgrep ps chmod mkdir rm cp mv ln ls; do
     # Skip utilities the caller explicitly wants missing.
     [[ "$missing_csv" == *",$u,"* ]] && continue
-    src="$(command -v "$u" 2>/dev/null || true)"
+    # Bypass TEST_BIN_DIR here. Backend selection now reads the real git
+    # worktree before checking the selected runtime, while the fixture git shim
+    # cannot delegate after PATH is replaced with this curated directory.
+    src="$(PATH="$lookup_path" command -v "$u" 2>/dev/null || true)"
     [[ -n "$src" ]] && ln -sf "$src" "$tmpbin/$u"
   done
 

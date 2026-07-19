@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -25,9 +26,70 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
+
+type successfulNonTmuxBackend struct {
+	launches []backend.LaunchRequest
+	closed   []backend.PaneRef
+}
+
+func (*successfulNonTmuxBackend) Name() backend.Name    { return backend.Herdr }
+func (*successfulNonTmuxBackend) CheckAvailable() error { return nil }
+func (b *successfulNonTmuxBackend) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
+	b.launches = append(b.launches, req)
+	return backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}, nil
+}
+func (*successfulNonTmuxBackend) ReleaseStartGate(string) error { return nil }
+func (*successfulNonTmuxBackend) ListLive() ([]backend.LivePane, error) {
+	return nil, nil
+}
+func (*successfulNonTmuxBackend) Read(backend.PaneRef, int) (string, error) { return "", nil }
+func (*successfulNonTmuxBackend) SendLine(backend.PaneRef, string) error    { return nil }
+func (*successfulNonTmuxBackend) Focus(backend.PaneRef) error               { return nil }
+func (b *successfulNonTmuxBackend) Close(ref backend.PaneRef) error {
+	b.closed = append(b.closed, ref)
+	return nil
+}
+
+func (b *successfulNonTmuxBackend) CloseFresh(ref backend.PaneRef) error {
+	b.closed = append(b.closed, ref)
+	return nil
+}
+
+type testTmuxBackend struct {
+	*tmuxbackend.Backend
+	releasedGates []string
+}
+
+func newTestTmuxBackend() *testTmuxBackend {
+	return &testTmuxBackend{Backend: tmuxbackend.New()}
+}
+
+func (*testTmuxBackend) CloseOwned(req backend.CloseRequest) (backend.CloseResult, error) {
+	result, err := closePaneForCleanup(req.Ref.Pane, req.WorktreePath, req.ShellKey)
+	mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
+	switch result.Status {
+	case tmuxrun.ClosePaneClosed:
+		mapped.Status = backend.CloseConfirmed
+	case tmuxrun.ClosePaneStale:
+		mapped.Status = backend.CloseStale
+	case tmuxrun.ClosePaneFailed:
+		mapped.Status = backend.CloseFailed
+	}
+	return mapped, err
+}
+
+func (*testTmuxBackend) CloseFresh(ref backend.PaneRef) error {
+	return closeFreshPane(ref.Pane)
+}
+
+func (b *testTmuxBackend) ReleaseStartGate(gate string) error {
+	b.releasedGates = append(b.releasedGates, gate)
+	return nil
+}
 
 func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
 	// A prompt ending in an @-mention must keep a whitespace terminator before
@@ -122,6 +184,60 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 }
 
+func TestSplitAndDecorateSkipsTmuxForSuccessfulNonTmuxBackend(t *testing.T) {
+	installFakeTmux(t, "%unexpected")
+	calls := filepath.Join(t.TempDir(), "tmux.calls")
+	t.Setenv("TMUX_CALLS", calls)
+	runtimeBackend := &successfulNonTmuxBackend{}
+	launcher := &Launcher{
+		Backend: runtimeBackend,
+		Info:    &fanoutruntime.Info{Session: "herdr-session", Target: "w1", ProjectRoot: "/repo"},
+		Log:     log.NewWith(io.Discard, io.Discard, false),
+	}
+
+	paneID, ok := launcher.splitAndDecorate(Request{ParentRef: "425", Number: 426, Title: "child"}, "/repo/worktree", decorateOpts{})
+	if !ok || paneID != "w1:p1" {
+		t.Fatalf("splitAndDecorate() = (%q, %t), want (w1:p1, true)", paneID, ok)
+	}
+	if len(runtimeBackend.launches) != 1 || len(runtimeBackend.closed) != 0 {
+		t.Fatalf("backend calls = launches:%d closed:%v", len(runtimeBackend.launches), runtimeBackend.closed)
+	}
+	if body, err := os.ReadFile(calls); err == nil && len(body) > 0 {
+		t.Fatalf("non-tmux launch invoked tmux:\n%s", body)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestSplitAndDecorateRejectsStrictIdentityForNonTmuxBackend(t *testing.T) {
+	installFakeTmux(t, "%unexpected")
+	calls := filepath.Join(t.TempDir(), "tmux.calls")
+	t.Setenv("TMUX_CALLS", calls)
+	runtimeBackend := &successfulNonTmuxBackend{}
+	var stderr bytes.Buffer
+	launcher := &Launcher{
+		Backend: runtimeBackend,
+		Info:    &fanoutruntime.Info{Session: "herdr-session", Target: "w1", ProjectRoot: "/repo"},
+		Log:     log.NewWith(io.Discard, &stderr, false),
+	}
+
+	paneID, ok := launcher.splitAndDecorate(Request{ParentRef: "425", Number: -1, Title: "attached"}, "/repo", decorateOpts{strictShellKey: true})
+	if ok || paneID != "" {
+		t.Fatalf("splitAndDecorate(strict) = (%q, %t), want (empty, false)", paneID, ok)
+	}
+	if len(runtimeBackend.closed) != 1 || runtimeBackend.closed[0].Pane != "w1:p1" {
+		t.Fatalf("closed refs = %#v, want launched non-tmux pane cleanup", runtimeBackend.closed)
+	}
+	if !strings.Contains(stderr.String(), "strict pane liveness keys are not supported by the herdr backend") {
+		t.Fatalf("stderr = %q, want strict non-tmux identity rejection", stderr.String())
+	}
+	if body, err := os.ReadFile(calls); err == nil && len(body) > 0 {
+		t.Fatalf("strict non-tmux rejection invoked tmux:\n%s", body)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestStatePaneCapturesTaskID(t *testing.T) {
 	now := time.Date(2026, 6, 13, 1, 2, 3, 0, time.UTC)
 	req := Request{
@@ -172,7 +288,7 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
 	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: "/repo"}
-	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Backend: tmuxbackend.New(), Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
 	if !launcher.LaunchOK(req) {
 		t.Fatalf("LaunchOK() = false, stderr:\n%s", stderr.String())
 	}
@@ -404,6 +520,7 @@ func TestLaunchWithResultDryRunHasNoPaneID(t *testing.T) {
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: projectRoot},
+		Backend:     tmuxbackend.New(),
 		Palette:     log.Palette{},
 		CommandName: "fanout",
 	}
@@ -430,6 +547,7 @@ func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend:     tmuxbackend.New(),
 		Recorder:    recorder,
 		Palette:     log.Palette{},
 		CommandName: "fanout",
@@ -472,14 +590,24 @@ func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T
 	)
 	targetPath := t.TempDir()
 	recorder := &captureStateRecorder{}
+	runtimeBackend := newTestTmuxBackend()
 	launcher := &Launcher{
 		Cfg:         &cliflags.Config{Agent: "claude"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend:     runtimeBackend,
 		Recorder:    recorder,
 		CommandName: "fanout",
 	}
-	req := Request{ParentRef: ManualParentRef, Number: -1, Slug: "attached-pane", Prompt: "inspect", Agent: "claude", Hooks: hooks.EmptyConfig()}
+	req := Request{
+		ParentRef:      ManualParentRef,
+		Number:         -1,
+		Slug:           "attached-pane",
+		Prompt:         "inspect",
+		Agent:          "claude",
+		AgentStartGate: "recovery-gate",
+		Hooks:          hooks.EmptyConfig(),
+	}
 
 	result, ok := launcher.AttachWithResult(req, targetPath)
 
@@ -492,6 +620,44 @@ func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T
 	got := recorder.panes[0]
 	if got.PaneID != "%315" || got.Kind != state.PaneKindAttachedAgent || !strings.HasPrefix(got.ShellKey, "shell-") {
 		t.Fatalf("recovery pane = %+v, want keyed attached pane %%315", got)
+	}
+	if len(runtimeBackend.releasedGates) != 0 {
+		t.Fatalf("released gates = %v, want gate held while pane close is unconfirmed", runtimeBackend.releasedGates)
+	}
+}
+
+func TestAttachReleasesStartGateAfterConfirmedFreshCleanup(t *testing.T) {
+	installFakeExecutable(t, "claude")
+	installFakeTmux(t, "%315")
+	stubPaneLivenessOps(t,
+		func(string, string) error { return fmt.Errorf("stamp failed") },
+		func(string) error { return nil },
+	)
+	runtimeBackend := newTestTmuxBackend()
+	launcher := &Launcher{
+		Cfg:         &cliflags.Config{Agent: "claude"},
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: t.TempDir()},
+		Backend:     runtimeBackend,
+		CommandName: "fanout",
+	}
+	req := Request{
+		ParentRef:      ManualParentRef,
+		Number:         -1,
+		Slug:           "attached-pane",
+		Prompt:         "inspect",
+		Agent:          "claude",
+		AgentStartGate: "cleanup-gate",
+		Hooks:          hooks.EmptyConfig(),
+	}
+
+	result, ok := launcher.AttachWithResult(req, t.TempDir())
+
+	if ok || result.PaneID != "" {
+		t.Fatalf("AttachWithResult() = %+v, %v, want failed launch with confirmed cleanup", result, ok)
+	}
+	if got := runtimeBackend.releasedGates; len(got) != 1 || got[0] != "cleanup-gate" {
+		t.Fatalf("released gates = %v, want [cleanup-gate]", got)
 	}
 }
 
@@ -511,6 +677,7 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 		Cfg:         &cliflags.Config{Agent: "codex"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend:     newTestTmuxBackend(),
 		Recorder:    recorder,
 		CommandName: "fanout",
 	}
@@ -586,7 +753,7 @@ func assertCreatePaneDryRunDoesNotWriteBriefing(t *testing.T, cfg *cliflags.Conf
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
 	info := &fanoutruntime.Info{Target: "%caller", ProjectRoot: projectRoot}
-	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Backend: tmuxbackend.New(), Recorder: nil, Palette: log.Palette{}, CommandName: "fanout"}
 	if !launcher.LaunchOK(req) {
 		t.Fatalf("LaunchOK() = false, stderr:\n%s", stderr.String())
 	}
@@ -625,7 +792,7 @@ func TestLaunchFailsWhenWorktreeAppearsDuringLaunch(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Duplicate Title", State: "OPEN", Body: "body"}
 
-	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Palette: log.Palette{}, CommandName: "fanout"}
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Backend: tmuxbackend.New(), Palette: log.Palette{}, CommandName: "fanout"}
 	if launcher.LaunchOK(NewIssueRequest(cfg, repo, issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)) {
 		t.Fatal("LaunchOK() = true, want false for launch-time worktree collision")
 	}
@@ -668,6 +835,7 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, &stderr, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
+		Backend:     newTestTmuxBackend(),
 		Palette:     log.Palette{},
 		CommandName: "fanout",
 	}
@@ -717,7 +885,7 @@ func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T
 		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
 	})
 
-	if failCleanup("#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
+	if failCleanup(newTestTmuxBackend(), "#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
 		t.Fatal("failCleanup() = true, want unconfirmed pane close")
 	}
 
@@ -743,7 +911,7 @@ func TestLaunchRejectsUnsupportedRefreshBaseInDryRun(t *testing.T) {
 	}
 	issue := ghissue.Issue{Number: 77, Title: "Bad Base", State: "OPEN", Body: "body"}
 
-	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Palette: log.Palette{}, CommandName: "fanout"}
+	launcher := &Launcher{Cfg: cfg, Log: lg, Info: info, Backend: tmuxbackend.New(), Palette: log.Palette{}, CommandName: "fanout"}
 	if launcher.LaunchOK(NewIssueRequest(cfg, repo, issue, settings.Defaults(), hooks.EmptyConfig(), false, nil)) {
 		t.Fatal("LaunchOK() = true, want false for unsupported refresh base")
 	}
@@ -1138,7 +1306,7 @@ func TestBuildAgentCommandStartsCodexTeamTUIControllerInDryRun(t *testing.T) {
 	}
 }
 
-func TestBuildAgentCommandWaitsForAgentStartGate(t *testing.T) {
+func TestBuildAgentCommandLeavesStartGateToBackend(t *testing.T) {
 	got, err := buildAgentCommand(
 		&cliflags.Config{Agent: "claude", DryRun: true},
 		Request{Agent: "claude", Prompt: "review", AgentStartGate: "gate; touch /tmp/untrusted"},
@@ -1147,9 +1315,8 @@ func TestBuildAgentCommandWaitsForAgentStartGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wait := "tmux wait-for -L 'gate; touch /tmp/untrusted' && tmux wait-for -U 'gate; touch /tmp/untrusted'"
-	if !strings.HasPrefix(got, wait+" && ") || !strings.Contains(got, "claude") {
-		t.Fatalf("buildAgentCommand() = %q, want quoted gate before agent", got)
+	if strings.Contains(got, "tmux wait-for") || !strings.Contains(got, "claude") {
+		t.Fatalf("buildAgentCommand() = %q, want ungated agent command", got)
 	}
 }
 
@@ -1357,6 +1524,26 @@ func TestPlanPaneIssueNum(t *testing.T) {
 	}
 }
 
+func TestPlanRuntimeParentRefUsesOnlyDeclaredIssueSource(t *testing.T) {
+	tests := []struct {
+		name   string
+		slug   string
+		source string
+		want   string
+	}{
+		{name: "declared issue", slug: "launch-plan", source: "issue #425", want: "425"},
+		{name: "issue-like slug without declaration", slug: "issue-425-migration", source: "path-or-conversation-label", want: "plan:issue-425-migration"},
+		{name: "malformed issue declaration", slug: "launch-plan", source: "issue 425", want: "plan:launch-plan"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PlanRuntimeParentRef(tt.slug, tt.source); got != tt.want {
+				t.Fatalf("PlanRuntimeParentRef(%q, %q) = %q, want %q", tt.slug, tt.source, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOrchestratorIssueSlug(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1422,7 +1609,7 @@ func TestKillAttachedPaneIgnoresEmptyPaneID(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_CALLS", marker)
 
-	if err := KillAttachedPane("%caller", "", ""); err != nil {
+	if err := KillAttachedPane(nil, "%caller", "", ""); err != nil {
 		t.Fatalf("KillAttachedPane() error = %v, want nil", err)
 	}
 

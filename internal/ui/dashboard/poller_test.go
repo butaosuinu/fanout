@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -104,6 +105,41 @@ func newCommittedRepoDash(t *testing.T) string {
 	gitDash(t, repo, "add", "file.txt")
 	gitDash(t, repo, "commit", "-m", "base")
 	return repo
+}
+
+func TestPollerBuildUsesRuntimeListLiveWithoutClaimingHerdrLiveness(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrSession":"session-a","herdrAgentId":"agent-a"}
+	]}`)
+
+	p := newPoller("o/n", root, &countingGH{}, nil, newHub())
+	called := 0
+	p.listLive = func() ([]backend.LivePane, error) {
+		called++
+		return []backend.LivePane{{
+			Ref:        backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+			Title:      "herdr child",
+			AgentState: backend.AgentWorking,
+			AgentID:    "agent-a",
+			SessionID:  "session-a",
+		}}, nil
+	}
+
+	snap := p.build()
+	if called == 0 {
+		t.Fatal("runtime ListLive collector was not called")
+	}
+	if snap.Degraded.Tmux {
+		t.Fatalf("runtime collector unexpectedly degraded: %+v", snap.Degraded)
+	}
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 1 {
+		t.Fatalf("unexpected snapshot shape: %+v", snap.Sessions)
+	}
+	got := snap.Sessions[0].Panes[0]
+	if got.Alive || got.Backend != backend.Herdr || got.TmuxState != "stale" || got.TmuxTitle != "" || got.AgentState != "" {
+		t.Fatalf("herdr row bypassed the pending #427 identity gate: %+v", got)
+	}
 }
 
 // TestPollerMergesSiblingWorktreesForBuildAndRefreshGH guards the cross-worktree

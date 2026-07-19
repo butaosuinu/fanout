@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -84,13 +85,14 @@ func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	issues := cloneIssueStatuses(m.issues)
 	restorePanes := m.opts.RestorePanes
+	listLive := m.opts.ListLive
 	return func() tea.Msg {
 		var restoreNotice string
 		var restoreErr error
 		if restorePanes != nil {
 			restoreNotice, restoreErr = restorePanes()
 		}
-		panes, err := loadPaneViews(projectRoot, issues)
+		panes, err := loadPaneViews(projectRoot, issues, listLive)
 		return stateLoadedMsg{
 			panes:         panes,
 			at:            time.Now(),
@@ -105,8 +107,9 @@ func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 
 func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
+	listLive := m.opts.ListLive
 	return func() tea.Msg {
-		issues, err := loadIssueStatuses(projectRoot)
+		issues, err := loadIssueStatuses(projectRoot, listLive)
 		return ghLoadedMsg{issues: issues, at: time.Now(), err: err, scheduleNext: scheduleNext}
 	}
 }
@@ -129,36 +132,42 @@ func (m model) loadActivePaneCmd(scheduleNext bool) tea.Cmd {
 	}
 }
 
-func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus) ([]paneView, error) {
+func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus, listLive func() ([]backend.LivePane, error)) ([]paneView, error) {
 	var stateErr error
-	mergedState := sessionview.MergedStateLoader(projectRoot)
+	mergedState := sessionview.MergedStateLoader(projectRoot, listLive)
 	loadState := func() (state.Store, error) {
 		store, err := mergedState()
 		stateErr = err
 		return store, err
 	}
-	var tmuxErr error
-	livePanes := sessionview.LivePanes()
-	live := func() (map[string]sessionview.LivePaneInfo, error) {
-		panes, err := livePanes()
-		tmuxErr = err
+	var backendErr error
+	live := func() ([]backend.LivePane, error) {
+		panes, err := listLive()
+		backendErr = err
 		return panes, err
+	}
+	if listLive == nil {
+		live = nil
 	}
 	snap := sessionview.Build("", projectRoot, sessionview.Collectors{
 		LoadState:    loadState,
-		LivePanes:    live,
+		ListLive:     live,
 		IssuePRs:     issuePRCollector(issues),
 		Waves:        waveCollector(issues),
 		WorktreeStat: sessionview.GitWorktreeStat(projectRoot),
 		Now:          time.Now,
 	})
-	return paneViewsFromSnapshot(projectRoot, snap), errors.Join(stateErr, tmuxErr)
+	return paneViewsFromSnapshot(projectRoot, snap), errors.Join(stateErr, backendErr)
 }
 
-func loadIssueStatuses(projectRoot string) (map[issueKey]issueStatus, error) {
+func loadIssueStatuses(projectRoot string, liveCollectors ...func() ([]backend.LivePane, error)) (map[issueKey]issueStatus, error) {
+	var listLive func() ([]backend.LivePane, error)
+	if len(liveCollectors) > 0 {
+		listLive = liveCollectors[0]
+	}
 	// Merge sibling worktrees so issue/PR/wave status is fetched for Sessions
 	// fanned out from another worktree too, matching loadPaneViews.
-	store, err := sessionview.MergedStateLoader(projectRoot)()
+	store, err := sessionview.MergedStateLoader(projectRoot, listLive)()
 	if err != nil {
 		return nil, err
 	}
@@ -406,11 +415,18 @@ func keyForTask(parent, taskID, source string) issueKey {
 
 func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.LivePane, tmuxKnown bool, issues map[issueKey]issueStatus, worktrees map[string]worktreeStatView) []paneView {
 	const projectRoot = "/repo"
-	live := map[string]sessionview.LivePaneInfo{}
+	live := make([]backend.LivePane, 0, len(tmuxPanes))
 	for _, pane := range tmuxPanes {
-		live[pane.ID] = sessionview.LivePaneInfo{Path: matchingWorktreePath(pane.ID, panes), Title: pane.Title, AgentState: pane.AgentState}
+		state, _ := backend.ParseAgentState(pane.AgentState)
+		live = append(live, backend.LivePane{
+			Ref:              backend.PaneRef{Backend: backend.Tmux, Pane: pane.ID},
+			CurrentPath:      matchingWorktreePath(pane.ID, panes),
+			Title:            pane.Title,
+			AgentState:       state,
+			NativeAgentState: pane.AgentState,
+		})
 	}
-	liveCollector := func() (map[string]sessionview.LivePaneInfo, error) {
+	liveCollector := func() ([]backend.LivePane, error) {
 		if !tmuxKnown {
 			return nil, errors.New("tmux unavailable")
 		}
@@ -424,7 +440,7 @@ func buildPaneViews(panes []state.Pane, tmuxPanes []tmuxrun.LivePane, tmuxKnown 
 	}
 	snap := sessionview.Build("", projectRoot, sessionview.Collectors{
 		LoadState:    func() (state.Store, error) { return state.Store{SchemaVersion: 1, Panes: panes}, nil },
-		LivePanes:    liveCollector,
+		ListLive:     liveCollector,
 		IssuePRs:     issuePRCollector(issues),
 		Waves:        waveCollector(issues),
 		WorktreeStat: worktreeCollector,
@@ -463,8 +479,10 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				IssueNum:           pv.IssueNum,
 				TaskID:             pv.TaskID,
 				Kind:               pv.Kind,
+				Slug:               pv.Slug,
 				Name:               derived.Name,
 				PaneID:             pv.PaneID,
+				Backend:            pv.Backend,
 				ShellKey:           pv.ShellKey,
 				SourceParent:       pv.SourceParent,
 				SourceIssueNum:     pv.SourceIssueNum,
@@ -559,6 +577,7 @@ func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, bloc
 		Agent:        view.Agent,
 		BranchName:   view.BranchName,
 		PaneID:       view.PaneID,
+		Backend:      view.Backend,
 		ShellKey:     view.ShellKey,
 		WorktreePath: view.WorktreePath,
 		CreatedAt:    view.CreatedAt,

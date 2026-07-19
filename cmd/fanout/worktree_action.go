@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -330,6 +332,7 @@ func attachTargetFromStatePane(pane state.Pane) fanouttui.AttachTarget {
 	return fanouttui.AttachTarget{
 		TargetPath:        pane.WorktreePath,
 		SourceProjectRoot: pane.SourceProjectRoot,
+		Backend:           pane.Backend,
 		SourceParent:      sourceParent,
 		SourceIssueNum:    sourceIssueNum,
 		SourceTaskID:      sourceTaskID,
@@ -340,6 +343,9 @@ func attachTargetFromStatePane(pane state.Pane) fanouttui.AttachTarget {
 
 func attachSourceIdentityFromStatePane(pane state.Pane) (parent string, issueNum int, taskID, label string) {
 	if !pane.IsAttachedAgent() {
+		if actualIssue, ok := panelaunch.PaneIssueParentNum(pane); ok {
+			return strconv.Itoa(actualIssue), actualIssue, pane.TaskID, fmt.Sprintf("#%d", actualIssue)
+		}
 		return pane.Parent, pane.IssueNum, pane.TaskID, sourceLabelForStatePane(pane)
 	}
 	parent = strings.TrimSpace(pane.SourceParent)

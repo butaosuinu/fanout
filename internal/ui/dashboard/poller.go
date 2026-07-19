@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -61,7 +62,7 @@ type waveCacheEntry struct {
 }
 
 // poller owns the authoritative latest Snapshot. A cheap tick reloads
-// state.json + tmux liveness (~2s); a throttled GitHub tick refreshes per-issue
+// state.json + runtime liveness (~2s); a throttled GitHub tick refreshes per-issue
 // PR state (~20s), with the costlier per-parent wave-graph phase further
 // throttled to waveInterval (~60s) to respect the gh API budget.
 // sessionview.Build reads gh only through the cache, so the
@@ -70,6 +71,7 @@ type waveCacheEntry struct {
 type poller struct {
 	projectRoot string
 	hub         *hub
+	listLive    func() ([]backend.LivePane, error)
 
 	cheapInterval time.Duration
 	ghInterval    time.Duration
@@ -144,7 +146,7 @@ func (p *poller) Start(ctx context.Context) {
 
 func (p *poller) loop(ctx context.Context) {
 	// GitHub refresh runs on its own goroutine so a slow `gh api graphql` (many
-	// panes, network latency) never starves the cheap state/tmux ticker — pane
+	// panes, network latency) never starves the cheap state/runtime ticker — pane
 	// liveness and state changes keep updating every cheapInterval regardless.
 	go p.ghLoop(ctx)
 
@@ -260,7 +262,7 @@ func (p *poller) refreshGH() {
 	// Load the merged store so PR/wave refresh covers issues recorded in sibling
 	// worktrees too; otherwise build() surfaces their panes but refreshGH never
 	// fetches their issue/PR/wave state, leaving them permanently UNKNOWN.
-	store, err := sessionview.MergedStateLoader(p.projectRoot)()
+	store, err := sessionview.MergedStateLoader(p.projectRoot, p.listLive)()
 	if err != nil {
 		return
 	}
@@ -461,8 +463,8 @@ func mergeDegradedWaveInfos(previous, current map[int]sessionview.WaveInfo) map[
 func (p *poller) build() sessionview.Snapshot {
 	repo, _, _ := p.ghIdentity()
 	return sessionview.Build(repo, p.projectRoot, sessionview.Collectors{
-		LoadState:    sessionview.MergedStateLoader(p.projectRoot),
-		LivePanes:    sessionview.LivePanes(),
+		LoadState:    sessionview.MergedStateLoader(p.projectRoot, p.listLive),
+		ListLive:     p.listLive,
 		IssuePRs:     p.issuePRsFromCache,
 		BranchPRs:    p.branchPRsFromCache,
 		Waves:        p.wavesFromCache,

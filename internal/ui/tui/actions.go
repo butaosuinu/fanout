@@ -212,6 +212,7 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 			Hooks:               m.opts.Hooks,
 			WatcherRunningLabel: watcherLabel,
 			RemoveIssueLabel:    removeLabel,
+			CloseOwned:          m.opts.LifecycleCloseOwned,
 		}
 	}
 	paneOpts := lifecycleOpts(paneRoot)

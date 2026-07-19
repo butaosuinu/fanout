@@ -18,8 +18,10 @@ func TestClassifyPath(t *testing.T) {
 		{name: "infra worktree is H", path: "internal/infra/worktree/add.go", want: ClassH, found: true},
 		{name: "infra settings is H", path: "internal/infra/settings/settings.go", want: ClassH, found: true},
 		{name: "infra reviewjson is H", path: "internal/infra/reviewjson/project.go", want: ClassH, found: true},
+		{name: "infra herdrrun is H", path: "internal/infra/herdrrun/herdrrun.go", want: ClassH, found: true},
 		{name: "infra ghissue is M", path: "internal/infra/ghissue/issue.go", want: ClassM, found: true},
 		{name: "infra atomicfs is M", path: "internal/infra/atomicfs/write.go", want: ClassM, found: true},
+		{name: "infra tmuxbackend is M", path: "internal/infra/tmuxbackend/backend.go", want: ClassM, found: true},
 		{name: "infra log is A", path: "internal/infra/log/log.go", want: ClassA, found: true},
 		{name: "infra browser is A", path: "internal/infra/browser/open.go", want: ClassA, found: true},
 		{name: "app briefing is H", path: "internal/app/briefing/render.go", want: ClassH, found: true},
@@ -27,12 +29,14 @@ func TestClassifyPath(t *testing.T) {
 		{name: "app run is M", path: "internal/app/run/run.go", want: ClassM, found: true},
 		{name: "app cliflags is M", path: "internal/app/cliflags/flags.go", want: ClassM, found: true},
 		{name: "core naming is M", path: "internal/core/naming/slug.go", want: ClassM, found: true},
+		{name: "core backend is H", path: "internal/core/backend/backend.go", want: ClassH, found: true},
 		{name: "core blockers is M", path: "internal/core/blockers/blockers.go", want: ClassM, found: true},
 		{name: "core exitcode is A", path: "internal/core/exitcode/code.go", want: ClassA, found: true},
 		{name: "core cliview is A", path: "internal/core/cliview/view.go", want: ClassA, found: true},
 
-		// --- cmd/fanout: 9 H files plus the catch-all M ---
+		// --- cmd/fanout: 10 H files plus the catch-all M ---
 		{name: "cmd main is H", path: "cmd/fanout/main.go", want: ClassH, found: true},
+		{name: "cmd runtime backend is H", path: "cmd/fanout/runtime_backend.go", want: ClassH, found: true},
 		{name: "cmd tui_popup is H", path: "cmd/fanout/tui_popup.go", want: ClassH, found: true},
 		{name: "cmd tui_launch is H", path: "cmd/fanout/tui_launch.go", want: ClassH, found: true},
 		{name: "cmd worktree_action is H", path: "cmd/fanout/worktree_action.go", want: ClassH, found: true},

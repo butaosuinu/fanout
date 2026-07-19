@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,6 +15,10 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // LaunchMode selects the new-session lane. The zero value is the classic
@@ -103,6 +108,7 @@ const (
 type AttachTarget struct {
 	TargetPath        string
 	SourceProjectRoot string
+	Backend           backend.Name
 	SourceParent      string
 	SourceIssueNum    int
 	SourceTaskID      string
@@ -322,6 +328,7 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 	target := AttachTarget{
 		TargetPath:        targetPath,
 		SourceProjectRoot: pane.sourceProjectRoot,
+		Backend:           pane.Backend,
 		SourceParent:      sourceParent,
 		SourceIssueNum:    sourceIssueNum,
 		SourceTaskID:      sourceTaskID,
@@ -338,6 +345,13 @@ func (m *model) openAttachAgentForm() tea.Cmd {
 
 func attachSourceIdentity(pane paneView) (parent string, issueNum int, taskID, label string) {
 	if !pane.isAttachedAgent() {
+		if actualIssue, ok := panelaunch.PaneIssueParentNum(state.Pane{
+			Parent:   pane.Parent,
+			IssueNum: pane.IssueNum,
+			Slug:     pane.Slug,
+		}); ok {
+			return strconv.Itoa(actualIssue), actualIssue, pane.TaskID, fmt.Sprintf("#%d", actualIssue)
+		}
 		return pane.Parent, pane.IssueNum, pane.TaskID, pane.identityLabel()
 	}
 	parent = strings.TrimSpace(pane.SourceParent)

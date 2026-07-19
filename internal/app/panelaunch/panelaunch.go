@@ -1,8 +1,8 @@
 // Package panelaunch owns the pane-creation orchestration shared by the
 // issue/plan batch lanes, the TUI watch and manual launchers, and the
 // attached-agent / shell pane paths: briefing write, worktree preparation,
-// tmux split and decoration, state recording, metadata write, and failure
-// cleanup.
+// runtime launch, tmux-only decoration, state recording, metadata write, and
+// failure cleanup.
 package panelaunch
 
 import (
@@ -16,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/displayname"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -77,7 +78,7 @@ type Request struct {
 	Worktree       worktree.Plan
 }
 
-// Result identifies the tmux pane created by a successful launch. PaneID is
+// Result identifies the runtime pane created by a successful launch. PaneID is
 // empty for successful dry runs because no pane is created.
 type Result struct {
 	PaneID string
@@ -104,6 +105,7 @@ type Launcher struct {
 	Cfg         *cliflags.Config
 	Log         *log.Logger
 	Info        *fanoutruntime.Info
+	Backend     backend.Backend
 	Recorder    StateRecorder
 	Palette     log.Palette
 	CommandName string
@@ -116,17 +118,21 @@ func (l *Launcher) LaunchOK(req Request) bool {
 }
 
 // LaunchWithResult creates one worktree-backed agent pane and returns its exact
-// tmux pane id. A successful dry run returns an empty Result.
+// backend-native pane id. A successful dry run returns an empty Result.
 func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
 	return l.launch(req)
 }
 
 // launch creates one worktree-backed agent pane: briefing write, worktree
-// preparation, hooks, tmux split and decoration, optional Codex Plan Mode
+// preparation, hooks, runtime launch and tmux decoration, optional Codex Plan Mode
 // wait, state recording, and worktree metadata write. A failure after the
 // split tears the partial launch down.
 func (l *Launcher) launch(req Request) (Result, bool) {
-	agentCmd, cmdErr := buildAgentCommand(l.Cfg, req, l.CommandName)
+	if l.Backend == nil {
+		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
+		return Result{}, false
+	}
+	agentCmd, cmdErr := buildAgentCommandForBackend(l.Cfg, req, l.CommandName, l.Backend.Name())
 	if cmdErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), cmdErr)
 		return Result{}, false
@@ -153,7 +159,11 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 	logPaneRequest(req, l.Log)
 
 	if l.Cfg.DryRun {
-		printPaneDryRun(req, l.Info.Target, l.Log, l.Palette)
+		printReq := req
+		if l.Backend.Name() == backend.Tmux {
+			printReq.AgentCommand = withAgentStartGate(printReq.AgentCommand, printReq.AgentStartGate)
+		}
+		printPaneDryRun(printReq, l.Info.Target, l.Log, l.Palette)
 		return Result{}, true
 	}
 
@@ -183,7 +193,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 	if result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, l.Info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, l.Log); !result.OK() {
 		l.Log.Err("%s: %v", paneLogLabel(req), result.Err)
 		printPaneHookOutput(result, l.Log)
-		failCleanup(paneLogLabel(req), l.Info.Target, "", "", "", &prepared, l.Log)
+		failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, "", "", "", &prepared, l.Log)
 		return Result{}, false
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, prepared.WorktreePath, ""), req.Hooks, l.Log)
@@ -195,7 +205,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 			l.Log.Warn("%s: preserving worktree because the unstamped pane could not be stopped: %s", paneLogLabel(req), prepared.WorktreePath)
 			return Result{}, false
 		}
-		failCleanup(paneLogLabel(req), l.Info.Target, "", "", "", &prepared, l.Log)
+		failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, "", "", "", &prepared, l.Log)
 		return Result{}, false
 	}
 	var codexTUIStatus codexapp.Status
@@ -204,19 +214,23 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		codexTUIStatus, statusErr = codexapp.WaitReady(statusPath, CodexPlanTUIStartupTimeout)
 		if statusErr != nil {
 			l.Log.Err("%s: start %s in pane %s: %v", paneLogLabel(req), codexTUILabel(req), paneID, statusErr)
-			if !failCleanup(paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
+			cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log)
+			if !cleaned {
 				l.recordRecoveryPane(req, paneID, prepared.WorktreePath, "", codexTUIStatus)
+			} else {
+				l.releaseStartGateAfterFailure(req)
 			}
 			return Result{}, false
 		}
 		_ = os.Remove(statusPath)
 	}
 	if l.Recorder != nil {
-		entry := statePane(req, paneID, prepared.WorktreePath, time.Now().UTC(), codexTUIStatus)
+		entry := statePaneForBackend(req, paneID, prepared.WorktreePath, time.Now().UTC(), codexTUIStatus, l.Backend.Name())
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
-			if failCleanup(paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
+			if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
 				rollbackState(l.Recorder, req, l.Log)
+				l.releaseStartGateAfterFailure(req)
 			} else {
 				l.recordRecoveryPane(req, paneID, prepared.WorktreePath, "", codexTUIStatus)
 			}
@@ -233,8 +247,9 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		CodexSessionID: codexTUIStatus.SessionID,
 	}); err != nil {
 		l.Log.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
-		if failCleanup(paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
+		if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
 			rollbackState(l.Recorder, req, l.Log)
+			l.releaseStartGateAfterFailure(req)
 		} else {
 			l.Log.Warn("%s: pane %s remains recorded for lifecycle cleanup", paneLogLabel(req), paneID)
 		}
@@ -266,13 +281,17 @@ func (l *Launcher) Attach(req Request, targetPath string) bool {
 }
 
 // AttachWithResult creates one agent pane attached to an existing directory
-// and returns its exact tmux pane id.
+// and returns its exact backend-native pane id.
 func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, bool) {
+	if l.Backend == nil {
+		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
+		return Result{}, false
+	}
 	if keyErr := ensurePaneLivenessKey(&req); keyErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), keyErr)
 		return Result{}, false
 	}
-	agentCmd, err := buildAgentCommand(l.Cfg, req, l.CommandName)
+	agentCmd, err := buildAgentCommandForBackend(l.Cfg, req, l.CommandName, l.Backend.Name())
 	if err != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), err)
 		return Result{}, false
@@ -289,29 +308,12 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
-	gateLocked := false
-	if req.AgentStartGate != "" {
-		if err := tmuxrun.LockWaitChannel(req.AgentStartGate); err != nil {
-			l.Log.Err("%s: lock agent start gate: %v", paneLogLabel(req), err)
-			return Result{}, false
-		}
-		gateLocked = true
-	}
-	unlockGateAfterFailure := func() {
-		if !gateLocked {
-			return
-		}
-		if err := tmuxrun.UnlockWaitChannel(req.AgentStartGate); err != nil {
-			l.Log.Warn("%s: unlock agent start gate after failed launch: %v", paneLogLabel(req), err)
-		}
-	}
 
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
 		if paneID != "" {
 			l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexapp.Status{})
 		}
-		unlockGateAfterFailure()
 		return Result{}, false
 	}
 	codexPlanStatus := codexapp.Status{}
@@ -320,25 +322,27 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
 		if planErr != nil {
 			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
-			if !failCleanup(paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
+			cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log)
+			if !cleaned {
 				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
+			} else {
+				l.releaseStartGateAfterFailure(req)
 			}
-			unlockGateAfterFailure()
 			return Result{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
 	}
 	if l.Recorder != nil {
-		entry := statePane(req, paneID, targetPath, time.Now().UTC(), codexPlanStatus)
+		entry := statePaneForBackend(req, paneID, targetPath, time.Now().UTC(), codexPlanStatus, l.Backend.Name())
 		entry.Kind = state.PaneKindAttachedAgent
 		if err := l.Recorder.RecordPane(entry); err != nil {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
-			if failCleanup(paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
+			if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
 				rollbackState(l.Recorder, req, l.Log)
+				l.releaseStartGateAfterFailure(req)
 			} else {
 				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
 			}
-			unlockGateAfterFailure()
 			return Result{}, false
 		}
 	}
@@ -359,20 +363,47 @@ type decorateOpts struct {
 // error and returns ok=false when the split fails (the caller owns any
 // worktree cleanup); a failed strict shell key tears the pane down itself.
 func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateOpts) (string, bool) {
-	paneID, splitErr := tmuxrun.SplitPaneWithAgentCommand(l.Info.Target, workPath, req.AgentCommand)
+	ref, splitErr := l.Backend.Launch(backend.LaunchRequest{
+		Workspace:    l.Info.Session,
+		Target:       l.Info.Target,
+		WorktreePath: workPath,
+		Command:      req.AgentCommand,
+		StartGate:    req.AgentStartGate,
+	})
 	if splitErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), splitErr)
 		return "", false
+	}
+	paneID := ref.Pane
+	if l.Backend.Name() != backend.Tmux {
+		// Pane decoration and layout are tmux-only implementation details. A
+		// future non-tmux launcher may succeed through the neutral interface, but
+		// it must never pass its backend-native pane id to tmux. Attached panes
+		// still require a proven liveness identity, so keep that lane fail closed
+		// until its backend supplies an equivalent identity contract.
+		if opts.strictShellKey {
+			l.Log.Err("%s: strict pane liveness keys are not supported by the %s backend", paneLogLabel(req), l.Backend.Name())
+			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
+			if cleanupErr != nil {
+				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
+				return paneID, false
+			}
+			l.releaseStartGateAfterFailure(req)
+			return "", false
+		}
+		return paneID, true
 	}
 	if opts.strictShellKey && req.ShellKey != "" {
 		// The liveness key is not best-effort: a recorded key that never reaches
 		// the tmux pane would leave the row permanently stale.
 		if err := setPaneLivenessKey(paneID, req.ShellKey); err != nil {
 			l.Log.Err("%s: set pane liveness key: %v", paneLogLabel(req), err)
-			if cleanupErr := cleanupFreshPane(l.Info.Target, paneID); cleanupErr != nil {
+			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
+			if cleanupErr != nil {
 				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
 				return paneID, false
 			}
+			l.releaseStartGateAfterFailure(req)
 			return "", false
 		}
 	}
@@ -402,7 +433,11 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 }
 
 func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status) state.Pane {
-	return state.Pane{
+	return statePaneForBackend(req, paneID, worktreePath, now, codexTUIStatus, backend.Tmux)
+}
+
+func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status, runtimeBackend backend.Name) state.Pane {
+	pane := state.Pane{
 		Parent:         req.ParentRef,
 		IssueNum:       req.Number,
 		TaskID:         req.TaskID,
@@ -425,6 +460,12 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUI
 		CreatedAt:      now.Format(time.RFC3339),
 		AgentStatus:    "running",
 	}
+	// Keep new tmux rows byte-compatible with the legacy state shape. Empty is
+	// defined as tmux on read; non-tmux rows carry an explicit sticky binding.
+	if runtimeBackend != backend.Tmux {
+		pane.Backend = runtimeBackend
+	}
+	return pane
 }
 
 func ensurePaneLivenessKey(req *Request) error {
@@ -440,6 +481,17 @@ func ensurePaneLivenessKey(req *Request) error {
 }
 
 func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
+	return buildAgentCommandForRuntime(cfg, req, commandName, backend.Tmux)
+}
+
+func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
+	if backend.NormalizeName(runtimeBackend) == backend.Tmux {
+		return buildAgentCommand(cfg, req, commandName)
+	}
+	return buildAgentCommandForRuntime(cfg, req, commandName, runtimeBackend)
+}
+
+func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
 	if req.CodexPlanMode {
 		if strings.TrimSpace(req.AgentStartGate) != "" {
 			return "", fmt.Errorf("agent start gate is not supported in Codex Plan Mode")
@@ -484,13 +536,13 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
 	if cfg.DryRun {
-		command, err := agent.BuildCommand(req.Agent, req.Prompt)
+		command, err := agent.BuildCommandForBackend(req.Agent, req.Prompt, runtimeBackend)
 		if err != nil {
 			return "", err
 		}
-		return withAgentStartGate(command, req.AgentStartGate), nil
+		return command, nil
 	}
-	command, err := agent.BuildResolvedCommand(req.Agent, req.Prompt)
+	command, err := agent.BuildResolvedCommandForBackend(req.Agent, req.Prompt, runtimeBackend)
 	if err != nil {
 		return "", err
 	}
@@ -498,7 +550,7 @@ func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (s
 	if err != nil {
 		return "", fmt.Errorf("resolve fanout executable: %w", err)
 	}
-	return withAgentStartGate(agent.WithFanoutBin(command, fanoutPath), req.AgentStartGate), nil
+	return agent.WithFanoutBin(command, fanoutPath), nil
 }
 
 func codexTeamMember(req Request) string {
@@ -536,8 +588,20 @@ func withAgentStartGate(command, gate string) string {
 
 // ReleaseAgentStartGate lets a successfully attached gated pane start its
 // agent. Callers must wait until the state the agent consumes is committed.
-func ReleaseAgentStartGate(req Request) error {
-	return tmuxrun.UnlockWaitChannel(req.AgentStartGate)
+func ReleaseAgentStartGate(runtimeBackend backend.Backend, req Request) error {
+	if runtimeBackend == nil {
+		return fmt.Errorf("runtime backend is not configured")
+	}
+	return runtimeBackend.ReleaseStartGate(req.AgentStartGate)
+}
+
+func (l *Launcher) releaseStartGateAfterFailure(req Request) {
+	if l.Backend == nil || strings.TrimSpace(req.AgentStartGate) == "" {
+		return
+	}
+	if err := l.Backend.ReleaseStartGate(req.AgentStartGate); err != nil {
+		l.Log.Warn("%s: release agent start gate after failed launch: %v", paneLogLabel(req), err)
+	}
 }
 
 func logPaneRequest(req Request, lg *log.Logger) {
@@ -681,7 +745,11 @@ func (l *Launcher) recordRecoveryPane(req Request, paneID, worktreePath, kind st
 		l.Log.Warn("%s: pane %s may still be live but no state recorder is available", paneLogLabel(req), paneID)
 		return
 	}
-	entry := statePane(req, paneID, worktreePath, time.Now().UTC(), status)
+	runtimeBackend := backend.Tmux
+	if l.Backend != nil {
+		runtimeBackend = l.Backend.Name()
+	}
+	entry := statePaneForBackend(req, paneID, worktreePath, time.Now().UTC(), status, runtimeBackend)
 	entry.Kind = kind
 	if err := l.Recorder.RecordPane(entry); err != nil {
 		l.Log.Err("%s: preserve live pane %s in fanout state: %v", paneLogLabel(req), paneID, err)
@@ -694,23 +762,40 @@ func (l *Launcher) recordRecoveryPane(req Request, paneID, worktreePath, kind st
 // only when its live @fanout_shell_key still matches the recorded identity. It
 // does not remove the state row; callers may do that only after this succeeds.
 // An empty paneID is a no-op, and an already-gone pane is considered stopped.
-func KillAttachedPane(target, paneID, shellKey string) error {
+func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey string) error {
 	if strings.TrimSpace(paneID) == "" {
 		return nil
+	}
+	if runtimeBackend == nil {
+		return fmt.Errorf("runtime backend is not configured")
 	}
 	shellKey = strings.TrimSpace(shellKey)
 	if shellKey == "" {
 		return fmt.Errorf("attached pane shell key is required")
 	}
-	result, err := closePaneForCleanup(paneID, "", shellKey)
-	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
-		if err == nil {
-			err = fmt.Errorf("attached pane %s remained live after close", paneID)
-		}
+	closer, ok := runtimeBackend.(backend.OwnedCloser)
+	if !ok {
+		return fmt.Errorf("runtime backend %s does not support identity-aware pane close", runtimeBackend.Name())
+	}
+	result, err := closer.CloseOwned(backend.CloseRequest{
+		Ref:      backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
+		ShellKey: shellKey,
+	})
+	if err != nil {
 		return err
 	}
-	if result.Status == tmuxrun.ClosePaneClosed {
-		relayoutTarget := result.WindowID
+	switch result.Status {
+	case backend.CloseFailed:
+		return fmt.Errorf("attached pane %s remained live after close", paneID)
+	case backend.CloseStale:
+		return nil
+	case backend.CloseConfirmed:
+		// Continue below and repair tmux layout when applicable.
+	default:
+		return fmt.Errorf("attached pane %s close returned unknown status %d", paneID, result.Status)
+	}
+	if runtimeBackend.Name() == backend.Tmux {
+		relayoutTarget := result.ContainerID
 		if relayoutTarget == "" {
 			relayoutTarget = target
 		}
@@ -720,30 +805,56 @@ func KillAttachedPane(target, paneID, shellKey string) error {
 	return nil
 }
 
-var (
-	closePaneForCleanup = tmuxrun.ClosePaneIfOwned
-	setPaneLivenessKey  = tmuxrun.SetPaneShellKey
-	closeFreshPane      = tmuxrun.CloseFreshPane
-)
+var setPaneLivenessKey = tmuxrun.SetPaneShellKey
 
 // failCleanup tears down a partially created launch and reports whether the
 // pane is confirmed gone. A live pane is closed only after its liveness-key
 // identity is verified, and a created worktree is preserved when that close
 // cannot be confirmed. A nil lg suppresses cleanup diagnostics.
-func failCleanup(label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, prepared *worktree.Result, lg *log.Logger) bool {
+func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, prepared *worktree.Result, lg *log.Logger) bool {
 	if paneID != "" {
-		result, err := closePaneForCleanup(paneID, expectedWorktreePath, shellKey)
-		if err != nil || result.Status == tmuxrun.ClosePaneFailed {
-			if err == nil {
-				err = fmt.Errorf("pane remained live after close")
+		if runtimeBackend == nil {
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend is not configured", label, paneID)
 			}
+			return false
+		}
+		closer, ok := runtimeBackend.(backend.OwnedCloser)
+		if !ok {
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend %s does not support identity-aware pane close", label, paneID, runtimeBackend.Name())
+			}
+			return false
+		}
+		result, err := closer.CloseOwned(backend.CloseRequest{
+			Ref:          backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
+			WorktreePath: expectedWorktreePath,
+			ShellKey:     strings.TrimSpace(shellKey),
+		})
+		if err != nil {
 			if lg != nil {
 				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %v", label, paneID, err)
 			}
 			return false
 		}
-		if result.Status == tmuxrun.ClosePaneClosed {
-			target := result.WindowID
+		switch result.Status {
+		case backend.CloseFailed:
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: close was not confirmed", label, paneID)
+			}
+			return false
+		case backend.CloseStale:
+			// The recorded identity is already gone; worktree cleanup is safe.
+		case backend.CloseConfirmed:
+			// Continue below and repair tmux layout when applicable.
+		default:
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: unknown close status %d", label, paneID, result.Status)
+			}
+			return false
+		}
+		if result.Status == backend.CloseConfirmed && runtimeBackend.Name() == backend.Tmux {
+			target := result.ContainerID
 			if target == "" {
 				target = relayoutTarget
 			}
@@ -764,13 +875,22 @@ func failCleanup(label, relayoutTarget, paneID, expectedWorktreePath, shellKey s
 }
 
 // cleanupFreshPane is reserved for the split-time metadata failure before a
-// pane has a durable identity. The exact pane id has just been returned by
-// tmux; callers preserve any created worktree when this close fails.
-func cleanupFreshPane(relayoutTarget, paneID string) error {
-	if err := closeFreshPane(paneID); err != nil {
+// pane has a durable identity. The exact pane id has just been returned by the
+// runtime; callers preserve any created worktree when this close fails.
+func cleanupFreshPane(runtimeBackend backend.Backend, relayoutTarget, paneID string) error {
+	if runtimeBackend == nil {
+		return fmt.Errorf("runtime backend is not configured")
+	}
+	closer, ok := runtimeBackend.(backend.FreshCloser)
+	if !ok {
+		return fmt.Errorf("runtime backend %s does not support fresh pane close", runtimeBackend.Name())
+	}
+	if err := closer.CloseFresh(backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID}); err != nil {
 		return err
 	}
-	_ = panelayout.Apply(relayoutTarget, panelayout.Close)
+	if runtimeBackend.Name() == backend.Tmux {
+		_ = panelayout.Apply(relayoutTarget, panelayout.Close)
+	}
 	return nil
 }
 
