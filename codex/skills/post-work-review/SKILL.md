@@ -29,7 +29,10 @@ reviewer output or require a result schema.
   tools, MCP/connectors, external services, nested agents, agent messaging,
   approval requests, and escalation.
 - Before spawning, the helper proves that applicable `AGENTS.md`,
-  `AGENTS.override.md`, and repository `.codex` bootstrap files are unchanged from the trusted bootstrap base and have no worktree additions. The
+  `AGENTS.override.md`, and repository `.codex` bootstrap files are
+  unchanged from the trusted bootstrap base and have no worktree additions. It also
+  rejects linked instruction files, nested `.codex` paths, dynamic or escaped
+  project config keys, and committed or worktree submodule changes. The
   reviewer's controlling contract consists of trusted parent-session and system
   instructions, those base-identical bootstrap instructions, and the spawn
   message in their normal precedence order. Follow unchanged base instructions
@@ -57,12 +60,14 @@ reviewer output or require a result schema.
    `git merge-base <recorded-base-head> <recorded-head>`.
    Then select one scope:
    - For a clean committed branch, record the branch review bundle from that
-     base commit through the recorded `HEAD`, including submodule changes.
+     base commit through the recorded `HEAD`. The helper rejects any submodule
+     pointer change before review.
    - For a dirty uncommitted review, record a worktree bundle relative to the
-     recorded `HEAD`. It must cover staged, unstaged, untracked, and dirty
-     submodule changes: include Git status, binary tracked diffs, complete
-     untracked-file contents, and dirty-submodule status/diffs. Record a digest
-     of that complete bundle. This is review-only scope.
+     recorded `HEAD`. It must cover staged, unstaged, and untracked changes:
+     include Git status, binary tracked diffs, and complete untracked-file
+     contents. Record a digest of that complete bundle. This is review-only
+     scope. The helper rejects staged, unstaged, or dirty submodule changes
+     before review.
 4. Resolve this skill package and `scripts/mark-reviewed-head.sh` to lexical
    and physical absolute paths. Stop if the package, any path component, or the
    helper is a symlink, or if its physical path is inside the recorded
@@ -77,16 +82,25 @@ reviewer output or require a result schema.
    `"$helper" guard <recorded-head> <base-branch> <recorded-base-head>`. It
    rejects committed or worktree changes to `AGENTS.md`,
    `AGENTS.override.md`, repository `.codex` files, or this
-   `codex/skills/post-work-review` gate. This proves that active supported
-   repository bootstrap instructions are base-identical and prevents a
-   gate-changing target from reviewing itself. An instruction- or gate-changing
-   target requires a reviewer launched from a trusted checkout or human review;
-   do not spawn or write a marker.
+   `codex/skills/post-work-review` gate, using case-insensitive path matching
+   for filesystem portability. It also rejects any linked
+   `AGENTS.md` / `AGENTS.override.md`, nested `.codex` paths, project config
+   that defines dynamic instruction-source keys or escaped keys, and any
+   committed or worktree submodule change.
+   This proves that active supported repository bootstrap instructions are
+   base-identical and prevents a gate-changing target from reviewing itself.
+   An instruction- or gate-changing target, or any submodule-changing target,
+   requires a reviewer launched from a trusted checkout or human review; do not
+   spawn or write a marker.
 7. Base-identical inline project `developer_instructions` are supported because
-   the `.codex` guard binds their bytes. Stop if project config uses
-   `model_instructions_file`, or if the effective
-   `project_doc_fallback_filenames` is non-empty; their dynamic repository
-   instruction sources are outside the fixed path guard. User- and system-level
+   the `.codex` guard binds their bytes. Case-variant or nested `.codex` paths
+   are unsupported.
+   The helper stops if root project config defines `model_instructions_file` or
+   `project_doc_fallback_filenames`, even with an empty value, and rejects
+   escaped config keys rather than implementing a partial TOML parser. Dynamic
+   repository instruction sources are outside the fixed path guard.
+   Also stop if trusted parent configuration makes the effective
+   `project_doc_fallback_filenames` non-empty. User- and system-level
    instructions and files outside the repository remain a trusted
    parent-session boundary.
 8. For branch scope, resolve the project's canonical full validation command
@@ -109,8 +123,8 @@ Spawn exactly one generic subagent with a payload shaped like this:
 
 For uncommitted scope, replace the first sentence of `message` with:
 `Review the recorded uncommitted worktree bundle relative to <head-commit> at
-the recorded repository.` Tell the reviewer to inspect every staged, unstaged,
-untracked, and dirty-submodule change represented by the recorded bundle.
+the recorded repository.` Tell the reviewer to inspect every staged,
+unstaged, and untracked change represented by the recorded bundle.
 
 Replace the recorded placeholders in the message with the absolute repository
 root, base branch, full base commit, trusted bootstrap base commit, and full

@@ -30,10 +30,38 @@ for bootstrap_path in "$repo_root/AGENTS.md" "$repo_root/AGENTS.override.md" "$r
   [ ! -L "$bootstrap_path" ] ||
     die "Codex bootstrap paths must not be symlinks: $bootstrap_path"
 done
+agents_symlink=$(find "$repo_root" -name .git -prune -o -type l \
+  \( -iname AGENTS.md -o -iname AGENTS.override.md \) -print -quit) ||
+  die "cannot inspect repository AGENTS files"
+[ -z "$agents_symlink" ] || die "repository AGENTS files must not be symlinks: $agents_symlink"
+unsupported_codex=$(find "$repo_root" -name .git -prune -o -iname .codex \
+  ! -path "$repo_root/.codex" -print -quit) || die "cannot inspect repository .codex paths"
+[ -z "$unsupported_codex" ] ||
+  die "case-variant or nested repository .codex paths are unsupported: $unsupported_codex"
 if [ -d "$repo_root/.codex" ]; then
   codex_symlink=$(find "$repo_root/.codex" -type l -print -quit) ||
     die "cannot inspect repository .codex directory"
   [ -z "$codex_symlink" ] || die "repository .codex files must not be symlinks: $codex_symlink"
+fi
+project_config="$repo_root/.codex/config.toml"
+if [ -e "$project_config" ] && [ ! -f "$project_config" ]; then
+  die "repository .codex/config.toml must be a regular file"
+fi
+if [ -f "$project_config" ]; then
+  dynamic_key_pattern='(model_instructions_file|project_doc_fallback_filenames)[^=]*='
+  escaped_key_pattern='\\[^=]*='
+  if LC_ALL=C grep -Eq "$dynamic_key_pattern" "$project_config"; then
+    die "repository .codex/config.toml uses unsupported dynamic instruction sources"
+  else
+    grep_status=$?
+    [ "$grep_status" -eq 1 ] || die "cannot inspect repository .codex/config.toml"
+  fi
+  if LC_ALL=C grep -Eq "$escaped_key_pattern" "$project_config"; then
+    die "repository .codex/config.toml uses unsupported escaped keys"
+  else
+    grep_status=$?
+    [ "$grep_status" -eq 1 ] || die "cannot inspect repository .codex/config.toml"
+  fi
 fi
 
 git_dir=$(git rev-parse --absolute-git-dir) || die "cannot resolve Git directory"
@@ -62,16 +90,16 @@ load_target() {
 
 guard_bootstrap_instructions() {
   set -- \
-    ':(glob)AGENTS.md' \
-    ':(glob)AGENTS.override.md' \
-    ':(glob)**/AGENTS.md' \
-    ':(glob)**/AGENTS.override.md' \
-    ':(glob).codex' \
-    ':(glob).codex/**' \
-    ':(glob)**/.codex' \
-    ':(glob)**/.codex/**' \
-    ':(glob)codex/skills/post-work-review' \
-    ':(glob)codex/skills/post-work-review/**'
+    ':(icase,glob)AGENTS.md' \
+    ':(icase,glob)AGENTS.override.md' \
+    ':(icase,glob)**/AGENTS.md' \
+    ':(icase,glob)**/AGENTS.override.md' \
+    ':(icase,glob).codex' \
+    ':(icase,glob).codex/**' \
+    ':(icase,glob)**/.codex' \
+    ':(icase,glob)**/.codex/**' \
+    ':(icase,glob)codex/skills/post-work-review' \
+    ':(icase,glob)codex/skills/post-work-review/**'
 
   git diff --quiet --no-ext-diff --ignore-submodules=none \
     "$bootstrap_base" "$current_head" -- "$@" ||
@@ -82,6 +110,24 @@ guard_bootstrap_instructions() {
     die "worktree changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
   [ -z "$(git ls-files --others -- "$@")" ] ||
     die "worktree adds Codex bootstrap instructions or post-work-review gate files; use a trusted-checkout or human review"
+
+  candidate_gitlinks=$(git diff --raw --no-renames --no-ext-diff --ignore-submodules=none \
+    "$bootstrap_base" "$current_head" --) || die "cannot inspect candidate submodule changes"
+  case "$candidate_gitlinks" in
+    *":160000 "* | *" 160000 "*)
+      die "candidate changes submodules; use a trusted-checkout or human review"
+      ;;
+  esac
+
+  worktree_gitlinks=$(git diff --raw --no-renames --no-ext-diff --ignore-submodules=none --) ||
+    die "cannot inspect worktree submodule changes"
+  cached_gitlinks=$(git diff --cached --raw --no-renames --no-ext-diff --ignore-submodules=none --) ||
+    die "cannot inspect staged submodule changes"
+  case "$worktree_gitlinks$cached_gitlinks" in
+    *":160000 "* | *" 160000 "*)
+      die "worktree changes submodules; use a trusted-checkout or human review"
+      ;;
+  esac
 }
 
 case "${1:-}" in
@@ -119,7 +165,7 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=11\n'
+      printf 'post_work_review_version=12\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"

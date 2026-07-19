@@ -130,7 +130,7 @@ run_pr_gate() {
   grep -Fq 'fallback reviewer' "$skill"
   grep -Fq 'Do not edit files' "$skill"
   grep -Fq 'dirty uncommitted review' "$skill"
-  grep -Fq 'staged, unstaged, untracked, and dirty' "$skill"
+  grep -Fq 'staged, unstaged, and untracked changes' "$skill"
   grep -Fq 'run focused checks only' "$skill"
   grep -Fq 'must not write the review marker' "$skill"
   grep -Fq 'Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes' "$skill"
@@ -148,6 +148,9 @@ run_pr_gate() {
   grep -Fq 'differs from `refs/remotes/origin/main`' "$skill"
   grep -Fq 'Base-identical inline project `developer_instructions` are supported' "$skill"
   grep -Fq '`model_instructions_file`' "$skill"
+  grep -Fq 'Case-variant or nested `.codex` paths' "$skill"
+  grep -Fq 'case-insensitive path matching' "$skill"
+  grep -Fq 'submodule-changing target' "$skill"
   grep -Fq 'effective' "$skill"
   grep -Fq '"$helper" mark <reviewed-head>' "$skill"
   ! grep -Fq 'Read repository instructions first' "$skill"
@@ -234,6 +237,54 @@ run_pr_gate() {
   [ ! -e "$home/bin/fanout" ]
 }
 
+@test "binary-only install rejects a retired driver under a separate CODEX_HOME" {
+  local home="$BATS_TEST_TMPDIR/no-skills-runtime-home" \
+    codex_dir="$BATS_TEST_TMPDIR/no-skills-install-dir" \
+    codex_home="$BATS_TEST_TMPDIR/no-skills-codex-home"
+  mkdir -p "$codex_home/tools"
+  printf '#!/bin/sh\n' >"$codex_home/tools/post-work-review.sh"
+
+  run env HOME="$home" CODEX_DIR="$codex_dir" CODEX_HOME="$codex_home" \
+    BIN_DIR="$home/bin" sh "$REPO_ROOT/install.sh" --no-skills
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'retired Codex post-work-review driver'* ]]
+  [[ "$output" == *'Rerun without --no-skills'* ]]
+  [ ! -e "$home/bin/fanout" ]
+}
+
+@test "binary-only install checks the default Codex runtime home" {
+  local home="$BATS_TEST_TMPDIR/no-skills-default-home" \
+    codex_dir="$BATS_TEST_TMPDIR/no-skills-custom-install-dir"
+  mkdir -p "$home/.codex/tools"
+  printf '#!/bin/sh\n' >"$home/.codex/tools/post-work-review.sh"
+
+  run env HOME="$home" CODEX_DIR="$codex_dir" CODEX_HOME= \
+    BIN_DIR="$home/bin" sh "$REPO_ROOT/install.sh" --no-skills
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'retired Codex post-work-review driver'* ]]
+  [ ! -e "$home/bin/fanout" ]
+}
+
+@test "integration install rejects distinct CODEX_DIR and CODEX_HOME" {
+  local home="$BATS_TEST_TMPDIR/mismatched-codex-roots"
+
+  run env HOME="$home" CODEX_DIR="$home/install" CODEX_HOME="$home/runtime" \
+    BIN_DIR="$home/bin" sh "$REPO_ROOT/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'CODEX_DIR and CODEX_HOME must match'* ]]
+  [ ! -e "$home/bin/fanout" ]
+}
+
+@test "integration install rejects CODEX_DIR outside the default runtime home" {
+  local home="$BATS_TEST_TMPDIR/custom-codex-dir"
+
+  run env HOME="$home" CODEX_DIR="$home/install" CODEX_HOME= \
+    BIN_DIR="$home/bin" sh "$REPO_ROOT/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'CODEX_DIR and CODEX_HOME must match'* ]]
+  [ ! -e "$home/bin/fanout" ]
+}
+
 @test "pinned legacy archive installs its Codex review tools and agents" {
   local fixture="$BATS_TEST_TMPDIR/legacy-installer" home="$BATS_TEST_TMPDIR/legacy-home"
   make_installer_fixture "$fixture" legacy
@@ -249,21 +300,24 @@ run_pr_gate() {
 }
 
 @test "skills-only archive removes retired Codex review tools and agents" {
-  local fixture="$BATS_TEST_TMPDIR/skills-installer" home="$BATS_TEST_TMPDIR/skills-home"
+  local fixture="$BATS_TEST_TMPDIR/skills-installer" \
+    home="$BATS_TEST_TMPDIR/skills-home" \
+    codex_home="$BATS_TEST_TMPDIR/skills-runtime-home"
   make_installer_fixture "$fixture" skills-only
-  mkdir -p "$home/.codex/tools" "$home/.codex/agents"
-  printf '#!/bin/sh\n' >"$home/.codex/tools/post-work-review.sh"
-  printf 'retired\n' >"$home/.codex/agents/post-work-reviewer.md"
-  printf 'retired\n' >"$home/.codex/agents/post-work-verifier.toml"
+  mkdir -p "$codex_home/tools" "$codex_home/agents"
+  printf '#!/bin/sh\n' >"$codex_home/tools/post-work-review.sh"
+  printf 'retired\n' >"$codex_home/agents/post-work-reviewer.md"
+  printf 'retired\n' >"$codex_home/agents/post-work-verifier.toml"
 
-  run env HOME="$home" CODEX_DIR="$home/.codex" CLAUDE_DIR="$home/.claude" \
+  run env HOME="$home" CODEX_DIR= CODEX_HOME="$codex_home" \
+    CLAUDE_DIR="$home/.claude" \
     BIN_DIR="$home/bin" FANOUT_INSTALL_FIXTURE="$fixture" \
     PATH="$fixture/bin:$PATH" sh "$REPO_ROOT/install.sh"
   [ "$status" -eq 0 ]
-  [ ! -e "$home/.codex/tools/post-work-review.sh" ]
-  [ ! -e "$home/.codex/agents/post-work-reviewer.md" ]
-  [ ! -e "$home/.codex/agents/post-work-verifier.toml" ]
-  grep -Fxq 'fixture skill' "$home/.codex/skills/post-work-review/SKILL.md"
+  [ ! -e "$codex_home/tools/post-work-review.sh" ]
+  [ ! -e "$codex_home/agents/post-work-reviewer.md" ]
+  [ ! -e "$codex_home/agents/post-work-verifier.toml" ]
+  grep -Fxq 'fixture skill' "$codex_home/skills/post-work-review/SKILL.md"
 }
 
 @test "review marker binds the clean exact HEAD, base, and diff" {
@@ -286,7 +340,7 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" release/v1 "$(git -C "$repo" rev-parse refs/remotes/origin/release/v1)"
   [ "$status" -eq 0 ]
   [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
-  grep -Fxq 'post_work_review_version=11' "$gitdir/post-work-review-passed.meta"
+  grep -Fxq 'post_work_review_version=12' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "head=$head" "$gitdir/post-work-review-passed.meta"
   grep -Fxq 'base=release/v1' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base_head=$(git -C "$repo" rev-parse HEAD^)" "$gitdir/post-work-review-passed.meta"
@@ -297,7 +351,7 @@ run_pr_gate() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 
-  metadata="$(sed 's/post_work_review_version=11/post_work_review_version=10/' "$gitdir/post-work-review-passed.meta")"
+  metadata="$(sed 's/post_work_review_version=12/post_work_review_version=11/' "$gitdir/post-work-review-passed.meta")"
   printf '%s\n' "$metadata" >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ]
@@ -338,6 +392,69 @@ run_pr_gate() {
   [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
 }
 
+@test "review guard rejects base-identical dynamic project instruction sources" {
+  local kind repo config_line base_head head gitdir
+
+  for kind in model fallback dotted inline escaped; do
+    repo="$BATS_TEST_TMPDIR/review-dynamic-$kind"
+    setup_review_repo "$repo"
+    mkdir -p "$repo/.codex"
+    printf '# trusted base policy\n' >"$repo/POLICY.md"
+    case "$kind" in
+      model) config_line='model_instructions_file = "../POLICY.md"' ;;
+      fallback) config_line="'project_doc_fallback_filenames' = [\"POLICY.md\"]" ;;
+      dotted) config_line='profiles."team#review".model_instructions_file = "../POLICY.md"' ;;
+      inline) config_line='profiles = { review = { model_instructions_file = "../POLICY.md" } }' ;;
+      escaped) config_line='"model_instructions_\u0066ile" = "../POLICY.md"' ;;
+    esac
+    printf '%s\n' "$config_line" >"$repo/.codex/config.toml"
+    git -C "$repo" add POLICY.md .codex/config.toml
+    git -C "$repo" commit -qm "add dynamic project instructions"
+    base_head="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" checkout -qb feature
+    printf '# candidate policy\n' >"$repo/POLICY.md"
+    git -C "$repo" add POLICY.md
+    git -C "$repo" commit -qm "change dynamic policy"
+    head="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+    gitdir="$(gitdir_for "$repo")"
+
+    run_marker "$repo" guard "$head" main "$base_head"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'unsupported dynamic'* || "$output" == *'unsupported escaped keys'* ]]
+    run_marker "$repo" mark "$head" main "$base_head"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'unsupported dynamic'* || "$output" == *'unsupported escaped keys'* ]]
+    [ ! -e "$gitdir/post-work-review-passed" ]
+  done
+}
+
+@test "review guard rejects nested repository Codex config" {
+  local repo="$BATS_TEST_TMPDIR/review-nested-codex" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$repo/sub/.codex"
+  printf 'model_instructions_file = "../POLICY.md"\n' >"$repo/sub/.codex/config.toml"
+  printf '# trusted nested policy\n' >"$repo/sub/POLICY.md"
+  git -C "$repo" add sub/.codex/config.toml sub/POLICY.md
+  git -C "$repo" commit -qm "add nested project config"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  printf '# candidate nested policy\n' >"$repo/sub/POLICY.md"
+  git -C "$repo" add sub/POLICY.md
+  git -C "$repo" commit -qm "change nested project policy"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'case-variant or nested repository .codex paths are unsupported'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'case-variant or nested repository .codex paths are unsupported'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
 @test "review guard rejects candidate Codex bootstrap changes" {
   local repo="$BATS_TEST_TMPDIR/review-bootstrap-committed" base_head head gitdir
   setup_review_repo "$repo"
@@ -360,6 +477,49 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard matches case-variant instruction paths" {
+  local repo="$BATS_TEST_TMPDIR/review-case-instructions" base_head head gitdir
+  setup_review_repo "$repo"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  printf '# candidate case-variant instructions\n' >"$repo/agents.md"
+  git -C "$repo" add agents.md
+  git -C "$repo" commit -qm "add case-variant instructions"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects case-variant root Codex paths" {
+  local repo="$BATS_TEST_TMPDIR/review-case-codex" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$repo/.CODEX"
+  printf 'developer_instructions = "base policy"\n' >"$repo/.CODEX/config.toml"
+  git -C "$repo" add .CODEX/config.toml
+  git -C "$repo" commit -qm "add case-variant project config"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  make_branch_change "$repo"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'case-variant or nested repository .codex paths are unsupported'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'case-variant or nested repository .codex paths are unsupported'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
@@ -403,9 +563,38 @@ run_pr_gate() {
   [[ "$output" == *'worktree changes Codex bootstrap instructions or the post-work-review gate'* ]]
 
   git -C "$repo" add codex/skills/post-work-review/SKILL.md
-  run_marker "$repo" mark "$head" main "$base_head"
+  run_marker "$repo" guard "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'worktree changes Codex bootstrap instructions or the post-work-review gate'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'working tree is dirty'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects unchanged nested AGENTS symlinks" {
+  local repo="$BATS_TEST_TMPDIR/review-nested-agents-symlink" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$repo/sub"
+  printf '# trusted policy\n' >"$repo/sub/POLICY.md"
+  ln -s POLICY.md "$repo/sub/AGENTS.md"
+  git -C "$repo" add sub/POLICY.md sub/AGENTS.md
+  git -C "$repo" commit -qm "add linked nested instructions"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  printf '# candidate policy\n' >"$repo/sub/POLICY.md"
+  git -C "$repo" add sub/POLICY.md
+  git -C "$repo" commit -qm "change linked instructions"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'repository AGENTS files must not be symlinks'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'repository AGENTS files must not be symlinks'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
@@ -550,7 +739,36 @@ run_pr_gate() {
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
-@test "review marker rejects dirty submodules hidden by repository config" {
+@test "review guard rejects committed submodule pointer changes" {
+  local repo="$BATS_TEST_TMPDIR/review-pointer-repo" subrepo="$BATS_TEST_TMPDIR/review-pointer-sub" base_head head gitdir
+  setup_review_repo "$repo"
+  setup_review_repo "$subrepo"
+  git -C "$repo" -c protocol.file.allow=always submodule add "$subrepo" vendor/sub >/dev/null
+  git -C "$repo" add .gitmodules vendor/sub
+  git -C "$repo" commit -qm "add trusted submodule"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  git -C "$repo/vendor/sub" config user.email "fanout-test@example.com"
+  git -C "$repo/vendor/sub" config user.name "fanout test"
+  printf '# candidate submodule instructions\n' >"$repo/vendor/sub/AGENTS.md"
+  git -C "$repo/vendor/sub" add AGENTS.md
+  git -C "$repo/vendor/sub" commit -qm "add candidate instructions"
+  git -C "$repo" add vendor/sub
+  git -C "$repo" commit -qm "update submodule pointer"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate changes submodules'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate changes submodules'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects dirty submodules hidden by repository config" {
   local repo="$BATS_TEST_TMPDIR/review-marker-submodule" subrepo="$BATS_TEST_TMPDIR/review-submodule" head base_head gitdir
   setup_review_repo "$repo"
   setup_review_repo "$subrepo"
@@ -559,13 +777,17 @@ run_pr_gate() {
   git -C "$repo" config -f .gitmodules submodule.vendor/sub.ignore all
   git -C "$repo" add .gitmodules vendor/sub
   git -C "$repo" commit -qm "add ignored submodule"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  make_branch_change "$repo"
   head="$(git -C "$repo" rev-parse HEAD)"
-  base_head="$(git -C "$repo" rev-parse HEAD^)"
   git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
   gitdir="$(gitdir_for "$repo")"
   printf 'dirty\n' >>"$repo/vendor/sub/tracked.txt"
 
   [ -z "$(git -C "$repo" status --porcelain -uall)" ]
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree changes submodules'* ]]
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'working tree is dirty'* ]]

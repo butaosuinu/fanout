@@ -16,7 +16,9 @@ Environment:
   BIN_DIR         Binary destination (default: $HOME/.local/bin)
   FANOUT_VERSION Git tag to install, e.g. v0.1.0 (default: latest)
   CLAUDE_DIR      Claude data directory (default: $HOME/.claude)
-  CODEX_DIR       Codex data directory (default: $HOME/.codex)
+  CODEX_DIR       Codex install directory (default: CODEX_HOME or $HOME/.codex)
+  CODEX_HOME      Codex runtime data directory (default: $HOME/.codex)
+                    CODEX_DIR must match it when integrations are enabled.
 
 Options:
   --no-skills   Install or uninstall only the fanout binary.
@@ -66,8 +68,13 @@ done
 : "${HOME:?HOME must be set}"
 bin_dir="${BIN_DIR:-$HOME/.local/bin}"
 claude_dir="${CLAUDE_DIR:-$HOME/.claude}"
-codex_dir="${CODEX_DIR:-$HOME/.codex}"
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+codex_dir="${CODEX_DIR:-$codex_home}"
 version="${FANOUT_VERSION:-latest}"
+
+if [ "$install_skills" -eq 1 ] && [ "$codex_dir" != "$codex_home" ]; then
+  die "CODEX_DIR and CODEX_HOME must match when installing or uninstalling integrations"
+fi
 
 download() {
   url="$1"
@@ -108,19 +115,23 @@ install_data() {
 # install_integrations does. Keep this enumeration in sync with the bundled
 # commands and skills.
 remove_retired_codex_review_files() {
-  rm -f "$codex_dir/tools/post-work-review.sh"
-  rm -f "$codex_dir/agents/post-work-reviewer.toml" \
-    "$codex_dir/agents/post-work-reviewer.md" \
-    "$codex_dir/agents/post-work-verifier.toml" \
-    "$codex_dir/agents/post-work-verifier.md"
+  for review_dir in "$codex_dir" "$codex_home"; do
+    rm -f "$review_dir/tools/post-work-review.sh"
+    rm -f "$review_dir/agents/post-work-reviewer.toml" \
+      "$review_dir/agents/post-work-reviewer.md" \
+      "$review_dir/agents/post-work-verifier.toml" \
+      "$review_dir/agents/post-work-verifier.md"
+  done
 }
 
 guard_binary_only_review_compat() {
   [ "$install_skills" -eq 0 ] || return 0
-  driver="$codex_dir/tools/post-work-review.sh"
-  if [ -e "$driver" ] || [ -L "$driver" ]; then
-    die "--no-skills cannot preserve the retired Codex post-work-review driver with this binary. Rerun without --no-skills to update the integrations."
-  fi
+  for review_dir in "$codex_dir" "$codex_home"; do
+    driver="$review_dir/tools/post-work-review.sh"
+    if [ -e "$driver" ] || [ -L "$driver" ]; then
+      die "--no-skills cannot preserve the retired Codex post-work-review driver with this binary. Rerun without --no-skills to update the integrations."
+    fi
+  done
 }
 
 remove_integrations() {

@@ -39,7 +39,10 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### 配置先
 
-各配置先はインストールコマンドの環境変数で上書きできます。`BIN_DIR`(既定 `~/.local/bin`)、`CLAUDE_DIR`(既定 `~/.claude`)、`CODEX_DIR`(既定 `~/.codex`)です。
+各配置先はインストールコマンドの環境変数で上書きできます。
+`BIN_DIR`(既定 `~/.local/bin`)、`CLAUDE_DIR`(既定 `~/.claude`)、`CODEX_DIR`(既定 `CODEX_HOME`、次に `~/.codex`)です。
+integration の install または uninstall では、`CODEX_DIR` を実効 `CODEX_HOME` と同じ path にしてください。
+custom destination を使う場合は両方に同じ path を指定します。
 
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
@@ -101,9 +104,9 @@ curl インストールは prebuilt バイナリを配置するので、Go も N
 `fanout update` は上の curl インストールと同じ経路を呼び出し、本体と Claude/Codex 連携をまとめて更新します。
 
 - `--version <tag>`: 指定した tag をインストールする
-- `--no-skills`: バイナリのみ更新する。廃止済みの Codex
-  `post-work-review.sh` driver が残っている場合は置換前に停止するため、
-  `--no-skills` を外して連携ファイルを移行する
+- `--no-skills`: バイナリのみ更新する。`CODEX_DIR` または別指定の
+  `CODEX_HOME` に廃止済みの Codex `post-work-review.sh` driver が残っている場合は
+  置換前に停止するため、`--no-skills` を外して連携ファイルを移行する
 
 > install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill を含む)を上書きします。
 > カスタマイズした copy は先に退避してください。

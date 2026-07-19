@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### Installed paths
 
-Each destination has an environment-variable override for the install command: `BIN_DIR` (default `~/.local/bin`), `CLAUDE_DIR` (default `~/.claude`), and `CODEX_DIR` (default `~/.codex`).
+Each destination has an environment-variable override for the install command: `BIN_DIR` (default `~/.local/bin`), `CLAUDE_DIR` (default `~/.claude`), and `CODEX_DIR` (default `CODEX_HOME`, then `~/.codex`). For integration install or removal, `CODEX_DIR` must match the effective `CODEX_HOME`; set both to the same path when using a custom destination.
 
 - `$BIN_DIR/fanout` — the binary
 - `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
@@ -100,8 +100,9 @@ Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`ma
 
 - `--version <tag>`: install the given tag
 - `--no-skills`: update only the binary. If the retired Codex
-  `post-work-review.sh` driver is installed, this stops before replacement;
-  rerun without `--no-skills` to migrate the integrations.
+  `post-work-review.sh` driver remains under `CODEX_DIR` or a distinct
+  `CODEX_HOME`, this stops before replacement; rerun without `--no-skills` to
+  migrate the integrations.
 
 > Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills — so back up customized copies first. Codex CLI loads skills at startup; restart running Codex sessions after an update.
 

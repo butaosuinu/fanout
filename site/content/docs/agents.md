@@ -53,7 +53,9 @@ The reviewer receives the target repository path and diff scope, so repository c
 
 The helper also rejects candidate changes to the `post-work-review` gate. The installed skill and helper must be non-symlinked copies outside the reviewed repository, and repository `make install` / `make link` copies them from fetched `origin/main` rather than the worktree. Review instruction or gate changes from a trusted checkout or by a human instead. A native subagent inherits the parent session's sandbox, approval policy, and network restrictions. The skill tells reviewers not to edit, request approval, or use the network, but it cannot create a stricter child-only sandbox. Start Codex read-only first when enforced read-only access is required. If the trust boundary, native spawning, or waiting is unavailable, the gate stops without a fallback.
 
-A dirty worktree uses review-only scope. The reviewer inspects staged, unstaged, untracked, and dirty-submodule changes, while the parent runs focused checks only. This scope never writes a marker; commit the candidate and rerun for the PR gate.
+The helper matches instruction and gate paths case-insensitively for filesystem portability. It rejects linked `AGENTS.md` / `AGENTS.override.md`, case-variant or nested `.codex` paths, project config that defines `model_instructions_file` or `project_doc_fallback_filenames`, escaped project config keys, and committed or worktree submodule changes. Review those targets from a trusted checkout or by a human.
+
+A dirty worktree uses review-only scope. The reviewer inspects staged, unstaged, and untracked changes, while the parent runs focused checks only. This scope never writes a marker; commit the candidate and rerun for the PR gate. Submodule changes fail closed before review.
 
 For a clean committed branch, the skill runs the repository's canonical validation once and records the exact clean HEAD, PR base commit, and diff hash. A later commit, base movement, or review-diff change invalidates the marker.
 
