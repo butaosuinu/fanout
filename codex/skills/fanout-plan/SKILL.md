@@ -179,11 +179,13 @@ each task briefing. Address peers by task ID:
 - `fanout msg peers`
 - `fanout msg inbox [--mark-read]`
 - `fanout msg board`
+- `fanout msg watch [--interval S]`
 - `fanout msg send --to <task-id> "<body>"`
 - `fanout msg post "<body>"`
 - `fanout msg nudge <task-id>`
 
-For Claude panes, treat messages as pull-based. `send` and `post` persist data;
+Claude task panes are briefed to start `fanout msg watch` under their Monitor
+tool (mark-on-emit); restored Codex panes stay pull-based. `send` and `post` persist data;
 `nudge` is a separate best-effort tmux hint and may safely no-op. Never store
 secrets in the plaintext owner-only database under `/tmp`.
 

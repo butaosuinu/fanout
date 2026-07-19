@@ -123,7 +123,8 @@ backed by a per-parent SQLite bus (`fanout msg peers` / `inbox` / `board` /
 briefing without the section, but are still seeded.
 
 Messages persist in the bus and siblings read them at their own checkpoints;
-on top of that pull loop, each agent gets a push lane:
+on top of that pull loop, `claude` panes and fresh non-Plan `codex` panes get
+a push lane (Codex Plan Mode panes stay pull-based):
 
 - `fanout msg watch` follows the bus and emits each new message (1:1 and
   board) as one line; an emitted message is marked read (mark-on-emit).
@@ -133,10 +134,11 @@ on top of that pull loop, each agent gets a push lane:
   app-server bridge that injects unread messages into a turn while the thread
   is idle; restored panes resume without the bridge and pull instead.
 - In a running pane without a working lane — no Monitor for `claude`, a
-  restored `codex` pane, or an injection failure — siblings fall back to pull
-  (`inbox` / `board`) plus `nudge`, a best-effort hint that is never sent to a
-  `blocked` pane. A codex bridge that fails to start fails the launch itself
-  and is cleaned up.
+  restored `codex` pane — siblings fall back to pull (`inbox` / `board`) plus
+  `nudge`, a best-effort hint that is never sent to a `blocked` pane. After an
+  injection failure, recover with `fanout msg inbox --all` — the failed batch
+  is already marked read. A codex bridge that fails to start fails the launch
+  itself and is cleaned up.
 
 This is separate from the Watcher mode below: that watches GitHub labels, not
 messages.

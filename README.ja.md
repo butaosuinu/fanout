@@ -123,7 +123,8 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
 協調セクションが付きませんが、registry には登録されます。
 
 メッセージはバスに永続化され、各ペインが自分のチェックポイントで読みます。
-その pull の上に、エージェント別の push レーンが載ります。
+その pull の上に、`claude` ペインと新規起動の非 Plan `codex` ペインには push
+レーンが載ります(Codex Plan Mode のペインは pull のまま)。
 
 - `fanout msg watch` はバスを追いかけ、新着(1:1 と board)を 1 行 1
   メッセージで流します。emit したメッセージは既読になります(mark-on-emit)。
@@ -133,9 +134,11 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
   経由になり、thread が idle のときに未読メッセージを turn へ注入します。
   restore したペインはブリッジなしで再開し、pull で読みます。
 - 動作中のペインでレーンが使えないとき — claude の Monitor 不可、restore した
-  `codex` ペイン、注入失敗 — は pull(`inbox` / `board`)と `nudge` に
-  戻ります。`nudge` は best-effort の hint で、`blocked` ペインには送りません。
-  ブリッジの起動自体に失敗した codex ペインは launch 失敗として片づけられます。
+  `codex` ペイン — は pull(`inbox` / `board`)と `nudge` に戻ります。`nudge` は
+  best-effort の hint で、`blocked` ペインには送りません。注入失敗の回収は
+  `fanout msg inbox --all` です — 失敗した分は既読化済みのため、未読だけを見る
+  pull では見つかりません。ブリッジの起動自体に失敗した codex ペインは launch
+  失敗として片づけられます。
 
 下の watcher モードとは別物です。あちらが見るのは GitHub のラベルで、
 メッセージではありません。
