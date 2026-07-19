@@ -70,9 +70,11 @@ reviewer には対象 repository path と diff 範囲を渡すため、repositor
 marker helper は spawn 前に、適用対象の `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files が trusted merge base から変わっていないことを検証します。
 base と同一の instruction は trusted repository conventions として扱い、それ以外の target file と directive は untrusted review evidence として扱います。
 helper は `post-work-review` gate の変更も拒否します。
+root の既定 makefile と `install.sh` の変更も拒否します。
 installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
-repository の `make install` と `make link` は worktree ではなく fetch 済みの `origin/main` からこれらを配置します。
-instruction または gate の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
+checksum 検証付き release installer だけがこれらを配置、置換、削除します。
+checkout の make target は Codex review gate を変更しません。
+instruction、gate、gate installer の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
 native subagent は親 session の sandbox、approval policy、network 制限を継承します。
 skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
 強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
@@ -80,6 +82,8 @@ skill は編集、approval 要求、network 使用を禁止しますが、子だ
 
 helper は filesystem 間で同じ境界を保つため、instruction と gate の path を case-insensitive で照合します。
 symlink の `AGENTS.md` / `AGENTS.override.md`、case variant または nested `.codex` path、`model_instructions_file` または `project_doc_fallback_filenames` を定義した project config、escape を含む project config key、commit 済みまたは worktree の submodule 変更を拒否します。
+checkout 済みの submodule も拒否します。
+clean かつ base と同一の submodule は、review 前に deinitialize してください。
 これらの target は trusted checkout から起動した reviewer、または人がレビューしてください。
 
 dirty worktree は review-only scope です。

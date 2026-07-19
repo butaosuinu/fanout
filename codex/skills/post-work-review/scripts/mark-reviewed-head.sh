@@ -184,7 +184,11 @@ guard_bootstrap_instructions() {
     ':(icase,glob)**/.codex' \
     ':(icase,glob)**/.codex/**' \
     ':(icase,glob)codex/skills/post-work-review' \
-    ':(icase,glob)codex/skills/post-work-review/**'
+    ':(icase,glob)codex/skills/post-work-review/**' \
+    ':(top,icase,literal)GNUmakefile' \
+    ':(top,icase,literal)makefile' \
+    ':(top,icase,literal)Makefile' \
+    ':(top,icase,literal)install.sh'
 
   index_state=$(git ls-files -v -- "$@") || die "cannot inspect Git index flags"
   if printf '%s\n' "$index_state" | LC_ALL=C grep -Eq '^[a-zS] '; then
@@ -201,7 +205,9 @@ guard_bootstrap_instructions() {
     die "worktree changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
   git diff --cached --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
     die "worktree changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
-  [ -z "$(git ls-files --others -- "$@")" ] ||
+  untracked_bootstrap=$(git ls-files --others -- "$@") ||
+    die "cannot inspect untracked Codex bootstrap or gate files"
+  [ -z "$untracked_bootstrap" ] ||
     die "worktree adds Codex bootstrap instructions or post-work-review gate files; use a trusted-checkout or human review"
 
   candidate_gitlinks=$(git diff --raw --no-renames --no-ext-diff --ignore-submodules=none \
@@ -221,6 +227,15 @@ guard_bootstrap_instructions() {
       die "worktree changes submodules; use a trusted-checkout or human review"
       ;;
   esac
+
+  submodule_status=$(git submodule status --recursive) ||
+    die "cannot inspect checked-out submodules"
+  if printf '%s\n' "$submodule_status" | LC_ALL=C grep -Eq '^[ +U]'; then
+    die "checked-out submodules are unsupported; use a trusted-checkout or human review"
+  else
+    submodule_status_code=$?
+    [ "$submodule_status_code" -eq 1 ] || die "cannot inspect checked-out submodules"
+  fi
 }
 
 case "${1:-}" in
@@ -236,7 +251,9 @@ case "${1:-}" in
   mark)
     [ "$#" -eq 4 ] || die "usage: $0 mark <expected-head> <base-branch> <expected-base-head>"
     load_target "$2" "$3" "$4"
-    [ -z "$(git status --porcelain -uall --ignore-submodules=none)" ] || die "working tree is dirty"
+    worktree_status=$(git status --porcelain -uall --ignore-submodules=none) ||
+      die "cannot inspect working tree"
+    [ -z "$worktree_status" ] || die "working tree is dirty"
     guard_bootstrap_instructions
 
     umask 077
@@ -258,7 +275,7 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=13\n'
+      printf 'post_work_review_version=14\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"

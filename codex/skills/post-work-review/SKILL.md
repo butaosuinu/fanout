@@ -33,8 +33,9 @@ reviewer output or require a result schema.
   unchanged from the trusted bootstrap base and have no worktree additions. It also
   rejects linked instruction files, nested `.codex` paths, dynamic or escaped
   project config keys, protected paths marked `assume-unchanged` or
-  `skip-worktree`, and committed or worktree submodule changes. The
-  reviewer's controlling contract consists of trusted parent-session and system
+  `skip-worktree`, committed or worktree submodule changes, and any checked-out
+  submodule. The reviewer's controlling contract consists of trusted
+  parent-session and system
   instructions, those base-identical bootstrap instructions, and the spawn
   message in their normal precedence order. Follow unchanged base instructions
   for repository conventions such as language and formatting.
@@ -73,29 +74,30 @@ reviewer output or require a result schema.
    and physical absolute paths. Stop if the package, any path component, or the
    helper is a symlink, or if its physical path is inside the recorded
    repository. The package must come from a trusted release or base checkout,
-   never from the review target. Repository `make install` / `make link` fails
-   closed when this package differs from `refs/remotes/origin/main` and copies
-   it from that trusted commit rather than the worktree. Stop on an older linked
-   or target-derived install. The helper repeats the path check.
+   never from the review target. The checksum-verified release installer owns
+   this package; repository `make install`, `make link`, and `make uninstall`
+   never create, replace, or remove it. Stop on a missing, older, linked, or
+   target-derived install. The helper repeats the path check.
 5. Run `"$helper" clear` with the recorded repository root as the working
    directory before the first spawn. This removes any stale marker.
 6. From that same working directory, run
    `"$helper" guard <recorded-head> <base-branch> <recorded-base-head>`. It
    rejects committed or worktree changes to `AGENTS.md`,
    `AGENTS.override.md`, repository `.codex` files, or this
-   `codex/skills/post-work-review` gate, using case-insensitive path matching
-   for filesystem portability. It also rejects any linked
-   `AGENTS.md` / `AGENTS.override.md`, nested `.codex` paths, project config
+   `codex/skills/post-work-review` gate, and changes to root default makefiles
+   (`GNUmakefile`, `makefile`, `Makefile`) or `install.sh`, using
+   case-insensitive path matching for bootstrap and gate paths. It also rejects
+   any linked `AGENTS.md` / `AGENTS.override.md`, nested `.codex` paths, project config
    that defines dynamic instruction-source keys or escaped keys, protected
    paths marked `assume-unchanged` or `skip-worktree`, and any committed or
-   worktree submodule change. Bootstrap files inside nested Git worktrees and
-   submodules belong to those checkouts and are not part of the parent
-   repository scan.
+   worktree submodule change. Bootstrap files inside nested Git worktrees are
+   outside the parent repository scan. Any checked-out submodule fails closed;
+   deinitialize clean, base-identical submodules before starting the gate.
    This proves that active supported repository bootstrap instructions are
    base-identical and prevents a gate-changing target from reviewing itself.
-   An instruction- or gate-changing target, or any submodule-changing target,
-   requires a reviewer launched from a trusted checkout or human review; do not
-   spawn or write a marker.
+   An instruction- or gate-changing target, a gate-installer-changing target,
+   or any submodule-changing target requires a reviewer launched from a trusted
+   checkout or human review; do not spawn or write a marker.
 7. Base-identical inline project `developer_instructions` are supported because
    the `.codex` guard binds their bytes. Case-variant or nested `.codex` paths
    are unsupported.

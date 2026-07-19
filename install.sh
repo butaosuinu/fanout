@@ -40,6 +40,21 @@ die() {
   exit 1
 }
 
+same_directory() (
+  left=$1
+  right=$2
+  physical_pwd=$(pwd -P) || exit 1
+  case "$left" in /*) ;; *) left="$physical_pwd/$left" ;; esac
+  case "$right" in /*) ;; *) right="$physical_pwd/$right" ;; esac
+  while [ "$left" != / ] && [ "${left%/}" != "$left" ]; do left=${left%/}; done
+  while [ "$right" != / ] && [ "${right%/}" != "$right" ]; do right=${right%/}; done
+  [ "$left" != "$right" ] || exit 0
+  [ -d "$left" ] && [ -d "$right" ] || exit 1
+  left=$(CDPATH='' cd -P "$left" 2>/dev/null && pwd -P) || exit 1
+  right=$(CDPATH='' cd -P "$right" 2>/dev/null && pwd -P) || exit 1
+  [ "$left" = "$right" ]
+)
+
 cleanup() {
   if [ -n "$tmp" ]; then
     rm -rf "$tmp"
@@ -72,7 +87,7 @@ codex_home="${CODEX_HOME:-$HOME/.codex}"
 codex_dir="${CODEX_DIR:-$codex_home}"
 version="${FANOUT_VERSION:-latest}"
 
-if [ "$install_skills" -eq 1 ] && [ "$codex_dir" != "$codex_home" ]; then
+if [ "$install_skills" -eq 1 ] && ! same_directory "$codex_dir" "$codex_home"; then
   die "CODEX_DIR and CODEX_HOME must match when installing or uninstalling integrations"
 fi
 
@@ -251,8 +266,7 @@ verify_checksum() {
   asset="$3"
 
   if ! tool=$(checksum_tool); then
-    warn "sha256sum/shasum not found; skipping checksum verification"
-    return 0
+    die "sha256sum or shasum is required to verify the release archive"
   fi
 
   expected=$(awk -v file="$asset" '$2 == file || $2 == "./" file { print $1; found = 1 } END { if (!found) exit 1 }' "$sums") \

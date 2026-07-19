@@ -5,7 +5,6 @@ CODEX_DIR  ?= $(HOME)/.codex
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
-TRUSTED_REVIEW_GATE_REF := refs/remotes/origin/main
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
@@ -41,7 +40,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-trusted-review-gate install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
+.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -100,42 +99,9 @@ clean-web:
 	rm -rf $(WEB_DIR)/node_modules
 	find $(STATIC_DIR) -type f ! -name '.gitkeep' -delete
 
-install-trusted-review-gate:
-	@set -eu; \
-		ref="$(TRUSTED_REVIEW_GATE_REF)"; \
-		src=codex/skills/post-work-review; \
-		dest="$(CODEX_SKILL_DIR)/post-work-review"; \
-		trusted_commit=$$(git rev-parse --verify "$$ref^{commit}" 2>/dev/null) || { \
-			echo "error: cannot resolve trusted post-work-review source $$ref" >&2; \
-			echo "Use a checkout with origin/main fetched or the release installer." >&2; \
-			exit 1; \
-		}; \
-		if ! git diff --quiet --no-ext-diff --ignore-submodules=none "$$trusted_commit" -- "$$src" || \
-			! git diff --cached --quiet --no-ext-diff --ignore-submodules=none "$$trusted_commit" -- "$$src" || \
-			! git diff --quiet --no-ext-diff --ignore-submodules=none -- "$$src" || \
-			[ -n "$$(git ls-files --others --exclude-standard -- "$$src")" ] || \
-			[ -n "$$(git ls-files --others --ignored --exclude-standard -- "$$src")" ]; then \
-			echo "error: post-work-review differs from trusted $$ref; installed copy was not changed" >&2; \
-			echo "Review this gate change from a trusted checkout or use human review." >&2; \
-			exit 1; \
-		fi; \
-		if git ls-tree -r "$$trusted_commit" "$$src" | grep -q '^120000 '; then \
-			echo "error: trusted post-work-review source contains a symlink" >&2; \
-			exit 1; \
-		fi; \
-		tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/fanout-review-gate.XXXXXX") || exit 1; \
-		staging="$$dest.tmp.$$$$"; \
-		trap 'rm -rf "$$tmp" "$$staging"' EXIT HUP INT TERM; \
-		git archive --format=tar -o "$$tmp/gate.tar" "$$trusted_commit" "$$src"; \
-		tar -xf "$$tmp/gate.tar" -C "$$tmp"; \
-		mkdir -p "$(CODEX_SKILL_DIR)" "$$staging"; \
-		cp -R "$$tmp/$$src/." "$$staging/"; \
-		rm -rf "$$dest"; \
-		mv "$$staging" "$$dest"; \
-		rm -rf "$$tmp"; \
-		trap - EXIT HUP INT TERM
-
-install-integrations: install-trusted-review-gate
+# The Codex post-work-review gate is installed only by the checksum-verified
+# release installer. A target Makefile must never replace that boundary.
+install-integrations:
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
@@ -150,11 +116,8 @@ install-integrations: install-trusted-review-gate
 		mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
 		cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
 	done
-	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
-		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
-		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
 
-link-integrations: install-trusted-review-gate
+link-integrations:
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
@@ -167,17 +130,11 @@ link-integrations: install-trusted-review-gate
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
 	done
-	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
-		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
-		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
 
 uninstall-integrations:
 	@for cmd in $(CLAUDE_COMMANDS); do rm -f "$(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
-	@rm -f "$(CODEX_DIR)/tools/post-work-review.sh" \
-		"$(CODEX_DIR)/agents/post-work-reviewer.toml" "$(CODEX_DIR)/agents/post-work-reviewer.md" \
-		"$(CODEX_DIR)/agents/post-work-verifier.toml" "$(CODEX_DIR)/agents/post-work-verifier.md"
+	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 
 install: build-go install-integrations
 	@mkdir -p "$(BINDIR)"
@@ -186,7 +143,7 @@ install: build-go install-integrations
 	@echo "  $(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
+	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
 link: build-go link-integrations
 	@mkdir -p "$(BINDIR)"
@@ -195,12 +152,8 @@ link: build-go link-integrations
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do \
-		if [ "$$skill" = post-work-review ]; then \
-			echo "  $(CODEX_SKILL_DIR)/$$skill (trusted origin/main copy)"; \
-		else \
-			echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; \
-		fi; \
+	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do \
+		echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; \
 	done
 
 uninstall: uninstall-integrations
@@ -209,7 +162,7 @@ uninstall: uninstall-integrations
 	@echo "  $(BINDIR)/fanout"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd"; done
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
-	@for skill in $(CODEX_SKILLS); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
+	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
 # --- test / lint -------------------------------------------------------------
 # `make test`         — build the Go binary, run Go unit tests + web UI tests

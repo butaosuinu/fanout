@@ -79,16 +79,15 @@ codesign -s - /path/to/fanout
 ## From a checkout
 
 ```bash
-make install        # builds the Go binary as $(BINDIR)/fanout + copies integrations
-make link           # symlinks the binary and other integrations
-make uninstall      # removes installed paths
+make install        # builds the Go binary + copies non-Codex-gate integrations
+make link           # symlinks the binary and non-Codex-gate integrations
+make uninstall      # removes paths except the Codex review gate
 ```
 
-`make install` and `make link` copy `post-work-review` from the exact fetched
-`refs/remotes/origin/main` commit, never from the working tree. If the local
-package differs from that trusted ref, they stop before changing the installed
-copy. Review a gate-changing branch from a trusted checkout or by a human; after
-the change reaches `main`, fetch it and rerun the command.
+The checkout Makefile never creates, replaces, or removes the Codex
+`post-work-review` package. Install, update, or remove that gate with the
+checksum-verified release installer above, not with code from the review target.
+Review a gate-changing branch from a trusted checkout or by a human.
 
 Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 

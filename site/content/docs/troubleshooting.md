@@ -80,7 +80,7 @@ The gate is pinned to HEAD, so adding a new commit re-arms it — review again b
 
 ## `post-work-review` reports an `agent_type` error
 
-Current `$post-work-review` does not request `agent_type`. It uses an ordinary native `spawn_agent` call and treats `task_name` only as a task label. If the old error still appears, update fanout, run `make install`, then start a new Codex session. Codex loads skills at session startup; installation also removes the retired custom agents and driver.
+Current `$post-work-review` does not request `agent_type`. It uses an ordinary native `spawn_agent` call and treats `task_name` only as a task label. If the old error still appears, run `fanout update`, then start a new Codex session. Codex loads skills at session startup; the checksum-verified release installer also removes the retired custom agents and driver.
 
 The current gate requires native `spawn_agent` and `wait_agent` plus an available concurrency slot. If any of these are unavailable, it stops with an error instead of starting `codex exec`, app-server, or another reviewer fallback.
 

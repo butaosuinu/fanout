@@ -61,17 +61,11 @@ make_installer_fixture() {
   chmod 0755 "$fixture/bin/curl"
 }
 
-setup_trusted_integration_repo() {
+setup_integration_repo() {
   local repo="$1"
   mkdir -p "$repo"
   cp "$REPO_ROOT/Makefile" "$REPO_ROOT/.golangci-lint-version" "$repo/"
   cp -R "$REPO_ROOT/claude" "$REPO_ROOT/codex" "$repo/"
-  git -C "$repo" init -q
-  git -C "$repo" config user.email "fanout-test@example.com"
-  git -C "$repo" config user.name "fanout test"
-  git -C "$repo" add Makefile .golangci-lint-version claude codex
-  git -C "$repo" commit -qm "trusted integration source"
-  git -C "$repo" update-ref refs/remotes/origin/main HEAD
 }
 
 setup_review_repo() {
@@ -145,7 +139,8 @@ run_pr_gate() {
   grep -Fq 'gate-changing' "$skill"
   grep -Fq 'helper is a symlink' "$skill"
   grep -Fq 'inside the recorded' "$skill"
-  grep -Fq 'differs from `refs/remotes/origin/main`' "$skill"
+  grep -Fq 'checksum-verified release installer owns' "$skill"
+  grep -Fq 'never create, replace, or remove it' "$skill"
   grep -Fq 'Base-identical inline project `developer_instructions` are supported' "$skill"
   grep -Fq '`model_instructions_file`' "$skill"
   grep -Fq 'Case-variant or nested `.codex` paths' "$skill"
@@ -153,6 +148,7 @@ run_pr_gate() {
   grep -Fq 'Comments and string values' "$skill"
   grep -Fq '`assume-unchanged` or `skip-worktree`' "$skill"
   grep -Fq 'nested Git worktrees' "$skill"
+  grep -Fq 'Any checked-out submodule fails closed' "$skill"
   grep -Fq 'submodule-changing target' "$skill"
   grep -Fq 'effective' "$skill"
   grep -Fq '"$helper" mark <reviewed-head>' "$skill"
@@ -168,38 +164,50 @@ run_pr_gate() {
   [ ! -e "$REPO_ROOT/codex/agents/post-work-verifier.toml" ]
 }
 
-@test "install and link copy the post-work-review gate from trusted origin/main" {
-  local repo="$BATS_TEST_TMPDIR/trusted-integrations" target root codex_dir
-  setup_trusted_integration_repo "$repo"
+@test "checkout make targets preserve an externally installed post-work-review gate" {
+  local repo="$BATS_TEST_TMPDIR/integrations" target root codex_dir review_file
+  setup_integration_repo "$repo"
 
-  for target in install-integrations link-integrations; do
+  for target in install-integrations link-integrations uninstall-integrations; do
     root="$BATS_TEST_TMPDIR/$target"
     codex_dir="$root/codex"
+    mkdir -p "$codex_dir/skills/post-work-review" "$codex_dir/tools" "$codex_dir/agents"
+    printf 'trusted installed gate\n' >"$codex_dir/skills/post-work-review/SKILL.md"
+    for review_file in \
+      tools/post-work-review.sh \
+      agents/post-work-reviewer.toml \
+      agents/post-work-reviewer.md \
+      agents/post-work-verifier.toml \
+      agents/post-work-verifier.md; do
+      printf '%s\n' "$review_file" >"$codex_dir/$review_file"
+    done
     run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
     [ "$status" -eq 0 ]
-    [ -d "$codex_dir/skills/post-work-review" ]
-    [ ! -L "$codex_dir/skills/post-work-review" ]
-    [ ! -L "$codex_dir/skills/post-work-review/scripts/mark-reviewed-head.sh" ]
+    grep -Fxq 'trusted installed gate' "$codex_dir/skills/post-work-review/SKILL.md"
+    for review_file in \
+      tools/post-work-review.sh \
+      agents/post-work-reviewer.toml \
+      agents/post-work-reviewer.md \
+      agents/post-work-verifier.toml \
+      agents/post-work-verifier.md; do
+      grep -Fxq "$review_file" "$codex_dir/$review_file"
+    done
   done
   [ -L "$BATS_TEST_TMPDIR/link-integrations/codex/skills/fanout" ]
 }
 
-@test "install and link reject a target-derived post-work-review gate" {
+@test "install and link do not bootstrap post-work-review from a target checkout" {
   local repo="$BATS_TEST_TMPDIR/changed-integrations" target root codex_dir
-  setup_trusted_integration_repo "$repo"
+  setup_integration_repo "$repo"
   printf '\n# candidate gate\n' >>"$repo/codex/skills/post-work-review/SKILL.md"
-  git -C "$repo" add codex/skills/post-work-review/SKILL.md
-  git -C "$repo" commit -qm "change review gate"
+  printf '\n# candidate Makefile\n' >>"$repo/Makefile"
 
   for target in install-integrations link-integrations; do
     root="$BATS_TEST_TMPDIR/rejected-$target"
     codex_dir="$root/codex"
-    mkdir -p "$codex_dir/skills/post-work-review"
-    printf 'trusted installed copy\n' >"$codex_dir/skills/post-work-review/SKILL.md"
     run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *'post-work-review differs from trusted refs/remotes/origin/main'* ]]
-    grep -Fxq 'trusted installed copy' "$codex_dir/skills/post-work-review/SKILL.md"
+    [ "$status" -eq 0 ]
+    [ ! -e "$codex_dir/skills/post-work-review" ]
   done
 }
 
@@ -313,6 +321,48 @@ run_pr_gate() {
   [ ! -e "$home/bin/fanout" ]
 }
 
+@test "integration install accepts equivalent CODEX_DIR and CODEX_HOME paths" {
+  local fixture="$BATS_TEST_TMPDIR/equivalent-codex-roots" \
+    slash_home="$BATS_TEST_TMPDIR/slash-codex-home" \
+    linked_home="$BATS_TEST_TMPDIR/linked-codex-home"
+  make_installer_fixture "$fixture" skills-only
+
+  run env HOME="$slash_home" CODEX_DIR="$slash_home/.codex/" CODEX_HOME= \
+    BIN_DIR="$slash_home/bin" FANOUT_INSTALL_FIXTURE="$fixture" PATH="$fixture/bin:$PATH" \
+    sh "$REPO_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  grep -Fxq 'fixture skill' "$slash_home/.codex/skills/post-work-review/SKILL.md"
+
+  mkdir -p "$linked_home/runtime"
+  ln -s "$linked_home/runtime" "$linked_home/install"
+  run env HOME="$linked_home" CODEX_DIR="$linked_home/install" CODEX_HOME="$linked_home/runtime" \
+    BIN_DIR="$linked_home/bin" FANOUT_INSTALL_FIXTURE="$fixture" PATH="$fixture/bin:$PATH" \
+    sh "$REPO_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  grep -Fxq 'fixture skill' "$linked_home/runtime/skills/post-work-review/SKILL.md"
+}
+
+@test "release install fails closed when no checksum tool is available" {
+  local fixture="$BATS_TEST_TMPDIR/no-checksum-installer" \
+    home="$BATS_TEST_TMPDIR/no-checksum-home" \
+    tools="$BATS_TEST_TMPDIR/no-checksum-tools" tool_name
+  make_installer_fixture "$fixture" skills-only
+  mkdir -p "$tools" "$home/bin" "$home/.codex/skills/post-work-review"
+  for tool_name in uname mktemp mkdir rm cp basename; do
+    ln -s "$(command -v "$tool_name")" "$tools/$tool_name"
+  done
+  ln -s "$fixture/bin/curl" "$tools/curl"
+  printf 'existing binary\n' >"$home/bin/fanout"
+  printf 'existing gate\n' >"$home/.codex/skills/post-work-review/SKILL.md"
+
+  run env HOME="$home" CODEX_DIR= CODEX_HOME= BIN_DIR="$home/bin" \
+    FANOUT_INSTALL_FIXTURE="$fixture" PATH="$tools" /bin/sh "$REPO_ROOT/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'sha256sum or shasum is required to verify the release archive'* ]]
+  grep -Fxq 'existing binary' "$home/bin/fanout"
+  grep -Fxq 'existing gate' "$home/.codex/skills/post-work-review/SKILL.md"
+}
+
 @test "pinned legacy archive installs its Codex review tools and agents" {
   local fixture="$BATS_TEST_TMPDIR/legacy-installer" home="$BATS_TEST_TMPDIR/legacy-home"
   make_installer_fixture "$fixture" legacy
@@ -368,7 +418,7 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" release/v1 "$(git -C "$repo" rev-parse refs/remotes/origin/release/v1)"
   [ "$status" -eq 0 ]
   [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
-  grep -Fxq 'post_work_review_version=13' "$gitdir/post-work-review-passed.meta"
+  grep -Fxq 'post_work_review_version=14' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "head=$head" "$gitdir/post-work-review-passed.meta"
   grep -Fxq 'base=release/v1' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base_head=$(git -C "$repo" rev-parse HEAD^)" "$gitdir/post-work-review-passed.meta"
@@ -379,7 +429,7 @@ run_pr_gate() {
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 
-  metadata="$(sed 's/post_work_review_version=13/post_work_review_version=12/' "$gitdir/post-work-review-passed.meta")"
+  metadata="$(sed 's/post_work_review_version=14/post_work_review_version=13/' "$gitdir/post-work-review-passed.meta")"
   printf '%s\n' "$metadata" >"$gitdir/post-work-review-passed.meta"
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ]
@@ -608,6 +658,34 @@ run_pr_gate() {
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
+@test "review guard rejects committed gate installer changes" {
+  local boundary repo base_head head gitdir index=0
+
+  for boundary in GNUmakefile makefile Makefile install.sh; do
+    index=$((index + 1))
+    repo="$BATS_TEST_TMPDIR/review-gate-installer-$index"
+    setup_review_repo "$repo"
+    printf 'trusted installer\n' >"$repo/$boundary"
+    git -C "$repo" add "$boundary"
+    git -C "$repo" commit -qm "add trusted gate installer"
+    base_head="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" checkout -qb feature
+    printf 'candidate installer\n' >>"$repo/$boundary"
+    git -C "$repo" add "$boundary"
+    git -C "$repo" commit -qm "change gate installer"
+    head="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+    gitdir="$(gitdir_for "$repo")"
+
+    run_marker "$repo" guard "$head" main "$base_head"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'candidate changes Codex bootstrap instructions or the post-work-review gate'* ]]
+    run_marker "$repo" mark "$head" main "$base_head"
+    [ "$status" -ne 0 ]
+    [ ! -e "$gitdir/post-work-review-passed" ]
+  done
+}
+
 @test "review guard rejects dirty and staged post-work-review gate changes" {
   local repo="$BATS_TEST_TMPDIR/review-gate-dirty" base_head head gitdir
   setup_review_repo "$repo"
@@ -822,6 +900,7 @@ run_pr_gate() {
   git -C "$repo" add .gitignore .gitmodules vendor/sub
   git -C "$repo" commit -qm "add trusted submodule"
   base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" submodule deinit -f -- vendor/sub >/dev/null
   make_branch_change "$repo"
   head="$(git -C "$repo" rev-parse HEAD)"
   git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
@@ -922,6 +1001,42 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'working tree is dirty'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects checked-out submodules with hidden ignored bootstrap files" {
+  local repo="$BATS_TEST_TMPDIR/review-ignored-submodule" \
+    subrepo="$BATS_TEST_TMPDIR/review-ignored-submodule-source" \
+    sub_gitdir head base_head gitdir
+  setup_review_repo "$repo"
+  setup_review_repo "$subrepo"
+  git -C "$repo" -c protocol.file.allow=always submodule add "$subrepo" vendor/sub >/dev/null
+  git -C "$repo" add .gitmodules vendor/sub
+  git -C "$repo" commit -qm "add trusted submodule"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  make_branch_change "$repo"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+  sub_gitdir="$(git -C "$repo/vendor/sub" rev-parse --absolute-git-dir)"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'checked-out submodules are unsupported'* ]]
+
+  printf 'AGENTS.md\n.codex/\n' >>"$sub_gitdir/info/exclude"
+  mkdir -p "$repo/vendor/sub/.codex"
+  printf '# ignored hostile instructions\n' >"$repo/vendor/sub/AGENTS.md"
+  printf 'developer_instructions = "ignored hostile instructions"\n' \
+    >"$repo/vendor/sub/.codex/config.toml"
+
+  [ -z "$(git -C "$repo" status --porcelain -uall --ignore-submodules=none)" ]
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'checked-out submodules are unsupported'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'checked-out submodules are unsupported'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 

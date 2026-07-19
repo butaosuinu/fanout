@@ -83,15 +83,15 @@ codesign -s - /path/to/fanout
 ## チェックアウトから使う場合
 
 ```bash
-make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
-make link           # binary と他の連携を symlink
-make uninstall      # インストール済みのパスを削除
+make install        # Go 版をビルド + Codex gate 以外の連携をコピー
+make link           # binary と Codex gate 以外の連携を symlink
+make uninstall      # Codex review gate 以外を削除
 ```
 
-`make install` と `make link` は `post-work-review` を worktree から copy せず、fetch 済みの `refs/remotes/origin/main` commit から配置します。
-local package がこの trusted ref と異なる場合は、installed copy を変更せずに停止します。
+checkout の Makefile は Codex の `post-work-review` package を配置、置換、削除しません。
+この gate の配置、更新、削除には、上記の checksum 検証付き release installer を使います。
+review target のコードから gate を配置しないでください。
 gate を変更する branch は trusted checkout または人がレビューしてください。
-変更が `main` に入ったら fetch してからコマンドを再実行します。
 
 ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。

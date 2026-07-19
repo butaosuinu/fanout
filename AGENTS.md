@@ -20,11 +20,12 @@ Source-of-truth integration files:
 - Claude Code: `claude/commands/*.md` and `claude/skills/*/SKILL.md`,
   installed under `~/.claude/`.
 - Codex CLI: `codex/skills/*/` (skill instructions, references, and scripts),
-  installed under `~/.codex/skills/`. `make link` still copies
-  `post-work-review` so its trust boundary never points into this checkout.
+  installed under `~/.codex/skills/`. The checksum-verified release installer
+  owns Codex `post-work-review`; checkout make targets never change it.
 
 Do not edit installed copies under home directories directly. Edit the repo
-versions and rerun `make install` or `make link`.
+versions and rerun `make install` or `make link` for other integrations. Use
+the release installer for Codex `post-work-review`.
 
 The user-facing surface is documented in `README.md` and `README.ja.md`. Read
 the README before changing CLI behavior.
