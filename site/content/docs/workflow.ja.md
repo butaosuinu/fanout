@@ -121,6 +121,8 @@ fanout msg inbox --mark-read
 
 verb の全表や plan task の指定方法など、詳しい仕組みは [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) にあります。
 
+メッセージはバスに永続し、兄弟は自分のチェックポイントで読みます。その pull の上に、`--team` はエージェント別の push レーンを載せます。`claude` ペインは briefing の指示で、最初のツール操作として Monitor ツール(persistent)の下で `fanout msg watch` を起動し、以後の新着は到着ごとに流れてきて配信時に既読になります(mark-on-emit)。新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します。動作中のペインでレーンが使えないとき(Monitor 不可、restore した codex ペイン、注入失敗)は pull(`inbox` / `board`)と `nudge` に戻ります。
+
 `claude` と `codex` どちらのペインでも同じく動き、1 セッション内のチームメイトを協調させる Claude Code Agent Teams とは別物です。
 
 > **セキュリティ。** バスは `/tmp` 配下の**平文** SQLite ファイルです。

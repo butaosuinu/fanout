@@ -60,8 +60,12 @@ thread が idle のときに 1 回の `turn/start` へバッチ注入する。Pl
    watcher が出力を書く直前に落ちると、その batch は配信されないまま既読に
    なる。この喪失窓は受容し、`inbox --all`(既読も表示する)・pull
    チェックポイント・`nudge` で backstop する。
-4. **transport は SQLite ポーリングのみ**: FS-watch や trigger は使わない。
-   WAL と両立し、可搬で、`team` の既存方式と対称になる。
+4. **新着検出の transport は SQLite ポーリングのみ**: FS-watch や trigger は
+   使わない。WAL と両立し、可搬で、`team` の既存方式と対称になる。SQLite が
+   担うのは検出とキューまでで、Codex への最終配信は Plan Mode 制御と同じ
+   loopback app-server 接続(`turn/start`)を通る。禁止される socket は
+   fanout が新設するメッセージング用常駐 broker のことで、この既存接続は
+   対象外。
 5. **Claude 側のレバーは briefing のみ**: hooks 注入(`--settings`)は変更
    しない。Monitor が使えない環境では pull + `nudge` が fallback。
 6. **Codex 側は `--team` で自動有効**: 新フラグは作らない。未読の SQLite 行が

@@ -132,8 +132,10 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
 - `--team` で新規起動した非 Plan Mode の `codex` ペインは app-server ブリッジ
   経由になり、thread が idle のときに未読メッセージを turn へ注入します。
   restore したペインはブリッジなしで再開し、pull で読みます。
-- どちらのレーンも使えないときは pull(`inbox` / `board`)と `nudge` に
+- 動作中のペインでレーンが使えないとき — claude の Monitor 不可、restore した
+  `codex` ペイン、注入失敗 — は pull(`inbox` / `board`)と `nudge` に
   戻ります。`nudge` は best-effort の hint で、`blocked` ペインには送りません。
+  ブリッジの起動自体に失敗した codex ペインは launch 失敗として片づけられます。
 
 下の watcher モードとは別物です。あちらが見るのは GitHub のラベルで、
 メッセージではありません。

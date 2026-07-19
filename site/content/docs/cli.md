@@ -354,6 +354,7 @@ Sibling coordination over a per-parent SQLite message bus. Run from inside a fan
 | `peers` | List the registered siblings of this parent. |
 | `inbox` | `[--all] [--mark-read]` — unread 1:1 messages plus unread shared-board posts. `--all` includes read ones; `--mark-read` drains what is shown. |
 | `board` | `[--all]` — the shared board (broadcast to all siblings), cursor-based. `--all` includes already-read posts. |
+| `watch` | `[--interval S]` — block and emit each new 1:1 message and board post as one line as it arrives (SQLite polling, default 2s). An emitted message is marked read on delivery (mark-on-emit). Ctrl-C to stop; exits `4` after 5 consecutive poll failures. |
 | `send` | `--to <N> [--kind K] <body...>` — send a 1:1 message to child issue `<N>`. Trailing words form the body. |
 | `post` | `[--kind K] <body...>` — post `<body...>` to the shared board. |
 | `mark-read` | `[--id <N> ... \| --all]` — mark 1:1 messages read by id (repeatable), or `--all` to mark everything and advance the board cursor. |
@@ -364,7 +365,7 @@ Common options across verbs: `--json` (machine-readable output), `--self <N>` an
 
 Under a [`fanout plan --team`](#plan-fan-out-issue-less) run, peers are addressed by **task ID** rather than issue number: `send --to <task-id>`, and `peers` lists the live task IDs. The `--json` output of plan-mode panes adds `selfTask` / `fromTask` / `toTask` fields so automation can resolve task IDs from the synthetic peer numbers; issue / Project JSON is unchanged.
 
-The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `FANOUT_DB_PATH`. Coordination is **pull-based**: messages persist in the DB and a sibling reads them at its own checkpoints — `fanout msg` does not interrupt a busy pane. The pure-Go SQLite driver is embedded, so no external `sqlite3` is required.
+The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `FANOUT_DB_PATH`. Messages persist in the DB and a sibling reads them at its own checkpoints; with `--team`, each agent also gets a push lane that delivers them as they arrive: `claude` panes are briefed to run `fanout msg watch` under the Monitor tool, and fresh non-Plan `codex` panes start through an app-server bridge that injects unread messages into an idle turn as quoted, untrusted data. Neither lane writes to a pane's tmux input — `nudge` is the only verb that does. Without a working lane (no Monitor, a restored codex pane), siblings fall back to pull. The pure-Go SQLite driver is embedded, so no external `sqlite3` is required.
 
 | Exit code | Meaning |
 |---|---|

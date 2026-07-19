@@ -360,6 +360,7 @@ parent ごとの SQLite メッセージバス上での兄弟協調です。fanou
 | `peers` | この親に登録済みの兄弟を一覧する。 |
 | `inbox` | `[--all] [--mark-read]`: 未読の 1:1 メッセージと未読の共有ボード投稿。`--all` は既読も含め、`--mark-read` は表示分を drain する。 |
 | `board` | `[--all]`: 共有ボード（全兄弟へのブロードキャスト）。cursor ベース。`--all` は既読の投稿も含める。 |
+| `watch` | `[--interval S]`: ブロックして、新着の 1:1 メッセージとボード投稿を到着ごとに 1 行ずつ流す（SQLite ポーリング、既定 2 秒）。emit したメッセージは配信時に既読になる（mark-on-emit）。Ctrl-C で停止。連続 5 回のポーリング失敗で exit `4`。 |
 | `send` | `--to <N> [--kind K] <body...>`: 子 issue `<N>` 宛に 1:1 メッセージを送る。末尾の語が body になる。 |
 | `post` | `[--kind K] <body...>`: `<body...>` を共有ボードに投稿する。 |
 | `mark-read` | `[--id <N> ... \| --all]`: 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
@@ -370,7 +371,7 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
-データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。協調は **pull ベース**です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読むため、`fanout msg` は忙しいペインに割り込みません。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらにエージェント別の push レーンが到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
 
 | Exit code | 意味 |
 |---|---|

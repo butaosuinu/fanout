@@ -132,8 +132,11 @@ on top of that pull loop, each agent gets a push lane:
 - Fresh non-Plan `codex` panes launched with `--team` start through an
   app-server bridge that injects unread messages into a turn while the thread
   is idle; restored panes resume without the bridge and pull instead.
-- When neither lane works, siblings fall back to pull (`inbox` / `board`) plus
-  `nudge`, a best-effort hint that is never sent to a `blocked` pane.
+- In a running pane without a working lane — no Monitor for `claude`, a
+  restored `codex` pane, or an injection failure — siblings fall back to pull
+  (`inbox` / `board`) plus `nudge`, a best-effort hint that is never sent to a
+  `blocked` pane. A codex bridge that fails to start fails the launch itself
+  and is cleaned up.
 
 This is separate from the Watcher mode below: that watches GitHub labels, not
 messages.

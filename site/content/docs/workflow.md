@@ -102,6 +102,8 @@ fanout msg inbox --mark-read
 
 The full verb table and how to address plan tasks are covered in the [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 
+Messages persist in the bus and siblings read them at their own checkpoints; on top of that pull loop, `--team` gives each agent a push lane. `claude` panes are briefed to start `fanout msg watch` under the Monitor tool (persistent) as their first tool action — new messages then stream in as they arrive, marked read on delivery (mark-on-emit). Fresh non-Plan `codex` panes start through an app-server bridge that injects unread messages into an idle turn as quoted, untrusted data. In a running pane without a working lane (no Monitor, a restored codex pane, an injection failure), siblings fall back to pull (`inbox` / `board`) plus `nudge`.
+
 It works the same for `claude` and `codex` panes, and is distinct from Claude Code Agent Teams, which coordinates teammates inside a single session.
 
 > **Security.** The bus is a **plaintext** SQLite file under `/tmp`. fanout creates it `0600` (owner-only) and refuses one that is group/world-readable or owned by another user, but `/tmp` is shared scratch space — **do not put secrets, tokens, or credentials in messages.**
