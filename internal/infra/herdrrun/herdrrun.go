@@ -189,7 +189,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			continue
 		}
 
-		lastPanes = append(lastPanes[:0], panes...)
+		lastPanes = cloneLivePanes(panes)
 		lastErr = nil
 		lastValid = true
 		if cause := waitCtx.Err(); cause != nil {
@@ -198,7 +198,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 		if !b.now().Before(deadline) {
 			return finishWait(lastPanes, nil, true)
 		}
-		matched := match(append([]corebackend.LivePane(nil), panes...))
+		matched := match(cloneLivePanes(panes))
 		if cause := waitCtx.Err(); cause != nil {
 			return cancelledWait(cause)
 		}
@@ -206,7 +206,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			return finishWait(lastPanes, nil, true)
 		}
 		if matched {
-			return WaitResult{Status: WaitMatched, Panes: append([]corebackend.LivePane(nil), panes...)}
+			return WaitResult{Status: WaitMatched, Panes: cloneLivePanes(panes)}
 		}
 	}
 	return finishWait(lastPanes, lastErr, lastValid)
@@ -289,13 +289,28 @@ func finishWait(lastPanes []corebackend.LivePane, lastErr error, lastValid bool)
 	if lastValid {
 		return WaitResult{
 			Status: WaitTimedOut,
-			Panes:  append([]corebackend.LivePane(nil), lastPanes...),
+			Panes:  cloneLivePanes(lastPanes),
 		}
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("herdr wait ended without a compatible snapshot")
 	}
 	return failedWait(lastErr)
+}
+
+func cloneLivePanes(panes []corebackend.LivePane) []corebackend.LivePane {
+	if panes == nil {
+		return nil
+	}
+	cloned := append([]corebackend.LivePane(nil), panes...)
+	for i := range cloned {
+		if cloned[i].AgentSession == nil {
+			continue
+		}
+		session := *cloned[i].AgentSession
+		cloned[i].AgentSession = &session
+	}
+	return cloned
 }
 
 func failedWait(err error) WaitResult {
@@ -668,6 +683,7 @@ type workspaceJSON struct {
 }
 
 type worktreeInfoJSON struct {
+	RepoKey      string `json:"repo_key"`
 	CheckoutPath string `json:"checkout_path"`
 	RepoRoot     string `json:"repo_root"`
 }
@@ -734,6 +750,12 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 	for _, workspace := range *snapshot.Workspaces {
 		if strings.TrimSpace(workspace.WorkspaceID) == "" {
 			return nil, fmt.Errorf("herdr snapshot contains an empty workspace id")
+		}
+		if workspace.Worktree != nil &&
+			(strings.TrimSpace(workspace.Worktree.RepoKey) == "" ||
+				strings.TrimSpace(workspace.Worktree.CheckoutPath) == "" ||
+				strings.TrimSpace(workspace.Worktree.RepoRoot) == "") {
+			return nil, fmt.Errorf("herdr workspace %q has incomplete worktree provenance", workspace.WorkspaceID)
 		}
 		if _, duplicate := workspaces[workspace.WorkspaceID]; duplicate {
 			return nil, fmt.Errorf("herdr snapshot contains duplicate workspace id %q", workspace.WorkspaceID)
@@ -813,16 +835,28 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 		currentPath := optionalString(pane.CWD)
 		projectRoot := ""
 		worktreePath := ""
+		repoKey := ""
 		if workspace.Worktree != nil {
 			currentPath = workspace.Worktree.CheckoutPath
+			repoKey = workspace.Worktree.RepoKey
 			projectRoot = workspace.Worktree.RepoRoot
 			worktreePath = workspace.Worktree.CheckoutPath
 		}
+		agent, agentPresent := agentsByPane[pane.PaneID]
 		agentID := ""
-		if agent, ok := agentsByPane[pane.PaneID]; ok {
+		if agentPresent {
 			agentID = optionalString(agent.Name)
 			if agentID == "" {
 				agentID = optionalString(agent.Agent)
+			}
+		}
+		var agentSession *corebackend.AgentSessionRef
+		if ref, present := sessionRefsByPane[pane.PaneID]; present {
+			agentSession = &corebackend.AgentSessionRef{
+				Source: ref.source,
+				Agent:  ref.agent,
+				Kind:   ref.kind,
+				Value:  ref.value,
 			}
 		}
 		live = append(live, corebackend.LivePane{
@@ -835,9 +869,13 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 			Title:            optionalString(pane.Title),
 			FocusKnown:       true,
 			Focused:          *pane.Focused,
+			AgentState:       corebackend.MapHerdrAgentState(agentPresent, pane.AgentStatus),
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,
+			AgentSession:     agentSession,
+			AgentPresent:     agentPresent,
+			RepoKey:          repoKey,
 			ProjectRoot:      projectRoot,
 			WorktreePath:     worktreePath,
 			SessionID:        target.session,

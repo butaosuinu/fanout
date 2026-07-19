@@ -1,4 +1,12 @@
-import { compactWave, fmtBlockers, fmtWave, paneCI, prPrimary } from "./pane";
+import {
+  compactWave,
+  fmtBlockers,
+  fmtWave,
+  paneCI,
+  paneRuntimeState,
+  paneRuntimeTitle,
+  prPrimary,
+} from "./pane";
 import type { PaneView } from "./types";
 
 /* 構造化フィルタ: key:value + 自由語、すべて AND。未知キーは自由語に降格。
@@ -47,7 +55,7 @@ export function matches(p: PaneView, terms: Term[]): boolean {
       p.diffSummary,
       p.dirtyState,
       p.issueState,
-      p.tmuxTitle,
+      paneRuntimeTitle(p),
       p.agentState,
       fmtWave(p),
       fmtBlockers(p),
@@ -61,14 +69,16 @@ export function matches(p: PaneView, terms: Term[]): boolean {
     }
     const pr = prPrimary(p.prs);
     switch (t.key) {
-      case "state":
-        // tmux 状態(live/stale)に一致するならそれを、さもなくば issue 状態を見る
+      case "state": {
+        const runtimeState = paneRuntimeState(p);
+        // runtime 状態に一致するならそれを、さもなくば issue 状態を見る。
         if (
-          (p.tmuxState === t.value ? p.tmuxState : String(p.issueState ?? "").toLowerCase()) !==
+          (runtimeState === t.value ? runtimeState : String(p.issueState ?? "").toLowerCase()) !==
           t.value
         )
           return false;
         break;
+      }
       case "run":
         if ((p.derived?.filterValues?.run ?? p.agentState ?? "") !== t.value) return false;
         break;

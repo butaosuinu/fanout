@@ -298,11 +298,11 @@ func validSnapshot() string {
       "tabs":[],
       "panes":[
         {"pane_id":"w1:p1","terminal_id":"term-root","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"/repo","foreground_cwd":"/tmp/foreground","agent_status":"unknown","revision":1},
-        {"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"w2:t1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","title":"child title","agent":"codex","agent_status":"working","revision":2}
+        {"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"w2:t1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","title":"child title","agent":"codex","agent_status":"working","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
       ],
       "layouts":[],
       "agents":[
-        {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2}
+        {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
       ]
     }
   }
@@ -522,7 +522,7 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if !root.FocusKnown || !root.Focused {
 		t.Fatalf("root focus projection = known:%t focused:%t, want true/true", root.FocusKnown, root.Focused)
 	}
-	if root.CurrentPath != "/repo" || root.NativeAgentState != "unknown" || root.AgentState != "" || root.TerminalID != "term-root" || root.SessionID != session || root.SocketPath != socket {
+	if root.CurrentPath != "/repo" || root.NativeAgentState != "unknown" || root.AgentState != "" || root.AgentPresent || root.AgentSession != nil || root.TerminalID != "term-root" || root.RepoKey != "" || root.SessionID != session || root.SocketPath != socket {
 		t.Fatalf("root live pane = %#v", root)
 	}
 	child := got[1]
@@ -532,11 +532,15 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if child.CurrentPath != "/repo/.fanout/worktrees/child" {
 		t.Fatalf("child CurrentPath = %q, want worktree checkout path", child.CurrentPath)
 	}
-	if child.ProjectRoot != "/repo" || child.WorktreePath != "/repo/.fanout/worktrees/child" {
+	if child.RepoKey != "/repo/.git" || child.ProjectRoot != "/repo" || child.WorktreePath != "/repo/.fanout/worktrees/child" {
 		t.Fatalf("child worktree projection = %#v", child)
 	}
-	if child.AgentState != "" || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || child.Title != "child title" || child.SocketPath != socket {
+	if child.AgentState != corebackend.AgentWorking || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || !child.AgentPresent || child.Focused || child.Title != "child title" || child.SocketPath != socket {
 		t.Fatalf("child agent projection = %#v", child)
+	}
+	wantSession := corebackend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-a"}
+	if child.AgentSession == nil || *child.AgentSession != wantSession {
+		t.Fatalf("child agent session = %#v, want %#v", child.AgentSession, wantSession)
 	}
 	if gotCalls := len(fake.commands); gotCalls != 4 || commandKey(fake.commands[3].args) != "snapshot" {
 		t.Fatalf("ListLive() calls = %#v", fake.commands)
@@ -586,6 +590,27 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 			wantErr: "pane with incomplete identity",
 		},
 		{
+			name: "worktree missing repo key",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"repo_key":"/repo/.git"`, `"repo_key":""`, 1)
+			},
+			wantErr: "incomplete worktree provenance",
+		},
+		{
+			name: "worktree missing checkout path",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"checkout_path":"/repo/.fanout/worktrees/child"`, `"checkout_path":""`, 1)
+			},
+			wantErr: "incomplete worktree provenance",
+		},
+		{
+			name: "worktree missing repo root",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"repo_root":"/repo"`, `"repo_root":""`, 1)
+			},
+			wantErr: "incomplete worktree provenance",
+		},
+		{
 			name: "pane missing required revision field",
 			mutate: func(snapshot string) string {
 				return strings.Replace(snapshot, `,"revision":1`, ``, 1)
@@ -598,6 +623,18 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 				return strings.Replace(snapshot, `"pane_id":"w2:p1"`, `"pane_id":"w1:p1"`, 1)
 			},
 			wantErr: "duplicate pane id",
+		},
+		{
+			name: "duplicate logical conversation",
+			mutate: func(snapshot string) string {
+				return strings.Replace(
+					snapshot,
+					`"agent_status":"unknown","revision":1`,
+					`"agent_status":"unknown","revision":1,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}`,
+					1,
+				)
+			},
+			wantErr: "duplicate agent session refs",
 		},
 		{
 			name: "unknown native state",
@@ -616,8 +653,7 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 		{
 			name: "agent session ref disagrees with pane",
 			mutate: func(snapshot string) string {
-				withPaneRef := strings.Replace(snapshot, `"title":"child title","agent":"codex"`, `"title":"child title","agent":"codex","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-a"}`, 1)
-				return strings.Replace(withPaneRef, `"terminal_id":"term-child","name":"fanout-child","agent":"codex"`, `"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-b"}`, 1)
+				return strings.Replace(snapshot, `"value":"session-a"`, `"value":"session-b"`, 1)
 			},
 			wantErr: "agent session ref disagrees",
 		},
@@ -720,13 +756,18 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 		matched := len(panes) == 2 && panes[0].FocusKnown && panes[0].Focused && panes[1].FocusKnown && !panes[1].Focused
 		panes[0] = corebackend.LivePane{}
 		panes[1].Title = "mutated by predicate"
+		if panes[1].AgentSession == nil {
+			t.Fatal("predicate snapshot child AgentSession = nil")
+		}
+		panes[1].AgentSession.Value = "mutated by predicate"
 		return matched
 	})
 
 	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
 		t.Fatalf("Wait() = %#v, want matched with two panes and no error", got)
 	}
-	if got.Panes[0].Ref.Pane != "w1:p1" || got.Panes[1].Title != "child title" {
+	if got.Panes[0].Ref.Pane != "w1:p1" || got.Panes[1].Title != "child title" ||
+		got.Panes[1].AgentSession == nil || got.Panes[1].AgentSession.Value != "session-a" {
 		t.Fatalf("matched panes were mutated through predicate slice: %#v", got.Panes)
 	}
 	if matchCalls != 1 {
@@ -775,13 +816,20 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 			clock := installFakeWaitClock(b)
 			matchCalls := 0
 
-			got := b.Wait(context.Background(), tt.totalTimeout, func([]corebackend.LivePane) bool {
+			got := b.Wait(context.Background(), tt.totalTimeout, func(panes []corebackend.LivePane) bool {
 				matchCalls++
+				if panes[1].AgentSession == nil {
+					t.Fatal("predicate snapshot child AgentSession = nil")
+				}
+				panes[1].AgentSession.Value = "mutated by predicate"
 				return false
 			})
 
 			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with last two panes and no error", got)
+			}
+			if got.Panes[1].AgentSession == nil || got.Panes[1].AgentSession.Value != "session-a" {
+				t.Fatalf("timed-out panes were mutated through predicate session ref: %#v", got.Panes)
 			}
 			if matchCalls != tt.wantSnapshots {
 				t.Fatalf("predicate calls = %d, want %d", matchCalls, tt.wantSnapshots)

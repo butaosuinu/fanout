@@ -107,22 +107,33 @@ func newCommittedRepoDash(t *testing.T) string {
 	return repo
 }
 
-func TestPollerBuildUsesRuntimeListLiveWithoutClaimingHerdrLiveness(t *testing.T) {
+func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
-	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrSession":"session-a","herdrAgentId":"agent-a"}
+	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrTerminalId":"terminal-a","herdrRepoKey":"/repo/.git","herdrAgentId":"agent-a","herdrAgentSession":{"source":"herdr:codex","agent":"codex","kind":"id","value":"conversation-a"},"herdrSession":"session-a","herdrSocketPath":"/tmp/herdr-a.sock","worktreePath":"/repo/worktree-a"}
 	]}`)
 
 	p := newPoller("o/n", root, &countingGH{}, nil, newHub())
 	called := 0
 	p.listLive = func() ([]backend.LivePane, error) {
 		called++
+		agentSession := &backend.AgentSessionRef{
+			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "conversation-a",
+		}
 		return []backend.LivePane{{
-			Ref:        backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-			Title:      "herdr child",
-			AgentState: backend.AgentWorking,
-			AgentID:    "agent-a",
-			SessionID:  "session-a",
+			Ref:          backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+			Title:        "herdr child",
+			AgentState:   backend.AgentWorking,
+			AgentID:      "agent-a",
+			AgentSession: agentSession,
+			AgentPresent: true,
+			TerminalID:   "terminal-a",
+			Focused:      true,
+			RepoKey:      "/repo/.git",
+			ProjectRoot:  "/repo",
+			WorktreePath: "/repo/worktree-a",
+			SessionID:    "session-a",
+			SocketPath:   "/tmp/herdr-a.sock",
 		}}, nil
 	}
 
@@ -137,8 +148,14 @@ func TestPollerBuildUsesRuntimeListLiveWithoutClaimingHerdrLiveness(t *testing.T
 		t.Fatalf("unexpected snapshot shape: %+v", snap.Sessions)
 	}
 	got := snap.Sessions[0].Panes[0]
-	if got.Alive || got.Backend != backend.Herdr || got.TmuxState != "stale" || got.TmuxTitle != "" || got.AgentState != "" {
-		t.Fatalf("herdr row bypassed the pending #427 identity gate: %+v", got)
+	if !got.Alive || got.Backend != backend.Herdr || got.AgentState != "working" {
+		t.Fatalf("matching herdr row = %+v, want live working row", got)
+	}
+	if got.RuntimeState != "live" || got.RuntimeTitle != "herdr child" {
+		t.Fatalf("runtime projection = %q/%q, want live/herdr child", got.RuntimeState, got.RuntimeTitle)
+	}
+	if got.TmuxState != got.RuntimeState || got.TmuxTitle != got.RuntimeTitle {
+		t.Fatalf("legacy tmux aliases = %q/%q, want runtime %q/%q", got.TmuxState, got.TmuxTitle, got.RuntimeState, got.RuntimeTitle)
 	}
 }
 

@@ -27,6 +27,7 @@ export interface PaneView {
   slug: string;
   displayName: string;
   agent: string;
+  backend?: string; // "tmux" / "herdr"; legacy snapshot は欠落 = tmux
   branchName: string;
   paneId: string;
   shellKey?: string;
@@ -45,8 +46,10 @@ export interface PaneView {
   diffSummary: string; // "+X/-Y" or free text
   dirtyState: string; // "dirty" / "clean" / "unknown"
   worktreeErr?: string;
-  tmuxState: string; // "live" / "stale" / "unknown" / "-"
+  tmuxState: string; // compatibility field: "live" / "stale" / "unknown" / "-"
   tmuxTitle?: string;
+  runtimeState?: string; // backend-neutral field; additive "unsupported" を含む
+  runtimeTitle?: string; // backend-neutral alias; tmuxTitle は互換用に残る
   agentState?: string; // "running" / "working" / "plan" / "blocked" / "idle" / "done" / ""(不明)
   planMode?: boolean; // Codex Plan Mode 起動ペイン(/api/plan・Plan セクションの対象)
   prompt?: string;
@@ -110,6 +113,7 @@ export interface Rollup {
 
 export interface Degraded {
   tmux: boolean;
+  runtime?: boolean;
   github: boolean;
   reason?: string;
 }

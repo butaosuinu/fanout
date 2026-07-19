@@ -42,12 +42,20 @@ type Pane struct {
 	// Backend is empty for legacy tmux rows. Consumers normalize the empty value
 	// when routing operations; keeping it empty on load preserves byte-identical
 	// round trips for existing state.json files.
-	Backend          backend.Name `json:"backend,omitempty"`
-	PaneID           string       `json:"paneId"`
-	HerdrWorkspaceID string       `json:"herdrWorkspaceId,omitempty"`
-	HerdrAgentID     string       `json:"herdrAgentId,omitempty"`
-	HerdrSession     string       `json:"herdrSession,omitempty"`
-	HerdrSocketPath  string       `json:"herdrSocketPath,omitempty"`
+	Backend backend.Name `json:"backend,omitempty"`
+	PaneID  string       `json:"paneId"`
+	// Herdr identity is additive so legacy rows still decode. Observation-only
+	// v1 does not create herdr rows through a launch path or fill identity from a
+	// snapshot. A future mutation-enabled launch must persist these authoritative
+	// values; a row without a comparison baseline is unsupported rather than
+	// rebound by name, while a complete row whose identity differs is stale.
+	HerdrWorkspaceID  string                   `json:"herdrWorkspaceId,omitempty"`
+	HerdrTerminalID   string                   `json:"herdrTerminalId,omitempty"`
+	HerdrRepoKey      string                   `json:"herdrRepoKey,omitempty"`
+	HerdrAgentID      string                   `json:"herdrAgentId,omitempty"`
+	HerdrAgentSession *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
+	HerdrSession      string                   `json:"herdrSession,omitempty"`
+	HerdrSocketPath   string                   `json:"herdrSocketPath,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.

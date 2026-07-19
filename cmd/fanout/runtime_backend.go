@@ -51,6 +51,14 @@ type runtimeReadRoute struct {
 	herdrSocketPath string
 }
 
+func (r runtimeReadRoute) observationRoute() backend.ObservationRoute {
+	return backend.ObservationRoute{
+		Backend:    backend.NormalizeName(r.name),
+		SessionID:  r.herdrSession,
+		SocketPath: r.herdrSocketPath,
+	}
+}
+
 var runtimeListLiveForProject = runtimeListLiveCollector
 
 const tuiWatcherPreflightRef = "@watcher"
@@ -213,6 +221,11 @@ func canonicalRuntimeRoot(root string) string {
 
 func validateLaunchBackend(selection backend.Selection) error {
 	if selection.Name == backend.Herdr {
+		// Herdr v1 is observation-only. Reject it before provisional intents,
+		// worktrees, or state rows are created. In particular, the read path must
+		// not fill missing row identity from a snapshot: same-name sessions reuse
+		// public IDs, so doing so would adopt a new terminal instead of reporting
+		// the incomplete row as stale.
 		return backend.Unsupported(backend.Herdr, "issue, Project, and plan launch in v1")
 	}
 	return nil
@@ -387,17 +400,23 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 				session := strings.TrimSpace(pane.HerdrSession)
 				socketPath := strings.TrimSpace(pane.HerdrSocketPath)
 				if session == "" || socketPath == "" {
-					routeErr = errors.Join(routeErr, fmt.Errorf(
-						"saved herdr runtime route at %s pane %d requires herdrSession and herdrSocketPath",
-						state.Path(root), i,
+					routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
+						backend.ObservationRoute{Backend: backend.Herdr, SessionID: session, SocketPath: socketPath},
+						fmt.Errorf(
+							"saved herdr runtime route at %s pane %d requires herdrSession and herdrSocketPath",
+							state.Path(root), i,
+						),
 					))
 					continue
 				}
 				addRoute(runtimeReadRoute{name: backend.Herdr, herdrSession: session, herdrSocketPath: socketPath})
 			default:
-				routeErr = errors.Join(routeErr, fmt.Errorf(
-					"saved runtime route at %s pane %d has unknown backend %q",
-					state.Path(root), i, name,
+				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
+					backend.ObservationRoute{Backend: name},
+					fmt.Errorf(
+						"saved runtime route at %s pane %d has unknown backend %q",
+						state.Path(root), i, name,
+					),
 				))
 			}
 		}
@@ -438,7 +457,10 @@ func collectRuntimeLive(
 	for _, route := range routes {
 		got, err := list(route)
 		if err != nil {
-			joined = errors.Join(joined, fmt.Errorf("list live panes via %s: %w", runtimeReadRouteLabel(route), err))
+			joined = errors.Join(joined, backend.ObservationRouteUnavailable(
+				route.observationRoute(),
+				fmt.Errorf("list live panes via %s: %w", runtimeReadRouteLabel(route), err),
+			))
 			continue
 		}
 		panes = append(panes, got...)

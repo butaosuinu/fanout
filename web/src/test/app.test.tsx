@@ -202,6 +202,10 @@ describe("snapshot 描画", () => {
     expect(banner).toHaveTextContent("GitHub データ取得が不安定");
     expect(banner).toHaveTextContent("tmux が利用できません");
 
+    streamSnapshot(makeSnapshot([], { degraded: { runtime: true, tmux: true, github: false } }));
+    expect(screen.getByRole("status")).toHaveTextContent("runtime の一部が利用できません");
+    expect(screen.getByRole("status")).not.toHaveTextContent("tmux が利用できません");
+
     streamSnapshot(
       makeSnapshot([], { degraded: { tmux: false, github: false, reason: "state broken" } }),
     );
@@ -215,6 +219,50 @@ describe("snapshot 描画", () => {
     render(<App />);
     streamSnapshot(makeSnapshot([]));
     expect(screen.getByText("アクティブなセッションがありません")).toBeInTheDocument();
+  });
+
+  it("herdr row の live / stale / unknown / unsupported を runtime 状態として表示する", () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("427", [
+          makePane({ issueNum: 101, displayName: "Herdr live", backend: "herdr", alive: true }),
+          makePane({
+            issueNum: 102,
+            displayName: "Herdr stale",
+            backend: "herdr",
+            alive: false,
+            tmuxState: "stale",
+          }),
+          makePane({
+            issueNum: 103,
+            displayName: "Herdr unknown",
+            backend: "herdr",
+            alive: false,
+            tmuxState: "unknown",
+          }),
+          makePane({
+            issueNum: 104,
+            displayName: "Herdr unsupported",
+            backend: "herdr",
+            alive: false,
+            tmuxState: "unknown",
+            runtimeState: "unsupported",
+          }),
+        ]),
+      ]),
+    );
+
+    for (const [name, state] of [
+      ["Herdr live", "live"],
+      ["Herdr stale", "stale"],
+      ["Herdr unknown", "unknown"],
+      ["Herdr unsupported", "unsupported"],
+    ] as const) {
+      const row = screen.getByText(name).closest("tr");
+      expect(row).not.toBeNull();
+      expect(within(row!).getByText(state, { exact: true })).toBeInTheDocument();
+    }
   });
 
   it("rise 入場アニメは前 snapshot に無かった parent のみ", () => {
@@ -607,6 +655,48 @@ describe("drawer + peek", () => {
     expect(
       await screen.findByText("(pane output unavailable — ペインは終了しています)"),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["derived.canPeek", true],
+    ["backend fallback", false],
+  ])("live herdr pane は %s で targeted read を呼ばない", async (_gate, includeDerived) => {
+    let peekCalls = 0;
+    let planCalls = 0;
+    server.use(
+      http.get("/api/peek", () => {
+        peekCalls++;
+        return HttpResponse.json({ paneId: "%5", lines: 80, capturedAt: "", output: "" });
+      }),
+      http.get("/api/plan", () => {
+        planCalls++;
+        return HttpResponse.json({ paneId: "%5", capturedAt: "", found: false, plan: "" });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 105,
+            displayName: "Herdr child",
+            backend: "herdr",
+            paneId: "%5",
+            alive: true,
+            planMode: true,
+            ...(includeDerived ? { derived: { canPeek: false } } : {}),
+          }),
+        ]),
+      ]),
+    );
+
+    await user.click(screen.getByText("Herdr child"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(within(drawer).queryByText("peek — 直近の出力")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("plan — 提案中のプラン")).not.toBeInTheDocument();
+    expect(peekCalls).toBe(0);
+    expect(planCalls).toBe(0);
   });
 
   it("選択中ペインが snapshot から消えたら閉じて status に通知する", async () => {

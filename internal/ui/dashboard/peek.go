@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -50,10 +51,10 @@ func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
 
 // requireLivePane is the request-validation chain GET /api/peek and
 // GET /api/plan share: pane-id shape (400), snapshot liveness via livePaneView
-// (404), and a recorded identity usable for request-time verification. Agent
-// rows need a worktree path; shell rows need a shellKey because they have no
-// worktree of their own. On ok=false the JSON error response has already been
-// written.
+// (404), a tmux backend route, and a recorded identity usable for request-time
+// verification. Agent rows need a worktree path; shell rows need a shellKey
+// because they have no worktree of their own. On ok=false the JSON error
+// response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
 	if !paneIDRe.MatchString(paneID) {
 		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
@@ -62,6 +63,10 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 	pv, ok := s.poller.livePaneView(paneID)
 	if !ok {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
+		return sessionview.PaneView{}, false
+	}
+	if backend.NormalizeName(pv.Backend) != backend.Tmux {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a tmux pane", paneID))
 		return sessionview.PaneView{}, false
 	}
 	if pv.Kind == state.PaneKindShell {

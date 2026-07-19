@@ -84,12 +84,17 @@ type PaneView struct {
 	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown
 	WorktreeErr string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 
-	TmuxState string `json:"tmuxState"`           // "live" / "stale" / "unknown" / "-"
-	TmuxTitle string `json:"tmuxTitle,omitempty"` // live tmux pane title; "" when dead
+	RuntimeState string `json:"runtimeState"`           // "live" / "stale" / "unknown" / "unsupported" / "-"
+	RuntimeTitle string `json:"runtimeTitle,omitempty"` // live backend pane title; "" when dead
+	// TmuxState/TmuxTitle are compatibility aliases for existing snapshot
+	// consumers. TmuxState retains its old value set; unsupported runtime rows
+	// project to unknown. TmuxTitle mirrors RuntimeTitle.
+	TmuxState string `json:"tmuxState"`
+	TmuxTitle string `json:"tmuxTitle,omitempty"`
 	// AgentState は "running" / "working" / "plan" / "blocked" / "idle" /
-	// "done" / ""(pane 死亡・不明)。alive な pane は起動ラッパーと agent hooks
-	// が設定する tmux pane user option @fanout_agent_state からの動的判定、
-	// tmux 不通時は state.json の起動時記録値(AgentStatus)への fallback。
+	// "done" / ""(pane 死亡・不明)。alive な pane は backend の live snapshot
+	// から動的判定する。tmux 不通時だけ state.json の起動時記録値
+	// (AgentStatus)へ fallback し、herdr の未知状態は running とみなさない。
 	AgentState string `json:"agentState,omitempty"`
 	// PlanMode は Codex Plan Mode(--codex-plan-mode)で起動した記録ペインか
 	// どうか(state row の CodexPlanMode の passthrough)。ダッシュボードは
@@ -161,7 +166,7 @@ type Rollup struct {
 	Total      int  `json:"total"`
 	Merged     int  `json:"merged"`     // panes with at least one MERGED PR
 	Pending    int  `json:"pending"`    // total - merged
-	Live       int  `json:"live"`       // panes whose tmux pane is alive
+	Live       int  `json:"live"`       // panes whose runtime pane is alive
 	Running    int  `json:"running"`    // agent が進行中(AgentState が running / working / plan)のペイン数
 	Blocked    int  `json:"blocked"`    // panes whose blockers still have an OPEN issue
 	NotStarted int  `json:"notStarted"` // 未開始子 issue(synthetic 行)の数
@@ -171,7 +176,8 @@ type Rollup struct {
 // Degraded records which collectors failed so the UI can show a banner instead
 // of silently presenting partial data as complete.
 type Degraded struct {
-	Tmux   bool   `json:"tmux"`
-	GitHub bool   `json:"github"`
-	Reason string `json:"reason,omitempty"`
+	Runtime bool   `json:"runtime,omitempty"`
+	Tmux    bool   `json:"tmux"` // compatibility alias: true for any runtime route failure
+	GitHub  bool   `json:"github"`
+	Reason  string `json:"reason,omitempty"`
 }
