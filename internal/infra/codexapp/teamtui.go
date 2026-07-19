@@ -77,6 +77,7 @@ type teamBridge struct {
 	now               func() time.Time
 	polls             <-chan time.Time
 	tuiDone           <-chan error
+	signals           <-chan os.Signal
 	received          <-chan teamReceivedMessage
 	activeTurnID      string
 	lastTurnCompleted time.Time
@@ -91,7 +92,8 @@ type teamBridge struct {
 func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 	ready := false
 	defer func() {
-		if err != nil && !ready {
+		_, signaled := SignalErrorExitCode(err)
+		if err != nil && !ready && !signaled {
 			_ = writeStatus(cfg.StatusFile, Status{
 				Status: statusFailed,
 				Error:  err.Error(),
@@ -125,7 +127,7 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer func() { err = session.finish(err) }()
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -133,9 +135,13 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 	}
 	// The team bridge is now the sole app-server reader. The startup sentinel
 	// is not a live drain goroutine and must not be awaited during shutdown.
-	session.drainDone = nil
+	session.setDrainDone(nil)
 	receiverDone := make(chan struct{})
+	// This defer is registered after session.finish above, so LIFO teardown
+	// stops the sole receiver before finish closes the shared client/session.
 	defer close(receiverDone)
+	received, observerDone := receiveTeamAppServerMessages(session.client, receiverDone)
+	session.setObserverDone(observerDone)
 	bridge := &teamBridge{
 		client:           session.client,
 		threadID:         session.thread.ID,
@@ -146,7 +152,8 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 		idleGrace:        cfg.IdleGrace,
 		now:              time.Now,
 		tuiDone:          session.tuiDone,
-		received:         receiveTeamAppServerMessages(session.client, receiverDone),
+		signals:          session.signals,
+		received:         received,
 		pendingApprovals: make(map[string]struct{}),
 	}
 	if session.freshThread {
@@ -156,7 +163,7 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 		}
 		tuiExited, startErr := bridge.waitForInitialTurn()
 		if startErr != nil {
-			session.tuiStopped = tuiExited
+			session.setTUIStopped(tuiExited)
 			return startErr
 		}
 	} else {
@@ -178,7 +185,7 @@ func RunTeamTUI(cfg TeamTUIConfig, stdout, stderr io.Writer) (err error) {
 	defer ticker.Stop()
 	bridge.polls = ticker.C
 	tuiExited, runErr := bridge.run()
-	session.tuiStopped = tuiExited
+	session.setTUIStopped(tuiExited)
 	return runErr
 }
 
@@ -228,6 +235,8 @@ func (b *teamBridge) waitForInitialTurn() (bool, error) {
 			if handled.initialAccepted {
 				return false, nil
 			}
+		case sig := <-b.signals:
+			return false, newCodexSignalError(sig)
 		}
 	}
 }
@@ -258,7 +267,7 @@ func codexTeamInitialPrompt(prompt string) string {
 func (b *teamBridge) run() (bool, error) {
 	received := b.received
 	if received == nil {
-		received = receiveTeamAppServerMessages(b.client, nil)
+		received, _ = receiveTeamAppServerMessages(b.client, nil)
 		b.received = received
 	}
 	for {
@@ -278,6 +287,8 @@ func (b *teamBridge) run() (bool, error) {
 			}
 		case <-b.polls:
 			b.poll()
+		case sig := <-b.signals:
+			return false, newCodexSignalError(sig)
 		}
 	}
 }
@@ -289,9 +300,11 @@ func teamObserverError(err error) error {
 	return err
 }
 
-func receiveTeamAppServerMessages(receiver appServerReceiver, done <-chan struct{}) <-chan teamReceivedMessage {
+func receiveTeamAppServerMessages(receiver appServerReceiver, done <-chan struct{}) (<-chan teamReceivedMessage, <-chan struct{}) {
 	received := make(chan teamReceivedMessage, 1)
+	exited := make(chan struct{})
 	go func() {
+		defer close(exited)
 		for {
 			msg, err := receiver.receive()
 			select {
@@ -304,7 +317,7 @@ func receiveTeamAppServerMessages(receiver appServerReceiver, done <-chan struct
 			}
 		}
 	}()
-	return received
+	return received, exited
 }
 
 func (b *teamBridge) handleMessage(msg appServerMessage) teamHandleResult {

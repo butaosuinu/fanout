@@ -1377,6 +1377,21 @@ func TestWatchPaneMatchesLiveRequiresShellKeyForShellRows(t *testing.T) {
 	}
 }
 
+func TestWatchPaneMatchesLivePrefersLivenessKeyForOrdinaryRows(t *testing.T) {
+	pane := state.Pane{
+		PaneID:       "%1",
+		ShellKey:     "shell-child",
+		WorktreePath: "/repo/.fanout/worktrees/child-101",
+	}
+
+	if watchPaneMatchesLive(pane, tmuxrun.LivePane{ID: "%1", CurrentPath: pane.WorktreePath, ShellKey: "shell-reused"}) {
+		t.Fatal("watchPaneMatchesLive() = true for ordinary row with reused pane id")
+	}
+	if !watchPaneMatchesLive(pane, tmuxrun.LivePane{ID: "%1", CurrentPath: "/tmp/changed", ShellKey: "shell-child"}) {
+		t.Fatal("watchPaneMatchesLive() = false for ordinary row with matching liveness key")
+	}
+}
+
 func TestWatchLivePaneCacheReusesListingUntilReset(t *testing.T) {
 	calls := 0
 	cache := &watchLivePaneCache{
@@ -1422,6 +1437,35 @@ func TestWatchLivePaneCacheReusesListingUntilReset(t *testing.T) {
 	}
 	if !ok || calls != 2 {
 		t.Fatalf("after reset alive/calls = %v/%d, want true/2", ok, calls)
+	}
+}
+
+func TestWatchLivePaneCacheFailsClosedWhenIdentityListingIsIncomplete(t *testing.T) {
+	installTUIIdentityTitleFailureTmuxShim(t)
+	cache := &watchLivePaneCache{}
+
+	alive, err := cache.Alive(state.Pane{PaneID: "%9", ShellKey: "key-nine"})
+	if err == nil || !strings.Contains(err.Error(), "titles") {
+		t.Fatalf("Alive() = %v, %v, want false and strict title-listing error", alive, err)
+	}
+	if alive {
+		t.Fatal("Alive() = true after incomplete identity sweep")
+	}
+}
+
+func TestWatchLivePaneCacheFailsClosedWhenRecordedKeyIsUnavailable(t *testing.T) {
+	cache := &watchLivePaneCache{
+		list: func() ([]tmuxrun.LivePane, error) {
+			return []tmuxrun.LivePane{{ID: "%9", CurrentPath: "/wt/nine"}}, nil
+		},
+	}
+
+	alive, err := cache.Alive(state.Pane{PaneID: "%9", ShellKey: "key-nine", WorktreePath: "/wt/nine"})
+	if err == nil || !strings.Contains(err.Error(), "liveness key is unavailable") {
+		t.Fatalf("Alive() = %v, %v, want false and unavailable-key error", alive, err)
+	}
+	if alive {
+		t.Fatal("Alive() = true while the recorded key is unavailable")
 	}
 }
 

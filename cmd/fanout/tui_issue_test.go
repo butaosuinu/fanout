@@ -652,10 +652,14 @@ func installTUISequentialTmuxShim(t *testing.T, repo string) string {
 	argsPath := filepath.Join(dir, "tmux-args.txt")
 	counterPath := filepath.Join(dir, "tmux-counter.txt")
 	shellKeyPath := filepath.Join(dir, "tmux-shell-key.txt")
+	killedPanesPath := filepath.Join(dir, "tmux-killed-panes.txt")
 	if err := os.WriteFile(counterPath, []byte("90\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(shellKeyPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(killedPanesPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	script := `#!/usr/bin/env bash
@@ -683,14 +687,18 @@ case "${1:-}" in
       read -r current < "$TMUX_SHIM_COUNTER"
       pane=91
       while (( pane <= current )); do
-        printf '%%%d\t%s\n' "$pane" "$TMUX_SHIM_LIVE_PATH"
+        if ! grep -Fxq "%$pane" "$TMUX_SHIM_KILLED_PANES"; then
+          printf '%%%d\t%s\n' "$pane" "$TMUX_SHIM_LIVE_PATH"
+        fi
         pane=$((pane + 1))
       done
     elif [[ "$*" == *pane_title* ]]; then
       read -r current < "$TMUX_SHIM_COUNTER"
       pane=91
       while (( pane <= current )); do
-        printf '%%%d\tpane-%d\n' "$pane" "$pane"
+        if ! grep -Fxq "%$pane" "$TMUX_SHIM_KILLED_PANES"; then
+          printf '%%%d\tpane-%d\n' "$pane" "$pane"
+        fi
         pane=$((pane + 1))
       done
     elif [[ "$*" == *fanout_shell_key* ]]; then
@@ -698,10 +706,21 @@ case "${1:-}" in
       shell_key="$(sed -n '1p' "$TMUX_SHIM_SHELL_KEY")"
       pane=91
       while (( pane <= current )); do
-        if (( pane == 91 )); then
-          printf '%%%d\t%s\n' "$pane" "$shell_key"
-        else
-          printf '%%%d\t\n' "$pane"
+        if ! grep -Fxq "%$pane" "$TMUX_SHIM_KILLED_PANES"; then
+          if (( pane == 91 )); then
+            printf '%%%d\t%s\n' "$pane" "$shell_key"
+          else
+            printf '%%%d\t\n' "$pane"
+          fi
+        fi
+        pane=$((pane + 1))
+      done
+    elif [[ "$*" == *fanout_project_root* || "$*" == *fanout_worktree_path* ]]; then
+      read -r current < "$TMUX_SHIM_COUNTER"
+      pane=91
+      while (( pane <= current )); do
+        if ! grep -Fxq "%$pane" "$TMUX_SHIM_KILLED_PANES"; then
+          printf '%%%d\t%s\n' "$pane" "$TMUX_SHIM_LIVE_PATH"
         fi
         pane=$((pane + 1))
       done
@@ -711,7 +730,9 @@ case "${1:-}" in
       pane=91
       index=1
       while (( pane <= current )); do
-        printf '%%%d\t%d\t0\t\t\n' "$pane" "$index"
+        if ! grep -Fxq "%$pane" "$TMUX_SHIM_KILLED_PANES"; then
+          printf '%%%d\t%d\t0\t\t\n' "$pane" "$index"
+        fi
         pane=$((pane + 1))
         index=$((index + 1))
       done
@@ -735,6 +756,7 @@ case "${1:-}" in
       printf 'kill failed for %s\n' "${3:-}" >&2
       exit 23
     fi
+    printf '%s\n' "${3:-}" >> "$TMUX_SHIM_KILLED_PANES"
     ;;
   select-pane|select-layout|set-window-option|bind-key)
     ;;
@@ -749,6 +771,7 @@ esac
 	t.Setenv("TMUX_SHIM_ARGS", argsPath)
 	t.Setenv("TMUX_SHIM_COUNTER", counterPath)
 	t.Setenv("TMUX_SHIM_SHELL_KEY", shellKeyPath)
+	t.Setenv("TMUX_SHIM_KILLED_PANES", killedPanesPath)
 	t.Setenv("TMUX_SHIM_LIVE_PATH", repo)
 	t.Setenv("TMUX_SHIM_FAIL_SPLIT", "")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

@@ -42,6 +42,7 @@ func TestRunMsgNudge(t *testing.T) {
 	// must also sit at/under it (the reused-%N defense).
 	withPane := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5"}}}
 	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", WorktreePath: "/wt/recipient"}}}
+	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}
 	lp := func(id, path, agentState string) tmuxrun.LivePane {
 		return tmuxrun.LivePane{ID: id, CurrentPath: path, AgentState: agentState}
@@ -72,6 +73,14 @@ func TestRunMsgNudge(t *testing.T) {
 		{
 			name: "running pane under the recorded worktree is nudged", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
 			live: []tmuxrun.LivePane{lp("%5", "/wt/recipient/nested", "running")}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			name: "matching liveness key is nudged despite changed cwd", req: Request{Verb: "nudge", To: 71}, store: withKey,
+			live: []tmuxrun.LivePane{{ID: "%5", CurrentPath: "/tmp/changed", ShellKey: "key-five", AgentState: "running"}}, wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStdout: "nudged #71",
+		},
+		{
+			name: "mismatched liveness key is not nudged on shared worktree", req: Request{Verb: "nudge", To: 71}, store: withKey,
+			live: []tmuxrun.LivePane{{ID: "%5", CurrentPath: "/wt/recipient", ShellKey: "other-key", AgentState: "running"}}, wantCode: exitcode.OK, wantListed: true, wantStderr: "gone or its id was reused",
 		},
 		{
 			name: "plan-ready pane at the recorded worktree is nudged", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
@@ -201,7 +210,7 @@ func TestRunMsgNudge(t *testing.T) {
 
 func TestMatchLivePane(t *testing.T) {
 	panes := []tmuxrun.LivePane{
-		{ID: "%5", CurrentPath: "/wt/recipient", AgentState: "running"},
+		{ID: "%5", CurrentPath: "/wt/recipient", AgentState: "running", ShellKey: "key-five"},
 		{ID: "%6", CurrentPath: "/wt/recipient/nested/deep", AgentState: "done"},
 		{ID: "%7", CurrentPath: "/wt/other", AgentState: "running"},
 	}
@@ -209,6 +218,7 @@ func TestMatchLivePane(t *testing.T) {
 		name     string
 		paneID   string
 		worktree string
+		key      string
 		wantOK   bool
 		wantID   string // matched pane id when wantOK
 	}{
@@ -219,12 +229,14 @@ func TestMatchLivePane(t *testing.T) {
 		{name: "sibling-prefix path is not under the worktree", paneID: "%5", worktree: "/wt/recip", wantOK: false},
 		{name: "id absent from the live set", paneID: "%9", worktree: "/wt/recipient", wantOK: false},
 		{name: "empty worktree falls back to id-only", paneID: "%7", worktree: "", wantOK: true, wantID: "%7"},
+		{name: "matching liveness key wins over changed cwd", paneID: "%5", worktree: "/wt/other", key: "key-five", wantOK: true, wantID: "%5"},
+		{name: "mismatched liveness key rejects shared worktree", paneID: "%5", worktree: "/wt/recipient", key: "other-key", wantOK: false},
 		{name: "empty pane id never matches", paneID: "", worktree: "/wt/recipient", wantOK: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := matchLivePane(panes, tc.paneID, tc.worktree)
+			got, ok := matchLivePane(panes, tc.paneID, tc.worktree, tc.key)
 			if ok != tc.wantOK {
-				t.Fatalf("matchLivePane(%q, %q) ok = %v, want %v", tc.paneID, tc.worktree, ok, tc.wantOK)
+				t.Fatalf("matchLivePane(%q, %q, %q) ok = %v, want %v", tc.paneID, tc.worktree, tc.key, ok, tc.wantOK)
 			}
 			if ok && got.ID != tc.wantID {
 				t.Errorf("matched pane id = %q, want %q", got.ID, tc.wantID)

@@ -33,7 +33,7 @@ type LivePaneInfo struct {
 	// それ以外は agent hooks が設定する。未設定(旧版 fanout やラッパー外で
 	// 起動した pane)や取得失敗時は ""。
 	AgentState string
-	// ShellKey is @fanout_shell_key for TUI shell panes.
+	// ShellKey is the pane's @fanout_shell_key liveness token.
 	ShellKey string
 }
 
@@ -514,11 +514,9 @@ func SyntheticTmuxState(issueState string, blocked bool) string {
 	}
 }
 
-// paneAlive reports whether a recorded pane is live. Agent panes match on both
-// pane id and cwd at/under their recorded worktree. Panes recorded with a
-// ShellKey match on pane id plus @fanout_shell_key instead: root terminals and
-// the plan fan-out coordinator record the repo root as WorktreePath, which is
-// too broad to protect against tmux pane id reuse.
+// paneAlive reports whether a recorded pane is live. Keyed panes match on pane
+// id plus @fanout_shell_key. Legacy agent rows fall back to their recorded
+// worktree; legacy shell rows without a key are never treated as live.
 func paneAlive(live map[string]LivePaneInfo, pane state.Pane) bool {
 	if pane.PaneID == "" {
 		return false

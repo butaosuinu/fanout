@@ -1,15 +1,56 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
+
+func TestLoadTUIRestoreSnapshotFailsClosedWhenIdentityListingIsIncomplete(t *testing.T) {
+	argsPath := installTUIIdentityTitleFailureTmuxShim(t)
+
+	_, err := loadTUIRestoreSnapshot("fanout")
+	if err == nil || !strings.Contains(err.Error(), "titles") {
+		t.Fatalf("loadTUIRestoreSnapshot() error = %v, want strict title-listing error", err)
+	}
+	args, readErr := os.ReadFile(argsPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(args), "split-window") {
+		t.Fatalf("tmux calls contain split-window after incomplete identity sweep:\n%s", args)
+	}
+}
+
+func installTUIIdentityTitleFailureTmuxShim(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	tmuxPath := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUX_SHIM_ARGS"
+printf '%s\n' '---' >> "$TMUX_SHIM_ARGS"
+case "$4" in
+*pane_current_path*) printf '%%9\t/wt/nine\n' ;;
+*pane_title*) exit 7 ;;
+*) exit 99 ;;
+esac
+`
+	if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_SHIM_ARGS", argsPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsPath
+}
 
 func TestRestoreRecordedPanesRebindsLivePaneByTitle(t *testing.T) {
 	root := t.TempDir()
@@ -108,6 +149,52 @@ func TestRestoreRecordedPanesKeepsLiveShellWhenShellKeyMissing(t *testing.T) {
 	}
 	if report.Skipped != 1 || report.RemovedShells != 0 {
 		t.Fatalf("report = %+v, want one skipped shell and no removal", report)
+	}
+}
+
+func TestRestoreRecordedPanesKeepsKeyedAgentWhenLiveKeyIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := installRestoreTmuxAndAgentScripts(t, "claude")
+	pane := state.Pane{
+		Parent:       "81",
+		IssueNum:     101,
+		Slug:         "restore-api-101",
+		DisplayName:  "Restore API",
+		PaneID:       "%live",
+		ShellKey:     "key-live",
+		Agent:        "claude",
+		WorktreePath: wt,
+	}
+	writeRestoreState(t, root, []state.Pane{pane})
+	livePane := tmuxrun.LivePane{ID: pane.PaneID, CurrentPath: wt, Title: pane.DisplayName}
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{
+			Live:         map[string]tmuxrun.LivePane{livePane.ID: livePane},
+			PanesByTitle: map[string][]tmuxrun.LivePane{livePane.Title: {livePane}},
+		}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 1 || got.Panes[0].PaneID != pane.PaneID || got.Panes[0].ShellKey != pane.ShellKey {
+		t.Fatalf("state panes = %+v, want keyed live pane preserved", got.Panes)
+	}
+	if report.Skipped != 1 || report.Restored != 0 || report.Rebound != 0 {
+		t.Fatalf("report = %+v, want unknown identity skipped without restore", report)
+	}
+	logBody, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(logBody), "split-window") {
+		t.Fatalf("tmux log = %q, must not split while the live key is unavailable", logBody)
 	}
 }
 
@@ -262,6 +349,32 @@ func TestPreclaimLiveRestoreIdentitiesClaimsLiveSibling(t *testing.T) {
 	}
 }
 
+func TestPreclaimLiveRestoreIdentitiesClaimsUnknownKeyedSibling(t *testing.T) {
+	sibling := t.TempDir()
+	wt := filepath.Join(sibling, ".fanout", "worktrees", "restore-api-102")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRestoreState(t, sibling, []state.Pane{{
+		Parent:       "82",
+		IssueNum:     102,
+		PaneID:       "%live",
+		ShellKey:     "key-live",
+		Agent:        "codex",
+		WorktreePath: wt,
+	}})
+
+	claimed := preclaimLiveRestoreIdentities([]string{sibling}, tuiRestoreSnapshot{
+		Live: map[string]tmuxrun.LivePane{
+			"%live": {ID: "%live", CurrentPath: wt},
+		},
+	})
+
+	if !claimed["issue\x0082\x00102"] {
+		t.Fatalf("claimed = %#v, want unknown keyed sibling identity claimed", claimed)
+	}
+}
+
 func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testing.T) {
 	root := t.TempDir()
 	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
@@ -290,6 +403,9 @@ func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testi
 	if len(got.Panes) != 1 || got.Panes[0].PaneID != "%restored" || got.Panes[0].AgentStatus != "running" {
 		t.Fatalf("state panes = %+v, want restored running pane %%restored", got.Panes)
 	}
+	if !strings.HasPrefix(got.Panes[0].ShellKey, "shell-") {
+		t.Fatalf("restored legacy pane shellKey = %q, want generated liveness key", got.Panes[0].ShellKey)
+	}
 	if report.Restored != 1 {
 		t.Fatalf("Restored = %d, want 1", report.Restored)
 	}
@@ -305,6 +421,93 @@ func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testi
 	}
 	if !strings.Contains(string(logBody), "@fanout_worktree_path "+wt) {
 		t.Fatalf("tmux log = %q, want restored pane worktree option %q", string(logBody), wt)
+	}
+	if !strings.Contains(string(logBody), "@fanout_shell_key "+got.Panes[0].ShellKey) {
+		t.Fatalf("tmux log = %q, want generated liveness key stamp", string(logBody))
+	}
+}
+
+func TestRestoreTracksPaneWhenLivenessStampAndFreshCloseFail(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-103")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installRestoreTmuxAndAgentScripts(t, "claude")
+	stubRestorePaneOps(t,
+		func(string, string) error { return errors.New("stamp failed") },
+		func(string) error { return errors.New("pane still live") },
+		nil,
+		nil,
+	)
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:       "81",
+		IssueNum:     103,
+		DisplayName:  "Restore API",
+		PaneID:       "%old",
+		ShellKey:     "key-old",
+		Agent:        "claude",
+		WorktreePath: wt,
+	}})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{}, nil
+	}, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "pane still live") {
+		t.Fatalf("restore error = %v, want failed fresh close", err)
+	}
+	store := readRestoreState(t, root)
+	if len(store.Panes) != 1 || store.Panes[0].PaneID != "%restored" || store.Panes[0].ShellKey != "key-old" {
+		t.Fatalf("state panes = %+v, want failed restored pane tracked as %%restored", store.Panes)
+	}
+	if report.Skipped != 1 || report.Restored != 0 || report.Tracked != 1 {
+		t.Fatalf("report = %+v, want failed restore skipped with recovery row", report)
+	}
+}
+
+func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-plan-104")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installRestoreTmuxAndAgentScripts(t, "codex")
+	stubRestorePaneOps(t,
+		nil,
+		nil,
+		func(string, time.Duration) (codexapp.Status, error) {
+			return codexapp.Status{}, errors.New("startup failed")
+		},
+		func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+			return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("pane still live")
+		},
+	)
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:        "81",
+		IssueNum:      104,
+		DisplayName:   "Restore Plan",
+		PaneID:        "%old",
+		ShellKey:      "key-plan",
+		Agent:         "codex",
+		WorktreePath:  wt,
+		CodexPlanMode: true,
+		CodexThreadID: "thread-104",
+	}})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{}, nil
+	}, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "pane still live") {
+		t.Fatalf("restore error = %v, want failed owned close", err)
+	}
+	store := readRestoreState(t, root)
+	if len(store.Panes) != 1 || store.Panes[0].PaneID != "%restored" || store.Panes[0].ShellKey != "key-plan" {
+		t.Fatalf("state panes = %+v, want failed Codex pane tracked as %%restored", store.Panes)
+	}
+	if report.Skipped != 1 || report.Restored != 0 || report.Tracked != 1 {
+		t.Fatalf("report = %+v, want failed Codex restore skipped with recovery row", report)
 	}
 }
 
@@ -432,10 +635,41 @@ func installRestoreAgentScript(t *testing.T, agentName string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func stubRestorePaneOps(
+	t *testing.T,
+	setKey func(string, string) error,
+	closeFresh func(string) error,
+	waitReady func(string, time.Duration) (codexapp.Status, error),
+	closeOwned func(string, string, string) (tmuxrun.ClosePaneResult, error),
+) {
+	t.Helper()
+	originalSetKey := setRestoredPaneLivenessKey
+	originalCloseFresh := closeFreshRestoredPane
+	originalWaitReady := waitRestoredPaneReady
+	originalCloseOwned := closeRestoredPaneIfOwned
+	if setKey != nil {
+		setRestoredPaneLivenessKey = setKey
+	}
+	if closeFresh != nil {
+		closeFreshRestoredPane = closeFresh
+	}
+	if waitReady != nil {
+		waitRestoredPaneReady = waitReady
+	}
+	if closeOwned != nil {
+		closeRestoredPaneIfOwned = closeOwned
+	}
+	t.Cleanup(func() {
+		setRestoredPaneLivenessKey = originalSetKey
+		closeFreshRestoredPane = originalCloseFresh
+		waitRestoredPaneReady = originalWaitReady
+		closeRestoredPaneIfOwned = originalCloseOwned
+	})
+}
+
 // TestRestorePaneAliveKeyedPaneRequiresKeyMatch pins liveness for rows recorded
-// with a ShellKey (shell terminals, the plan fan-out coordinator): the repo
-// root as WorktreePath makes path containment useless against pane id reuse,
-// so only a matching @fanout_shell_key counts as alive.
+// with a ShellKey: pane ids and worktree paths can be reused, so only a
+// matching @fanout_shell_key counts as alive.
 func TestRestorePaneAliveKeyedPaneRequiresKeyMatch(t *testing.T) {
 	tests := []struct {
 		name string

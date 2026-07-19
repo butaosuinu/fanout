@@ -49,10 +49,10 @@ type statusChild struct {
 type CloseMode int
 
 const (
-	// ClosePaneOnly kills the tmux pane and removes fanout state, leaving the
+	// ClosePaneOnly closes the tmux pane and removes fanout state, leaving the
 	// worktree and branch available outside fanout.
 	ClosePaneOnly CloseMode = iota
-	// CloseWorktree kills the tmux pane, removes the worktree, and leaves the
+	// CloseWorktree closes the tmux pane, removes the worktree, and leaves the
 	// local branch intact. This is the historical --close behavior.
 	CloseWorktree
 	// CloseEverything also deletes the recorded local branch after removing the
@@ -62,8 +62,8 @@ const (
 
 const watcherStandaloneParent = "@watch"
 
-// Close removes the recorded worktree(s), best-effort kills tmux pane(s), and
-// removes all state rows matching parent and issueNum.
+// Close verifies and closes the recorded tmux pane(s), then removes the
+// recorded worktree(s) and all state rows matching parent and issueNum.
 func Close(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	return CloseWithMode(opts, parent, issueNum, CloseWorktree, lg)
 }
@@ -116,8 +116,8 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	return exitcode.OK
 }
 
-// CloseTask removes the recorded worktree(s), best-effort kills tmux pane(s),
-// and removes all task state rows matching parent and taskID.
+// CloseTask verifies and closes the recorded tmux pane(s), then removes the
+// recorded worktree(s) and all task state rows matching parent and taskID.
 func CloseTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 	return CloseTaskWithMode(opts, parent, taskID, CloseWorktree, lg)
 }
@@ -457,44 +457,50 @@ func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger, windows map
 // so tests can stub it without a real tmux.
 var relayoutWindow = panelayout.Apply
 
-// closePaneRecords kills/cleans the given panes and records the window of each
-// pane it actually kills into windows. It does not relayout itself; the caller
-// relayouts the accumulated set once so a multi-pane cleanup re-tiles a shared
-// window a single time instead of once per pane. The window is captured at the
-// kill site (after the shell-pane identity check) so a stale pane id that tmux
-// has reused for an unrelated pane never drags that pane's window into a relayout.
+// closeTmuxPane is a test seam for the identity-aware tmux close.
+var closeTmuxPane = tmuxrun.ClosePaneIfOwned
+
+// closePaneRecords stops every target pane before removing any worktree. This
+// two-phase ordering prevents a partially failed close from deleting a cwd
+// underneath an agent that is still running. The caller removes state only
+// after this function succeeds, so a tmux inspection/close failure remains
+// retryable with both the worktree and state row intact.
 func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
-	ok := true
+	// Run every blocking worktree hook before stopping panes. A veto leaves the
+	// entire pane/worktree set untouched instead of closing sibling attached
+	// agents that share the same worktree.
+	if mode.removesWorktree() {
+		for _, pane := range panes {
+			if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
+				continue
+			}
+			if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
+				return false
+			}
+		}
+	}
+
+	// Stop and verify every pane before the first worktree removal. If one
+	// close fails, durable state and all worktrees remain for a retry; panes
+	// already stopped in this pass are safely classified stale on that retry.
+	for _, pane := range panes {
+		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+		if !closeOwnedPane(pane, lg, windows) {
+			return false
+		}
+		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+	}
+
+	if !mode.removesWorktree() {
+		return true
+	}
 	for _, pane := range panes {
 		if pane.IsShell() || pane.IsAttachedAgent() {
-			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			// Keyed attached agents (the plan fan-out coordinator, recorded at
-			// the repo root) take the identity-checked kill like shell panes: a
-			// bare pane-id kill could hit an unrelated pane after id reuse.
-			if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
-				killShellPaneBestEffort(pane, lg, windows)
-			} else {
-				captureWindow(pane.PaneID, windows)
-				killPaneBestEffort(pane, lg)
-			}
-			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
-			continue
-		}
-		if mode == ClosePaneOnly {
-			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-			captureWindow(pane.PaneID, windows)
-			killPaneBestEffort(pane, lg)
-			runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 			continue
 		}
 		hadWorktree := recordedWorktreeExists(pane)
-		if hadWorktree && !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
-			ok = false
-			continue
-		}
 		if !removeWorktree(opts.ProjectRoot, pane, lg) {
-			ok = false
-			continue
+			return false
 		}
 		if hadWorktree {
 			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
@@ -503,12 +509,8 @@ func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logge
 			_ = pruneWorktrees(opts.ProjectRoot, lg)
 			deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
 		}
-		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
-		captureWindow(pane.PaneID, windows)
-		killPaneBestEffort(pane, lg)
-		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
-	return ok
+	return true
 }
 
 // relayoutClosedWindows re-tiles each affected window into the fanout grid.
@@ -656,56 +658,21 @@ func localBranchExists(projectRoot, branch string) bool {
 	return err == nil
 }
 
-func killPaneBestEffort(pane state.Pane, lg Logger) {
-	if strings.TrimSpace(pane.PaneID) == "" {
-		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
-		return
-	}
-	if err := tmuxrun.KillPane(pane.PaneID); err != nil {
-		lg.Warn("%s: tmux kill-pane %s failed; treating pane as stale: %v", paneLabel(pane), pane.PaneID, err)
-	}
-}
-
-// killShellPaneBestEffort kills a pane only after confirming the live pane
-// still carries the recorded @fanout_shell_key. Shell terminals and keyed
-// attached agents (the plan fan-out coordinator) route here.
-func killShellPaneBestEffort(pane state.Pane, lg Logger, windows map[string]struct{}) {
-	if strings.TrimSpace(pane.PaneID) == "" {
-		lg.Warn("%s: no paneId recorded; skipping tmux kill-pane", paneLabel(pane))
-		return
-	}
+func closeOwnedPane(pane state.Pane, lg Logger, windows map[string]struct{}) bool {
 	shellKey := strings.TrimSpace(pane.ShellKey)
-	if shellKey == "" {
-		lg.Warn("%s: no shellKey recorded; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane))
-		return
+	result, err := closeTmuxPane(pane.PaneID, pane.WorktreePath, shellKey)
+	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
+		lg.Err("%s: close tmux pane %s failed; preserving worktree and state: %v", paneLabel(pane), emptyLabel(pane.PaneID), err)
+		return false
 	}
-	live, err := tmuxrun.ListLivePanes()
-	if err != nil {
-		lg.Warn("%s: tmux list-panes failed; skipping keyed pane kill: %v", paneLabel(pane), err)
-		return
+	if result.Status == tmuxrun.ClosePaneStale {
+		lg.Warn("%s: pane %s is gone or its identity changed; treating state as stale", paneLabel(pane), emptyLabel(pane.PaneID))
+		return true
 	}
-	for _, cur := range live {
-		if cur.ID != pane.PaneID {
-			continue
-		}
-		if cur.ShellKey != shellKey {
-			lg.Warn("%s: pane %s identity changed; skipping tmux kill-pane to avoid pane id reuse", paneLabel(pane), pane.PaneID)
-			return
-		}
-		// Identity confirmed: capture the window only now, so a reused pane id
-		// never schedules an unrelated window for relayout.
-		captureWindow(pane.PaneID, windows)
-		killPaneBestEffort(pane, lg)
-		return
+	if result.WindowID != "" {
+		windows[result.WindowID] = struct{}{}
 	}
-	lg.Warn("%s: pane %s is gone; skipping tmux kill-pane", paneLabel(pane), pane.PaneID)
-}
-
-// captureWindow records the window holding paneID into windows, best-effort.
-func captureWindow(paneID string, windows map[string]struct{}) {
-	if id, err := tmuxrun.WindowOfPane(paneID); err == nil && id != "" {
-		windows[id] = struct{}{}
-	}
+	return true
 }
 
 func pruneWorktrees(projectRoot string, lg Logger) bool {

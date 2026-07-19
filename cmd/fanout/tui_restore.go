@@ -22,9 +22,25 @@ import (
 type tuiRestoreReport struct {
 	Rebound       int
 	Restored      int
+	Tracked       int
 	RemovedShells int
 	Skipped       int
 }
+
+type recreatedPane struct {
+	Original     state.Pane
+	Pane         state.Pane
+	Index        int
+	LiveShellKey string
+	Track        bool
+}
+
+var (
+	setRestoredPaneLivenessKey = tmuxrun.SetPaneShellKey
+	closeFreshRestoredPane     = tmuxrun.CloseFreshPane
+	waitRestoredPaneReady      = codexapp.WaitReady
+	closeRestoredPaneIfOwned   = tmuxrun.ClosePaneIfOwned
+)
 
 type tuiRestoreSnapshot struct {
 	Live         map[string]tmuxrun.LivePane
@@ -74,7 +90,7 @@ func preclaimLiveRestoreIdentities(roots []string, snapshot tuiRestoreSnapshot) 
 		}
 		for _, pane := range store.Panes {
 			identity := restoreDedupeKey(pane)
-			if identity != "" && restorePaneAlive(snapshot.Live, pane) {
+			if identity != "" && (restorePaneAlive(snapshot.Live, pane) || restorePaneIdentityUnknown(snapshot.Live, pane)) {
 				claimed[identity] = true
 			}
 		}
@@ -111,7 +127,7 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 	var report tuiRestoreReport
 	changed := false
 	var restoreErr error
-	var createdPaneIDs []string
+	var createdPanes []recreatedPane
 	for idx := 0; idx < len(locked.Panes); idx++ {
 		pane := locked.Panes[idx]
 		identity := restoreDedupeKey(pane)
@@ -123,6 +139,13 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 			if identity != "" {
 				claimed[identity] = true
 			}
+			continue
+		}
+		if restorePaneIdentityUnknown(snapshot.Live, pane) {
+			if identity != "" {
+				claimed[identity] = true
+			}
+			report.Skipped++
 			continue
 		}
 		if pane.IsShell() {
@@ -158,6 +181,7 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 				CurrentPath: pane.WorktreePath,
 				Title:       restorePaneTitle(rebound),
 				AgentState:  "running",
+				ShellKey:    rebound.ShellKey,
 			}
 			report.Rebound++
 			if identity != "" {
@@ -166,43 +190,73 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 			changed = true
 			continue
 		}
-		restored, err := recreateRecordedPane(pane, root, session, commandName)
+		recreated, err := recreateRecordedPane(pane, root, session, commandName)
+		if recreated.Track {
+			recreated.Index = idx
+			locked.Panes[idx] = recreated.Pane
+			createdPanes = append(createdPanes, recreated)
+			snapshot.Live[recreated.Pane.PaneID] = tmuxrun.LivePane{
+				ID:          recreated.Pane.PaneID,
+				CurrentPath: recreated.Pane.WorktreePath,
+				Title:       restorePaneTitle(recreated.Pane),
+				AgentState:  "running",
+				ShellKey:    recreated.LiveShellKey,
+			}
+			if identity != "" {
+				claimed[identity] = true
+			}
+			changed = true
+		}
 		if err != nil {
+			if recreated.Track {
+				report.Tracked++
+			}
 			report.Skipped++
 			restoreErr = errors.Join(restoreErr, err)
 			continue
 		}
-		locked.Panes[idx] = restored
-		createdPaneIDs = append(createdPaneIDs, restored.PaneID)
-		snapshot.Live[restored.PaneID] = tmuxrun.LivePane{
-			ID:          restored.PaneID,
-			CurrentPath: restored.WorktreePath,
-			Title:       restorePaneTitle(restored),
-			AgentState:  "running",
-		}
 		report.Restored++
-		if identity != "" {
-			claimed[identity] = true
-		}
-		changed = true
 	}
 	if changed {
 		if err := locked.Save(); err != nil {
-			killRestoredPanes(createdPaneIDs)
-			return report, err
+			remaining, cleanupErr := stopRestoredPanes(createdPanes)
+			for _, created := range createdPanes {
+				if !remaining[created.Pane.PaneID] {
+					locked.Panes[created.Index] = created.Original
+				}
+			}
+			var recoverySaveErr error
+			if len(remaining) > 0 {
+				recoverySaveErr = locked.Save()
+				if recoverySaveErr != nil {
+					recoverySaveErr = fmt.Errorf("save recovery rows for live restored panes: %w", recoverySaveErr)
+				}
+			}
+			return report, errors.Join(err, cleanupErr, recoverySaveErr)
 		}
 	}
 	return report, restoreErr
 }
 
-func killRestoredPanes(paneIDs []string) {
-	for _, paneID := range paneIDs {
-		_ = tmuxrun.KillPane(paneID)
+func stopRestoredPanes(panes []recreatedPane) (map[string]bool, error) {
+	remaining := map[string]bool{}
+	var stopErr error
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.LiveShellKey) == "" {
+			remaining[pane.Pane.PaneID] = true
+			stopErr = errors.Join(stopErr, fmt.Errorf("restored pane %s has no verified liveness key", pane.Pane.PaneID))
+			continue
+		}
+		if err := stopRestoredPane(pane.Pane.PaneID, pane.LiveShellKey); err != nil {
+			remaining[pane.Pane.PaneID] = true
+			stopErr = errors.Join(stopErr, err)
+		}
 	}
+	return remaining, stopErr
 }
 
 func loadTUIRestoreSnapshot(session string) (tuiRestoreSnapshot, error) {
-	livePanes, err := tmuxrun.ListLivePanes()
+	livePanes, err := tmuxrun.ListLivePanesForIdentity()
 	if err != nil {
 		return tuiRestoreSnapshot{}, err
 	}
@@ -247,41 +301,70 @@ func rebindRecordedPane(pane state.Pane, panesByTitle map[string][]tmuxrun.LiveP
 	return state.Pane{}, false
 }
 
-func recreateRecordedPane(pane state.Pane, root, session, commandName string) (state.Pane, error) {
+func recreateRecordedPane(pane state.Pane, root, session, commandName string) (recreatedPane, error) {
+	result := recreatedPane{Original: pane, Pane: pane}
 	command, statusPath, err := restoreAgentCommand(pane, root, commandName)
 	if err != nil {
-		return pane, err
+		return result, err
 	}
-	paneID, err := tmuxrun.SplitPaneWithAgentCommand(tuiLaunchTarget(session), pane.WorktreePath, command)
-	if err != nil {
-		return pane, err
-	}
-	// Not best-effort: liveness for keyed rows matches on @fanout_shell_key, so
-	// a restored pane without the key would read as stale forever.
-	if key := strings.TrimSpace(pane.ShellKey); key != "" {
-		if err := tmuxrun.SetPaneShellKey(paneID, key); err != nil {
-			_ = tmuxrun.KillPane(paneID)
-			return pane, fmt.Errorf("restore pane liveness key on %s: %w", paneID, err)
+	if strings.TrimSpace(pane.ShellKey) == "" {
+		pane.ShellKey, err = panelaunch.NewShellPaneKey()
+		if err != nil {
+			return result, err
 		}
 	}
+	result.Pane = pane
+	paneID, err := tmuxrun.SplitPaneWithAgentCommand(tuiLaunchTarget(session), pane.WorktreePath, command)
+	if err != nil {
+		return result, err
+	}
+	pane.PaneID = paneID
+	pane.AgentStatus = "running"
+	result.Pane = pane
+	// Not best-effort: every recreated pane must bind its state row to this
+	// exact tmux pane before the new pane id is persisted.
+	if err := setRestoredPaneLivenessKey(paneID, pane.ShellKey); err != nil {
+		stampErr := fmt.Errorf("restore pane liveness key on %s: %w", paneID, err)
+		if cleanupErr := closeFreshRestoredPane(paneID); cleanupErr != nil {
+			result.Track = true
+			return result, errors.Join(stampErr, fmt.Errorf("stop unstamped restored pane %s: %w", paneID, cleanupErr))
+		}
+		return result, stampErr
+	}
+	result.LiveShellKey = pane.ShellKey
 	_ = tmuxrun.SetPaneTitle(paneID, restorePaneTitle(pane))                                      // cosmetic; pane is still usable if tmux rejects title updates
 	_ = tmuxrun.SetPaneLabel(paneID, panelaunch.BorderLabel(pane.Parent, restorePaneTitle(pane))) // cosmetic pane-border label
 	_ = tmuxrun.EnablePaneBorderTitles(paneID)                                                    // cosmetic pane-border label
 	_ = tmuxrun.SetPaneProjectRoot(paneID, root)                                                  // best-effort dashboard keybinding hint
 	_ = tmuxrun.SetPaneWorktreePath(paneID, pane.WorktreePath)                                    // best-effort same-worktree action target
 	if statusPath != "" {
-		status, err := codexapp.WaitReady(statusPath, panelaunch.CodexPlanTUIStartupTimeout)
+		status, err := waitRestoredPaneReady(statusPath, panelaunch.CodexPlanTUIStartupTimeout)
 		_ = os.Remove(statusPath)
 		if err != nil {
-			_ = tmuxrun.KillPane(paneID)
-			return pane, fmt.Errorf("resume Codex Plan Mode TUI in pane %s: %w", paneID, err)
+			statusErr := fmt.Errorf("resume Codex Plan Mode TUI in pane %s: %w", paneID, err)
+			if cleanupErr := stopRestoredPane(paneID, pane.ShellKey); cleanupErr != nil {
+				result.Track = true
+				return result, errors.Join(statusErr, cleanupErr)
+			}
+			return result, statusErr
 		}
 		pane.CodexThreadID = status.ThreadID
 		pane.CodexSessionID = status.SessionID
 	}
-	pane.PaneID = paneID
-	pane.AgentStatus = "running"
-	return pane, nil
+	result.Pane = pane
+	result.Track = true
+	return result, nil
+}
+
+func stopRestoredPane(paneID, shellKey string) error {
+	result, err := closeRestoredPaneIfOwned(paneID, "", shellKey)
+	if err != nil {
+		return fmt.Errorf("stop restored pane %s: %w", paneID, err)
+	}
+	if result.Status == tmuxrun.ClosePaneFailed {
+		return fmt.Errorf("restored pane %s remained live after close", paneID)
+	}
+	return nil
 }
 
 func restoreAgentCommand(pane state.Pane, root, commandName string) (string, string, error) {
@@ -321,14 +404,25 @@ func restorePaneAlive(live map[string]tmuxrun.LivePane, pane state.Pane) bool {
 	if !ok {
 		return false
 	}
-	// Rows recorded with a ShellKey (shell terminals, the plan fan-out
-	// coordinator at the repo root) match on @fanout_shell_key: their
-	// WorktreePath contains every fanout pane, so the path check below cannot
-	// detect pane id reuse.
+	// Rows recorded with a ShellKey match on @fanout_shell_key. Legacy rows fall
+	// back to their worktree path for read-only restore discovery.
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {
 		return strings.TrimSpace(pane.ShellKey) != "" && cur.ShellKey == pane.ShellKey
 	}
 	return pathWithin(cur.CurrentPath, pane.WorktreePath)
+}
+
+// restorePaneIdentityUnknown reports the fail-closed middle state for a keyed
+// record whose pane id is still live but whose tmux liveness option is empty.
+// The pane may still own the running agent process tree, so restore must not
+// launch a replacement until the identity can be resolved.
+func restorePaneIdentityUnknown(live map[string]tmuxrun.LivePane, pane state.Pane) bool {
+	key := strings.TrimSpace(pane.ShellKey)
+	if key == "" {
+		return false
+	}
+	cur, ok := live[pane.PaneID]
+	return ok && strings.TrimSpace(cur.ShellKey) == ""
 }
 
 func restorePaneIDStillBelongsToRecord(livePane tmuxrun.LivePane, pane state.Pane) bool {
@@ -437,18 +531,22 @@ func uniqueRestoreRoots(roots []string) []string {
 func (r *tuiRestoreReport) Add(other tuiRestoreReport) {
 	r.Rebound += other.Rebound
 	r.Restored += other.Restored
+	r.Tracked += other.Tracked
 	r.RemovedShells += other.RemovedShells
 	r.Skipped += other.Skipped
 }
 
 func (r tuiRestoreReport) Changed() bool {
-	return r.Rebound > 0 || r.Restored > 0 || r.RemovedShells > 0
+	return r.Rebound > 0 || r.Restored > 0 || r.Tracked > 0 || r.RemovedShells > 0
 }
 
 func (r tuiRestoreReport) Notice() string {
 	var parts []string
 	if r.Restored > 0 {
 		parts = append(parts, fmt.Sprintf("restored %d pane(s)", r.Restored))
+	}
+	if r.Tracked > 0 {
+		parts = append(parts, fmt.Sprintf("tracked %d pane(s) after failed restore", r.Tracked))
 	}
 	if r.Rebound > 0 {
 		parts = append(parts, fmt.Sprintf("rebound %d pane(s)", r.Rebound))

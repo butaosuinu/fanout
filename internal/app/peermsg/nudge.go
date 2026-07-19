@@ -108,7 +108,7 @@ func deliverNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged
 	if err != nil {
 		return "", "tmux is unavailable", false
 	}
-	lp, ok := matchLivePane(panes, pane.PaneID, pane.WorktreePath)
+	lp, ok := matchLivePane(panes, pane.PaneID, pane.WorktreePath, pane.ShellKey)
 	if !ok {
 		return "", "recipient pane is gone or its id was reused", false
 	}
@@ -124,18 +124,23 @@ func deliverNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged
 }
 
 // matchLivePane returns the live pane recorded as paneID only when it is still
-// the recipient's pane: its id must be live AND it must sit at/under the
-// recorded worktree, because tmux reuses %N ids across server restarts. A row
-// without a recorded worktree (legacy) falls back to an id-only match. This
-// mirrors sessionview.paneAlive — the dashboard's liveness convention — so a
-// reused id is treated identically on both surfaces.
-func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree string) (tmuxrun.LivePane, bool) {
+// the recipient's pane. New rows require the per-pane liveness key; legacy
+// rows fall back to the recorded worktree, or to id-only when that path is also
+// absent. This mirrors sessionview.paneAlive so pane-id reuse is handled the
+// same way before nudge sends terminal input.
+func matchLivePane(panes []tmuxrun.LivePane, paneID, worktree, livenessKey string) (tmuxrun.LivePane, bool) {
 	if paneID == "" {
 		return tmuxrun.LivePane{}, false
 	}
 	for _, lp := range panes {
 		if lp.ID != paneID {
 			continue
+		}
+		if livenessKey = strings.TrimSpace(livenessKey); livenessKey != "" {
+			if lp.ShellKey == livenessKey {
+				return lp, true
+			}
+			return tmuxrun.LivePane{}, false
 		}
 		if strings.TrimSpace(worktree) == "" {
 			return lp, true

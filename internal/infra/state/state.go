@@ -39,9 +39,9 @@ type Pane struct {
 	// (e.g. "main"). Legacy rows recorded before this field load as "".
 	BaseBranch string `json:"baseBranch,omitempty"`
 	PaneID     string `json:"paneId"`
-	// ShellKey is a tmux pane user-option token for TUI shell terminals. Shell
-	// panes can share WorktreePath with the repo root or an agent worktree, so
-	// liveness uses this marker instead of path-prefix matching.
+	// ShellKey is the tmux pane user-option token that binds this state row to
+	// one live pane. New fanout panes always record it; legacy rows load as "".
+	// The historical JSON name is retained for backward compatibility.
 	ShellKey string `json:"shellKey,omitempty"`
 	// SourceParent/SourceIssueNum/SourceTaskID point at the pane whose worktree an
 	// attached-agent pane shares. They are informational; the attached pane keeps

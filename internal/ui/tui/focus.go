@@ -193,11 +193,12 @@ func (m *model) peekSelectedCmd(force bool) tea.Cmd {
 	}
 
 	paneID := pane.PaneID
+	revalidateIdentity := pane.isShell() || strings.TrimSpace(pane.ShellKey) != ""
 	shellAlive := m.opts.ShellPaneAlive
 	capture := m.opts.CapturePaneOutput
 	m.peek = panePeek{PaneID: paneID, Loading: true}
 	return func() tea.Msg {
-		if pane.isShell() && !shellAlive(pane.PaneID, pane.ShellKey) {
+		if revalidateIdentity && !shellAlive(paneID, pane.ShellKey) {
 			return panePeekLoadedMsg{paneID: paneID, at: time.Now(), err: errPaneNotAlive}
 		}
 		out, err := capture(paneID, peekLines)
@@ -255,9 +256,8 @@ func (m *model) markPaneStale(paneID string) {
 }
 
 // paneAliveForAction gates focus/close style actions. Any pane recorded with a
-// ShellKey (shell terminals, the plan fan-out coordinator at the repo root)
-// must match the live pane's @fanout_shell_key: a bare pane id check would let
-// the action target an unrelated pane after tmux reuses the id.
+// ShellKey must match the live pane's @fanout_shell_key: a bare pane id check
+// would let the action target an unrelated pane after tmux reuses the id.
 func paneAliveForAction(pane paneView, paneAlive func(string) bool, shellPaneAlive func(string, string) bool) bool {
 	if pane.isShell() || pane.ShellKey != "" {
 		return shellPaneAlive(pane.PaneID, pane.ShellKey)

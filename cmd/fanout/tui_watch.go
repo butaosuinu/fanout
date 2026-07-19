@@ -240,7 +240,11 @@ func (c *watchLivePaneCache) Alive(pane state.Pane) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	recordedKey := strings.TrimSpace(pane.ShellKey)
 	for _, live := range panes {
+		if pane.PaneID == live.ID && recordedKey != "" && strings.TrimSpace(live.ShellKey) == "" {
+			return false, fmt.Errorf("pane %s liveness key is unavailable", pane.PaneID)
+		}
 		if watchPaneMatchesLive(pane, live) {
 			return true, nil
 		}
@@ -250,12 +254,12 @@ func (c *watchLivePaneCache) Alive(pane state.Pane) (bool, error) {
 
 func (c *watchLivePaneCache) load() ([]tmuxrun.LivePane, error) {
 	if c == nil {
-		return tmuxrun.ListLivePanes()
+		return tmuxrun.ListLivePanesForIdentity()
 	}
 	if !c.loaded {
 		list := c.list
 		if list == nil {
-			list = tmuxrun.ListLivePanes
+			list = tmuxrun.ListLivePanesForIdentity
 		}
 		c.panes, c.err = list()
 		c.loaded = true
@@ -267,8 +271,11 @@ func watchPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane) bool {
 	if pane.PaneID != live.ID {
 		return false
 	}
+	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {
+		return shellKey == live.ShellKey
+	}
 	if pane.IsShell() {
-		return pane.ShellKey != "" && pane.ShellKey == live.ShellKey
+		return false
 	}
 	worktree := strings.TrimSpace(pane.WorktreePath)
 	if worktree == "" {

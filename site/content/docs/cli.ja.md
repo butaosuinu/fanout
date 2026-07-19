@@ -249,11 +249,13 @@ Lifecycle コマンドは `.fanout/state.json` の記録済み entry だけを�
 `.fanout/state.json` には `schemaVersion` と、ペインごとに 1 行を保存します。
 各行は `parent` / `issueNum` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を必ず持ちます。
 空のとき省略されるキーは `taskId` / `kind` / `shellKey` / `baseBranch` / `wave` / `agentStatus`、Codex メタデータ(`codexPlanMode` / `codexThreadId` / `codexSessionId`)、attach 元(`sourceParent` / `sourceIssueNum` / `sourceTaskId`)です。
-TUI の shell terminal は `kind: "shell"` で記録されるため、close は tmux ペインと state 行だけを消します(`shellKey` が行と live tmux ペインを結びつけます)。
+`shellKey` は、新しく作成した各 state 行を 1 つの live tmux ペインに結びつけます。
+TUI の shell terminal は `kind: "shell"` で記録されるため、close は tmux ペインと state 行だけを消します。
 既存 worktree に追加した agent は `kind: "attached-agent"` で記録されます。
+launch または restore に失敗し、新しい pane の停止を確認できない場合は recovery 用の state 行と作成済み worktree を残します。後から lifecycle コマンドで安全に再試行できます。
 
 - `fanout <parent> --merge <NUM>` は、記録済み branch を `git -C <project-root> merge --ff-only <recorded-branch>` で取り込む。fast-forward できない場合は git エラーを報告するだけで、エディタや conflict 解決フローは起動しない。
-- `fanout <parent> --close <NUM>` は、記録済み worktree を `git worktree remove <path> --force` で削除し、記録済み tmux ペインが残っていれば kill し、state entry を削除して `git worktree prune` を実行する。
+- `fanout <parent> --close <NUM>` は、記録済み tmux ペインを `shellKey` で照合し、停止を再確認してから worktree と state entry を削除する。`shellKey` のない旧 state 行は、pane ID が不在だと確認できた場合だけ削除する。照合できない場合やペインが残る場合は失敗し、再実行できるように worktree と state entry を残す。
 - `fanout <parent> --cleanup` は、issue が `CLOSED`、または closed-by PR に `MERGED` を含む記録済み子をまとめて後始末する。保留中の子は記録されたまま残る。
 
 ```bash
@@ -304,7 +306,7 @@ fan-out 中（`worktree_created`、`before_pane_create`）と上記の lifecycle
 | `before_worktree_remove` | Blocking。`--close` / `--cleanup` の `git worktree remove` 前。 |
 | `worktree_removed` | Background。記録済み worktree の削除後。 |
 | `before_pane_close` | Background。記録済みペインを閉じる前。 |
-| `pane_closed` | Background。ペイン close 試行後。 |
+| `pane_closed` | Background。ペインの停止または stale を確認した後。 |
 | `pre_merge` | Blocking。`git merge --ff-only` 前。 |
 | `post_merge` | Background。fast-forward merge 成功後。 |
 

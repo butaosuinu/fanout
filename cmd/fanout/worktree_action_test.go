@@ -71,7 +71,7 @@ func TestAttachTargetFromAttachedAgentPreservesOriginalSourceIdentity(t *testing
 func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T) {
 	repo := t.TempDir()
 	worktree := filepath.Join(repo, ".fanout", "worktrees", "child")
-	writeLifecycleState(t, repo, state.Pane{
+	writeRawLifecycleState(t, repo, state.Pane{
 		Parent:       "100",
 		IssueNum:     101,
 		PaneID:       "%42",
@@ -105,13 +105,13 @@ func TestFindRecordedPaneByIDSearchesRawSiblingStores(t *testing.T) {
 	sibling := t.TempDir()
 	homeWorktree := filepath.Join(repo, ".fanout", "worktrees", "child")
 	siblingWorktree := filepath.Join(sibling, ".fanout", "worktrees", "child")
-	writeLifecycleState(t, repo, state.Pane{
+	writeRawLifecycleState(t, repo, state.Pane{
 		Parent:       "100",
 		IssueNum:     101,
 		PaneID:       "%home",
 		WorktreePath: homeWorktree,
 	})
-	writeLifecycleState(t, sibling, state.Pane{
+	writeRawLifecycleState(t, sibling, state.Pane{
 		Parent:       "100",
 		IssueNum:     101,
 		PaneID:       "%sibling",
@@ -142,7 +142,7 @@ func TestFindRecordedPaneByIDSearchesRawSiblingStores(t *testing.T) {
 func TestFindRecordedPaneByIDAllowsProjectRootHintWhenCurrentPathIsStale(t *testing.T) {
 	repo := t.TempDir()
 	worktree := filepath.Join(repo, ".fanout", "worktrees", "child")
-	writeLifecycleState(t, repo, state.Pane{
+	writeRawLifecycleState(t, repo, state.Pane{
 		Parent:       "100",
 		IssueNum:     101,
 		PaneID:       "%42",
@@ -163,7 +163,7 @@ func TestFindRecordedPaneByIDRejectsProjectRootHintForDuplicatePaneID(t *testing
 	repo := t.TempDir()
 	first := filepath.Join(repo, ".fanout", "worktrees", "first")
 	second := filepath.Join(repo, ".fanout", "worktrees", "second")
-	writeLifecycleState(t, repo,
+	writeRawLifecycleState(t, repo,
 		state.Pane{Parent: "100", IssueNum: 101, PaneID: "%42", WorktreePath: first},
 		state.Pane{Parent: "100", IssueNum: 102, PaneID: "%42", WorktreePath: second},
 	)

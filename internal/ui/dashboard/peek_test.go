@@ -411,7 +411,7 @@ func TestPeekShellPanePassesShellIdentityToVerifier(t *testing.T) {
 	}
 }
 
-func TestVerifyPaneAgainstLiveUsesShellKeyForShellRows(t *testing.T) {
+func TestVerifyPaneAgainstLiveUsesLivenessKeyForKeyedRows(t *testing.T) {
 	shell := sessionview.PaneView{
 		Kind:         state.PaneKindShell,
 		PaneID:       "%5",
@@ -428,7 +428,19 @@ func TestVerifyPaneAgainstLiveUsesShellKeyForShellRows(t *testing.T) {
 	}
 
 	shell.ShellKey = "shell-stale"
-	if err := verifyPaneAgainstLive(shell, live); err == nil || !strings.Contains(err.Error(), "recorded shell terminal") {
-		t.Fatalf("mismatched shell key err = %v, want recorded shell terminal error", err)
+	if err := verifyPaneAgainstLive(shell, live); err == nil || !strings.Contains(err.Error(), "recorded fanout pane") {
+		t.Fatalf("mismatched shell key err = %v, want recorded fanout pane error", err)
+	}
+
+	agent := sessionview.PaneView{PaneID: "%5", ShellKey: "shell-child", WorktreePath: "/repo/child"}
+	live[0].CurrentPath = agent.WorktreePath
+	live[0].ShellKey = "shell-reused"
+	if err := verifyPaneAgainstLive(agent, live); err == nil || !strings.Contains(err.Error(), "recorded fanout pane") {
+		t.Fatalf("ordinary pane mismatched key err = %v, want recorded fanout pane error", err)
+	}
+	live[0].CurrentPath = "/tmp/changed"
+	live[0].ShellKey = agent.ShellKey
+	if err := verifyPaneAgainstLive(agent, live); err != nil {
+		t.Fatalf("ordinary pane matching key with changed cwd failed: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -73,8 +74,8 @@ printf '\n' >> "$TMUX_LOG"
 `)
 	t.Setenv("TMUX_LOG", tmuxLog)
 	writeRawLifecycleState(t, repo,
-		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/close-child-101-a", PaneID: "%101", WorktreePath: firstPath},
-		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/close-child-101-b", PaneID: "%102", WorktreePath: secondPath},
+		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/close-child-101-a", PaneID: "%101", ShellKey: "shell-duplicate-a", WorktreePath: firstPath},
+		state.Pane{Parent: "84", IssueNum: 101, BranchName: "fanout/close-child-101-b", PaneID: "%102", ShellKey: "shell-duplicate-b", WorktreePath: secondPath},
 	)
 	t.Setenv(fanoutStatePathEnv, state.Path(repo))
 
@@ -855,6 +856,45 @@ exit 99
 	}
 }
 
+func TestCmdClosePreservesLiveLegacyPaneWithoutLivenessKey(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	worktreePath := filepath.Join(repo, ".fanout", "worktrees", "legacy-child-101")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "fanout/legacy-child-101", worktreePath, "HEAD")
+	tmuxLog := installLifecycleScript(t, "tmux", lifecycleLoggingTmuxScript)
+	t.Setenv("TMUX_LOG", tmuxLog)
+	writeRawLifecycleState(t, repo, state.Pane{
+		Parent:       "84",
+		IssueNum:     101,
+		BranchName:   "fanout/legacy-child-101",
+		PaneID:       "%101",
+		WorktreePath: worktreePath,
+	})
+	t.Setenv(fanoutStatePathEnv, state.Path(repo))
+
+	code := cmdClose(&cliflags.Config{ParentRef: "84", CloseNum: 101}, discardLogger())
+
+	if code != exitcode.Env {
+		t.Fatalf("cmdClose code = %d, want %d", code, exitcode.Env)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("legacy worktree was removed after unverified close: %v", err)
+	}
+	loaded, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Find("84", 101); !ok {
+		t.Fatal("legacy state row was removed after unverified close")
+	}
+	body, err := os.ReadFile(tmuxLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "kill-pane -t %101") {
+		t.Fatalf("tmux log = %q, legacy live pane must not be killed", body)
+	}
+}
+
 func TestCmdMergeFastForwardsRecordedBranch(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	baseHead := gitTrimTest(t, repo, "rev-parse", "HEAD")
@@ -1385,6 +1425,11 @@ func initLifecycleRepo(t *testing.T) string {
 
 func writeLifecycleState(t *testing.T, repo string, panes ...state.Pane) {
 	t.Helper()
+	for idx := range panes {
+		if strings.TrimSpace(panes[idx].PaneID) != "" && strings.TrimSpace(panes[idx].ShellKey) == "" {
+			panes[idx].ShellKey = fmt.Sprintf("shell-test-%d-%s", idx, strings.TrimPrefix(panes[idx].PaneID, "%"))
+		}
+	}
 	locked, err := state.LockProject(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -1395,6 +1440,7 @@ func writeLifecycleState(t *testing.T, repo string, panes ...state.Pane) {
 			t.Fatal(err)
 		}
 	}
+	writeLifecycleTmuxRows(t, repo, panes)
 }
 
 func writeRawLifecycleState(t *testing.T, repo string, panes ...state.Pane) {
@@ -1409,11 +1455,85 @@ func writeRawLifecycleState(t *testing.T, repo string, panes ...state.Pane) {
 	if err := os.WriteFile(state.Path(repo), append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeLifecycleTmuxRows(t, repo, panes)
+}
+
+const lifecycleLoggingTmuxScript = `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+`
+
+const lifecycleStatefulTmuxScript = `#!/bin/sh
+printf '%s ' "$@" >> "$TMUX_LOG"
+printf '\n' >> "$TMUX_LOG"
+case "$1 $2 $3" in
+"list-panes -a -F")
+	case "$4" in
+	*pane_current_path*) column=2 ;;
+	*pane_title*) column=3 ;;
+	*fanout_agent_state*) column=4 ;;
+	*fanout_shell_key*) column=5 ;;
+	*fanout_project_root*) column=6 ;;
+	*fanout_worktree_path*) column=7 ;;
+	*fanout_role*) column=8 ;;
+	*session_id*) column=9 ;;
+	*) exit 0 ;;
+	esac
+	awk -F '\t' -v column="$column" 'BEGIN { OFS="\t" } { print $1, $column }' "$TMUX_TEST_LIVE_PANES"
+	;;
+"kill-pane -t "*)
+	tmp="$TMUX_TEST_LIVE_PANES.tmp"
+	awk -F '\t' -v pane="$3" '$1 != pane' "$TMUX_TEST_LIVE_PANES" > "$tmp"
+	mv "$tmp" "$TMUX_TEST_LIVE_PANES"
+	;;
+esac
+`
+
+func writeLifecycleTmuxRows(t *testing.T, repo string, panes []state.Pane) {
+	t.Helper()
+	path := os.Getenv("TMUX_TEST_LIVE_PANES")
+	if path == "" {
+		return
+	}
+	var rows strings.Builder
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.PaneID) == "" {
+			continue
+		}
+		currentPath := pane.WorktreePath
+		if strings.TrimSpace(currentPath) == "" {
+			currentPath = repo
+		}
+		fields := []string{
+			pane.PaneID,
+			currentPath,
+			pane.DisplayName,
+			"",
+			pane.ShellKey,
+			repo,
+			pane.WorktreePath,
+			pane.Kind,
+			"$0",
+		}
+		rows.WriteString(strings.Join(fields, "\t"))
+		rows.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(rows.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func installLifecycleScript(t *testing.T, name, script string) string {
 	t.Helper()
 	binDir := t.TempDir()
+	if name == "tmux" && script == lifecycleLoggingTmuxScript {
+		script = lifecycleStatefulTmuxScript
+		livePanesPath := filepath.Join(t.TempDir(), "live-panes.tsv")
+		if err := os.WriteFile(livePanesPath, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TMUX_TEST_LIVE_PANES", livePanesPath)
+	}
 	path := filepath.Join(binDir, name)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -1454,6 +1574,9 @@ printf '%s ' "$@" >> "$TMUX_LOG"
 printf '\n' >> "$TMUX_LOG"
 case "$1 $2 $3" in
 "list-panes -a -F")
+	if [ ! -s "$TMUX_LIVE_ACTIVE_FILE" ]; then
+		exit 0
+	fi
 	case "$4" in
 	*pane_current_path*)
 		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_PATH"
@@ -1467,14 +1590,25 @@ case "$1 $2 $3" in
 	*fanout_shell_key*)
 		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_SHELL_KEY"
 		;;
+	*fanout_project_root*|*fanout_worktree_path*)
+		printf '%s\t%s\n' "$TMUX_LIVE_PANE_ID" "$TMUX_LIVE_PATH"
+		;;
 	esac
+	;;
+"kill-pane -t "*)
+	: > "$TMUX_LIVE_ACTIVE_FILE"
 	;;
 esac
 `)
+	activePath := filepath.Join(t.TempDir(), "live-pane-active")
+	if err := os.WriteFile(activePath, []byte("active\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMUX_LIVE_PANE_ID", paneID)
 	t.Setenv("TMUX_LIVE_PATH", path)
 	t.Setenv("TMUX_LIVE_TITLE", title)
 	t.Setenv("TMUX_LIVE_SHELL_KEY", shellKey)
+	t.Setenv("TMUX_LIVE_ACTIVE_FILE", activePath)
 	return logPath
 }
 
