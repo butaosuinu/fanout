@@ -190,14 +190,22 @@ touching only class-A packages can rely on AI review.
   prefix is a fallback) and the peer roster; `internal/infra/msgstore` is the
   send/post/inbox/board/mark-read query layer. The briefing coordination
   section is shared by `claude` and `codex` panes — distinct from Claude-only
-  Agent Teams. Messaging is pull-based with one push assist: `fanout msg`
-  nudges gate on `@fanout_agent_state` (`running` / `working` / `plan` / `idle`
-  qualify). That option carries the 6-value contract
+  Agent Teams. Messages persist to the bus and are read by pull (`inbox` /
+  `board`) or by the `--team` push lanes (see
+  `docs/session-messaging-push.ja.md`): `fanout msg watch` — a blocking
+  follower that marks messages read on emit — feeds claude panes via the
+  Monitor tool, and the codex team bridge (`__codex-team-tui`,
+  `internal/infra/codexapp`) injects unread rows into an idle `turn/start`.
+  Neither push lane writes to tmux input; `fanout msg nudge` is the only push
+  that does, gated on `@fanout_agent_state` (`running` / `working` / `plan` /
+  `idle` qualify). That option carries the 6-value contract
   running/working/plan/blocked/idle/done: the launch wrapper writes
   running/done, launch-injected Claude hooks refine claude panes to
-  working/blocked/idle, and the Codex Plan Mode controller reports working/plan
-  around the fanout-driven initial turn. The nudge gate never includes blocked —
-  the nudge's Enter could activate a focused permission dialog.
+  working/blocked/idle, the Codex Plan Mode controller reports working/plan
+  around the fanout-driven initial turn, and the codex team bridge reports
+  working/idle/blocked across the bridged session. The nudge gate never
+  includes blocked — the nudge's Enter could activate a focused permission
+  dialog.
 
 ## Be Careful
 

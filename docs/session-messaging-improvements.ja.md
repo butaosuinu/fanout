@@ -1,5 +1,13 @@
 # セッション間メッセージング改善案
 
+> **改訂(2026-07)**: 非目標のうち「常時 monitor loop は足さない」は
+> [push 型メッセージングの決定記録](session-messaging-push.ja.md)(issue #496)
+> により改訂した。ペイン専属・セッションスコープの watcher(Claude の Monitor
+> プロセスと Codex ブリッジ)は許可する。daemon・socket・broker・parent 境界を
+> 越える registry は引き続き禁止。「メッセージ本文を tmux の入力として
+> 流さない」「`blocked` 状態のペインへ Enter を送らない」は push 経路でも維持
+> される。以下の本文は当時の記録のまま残す。
+
 `fanout msg` は parent ごとの SQLite バスで兄弟ペインの協調を扱う。
 現状でも `peers`、`inbox`、`board`、`send`、`post`、`mark-read`、`register`、`nudge` があり、メッセージ本文は DB に残る。
 改善対象は「読む順序」と「伝えたことに気付く手掛かり」であり、別のメッセンジャーを fanout に載せることではない。

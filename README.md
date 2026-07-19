@@ -114,6 +114,35 @@ Three moves — **prepare → fan out → fold away**:
 and `--team` + `fanout msg` give sibling panes lightweight peer messaging — both
 detailed in the [workflow docs](https://butaosuinu.github.io/fanout/docs/workflow/).
 
+## Sibling messaging (fanout msg)
+
+`--team` opts a run into sibling messaging: each child's standard briefing
+gains a coordination section, and the panes are seeded into a peer registry
+backed by a per-parent SQLite bus (`fanout msg peers` / `inbox` / `board` /
+`send` / `post` / `nudge`). Codex Plan Mode children keep the minimal Plan
+briefing without the section, but are still seeded.
+
+Messages persist in the bus and siblings read them at their own checkpoints;
+on top of that pull loop, `claude` panes and fresh non-Plan `codex` panes get
+a push lane (Codex Plan Mode panes stay pull-based):
+
+- `fanout msg watch` follows the bus and emits each new message (1:1 and
+  board) as one line; an emitted message is marked read (mark-on-emit).
+- `claude` panes are briefed to start `fanout msg watch` under the Monitor
+  tool (persistent) as their first tool action, then keep working.
+- Fresh non-Plan `codex` panes launched with `--team` start through an
+  app-server bridge that injects unread messages into a turn while the thread
+  is idle; restored panes resume without the bridge and pull instead.
+- In a running pane without a working lane — no Monitor for `claude`, a
+  restored `codex` pane — siblings fall back to pull (`inbox` / `board`) plus
+  `nudge`, a best-effort hint that is never sent to a `blocked` pane. After an
+  injection failure, recover with `fanout msg inbox --all` — the failed batch
+  is already marked read. A codex bridge that fails to start fails the launch
+  itself and is cleaned up.
+
+This is separate from the Watcher mode below: that watches GitHub labels, not
+messages.
+
 ## Watcher mode
 
 The watcher runs only while the no-argument TUI console is open. It is off by

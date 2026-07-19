@@ -185,6 +185,7 @@ Inside a pane, use:
 - `fanout msg peers`
 - `fanout msg inbox [--all] [--mark-read]`
 - `fanout msg board [--all]`
+- `fanout msg watch [--interval S]`
 - `fanout msg send --to <N> [--kind K] "<body>"`
 - `fanout msg post [--kind K] "<body>"`
 - `fanout msg mark-read [--id N ...|--all]`
@@ -197,9 +198,10 @@ target agent states `running`, `working`, `plan`, or `idle`, but never
 `blocked`, `done`, or an unknown state. A skipped nudge remains success because
 the stored message is authoritative.
 
-Treat messaging as pull-based for Claude panes and restored Codex panes, even
-with the optional hint. Never put secrets in the plaintext per-parent SQLite
-database under `/tmp`.
+Claude `--team` panes are briefed to start `fanout msg watch` under their
+Monitor tool, so new messages stream in and are marked read on delivery
+(mark-on-emit). Restored Codex panes stay pull-based. Never put secrets in the
+plaintext per-parent SQLite database under `/tmp`.
 
 For fresh non-Plan Codex panes, `--team` also starts an app-server bridge. It
 drains unread rows only while Codex is idle, batches them into one quoted turn,

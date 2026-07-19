@@ -71,7 +71,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `notify` | 通知送出 | M |
 | infra | `runtime` | git root・tmux ターゲット解決 | M |
 | infra | `displayname` | 表示名生成 | M |
-| infra | `codexapp` | Codex app-server クライアント | M |
+| infra | `codexapp` | Codex app-server クライアント(Plan Mode 制御・team メッセージブリッジ) | M |
 | infra | `atomicfs` | 原子的ファイル書き込み(state.json / token 入り dashboard.json の共通経路) | M |
 | infra | `gitroot` | git root 探索(project root・state root・親 repo 判定の入力) | M |
 | app | `panelayout` | ペインレイアウト計算 | M |
@@ -118,14 +118,16 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **briefing はエージェントに注入されるプロンプト本文**: `briefing.Render` /
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
-  `__tui-help-popup` / `__codex-plan-tui` / `__post-work-review-json` は
-  `TestSelfExecSubcommandNames` が文字列を固定する。dispatch と popup 起動は
-  単一定数を参照するが、
-  `infra/codexapp/launch.go` の起動コマンド生成はリテラル埋め込みが残る
-  (burn-down 参照)。`__codex-plan-tui` を変えると実行中バイナリの Plan Mode
-  連携が壊れるため、変更時は 3 参照元すべての追随が要る。
-  `__post-work-review-json` は `codex/tools/post-work-review.sh` もリテラルで
-  呼び出すため、command 定数と同時に更新する。
+  `__tui-help-popup` / `__tui-close-popup` / `__codex-plan-tui` /
+  `__codex-team-tui` / `__post-work-review-json` は
+  `TestSelfExecSubcommandNames` が文字列を固定する(`__tui-settings-popup` は
+  dispatch と popup 起動に実在するがテスト未登録)。dispatch・popup 起動・
+  `infra/codexapp/launch.go` の起動コマンド生成は単一定数を参照する
+  (launch.go のリテラル埋め込みは #501 で解消。`codex_plan_tui.go` /
+  `codex_team_tui.go` の usage 文字列にはリテラルが残る)。`__codex-plan-tui` /
+  `__codex-team-tui` を変えると実行中バイナリの Plan Mode / team ブリッジ連携が
+  壊れる。`__post-work-review-json` は `codex/tools/post-work-review.sh` も
+  リテラルで呼び出すため、command 定数と同時に更新する。
 - **reviewer 結果は fail-closed**: child rollout の role・parent・sandbox・approval・bundle path・session UUID を検証する。cache の `valid` は JSON 全体の検証と
   全 projection file の書き込みが成功した後にだけ作る。欠損または非対応の
   helper で PR review marker を書かない。
@@ -147,8 +149,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   にある。
 - `shellQuote` の実装が `app/run` / `app/panelaunch` / `infra/tmuxrun` の
   3 箇所にある。
-- `infra/codexapp/launch.go` の起動コマンド生成が `__codex-plan-tui` を
-  リテラル埋め込みしている(`PlanTUICommand` 定数への統一が未了)。
 - `app` から `infra` への直接 import は既存分を容認するが、新規コードは
   `watch.IO` のような port 経由を優先する。
 
