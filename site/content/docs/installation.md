@@ -87,6 +87,9 @@ make uninstall      # removes paths except the Codex review gate
 The checkout Makefile never creates, replaces, or removes the Codex
 `post-work-review` package. Install, update, or remove that gate with the
 checksum-verified release installer above, not with code from the review target.
+If the retired driver remains under `CODEX_DIR` or the effective `CODEX_HOME`,
+`make install` and `make link` stop before replacing the binary. Run the release
+installer to migrate it.
 Review a gate-changing branch from a trusted checkout or by a human.
 
 Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.

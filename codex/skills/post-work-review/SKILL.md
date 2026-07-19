@@ -77,7 +77,9 @@ reviewer output or require a result schema.
    never from the review target. The checksum-verified release installer owns
    this package; repository `make install`, `make link`, and `make uninstall`
    never create, replace, or remove it. Stop on a missing, older, linked, or
-   target-derived install. The helper repeats the path check.
+   target-derived install. Repository install and link also stop if the retired
+   driver remains under `CODEX_DIR` or the effective `CODEX_HOME`; migrate it
+   with the release installer. The helper repeats the path check.
 5. Run `"$helper" clear` with the recorded repository root as the working
    directory before the first spawn. This removes any stale marker.
 6. From that same working directory, run

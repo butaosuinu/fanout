@@ -171,29 +171,121 @@ run_pr_gate() {
   for target in install-integrations link-integrations uninstall-integrations; do
     root="$BATS_TEST_TMPDIR/$target"
     codex_dir="$root/codex"
-    mkdir -p "$codex_dir/skills/post-work-review" "$codex_dir/tools" "$codex_dir/agents"
+    mkdir -p "$codex_dir/skills/post-work-review"
     printf 'trusted installed gate\n' >"$codex_dir/skills/post-work-review/SKILL.md"
-    for review_file in \
-      tools/post-work-review.sh \
-      agents/post-work-reviewer.toml \
-      agents/post-work-reviewer.md \
-      agents/post-work-verifier.toml \
-      agents/post-work-verifier.md; do
-      printf '%s\n' "$review_file" >"$codex_dir/$review_file"
-    done
-    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
+    if [ "$target" = uninstall-integrations ]; then
+      mkdir -p "$codex_dir/tools" "$codex_dir/agents"
+      for review_file in \
+        tools/post-work-review.sh \
+        agents/post-work-reviewer.toml \
+        agents/post-work-reviewer.md \
+        agents/post-work-verifier.toml \
+        agents/post-work-verifier.md; do
+        printf '%s\n' "$review_file" >"$codex_dir/$review_file"
+      done
+    fi
+    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CODEX_HOME="$codex_dir" \
+      CLAUDE_DIR="$root/claude"
     [ "$status" -eq 0 ]
     grep -Fxq 'trusted installed gate' "$codex_dir/skills/post-work-review/SKILL.md"
-    for review_file in \
-      tools/post-work-review.sh \
-      agents/post-work-reviewer.toml \
-      agents/post-work-reviewer.md \
-      agents/post-work-verifier.toml \
-      agents/post-work-verifier.md; do
-      grep -Fxq "$review_file" "$codex_dir/$review_file"
-    done
+    if [ "$target" = uninstall-integrations ]; then
+      for review_file in \
+        tools/post-work-review.sh \
+        agents/post-work-reviewer.toml \
+        agents/post-work-reviewer.md \
+        agents/post-work-verifier.toml \
+        agents/post-work-verifier.md; do
+        grep -Fxq "$review_file" "$codex_dir/$review_file"
+      done
+    fi
   done
   [ -L "$BATS_TEST_TMPDIR/link-integrations/codex/skills/fanout" ]
+}
+
+@test "checkout install and link reject retired drivers under either Codex root" {
+  local repo="$BATS_TEST_TMPDIR/legacy-make-integrations" \
+    target root codex_dir codex_home driver_root driver index=0
+  setup_integration_repo "$repo"
+
+  for target in install-integrations link-integrations; do
+    for driver_root in install runtime; do
+      index=$((index + 1))
+      root="$BATS_TEST_TMPDIR/legacy-make-$index"
+      codex_dir="$root/install"
+      codex_home="$root/runtime"
+      driver="$root/$driver_root/tools/post-work-review.sh"
+      mkdir -p "$(dirname "$driver")" "$codex_dir/skills/post-work-review" \
+        "$codex_home/skills/post-work-review"
+      printf 'trusted installed gate\n' >"$codex_dir/skills/post-work-review/SKILL.md"
+      printf 'trusted runtime gate\n' >"$codex_home/skills/post-work-review/SKILL.md"
+      if [ "$index" -eq 4 ]; then
+        ln -s "$root/missing-driver" "$driver"
+      else
+        printf 'retired driver\n' >"$driver"
+      fi
+
+      run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CODEX_HOME="$codex_home" \
+        CLAUDE_DIR="$root/claude"
+      [ "$status" -ne 0 ]
+      [[ "$output" == *"retired Codex post-work-review driver remains at $driver"* ]]
+      if [ "$index" -eq 4 ]; then
+        [ -L "$driver" ]
+        [ ! -e "$driver" ]
+      else
+        grep -Fxq 'retired driver' "$driver"
+      fi
+      grep -Fxq 'trusted installed gate' "$codex_dir/skills/post-work-review/SKILL.md"
+      grep -Fxq 'trusted runtime gate' "$codex_home/skills/post-work-review/SKILL.md"
+      [ ! -e "$codex_dir/skills/fanout" ]
+      [ ! -e "$codex_home/skills/fanout" ]
+    done
+  done
+
+  root="$BATS_TEST_TMPDIR/legacy-make-custom-home"
+  codex_home="$root/runtime"
+  driver="$codex_home/tools/post-work-review.sh"
+  mkdir -p "$(dirname "$driver")" "$codex_home/skills/post-work-review"
+  printf 'retired driver\n' >"$driver"
+  printf 'trusted runtime gate\n' >"$codex_home/skills/post-work-review/SKILL.md"
+  run make -C "$repo" link-integrations CODEX_HOME="$codex_home" \
+    CLAUDE_DIR="$root/claude"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"retired Codex post-work-review driver remains at $driver"* ]]
+  [[ "$output" == *'run fanout update without --no-skills'* ]]
+  grep -Fxq 'trusted runtime gate' "$codex_home/skills/post-work-review/SKILL.md"
+  [ ! -e "$codex_home/skills/fanout" ]
+
+  root="$BATS_TEST_TMPDIR/legacy-make-effective-home"
+  codex_dir="$root/install"
+  driver="$root/home/.codex/tools/post-work-review.sh"
+  mkdir -p "$(dirname "$driver")"
+  printf 'retired driver\n' >"$driver"
+  run make -C "$repo" install-integrations CODEX_DIR="$codex_dir" CODEX_HOME= \
+    HOME="$root/home" CLAUDE_DIR="$root/claude"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"retired Codex post-work-review driver remains at $driver"* ]]
+  [ ! -e "$codex_dir/skills/fanout" ]
+
+  root="$BATS_TEST_TMPDIR/legacy-make-parallel"
+  codex_dir="$root/codex"
+  driver="$codex_dir/tools/post-work-review.sh"
+  mkdir -p "$(dirname "$driver")" "$repo/web/node_modules" \
+    "$repo/internal/ui/dashboard/static"
+  printf 'retired driver\n' >"$driver"
+  printf '{}\n' >"$repo/web/package.json"
+  printf 'lockfileVersion: 9\n' >"$repo/web/pnpm-lock.yaml"
+  touch "$repo/web/node_modules/.installed"
+  printf '#!/bin/sh\n: >"$FANOUT_BUILD_MARKER"\n' >"$root/fake-pnpm"
+  chmod 0755 "$root/fake-pnpm"
+
+  run env FANOUT_BUILD_MARKER="$root/build-started" make -j2 -C "$repo" link \
+    CODEX_DIR="$codex_dir" CODEX_HOME="$codex_dir" CLAUDE_DIR="$root/claude" \
+    BINDIR="$root/bin" PNPM="$root/fake-pnpm"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"retired Codex post-work-review driver remains at $driver"* ]]
+  [ ! -e "$root/build-started" ]
+  [ ! -e "$repo/fanout-go" ]
+  [ ! -e "$root/bin/fanout" ]
 }
 
 @test "install and link do not bootstrap post-work-review from a target checkout" {
@@ -205,7 +297,8 @@ run_pr_gate() {
   for target in install-integrations link-integrations; do
     root="$BATS_TEST_TMPDIR/rejected-$target"
     codex_dir="$root/codex"
-    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
+    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CODEX_HOME="$codex_dir" \
+      CLAUDE_DIR="$root/claude"
     [ "$status" -eq 0 ]
     [ ! -e "$codex_dir/skills/post-work-review" ]
   done

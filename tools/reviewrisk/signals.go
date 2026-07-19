@@ -145,12 +145,14 @@ func criticalReasons(d Diff) []Reason {
 		if touches(fc, "internal/arch/") {
 			reasons = append(reasons, Reason{Signal: sigGuardModified, Level: LevelCritical, File: fc.Path, Detail: "層ガード(internal/arch)変更"})
 		}
-		// S5 review-gate-modified: any touch of .claude/ or the post-work-review
-		// gate skills installed from codex/ and claude/ (they produce the review
-		// marker the PR gate checks; weakening them weakens the gate itself).
+		// S5 review-gate-modified: any touch of .claude/, the post-work-review
+		// gate skills, or the retired Codex driver sentinel. Re-adding that driver
+		// switches release installation back to the legacy migration path.
 		if touches(fc, ".claude/") ||
 			touches(fc, "codex/skills/post-work-review/") ||
-			touches(fc, "claude/skills/post-work-review/") {
+			touches(fc, "claude/skills/post-work-review/") ||
+			fc.Path == "codex/tools/post-work-review.sh" ||
+			fc.OldPath == "codex/tools/post-work-review.sh" {
 			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})
 		}
 		// S6 risk-tool-modified: this tool or either of its workflows (the

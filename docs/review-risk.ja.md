@@ -67,7 +67,7 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
 | S3 | skip-added | 追加行に `\b\w+\.(Skip\|Skipf\|SkipNow)\(`(receiver 名は固定せず `t` 以外の `*testing.T`/`*testing.B`、例 `tb.Skip(` / `b.Skip(` も拾う。`t.Skipped()` は Skip 直後の `(` 要求で非マッチ)、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` / `*.spec.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
 | S4 | guard-modified | `internal/arch/` の変更 |
-| S5 | review-gate-modified | `.claude/` と post-work-review skill(`codex/skills/post-work-review/` / `claude/skills/post-work-review/`)の変更 |
+| S5 | review-gate-modified | `.claude/`、post-work-review skill(`codex/skills/post-work-review/` / `claude/skills/post-work-review/`)、legacy archive 判定 sentinel (`codex/tools/post-work-review.sh`)の変更 |
 | S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` / `review-risk-guard.yml` の変更 |
 | S7 | installer-modified | `install.sh` の変更 |
 | S8 | ci-workflow-deleted | `.github/workflows/` 直下の `.yml`/`.yaml` の削除(D)。rename による無効化(配下外への移動・拡張子変更・サブディレクトリへの移動)も含む |

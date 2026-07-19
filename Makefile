@@ -1,7 +1,9 @@
 PREFIX     ?= $(HOME)/.local
 BINDIR     ?= $(PREFIX)/bin
 CLAUDE_DIR ?= $(HOME)/.claude
-CODEX_DIR  ?= $(HOME)/.codex
+CODEX_HOME ?= $(HOME)/.codex
+CODEX_HOME_EFFECTIVE := $(if $(strip $(CODEX_HOME)),$(CODEX_HOME),$(HOME)/.codex)
+CODEX_DIR  ?= $(CODEX_HOME_EFFECTIVE)
 CLAUDE_CMD_DIR   := $(CLAUDE_DIR)/commands
 CLAUDE_SKILL_DIR := $(CLAUDE_DIR)/skills
 CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
@@ -40,7 +42,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-web clean-go clean-web install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
+.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -101,7 +103,22 @@ clean-web:
 
 # The Codex post-work-review gate is installed only by the checksum-verified
 # release installer. A target Makefile must never replace that boundary.
-install-integrations:
+guard-retired-codex-review:
+	@set -eu; \
+		for review_root in "$(CODEX_DIR)" "$(CODEX_HOME_EFFECTIVE)"; do \
+			[ -n "$$review_root" ] || { echo "error: CODEX_DIR and effective CODEX_HOME must not be empty" >&2; exit 1; }; \
+			driver="$$review_root/tools/post-work-review.sh"; \
+			if [ -e "$$driver" ] || [ -L "$$driver" ]; then \
+				echo "error: retired Codex post-work-review driver remains at $$driver" >&2; \
+				echo "Set CODEX_DIR and CODEX_HOME to that root, then run fanout update without --no-skills." >&2; \
+				exit 1; \
+			fi; \
+		done
+
+build-go-for-install: guard-retired-codex-review
+	@$(MAKE) --no-print-directory build-go
+
+install-integrations: guard-retired-codex-review
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
@@ -117,7 +134,7 @@ install-integrations:
 		cp -R "codex/skills/$$skill/." "$(CODEX_SKILL_DIR)/$$skill/"; \
 	done
 
-link-integrations:
+link-integrations: guard-retired-codex-review
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
@@ -136,7 +153,7 @@ uninstall-integrations:
 	@for skill in $(CLAUDE_SKILLS); do rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do rm -rf "$(CODEX_SKILL_DIR)/$$skill"; done
 
-install: build-go install-integrations
+install: build-go-for-install install-integrations
 	@mkdir -p "$(BINDIR)"
 	install -m 0755 "$(GO_BIN)" "$(BINDIR)/fanout"
 	@echo "Installed:"
@@ -145,7 +162,7 @@ install: build-go install-integrations
 	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill"; done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do echo "  $(CODEX_SKILL_DIR)/$$skill"; done
 
-link: build-go link-integrations
+link: build-go-for-install link-integrations
 	@mkdir -p "$(BINDIR)"
 	ln -sf "$(CURDIR)/$(GO_BIN)" "$(BINDIR)/fanout"
 	@echo "Linked:"

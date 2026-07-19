@@ -197,6 +197,12 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigReviewGateChanged},
 		},
 		{
+			name:      "S5 retired post-work-review driver sentinel is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'A', Path: "codex/tools/post-work-review.sh"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
 			name:      "S4 arch change is critical",
 			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "internal/arch/arch.go"}}},
 			wantLevel: LevelCritical,

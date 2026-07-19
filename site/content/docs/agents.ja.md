@@ -74,6 +74,7 @@ root の既定 makefile と `install.sh` の変更も拒否します。
 installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
 checksum 検証付き release installer だけがこれらを配置、置換、削除します。
 checkout の make target は Codex review gate を変更しません。
+いずれかの Codex root に旧 driver が残る場合、install と link は停止します。
 instruction、gate、gate installer の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
 native subagent は親 session の sandbox、approval policy、network 制限を継承します。
 skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。

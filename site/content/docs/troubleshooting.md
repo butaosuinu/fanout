@@ -82,6 +82,8 @@ The gate is pinned to HEAD, so adding a new commit re-arms it — review again b
 
 Current `$post-work-review` does not request `agent_type`. It uses an ordinary native `spawn_agent` call and treats `task_name` only as a task label. If the old error still appears, run `fanout update`, then start a new Codex session. Codex loads skills at session startup; the checksum-verified release installer also removes the retired custom agents and driver.
 
+If `make install` or `make link` reports that retired driver, the checkout stops before building or replacing the binary. Run `fanout update` without `--no-skills`, then retry the make target.
+
 The current gate requires native `spawn_agent` and `wait_agent` plus an available concurrency slot. If any of these are unavailable, it stops with an error instead of starting `codex exec`, app-server, or another reviewer fallback.
 
 The child inherits the parent session's permissions. Start the parent read-only if reviewer writes must be prevented by the sandbox. The reviewer still receives repository content through its prompt and repository reads.

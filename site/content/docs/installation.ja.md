@@ -91,6 +91,8 @@ make uninstall      # Codex review gate 以外を削除
 checkout の Makefile は Codex の `post-work-review` package を配置、置換、削除しません。
 この gate の配置、更新、削除には、上記の checksum 検証付き release installer を使います。
 review target のコードから gate を配置しないでください。
+`CODEX_DIR` または実効 `CODEX_HOME` に旧 driver が残る場合、`make install` と `make link` は binary の置換前に停止します。
+release installer で旧 driver を移行してください。
 gate を変更する branch は trusted checkout または人がレビューしてください。
 
 ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。

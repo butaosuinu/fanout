@@ -96,6 +96,9 @@ fanout settings で `prReviewGate=false` になっている場合、子 Claude b
 その後、新しい Codex session を開始してください。
 Codex は session 起動時に skill を読み込み、checksum 検証付き release installer が廃止済みの custom agent と driver を削除します。
 
+`make install` または `make link` が旧 driver を報告した場合、checkout は build や binary の置換前に停止しています。
+`fanout update` を `--no-skills` なしで実行してから make target を再実行してください。
+
 現在の gate には native `spawn_agent`、`wait_agent`、空き concurrency slot が必要です。
 いずれかを使えない場合は、`codex exec`、app-server、別 reviewer へ fallback せず停止します。
 
