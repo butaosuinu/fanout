@@ -756,13 +756,18 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 		matched := len(panes) == 2 && panes[0].FocusKnown && panes[0].Focused && panes[1].FocusKnown && !panes[1].Focused
 		panes[0] = corebackend.LivePane{}
 		panes[1].Title = "mutated by predicate"
+		if panes[1].AgentSession == nil {
+			t.Fatal("predicate snapshot child AgentSession = nil")
+		}
+		panes[1].AgentSession.Value = "mutated by predicate"
 		return matched
 	})
 
 	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
 		t.Fatalf("Wait() = %#v, want matched with two panes and no error", got)
 	}
-	if got.Panes[0].Ref.Pane != "w1:p1" || got.Panes[1].Title != "child title" {
+	if got.Panes[0].Ref.Pane != "w1:p1" || got.Panes[1].Title != "child title" ||
+		got.Panes[1].AgentSession == nil || got.Panes[1].AgentSession.Value != "session-a" {
 		t.Fatalf("matched panes were mutated through predicate slice: %#v", got.Panes)
 	}
 	if matchCalls != 1 {
@@ -811,13 +816,20 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 			clock := installFakeWaitClock(b)
 			matchCalls := 0
 
-			got := b.Wait(context.Background(), tt.totalTimeout, func([]corebackend.LivePane) bool {
+			got := b.Wait(context.Background(), tt.totalTimeout, func(panes []corebackend.LivePane) bool {
 				matchCalls++
+				if panes[1].AgentSession == nil {
+					t.Fatal("predicate snapshot child AgentSession = nil")
+				}
+				panes[1].AgentSession.Value = "mutated by predicate"
 				return false
 			})
 
 			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with last two panes and no error", got)
+			}
+			if got.Panes[1].AgentSession == nil || got.Panes[1].AgentSession.Value != "session-a" {
+				t.Fatalf("timed-out panes were mutated through predicate session ref: %#v", got.Panes)
 			}
 			if matchCalls != tt.wantSnapshots {
 				t.Fatalf("predicate calls = %d, want %d", matchCalls, tt.wantSnapshots)

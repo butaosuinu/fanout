@@ -189,7 +189,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			continue
 		}
 
-		lastPanes = append(lastPanes[:0], panes...)
+		lastPanes = cloneLivePanes(panes)
 		lastErr = nil
 		lastValid = true
 		if cause := waitCtx.Err(); cause != nil {
@@ -198,7 +198,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 		if !b.now().Before(deadline) {
 			return finishWait(lastPanes, nil, true)
 		}
-		matched := match(append([]corebackend.LivePane(nil), panes...))
+		matched := match(cloneLivePanes(panes))
 		if cause := waitCtx.Err(); cause != nil {
 			return cancelledWait(cause)
 		}
@@ -206,7 +206,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			return finishWait(lastPanes, nil, true)
 		}
 		if matched {
-			return WaitResult{Status: WaitMatched, Panes: append([]corebackend.LivePane(nil), panes...)}
+			return WaitResult{Status: WaitMatched, Panes: cloneLivePanes(panes)}
 		}
 	}
 	return finishWait(lastPanes, lastErr, lastValid)
@@ -289,13 +289,28 @@ func finishWait(lastPanes []corebackend.LivePane, lastErr error, lastValid bool)
 	if lastValid {
 		return WaitResult{
 			Status: WaitTimedOut,
-			Panes:  append([]corebackend.LivePane(nil), lastPanes...),
+			Panes:  cloneLivePanes(lastPanes),
 		}
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("herdr wait ended without a compatible snapshot")
 	}
 	return failedWait(lastErr)
+}
+
+func cloneLivePanes(panes []corebackend.LivePane) []corebackend.LivePane {
+	if panes == nil {
+		return nil
+	}
+	cloned := append([]corebackend.LivePane(nil), panes...)
+	for i := range cloned {
+		if cloned[i].AgentSession == nil {
+			continue
+		}
+		session := *cloned[i].AgentSession
+		cloned[i].AgentSession = &session
+	}
+	return cloned
 }
 
 func failedWait(err error) WaitResult {
