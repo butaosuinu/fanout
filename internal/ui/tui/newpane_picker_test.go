@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -907,9 +908,7 @@ func agentCountsOf(overrides map[string]int) map[string]int {
 	for _, agentName := range launchAgents {
 		counts[agentName] = 0
 	}
-	for agentName, count := range overrides {
-		counts[agentName] = count
-	}
+	maps.Copy(counts, overrides)
 	return counts
 }
 
