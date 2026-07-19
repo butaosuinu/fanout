@@ -20,11 +20,12 @@ Source-of-truth integration files:
 - Claude Code: `claude/commands/*.md` and `claude/skills/*/SKILL.md`,
   installed under `~/.claude/`.
 - Codex CLI: `codex/skills/*/` (skill instructions, references, and scripts),
-  `codex/agents/*`, and `codex/tools/*`, installed under the matching
-  `~/.codex/` directories.
+  installed under `~/.codex/skills/`. The checksum-verified release installer
+  owns Codex `post-work-review`; checkout make targets never change it.
 
 Do not edit installed copies under home directories directly. Edit the repo
-versions and rerun `make install` or `make link`.
+versions and rerun `make install` or `make link` for other integrations. Use
+the release installer for Codex `post-work-review`.
 
 The user-facing surface is documented in `README.md` and `README.ja.md`. Read
 the README before changing CLI behavior.
@@ -98,8 +99,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   pane at the project root so `fanout plan`'s git root stays at the repo,
   never Codex Plan Mode), and `tui_popup.go` (self-exec popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
-  `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` /
-  `post_work_review_json.go` are class H; the
+  `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` /
+  `tui_watch.go` are class H; the
   remaining cmd files (flag validation and thin dispatch into app) are
   class M.
 - `internal/core` is pure logic with no process/network/FS/DB access:
@@ -124,9 +125,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
   prompt prefix as fallback), and `settings` (the safety gate that blocks
-  repo config from enabling the watcher or notification targets), and
-  `reviewjson` (reviewer JSON projection plus native child-session role,
-  parent, sandbox, approval, and result binding) are class H; `ghissue`
+  repo config from enabling the watcher or notification targets) are class H;
+  `ghissue`
   (GitHub reads and mutations: label swaps, dashboard
   comments), `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
@@ -229,10 +229,14 @@ touching only class-A packages can rely on AI review.
   ships a stale bundle.
 - Preserve fail-fast in `executePlan`: stop after the first failed child
   launch.
-- Commit all fixes first, then run the post-work-review gate (the installed
-  driver, invoked per `codex/skills/post-work-review`) against that final HEAD
+- Commit all fixes first, then run the skill-led native subagent gate in
+  `codex/skills/post-work-review` against that final HEAD
   before `gh pr create`. The gate owns `make check`, and its marker is tied to
   the exact commit reviewed, so committing anything afterward invalidates it.
+  The installed skill and marker helper must be non-symlink copies outside the
+  reviewed checkout. A branch that changes `AGENTS.md`, `AGENTS.override.md`,
+  or repository `.codex` files requires a reviewer launched from a trusted
+  checkout or explicit human review; the same-checkout gate fails closed.
 - `git push` to a branch is gated by `scripts/agent-push-gate.sh`, wired as a
   `PreToolUse` hook for both agents (`.codex/hooks.json` for Codex,
   `.claude/settings.json` for Claude Code). The pushed tip must equal the

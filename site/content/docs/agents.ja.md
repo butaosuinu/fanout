@@ -61,8 +61,39 @@ fanout skill は「#123 を fan out して」のように依頼するか、明�
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
 `fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
 
-`$post-work-review` は、広いレビューを read-only・approval なしの `post-work-reviewer`(`gpt-5.6-sol`、`xhigh`)、修正確認を `post-work-verifier`(`gpt-5.6-terra`、`high`)へ割り当てます。
-driver は結果を native child rollout の role・parent・sandbox・approval policy・bundle path・session UUID と結合します。runtime が metadata を公開または強制できなければ gate は停止します。
+`$post-work-review` は `fork_turns: "none"` を指定し、通常の Codex native subagent を fresh な広域レビューとして起動します。
+親は自然言語の指摘を解釈します。
+修正で対象が変わった場合は、別の fresh subagent が新しい対象全体を広域レビューします。
+custom agent、model 固定、app-server controller、result parser は使いません。
+
+reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
+marker helper は spawn 前に、適用対象の `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files が trusted merge base から変わっていないことを検証します。
+base と同一の instruction は trusted repository conventions として扱い、それ以外の target file と directive は untrusted review evidence として扱います。
+helper は `post-work-review` gate の変更も拒否します。
+root の既定 makefile と `install.sh` の変更も拒否します。
+installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
+checksum 検証付き release installer だけがこれらを配置、置換、削除します。
+checkout の make target は Codex review gate を変更しません。
+いずれかの Codex root に旧 driver が残る場合、install と link は停止します。
+instruction、gate、gate installer の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
+native subagent は親 session の sandbox、approval policy、network 制限を継承します。
+skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
+強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
+この信頼境界、native spawn、wait のいずれかを維持できない場合は fallback せず停止します。
+
+helper は filesystem 間で同じ境界を保つため、instruction と gate の path を case-insensitive で照合します。
+symlink の `AGENTS.md` / `AGENTS.override.md`、case variant または nested `.codex` path、`model_instructions_file` または `project_doc_fallback_filenames` を定義した project config、escape を含む project config key、commit 済みまたは worktree の submodule 変更を拒否します。
+checkout 済みの submodule も拒否します。
+clean かつ base と同一の submodule は、review 前に deinitialize してください。
+これらの target は trusted checkout から起動した reviewer、または人がレビューしてください。
+
+dirty worktree は review-only scope です。
+reviewer は staged、unstaged、untracked の変更を確認し、親は focused checks だけを実行します。
+この scope では marker を書きません。PR gate には candidate を commit してから再実行してください。
+submodule 変更は review 前に fail-closed で停止します。
+
+clean な committed branch では、skill は repository の canonical validation を 1 回実行し、clean な exact HEAD、PR base commit、diff hash を記録します。
+commit、base の移動、review diff の変更で marker は無効です。
 
 `$pr-watch` は foreground で動きます。
 helper は変化のない snapshot の出力を省き、linked worktree でも cursor を Git metadata に保存します。

@@ -167,7 +167,9 @@ pre-flight.
 
 Run `fanout update` immediately when requested. Use `--version <tag>` to pin a
 release and `--no-skills` to omit bundled skill installation. The updater
-replaces only an executable whose resolved basename is `fanout`.
+replaces only an executable whose resolved basename is `fanout`. If the
+retired Codex `post-work-review.sh` driver is installed, `--no-skills` stops
+before replacement and asks for a full integration update.
 
 If a repository skill documents a flag rejected by the installed binary,
 compare versions and then inspect `fanout --help` or subcommand help. Do not

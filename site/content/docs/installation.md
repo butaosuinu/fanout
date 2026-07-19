@@ -39,12 +39,12 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### Installed paths
 
-Each destination has an environment-variable override for the install command: `BIN_DIR` (default `~/.local/bin`), `CLAUDE_DIR` (default `~/.claude`), and `CODEX_DIR` (default `~/.codex`).
+Each destination has an environment-variable override for the install command: `BIN_DIR` (default `~/.local/bin`), `CLAUDE_DIR` (default `~/.claude`), and `CODEX_DIR` (default `CODEX_HOME`, then `~/.codex`). For integration install or removal, `CODEX_DIR` must match the effective `CODEX_HOME`; set both to the same path when using a custom destination.
 
 - `$BIN_DIR/fanout` — the binary
 - `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
 - `$CLAUDE_DIR/skills/` — the `fanout`, `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` skills
-- `$CODEX_DIR/skills/` — the same skills minus `session-retro`, plus `$CODEX_DIR/agents/` (the post-work reviewer / verifier) and `$CODEX_DIR/tools/`
+- `$CODEX_DIR/skills/` — the same skills minus `session-retro`; `post-work-review` bundles its marker helper inside the skill
 
 Install and update overwrite all of these.
 
@@ -79,10 +79,18 @@ codesign -s - /path/to/fanout
 ## From a checkout
 
 ```bash
-make install        # builds the Go binary as $(BINDIR)/fanout + copies integrations
-make link           # symlinks the Go binary as $(BINDIR)/fanout + symlinks integrations
-make uninstall      # removes installed paths
+make install        # builds the Go binary + copies non-Codex-gate integrations
+make link           # symlinks the binary and non-Codex-gate integrations
+make uninstall      # removes paths except the Codex review gate
 ```
+
+The checkout Makefile never creates, replaces, or removes the Codex
+`post-work-review` package. Install, update, or remove that gate with the
+checksum-verified release installer above, not with code from the review target.
+If the retired driver remains under `CODEX_DIR` or the effective `CODEX_HOME`,
+`make install` and `make link` stop before replacing the binary. Run the release
+installer to migrate it.
+Review a gate-changing branch from a trusted checkout or by a human.
 
 Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 
@@ -93,7 +101,10 @@ Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`ma
 `fanout update` calls the same curl install path above, updating the binary and the Claude/Codex integrations together.
 
 - `--version <tag>`: install the given tag
-- `--no-skills`: update only the binary
+- `--no-skills`: update only the binary. If the retired Codex
+  `post-work-review.sh` driver remains under `CODEX_DIR` or a distinct
+  `CODEX_HOME`, this stops before replacement; rerun without `--no-skills` to
+  migrate the integrations.
 
 > Install and update overwrite the bundled files under `~/.claude` and `~/.codex` — including the `post-work-review` / `pr-watch` skills — so back up customized copies first. Codex CLI loads skills at startup; restart running Codex sessions after an update.
 

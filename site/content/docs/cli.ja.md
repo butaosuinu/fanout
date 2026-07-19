@@ -389,7 +389,7 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 fanout update [--version <tag>] [--no-skills]
 ```
 
-[インストール]({{< relref "/docs/installation" >}})で説明している同じ `install.sh` 経路を呼び、実行中の release バイナリと同梱の Claude/Codex 連携を置き換えます。`--version <tag>` は `FANOUT_VERSION=<tag>` を `install.sh` に渡して pin した release tag をインストールし、`--no-skills` はバイナリだけ更新します。ローカルの dev build は置き換えを拒否します。
+[インストール]({{< relref "/docs/installation" >}})で説明している同じ `install.sh` 経路を呼び、実行中の release バイナリと同梱の Claude/Codex 連携を置き換えます。`--version <tag>` は `FANOUT_VERSION=<tag>` を `install.sh` に渡して pin した release tag をインストールし、`--no-skills` はバイナリだけ更新します。廃止済みの Codex `post-work-review.sh` driver が残っている場合、binary-only update は置換前に停止し、`--no-skills` を外した再実行を求めます。ローカルの dev build は置き換えを拒否します。
 
 ### `fanout check-update`
 

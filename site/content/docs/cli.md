@@ -383,7 +383,7 @@ Run `fanout msg --help` for the full surface.
 fanout update [--version <tag>] [--no-skills]
 ```
 
-Replaces the running release binary plus the bundled Claude/Codex integrations through the same `install.sh` path documented in [Installation]({{< relref "/docs/installation" >}}). `--version <tag>` installs a pinned release tag by passing `FANOUT_VERSION=<tag>` to `install.sh`; `--no-skills` updates only the binary. Local dev builds refuse replacement.
+Replaces the running release binary plus the bundled Claude/Codex integrations through the same `install.sh` path documented in [Installation]({{< relref "/docs/installation" >}}). `--version <tag>` installs a pinned release tag by passing `FANOUT_VERSION=<tag>` to `install.sh`; `--no-skills` updates only the binary. If the retired Codex `post-work-review.sh` driver is installed, binary-only update stops before replacement and asks you to rerun without `--no-skills`. Local dev builds refuse replacement.
 
 ### `fanout check-update`
 

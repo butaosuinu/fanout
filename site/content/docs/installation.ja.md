@@ -39,12 +39,15 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 ### 配置先
 
-各配置先はインストールコマンドの環境変数で上書きできます。`BIN_DIR`(既定 `~/.local/bin`)、`CLAUDE_DIR`(既定 `~/.claude`)、`CODEX_DIR`(既定 `~/.codex`)です。
+各配置先はインストールコマンドの環境変数で上書きできます。
+`BIN_DIR`(既定 `~/.local/bin`)、`CLAUDE_DIR`(既定 `~/.claude`)、`CODEX_DIR`(既定 `CODEX_HOME`、次に `~/.codex`)です。
+integration の install または uninstall では、`CODEX_DIR` を実効 `CODEX_HOME` と同じ path にしてください。
+custom destination を使う場合は両方に同じ path を指定します。
 
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
 - `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
-- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群)と `$CODEX_DIR/agents/`(post-work reviewer / verifier)、`$CODEX_DIR/tools/`
+- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群。`post-work-review` の marker helper も skill 内に同梱)
 
 install と update はこれらすべてを上書きします。
 
@@ -80,10 +83,17 @@ codesign -s - /path/to/fanout
 ## チェックアウトから使う場合
 
 ```bash
-make install        # Go 版を $(BINDIR)/fanout としてビルド + 連携をコピー
-make link           # Go 版を $(BINDIR)/fanout として symlink + 連携を symlink
-make uninstall      # インストール済みのパスを削除
+make install        # Go 版をビルド + Codex gate 以外の連携をコピー
+make link           # binary と Codex gate 以外の連携を symlink
+make uninstall      # Codex review gate 以外を削除
 ```
+
+checkout の Makefile は Codex の `post-work-review` package を配置、置換、削除しません。
+この gate の配置、更新、削除には、上記の checksum 検証付き release installer を使います。
+review target のコードから gate を配置しないでください。
+`CODEX_DIR` または実効 `CODEX_HOME` に旧 driver が残る場合、`make install` と `make link` は binary の置換前に停止します。
+release installer で旧 driver を移行してください。
+gate を変更する branch は trusted checkout または人がレビューしてください。
 
 ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
@@ -96,7 +106,9 @@ curl インストールは prebuilt バイナリを配置するので、Go も N
 `fanout update` は上の curl インストールと同じ経路を呼び出し、本体と Claude/Codex 連携をまとめて更新します。
 
 - `--version <tag>`: 指定した tag をインストールする
-- `--no-skills`: バイナリのみ更新する
+- `--no-skills`: バイナリのみ更新する。`CODEX_DIR` または別指定の
+  `CODEX_HOME` に廃止済みの Codex `post-work-review.sh` driver が残っている場合は
+  置換前に停止するため、`--no-skills` を外して連携ファイルを移行する
 
 > install と update は `~/.claude` と `~/.codex` 配下の同梱ファイル(`post-work-review` や `pr-watch` skill を含む)を上書きします。
 > カスタマイズした copy は先に退避してください。

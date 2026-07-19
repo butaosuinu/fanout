@@ -189,10 +189,16 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigSkipAdded},
 		},
 		{
-			name: "S5 post-work-review gate script change is critical",
+			name: "S5 post-work-review skill change is critical",
 			diff: Diff{
-				Files: []FileChange{{Status: 'M', Path: "codex/tools/post-work-review.sh"}},
+				Files: []FileChange{{Status: 'M', Path: "codex/skills/post-work-review/SKILL.md"}},
 			},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name:      "S5 retired post-work-review driver sentinel is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'A', Path: "codex/tools/post-work-review.sh"}}},
 			wantLevel: LevelCritical,
 			wantSig:   []string{sigReviewGateChanged},
 		},
@@ -279,14 +285,6 @@ func TestEvaluate(t *testing.T) {
 			},
 			wantLevel: LevelMedium, // tests/bats (M), no S3
 			notSig:    []string{sigSkipAdded},
-		},
-		{
-			name: "S5 post-work-review agent definition change is critical",
-			diff: Diff{
-				Files: []FileChange{{Status: 'M', Path: "codex/agents/post-work-reviewer.md"}},
-			},
-			wantLevel: LevelCritical,
-			wantSig:   []string{sigReviewGateChanged},
 		},
 		{
 			name:      "S9 unclassified dashboard file is high",

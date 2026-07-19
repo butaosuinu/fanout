@@ -348,12 +348,6 @@ lint/test sweep outside the skill. If the review gate is unavailable or fails,
 stop and report it instead of bypassing the gate.
 `
 
-const boundedReviewFixContinuation = `If the broad review reports actionable findings, stay in the same bounded gate.
-After each fix round, run focused checks for the edited files, commit the fixes,
-run the project's canonical full validation on the new HEAD, then run
-` + "`prepare-verify`" + ` and a fresh ` + "`post-work-verifier`" + `. Run ` + "`mark`" + ` for that HEAD only
-after the verifier reports clean. Do not start another broad review.`
-
 const prVisualizationSectionTemplate = `
 When opening the PR, structure the PR body in this order:
 1. **TL;DR** — 1-2 sentences plus ` + "`Review effort: <0-5>`" + `, where 0 is mechanical and 5 needs careful review.
@@ -407,46 +401,31 @@ func prVisualizationSection(footer prFooter, baseBranch string) string {
 }
 
 func codexReviewSection(autoPullRequest bool, baseBranch string) string {
-	if baseBranch == "" {
-		baseBranch = "main"
-	}
+	baseBranch = pullRequestBaseBranch(baseBranch)
 	quotedBase := agent.ShellQuote(baseBranch)
+	section := fmt.Sprintf(codexReviewSectionTemplate, quotedBase)
 	if autoPullRequest {
-		return fmt.Sprintf(codexReviewWithPRSectionTemplate, quotedBase, quotedBase)
-	}
-	return fmt.Sprintf(codexReviewWithoutPRSectionTemplate, quotedBase, quotedBase)
-}
-
-const codexReviewWithPRSectionTemplate = `
-Commit the candidate changes before the final branch-scope review. Then run
-` + "`$post-work-review`" + ` once on the committed branch with base ` + "`%s`" + `. The skill
-must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this gate:
-1. The skill owns the canonical full project validation for that exact HEAD.
-   Do not run a separate full lint/test sweep before the skill.
-2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
-   and writes ` + "`.git/post-work-review-passed`" + ` for the
-   exact HEAD you will push.
-` + boundedReviewFixContinuation + `
-3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
-
+		return section + `
 Push and open the PR only after the branch review is clean and marked.
 `
+	}
+	return section + `
+Only after the committed branch review is clean and marked should you push the
+branch.
+`
+}
 
-const codexReviewWithoutPRSectionTemplate = `
+const codexReviewSectionTemplate = `
 Commit the candidate changes before the final branch-scope review. Then run
 ` + "`$post-work-review`" + ` once on the committed branch with base ` + "`%s`" + `. The skill
-must pass ` + "`POST_WORK_REVIEW_BASE=%s`" + ` to every driver command for this gate:
-1. The skill owns the canonical full project validation for that exact HEAD.
-   Do not run a separate full lint/test sweep before the skill.
-2. Continue only when it reports ` + "`clean=true`" + `, ` + "`findings=0`" + `, and an empty ` + "`stop_reason=`" + `,
-   and writes ` + "`.git/post-work-review-passed`" + ` for the
-   exact HEAD you will push.
-` + boundedReviewFixContinuation + `
-3. Stop on a non-empty ` + "`stop_reason=`" + ` or any tooling/auth failure.
-
-Only after the committed branch review is clean and marked should you push the
-branch. If the review gate is unavailable or fails for tooling/auth reasons,
-stop and report that instead of bypassing the gate.
+starts a fresh generic native subagent and the parent interprets its
+natural-language findings. Do not run a separate full lint/test sweep first.
+If the broad review finds an issue, fix it, run focused checks, commit the fix,
+then start a fresh broad reviewer for the entire new HEAD.
+Do not narrow the new review to the previous findings. After the latest broad reviewer is clean, the skill runs the canonical
+full project validation once and writes ` + "`.git/post-work-review-passed`" + ` for the exact
+HEAD and reviewed base. If subagent review, validation, or target binding is
+unavailable or unclear, stop instead of bypassing the gate.
 `
 
 const codeReviewSection = `

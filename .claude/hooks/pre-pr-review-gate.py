@@ -542,10 +542,9 @@ def main():
         else:
             target = head
         if read_marker() != target:
-            emit_deny("post-work-review が未実施です。先に /post-work-review を実行してください。\n"
+            emit_deny("post-work-review が未実施です。先に /post-work-review または $post-work-review を実行してください。\n"
                       "完了時に skill が現在の HEAD(%s)を %s に記録します。\n"
-                      "(codex companion 未検出の場合は Pass 2 はスキップされ、Pass 1 通過で marker が書かれます)\n"
-                      "/post-work-review が使えない場合は repo で make install (または make link) を実行してください。\n"
+                      "/post-work-review が使えない場合は trusted origin/main checkout または release から連携を更新してください。\n"
                       "完了後に gh pr create を再実行してください。\n%s" % (head, marker, HATCH))
 
         base = c["base"]
@@ -554,16 +553,17 @@ def main():
             if mb:
                 base = mb
 
-        # Codex's bounded driver records the reviewed base in marker metadata.
-        # Claude's legacy skill removes that sibling file before writing its
-        # exact-HEAD marker, so marker-only mode remains default-base-only.
+        # Codex records the target and trusted bootstrap base in marker
+        # metadata. The marker itself means the parent accepted the native
+        # subagent review. Claude's legacy skill removes the metadata, so
+        # marker-only mode stays default-base-only.
         if review_metadata_present:
             metadata_valid = (
-                review_metadata.get("backend") == "bounded-isolated-reviewer" and
+                review_metadata.get("post_work_review_version") == "14" and
                 review_metadata.get("head") == target and
-                review_metadata.get("scope") == "branch" and
-                review_metadata.get("clean") == "true" and
-                review_metadata.get("stop_reason") == "" and
+                bool(review_metadata.get("base")) and
+                bool(review_metadata.get("base_head")) and
+                bool(review_metadata.get("bootstrap_base")) and
                 bool(review_metadata.get("diff_hash"))
             )
             if not metadata_valid:
@@ -579,6 +579,16 @@ def main():
                           % (base or "未指定・既定ブランチを解決不可",
                              reviewed_base or "marker meta から解決不可", HATCH))
             pr_base_ref = "refs/remotes/origin/" + requested_base
+            current_base_head = git(["rev-parse", "--verify", pr_base_ref + "^{commit}"]).stdout.strip()
+            if current_base_head != review_metadata.get("base_head"):
+                emit_deny("marker_reason=review_base_changed\n"
+                          "remote base が post-work-review 後に移動したか、ローカルで解決できません。\n"
+                          "対象 base に対して /post-work-review をやり直してください。\n%s" % HATCH)
+            current_bootstrap_base = git(["merge-base", pr_base_ref, target]).stdout.strip()
+            if current_bootstrap_base != review_metadata.get("bootstrap_base"):
+                emit_deny("marker_reason=review_bootstrap_base_changed\n"
+                          "trusted bootstrap base が marker metadata と一致しません。\n"
+                          "対象 base に対して /post-work-review をやり直してください。\n%s" % HATCH)
             current_diff_hash = branch_diff_hash(pr_base_ref, target)
             if current_diff_hash != review_metadata.get("diff_hash"):
                 emit_deny("marker_reason=review_diff_changed\n"

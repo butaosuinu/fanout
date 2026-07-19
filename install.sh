@@ -16,7 +16,9 @@ Environment:
   BIN_DIR         Binary destination (default: $HOME/.local/bin)
   FANOUT_VERSION Git tag to install, e.g. v0.1.0 (default: latest)
   CLAUDE_DIR      Claude data directory (default: $HOME/.claude)
-  CODEX_DIR       Codex data directory (default: $HOME/.codex)
+  CODEX_DIR       Codex install directory (default: CODEX_HOME or $HOME/.codex)
+  CODEX_HOME      Codex runtime data directory (default: $HOME/.codex)
+                    CODEX_DIR must match it when integrations are enabled.
 
 Options:
   --no-skills   Install or uninstall only the fanout binary.
@@ -37,6 +39,21 @@ die() {
   printf '[err ] %s\n' "$*" >&2
   exit 1
 }
+
+same_directory() (
+  left=$1
+  right=$2
+  physical_pwd=$(pwd -P) || exit 1
+  case "$left" in /*) ;; *) left="$physical_pwd/$left" ;; esac
+  case "$right" in /*) ;; *) right="$physical_pwd/$right" ;; esac
+  while [ "$left" != / ] && [ "${left%/}" != "$left" ]; do left=${left%/}; done
+  while [ "$right" != / ] && [ "${right%/}" != "$right" ]; do right=${right%/}; done
+  [ "$left" != "$right" ] || exit 0
+  [ -d "$left" ] && [ -d "$right" ] || exit 1
+  left=$(CDPATH='' cd -P "$left" 2>/dev/null && pwd -P) || exit 1
+  right=$(CDPATH='' cd -P "$right" 2>/dev/null && pwd -P) || exit 1
+  [ "$left" = "$right" ]
+)
 
 cleanup() {
   if [ -n "$tmp" ]; then
@@ -66,8 +83,13 @@ done
 : "${HOME:?HOME must be set}"
 bin_dir="${BIN_DIR:-$HOME/.local/bin}"
 claude_dir="${CLAUDE_DIR:-$HOME/.claude}"
-codex_dir="${CODEX_DIR:-$HOME/.codex}"
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+codex_dir="${CODEX_DIR:-$codex_home}"
 version="${FANOUT_VERSION:-latest}"
+
+if [ "$install_skills" -eq 1 ] && ! same_directory "$codex_dir" "$codex_home"; then
+  die "CODEX_DIR and CODEX_HOME must match when installing or uninstalling integrations"
+fi
 
 download() {
   url="$1"
@@ -105,9 +127,29 @@ install_data() {
 
 # Uninstall runs before the release tarball is fetched/extracted, so the list of
 # integrations to remove cannot be derived from the source the way
-# install_integrations does. Keep this enumeration in sync with whatever
-# claude/commands, claude/skills, codex/skills, codex/tools, and codex/agents
-# the repo ships.
+# install_integrations does. Keep this enumeration in sync with the bundled
+# commands and skills.
+remove_retired_codex_review_files() {
+  for review_dir in "$codex_dir" "$codex_home"; do
+    rm -f "$review_dir/tools/post-work-review.sh"
+    rm -f "$review_dir/agents/post-work-reviewer.toml" \
+      "$review_dir/agents/post-work-reviewer.md" \
+      "$review_dir/agents/post-work-verifier.toml" \
+      "$review_dir/agents/post-work-verifier.md"
+  done
+}
+
+guard_binary_only_review_compat() {
+  [ "$install_skills" -eq 0 ] || return 0
+  [ ! -f "$tmp/extract/codex/tools/post-work-review.sh" ] || return 0
+  for review_dir in "$codex_dir" "$codex_home"; do
+    driver="$review_dir/tools/post-work-review.sh"
+    if [ -e "$driver" ] || [ -L "$driver" ]; then
+      die "--no-skills cannot preserve the retired Codex post-work-review driver with this binary. Rerun without --no-skills to update the integrations."
+    fi
+  done
+}
+
 remove_integrations() {
   rm -f "$claude_dir/commands/fanout.md" "$claude_dir/commands/pr-watch.md" \
     "$claude_dir/commands/session-retro.md"
@@ -117,11 +159,7 @@ remove_integrations() {
   rm -rf "$codex_dir/skills/fanout" "$codex_dir/skills/fanout-issues" \
     "$codex_dir/skills/fanout-plan" "$codex_dir/skills/post-work-review" \
     "$codex_dir/skills/pr-watch"
-  rm -f "$codex_dir/tools/post-work-review.sh"
-  rm -f "$codex_dir/agents/post-work-reviewer.toml" \
-    "$codex_dir/agents/post-work-reviewer.md" \
-    "$codex_dir/agents/post-work-verifier.toml" \
-    "$codex_dir/agents/post-work-verifier.md"
+  remove_retired_codex_review_files
 }
 
 copy_skill_dirs() {
@@ -176,8 +214,14 @@ install_integrations() {
 
   copy_skill_dirs "$tmp/extract/claude/skills" "$claude_dir/skills"
   copy_skill_dirs "$tmp/extract/codex/skills" "$codex_dir/skills"
-  copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
-  copy_agent_files "$tmp/extract/codex/agents" "$codex_dir/agents"
+  if [ -f "$tmp/extract/codex/tools/post-work-review.sh" ]; then
+    # A pinned legacy release still needs the helper and agent files bundled
+    # in its archive. Only skills-only archives retire those installed files.
+    copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
+    copy_agent_files "$tmp/extract/codex/agents" "$codex_dir/agents"
+  else
+    remove_retired_codex_review_files
+  fi
 }
 
 normalize_os() {
@@ -222,8 +266,7 @@ verify_checksum() {
   asset="$3"
 
   if ! tool=$(checksum_tool); then
-    warn "sha256sum/shasum not found; skipping checksum verification"
-    return 0
+    die "sha256sum or shasum is required to verify the release archive"
   fi
 
   expected=$(awk -v file="$asset" '$2 == file || $2 == "./" file { print $1; found = 1 } END { if (!found) exit 1 }' "$sums") \
@@ -279,6 +322,7 @@ verify_checksum "$archive" "$sums" "$asset"
 
 tar -xzf "$archive" -C "$tmp/extract"
 [ -f "$tmp/extract/fanout" ] || die "archive does not contain fanout"
+guard_binary_only_review_compat
 
 mkdir -p "$bin_dir"
 install_exec "$tmp/extract/fanout" "$bin_dir/fanout"
