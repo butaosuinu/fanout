@@ -1,0 +1,141 @@
+{
+  "allowedSeverity": "error",
+  "allowed": [
+    {
+      "name": "non-local-deps",
+      "comment": "stdlib / third-party / cgo edges pass the allowed matrix; core and tools purity is enforced by the forbidden rules below.",
+      "from": {},
+      "to": { "dependencyTypesNot": ["local"] }
+    },
+    {
+      "name": "core-to-core",
+      "from": { "path": ["^internal/core/"] },
+      "to": { "dependencyTypes": ["local"], "path": ["^internal/core(/|$)"] }
+    },
+    {
+      "name": "app-to-core-app-infra",
+      "from": { "path": ["^internal/app/"] },
+      "to": { "dependencyTypes": ["local"], "path": ["^internal/(core|app|infra)(/|$)"] }
+    },
+    {
+      "name": "infra-to-core-infra",
+      "from": { "path": ["^internal/infra/"] },
+      "to": { "dependencyTypes": ["local"], "path": ["^internal/(core|infra)(/|$)"] }
+    },
+    {
+      "name": "ui-to-all-layers",
+      "from": { "path": ["^internal/ui/"] },
+      "to": { "dependencyTypes": ["local"], "path": ["^internal/(core|app|infra|ui)(/|$)"] }
+    },
+    {
+      "name": "cmd-to-all-layers",
+      "from": { "path": ["^cmd/"] },
+      "to": { "dependencyTypes": ["local"], "path": ["^internal/(core|app|infra|ui)(/|$)"] }
+    }
+  ],
+  "forbidden": [
+    {
+      "name": "layer-core-outward",
+      "severity": "error",
+      "comment": "internal/core may import only internal/core (core -> core only). Invert the dependency behind a core type or move this code out of core.",
+      "from": { "path": ["^internal/core/"] },
+      "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/core(/|$)"] }
+    },
+    {
+      "name": "layer-app-outward",
+      "severity": "error",
+      "comment": "internal/app may import only core/app/infra (app -> core|app|infra). UI and cmd must depend on app, never the reverse.",
+      "from": { "path": ["^internal/app/"] },
+      "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/(core|app|infra)(/|$)"] }
+    },
+    {
+      "name": "layer-infra-outward",
+      "severity": "error",
+      "comment": "internal/infra may import only core/infra (infra -> core|infra). Orchestration on top of infra belongs in app.",
+      "from": { "path": ["^internal/infra/"] },
+      "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/(core|infra)(/|$)"] }
+    },
+    {
+      "name": "layer-ui-outward",
+      "severity": "error",
+      "comment": "internal/ui may import core/app/infra/ui only; importing cmd/... or internal/arch is forbidden.",
+      "from": { "path": ["^internal/ui/"] },
+      "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/(core|app|infra|ui)(/|$)"] }
+    },
+    {
+      "name": "layer-cmd-outward",
+      "severity": "error",
+      "comment": "cmd/ may import the four layers only (cmd -> core|app|infra|ui). Shared cmd helpers belong in internal/.",
+      "from": { "path": ["^cmd/"] },
+      "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/(core|app|infra|ui)(/|$)"] }
+    },
+    {
+      "name": "meta-no-module-imports",
+      "severity": "error",
+      "comment": "internal/arch is the test-only meta package and imports no module-internal packages, so the layer guard cannot depend on what it guards.",
+      "from": { "path": ["^internal/arch/"] },
+      "to": { "dependencyTypes": ["local"] }
+    },
+    {
+      "name": "core-purity-stdlib",
+      "severity": "error",
+      "comment": "core stdlib purity: no process/network/filesystem/database access from internal/core. The denylist is exact-match on purpose - pure-computation packages under the same trees (net/url, net/netip) stay allowed.",
+      "from": {
+        "path": ["^internal/core/"],
+        "pathNot": ["_test\\.go$", "^internal/core/agent/", "^internal/core/planspec/"]
+      },
+      "to": {
+        "dependencyTypes": ["stdlib"],
+        "path": ["^(database/sql|io/ioutil|net|net/http|os|os/exec|syscall)$"]
+      }
+    },
+    {
+      "name": "core-purity-stdlib-agent",
+      "severity": "error",
+      "comment": "internal/core/agent is exempt for os and os/exec only (agent CLI validation for live mode); the rest of the core denylist still applies.",
+      "from": { "path": ["^internal/core/agent/"], "pathNot": ["_test\\.go$"] },
+      "to": {
+        "dependencyTypes": ["stdlib"],
+        "path": ["^(database/sql|io/ioutil|net|net/http|syscall)$"]
+      }
+    },
+    {
+      "name": "core-purity-stdlib-planspec",
+      "severity": "error",
+      "comment": "internal/core/planspec is exempt for os only (spec loading); the rest of the core denylist still applies.",
+      "from": { "path": ["^internal/core/planspec/"], "pathNot": ["_test\\.go$"] },
+      "to": {
+        "dependencyTypes": ["stdlib"],
+        "path": ["^(database/sql|io/ioutil|net|net/http|os/exec|syscall)$"]
+      }
+    },
+    {
+      "name": "core-no-third-party",
+      "severity": "error",
+      "comment": "core bans third-party modules (and cgo) wholesale, so wrappers cannot smuggle IO into the pure layer.",
+      "from": { "path": ["^internal/core/"], "pathNot": ["_test\\.go$"] },
+      "to": { "dependencyTypes": ["module", "unresolved"] }
+    },
+    {
+      "name": "tools-stdlib-only",
+      "severity": "error",
+      "comment": "tools/ is stdlib-only: no module-internal packages and no third-party modules, so repo meta-tools stay physically separate from product code.",
+      "from": { "path": ["^tools/"] },
+      "to": { "dependencyTypesNot": ["stdlib"] }
+    },
+    {
+      "name": "no-import-cmd",
+      "severity": "error",
+      "comment": "importing cmd/... is forbidden everywhere: cmd/fanout is the composition root and shared helpers belong in internal/.",
+      "from": {},
+      "to": { "dependencyTypes": ["local"], "path": ["^cmd(/|$)"] }
+    },
+    {
+      "name": "package-main-location",
+      "severity": "error",
+      "comment": "package main is only allowed under cmd/fanout (the one product composition root) or a tools/<tool>/ subdirectory; a bare tools/*.go file is not a valid tool.",
+      "from": { "packageName": ["^main$"], "pathNot": ["^cmd/fanout/", "^tools/[^/]+/"] },
+      "to": {}
+    }
+  ]
+}
