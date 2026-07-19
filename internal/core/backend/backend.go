@@ -76,9 +76,15 @@ func ParseAgentState(raw string) (AgentState, bool) {
 // identity fields remain separate from display metadata so later liveness code
 // can choose the evidence appropriate for each backend.
 type LivePane struct {
-	Ref              PaneRef
-	CurrentPath      string
-	Title            string
+	Ref         PaneRef
+	CurrentPath string
+	Title       string
+
+	// FocusKnown distinguishes an observed false focus value from a backend that
+	// does not expose focus in its aggregate liveness snapshot.
+	FocusKnown bool
+	Focused    bool
+
 	AgentState       AgentState
 	NativeAgentState string
 	TerminalID       string

@@ -10,20 +10,28 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 const (
-	commandName       = "herdr"
-	supportedVersion  = "0.7.3"
-	supportedProtocol = 16
-	supportedSchema   = 1
-	commandTimeout    = 5 * time.Second
+	commandName         = "herdr"
+	supportedVersion    = "0.7.3"
+	supportedProtocol   = 16
+	supportedSchema     = 1
+	commandTimeout      = 5 * time.Second
+	commandCleanupDelay = 100 * time.Millisecond
+	minimumWaitTimeout  = 3 * time.Second
+	waitInterval        = 2 * time.Second
+
+	// DefaultWaitTimeout is the bounded wait used when a caller omits an
+	// explicit total timeout.
+	DefaultWaitTimeout = 300 * time.Second
 
 	sessionEnv = "HERDR_SESSION"
 	socketEnv  = "HERDR_SOCKET_PATH"
@@ -37,12 +45,16 @@ var _ corebackend.Backend = (*Backend)(nil)
 type Backend struct {
 	session    string
 	socketPath string
-	probeMu    sync.Mutex
+	probeGate  chan struct{}
 	lookPath   func(string) (string, error)
 	output     commandOutput
+	now        func() time.Time
+	sleep      waitSleep
 }
 
-type commandOutput func(binary string, env []string, args ...string) ([]byte, error)
+type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
+
+type waitSleep func(context.Context, time.Duration) error
 
 type route struct {
 	session    string
@@ -54,6 +66,24 @@ type probeResult struct {
 	route  route
 }
 
+// WaitStatus is the terminal outcome of a bounded snapshot wait.
+type WaitStatus string
+
+const (
+	WaitMatched   WaitStatus = "matched"
+	WaitTimedOut  WaitStatus = "timed_out"
+	WaitCancelled WaitStatus = "cancelled" //nolint:misspell // The published terminal-result contract uses this spelling.
+	WaitFailed    WaitStatus = "failed"
+)
+
+// WaitResult reports one of the four terminal wait outcomes. Panes contains
+// the last compatible snapshot only for matched and timed-out results.
+type WaitResult struct {
+	Status WaitStatus
+	Panes  []corebackend.LivePane
+	Err    error
+}
+
 // New constructs a herdr backend for one named session. socketPath may be
 // empty on the first probe; CheckAvailable resolves it through an explicit
 // --session status call, then pins subsequent probes to the returned path.
@@ -61,8 +91,11 @@ func New(session, socketPath string) *Backend {
 	return &Backend{
 		session:    strings.TrimSpace(session),
 		socketPath: socketPath,
+		probeGate:  make(chan struct{}, 1),
 		lookPath:   exec.LookPath,
 		output:     runCommand,
+		now:        time.Now,
+		sleep:      sleepContext,
 	}
 }
 
@@ -83,15 +116,100 @@ func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := b.run(probed.binary, probed.route, "api", "snapshot")
+	return b.snapshot(context.Background(), commandTimeout, probed)
+}
+
+// Wait probes the exact compatibility tuple once, then polls only aggregate
+// snapshots until match succeeds or the fixed budget terminates. A zero
+// totalTimeout selects DefaultWaitTimeout; non-zero values must be whole
+// seconds and at least three seconds. match receives a cloned compatible
+// snapshot and should perform only bounded in-memory inspection.
+func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match func([]corebackend.LivePane) bool) WaitResult {
+	if ctx == nil {
+		return failedWait(fmt.Errorf("herdr wait requires a context"))
+	}
+	totalTimeout, err := normalizeWaitTimeout(totalTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("herdr api snapshot: %w", err)
+		return failedWait(err)
 	}
-	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return nil, fmt.Errorf("parse herdr api snapshot: %w", err)
+	if match == nil {
+		return failedWait(fmt.Errorf("herdr wait requires a snapshot predicate"))
 	}
-	return projectSnapshot(envelope, probed.route)
+
+	waitCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	if cause := waitCtx.Err(); cause != nil {
+		return cancelledWait(cause)
+	}
+	probed, err := b.probeContext(waitCtx)
+	if err != nil {
+		if cause := waitCtx.Err(); cause != nil {
+			return cancelledWait(cause)
+		}
+		return failedWait(err)
+	}
+
+	deadline := b.now().Add(totalTimeout)
+	callLimit := waitSnapshotCallLimit(totalTimeout)
+	var (
+		lastStart time.Time
+		lastPanes []corebackend.LivePane
+		lastErr   error
+		lastValid bool
+	)
+	for attempt := range callLimit {
+		if attempt > 0 {
+			if result, done := b.waitForNextSnapshot(waitCtx, deadline, lastStart, lastPanes, lastErr, lastValid); done {
+				return result
+			}
+		}
+		if cause := waitCtx.Err(); cause != nil {
+			return cancelledWait(cause)
+		}
+
+		now := b.now()
+		remaining := deadline.Sub(now)
+		if remaining <= 0 {
+			return finishWait(lastPanes, lastErr, lastValid)
+		}
+		lastStart = now
+		callTimeout := min(commandTimeout, remaining)
+		panes, snapshotErr := b.snapshot(waitCtx, callTimeout, probed)
+		if snapshotErr != nil {
+			if cause := waitCtx.Err(); cause != nil {
+				return cancelledWait(cause)
+			}
+			lastPanes = nil
+			lastErr = snapshotErr
+			lastValid = false
+			var retryable retryableSnapshotError
+			if !errors.As(snapshotErr, &retryable) {
+				return failedWait(snapshotErr)
+			}
+			continue
+		}
+
+		lastPanes = append(lastPanes[:0], panes...)
+		lastErr = nil
+		lastValid = true
+		if cause := waitCtx.Err(); cause != nil {
+			return cancelledWait(cause)
+		}
+		if !b.now().Before(deadline) {
+			return finishWait(lastPanes, nil, true)
+		}
+		matched := match(append([]corebackend.LivePane(nil), panes...))
+		if cause := waitCtx.Err(); cause != nil {
+			return cancelledWait(cause)
+		}
+		if !b.now().Before(deadline) {
+			return finishWait(lastPanes, nil, true)
+		}
+		if matched {
+			return WaitResult{Status: WaitMatched, Panes: append([]corebackend.LivePane(nil), panes...)}
+		}
+	}
+	return finishWait(lastPanes, lastErr, lastValid)
 }
 
 func (b *Backend) Launch(corebackend.LaunchRequest) (corebackend.PaneRef, error) {
@@ -118,9 +236,122 @@ func (b *Backend) Close(corebackend.PaneRef) error {
 	return corebackend.Unsupported(corebackend.Herdr, "close")
 }
 
+func normalizeWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
+	if totalTimeout == 0 {
+		return DefaultWaitTimeout, nil
+	}
+	if totalTimeout < minimumWaitTimeout || totalTimeout%time.Second != 0 {
+		return 0, fmt.Errorf("herdr wait total_timeout must be a whole number of seconds at least 3, got %s", totalTimeout)
+	}
+	return totalTimeout, nil
+}
+
+func waitSnapshotCallLimit(totalTimeout time.Duration) int {
+	return int((totalTimeout-1)/waitInterval) + 1
+}
+
+func (b *Backend) waitForNextSnapshot(
+	ctx context.Context,
+	deadline time.Time,
+	lastStart time.Time,
+	lastPanes []corebackend.LivePane,
+	lastErr error,
+	lastValid bool,
+) (WaitResult, bool) {
+	now := b.now()
+	if !now.Before(deadline) {
+		return finishWait(lastPanes, lastErr, lastValid), true
+	}
+	nextStart := lastStart.Add(waitInterval)
+	if !now.Before(nextStart) {
+		return WaitResult{}, false
+	}
+	delay := nextStart.Sub(now)
+	if remaining := deadline.Sub(now); delay > remaining {
+		delay = remaining
+	}
+	if err := b.sleep(ctx, delay); err != nil {
+		if cause := ctx.Err(); cause != nil {
+			return cancelledWait(cause), true
+		}
+		return failedWait(fmt.Errorf("wait for next herdr snapshot: %w", err)), true
+	}
+	if cause := ctx.Err(); cause != nil {
+		return cancelledWait(cause), true
+	}
+	if !b.now().Before(deadline) {
+		return finishWait(lastPanes, lastErr, lastValid), true
+	}
+	return WaitResult{}, false
+}
+
+func finishWait(lastPanes []corebackend.LivePane, lastErr error, lastValid bool) WaitResult {
+	if lastValid {
+		return WaitResult{
+			Status: WaitTimedOut,
+			Panes:  append([]corebackend.LivePane(nil), lastPanes...),
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("herdr wait ended without a compatible snapshot")
+	}
+	return failedWait(lastErr)
+}
+
+func failedWait(err error) WaitResult {
+	return WaitResult{Status: WaitFailed, Err: err}
+}
+
+func cancelledWait(err error) WaitResult {
+	return WaitResult{Status: WaitCancelled, Err: err}
+}
+
+type retryableSnapshotError struct {
+	err error
+}
+
+func (e retryableSnapshotError) Error() string { return e.err.Error() }
+
+func (e retryableSnapshotError) Unwrap() error { return e.err }
+
+type commandCleanupError struct {
+	err error
+}
+
+func (e commandCleanupError) Error() string { return "herdr command process cleanup: " + e.err.Error() }
+
+func (e commandCleanupError) Unwrap() error { return e.err }
+
+func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed probeResult) ([]corebackend.LivePane, error) {
+	out, err := b.runContext(ctx, timeout, probed.binary, probed.route, "api", "snapshot")
+	if err != nil {
+		wrapped := fmt.Errorf("herdr api snapshot: %w", err)
+		if retryableCommandError(err) {
+			return nil, retryableSnapshotError{err: wrapped}
+		}
+		return nil, wrapped
+	}
+	var envelope snapshotEnvelope
+	if err := decodeOne(out, &envelope); err != nil {
+		return nil, fmt.Errorf("parse herdr api snapshot: %w", err)
+	}
+	return projectSnapshot(envelope, probed.route)
+}
+
 func (b *Backend) probe() (probeResult, error) {
-	b.probeMu.Lock()
-	defer b.probeMu.Unlock()
+	return b.probeContext(context.Background())
+}
+
+func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
+	select {
+	case b.probeGate <- struct{}{}:
+		defer func() { <-b.probeGate }()
+	case <-ctx.Done():
+		return probeResult{}, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return probeResult{}, err
+	}
 
 	if err := validateSessionName(b.session); err != nil {
 		return probeResult{}, err
@@ -137,7 +368,7 @@ func (b *Backend) probe() (probeResult, error) {
 	}
 
 	initial := route{session: b.session, socketPath: b.socketPath}
-	versionOut, err := b.run(binary, initial, "--version")
+	versionOut, err := b.runContext(ctx, commandTimeout, binary, initial, "--version")
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr --version: %w", err)
 	}
@@ -152,7 +383,7 @@ func (b *Backend) probe() (probeResult, error) {
 	if initial.socketPath == "" {
 		statusArgs = append([]string{"--session", initial.session}, statusArgs...)
 	}
-	statusOut, err := b.run(binary, initial, statusArgs...)
+	statusOut, err := b.runContext(ctx, commandTimeout, binary, initial, statusArgs...)
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr status --json: %w", err)
 	}
@@ -165,7 +396,7 @@ func (b *Backend) probe() (probeResult, error) {
 		return probeResult{}, err
 	}
 
-	schemaOut, err := b.run(binary, verified, "api", "schema", "--json")
+	schemaOut, err := b.runContext(ctx, commandTimeout, binary, verified, "api", "schema", "--json")
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr api schema --json: %w", err)
 	}
@@ -186,8 +417,16 @@ func (b *Backend) probe() (probeResult, error) {
 	return probeResult{binary: binary, route: verified}, nil
 }
 
-func (b *Backend) run(binary string, target route, args ...string) ([]byte, error) {
-	return b.output(binary, routeEnvironment(target), args...)
+func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if timeout <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return b.output(callCtx, binary, routeEnvironment(target), args...)
 }
 
 func routeEnvironment(target route) []string {
@@ -206,17 +445,37 @@ func routeEnvironment(target route) []string {
 	return env
 }
 
-func runCommand(binary string, env []string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	defer cancel()
+func runCommand(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cancelCleanup := make(chan error, 1)
+	cmd.Cancel = func() error {
+		cleanupErr := killCommandProcessGroup(cmd)
+		if cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
+			select {
+			case cancelCleanup <- cleanupErr:
+			default:
+			}
+		}
+		return cleanupErr
+	}
+	cmd.WaitDelay = commandCleanupDelay
 	out, err := cmd.Output()
+	var cleanupErrors []error
+	select {
+	case cleanupErr := <-cancelCleanup:
+		cleanupErrors = append(cleanupErrors, cleanupErr)
+	default:
+	}
+	if err != nil {
+		if cleanupErr := killCommandProcessGroup(cmd); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
+			cleanupErrors = append(cleanupErrors, cleanupErr)
+		}
+	}
+	err = finalizeCommandError(err, ctx.Err(), cleanupErrors...)
 	if err == nil {
 		return out, nil
-	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return out, context.DeadlineExceeded
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
@@ -226,6 +485,73 @@ func runCommand(binary string, env []string, args ...string) ([]byte, error) {
 		}
 	}
 	return out, err
+}
+
+func finalizeCommandError(commandErr, contextErr error, cleanupErrors ...error) error {
+	cleanupErr := errors.Join(cleanupErrors...)
+	if cleanupErr != nil {
+		failure := commandCleanupError{err: cleanupErr}
+		if contextErr != nil {
+			return errors.Join(contextErr, failure)
+		}
+		return errors.Join(commandErr, failure)
+	}
+	if contextErr != nil {
+		return contextErr
+	}
+	return commandErr
+}
+
+func retryableCommandError(err error) bool {
+	var cleanupErr commandCleanupError
+	if errors.As(err, &cleanupErr) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
+}
+
+func killCommandProcessGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	return killCommandProcessTree(
+		func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) },
+		cmd.Process.Kill,
+	)
+}
+
+func killCommandProcessTree(killGroup, killDirect func() error) error {
+	groupErr := killGroup()
+	if groupErr == nil {
+		return nil
+	}
+	directErr := killDirect()
+	if errors.Is(groupErr, syscall.ESRCH) && errors.Is(directErr, os.ErrProcessDone) {
+		return os.ErrProcessDone
+	}
+	groupErr = fmt.Errorf("kill process group: %w", groupErr)
+	if directErr == nil || errors.Is(directErr, os.ErrProcessDone) {
+		return groupErr
+	}
+	return errors.Join(groupErr, fmt.Errorf("kill direct process: %w", directErr))
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func validateSessionName(session string) error {
@@ -507,6 +833,8 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 			},
 			CurrentPath:      currentPath,
 			Title:            optionalString(pane.Title),
+			FocusKnown:       true,
+			Focused:          *pane.Focused,
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,

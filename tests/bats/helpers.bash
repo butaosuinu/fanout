@@ -44,6 +44,10 @@ setup() {
   unset FANOUT_CODEX_PLAN_MODE
   unset FANOUT_PR_VISUALIZATION
   unset FANOUT_AGENT
+  unset FANOUT_BACKEND
+  unset HERDR_ENV
+  unset HERDR_SESSION
+  unset HERDR_SOCKET_PATH
 
   # Most tests exercise the direct tmux runtime. Provide fake TMUX markers so
   # fanout targets the invoking pane instead of the session's active pane.
