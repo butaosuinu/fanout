@@ -94,7 +94,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
-| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない。既定: off。 |
+| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインで、そのレジストリ seed と app-server ブリッジ起動は fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。既定: off。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。worktree、ペイン、state row、briefing file は作らない。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
 
@@ -154,7 +154,7 @@ spec フォーマット:
 | `--base-branch` | `<branch>` | `plan.base_branch` を上書きする。どちらも無い場合は repository default branch を解決し、`origin` remote が無い場合は現在の local branch / `HEAD` を使う。 |
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
 | `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
-| `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
+| `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
 
 `--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。
 
