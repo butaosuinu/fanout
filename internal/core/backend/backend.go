@@ -137,6 +137,8 @@ func (e *observationRouteUnavailableError) Error() string { return e.cause.Error
 
 func (e *observationRouteUnavailableError) Unwrap() error { return e.cause }
 
+func (e *observationRouteUnavailableError) observationRoute() ObservationRoute { return e.route }
+
 // ClassifyObservationError separates route-scoped failures from failures that
 // make every route indeterminate. It recursively follows errors.Join and %w
 // wrappers. Once a route wrapper is reached its cause remains scoped to that
@@ -148,8 +150,8 @@ func ClassifyObservationError(err error) (routes map[ObservationRoute]bool, all 
 		if current == nil {
 			return
 		}
-		if scoped, ok := current.(*observationRouteUnavailableError); ok {
-			routes[scoped.route] = true
+		if scoped, ok := current.(interface{ observationRoute() ObservationRoute }); ok {
+			routes[scoped.observationRoute()] = true
 			return
 		}
 		if joined, ok := current.(interface{ Unwrap() []error }); ok {
