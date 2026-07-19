@@ -30,38 +30,123 @@ for bootstrap_path in "$repo_root/AGENTS.md" "$repo_root/AGENTS.override.md" "$r
   [ ! -L "$bootstrap_path" ] ||
     die "Codex bootstrap paths must not be symlinks: $bootstrap_path"
 done
-agents_symlink=$(find "$repo_root" -name .git -prune -o -type l \
-  \( -iname AGENTS.md -o -iname AGENTS.override.md \) -print -quit) ||
-  die "cannot inspect repository AGENTS files"
-[ -z "$agents_symlink" ] || die "repository AGENTS files must not be symlinks: $agents_symlink"
-unsupported_codex=$(find "$repo_root" -name .git -prune -o -iname .codex \
-  ! -path "$repo_root/.codex" -print -quit) || die "cannot inspect repository .codex paths"
+agents_index=$(git ls-files --stage -- \
+  ':(icase,glob)AGENTS.md' \
+  ':(icase,glob)AGENTS.override.md' \
+  ':(icase,glob)**/AGENTS.md' \
+  ':(icase,glob)**/AGENTS.override.md') || die "cannot inspect repository AGENTS files"
+case "$agents_index" in
+  120000\ * | *'
+'120000\ *) die "repository AGENTS files must not be symlinks" ;;
+esac
+unsupported_codex=$(git ls-files --cached --others -- \
+  ':(icase,glob).codex' \
+  ':(icase,glob).codex/**' \
+  ':(icase,glob)**/.codex' \
+  ':(icase,glob)**/.codex/**' \
+  ':(exclude,glob).codex' \
+  ':(exclude,glob).codex/**') || die "cannot inspect repository .codex paths"
 [ -z "$unsupported_codex" ] ||
   die "case-variant or nested repository .codex paths are unsupported: $unsupported_codex"
 if [ -d "$repo_root/.codex" ]; then
-  codex_symlink=$(find "$repo_root/.codex" -type l -print -quit) ||
-    die "cannot inspect repository .codex directory"
-  [ -z "$codex_symlink" ] || die "repository .codex files must not be symlinks: $codex_symlink"
+  codex_index=$(git ls-files --stage -- \
+    ':(glob).codex' ':(glob).codex/**') || die "cannot inspect repository .codex directory"
+  case "$codex_index" in
+    120000\ * | *'
+'120000\ *) die "repository .codex files must not be symlinks" ;;
+  esac
 fi
 project_config="$repo_root/.codex/config.toml"
 if [ -e "$project_config" ] && [ ! -f "$project_config" ]; then
   die "repository .codex/config.toml must be a regular file"
 fi
 if [ -f "$project_config" ]; then
-  dynamic_key_pattern='(model_instructions_file|project_doc_fallback_filenames)[^=]*='
-  escaped_key_pattern='\\[^=]*='
-  if LC_ALL=C grep -Eq "$dynamic_key_pattern" "$project_config"; then
-    die "repository .codex/config.toml uses unsupported dynamic instruction sources"
-  else
-    grep_status=$?
-    [ "$grep_status" -eq 1 ] || die "cannot inspect repository .codex/config.toml"
-  fi
-  if LC_ALL=C grep -Eq "$escaped_key_pattern" "$project_config"; then
-    die "repository .codex/config.toml uses unsupported escaped keys"
-  else
-    grep_status=$?
-    [ "$grep_status" -eq 1 ] || die "cannot inspect repository .codex/config.toml"
-  fi
+  config_issue=$(LC_ALL=C awk '
+    BEGIN {
+      sq = sprintf("%c", 39); dq = "\""; bs = "\\"
+      triple_sq = sq sq sq; triple_dq = dq dq dq
+      mode = "code"
+    }
+    function reset_key() { bare = ""; dynamic = escaped = 0 }
+    function report(issue) { print issue; reported = 1; exit }
+    {
+      line = $0; length_ = length(line); pos = 1
+      if (mode == "code") reset_key()
+      while (pos <= length_) {
+        char = substr(line, pos, 1)
+        if (mode != "code") {
+          quote = mode == "multiline_basic" ? dq : sq
+          if (mode == "multiline_basic" && char == bs) { pos += 2; continue }
+          if (char != quote) { pos++; continue }
+          run = 1
+          while (pos + run <= length_ && substr(line, pos + run, 1) == quote) run++
+          if (run >= 3) mode = "code"
+          pos += run
+          continue
+        }
+        if (char ~ /[A-Za-z0-9_-]/) {
+          bare = bare char; pos++; continue
+        }
+        if (bare == "model_instructions_file" ||
+            bare == "project_doc_fallback_filenames") {
+          dynamic = 1
+        }
+        bare = ""
+        if (char == "#") break
+        if (char == dq || char == sq) {
+          triple = char == dq ? triple_dq : triple_sq
+          if (substr(line, pos, 3) == triple) {
+            mode = char == dq ? "multiline_basic" : "multiline_literal"
+            pos += 3; continue
+          }
+          quote = char; text = ""; quote_escaped = 0; pos++
+          while (pos <= length_) {
+            char = substr(line, pos, 1)
+            if (quote == dq && char == bs) {
+              quote_escaped = 1; pos += 2; continue
+            }
+            if (char == quote) break
+            text = text char; pos++
+          }
+          if (pos > length_) report("ambiguous")
+          next_pos = pos + 1
+          while (next_pos <= length_ &&
+                 (substr(line, next_pos, 1) == " " ||
+                  substr(line, next_pos, 1) == "\t")) next_pos++
+          following = substr(line, next_pos, 1)
+          if (following == "." || following == "=") {
+            if (quote_escaped) escaped = 1
+            else if (text == "model_instructions_file" ||
+                     text == "project_doc_fallback_filenames") {
+              dynamic = 1
+            }
+          }
+          pos++; continue
+        }
+        if (char == "=") {
+          if (escaped) report("escaped")
+          if (dynamic) report("dynamic")
+          reset_key()
+        } else if (index(",{}[]", char)) reset_key()
+        pos++
+      }
+      if (mode == "code") reset_key()
+    }
+    END { if (!reported && mode != "code") print "ambiguous" }
+  ' "$project_config") || die "cannot inspect repository .codex/config.toml"
+  case "$config_issue" in
+    dynamic)
+      die "repository .codex/config.toml uses unsupported dynamic instruction sources"
+      ;;
+    escaped)
+      die "repository .codex/config.toml uses unsupported escaped keys"
+      ;;
+    ambiguous)
+      die "cannot safely inspect repository .codex/config.toml"
+      ;;
+    "") ;;
+    *) die "cannot inspect repository .codex/config.toml" ;;
+  esac
 fi
 
 git_dir=$(git rev-parse --absolute-git-dir) || die "cannot resolve Git directory"
@@ -100,6 +185,14 @@ guard_bootstrap_instructions() {
     ':(icase,glob)**/.codex/**' \
     ':(icase,glob)codex/skills/post-work-review' \
     ':(icase,glob)codex/skills/post-work-review/**'
+
+  index_state=$(git ls-files -v -- "$@") || die "cannot inspect Git index flags"
+  if printf '%s\n' "$index_state" | LC_ALL=C grep -Eq '^[a-zS] '; then
+    die "Git index uses unsupported assume-unchanged or skip-worktree flags"
+  else
+    index_status=$?
+    [ "$index_status" -eq 1 ] || die "cannot inspect Git index flags"
+  fi
 
   git diff --quiet --no-ext-diff --ignore-submodules=none \
     "$bootstrap_base" "$current_head" -- "$@" ||
@@ -165,7 +258,7 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=12\n'
+      printf 'post_work_review_version=13\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"

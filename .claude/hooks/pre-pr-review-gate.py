@@ -559,7 +559,7 @@ def main():
         # marker-only mode stays default-base-only.
         if review_metadata_present:
             metadata_valid = (
-                review_metadata.get("post_work_review_version") == "12" and
+                review_metadata.get("post_work_review_version") == "13" and
                 review_metadata.get("head") == target and
                 bool(review_metadata.get("base")) and
                 bool(review_metadata.get("base_head")) and

@@ -32,7 +32,8 @@ reviewer output or require a result schema.
   `AGENTS.override.md`, and repository `.codex` bootstrap files are
   unchanged from the trusted bootstrap base and have no worktree additions. It also
   rejects linked instruction files, nested `.codex` paths, dynamic or escaped
-  project config keys, and committed or worktree submodule changes. The
+  project config keys, protected paths marked `assume-unchanged` or
+  `skip-worktree`, and committed or worktree submodule changes. The
   reviewer's controlling contract consists of trusted parent-session and system
   instructions, those base-identical bootstrap instructions, and the spawn
   message in their normal precedence order. Follow unchanged base instructions
@@ -85,8 +86,11 @@ reviewer output or require a result schema.
    `codex/skills/post-work-review` gate, using case-insensitive path matching
    for filesystem portability. It also rejects any linked
    `AGENTS.md` / `AGENTS.override.md`, nested `.codex` paths, project config
-   that defines dynamic instruction-source keys or escaped keys, and any
-   committed or worktree submodule change.
+   that defines dynamic instruction-source keys or escaped keys, protected
+   paths marked `assume-unchanged` or `skip-worktree`, and any committed or
+   worktree submodule change. Bootstrap files inside nested Git worktrees and
+   submodules belong to those checkouts and are not part of the parent
+   repository scan.
    This proves that active supported repository bootstrap instructions are
    base-identical and prevents a gate-changing target from reviewing itself.
    An instruction- or gate-changing target, or any submodule-changing target,
@@ -95,10 +99,12 @@ reviewer output or require a result schema.
 7. Base-identical inline project `developer_instructions` are supported because
    the `.codex` guard binds their bytes. Case-variant or nested `.codex` paths
    are unsupported.
-   The helper stops if root project config defines `model_instructions_file` or
-   `project_doc_fallback_filenames`, even with an empty value, and rejects
-   escaped config keys rather than implementing a partial TOML parser. Dynamic
-   repository instruction sources are outside the fixed path guard.
+   The helper stops if root project config assigns `model_instructions_file` or
+   `project_doc_fallback_filenames` as a bare, quoted, dotted, or inline-table
+   key, even with an empty value. Comments and string values may mention those
+   names. Escaped keys and ambiguous quoted strings fail closed; the helper
+   recognizes assignment boundaries without implementing TOML semantics.
+   Dynamic repository instruction sources are outside the fixed path guard.
    Also stop if trusted parent configuration makes the effective
    `project_doc_fallback_filenames` non-empty. User- and system-level
    instructions and files outside the repository remain a trusted

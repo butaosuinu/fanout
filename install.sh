@@ -126,6 +126,7 @@ remove_retired_codex_review_files() {
 
 guard_binary_only_review_compat() {
   [ "$install_skills" -eq 0 ] || return 0
+  [ ! -f "$tmp/extract/codex/tools/post-work-review.sh" ] || return 0
   for review_dir in "$codex_dir" "$codex_home"; do
     driver="$review_dir/tools/post-work-review.sh"
     if [ -e "$driver" ] || [ -L "$driver" ]; then
@@ -283,8 +284,6 @@ if [ "$uninstall" -eq 1 ]; then
   exit 0
 fi
 
-guard_binary_only_review_compat
-
 os=$(normalize_os)
 arch=$(normalize_arch)
 asset="fanout_${os}_${arch}.tar.gz"
@@ -309,6 +308,7 @@ verify_checksum "$archive" "$sums" "$asset"
 
 tar -xzf "$archive" -C "$tmp/extract"
 [ -f "$tmp/extract/fanout" ] || die "archive does not contain fanout"
+guard_binary_only_review_compat
 
 mkdir -p "$bin_dir"
 install_exec "$tmp/extract/fanout" "$bin_dir/fanout"
