@@ -84,11 +84,11 @@ type PaneView struct {
 	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown
 	WorktreeErr string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 
-	RuntimeState string `json:"runtimeState"`           // "live" / "stale" / "unknown" / "-"
+	RuntimeState string `json:"runtimeState"`           // "live" / "stale" / "unknown" / "unsupported" / "-"
 	RuntimeTitle string `json:"runtimeTitle,omitempty"` // live backend pane title; "" when dead
 	// TmuxState/TmuxTitle are compatibility aliases for existing snapshot
-	// consumers. They carry the same values as RuntimeState/RuntimeTitle for
-	// every backend while the public wire contract migrates incrementally.
+	// consumers. TmuxState retains its old value set; unsupported runtime rows
+	// project to unknown. TmuxTitle mirrors RuntimeTitle.
 	TmuxState string `json:"tmuxState"`
 	TmuxTitle string `json:"tmuxTitle,omitempty"`
 	// AgentState は "running" / "working" / "plan" / "blocked" / "idle" /

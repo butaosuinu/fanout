@@ -9,6 +9,8 @@ import {
   paneCI,
   paneIssueURL,
   paneLabel,
+  paneRuntimeState,
+  paneRuntimeTitle,
   prPrimary,
   rowKey,
 } from "../lib/pane";
@@ -55,6 +57,8 @@ function PaneRow({
 }) {
   const ci = paneCI(pane);
   const wave = fmtWave(pane);
+  const runtimeState = paneRuntimeState(pane);
+  const runtimeTitle = paneRuntimeTitle(pane);
   const onClick = (e: MouseEvent) => {
     // GitHub リンク(issue / PR)は行選択にしない
     if ((e.target as Element).closest("a")) return;
@@ -102,9 +106,9 @@ function PaneRow({
           <span className="muted">—</span>
         )}
       </td>
-      <td title={pane.tmuxTitle ?? ""}>
+      <td title={runtimeTitle}>
         <span className={pane.alive ? "dot on" : "dot off"} aria-hidden="true"></span>
-        {pane.alive ? "live" : pane.tmuxState || "stale"}
+        {pane.alive ? "live" : runtimeState || "stale"}
         {isKnownAgentState(pane.agentState) && (
           <>
             {" "}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
@@ -24,16 +25,20 @@ func TestPaneViewsFromSnapshotRendersHerdrRuntimeAliases(t *testing.T) {
 				IssueNum: 103, Backend: backend.Herdr, PaneID: "w1:p3",
 				RuntimeState: "unknown", TmuxState: "unknown",
 			},
+			{
+				IssueNum: 104, Backend: backend.Herdr, PaneID: "w1:p4",
+				RuntimeState: "unsupported", TmuxState: "unknown",
+			},
 		},
 	}}}
 
 	got := paneViewsFromSnapshot("/repo", snap)
-	if len(got) != 3 {
-		t.Fatalf("paneViewsFromSnapshot len = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("paneViewsFromSnapshot len = %d, want 4", len(got))
 	}
 
-	wantStates := []string{"live", "stale!", "unknown"}
-	wantRuns := []string{"◐", "✗", "-"}
+	wantStates := []string{"live", "stale!", "unknown", "unsup!"}
+	wantRuns := []string{"◐", "✗", "-", "!"}
 	runtimeColumn := columnIndex(t, "TMUX")
 	runColumn := columnIndex(t, "RUN")
 	for i := range got {
@@ -47,6 +52,9 @@ func TestPaneViewsFromSnapshotRendersHerdrRuntimeAliases(t *testing.T) {
 		if got[i].Backend != backend.Herdr {
 			t.Errorf("row %d backend = %q, want herdr", i, got[i].Backend)
 		}
+	}
+	if compact := compactPaneLine(got[3], 4, false, 60); !strings.Contains(compact, "4! #104") {
+		t.Fatalf("compact unsupported row = %q, want distinct ! runtime glyph", compact)
 	}
 
 	filtered := filterPaneViews(got, "run:working")

@@ -234,7 +234,11 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			current, alive := livePaneForState(live, p)
 			runtimeDegraded := allRuntimeRoutesDegraded || failedRuntimeRoutes[observationRouteForState(p)]
-			runtimeState := runtimeStateOf(p.PaneID, runtimeDegraded, alive)
+			runtimeUnsupported := herdrRowUnsupported(p)
+			if runtimeUnsupported {
+				alive = false
+			}
+			runtimeState := runtimeStateOf(p.PaneID, runtimeDegraded, runtimeUnsupported, alive)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:           p.IssueNum,
@@ -263,7 +267,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				DirtyState:         worktreeStat.DirtyState,
 				WorktreeErr:        worktreeErr,
 				RuntimeState:       runtimeState,
-				TmuxState:          runtimeState,
+				TmuxState:          compatibilityTmuxState(runtimeState),
 				PlanMode:           p.CodexPlanMode,
 				Prompt:             p.Prompt,
 				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
@@ -613,7 +617,7 @@ func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 		pane.HerdrTerminalID != current.TerminalID {
 		return false
 	}
-	storedAgent := pane.HerdrAgentID != "" || pane.HerdrAgentSession != nil
+	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != "" || pane.HerdrAgentSession != nil
 	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentSession != nil
 	if storedAgent != observedAgent {
 		return false
@@ -646,6 +650,34 @@ func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	return strings.TrimSpace(storedRepoKey) == "" && currentPath != "" && filepath.Clean(currentPath) == storedPath
 }
 
+// herdrRowUnsupported identifies persisted rows that predate the authoritative
+// identity baseline required by the observation-only v1 matcher. These rows are
+// not stale: without the saved baseline there is no prior terminal or logical
+// conversation to compare. They remain explicitly unsupported and are never
+// filled from the current snapshot, which would adopt a potentially reused
+// public pane ID.
+func herdrRowUnsupported(pane state.Pane) bool {
+	if backend.NormalizeName(pane.Backend) != backend.Herdr || strings.TrimSpace(pane.PaneID) == "" {
+		return false
+	}
+	if strings.TrimSpace(pane.HerdrWorkspaceID) == "" ||
+		strings.TrimSpace(pane.HerdrTerminalID) == "" ||
+		strings.TrimSpace(pane.HerdrSession) == "" ||
+		strings.TrimSpace(pane.HerdrSocketPath) == "" ||
+		strings.TrimSpace(pane.WorktreePath) == "" {
+		return true
+	}
+	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
+	storedAgentSession := pane.HerdrAgentSession != nil
+	if storedAgentID != storedAgentSession || (storedAgentSession && !pane.HerdrAgentSession.Valid()) {
+		return true
+	}
+	if !storedAgentID && strings.TrimSpace(pane.Agent) != "" {
+		return true
+	}
+	return false
+}
+
 func agentSessionRefsEqual(stored, current *backend.AgentSessionRef) bool {
 	if stored == nil || current == nil {
 		return stored == nil && current == nil
@@ -658,21 +690,34 @@ func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {
 	return alive
 }
 
-// runtimeStateOf preserves the established TUI state strings across backends:
-// "-" for a row that never had a pane, "live" for a positive observation even
-// in a degraded snapshot, "unknown" when the row's route is unavailable, and
-// "stale" otherwise.
-func runtimeStateOf(paneID string, runtimeDegraded, alive bool) string {
+// runtimeStateOf preserves the established TUI state strings across backends
+// and adds "unsupported" for a herdr row that has no authoritative persisted
+// identity baseline. Such a row is distinct from a stale row whose saved
+// identity was actually compared and rejected.
+func runtimeStateOf(paneID string, runtimeDegraded, runtimeUnsupported, alive bool) string {
 	switch {
 	case strings.TrimSpace(paneID) == "":
 		return "-"
 	case alive:
 		return "live"
+	case runtimeUnsupported:
+		return "unsupported"
 	case runtimeDegraded:
 		return "unknown"
 	default:
 		return "stale"
 	}
+}
+
+// compatibilityTmuxState keeps the pre-runtime-alias value set stable for
+// existing snapshot consumers. A legacy consumer cannot distinguish an
+// unsupported backend row from an unobservable one, so project it as unknown;
+// RuntimeState carries the precise backend-neutral value.
+func compatibilityTmuxState(runtimeState string) string {
+	if runtimeState == "unsupported" {
+		return "unknown"
+	}
+	return runtimeState
 }
 
 // knownAgentStates は @fanout_agent_state の許可語彙(6 値契約:

@@ -46,9 +46,9 @@ export interface PaneView {
   diffSummary: string; // "+X/-Y" or free text
   dirtyState: string; // "dirty" / "clean" / "unknown"
   worktreeErr?: string;
-  tmuxState: string; // "live" / "stale" / "unknown" / "-"
+  tmuxState: string; // compatibility field: "live" / "stale" / "unknown" / "-"
   tmuxTitle?: string;
-  runtimeState?: string; // backend-neutral alias; tmuxState は互換用に残る
+  runtimeState?: string; // backend-neutral field; additive "unsupported" を含む
   runtimeTitle?: string; // backend-neutral alias; tmuxTitle は互換用に残る
   agentState?: string; // "running" / "working" / "plan" / "blocked" / "idle" / "done" / ""(不明)
   planMode?: boolean; // Codex Plan Mode 起動ペイン(/api/plan・Plan セクションの対象)

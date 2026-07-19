@@ -221,7 +221,7 @@ describe("snapshot 描画", () => {
     expect(screen.getByText("アクティブなセッションがありません")).toBeInTheDocument();
   });
 
-  it("herdr row の live / stale / unknown を runtime 状態として表示する", () => {
+  it("herdr row の live / stale / unknown / unsupported を runtime 状態として表示する", () => {
     render(<App />);
     streamSnapshot(
       makeSnapshot([
@@ -241,6 +241,14 @@ describe("snapshot 描画", () => {
             alive: false,
             tmuxState: "unknown",
           }),
+          makePane({
+            issueNum: 104,
+            displayName: "Herdr unsupported",
+            backend: "herdr",
+            alive: false,
+            tmuxState: "unknown",
+            runtimeState: "unsupported",
+          }),
         ]),
       ]),
     );
@@ -249,6 +257,7 @@ describe("snapshot 描画", () => {
       ["Herdr live", "live"],
       ["Herdr stale", "stale"],
       ["Herdr unknown", "unknown"],
+      ["Herdr unsupported", "unsupported"],
     ] as const) {
       const row = screen.getByText(name).closest("tr");
       expect(row).not.toBeNull();

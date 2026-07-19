@@ -31,6 +31,14 @@ export function paneCI(p: PaneView): string {
   return p.ciStatus === "-" ? "" : p.ciStatus;
 }
 
+export function paneRuntimeState(p: PaneView): string {
+  return p.runtimeState || p.tmuxState;
+}
+
+export function paneRuntimeTitle(p: PaneView): string {
+  return p.runtimeTitle || p.tmuxTitle || "";
+}
+
 /* Mirrors Go blockers.FormatStatuses: OPEN → "OPEN #N", CLOSED → "resolved #N",
  * anything else (UNKNOWN etc.) → "<STATE> #N". */
 export function blockerLabel(b: BlockerStatus): string {

@@ -80,7 +80,7 @@ var agentStateGlyphs = map[string]string{
 	"blocked": "◆",
 }
 
-// agentStateGlyph はグリフの単一情報源。入力は AgentState と TmuxState のみで、
+// agentStateGlyph はグリフの単一情報源。入力は AgentState と runtime state のみで、
 // ペイン内容(capture-pane)からの状態推定はしない。stale ペインと pane 記録の
 // ない行の AgentState は残骸なので、map より先に弾く。tmux degraded
 // ("unknown")では state.json の記録値が最善情報としてそのまま出る。
@@ -88,6 +88,8 @@ func agentStateGlyph(p paneView) string {
 	switch p.TmuxState {
 	case "stale":
 		return "✗"
+	case "unsupported":
+		return "!"
 	case "-":
 		return "-"
 	}
@@ -102,8 +104,11 @@ func agentStateGlyph(p paneView) string {
 
 func (p paneView) tableRow() table.Row {
 	tmuxState := p.TmuxState
-	if tmuxState == "stale" {
+	switch tmuxState {
+	case "stale":
 		tmuxState = "stale!"
+	case "unsupported":
+		tmuxState = "unsup!"
 	}
 	return table.Row{
 		compactParent(p.Parent),

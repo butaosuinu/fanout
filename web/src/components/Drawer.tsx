@@ -4,7 +4,15 @@ import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
-import { blockerLabel, fmtWave, notStartedNote, paneIssueURL, paneLabel } from "../lib/pane";
+import {
+  blockerLabel,
+  fmtWave,
+  notStartedNote,
+  paneIssueURL,
+  paneLabel,
+  paneRuntimeState,
+  paneRuntimeTitle,
+} from "../lib/pane";
 import type { PaneView } from "../lib/types";
 import {
   AgentStateTag,
@@ -214,8 +222,8 @@ export function Drawer({
               <dd id="d-agent">{pane.agent || "—"}</dd>
               <dt>pane</dt>
               <dd id="d-pane">{pane.paneId || "—"}</dd>
-              <dt>tmux</dt>
-              <dd id="d-tmux">{pane.alive ? "live" : pane.tmuxState || "stale"}</dd>
+              <dt>runtime</dt>
+              <dd id="d-tmux">{pane.alive ? "live" : paneRuntimeState(pane) || "stale"}</dd>
               <dt>run</dt>
               <dd id="d-run">
                 {isKnownAgentState(pane.agentState) ? (
@@ -225,7 +233,7 @@ export function Drawer({
                 )}
               </dd>
               <dt>title</dt>
-              <dd id="d-title">{pane.tmuxTitle || "—"}</dd>
+              <dd id="d-title">{paneRuntimeTitle(pane) || "—"}</dd>
               <dt>created</dt>
               <dd id="d-created">{fmtCreated(pane.createdAt)}</dd>
               <dt>issue</dt>
