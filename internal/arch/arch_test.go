@@ -23,9 +23,10 @@ import (
 // godep-cruiser scans every *.go file under the whole repo root (tests
 // included, build constraints not evaluated, skipping testdata/, vendor/, and
 // dot- or underscore-prefixed directories). That is deliberately wider than
-// the internal/+cmd/+tools/ walk of the previous handwritten tests: a new Go
-// tree anywhere in the repo is guarded (and must parse) instead of escaping
-// every rule.
+// the internal/+cmd/+tools/ walk of the previous handwritten tests: a Go file
+// outside those three trees must parse and is rejected outright by
+// no-go-files-outside-trees, whatever it imports, instead of escaping every
+// rule.
 //
 // godep-cruiser-baseline.json grandfathers violations that predate the rules;
 // entries whose violation is gone fail as stale, forcing deletion. Current

@@ -143,6 +143,13 @@
       "comment": "no *.go files directly under cmd/, tools/, or a layer root (internal/core|app|infra|ui): every package lives in its own subdirectory, so shared cmd helpers cannot ship outside internal/ and no package can sit at a layer root.",
       "from": { "packageName": ["."], "path": ["^(cmd|tools|internal/(core|app|infra|ui))/[^/]+\\.go$"] },
       "to": {}
+    },
+    {
+      "name": "no-go-files-outside-trees",
+      "severity": "error",
+      "comment": "Go code lives only under internal/, cmd/, and tools/: a new Go tree anywhere else (pkg/, examples/, web/, the repo root) would sit outside the layer rules, so it is rejected outright regardless of its imports (fail-closed project shape).",
+      "from": { "packageName": ["."], "pathNot": ["^(cmd|tools|internal)/"] },
+      "to": {}
     }
   ]
 }

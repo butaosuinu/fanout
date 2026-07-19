@@ -126,9 +126,9 @@ godep-cruiser v0.3.0(dependency-cruiser の Go 移植・同作者)を精査し�
 1. cgo(`import "C"`)の禁止。旧テストは core / tools とも cgo を素通し
    していたが、`unresolved` 型を禁止対象に含めたため両方で落ちる(微強化)
 2. スキャン範囲が internal/・cmd/・tools/ の 3 ツリーから repo 全体に拡大。
-   3 ツリー外に置かれた新規 Go ツリーも fail-closed で検査される(旧テストは
-   素通し)。副作用として、repo 内のどこかに parse できない `.go` が置かれる
-   とテスト自体が失敗する
+   3 ツリー外の `.go` は import に関係なく `no-go-files-outside-trees` が
+   拒否する(旧テストは素通し)。副作用として、repo 内のどこかに parse
+   できない `.go` が置かれるとテスト自体が失敗する
 3. scanner は `vendor/` を skip する(旧 `scanRepo` は skip しない。repo に
    vendor は無いので現状は無差)
 
