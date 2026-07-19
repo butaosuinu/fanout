@@ -25,8 +25,7 @@ func tmuxLifecycleOptions(repo string) lifecycle.Options {
 	return lifecycle.Options{
 		ProjectRoot: repo,
 		StatePath:   state.Path(repo),
-		ClosePane:   runtimeBackend.Close,
-		ListLive:    runtimeBackend.ListLive,
+		CloseOwned:  runtimeBackend.CloseOwned,
 	}
 }
 

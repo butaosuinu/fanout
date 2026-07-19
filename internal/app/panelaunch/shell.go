@@ -24,6 +24,11 @@ type ShellRequest struct {
 	Root bool
 }
 
+var (
+	closePaneForCleanup = tmuxrun.ClosePaneIfOwned
+	closeFreshPane      = tmuxrun.CloseFreshPane
+)
+
 // Shell opens a plain tmux shell pane at req.TargetPath and records it as a
 // keyed @manual shell row in l.Info.ProjectRoot's state. Plain TUI terminals
 // are part of tmux session management, not backend agent launch, so this path
@@ -84,7 +89,7 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	}
 	if err := setPaneLivenessKey(paneID, shellKey); err != nil {
 		stampErr := fmt.Errorf("set terminal pane liveness key: %w", err)
-		if cleanupErr := cleanupFreshPane(target, paneID); cleanupErr != nil {
+		if cleanupErr := cleanupFreshShellPane(target, paneID); cleanupErr != nil {
 			recoveryErr := recorder.RecordPane(entry)
 			if recoveryErr != nil {
 				recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", paneID, recoveryErr)
@@ -102,7 +107,7 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
 	if err := recorder.RecordPane(entry); err != nil {
 		writeErr := fmt.Errorf("write fanout state: %w", err)
-		if failCleanup(title, target, paneID, targetPath, shellKey, nil, nil) {
+		if cleanupShellPane(target, paneID, targetPath, shellKey) {
 			removeErr := recorder.RemovePane(ManualParentRef, number)
 			if removeErr != nil {
 				removeErr = fmt.Errorf("remove stopped terminal pane from fanout state: %w", removeErr)
@@ -120,6 +125,29 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	// orphaned spacer behind.
 	_ = panelayout.Apply(target, panelayout.Create)
 	return nil
+}
+
+func cleanupFreshShellPane(relayoutTarget, paneID string) error {
+	if err := closeFreshPane(paneID); err != nil {
+		return err
+	}
+	_ = panelayout.Apply(relayoutTarget, panelayout.Close)
+	return nil
+}
+
+func cleanupShellPane(relayoutTarget, paneID, expectedWorktreePath, shellKey string) bool {
+	result, err := closePaneForCleanup(paneID, expectedWorktreePath, shellKey)
+	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
+		return false
+	}
+	if result.Status == tmuxrun.ClosePaneClosed {
+		target := result.WindowID
+		if target == "" {
+			target = relayoutTarget
+		}
+		_ = panelayout.Apply(target, panelayout.Close)
+	}
+	return true
 }
 
 // NewShellPaneKey generates a random @fanout_shell_key liveness token. The

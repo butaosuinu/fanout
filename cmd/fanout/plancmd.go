@@ -466,8 +466,7 @@ func cmdPlanLifecycle(cfg run.PlanCommandConfig, lg *log.Logger) exitcode.Code {
 		ProjectRoot: rt.projectRoot,
 		StatePath:   rt.statePath,
 		Hooks:       hooks.LoadUserConfig(lg),
-		ClosePane:   runtimeBackend.Close,
-		ListLive:    runtimeBackend.ListLive,
+		CloseOwned:  runtimeBackend.CloseOwned,
 	}
 
 	switch {

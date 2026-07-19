@@ -120,9 +120,11 @@ type Backend interface {
 type CloseStatus int
 
 const (
-	CloseConfirmed CloseStatus = iota
+	// CloseFailed is the zero value so an incomplete adapter cannot accidentally
+	// authorize state or worktree removal.
+	CloseFailed CloseStatus = iota
+	CloseConfirmed
 	CloseStale
-	CloseFailed
 )
 
 // CloseRequest carries the durable identity needed to avoid closing a pane

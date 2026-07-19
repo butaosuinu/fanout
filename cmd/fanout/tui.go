@@ -102,17 +102,17 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		LaunchAttach:        newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig),
 		// List providers also feed the in-process fallback form (NewPanePrompt
 		// unavailable); the popup process wires its own copies.
-		ListOpenIssues:    newTUIListOpenIssuesFunc(projectRoot),
-		ListIssueChildren: newTUIListIssueChildrenFunc(projectRoot),
-		LaunchIssue:       newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
-		LaunchIssuePlan:   newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig),
-		OpenIssue:         newTUIOpenIssueFunc(projectRoot),
-		LaunchShell:       newTUILaunchShellFunc(projectRoot, session),
-		RestorePanes:      newTUIRestoreFunc(projectRoot, session, commandName),
-		Relayout:          func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
-		ListLive:          listLive,
-		LifecycleListLive: runtimeBackend.ListLive,
-		ShellPaneAlive:    runtimeShellPaneAlive(runtimeBackend.ListLive),
+		ListOpenIssues:      newTUIListOpenIssuesFunc(projectRoot),
+		ListIssueChildren:   newTUIListIssueChildrenFunc(projectRoot),
+		LaunchIssue:         newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig),
+		LaunchIssuePlan:     newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig),
+		OpenIssue:           newTUIOpenIssueFunc(projectRoot),
+		LaunchShell:         newTUILaunchShellFunc(projectRoot, session),
+		RestorePanes:        newTUIRestoreFunc(projectRoot, session, commandName),
+		Relayout:            func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) },
+		ListLive:            listLive,
+		LifecycleCloseOwned: runtimeBackend.CloseOwned,
+		ShellPaneAlive:      runtimeShellPaneAlive(runtimeBackend.ListLive),
 		FocusPane: func(paneID string) error {
 			return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
 		},

@@ -45,8 +45,7 @@ func lifecycleOptions(mode string, removeWatcherRunningLabel bool, lg *log.Logge
 		ProjectRoot: rt.projectRoot,
 		StatePath:   rt.statePath,
 		Hooks:       hooks.LoadUserConfig(lg),
-		ClosePane:   runtimeBackend.Close,
-		ListLive:    runtimeBackend.ListLive,
+		CloseOwned:  runtimeBackend.CloseOwned,
 	}
 	if removeWatcherRunningLabel {
 		resolvedSettings := settings.Resolve(rt.projectRoot, settings.CLIOverrides{}, lg.Warn)

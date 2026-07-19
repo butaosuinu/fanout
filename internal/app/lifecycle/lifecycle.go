@@ -700,18 +700,31 @@ func localBranchExists(projectRoot, branch string) bool {
 }
 
 func closeOwnedPane(opts Options, pane state.Pane, lg Logger, windows map[string]struct{}) bool {
+	if strings.TrimSpace(pane.PaneID) == "" {
+		lg.Warn("%s: no pane id recorded; treating state as stale", paneLabel(pane))
+		return true
+	}
 	result, err := opts.CloseOwned(backend.CloseRequest{
 		Ref:          paneRefFromState(pane),
 		WorktreePath: pane.WorktreePath,
 		ShellKey:     strings.TrimSpace(pane.ShellKey),
 	})
-	if err != nil || result.Status == backend.CloseFailed {
+	if err != nil {
 		lg.Err("%s: close tmux pane %s failed; preserving worktree and state: %v", paneLabel(pane), emptyLabel(pane.PaneID), err)
 		return false
 	}
-	if result.Status == backend.CloseStale {
+	switch result.Status {
+	case backend.CloseFailed:
+		lg.Err("%s: close tmux pane %s was not confirmed; preserving worktree and state", paneLabel(pane), emptyLabel(pane.PaneID))
+		return false
+	case backend.CloseStale:
 		lg.Warn("%s: pane %s is gone or its identity changed; treating state as stale", paneLabel(pane), emptyLabel(pane.PaneID))
 		return true
+	case backend.CloseConfirmed:
+		// Continue below and record the container for cosmetic relayout.
+	default:
+		lg.Err("%s: close tmux pane %s returned unknown status %d; preserving worktree and state", paneLabel(pane), emptyLabel(pane.PaneID), result.Status)
+		return false
 	}
 	if result.ContainerID != "" {
 		windows[result.ContainerID] = struct{}{}

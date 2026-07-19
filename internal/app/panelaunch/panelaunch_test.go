@@ -54,6 +54,43 @@ func (b *successfulNonTmuxBackend) Close(ref backend.PaneRef) error {
 	return nil
 }
 
+func (b *successfulNonTmuxBackend) CloseFresh(ref backend.PaneRef) error {
+	b.closed = append(b.closed, ref)
+	return nil
+}
+
+type testTmuxBackend struct {
+	*tmuxbackend.Backend
+	releasedGates []string
+}
+
+func newTestTmuxBackend() *testTmuxBackend {
+	return &testTmuxBackend{Backend: tmuxbackend.New()}
+}
+
+func (*testTmuxBackend) CloseOwned(req backend.CloseRequest) (backend.CloseResult, error) {
+	result, err := closePaneForCleanup(req.Ref.Pane, req.WorktreePath, req.ShellKey)
+	mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
+	switch result.Status {
+	case tmuxrun.ClosePaneClosed:
+		mapped.Status = backend.CloseConfirmed
+	case tmuxrun.ClosePaneStale:
+		mapped.Status = backend.CloseStale
+	case tmuxrun.ClosePaneFailed:
+		mapped.Status = backend.CloseFailed
+	}
+	return mapped, err
+}
+
+func (*testTmuxBackend) CloseFresh(ref backend.PaneRef) error {
+	return closeFreshPane(ref.Pane)
+}
+
+func (b *testTmuxBackend) ReleaseStartGate(gate string) error {
+	b.releasedGates = append(b.releasedGates, gate)
+	return nil
+}
+
 func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
 	// A prompt ending in an @-mention must keep a whitespace terminator before
 	// the appended sentence, else "@cmd/main.go" + ". read" merges into the
@@ -553,14 +590,24 @@ func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T
 	)
 	targetPath := t.TempDir()
 	recorder := &captureStateRecorder{}
+	runtimeBackend := newTestTmuxBackend()
 	launcher := &Launcher{
 		Cfg:         &cliflags.Config{Agent: "claude"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend:     runtimeBackend,
 		Recorder:    recorder,
 		CommandName: "fanout",
 	}
-	req := Request{ParentRef: ManualParentRef, Number: -1, Slug: "attached-pane", Prompt: "inspect", Agent: "claude", Hooks: hooks.EmptyConfig()}
+	req := Request{
+		ParentRef:      ManualParentRef,
+		Number:         -1,
+		Slug:           "attached-pane",
+		Prompt:         "inspect",
+		Agent:          "claude",
+		AgentStartGate: "recovery-gate",
+		Hooks:          hooks.EmptyConfig(),
+	}
 
 	result, ok := launcher.AttachWithResult(req, targetPath)
 
@@ -573,6 +620,44 @@ func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T
 	got := recorder.panes[0]
 	if got.PaneID != "%315" || got.Kind != state.PaneKindAttachedAgent || !strings.HasPrefix(got.ShellKey, "shell-") {
 		t.Fatalf("recovery pane = %+v, want keyed attached pane %%315", got)
+	}
+	if len(runtimeBackend.releasedGates) != 0 {
+		t.Fatalf("released gates = %v, want gate held while pane close is unconfirmed", runtimeBackend.releasedGates)
+	}
+}
+
+func TestAttachReleasesStartGateAfterConfirmedFreshCleanup(t *testing.T) {
+	installFakeExecutable(t, "claude")
+	installFakeTmux(t, "%315")
+	stubPaneLivenessOps(t,
+		func(string, string) error { return fmt.Errorf("stamp failed") },
+		func(string) error { return nil },
+	)
+	runtimeBackend := newTestTmuxBackend()
+	launcher := &Launcher{
+		Cfg:         &cliflags.Config{Agent: "claude"},
+		Log:         log.NewWith(io.Discard, io.Discard, false),
+		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: t.TempDir()},
+		Backend:     runtimeBackend,
+		CommandName: "fanout",
+	}
+	req := Request{
+		ParentRef:      ManualParentRef,
+		Number:         -1,
+		Slug:           "attached-pane",
+		Prompt:         "inspect",
+		Agent:          "claude",
+		AgentStartGate: "cleanup-gate",
+		Hooks:          hooks.EmptyConfig(),
+	}
+
+	result, ok := launcher.AttachWithResult(req, t.TempDir())
+
+	if ok || result.PaneID != "" {
+		t.Fatalf("AttachWithResult() = %+v, %v, want failed launch with confirmed cleanup", result, ok)
+	}
+	if got := runtimeBackend.releasedGates; len(got) != 1 || got[0] != "cleanup-gate" {
+		t.Fatalf("released gates = %v, want [cleanup-gate]", got)
 	}
 }
 
@@ -592,6 +677,7 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 		Cfg:         &cliflags.Config{Agent: "codex"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend:     newTestTmuxBackend(),
 		Recorder:    recorder,
 		CommandName: "fanout",
 	}
@@ -749,7 +835,7 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, &stderr, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
-		Backend:     tmuxbackend.New(),
+		Backend:     newTestTmuxBackend(),
 		Palette:     log.Palette{},
 		CommandName: "fanout",
 	}
@@ -799,7 +885,7 @@ func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T
 		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
 	})
 
-	if failCleanup("#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
+	if failCleanup(newTestTmuxBackend(), "#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
 		t.Fatal("failCleanup() = true, want unconfirmed pane close")
 	}
 

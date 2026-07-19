@@ -214,10 +214,12 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		codexTUIStatus, statusErr = codexapp.WaitReady(statusPath, CodexPlanTUIStartupTimeout)
 		if statusErr != nil {
 			l.Log.Err("%s: start %s in pane %s: %v", paneLogLabel(req), codexTUILabel(req), paneID, statusErr)
-			if !failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
+			cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log)
+			if !cleaned {
 				l.recordRecoveryPane(req, paneID, prepared.WorktreePath, "", codexTUIStatus)
+			} else {
+				l.releaseStartGateAfterFailure(req)
 			}
-			l.releaseStartGateAfterFailure(req)
 			return Result{}, false
 		}
 		_ = os.Remove(statusPath)
@@ -228,10 +230,10 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
 				rollbackState(l.Recorder, req, l.Log)
+				l.releaseStartGateAfterFailure(req)
 			} else {
 				l.recordRecoveryPane(req, paneID, prepared.WorktreePath, "", codexTUIStatus)
 			}
-			l.releaseStartGateAfterFailure(req)
 			return Result{}, false
 		}
 	}
@@ -247,10 +249,10 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		l.Log.Err("%s: write worktree metadata: %v", paneLogLabel(req), err)
 		if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, prepared.WorktreePath, req.ShellKey, &prepared, l.Log) {
 			rollbackState(l.Recorder, req, l.Log)
+			l.releaseStartGateAfterFailure(req)
 		} else {
 			l.Log.Warn("%s: pane %s remains recorded for lifecycle cleanup", paneLogLabel(req), paneID)
 		}
-		l.releaseStartGateAfterFailure(req)
 		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
@@ -320,10 +322,12 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
 		if planErr != nil {
 			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
-			if !failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
+			cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log)
+			if !cleaned {
 				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
+			} else {
+				l.releaseStartGateAfterFailure(req)
 			}
-			l.releaseStartGateAfterFailure(req)
 			return Result{}, false
 		}
 		_ = os.Remove(req.CodexPlanStatusPath)
@@ -335,10 +339,10 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
 			if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
 				rollbackState(l.Recorder, req, l.Log)
+				l.releaseStartGateAfterFailure(req)
 			} else {
 				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
 			}
-			l.releaseStartGateAfterFailure(req)
 			return Result{}, false
 		}
 	}
@@ -380,11 +384,11 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 		if opts.strictShellKey {
 			l.Log.Err("%s: strict pane liveness keys are not supported by the %s backend", paneLogLabel(req), l.Backend.Name())
 			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
-			l.releaseStartGateAfterFailure(req)
 			if cleanupErr != nil {
 				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
 				return paneID, false
 			}
+			l.releaseStartGateAfterFailure(req)
 			return "", false
 		}
 		return paneID, true
@@ -395,11 +399,11 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 		if err := setPaneLivenessKey(paneID, req.ShellKey); err != nil {
 			l.Log.Err("%s: set pane liveness key: %v", paneLogLabel(req), err)
 			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
-			l.releaseStartGateAfterFailure(req)
 			if cleanupErr != nil {
 				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
 				return paneID, false
 			}
+			l.releaseStartGateAfterFailure(req)
 			return "", false
 		}
 	}
@@ -777,13 +781,20 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 		Ref:      backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
 		ShellKey: shellKey,
 	})
-	if err != nil || result.Status == backend.CloseFailed {
-		if err == nil {
-			err = fmt.Errorf("attached pane %s remained live after close", paneID)
-		}
+	if err != nil {
 		return err
 	}
-	if result.Status == backend.CloseConfirmed && runtimeBackend.Name() == backend.Tmux {
+	switch result.Status {
+	case backend.CloseFailed:
+		return fmt.Errorf("attached pane %s remained live after close", paneID)
+	case backend.CloseStale:
+		return nil
+	case backend.CloseConfirmed:
+		// Continue below and repair tmux layout when applicable.
+	default:
+		return fmt.Errorf("attached pane %s close returned unknown status %d", paneID, result.Status)
+	}
+	if runtimeBackend.Name() == backend.Tmux {
 		relayoutTarget := result.ContainerID
 		if relayoutTarget == "" {
 			relayoutTarget = target
@@ -820,12 +831,25 @@ func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, 
 			WorktreePath: expectedWorktreePath,
 			ShellKey:     strings.TrimSpace(shellKey),
 		})
-		if err != nil || result.Status == backend.CloseFailed {
-			if err == nil {
-				err = fmt.Errorf("pane remained live after close")
-			}
+		if err != nil {
 			if lg != nil {
 				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %v", label, paneID, err)
+			}
+			return false
+		}
+		switch result.Status {
+		case backend.CloseFailed:
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: close was not confirmed", label, paneID)
+			}
+			return false
+		case backend.CloseStale:
+			// The recorded identity is already gone; worktree cleanup is safe.
+		case backend.CloseConfirmed:
+			// Continue below and repair tmux layout when applicable.
+		default:
+			if lg != nil {
+				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: unknown close status %d", label, paneID, result.Status)
 			}
 			return false
 		}

@@ -155,7 +155,7 @@ func (*Backend) CloseOwned(req backend.CloseRequest) (backend.CloseResult, error
 		return backend.CloseResult{Status: backend.CloseFailed}, err
 	}
 	result, err := tmuxrun.ClosePaneIfOwned(paneID, req.WorktreePath, req.ShellKey)
-	mapped := backend.CloseResult{ContainerID: result.WindowID}
+	mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
 	switch result.Status {
 	case tmuxrun.ClosePaneClosed:
 		mapped.Status = backend.CloseConfirmed

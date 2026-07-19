@@ -21,6 +21,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -165,7 +166,7 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	if code := cmdTUI("fanout", discardLogger()); code != exitcode.OK {
 		t.Fatalf("cmdTUI() = %d, want OK", code)
 	}
-	if opts.ListLive == nil || opts.LifecycleListLive == nil || opts.ShellPaneAlive == nil || opts.FocusPane == nil || opts.PaneAlive == nil || opts.CapturePaneOutput == nil || opts.ClosePane == nil {
+	if opts.ListLive == nil || opts.LifecycleCloseOwned == nil || opts.ShellPaneAlive == nil || opts.FocusPane == nil || opts.PaneAlive == nil || opts.CapturePaneOutput == nil || opts.ClosePane == nil {
 		t.Fatal("runtime backend ports are incomplete")
 	}
 	observed, err := opts.ListLive()
@@ -174,9 +175,6 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	}
 	if !compositeIncludeTmux || len(observed) != 1 || observed[0].Ref.Backend != backend.Herdr {
 		t.Fatalf("composite ListLive = %+v (includeTmux=%v), want herdr observation with tmux host", observed, compositeIncludeTmux)
-	}
-	if _, err := opts.LifecycleListLive(); err != nil {
-		t.Fatal(err)
 	}
 	_ = opts.ShellPaneAlive("%2", "shell-key")
 	_ = opts.PaneAlive("%2")
@@ -1498,10 +1496,10 @@ func TestWatchPaneMatchesLivePrefersLivenessKeyForOrdinaryRows(t *testing.T) {
 		WorktreePath: "/repo/.fanout/worktrees/child-101",
 	}
 
-	if watchPaneMatchesLive(pane, tmuxrun.LivePane{ID: "%1", CurrentPath: pane.WorktreePath, ShellKey: "shell-reused"}) {
+	if watchPaneMatchesLive(pane, backend.LivePane{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}, CurrentPath: pane.WorktreePath, ShellKey: "shell-reused"}) {
 		t.Fatal("watchPaneMatchesLive() = true for ordinary row with reused pane id")
 	}
-	if !watchPaneMatchesLive(pane, tmuxrun.LivePane{ID: "%1", CurrentPath: "/tmp/changed", ShellKey: "shell-child"}) {
+	if !watchPaneMatchesLive(pane, backend.LivePane{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}, CurrentPath: "/tmp/changed", ShellKey: "shell-child"}) {
 		t.Fatal("watchPaneMatchesLive() = false for ordinary row with matching liveness key")
 	}
 }
@@ -1556,7 +1554,7 @@ func TestWatchLivePaneCacheReusesListingUntilReset(t *testing.T) {
 
 func TestWatchLivePaneCacheFailsClosedWhenIdentityListingIsIncomplete(t *testing.T) {
 	installTUIIdentityTitleFailureTmuxShim(t)
-	cache := &watchLivePaneCache{}
+	cache := &watchLivePaneCache{list: tmuxbackend.New().ListLiveForIdentity}
 
 	alive, err := cache.Alive(state.Pane{PaneID: "%9", ShellKey: "key-nine"})
 	if err == nil || !strings.Contains(err.Error(), "titles") {
@@ -1569,8 +1567,8 @@ func TestWatchLivePaneCacheFailsClosedWhenIdentityListingIsIncomplete(t *testing
 
 func TestWatchLivePaneCacheFailsClosedWhenRecordedKeyIsUnavailable(t *testing.T) {
 	cache := &watchLivePaneCache{
-		list: func() ([]tmuxrun.LivePane, error) {
-			return []tmuxrun.LivePane{{ID: "%9", CurrentPath: "/wt/nine"}}, nil
+		list: func() ([]backend.LivePane, error) {
+			return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%9"}, CurrentPath: "/wt/nine"}}, nil
 		},
 	}
 

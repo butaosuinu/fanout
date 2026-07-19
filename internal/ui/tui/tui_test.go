@@ -2988,14 +2988,13 @@ func TestLifecycleCmdPassesRuntimeBackendPorts(t *testing.T) {
 	lifecycleCalls := 0
 	m := newModel(Options{
 		ProjectRoot: "/repo",
-		ClosePane:   func(backend.PaneRef) error { return nil },
 		ListLive: func() ([]backend.LivePane, error) {
 			displayCalls++
 			return nil, errors.New("unrelated herdr route failed")
 		},
-		LifecycleListLive: func() ([]backend.LivePane, error) {
+		LifecycleCloseOwned: func(backend.CloseRequest) (backend.CloseResult, error) {
 			lifecycleCalls++
-			return nil, nil
+			return backend.CloseResult{Status: backend.CloseConfirmed}, nil
 		},
 		lifecycle: runner,
 	})
@@ -3005,14 +3004,14 @@ func TestLifecycleCmdPassesRuntimeBackendPorts(t *testing.T) {
 	if _, ok := cmd().(lifecycleDoneMsg); !ok {
 		t.Fatal("lifecycleCmd did not return lifecycleDoneMsg")
 	}
-	if !runner.closePaneConfigured || !runner.listLiveConfigured {
-		t.Fatalf("runtime ports configured = close:%v list:%v, want both true", runner.closePaneConfigured, runner.listLiveConfigured)
+	if !runner.closeOwnedConfigured || runner.closeOwned == nil {
+		t.Fatal("identity-aware runtime close port was not configured")
 	}
-	if _, err := runner.listLive(); err != nil {
+	if _, err := runner.closeOwned(backend.CloseRequest{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if lifecycleCalls != 1 || displayCalls != 0 {
-		t.Fatalf("ListLive calls = lifecycle:%d display:%d, want isolated lifecycle route", lifecycleCalls, displayCalls)
+		t.Fatalf("runtime calls = lifecycle close:%d display list:%d, want isolated lifecycle route", lifecycleCalls, displayCalls)
 	}
 }
 
@@ -3472,24 +3471,23 @@ func TestLifecycleRunningDefersQuitKeysUntilDone(t *testing.T) {
 }
 
 type fakeLifecycleRunner struct {
-	code                exitcode.Code
-	projectRoot         string
-	statePath           string
-	closeParent         string
-	closeIssue          int
-	closeTaskParent     string
-	closeTaskID         string
-	closeMode           lifecycle.CloseMode
-	mergeTaskParent     string
-	mergeTaskID         string
-	cleanupParent       string
-	cleanupPlanParent   string
-	watcherRunningLabel string
-	closePaneConfigured bool
-	listLiveConfigured  bool
-	listLive            func() ([]backend.LivePane, error)
-	cleanupRoots        []string
-	closeRoots          []string
+	code                 exitcode.Code
+	projectRoot          string
+	statePath            string
+	closeParent          string
+	closeIssue           int
+	closeTaskParent      string
+	closeTaskID          string
+	closeMode            lifecycle.CloseMode
+	mergeTaskParent      string
+	mergeTaskID          string
+	cleanupParent        string
+	cleanupPlanParent    string
+	watcherRunningLabel  string
+	closeOwnedConfigured bool
+	closeOwned           func(backend.CloseRequest) (backend.CloseResult, error)
+	cleanupRoots         []string
+	closeRoots           []string
 }
 
 type fakeTransitionNotifier struct {
@@ -3513,9 +3511,8 @@ func (f *fakeLifecycleRunner) CloseWithMode(opts lifecycle.Options, parent strin
 	f.closeParent = parent
 	f.closeIssue = issueNum
 	f.closeMode = mode
-	f.closePaneConfigured = opts.ClosePane != nil
-	f.listLiveConfigured = opts.ListLive != nil
-	f.listLive = opts.ListLive
+	f.closeOwnedConfigured = opts.CloseOwned != nil
+	f.closeOwned = opts.CloseOwned
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close\n")
 	return f.code
@@ -3531,9 +3528,8 @@ func (f *fakeLifecycleRunner) CloseTaskWithMode(opts lifecycle.Options, parent, 
 	f.closeTaskParent = parent
 	f.closeTaskID = taskID
 	f.closeMode = mode
-	f.closePaneConfigured = opts.ClosePane != nil
-	f.listLiveConfigured = opts.ListLive != nil
-	f.listLive = opts.ListLive
+	f.closeOwnedConfigured = opts.CloseOwned != nil
+	f.closeOwned = opts.CloseOwned
 	f.closeRoots = append(f.closeRoots, opts.ProjectRoot)
 	fmt.Fprintf(lg.Stderr(), "[ ok ] fake close task\n")
 	return f.code

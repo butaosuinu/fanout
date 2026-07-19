@@ -32,3 +32,10 @@ func TestUnsupportedMatchesSentinel(t *testing.T) {
 		t.Fatalf("Unsupported() = %v, want sentinel and typed match", err)
 	}
 }
+
+func TestCloseResultZeroValueFailsClosed(t *testing.T) {
+	var result CloseResult
+	if result.Status != CloseFailed {
+		t.Fatalf("zero-value CloseResult status = %d, want CloseFailed", result.Status)
+	}
+}
