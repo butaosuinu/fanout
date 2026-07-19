@@ -693,6 +693,43 @@ JSON
   [[ "$output" == *"#101 resolves to claude"* ]]
 }
 
+@test "--agent opencode accepted: dry-run routes the prompt through --prompt" {
+  use_fixture scenario-sub-issue-only
+  run_fanout 100 --agent opencode --dry-run --sleep 0
+  assert_success
+  [[ "$output" == *"opencode --prompt"* ]]
+}
+
+@test "--agent opencode per-issue override accepted: exit 0" {
+  use_fixture scenario-sub-issue-only
+  run_fanout 100 --agent claude --agent 101=opencode --dry-run --sleep 0
+  assert_success
+  [[ "$output" == *"opencode --prompt"* ]]
+}
+
+@test "plan --agent task-id=opencode override accepted: exit 0" {
+  use_fixture scenario-plan-basic
+  run_fanout plan "$FIXTURE_DIR/plan.json" --agent claude --agent base-types=opencode --dry-run --sleep 0
+  assert_success
+  [[ "$output" == *"opencode --prompt"* ]]
+}
+
+@test "unknown agent error lists opencode as supported: exit 1" {
+  use_fixture scenario-sub-issue-only
+  run_fanout 100 --agent bogus --dry-run
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'unknown agent "bogus"'* ]]
+  [[ "$output" == *"opencode"* ]]
+}
+
+@test "missing opencode CLI in live mode: prereq error before pane creation" {
+  use_fixture scenario-sub-issue-only
+  force_missing opencode
+  run_fanout 100 --agent opencode --sleep 0
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'agent "opencode" is not installed or not on PATH (missing command: opencode)'* ]]
+}
+
 @test "outside tmux: explicit error" {
   unset TMUX
   run_fanout 20 --agent claude

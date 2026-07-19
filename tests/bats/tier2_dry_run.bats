@@ -128,6 +128,17 @@ load helpers
   assert_golden scenario-sub-issue-only-agent-override
 }
 
+@test "agent-opencode variant of scenario-sub-issue-only: prompt routed through --prompt flag" {
+  # Reuses the scenario-sub-issue-only fixture; opencode's positional argument
+  # is a project path, so the launch command must carry the prompt as the
+  # --prompt flag value, and the briefing keeps the base shape without the
+  # claude-only or codex-only sections.
+  use_fixture scenario-sub-issue-only
+  run_fanout_dry 100 --agent opencode
+  assert_success
+  assert_golden scenario-sub-issue-only-opencode
+}
+
 @test "agent-codex plan mode variant of scenario-sub-issue-only: interactive TUI launch" {
   use_fixture scenario-sub-issue-only
   run_fanout_dry 100 --agent codex --codex-plan-mode
