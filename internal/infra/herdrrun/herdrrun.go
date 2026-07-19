@@ -668,6 +668,7 @@ type workspaceJSON struct {
 }
 
 type worktreeInfoJSON struct {
+	RepoKey      string `json:"repo_key"`
 	CheckoutPath string `json:"checkout_path"`
 	RepoRoot     string `json:"repo_root"`
 }
@@ -734,6 +735,12 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 	for _, workspace := range *snapshot.Workspaces {
 		if strings.TrimSpace(workspace.WorkspaceID) == "" {
 			return nil, fmt.Errorf("herdr snapshot contains an empty workspace id")
+		}
+		if workspace.Worktree != nil &&
+			(strings.TrimSpace(workspace.Worktree.RepoKey) == "" ||
+				strings.TrimSpace(workspace.Worktree.CheckoutPath) == "" ||
+				strings.TrimSpace(workspace.Worktree.RepoRoot) == "") {
+			return nil, fmt.Errorf("herdr workspace %q has incomplete worktree provenance", workspace.WorkspaceID)
 		}
 		if _, duplicate := workspaces[workspace.WorkspaceID]; duplicate {
 			return nil, fmt.Errorf("herdr snapshot contains duplicate workspace id %q", workspace.WorkspaceID)
@@ -813,16 +820,28 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 		currentPath := optionalString(pane.CWD)
 		projectRoot := ""
 		worktreePath := ""
+		repoKey := ""
 		if workspace.Worktree != nil {
 			currentPath = workspace.Worktree.CheckoutPath
+			repoKey = workspace.Worktree.RepoKey
 			projectRoot = workspace.Worktree.RepoRoot
 			worktreePath = workspace.Worktree.CheckoutPath
 		}
+		agent, agentPresent := agentsByPane[pane.PaneID]
 		agentID := ""
-		if agent, ok := agentsByPane[pane.PaneID]; ok {
+		if agentPresent {
 			agentID = optionalString(agent.Name)
 			if agentID == "" {
 				agentID = optionalString(agent.Agent)
+			}
+		}
+		var agentSession *corebackend.AgentSessionRef
+		if ref, present := sessionRefsByPane[pane.PaneID]; present {
+			agentSession = &corebackend.AgentSessionRef{
+				Source: ref.source,
+				Agent:  ref.agent,
+				Kind:   ref.kind,
+				Value:  ref.value,
 			}
 		}
 		live = append(live, corebackend.LivePane{
@@ -835,9 +854,13 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 			Title:            optionalString(pane.Title),
 			FocusKnown:       true,
 			Focused:          *pane.Focused,
+			AgentState:       corebackend.MapHerdrAgentState(agentPresent, pane.AgentStatus),
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,
+			AgentSession:     agentSession,
+			AgentPresent:     agentPresent,
+			RepoKey:          repoKey,
 			ProjectRoot:      projectRoot,
 			WorktreePath:     worktreePath,
 			SessionID:        target.session,

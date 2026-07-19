@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -226,6 +227,26 @@ func TestPeekRecordedButDeadPaneIs404(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a dead pane", calls)
+	}
+}
+
+func TestPeekHerdrPaneIs404AndSkipsCapture(t *testing.T) {
+	fake := &fakeCapture{out: "an unrelated tmux pane's terminal"}
+	srv := newPeekServer(t, "", fake)
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	publishSnapshot(srv, snap)
+
+	status, _, body := getPeek(t, peekURL(srv.base, map[string]string{"pane": "%5"}))
+	if status != http.StatusNotFound {
+		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "not a tmux pane") {
+		t.Fatalf("body = %s want a JSON error rejecting the herdr backend", body)
+	}
+	if calls, _, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)
 	}
 }
 

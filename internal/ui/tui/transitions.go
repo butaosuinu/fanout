@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
@@ -236,6 +237,13 @@ func agentTransitionSnapshotForPane(pane paneView) (string, agentTransitionSnaps
 		return "", agentTransitionSnapshot{}, false
 	}
 	state := strings.ToLower(strings.TrimSpace(pane.AgentState))
+	// Herdr exposes an unfocused idle agent as public "done" and switches it
+	// back to "idle" when focused. Keep that value in the row for display and
+	// run: filtering, but never turn the focus-dependent presentation state into
+	// an "agent exited" notification or a completion baseline.
+	if backend.NormalizeName(pane.Backend) == backend.Herdr && state == "done" {
+		return "", agentTransitionSnapshot{}, false
+	}
 	if !trackedAgentState(state) {
 		return "", agentTransitionSnapshot{}, false
 	}

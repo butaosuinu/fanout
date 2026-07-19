@@ -664,6 +664,11 @@ func TestRuntimeReadRoutesDoNotAmbientFallbackForIncompleteSavedHerdrRoute(t *te
 	if err == nil || !strings.Contains(err.Error(), "requires herdrSession and herdrSocketPath") {
 		t.Fatalf("runtimeReadRoutes() error = %v, want incomplete saved-route rejection", err)
 	}
+	failed, all := backend.ClassifyObservationError(err)
+	wantRoute := backend.ObservationRoute{Backend: backend.Herdr, SessionID: "saved"}
+	if all || !failed[wantRoute] || len(failed) != 1 {
+		t.Fatalf("classified routes = %+v all=%t, want only %+v", failed, all, wantRoute)
+	}
 	if len(routes) != 0 {
 		t.Fatalf("routes = %+v, want no ambient fallback", routes)
 	}
@@ -686,6 +691,11 @@ func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "route discovery degraded") || !strings.Contains(err.Error(), "saved-b") {
 		t.Fatalf("partial error = %v, want discovery and saved-b failures", err)
 	}
+	failed, all := backend.ClassifyObservationError(err)
+	wantFailed := routes[2].observationRoute()
+	if !all || !failed[wantFailed] || len(failed) != 1 {
+		t.Fatalf("classified partial error = %+v all=%t, want global discovery failure plus %+v", failed, all, wantFailed)
+	}
 	if len(panes) != 2 {
 		t.Fatalf("panes = %+v, want successful tmux and saved-a observations", panes)
 	}
@@ -700,5 +710,9 @@ func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T
 	})
 	if err == nil || !strings.Contains(err.Error(), "saved-a") || !strings.Contains(err.Error(), "saved-b") {
 		t.Fatalf("all-failed error = %v, want both herdr route labels", err)
+	}
+	failed, all = backend.ClassifyObservationError(err)
+	if all || len(failed) != 2 || !failed[routes[1].observationRoute()] || !failed[routes[2].observationRoute()] {
+		t.Fatalf("classified all-route error = %+v all=%t, want both scoped herdr routes", failed, all)
 	}
 }

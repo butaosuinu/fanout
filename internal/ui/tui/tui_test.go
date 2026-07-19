@@ -949,6 +949,39 @@ func TestAgentTransitionKindMatrix(t *testing.T) {
 	}
 }
 
+func TestHerdrDoneIdleTransitionIsDisplayOnly(t *testing.T) {
+	notifier := &fakeTransitionNotifier{}
+	m := newModel(Options{Notifier: notifier})
+
+	idle := []paneView{{
+		Parent: "100", IssueNum: 101, Name: "herdr child", PaneID: "w1:p1",
+		Backend: backend.Herdr, TmuxState: "live", AgentState: "idle",
+	}}
+	updated, cmd := m.Update(stateLoadedMsg{panes: idle, at: time.Unix(1, 0)})
+	if cmd != nil {
+		t.Fatal("initial herdr idle snapshot returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	done := []paneView{{
+		Parent: "100", IssueNum: 101, Name: "herdr child", PaneID: "w1:p1",
+		Backend: backend.Herdr, TmuxState: "live", AgentState: "done",
+	}}
+	updated, cmd = m.Update(stateLoadedMsg{panes: done, at: time.Unix(2, 0)})
+	if cmd != nil {
+		t.Fatal("herdr idle-to-done display transition returned notification command, want nil")
+	}
+	m = updated.(model)
+
+	_, cmd = m.Update(stateLoadedMsg{panes: idle, at: time.Unix(3, 0)})
+	if cmd != nil {
+		t.Fatal("herdr done-to-idle display transition returned notification command, want nil")
+	}
+	if len(notifier.events) != 0 {
+		t.Fatalf("herdr display transition notifications = %#v, want none", notifier.events)
+	}
+}
+
 func TestStateUpdateNotifiesAgentTransitionsOnce(t *testing.T) {
 	notifier := &fakeTransitionNotifier{}
 	m := newModel(Options{Notifier: notifier})

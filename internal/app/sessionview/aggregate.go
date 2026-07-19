@@ -93,13 +93,19 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	}
 
 	live := map[livePaneKey]backend.LivePane{}
+	failedRuntimeRoutes := map[backend.ObservationRoute]bool{}
+	allRuntimeRoutesDegraded := false
 	if c.ListLive == nil {
 		snap.Degraded.Tmux = true
+		snap.Degraded.Runtime = true
+		allRuntimeRoutesDegraded = true
 	} else {
 		set, err := c.ListLive()
 		live = indexLivePanes(set)
 		if err != nil {
 			snap.Degraded.Tmux = true
+			snap.Degraded.Runtime = true
+			failedRuntimeRoutes, allRuntimeRoutesDegraded = backend.ClassifyObservationError(err)
 			snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
 		}
 	}
@@ -227,6 +233,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			issueState, prs := fetchPanePRs(p)
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			current, alive := livePaneForState(live, p)
+			runtimeDegraded := allRuntimeRoutesDegraded || failedRuntimeRoutes[observationRouteForState(p)]
+			runtimeState := runtimeStateOf(p.PaneID, runtimeDegraded, alive)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
 				IssueNum:           p.IssueNum,
@@ -254,7 +262,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				DiffSummary:        worktreeStat.DiffSummary,
 				DirtyState:         worktreeStat.DirtyState,
 				WorktreeErr:        worktreeErr,
-				TmuxState:          tmuxStateOf(p.PaneID, snap.Degraded.Tmux, alive),
+				RuntimeState:       runtimeState,
+				TmuxState:          runtimeState,
 				PlanMode:           p.CodexPlanMode,
 				Prompt:             p.Prompt,
 				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
@@ -264,9 +273,12 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				Blocked:            wi.Blocked,
 			}
 			if alive {
+				pv.RuntimeTitle = current.Title
 				pv.TmuxTitle = current.Title
-				pv.AgentState = normalizeAgentState(string(current.AgentState))
-			} else if snap.Degraded.Tmux {
+				if backend.NormalizeName(p.Backend) != backend.Herdr || current.AgentPresent {
+					pv.AgentState = normalizeAgentState(string(current.AgentState))
+				}
+			} else if runtimeDegraded && backend.NormalizeName(p.Backend) == backend.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
 				// state.json は手編集されうる入力なので option 値と同じく
@@ -302,6 +314,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					closeUnconfirmed = strings.EqualFold(issueState, "CLOSED")
 				}
 				wi := graph.Info[child.Number]
+				runtimeState := SyntheticTmuxState(issueState, wi.Blocked)
 				pv := PaneView{
 					IssueNum:         child.Number,
 					DisplayName:      issueDisplayName(child),
@@ -310,7 +323,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					HasMergedPR:      hasMergedPR(prs),
 					DiffSummary:      "-",
 					DirtyState:       "-",
-					TmuxState:        SyntheticTmuxState(issueState, wi.Blocked),
+					RuntimeState:     runtimeState,
+					TmuxState:        runtimeState,
 					CIStatus:         strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 					Wave:             wi.Wave,
 					WaveLabel:        wi.WaveLabel,
@@ -498,55 +512,145 @@ func SyntheticTmuxState(issueState string, blocked bool) string {
 }
 
 type livePaneKey struct {
-	backend backend.Name
-	pane    string
+	backend   backend.Name
+	workspace string
+	pane      string
+	session   string
+	socket    string
 }
 
 func indexLivePanes(panes []backend.LivePane) map[livePaneKey]backend.LivePane {
 	live := make(map[livePaneKey]backend.LivePane, len(panes))
 	for _, pane := range panes {
-		key := livePaneKey{backend: backend.NormalizeName(pane.Ref.Backend), pane: pane.Ref.Pane}
-		live[key] = pane
+		live[livePaneKeyForObservation(pane)] = pane
 	}
 	return live
 }
 
+func livePaneKeyForObservation(pane backend.LivePane) livePaneKey {
+	key := livePaneKey{
+		backend: backend.NormalizeName(pane.Ref.Backend),
+		pane:    pane.Ref.Pane,
+	}
+	if key.backend == backend.Herdr {
+		key.workspace = pane.Ref.Workspace
+		key.session = strings.TrimSpace(pane.SessionID)
+		key.socket = strings.TrimSpace(pane.SocketPath)
+	}
+	return key
+}
+
+func livePaneKeyForState(pane state.Pane) livePaneKey {
+	key := livePaneKey{
+		backend: backend.NormalizeName(pane.Backend),
+		pane:    pane.PaneID,
+	}
+	if key.backend == backend.Herdr {
+		key.workspace = pane.HerdrWorkspaceID
+		key.session = strings.TrimSpace(pane.HerdrSession)
+		key.socket = strings.TrimSpace(pane.HerdrSocketPath)
+	}
+	return key
+}
+
+func observationRouteForState(pane state.Pane) backend.ObservationRoute {
+	name := backend.NormalizeName(pane.Backend)
+	route := backend.ObservationRoute{Backend: name}
+	if name == backend.Herdr {
+		route.SessionID = strings.TrimSpace(pane.HerdrSession)
+		route.SocketPath = strings.TrimSpace(pane.HerdrSocketPath)
+	}
+	return route
+}
+
 // livePaneForState reports whether a recorded pane is live and returns the
 // matching backend-neutral observation. Runtime and pane identity must match.
-// Agent panes also require the live path to remain at/under their recorded
-// worktree. Tmux shell panes use ShellKey instead because their repo-root path
-// is too broad to protect against pane-id reuse.
+// Tmux agent panes accept their recorded worktree or a descendant, while herdr
+// requires exact worktree provenance (or exact saved cwd for generic
+// workspaces). Tmux shell panes use ShellKey because their repo-root path is too
+// broad to protect against pane-id reuse.
 func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (backend.LivePane, bool) {
 	if pane.PaneID == "" {
 		return backend.LivePane{}, false
 	}
 	name := backend.NormalizeName(pane.Backend)
-	cur, ok := live[livePaneKey{backend: name, pane: pane.PaneID}]
+	cur, ok := live[livePaneKeyForState(pane)]
 	if !ok {
 		return backend.LivePane{}, false
 	}
-	if name == backend.Herdr {
-		// #425 exposes the read-only snapshot seam but does not yet persist the
-		// terminal/session identity required to prove herdr liveness. Treat every
-		// herdr row as unverified until #427 installs that full fail-closed matcher;
-		// pane/workspace/path equality alone is insufficient after a same-name
-		// session restart.
+	switch name {
+	case backend.Herdr:
+		return cur, herdrIdentityMatches(pane, cur)
+	case backend.Tmux:
+		if pane.IsShell() || pane.ShellKey != "" {
+			return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+		}
+		worktree := pane.WorktreePath
+		if strings.TrimSpace(worktree) == "" {
+			return cur, true
+		}
+		wt := filepath.Clean(worktree)
+		if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
+			opt := filepath.Clean(optionPath)
+			return cur, opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+		}
+		cp := filepath.Clean(cur.CurrentPath)
+		return cur, cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+	default:
 		return backend.LivePane{}, false
 	}
-	if pane.IsShell() || pane.ShellKey != "" {
-		return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+}
+
+// herdrIdentityMatches keeps runtime routing, terminal identity, logical agent
+// identity, and worktree ownership as separate checks. A generic row and
+// observation may both omit an agent, leaving AgentState unknown. Once the row
+// records a logical conversation, a missing or different agent identity fails
+// closed. foreground_cwd is deliberately absent from LivePane and therefore
+// cannot become liveness evidence.
+func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+	if strings.TrimSpace(pane.HerdrTerminalID) == "" ||
+		strings.TrimSpace(current.TerminalID) == "" ||
+		pane.HerdrTerminalID != current.TerminalID {
+		return false
 	}
-	worktree := pane.WorktreePath
-	if strings.TrimSpace(worktree) == "" {
-		return cur, true
+	storedAgent := pane.HerdrAgentID != "" || pane.HerdrAgentSession != nil
+	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentSession != nil
+	if storedAgent != observedAgent {
+		return false
 	}
-	wt := filepath.Clean(worktree)
-	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
-		opt := filepath.Clean(optionPath)
-		return cur, opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+	if storedAgent {
+		if pane.HerdrAgentID == "" || pane.HerdrAgentSession == nil || !current.AgentPresent ||
+			pane.HerdrAgentID != current.AgentID || !agentSessionRefsEqual(pane.HerdrAgentSession, current.AgentSession) {
+			return false
+		}
 	}
-	cp := filepath.Clean(cur.CurrentPath)
-	return cur, cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+
+	storedPath := strings.TrimSpace(pane.WorktreePath)
+	if storedPath == "" {
+		return false
+	}
+	storedPath = filepath.Clean(storedPath)
+	storedRepoKey := pane.HerdrRepoKey
+	repoKey := current.RepoKey
+	worktreePath := strings.TrimSpace(current.WorktreePath)
+	projectRoot := strings.TrimSpace(current.ProjectRoot)
+	if strings.TrimSpace(repoKey) != "" || worktreePath != "" || projectRoot != "" {
+		// herdrrun rejects partial worktree provenance. Keep this boundary
+		// fail-closed for tests and alternative collectors too.
+		return strings.TrimSpace(storedRepoKey) != "" && repoKey == storedRepoKey && worktreePath != "" && projectRoot != "" && filepath.Clean(worktreePath) == storedPath
+	}
+
+	// Generic herdr workspaces have no worktree provenance. Only the saved cwd
+	// may support the match; subdirectories and foreground cwd are not accepted.
+	currentPath := strings.TrimSpace(current.CurrentPath)
+	return strings.TrimSpace(storedRepoKey) == "" && currentPath != "" && filepath.Clean(currentPath) == storedPath
+}
+
+func agentSessionRefsEqual(stored, current *backend.AgentSessionRef) bool {
+	if stored == nil || current == nil {
+		return stored == nil && current == nil
+	}
+	return stored.Valid() && current.Valid() && *stored == *current
 }
 
 func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {
@@ -554,17 +658,17 @@ func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {
 	return alive
 }
 
-// tmuxStateOf mirrors the TUI's tmux-state strings so `state:` filters behave
-// identically across surfaces: "-" for a row that never had a pane, "live" for
-// a positive observation even in a degraded snapshot, "unknown" when liveness
-// could not be determined, and "stale" otherwise.
-func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
+// runtimeStateOf preserves the established TUI state strings across backends:
+// "-" for a row that never had a pane, "live" for a positive observation even
+// in a degraded snapshot, "unknown" when the row's route is unavailable, and
+// "stale" otherwise.
+func runtimeStateOf(paneID string, runtimeDegraded, alive bool) string {
 	switch {
 	case strings.TrimSpace(paneID) == "":
 		return "-"
 	case alive:
 		return "live"
-	case tmuxDegraded:
+	case runtimeDegraded:
 		return "unknown"
 	default:
 		return "stale"
@@ -702,6 +806,8 @@ func appendReason(existing, add string) string {
 // PaneView fields. parent is passed separately because PaneView deliberately
 // does not repeat its containing Session parent on the public wire shape.
 func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
+	runtimeState := firstNonEmpty(pv.RuntimeState, pv.TmuxState)
+	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.TmuxTitle)
 	name := paneName(pv)
 	prSummary, prNum, prState := summarizePR(pv.PRs)
 	ci := paneCI(pv)
@@ -714,7 +820,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	relWorktree := RelativePath(projectRoot, pv.WorktreePath)
 
 	filterValues := map[string]string{
-		"state": strings.ToLower(strings.TrimSpace(firstMatchingState(pv.TmuxState, pv.IssueState))),
+		"state": strings.ToLower(strings.TrimSpace(firstMatchingState(runtimeState, pv.IssueState))),
 		"run":   strings.ToLower(strings.TrimSpace(pv.AgentState)),
 		"agent": strings.ToLower(strings.TrimSpace(pv.Agent)),
 		"wave":  strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
@@ -738,6 +844,8 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		pv.Slug,
 		pv.PaneID,
 		string(pv.Backend),
+		runtimeState,
+		runtimeTitle,
 		pv.TmuxState,
 		pv.TmuxTitle,
 		pv.AgentState,
@@ -760,7 +868,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		pv.Prompt,
 	}, "\n"))
 
-	canFocus := backend.NormalizeName(pv.Backend) == backend.Tmux && canFocusPane(pv.PaneID, pv.TmuxState)
+	canFocus := backend.NormalizeName(pv.Backend) == backend.Tmux && canFocusPane(pv.PaneID, runtimeState)
 	return PaneDerived{
 		Name:             name,
 		PRSummary:        prSummary,

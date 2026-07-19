@@ -48,6 +48,26 @@ type PaneRef struct {
 	Pane      string
 }
 
+// AgentSessionRef identifies one logical agent conversation independently of
+// its terminal and process. Herdr currently exposes id and path refs; callers
+// compare the full tuple byte-for-byte after validating it.
+type AgentSessionRef struct {
+	Source string `json:"source"`
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
+}
+
+// Valid reports whether every identity component is present and the ref kind
+// is one herdr 0.7.3 exposes. Validation does not normalize the tuple because
+// liveness comparison is exact.
+func (r AgentSessionRef) Valid() bool {
+	if strings.TrimSpace(r.Source) == "" || strings.TrimSpace(r.Agent) == "" || strings.TrimSpace(r.Value) == "" {
+		return false
+	}
+	return r.Kind == "id" || r.Kind == "path"
+}
+
 // AgentState is fanout's six-value display vocabulary.
 type AgentState string
 
@@ -72,6 +92,92 @@ func ParseAgentState(raw string) (AgentState, bool) {
 	}
 }
 
+// MapHerdrAgentState projects herdr's public agent status into fanout's
+// six-value display vocabulary. A status is useful only while the snapshot
+// contains the corresponding agent record. In particular, herdr's unknown
+// status is not evidence that an agent process is running.
+func MapHerdrAgentState(agentPresent bool, native string) AgentState {
+	if !agentPresent {
+		return ""
+	}
+	state := AgentState(native)
+	switch state {
+	case AgentWorking, AgentBlocked, AgentIdle, AgentDone:
+		return state
+	default:
+		return ""
+	}
+}
+
+// ObservationRoute identifies one independently queried runtime route. Tmux
+// has one route with empty session/socket fields; herdr routes are scoped by
+// their verified named session and socket path.
+type ObservationRoute struct {
+	Backend    Name
+	SessionID  string
+	SocketPath string
+}
+
+type observationRouteUnavailableError struct {
+	route ObservationRoute
+	cause error
+}
+
+// ObservationRouteUnavailable scopes cause to one runtime observation route.
+// Its text and unwrap chain remain the cause's, so adding route metadata does
+// not rewrite existing user-facing diagnostics or break errors.Is/errors.As.
+func ObservationRouteUnavailable(route ObservationRoute, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &observationRouteUnavailableError{route: route, cause: cause}
+}
+
+func (e *observationRouteUnavailableError) Error() string { return e.cause.Error() }
+
+func (e *observationRouteUnavailableError) Unwrap() error { return e.cause }
+
+// ClassifyObservationError separates route-scoped failures from failures that
+// make every route indeterminate. It recursively follows errors.Join and %w
+// wrappers. Once a route wrapper is reached its cause remains scoped to that
+// route; an unwrapped, untyped leaf anywhere else sets all=true.
+func ClassifyObservationError(err error) (routes map[ObservationRoute]bool, all bool) {
+	routes = map[ObservationRoute]bool{}
+	var visit func(error)
+	visit = func(current error) {
+		if current == nil {
+			return
+		}
+		if scoped, ok := current.(*observationRouteUnavailableError); ok {
+			routes[scoped.route] = true
+			return
+		}
+		if joined, ok := current.(interface{ Unwrap() []error }); ok {
+			children := joined.Unwrap()
+			if len(children) == 0 {
+				all = true
+				return
+			}
+			for _, child := range children {
+				visit(child)
+			}
+			return
+		}
+		if wrapped, ok := current.(interface{ Unwrap() error }); ok {
+			child := wrapped.Unwrap()
+			if child == nil {
+				all = true
+				return
+			}
+			visit(child)
+			return
+		}
+		all = true
+	}
+	visit(err)
+	return routes, all
+}
+
 // LivePane is the backend-neutral observation of one live pane. Runtime-owned
 // identity fields remain separate from display metadata so later liveness code
 // can choose the evidence appropriate for each backend.
@@ -89,7 +195,10 @@ type LivePane struct {
 	NativeAgentState string
 	TerminalID       string
 	AgentID          string
+	AgentSession     *AgentSessionRef
+	AgentPresent     bool
 	ShellKey         string
+	RepoKey          string
 	ProjectRoot      string
 	WorktreePath     string
 	Role             string

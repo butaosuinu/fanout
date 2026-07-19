@@ -137,6 +137,11 @@ function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
   );
 }
 
+function canCapturePane(pane: PaneView): boolean {
+  const paneBackend = pane.backend?.trim().toLowerCase() || "tmux";
+  return paneBackend === "tmux" && (pane.derived?.canPeek ?? true);
+}
+
 export function Drawer({
   pane,
   repo,
@@ -255,8 +260,8 @@ export function Drawer({
               {pane.prompt || "—"}
             </pre>
           </section>
-          {pane.planMode && <PlanPanel pane={pane} token={token} />}
-          <PeekPanel pane={pane} token={token} />
+          {pane.planMode && canCapturePane(pane) && <PlanPanel pane={pane} token={token} />}
+          {canCapturePane(pane) && <PeekPanel pane={pane} token={token} />}
         </div>
       )}
     </aside>
