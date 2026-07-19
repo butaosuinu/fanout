@@ -160,7 +160,7 @@ func TestCompactPaneLineFormat(t *testing.T) {
 			pane:    paneView{IssueNum: 101, Name: "rate-limiter-core", PaneID: "%5", TmuxState: "live", AgentState: "done"},
 			ordinal: 1,
 			width:   40,
-			want:    " 1✓ #101 rate-limiter-core            %5",
+			want:    " 1✓ tmux #101 rate-limiter-core       %5",
 		},
 		{
 			name:     "selected row carries the > marker",
@@ -168,70 +168,70 @@ func TestCompactPaneLineFormat(t *testing.T) {
 			ordinal:  2,
 			selected: true,
 			width:    40,
-			want:     ">2● #102 api-cache                    %8",
+			want:     ">2● tmux #102 api-cache               %8",
 		},
 		{
 			name:    "only the name shrinks on overflow",
 			pane:    paneView{IssueNum: 103, Name: "very-long-name-that-overflows-the-line-badly", PaneID: "%12", TmuxState: "live", AgentState: "running"},
 			ordinal: 3,
 			width:   40,
-			want:    " 3● #103 very-long-name-that-over... %12",
+			want:    " 3● tmux #103 very-long-name-that... %12",
 		},
 		{
 			name:    "ordinal past 9 renders blank",
 			pane:    paneView{IssueNum: 110, Name: "ten", PaneID: "%10", TmuxState: "live"},
 			ordinal: 10,
 			width:   40,
-			want:    "  · #110 ten                         %10",
+			want:    "  · tmux #110 ten                    %10",
 		},
 		{
 			name:    "stale pane shows the stale glyph",
 			pane:    paneView{IssueNum: 104, Name: "gone", PaneID: "%9", TmuxState: "stale", AgentState: "running"},
 			ordinal: 4,
 			width:   40,
-			want:    " 4✗ #104 gone                         %9",
+			want:    " 4✗ tmux #104 gone                    %9",
 		},
 		{
 			name:    "shell row uses the shell label and dashes a missing pane id",
 			pane:    paneView{Kind: state.PaneKindShell, Name: "scratch", TmuxState: "-"},
 			ordinal: 5,
 			width:   40,
-			want:    " 5- shell scratch                      -",
+			want:    " 5- tmux shell scratch                 -",
 		},
 		{
 			name:    "plan task row uses the task id label",
 			pane:    paneView{TaskID: "T1", Name: "fix-flaky-test", PaneID: "%21", TmuxState: "live", AgentState: "running"},
 			ordinal: 4,
 			width:   40,
-			want:    " 4● T1 fix-flaky-test                %21",
+			want:    " 4● tmux T1 fix-flaky-test           %21",
 		},
 		{
 			name:    "working pane shows the working glyph",
 			pane:    paneView{IssueNum: 106, Name: "hook-emitter", PaneID: "%6", TmuxState: "live", AgentState: "working"},
 			ordinal: 7,
 			width:   40,
-			want:    " 7◐ #106 hook-emitter                 %6",
+			want:    " 7◐ tmux #106 hook-emitter            %6",
 		},
 		{
 			name:    "plan-state pane shows the plan glyph",
 			pane:    paneView{TaskID: "T2", Name: "notify-sounds", PaneID: "%22", TmuxState: "live", AgentState: "plan"},
 			ordinal: 8,
 			width:   40,
-			want:    " 8◇ T2 notify-sounds                 %22",
+			want:    " 8◇ tmux T2 notify-sounds            %22",
 		},
 		{
 			name:    "narrow width keeps label and pane id intact",
 			pane:    paneView{IssueNum: 101, Name: "rate-limiter-core", PaneID: "%5", TmuxState: "live", AgentState: "done"},
 			ordinal: 1,
 			width:   20,
-			want:    " 1✓ #101 rate-... %5",
+			want:    " 1✓ tmux #101 rat %5",
 		},
 		{
 			name:    "double-width name is measured in display cells",
 			pane:    paneView{IssueNum: 105, Name: "認証キャッシュ改善", PaneID: "%7", TmuxState: "live", AgentState: "running"},
 			ordinal: 6,
 			width:   40,
-			want:    " 6● #105 認証キャッシュ改善           %7",
+			want:    " 6● tmux #105 認証キャッシュ改善      %7",
 		},
 	}
 	for _, tt := range tests {
@@ -498,13 +498,13 @@ func TestCompactViewRendersSwitcher(t *testing.T) {
 
 	view := m.View()
 	for _, want := range []string{
-		"fanout repo", // title + project-root basename, not the full header
+		"fanout backend: tmux (default) repo",
 		"▏100 t2 m0 p2 b0 l2",
 		"▏200 t1 m0 p1 b0 l1",
-		">1● #101 one",
+		">1● tmux #101 one",
 		"   ⎇ fanout/one",
-		" 2✓ #102 two",
-		" 3· #201 three",
+		" 2✓ tmux #102 two",
+		" 3· tmux #201 three",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("compact view missing %q:\n%s", want, view)
@@ -531,7 +531,7 @@ func TestCompactHeaderTruncatesLongRepoBasename(t *testing.T) {
 	if got := cellWidth(headerLine); got > 40 {
 		t.Fatalf("compact header width = %d cells, want <= 40:\n%q", got, headerLine)
 	}
-	if !strings.Contains(headerLine, "very-long-repository-basename-...") {
+	if !strings.Contains(headerLine, "backend: tmux (default) very-l...") {
 		t.Fatalf("compact header did not truncate the basename:\n%q", headerLine)
 	}
 }

@@ -39,12 +39,16 @@ func TestPaneViewsFromSnapshotRendersHerdrRuntimeAliases(t *testing.T) {
 
 	wantStates := []string{"live", "stale!", "unknown", "unsup!"}
 	wantRuns := []string{"◐", "✗", "-", "!"}
-	runtimeColumn := columnIndex(t, "TMUX")
+	runtimeColumn := columnIndex(t, "RUNTIME")
+	backendColumn := columnIndex(t, "BACKEND")
 	runColumn := columnIndex(t, "RUN")
 	for i := range got {
 		row := got[i].tableRow()
 		if row[runtimeColumn] != wantStates[i] {
-			t.Errorf("row %d TMUX = %q, want %q", i, row[runtimeColumn], wantStates[i])
+			t.Errorf("row %d RUNTIME = %q, want %q", i, row[runtimeColumn], wantStates[i])
+		}
+		if row[backendColumn] != "herdr" {
+			t.Errorf("row %d BACKEND = %q, want herdr", i, row[backendColumn])
 		}
 		if row[runColumn] != wantRuns[i] {
 			t.Errorf("row %d RUN = %q, want %q", i, row[runColumn], wantRuns[i])
@@ -53,7 +57,7 @@ func TestPaneViewsFromSnapshotRendersHerdrRuntimeAliases(t *testing.T) {
 			t.Errorf("row %d backend = %q, want herdr", i, got[i].Backend)
 		}
 	}
-	if compact := compactPaneLine(got[3], 4, false, 60); !strings.Contains(compact, "4! #104") {
+	if compact := compactPaneLine(got[3], 4, false, 60); !strings.Contains(compact, "4! herdr #104") {
 		t.Fatalf("compact unsupported row = %q, want distinct ! runtime glyph", compact)
 	}
 

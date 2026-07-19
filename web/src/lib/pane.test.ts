@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { makePane } from "../test/fixtures";
-import { paneIssueURL, paneLabel, rowKey } from "./pane";
+import { paneBackend, paneIssueURL, paneLabel, rowKey } from "./pane";
 
 describe("pane identity helpers", () => {
+  it("normalizes a missing legacy backend to tmux", () => {
+    expect(paneBackend(makePane())).toBe("tmux");
+    expect(paneBackend(makePane({ backend: "" }))).toBe("tmux");
+    expect(paneBackend(makePane({ backend: " HERDR " }))).toBe("herdr");
+    expect(paneBackend(makePane({ backend: "", notStarted: true }))).toBe("");
+  });
+
   it("keys issue rows by parent and issue number", () => {
     const pane = makePane({ issueNum: 42 });
 

@@ -24,6 +24,10 @@ func (m *model) openSelectedWorktreeShellCmd() tea.Cmd {
 		m.notice = "no pane selected"
 		return nil
 	}
+	if reason := m.runtimeActionDisabledReason(&pane, "terminal launch"); reason != "" {
+		m.notice = reason
+		return nil
+	}
 	targetPath := pane.absoluteWorktreePath(m.opts.ProjectRoot)
 	if targetPath == "" {
 		m.notice = fmt.Sprintf("terminal skipped for %s: no worktree path", pane.identityLabel())
@@ -37,6 +41,10 @@ func (m *model) openSelectedWorktreeShellCmd() tea.Cmd {
 }
 
 func (m *model) openProjectRootShellCmd() tea.Cmd {
+	if reason := m.runtimeActionDisabledReason(nil, "terminal launch"); reason != "" {
+		m.notice = reason
+		return nil
+	}
 	projectRoot := strings.TrimSpace(m.opts.ProjectRoot)
 	if projectRoot == "" {
 		m.notice = "terminal skipped: project root is unknown"

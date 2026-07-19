@@ -57,6 +57,7 @@ type paneView struct {
 	Agent              string
 	CreatedAt          string
 	Prompt             string
+	NotStarted         bool
 	Derived            sessionview.PaneDerived
 }
 
@@ -118,6 +119,7 @@ func (p paneView) tableRow() table.Row {
 		truncate(p.Name, 28),
 		dash(p.Agent),
 		agentStateGlyph(p),
+		dash(p.backendLabel()),
 		tmuxState,
 		dash(p.IssueState),
 		truncate(dash(p.PRSummary), 12),
@@ -127,6 +129,21 @@ func (p paneView) tableRow() table.Row {
 		truncate(dash(p.BranchName), 18),
 		dash(p.PaneID),
 	}
+}
+
+// backendLabel uses the derived wire metadata when present so a synthetic
+// not-started row remains unowned ("-"). Hand-built/legacy recorded rows that
+// predate derived metadata still normalize an empty backend to tmux.
+func (p paneView) backendLabel() string {
+	if p.NotStarted && strings.TrimSpace(string(p.Backend)) == "" {
+		return ""
+	}
+	if p.Derived.FilterValues != nil {
+		if value, ok := p.Derived.FilterValues["backend"]; ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return string(backend.NormalizeName(p.Backend))
 }
 
 func (p paneView) canFocus() bool {
@@ -176,7 +193,8 @@ func columnsForWidth(width int) []table.Column {
 		{Title: "NAME", Width: nameWidth},
 		{Title: "AGENT", Width: 7},
 		{Title: "RUN", Width: 5},
-		{Title: "TMUX", Width: 7},
+		{Title: "BACKEND", Width: 7},
+		{Title: "RUNTIME", Width: 7},
 		{Title: "STATE", Width: 8},
 		{Title: "PR", Width: 12},
 		{Title: "CI", Width: 7},

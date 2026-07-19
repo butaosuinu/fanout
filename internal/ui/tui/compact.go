@@ -116,7 +116,7 @@ func compactPaneLine(p paneView, ordinal int, selected bool, width int) string {
 	if ordinal >= 1 && ordinal <= 9 {
 		ord = strconv.Itoa(ordinal)
 	}
-	prefix := marker + ord + agentStateGlyph(p) + " " + p.itemLabel() + " "
+	prefix := marker + ord + agentStateGlyph(p) + " " + dash(p.backendLabel()) + " " + p.itemLabel() + " "
 	paneID := dash(p.PaneID)
 	name := truncateCells(strings.TrimSpace(p.Name), width-cellWidth(prefix)-cellWidth(paneID)-1)
 	line := prefix + name

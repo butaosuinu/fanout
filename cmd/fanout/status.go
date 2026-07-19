@@ -5,6 +5,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -49,6 +50,7 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 	if code != exitcode.OK {
 		return code
 	}
+	attachChildRuntimeMetadata(children, store, cfg.ParentRef)
 	statusreport.MarkBlockers(rt.projectRoot, cfg.Parent, children)
 	report := statusreport.NewReport(cfg.Parent, children)
 	if cfg.Format == "table" {
@@ -62,6 +64,17 @@ func cmdStatus(cfg *cliflags.Config, lg *log.Logger) exitcode.Code {
 		return statusreport.PostDashboard(report, rt.projectRoot, lg)
 	}
 	return exitcode.OK
+}
+
+func attachChildRuntimeMetadata(children []statusreport.Child, store state.Store, parent string) {
+	for i := range children {
+		pane, ok := store.Find(parent, children[i].Num)
+		if !ok {
+			continue
+		}
+		children[i].Backend = backend.NormalizeName(pane.Backend)
+		children[i].PaneID = pane.PaneID
+	}
 }
 
 func sortedKeys(set map[int]bool) []int {

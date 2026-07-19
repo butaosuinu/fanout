@@ -8,6 +8,8 @@
     {
       "id": "base-types",
       "branch": "fanout/launch-plan-define-base-types-base-types",
+      "backend": "tmux",
+      "pane_id": "%11",
       "prs": [
         {
           "number": 501,
@@ -23,6 +25,8 @@
     {
       "id": "api-client",
       "branch": "fanout/custom-api-client",
+      "backend": "herdr",
+      "pane_id": "workspace-2:terminal-3",
       "prs": [
         {
           "number": 502,

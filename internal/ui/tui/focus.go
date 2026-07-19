@@ -92,7 +92,7 @@ func (m model) detailContent() string {
 	}
 	lines := []string{
 		fmt.Sprintf("%s %s  %s", pane.Parent, pane.itemLabel(), pane.Name),
-		fmt.Sprintf("pane=%s tmux=%s title=%s kind=%s agent=%s run=%s", dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Kind), dash(pane.Agent), dash(pane.AgentState)),
+		fmt.Sprintf("backend=%s pane=%s runtime=%s title=%s kind=%s agent=%s run=%s", dash(pane.backendLabel()), dash(pane.PaneID), pane.TmuxState, dash(pane.TmuxTitle), dash(pane.Kind), dash(pane.Agent), dash(pane.AgentState)),
 		fmt.Sprintf("issue=%s pr=%s ci=%s branch=%s", dash(pane.IssueState), dash(pane.PRSummary), dash(pane.CIStatus), dash(pane.BranchName)),
 		fmt.Sprintf("wave=%s blockers=%s", dash(pane.waveText()), dash(pane.Blockers)),
 		fmt.Sprintf("worktree=%s diff=%s dirty=%s", dash(pane.WorktreePath), dash(pane.DiffSummary), dash(pane.DirtyState)),
@@ -135,7 +135,15 @@ func (m *model) focusSelected(zoom bool) tea.Cmd {
 		return nil
 	}
 	if !pane.canFocus() {
-		m.notice = fmt.Sprintf("focus skipped for %s: tmux state is %s", dash(pane.PaneID), pane.TmuxState)
+		if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+			m.notice = reason
+		} else {
+			m.notice = fmt.Sprintf("focus skipped for %s: runtime state is %s", dash(pane.PaneID), pane.TmuxState)
+		}
+		return nil
+	}
+	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+		m.notice = reason
 		return nil
 	}
 	return m.focusPaneCmd(pane, zoom, "")
@@ -185,7 +193,15 @@ func (m *model) peekSelectedCmd(force bool) tea.Cmd {
 		return nil
 	}
 	if !pane.canPeek() {
-		m.peek = panePeek{PaneID: pane.PaneID, At: time.Now(), Err: fmt.Sprintf("tmux state is %s", pane.TmuxState)}
+		reason := m.peekDisabledReason(pane)
+		if reason == "" {
+			reason = fmt.Sprintf("runtime state is %s", pane.TmuxState)
+		}
+		m.peek = panePeek{PaneID: pane.PaneID, At: time.Now(), Err: reason}
+		return nil
+	}
+	if reason := m.peekDisabledReason(pane); reason != "" {
+		m.peek = panePeek{PaneID: pane.PaneID, At: time.Now(), Err: reason}
 		return nil
 	}
 	if !force && m.peek.PaneID == pane.PaneID && (m.peek.Loading || m.peek.Output != "" || m.peek.Err != "") {
@@ -215,7 +231,14 @@ func (m model) peekContent(pane paneView, maxLines int) []string {
 		return []string{header + ": no pane id recorded"}
 	}
 	if !pane.canPeek() {
-		return []string{header + ": unavailable (" + pane.TmuxState + ")"}
+		reason := m.peekDisabledReason(pane)
+		if reason == "" {
+			reason = pane.TmuxState
+		}
+		return []string{header + ": unavailable (" + reason + ")"}
+	}
+	if reason := m.peekDisabledReason(pane); reason != "" {
+		return []string{header + ": unavailable (" + reason + ")"}
 	}
 	if m.peek.PaneID != pane.PaneID {
 		return []string{header + ": waiting for capture"}

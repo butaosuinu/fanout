@@ -40,7 +40,7 @@ export const COLS: ReadonlyArray<readonly [key: string, label: string]> = [
   ["diff", "diff"],
   ["dirty", "dirty"],
   ["ci", "ci"],
-  ["tmux", "tmux"],
+  ["tmux", "runtime"],
   ["state", "state"],
   ["pr", "pr"],
 ];

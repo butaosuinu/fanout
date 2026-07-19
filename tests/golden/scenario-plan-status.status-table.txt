@@ -1,6 +1,6 @@
 fanout plan status launch-plan: total=3 merged=1 pending=2 blocked=1 all_merged=false
-TASK        STATE    PR    PR_STATE         CI       TYPE  FILES  DIFF                              LINK
-----------  -------  ----  ---------------  -------  ----  -----  --------------------------------  ----
-base-types  merged   #501  merged           pass     feat  2      +6 ++++++++++++  -0               https://github.com/butaosuinu/fanout/pull/501
-api-client  pending  #502  review-required  pending  fix   1      +3 ++++++        -4 --------      https://github.com/butaosuinu/fanout/pull/502
-ui-shell    blocked  -     -                -        -     -      -                                 -
+TASK        BACKEND  PANE                    STATE    PR    PR_STATE         CI       TYPE  FILES  DIFF                              LINK
+----------  -------  ----------------------  -------  ----  ---------------  -------  ----  -----  --------------------------------  ----
+base-types  tmux     %11                     merged   #501  merged           pass     feat  2      +6 ++++++++++++  -0               https://github.com/butaosuinu/fanout/pull/501
+api-client  herdr    workspace-2:terminal-3  pending  #502  review-required  pending  fix   1      +3 ++++++        -4 --------      https://github.com/butaosuinu/fanout/pull/502
+ui-shell    -        -                       blocked  -     -                -        -     -      -                                 -

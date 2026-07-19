@@ -141,15 +141,16 @@ func TestPlanHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 	srv := newPlanServer(t, "", fake)
 	snap := planSnapshot(true, true)
 	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "w1:p1"
 	publishSnapshot(srv, snap)
 
-	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
+	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "w1:p1"}))
 	if status != http.StatusNotFound {
 		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "not a tmux pane") {
-		t.Fatalf("body = %s want a JSON error rejecting the herdr backend", body)
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], backend.HerdrContentReadReason) {
+		t.Fatalf("body = %s want the explicit herdr content-read reason", body)
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)

@@ -21,8 +21,9 @@ export function degradedMessages(deg: Degraded | null | undefined): string[] {
   if (deg.runtime) {
     msgs.push("runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示");
   } else if (deg.tmux) {
-    // Older snapshots expose only the tmux compatibility field.
-    msgs.push("tmux が利用できません — ペイン生死・peek は劣化表示");
+    // Older snapshots expose only the tmux compatibility field, but the
+    // user-facing failure surface is runtime-neutral.
+    msgs.push("runtime が利用できません — ペイン生死・peek は劣化表示");
   }
   // A state-load failure sets only degraded.reason (no source flag); surface it
   // so a corrupted .fanout/state.json shows a warning, not a silent empty view.

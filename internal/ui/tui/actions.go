@@ -178,6 +178,12 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = fmt.Sprintf("%s unavailable for %s", action, paneOnlyKindLabel(pane))
 		return m, nil
 	}
+	if action == actionClose || action == actionCleanup {
+		if reason := m.runtimeActionDisabledReason(&pane, string(action)); reason != "" {
+			m.actionMessage = reason
+			return m, nil
+		}
+	}
 	m.pendingAction = &pendingLifecycleAction{action: action, pane: pane}
 	if action == actionClose {
 		m.pendingAction.closeMode = lifecycle.ClosePaneOnly

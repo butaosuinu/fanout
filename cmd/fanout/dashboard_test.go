@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
@@ -74,6 +76,24 @@ func TestNoKeybindOverride(t *testing.T) {
 	}
 	if v := noKeybindOverride(true); v == nil || *v != false {
 		t.Fatalf("--no-keybind -> *false, got %v", v)
+	}
+}
+
+func TestBindDashboardKeyForBackendIsTmuxOnly(t *testing.T) {
+	argsPath := installTUIDashboardTmuxShim(t)
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr})
+	if body, err := os.ReadFile(argsPath); err == nil {
+		t.Fatalf("herdr dashboard bound tmux keys:\n%s", body)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("read tmux argv log: %v", err)
+	}
+
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Tmux})
+	log := readTUITmuxLog(t, argsPath)
+	for _, want := range []string{"bind-key\nD\nrun-shell", "bind-key\n-n\nF12\nrun-shell", "bind-key\nM\ndisplay-popup"} {
+		if !tmuxLogHasCommand(log, want) {
+			t.Fatalf("tmux dashboard log missing %q:\n%s", want, log)
+		}
 	}
 }
 

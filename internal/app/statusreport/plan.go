@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -22,6 +23,8 @@ type PlanReport struct {
 type PlanTask struct {
 	ID          string          `json:"id"`
 	Branch      string          `json:"branch"`
+	Backend     backend.Name    `json:"backend,omitempty"`
+	PaneID      string          `json:"pane_id,omitempty"`
 	PRs         []ghissue.PRRef `json:"prs"`
 	HasMergedPR bool            `json:"has_merged_pr"`
 	Blocked     bool            `json:"blocked"`
@@ -108,7 +111,13 @@ func WritePlanReport(report PlanReport, lg *log.Logger) exitcode.Code {
 func WritePlanTable(report PlanReport, projectRoot string, lg *log.Logger) exitcode.Code {
 	sources := make([]RowSource, 0, len(report.Tasks))
 	for _, task := range report.Tasks {
-		sources = append(sources, RowSource{Label: task.ID, State: planStatusState(task), PRs: task.PRs})
+		sources = append(sources, RowSource{
+			Label:   task.ID,
+			Backend: task.Backend,
+			PaneID:  task.PaneID,
+			State:   planStatusState(task),
+			PRs:     task.PRs,
+		})
 	}
 	rows, maxLines, addWidth, delWidth, code := BuildTableRows(ghissue.Runner{Cwd: projectRoot}, projectRoot, sources, lg)
 	if code != exitcode.OK {

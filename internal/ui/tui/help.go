@@ -10,8 +10,9 @@ import (
 const helpPopupOpeningNotice = "opening help popup..."
 
 type helpEntry struct {
-	Key         string
-	Description string
+	Key            string
+	Description    string
+	DisabledReason string
 }
 
 // HelpPopupFunc opens the keyboard shortcut help in an external surface, such as
@@ -45,6 +46,12 @@ func RunHelpPopup(opts HelpPopupOptions) error {
 }
 
 func (m *model) openHelpPopupCmd() tea.Cmd {
+	if m.helpHasDisabledRuntimeActions() {
+		// The external popup is a fresh model and cannot carry the selected row's
+		// backend. Keep backend-specific disabled state visible in the inline view.
+		m.mode = modeHelp
+		return nil
+	}
 	popup := m.opts.HelpPopup
 	if popup == nil {
 		m.mode = modeHelp
@@ -57,35 +64,52 @@ func (m *model) openHelpPopupCmd() tea.Cmd {
 	}
 }
 
+func (m model) helpHasDisabledRuntimeActions() bool {
+	if m.runtimeActionDisabledReason(nil, "launch") != "" {
+		return true
+	}
+	pane, ok := m.selectedPane()
+	if !ok {
+		return false
+	}
+	return m.runtimeActionDisabledReason(&pane, "runtime action") != "" || m.peekDisabledReason(pane) != ""
+}
+
 func (m model) helpView() string {
+	launchDisabled := m.runtimeActionDisabledReason(nil, "launch")
+	var paneDisabled, peekDisabled string
+	if pane, ok := m.selectedPane(); ok {
+		paneDisabled = m.runtimeActionDisabledReason(&pane, "runtime action")
+		peekDisabled = m.peekDisabledReason(pane)
+	}
 	monitor := []helpEntry{
-		{"n", "New agent pane"},
-		{"s", "Settings"},
-		{"a", "Attach agent to worktree"},
-		{"A", "Worktree terminal"},
-		{"t", "Project root terminal"},
-		{"j/k", "Move selection"},
-		{"[ / ]", "Prev / next Session"},
-		{"1-9", "Jump to Nth pane"},
-		{"/", "Filter rows"},
-		{"Enter/o", "Focus pane"},
-		{"Z", "Focus + zoom pane"},
-		{"p", "Peek output"},
-		{"v", "Auto/compact/full view"},
-		{"c/x", "Close pane"},
-		{"m", "Merge branch"},
-		{"X", "Cleanup parent"},
+		{"n", "New agent pane", launchDisabled},
+		{"s", "Settings", ""},
+		{"a", "Attach agent to worktree", paneDisabled},
+		{"A", "Worktree terminal", firstNonEmpty(paneDisabled, launchDisabled)},
+		{"t", "Project root terminal", launchDisabled},
+		{"j/k", "Move selection", ""},
+		{"[ / ]", "Prev / next Session", ""},
+		{"1-9", "Jump to Nth pane", ""},
+		{"/", "Filter rows", ""},
+		{"Enter/o", "Focus pane", paneDisabled},
+		{"Z", "Focus + zoom pane", paneDisabled},
+		{"p", "Peek output", peekDisabled},
+		{"v", "Auto/compact/full view", ""},
+		{"c/x", "Close pane", paneDisabled},
+		{"m", "Merge branch", ""},
+		{"X", "Cleanup parent", paneDisabled},
 	}
 	newPane := []helpEntry{
-		{"Ctrl+J", "Prompt newline"},
-		{"Tab", "Move fields"},
-		{"Up/Down", "Pick agent / row"},
-		{"Space", "Toggle agent"},
-		{"Left/Right", "Mode / agent"},
-		{"@", "File completion"},
-		{"Ctrl+O", "Open issue"},
-		{"Enter", "Create / next"},
-		{"Esc", "Cancel / back"},
+		{"Ctrl+J", "Prompt newline", launchDisabled},
+		{"Tab", "Move fields", launchDisabled},
+		{"Up/Down", "Pick agent / row", launchDisabled},
+		{"Space", "Toggle agent", launchDisabled},
+		{"Left/Right", "Mode / agent", launchDisabled},
+		{"@", "File completion", launchDisabled},
+		{"Ctrl+O", "Open issue", launchDisabled},
+		{"Enter", "Create / next", launchDisabled},
+		{"Esc", "Cancel / back", launchDisabled},
 	}
 	columnWidth := m.helpColumnWidth()
 	// No blank lines around the columns: the in-TUI modal fallback must stay
@@ -94,6 +118,13 @@ func (m model) helpView() string {
 	if !m.helpOnly {
 		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
+	footer := "Esc / q / ? close"
+	if reason := firstNonEmpty(launchDisabled, paneDisabled, peekDisabled); reason != "" {
+		if summary, _, ok := strings.Cut(reason, ";"); ok {
+			reason = summary
+		}
+		footer = "disabled: " + reason + " · " + footer
+	}
 	lines = append(lines,
 		lipgloss.JoinHorizontal(
 			lipgloss.Top,
@@ -101,7 +132,7 @@ func (m model) helpView() string {
 			"  ",
 			m.helpColumn("New pane popup", newPane, columnWidth),
 		),
-		dimStyle.Render("Esc / q / ? close"),
+		dimStyle.Render(footer),
 	)
 	content := strings.Join(lines, "\n")
 	if m.helpOnly {
@@ -114,17 +145,21 @@ func (m model) helpColumn(title string, entries []helpEntry, width int) string {
 	lines := make([]string, 0, len(entries)+1)
 	lines = append(lines, titleStyle.Render(title))
 	for _, entry := range entries {
-		lines = append(lines, m.helpRow(entry.Key, entry.Description, width))
+		lines = append(lines, m.helpRow(entry, width))
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (m model) helpRow(key, description string, width int) string {
-	keyText := key
+func (m model) helpRow(entry helpEntry, width int) string {
+	keyText := entry.Key
 	if !strings.HasPrefix(keyText, "[") {
 		keyText = "[" + keyText + "]"
 	}
 	keyText = titleStyle.Width(13).Render(keyText)
+	description := entry.Description
+	if entry.DisabledReason != "" {
+		description = dimStyle.Render(description + " [disabled]")
+	}
 	return lipgloss.NewStyle().Width(width).Render(keyText + description)
 }
 

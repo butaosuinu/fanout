@@ -26,22 +26,22 @@ const (
 // it, so the endpoint can never address an arbitrary tmux target.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
-// livePaneView returns the snapshot row whose pane id is paneID, but only when
-// the poller's latest committed snapshot reports it as a live pane. Requiring
-// Alive (not mere presence in state) closes a pane-id-reuse hole: after a tmux
-// server restart an unrelated pane can take over a recorded id, and only the
-// snapshot's liveness check (pane id plus worktree-path match, see
-// sessionview's paneAlive) ties the id back to this child — a bare id match
+// snapshotPaneView returns the latest committed snapshot row whose runtime-
+// native pane id is paneID. requireLivePane checks backend and Alive before any
+// capture. Requiring Alive (not mere presence in state) closes a pane-id-reuse
+// hole: after a tmux server restart an unrelated pane can take over a recorded
+// id, and only the snapshot's liveness check (pane id plus worktree-path
+// match, see sessionview's paneAlive) ties the id back to this child — a bare id match
 // would let /api/peek or /api/plan capture a stranger's terminal. Defined here
 // rather than in poller.go because the capture endpoints are its only
 // consumers. The zero-value snapshot has nil Sessions, which ranges as empty,
 // so an unpublished snapshot simply reports false.
-func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
+func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
-			if sess.Panes[i].PaneID == paneID && sess.Panes[i].Alive {
+			if sess.Panes[i].PaneID == paneID {
 				return sess.Panes[i], true
 			}
 		}
@@ -50,23 +50,30 @@ func (p *poller) livePaneView(paneID string) (sessionview.PaneView, bool) {
 }
 
 // requireLivePane is the request-validation chain GET /api/peek and
-// GET /api/plan share: pane-id shape (400), snapshot liveness via livePaneView
+// GET /api/plan share: pane-id shape (400), snapshot liveness via snapshotPaneView
 // (404), a tmux backend route, and a recorded identity usable for request-time
 // verification. Agent rows need a worktree path; shell rows need a shellKey
 // because they have no worktree of their own. On ok=false the JSON error
 // response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
+	pv, recorded := s.poller.snapshotPaneView(paneID)
+	if recorded {
+		switch runtimeBackend := backend.NormalizeName(pv.Backend); runtimeBackend {
+		case backend.Tmux:
+		case backend.Herdr:
+			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s: %s", paneID, backend.HerdrContentReadReason))
+			return sessionview.PaneView{}, false
+		default:
+			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s uses unsupported backend %q", paneID, runtimeBackend))
+			return sessionview.PaneView{}, false
+		}
+	}
 	if !paneIDRe.MatchString(paneID) {
 		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
 		return sessionview.PaneView{}, false
 	}
-	pv, ok := s.poller.livePaneView(paneID)
-	if !ok {
+	if !recorded || !pv.Alive {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not live in the current sessions", paneID))
-		return sessionview.PaneView{}, false
-	}
-	if backend.NormalizeName(pv.Backend) != backend.Tmux {
-		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a tmux pane", paneID))
 		return sessionview.PaneView{}, false
 	}
 	if pv.Kind == state.PaneKindShell {

@@ -2170,8 +2170,8 @@ func TestFocusSelectedPaneMarksDeadPaneStale(t *testing.T) {
 	if m.panes[0].AgentState != "" {
 		t.Fatalf("AgentState = %q, want cleared on stale", m.panes[0].AgentState)
 	}
-	if got := m.table.Rows()[0][columnIndex(t, "TMUX")]; got != "stale!" {
-		t.Fatalf("table tmux cell = %q, want stale!", got)
+	if got := m.table.Rows()[0][columnIndex(t, "RUNTIME")]; got != "stale!" {
+		t.Fatalf("table runtime cell = %q, want stale!", got)
 	}
 	if got := m.table.Rows()[0][columnIndex(t, "RUN")]; got != "✗" {
 		t.Fatalf("table run cell = %q, want ✗", got)
@@ -4559,7 +4559,7 @@ func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
 		BranchName:   "fanout/child-101",
 		WorktreePath: ".fanout/worktrees/child",
 		worktreeAbs:  "/repo/.fanout/worktrees/child",
-		Backend:      backend.Herdr,
+		Backend:      backend.Tmux,
 	}}
 	m.refreshRows()
 
@@ -4573,7 +4573,7 @@ func TestAttachAgentKeyOpensSameWorktreeForm(t *testing.T) {
 	}
 	want := AttachTarget{
 		TargetPath:       "/repo/.fanout/worktrees/child",
-		Backend:          backend.Herdr,
+		Backend:          backend.Tmux,
 		SourceParent:     "100",
 		SourceIssueNum:   101,
 		SourceBranchName: "fanout/child-101",

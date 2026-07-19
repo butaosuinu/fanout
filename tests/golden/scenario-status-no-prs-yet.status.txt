@@ -4,12 +4,16 @@
     {
       "num": 701,
       "state": "OPEN",
+      "backend": "tmux",
+      "pane_id": "%9",
       "prs": [],
       "has_merged_pr": false
     },
     {
       "num": 702,
       "state": "OPEN",
+      "backend": "tmux",
+      "pane_id": "%10",
       "prs": [],
       "has_merged_pr": false
     }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/cliview"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -24,17 +25,21 @@ type PRStatSource interface {
 }
 
 // RowSource is one status table input row: an issue label ("#123") or a
-// plan task ID, its display state, and the PRs recorded for it.
+// plan task ID, its recorded runtime identity, display state, and PRs.
 type RowSource struct {
-	Label string
-	State string
-	PRs   []ghissue.PRRef
+	Label   string
+	Backend backend.Name
+	PaneID  string
+	State   string
+	PRs     []ghissue.PRRef
 }
 
 // TableRow is one rendered status table row; PR-less sources collapse to
 // a single dash row.
 type TableRow struct {
 	Label     string
+	Backend   string
+	PaneID    string
 	State     string
 	PR        string
 	PRState   string
@@ -77,6 +82,8 @@ func BuildTableRows(gh PRStatSource, projectRoot string, sources []RowSource, lg
 		if len(src.PRs) == 0 {
 			rows = append(rows, TableRow{
 				Label:   src.Label,
+				Backend: cliview.DashIfEmpty(string(src.Backend)),
+				PaneID:  cliview.DashIfEmpty(src.PaneID),
 				State:   cliview.DashIfEmpty(src.State),
 				PR:      "-",
 				PRState: "-",
@@ -99,6 +106,8 @@ func BuildTableRows(gh PRStatSource, projectRoot string, sources []RowSource, lg
 			maxLines = max(maxLines, stat.Deletions)
 			rows = append(rows, TableRow{
 				Label:     src.Label,
+				Backend:   cliview.DashIfEmpty(string(src.Backend)),
+				PaneID:    cliview.DashIfEmpty(src.PaneID),
 				State:     cliview.DashIfEmpty(src.State),
 				PR:        "#" + strconv.Itoa(pr.Number),
 				PRState:   cliview.DashIfEmpty(pr.DisplayState()),
@@ -127,6 +136,8 @@ func WriteTable(out io.Writer, colors log.Palette, spec TableSpec, rows []TableR
 	diffWidth := statusDiffWidth(addWidth, delWidth)
 	widths := []int{
 		len(spec.FirstColHeader),
+		len("BACKEND"),
+		len("PANE"),
 		len("STATE"),
 		len("PR"),
 		len("PR_STATE"),
@@ -138,15 +149,17 @@ func WriteTable(out io.Writer, colors log.Palette, spec TableSpec, rows []TableR
 	}
 	for _, row := range rows {
 		widths[0] = max(widths[0], len(row.Label))
-		widths[1] = max(widths[1], len(row.State))
-		widths[2] = max(widths[2], len(row.PR))
-		widths[3] = max(widths[3], len(row.PRState))
-		widths[4] = max(widths[4], len(row.CI))
-		widths[5] = max(widths[5], len(row.Type))
-		widths[6] = max(widths[6], len(row.Files))
+		widths[1] = max(widths[1], len(row.Backend))
+		widths[2] = max(widths[2], len(row.PaneID))
+		widths[3] = max(widths[3], len(row.State))
+		widths[4] = max(widths[4], len(row.PR))
+		widths[5] = max(widths[5], len(row.PRState))
+		widths[6] = max(widths[6], len(row.CI))
+		widths[7] = max(widths[7], len(row.Type))
+		widths[8] = max(widths[8], len(row.Files))
 	}
 
-	headers := []string{spec.FirstColHeader, "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
+	headers := []string{spec.FirstColHeader, "BACKEND", "PANE", "STATE", "PR", "PR_STATE", "CI", "TYPE", "FILES", "DIFF", "LINK"}
 	fmt.Fprintln(out, cliview.TableLine(headers, widths))
 	separators := []string{
 		strings.Repeat("-", widths[0]),
@@ -156,14 +169,18 @@ func WriteTable(out io.Writer, colors log.Palette, spec TableSpec, rows []TableR
 		strings.Repeat("-", widths[4]),
 		strings.Repeat("-", widths[5]),
 		strings.Repeat("-", widths[6]),
-		strings.Repeat("-", diffWidth),
+		strings.Repeat("-", widths[7]),
 		strings.Repeat("-", widths[8]),
+		strings.Repeat("-", diffWidth),
+		strings.Repeat("-", widths[10]),
 	}
 	fmt.Fprintln(out, cliview.TableLine(separators, widths))
 
 	for _, row := range rows {
 		cols := []string{
 			row.Label,
+			row.Backend,
+			row.PaneID,
 			row.State,
 			row.PR,
 			row.PRState,
@@ -181,7 +198,13 @@ func WriteTable(out io.Writer, colors log.Palette, spec TableSpec, rows []TableR
 func WriteIssueTable(report Report, projectRoot string, lg *log.Logger) exitcode.Code {
 	sources := make([]RowSource, 0, len(report.Children))
 	for _, child := range report.Children {
-		sources = append(sources, RowSource{Label: "#" + strconv.Itoa(child.Num), State: child.State, PRs: child.PRs})
+		sources = append(sources, RowSource{
+			Label:   "#" + strconv.Itoa(child.Num),
+			Backend: child.Backend,
+			PaneID:  child.PaneID,
+			State:   child.State,
+			PRs:     child.PRs,
+		})
 	}
 	rows, maxLines, addWidth, delWidth, code := BuildTableRows(ghissue.Runner{Cwd: projectRoot}, projectRoot, sources, lg)
 	if code != exitcode.OK {

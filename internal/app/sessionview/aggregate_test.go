@@ -434,10 +434,10 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	if d.DiffTotal != 15 || !d.DiffParsed || d.Sort.Diff != 15 || d.Sort.CI != 0 {
 		t.Fatalf("derived sort/diff = %+v", d)
 	}
-	if d.FilterValues["run"] != "running" || d.FilterValues["dirty"] != "yes" || d.FilterValues["pr"] != "open" {
+	if d.FilterValues["backend"] != "tmux" || d.FilterValues["run"] != "running" || d.FilterValues["dirty"] != "yes" || d.FilterValues["pr"] != "open" {
 		t.Fatalf("derived filter values = %+v", d.FilterValues)
 	}
-	if !strings.Contains(d.FilterText, "child title") || !strings.Contains(d.FilterText, "+12/-3") {
+	if !strings.Contains(d.FilterText, "tmux") || !strings.Contains(d.FilterText, "child title") || !strings.Contains(d.FilterText, "+12/-3") {
 		t.Fatalf("derived filter text = %q", d.FilterText)
 	}
 	if d.WorktreeRelative != ".fanout/worktrees/child" || !d.CanFocus || !d.CanPeek {
@@ -1209,6 +1209,9 @@ func TestDerivePaneDisablesHerdrV1TargetedActions(t *testing.T) {
 	if derived.CanFocus || derived.CanPeek {
 		t.Fatalf("herdr derived actions = focus:%t peek:%t, want both false", derived.CanFocus, derived.CanPeek)
 	}
+	if derived.FilterValues["backend"] != "herdr" || !strings.Contains(derived.FilterText, "herdr") {
+		t.Fatalf("herdr derived filter metadata = values:%+v text:%q", derived.FilterValues, derived.FilterText)
+	}
 }
 
 func TestBuildAliveWhenPaneInWorktreeSubdir(t *testing.T) {
@@ -1834,8 +1837,11 @@ func TestBuildAppendsSyntheticPanesForUnrecordedChildren(t *testing.T) {
 			panes[1].IssueNum, panes[2].IssueNum, panes[3].IssueNum)
 	}
 	queued := panes[1]
-	if !queued.NotStarted || queued.Alive || queued.PaneID != "" || queued.Agent != "" || queued.BranchName != "" {
+	if !queued.NotStarted || queued.Alive || queued.Backend != "" || queued.PaneID != "" || queued.Agent != "" || queued.BranchName != "" {
 		t.Fatalf("synthetic pane must carry zero pane fields: %+v", queued)
+	}
+	if queued.Derived.FilterValues["backend"] != "" || strings.Contains(queued.Derived.FilterText, "tmux") {
+		t.Fatalf("synthetic pane must not invent backend metadata: %+v", queued.Derived)
 	}
 	if queued.DisplayName != "Queued child" {
 		t.Fatalf("DisplayName = %q want the issue title", queued.DisplayName)

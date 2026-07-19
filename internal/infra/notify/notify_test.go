@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestParseChannelsDefaultDedupeAndNone(t *testing.T) {
@@ -102,6 +104,31 @@ func TestNotifierRequiresOptInURLs(t *testing.T) {
 	}
 	if _, err := New(Config{Channels: "slack"}); err == nil {
 		t.Fatal("New(slack without URL) returned nil error")
+	}
+}
+
+func TestNotifierHerdrKeepsRuntimeNeutralChannelsAndSkipsTmux(t *testing.T) {
+	var bell strings.Builder
+	n, err := New(Config{
+		Channels:       "bell,tmux",
+		RuntimeBackend: backend.Herdr,
+		TmuxTarget:     "must-not-be-used",
+		BellWriter:     &bell,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if len(n.sinks) != 1 {
+		t.Fatalf("sinks = %#v, want only the runtime-neutral bell sink", n.sinks)
+	}
+	if _, ok := n.sinks[0].(bellSink); !ok {
+		t.Fatalf("sink = %T, want bellSink", n.sinks[0])
+	}
+	if err := n.Notify([]Event{{Kind: EventAgentDone, PaneID: "w1:p1"}}); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if got := bell.String(); got != "\a" {
+		t.Fatalf("bell output = %q, want one bell", got)
 	}
 }
 

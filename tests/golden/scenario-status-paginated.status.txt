@@ -4,6 +4,8 @@
     {
       "num": 901,
       "state": "OPEN",
+      "backend": "tmux",
+      "pane_id": "%9",
       "prs": [
         {
           "number": 1001,
