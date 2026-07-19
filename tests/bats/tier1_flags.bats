@@ -614,6 +614,22 @@ JSON
   [[ "$output" == *"--name #4: branch-name must not contain whitespace"* ]]
 }
 
+# --- Runtime backend preflight ---------------------------------------------
+
+@test "--backend herdr issue dry-run fails closed before launch mutation" {
+  local repo="$BATS_TEST_TMPDIR/herdr-backend-project"
+
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  cd "$repo" || return 1
+
+  run_fanout --backend herdr 20 --dry-run
+
+  [ "$status" -eq 1 ]
+  [ "$output" = "[err ] runtime backend: runtime backend herdr does not support issue, Project, and plan launch in v1" ]
+  [ ! -e "$repo/.fanout" ]
+}
+
 # --- Prerequisite detection (missing_deps[]) --------------------------------
 # force_missing rebuilds PATH to exclude the named command(s) while keeping
 # jq / awk / grep / ... reachable so fanout can still run its prereq loop.
