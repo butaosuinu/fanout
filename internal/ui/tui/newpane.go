@@ -480,7 +480,9 @@ func (m model) newPaneContentAvailableHeight() int {
 }
 
 func (m model) newPanePromptFixedOverhead() int {
-	overhead := 10
+	// The base covers every fixed row except the agent selector, which renders
+	// one row per registry agent.
+	overhead := 8 + len(launchAgents)
 	if !m.promptOnly {
 		// The in-process fallback keeps the title as its own section, followed
 		// by the blank section separator.

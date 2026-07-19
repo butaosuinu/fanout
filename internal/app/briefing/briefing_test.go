@@ -548,6 +548,7 @@ func TestTeamBriefingAddsOnlyTeamSectionForNonClaudeAgents(t *testing.T) {
 		agent string
 	}{
 		{name: "codex", agent: "codex"},
+		{name: "opencode gets the base briefing without per-agent sections", agent: "opencode"},
 		{name: "unknown agent falls through the claude-only sections", agent: "future-agent"},
 	}
 	for _, tt := range tests {
