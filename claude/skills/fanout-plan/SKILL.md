@@ -204,6 +204,10 @@ reads them at its own checkpoints; claude `--team` briefings additionally
 instruct the pane to start `fanout msg watch` under the Monitor tool (new
 messages then stream in, marked read on emit), and fresh non-Plan codex task
 panes receive unread messages through an app-server bridge as quoted turns.
+When the plan includes Codex team tasks, the registry preseed and each
+bridge's in-pane DB setup are fail-fast — a failure there (a bad
+`FANOUT_DB_PATH`, wrong DB ownership or permissions) stops the run before
+pane creation or fails that launch instead of falling back to pull.
 `nudge` is the only push that writes to tmux input. The DB is a plaintext
 SQLite file under `/tmp` (`0600`, owner-only) — never put secrets in messages.
 This is distinct from Claude Code Agent Teams (a Claude-only, single-session
