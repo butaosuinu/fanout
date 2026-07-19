@@ -555,16 +555,17 @@ func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {
 }
 
 // tmuxStateOf mirrors the TUI's tmux-state strings so `state:` filters behave
-// identically across surfaces: "-" for a row that never had a pane, "unknown"
-// when tmux itself could not be read, "live"/"stale" otherwise.
+// identically across surfaces: "-" for a row that never had a pane, "live" for
+// a positive observation even in a degraded snapshot, "unknown" when liveness
+// could not be determined, and "stale" otherwise.
 func tmuxStateOf(paneID string, tmuxDegraded, alive bool) string {
 	switch {
 	case strings.TrimSpace(paneID) == "":
 		return "-"
-	case tmuxDegraded:
-		return "unknown"
 	case alive:
 		return "live"
+	case tmuxDegraded:
+		return "unknown"
 	default:
 		return "stale"
 	}

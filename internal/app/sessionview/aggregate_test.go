@@ -481,11 +481,12 @@ func TestBuildDegradesWhenTmuxFails(t *testing.T) {
 }
 
 func TestBuildUsesPartialRuntimeSnapshotWhenCollectorDegrades(t *testing.T) {
-	recorded := pane("1", 2, "%1")
+	recordedLive := pane("1", 2, "%1")
+	recordedUnknown := pane("1", 3, "%2")
 	live := livePanesAt("%1")
 	c := Collectors{
 		Now:       fixedNow,
-		LoadState: storeOf(recorded),
+		LoadState: storeOf(recordedLive, recordedUnknown),
 		ListLive: func() ([]backend.LivePane, error) {
 			panes, err := live()
 			return panes, errors.Join(err, errors.New("herdr session offline"))
@@ -499,6 +500,15 @@ func TestBuildUsesPartialRuntimeSnapshotWhenCollectorDegrades(t *testing.T) {
 	}
 	if !snap.Sessions[0].Panes[0].Alive {
 		t.Fatal("successful tmux observation should remain live in a degraded mixed snapshot")
+	}
+	if got := snap.Sessions[0].Panes[0].TmuxState; got != "live" {
+		t.Fatalf("tmux state = %q, want live for successful observation in degraded mixed snapshot", got)
+	}
+	if snap.Sessions[0].Panes[1].Alive {
+		t.Fatal("unobserved pane should not be live in a degraded mixed snapshot")
+	}
+	if got := snap.Sessions[0].Panes[1].TmuxState; got != "unknown" {
+		t.Fatalf("unobserved tmux state = %q, want unknown in degraded mixed snapshot", got)
 	}
 }
 
