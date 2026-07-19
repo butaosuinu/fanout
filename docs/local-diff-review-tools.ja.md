@@ -25,7 +25,9 @@ fanout の使い方から、次を評価軸にした。
 
 - **worktree 適合**:linked worktree(`.git` がファイル)で動くか
 - **base 指定**:merge-base 基準の diff(gitstat と同じ意味論)を表示できるか。
-  base branch が先行した checkout で子の変更だけを見るために必須
+  base branch が先行した checkout で子の変更だけを見るために必須。
+  未追跡ファイル(エージェントが新規作成したファイル)を落とさないことも
+  ここに含める
 - **tmux 適合**:ペインまたは `display-popup` 内で描画と操作が成立するか
 - **還元ループ**:人間が付けた指摘を、ペインで生きている子エージェント
   (書いた本人)へ機械的に渡せるか
@@ -60,6 +62,7 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
 - **`hunk diff main` は two-dot 比較**。base 先行分が Deleted として混入した。
   merge-base の SHA を target に渡せば子の変更だけになることを確認済みで、
   fanout 側は gitstat の base 解決をそのまま渡せばよい
+- 未追跡ファイルは既定で含まれる(`--exclude-untracked` で除外する側の設計)
 - `hunk session` CLI が双方向の還元ループを提供する。検証した往復:
   エージェント側から `session comment add --repo <path>`(TUI に
   Agent note がインライン描画される)、人間が TUI で `c` → Ctrl+S で
@@ -72,10 +75,15 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
 ### difit
 
 - `npx difit . main --merge-base --no-open --background` で起動。
-  **`--merge-base` をネイティブに持ち**、コミット済み + 未コミットの
-  全変更を GitHub 風 Web UI で表示した
+  **`--merge-base` をネイティブに持ち**、コミット済みと未コミットの変更を
+  GitHub 風 Web UI で表示した(試用リポジトリに未追跡ファイルは
+  なかった)。未追跡ファイルは既定で含まれず、`--include-untracked` は
+  内部で `git add --intent-to-add` を実行して index を変更する
+  (dist ソースで確認)。読み取り専用でない点に注意が要る
 - `--background` は `{"port":4966,"url":...,"pid":...}` の JSON を返す。
-  fanout からのプログラム起動と後始末(pid で kill)に向く
+  port は空き状況で変わり、サーバーは keep-alive で残留するため、
+  fanout 側で JSON の port と pid を保持して comment CLI(`--port` 必須)
+  への再利用と停止に使う前提になる
 - コメント往復を CLI で検証: `difit comment add '{"type":"thread",
   "filePath":...,"position":{"side":"new","line":N},"body":...}'` で注入、
   `difit comment get` で人間のコメントを整形済みテキストで取得
@@ -86,7 +94,8 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
 ### revdiff
 
 - 単一バイナリで、リリースから取得してそのまま動いた。ランタイム依存なし
-- `revdiff <merge-base SHA>` で子の変更だけを表示(未コミット分も含む)
+- `revdiff <merge-base SHA>` で子の変更だけを表示(未コミット分も含む。
+  未追跡ファイルは `--untracked` 指定時のみで、index は変更しない)
 - 人間が `a` で行注釈を付けて `q` で終了すると、`-o` 指定の markdown
   (`## ファイル:行` + 本文)が書き出され、`--exit-code-on-annotations` で
   **exit 10** が返る。「注釈が付いたら差し戻す」分岐を終了コードだけで
@@ -133,26 +142,40 @@ agent registry(`internal/core/agent`)と同型であり、複数対応の増分�
 repo config から書けないようにし(`RepoEditable: false`)、リポジトリを
 クローンさせるだけで任意コマンドが起動される経路を塞ぐ。
 
+検出と起動は PATH 上のグローバル実行ファイル(`hunk`、`difit`、`revdiff`)
+に統一する。試用では npx を使ったが、npx 経由の起動は未導入 package の
+ネットワークインストールが走るうえ、`exec.LookPath` による存在判定とも
+両立しない。未導入のツールはメニューに出さないかエラーで案内し、
+インストール自体はユーザーに委ねる(agent CLI と同じ扱い)。
+
 ## 実装計画案(issue 化はユーザー判断待ち)
 
 ### Phase 1: 起動導線(MVP)
 
 worktree を選んでビュアーを開けるようにする。
 
-- `internal/core/diffviewer`(新設): registry(hunk / difit / revdiff)と
-  `exec.LookPath` による存在チェック。`internal/core/agent` の
-  `ResolveExecutable` と同型
+- `internal/core/diffviewer`(新設): registry の純データ(ツール名、
+  コマンド、引数組み立て)だけを置く。実行ファイル解決(`exec.LookPath`)は
+  infra 側に置く。core の stdlib 純度検査(`internal/arch`)は `os/exec` を
+  禁止しており、既存例外は `internal/core/agent` のみ。例外を増やさない
 - `cmd/fanout/worktree_action.go`: `promptWorktreeAction` メニューに
   「3. Open diff viewer」を追加。既存の prefix+M ポップアップから到達
 - `internal/ui/tui`: `Options` に `LaunchReview` フィールドを追加し、
   キー 1 つ(候補: `R`)を `openSelectedWorktreeShellCmd` と同型で配線。
   `help.go` に 1 行追加
 - 起動形態: TUI 系(hunk / revdiff)は `tmuxrun.DisplayPopup`、
-  difit は `--background --no-open` で起動して URL を表示。popup 内で
-  npx を呼ぶため `tui_popup.go` の PATH forward を通す
-- base 解決: `internal/infra/gitstat` の merge-base 解決(`diffBase`)を
-  公開関数に切り出し、ビュアーへ SHA で渡す(hunk の two-dot 問題を
-  fanout 側で吸収する)
+  difit は `--background --no-open` で起動して URL を表示し、返却された
+  port と pid を記録して停止導線(または TTL)まで面倒を見る。popup 内で
+  外部コマンドを呼ぶため `tui_popup.go` の PATH forward を通す
+- base 解決: merge-base を strict に解決する関数を `internal/infra/gitstat`
+  に新設し、ビュアーへ SHA で渡す(hunk の two-dot 問題を fanout 側で
+  吸収する)。表示統計用の既存 `diffBase` は base を解決できないとき
+  `HEAD` へフォールバックする仕様なので流用しない。フォールバックすると
+  空 diff を「変更なし」と誤読させるため、解決失敗はエラーにして
+  レビューを中止する
+- 未追跡ファイル: hunk は既定で含まれ、revdiff は `--untracked` を付ける。
+  difit は `--include-untracked` が index を変更するため既定では付けず、
+  未追跡分が表示されないことを起動時に明示する
 - `internal/infra/settings`: ビュアー選択キーを 1 つ追加
   (string、`RepoEditable: false`)。未設定時は registry の PATH 発見順
 
@@ -161,10 +184,15 @@ worktree を選んでビュアーを開けるようにする。
 人間の指摘を子エージェントに渡す。CLI は転送のみで、LLM 文脈の解釈は
 skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 
-- hunk: `session comment list --type user` の出力を `fanout msg send` で
-  該当ペインの受信箱へ転送する補助 verb(または skill 手順)
-- difit: `comment get` の出力を同様に転送
+- hunk: `session comment list --type user` の出力を該当ペインの受信箱へ
+  転送する補助 verb(または skill 手順)
+- difit: `comment get` の出力を同様に転送(起動時に記録した port を使う)
 - revdiff: exit 10 を検知して `-o` の markdown を転送
+- 配送経路: `fanout msg send` は SQLite への保存のみで、push 配送
+  (`msg watch`、codex bridge)は `--team` セッションにしか存在しない。
+  通常ペインへ届けるには、保存に加えて state ゲート付きの
+  `fanout msg nudge` を打つか、`--team` を前提にする。人間(レビュアー)
+  側の sender identity をどう表すかもこの Phase の設計項目
 - v2 構想の案 4(Findings 裁可コンソール)が想定する「d = diff ビュアーへ
   パイプ」導線は、この Phase の自然な続きになる
 
