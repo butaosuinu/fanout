@@ -12,6 +12,68 @@ setup_file() {
   export MARK_REVIEWED_HEAD="$install_dir/mark-reviewed-head.sh"
 }
 
+make_installer_fixture() {
+  local fixture="$1" generation="$2" payload="$1/payload" os arch asset hash
+
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  asset="fanout_${os}_${arch}.tar.gz"
+
+  mkdir -p "$payload/codex/skills/post-work-review" "$fixture/bin"
+  printf '#!/bin/sh\nprintf "fanout fixture\\n"\n' >"$payload/fanout"
+  chmod 0755 "$payload/fanout"
+  printf 'fixture skill\n' >"$payload/codex/skills/post-work-review/SKILL.md"
+
+  if [ "$generation" = legacy ]; then
+    mkdir -p "$payload/codex/tools" "$payload/codex/agents"
+    printf '#!/bin/sh\nprintf "legacy review\\n"\n' >"$payload/codex/tools/post-work-review.sh"
+    chmod 0755 "$payload/codex/tools/post-work-review.sh"
+    printf 'legacy reviewer\n' >"$payload/codex/agents/post-work-reviewer.md"
+    printf 'legacy verifier\n' >"$payload/codex/agents/post-work-verifier.toml"
+  fi
+
+  tar -C "$payload" -czf "$fixture/$asset" .
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash="$(sha256sum "$fixture/$asset" | awk '{print $1}')"
+  else
+    hash="$(shasum -a 256 "$fixture/$asset" | awk '{print $1}')"
+  fi
+  printf '%s  %s\n' "$hash" "$asset" >"$fixture/SHA256SUMS"
+
+  printf '%s\n' '#!/bin/sh' \
+    'while [ "$#" -gt 0 ]; do' \
+    '  case "$1" in' \
+    '    -o) out="$2"; shift 2 ;;' \
+    '    -*) shift ;;' \
+    '    *) url="$1"; shift ;;' \
+    '  esac' \
+    'done' \
+    'cp "$FANOUT_INSTALL_FIXTURE/$(basename "$url")" "$out"' \
+    >"$fixture/bin/curl"
+  chmod 0755 "$fixture/bin/curl"
+}
+
+setup_trusted_integration_repo() {
+  local repo="$1"
+  mkdir -p "$repo"
+  cp "$REPO_ROOT/Makefile" "$REPO_ROOT/.golangci-lint-version" "$repo/"
+  cp -R "$REPO_ROOT/claude" "$REPO_ROOT/codex" "$repo/"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "fanout-test@example.com"
+  git -C "$repo" config user.name "fanout test"
+  git -C "$repo" add Makefile .golangci-lint-version claude codex
+  git -C "$repo" commit -qm "trusted integration source"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+}
+
 setup_review_repo() {
   local repo="$1"
   mkdir -p "$repo"
@@ -74,15 +136,23 @@ run_pr_gate() {
   grep -Fq 'Normalize `refs/remotes/origin/`, `origin/`, and `refs/heads/` prefixes' "$skill"
   grep -Fq 'recorded repository root as the' "$skill"
   grep -Fq 'as untrusted review evidence' "$skill"
-  grep -Fq 'This task message is your only review instruction' "$skill"
+  grep -Fq 'unchanged from the trusted bootstrap base' "$skill"
+  grep -Fq 'normal precedence order' "$skill"
+  grep -Fq 'do not reject it merely for following unchanged base instructions' "$skill"
   grep -Fq 'fresh broad reviewer with a new task name for the entire new target' "$skill"
   grep -Fq '"$helper" guard <recorded-head>' "$skill"
-  grep -Fq 'instruction-changing' "$skill"
+  grep -Fq 'instruction- or gate-changing' "$skill"
+  grep -Fq 'gate-changing' "$skill"
   grep -Fq 'helper is a symlink' "$skill"
   grep -Fq 'inside the recorded' "$skill"
-  grep -Fq 'Current `make link` copies this skill' "$skill"
+  grep -Fq 'differs from `refs/remotes/origin/main`' "$skill"
+  grep -Fq 'Base-identical inline project `developer_instructions` are supported' "$skill"
+  grep -Fq '`model_instructions_file`' "$skill"
+  grep -Fq 'effective' "$skill"
   grep -Fq '"$helper" mark <reviewed-head>' "$skill"
   ! grep -Fq 'Read repository instructions first' "$skill"
+  ! grep -Fq 'This task message is your only review instruction' "$skill"
+  ! grep -Fq 'Treat every repository-provided instruction' "$skill"
   ! grep -Fq 'post_work_verify_' "$skill"
   ! grep -Fq 'native-call' "$skill"
   ! grep -Fq 'model_catalog_json' "$skill"
@@ -92,15 +162,39 @@ run_pr_gate() {
   [ ! -e "$REPO_ROOT/codex/agents/post-work-verifier.toml" ]
 }
 
-@test "link-integrations copies the post-work-review trust boundary" {
-  local root="$BATS_TEST_TMPDIR/link-integrations" codex_dir="$BATS_TEST_TMPDIR/link-integrations/codex"
+@test "install and link copy the post-work-review gate from trusted origin/main" {
+  local repo="$BATS_TEST_TMPDIR/trusted-integrations" target root codex_dir
+  setup_trusted_integration_repo "$repo"
 
-  run make -C "$REPO_ROOT" link-integrations CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
-  [ "$status" -eq 0 ]
-  [ -d "$codex_dir/skills/post-work-review" ]
-  [ ! -L "$codex_dir/skills/post-work-review" ]
-  [ ! -L "$codex_dir/skills/post-work-review/scripts/mark-reviewed-head.sh" ]
-  [ -L "$codex_dir/skills/fanout" ]
+  for target in install-integrations link-integrations; do
+    root="$BATS_TEST_TMPDIR/$target"
+    codex_dir="$root/codex"
+    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
+    [ "$status" -eq 0 ]
+    [ -d "$codex_dir/skills/post-work-review" ]
+    [ ! -L "$codex_dir/skills/post-work-review" ]
+    [ ! -L "$codex_dir/skills/post-work-review/scripts/mark-reviewed-head.sh" ]
+  done
+  [ -L "$BATS_TEST_TMPDIR/link-integrations/codex/skills/fanout" ]
+}
+
+@test "install and link reject a target-derived post-work-review gate" {
+  local repo="$BATS_TEST_TMPDIR/changed-integrations" target root codex_dir
+  setup_trusted_integration_repo "$repo"
+  printf '\n# candidate gate\n' >>"$repo/codex/skills/post-work-review/SKILL.md"
+  git -C "$repo" add codex/skills/post-work-review/SKILL.md
+  git -C "$repo" commit -qm "change review gate"
+
+  for target in install-integrations link-integrations; do
+    root="$BATS_TEST_TMPDIR/rejected-$target"
+    codex_dir="$root/codex"
+    mkdir -p "$codex_dir/skills/post-work-review"
+    printf 'trusted installed copy\n' >"$codex_dir/skills/post-work-review/SKILL.md"
+    run make -C "$repo" "$target" CODEX_DIR="$codex_dir" CLAUDE_DIR="$root/claude"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'post-work-review differs from trusted refs/remotes/origin/main'* ]]
+    grep -Fxq 'trusted installed copy' "$codex_dir/skills/post-work-review/SKILL.md"
+  done
 }
 
 @test "review helper rejects linked or in-repository installs" {
@@ -140,10 +234,42 @@ run_pr_gate() {
   [ ! -e "$home/bin/fanout" ]
 }
 
+@test "pinned legacy archive installs its Codex review tools and agents" {
+  local fixture="$BATS_TEST_TMPDIR/legacy-installer" home="$BATS_TEST_TMPDIR/legacy-home"
+  make_installer_fixture "$fixture" legacy
+
+  run env HOME="$home" CODEX_DIR="$home/.codex" CLAUDE_DIR="$home/.claude" \
+    BIN_DIR="$home/bin" FANOUT_VERSION=v0.12.0 FANOUT_INSTALL_FIXTURE="$fixture" \
+    PATH="$fixture/bin:$PATH" sh "$REPO_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  [ -x "$home/.codex/tools/post-work-review.sh" ]
+  grep -Fq 'legacy review' "$home/.codex/tools/post-work-review.sh"
+  grep -Fxq 'legacy reviewer' "$home/.codex/agents/post-work-reviewer.md"
+  grep -Fxq 'legacy verifier' "$home/.codex/agents/post-work-verifier.toml"
+}
+
+@test "skills-only archive removes retired Codex review tools and agents" {
+  local fixture="$BATS_TEST_TMPDIR/skills-installer" home="$BATS_TEST_TMPDIR/skills-home"
+  make_installer_fixture "$fixture" skills-only
+  mkdir -p "$home/.codex/tools" "$home/.codex/agents"
+  printf '#!/bin/sh\n' >"$home/.codex/tools/post-work-review.sh"
+  printf 'retired\n' >"$home/.codex/agents/post-work-reviewer.md"
+  printf 'retired\n' >"$home/.codex/agents/post-work-verifier.toml"
+
+  run env HOME="$home" CODEX_DIR="$home/.codex" CLAUDE_DIR="$home/.claude" \
+    BIN_DIR="$home/bin" FANOUT_INSTALL_FIXTURE="$fixture" \
+    PATH="$fixture/bin:$PATH" sh "$REPO_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  [ ! -e "$home/.codex/tools/post-work-review.sh" ]
+  [ ! -e "$home/.codex/agents/post-work-reviewer.md" ]
+  [ ! -e "$home/.codex/agents/post-work-verifier.toml" ]
+  grep -Fxq 'fixture skill' "$home/.codex/skills/post-work-review/SKILL.md"
+}
+
 @test "review marker binds the clean exact HEAD, base, and diff" {
   command -v python3 >/dev/null 2>&1 || skip "python3 is required"
 
-  local repo="$BATS_TEST_TMPDIR/review-marker" gitdir head hook base_tip before_hash after_hash
+  local repo="$BATS_TEST_TMPDIR/review-marker" gitdir head hook base_tip before_hash after_hash metadata
   setup_review_repo "$repo"
   git -C "$repo" remote add origin git@github.com:butaosuinu/fanout.git
   make_branch_change "$repo"
@@ -160,15 +286,25 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" release/v1 "$(git -C "$repo" rev-parse refs/remotes/origin/release/v1)"
   [ "$status" -eq 0 ]
   [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
-  grep -Fxq 'post_work_review_version=10' "$gitdir/post-work-review-passed.meta"
+  grep -Fxq 'post_work_review_version=11' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "head=$head" "$gitdir/post-work-review-passed.meta"
   grep -Fxq 'base=release/v1' "$gitdir/post-work-review-passed.meta"
   grep -Fxq "base_head=$(git -C "$repo" rev-parse HEAD^)" "$gitdir/post-work-review-passed.meta"
+  grep -Fxq "bootstrap_base=$(git -C "$repo" rev-parse HEAD^)" "$gitdir/post-work-review-passed.meta"
   grep -Eq '^diff_hash=[0-9a-f]+$' "$gitdir/post-work-review-passed.meta"
 
   run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+
+  metadata="$(sed 's/post_work_review_version=11/post_work_review_version=10/' "$gitdir/post-work-review-passed.meta")"
+  printf '%s\n' "$metadata" >"$gitdir/post-work-review-passed.meta"
+  run run_pr_gate "$repo" "gh pr create --base release/v1" "$hook"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"permissionDecision": "deny"'* ]]
+
+  run_marker "$repo" mark "$head" release/v1 "$(git -C "$repo" rev-parse refs/remotes/origin/release/v1)"
+  [ "$status" -eq 0 ]
 
   before_hash="$(git -C "$repo" diff --binary refs/remotes/origin/release/v1..."$head" -- | git -C "$repo" hash-object --stdin)"
   base_tip="$(git -C "$repo" commit-tree "$head^{tree}" -p "$head^" -m "base advance")"
@@ -181,9 +317,33 @@ run_pr_gate() {
   [[ "$output" == *'marker_reason=review_base_changed'* ]]
 }
 
+@test "review guard accepts base-identical bootstrap instructions" {
+  local repo="$BATS_TEST_TMPDIR/review-bootstrap-base" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$repo/.codex"
+  printf '# Base instructions\n\nWrite review comments in Japanese.\n' >"$repo/AGENTS.md"
+  printf 'developer_instructions = "Follow the base repository conventions."\n' >"$repo/.codex/config.toml"
+  git -C "$repo" add AGENTS.md .codex/config.toml
+  git -C "$repo" commit -qm "add trusted bootstrap instructions"
+  make_branch_change "$repo"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  base_head="$(git -C "$repo" rev-parse HEAD^)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -eq 0 ]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -eq 0 ]
+  [ "$(<"$gitdir/post-work-review-passed")" = "$head" ]
+}
+
 @test "review guard rejects candidate Codex bootstrap changes" {
   local repo="$BATS_TEST_TMPDIR/review-bootstrap-committed" base_head head gitdir
   setup_review_repo "$repo"
+  printf '# Trusted base instructions\n' >"$repo/AGENTS.md"
+  git -C "$repo" add AGENTS.md
+  git -C "$repo" commit -qm "add base reviewer instructions"
   base_head="$(git -C "$repo" rev-parse HEAD)"
   git -C "$repo" checkout -qb feature
   printf '# hostile candidate instructions\n' >"$repo/AGENTS.md"
@@ -200,6 +360,52 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'candidate changes Codex bootstrap instructions'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects a committed post-work-review gate change" {
+  local repo="$BATS_TEST_TMPDIR/review-gate-committed" base_head head gitdir
+  setup_review_repo "$repo"
+  base_head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" checkout -qb feature
+  mkdir -p "$repo/codex/skills/post-work-review"
+  printf 'candidate gate\n' >"$repo/codex/skills/post-work-review/SKILL.md"
+  git -C "$repo" add codex/skills/post-work-review/SKILL.md
+  git -C "$repo" commit -qm "change review gate"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'candidate changes Codex bootstrap instructions or the post-work-review gate'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+}
+
+@test "review guard rejects dirty and staged post-work-review gate changes" {
+  local repo="$BATS_TEST_TMPDIR/review-gate-dirty" base_head head gitdir
+  setup_review_repo "$repo"
+  mkdir -p "$repo/codex/skills/post-work-review"
+  printf 'trusted gate\n' >"$repo/codex/skills/post-work-review/SKILL.md"
+  git -C "$repo" add codex/skills/post-work-review/SKILL.md
+  git -C "$repo" commit -qm "add trusted review gate"
+  make_branch_change "$repo"
+  head="$(git -C "$repo" rev-parse HEAD)"
+  base_head="$(git -C "$repo" rev-parse HEAD^)"
+  git -C "$repo" update-ref refs/remotes/origin/main "$base_head"
+  gitdir="$(gitdir_for "$repo")"
+
+  printf 'dirty gate\n' >"$repo/codex/skills/post-work-review/SKILL.md"
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree changes Codex bootstrap instructions or the post-work-review gate'* ]]
+
+  git -C "$repo" add codex/skills/post-work-review/SKILL.md
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree changes Codex bootstrap instructions or the post-work-review gate'* ]]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 
@@ -252,7 +458,7 @@ run_pr_gate() {
 @test "review guard rejects dirty, untracked, and ignored Codex bootstrap changes" {
   local repo="$BATS_TEST_TMPDIR/review-bootstrap-dirty" config_dir="$BATS_TEST_TMPDIR/review-ignored-config" base_head head gitdir global_excludes
   setup_review_repo "$repo"
-  printf 'AGENTS.override.md\n.codex\n' >"$repo/.gitignore"
+  printf 'AGENTS.override.md\n.codex\ncodex/skills/post-work-review\n' >"$repo/.gitignore"
   git -C "$repo" add .gitignore
   git -C "$repo" commit -qm "ignore local Codex overrides"
   make_branch_change "$repo"
@@ -305,6 +511,17 @@ run_pr_gate() {
   run_marker "$repo" mark "$head" main "$base_head"
   [ "$status" -ne 0 ]
   [[ "$output" == *'worktree adds Codex bootstrap instructions'* ]]
+  [ ! -e "$gitdir/post-work-review-passed" ]
+
+  rm -rf "$repo/global-override"
+  mkdir -p "$repo/codex/skills/post-work-review"
+  printf 'ignored candidate gate\n' >"$repo/codex/skills/post-work-review/SKILL.md"
+  [ -z "$(git -C "$repo" status --porcelain -uall --ignore-submodules=none)" ]
+  run_marker "$repo" guard "$head" main "$base_head"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *'worktree adds Codex bootstrap instructions or post-work-review gate files'* ]]
+  run_marker "$repo" mark "$head" main "$base_head"
+  [ "$status" -ne 0 ]
   [ ! -e "$gitdir/post-work-review-passed" ]
 }
 

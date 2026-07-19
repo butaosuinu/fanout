@@ -150,6 +150,30 @@ copy_skill_dirs() {
   done
 }
 
+copy_tool_files() {
+  src_root="$1"
+  dest_root="$2"
+  [ -d "$src_root" ] || return 0
+  mkdir -p "$dest_root"
+  for src in "$src_root"/*; do
+    [ -f "$src" ] || continue
+    install_exec "$src" "$dest_root/$(basename "$src")"
+  done
+}
+
+copy_agent_files() {
+  src_root="$1"
+  dest_root="$2"
+  [ -d "$src_root" ] || return 0
+  mkdir -p "$dest_root"
+  for src in "$src_root"/*; do
+    [ -f "$src" ] || continue
+    dest="$dest_root/$(basename "$src")"
+    rm -f "$dest"
+    install_data "$src" "$dest"
+  done
+}
+
 install_integrations() {
   [ "$install_skills" -eq 1 ] || return 0
 
@@ -163,7 +187,14 @@ install_integrations() {
 
   copy_skill_dirs "$tmp/extract/claude/skills" "$claude_dir/skills"
   copy_skill_dirs "$tmp/extract/codex/skills" "$codex_dir/skills"
-  remove_retired_codex_review_files
+  if [ -f "$tmp/extract/codex/tools/post-work-review.sh" ]; then
+    # A pinned legacy release still needs the helper and agent files bundled
+    # in its archive. Only skills-only archives retire those installed files.
+    copy_tool_files "$tmp/extract/codex/tools" "$codex_dir/tools"
+    copy_agent_files "$tmp/extract/codex/agents" "$codex_dir/agents"
+  else
+    remove_retired_codex_review_files
+  fi
 }
 
 normalize_os() {

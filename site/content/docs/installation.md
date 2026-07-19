@@ -80,13 +80,15 @@ codesign -s - /path/to/fanout
 
 ```bash
 make install        # builds the Go binary as $(BINDIR)/fanout + copies integrations
-make link           # symlinks the binary and integrations except post-work-review
+make link           # symlinks the binary and other integrations
 make uninstall      # removes installed paths
 ```
 
-`make link` still copies `post-work-review` outside the checkout as a trust
-boundary. Run `make link` again after editing that skill; its installed copy
-does not update live.
+`make install` and `make link` copy `post-work-review` from the exact fetched
+`refs/remotes/origin/main` commit, never from the working tree. If the local
+package differs from that trusted ref, they stop before changing the installed
+copy. Review a gate-changing branch from a trusted checkout or by a human; after
+the change reaches `main`, fetch it and rerun the command.
 
 Building it needs a Go toolchain (Go 1.26.5+) plus Node.js 24+ and pnpm 11+ (`make install` builds the dashboard web UI first and embeds it). The curl install ships a prebuilt binary, so it needs neither Go nor Node.
 

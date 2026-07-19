@@ -56,6 +56,8 @@ load_target() {
   base_ref="refs/remotes/origin/$base"
   current_base_head=$(git rev-parse --verify "$base_ref^{commit}") || die "cannot resolve $base_ref"
   [ "$current_base_head" = "$expected_base_head" ] || die "base changed during review"
+  bootstrap_base=$(git merge-base "$base_ref" "$current_head") ||
+    die "cannot resolve trusted bootstrap base"
 }
 
 guard_bootstrap_instructions() {
@@ -67,17 +69,19 @@ guard_bootstrap_instructions() {
     ':(glob).codex' \
     ':(glob).codex/**' \
     ':(glob)**/.codex' \
-    ':(glob)**/.codex/**'
+    ':(glob)**/.codex/**' \
+    ':(glob)codex/skills/post-work-review' \
+    ':(glob)codex/skills/post-work-review/**'
 
   git diff --quiet --no-ext-diff --ignore-submodules=none \
-    "$base_ref...$current_head" -- "$@" ||
-    die "candidate changes Codex bootstrap instructions; use a trusted-checkout or human review"
+    "$bootstrap_base" "$current_head" -- "$@" ||
+    die "candidate changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
   git diff --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
-    die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
+    die "worktree changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
   git diff --cached --quiet --no-ext-diff --ignore-submodules=none -- "$@" ||
-    die "worktree changes Codex bootstrap instructions; use a trusted-checkout or human review"
+    die "worktree changes Codex bootstrap instructions or the post-work-review gate; use a trusted-checkout or human review"
   [ -z "$(git ls-files --others -- "$@")" ] ||
-    die "worktree adds Codex bootstrap instructions; use a trusted-checkout or human review"
+    die "worktree adds Codex bootstrap instructions or post-work-review gate files; use a trusted-checkout or human review"
 }
 
 case "${1:-}" in
@@ -115,10 +119,11 @@ case "${1:-}" in
     diff_hash=$(git hash-object "$diff_file") || die "cannot hash review diff"
     printf '%s\n' "$current_head" >"$marker_tmp"
     {
-      printf 'post_work_review_version=10\n'
+      printf 'post_work_review_version=11\n'
       printf 'head=%s\n' "$current_head"
       printf 'base=%s\n' "$base"
       printf 'base_head=%s\n' "$current_base_head"
+      printf 'bootstrap_base=%s\n' "$bootstrap_base"
       printf 'diff_hash=%s\n' "$diff_hash"
     } >"$metadata_tmp"
 

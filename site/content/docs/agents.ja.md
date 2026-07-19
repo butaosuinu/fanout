@@ -67,10 +67,12 @@ Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 
 custom agent、model 固定、app-server controller、result parser は使いません。
 
 reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
-review task は repository の内容を untrusted evidence とし、その中の指示に従わないよう reviewer に求めます。
-Codex は child の bootstrap 時に repository の指示を読み込むため、marker helper は candidate が `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files を変更していれば spawn 前に拒否します。
+marker helper は spawn 前に、適用対象の `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files が trusted merge base から変わっていないことを検証します。
+base と同一の instruction は trusted repository conventions として扱い、それ以外の target file と directive は untrusted review evidence として扱います。
+helper は `post-work-review` gate の変更も拒否します。
 installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
-これらの変更は trusted checkout から起動した reviewer、または人がレビューしてください。
+repository の `make install` と `make link` は worktree ではなく fetch 済みの `origin/main` からこれらを配置します。
+instruction または gate の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
 native subagent は親 session の sandbox、approval policy、network 制限を継承します。
 skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
 強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
