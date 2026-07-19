@@ -2,8 +2,10 @@
 
 `internal/` は `core` / `app` / `infra` / `ui` の 4 層と、層ルールを強制する
 `internal/arch` からなる。`cmd/fanout` はどの層からも import されない
-composition root。層ルールの正典実装は `internal/arch/arch_test.go` で、この
-文書はその読み方と、PR レビューでどこまで人間が見るかの運用ルールをまとめる。
+composition root。層ルールの正典は `internal/arch/godep-cruiser.json`
+(godep-cruiser のルール定義。runner と実ディレクトリ検査は
+`internal/arch/arch_test.go`)で、この文書はその読み方と、PR レビューで
+どこまで人間が見るかの運用ルールをまとめる。
 
 ## 層の責務と依存ルール
 
@@ -18,10 +20,15 @@ composition root。層ルールの正典実装は `internal/arch/arch_test.go` �
 
 依存の向きは一方向で、`ui -> app -> core` が主経路、`app` と `ui` はどちらも
 `infra` に直接手を伸ばせる。強制するのは `internal/arch` の Go テスト
-(`TestLayerImportDirection` ほか)。`.golangci.yml` は depguard をノイズが
-多いとして無効化しているため、層制約の CI ガードはこのテストだけである。
-外部のアーキテクチャテストツール(go-arch-lint / arch-go など)も 2026-07 の
-調査で不採用にした。経緯と再評価の条件は `docs/arch-test-tools.ja.md`。
+(`TestArchitecture` が `internal/arch/godep-cruiser.json` のルールを
+[godep-cruiser](https://github.com/butaosuinu/godep-cruiser) の archtest で
+実行する。方向マトリクスは allowed ルールで fail-closed、既知の例外は
+`godep-cruiser-baseline.json` に隔離され、違反が消えると stale エラーで
+強制削除される)。`.golangci.yml` は depguard をノイズが多いとして無効化して
+いるため、層制約の CI ガードはこのテストだけである。2026-07 の初回調査では
+外部ツール(go-arch-lint / arch-go など)を不採用にしたが、再評価条件を
+godep-cruiser v0.3.0 が満たしたため同月に採用へ改訂した。経緯は
+`docs/arch-test-tools.ja.md`。
 
 ## 依存図
 
@@ -140,8 +147,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 
 - `internal/infra/team/path_test.go` が `internal/app/briefing` を import
   している(infra -> app)。DB パスと `briefing.Path` が同じ親 slug を導出する
-  ことを固定した副作用で、`internal/arch` の `legacyDirectionAllowlist` に
-  登録済み。フィクスチャを decouple すれば解消できる。
+  ことを固定した副作用で、`internal/arch/godep-cruiser-baseline.json` に
+  登録済み。フィクスチャを decouple すれば解消できる(import が消えれば
+  baseline が stale エラーになり、エントリ削除を強制する)。
 - `state` パッケージは `Store` 型と `Load`/`Save` の IO が同居している。
 - `sessionview` は純粋な集約ロジックと `Collectors` の IO 束が同じパッケージ
   にある。

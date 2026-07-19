@@ -2,186 +2,55 @@ package arch
 
 import (
 	"errors"
-	"go/parser"
-	"go/token"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
+
+	"github.com/butaosuinu/godep-cruiser/archtest"
+	"github.com/butaosuinu/godep-cruiser/config"
+	"github.com/butaosuinu/godep-cruiser/cruiser"
 )
 
-// layer identifies one of the four architecture layers plus the cmd
-// entrypoints and this meta package.
-type layer string
-
-const (
-	layerCore  layer = "core"
-	layerApp   layer = "app"
-	layerInfra layer = "infra"
-	layerUI    layer = "ui"
-	layerCmd   layer = "cmd"
-	layerTools layer = "tools" // repo meta-tooling under tools/: stdlib-only, imports no module packages
-	layerMeta  layer = "meta"  // internal/arch itself: test-only, imports no module packages
-)
-
-// explicitLayers classifies the packages that live outside the four layer
-// directories. Since the 4-layer move completed, only the meta package remains;
-// every other package derives its layer from its internal/<layer>/ prefix and
-// TestInternalTreeShape rejects new top-level directories under internal/.
-var explicitLayers = map[string]layer{
-	"internal/arch": layerMeta,
-}
-
-// prefixLayers derives the layer from the package path once packages live
-// under their layer directory.
-var prefixLayers = []struct {
-	prefix string
-	l      layer
-}{
-	{"internal/core/", layerCore},
-	{"internal/app/", layerApp},
-	{"internal/infra/", layerInfra},
-	{"internal/ui/", layerUI},
-	{"cmd/", layerCmd},
-	{"tools/", layerTools},
-}
-
-// allowedImports is the layer dependency direction: a key layer may import
-// only the value layers. cmd deliberately has no cmd entry: all shared cmd
-// helpers belong in internal/, and TestPackageMainOnlyInCmd bans every import
-// of cmd/... outright.
-var allowedImports = map[layer]map[layer]bool{
-	layerMeta:  {},
-	layerCore:  {layerCore: true},
-	layerApp:   {layerCore: true, layerApp: true, layerInfra: true},
-	layerInfra: {layerCore: true, layerInfra: true},
-	layerUI:    {layerCore: true, layerApp: true, layerInfra: true, layerUI: true},
-	layerCmd:   {layerCore: true, layerApp: true, layerInfra: true, layerUI: true},
-	// tools may import only tools; TestToolsStdlibOnly further bans even that,
-	// pinning the tree to the standard library alone.
-	layerTools: {layerTools: true},
-}
-
-// legacyDirectionAllowlist grandfathers layer violations that existed before
-// this test was introduced. It maps a module-relative file path to the
-// module-relative import paths that file may keep. Do not add entries for new
-// code; TestLayerImportDirection fails on entries whose offending import is
-// gone, forcing deletion.
-var legacyDirectionAllowlist = map[string][]string{
-	// infra -> app: the test pins that the team DB path and briefing.Path
-	// derive the same parent slug; decouple that fixture to remove this.
-	"internal/infra/team/path_test.go": {"internal/app/briefing"},
-}
-
-// coreForbiddenStdlib is the stdlib denylist for non-test files in core
-// packages: no process, network, filesystem, or database access from the core
-// layer. The list is exact-match on purpose — pure-computation packages under
-// the same trees (net/url, net/netip) stay allowed. Third-party modules are
-// banned wholesale in TestCorePurity, so wrappers cannot smuggle IO in.
-var coreForbiddenStdlib = map[string]bool{
-	"database/sql": true,
-	"io/ioutil":    true,
-	"net":          true,
-	"net/http":     true,
-	"os":           true,
-	"os/exec":      true,
-	"syscall":      true,
-}
-
-// corePurityAllowlist exempts specific core packages from part of the stdlib
-// denylist. Lookup walks parent directories, so subpackages inherit their
-// parent's exemption.
-var corePurityAllowlist = map[string]map[string]bool{
-	"internal/core/agent":    {"os": true, "os/exec": true},
-	"internal/core/planspec": {"os": true},
-}
-
-// classify resolves a module-relative package path to its layer: the layer
-// directory prefixes win (a stale explicit entry cannot override them), then
-// the explicit map, walking parent dirs so subpackages of a mapped package
-// inherit its layer.
-func classify(pkgPath string) (layer, bool) {
-	for _, p := range prefixLayers {
-		if strings.HasPrefix(pkgPath, p.prefix) {
-			return p.l, true
-		}
+// TestArchitecture enforces the layer dependency rules via godep-cruiser.
+// The rule canon is godep-cruiser.json in this directory: the layer direction
+// matrix (allowed rules, fail-closed - an import matching no allowed rule is
+// an error), the per-layer complement rules with fix guidance, core stdlib
+// purity, the tools/ stdlib-only pin, the cmd/... import ban, the package
+// main location check, and the ban on bare *.go files at tree/layer roots.
+// godep-cruiser scans every *.go file under the whole repo root (tests
+// included, build constraints not evaluated, skipping testdata/, vendor/, and
+// dot- or underscore-prefixed directories). That is deliberately wider than
+// the internal/+cmd/+tools/ walk of the previous handwritten tests: a Go file
+// outside those three trees must parse and is rejected outright by
+// no-go-files-outside-trees, whatever it imports, instead of escaping every
+// rule.
+//
+// godep-cruiser-baseline.json grandfathers violations that predate the rules;
+// entries whose violation is gone fail as stale, forcing deletion. Current
+// entries: internal/infra/team/path_test.go -> internal/app/briefing pins
+// that the team DB path and briefing.Path derive the same parent slug;
+// decouple that fixture to remove both entries.
+func TestArchitecture(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
 	}
-	for dir := pkgPath; dir != "" && dir != "." && dir != "/"; dir = path.Dir(dir) {
-		if l, ok := explicitLayers[dir]; ok {
-			return l, true
-		}
+	configuration, err := config.LoadFile("godep-cruiser.json")
+	if err != nil {
+		t.Fatalf("config.LoadFile(godep-cruiser.json) = %v, want nil", err)
 	}
-	return "", false
-}
-
-// purityAllowed reports whether pkgDir (or one of its parents) is exempted
-// from the purity ban on importPath.
-func purityAllowed(pkgDir, importPath string) bool {
-	for dir := pkgDir; dir != "" && dir != "." && dir != "/"; dir = path.Dir(dir) {
-		if corePurityAllowlist[dir][importPath] {
-			return true
-		}
+	baseline, err := cruiser.LoadBaselineFile("godep-cruiser-baseline.json")
+	if err != nil {
+		t.Fatalf("cruiser.LoadBaselineFile(godep-cruiser-baseline.json) = %v, want nil", err)
 	}
-	return false
-}
-
-// moduleRel returns the module-relative package path of a module-internal
-// import, or ok=false for imports outside this module. An import of the
-// module root package resolves to "." so it surfaces as unclassified instead
-// of silently escaping every rule.
-func moduleRel(importPath string) (string, bool) {
-	if importPath == scanned.modulePath {
-		return ".", true
-	}
-	return strings.CutPrefix(importPath, scanned.modulePath+"/")
-}
-
-// stdlibImport reports whether the import path is a standard-library package:
-// the first path segment of a stdlib import never contains a dot.
-func stdlibImport(importPath string) bool {
-	first, _, _ := strings.Cut(importPath, "/")
-	return !strings.Contains(first, ".")
-}
-
-type importRef struct {
-	path string // import path as written in the source file
-	line int
-}
-
-type goFile struct {
-	relPath string // module-relative file path, slash-separated
-	pkgDir  string // module-relative package directory, slash-separated
-	pkgName string // package clause identifier
-	pkgLine int    // line of the package clause
-	imports []importRef
-}
-
-type repoScan struct {
-	root       string
-	modulePath string
-	files      []goFile
-}
-
-var (
-	scanOnce sync.Once
-	scanned  repoScan
-	scanErr  error
-)
-
-// repoFiles parses every *.go file under internal/, cmd/, and tools/ (imports
-// only), once per test binary, and resolves the module path from go.mod.
-func repoFiles(t *testing.T) []goFile {
-	t.Helper()
-	scanOnce.Do(func() { scanned, scanErr = scanRepo() })
-	if scanErr != nil {
-		t.Fatalf("scanRepo() = %v, want nil", scanErr)
-	}
-	return scanned.files
+	archtest.Check(t, configuration, cruiser.Options{
+		ScanRoot:  root,
+		GoModPath: filepath.Join(root, "go.mod"),
+		Baseline:  &baseline,
+	})
 }
 
 // repoRoot walks up from the working directory (the package dir under
@@ -204,124 +73,18 @@ func repoRoot() (string, error) {
 	}
 }
 
-func readModulePath(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		return "", err
-	}
-	for line := range strings.Lines(string(data)) {
-		if mod, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
-			return strings.TrimSpace(mod), nil
-		}
-	}
-	return "", errors.New("go.mod has no module directive")
-}
-
-func scanRepo() (repoScan, error) {
-	root, err := repoRoot()
-	if err != nil {
-		return repoScan{}, err
-	}
-	modPath, err := readModulePath(root)
-	if err != nil {
-		return repoScan{}, err
-	}
-	fset := token.NewFileSet()
-	scan := repoScan{root: root, modulePath: modPath}
-	for _, top := range []string{"internal", "cmd", "tools"} {
-		topPath := filepath.Join(root, top)
-		// A checkout without one of these trees (e.g. tools/ deleted) still
-		// exercises the others; TestScanSanity turns the resulting gap into a
-		// clear counts[...] == 0 failure instead of a fatal walk error here.
-		if _, statErr := os.Stat(topPath); errors.Is(statErr, fs.ErrNotExist) {
-			continue
-		}
-		err := filepath.WalkDir(topPath, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				// testdata/ and _/. prefixed dirs are ignored by the Go
-				// toolchain, so their contents are not part of any build.
-				if p != filepath.Join(root, top) &&
-					(d.Name() == "testdata" || strings.HasPrefix(d.Name(), "_") || strings.HasPrefix(d.Name(), ".")) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(d.Name(), ".go") {
-				return nil
-			}
-			rel, err := filepath.Rel(root, p)
-			if err != nil {
-				return err
-			}
-			relSlash := filepath.ToSlash(rel)
-			f, err := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
-			if err != nil {
-				return err
-			}
-			gf := goFile{
-				relPath: relSlash,
-				pkgDir:  path.Dir(relSlash),
-				pkgName: f.Name.Name,
-				pkgLine: fset.Position(f.Name.Pos()).Line,
-			}
-			for _, imp := range f.Imports {
-				ip, err := strconv.Unquote(imp.Path.Value)
-				if err != nil {
-					return err
-				}
-				gf.imports = append(gf.imports, importRef{path: ip, line: fset.Position(imp.Path.Pos()).Line})
-			}
-			scan.files = append(scan.files, gf)
-			return nil
-		})
-		if err != nil {
-			return repoScan{}, err
-		}
-	}
-	return scan, nil
-}
-
-// TestAllPackagesClassified guarantees every package under internal/, cmd/, and
-// tools/, and every module-internal import target, resolves to a layer, so a
-// new package cannot ship unclassified.
-func TestAllPackagesClassified(t *testing.T) {
-	seen := make(map[string]bool)
-	var unclassified []string
-	record := func(pkgPath string) {
-		if seen[pkgPath] {
-			return
-		}
-		if _, ok := classify(pkgPath); ok {
-			return
-		}
-		seen[pkgPath] = true
-		unclassified = append(unclassified, pkgPath)
-	}
-	for _, f := range repoFiles(t) {
-		record(f.pkgDir)
-		for _, imp := range f.imports {
-			if rel, ok := moduleRel(imp.path); ok {
-				record(rel)
-			}
-		}
-	}
-	slices.Sort(unclassified)
-	for _, pkg := range unclassified {
-		t.Errorf("classify(%q) = unclassified, want a layer (add it to explicitLayers or move it under internal/<layer>/)", pkg)
-	}
-}
-
 // TestInternalTreeShape pins internal/'s top level to the four layer
 // directories plus this meta package. It checks the directory entries
-// themselves, not just parsed Go files, so a retired directory resurrected by
-// stray non-Go files (a stale built bundle, fixtures) is flagged too.
+// themselves, not just Go files, so a retired directory resurrected by stray
+// non-Go files (a stale built bundle, fixtures) is flagged too - godep-cruiser
+// only sees Go files and cannot cover this.
 func TestInternalTreeShape(t *testing.T) {
-	repoFiles(t) // ensure scanned.root is resolved
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
 	allowed := map[string]bool{"core": true, "app": true, "infra": true, "ui": true, "arch": true}
-	entries, err := os.ReadDir(filepath.Join(scanned.root, "internal"))
+	entries, err := os.ReadDir(filepath.Join(root, "internal"))
 	if err != nil {
 		t.Fatalf("ReadDir(internal) = %v, want nil", err)
 	}
@@ -334,158 +97,125 @@ func TestInternalTreeShape(t *testing.T) {
 	}
 }
 
-// TestExplicitLayerMapIsCurrent fails on explicitLayers entries whose package
-// directory no longer exists, so a stale entry cannot silently classify an
-// unrelated future package after a move.
-func TestExplicitLayerMapIsCurrent(t *testing.T) {
-	dirs := make(map[string]bool)
-	for _, f := range repoFiles(t) {
-		dirs[f.pkgDir] = true
+// TestScanTreesPresent pins that internal/, cmd/, and tools/ each still hold
+// Go files the godep-cruiser scanner actually sees, so a renamed or deleted
+// tree (or one holding only skipped fixtures) cannot make the rules - whose
+// from patterns would then match nothing - pass vacuously. godep-cruiser
+// itself only errors when the whole scan root has zero Go files. The walk
+// applies the scanner's skip rules; a Go file under testdata/, vendor/, or a
+// dot-/underscore-prefixed directory must not count as presence.
+func TestScanTreesPresent(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
 	}
-	var keys []string
-	for key := range explicitLayers {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	for _, key := range keys {
-		found := dirs[key]
-		for dir := range dirs {
-			if strings.HasPrefix(dir, key+"/") {
-				found = true
-				break
+	for _, top := range []string{"internal", "cmd", "tools"} {
+		topPath := filepath.Join(root, top)
+		found := false
+		err := filepath.WalkDir(topPath, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
+			if d.IsDir() {
+				name := d.Name()
+				if p != topPath && (name == "testdata" || name == "vendor" ||
+					strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), ".go") {
+				found = true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("WalkDir(%s) = %v, want nil", top, err)
+			continue
 		}
 		if !found {
-			t.Errorf("explicitLayers[%q] is stale: no Go files under that directory (delete the entry after moving the package)", key)
+			t.Errorf("%s/ holds no scannable Go files, want at least one (the layer rules would pass vacuously)", top)
 		}
 	}
 }
 
-// TestLayerImportDirection enforces the core/app/infra/ui/cmd dependency
-// direction on every file, tests included, and fails on stale allowlist
-// entries so a grandfathered exception dies with its violation.
-func TestLayerImportDirection(t *testing.T) {
-	used := make(map[string]bool) // "relPath\x00importRel" of exercised allowlist entries
-	for _, f := range repoFiles(t) {
-		src, ok := classify(f.pkgDir)
+// TestRuleSeveritiesPinned guards the guard: godep-cruiser defaults an omitted
+// rule severity to warn, and archtest only fails the test on error-severity
+// violations, so a rule missing "severity": "error" (or a dropped
+// allowedSeverity) would silently demote its violations to log lines.
+func TestRuleSeveritiesPinned(t *testing.T) {
+	configuration, err := config.LoadFile("godep-cruiser.json")
+	if err != nil {
+		t.Fatalf("config.LoadFile(godep-cruiser.json) = %v, want nil", err)
+	}
+	if configuration.AllowedSeverity != config.SeverityError {
+		t.Errorf("allowedSeverity = %q, want %q (the fail-closed matrix must fail the build)", configuration.AllowedSeverity, config.SeverityError)
+	}
+	for _, rule := range configuration.Forbidden {
+		if rule.Severity != config.SeverityError {
+			t.Errorf("forbidden rule %q severity = %q, want %q", rule.Name, rule.Severity, config.SeverityError)
+		}
+	}
+	for _, rule := range configuration.Required {
+		if rule.Severity != config.SeverityError {
+			t.Errorf("required rule %q severity = %q, want %q", rule.Name, rule.Severity, config.SeverityError)
+		}
+	}
+}
+
+// TestPurityDenylistConsistent pins the relationship between the three
+// hand-copied core purity denylists in godep-cruiser.json: JSON cannot share
+// one list across rules, so this keeps the copies from drifting. The agent
+// list must be the base list minus os and os/exec, and the planspec list the
+// base minus os; a package added to the base rule alone would otherwise leave
+// the exempted subtrees unguarded (their from.pathNot removes them from the
+// base rule entirely).
+func TestPurityDenylistConsistent(t *testing.T) {
+	configuration, err := config.LoadFile("godep-cruiser.json")
+	if err != nil {
+		t.Fatalf("config.LoadFile(godep-cruiser.json) = %v, want nil", err)
+	}
+	lists := make(map[string][]string)
+	for _, rule := range configuration.Forbidden {
+		if !strings.HasPrefix(rule.Name, "core-purity-stdlib") {
+			continue
+		}
+		if len(rule.To.Path) != 1 {
+			t.Fatalf("rule %q to.path has %d patterns, want 1", rule.Name, len(rule.To.Path))
+		}
+		lists[rule.Name] = parseDenylist(t, rule.Name, rule.To.Path[0])
+	}
+	base, ok := lists["core-purity-stdlib"]
+	if !ok {
+		t.Fatal("rule core-purity-stdlib not found")
+	}
+	for rule, drops := range map[string][]string{
+		"core-purity-stdlib-agent":    {"os", "os/exec"},
+		"core-purity-stdlib-planspec": {"os"},
+	} {
+		got, ok := lists[rule]
 		if !ok {
-			continue // reported by TestAllPackagesClassified
-		}
-		for _, imp := range f.imports {
-			rel, ok := moduleRel(imp.path)
-			if !ok {
-				continue
-			}
-			dst, ok := classify(rel)
-			if !ok {
-				continue // reported by TestAllPackagesClassified
-			}
-			if allowedImports[src][dst] {
-				continue
-			}
-			if slices.Contains(legacyDirectionAllowlist[f.relPath], rel) {
-				used[f.relPath+"\x00"+rel] = true
-				continue
-			}
-			t.Errorf("%s:%d: %s may not import %s (%s -> %s forbidden)", f.relPath, imp.line, f.pkgDir, rel, src, dst)
-		}
-	}
-	for relPath, imports := range legacyDirectionAllowlist {
-		for _, rel := range imports {
-			if !used[relPath+"\x00"+rel] {
-				t.Errorf("legacyDirectionAllowlist[%q] entry %q is stale: the import is gone, delete the entry", relPath, rel)
-			}
-		}
-	}
-}
-
-// TestCorePurity keeps non-test files of core packages free of the
-// process/network/filesystem/database stdlib packages and of third-party
-// modules, so the core layer stays pure computation.
-func TestCorePurity(t *testing.T) {
-	for _, f := range repoFiles(t) {
-		if strings.HasSuffix(f.relPath, "_test.go") {
-			continue // fixture IO in tests is fine
-		}
-		if l, ok := classify(f.pkgDir); !ok || l != layerCore {
+			t.Errorf("rule %s not found", rule)
 			continue
 		}
-		for _, imp := range f.imports {
-			if _, ok := moduleRel(imp.path); ok {
-				continue // module-internal: covered by TestLayerImportDirection
-			}
-			if purityAllowed(f.pkgDir, imp.path) {
-				continue
-			}
-			switch {
-			case !stdlibImport(imp.path):
-				t.Errorf("%s:%d: %s may not import %q (core layer bans third-party modules)", f.relPath, imp.line, f.pkgDir, imp.path)
-			case coreForbiddenStdlib[imp.path]:
-				t.Errorf("%s:%d: %s may not import %q (core stdlib purity)", f.relPath, imp.line, f.pkgDir, imp.path)
-			}
+		want := slices.DeleteFunc(slices.Clone(base), func(s string) bool { return slices.Contains(drops, s) })
+		if !slices.Equal(got, want) {
+			t.Errorf("%s denylist = %v, want base minus %v = %v", rule, got, drops, want)
 		}
 	}
 }
 
-// TestToolsStdlibOnly pins the tools/ tree to standard-library imports only:
-// no module-internal packages (stronger than the layer direction, which would
-// permit tools -> tools) and no third-party modules. This keeps repo meta-tools
-// physically separate from product code at the directory level, so a PR that
-// touches tools/ can never reach into internal/ or cmd/.
-func TestToolsStdlibOnly(t *testing.T) {
-	for _, f := range repoFiles(t) {
-		if l, ok := classify(f.pkgDir); !ok || l != layerTools {
-			continue
-		}
-		for _, imp := range f.imports {
-			if rel, ok := moduleRel(imp.path); ok {
-				t.Errorf("%s:%d: %s may not import %s (tools/ is stdlib-only, no module-internal imports)", f.relPath, imp.line, f.pkgDir, rel)
-				continue
-			}
-			if !stdlibImport(imp.path) {
-				t.Errorf("%s:%d: %s may not import %q (tools/ is stdlib-only, no third-party modules)", f.relPath, imp.line, f.pkgDir, imp.path)
-			}
-		}
+// parseDenylist splits a ^(a|b|c)$ exact-match alternation into its sorted
+// members.
+func parseDenylist(t *testing.T, rule, pattern string) []string {
+	t.Helper()
+	inner, okPrefix := strings.CutPrefix(pattern, "^(")
+	inner, okSuffix := strings.CutSuffix(inner, ")$")
+	if !okPrefix || !okSuffix {
+		t.Fatalf("rule %q to.path %q is not in ^(a|b)$ exact-match form", rule, pattern)
 	}
-}
-
-// TestPackageMainOnlyInCmd pins package main declarations to cmd/fanout (the
-// one product composition root) and tools/ subdirectories (repo meta-tools,
-// each its own main, kept stdlib-only by TestToolsStdlibOnly), and forbids
-// every package from importing cmd/... . A bare tools/ file is not allowed:
-// classify() leaves tools/-direct files unclassified, so every tool must live
-// in its own subdirectory.
-func TestPackageMainOnlyInCmd(t *testing.T) {
-	for _, f := range repoFiles(t) {
-		underCmdFanout := f.pkgDir == "cmd/fanout" || strings.HasPrefix(f.pkgDir, "cmd/fanout/")
-		underTools := strings.HasPrefix(f.pkgDir, "tools/")
-		if f.pkgName == "main" && !underCmdFanout && !underTools {
-			t.Errorf("%s:%d: package main is only allowed under cmd/fanout or tools/", f.relPath, f.pkgLine)
-		}
-		for _, imp := range f.imports {
-			if imp.path != scanned.modulePath+"/cmd" && !strings.HasPrefix(imp.path, scanned.modulePath+"/cmd/") {
-				continue
-			}
-			rel, _ := moduleRel(imp.path)
-			t.Errorf("%s:%d: %s may not import %s (importing cmd/... is forbidden)", f.relPath, imp.line, f.pkgDir, rel)
-		}
-	}
-}
-
-// TestScanSanity pins the scan itself: the walk must see both trees and the
-// module path must come from go.mod, so a broken root resolution cannot make
-// every other test pass vacuously on an empty file set.
-func TestScanSanity(t *testing.T) {
-	files := repoFiles(t)
-	counts := map[string]int{}
-	for _, f := range files {
-		top, _, _ := strings.Cut(f.pkgDir, "/")
-		counts[top]++
-	}
-	if counts["internal"] == 0 || counts["cmd"] == 0 || counts["tools"] == 0 {
-		t.Errorf("scanRepo() saw internal=%d cmd=%d tools=%d files, want all > 0", counts["internal"], counts["cmd"], counts["tools"])
-	}
-	if scanned.modulePath == "" || strings.ContainsAny(scanned.modulePath, " \t\"") {
-		t.Errorf("readModulePath() = %q, want a plausible module path", scanned.modulePath)
-	}
+	members := strings.Split(inner, "|")
+	slices.Sort(members)
+	return members
 }

@@ -84,8 +84,12 @@ FS/DB), `app` (use-case orchestration), `infra` (external process/FS/DB), and
 `ui` (TUI + web dashboard). Allowed imports: core -> core only; app ->
 core/app/infra; infra -> core/infra; ui -> all four; `cmd/fanout` is the
 composition root and no package may import `cmd/...`. `internal/arch` enforces
-the direction and a core stdlib-purity denylist in CI (depguard is off on
-purpose) and is itself class H — weakening it disables every layer guard.
+the direction and a core stdlib-purity denylist in CI via godep-cruiser rules
+(`internal/arch/godep-cruiser.json` is the rule canon, run by `archtest`
+inside `go test`; known exceptions live in `godep-cruiser-baseline.json` and
+auto-expire as stale errors; depguard is off on purpose) and is itself class
+H — weakening it disables every layer guard, and a godep-cruiser version bump
+changes the guard's substance even though the diff only touches go.mod.
 Canonical reference, the full package table, the Mermaid dependency diagram,
 and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
 
