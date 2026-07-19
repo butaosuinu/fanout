@@ -199,12 +199,15 @@ belong to. Peers are addressed by task id:
   pane, only when its agent state can take queued input (never a blocked
   pane); undeliverable nudges warn and exit `0`.
 
-Coordination is pull-based with one push assist (`nudge`): messages persist
-and a sibling reads them at its own checkpoints; claude `--team` briefings
-additionally instruct the pane to start `fanout msg watch` under the Monitor
-tool, turning that pull into a stream. The DB is a plaintext SQLite file
-under `/tmp` (`0600`, owner-only) — never put secrets in messages. This is
-distinct from Claude Code Agent Teams (a Claude-only, single-session feature).
+Delivery is pull plus per-agent push lanes: messages persist and a sibling
+reads them at its own checkpoints; claude `--team` briefings additionally
+instruct the pane to start `fanout msg watch` under the Monitor tool (new
+messages then stream in, marked read on emit), and fresh non-Plan codex task
+panes receive unread messages through an app-server bridge as quoted turns.
+`nudge` is the only push that writes to tmux input. The DB is a plaintext
+SQLite file under `/tmp` (`0600`, owner-only) — never put secrets in messages.
+This is distinct from Claude Code Agent Teams (a Claude-only, single-session
+feature).
 
 ## Run
 
