@@ -80,7 +80,7 @@ func TestRestoreRecordedPanesRebindsLivePaneByTitle(t *testing.T) {
 				"Restore API": {livePane},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRestoreRecordedPanesRemovesStaleShellRows(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestRestoreRecordedPanesKeepsLiveShellWhenShellKeyMissing(t *testing.T) {
 				"%9": {ID: "%9", CurrentPath: root, Title: "terminal"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestRestoreRecordedPanesKeepsKeyedAgentWhenLiveKeyIsUnavailable(t *testing.
 			Live:         map[string]tmuxrun.LivePane{livePane.ID: livePane},
 			PanesByTitle: map[string][]tmuxrun.LivePane{livePane.Title: {livePane}},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestRestoreRecordedPanesRemovesShellWhenLiveShellKeyDiffers(t *testing.T) {
 				"%9": {ID: "%9", CurrentPath: root, Title: "terminal", ShellKey: "shell-2"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestRestoreRecordedPanesSkipsRootWithoutStateFile(t *testing.T) {
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		snapshotCalled = true
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestRestoreRecordedPanesDoesNotRecreateLivePaneWithPathMismatch(t *testing.
 				"%old": {ID: "%old", CurrentPath: "/tmp", Title: "Restore API"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 
 			report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 				return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}}, nil
-			}, nil)
+			}, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -469,7 +469,7 @@ func TestRestoreRecordedPanesDoesNotAdoptAmbiguousTwinRows(t *testing.T) {
 		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
 			"%live": {ID: "%live", CurrentPath: wt, Title: "claude for restore-api-101", WorktreePath: wt, Label: "@manual · claude for restore-api-101"},
 		}}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,6 +480,71 @@ func TestRestoreRecordedPanesDoesNotAdoptAmbiguousTwinRows(t *testing.T) {
 	}
 	if report.Adopted != 0 || stamps != 0 {
 		t.Fatalf("report = %+v (stamps=%d), want ambiguous adoption declined", report, stamps)
+	}
+}
+
+// Claimants live in every restore root's store, not just the one being
+// restored: a sibling root's row recording the same pane id or the same
+// liveness key must block adoption there too.
+func TestRestoreRecordedPanesAdoptionChecksClaimantsAcrossRoots(t *testing.T) {
+	tests := []struct {
+		name    string
+		sibling state.Pane
+		liveKey string
+	}{
+		{
+			name:    "pane id claimed by a sibling root's row",
+			sibling: state.Pane{Parent: "90", IssueNum: 201, DisplayName: "Sibling API", PaneID: "%live", ShellKey: "key-sibling", Agent: "claude"},
+		},
+		{
+			name:    "orphan key recorded by a sibling root's row",
+			sibling: state.Pane{Parent: "90", IssueNum: 201, DisplayName: "Sibling API", PaneID: "%elsewhere", ShellKey: "key-orphan", Agent: "claude"},
+			liveKey: "key-orphan",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sibling := t.TempDir()
+			wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+			if err := os.MkdirAll(wt, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stamps := 0
+			stubRestorePaneOps(t, func(string, string) error {
+				stamps++
+				return nil
+			}, nil, nil, nil)
+			writeRestoreState(t, root, []state.Pane{{
+				Parent:       "81",
+				IssueNum:     101,
+				DisplayName:  "Restore API",
+				PaneID:       "%live",
+				Agent:        "claude",
+				WorktreePath: wt,
+			}})
+			siblingPane := tt.sibling
+			siblingPane.WorktreePath = sibling
+			writeRestoreState(t, sibling, []state.Pane{siblingPane})
+			claims := collectRestoreClaimants([]string{root, sibling})
+
+			report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+				return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
+					"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: tt.liveKey, WorktreePath: wt, Label: "#81 · Restore API"},
+				}}, nil
+			}, nil, claims)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := readRestoreState(t, root)
+			if len(got.Panes) != 1 || got.Panes[0].ShellKey != "" {
+				t.Fatalf("state panes = %+v, want cross-root claimed row left keyless", got.Panes)
+			}
+			if report.Adopted != 0 || stamps != 0 {
+				t.Fatalf("report = %+v (stamps=%d), want cross-root adoption declined", report, stamps)
+			}
+		})
 	}
 }
 
@@ -509,7 +574,7 @@ func TestRestoreRecordedPanesDoesNotAbsorbKeyClaimedByAnotherRow(t *testing.T) {
 			"%live":  {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: "key-claimed", WorktreePath: wt, Label: "#81 · Restore API"},
 			"%other": {ID: "%other", CurrentPath: otherWt, Title: "Other API", ShellKey: "key-claimed", WorktreePath: otherWt, Label: "#81 · Other API"},
 		}}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +607,7 @@ func TestRestoreRecordedPanesAdoptionStampFailureKeepsRowLegacy(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}}, nil
-	}, nil)
+	}, nil, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "adopt legacy pane") {
 		t.Fatalf("restore error = %v, want adopt legacy pane failure", err)
@@ -583,7 +648,7 @@ func TestRestoreRecordedPanesAdoptsLegacyPaneClaimedByPreclaim(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}}, nil
-	}, claimed)
+	}, claimed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,14 +684,14 @@ func TestRestoreRecordedPanesAdoptionIsIdempotent(t *testing.T) {
 
 	if _, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}}}, nil
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	key := readRestoreState(t, root).Panes[0].ShellKey
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: key, WorktreePath: wt, Label: "#81 · Restore API"}}}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +731,7 @@ func TestRestoreRecordedPanesSkipsHerdrRowWithoutMutation(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +773,7 @@ func TestRestoreRecordedPanesSkipsDuplicateIssueClaimedByAnotherRoot(t *testing.
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, claimed)
+	}, claimed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +860,7 @@ func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testi
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +918,7 @@ func TestRestoreTracksPaneWhenLivenessStampAndFreshCloseFail(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "pane still live") {
 		t.Fatalf("restore error = %v, want failed fresh close", err)
@@ -898,7 +963,7 @@ func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "pane still live") {
 		t.Fatalf("restore error = %v, want failed owned close", err)
@@ -1147,7 +1212,7 @@ func TestRestoreRecordedPanesRecreatesCoordinatorWithLivenessKey(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
