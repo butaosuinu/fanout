@@ -9,6 +9,26 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.13.0 (2026-07-20)
+
+- **Observation-only herdr backend.** fanout can now select an opt-in `herdr` runtime backend and match recorded sessions against `herdr api snapshot` in the TUI and web dashboard.
+  v1 pins herdr 0.7.3 and rejects launches and other mutations; tmux remains the default.
+  Status tables add `BACKEND` / `PANE` columns, while JSON adds optional `backend` / `pane_id` fields.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}) and [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Push delivery for team messages.** `fanout msg watch` streams new peer messages through Claude's Monitor tool, while fresh non-Plan Codex panes receive unread rows through an app-server bridge when idle.
+  Plan Mode and restored panes remain pull-based; recover failed injections with `fanout msg inbox --all`.
+  See [Workflow]({{< relref "/docs/workflow" >}}) and [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
+- **Safer Codex pane cleanup.** Closing a Codex pane now stops its app-server and descendant Node / MCP processes, verifies pane ownership with `shellKey`, and preserves recovery state when cleanup cannot be proven safe.
+  Existing live rows without `shellKey` fail closed instead of targeting a reused pane.
+  See [CLI Reference]({{< relref "/docs/cli#merge--close--cleanup" >}}).
+- **Native post-work-review.** `$post-work-review` now delegates to an ordinary fresh native Codex subagent and no longer uses custom agents, a model pin, an app-server controller, or a JSON result parser.
+  Install or update with integrations to remove the retired driver; a binary-only `--no-skills` update stops while that driver remains.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Installation]({{< relref "/docs/installation" >}}).
+- **godep-cruiser architecture guard.** Layer checks now run through the pinned godep-cruiser rule set with an expiring baseline, replacing the hand-written import test while keeping the same four-layer boundary.
+  See `docs/architecture.ja.md`.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.13.0)
+
 ## v0.12.0 (2026-07-15)
 
 - **Configurable Codex Plan Mode.** Normal issue / Project child fan-outs now resolve `codexPlanMode` through CLI, environment, repo config, or user config, and the TUI settings popup exposes the same switch.
