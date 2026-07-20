@@ -155,7 +155,7 @@ spec フォーマット:
 | `--base-branch` | `<branch>` | `plan.base_branch` を上書きする。どちらも無い場合は repository default branch を解決し、`origin` remote が無い場合は現在の local branch / `HEAD` を使う。 |
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
 | `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
-| `--backend` | `<tmux\|herdr>` | この plan run の runtime backend。issue の親と同じく plan slug 単位で sticky。herdr は v1 では観測専用で、plan の launch は fail closed する。 |
+| `--backend` | `<tmux\|herdr>` | この plan run の runtime backend。`plan.source` が issue を指す plan はその issue の backend binding を共有し、issue-less の plan は現在の project の state 内で `plan:<slug>` 単位に sticky。herdr は v1 では観測専用で、plan の launch は fail closed する。 |
 | `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
 
 `--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。

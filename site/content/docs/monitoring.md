@@ -136,6 +136,6 @@ The same registration also binds **`prefix + M`**: press it from a recorded fano
 
 - With `gh` logged out, it shows a banner and a state-only view.
 - Outside tmux it keeps serving, with pane liveness left as unknown.
-- A herdr row keeps its identity and state from `herdr api snapshot`; its output peek is always empty.
+- A herdr row matches its saved identity against `herdr api snapshot` for liveness and agent state — identity is never filled in from the snapshot — and its output peek is always empty.
 
 Every flag on this page is listed in the [CLI Reference]({{< relref "/docs/cli" >}}).

@@ -147,6 +147,6 @@ herdr 0.7.3 を入れて合わせてください。`requires a client/server res
 ## "herdr backend v1 is observation-only; ... is unavailable"
 
 故障ではありません。herdr backend v1 は、herdr session を変更しうる操作を意図的に fail closed します。`runtime backend herdr does not support ...` も同じ系統です(launch・focus・send・close・restore・peek・plan capture・cleanup)。
-launch や lifecycle コマンドには tmux backend を使うか、herdr 側で直接操作してください。
+新しい launch には tmux backend を使ってください。既存の herdr 行では、branch を merge するだけの `--merge` は使えますが、`--close` / `--cleanup` は拒否されます。workspace は herdr 側で片付けてください。
 関連して、記録済みペインを持つ親への矛盾する `--backend` は `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

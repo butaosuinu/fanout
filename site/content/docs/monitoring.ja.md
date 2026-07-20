@@ -185,6 +185,6 @@ Session の各行には runtime backend と pane の identity が出て、runtim
 
 - `gh` 未ログインの場合は、バナーを出して state のみのビューを表示します。
 - tmux 外でも配信は続き、ペインの生存は unknown のままになります。
-- herdr の行は identity と状態を `herdr api snapshot` から保ちます。出力の peek は常に空です。
+- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します(identity を snapshot から補完することはありません)。出力の peek は常に空です。
 
 このページに登場するフラグの一覧は [CLI リファレンス]({{< relref "/docs/cli" >}}) にあります。
