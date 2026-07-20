@@ -163,10 +163,18 @@ worktree を選んでビュアーを開けるようにする。
 - `internal/ui/tui`: `Options` に `LaunchReview` フィールドを追加し、
   キー 1 つ(候補: `R`)を `openSelectedWorktreeShellCmd` と同型で配線。
   `help.go` に 1 行追加
-- 起動形態: TUI 系(hunk / revdiff)は `tmuxrun.DisplayPopup`、
-  difit は `--background --no-open` で起動して URL を表示し、返却された
-  port と pid を記録して停止導線(または TTL)まで面倒を見る。popup 内で
-  外部コマンドを呼ぶため `tui_popup.go` の PATH forward を通す
+- 起動形態: TUI 系(hunk / revdiff)は `tmuxrun.DisplayPopup`、difit は
+  popup ではなく直接のプロセス起動(execx 系)にして stdout の JSON
+  (port / pid)を回収し、URL を表示する。port と pid は記録して
+  停止導線(または TTL)まで面倒を見る。`DisplayPopup` は子プロセスの
+  stdout も終了コードも呼び出し元へ返さないため、popup 側の結果
+  (revdiff の exit 10 と `-o` 出力)は `tui_popup.go` の result / done
+  一時ファイル方式で回収する。popup 内で外部コマンドを呼ぶため
+  同ファイルの PATH forward も通す
+- hunk の session 識別: `--repo <path>` は同一 worktree に session が
+  複数あると一致エラーになる。起動時に session ID を特定して pane /
+  worktree と対応付けて記録し、二重起動は新規 session ではなく既存
+  session の `reload` 再利用にする
 - base 解決: merge-base を strict に解決する関数を `internal/infra/gitstat`
   に新設し、ビュアーへ SHA で渡す(hunk の two-dot 問題を fanout 側で
   吸収する)。表示統計用の既存 `diffBase` は base を解決できないとき
@@ -174,8 +182,11 @@ worktree を選んでビュアーを開けるようにする。
   空 diff を「変更なし」と誤読させるため、解決失敗はエラーにして
   レビューを中止する
 - 未追跡ファイル: hunk は既定で含まれ、revdiff は `--untracked` を付ける。
-  difit は `--include-untracked` が index を変更するため既定では付けず、
-  未追跡分が表示されないことを起動時に明示する
+  difit は `--include-untracked` が index を変更するため付けない。
+  ただし警告表示だけでは新規ファイルを見ないまま承認できてしまうので、
+  未追跡ファイルのある worktree(`git status --porcelain` で機械判定)では
+  difit の起動を fail closed にし、hunk / revdiff への切替か、index 変更を
+  理解したうえでの手動 `--include-untracked` を案内する
 - `internal/infra/settings`: ビュアー選択キーを 1 つ追加
   (string、`RepoEditable: false`)。未設定時は registry の PATH 発見順
 
@@ -185,7 +196,8 @@ worktree を選んでビュアーを開けるようにする。
 skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 
 - hunk: `session comment list --type user` の出力を該当ペインの受信箱へ
-  転送する補助 verb(または skill 手順)
+  転送する補助 verb(または skill 手順)。session の指定は Phase 1 で
+  記録した session ID を使う(`--repo` 指定は複数 session で壊れる)
 - difit: `comment get` の出力を同様に転送(起動時に記録した port を使う)
 - revdiff: exit 10 を検知して `-o` の markdown を転送
 - 配送経路: `fanout msg send` は SQLite への保存のみで、push 配送
