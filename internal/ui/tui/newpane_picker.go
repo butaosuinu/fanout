@@ -161,6 +161,11 @@ func (m model) pickerVisibleRows() int {
 		// separator. Turning the checkbox on adds no rows: the coordinator/
 		// task-agent block renders side by side at the plain Agent row's height.
 		overhead++
+		if m.issuePlanFanoutActive() && m.coordinatorWorkerWraps() {
+			// A stacked coordinator/worker block adds the worker label and tab
+			// rows that the side-by-side layout shares.
+			overhead += 2
+		}
 	}
 	if m.newPane.notice != "" {
 		overhead++

@@ -218,8 +218,8 @@ context. See the
 - The agent CLI you launch children with — **`claude`** (Claude Code),
   **`codex`**, and/or **`opencode`** (OpenCode) — on your `PATH` for live runs.
   The install only bundles fanout's
-  skills/commands for them; it does not install the agents themselves.
-  (`--dry-run` and read-only commands don't need one.)
+  skills/commands for Claude Code and Codex; it does not install the agents
+  themselves. (`--dry-run` and read-only commands don't need one.)
 - Batch fan-out (`fanout <parent>`) must run from inside tmux; the no-argument
   TUI console can start from a plain shell.
 - Project mode needs the `read:project` gh scope
