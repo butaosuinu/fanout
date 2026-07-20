@@ -200,6 +200,10 @@ PR 本文という独自資産(score/TL;DR/Changes by file)を持つため、描
   部品。fanout TUI と同スタック。 https://github.com/NimbleMarkets/ntcharts /
   https://pkg.go.dev/github.com/charmbracelet/lipgloss/tree
 
+レビューコメントを返せる diff ビュアー(hunk / difit / revdiff)の選定と
+統合方針は [local-diff-review-tools.ja.md](local-diff-review-tools.ja.md)
+(2026-07 予備調査)を参照。
+
 ## 案カタログ
 
 7 案(near-term 2 / ambitious 3 / moonshot 2)。tier は near-term(6 ヶ月内に
