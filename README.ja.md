@@ -210,9 +210,9 @@ flag を生成します。詳しくは
 - **git** と **tmux 3.3+**。GitHub issue / Project workflow、PR status、
   cleanup/status view では認証済みの **GitHub CLI(`gh`)**(`gh auth status`)も
   必要です。ローカルの `fanout plan` 実行や TUI の手動 pane では不要です。
-- 既定の runtime backend は tmux で、既存の tmux workflow は変わりません。
-  opt-in の herdr backend は v1 では観測専用で、herdr 0.7.3 の稼働中の
-  名前付き session が必要です。herdr は AGPL ライセンスで同梱されないため、
+- 既定の runtime backend は tmux で、herdr session の外では既存の tmux
+  workflow は変わりません。opt-in の herdr backend は v1 では観測専用で、
+  herdr 0.7.3 の稼働中の名前付き session が必要です。herdr は AGPL ライセンスで同梱されないため、
   別途インストールしてください。詳細は
   [herdr backend のドキュメント](https://butaosuinu.github.io/fanout/ja/docs/herdr-backend/)
   を参照してください。

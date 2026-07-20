@@ -9,7 +9,7 @@ yomi: herdr
 
 herdr backend は、[herdr](https://herdr.dev/)(コーディングエージェント向けの tmux 代替・永続 PTY ランタイム)の中で fanout を read-only コンソールとして動かすための backend です。
 opt-in で、v1 は観測専用です。fanout は記録済みの herdr pane を表示しますが、作成・変更・close は一切しません。
-既定の backend は tmux のままで、既存の tmux workflow は何も変わりません。
+既定の backend は tmux のままで、herdr session の外では tmux 利用者の workflow は何も変わりません。herdr session の中では、上書きしない限り herdr が自動選択で勝ちます(後述)。
 fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別途インストールします。
 
 ## v1 でできること
@@ -82,9 +82,9 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 
 ## herdr の integration と plugin
 
-`herdr integration install claude` / `codex` は、herdr が agent session を追跡・復元できるよう、状態報告の hook をあなたの agent 設定に書き込みます。
+`herdr integration install claude` / `codex` は、agent の session identity を herdr に報告する hook をあなたの agent 設定に書き込みます。herdr の session 追跡と復元はこれで機能します。
 fanout はこれを代行しません。agent 設定の所有者はあなたです。
-任意の手順ですが、herdr の session restore を実効的にするのはこの手順なので、restore に頼るなら検討してください。
+任意の手順です。restore に頼るなら検討してください。
 
 plugin の注意が 2 点あります。
 

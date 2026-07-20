@@ -7,7 +7,7 @@ kanji: 観
 yomi: herdr
 ---
 
-The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-alternative persistent-PTY runtime for coding agents — as a read-only console. It is opt-in, and in v1 it is observation-only: fanout displays recorded herdr panes but never creates, mutates, or closes them. The default backend stays tmux, and an existing tmux workflow does not change at all. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
+The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-alternative persistent-PTY runtime for coding agents — as a read-only console. It is opt-in, and in v1 it is observation-only: fanout displays recorded herdr panes but never creates, mutates, or closes them. The default backend stays tmux, and outside a herdr session nothing changes for tmux users; inside one, herdr wins the automatic selection unless overridden (see below). fanout does not bundle herdr; it is AGPL-licensed and installed separately.
 
 ## What v1 does
 
@@ -72,7 +72,7 @@ Two consequences worth spelling out. A herdr pane whose `terminal_id` changed �
 
 ## herdr integrations and plugins
 
-`herdr integration install claude` / `codex` writes state-reporting hooks into your agent configuration so herdr can track and restore agent sessions. fanout never runs it for you — your agent configuration stays yours. It is an optional step, and the one that makes herdr's session restore effective, so consider it if you rely on restore.
+`herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is an optional step; consider it if you rely on restore.
 
 Two plugin cautions:
 

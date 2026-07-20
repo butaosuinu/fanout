@@ -133,7 +133,7 @@ TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
 fanout は検証済みの herdr の組 — CLI と server 0.7.3、protocol 16、API schema version 1 — に固定し、それ以外は新しい version でも fail closed します。
-`herdr 0.7.3 is required: ...` は、`PATH` に `herdr` バイナリが無いか、probe に失敗したという意味です。
+`herdr 0.7.3 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
 実際に入っているものを確認してください。
 
 ```bash

@@ -110,7 +110,7 @@ herdr status --json   # server and session state
 
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
-fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary is missing from `PATH` or the probe failed. Check what is actually installed:
+fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
 
 ```bash
 herdr --version          # must print: herdr 0.7.3
