@@ -9,6 +9,29 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.13.0 (2026-07-20)
+
+- **観測専用の herdr backend。** opt-in の `herdr` runtime backend を選択し、TUI と web ダッシュボードで記録済み session を `herdr api snapshot` と照合できるようになりました。
+  v1 は herdr 0.7.3 に固定し、launch や変更操作を拒否します。
+  既定の backend は tmux のままです。
+  status table に `BACKEND` / `PANE` 列を追加し、JSON には省略可能な `backend` / `pane_id` field を追加しました。
+  [herdr backend]({{< relref "/docs/herdr-backend" >}}) と [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- **team message の push 配信。** `fanout msg watch` が Claude の Monitor ツール経由で新着を配信し、新規起動した非 Plan Codex ペインには app-server bridge が idle 時に未読 message を注入します。
+  Plan Mode と restore したペインは pull のままです。
+  注入失敗は `fanout msg inbox --all` で回収します。
+  [ワークフロー]({{< relref "/docs/workflow" >}}) と [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) を参照。
+- **Codex pane cleanup の安全化。** Codex ペインを close すると app-server と子孫の Node / MCP process を停止し、`shellKey` でペインの所有を照合し、安全な cleanup を確認できなければ recovery state を残します。
+  `shellKey` のない既存の live state 行は、再利用されたペインを誤って対象にせず fail closed します。
+  [CLI リファレンス]({{< relref "/docs/cli#merge--close--cleanup" >}}) を参照。
+- **native subagent による post-work-review。** `$post-work-review` は fresh な通常の Codex native subagent に委譲し、custom agent、model 固定、app-server controller、JSON result parser を使わなくなりました。
+  廃止済み driver は integrations 込みの install または update で削除してください。
+  driver が残っている間、`--no-skills` による binary-only update は停止します。
+  [エージェント連携]({{< relref "/docs/agents" >}}) と [インストール]({{< relref "/docs/installation" >}}) を参照。
+- **godep-cruiser による architecture guard。** layer check を手書きの import test から、期限付き baseline を持つ固定版 godep-cruiser rule set へ移し、同じ4層の境界を検証します。
+  `docs/architecture.ja.md` を参照。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.13.0)
+
 ## v0.12.0 (2026-07-15)
 
 - **Codex Plan Mode の保存設定。** 通常の issue / Project の子 fan-out は、CLI、環境変数、repo config、user config から `codexPlanMode` を解決し、TUI settings popup でも同じ設定を編集できます。
