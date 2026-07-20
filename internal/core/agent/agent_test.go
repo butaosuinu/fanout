@@ -270,3 +270,23 @@ func TestWithFanoutBinQuotesExecutablePath(t *testing.T) {
 		t.Fatalf("WithFanoutBin() = %q, want %q", got, want)
 	}
 }
+
+func TestPaneStateRefined(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent string
+		want  bool
+	}{
+		{name: "claude refines via tmux hooks", agent: "claude", want: true},
+		{name: "codex refines via plan controller and team bridge", agent: "codex", want: true},
+		{name: "opencode stays at the wrapper states", agent: "opencode", want: false},
+		{name: "unknown agent fails safe", agent: "future-agent", want: false},
+		{name: "empty agent fails safe", agent: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PaneStateRefined(tc.agent); got != tc.want {
+				t.Fatalf("PaneStateRefined(%q) = %v, want %v", tc.agent, got, tc.want)
+			}
+		})
+	}
+}

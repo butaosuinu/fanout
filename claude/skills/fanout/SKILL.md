@@ -193,7 +193,7 @@ fanned panes are separate agent sessions (not Agent Teams teammates — that is 
   - `fanout msg watch [--interval S]` — block and emit new 1:1 + board messages one per line as they arrive; emitted messages are marked read on delivery (mark-on-emit). Ctrl-C to stop.
   - `fanout msg send --to <N> [--kind K] "<body>"` — 1:1 message to sibling #N.
   - `fanout msg post [--kind K] "<body>"` — post to the shared board.
-  - `fanout msg nudge <N>` — best-effort push: send-keys an inbox hint into sibling #N's pane, only when its agent state can take queued input (never a blocked pane). Never touches the DB; undeliverable nudges warn and exit `0`.
+  - `fanout msg nudge <N>` — best-effort push: send-keys an inbox hint into sibling #N's pane, only when its agent state can take queued input (never a blocked pane; opencode panes are excluded — no state refinement). Never touches the DB; undeliverable nudges warn and exit `0`.
   - `fanout msg mark-read [--id N ...|--all]` — mark 1:1 messages read (`--all` also advances the board cursor).
   - `fanout msg register` — (re-)register this pane in the roster.
 - Common options: `--json` (machine-readable), `--self <N>` / `--parent <ref>` (override pane detection). `kind` is a free-form label (default `note`; no fixed vocabulary). Exit codes: `0` ok, `2` bad invocation, `4` backend failure (SQLite, or `watch`'s stdout breaking); `nudge` reports undeliverable targets as a warning with exit `0`.

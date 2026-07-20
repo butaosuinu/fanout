@@ -77,7 +77,7 @@ Watcher launches, childless-issue standalone panes, `fanout plan` tasks, and pla
 
 ## OpenCode
 
-OpenCode (`opencode`) is a supported child agent with no bundled skills: pass `--agent opencode`, or mix it per target with `--agent NUM=opencode` / `--agent task-id=opencode`. fanout passes the launch prompt as the `--prompt` flag value — opencode's positional argument is a project path — and resumes panes with `opencode --continue`. OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. When fanout's Claude integrations are installed, its Claude Code compatibility also resolves the `/fanout` command that TUI plan fan-out coordinators receive. Its briefings carry only the base requirements; the Claude-only and Codex-only sections do not apply.
+OpenCode (`opencode`) is a supported child agent with no bundled skills: pass `--agent opencode`, or mix it per target with `--agent NUM=opencode` / `--agent task-id=opencode`. fanout passes the launch prompt as the `--prompt` flag value — opencode's positional argument is a project path — and resumes panes with `opencode --continue`. OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. When fanout's Claude integrations are installed, its Claude Code compatibility also resolves the `/fanout` command that TUI plan fan-out coordinators receive. Its briefings carry the base requirements plus the generic final-validation instructions; the Claude-only and Codex-only sections do not apply. `fanout msg nudge` skips opencode panes, so `--team` coordination stays pull-based.
 
 ## How the briefing works
 

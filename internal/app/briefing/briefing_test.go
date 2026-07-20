@@ -825,3 +825,19 @@ func TestCodexPlanModeUsesPlanningBriefing(t *testing.T) {
 		}
 	}
 }
+
+// TestNonClaudeNonCodexBriefingCarriesCompletionInstructions pins the
+// fallthrough lane (opencode and future agents): the base requirement "follow
+// the final validation, commit, and push instructions below" must not dangle
+// — the generic completion section supplies those instructions.
+func TestNonClaudeNonCodexBriefingCarriesCompletionInstructions(t *testing.T) {
+	for _, agentName := range []string{"opencode", "future-agent"} {
+		got := Render(101, "First child", "Issue body", agentName, "main", settings.Defaults(), false, nil)
+		if !strings.Contains(got, "follow the final validation, commit, and push instructions below") {
+			t.Fatalf("render(..., %q) missing the base completion requirement:\n%s", agentName, got)
+		}
+		if !strings.Contains(got, "canonical") || !strings.Contains(got, "full validation command") {
+			t.Fatalf("render(..., %q) missing the generic completion section:\n%s", agentName, got)
+		}
+	}
+}

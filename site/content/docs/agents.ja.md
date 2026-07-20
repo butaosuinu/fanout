@@ -129,7 +129,8 @@ OpenCode(`opencode`)は同梱 skill のない子 agent として使えます。`
 opencode の位置引数はプロジェクトパスなので、fanout は起動プロンプトを `--prompt` フラグの値として渡します。ペインの resume には `opencode --continue` を使います。
 OpenCode はリポジトリの `AGENTS.md` をネイティブに読むため、子ペインは追加のセットアップなしでプロジェクトのルールを拾います。
 fanout の Claude 連携がインストール済みなら、その互換層経由で TUI の plan fan-out coordinator が受け取る `/fanout` コマンドも解決されます。
-briefing には base の requirements のみが入り、Claude 専用・Codex 専用のセクションは付きません。
+briefing には base の requirements と共通の最終検証手順が入り、Claude 専用・Codex 専用のセクションは付きません。
+`fanout msg nudge` は opencode ペインを対象から外すため、`--team` の協調は pull ベースのままです。
 
 ## briefing の仕組み
 

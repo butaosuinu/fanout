@@ -247,7 +247,7 @@ func renderWorkBriefing(b workBriefing) string {
 		return base + codexReviewSection(b.settings.AutoPullRequest, b.baseBranch)
 	}
 	if b.agentName != "claude" {
-		return base
+		return base + genericCompletionSection
 	}
 
 	if b.settings.BriefingCodeReview {
@@ -334,6 +334,17 @@ command from the repository's own instructions and build configuration, then
 run it once on the exact HEAD you will push. Do not also run the individual
 full lint/test targets unless you are diagnosing a failure. If ` + "`gh pr create`" + ` is denied before
 ` + "`/post-work-review`" + `, you may run it as ` + "`FANOUT_SKIP_PR_REVIEW=1 gh pr create ...`" + `.
+`
+
+// genericCompletionSection is the final-validation tail for agents without a
+// bundled review-gate integration (opencode and any future agent). The base
+// completion requirement points at these instructions, so the fallthrough
+// lane must not drop them.
+const genericCompletionSection = `
+After committing the candidate changes, resolve the project's single canonical
+full validation command from the repository's own instructions and build
+configuration, then run it once on the exact HEAD you will push. Do not also
+run the individual full lint/test targets unless you are diagnosing a failure.
 `
 
 const claudeReviewGateSection = `

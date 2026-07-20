@@ -209,7 +209,9 @@ touching only class-A packages can rely on AI review.
   around the fanout-driven initial turn, and the codex team bridge reports
   working/idle/blocked across the bridged session. The nudge gate never
   includes blocked — the nudge's Enter could activate a focused permission
-  dialog.
+  dialog — and agents without pane-state refinement (opencode) are excluded
+  from nudge entirely, since their panes stay `running` even while a
+  permission dialog is focused.
 
 ## Be Careful
 

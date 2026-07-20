@@ -207,6 +207,21 @@ func Supported() []string {
 	return names
 }
 
+// PaneStateRefined reports whether the agent refines @fanout_agent_state
+// beyond the launch wrapper's running/done — claude via its tmux hooks and
+// codex via the Plan Mode controller and team bridge. A pane of an agent
+// without refinement stays "running" even while a permission dialog is
+// focused, so peermsg must not send-keys a nudge into it. Unknown and empty
+// names fail safe: no nudge.
+func PaneStateRefined(name string) bool {
+	switch name {
+	case "claude", "codex":
+		return true
+	default:
+		return false
+	}
+}
+
 // ShellQuote quotes one POSIX shell token.
 func ShellQuote(s string) string {
 	if s == "" {
