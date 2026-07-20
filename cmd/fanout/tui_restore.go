@@ -527,6 +527,7 @@ func adoptLegacyLivePaneKey(pane state.Pane, snapshot tuiRestoreSnapshot, claims
 	}
 	created, createdErr := time.Parse(time.RFC3339, strings.TrimSpace(pane.CreatedAt))
 	if snapshot.ServerStart.IsZero() || createdErr != nil || created.Before(snapshot.ServerStart) {
+		//nolint:nilerr // Unprovable incarnation declines adoption; the row stays legacy, not an error.
 		return "", nil
 	}
 	cur, ok := live[pane.PaneID]
@@ -553,6 +554,7 @@ func adoptLegacyLivePaneKey(pane state.Pane, snapshot tuiRestoreSnapshot, claims
 	// process start time matching the row's CreatedAt.
 	paneStart, startErr := restorePaneStartTime(pane.PaneID)
 	if startErr != nil {
+		//nolint:nilerr // Unverifiable provenance declines adoption; the next poll retries.
 		return "", nil
 	}
 	if paneStart.Before(created.Add(-adoptPaneStartEarly)) || paneStart.After(created.Add(adoptPaneStartLate)) {
