@@ -426,13 +426,17 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 // live pane: @fanout_worktree_path must equal the row's recorded worktree (a
 // reused pane id outside fanout never carries it), and @fanout_pane_label
 // must equal this row's border label — the worktree path is shared by
-// attached agents, the label is per-session identity. Rows that are keyed,
-// shells, missing a worktree path, or not alive return ("", nil). A live pane
-// already holding a key is an interrupted earlier adoption (stamped, then the
-// state save failed or the process died): its key is re-associated without
-// restamping, unless another row in this store records it. The tmux stamp
-// happens before the state row is persisted; the reverse order would create
-// the fail-closed keyed-row-without-live-key state on stamp failure.
+// attached agents, the label narrows the pane to this session identity. The
+// label is still not per-row unique (repeated attaches of one agent to one
+// worktree share a DisplayName), so the row must also be the only row in this
+// store recording the pane id: any second claimant makes the binding
+// ambiguous and adoption fails closed. Rows that are keyed, shells, missing a
+// worktree path, or not alive return ("", nil). A live pane already holding a
+// key is an interrupted earlier adoption (stamped, then the state save failed
+// or the process died): its key is re-associated without restamping, unless
+// another row in this store records it. The tmux stamp happens before the
+// state row is persisted; the reverse order would create the fail-closed
+// keyed-row-without-live-key state on stamp failure.
 func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane, rows []state.Pane) (string, error) {
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" || strings.TrimSpace(pane.WorktreePath) == "" {
 		return "", nil
@@ -447,6 +451,15 @@ func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane, r
 	}
 	rowLabel := tmuxrun.NeutralizePaneLabel(panelaunch.BorderLabel(pane.Parent, restorePaneTitle(pane)))
 	if liveLabel := strings.TrimSpace(cur.Label); liveLabel == "" || liveLabel != strings.TrimSpace(rowLabel) {
+		return "", nil
+	}
+	claimants := 0
+	for _, other := range rows {
+		if strings.TrimSpace(other.PaneID) == strings.TrimSpace(pane.PaneID) {
+			claimants++
+		}
+	}
+	if claimants != 1 {
 		return "", nil
 	}
 	if !restorePaneAlive(live, pane) {

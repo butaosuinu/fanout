@@ -438,6 +438,51 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 	}
 }
 
+// Repeated attaches of one agent to one worktree share a DisplayName, so two
+// keyless rows can claim the same pane id with identical markers. Neither may
+// be adopted: stamping the first would let its close kill the other session.
+func TestRestoreRecordedPanesDoesNotAdoptAmbiguousTwinRows(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamps := 0
+	stubRestorePaneOps(t, func(string, string) error {
+		stamps++
+		return nil
+	}, nil, nil, nil)
+	twin := state.Pane{
+		Parent:       "@manual",
+		Kind:         state.PaneKindAttachedAgent,
+		DisplayName:  "claude for restore-api-101",
+		PaneID:       "%live",
+		Agent:        "claude",
+		WorktreePath: wt,
+	}
+	first, second := twin, twin
+	first.IssueNum = -4
+	second.IssueNum = -6
+	writeRestoreState(t, root, []state.Pane{first, second})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
+			"%live": {ID: "%live", CurrentPath: wt, Title: "claude for restore-api-101", WorktreePath: wt, Label: "@manual · claude for restore-api-101"},
+		}}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 2 || got.Panes[0].ShellKey != "" || got.Panes[1].ShellKey != "" {
+		t.Fatalf("state panes = %+v, want both ambiguous twin rows left keyless", got.Panes)
+	}
+	if report.Adopted != 0 || stamps != 0 {
+		t.Fatalf("report = %+v (stamps=%d), want ambiguous adoption declined", report, stamps)
+	}
+}
+
 // A live key already recorded by another row proves the pane belongs to that
 // row; absorbing it would let one close kill the other row's pane.
 func TestRestoreRecordedPanesDoesNotAbsorbKeyClaimedByAnotherRow(t *testing.T) {
