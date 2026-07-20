@@ -26,6 +26,7 @@ type tuiRestoreReport struct {
 	Tracked       int
 	RemovedShells int
 	Skipped       int
+	Adopted       int
 }
 
 type recreatedPane struct {
@@ -137,6 +138,19 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 		if backend.NormalizeName(pane.Backend) != backend.Tmux {
 			report.Skipped++
 			continue
+		}
+		// Adoption must run before the dedupe skip: preclaimed live issue rows
+		// never reach the alive branch below.
+		if key, adoptErr := adoptLegacyLivePaneKey(pane, snapshot.Live); adoptErr != nil {
+			restoreErr = errors.Join(restoreErr, adoptErr)
+		} else if key != "" {
+			pane.ShellKey = key
+			locked.Panes[idx].ShellKey = key
+			cur := snapshot.Live[pane.PaneID]
+			cur.ShellKey = key
+			snapshot.Live[pane.PaneID] = cur
+			report.Adopted++
+			changed = true
 		}
 		identity := restoreDedupeKey(pane)
 		if identity != "" && claimed[identity] {
@@ -404,6 +418,35 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 	return agent.WithFanoutBin(command, fanoutPath), "", nil
 }
 
+// adoptLegacyLivePaneKey migrates a keyless legacy agent row whose recorded
+// pane is still alive by path containment: it stamps a fresh
+// @fanout_shell_key on the live pane so the row graduates to the keyed
+// identity that pane close requires, and returns the stamped key. Rows that
+// are keyed, shells, missing a worktree path (path containment would be
+// vacuous), or not alive return ("", nil). A live pane that already carries a
+// different key may belong to another row and is left alone. The tmux stamp
+// happens before the state row is persisted; the reverse order would create
+// the fail-closed keyed-row-without-live-key state on stamp failure.
+func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane) (string, error) {
+	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" || strings.TrimSpace(pane.WorktreePath) == "" {
+		return "", nil
+	}
+	if !restorePaneAlive(live, pane) {
+		return "", nil
+	}
+	if strings.TrimSpace(live[pane.PaneID].ShellKey) != "" {
+		return "", nil
+	}
+	key, err := panelaunch.NewShellPaneKey()
+	if err != nil {
+		return "", fmt.Errorf("adopt legacy pane %s: %w", pane.PaneID, err)
+	}
+	if err := setRestoredPaneLivenessKey(pane.PaneID, key); err != nil {
+		return "", fmt.Errorf("adopt legacy pane %s liveness key: %w", pane.PaneID, err)
+	}
+	return key, nil
+}
+
 func restorePaneAlive(live map[string]tmuxrun.LivePane, pane state.Pane) bool {
 	if strings.TrimSpace(pane.PaneID) == "" {
 		return false
@@ -542,6 +585,7 @@ func (r *tuiRestoreReport) Add(other tuiRestoreReport) {
 	r.Tracked += other.Tracked
 	r.RemovedShells += other.RemovedShells
 	r.Skipped += other.Skipped
+	r.Adopted += other.Adopted
 }
 
 func (r tuiRestoreReport) Changed() bool {
@@ -558,6 +602,9 @@ func (r tuiRestoreReport) Notice() string {
 	}
 	if r.Rebound > 0 {
 		parts = append(parts, fmt.Sprintf("rebound %d pane(s)", r.Rebound))
+	}
+	if r.Adopted > 0 {
+		parts = append(parts, fmt.Sprintf("adopted %d legacy pane(s)", r.Adopted))
 	}
 	if r.RemovedShells > 0 {
 		parts = append(parts, fmt.Sprintf("removed %d stale terminal(s)", r.RemovedShells))
