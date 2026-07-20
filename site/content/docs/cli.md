@@ -16,7 +16,7 @@ fanout <parent-issue|project-url>
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
-       [--session <tmux-session>] [--sleep <seconds>]
+       [--backend <tmux|herdr>] [--session <tmux-session>] [--sleep <seconds>]
        [--dry-run] [--debug]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
@@ -29,7 +29,7 @@ fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
-       [--sleep <seconds>]
+       [--sleep <seconds>] [--backend <tmux|herdr>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
 fanout plan <spec.json|plan-slug> --merge <task-id>
 fanout plan <spec.json|plan-slug> --close <task-id>
@@ -92,6 +92,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | Flag | Argument | Description |
 |---|---|---|
 | `--agent` | `<name>` or `<NUM>=<name>` | Agent CLI to launch in child panes: `claude` or `codex`. Required unless `FANOUT_AGENT` is set. A bare `--agent <name>` sets the default for every child; the repeatable `--agent <NUM>=<name>` form overrides one child issue (or Project item) by number, e.g. `--agent codex --agent 456=claude`. Each child resolves its agent from a matching per-target override first, then the global `--agent`, then `FANOUT_AGENT`. Unknown agents fail before pane creation, and live mode checks that the agent CLI is installed — but only for the agents actually selected this run. |
+| `--backend` | `<tmux\|herdr>` | Runtime backend for this run. Default: `tmux`. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1, so issue and plan launches fail closed before any worktree or state mutation. A parent with recorded panes keeps its recorded backend; a conflicting override fails instead of mixing backends. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
 | `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out — the exception is the app-server bridge startup of a fresh non-Plan `codex` pane, whose in-pane DB setup is fail-fast: a failure there (a bad `FANOUT_DB_PATH`, wrong ownership or permissions) fails that launch. Off by default. |
@@ -154,6 +155,7 @@ generated branches use `fanout/<slug>` unless the task supplies `branch`.
 | `--base-branch` | `<branch>` | Override `plan.base_branch`; if neither is set, fanout resolves the repository default branch, or uses the current local branch/`HEAD` when no `origin` remote is configured. |
 | `--branch-prefix` | `<prefix>` | Prefix generated task branch names. |
 | `--no-refresh` | — | Skip base-branch refresh before creating task worktrees. |
+| `--backend` | `<tmux\|herdr>` | Runtime backend for this plan run. A plan whose `plan.source` names an issue shares that issue's backend binding; an issue-less plan is sticky per `plan:<slug>` in the current project's state. herdr is observation-only in v1 — plan launches fail closed. |
 | `--team` | — | Opt the plan run into sibling coordination, exactly like issue mode — except peers are addressed by **task ID** (issue-less plan tasks have no `#N`). Seeds the plan's per-parent peer registry and appends the roster section to each task briefing. When the plan includes Codex team tasks, the registry preseed is fail-fast: a DB failure stops the run before any pane is created. The plan bus lives at `/tmp/fanout-<repo>-plan-<slug>.db`. Not combinable with the plan read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`). Off by default. |
 
 `--agent` works the same way as in issue mode, but per-target overrides are keyed by task ID instead of issue number: `--agent <name>` sets the default and the repeatable `--agent <task-id>=<name>` form overrides a single task. Each task resolves a matching override first, then the global `--agent`, then `FANOUT_AGENT`.
@@ -225,7 +227,7 @@ These paired switches toggle fanout's child launch mode, briefing instructions, 
 
 `fanout <parent> --status` is read-only: it enumerates the children recorded for that parent in `.fanout/state.json` (or `FANOUT_STATE_PATH`), queries each one through `gh api graphql` for issue state plus closed-by PR merge/review/CI status, and prints one JSON document on stdout by default.
 
-The JSON document carries `parent`, `children[]` — each child with `num`, `state`, `prs[]` (`number`, `state`, `mergedAt`, `reviewDecision`, `ci`), and `has_merged_pr` — and `summary` (`total`, `merged`, `pending`, `blocked`, `all_merged`).
+The JSON document carries `parent`, `children[]` — each child with `num`, `state`, `backend` and `pane_id` (omitted when empty), `prs[]` (`number`, `state`, `mergedAt`, `reviewDecision`, `ci`), and `has_merged_pr` — and `summary` (`total`, `merged`, `pending`, `blocked`, `all_merged`).
 
 - `--format <json|table>` — output format, default `json`. The table format adds normalized PR state (`open`, `draft`, `review-required`, `approved`, `changes-requested`, `merged`, `closed`), CI, PR diff bars, changed-file counts, Conventional-Commit type and PR links.
 - `--post-dashboard` — upsert one marker-based rollup comment on the parent issue, aggregating child PR links, PR state, CI, diff size, Conventional-Commit type, TL;DR and Review effort score from machine-readable PR data. This is the only `--status` option that writes to GitHub.
@@ -239,7 +241,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` is exclusive with all action-bearing flags (`--agent`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--team`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`, `--dashboard-keybind`, `--no-dashboard-keybind`).
+`--status` is exclusive with all action-bearing flags (`--agent`, `--backend`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--team`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`, `--dashboard-keybind`, `--no-dashboard-keybind`).
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -399,6 +401,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | Variable | Description |
 |---|---|
 | `FANOUT_AGENT` | Default agent for child panes when `--agent` is not passed. |
+| `FANOUT_BACKEND` | Environment layer for the runtime backend (`runtimeBackend`): `tmux` or `herdr`. A parent's recorded backend still takes precedence, and a conflict fails closed. |
 | `FANOUT_STATE_PATH` | Point `--status` and the lifecycle commands directly at a state file instead of `<git-root>/.fanout/state.json`. |
 | `FANOUT_AUTO_PR` | Environment layer for the PR auto-creation instruction (`autoPullRequest`). |
 | `FANOUT_PR_REVIEW_GATE` | Environment layer for the PR review-gate note (`prReviewGate`). |

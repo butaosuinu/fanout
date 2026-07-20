@@ -47,6 +47,8 @@ Each child gets a pane in the current tmux session, an isolated worktree under `
 
 > The pane-creation flow needs `gh`, `git`, and `tmux 3.3+` on your `PATH`. fanout checks the dependencies at startup and prints install hints when one is missing — see [Installation]({{< relref "/docs/installation" >}}).
 
+This page assumes the default tmux backend. The opt-in [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1 and cannot run this fan-out.
+
 ## How child issues are declared
 
 fanout enumerates children as the union of GitHub Sub-issues and task-list rows in the parent body (`- [ ] #NUM ...`), and only children with `state == "OPEN"` are processed. Task-list references are same-repo only — `owner/repo#NUM` is skipped. See [Workflow]({{< relref "/docs/workflow" >}}) for details on how to write it.

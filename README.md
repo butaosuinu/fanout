@@ -209,6 +209,11 @@ context. See the
 - **git** and **tmux 3.3+**. GitHub issue / Project workflows, PR status, and
   cleanup/status views also need the **GitHub CLI (`gh`)**, authenticated
   (`gh auth status`); local `fanout plan` runs and manual TUI panes do not.
+- tmux is the default runtime backend; outside a herdr session, existing tmux
+  workflows do not change. The opt-in herdr backend is observation-only in v1
+  and needs a running named session of herdr 0.7.3, which is AGPL-licensed and
+  not bundled — install it separately. See the
+  [herdr backend docs](https://butaosuinu.github.io/fanout/docs/herdr-backend/).
 - The agent CLI you launch children with — **`claude`** (Claude Code) and/or
   **`codex`** — on your `PATH` for live runs. The install only bundles fanout's
   skills/commands for them; it does not install the agents themselves.

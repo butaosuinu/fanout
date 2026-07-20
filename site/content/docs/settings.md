@@ -20,7 +20,7 @@ When the same setting is given on both the CLI and a config file, which one wins
 
 Press `s` in the persistent TUI console to edit either config file in a popup. The Target row switches between user config and repo config. Each key can be set to a value or returned to `inherit`, which removes that key from the selected JSON file.
 
-The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. `codexPlanMode` is editable in both user and repo config. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, cannot set HTTP notification URLs, and can only choose `bell`, `tmux`, or `none` for `notifications`.
+The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. `codexPlanMode` is editable in both user and repo config. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, cannot set HTTP notification URLs, cannot set `runtimeBackend`, and can only choose `bell`, `tmux`, or `none` for `notifications`.
 
 ## What each toggle is for
 
@@ -34,6 +34,7 @@ The behavior toggles control child launch mode, briefing instructions, and tmux 
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
 - `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
+- `runtimeBackend`: the fallback runtime backend (`tmux` or `herdr`) when nothing higher in the resolution order decides — a parent's recorded backend, `--backend`, `FANOUT_BACKEND`, and the runtime context (`HERDR_ENV` / `TMUX`) all take precedence. User config only — repo config ignores the key with a warning. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1.
 
 The watcher and notification channels are a separate track. The watcher gates opt-in label-driven launches:
 
@@ -58,6 +59,7 @@ Notification channels pick where TUI state transitions go.
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard/action tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | Console-return tmux keybindings | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
+| Runtime backend | `runtimeBackend` | `FANOUT_BACKEND` | `--backend <tmux\|herdr>` | `tmux` |
 | Watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | Watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
 | Watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |
@@ -84,6 +86,7 @@ Both config files share the same shape: a flat JSON object of booleans, strings,
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,
+  "runtimeBackend": "tmux",
   "watcher": false,
   "watcherTriggerLabel": "fanout:auto",
   "watcherRunningLabel": "fanout:running",

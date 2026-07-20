@@ -25,6 +25,8 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates or attaches to fanout's managed tmux session; from inside tmux it turns the current pane into the console. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
 
+The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. Under the observation-only [herdr backend]({{< relref "/docs/herdr-backend" >}}) the console is read-only: launch, focus, close, and peek are disabled, and the help screen shows the reason next to each key.
+
 {{< diagram "console" >}}
 
 ### Agent-state notification sounds
@@ -107,7 +109,7 @@ fanout 123 --status --format table       # human-readable table format
 fanout 123 --status --post-dashboard     # upsert a rollup comment on the parent issue
 ```
 
-See the [CLI Reference]({{< relref "/docs/cli" >}}) for every JSON field and exit code. `--format table` lists PR state, CI, diff size, and changed-file count. `--post-dashboard` is the only `--status` variant that writes to GitHub — it upserts one rollup comment on the parent issue and keeps updating it.
+See the [CLI Reference]({{< relref "/docs/cli" >}}) for every JSON field and exit code. Each child row carries a `backend` field naming the runtime that owns its pane (`tmux` or `herdr`). `--format table` lists PR state, CI, diff size, and changed-file count. `--post-dashboard` is the only `--status` variant that writes to GitHub — it upserts one rollup comment on the parent issue and keeps updating it.
 
 ## Web dashboard (fanout dashboard --web)
 
@@ -119,6 +121,8 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 
 The server binds only to `127.0.0.1` and exposes GET-only endpoints, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
+
+Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}) the live peek stays empty — herdr backend v1 does not read pane content.
 
 ### F12 / prefix + D
 
@@ -132,5 +136,6 @@ The same registration also binds **`prefix + M`**: press it from a recorded fano
 
 - With `gh` logged out, it shows a banner and a state-only view.
 - Outside tmux it keeps serving, with pane liveness left as unknown.
+- A herdr row matches its saved identity against `herdr api snapshot` for liveness and agent state — identity is never filled in from the snapshot — and its output peek is always empty.
 
 Every flag on this page is listed in the [CLI Reference]({{< relref "/docs/cli" >}}).

@@ -28,7 +28,7 @@ Target 行で user config と repo config を切り替えます。
 popup が編集するのは config ファイルだけです。
 CLI flag と `FANOUT_*` 環境変数は、保存した値より引き続き優先されます。
 `codexPlanMode` は user config と repo config のどちらでも編集できます。
-repo config の安全制限も後述のとおりです。repo config から watcher は有効化できず、HTTP 通知 URL も設定できません。`notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
+repo config の安全制限も後述のとおりです。repo config から watcher は有効化できず、HTTP 通知 URL も `runtimeBackend` も設定できません。`notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
 
 ## 各トグルの目的
 
@@ -45,6 +45,7 @@ repo config の安全制限も後述のとおりです。repo config から watc
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
+- `runtimeBackend`: 解決順の上位で決まらなかったときの fallback の runtime backend（`tmux` または `herdr`）です。親に記録済みの backend、`--backend`、`FANOUT_BACKEND`、実行環境のコンテキスト（`HERDR_ENV` / `TMUX`）がいずれも優先されます。user config 専用で、repo config では警告付きで無視されます。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用です。
 
 watcher と通知 channel は別系統の設定です。
 watcher はラベル巡回による自動起動を opt-in で制御します。
@@ -70,6 +71,7 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード / 同一 worktree 操作 tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | コンソール復帰 tmux キーバインド | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
+| runtime backend | `runtimeBackend` | `FANOUT_BACKEND` | `--backend <tmux\|herdr>` | `tmux` |
 | watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
 | watcher running label | `watcherRunningLabel` | `FANOUT_WATCHER_RUNNING_LABEL` | n/a | `fanout:running` |
@@ -97,6 +99,7 @@ watcher と通知設定に CLI flag はありません。
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,
+  "runtimeBackend": "tmux",
   "watcher": false,
   "watcherTriggerLabel": "fanout:auto",
   "watcherRunningLabel": "fanout:running",

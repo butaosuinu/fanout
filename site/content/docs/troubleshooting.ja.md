@@ -117,3 +117,36 @@ gh auth refresh -s read:project
 
 items が想定より少なく見えることがありますが、Status フィールドの無い Project は全 item にフォールバックし、現在の git repository root と異なる repository の item は警告付きでスキップする仕様どおりの挙動です。
 詳しくは[ワークフロー]({{< relref "/docs/workflow" >}})と[CLI リファレンス]({{< relref "/docs/cli" >}})を参照してください。
+
+## "herdr named session ... is not running"
+
+[herdr backend]({{< relref "/docs/herdr-backend" >}}) には、明示的な名前を付けて稼働中の herdr session が必要です。fanout は herdr server を起動せず、session の作成も attach もしません。`default` は拒否されます。
+先に herdr 側で名前付き session を起動し、同じシェルから確認してください。
+
+```bash
+herdr status --json   # server と session の状態
+```
+
+`HERDR_SOCKET_PATH` は `HERDR_SESSION` より優先されるため、古い socket path が残っていると fanout が別の server を見に行きます。`status` の結果が想定と合わないときは unset してください。
+TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は文字どおりの意味です。herdr backend でのコンソールは、herdr session 内の pane から起動したときだけ立ち上がります。
+
+## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
+
+fanout は検証済みの herdr の組 — CLI と server 0.7.3、protocol 16、API schema version 1 — に固定し、それ以外は新しい version でも fail closed します。
+`herdr 0.7.3 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
+実際に入っているものを確認してください。
+
+```bash
+herdr --version          # herdr 0.7.3 と出ること
+herdr status --json      # server の組: version、protocol、compatible
+herdr api schema --json  # API の組: protocol 16、schema_version 1
+```
+
+herdr 0.7.3 を入れて合わせてください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
+
+## "herdr backend v1 is observation-only; ... is unavailable"
+
+故障ではありません。herdr backend v1 は、herdr session を変更しうる操作を意図的に fail closed します。`runtime backend herdr does not support ...` も同じ系統です(launch・focus・send・close・restore・peek・plan capture・cleanup)。
+新しい launch には tmux backend を使ってください。既存の herdr 行では、branch を merge するだけの `--merge` は使えますが、`--close` / `--cleanup` は拒否されます。workspace は herdr 側で片付けてください。
+関連して、記録済みペインを持つ親への矛盾する `--backend` は `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
+機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。
