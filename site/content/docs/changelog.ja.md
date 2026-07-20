@@ -2,7 +2,7 @@
 title: 変更履歴
 linkTitle: 変更履歴
 description: "各リリースの変更点。新しい順で、ドキュメントへのリンク付き。"
-weight: 90
+weight: 110
 kanji: 録
 yomi: changelog
 ---
@@ -22,7 +22,7 @@ yomi: changelog
   [ワークフロー]({{< relref "/docs/workflow" >}}) と [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) を参照。
 - **Codex pane cleanup の安全化。** Codex ペインを close すると app-server と子孫の Node / MCP process を停止し、`shellKey` でペインの所有を照合し、安全な cleanup を確認できなければ recovery state を残します。
   `shellKey` のない既存の live state 行は、再利用されたペインを誤って対象にせず fail closed します。
-  [CLI リファレンス]({{< relref "/docs/cli#merge--close--cleanup" >}}) を参照。
+  [CLI リファレンス]({{< relref "/docs/cli#--merge----close----cleanup" >}}) を参照。
 - **native subagent による post-work-review。** `$post-work-review` は fresh な通常の Codex native subagent に委譲し、custom agent、model 固定、app-server controller、JSON result parser を使わなくなりました。
   廃止済み driver は integrations 込みの install または update で削除してください。
   driver が残っている間、`--no-skills` による binary-only update は停止します。

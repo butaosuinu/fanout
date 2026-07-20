@@ -2,7 +2,7 @@
 title: CLI Reference
 linkTitle: CLI Reference
 description: "Every command form, flag, environment variable and exit code — the complete fanout surface."
-weight: 50
+weight: 60
 kanji: 引
 yomi: reference
 ---
@@ -98,6 +98,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out — the exception is the app-server bridge startup of a fresh non-Plan `codex` pane, whose in-pane DB setup is fail-fast: a failure there (a bad `FANOUT_DB_PATH`, wrong ownership or permissions) fails that launch. Off by default. |
 | `--dry-run` | — | Print the git worktree, tmux split-window, and agent launch commands without executing them. It creates no worktrees, panes, state rows, or briefing files. |
 | `--debug` | — | Enable extra diagnostic logging. |
+| `--popup-timeout` | `<seconds>` | Deprecated compatibility flag from the old runtime; accepted but ignored. |
 
 ```bash
 fanout 123 --agent codex                  # codex for every child
@@ -472,9 +473,3 @@ The default fan-out flow exits `0` on success (including "no children, nothing t
 | `1` | environment/preflight failure: dev build, no `curl`/`wget`, unwritable binary directory, missing option value |
 | `2` | unknown option, unexpected argument, or incomparable version strings |
 | `3` | latest release lookup failed |
-
-## Deprecated flags
-
-| Flag | Argument | Description |
-|---|---|---|
-| `--popup-timeout` | `<seconds>` | Deprecated compatibility flag from the old runtime. Accepted but ignored by the direct tmux path. |

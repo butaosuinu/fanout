@@ -2,7 +2,7 @@
 title: herdr backend
 linkTitle: herdr backend
 description: "opt-in・観測専用の herdr runtime backend。前提条件、backend 選択の仕組み、tmux との差分、plugin の注意をまとめます。"
-weight: 55
+weight: 90
 kanji: 観
 yomi: herdr
 ---

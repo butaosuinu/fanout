@@ -121,7 +121,10 @@ fanout msg inbox --mark-read
 
 verb の全表や plan task の指定方法など、詳しい仕組みは [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) にあります。
 
-メッセージはバスに永続し、兄弟は自分のチェックポイントで読みます。その pull の上に、`--team` は `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンを載せます(Codex Plan Mode のペインは pull のまま)。`claude` ペインは briefing の指示で、最初のツール操作として Monitor ツール(persistent)の下で `fanout msg watch` を起動し、以後の新着は到着ごとに流れてきて配信時に既読になります(mark-on-emit)。新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します。動作中のペインでレーンが使えないとき(Monitor 不可、restore した codex ペイン)は pull(`inbox` / `board`)と `nudge` に戻ります。注入失敗の回収は `inbox --all` です(失敗した分は既読化済みのため)。ブリッジの起動自体に失敗した codex ペインは fallback ではなく、launch 失敗としてペインと worktree が片づけられます。
+メッセージはバスに永続し、兄弟は自分のチェックポイントで読みます。
+その pull の上に、`--team` は `claude` ペインと新規起動の非 Plan `codex` ペインへ push レーンを載せ、新着を到着ごとに届けます。
+レーンが使えないペインは pull(`inbox` / `board`)と `nudge` に戻ります。
+各レーンの届き方と、注入失敗からの回復手順は [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}}) にあります。
 
 `claude`、`codex`、`opencode` どのペインでも同じく動き、1 セッション内のチームメイトを協調させる Claude Code Agent Teams とは別物です。
 

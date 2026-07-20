@@ -2,7 +2,7 @@
 title: Troubleshooting
 linkTitle: Troubleshooting
 description: "Common fanout error messages and their fixes."
-weight: 80
+weight: 100
 kanji: 直
 yomi: troubleshoot
 ---

@@ -2,7 +2,7 @@
 title: herdr backend
 linkTitle: herdr backend
 description: "The opt-in, observation-only herdr runtime backend: prerequisites, how backend selection works, what differs from tmux, and the plugin cautions."
-weight: 55
+weight: 90
 kanji: 観
 yomi: herdr
 ---

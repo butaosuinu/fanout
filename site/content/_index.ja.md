@@ -1,6 +1,6 @@
 ---
 title: fanout
-description: "GitHub 親 issue の OPEN なサブ issue、あるいはローカルの plan spec を、子 issue / タスクごとに git worktree + tmux ペイン + エージェント CLI(Claude Code / Codex)へ並列展開するオーケストレーター。"
+description: "GitHub 親 issue の OPEN なサブ issue、あるいはローカルの plan spec を、子 issue / タスクごとに git worktree + tmux ペイン + エージェント CLI(Claude Code / Codex / OpenCode)へ並列展開するオーケストレーター。"
 hero:
   kicker: "Parallel agent orchestrator for tmux"
   tagline: "issue でも <em>plan</em> でも、並列に展開する。"
@@ -44,7 +44,7 @@ features:
     - no: "vi"
       icon: "slash"
       title: "エージェント連携"
-      body: "Claude Code / Codex の <code>/fanout</code> スラッシュコマンドと skill を同梱インストール。"
+      body: "Claude Code / Codex の <code>/fanout</code> スラッシュコマンドと skill を同梱インストール。OpenCode の子ペインも選べる。"
       link: "/docs/agents"
 workflow:
   title: "用意して、展開して、片づける。"

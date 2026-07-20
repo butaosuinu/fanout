@@ -1,6 +1,6 @@
 ---
 title: fanout
-description: "Fan a GitHub parent issue's OPEN sub-issues — or a local plan spec — out into parallel tmux panes, one git worktree and agent CLI (Claude Code / Codex) per child or task."
+description: "Fan a GitHub parent issue's OPEN sub-issues — or a local plan spec — out into parallel tmux panes, one git worktree and agent CLI (Claude Code / Codex / OpenCode) per child or task."
 hero:
   kicker: "Parallel agent orchestrator for tmux"
   tagline: "Issues or a plan, <em>fanned</em> out in parallel."
@@ -44,7 +44,7 @@ features:
     - no: "vi"
       icon: "slash"
       title: "Agent integrations"
-      body: "The <code>/fanout</code> slash command and skills for Claude Code &amp; Codex, bundled with the install."
+      body: "The <code>/fanout</code> slash command and skills for Claude Code &amp; Codex, bundled with the install. OpenCode runs children too."
       link: "/docs/agents"
 workflow:
   title: "Prepare, fan out, fold away."

@@ -2,7 +2,7 @@
 title: CLI リファレンス
 linkTitle: CLI リファレンス
 description: "fanout のコマンド形式、フラグ、環境変数、exit code を 1 ページに集めたリファレンス。"
-weight: 50
+weight: 60
 kanji: 引
 yomi: reference
 ---
@@ -98,6 +98,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。既定: off。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。worktree、ペイン、state row、briefing file は作らない。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
+| `--popup-timeout` | `<seconds>` | 旧ランタイム互換の deprecated フラグ。受理されるが無視される。 |
 
 ```bash
 fanout 123 --agent codex                  # 全ての子で codex
@@ -478,9 +479,3 @@ bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付け
 | `1` | 環境 / preflight の失敗: dev build、`curl`/`wget` 無し、書き込めない binary ディレクトリ、オプション値の欠落 |
 | `2` | 未知のオプション、想定外の引数、比較不能な version 文字列 |
 | `3` | 最新 release の取得に失敗した |
-
-## 非推奨フラグ
-
-| フラグ | 引数 | 説明 |
-|---|---|---|
-| `--popup-timeout` | `<seconds>` | 旧ランタイム互換の deprecated フラグ。受理されるが、direct tmux path では無視される。 |

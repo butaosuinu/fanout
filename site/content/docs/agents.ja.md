@@ -1,11 +1,27 @@
 ---
 title: エージェント連携
 linkTitle: エージェント連携
-description: "Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、Codex Plan Mode。"
-weight: 70
+description: "対応エージェントの比較、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、Codex Plan Mode、OpenCode。"
+weight: 80
 kanji: 連
 yomi: agents
 ---
+
+## 対応エージェント
+
+子ペインを起動できるエージェント CLI は 3 つです。
+ファンアウトの仕組み(1 子 = 1 worktree = 1 ペイン = 1 briefing)は共通で、違いはセッションの周辺に現れます。
+
+| | Claude Code | Codex CLI | OpenCode |
+|---|---|---|---|
+| `--agent` 名 | `claude` | `codex` | `opencode` |
+| 同梱 skill | `/fanout` + skills | `$fanout` + skills | なし |
+| Codex Plan Mode(`codexPlanMode`) | — | ✓ | — |
+| `--team` の push 配信 | ✓ Monitor tool 下の `fanout msg watch` | ✓ fresh な非 Plan セッション(app-server bridge) | —(pull のみ) |
+| `fanout msg nudge` の対象 | ✓ | ✓ | —(スキップ) |
+| briefing の構成 | base + Claude 専用 | base + Codex 専用 | base + 共通検証のみ |
+
+push と nudge の行の挙動は [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}})にまとめています。
 
 ## エージェントセッションの中から呼ぶ
 
@@ -61,43 +77,26 @@ fanout skill は「#123 を fan out して」のように依頼するか、明�
 Claude の `/fanout` と同じ安全フロー(dry-run → ターゲット確認 → 本実行)をたどります。
 `fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch` も Codex 版として同梱されており、`$fanout-issues` や `$pr-watch` のように呼び出すと Claude 版と同じ役割を果たします。
 
-`$post-work-review` は `fork_turns: "none"` を指定し、通常の Codex native subagent を fresh な広域レビューとして起動します。
-親は自然言語の指摘を解釈します。
-修正で対象が変わった場合は、別の fresh subagent が新しい対象全体を広域レビューします。
-custom agent、model 固定、app-server controller、result parser は使いません。
+### `$post-work-review` ゲート
 
-reviewer には対象 repository path と diff 範囲を渡すため、repository の内容が Codex model へ送信されます。
-marker helper は spawn 前に、適用対象の `AGENTS.md`、`AGENTS.override.md`、repository の `.codex` files が trusted merge base から変わっていないことを検証します。
-base と同一の instruction は trusted repository conventions として扱い、それ以外の target file と directive は untrusted review evidence として扱います。
-helper は `post-work-review` gate の変更も拒否します。
-root の既定 makefile と `install.sh` の変更も拒否します。
-installed skill package と helper は、review 対象 repository 外に置いた symlink ではない copy が必要です。
-checksum 検証付き release installer だけがこれらを配置、置換、削除します。
-checkout の make target は Codex review gate を変更しません。
-いずれかの Codex root に旧 driver が残る場合、install と link は停止します。
-instruction、gate、gate installer の変更は trusted checkout から起動した reviewer、または人がレビューしてください。
-native subagent は親 session の sandbox、approval policy、network 制限を継承します。
-skill は編集、approval 要求、network 使用を禁止しますが、子だけを厳しい sandbox にはできません。
-強制された read-only が必要なら、Codex を read-only で開始してから実行してください。
-この信頼境界、native spawn、wait のいずれかを維持できない場合は fallback せず停止します。
+`$post-work-review` は fresh な native Codex subagent を 1 つ起動し、対象全体を広域レビューさせます。
+親はその指摘を自然言語のまま解釈し、修正で対象が変わったら新しい対象をまた fresh にレビューし直します。
+reviewer には repository path と diff 範囲を渡すため、repository の内容は Codex model へ送信されます。
 
-helper は filesystem 間で同じ境界を保つため、instruction と gate の path を case-insensitive で照合します。
-symlink の `AGENTS.md` / `AGENTS.override.md`、case variant または nested `.codex` path、`model_instructions_file` または `project_doc_fallback_filenames` を定義した project config、escape を含む project config key、commit 済みまたは worktree の submodule 変更を拒否します。
-checkout 済みの submodule も拒否します。
-clean かつ base と同一の submodule は、review 前に deinitialize してください。
-これらの target は trusted checkout から起動した reviewer、または人がレビューしてください。
+ゲートは自分自身の信頼境界を守ります。
+spawn 前に marker helper が、適用対象の `AGENTS.md` / `AGENTS.override.md` と repository の `.codex` bootstrap files が trusted merge base から変わっていないことを検証し、ゲート自身(`post-work-review` のファイル、root の既定 makefile、`install.sh`)への変更を含む candidate を拒否します。
+インストール済みの skill と helper を配置・置換・削除できるのは checksum 検証付きの release installer だけで、checkout の make target は触れません。
+helper は追跡できないものに対して fail-closed です — symlink や case 違いの instruction ファイル、instruction の場所を変える project config、submodule の変更(clean な submodule は先に deinitialize してください)。
+拒否された対象は trusted checkout から、または人がレビューしてください。
 
-dirty worktree は review-only scope です。
-reviewer は staged、unstaged、untracked の変更を確認し、親は focused checks だけを実行します。
-この scope では marker を書きません。PR gate には candidate を commit してから再実行してください。
-submodule 変更は review 前に fail-closed で停止します。
+subagent は親セッションの sandbox と approval policy を継承します。
+read-only を強制したいときは、Codex 自体を read-only で開始してください。
+dirty worktree はレビュー専用の pass になり、PR gate の marker は書きません — candidate を commit してから再実行してください。
+clean な committed branch では canonical validation を 1 回実行し、exact HEAD・PR base・diff hash を記録します。
+その後の commit、base の移動、diff の変化で marker は無効になります。
 
-clean な committed branch では、skill は repository の canonical validation を 1 回実行し、clean な exact HEAD、PR base commit、diff hash を記録します。
-commit、base の移動、review diff の変更で marker は無効です。
-
-`$pr-watch` は foreground で動きます。
-helper は変化のない snapshot の出力を省き、linked worktree でも cursor を Git metadata に保存します。
-Codex セッション終了後に background watcher は残りません。
+`$pr-watch` は foreground で動き、変化のない snapshot は出力せず、cursor を Git metadata に保存します(linked worktree でも同様)。
+Codex セッションの終了後に background watcher は残りません。
 
 ## Codex Plan Mode
 
@@ -125,12 +124,27 @@ manual と attach の `codex` ペインは、この設定に関係なく従来�
 
 ## OpenCode
 
-OpenCode(`opencode`)は同梱 skill のない子 agent として使えます。`--agent opencode` を渡すか、`--agent NUM=opencode` / `--agent task-id=opencode` で対象ごとに混在させてください。
-opencode の位置引数はプロジェクトパスなので、fanout は起動プロンプトを `--prompt` フラグの値として渡します。ペインの resume には `opencode --continue` を使います。
+OpenCode(`opencode`)は同梱 skill を持たない子 agent です。
+`--agent opencode` を渡すか、`--agent NUM=opencode` / `--agent task-id=opencode` で対象ごとに混在させます。
+
+### 起動と resume
+
+opencode の位置引数はプロジェクトパスなので、fanout は起動プロンプトを `--prompt` フラグの値として渡します。
+ペインの resume には `opencode --continue` を使います。
+
+### プロジェクトルールと briefing
+
 OpenCode はリポジトリの `AGENTS.md` をネイティブに読むため、子ペインは追加のセットアップなしでプロジェクトのルールを拾います。
-fanout の Claude 連携がインストール済みなら、その互換層経由で TUI の plan fan-out coordinator が受け取る `/fanout` コマンドも解決されます。
 briefing には base の requirements と共通の最終検証手順が入り、Claude 専用・Codex 専用のセクションは付きません。
-`fanout msg nudge` は opencode ペインを対象から外すため、`--team` の協調は pull ベースのままです。
+fanout の Claude 連携が入れる `/fanout` コマンドは Claude Code 専用です。
+OpenCode の Claude Code 互換が読むのは `CLAUDE.md` と `~/.claude/skills/` で、`~/.claude/commands` は読みません。
+TUI の plan fan-out coordinator には `claude` か `codex` を選んでください。
+
+### メッセージングは pull ベース
+
+`fanout msg nudge` は opencode ペインを対象から外し、push 配信レーンもありません。
+`--team` でも、opencode の sibling は自分のチェックポイントで bus を読みます(`inbox` / `board`)。
+nudge の除外は意図的な設計です。opencode ペインは `running` より細かいペイン状態を報告しないため、queue された入力を安全に送れるタイミングを fanout が判定できません。
 
 ## briefing の仕組み
 

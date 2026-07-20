@@ -2,7 +2,7 @@
 title: Changelog
 linkTitle: Changelog
 description: "What changed in each fanout release — newest first, with links into the docs."
-weight: 90
+weight: 110
 kanji: 録
 yomi: changelog
 ---
@@ -20,7 +20,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
   See [Workflow]({{< relref "/docs/workflow" >}}) and [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 - **Safer Codex pane cleanup.** Closing a Codex pane now stops its app-server and descendant Node / MCP processes, verifies pane ownership with `shellKey`, and preserves recovery state when cleanup cannot be proven safe.
   Existing live rows without `shellKey` fail closed instead of targeting a reused pane.
-  See [CLI Reference]({{< relref "/docs/cli#merge--close--cleanup" >}}).
+  See [CLI Reference]({{< relref "/docs/cli#--merge----close----cleanup" >}}).
 - **Native post-work-review.** `$post-work-review` now delegates to an ordinary fresh native Codex subagent and no longer uses custom agents, a model pin, an app-server controller, or a JSON result parser.
   Install or update with integrations to remove the retired driver; a binary-only `--no-skills` update stops while that driver remains.
   See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Installation]({{< relref "/docs/installation" >}}).

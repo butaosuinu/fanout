@@ -76,12 +76,17 @@ fanout 123
 ```bash
 fanout 123 --agent claude
 fanout 123 --agent codex
+fanout 123 --agent opencode
 export FANOUT_AGENT=claude   # applies to every following run in this shell
 ```
+
+3 つのエージェントは同梱 skill、Codex Plan Mode、メッセージングが異なります。
+違いは[エージェント連携]({{< relref "/docs/agents" >}})のマトリクスで比較できます。
 
 未知のエージェントはペイン作成前に失敗し、live 実行では選択したエージェント CLI がインストール済みかも確認します。
 fanout は tmux セッション内から実行してください。
 子ペインは `tmux split-window` で直接作られ、`--session` で別セッションを指定しない限り起動元ペインが target になります。
 唯一の例外は引数なしの `fanout`(TUI コンソール)で、素のシェルからも起動できます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 
-次は[ワークフロー]({{< relref "/docs/workflow" >}})で、run を形作る flag を見ていきます。
+次は[ワークフロー]({{< relref "/docs/workflow" >}})です。
+run を形作る flag をそこで扱います。

@@ -2,7 +2,7 @@
 title: 設定
 linkTitle: 設定
 description: "子の起動と briefing のトグル、watcher 制御、TUI 通知 channel と、それらを flag > env > repo > user > default の順で解決する仕組み。"
-weight: 60
+weight: 70
 kanji: 整
 yomi: settings
 ---
@@ -39,9 +39,8 @@ repo config の安全制限も後述のとおりです。repo config から watc
 - `briefingCodeReview`: Claude の子に、コミット前に変更へ `/code-review` スラッシュコマンドを走らせるよう指示します。
 - `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
 - `codexPlanMode`: 通常の issue / Project fan-out の子を interactive な Codex Plan Mode セッションとして起動します。
-  TUI の Issue モードで OPEN な子を持つ issue を選んだ場合にも適用します。
   選択された子はすべて `codex` に解決される必要があり、agent が混在する run はペイン作成前に失敗します。
-  watcher、子のない issue の単独ペイン、manual ペイン、attach ペイン、`fanout plan` task、plan coordinator は制御しません。
+  この設定が効く起動経路と無視する経路は[エージェント連携]({{< relref "/docs/agents#codex-plan-mode" >}})にまとめています。
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
@@ -133,18 +132,6 @@ agent-state 通知は `@fanout_agent_state` から発火し、ペイン出力か
 watcher は誰かが checkout しただけで自動起動してほしくない機能です。そのため repo config では opt-in できません。`<project_root>/.fanout/config.json` が `watcher` を設定していると、fanout は警告してそのキーを無視します。有効化は user config か `FANOUT_WATCHER` で行ってください。一方、`watcherTriggerLabel`、`watcherRunningLabel`、`watcherIntervalSeconds`、`watcherAgent`、`watcherMaxSessions` は repo config でも設定できます。
 
 trigger label は、label を付けた issue と、それが parent fan-out なら起動される OPEN child から agent 作業を始める合図です。それらの本文はそのまま agent briefing になります。label は実行依頼として扱い、その issue と起動対象の child を信頼できるときだけ付けてください。運用の詳細は [Watcher]({{< relref "/docs/watcher" >}}) を参照してください。
-
-## watcher の運用
-
-watcher は、TUI コンソールを起動している間だけ動きます。
-有効化の手順やラベルのライフサイクル、session 予算、後始末までの全体像は [Watcher]({{< relref "/docs/watcher" >}}) を参照してください。
-
-```bash
-# One shell
-export FANOUT_WATCHER=1
-export FANOUT_WATCHER_AGENT=codex
-fanout
-```
 
 ## 前方互換
 
