@@ -28,31 +28,14 @@ English and 日本語.
 - **Wave progression** — `--unblocked-only` reads blockers and fans out only
   unblocked children; rerun as PRs merge and the next wave opens.
 - **Persistent TUI console** — run `fanout` with no arguments for a live
-  pane / issue / PR view with a compact Session navigator plus focus, peek,
-  terminal, same-worktree agent attach, lifecycle keys, and automatic restore
-  of missing worktree panes. The new-session popup starts work from a free
-  prompt or an OPEN issue picked from a list; `Ctrl+O` opens the selected issue
-  in the browser, and per-child agent choices let one task use claude while
-  another uses codex. When a parent Issue fan-out creates its orchestrator, it
-  starts that pane with the popup's default agent at the project root without a
-  worktree, before any new child panes. The children keep their per-child agent
-  assignments. The briefing tells the orchestrator not to implement
-  child-scoped work and instead to poll `fanout <N> --status`, own parent-scope
-  work, integrate and post the final rollup comment after all children merge,
-  and use `--merge` / `--cleanup` for lifecycle work. An all-blocked first
-  selection creates no panes; re-select after a child unblocks to create the
-  orchestrator and child pane. Once the orchestrator exists, later selections
-  do not create another and fan out only newly unblocked children. A prompt-mode
-  checkbox instead decomposes the prompt into parallel tasks via `/fanout plan`;
-  the same checkbox appears in issue mode, decomposing a single issue into
-  parallel issue-less tasks with separately chosen coordinator and task agents.
-  After a Prompt, plan coordinator, or Issue launch from `n` succeeds, focus
-  moves to the first newly created pane in actual creation order. When an
-  Issue fan-out creates an orchestrator, that pane is first in the creation
-  order. The `s` key
-  opens the settings popup. Return to the console from any pane with `F11` or
-  `prefix + T`; mouse or `prefix` movement keys keep the selected row in sync
-  with the focused pane.
+  pane / issue / PR view with a compact Session navigator, focus / peek /
+  terminal / lifecycle keys, and automatic restore of missing worktree panes.
+  The new-session popup starts work from a free prompt or an OPEN issue,
+  chooses agents per child, and can decompose either into parallel tasks via
+  `/fanout plan`; a parent Issue fan-out first creates an orchestrator pane
+  at the project root. Return from any pane with `F11` or `prefix + T`. The
+  full key map and popup behavior are in the
+  [monitoring docs](https://butaosuinu.github.io/fanout/docs/monitoring/).
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it
@@ -67,16 +50,22 @@ English and 日本語.
 
 ## Installation
 
+Requires **git**, **tmux 3.3+**, and — for GitHub issue / Project
+workflows and the PR status / cleanup views — the authenticated
+**GitHub CLI (`gh`)** (`gh auth status`). The
+agent CLI you fan out with (**`claude`** / **`codex`** / **`opencode`**) is
+not bundled; install it separately.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | sh
 ```
 
-This installs the `fanout` binary (to `~/.local/bin` by default) plus the
-bundled Claude/Codex integration files. Binary-only install, custom
-destinations, pinned versions, uninstall, and building from a checkout are all
-covered in the [installation docs](https://butaosuinu.github.io/fanout/docs/installation/).
-
-Make sure `~/.local/bin` is on your `PATH`.
+This installs the `fanout` binary (to `~/.local/bin` by default — make sure
+it is on your `PATH`) plus the bundled Claude/Codex integration files.
+Binary-only install, custom destinations, pinned versions, uninstall,
+building from a checkout, and the remaining prerequisite notes (Project
+mode's gh scope, the opt-in herdr backend) are covered in the
+[installation docs](https://butaosuinu.github.io/fanout/docs/installation/).
 
 ## Quick start
 
@@ -116,29 +105,16 @@ detailed in the [workflow docs](https://butaosuinu.github.io/fanout/docs/workflo
 
 ## Sibling messaging (fanout msg)
 
-`--team` opts a run into sibling messaging: each child's standard briefing
-gains a coordination section, and the panes are seeded into a peer registry
-backed by a per-parent SQLite bus (`fanout msg peers` / `inbox` / `board` /
-`send` / `post` / `nudge`). Codex Plan Mode children keep the minimal Plan
-briefing without the section, but are still seeded.
-
-Messages persist in the bus and siblings read them at their own checkpoints;
-on top of that pull loop, `claude` panes and fresh non-Plan `codex` panes get
-a push lane (Codex Plan Mode panes stay pull-based):
-
-- `fanout msg watch` follows the bus and emits each new message (1:1 and
-  board) as one line; an emitted message is marked read (mark-on-emit).
-- `claude` panes are briefed to start `fanout msg watch` under the Monitor
-  tool (persistent) as their first tool action, then keep working.
-- Fresh non-Plan `codex` panes launched with `--team` start through an
-  app-server bridge that injects unread messages into a turn while the thread
-  is idle; restored panes resume without the bridge and pull instead.
-- In a running pane without a working lane — no Monitor for `claude`, a
-  restored `codex` pane — siblings fall back to pull (`inbox` / `board`) plus
-  `nudge`, a best-effort hint that is never sent to a `blocked` pane. After an
-  injection failure, recover with `fanout msg inbox --all` — the failed batch
-  is already marked read. A codex bridge that fails to start fails the launch
-  itself and is cleaned up.
+`--team` opts a run into sibling messaging: each child's briefing gains a
+coordination section, and the panes are registered on a per-parent SQLite
+bus driven by the `fanout msg` verbs (`peers` / `inbox` / `board` / `send` /
+`post` / `nudge`). Codex Plan Mode children keep the minimal Plan briefing
+without the section, but are still registered. Messages persist in the bus
+and siblings read them at
+their own checkpoints; `claude` panes and fresh non-Plan `codex` panes also
+get a push lane that delivers new messages as they arrive. Push-lane
+mechanics, fallbacks, and failure recovery are covered in the
+[workflow docs](https://butaosuinu.github.io/fanout/docs/workflow/).
 
 This is separate from the Watcher mode below: that watches GitHub labels, not
 messages.
@@ -205,27 +181,10 @@ confirm. fanout itself never calls an LLM — the skills generate flags from iss
 context. See the
 [agent integration docs](https://butaosuinu.github.io/fanout/docs/agents/).
 
-## Prerequisites
+## Development requirements
 
-- **git** and **tmux 3.3+**. GitHub issue / Project workflows, PR status, and
-  cleanup/status views also need the **GitHub CLI (`gh`)**, authenticated
-  (`gh auth status`); local `fanout plan` runs and manual TUI panes do not.
-- tmux is the default runtime backend; outside a herdr session, existing tmux
-  workflows do not change. The opt-in herdr backend is observation-only in v1
-  and needs a running named session of herdr 0.7.3, which is AGPL-licensed and
-  not bundled — install it separately. See the
-  [herdr backend docs](https://butaosuinu.github.io/fanout/docs/herdr-backend/).
-- The agent CLI you launch children with — **`claude`** (Claude Code),
-  **`codex`**, and/or **`opencode`** (OpenCode) — on your `PATH` for live runs.
-  The install only bundles fanout's
-  skills/commands for Claude Code and Codex; it does not install the agents
-  themselves. (`--dry-run` and read-only commands don't need one.)
-- Batch fan-out (`fanout <parent>`) must run from inside tmux; the no-argument
-  TUI console can start from a plain shell.
-- Project mode needs the `read:project` gh scope
-  (`gh auth refresh -s read:project`).
-- Building from a checkout additionally needs Go 1.26.5+, Node.js 24+, and
-  pnpm 11+ (the curl install ships a prebuilt binary and needs neither).
+Building from a checkout needs Go 1.26.5+, Node.js 24+, and pnpm 11+ (the
+curl install ships a prebuilt binary and needs none of these).
 
 ## Development
 
