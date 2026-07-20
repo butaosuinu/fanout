@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
@@ -26,6 +27,7 @@ type tuiRestoreReport struct {
 	Tracked       int
 	RemovedShells int
 	Skipped       int
+	Adopted       int
 }
 
 type recreatedPane struct {
@@ -41,11 +43,26 @@ var (
 	closeFreshRestoredPane     = tmuxrun.CloseFreshPane
 	waitRestoredPaneReady      = codexapp.WaitReady
 	closeRestoredPaneIfOwned   = tmuxrun.ClosePaneIfOwned
+	restorePaneStartTime       = tmuxrun.PaneStartTime
+)
+
+// Adoption provenance window: the live pane's root process must have started
+// shortly before the row was recorded. split-window precedes RecordPane, and
+// Codex Plan Mode startup (panelaunch.CodexPlanTUIStartupTimeout, 90s) plus
+// state-lock contention can hold that gap open, so the early bound is
+// generous; the late bound only absorbs second-precision rounding.
+const (
+	adoptPaneStartEarly = 15 * time.Minute
+	adoptPaneStartLate  = 2 * time.Minute
 )
 
 type tuiRestoreSnapshot struct {
 	Live         map[string]tmuxrun.LivePane
 	PanesByTitle map[string][]tmuxrun.LivePane
+	// ServerStart is the tmux server's start time. Pane ids are never reused
+	// within one server lifetime, so a row created at or after this instant
+	// still owns its recorded pane id. Zero (query failed) disables adoption.
+	ServerStart time.Time
 }
 
 func newTUIRestoreFunc(projectRoot, session, commandName string) func() (string, error) {
@@ -60,7 +77,7 @@ func newTUIRestoreFunc(projectRoot, session, commandName string) func() (string,
 }
 
 func restoreRecordedPanes(projectRoot, session, commandName string) (tuiRestoreReport, error) {
-	roots, _ := worktree.ListRoots(projectRoot) // Degrade to the current root, matching the TUI state loader.
+	roots, rootsErr := worktree.ListRoots(projectRoot) // Degrade to the current root, matching the TUI state loader.
 	initialSnapshot, err := loadTUIRestoreSnapshot(session)
 	if err != nil {
 		return tuiRestoreReport{}, err
@@ -68,8 +85,14 @@ func restoreRecordedPanes(projectRoot, session, commandName string) (tuiRestoreR
 	var report tuiRestoreReport
 	var restoreErr error
 	claimed := preclaimLiveRestoreIdentities(roots, initialSnapshot)
+	claims := collectRestoreClaimants(roots)
+	if rootsErr != nil {
+		// An incomplete root listing may hide claimants in unlisted sibling
+		// stores; restore proceeds, adoption fails closed for this cycle.
+		claims.complete = false
+	}
 	for _, root := range uniqueRestoreRoots(roots) {
-		rootReport, err := restoreRecordedPanesForRoot(root, session, commandName, claimed)
+		rootReport, err := restoreRecordedPanesForRoot(root, session, commandName, claimed, claims)
 		report.Add(rootReport)
 		restoreErr = errors.Join(restoreErr, err)
 	}
@@ -99,11 +122,11 @@ func preclaimLiveRestoreIdentities(roots []string, snapshot tuiRestoreSnapshot) 
 	return claimed
 }
 
-func restoreRecordedPanesForRoot(root, session, commandName string, claimed map[string]bool) (tuiRestoreReport, error) {
-	return restoreRecordedPanesForRootWithSnapshot(root, session, commandName, loadTUIRestoreSnapshot, claimed)
+func restoreRecordedPanesForRoot(root, session, commandName string, claimed map[string]bool, claims *restoreClaimants) (tuiRestoreReport, error) {
+	return restoreRecordedPanesForRootWithSnapshot(root, session, commandName, loadTUIRestoreSnapshot, claimed, claims)
 }
 
-func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, loadSnapshot func(string) (tuiRestoreSnapshot, error), claimed map[string]bool) (tuiRestoreReport, error) {
+func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, loadSnapshot func(string) (tuiRestoreSnapshot, error), claimed map[string]bool, claims *restoreClaimants) (tuiRestoreReport, error) {
 	hasState, err := restoreStateFileExists(root)
 	if err != nil || !hasState {
 		return tuiRestoreReport{}, err
@@ -124,6 +147,12 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 	if snapshot.Live == nil {
 		snapshot.Live = map[string]tmuxrun.LivePane{}
 	}
+	// Direct single-root callers (tests) may pass nil claims: fall back to this
+	// store's own rows, the pre-cross-root behavior.
+	if claims == nil {
+		claims = newRestoreClaimants()
+		claims.addRows(locked.Panes)
+	}
 
 	var report tuiRestoreReport
 	changed := false
@@ -137,6 +166,20 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 		if backend.NormalizeName(pane.Backend) != backend.Tmux {
 			report.Skipped++
 			continue
+		}
+		// Adoption must run before the dedupe skip: preclaimed live issue rows
+		// never reach the alive branch below.
+		if key, adoptErr := adoptLegacyLivePaneKey(pane, snapshot, claims); adoptErr != nil {
+			restoreErr = errors.Join(restoreErr, adoptErr)
+		} else if key != "" {
+			pane.ShellKey = key
+			locked.Panes[idx].ShellKey = key
+			cur := snapshot.Live[pane.PaneID]
+			cur.ShellKey = key
+			snapshot.Live[pane.PaneID] = cur
+			claims.keys[key]++
+			report.Adopted++
+			changed = true
 		}
 		identity := restoreDedupeKey(pane)
 		if identity != "" && claimed[identity] {
@@ -276,7 +319,10 @@ func loadTUIRestoreSnapshot(session string) (tuiRestoreSnapshot, error) {
 	if err != nil {
 		return tuiRestoreSnapshot{}, err
 	}
-	return tuiRestoreSnapshot{Live: live, PanesByTitle: liveSessionPanesByTitle(sessionPanes, live)}, nil
+	// Best-effort: a failed query leaves ServerStart zero, which only disables
+	// legacy-pane adoption for this cycle; restore itself proceeds.
+	serverStart, _ := tmuxrun.ServerStartTime()
+	return tuiRestoreSnapshot{Live: live, PanesByTitle: liveSessionPanesByTitle(sessionPanes, live), ServerStart: serverStart}, nil
 }
 
 func liveSessionPanesByTitle(sessionPanes []tmuxrun.PaneInfo, live map[string]tmuxrun.LivePane) map[string][]tmuxrun.LivePane {
@@ -402,6 +448,132 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 		fanoutPath = commandName
 	}
 	return agent.WithFanoutBin(command, fanoutPath), "", nil
+}
+
+// restoreClaimants indexes, across every restore root's store, how many rows
+// record each pane id and each liveness key. Adoption consults it so a pane
+// or key that any other row — in any root — also claims fails closed.
+type restoreClaimants struct {
+	paneIDs map[string]int
+	keys    map[string]int
+	// complete is false when a store could not be read; an incomplete sweep
+	// may hide a claimant, so it disables adoption for the whole cycle.
+	complete bool
+}
+
+func newRestoreClaimants() *restoreClaimants {
+	return &restoreClaimants{paneIDs: map[string]int{}, keys: map[string]int{}, complete: true}
+}
+
+func collectRestoreClaimants(roots []string) *restoreClaimants {
+	claims := newRestoreClaimants()
+	for _, root := range uniqueRestoreRoots(roots) {
+		store, err := state.LoadProject(root)
+		if err != nil {
+			claims.complete = false
+			continue
+		}
+		claims.addRows(store.Panes)
+	}
+	return claims
+}
+
+func (c *restoreClaimants) addRows(rows []state.Pane) {
+	for _, pane := range rows {
+		if id := strings.TrimSpace(pane.PaneID); id != "" {
+			c.paneIDs[id]++
+		}
+		if key := strings.TrimSpace(pane.ShellKey); key != "" {
+			c.keys[key]++
+		}
+	}
+}
+
+// adoptLegacyLivePaneKey migrates a keyless legacy agent row whose recorded
+// pane is still alive: it stamps a fresh @fanout_shell_key on the live pane so
+// the row graduates to the keyed identity that pane close requires, and
+// returns the key to persist.
+//
+// Ownership proof: tmux never reuses a pane id within one server lifetime, so
+// a row created at or after the server's start time still owns its recorded
+// pane id — the live pane at that id is the exact pane the row launched.
+// Rows older than the server (or with an unparsable CreatedAt, or when the
+// server start is unknown) fail closed: their recorded id may have been
+// reused by an unrelated pane. The incarnation proof is server-scoped, so a
+// second, per-pane proof binds the exact pane: the live pane's root-process
+// start time must fall in the window in which the row recorded its pane.
+// On top of those, adoption keeps defense-in-depth requirements: the live
+// pane must carry the launch-time fanout markers (@fanout_worktree_path
+// equal to the row's worktree and @fanout_pane_label equal to the row's
+// border label), the row must be the only claimant of the pane id across
+// every restore root's store, and the row must be alive by path containment.
+// Rows that are keyed, shells, or missing a worktree path return ("", nil).
+//
+// A live pane already holding a key is an interrupted earlier adoption
+// (stamped, then the state save failed or the process died) — within the
+// same server incarnation nothing else stamps a key on this row's own pane
+// without also recording a row, and a recorded key is rejected via the
+// claimant index. Such an orphan key is re-associated without restamping.
+// The tmux stamp happens before the state row is persisted; the reverse
+// order would create the fail-closed keyed-row-without-live-key state on
+// stamp failure.
+func adoptLegacyLivePaneKey(pane state.Pane, snapshot tuiRestoreSnapshot, claims *restoreClaimants) (string, error) {
+	live := snapshot.Live
+	if claims == nil || !claims.complete {
+		return "", nil
+	}
+	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" || strings.TrimSpace(pane.WorktreePath) == "" {
+		return "", nil
+	}
+	created, createdErr := time.Parse(time.RFC3339, strings.TrimSpace(pane.CreatedAt))
+	if snapshot.ServerStart.IsZero() || createdErr != nil || created.Before(snapshot.ServerStart) {
+		//nolint:nilerr // Unprovable incarnation declines adoption; the row stays legacy, not an error.
+		return "", nil
+	}
+	cur, ok := live[pane.PaneID]
+	if !ok {
+		return "", nil
+	}
+	liveWorktree := strings.TrimSpace(cur.WorktreePath)
+	if liveWorktree == "" || filepath.Clean(liveWorktree) != filepath.Clean(strings.TrimSpace(pane.WorktreePath)) {
+		return "", nil
+	}
+	rowLabel := tmuxrun.NeutralizePaneLabel(panelaunch.BorderLabel(pane.Parent, restorePaneTitle(pane)))
+	if liveLabel := strings.TrimSpace(cur.Label); liveLabel == "" || liveLabel != strings.TrimSpace(rowLabel) {
+		return "", nil
+	}
+	if claims.paneIDs[strings.TrimSpace(pane.PaneID)] != 1 {
+		return "", nil
+	}
+	if !restorePaneAlive(live, pane) {
+		return "", nil
+	}
+	// Per-pane provenance: the live pane's root process must have started in
+	// the window in which this row recorded its pane. A pane id coincidence —
+	// another server generation, another socket's server — cannot fake the
+	// process start time matching the row's CreatedAt.
+	paneStart, startErr := restorePaneStartTime(pane.PaneID)
+	if startErr != nil {
+		//nolint:nilerr // Unverifiable provenance declines adoption; the next poll retries.
+		return "", nil
+	}
+	if paneStart.Before(created.Add(-adoptPaneStartEarly)) || paneStart.After(created.Add(adoptPaneStartLate)) {
+		return "", nil
+	}
+	if liveKey := strings.TrimSpace(cur.ShellKey); liveKey != "" {
+		if claims.keys[liveKey] > 0 {
+			return "", nil
+		}
+		return liveKey, nil
+	}
+	key, err := panelaunch.NewShellPaneKey()
+	if err != nil {
+		return "", fmt.Errorf("adopt legacy pane %s: %w", pane.PaneID, err)
+	}
+	if err := setRestoredPaneLivenessKey(pane.PaneID, key); err != nil {
+		return "", fmt.Errorf("adopt legacy pane %s liveness key: %w", pane.PaneID, err)
+	}
+	return key, nil
 }
 
 func restorePaneAlive(live map[string]tmuxrun.LivePane, pane state.Pane) bool {
@@ -542,6 +714,7 @@ func (r *tuiRestoreReport) Add(other tuiRestoreReport) {
 	r.Tracked += other.Tracked
 	r.RemovedShells += other.RemovedShells
 	r.Skipped += other.Skipped
+	r.Adopted += other.Adopted
 }
 
 func (r tuiRestoreReport) Changed() bool {
@@ -558,6 +731,9 @@ func (r tuiRestoreReport) Notice() string {
 	}
 	if r.Rebound > 0 {
 		parts = append(parts, fmt.Sprintf("rebound %d pane(s)", r.Rebound))
+	}
+	if r.Adopted > 0 {
+		parts = append(parts, fmt.Sprintf("adopted %d legacy pane(s)", r.Adopted))
 	}
 	if r.RemovedShells > 0 {
 		parts = append(parts, fmt.Sprintf("removed %d stale terminal(s)", r.RemovedShells))

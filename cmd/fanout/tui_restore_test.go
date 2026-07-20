@@ -80,7 +80,7 @@ func TestRestoreRecordedPanesRebindsLivePaneByTitle(t *testing.T) {
 				"Restore API": {livePane},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRestoreRecordedPanesRemovesStaleShellRows(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestRestoreRecordedPanesKeepsLiveShellWhenShellKeyMissing(t *testing.T) {
 				"%9": {ID: "%9", CurrentPath: root, Title: "terminal"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestRestoreRecordedPanesKeepsKeyedAgentWhenLiveKeyIsUnavailable(t *testing.
 			Live:         map[string]tmuxrun.LivePane{livePane.ID: livePane},
 			PanesByTitle: map[string][]tmuxrun.LivePane{livePane.Title: {livePane}},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestRestoreRecordedPanesRemovesShellWhenLiveShellKeyDiffers(t *testing.T) {
 				"%9": {ID: "%9", CurrentPath: root, Title: "terminal", ShellKey: "shell-2"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestRestoreRecordedPanesSkipsRootWithoutStateFile(t *testing.T) {
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		snapshotCalled = true
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestRestoreRecordedPanesDoesNotRecreateLivePaneWithPathMismatch(t *testing.
 				"%old": {ID: "%old", CurrentPath: "/tmp", Title: "Restore API"},
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,6 +287,504 @@ func TestRestoreRecordedPanesDoesNotRecreateLivePaneWithPathMismatch(t *testing.
 	}
 	if report.Skipped != 1 || report.Restored != 0 || report.Rebound != 0 {
 		t.Fatalf("report = %+v, want one skipped pane and no restore", report)
+	}
+}
+
+// Fixed instants for the adoption tests: the tmux server started at the
+// epoch below, rows created after it hold the incarnation proof that their
+// recorded pane id was never reused, and the default pane start (30s before
+// the row) satisfies the per-pane provenance window.
+var (
+	restoreAdoptServerStart   = time.Unix(1_700_000_000, 0)
+	restoreAdoptCreatedAfter  = time.Unix(1_700_000_060, 0).UTC().Format(time.RFC3339)
+	restoreAdoptCreatedBefore = time.Unix(1_699_999_940, 0).UTC().Format(time.RFC3339)
+	restoreAdoptPaneStart     = time.Unix(1_700_000_030, 0)
+)
+
+func stubRestorePaneStartTime(t *testing.T, fn func(string) (time.Time, error)) {
+	t.Helper()
+	original := restorePaneStartTime
+	restorePaneStartTime = fn
+	t.Cleanup(func() { restorePaneStartTime = original })
+}
+
+func stubDefaultRestorePaneStartTime(t *testing.T) {
+	t.Helper()
+	stubRestorePaneStartTime(t, func(string) (time.Time, error) { return restoreAdoptPaneStart, nil })
+}
+
+// TestRestoreRecordedPanesAdoptsLegacyLivePaneKey pins the migration for rows
+// recorded before per-pane liveness keys existed: a live keyless agent pane
+// created within this tmux server's lifetime and carrying the launch-time
+// fanout markers is stamped once and the key is persisted so lifecycle close
+// can verify it.
+func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		pane        func(root, wt string) state.Pane
+		live        func(root, wt string) tmuxrun.LivePane
+		paneStart   func() (time.Time, error)
+		wantAdopted bool
+		wantStamps  int
+		wantKey     string
+		wantSkipped int
+	}{
+		{
+			name: "legacy issue agent row alive by path gets a key",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, Slug: "restore-api-101", DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: filepath.Join(wt, "internal"), Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			wantAdopted: true,
+			wantStamps:  1,
+		},
+		{
+			name: "legacy manual worktree row gets a key",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "@manual", IssueNum: -8, Slug: "manual-8-main-pane", DisplayName: "manual-8-main-pane", PaneID: "%live", Agent: "codex", CodexPlanMode: true, WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "manual-8-main-pane", WorktreePath: wt, Label: "@manual · manual-8-main-pane"}
+			},
+			wantAdopted: true,
+			wantStamps:  1,
+		},
+		{
+			// A live key on a keyless row is an earlier adoption whose state
+			// save failed or crashed: re-associate it instead of restamping.
+			name: "orphaned live key is re-associated without a restamp",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: "key-orphan", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			wantAdopted: true,
+			wantKey:     "key-orphan",
+		},
+		{
+			// The recorded pane id predates this tmux server, so it may have
+			// been reused by an unrelated pane: the incarnation proof fails.
+			name: "row created before this tmux server stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedBefore}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+		},
+		{
+			name: "row without a created timestamp stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+		},
+		{
+			// A pane whose root process started an hour before the row was
+			// recorded is not the pane this row launched (id coincidence
+			// from another server generation or socket).
+			name: "live pane whose process predates the row stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			paneStart: func() (time.Time, error) { return restoreAdoptPaneStart.Add(-time.Hour), nil },
+		},
+		{
+			name: "pane start lookup failure stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			paneStart: func() (time.Time, error) { return time.Time{}, errors.New("pane gone") },
+		},
+		{
+			name: "live pane without the fanout worktree marker stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", Label: "#81 · Restore API"}
+			},
+		},
+		{
+			// An attached agent shares the worktree but never this row's label.
+			name: "live pane with another session's label stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "reviewer", WorktreePath: wt, Label: "@manual · attached-reviewer"}
+			},
+		},
+		{
+			name: "keyed row is not restamped",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", ShellKey: "key-1", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: "key-1", WorktreePath: wt}
+			},
+		},
+		{
+			name: "keyless shell row is skipped, not adopted",
+			pane: func(root, _ string) state.Pane {
+				return state.Pane{Parent: "@shell", IssueNum: -1, Kind: state.PaneKindShell, PaneID: "%live", DisplayName: "terminal", WorktreePath: root, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(root, _ string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: root, Title: "terminal", WorktreePath: root}
+			},
+			wantSkipped: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+			if err := os.MkdirAll(wt, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var stamped []string
+			stubRestorePaneOps(t, func(paneID, key string) error {
+				stamped = append(stamped, paneID+"\x00"+key)
+				return nil
+			}, nil, nil, nil)
+			startFn := tt.paneStart
+			if startFn == nil {
+				startFn = func() (time.Time, error) { return restoreAdoptPaneStart, nil }
+			}
+			stubRestorePaneStartTime(t, func(string) (time.Time, error) { return startFn() })
+			original := tt.pane(root, wt)
+			writeRestoreState(t, root, []state.Pane{original})
+			livePane := tt.live(root, wt)
+
+			report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+				return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}, ServerStart: restoreAdoptServerStart}, nil
+			}, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := readRestoreState(t, root)
+			if len(got.Panes) != 1 || got.Panes[0].PaneID != original.PaneID {
+				t.Fatalf("state panes = %+v, want the original live row preserved", got.Panes)
+			}
+			if report.Changed() {
+				t.Fatalf("report = %+v, adoption must not trigger a layout re-apply", report)
+			}
+			if report.Skipped != tt.wantSkipped || report.Restored != 0 || report.Rebound != 0 {
+				t.Fatalf("report = %+v, want skipped=%d and no restore", report, tt.wantSkipped)
+			}
+			if !tt.wantAdopted {
+				if report.Adopted != 0 || len(stamped) != 0 || got.Panes[0].ShellKey != original.ShellKey {
+					t.Fatalf("restoreRecordedPanesForRoot() = (adopted=%d, stamps=%v, key=%q), want untouched row", report.Adopted, stamped, got.Panes[0].ShellKey)
+				}
+				return
+			}
+			if report.Adopted != 1 {
+				t.Fatalf("Adopted = %d, want 1", report.Adopted)
+			}
+			key := got.Panes[0].ShellKey
+			if tt.wantKey != "" {
+				if key != tt.wantKey {
+					t.Fatalf("adopted shellKey = %q, want re-associated key %q", key, tt.wantKey)
+				}
+			} else if !strings.HasPrefix(key, "shell-") {
+				t.Fatalf("adopted shellKey = %q, want generated liveness key", key)
+			}
+			if len(stamped) != tt.wantStamps {
+				t.Fatalf("liveness stamps = %v, want %d stamp(s)", stamped, tt.wantStamps)
+			}
+			if tt.wantStamps == 1 && stamped[0] != original.PaneID+"\x00"+key {
+				t.Fatalf("liveness stamps = %v, want one stamp of %q on %s", stamped, key, original.PaneID)
+			}
+		})
+	}
+}
+
+// Repeated attaches of one agent to one worktree share a DisplayName, so two
+// keyless rows can claim the same pane id with identical markers. Neither may
+// be adopted: stamping the first would let its close kill the other session.
+func TestRestoreRecordedPanesDoesNotAdoptAmbiguousTwinRows(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamps := 0
+	stubRestorePaneOps(t, func(string, string) error {
+		stamps++
+		return nil
+	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
+	twin := state.Pane{
+		Parent:       "@manual",
+		Kind:         state.PaneKindAttachedAgent,
+		DisplayName:  "claude for restore-api-101",
+		PaneID:       "%live",
+		Agent:        "claude",
+		WorktreePath: wt,
+		CreatedAt:    restoreAdoptCreatedAfter,
+	}
+	first, second := twin, twin
+	first.IssueNum = -4
+	second.IssueNum = -6
+	writeRestoreState(t, root, []state.Pane{first, second})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
+			"%live": {ID: "%live", CurrentPath: wt, Title: "claude for restore-api-101", WorktreePath: wt, Label: "@manual · claude for restore-api-101"},
+		}, ServerStart: restoreAdoptServerStart}, nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 2 || got.Panes[0].ShellKey != "" || got.Panes[1].ShellKey != "" {
+		t.Fatalf("state panes = %+v, want both ambiguous twin rows left keyless", got.Panes)
+	}
+	if report.Adopted != 0 || stamps != 0 {
+		t.Fatalf("report = %+v (stamps=%d), want ambiguous adoption declined", report, stamps)
+	}
+}
+
+// Claimants live in every restore root's store, not just the one being
+// restored: a sibling root's row recording the same pane id or the same
+// liveness key must block adoption there too.
+func TestRestoreRecordedPanesAdoptionChecksClaimantsAcrossRoots(t *testing.T) {
+	tests := []struct {
+		name    string
+		sibling state.Pane
+		liveKey string
+	}{
+		{
+			name:    "pane id claimed by a sibling root's row",
+			sibling: state.Pane{Parent: "90", IssueNum: 201, DisplayName: "Sibling API", PaneID: "%live", ShellKey: "key-sibling", Agent: "claude"},
+		},
+		{
+			name:    "orphan key recorded by a sibling root's row",
+			sibling: state.Pane{Parent: "90", IssueNum: 201, DisplayName: "Sibling API", PaneID: "%elsewhere", ShellKey: "key-orphan", Agent: "claude"},
+			liveKey: "key-orphan",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sibling := t.TempDir()
+			wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+			if err := os.MkdirAll(wt, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stamps := 0
+			stubRestorePaneOps(t, func(string, string) error {
+				stamps++
+				return nil
+			}, nil, nil, nil)
+			stubDefaultRestorePaneStartTime(t)
+			writeRestoreState(t, root, []state.Pane{{
+				Parent:       "81",
+				IssueNum:     101,
+				DisplayName:  "Restore API",
+				PaneID:       "%live",
+				Agent:        "claude",
+				WorktreePath: wt,
+				CreatedAt:    restoreAdoptCreatedAfter,
+			}})
+			siblingPane := tt.sibling
+			siblingPane.WorktreePath = sibling
+			writeRestoreState(t, sibling, []state.Pane{siblingPane})
+			claims := collectRestoreClaimants([]string{root, sibling})
+
+			report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+				return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
+					"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: tt.liveKey, WorktreePath: wt, Label: "#81 · Restore API"},
+				}, ServerStart: restoreAdoptServerStart}, nil
+			}, nil, claims)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := readRestoreState(t, root)
+			if len(got.Panes) != 1 || got.Panes[0].ShellKey != "" {
+				t.Fatalf("state panes = %+v, want cross-root claimed row left keyless", got.Panes)
+			}
+			if report.Adopted != 0 || stamps != 0 {
+				t.Fatalf("report = %+v (stamps=%d), want cross-root adoption declined", report, stamps)
+			}
+		})
+	}
+}
+
+// A live key already recorded by another row proves the pane belongs to that
+// row; absorbing it would let one close kill the other row's pane.
+func TestRestoreRecordedPanesDoesNotAbsorbKeyClaimedByAnotherRow(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	otherWt := filepath.Join(root, ".fanout", "worktrees", "restore-api-102")
+	for _, dir := range []string{wt, otherWt} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamps := 0
+	stubRestorePaneOps(t, func(string, string) error {
+		stamps++
+		return nil
+	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
+	writeRestoreState(t, root, []state.Pane{
+		{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter},
+		{Parent: "81", IssueNum: 102, DisplayName: "Other API", PaneID: "%other", ShellKey: "key-claimed", Agent: "claude", WorktreePath: otherWt, CreatedAt: restoreAdoptCreatedAfter},
+	})
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{
+			"%live":  {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: "key-claimed", WorktreePath: wt, Label: "#81 · Restore API"},
+			"%other": {ID: "%other", CurrentPath: otherWt, Title: "Other API", ShellKey: "key-claimed", WorktreePath: otherWt, Label: "#81 · Other API"},
+		}, ServerStart: restoreAdoptServerStart}, nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 2 || got.Panes[0].ShellKey != "" || got.Panes[1].ShellKey != "key-claimed" {
+		t.Fatalf("state panes = %+v, want claimed key left with its own row", got.Panes)
+	}
+	if report.Adopted != 0 || stamps != 0 {
+		t.Fatalf("report = %+v (stamps=%d), want no adoption of a claimed key", report, stamps)
+	}
+}
+
+func TestRestoreRecordedPanesAdoptionStampFailureKeepsRowLegacy(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubRestorePaneOps(t, func(string, string) error { return errors.New("stamp failed") }, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:       "81",
+		IssueNum:     101,
+		DisplayName:  "Restore API",
+		PaneID:       "%live",
+		Agent:        "claude",
+		WorktreePath: wt,
+		CreatedAt:    restoreAdoptCreatedAfter,
+	}})
+	livePane := tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}, ServerStart: restoreAdoptServerStart}, nil
+	}, nil, nil)
+
+	if err == nil || !strings.Contains(err.Error(), "adopt legacy pane") {
+		t.Fatalf("restore error = %v, want adopt legacy pane failure", err)
+	}
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 1 || got.Panes[0].PaneID != "%live" || got.Panes[0].ShellKey != "" {
+		t.Fatalf("state panes = %+v, want legacy row unchanged", got.Panes)
+	}
+	if report.Adopted != 0 || report.Restored != 0 || report.Changed() {
+		t.Fatalf("report = %+v, want no adoption after stamp failure", report)
+	}
+}
+
+// TestRestoreRecordedPanesAdoptsLegacyPaneClaimedByPreclaim pins the adoption
+// point before the dedupe skip: preclaimed live issue rows never reach the
+// alive branch, so adopting later would silently strand them keyless.
+func TestRestoreRecordedPanesAdoptsLegacyPaneClaimedByPreclaim(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamps := 0
+	stubRestorePaneOps(t, func(string, string) error {
+		stamps++
+		return nil
+	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:       "81",
+		IssueNum:     101,
+		DisplayName:  "Restore API",
+		PaneID:       "%live",
+		Agent:        "claude",
+		WorktreePath: wt,
+		CreatedAt:    restoreAdoptCreatedAfter,
+	}})
+	claimed := map[string]bool{"issue\x0081\x00101": true}
+	livePane := tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{livePane.ID: livePane}, ServerStart: restoreAdoptServerStart}, nil
+	}, claimed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := readRestoreState(t, root)
+	if len(got.Panes) != 1 || !strings.HasPrefix(got.Panes[0].ShellKey, "shell-") {
+		t.Fatalf("state panes = %+v, want preclaimed legacy row adopted", got.Panes)
+	}
+	if report.Adopted != 1 || report.Skipped != 1 || stamps != 1 {
+		t.Fatalf("report = %+v (stamps=%d), want adoption before the dedupe skip", report, stamps)
+	}
+}
+
+func TestRestoreRecordedPanesAdoptionIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	wt := filepath.Join(root, ".fanout", "worktrees", "restore-api-101")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamps := 0
+	stubRestorePaneOps(t, func(string, string) error {
+		stamps++
+		return nil
+	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
+	writeRestoreState(t, root, []state.Pane{{
+		Parent:       "81",
+		IssueNum:     101,
+		DisplayName:  "Restore API",
+		PaneID:       "%live",
+		Agent:        "claude",
+		WorktreePath: wt,
+		CreatedAt:    restoreAdoptCreatedAfter,
+	}})
+
+	if _, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}}, ServerStart: restoreAdoptServerStart}, nil
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	key := readRestoreState(t, root).Panes[0].ShellKey
+
+	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
+		return tuiRestoreSnapshot{Live: map[string]tmuxrun.LivePane{"%live": {ID: "%live", CurrentPath: wt, Title: "Restore API", ShellKey: key, WorktreePath: wt, Label: "#81 · Restore API"}}, ServerStart: restoreAdoptServerStart}, nil
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readRestoreState(t, root).Panes[0].ShellKey; got != key {
+		t.Fatalf("second restore shellKey = %q, want first adopted key %q kept", got, key)
+	}
+	if report.Adopted != 0 || stamps != 1 {
+		t.Fatalf("second restore report = %+v (stamps=%d), want no re-adoption", report, stamps)
 	}
 }
 
@@ -317,7 +815,7 @@ func TestRestoreRecordedPanesSkipsHerdrRowWithoutMutation(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +857,7 @@ func TestRestoreRecordedPanesSkipsDuplicateIssueClaimedByAnotherRoot(t *testing.
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, claimed)
+	}, claimed, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +944,7 @@ func TestRestoreRecordedPanesRecreatesMissingAgentPaneWithResumeCommand(t *testi
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +1002,7 @@ func TestRestoreTracksPaneWhenLivenessStampAndFreshCloseFail(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "pane still live") {
 		t.Fatalf("restore error = %v, want failed fresh close", err)
@@ -549,7 +1047,7 @@ func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "pane still live") {
 		t.Fatalf("restore error = %v, want failed owned close", err)
@@ -798,7 +1296,7 @@ func TestRestoreRecordedPanesRecreatesCoordinatorWithLivenessKey(t *testing.T) {
 
 	report, err := restoreRecordedPanesForRootWithSnapshot(root, "fanout", "fanout", func(string) (tuiRestoreSnapshot, error) {
 		return tuiRestoreSnapshot{}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func installTmuxShim(t *testing.T, script string) string {
@@ -264,6 +265,10 @@ func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody stri
 	if len(optionBodies) > 4 {
 		sessionIDBody = optionBodies[4]
 	}
+	labelBody := `printf ''`
+	if len(optionBodies) > 5 {
+		labelBody = optionBodies[5]
+	}
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 case "$4" in
@@ -284,6 +289,9 @@ case "$4" in
 	;;
 *fanout_role*)
 	` + roleBody + `
+	;;
+*fanout_pane_label*)
+	` + labelBody + `
 	;;
 *session_id*)
 	` + sessionIDBody + `
@@ -309,14 +317,15 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		`printf '%%9\t/repo\n%%10\t/repo\n'`,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n'`,
 		`printf '%%9\tconsole\n'`,
-		`printf '%%9\t$1\n%%10\t$1\n%%11\t$2\n'`)
+		`printf '%%9\t$1\n%%10\t$1\n%%11\t$2\n'`,
+		`printf '%%9\t#81 · nine\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine", Role: "console", SessionID: "$1"},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine", Role: "console", Label: "#81 · nine", SessionID: "$1"},
 		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done", ProjectRoot: "/repo", WorktreePath: "/wt/ten\twith\ttabs", SessionID: "$1"},
 		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: "", SessionID: "$2"},
 	}
@@ -332,6 +341,7 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_project_root}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_worktree_path}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_role}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_pane_label}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{session_id}", "---",
 	})
 }
@@ -500,6 +510,37 @@ func TestParseLivePanePathsTrimsCarriageReturns(t *testing.T) {
 	want := []LivePane{{ID: "%5", CurrentPath: "/wt/five"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseLivePanePaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParsePSElapsed(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "minutes and seconds", in: "05:09", want: 5*time.Minute + 9*time.Second},
+		{name: "hours minutes seconds", in: "01:02:03", want: time.Hour + 2*time.Minute + 3*time.Second},
+		{name: "days prefix", in: "17-03:20:15", want: 17*24*time.Hour + 3*time.Hour + 20*time.Minute + 15*time.Second},
+		{name: "leading spaces from ps padding", in: " 1:02", want: time.Minute + 2*time.Second},
+		{name: "bare seconds are rejected", in: "42", wantErr: true},
+		{name: "empty output is rejected", in: "", wantErr: true},
+		{name: "non-numeric field is rejected", in: "aa:bb", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parsePSElapsed(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parsePSElapsed(%q) = %v, want error", tt.in, got)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("parsePSElapsed(%q) = %v, %v, want %v", tt.in, got, err, tt.want)
+			}
+		})
 	}
 }
 

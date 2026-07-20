@@ -38,6 +38,7 @@ const (
 	livePaneProjectRootFormat  = "#{pane_id}\t#{" + projectRootOption + "}"
 	livePaneWorktreePathFormat = "#{pane_id}\t#{" + worktreePathOption + "}"
 	livePaneRoleFormat         = "#{pane_id}\t#{" + roleOption + "}"
+	livePaneLabelFormat        = "#{pane_id}\t#{" + paneLabelOption + "}"
 	livePaneSessionIDFormat    = "#{pane_id}\t#{session_id}"
 	paneAlternateFormat        = "#{alternate_on}"
 	paneGeometryFormat         = "#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{client_width}\t#{client_height}"
@@ -182,6 +183,83 @@ func compareTmuxVersions(a, b tmuxVersion) int {
 
 func (v tmuxVersion) String() string {
 	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
+}
+
+// ServerStartTime returns the tmux server's start time (#{start_time}).
+// Pane ids are unique for the lifetime of one server, so a fanout state row
+// created after this instant can trust its recorded pane id to still mean
+// the exact pane it launched; a row older than the server predates every
+// live pane id. Callers making destructive decisions must fail closed when
+// this errors.
+func ServerStartTime() (time.Time, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{start_time}").Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("tmux display-message start_time: %w", err)
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse tmux start_time %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	return time.Unix(secs, 0), nil
+}
+
+// PaneStartTime returns the wall-clock instant paneID's root process started,
+// which is the moment tmux created the pane. tmux exposes no pane creation
+// time format, so this resolves #{pane_pid} and subtracts the process's
+// elapsed time (ps etime, locale-independent unlike lstart) from the current
+// clock. Second precision. Callers making destructive decisions must fail
+// closed when this errors.
+func PaneStartTime(paneID string) (time.Time, error) {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return time.Time{}, fmt.Errorf("pane id is required")
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("tmux display-message pane_pid for %s: %w", paneID, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		return time.Time{}, fmt.Errorf("parse pane_pid %q for %s", strings.TrimSpace(string(out)), paneID)
+	}
+	cmd := exec.Command("ps", "-o", "etime=", "-p", strconv.Itoa(pid))
+	cmd.Env = envWithCLocale(os.Environ())
+	psOut, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("ps etime for pane %s pid %d: %w", paneID, pid, err)
+	}
+	elapsed, err := parsePSElapsed(strings.TrimSpace(string(psOut)))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("pane %s pid %d: %w", paneID, pid, err)
+	}
+	return time.Now().Add(-elapsed), nil
+}
+
+// parsePSElapsed parses ps's etime format: [[dd-]hh:]mm:ss.
+func parsePSElapsed(raw string) (time.Duration, error) {
+	s := raw
+	var days int64
+	if before, after, ok := strings.Cut(s, "-"); ok {
+		d, err := strconv.ParseInt(before, 10, 64)
+		if err != nil || d < 0 {
+			return 0, fmt.Errorf("parse ps etime %q", raw)
+		}
+		days = d
+		s = after
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, fmt.Errorf("parse ps etime %q", raw)
+	}
+	var total int64
+	for _, part := range parts {
+		v, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || v < 0 {
+			return 0, fmt.Errorf("parse ps etime %q", raw)
+		}
+		total = total*60 + v
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(total)*time.Second, nil
 }
 
 // CurrentClientSize returns the tmux client dimensions, not the current pane
@@ -457,6 +535,11 @@ type LivePane struct {
 	// pane. It gives action keybindings a stable match that does not depend on
 	// pane_current_path.
 	WorktreePath string
+	// Label is @fanout_pane_label, the neutralized border label fanout stamps
+	// at launch (see SetPaneLabel). Unlike #{pane_title} it is never rewritten
+	// by the agent inside the pane, so it identifies which fanout session the
+	// pane was created for. Degrades to "" when the listing fails.
+	Label string
 	// Role is @fanout_role, the auto-layout role fanout stamps on panes it
 	// manages (RoleConsole for the TUI console). Like every pane user option it
 	// is settable by the process inside the pane, so it is a display/UX signal,
@@ -578,6 +661,10 @@ func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 	if roleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneRoleFormat).Output(); err == nil {
 		roles = parseLivePaneField(string(roleOut))
 	}
+	labels := map[string]string{}
+	if labelOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneLabelFormat).Output(); err == nil {
+		labels = parseLivePaneField(string(labelOut))
+	}
 	sessionIDs := map[string]string{}
 	if sessionIDOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneSessionIDFormat).Output(); err == nil {
 		sessionIDs = parseLivePaneField(string(sessionIDOut))
@@ -603,6 +690,7 @@ func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 		pane.ProjectRoot = projectRoots[pane.ID]
 		pane.WorktreePath = worktreePaths[pane.ID]
 		pane.Role = roles[pane.ID]
+		pane.Label = labels[pane.ID]
 		pane.SessionID = sessionIDs[pane.ID]
 		joined = append(joined, pane)
 	}
