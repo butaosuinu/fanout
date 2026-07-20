@@ -451,7 +451,9 @@ func TestPromptCompletionFitsStandardPopupWithModeRow(t *testing.T) {
 	})
 	m.promptOnly = true
 	m.width = 74
-	m.height = 20
+	// Height budget: one row taller than the two-agent era; the third registry
+	// agent's selector row leaves the same completion-popup room as before.
+	m.height = 21
 	m.openNewPaneForm()
 	m.repoFiles = []string{
 		"cmd/main.go",
@@ -486,7 +488,8 @@ func TestPromptCompletionFallbackFitsStandardModalWithModeRow(t *testing.T) {
 		},
 	})
 	m.width = 80
-	m.height = 24
+	// One row taller than the two-agent budget; see the popup variant above.
+	m.height = 25
 	m.openNewPaneForm()
 	m.repoFiles = []string{
 		"cmd/main.go",

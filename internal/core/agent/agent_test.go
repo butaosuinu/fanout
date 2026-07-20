@@ -61,6 +61,56 @@ func TestBuildCommandCodexStaysBare(t *testing.T) {
 	}
 }
 
+// TestBuildCommandOpencodeRoutesPromptThroughFlag pins the opencode launch
+// contract verified in the #357 spike: opencode's positional argument is a
+// project path, so the prompt must travel as the --prompt flag value.
+func TestBuildCommandOpencodeRoutesPromptThroughFlag(t *testing.T) {
+	got, err := BuildCommand("opencode", "[fanout #1] go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "opencode --prompt '[fanout #1] go'"
+	if got != want {
+		t.Fatalf("BuildCommand(opencode) = %q, want %q", got, want)
+	}
+}
+
+// TestBuildCommandOpencodePromptFlagQuotesValue ensures the flag form keeps
+// the prompt a single shell token even with shell metacharacters.
+func TestBuildCommandOpencodePromptFlagQuotesValue(t *testing.T) {
+	got, err := BuildCommand("opencode", "[fanout #1] it's ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "opencode --prompt '[fanout #1] it'\\''s ready'"
+	if got != want {
+		t.Fatalf("BuildCommand(opencode) = %q, want %q", got, want)
+	}
+}
+
+// TestBuildResumeCommandOpencodeOmitsPromptFlag pins resume without a prompt:
+// the --prompt flag must not appear (it would swallow --continue as its
+// value), leaving the bare --continue resume contract.
+func TestBuildResumeCommandOpencodeOmitsPromptFlag(t *testing.T) {
+	got, err := BuildResumeCommand("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "opencode --continue" {
+		t.Fatalf("BuildResumeCommand(opencode) = %q, want opencode --continue", got)
+	}
+}
+
+func TestBuildCommandForBackendOpencodeStaysBackendAgnostic(t *testing.T) {
+	got, err := BuildCommandForBackend("opencode", "prompt", backend.Herdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "opencode --prompt prompt" {
+		t.Fatalf("BuildCommandForBackend(opencode, herdr) = %q, want opencode --prompt prompt", got)
+	}
+}
+
 func TestBuildCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
 	got, err := BuildCommandForBackend("claude", "[fanout #1] go", backend.Herdr)
 	if err != nil {
@@ -218,5 +268,25 @@ func TestWithFanoutBinQuotesExecutablePath(t *testing.T) {
 	want := "FANOUT_BIN='/tmp/fanout build/fanout-go' PATH=/bin codex"
 	if got != want {
 		t.Fatalf("WithFanoutBin() = %q, want %q", got, want)
+	}
+}
+
+func TestPaneStateRefined(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent string
+		want  bool
+	}{
+		{name: "claude refines via tmux hooks", agent: "claude", want: true},
+		{name: "codex refines via plan controller and team bridge", agent: "codex", want: true},
+		{name: "opencode stays at the wrapper states", agent: "opencode", want: false},
+		{name: "unknown agent fails safe", agent: "future-agent", want: false},
+		{name: "empty agent fails safe", agent: "", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PaneStateRefined(tc.agent); got != tc.want {
+				t.Fatalf("PaneStateRefined(%q) = %v, want %v", tc.agent, got, tc.want)
+			}
+		})
 	}
 }

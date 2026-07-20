@@ -83,7 +83,7 @@ Make sure `~/.local/bin` is on your `PATH`.
 From inside a tmux session, in the repository you want to work in:
 
 ```bash
-# pick the child agent once (or pass --agent claude / --agent codex per run)
+# pick the child agent once (or pass --agent claude / --agent codex / --agent opencode per run)
 export FANOUT_AGENT=claude
 
 fanout 123 --dry-run    # preview commands; create no worktrees, panes, state, or briefings
@@ -189,7 +189,8 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 | `fanout dashboard --web` | Serve the read-only web dashboard on localhost |
 | `fanout 123 --merge 4` | Fast-forward merge a child branch (`--close` / `--cleanup` fold panes away) |
 
-Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` or set
+Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` /
+`--agent opencode` or set
 `FANOUT_AGENT`; the status, dashboard, and lifecycle commands (`--status`,
 `dashboard`, `--merge`) don't.
 The [full CLI reference](https://butaosuinu.github.io/fanout/docs/cli/) documents
@@ -214,10 +215,11 @@ context. See the
   and needs a running named session of herdr 0.7.3, which is AGPL-licensed and
   not bundled — install it separately. See the
   [herdr backend docs](https://butaosuinu.github.io/fanout/docs/herdr-backend/).
-- The agent CLI you launch children with — **`claude`** (Claude Code) and/or
-  **`codex`** — on your `PATH` for live runs. The install only bundles fanout's
-  skills/commands for them; it does not install the agents themselves.
-  (`--dry-run` and read-only commands don't need one.)
+- The agent CLI you launch children with — **`claude`** (Claude Code),
+  **`codex`**, and/or **`opencode`** (OpenCode) — on your `PATH` for live runs.
+  The install only bundles fanout's
+  skills/commands for Claude Code and Codex; it does not install the agents
+  themselves. (`--dry-run` and read-only commands don't need one.)
 - Batch fan-out (`fanout <parent>`) must run from inside tmux; the no-argument
   TUI console can start from a plain shell.
 - Project mode needs the `read:project` gh scope

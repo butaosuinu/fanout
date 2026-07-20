@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -394,7 +395,7 @@ func newNewPaneForm(defaultAgent string, width int) newPaneForm {
 	)
 	prompt.Focus()
 
-	if defaultAgent != "codex" {
+	if agent.ValidateKnown(defaultAgent) != nil {
 		defaultAgent = defaultLaunchAgent
 	}
 	return newPaneForm{
@@ -479,7 +480,9 @@ func (m model) newPaneContentAvailableHeight() int {
 }
 
 func (m model) newPanePromptFixedOverhead() int {
-	overhead := 10
+	// The base covers every fixed row except the agent selector, which renders
+	// one row per registry agent.
+	overhead := 8 + len(launchAgents)
 	if !m.promptOnly {
 		// The in-process fallback keeps the title as its own section, followed
 		// by the blank section separator.
@@ -513,6 +516,13 @@ func (m model) newPaneHintRows() int {
 }
 
 func (m model) newPaneHintWrapWidth() int {
+	return m.newPaneModalContentWidth()
+}
+
+// newPaneModalContentWidth returns the inner width available to form content:
+// the popup gutter in promptOnly mode, or the modal frame's padding+border
+// inset in the in-process fallback.
+func (m model) newPaneModalContentWidth() int {
 	width := m.modalWidth()
 	if m.promptOnly {
 		return max(width-2*popupContentPadding, 1)
@@ -1179,6 +1189,9 @@ func (m model) issuePlanFanoutCheckboxView() string {
 // one side-by-side block (coordinator selector next to the task-agent tabs), so
 // turning the checkbox on never grows the form taller than the plain Agent row:
 // the popup geometry has no room for extra rows at common terminal heights.
+// Three or more registry agents can push the joined block past the modal
+// content width on narrow fallback terminals; the blocks then stack vertically
+// and pickerVisibleRows budgets the extra rows via coordinatorWorkerWraps.
 func (m model) coordinatorWorkerRowView() string {
 	coordMarker, workerMarker := plainItemMarker, plainItemMarker
 	if m.newPane.focus == newPaneFieldAgent {
@@ -1189,9 +1202,22 @@ func (m model) coordinatorWorkerRowView() string {
 	}
 	coord := coordMarker + "Coordinator agent\n" + m.agentSelectorView()
 	worker := workerMarker + "Task agent\n" + m.workerSelectorView()
+	if m.coordinatorWorkerWraps() {
+		return lipgloss.JoinVertical(lipgloss.Left, coord, worker)
+	}
 	// A two-space gap keeps the joined block inside the modal's 40-column
 	// width floor on narrow terminals.
 	return lipgloss.JoinHorizontal(lipgloss.Top, coord, "  ", worker)
+}
+
+// coordinatorWorkerWraps reports whether the side-by-side coordinator/worker
+// block would exceed the modal content width. Markers are width-neutral, so
+// the probe uses plain markers regardless of focus.
+func (m model) coordinatorWorkerWraps() bool {
+	coord := plainItemMarker + "Coordinator agent\n" + m.agentSelectorView()
+	worker := plainItemMarker + "Task agent\n" + m.workerSelectorView()
+	row := lipgloss.JoinHorizontal(lipgloss.Top, coord, "  ", worker)
+	return lipgloss.Width(row) > m.newPaneModalContentWidth()
 }
 
 // workerSelectorView renders the issue-mode plan fan-out task-agent tabs: the
@@ -1230,7 +1256,9 @@ func (m model) agentSelectorView() string {
 
 const maxAgentLaunchCount = 3
 
-var launchAgents = []string{"claude", "codex"}
+// launchAgents lists the agents offered by the new-pane form, sourced from the
+// core registry so adding an agent there grows the selector automatically.
+var launchAgents = agent.Supported()
 
 func defaultAgentCounts(defaultAgent string) map[string]int {
 	counts := make(map[string]int, len(launchAgents))

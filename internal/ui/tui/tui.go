@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -291,7 +292,7 @@ func normalizeOptions(opts Options) Options {
 	if opts.lifecycle == nil {
 		opts.lifecycle = defaultLifecycleRunner{}
 	}
-	if opts.DefaultAgent != "codex" {
+	if agent.ValidateKnown(opts.DefaultAgent) != nil {
 		opts.DefaultAgent = defaultLaunchAgent
 	}
 	if opts.FocusPane == nil {

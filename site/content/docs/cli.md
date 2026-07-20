@@ -91,7 +91,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 
 | Flag | Argument | Description |
 |---|---|---|
-| `--agent` | `<name>` or `<NUM>=<name>` | Agent CLI to launch in child panes: `claude` or `codex`. Required unless `FANOUT_AGENT` is set. A bare `--agent <name>` sets the default for every child; the repeatable `--agent <NUM>=<name>` form overrides one child issue (or Project item) by number, e.g. `--agent codex --agent 456=claude`. Each child resolves its agent from a matching per-target override first, then the global `--agent`, then `FANOUT_AGENT`. Unknown agents fail before pane creation, and live mode checks that the agent CLI is installed — but only for the agents actually selected this run. |
+| `--agent` | `<name>` or `<NUM>=<name>` | Agent CLI to launch in child panes: `claude`, `codex`, or `opencode`. Required unless `FANOUT_AGENT` is set. A bare `--agent <name>` sets the default for every child; the repeatable `--agent <NUM>=<name>` form overrides one child issue (or Project item) by number, e.g. `--agent codex --agent 456=claude`. Each child resolves its agent from a matching per-target override first, then the global `--agent`, then `FANOUT_AGENT`. Unknown agents fail before pane creation, and live mode checks that the agent CLI is installed — but only for the agents actually selected this run. |
 | `--backend` | `<tmux\|herdr>` | Runtime backend for this run. Default: `tmux`. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1, so issue and plan launches fail closed before any worktree or state mutation. A parent with recorded panes keeps its recorded backend; a conflicting override fails instead of mixing backends. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
@@ -363,7 +363,7 @@ Sibling coordination over a per-parent SQLite message bus. Run from inside a fan
 | `post` | `[--kind K] <body...>` — post `<body...>` to the shared board. |
 | `mark-read` | `[--id <N> ... \| --all]` — mark 1:1 messages read by id (repeatable), or `--all` to mark everything and advance the board cursor. |
 | `register` | Upsert this pane into the peers table (auto-done by `--team`; use it to (re-)join). |
-| `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent can take queued input (state `running` / `working` / `plan` / `idle`). A notify verb, not a message: it never touches the DB and is a no-op success otherwise (pane gone, state unknown, `blocked` on a permission prompt, or done). |
+| `nudge` | `<N>` — best-effort: drop an inbox hint into peer `#N`'s pane via tmux only when its agent can take queued input (state `running` / `working` / `plan` / `idle`). A notify verb, not a message: it never touches the DB and is a no-op success otherwise (pane gone, state unknown, `blocked` on a permission prompt, or done). Agents without pane-state refinement (`opencode`) are excluded entirely, since their panes stay `running` even on a permission prompt. |
 
 Common options across verbs: `--json` (machine-readable output), `--self <N>` and `--parent <ref>` (override pane detection).
 

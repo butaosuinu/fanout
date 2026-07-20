@@ -13,7 +13,7 @@ Action mode creates child panes directly with `tmux split-window`, so start or a
 
 ## "agent is required"
 
-Pass `--agent claude` or `--agent codex`, or set the `FANOUT_AGENT` environment variable.
+Pass `--agent claude`, `--agent codex`, or `--agent opencode`, or set the `FANOUT_AGENT` environment variable.
 
 ```bash
 fanout 123 --agent claude

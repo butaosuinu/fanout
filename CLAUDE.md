@@ -47,7 +47,7 @@ Build the binary with `make build-go`. Use focused tests while editing and
   inside tmux.
 - Override one child issue's agent with repeatable `--agent NUM=name`; for
   `fanout plan`, use `--agent task-id=name`. Supported agents remain
-  `claude` and `codex`.
+  `claude`, `codex`, and `opencode`.
 - Verify changes without creating worktrees or panes:
   `./fanout-go <parent-issue> --agent claude --dry-run`.
 - Verify issue-less plan tasks without creating worktrees or panes:

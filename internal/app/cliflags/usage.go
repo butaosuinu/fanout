@@ -6,8 +6,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 )
+
+// supportedAgentsPlaceholder is swapped for the live registry list at print
+// time so newly registered agents appear in --help without an edit here.
+const supportedAgentsPlaceholder = "@SUPPORTED_AGENTS@"
 
 const usageText = `Usage: fanout
        fanout <parent-issue|project-url> [options]
@@ -24,7 +29,7 @@ with a briefing that points at .fanout/briefings/fanout-<repo>-<num>.md.
 
 Options:
   --agent <name|NUM=name>
-                      Agent to launch (claude|codex). Repeatable: a bare
+                      Agent to launch (@SUPPORTED_AGENTS@). Repeatable: a bare
                       name is the default, and NUM=name overrides one child
                       issue. Required unless FANOUT_AGENT is set or every
                       selected child has an override. Unknown agents fail
@@ -209,7 +214,8 @@ Exit codes (update):
 
 // Usage writes the help text to w.
 func Usage(w io.Writer) {
-	fmt.Fprint(w, usageText)
+	text := strings.ReplaceAll(usageText, supportedAgentsPlaceholder, strings.Join(agent.Supported(), "|"))
+	fmt.Fprint(w, text)
 }
 
 // NormalizeParentRef canonicalizes a parent reference exactly the way Parse

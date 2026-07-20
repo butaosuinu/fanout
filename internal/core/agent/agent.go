@@ -21,7 +21,12 @@ type Definition struct {
 	// Claude's tmux entry carries the @fanout_agent_state hook settings;
 	// non-tmux runtimes must not receive commands that target tmux pane state.
 	BackendLaunchArgs map[backend.Name][]string
-	ResumeArgs        []string
+	// PromptFlag, when non-empty, passes the launch prompt as this flag's value
+	// instead of a positional argument (opencode's positional is a project
+	// path). Emitted only when a prompt is present, so resume commands never
+	// receive a value-less flag.
+	PromptFlag string
+	ResumeArgs []string
 }
 
 var registry = map[string]Definition{
@@ -32,6 +37,12 @@ var registry = map[string]Definition{
 		ResumeArgs:        []string{"--continue"},
 	},
 	"codex": {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
+	"opencode": {
+		Name:       "opencode",
+		Command:    "opencode",
+		PromptFlag: "--prompt",
+		ResumeArgs: []string{"--continue"},
+	},
 }
 
 // ValidateKnown returns an error if name is not in fanout's MVP registry.
@@ -84,7 +95,7 @@ func BuildCommandForBackend(name, prompt string, runtimeBackend backend.Name) (s
 	if err != nil {
 		return "", err
 	}
-	return buildCommand(def.Command, args, prompt), nil
+	return buildCommand(def.Command, args, def.PromptFlag, prompt), nil
 }
 
 // BuildResolvedCommand returns the live-launch command using the resolved
@@ -109,7 +120,7 @@ func BuildResolvedCommandForBackend(name, prompt string, runtimeBackend backend.
 	if err != nil {
 		return "", err
 	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, args, prompt), nil
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, args, def.PromptFlag, prompt), nil
 }
 
 // BuildResumeCommand returns the generic resume command for a supported agent.
@@ -128,7 +139,7 @@ func BuildResumeCommandForBackend(name string, runtimeBackend backend.Name) (str
 	if err != nil {
 		return "", err
 	}
-	return buildCommand(def.Command, slices.Concat(args, def.ResumeArgs), ""), nil
+	return buildCommand(def.Command, slices.Concat(args, def.ResumeArgs), def.PromptFlag, ""), nil
 }
 
 // BuildResolvedResumeCommand returns the live resume command using the resolved
@@ -153,7 +164,7 @@ func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Na
 	if err != nil {
 		return "", err
 	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(args, def.ResumeArgs), ""), nil
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(args, def.ResumeArgs), def.PromptFlag, ""), nil
 }
 
 func launchArgsForBackend(def Definition, runtimeBackend backend.Name) ([]string, error) {
@@ -171,13 +182,17 @@ func WithFanoutBin(command, fanoutPath string) string {
 }
 
 // buildCommand assembles a shell command from an executable, per-agent flags,
-// and an optional prompt, quoting every token.
-func buildCommand(executable string, args []string, prompt string) string {
+// and an optional prompt, quoting every token. promptFlag routes a non-empty
+// prompt through that flag (e.g. opencode --prompt) instead of a positional.
+func buildCommand(executable string, args []string, promptFlag, prompt string) string {
 	parts := []string{ShellQuote(executable)}
 	for _, arg := range args {
 		parts = append(parts, ShellQuote(arg))
 	}
 	if strings.TrimSpace(prompt) != "" {
+		if promptFlag != "" {
+			parts = append(parts, ShellQuote(promptFlag))
+		}
 		parts = append(parts, ShellQuote(prompt))
 	}
 	return strings.Join(parts, " ")
@@ -190,6 +205,21 @@ func Supported() []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// PaneStateRefined reports whether the agent refines @fanout_agent_state
+// beyond the launch wrapper's running/done — claude via its tmux hooks and
+// codex via the Plan Mode controller and team bridge. A pane of an agent
+// without refinement stays "running" even while a permission dialog is
+// focused, so peermsg must not send-keys a nudge into it. Unknown and empty
+// names fail safe: no nudge.
+func PaneStateRefined(name string) bool {
+	switch name {
+	case "claude", "codex":
+		return true
+	default:
+		return false
+	}
 }
 
 // ShellQuote quotes one POSIX shell token.

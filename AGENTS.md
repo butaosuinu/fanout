@@ -193,8 +193,8 @@ touching only class-A packages can rely on AI review.
   identity detection from `.fanout/state.json` (the `[fanout #N of #P]` prompt
   prefix is a fallback) and the peer roster; `internal/infra/msgstore` is the
   send/post/inbox/board/mark-read query layer. The briefing coordination
-  section is shared by `claude` and `codex` panes — distinct from Claude-only
-  Agent Teams. Messages persist to the bus and are read by pull (`inbox` /
+  section is shared by `claude`, `codex`, and `opencode` panes — distinct from
+  Claude-only Agent Teams. Messages persist to the bus and are read by pull (`inbox` /
   `board`) or by the `--team` push lanes (see
   `docs/session-messaging-push.ja.md`): `fanout msg watch` — a blocking
   follower that marks messages read on emit — feeds claude panes via the
@@ -209,7 +209,9 @@ touching only class-A packages can rely on AI review.
   around the fanout-driven initial turn, and the codex team bridge reports
   working/idle/blocked across the bridged session. The nudge gate never
   includes blocked — the nudge's Enter could activate a focused permission
-  dialog.
+  dialog — and agents without pane-state refinement (opencode) are excluded
+  from nudge entirely, since their panes stay `running` even while a
+  permission dialog is focused.
 
 ## Be Careful
 

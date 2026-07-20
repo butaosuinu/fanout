@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // issueModeModel returns a form parked in issue mode with items already loaded
@@ -393,5 +394,40 @@ func TestIssuePlanFanoutDoesNotLeakIntoPromptMode(t *testing.T) {
 	}
 	if m.newPane.agentCount["claude"] != 2 || m.newPane.agentCount["codex"] != 1 {
 		t.Fatalf("prompt counts = %v, want claude 2 / codex 1 restored", m.newPane.agentCount)
+	}
+}
+
+// TestCoordinatorWorkerRowStacksOnNarrowModal pins the narrow-terminal
+// fallback: with three registry agents the side-by-side coordinator/worker
+// block exceeds the modal's 40-column content floor, so it stacks vertically
+// and pickerVisibleRows budgets the two extra rows.
+func TestCoordinatorWorkerRowStacksOnNarrowModal(t *testing.T) {
+	m := issueModeModel(t, IssueListItem{Number: 3, Title: "Fix bug"})
+	m.newPane.issuePlanFanout = true
+
+	m.width = 80
+	if m.coordinatorWorkerWraps() {
+		t.Fatal("side-by-side block should fit the width-80 fallback modal")
+	}
+	if got, want := lipgloss.Height(m.coordinatorWorkerRowView()), 1+len(launchAgents); got != want {
+		t.Fatalf("side-by-side block height = %d, want %d", got, want)
+	}
+
+	// Fallback modal content floor (40 cells) is narrower than the joined row.
+	m.width = 56
+	if !m.coordinatorWorkerWraps() {
+		t.Fatal("side-by-side block should wrap at the modal width floor")
+	}
+	if got, want := lipgloss.Height(m.coordinatorWorkerRowView()), len(launchAgents)+3; got != want {
+		t.Fatalf("stacked block height = %d, want %d", got, want)
+	}
+
+	m.height = 26
+	if got := m.pickerVisibleRows(); got != 1 {
+		t.Fatalf("pickerVisibleRows with the stacked block = %d, want 1 (26-25)", got)
+	}
+	m.width = 80
+	if got := m.pickerVisibleRows(); got != 3 {
+		t.Fatalf("pickerVisibleRows side-by-side = %d, want 3 (26-23)", got)
 	}
 }

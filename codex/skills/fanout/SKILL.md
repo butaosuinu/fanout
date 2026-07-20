@@ -63,7 +63,7 @@ run.
    breadth, file count, or whether work is code or documentation.
 5. Use a per-target `--agent NUM=name` override only when the user supplied
    it or a provider-specific requirement makes it necessary. Supported agents
-   are `claude` and `codex`.
+   are `claude`, `codex`, and `opencode`.
 6. Pass `--codex-plan-mode` only when every selected target resolves to
    `codex` after overrides.
 

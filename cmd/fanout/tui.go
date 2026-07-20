@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -284,8 +285,9 @@ func defaultTUIAgent() string {
 }
 
 func tuiAgentOrDefault(agentName string) string {
-	if strings.TrimSpace(agentName) == "codex" {
-		return "codex"
+	name := strings.TrimSpace(agentName)
+	if agent.ValidateKnown(name) == nil {
+		return name
 	}
 	return "claude"
 }

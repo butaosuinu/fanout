@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -107,6 +108,13 @@ func deliverNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged
 	ref := paneRef(pane)
 	if backend.NormalizeName(ref.Backend) != backend.Tmux {
 		return "", fmt.Sprintf("automatic nudge is unavailable for %s backend", backend.NormalizeName(ref.Backend)), false
+	}
+	// An agent without @fanout_agent_state refinement (opencode, future
+	// agents) stays "running" even while a permission dialog is focused, and
+	// the nudge's trailing Enter could press the dialog's button. Exclude its
+	// panes; the message stays readable via inbox/board regardless.
+	if !agent.PaneStateRefined(pane.Agent) {
+		return "", fmt.Sprintf("agent %q has no agent-state refinement; nudge is disabled for its panes", pane.Agent), false
 	}
 	if deps.ListLive == nil || deps.SendLine == nil {
 		return "", "tmux is unavailable", false

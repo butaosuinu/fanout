@@ -548,6 +548,7 @@ func TestTeamBriefingAddsOnlyTeamSectionForNonClaudeAgents(t *testing.T) {
 		agent string
 	}{
 		{name: "codex", agent: "codex"},
+		{name: "opencode gets the base briefing without per-agent sections", agent: "opencode"},
 		{name: "unknown agent falls through the claude-only sections", agent: "future-agent"},
 	}
 	for _, tt := range tests {
@@ -821,6 +822,22 @@ func TestCodexPlanModeUsesPlanningBriefing(t *testing.T) {
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("plan briefing contains implementation guidance %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+// TestNonClaudeNonCodexBriefingCarriesCompletionInstructions pins the
+// fallthrough lane (opencode and future agents): the base requirement "follow
+// the final validation, commit, and push instructions below" must not dangle
+// — the generic completion section supplies those instructions.
+func TestNonClaudeNonCodexBriefingCarriesCompletionInstructions(t *testing.T) {
+	for _, agentName := range []string{"opencode", "future-agent"} {
+		got := Render(101, "First child", "Issue body", agentName, "main", settings.Defaults(), false, nil)
+		if !strings.Contains(got, "follow the final validation, commit, and push instructions below") {
+			t.Fatalf("render(..., %q) missing the base completion requirement:\n%s", agentName, got)
+		}
+		if !strings.Contains(got, "canonical") || !strings.Contains(got, "full validation command") {
+			t.Fatalf("render(..., %q) missing the generic completion section:\n%s", agentName, got)
 		}
 	}
 }

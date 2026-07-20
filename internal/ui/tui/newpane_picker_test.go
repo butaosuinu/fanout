@@ -2,13 +2,17 @@ package tui
 
 import (
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/butaosuinu/fanout/internal/core/agent"
 )
 
 func TestRankPickerItems(t *testing.T) {
@@ -684,7 +688,7 @@ func TestPickerRowWindowFollowsSelection(t *testing.T) {
 	})
 	m.openNewPaneForm()
 	m.newPane.mode = newPaneModeIssue
-	m.height = 26 // 26-22 overhead (incl. the issue plan checkbox line) = 4 visible rows
+	m.height = 27 // 27-23 overhead (3 agent rows + the issue plan checkbox line) = 4 visible rows
 
 	items := make([]IssueListItem, 15)
 	for i := range items {
@@ -749,31 +753,31 @@ func TestIssueModeAgentSelectorSingleSelect(t *testing.T) {
 			name:       "space selects the focused agent",
 			keys:       []tea.KeyMsg{{Type: tea.KeySpace}},
 			wantAgent:  "claude",
-			wantCounts: map[string]int{"claude": 1, "codex": 0},
+			wantCounts: agentCountsOf(map[string]int{"claude": 1}),
 		},
 		{
 			name:       "re-pressing the selected row keeps the sum at one",
 			keys:       []tea.KeyMsg{{Type: tea.KeySpace}, {Type: tea.KeySpace}},
 			wantAgent:  "claude",
-			wantCounts: map[string]int{"claude": 1, "codex": 0},
+			wantCounts: agentCountsOf(map[string]int{"claude": 1}),
 		},
 		{
 			name:       "down then space selects codex",
 			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace}},
 			wantAgent:  "codex",
-			wantCounts: map[string]int{"claude": 0, "codex": 1},
+			wantCounts: agentCountsOf(map[string]int{"codex": 1}),
 		},
 		{
 			name:       "right selects instead of incrementing the count",
 			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyRight}},
 			wantAgent:  "codex",
-			wantCounts: map[string]int{"claude": 0, "codex": 1},
+			wantCounts: agentCountsOf(map[string]int{"codex": 1}),
 		},
 		{
 			name:       "left selects instead of decrementing the count",
 			keys:       []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyLeft}},
 			wantAgent:  "codex",
-			wantCounts: map[string]int{"claude": 0, "codex": 1},
+			wantCounts: agentCountsOf(map[string]int{"codex": 1}),
 		},
 		{
 			name: "selecting collapses a carried-over multi-count selection",
@@ -781,7 +785,7 @@ func TestIssueModeAgentSelectorSingleSelect(t *testing.T) {
 			setup:      func(m *model) { m.newPane.agentCount["claude"] = 2; m.newPane.agentCount["codex"] = 1 },
 			keys:       []tea.KeyMsg{{Type: tea.KeySpace}},
 			wantAgent:  "claude",
-			wantCounts: map[string]int{"claude": 1, "codex": 0},
+			wantCounts: agentCountsOf(map[string]int{"claude": 1}),
 		},
 	}
 
@@ -830,7 +834,7 @@ func TestIssueModeNormalizesCarriedOverAgentCounts(t *testing.T) {
 	if m.newPane.mode != newPaneModeIssue {
 		t.Fatalf("mode after switch = %v, want issue", m.newPane.mode)
 	}
-	wantCounts := map[string]int{"claude": 1, "codex": 0}
+	wantCounts := agentCountsOf(map[string]int{"claude": 1})
 	if got := m.newPane.agentCount; !reflect.DeepEqual(got, wantCounts) {
 		t.Fatalf("agentCount after switch = %v, want %v", got, wantCounts)
 	}
@@ -890,10 +894,22 @@ func TestIssueModeSwitchKeepsConfiguredDefaultOnEmptySelection(t *testing.T) {
 	if got := m.selectedDefaultAgent(); got != "codex" {
 		t.Fatalf("selectedDefaultAgent() after empty switch = %q, want codex", got)
 	}
-	wantCounts := map[string]int{"claude": 0, "codex": 1}
+	wantCounts := agentCountsOf(map[string]int{"codex": 1})
 	if got := m.newPane.agentCount; !reflect.DeepEqual(got, wantCounts) {
 		t.Fatalf("agentCount = %v, want %v", got, wantCounts)
 	}
+}
+
+// agentCountsOf builds an agentCount expectation with every launch agent at
+// zero, overridden per name, so selector tests stay stable as the core agent
+// registry grows.
+func agentCountsOf(overrides map[string]int) map[string]int {
+	counts := make(map[string]int, len(launchAgents))
+	for _, agentName := range launchAgents {
+		counts[agentName] = 0
+	}
+	maps.Copy(counts, overrides)
+	return counts
 }
 
 // TestNewPaneIssuePickerCodexDefaultToAssignFlow drives the promptOnly wizard
@@ -1086,5 +1102,23 @@ func TestIssueDefaultAgentSurvivesModeRoundTrip(t *testing.T) {
 	}
 	if total := m.newPane.agentCount["claude"] + m.newPane.agentCount["codex"]; total != 1 {
 		t.Fatalf("issue-mode agent counts sum = %d, want 1", total)
+	}
+}
+
+func TestLaunchAgentsMirrorsCoreRegistry(t *testing.T) {
+	supported := agent.Supported()
+	if !slices.Equal(launchAgents, supported) {
+		t.Fatalf("launchAgents = %v, want registry Supported() %v", launchAgents, supported)
+	}
+	for _, agentName := range launchAgents {
+		if err := agent.ValidateKnown(agentName); err != nil {
+			t.Fatalf("launchAgents entry %q rejected by registry: %v", agentName, err)
+		}
+		if counts := defaultAgentCounts(agentName); counts[agentName] != 1 {
+			t.Fatalf("defaultAgentCounts(%q)[%q] = %d, want 1", agentName, agentName, counts[agentName])
+		}
+		if idx := defaultAgentIndex(agentName); launchAgents[idx] != agentName {
+			t.Fatalf("defaultAgentIndex(%q) = %d, does not resolve back to %q", agentName, idx, agentName)
+		}
 	}
 }

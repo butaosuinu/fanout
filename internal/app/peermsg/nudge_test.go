@@ -40,12 +40,13 @@ func TestRunMsgNudge(t *testing.T) {
 	// withPane is a legacy row (no recorded worktree) so it falls back to an
 	// id-only liveness match; withWorktree carries a worktree, so the live pane
 	// must also sit at/under it (the reused-%N defense).
-	withPane := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5"}}}
-	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", WorktreePath: "/wt/recipient"}}}
-	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
+	withPane := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude"}}}
+	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", WorktreePath: "/wt/recipient"}}}
+	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
 	withHerdr := state.Store{SchemaVersion: 1, Panes: []state.Pane{{
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
 	}}}
+	withOpencode := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "opencode", WorktreePath: "/wt/recipient"}}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}
 	lp := func(id, path, agentState string) backend.LivePane {
 		state, _ := backend.ParseAgentState(agentState)
@@ -121,6 +122,13 @@ func TestRunMsgNudge(t *testing.T) {
 		{
 			name: "blocked pane is a no-op success (permission dialog)", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
 			live: []backend.LivePane{lp("%5", "/wt/recipient", "blocked")}, wantCode: exitcode.OK, wantListed: true, wantStderr: "agent is not nudgeable",
+		},
+		{
+			// opencode never refines the wrapper's "running" state, so a nudge
+			// could land while its permission dialog is focused. The pane is
+			// excluded before any tmux IO; the message stays in the inbox.
+			name: "opencode pane is excluded before tmux IO (no state refinement)", req: Request{Verb: "nudge", To: 71}, store: withOpencode,
+			wantCode: exitcode.OK, wantStderr: "no agent-state refinement",
 		},
 		{
 			name: "done pane is a no-op success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
