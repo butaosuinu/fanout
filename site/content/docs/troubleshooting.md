@@ -97,3 +97,29 @@ gh auth refresh -s read:project
 ```
 
 Items can look fewer than expected, but that's expected behavior: a Project with no Status field falls back to every item, and an item whose repository differs from the current git repository root is skipped with a warning. See [Workflow]({{< relref "/docs/workflow" >}}) and the [CLI reference]({{< relref "/docs/cli" >}}) for details.
+
+## "herdr named session ... is not running"
+
+The [herdr backend]({{< relref "/docs/herdr-backend" >}}) needs a running herdr session with an explicit name — fanout never starts a herdr server and never creates or attaches a session, and `default` is rejected. Start the named session in herdr first, then verify from the same shell:
+
+```bash
+herdr status --json   # server and session state
+```
+
+`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session.
+
+## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
+
+fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary is missing from `PATH` or the probe failed. Check what is actually installed:
+
+```bash
+herdr --version          # must print: herdr 0.7.3
+herdr status --json      # server tuple: version, protocol, compatible
+herdr api schema --json  # API tuple: protocol 16, schema_version 1
+```
+
+Install herdr 0.7.3 to match. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
+
+## "herdr backend v1 is observation-only; ... is unavailable"
+
+Not a fault. herdr backend v1 deliberately fails closed on anything that would mutate a herdr session; `runtime backend herdr does not support ...` is the same family (launch, focus, send, close, restore, peek, plan capture, cleanup). Use the tmux backend for launches and lifecycle commands, or act in herdr directly. Related: a conflicting `--backend` on a parent with recorded panes fails with `explicit migration is required` — there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the full capability table.

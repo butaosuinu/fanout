@@ -51,6 +51,8 @@ fanout 123
 > ペイン作成には `gh`、`git`、`tmux 3.3+` が `PATH` 上に必要です。
 > fanout は起動時に依存を確認し、欠けていればインストールのヒントを表示します([インストール]({{< relref "/docs/installation" >}})を参照)。
 
+このページは既定の tmux backend を前提にしています。opt-in の [herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用で、このファンアウトは実行できません。
+
 ## 子 issue の宣言方法
 
 fanout は子を GitHub の Sub-issues と、親本文のタスクリスト行 `- [ ] #NUM ...` の和集合で列挙し、処理するのは `state == "OPEN"` の子だけです。

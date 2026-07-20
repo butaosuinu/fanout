@@ -33,6 +33,9 @@ fanout   # start the persistent tmux console
 `RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
 マウスや tmux の `prefix` ペイン移動で記録済みペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
+コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
+観測専用の [herdr backend]({{< relref "/docs/herdr-backend" >}}) ではコンソールは read-only です。launch・focus・close・peek は無効になり、ヘルプ画面がキーごとに理由を表示します。
+
 {{< diagram "console" >}}
 
 ### agent-state の通知音
@@ -150,6 +153,7 @@ fanout 123 --status --post-dashboard     # 親 issue に集約コメントを up
 ```
 
 JSON の全 field と exit code は [CLI リファレンス]({{< relref "/docs/cli" >}}) を参照してください。
+各子の行には、ペインを所有する runtime を示す `backend` field(`tmux` または `herdr`)が入ります。
 `--format table` は PR 状態、CI、差分規模、変更ファイル数などを一覧にします。
 `--status` 系で GitHub に書き込むのは `--post-dashboard` だけで、親 issue に集約コメントを 1 つ upsert して更新し続けます。
 
@@ -165,6 +169,9 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
+Session の各行には runtime backend と pane の identity が出て、runtime の状態は `live` / `stale` / `unknown` / `unsupported` / `-` で示されます。フィルタは `backend:tmux` / `backend:herdr` を受け付けます。
+[herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では live peek は空のままです。herdr backend v1 は pane の内容を読みません。
+
 ### F12 / prefix + D
 
 どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。
@@ -178,5 +185,6 @@ Prompt Session の記録済み branch に PR があると、ダッシュボー�
 
 - `gh` 未ログインの場合は、バナーを出して state のみのビューを表示します。
 - tmux 外でも配信は続き、ペインの生存は unknown のままになります。
+- herdr の行は identity と状態を `herdr api snapshot` から保ちます。出力の peek は常に空です。
 
 このページに登場するフラグの一覧は [CLI リファレンス]({{< relref "/docs/cli" >}}) にあります。

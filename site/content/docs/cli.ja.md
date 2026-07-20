@@ -16,7 +16,7 @@ fanout <parent-issue|project-url>
        [--include <list>] [--unblocked-only] [--project-status <name>]
        [--name <NUM>=<slug>[|<display>[|<branch>]]]
        [--base-branch <branch>] [--branch-prefix <prefix>] [--no-refresh]
-       [--session <tmux-session>] [--sleep <seconds>]
+       [--backend <tmux|herdr>] [--session <tmux-session>] [--sleep <seconds>]
        [--dry-run] [--debug]
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
@@ -29,7 +29,7 @@ fanout plan <spec.json|plan-slug> [--agent <name|task-id=name>] [--dry-run]
        [--limit <N>] [--only <task-id[,id...]>] [--skip <task-id[,id...]>]
        [--unblocked-only] [--team] [--base-branch <branch>]
        [--branch-prefix <prefix>] [--no-refresh] [--session <tmux-session>]
-       [--sleep <seconds>]
+       [--sleep <seconds>] [--backend <tmux|herdr>]
 fanout plan <spec.json|plan-slug> --status [--format json|table]
 fanout plan <spec.json|plan-slug> --merge <task-id>
 fanout plan <spec.json|plan-slug> --close <task-id>
@@ -92,6 +92,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | フラグ | 引数 | 説明 |
 |---|---|---|
 | `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude` または `codex`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
+| `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用で、issue / plan の launch は worktree や state の変更前に fail closed する。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
 | `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。既定: off。 |
@@ -154,6 +155,7 @@ spec フォーマット:
 | `--base-branch` | `<branch>` | `plan.base_branch` を上書きする。どちらも無い場合は repository default branch を解決し、`origin` remote が無い場合は現在の local branch / `HEAD` を使う。 |
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
 | `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
+| `--backend` | `<tmux\|herdr>` | この plan run の runtime backend。issue の親と同じく plan slug 単位で sticky。herdr は v1 では観測専用で、plan の launch は fail closed する。 |
 | `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
 
 `--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。
@@ -240,7 +242,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` はすべての action 系フラグ（`--agent`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
+`--status` はすべての action 系フラグ（`--agent`、`--backend`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -405,6 +407,7 @@ fanout check-update
 | 変数 | 説明 |
 |---|---|
 | `FANOUT_AGENT` | `--agent` 未指定時に子ペインで使う既定 agent。 |
+| `FANOUT_BACKEND` | runtime backend（`runtimeBackend`）の環境変数レイヤ: `tmux` または `herdr`。親に記録済みの backend が引き続き優先され、矛盾は fail closed する。 |
 | `FANOUT_STATE_PATH` | `--status` と lifecycle コマンドが読む state file を `<git-root>/.fanout/state.json` の代わりに直接指定する。 |
 | `FANOUT_AUTO_PR` | PR 自動作成指示（`autoPullRequest`）の環境変数レイヤ。 |
 | `FANOUT_PR_REVIEW_GATE` | PR レビューゲート注記（`prReviewGate`）の環境変数レイヤ。 |
