@@ -96,7 +96,7 @@ fanout passes the launch prompt as the `--prompt` flag value — opencode's posi
 
 ### Project rules and briefings
 
-OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. Its briefings carry the base requirements plus the generic final-validation instructions; the Claude-only and Codex-only sections do not apply. When fanout's Claude integrations are installed, OpenCode's Claude Code compatibility also resolves the `/fanout` command that TUI plan fan-out coordinators receive.
+OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. Its briefings carry the base requirements plus the generic final-validation instructions; the Claude-only and Codex-only sections do not apply. The `/fanout` command that fanout's Claude integrations install is Claude Code-only — OpenCode's Claude Code compatibility reads `CLAUDE.md` and `~/.claude/skills/`, not `~/.claude/commands` — so pick `claude` or `codex` as a TUI plan fan-out coordinator.
 
 ### Messaging stays pull-based
 

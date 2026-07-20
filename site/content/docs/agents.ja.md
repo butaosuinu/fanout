@@ -136,7 +136,9 @@ opencode の位置引数はプロジェクトパスなので、fanout は起動�
 
 OpenCode はリポジトリの `AGENTS.md` をネイティブに読むため、子ペインは追加のセットアップなしでプロジェクトのルールを拾います。
 briefing には base の requirements と共通の最終検証手順が入り、Claude 専用・Codex 専用のセクションは付きません。
-fanout の Claude 連携がインストール済みなら、OpenCode の Claude Code 互換層が、TUI の plan fan-out coordinator に渡る `/fanout` コマンドも解決します。
+fanout の Claude 連携が入れる `/fanout` コマンドは Claude Code 専用です。
+OpenCode の Claude Code 互換が読むのは `CLAUDE.md` と `~/.claude/skills/` で、`~/.claude/commands` は読みません。
+TUI の plan fan-out coordinator には `claude` か `codex` を選んでください。
 
 ### メッセージングは pull ベース
 
