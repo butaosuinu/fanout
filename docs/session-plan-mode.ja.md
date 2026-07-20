@@ -42,7 +42,7 @@ plan mode の配線が存在しない。エージェントを差し替えると�
 | 起動レーン | 従う設定 |
 |---|---|
 | TUI 新規 Session(プロンプトモード手動ペイン) | `newSessionPlanMode` |
-| plan fan-out coordinator(fanout-plan skill 実行ペイン) | `newSessionPlanMode` |
+| plan fan-out coordinator(fanout-plan skill 実行ペイン。claude / codex のみ) | `newSessionPlanMode` |
 | TUI attach(既存ペインへのエージェント起動) | `newSessionPlanMode` |
 | issue mode オーケストレーター親ペイン | `orchestratorPlanMode` |
 | issue mode の子 Session | `childPlanMode` |
@@ -51,8 +51,11 @@ plan mode の配線が存在しない。エージェントを差し替えると�
 
 coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 実行は plan 承認を待ってから走る。これは意図した挙動で、fan-out 前に計画を
-レビューする機会になる。watcher レーンは無人運用のため、`childPlanMode=true`
-にすると起動した Session が承認待ちで止まる点に注意する。
+レビューする機会になる。coordinator の plan mode 配線は claude / codex
+のみ — opencode は bundled command(`/fanout plan`)を読めず coordinator
+自体が非対応(`site/content/docs/agents.md` の既存制約)。watcher レーンは
+無人運用のため、`childPlanMode=true` にすると起動した Session が承認待ちで
+止まる点に注意する。
 
 ## エージェント別の mode 実装
 
@@ -69,9 +72,11 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 - 非 plan を `--permission-mode auto` / `--agent build` と明示するため、
   既存の全 claude / opencode 起動コマンド文字列が変わる。Tier 2 goldens は
   全面再生成になる。
-- resume にも mode を通す。restore は state に記録した plan mode から
-  フラグを再付与し(claude の `--continue --permission-mode plan` は有効な
-  組み合わせ)、plan mode を維持したまま復元する。
+- resume / restore では mode フラグを再付与しない。state の記録値は起動時
+  姿勢で、対話中の plan 承認・解除を追跡しないため、`--continue` への
+  再注入は現在姿勢を上書きしうる。claude / opencode の復元はエージェント側
+  のセッション状態に委ね、記録 PlanMode は codex plan TUI の thread
+  resume 判定だけに使う。
 - `internal/app/panelaunch` は `Request.CodexPlanMode` を `PlanMode` に
   一般化し、`PlanMode && Agent=="codex"` のときだけ plan TUI 経路、他は
   mode 付き builder を呼ぶ。codex 以外を拒む既存のハードエラーと
@@ -82,11 +87,14 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   launch wrapper が exit status を表示して shell へ戻すことで表面化する
   (fail loud)。v1 は capability 検査や素起動フォールバックを持たず
   (非ゴール参照)、前提は利用者向けドキュメントに明記する。
-- plan mode の issue 子 briefing は合成にする。現行の `briefing.Render` は
-  codex plan 時に plan 専用 briefing を即 return し、auto PR・review
-  gate・base branch などの完了契約を落とす。claude / opencode の plan 子は
-  plan-first の前置き + 通常の work 契約を合成した briefing にし、codex
-  plan TUI 子は既存の `<proposed_plan>` 契約付き briefing を維持する。
+- plan mode の briefing は合成にする。現行の `briefing.Render` は codex
+  plan 時に plan 専用 briefing を即 return し、auto PR・review gate・base
+  branch などの完了契約を落とす。claude / opencode の plan 子は plan-first
+  の前置き + 通常の work 契約を合成した briefing にし、codex plan TUI 子は
+  既存の `<proposed_plan>` 契約付き briefing を維持する。manual / attach も
+  同じ扱いで、`RenderManualPlan` の `<proposed_plan>` 契約付き briefing は
+  codex 専用に残し、claude / opencode の plan ペインには通常の manual
+  briefing を使う。
 
 ## precedence と競合
 
@@ -156,6 +164,10 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 - claude auto mode の capability 検査と素起動フォールバック設定。非対応
   環境の起動失敗は fail loud で表面化し、必要になったら follow-up で
   検討する。
+- 対話中の permission / plan mode 変更の追跡(state への反映)。resume で
+  mode を再付与しない決定の帰結として、復元後の姿勢はエージェント側に
+  委ねる。
+- opencode coordinator の実行経路(bundled command 非対応の既存制約)。
 
 ## 実装分解
 
