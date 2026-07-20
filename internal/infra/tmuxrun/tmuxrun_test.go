@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func installTmuxShim(t *testing.T, script string) string {
@@ -509,6 +510,37 @@ func TestParseLivePanePathsTrimsCarriageReturns(t *testing.T) {
 	want := []LivePane{{ID: "%5", CurrentPath: "/wt/five"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseLivePanePaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParsePSElapsed(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "minutes and seconds", in: "05:09", want: 5*time.Minute + 9*time.Second},
+		{name: "hours minutes seconds", in: "01:02:03", want: time.Hour + 2*time.Minute + 3*time.Second},
+		{name: "days prefix", in: "17-03:20:15", want: 17*24*time.Hour + 3*time.Hour + 20*time.Minute + 15*time.Second},
+		{name: "leading spaces from ps padding", in: " 1:02", want: time.Minute + 2*time.Second},
+		{name: "bare seconds are rejected", in: "42", wantErr: true},
+		{name: "empty output is rejected", in: "", wantErr: true},
+		{name: "non-numeric field is rejected", in: "aa:bb", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parsePSElapsed(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parsePSElapsed(%q) = %v, want error", tt.in, got)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("parsePSElapsed(%q) = %v, %v, want %v", tt.in, got, err, tt.want)
+			}
+		})
 	}
 }
 

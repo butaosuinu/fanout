@@ -291,13 +291,27 @@ func TestRestoreRecordedPanesDoesNotRecreateLivePaneWithPathMismatch(t *testing.
 }
 
 // Fixed instants for the adoption tests: the tmux server started at the
-// epoch below, and rows created after it hold the incarnation proof that
-// their recorded pane id was never reused.
+// epoch below, rows created after it hold the incarnation proof that their
+// recorded pane id was never reused, and the default pane start (30s before
+// the row) satisfies the per-pane provenance window.
 var (
 	restoreAdoptServerStart   = time.Unix(1_700_000_000, 0)
 	restoreAdoptCreatedAfter  = time.Unix(1_700_000_060, 0).UTC().Format(time.RFC3339)
 	restoreAdoptCreatedBefore = time.Unix(1_699_999_940, 0).UTC().Format(time.RFC3339)
+	restoreAdoptPaneStart     = time.Unix(1_700_000_030, 0)
 )
+
+func stubRestorePaneStartTime(t *testing.T, fn func(string) (time.Time, error)) {
+	t.Helper()
+	original := restorePaneStartTime
+	restorePaneStartTime = fn
+	t.Cleanup(func() { restorePaneStartTime = original })
+}
+
+func stubDefaultRestorePaneStartTime(t *testing.T) {
+	t.Helper()
+	stubRestorePaneStartTime(t, func(string) (time.Time, error) { return restoreAdoptPaneStart, nil })
+}
 
 // TestRestoreRecordedPanesAdoptsLegacyLivePaneKey pins the migration for rows
 // recorded before per-pane liveness keys existed: a live keyless agent pane
@@ -309,6 +323,7 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 		name        string
 		pane        func(root, wt string) state.Pane
 		live        func(root, wt string) tmuxrun.LivePane
+		paneStart   func() (time.Time, error)
 		wantAdopted bool
 		wantStamps  int
 		wantKey     string
@@ -370,6 +385,29 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 			},
 		},
 		{
+			// A pane whose root process started an hour before the row was
+			// recorded is not the pane this row launched (id coincidence
+			// from another server generation or socket).
+			name: "live pane whose process predates the row stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			paneStart: func() (time.Time, error) { return restoreAdoptPaneStart.Add(-time.Hour), nil },
+		},
+		{
+			name: "pane start lookup failure stays legacy",
+			pane: func(_, wt string) state.Pane {
+				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+			},
+			live: func(_, wt string) tmuxrun.LivePane {
+				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "Restore API", WorktreePath: wt, Label: "#81 · Restore API"}
+			},
+			paneStart: func() (time.Time, error) { return time.Time{}, errors.New("pane gone") },
+		},
+		{
 			name: "live pane without the fanout worktree marker stays legacy",
 			pane: func(_, wt string) state.Pane {
 				return state.Pane{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
@@ -420,6 +458,11 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 				stamped = append(stamped, paneID+"\x00"+key)
 				return nil
 			}, nil, nil, nil)
+			startFn := tt.paneStart
+			if startFn == nil {
+				startFn = func() (time.Time, error) { return restoreAdoptPaneStart, nil }
+			}
+			stubRestorePaneStartTime(t, func(string) (time.Time, error) { return startFn() })
 			original := tt.pane(root, wt)
 			writeRestoreState(t, root, []state.Pane{original})
 			livePane := tt.live(root, wt)
@@ -482,6 +525,7 @@ func TestRestoreRecordedPanesDoesNotAdoptAmbiguousTwinRows(t *testing.T) {
 		stamps++
 		return nil
 	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
 	twin := state.Pane{
 		Parent:       "@manual",
 		Kind:         state.PaneKindAttachedAgent,
@@ -546,6 +590,7 @@ func TestRestoreRecordedPanesAdoptionChecksClaimantsAcrossRoots(t *testing.T) {
 				stamps++
 				return nil
 			}, nil, nil, nil)
+			stubDefaultRestorePaneStartTime(t)
 			writeRestoreState(t, root, []state.Pane{{
 				Parent:       "81",
 				IssueNum:     101,
@@ -596,6 +641,7 @@ func TestRestoreRecordedPanesDoesNotAbsorbKeyClaimedByAnotherRow(t *testing.T) {
 		stamps++
 		return nil
 	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
 	writeRestoreState(t, root, []state.Pane{
 		{Parent: "81", IssueNum: 101, DisplayName: "Restore API", PaneID: "%live", Agent: "claude", WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter},
 		{Parent: "81", IssueNum: 102, DisplayName: "Other API", PaneID: "%other", ShellKey: "key-claimed", Agent: "claude", WorktreePath: otherWt, CreatedAt: restoreAdoptCreatedAfter},
@@ -627,6 +673,7 @@ func TestRestoreRecordedPanesAdoptionStampFailureKeepsRowLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	stubRestorePaneOps(t, func(string, string) error { return errors.New("stamp failed") }, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
 	writeRestoreState(t, root, []state.Pane{{
 		Parent:       "81",
 		IssueNum:     101,
@@ -668,6 +715,7 @@ func TestRestoreRecordedPanesAdoptsLegacyPaneClaimedByPreclaim(t *testing.T) {
 		stamps++
 		return nil
 	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
 	writeRestoreState(t, root, []state.Pane{{
 		Parent:       "81",
 		IssueNum:     101,
@@ -707,6 +755,7 @@ func TestRestoreRecordedPanesAdoptionIsIdempotent(t *testing.T) {
 		stamps++
 		return nil
 	}, nil, nil, nil)
+	stubDefaultRestorePaneStartTime(t)
 	writeRestoreState(t, root, []state.Pane{{
 		Parent:       "81",
 		IssueNum:     101,

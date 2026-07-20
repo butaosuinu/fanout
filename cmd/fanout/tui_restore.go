@@ -43,6 +43,17 @@ var (
 	closeFreshRestoredPane     = tmuxrun.CloseFreshPane
 	waitRestoredPaneReady      = codexapp.WaitReady
 	closeRestoredPaneIfOwned   = tmuxrun.ClosePaneIfOwned
+	restorePaneStartTime       = tmuxrun.PaneStartTime
+)
+
+// Adoption provenance window: the live pane's root process must have started
+// shortly before the row was recorded. split-window precedes RecordPane, and
+// Codex Plan Mode startup (panelaunch.CodexPlanTUIStartupTimeout, 90s) plus
+// state-lock contention can hold that gap open, so the early bound is
+// generous; the late bound only absorbs second-precision rounding.
+const (
+	adoptPaneStartEarly = 15 * time.Minute
+	adoptPaneStartLate  = 2 * time.Minute
 )
 
 type tuiRestoreSnapshot struct {
@@ -488,13 +499,15 @@ func (c *restoreClaimants) addRows(rows []state.Pane) {
 // pane id — the live pane at that id is the exact pane the row launched.
 // Rows older than the server (or with an unparsable CreatedAt, or when the
 // server start is unknown) fail closed: their recorded id may have been
-// reused by an unrelated pane. On top of that incarnation proof, adoption
-// keeps defense-in-depth requirements: the live pane must carry the
-// launch-time fanout markers (@fanout_worktree_path equal to the row's
-// worktree and @fanout_pane_label equal to the row's border label), the row
-// must be the only claimant of the pane id across every restore root's store,
-// and the row must be alive by path containment. Rows that are keyed, shells,
-// or missing a worktree path return ("", nil).
+// reused by an unrelated pane. The incarnation proof is server-scoped, so a
+// second, per-pane proof binds the exact pane: the live pane's root-process
+// start time must fall in the window in which the row recorded its pane.
+// On top of those, adoption keeps defense-in-depth requirements: the live
+// pane must carry the launch-time fanout markers (@fanout_worktree_path
+// equal to the row's worktree and @fanout_pane_label equal to the row's
+// border label), the row must be the only claimant of the pane id across
+// every restore root's store, and the row must be alive by path containment.
+// Rows that are keyed, shells, or missing a worktree path return ("", nil).
 //
 // A live pane already holding a key is an interrupted earlier adoption
 // (stamped, then the state save failed or the process died) — within the
@@ -532,6 +545,17 @@ func adoptLegacyLivePaneKey(pane state.Pane, snapshot tuiRestoreSnapshot, claims
 		return "", nil
 	}
 	if !restorePaneAlive(live, pane) {
+		return "", nil
+	}
+	// Per-pane provenance: the live pane's root process must have started in
+	// the window in which this row recorded its pane. A pane id coincidence —
+	// another server generation, another socket's server — cannot fake the
+	// process start time matching the row's CreatedAt.
+	paneStart, startErr := restorePaneStartTime(pane.PaneID)
+	if startErr != nil {
+		return "", nil
+	}
+	if paneStart.Before(created.Add(-adoptPaneStartEarly)) || paneStart.After(created.Add(adoptPaneStartLate)) {
 		return "", nil
 	}
 	if liveKey := strings.TrimSpace(cur.ShellKey); liveKey != "" {

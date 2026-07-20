@@ -203,6 +203,65 @@ func ServerStartTime() (time.Time, error) {
 	return time.Unix(secs, 0), nil
 }
 
+// PaneStartTime returns the wall-clock instant paneID's root process started,
+// which is the moment tmux created the pane. tmux exposes no pane creation
+// time format, so this resolves #{pane_pid} and subtracts the process's
+// elapsed time (ps etime, locale-independent unlike lstart) from the current
+// clock. Second precision. Callers making destructive decisions must fail
+// closed when this errors.
+func PaneStartTime(paneID string) (time.Time, error) {
+	paneID = strings.TrimSpace(paneID)
+	if paneID == "" {
+		return time.Time{}, fmt.Errorf("pane id is required")
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "#{pane_pid}").Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("tmux display-message pane_pid for %s: %w", paneID, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid <= 0 {
+		return time.Time{}, fmt.Errorf("parse pane_pid %q for %s", strings.TrimSpace(string(out)), paneID)
+	}
+	cmd := exec.Command("ps", "-o", "etime=", "-p", strconv.Itoa(pid))
+	cmd.Env = envWithCLocale(os.Environ())
+	psOut, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("ps etime for pane %s pid %d: %w", paneID, pid, err)
+	}
+	elapsed, err := parsePSElapsed(strings.TrimSpace(string(psOut)))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("pane %s pid %d: %w", paneID, pid, err)
+	}
+	return time.Now().Add(-elapsed), nil
+}
+
+// parsePSElapsed parses ps's etime format: [[dd-]hh:]mm:ss.
+func parsePSElapsed(raw string) (time.Duration, error) {
+	s := raw
+	var days int64
+	if before, after, ok := strings.Cut(s, "-"); ok {
+		d, err := strconv.ParseInt(before, 10, 64)
+		if err != nil || d < 0 {
+			return 0, fmt.Errorf("parse ps etime %q", raw)
+		}
+		days = d
+		s = after
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, fmt.Errorf("parse ps etime %q", raw)
+	}
+	var total int64
+	for _, part := range parts {
+		v, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || v < 0 {
+			return 0, fmt.Errorf("parse ps etime %q", raw)
+		}
+		total = total*60 + v
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(total)*time.Second, nil
+}
+
 // CurrentClientSize returns the tmux client dimensions, not the current pane
 // dimensions. tmux display-popup is client-scoped, so pane width is irrelevant.
 func CurrentClientSize() (ClientSize, error) {
