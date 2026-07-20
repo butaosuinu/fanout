@@ -11,7 +11,7 @@ The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-
 
 ## What v1 does
 
-Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). Rows recorded with the herdr backend are matched against `herdr api snapshot` for liveness and agent state. fanout reads herdr through four CLI commands only: `herdr --version`, `herdr status --json`, `herdr api schema --json`, and `herdr api snapshot`.
+Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. fanout reads herdr through four CLI commands only: `herdr --version`, `herdr status --json`, `herdr api schema --json`, and `herdr api snapshot`.
 
 Everything that would mutate a herdr session fails closed with a clear error instead of degrading:
 
@@ -34,6 +34,8 @@ The TUI header always shows the selected backend and why it was selected, such a
 2. Run `fanout` inside a pane of that session. herdr sets `HERDR_ENV=1` there, so fanout picks the herdr backend on its own.
 3. Read the recorded rows in the TUI console, `--status`, or the web dashboard.
 
+Because launches fail closed, v1 never records herdr rows itself — a herdr-backend row exists only when written outside the normal launch flow (manual experiments). Day to day, the console under herdr is a read-only view of the repository's recorded sessions.
+
 The backend for a run resolves in this order, first match wins:
 
 1. The parent's recorded backend (stickiness — see below)
@@ -44,7 +46,7 @@ The backend for a run resolves in this order, first match wins:
 6. `runtimeBackend` in user config
 7. Default: `tmux`
 
-When both `HERDR_ENV` and `TMUX` are set — tmux nested inside herdr — herdr wins; pass `--backend tmux` or `FANOUT_BACKEND=tmux` to override. `runtimeBackend` is a user-config key: repo config cannot set it and is ignored with a warning ([Settings]({{< relref "/docs/settings" >}})).
+When both `HERDR_ENV` and `TMUX` are set — tmux nested inside herdr — herdr wins; override with `FANOUT_BACKEND=tmux`, or `--backend tmux` on the launch commands that accept the flag (the no-argument console reads the environment and config only). `runtimeBackend` is a user-config key: repo config cannot set it and is ignored with a warning ([Settings]({{< relref "/docs/settings" >}})).
 
 A parent that already has recorded panes keeps its recorded backend. A conflicting `--backend` or `FANOUT_BACKEND` fails with `explicit migration is required` rather than mixing backends under one parent. There is no migration command in v1 — existing tmux parents stay on tmux.
 
@@ -54,19 +56,19 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 |---|---|---|
 | Issue / Project / plan launch | Creates worktrees, panes, agents | Rejected before any worktree or state mutation |
 | Worktree creation | One per child under `.fanout/worktrees/` | Never |
-| Status views (TUI, `--status`, web dashboard) | tmux queries | `herdr api snapshot` — supported |
+| Liveness and agent state (TUI console, web dashboard) | tmux queries | `herdr api snapshot` — supported |
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
-| Pane after the agent exits | Pane stays open with the wrapper message | Pane and its record disappear on normal exit |
+| Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
 | Focus / send / close / restore / peek / plan capture | TUI keys and lifecycle flags | Unavailable — `runtime backend herdr does not support …` |
 | Automatic cleanup (`--cleanup`) | Folds merged/closed panes away | Refused; clean herdr workspaces up in herdr |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | Disabled for every agent kind |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
 | Codex Plan Mode | Opt-in via `codexPlanMode` | Unavailable |
-| TUI forms (new pane, settings, help) | tmux popups | Inline in-process forms |
+| TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | Left to herdr (see below) |
 
-Two consequences worth spelling out. A herdr pane whose `terminal_id` changed — after a cold server restart, for example — shows as `stale` rather than being re-bound. And because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind.
+Two consequences worth spelling out. A herdr pane whose `terminal_id` changed — after a cold server restart, for example — shows as `stale` rather than being re-bound. And because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 
 ## herdr integrations and plugins
 
@@ -81,6 +83,6 @@ The two tools sit on different layers. herdr plugins approach parallel agent wor
 
 ## Older fanout binaries
 
-Older fanout binaries read the herdr fields in `.fanout/state.json` as unknown keys and keep working. A herdr row shows as stale there, and an old binary's `--close` leaves the herdr workspace behind — clean it up in herdr.
+Older fanout binaries read the herdr fields in `.fanout/state.json` as unknown keys: a herdr row shows as stale there, and an old binary's `--close` leaves the herdr workspace behind — clean it up in herdr. Any state write from an old binary saves only the fields it knows, so it drops the herdr identity from the row.
 
 The `--backend` flag and `FANOUT_BACKEND` are in the [CLI Reference]({{< relref "/docs/cli" >}}), the `runtimeBackend` key in [Settings]({{< relref "/docs/settings" >}}), and the herdr error messages with their fixes in [Troubleshooting]({{< relref "/docs/troubleshooting" >}}).

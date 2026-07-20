@@ -15,7 +15,7 @@ fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別
 ## v1 でできること
 
 名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
-herdr backend で記録された行は `herdr api snapshot` と照合され、生死と agent state が反映されます。
+TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
 fanout が herdr を読むのは 4 つの CLI コマンドだけです: `herdr --version`、`herdr status --json`、`herdr api schema --json`、`herdr api snapshot`。
 
 herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
@@ -39,6 +39,8 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 2. その session の pane の中で `fanout` を実行します。herdr が `HERDR_ENV=1` を設定するので、fanout は自動で herdr backend を選びます。
 3. TUI コンソール、`--status`、web ダッシュボードで記録済みの行を読みます。
 
+launch が fail closed するため、v1 は herdr 行を自分では記録しません。herdr backend の行が存在するのは、通常の launch フローの外(手動の実験)で書かれた場合だけです。日常的には、herdr 内のコンソールはリポジトリの記録済み session の read-only ビューです。
+
 backend は次の順で解決され、最初に一致したものが使われます。
 
 1. 親に記録済みの backend(stickiness — 後述)
@@ -49,7 +51,7 @@ backend は次の順で解決され、最初に一致したものが使われま
 6. user config の `runtimeBackend`
 7. 既定: `tmux`
 
-`HERDR_ENV` と `TMUX` の両方がある場合 — herdr の中で tmux を入れ子にしている場合 — は herdr が勝ちます。`--backend tmux` か `FANOUT_BACKEND=tmux` で上書きしてください。
+`HERDR_ENV` と `TMUX` の両方がある場合 — herdr の中で tmux を入れ子にしている場合 — は herdr が勝ちます。`FANOUT_BACKEND=tmux` で上書きするか、フラグを受け付ける launch 系コマンドでは `--backend tmux` も使えます(引数なしのコンソールが読むのは環境変数と config だけです)。
 `runtimeBackend` は user config 専用のキーです。repo config では設定できず、警告付きで無視されます([設定]({{< relref "/docs/settings" >}}))。
 
 記録済みの pane を持つ親は、記録された backend を使い続けます。
@@ -62,21 +64,21 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 |---|---|---|
 | issue / Project / plan の launch | worktree・pane・agent を作成 | worktree / state の変更前に拒否 |
 | worktree 作成 | 子ごとに `.fanout/worktrees/` 配下へ | しない |
-| 状態表示(TUI、`--status`、web ダッシュボード) | tmux へ照会 | `herdr api snapshot` — 対応 |
+| 生死と agent state(TUI コンソール、web ダッシュボード) | tmux へ照会 | `herdr api snapshot` — 対応 |
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
-| agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で pane と記録が消える |
+| agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | focus / send / close / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
 | 自動 cleanup(`--cleanup`) | merge/close 済み pane を畳む | 拒否。herdr workspace は herdr 側で片付ける |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
 | Codex Plan Mode | `codexPlanMode` で opt-in | 非対応 |
-| TUI フォーム(新規 pane、設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
+| TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
 | session resume | fanout の restore フロー | herdr 任せ(後述) |
 
 補足が 2 点あります。
 `terminal_id` が変わった herdr pane — たとえば server の cold restart 後 — は、再束縛されずに `stale` と表示されます。
-また herdr は exit status を残さず、正常終了で pane の記録も消えるため、終了した agent は `✓ done` の pane を残さずに herdr session から消えます。
+また herdr は exit status を残さず、正常終了で pane の記録も消えるため、終了した agent は `✓ done` の pane を残さずに herdr session から消えます。記録済みの fanout の行は残り、`stale` と表示されます。
 
 ## herdr の integration と plugin
 
@@ -96,7 +98,8 @@ herdr が pane を実行・表示し、fanout が作業を計画して(tmux 上�
 
 ## 旧 fanout バイナリ
 
-旧版の fanout バイナリは `.fanout/state.json` の herdr フィールドを未知のキーとして読み飛ばし、そのまま動き続けます。
+旧版の fanout バイナリは `.fanout/state.json` の herdr フィールドを未知のキーとして読み飛ばします。
 herdr 行は stale と表示され、旧版の `--close` は herdr workspace を残します。herdr 側で片付けてください。
+旧版が state を書き込むと、知っているフィールドだけを保存するため、行から herdr の identity が落ちます。
 
 `--backend` フラグと `FANOUT_BACKEND` は [CLI リファレンス]({{< relref "/docs/cli" >}})、`runtimeBackend` キーは[設定]({{< relref "/docs/settings" >}})、herdr のエラーメッセージと対処は[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})にあります。
