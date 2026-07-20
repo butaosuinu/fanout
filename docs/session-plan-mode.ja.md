@@ -82,12 +82,14 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   一般化し、`PlanMode && Agent=="codex"` のときだけ plan TUI 経路、他は
   mode 付き builder を呼ぶ。codex 以外を拒む既存のハードエラーと
   `run/agents.go` の codex-only ガードは削除する。
-- claude の `--permission-mode auto` には利用条件がある(Anthropic API は
-  全ユーザー可、Bedrock / Vertex / Foundry は `CLAUDE_CODE_ENABLE_AUTO_MODE`
-  等の明示有効化が必要)。非対応環境では claude が起動時にエラーで終了し、
-  launch wrapper が exit status を表示して shell へ戻すことで表面化する
-  (fail loud)。v1 は capability 検査や素起動フォールバックを持たず
-  (非ゴール参照)、前提は利用者向けドキュメントに明記する。
+- claude の `--permission-mode auto` には利用条件がある。Claude Code
+  v2.1.207 以降は全プロバイダで利用できる(v2.1.158〜2.1.206 のゲートウェイ
+  系のみ `CLAUDE_CODE_ENABLE_AUTO_MODE=1` が必要だった)。現行の失敗条件は
+  旧バージョン、Team / Enterprise プランで Owner が未有効化、非対応
+  モデル、managed policy による無効化。無効環境では claude が起動時に
+  エラーで終了し、launch wrapper が exit status を表示して shell へ戻す
+  ことで表面化する(fail loud)。v1 は capability 検査や素起動フォール
+  バックを持たず(非ゴール参照)、条件は利用者向けドキュメントに明記する。
 - plan mode の briefing は合成にする。現行の `briefing.Render` は codex
   plan 時に plan 専用 briefing を即 return し、auto PR・review gate・base
   branch などの完了契約を落とす。claude / opencode の plan 子は plan-first
@@ -189,11 +191,11 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 | 1 | #541 | core/agent の mode-aware builder 追加(additive) | M |
 | 1 | #542 | settings 3 キー追加(消費なし、repoOverrides gate) | H |
 | 2 | #543 | dashboard / web の codex 限定ゲート + docsync(← #540) | H + web |
-| 2 | #544 | panelaunch 一般化 + 非 plan 明示化 + goldens 再生成(← #540 #541 #543) | H |
-| 3 | #545 | childPlanMode 消費 + codexPlanMode 全廃(← #542 #544) | H |
-| 3 | #546 | newSessionPlanMode 消費 + CLAUDE.md / SKILL.md 更新(← #542 #544) | H |
-| 3 | #547 | orchestratorPlanMode 消費 + codex gate フォールバック(← #542 #544) | M |
-| 4 | #548 | 利用者向け docs 一括同期(← #543 #545 #546 #547) | 文書 |
+| 3 | #544 | panelaunch 一般化 + 非 plan 明示化 + goldens 再生成(← #540 #541 #543) | H |
+| 4 | #545 | childPlanMode 消費 + codexPlanMode 全廃(← #542 #544) | H |
+| 4 | #546 | newSessionPlanMode 消費 + CLAUDE.md / SKILL.md 更新(← #542 #544) | H |
+| 4 | #547 | orchestratorPlanMode 消費 + codex gate フォールバック(← #542 #544) | M |
+| 5 | #548 | 利用者向け docs 一括同期(← #543 #545 #546 #547) | 文書 |
 
 ## 参照
 
