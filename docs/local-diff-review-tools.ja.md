@@ -67,7 +67,8 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
   エージェント側から `session comment add --repo <path>`(TUI に
   Agent note がインライン描画される)、人間が TUI で `c` → Ctrl+S で
   付けたコメントを `session comment list --type user` で取得、
-  `session review` で diff 構造 + コメントの統合ペイロード取得、
+  `session review` で diff 構造 + コメントの統合ペイロード取得
+  (本文まで含めるには `--include-notes` が要る。既定は件数のみ)、
   `session navigate` / `session reload` で表示中セッションの遠隔操作
 - セッションはデーモン経由で `--repo <path>` により識別され、tmux の
   pane id も保持する。worktree 単位で並ぶ fanout のモデルと相性がよい
@@ -104,6 +105,10 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
 - `--annotations` で前回出力を再読込する round-trip、`--description-file` で
   タスク文脈を情報ポップアップに表示する口もある。fanout が briefing の
   要約を渡す使い方が考えられる
+- 注釈を保存して終了すると、`-o` とは別に既定で
+  `~/.config/revdiff/history/` へレビュー対象の diff 全体と注釈が
+  自動保存される。checkout の外にソースのコピーが残る挙動なので、
+  統合時は `--history-dir` の管理が要る(後述)
 - 常駐デーモンを持たないため、エージェント側から取得や操作を駆動する
   CLI はない。ただし終了時一括に限られるわけでもない: `O` キーで注釈を
   終了せずに `-o` 先へ書き出し(flush)でき、`R` で diff を再読込できる
@@ -169,9 +174,13 @@ worktree を選んでビュアーを開けるようにする。
   キー 1 つ(候補: `R`)を `openSelectedWorktreeShellCmd` と同型で配線。
   `help.go` に 1 行追加
 - 起動形態: TUI 系(hunk / revdiff)は `tmuxrun.DisplayPopup`、difit は
-  popup ではなく直接のプロセス起動(execx 系)にして stdout の JSON
-  (port / pid)を回収し、URL を表示する。port と pid は記録して
-  停止導線(または TTL)まで面倒を見る。`DisplayPopup` は子プロセスの
+  popup ではなく fanout 管理の子プロセスとして foreground 起動
+  (`--no-open`)し、出力から port を読み取って URL を表示する。
+  `--background` の detached 化は使わない: v5.0.8 では port 競合時に
+  JSON より先に `Port ... is busy` 行が出るのに、親プロセスは子 stdout の
+  最初の非空行しか返さないため、複数 worktree で並行起動すると
+  port / pid の回収が壊れ、detached サーバーだけが残る。port と pid は
+  記録して停止導線(または TTL)まで面倒を見る。`DisplayPopup` は子プロセスの
   stdout も終了コードも呼び出し元へ返さないため、popup 側の結果
   (revdiff の exit 10 と `-o` 出力)は `tui_popup.go` の result / done
   一時ファイル方式で回収する。popup 内で外部コマンドを呼ぶため
@@ -180,6 +189,10 @@ worktree を選んでビュアーを開けるようにする。
   複数あると一致エラーになる。起動時に session ID を特定して pane /
   worktree と対応付けて記録し、二重起動は新規 session ではなく既存
   session の `reload` 再利用にする
+- revdiff の自動履歴: 既定の `~/.config/revdiff/history/` 保存は
+  checkout 外にソースの diff を永続化する。`--history-dir` を fanout
+  管理の一時領域へ向けて worktree cleanup と一緒に消すか、永続保存を
+  明示的な opt-in にする
 - base 解決: merge-base を strict に解決する関数を `internal/infra/gitstat`
   に新設し、ビュアーへ SHA で渡す(hunk の two-dot 問題を fanout 側で
   吸収する)。表示統計用の既存 `diffBase` は base を解決できないとき
@@ -208,7 +221,10 @@ skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 - hunk: `session comment list --type user` の出力を該当ペインの受信箱へ
   転送する補助 verb(または skill 手順)。session の指定は Phase 1 で
   記録した session ID を使う(`--repo` 指定は複数 session で壊れる)
-- difit: `comment get` の出力を同様に転送(起動時に記録した port を使う)
+- difit: `comment get --port <記録した port> --format json` の出力から、
+  人間の未送信 message だけを抽出して転送する。text 形式は author を
+  省略し、エージェント注入分も同じセッションに混ざるため、注入時に
+  author / ID を付けて区別し、送信済み管理を持つ
 - revdiff: exit 10 を検知して `-o` の markdown を転送。セッションを
   終了しない随時還元は、人間の `O` flush で更新される `-o` ファイルを
   watch して転送し、修正後は `R` 再読込で受ける
