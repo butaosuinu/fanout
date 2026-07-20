@@ -2,7 +2,7 @@
 title: トラブルシューティング
 linkTitle: トラブルシューティング
 description: "fanout のよくあるエラーメッセージと直し方。"
-weight: 80
+weight: 100
 kanji: 直
 yomi: troubleshoot
 ---

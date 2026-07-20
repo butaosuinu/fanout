@@ -2,7 +2,7 @@
 title: Settings
 linkTitle: Settings
 description: "Child-launch and briefing toggles, watcher controls, TUI notification channels, and the flag > env > repo > user > default resolution order behind them."
-weight: 60
+weight: 70
 kanji: 整
 yomi: settings
 ---
@@ -30,7 +30,7 @@ The behavior toggles control child launch mode, briefing instructions, and tmux 
 - `prReviewGate`: on by default, it keeps the PR-review-gate expectation. Turn it off and the Claude child briefing instead gets a note permitting `FANOUT_SKIP_PR_REVIEW=1 gh pr create` when the creation hook blocks (see below).
 - `briefingCodeReview`: tells Claude children to run the `/code-review` slash command on their changes before committing.
 - `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
-- `codexPlanMode`: starts normal issue / Project fan-out children as interactive Codex Plan Mode sessions. It also applies to TUI Issue mode when the selected issue has OPEN children. Every selected child must resolve to `codex`; a mixed-agent run fails before any pane is created. It does not control watcher launches, childless-issue standalone panes, manual or attached panes, `fanout plan` tasks, or plan coordinators.
+- `codexPlanMode`: starts normal issue / Project fan-out children as interactive Codex Plan Mode sessions. Every selected child must resolve to `codex`; a mixed-agent run fails before any pane is created. Which launch paths the setting covers — and which ignore it — is in [Agent Integrations]({{< relref "/docs/agents#codex-plan-mode" >}}).
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
 - `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
@@ -115,17 +115,6 @@ Agent-state notifications come from `@fanout_agent_state`, not from pane output.
 The watcher should never start just because someone checked out the repo, so repo config cannot opt into it. If `<project_root>/.fanout/config.json` sets `watcher`, fanout warns and ignores that key; enable it from user config or `FANOUT_WATCHER` instead. Repo config may still set `watcherTriggerLabel`, `watcherRunningLabel`, `watcherIntervalSeconds`, `watcherAgent`, and `watcherMaxSessions`.
 
 The trigger label starts agent work from the labeled issue and, for parent fan-outs, any OPEN children it launches. Their bodies become agent briefings, so treat the label as an execution request and apply it only when you trust that issue and its launchable children. See [Watcher]({{< relref "/docs/watcher" >}}) for the operational details.
-
-## Watcher operation
-
-The watcher only runs while a TUI console is running. See [Watcher]({{< relref "/docs/watcher" >}}) for the full operation guide — enabling it, the label lifecycle, the session budget, and cleanup.
-
-```bash
-# One shell
-export FANOUT_WATCHER=1
-export FANOUT_WATCHER_AGENT=codex
-fanout
-```
 
 ## Forward compatibility
 

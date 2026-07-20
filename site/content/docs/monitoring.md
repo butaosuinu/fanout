@@ -46,7 +46,7 @@ fanout reads structured agent state from the pane's `@fanout_agent_state` tmux o
 | `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
 | `s` | Open the settings tmux popup. Choose user or repo config, edit the same keys as `config.json`, and save with `Ctrl+S`. |
 | `Ctrl+O` | In the new-session Issue list, open the selected issue in the default browser. |
-| `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in Codex Plan Mode. |
+| `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. `codex` starts in [Codex Plan Mode]({{< relref "/docs/agents#codex-plan-mode" >}}). |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
 | `t` | Open a shell terminal at the project root. Closing it removes only the tmux pane and the state row; it never deletes the git worktree. |
 | `Enter` / `o` | Focus the selected live row's pane. |

@@ -2,7 +2,7 @@
 title: Watcher
 linkTitle: Watcher
 description: "The opt-in, TUI-resident launcher that turns a `fanout:auto` label into an unattended session: enabling it, the label lifecycle, the session budget, and cleanup."
-weight: 45
+weight: 50
 kanji: 巡
 yomi: watcher
 ---

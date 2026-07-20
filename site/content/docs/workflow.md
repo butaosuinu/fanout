@@ -102,7 +102,7 @@ fanout msg inbox --mark-read
 
 The full verb table and how to address plan tasks are covered in the [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 
-Messages persist in the bus and siblings read them at their own checkpoints; on top of that pull loop, `--team` gives `claude` panes and fresh non-Plan `codex` panes a push lane (Codex Plan Mode panes stay pull-based). `claude` panes are briefed to start `fanout msg watch` under the Monitor tool (persistent) as their first tool action — new messages then stream in as they arrive, marked read on delivery (mark-on-emit). Fresh non-Plan `codex` panes start through an app-server bridge that injects unread messages into an idle turn as quoted, untrusted data. In a running pane without a working lane (no Monitor, a restored codex pane), siblings fall back to pull (`inbox` / `board`) plus `nudge`; after an injection failure, recover with `inbox --all` because the failed batch is already marked read. A codex bridge that fails to start fails the launch itself and is cleaned up.
+Messages persist in the bus and siblings read them at their own checkpoints. On top of that pull loop, `--team` adds a push lane for `claude` panes and fresh non-Plan `codex` panes, delivering new messages as they arrive; panes without a working lane fall back to pull (`inbox` / `board`) plus `nudge`. How each lane delivers — and how to recover after an injection failure — is in the [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 
 It works the same for `claude`, `codex`, and `opencode` panes, and is distinct from Claude Code Agent Teams, which coordinates teammates inside a single session.
 

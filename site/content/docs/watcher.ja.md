@@ -2,18 +2,16 @@
 title: watcher
 linkTitle: watcher
 description: "`fanout:auto` ラベルを無人 session に変える opt-in の TUI 常駐ランチャ。有効化、ラベルのライフサイクル、session 予算、後始末をまとめます。"
-weight: 45
+weight: 50
 kanji: 巡
 yomi: watcher
 ---
 
 watcher は、`fanout:auto` ラベルを one-shot の fanout session に変える opt-in のランチャです。
 CLI を手で叩かなくても起動します。
-動くのは引数なしの TUI コンソールを開いている間だけです。
-コンソールを抜けると watcher も止まります。
+動くのは引数なしの TUI コンソールを開いている間だけで、コンソールを抜けると watcher も止まります。
 cron や webhook のサービスではありません。
-リポジトリ全体からラベル付き issue を見つけ、それぞれを一度だけ起動します。
-親配下の子を継続的に巡回し続けるものではありません。
+リポジトリ全体からラベル付き issue を見つけてそれぞれを一度だけ起動するもので、親配下の子を継続的に巡回し続けるものではありません。
 
 blocker が解けるたびに `fanout <parent> --unblocked-only` を手で再実行する代わりに使います([ワークフロー]({{< relref "/docs/workflow" >}})を参照)。
 信頼できる issue に一度ラベルを付ければ、あとは watcher が自分で拾います。

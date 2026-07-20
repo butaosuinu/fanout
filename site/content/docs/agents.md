@@ -1,11 +1,26 @@
 ---
 title: Agent Integrations
 linkTitle: Agent Integrations
-description: "Bundled skills for Claude Code and Codex, the /fanout slash command, and Codex Plan Mode."
-weight: 70
+description: "The supported agents compared, bundled skills for Claude Code and Codex, the /fanout slash command, Codex Plan Mode, and OpenCode."
+weight: 80
 kanji: 連
 yomi: agents
 ---
+
+## Supported agents
+
+fanout can start a child pane with any of three agent CLIs. The fan-out mechanics are shared — one worktree, one pane, one briefing per child — and the differences sit around the session:
+
+| | Claude Code | Codex CLI | OpenCode |
+|---|---|---|---|
+| `--agent` name | `claude` | `codex` | `opencode` |
+| Bundled skills | `/fanout` + skills | `$fanout` + skills | none |
+| Codex Plan Mode (`codexPlanMode`) | — | ✓ | — |
+| `--team` push delivery | ✓ `fanout msg watch` under the Monitor tool | ✓ fresh non-Plan sessions (app-server bridge) | — (pull only) |
+| `fanout msg nudge` | ✓ | ✓ | — (skipped) |
+| Briefing sections | base + Claude-specific | base + Codex-specific | base + generic validation |
+
+The push and nudge rows are explained in the [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
 
 ## From inside an agent session
 
@@ -47,19 +62,15 @@ Codex installs five repo-managed skills under `~/.codex/skills/` (see [Installat
 
 Invoke the fanout skill by asking Codex to fan out a parent issue (for example, "fan out #123") or explicitly with `$fanout`. It follows the same safety flow as Claude's `/fanout` — dry-run, confirm targets, then run. `fanout-issues`, `fanout-plan`, `post-work-review`, and `pr-watch` are also bundled as Codex versions; invoke them as `$fanout-issues` or `$pr-watch`, and they play the same role as the Claude versions.
 
-`$post-work-review` starts an ordinary native Codex subagent with `fork_turns: "none"` for a fresh broad review. The parent interprets its natural-language findings. If a fix changes the target, the parent starts another fresh broad review of the entire new target. There is no custom agent, model pin, app-server controller, or result parser.
+### The `$post-work-review` gate
 
-The reviewer receives the target repository path and diff scope, so repository content is sent to the Codex model. Before spawning, the marker helper proves that applicable `AGENTS.md`, `AGENTS.override.md`, and repository `.codex` bootstrap files are unchanged from the trusted merge base. Those base-identical instructions remain trusted repository conventions; every other target file and directive is untrusted review evidence.
+`$post-work-review` starts a fresh native Codex subagent for one broad review of the whole target; the parent interprets its findings, and a fix that changes the target triggers another fresh review. The reviewer receives the repository path and diff scope, so repository content is sent to the Codex model.
 
-The helper also rejects candidate changes to the `post-work-review` gate, root default makefiles, and `install.sh`. The installed skill and helper must be non-symlinked copies outside the reviewed repository. The checksum-verified release installer owns them; checkout make targets never create, replace, or remove them. Install and link stop if the retired driver remains under either Codex root. Review instruction, gate, or gate-installer changes from a trusted checkout or by a human instead. A native subagent inherits the parent session's sandbox, approval policy, and network restrictions. The skill tells reviewers not to edit, request approval, or use the network, but it cannot create a stricter child-only sandbox. Start Codex read-only first when enforced read-only access is required. If the trust boundary, native spawning, or waiting is unavailable, the gate stops without a fallback.
+The gate protects its own trust boundary. Before spawning, a marker helper proves that the applicable `AGENTS.md` / `AGENTS.override.md` and repository `.codex` bootstrap files are unchanged from the trusted merge base, and it rejects candidate changes to the gate itself (the `post-work-review` files, root default makefiles, `install.sh`). The checksum-verified release installer owns the installed skill and helper; checkout make targets never touch them. The helper fails closed on anything it cannot trace — linked or case-variant instruction files, project config that relocates instructions, and submodule changes (deinitialize clean submodules first). Review rejected targets from a trusted checkout or by a human.
 
-The helper matches instruction and gate paths case-insensitively for filesystem portability. It rejects linked `AGENTS.md` / `AGENTS.override.md`, case-variant or nested `.codex` paths, project config that defines `model_instructions_file` or `project_doc_fallback_filenames`, escaped project config keys, committed or worktree submodule changes, and every checked-out submodule. Deinitialize clean, base-identical submodules before review. Review other rejected targets from a trusted checkout or by a human.
+The subagent inherits the parent session's sandbox and approval policy; when enforced read-only access is required, start Codex itself read-only. A dirty worktree gets a review-only pass that never writes the PR-gate marker — commit the candidate and rerun. On a clean committed branch, the skill runs the repository's canonical validation once and records the exact HEAD, PR base, and diff hash; a later commit, base movement, or diff change invalidates the marker.
 
-A dirty worktree uses review-only scope. The reviewer inspects staged, unstaged, and untracked changes, while the parent runs focused checks only. This scope never writes a marker; commit the candidate and rerun for the PR gate. Submodule changes fail closed before review.
-
-For a clean committed branch, the skill runs the repository's canonical validation once and records the exact clean HEAD, PR base commit, and diff hash. A later commit, base movement, or review-diff change invalidates the marker.
-
-`$pr-watch` runs in the foreground. Its helper suppresses unchanged snapshots and stores its cursor in Git metadata, including in linked worktrees. It does not leave a background watcher after the Codex session ends.
+`$pr-watch` runs in the foreground, suppresses unchanged snapshots, and stores its cursor in Git metadata, including in linked worktrees. No background watcher outlives the Codex session.
 
 ## Codex Plan Mode
 
@@ -77,7 +88,19 @@ Watcher launches, childless-issue standalone panes, `fanout plan` tasks, and pla
 
 ## OpenCode
 
-OpenCode (`opencode`) is a supported child agent with no bundled skills: pass `--agent opencode`, or mix it per target with `--agent NUM=opencode` / `--agent task-id=opencode`. fanout passes the launch prompt as the `--prompt` flag value — opencode's positional argument is a project path — and resumes panes with `opencode --continue`. OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. When fanout's Claude integrations are installed, its Claude Code compatibility also resolves the `/fanout` command that TUI plan fan-out coordinators receive. Its briefings carry the base requirements plus the generic final-validation instructions; the Claude-only and Codex-only sections do not apply. `fanout msg nudge` skips opencode panes, so `--team` coordination stays pull-based.
+OpenCode (`opencode`) is a supported child agent with no bundled skills: pass `--agent opencode`, or mix it per target with `--agent NUM=opencode` / `--agent task-id=opencode`.
+
+### Launch and resume
+
+fanout passes the launch prompt as the `--prompt` flag value — opencode's positional argument is a project path — and resumes panes with `opencode --continue`.
+
+### Project rules and briefings
+
+OpenCode reads the repository's `AGENTS.md` natively, so child panes pick up project rules without extra setup. Its briefings carry the base requirements plus the generic final-validation instructions; the Claude-only and Codex-only sections do not apply. When fanout's Claude integrations are installed, OpenCode's Claude Code compatibility also resolves the `/fanout` command that TUI plan fan-out coordinators receive.
+
+### Messaging stays pull-based
+
+`fanout msg nudge` skips opencode panes, and there is no push lane: with `--team`, opencode siblings read the bus at their own checkpoints (`inbox` / `board`). The nudge exclusion is deliberate — opencode panes report no pane state beyond `running`, so fanout cannot tell when queued input is safe to send.
 
 ## How the briefing works
 
