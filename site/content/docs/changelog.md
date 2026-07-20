@@ -9,6 +9,19 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.14.0 (2026-07-21)
+
+- **OpenCode child agents.** `--agent opencode` now works in issue / Project and `fanout plan` runs, including per-target overrides and the TUI new-session picker.
+  fanout passes prompts with `--prompt`, resumes with `opencode --continue`, and gives OpenCode the base briefing plus generic validation; team messaging remains pull-only and `nudge` skips these panes.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [CLI Reference]({{< relref "/docs/cli" >}}).
+- **Safe adoption of legacy panes.** TUI restore can now migrate live pre-#503 rows without `shellKey` when the tmux server generation, pane process start time, launch markers, and cross-root claimant scan prove ownership.
+  It stamps and persists a liveness key so lifecycle close works; ambiguous rows remain unchanged and fail closed.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}) and [CLI Reference]({{< relref "/docs/cli#--merge----close----cleanup" >}}).
+- **Clearer agent and setup docs.** The docs landing page and Agent Integrations now compare Claude Code, Codex, and OpenCode in one place; README and installation guidance put prerequisites first and link detailed TUI, messaging, watcher, and Plan Mode behavior to their canonical pages.
+  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Installation]({{< relref "/docs/installation" >}}).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.14.0)
+
 ## v0.13.0 (2026-07-20)
 
 - **Observation-only herdr backend.** fanout can now select an opt-in `herdr` runtime backend and match recorded sessions against `herdr api snapshot` in the TUI and web dashboard.

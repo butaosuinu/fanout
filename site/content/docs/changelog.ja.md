@@ -9,6 +9,20 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.14.0 (2026-07-21)
+
+- **OpenCode 子エージェント。** `--agent opencode` で issue / Project と `fanout plan` を実行でき、per-target override と TUI new-session picker でも選べるようになりました。
+  fanout は prompt を `--prompt` で渡し、`opencode --continue` で resume します。
+  briefing は base + 共通検証で、team message は pull のみ、`nudge` は対象外です。
+  [エージェント連携]({{< relref "/docs/agents" >}}) と [CLI リファレンス]({{< relref "/docs/cli" >}}) を参照。
+- **レガシーペインの安全な adoption。** TUI restore は、tmux server 世代、pane process の起動時刻、起動時の marker、全 restore root 横断の claimant 検査で所有を証明できた場合に限り、`shellKey` のない live な pre-#503 state 行を移行します。
+  liveness key を live ペインへ刻印して state 行へ保存するため lifecycle close が可能になり、曖昧な行は変更せず fail closed のままです。
+  [モニタリング]({{< relref "/docs/monitoring" >}}) と [CLI リファレンス]({{< relref "/docs/cli#--merge----close----cleanup" >}}) を参照。
+- **agent とセットアップの導線整理。** ドキュメントトップとエージェント連携で Claude Code、Codex、OpenCode を一か所で比較できるようにし、README とインストール案内は前提ツールを先に示して、TUI、message、watcher、Plan Mode の詳細を正典ページへのリンクに置き換えました。
+  [エージェント連携]({{< relref "/docs/agents" >}}) と [インストール]({{< relref "/docs/installation" >}}) を参照。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.14.0)
+
 ## v0.13.0 (2026-07-20)
 
 - **観測専用の herdr backend。** opt-in の `herdr` runtime backend を選択し、TUI と web ダッシュボードで記録済み session を `herdr api snapshot` と照合できるようになりました。
