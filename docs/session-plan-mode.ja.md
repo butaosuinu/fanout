@@ -76,6 +76,17 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   一般化し、`PlanMode && Agent=="codex"` のときだけ plan TUI 経路、他は
   mode 付き builder を呼ぶ。codex 以外を拒む既存のハードエラーと
   `run/agents.go` の codex-only ガードは削除する。
+- claude の `--permission-mode auto` には利用条件がある(Anthropic API は
+  全ユーザー可、Bedrock / Vertex / Foundry は `CLAUDE_CODE_ENABLE_AUTO_MODE`
+  等の明示有効化が必要)。非対応環境では claude が起動時にエラーで終了し、
+  launch wrapper が exit status を表示して shell へ戻すことで表面化する
+  (fail loud)。v1 は capability 検査や素起動フォールバックを持たず
+  (非ゴール参照)、前提は利用者向けドキュメントに明記する。
+- plan mode の issue 子 briefing は合成にする。現行の `briefing.Render` は
+  codex plan 時に plan 専用 briefing を即 return し、auto PR・review
+  gate・base branch などの完了契約を落とす。claude / opencode の plan 子は
+  plan-first の前置き + 通常の work 契約を合成した briefing にし、codex
+  plan TUI 子は既存の `<proposed_plan>` 契約付き briefing を維持する。
 
 ## precedence と競合
 
@@ -112,14 +123,27 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 
 ## 移行
 
+- **旧キーの repo 遮断は一般化と同時に行う**。panelaunch 一般化(#544)の
+  時点で旧 `codexPlanMode` は claude / opencode の権限姿勢も動かすように
+  なるため、同 PR で `RepoEditable=false` 化 + `repoOverrides()` の
+  strip+warn を前倒しする。repo config が user 設定を上書きして子を auto
+  へ落とせる中間状態を作らない。キーの全廃は #545。
 - config.json の旧キー `codexPlanMode` は専用警告(3 キーへの置き換え案内)
   を出して無視する。`FANOUT_CODEX_PLAN_MODE` も同様に検出して警告する。
 - 旧 CLI フラグは unknown option エラーになる(意図した breaking)。Tier 1
   bats の該当ケースと、Tier 2 の codex-plan シナリオ(flag / user-config /
   env の 3 経路)は新設定での検証に置き換える。
-- 利用者向けドキュメント(README ペア、site の settings / agents / cli /
-  workflow / monitoring / changelog の en+ja、claude / codex の skills)と
-  CLAUDE.md の「never Codex Plan Mode」注記を実装後に一括同期する。
+- **旧フラグを転送する配布 integration はフラグ削除と同一 PR(#545)で
+  更新する**: `claude/commands/fanout.md`、`claude/skills/fanout/SKILL.md`、
+  `codex/skills/fanout/`(SKILL.md / references/batch-workflow.md /
+  references/cli-modes.md)、fanout-plan SKILL.md(claude / codex)の
+  `--codex-plan-mode` 言及。#545 だけが入った main から `make install`
+  した integration が unknown option なコマンドを生成する窓を作らない。
+- 残りの利用者向けドキュメント(README ペア、site の settings / agents /
+  cli / workflow / monitoring / changelog / herdr-backend の en+ja)は
+  #548 で一括同期する。repository instruction は該当実装と同じ PR で
+  更新する: CLAUDE.md / AGENTS.md の「never Codex Plan Mode」(#546)、
+  CLAUDE.md の「`/api/plan` は codexPlanMode 記録ペイン限定」(#543)。
 
 ## 非ゴール
 
@@ -129,6 +153,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   契約を維持し、peermsg allowlist・TUI glyph・dashboard への波及を避ける。
 - codex オーケストレーターの gate 対応 plan TUI(handshake の再構成)。
 - herdr backend での plan TUI 起動。
+- claude auto mode の capability 検査と素起動フォールバック設定。非対応
+  環境の起動失敗は fail loud で表面化し、必要になったら follow-up で
+  検討する。
 
 ## 実装分解
 
