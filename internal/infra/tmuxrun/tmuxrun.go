@@ -185,6 +185,24 @@ func (v tmuxVersion) String() string {
 	return fmt.Sprintf("%d.%d", v.Major, v.Minor)
 }
 
+// ServerStartTime returns the tmux server's start time (#{start_time}).
+// Pane ids are unique for the lifetime of one server, so a fanout state row
+// created after this instant can trust its recorded pane id to still mean
+// the exact pane it launched; a row older than the server predates every
+// live pane id. Callers making destructive decisions must fail closed when
+// this errors.
+func ServerStartTime() (time.Time, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "#{start_time}").Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("tmux display-message start_time: %w", err)
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse tmux start_time %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	return time.Unix(secs, 0), nil
+}
+
 // CurrentClientSize returns the tmux client dimensions, not the current pane
 // dimensions. tmux display-popup is client-scoped, so pane width is irrelevant.
 func CurrentClientSize() (ClientSize, error) {

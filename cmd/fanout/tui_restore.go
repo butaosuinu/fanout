@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
@@ -47,6 +48,10 @@ var (
 type tuiRestoreSnapshot struct {
 	Live         map[string]tmuxrun.LivePane
 	PanesByTitle map[string][]tmuxrun.LivePane
+	// ServerStart is the tmux server's start time. Pane ids are never reused
+	// within one server lifetime, so a row created at or after this instant
+	// still owns its recorded pane id. Zero (query failed) disables adoption.
+	ServerStart time.Time
 }
 
 func newTUIRestoreFunc(projectRoot, session, commandName string) func() (string, error) {
@@ -61,7 +66,7 @@ func newTUIRestoreFunc(projectRoot, session, commandName string) func() (string,
 }
 
 func restoreRecordedPanes(projectRoot, session, commandName string) (tuiRestoreReport, error) {
-	roots, _ := worktree.ListRoots(projectRoot) // Degrade to the current root, matching the TUI state loader.
+	roots, rootsErr := worktree.ListRoots(projectRoot) // Degrade to the current root, matching the TUI state loader.
 	initialSnapshot, err := loadTUIRestoreSnapshot(session)
 	if err != nil {
 		return tuiRestoreReport{}, err
@@ -70,6 +75,11 @@ func restoreRecordedPanes(projectRoot, session, commandName string) (tuiRestoreR
 	var restoreErr error
 	claimed := preclaimLiveRestoreIdentities(roots, initialSnapshot)
 	claims := collectRestoreClaimants(roots)
+	if rootsErr != nil {
+		// An incomplete root listing may hide claimants in unlisted sibling
+		// stores; restore proceeds, adoption fails closed for this cycle.
+		claims.complete = false
+	}
 	for _, root := range uniqueRestoreRoots(roots) {
 		rootReport, err := restoreRecordedPanesForRoot(root, session, commandName, claimed, claims)
 		report.Add(rootReport)
@@ -148,7 +158,7 @@ func restoreRecordedPanesForRootWithSnapshot(root, session, commandName string, 
 		}
 		// Adoption must run before the dedupe skip: preclaimed live issue rows
 		// never reach the alive branch below.
-		if key, adoptErr := adoptLegacyLivePaneKey(pane, snapshot.Live, claims); adoptErr != nil {
+		if key, adoptErr := adoptLegacyLivePaneKey(pane, snapshot, claims); adoptErr != nil {
 			restoreErr = errors.Join(restoreErr, adoptErr)
 		} else if key != "" {
 			pane.ShellKey = key
@@ -298,7 +308,10 @@ func loadTUIRestoreSnapshot(session string) (tuiRestoreSnapshot, error) {
 	if err != nil {
 		return tuiRestoreSnapshot{}, err
 	}
-	return tuiRestoreSnapshot{Live: live, PanesByTitle: liveSessionPanesByTitle(sessionPanes, live)}, nil
+	// Best-effort: a failed query leaves ServerStart zero, which only disables
+	// legacy-pane adoption for this cycle; restore itself proceeds.
+	serverStart, _ := tmuxrun.ServerStartTime()
+	return tuiRestoreSnapshot{Live: live, PanesByTitle: liveSessionPanesByTitle(sessionPanes, live), ServerStart: serverStart}, nil
 }
 
 func liveSessionPanesByTitle(sessionPanes []tmuxrun.PaneInfo, live map[string]tmuxrun.LivePane) map[string][]tmuxrun.LivePane {
@@ -468,27 +481,39 @@ func (c *restoreClaimants) addRows(rows []state.Pane) {
 // adoptLegacyLivePaneKey migrates a keyless legacy agent row whose recorded
 // pane is still alive: it stamps a fresh @fanout_shell_key on the live pane so
 // the row graduates to the keyed identity that pane close requires, and
-// returns the key to persist. Path containment alone never proves ownership,
-// so adoption additionally requires two launch-time fanout markers on the
-// live pane: @fanout_worktree_path must equal the row's recorded worktree (a
-// reused pane id outside fanout never carries it), and @fanout_pane_label
-// must equal this row's border label — the worktree path is shared by
-// attached agents, the label narrows the pane to this session identity. The
-// label is still not per-row unique (repeated attaches of one agent to one
-// worktree share a DisplayName), so the row must also be the only claimant of
-// the pane id across every restore root's store: any second claimant makes
-// the binding ambiguous and adoption fails closed. Rows that are keyed,
-// shells, missing a worktree path, or not alive return ("", nil). A live pane
-// already holding a key is an interrupted earlier adoption (stamped, then the
-// state save failed or the process died): its key is re-associated without
-// restamping, unless a row in any root records it. The tmux stamp happens
-// before the state row is persisted; the reverse order would create the
-// fail-closed keyed-row-without-live-key state on stamp failure.
-func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane, claims *restoreClaimants) (string, error) {
+// returns the key to persist.
+//
+// Ownership proof: tmux never reuses a pane id within one server lifetime, so
+// a row created at or after the server's start time still owns its recorded
+// pane id — the live pane at that id is the exact pane the row launched.
+// Rows older than the server (or with an unparsable CreatedAt, or when the
+// server start is unknown) fail closed: their recorded id may have been
+// reused by an unrelated pane. On top of that incarnation proof, adoption
+// keeps defense-in-depth requirements: the live pane must carry the
+// launch-time fanout markers (@fanout_worktree_path equal to the row's
+// worktree and @fanout_pane_label equal to the row's border label), the row
+// must be the only claimant of the pane id across every restore root's store,
+// and the row must be alive by path containment. Rows that are keyed, shells,
+// or missing a worktree path return ("", nil).
+//
+// A live pane already holding a key is an interrupted earlier adoption
+// (stamped, then the state save failed or the process died) — within the
+// same server incarnation nothing else stamps a key on this row's own pane
+// without also recording a row, and a recorded key is rejected via the
+// claimant index. Such an orphan key is re-associated without restamping.
+// The tmux stamp happens before the state row is persisted; the reverse
+// order would create the fail-closed keyed-row-without-live-key state on
+// stamp failure.
+func adoptLegacyLivePaneKey(pane state.Pane, snapshot tuiRestoreSnapshot, claims *restoreClaimants) (string, error) {
+	live := snapshot.Live
 	if claims == nil || !claims.complete {
 		return "", nil
 	}
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" || strings.TrimSpace(pane.WorktreePath) == "" {
+		return "", nil
+	}
+	created, createdErr := time.Parse(time.RFC3339, strings.TrimSpace(pane.CreatedAt))
+	if snapshot.ServerStart.IsZero() || createdErr != nil || created.Before(snapshot.ServerStart) {
 		return "", nil
 	}
 	cur, ok := live[pane.PaneID]
