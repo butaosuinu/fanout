@@ -1,38 +1,40 @@
 # herdr runtime backend 実機検証
 
-ステータス: v1 の実機検証と fail-closed 境界を確定。
-herdr backend v1 は自動 mutation を持たない read-only / manual experiment とし、fanout workflow の runtime としては提供しない。
-v0.7.4 metadata token reporting と sidebar row layout は追試済み。
-v0.7.4 core runtime matrix は未実施で、core runtime allowlist は変更しない。
-core runtime の検証日は 2026-07-16、v0.7.4 追試日は 2026-07-17。
-core runtime の対象は stable CLI / server `0.7.3`、protocol `16`、schema version `1`。
-metadata token reporting と sidebar row layout の対象は stable CLI / server `0.7.4`、protocol `16`、schema version `1`。
+ステータス: 0.7.4 wave 2 の実機検証を完了し、fanout-owned authenticated lifecycle は No-Go と判定した。
+herdr backend は自動 mutation を持たない read-only / manual experiment のままとし、fanout workflow の runtime としては提供しない。
+0.7.4 core runtime matrix、metadata token reporting、sidebar row layout は実測済みである。
+core runtime の検証日は 2026-07-16 と 2026-07-21、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
+0.7.3 と 0.7.4 の対象はいずれも protocol `16`、schema version `1` である。
 
 fanout の herdr backend v1 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
-fanout が実行する v1 の herdr 操作は version / session / schema の検査と snapshot / list / wait に限定する。
+fanout が実行する herdr 操作は version / session / schema の検査と snapshot / list / wait に限定する。
 targeted content read の `pane read` / `agent read` は手動実測面としてだけ残し、fanout v1 は発行しない。
 issue / Project / plan の launch は root coordinator の provisional intent、state row、`workspace create` を含む最初の mutation より前に fail closed にする。
 worktree の作成と既存 checkout の採用は herdr CLI で実行できるが、fanout の自動 launch には採用しない。
-herdr 0.7.3 は setup hook の抑止または registry generation を create / open request に束縛できず、plugin の実行完了 receipt も持たないため、自動 create / open とその直後の agent start を v1 では無効にする。
+herdr 0.7.4 も setup hook の抑止または registry generation を create / open request に束縛できず、plugin の実行完了 receipt を持たないため、自動 create / open とその直後の agent start を無効にする。
 条件付き remove / close もないため、自動 cleanup、create rollback、それに依存する git fallback も無効にする。
 Claude hook の signal は agent process から偽造できるため telemetry に限定し、nudge authority または完了判定には使わない。
-herdr backend v1 の自動 nudge は agent 種別にかかわらず無効にし、pane 消滅または `terminal_id` の変化は `stale` とする。
+herdr backend の自動 nudge は agent 種別にかかわらず恒久的に除外し、pane 消滅または `terminal_id` の変化は `stale` とする。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
-自動 mutation の再導入には、request が expected immutable session / resource generation を原子的に検査するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する必要がある。
+0700 directory、0600 socket、fanout 側の ownership marker は別 UID を排除するが、同一 UID の agent を排除せず、mutation authority にはならない。
+自動 mutation の再導入には、server が認証する controller capability、agent と別 UID の server、request-bound immutable generation と conditional mutation のいずれかが必要である。
 同じ TOCTOU は targeted content read にも残り、別接続の post-read snapshot は ABA を排除できないため content の公開 authority には使わない。
 
 ## 採用判断
 
-| 対象 | v1 の判断 | 理由 |
+| 対象 | wave 2 の判断 | 理由 |
 |---|---|---|
-| server 起動 | read-only experiment は既存の named session を要求する | headless CLI は server を自動起動しなかった |
+| owned server | No-Go | private socket と marker は同一 UID の agent に対する認証境界にならない |
+| server 起動 | read-only experiment は既存の named session を要求する | 0.7.4 owned server の自動 bootstrap と再起動は解禁しない |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read | fanout v1 では無効 | response が immutable session generation と target `terminal_id` を束縛しない |
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | `worktree create/open` は手動操作としてだけ使う | setup hook gate を mutation に束縛できず、自動 remove も安全に実行できない |
 | agent 起動 | `agent start` の bare argv、`--cwd`、`--env` は手動操作としてだけ使う | worktree setup 完了を API で証明できず、自動 launch には採用しない |
-| nudge | v1 では無効 | hook signal は authority ではなく、状態検査と submit を原子的に実行する CAS もない |
+| capability gate | stable `>=0.7.4` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
+| attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
+| nudge | herdr backend から恒久除外 | hook signal は authority ではなく、状態検査と submit を原子的に実行する CAS もない |
 | identity | routing、checkout、terminal、会話、process を別々に照合する | v1 は cold restart 後に再束縛せず、provider 固有 matcher は後続版に限る |
 | cleanup | 自動 mutation は無効 | remove / close の request に nonce または session epoch の precondition を渡せない |
 | 通知 | 手動検証だけに使う | detached 時も `shown:true` で、表示完了の応答ではなく、fanout v1 は発行しない |
@@ -40,18 +42,98 @@ session identity の read と mutation は別の CLI 接続になるため、直
 ## 検証条件
 
 検証用の git repository、bare remote、linked worktree、named herdr session を `/private/tmp` に作った。
-ユーザーの default herdr session は停止も削除もしていない。
+2026-07-16 の v1 検証ではユーザーの default herdr session を停止も削除もしていない。
 plugin event の検証では `XDG_CONFIG_HOME` と `XDG_STATE_HOME` も `/private/tmp` へ向け、plugin registry と state を隔離した。
 
 追加検証では公式 `v0.7.3` macOS arm64 リリースバイナリ（SHA-256 `b31345392d004ec1f1b2c821e1ad601019fa8385fe1e4c6931321eb58a920773`）を `/private/tmp` に置き、named session と state を隔離した。
 herdr 公式 Codex integration v6 の再開試験だけは、すでに信頼済みのこの worktree を cwd に使った。
 
-sidebar 追試では公式 `v0.7.4` macOS arm64 リリースバイナリ（SHA-256 `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7`）を `/private/tmp` に置き、named session、config、state を隔離した。
+sidebar 追試と wave 2 では公式 `v0.7.4` macOS arm64 リリースバイナリ（SHA-256 `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7`）を使った。
 インストール済みの `herdr 0.7.4` はこのリリースバイナリと byte 単位で一致した。
 隔離 session の `status --json` は client / server version `0.7.4` と protocol `16`、`api snapshot` は version `0.7.4` と protocol `16`、`api schema --json` は schema version `1` を返した。
 
+wave 2 の成功経路は `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME`、config、socket を検証ごとの 0700 directory へ向けた。
+`HERDR_CONFIG_PATH` と custom socket だけを隔離した負例では、herdr が既存の `~/.config/herdr/session.json` を復元して global log を書いた。
+終了時に同ファイルの SHA-256 は `48cff490ab170d1327262076d7f3a71d336b0e2e5f4495c68d1e99133ecca0eb` から `3fbd67b380ee59c3098d125349cacab62178088bb1fd21a6aae478695ebc30ab` へ変わった。
+既存の `~/.config/herdr/session-history.json`（SHA-256 `f597ddef792e7233b8035c7c2e7e6f5573523e00ad5801fc473d2eb051185445`）も削除された。
+事前の byte backup がなかったため復元はしていない。
+この負例以降は default herdr state を操作せず、全 XDG directory を隔離した。
+
 fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
+
+## 0.7.4 wave 2 owned session
+
+### server lifecycle と ownership
+
+`herdr server` は foreground process として起動でき、fanout supervisor の直接の子として監視できる。
+検証では session directory を 0700、server socket と client socket を 0600 とし、log は 0700 directory 配下の 0644 file に分離した。
+server log は隔離した `XDG_CONFIG_HOME/herdr/sessions/<session>/herdr-server.log` に置かれた。
+同じ socket path への二重起動は `herdr server is already running` で終了した。
+同じ path に non-herdr の Unix listener がいる場合も同じ error で終了し、protocol、version、owner は検査しなかった。
+`status --json` の `detached_server_daemon:true` は capability 表示であり、明示的に起動した server 自体は daemonize しなかった。
+
+この permission 境界が排除するのは別 UID だけである。
+herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継承するため、socket が分かれば `server.stop`、`plugin.*`、`worktree.remove` を発行できる。
+同じ UID の process は外部 `owner.json` の nonce、PID、binary hash も変更でき、status、schema、snapshot の応答は marker nonce または session generation に束縛されない。
+server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
+
+owned runtime directory の `owner.json` は協調する fanout process 間の診断に限って使える。
+将来置く場合は canonical git common directory、owner nonce、socket path、binary SHA-256 と version、supervisor PID と start token、隔離 XDG path を記録し、0600 で exclusive create する。
+既存 socket または marker があれば fail closed にし、fanout が起動したと証明できない server は停止しない。
+この marker を mutation authority として扱わない。
+
+config と plugin registry は全 XDG directory の差し替えで default state から隔離できる。
+しかし同一 UID の agent は空 registry の確認後に同じ socket から plugin mutation を実行できるため、standalone registry read は atomic proof にならない。
+setup hook の抑止、registry generation precondition、operation-scoped completion receipt のいずれかを mutation に束縛する条項は維持する。
+
+### attach
+
+custom socket へ plain terminal から接続する実測済みの形は、隔離 XDG path と socket path を指定した引数なしの bare `herdr` である。
+
+```console
+XDG_CONFIG_HOME=<owned-config> XDG_STATE_HOME=<owned-state> \
+XDG_DATA_HOME=<owned-data> XDG_CACHE_HOME=<owned-cache> \
+HERDR_CONFIG_PATH=<owned-config-file> HERDR_SESSION=<repo-session> \
+HERDR_SOCKET_PATH=<owned-server-socket> HERDR_CLIENT_SOCKET_PATH=<owned-client-socket> herdr
+```
+
+`herdr session attach <name>` と明示 `--session` は custom socket より named session を優先し、別の background daemon を起動し得るため使わない。
+wave 2 の UX は上の値を安全に shell quote した command の提示に限り、fanout console を `exec` で置き換えない。
+custom socket の detach と reattach では public ID と `terminal_id` は変わらなかった。
+
+### core matrix
+
+0.7.4 owned session で #424 と同じ core matrix を再実測した。
+`worktree create/open` の branch、path、base、既存 branch の `--base` 無視、`already_open:true` は 0.7.3 と同じだった。
+root workspace と child worktree workspace は sibling になった。
+bare `agent start` は argv、空白を含む env、exact cwd を保持し、`pane process-info` は shell PID、process group、候補 argv と cwd を返した。
+`pane run` は text と Enter を一操作で送った。
+
+cold restart の前後で `w1:p1`、`w2:p1`、`w3:p1`、`w4:p1` の public ID は維持された。
+一方、対応する `terminal_id` は `term_6570ff5b8ee0a1`、`term_6570ff5b981e62`、`term_6570ff5ba1f6c3`、`term_6570ff5ba971e4` から、`term_657100c2ce6f51`、`term_657100c2ceead2`、`term_657100c2cf6513`、`term_657100c2cffdc4` へすべて変わった。
+
+staged entry を持つ dirty worktree の remove は `dirty_worktree_requires_force` で拒否し、`--force` は checkout を削除した。
+clean worktree の remove も checkout を削除したが、どちらも local branch は残した。
+`workspace close` は root repository と外部 checkout を削除せず、最終 snapshot は空になった。
+
+### topology、restart、teardown
+
+将来の安全条件を満たす実装では session を per-repo とする。
+linked worktree は canonical git common directory を共有し、独立 clone は full common-directory identity の hash で名前を分離する。
+marker の full identity が一致しなければ hash が一致しても fail closed にする。
+
+repo root に console workspace を一つ置き、実際の親ごとに repo-root cwd の coordinator workspace を一つ置く。
+coordinator の state row は `@manual` の負番号を維持するが、backend stickiness と lifecycle provenance は実際の親へ帰属させる。
+child は sibling workspace とし、workspace label で親を識別する。
+create は `--no-focus` とし、明示的な TUI launch だけが返却 ID を focus する。
+focused child の close 後は同じ親の coordinator、存在しなければ console を focus する。
+
+将来の server process は per-repo supervisor が所有する foreground `herdr server` child とし、attached console process の子にはしない。
+これにより console の detach または終了後も server を存続させる。
+0.7.4 wave 2 では自動 bootstrap、cold restart 後の自動再起動、自動再束縛を解禁しない。
+server loss は既存 row を `stale` にする。
+最後の child close では server を止めず、active intent、row、または foreign resource がない場合の明示的な repo-session shutdown だけを将来の teardown とする。
 
 ## 起動と session 境界
 
@@ -90,7 +172,7 @@ v1 は `pane read` / `agent read` の出力を公開せず、post-read validatio
 
 `terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
 同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
-`terminal_id` が変わった場合、0.7.3 v1 は current row を `stale` とし、新しい terminal へ再対応付けしない。
+`terminal_id` が変わった場合、herdr backend は current row を `stale` とし、新しい terminal へ再対応付けしない。
 自動 launch を再導入する後続版では、保存済みの `{source, agent, kind, value}` と完全一致する一意な `agent_session` があれば、論理上の会話を新しい terminal へ再対応付けする候補にできる。
 `agent_session` ref が欠落、不一致、重複した場合は再対応付けせず fail closed にする。
 この ref は attach 前の再開待ちにも現れるため、process の生存を示す証拠には使わず、running への写像には provider 固有の process identity 検査も要求する。
@@ -124,11 +206,11 @@ generic pane の exact focus が必要になった場合、Socket API の `pane.
 同名 session の再作成で session 名、socket、public ID は再利用されるため、照合と mutation の間の TOCTOU は CLI では閉じられない。
 v1 は rollback を含めてこれらを fanout から自動実行せず、close はユーザーが対象を確認して fanout の外から直接行う手動操作、または条件付き mutation を提供する将来の Socket 経路に限る。
 
-0.7.3 v1 は root coordinator の intent / state row を保存せず、`workspace create` も実行しない。
+herdr backend は root coordinator の intent / state row を保存せず、`workspace create` も実行しない。
 version / session identity の precheck、provisional intent、nonce label は response loss と重複作成の検出には使えるが、precheck 後に同名 session が置き換わる TOCTOU を閉じない。
 
 自動 mutation の安全条件を満たす後続版では、root coordinator の `workspace create` も副作用を持つ launch 操作として provisional intent の対象にする。
-create request が expected immutable session generation を原子的に検査するか、fanout が認証済み session lifecycle を排他的に所有することを前提に、owner row key、backend / session identity、root cwd、intent 固有の coordinator nonce を intent へ保存する。
+create request が expected immutable session generation を原子的に検査するか、server-authenticated controller capability または agent と別 UID の server があることを前提に、owner row key、backend / session identity、root cwd、intent 固有の coordinator nonce を intent へ保存する。
 そのうえで `workspace create --label <nonce>` を発行し、成功応答の workspace ID を intent に束縛してから通常 state へ確定する。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別しない。
 応答喪失または crash 後の再実行は、pre-state 後に現れた intent nonce と同じ label の workspace が一つだけの場合にそれを回復対象とし、それ以外は fail closed にして既存のユーザー workspace を誤採用も重複作成もしない。
@@ -154,8 +236,8 @@ source checkout に untracked file があっても `worktree create` は成功�
 local `main` と `origin/main` を 1 commit ずつ diverge させた場合も、`--base main` は local の `6af20aa`、`--base origin/main` は remote-tracking ref の `b05fa51` をそのまま使った。
 herdr は fetch、dirty gate、divergence gate を実行しない。
 
-0.7.3 v1 は root coordinator の intent / row / workspace を作る前に fail closed にし、次の child launch state machine へ入らない。
-以下は expected immutable session / resource generation と hook gate を各 mutation に束縛できるか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続 API で、自動 launch を再導入する場合の必須契約である。
+herdr backend は root coordinator の intent / row / workspace を作る前に fail closed にし、次の child launch state machine へ入らない。
+以下は expected immutable session / resource generation と hook gate を各 mutation に束縛できるか、server-authenticated controller capability または agent と別 UID の server を持つ後続 API で、自動 launch を再導入する場合の必須契約である。
 
 - base ref を immutable commit SHA へ解決する。
 - source checkout の dirty と divergence を検査し、既存の fail-closed 契約を保つ。
@@ -218,7 +300,7 @@ herdr は fetch、dirty gate、divergence gate を実行しない。
 
 自動 launch を再導入する後続版の実現形は「親 workspace の内部に child pane」ではない。
 project root の coordinator workspace を一つ作り、各 child worktree を sibling workspace として開く。
-0.7.3 v1 はこの coordinator を作らない。
+herdr backend はこの coordinator を作らない。
 後続版では fanout の state が parent issue と child workspace の対応を保持する。
 pane split は同じ checkout 内に補助 process を追加する場合だけ使う。
 
@@ -258,7 +340,7 @@ payload は workspace、active tab、checkout path、branch、`already_open:fals
 ### bare argv と env
 
 以下は手動操作で得た実測と、自動 launch を再導入する後続版の契約である。
-0.7.3 v1 の fanout は `agent start` を自動実行しない。
+herdr backend の fanout は `agent start` を自動実行しない。
 
 `agent start --workspace w2` だけでは cwd は child checkout にならず、CLI 呼び出し元の cwd が使われた。
 `--cwd <child-checkout>` は必須である。
@@ -380,7 +462,7 @@ attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴�
 この実測から、`terminal_id` の変化だけでは論理上の会話の喪失を判定できない。
 一方、attach 前の `agent_session` ref と `idle` だけでは process の生存を判定できない。
 
-0.7.3 v1 は cold restart 後に process identity を再束縛せず、`terminal_id` が変わった row を `stale` とする。
+herdr backend は cold restart 後に process identity を再束縛せず、`terminal_id` が変わった row を `stale` とする。
 自動 launch を再導入する後続版が running へ再束縛できる provider は、今回実測した herdr 公式 Codex integration v6 だけとする。
 保存済み `agent_session` は `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致し、現在の pane に同じ ref が一つだけ存在しなければならない。
 attach 後の `pane process-info` は foreground process の候補を一つだけ返し、OS process 情報から解決した実 executable が final row に保存した Codex executable の絶対パスと一致しなければならない。
@@ -416,7 +498,7 @@ name が残った `unknown` record も、一致する ref を持つ再開待ち�
 これらの response は content と expected immutable session generation / target `terminal_id` を一つの応答へ束縛しない。
 v1 は `pane read` / `agent read` を発行せず、取得結果を UI、ログ、state、agent / LLM input へ公開しない。
 別接続の post-read snapshot が一致しても、read 中だけ session が差し替わる ABA を排除できないため authority にはしない。
-targeted content read の再導入は、request / response が immutable session generation と target terminal identity を原子的に束縛するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版に限る。
+targeted content read の再導入は、request / response が authoritative server generation と target terminal identity を原子的に束縛する後続版に限る。
 
 手動実測した `pane get` の `cwd` は label、follow-cwd、session restore に使われる pane または workspace の cwd を表す。
 `foreground_cwd` は現在 PTY を制御する foreground process の cwd を表す。
@@ -446,15 +528,14 @@ herdr の `done` は process exit ではなく、agent が処理を終えて `id
 実際、focus されていない pane に `working`、`idle` の順で報告すると snapshot は `working`、`done` と遷移し、`terminal_id` と focus は変わらなかった。
 focus 後は `done` から `idle` へ変わる。
 
-herdr backend v1 の自動 nudge は Claude と Codex の両方で無効にする。
+herdr backend の自動 nudge と `codexPlanMode` は Claude と Codex の両方で恒久的に除外する。
 public `idle` / `done`、hook telemetry、`agent explain --json`、screen manifest のどれも送信許可には使わない。
 hook telemetry は agent process から偽造でき、screen detection は未知の permission UI を除外できない。
 `terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
-herdr 0.7.3 には状態条件付き send または CAS がないため、この race を fail closed にできない。
+herdr 0.7.4 には状態条件付き send または CAS がないため、この race を fail closed にできない。
 fanout は peer message または watcher を契機に `pane run` を自動実行せず、Enter を送らない。
 peer message の bus への保存は維持するが、fanout v1 は herdr の `notification show` を呼ばない。
 ユーザーが対象 pane を確認して明示的に実行する `pane run` は手動操作として扱う。
-自動 nudge の再導入には、runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が必要になる。
 
 ### focus と wait
 
@@ -553,7 +634,7 @@ Agent entry には pane token の `#423 · #499 · success` と agent 名 `sideb
 pane / workspace token は `api snapshot` に返ったが、cold restart 後の snapshot から消えた。
 v1 は初回を含めて `report-metadata` を発行せず、cold restart 後も再送しない。
 metadata が表示専用であることは、同名 session の差し替え後に無関係な pane / workspace へ issue、PR、CI token を書く race を安全にはしない。
-初回報告と再送は、request が expected immutable session generation と target `terminal_id` / workspace generation を原子的に検査するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版まで無効にする。
+初回報告と再送は、request が authoritative server generation と target `terminal_id` / workspace generation を原子的に束縛する後続版まで無効にする。
 `seq` は reporter 内の順序制御であり、cold restart で失われるため identity precondition の代用にしない。
 metadata は表示専用データとし、`state.json`、liveness、nudge authority、完了判定には使わない。
 
@@ -586,6 +667,11 @@ v1 の fanout notify backend は herdr の `notification show` を呼ばない�
 ## Socket schema と JSON 契約
 
 `herdr api schema --json` は protocol `16`、schema version `1` を返した。
+0.7.4 の server 停止中と起動中に取得した schema は byte 単位で一致し、SHA-256 はどちらも `4c138114dfdb8ed9ddb906fcd117967ca7fac0c10251abf238452c52b766d49c` だった。
+schema は client binary に同梱された capability document であり、接続先 server の attestation ではない。
+top-level は `$schema`、`protocol`、`schema_version`、`schemas`、`title` を持ち、request の `oneOf` は 85 method を列挙した。
+fanout が使う `session.snapshot`、`workspace.create`、`workspace.close`、`workspace.report_metadata`、`worktree.create`、`worktree.open`、`worktree.remove`、`agent.start`、`pane.process_info`、`pane.report_metadata`、`pane.send_text`、`pane.send_keys` の params と response shape を structural gate で検査できる。
+CLI の `pane run` は Socket method ではなく send method を組み合わせる CLI surface なので structural gate では検査できず、将来採用する場合に command surface を別に検査する。
 request は top-level の `id` を必須とし、各 `oneOf` variant がさらに `method` と `params` を必須にする。
 
 ```json
@@ -663,39 +749,48 @@ raw Socket の `events.subscribe` は常駐 client を増やすため v1 では�
 ## version と JSON 対応
 
 stable public workspace、tab、pane ID の契約は 0.7.0、既存 local branch の worktree create/open は 0.7.1、`session.snapshot` と `api schema --json` は 0.7.2 で入った。
-herdr backend v1 の core runtime compatibility allowlist は、stable CLI / server `0.7.3`、protocol `16`、schema version `1` の組だけとする。
-v1 は herdr mutation を発行しない。
-後続版で mutation を再導入する場合は、各 mutation の直前に `herdr --version`、`status --json`、`api schema --json` を照合し、prerelease、解釈不能な version、または allowlist にない CLI / server version、protocol、schema を fail closed にする。
-この precheck は compatibility 検査であり、mutation authority にはしない。
-各 request には expected immutable session / resource generation の原子的な precondition、または fanout が認証済み session と対象資源の lifecycle を排他的に所有する条件も要求する。
-semver の `>=` から互換性を推定しない。
-後続 version は同じ実機 matrix を通し、exact version と protocol / schema の組を明示的に allowlist へ追加した場合だけ受理する。
-0.7.4 の exact tuple `(CLI/server 0.7.4, protocol 16, schema version 1)` は metadata token reporting と sidebar row layout だけで実測済みとする。
-この追試は core runtime matrix の代わりにならず、tuple を core runtime allowlist へ追加しない。
-#494 は 0.7.4 の core runtime matrix、exact tuple の allowlist entry、#426 が operation-scoped safety 条件を満たす identity-bound resource を作れることだけでは有効にしない。
-`report-metadata` request が expected immutable session generation と target `terminal_id` / workspace generation を原子的に検査するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有するまで、初回報告と再送の両方を無効にする。
-同じ protocol / schema でも 0.7.3 は `--token` を拒否したため、core runtime の上位互換を推定しない。
+core runtime の exact tuple allowlist は廃止し、stable SemVer `>=0.7.4`、structural capability、接続先 status の三段 gate へ置き換える。
+version 文字列は stable SemVer として parse し、prerelease と解釈不能な値を拒否する。
+schema が定義する version string には prerelease を拒否する pattern がないため、fanout が検査する。
+
+起動前は admitted binary の SHA-256、`herdr --version`、offline `api schema --json` を取得し、protocol、schema version、使用 method、request / response の必須 field を検査する。
+server 接続後は `status --json` の client / server version が同じ stable version で floor 以上、protocol が admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
+`api snapshot` の version と protocol も同じ admitted server に一致させる。
+full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
+各 read-only call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
+0.7.4 は比較可能な server generation を返さないため、connection loss、restart、binary drift、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させ、自動再 admission と resume を行わない。
+別 CLI 接続間の server continuity は証明できず、この gate を mutation authority にしない。
+schema にない CLI-only surface は admission 対象外とし、将来採用する場合は command surface と出力を別の fail-closed gate で検査する。
+
+0.7.3 client から 0.7.4 server と、0.7.4 client から 0.7.3 server の両方向を実測した。
+どちらも protocol `16` で `compatible:true` と snapshot success を返したが、`restart_needed:true` で client / server version は不一致だった。
+0.7.4 client の `api schema --json` は 0.7.3 server 接続中も offline schema と同じ SHA-256 を返した。
+したがって protocol compatibility と client schema だけでは接続先 server の capability を証明しない。
+
+この gate は compatibility だけを証明し、mutation authority を与えない。
+すべての mutation は request-bound immutable generation と conditional mutation、server-authenticated controller capability、agent と別 UID の server のいずれかを別に要求する。
+cleanup、metadata、targeted read はこれに加えて後続契約表の resource-specific generation 条件を要求する。
 
 | 実測コマンド | 導入 / 実測 version（runtime acceptance range ではない） | JSON 対応 |
 |---|---:|---|
-| `herdr --version` | 0.7.3 core baseline、0.7.4 metadata token 追試 | text のみ |
-| `status --json` | 0.7.3 core baseline、0.7.4 metadata token 追試 | 明示 `--json` |
+| `herdr --version` | 0.7.3 core baseline、0.7.4 core wave 2 | text のみ |
+| `status --json` | 0.7.3 core baseline、0.7.4 core wave 2 | 明示 `--json` |
 | `session list --json` | 0.7.3 core baseline | 明示 `--json` |
-| `workspace create/list/focus/close` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `worktree create/open/list/remove` | 0.7.1 | 明示 `--json` |
-| `agent start/list/read/focus` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `pane get/run/close` | 0.7.3 baseline | mutation と get は JSON envelope。`--json` は付けない |
-| `pane process-info` | 0.7.3 baseline | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
+| `workspace create/list/focus/close` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `worktree create/open/list/remove` | 0.7.1、0.7.4 core wave 2 | 明示 `--json` |
+| `agent start/list/read/focus` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `pane get/run/close` | 0.7.3 baseline、0.7.4 core wave 2 | mutation と get は JSON envelope。`--json` は付けない |
+| `pane process-info` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
 | `pane read` | 0.7.3 baseline | text または ANSI を直接出力する |
 | `pane report-metadata` の presentation fields / seq / TTL | 0.7.3 | 成功時は出力なし（`--json` 非対応） |
 | `pane report-metadata` の token patch | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
 | `workspace report-metadata` の token / seq / TTL | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
-| `api snapshot` | 0.7.2、token projection は 0.7.4 | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `api schema --json` | 0.7.2、metadata token schema は 0.7.4 | 明示 `--json` |
+| `api snapshot` | 0.7.2、0.7.4 core wave 2 と token projection | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `api schema --json` | 0.7.2、0.7.4 structural gate | 明示 `--json` |
 | `notification show` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `plugin link/list/log list` | 0.7.3 baseline | `list` は `--json` 対応。他は JSON envelope |
+| `plugin link/list/log list` | 0.7.3 baseline、0.7.4 isolation wave 2 | `list` は `--json` 対応。他は JSON envelope |
 
-この表は機能導入時期と 0.7.3 core / 0.7.4 metadata token の実測 provenance を示すだけで、core runtime の上位 version 互換性を認めない。
+この表は機能導入時期と実測 provenance を示すだけで、structural gate を通らない上位 version の互換性を認めない。
 
 version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4) を参照する。
 
@@ -703,22 +798,46 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 
 #423、#425 から #429、#494 は次の制約を前提にする。
 
-- backend は明示的に起動済みの named herdr session を使う。
+0.7.4 private socket は fanout-owned authenticated lifecycle の解禁条件を満たさない。
+各機能の wave 2 判定と再評価条件は次のとおりである。
+
+| 機能 | wave 2 | 再評価条件 |
+|---|---|---|
+| launch | No-Go | server-authenticated controller、server / agent の UID 分離、request-bound immutable generation と conditional mutation のいずれかに加え、setup hook の抑止または operation-scoped receipt を満たす |
+| cleanup / rollback | No-Go | mutation authority のいずれかを満たし、remove / close が authoritative server generation と target resource generation を原子的に検査する |
+| #427 emitter | blocked | launch が解禁されても表示・診断用 telemetry に限り、state、nudge、completion、cleanup の authority にしない |
+| cold restart resume | blocked | authoritative server generation と launch provenance を束縛し、下記の Codex integration v6 exact matcher を満たす |
+| #494 metadata | blocked | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
+| focus / peek / targeted read | blocked | response が authoritative server generation と target terminal identity を束縛する |
+| 自動 nudge / `codexPlanMode` | 恒久除外 | 再評価しない |
+
+wave 2 で緩和するのは exact tuple allowlist だけである。
+response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch の atomic reservation と compare-and-delete、bare argv と exact cwd / env、telemetry-only emitter、identity の分離、Codex integration v6 exact matcher、wait budget、metadata の表示専用性は維持する。
+
+- backend は明示的に起動済みで検査済みの herdr session を使い、0.7.4 では fanout-owned server を自動起動または再起動しない。
 - herdr backend v1 は既存 named session の snapshot / list / wait による identity / status 観測だけを行い、targeted content read を発行しない。
   root coordinator 作成、focus、send、notification、metadata、cleanup を含む herdr mutation も発行しない。
   issue / Project / plan の launch は coordinator intent / row / workspace を作る前に fail closed にする。
-- core runtime compatibility allowlist は stable CLI / server `0.7.3`、protocol `16`、schema version `1` の組だけとする。
-  後続版で mutation を再導入する場合は各 request の直前に client / server version、protocol、schema を照合し、prerelease、解釈不能な値、allowlist 外の組は fail closed にする。
-  この precheck は mutation authority ではなく、request-bound immutable session / resource generation または fanout-owned authenticated lifecycle も要求する。
-  上位 version は semver から互換性を推定せず、同じ実機 matrix と exact tuple の allowlist entry を追加した後にだけ受理する。
+- core runtime compatibility は exact tuple allowlist ではなく、stable CLI / server `>=0.7.4`、structural schema、接続先 status の gate で判定する。
+  prerelease、解釈不能な version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method または必須 field の欠落は fail closed にする。
+  full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
+  各 read-only call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
+  connection loss、restart、binary drift、`restart_needed:true`、その他の不一致は admission を失効させ、自動再 admission と resume を行わない。
+  schema にない CLI-only surface は admission 対象外とし、将来採用する場合は command surface と出力を別の fail-closed gate で検査する。
+  この gate は compatibility だけを証明し、0.7.4 private socket または fanout 側 marker と合わせても mutation authority にはしない。
 - backend 選択の resolver は final state rows と provisional intents の両方を入力にする。
   legacy row の空 backend は tmux に正規化する。
   実際の issue / Project / plan の親では、既存 rows / intents が一つの backend に一致する場合だけその backend を再利用し、mixed state または `--backend` / env との不一致は fail closed にする(明示的な移行はユーザー操作)。
   stickiness の単位は実際の issue / Project / plan の親に限る。
   自動 launch の安全条件を満たす後続版では、親 issue の orchestrator pane を `@manual` の負番号 row として保存するが、issue / plan の provenance を実親へ帰属させて同じ stickiness 判定に含める — coordinator 作成後に child launch が失敗した再実行が coordinator の backend を見落とさないようにする。
   それ以外の `@manual` synthetic launch は互いに独立した launch の集まりであり、row identity とその intent の単位で backend を固定する。
-- 自動 launch の安全条件を満たす後続版では、worktree を root coordinator と sibling child workspace で配置する。
-- 0.7.3 v1 は `worktree create`、`worktree open`、続く `agent start` を fanout から自動実行しない。
+- 安全条件を満たす後続版では、canonical git common directory で識別する per-repo session を使う。
+  repo root の console workspace、実際の親ごとの coordinator workspace、sibling child workspace を配置し、coordinator の `@manual` 負番号 row の provenance は実際の親へ帰属させる。
+  linked worktree は session を共有し、独立 clone は full common-directory identity の hash で分離する。
+  create は `--no-focus` とし、TUI の明示 launch だけが focus を移す。
+  per-repo supervisor が foreground server child を所有し、console detach 後も存続させる。
+  最後の child close では停止せず、active intent、row、foreign resource のない明示 repo-session shutdown だけを teardown とする。
+- 0.7.4 wave 2 は `worktree create`、`worktree open`、続く `agent start` を fanout から自動実行しない。
   plugin registry read を create / open mutation に束縛できず、setup hook の不在または完了を fail closed に証明できないためである。
   これらの CLI は手動実測面として残し、自動 launch は条件付き mutation または operation-scoped completion receipt を持つ後続 API まで fail closed にする。
 - 自動 launch を再導入する後続版では、fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
@@ -729,7 +848,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
   plugin registry の standalone read は setup hook 不在の証明に使わず、request による原子的な hook 抑止、registry generation の precondition、または mutation と terminal hook result を束縛する operation-scoped completion receipt を要求する。
   `worktree-realized` からはこの証明と checkout baseline の保存後にだけ `worktree-ready` へ進み、Git 状態の連続一致や静止時間を completion proof に使わない。
   `worktree create` request の発行後に事後条件違反、応答喪失、または mutation の不明が生じた場合は intent、資源、branch reservation を残し、`manual_cleanup_required` として fail closed にする。
-  0.7.3 の unconditioned remove は rollback にも使わず、rollback に依存する git fallback も実行しない。
+  0.7.4 の unconditioned remove は rollback にも使わず、rollback に依存する git fallback も実行しない。
   branch reservation は worktree mutation が起きていないことを証明できる場合だけ compare-and-delete で解放する。
 - 自動 launch を再導入する後続版では、agent は bare argv、明示 `--cwd`、fanout 固有値と呼び出し元 `PATH` を渡す明示 `--env` で起動する。
   launch 名は repo と親参照に agent launch nonce の hash を加え、同じ intent では安定し session 全体で一意になる決定論的名前を `core/naming` で生成する。
@@ -742,9 +861,10 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - snapshot / list / wait の read-only CLI は保存済みの検証済み socket path を明示的に選択する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
   session identity の再確認は routing / identity / status validation に限り、targeted content の公開または後続 mutation の authority にはしない。
   v1 は `pane read` / `agent read` を発行せず、post-read validation が一致しても content を公開しない。
-  targeted content read の再導入には request / response が immutable session generation と target terminal identity を原子的に束縛するか、fanout-owned authenticated lifecycle を要求する。
+  targeted content read の再導入には request / response が authoritative server generation と target terminal identity を原子的に束縛することを要求する。
   `pane get` / `pane process-info` は手動実測面またはこの条件を満たす後続版の structured identity 検査に限る。
-  後続版の mutation は request-bound immutable session / resource generation または fanout-owned authenticated lifecycle を要求する。
+  後続版の mutation は request-bound immutable session / resource generation と conditional mutation、server-authenticated controller capability、agent と別 UID の server のいずれかを要求する。
+  0.7.4 private socket と fanout 側 marker はこの条件を満たさない。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - 自動 launch の前提を満たす後続版で、#427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
   tmux pane option は使わない。
@@ -764,7 +884,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - `unknown` record を無条件に running へ写像しない。
   public pane の存在、保存した `terminal_id` との一致、完全一致する一意な `agent_session`、workspace の worktree provenance、provider 固有 matcher で検証した agent process を別々に判定する。
   `foreground_cwd` は識別に使わず、worktree provenance がない場合だけ保存された `cwd` を補助照合に使う。
-- 0.7.3 v1 は `terminal_id` が変わった row を `stale` とし、cold restart 後の process identity を再束縛しない。
+- 0.7.4 wave 2 は `terminal_id` が変わった row を `stale` とし、cold restart 後の process identity を再束縛しない。
   自動 launch を再導入する後続版では、一致する `agent_session` があれば論理上の会話を再対応付けする候補にできる。
   running へ再束縛できる provider は実測済みの herdr 公式 Codex integration v6 だけとする。
   exact な Codex `agent_session` ref、一意な foreground process、保存済み絶対 executable、argv0 を除く引数列 `["resume", "<session-id>"]`、保存済み `agent start --cwd` と一致する process cwd を照合する。
@@ -774,23 +894,22 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
   これは herdr runtime の表示遷移であり、fanout child の terminal completion または nudge authority には使わない。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
-- herdr backend v1 の自動 nudge は agent 種別にかかわらず無効にする。
+- herdr backend の自動 nudge と `codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
   public status、hook telemetry、screen manifest、`agent explain` のどれも送信許可に使わず、peer message または watcher を契機に `pane run` を呼ばない。
   message bus への保存は維持できるが、fanout から herdr の `notification show` は呼ばない。
-  自動 nudge の再導入には atomic conditional send / CAS または terminal UI を操作しない out-of-band queue と、agent process から分離した event provenance を要求する。
 - CLI-first の wait と後続版の再開待ちは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
   terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
-- herdr backend v1 の cleanup は read-only の対象表示に限定し、手動 cleanup 後も state row を自動整理しない。
+- herdr backend の cleanup は read-only の対象表示に限定し、手動 cleanup 後も state row を自動整理しない。
   `worktree remove`、`workspace close`、`pane close`、`--force`、削除用の `worktree open` を fanout から自動実行しない。
   remove / close request に nonce または session epoch の precondition を渡せず、検査から mutation までの TOCTOU を閉じられないためである。
   削除用再登録は setup hook を再実行するため、hook 抑止と operation-scoped completion receipt の両方が使える後続版まで採用しない。
 - v1 は初回と cold restart 後の再送のどちらでも `report-metadata` を発行せず、metadata token の欠落を許容する。
   metadata は `state.json`、liveness、nudge authority、完了判定に使わない。
   token の欠落自体は state transition に使わず、cold restart 後の `stale` は `terminal_id` の identity 契約で決める。
-  初回報告と再送は、request が expected immutable session generation と target `terminal_id` / workspace generation を原子的に検査するか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版まで有効にしない。
+  初回報告と再送は、request が authoritative server generation と target `terminal_id` / workspace generation を原子的に束縛する後続版まで有効にしない。
   0.7.3 の presentation fields と 0.7.4 の pane / workspace metadata token reporting は別の version provenance として扱う。
-  #494 は 0.7.4 の core runtime matrix、exact tuple の allowlist entry、#426 の operation-scoped safety と identity-bound resource に加え、この request-bound precondition または owned lifecycle が揃うまで有効にしない。
+  #494 は 0.7.4 core matrix と capability gate が通っても、authoritative server generation と target generation を request に原子的に束縛できるまで有効にしない。
   将来有効化する #494 の `report-metadata` call は対象 `pane_id` または `workspace_id`、固定 `source`、空でない token patch、必要な `seq` / `ttl_ms` だけで構成し、title、display agent、state label を書き換えない。
   #494 は実装前に `fanout_issue`、`fanout_slug`、`fanout_parent`、`fanout_pr`、`fanout_ci` の pane / workspace 配置、固定 source、sequence の永続化、TTL、値欠落時の clear を一意に決める。
   `rows`、`rows_by_agent`、`row_gap` と styling は herdr とユーザーが所有し、fanout は config を書き換えない。
@@ -808,3 +927,4 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 - 親設計: [#423](https://github.com/butaosuinu/fanout/issues/423)
 - 親設計の承認: [#424 spike 反映](https://github.com/butaosuinu/fanout/issues/423#issuecomment-4986704437)
 - 検証 issue: [#424](https://github.com/butaosuinu/fanout/issues/424)
+- wave 2 検証 issue: [#525](https://github.com/butaosuinu/fanout/issues/525)
