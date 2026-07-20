@@ -85,8 +85,9 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
   fanout 側で JSON の port と pid を保持して comment CLI(`--port` 必須)
   への再利用と停止に使う前提になる
 - コメント往復を CLI で検証: `difit comment add '{"type":"thread",
-  "filePath":...,"position":{"side":"new","line":N},"body":...}'` で注入、
-  `difit comment get` で人間のコメントを整形済みテキストで取得
+  "filePath":...,"position":{"side":"new","line":N},"body":...}' --port 4966`
+  で注入、`difit comment get --port 4966` で人間のコメントを整形済み
+  テキストで取得(どちらも `--port` 必須)
 - ブラウザを開く分だけ「端末内で完結」から一歩外れる。なお difit の
   HTTP サーバーは外部ツール自身のプロセス(127.0.0.1)であり、
   fanout が HTTP 面を増やすわけではない
@@ -103,8 +104,10 @@ hunk、difit、revdiff を隔離 tmux ソケットのペイン(200x50)で実測�
 - `--annotations` で前回出力を再読込する round-trip、`--description-file` で
   タスク文脈を情報ポップアップに表示する口もある。fanout が briefing の
   要約を渡す使い方が考えられる
-- hunk と違い常駐デーモンを持たないため、レビュー中のエージェントからの
-  遠隔操作はできない。還元は「終了時に一括」の一方向
+- 常駐デーモンを持たないため、エージェント側から取得や操作を駆動する
+  CLI はない。ただし終了時一括に限られるわけでもない: `O` キーで注釈を
+  終了せずに `-o` 先へ書き出し(flush)でき、`R` で diff を再読込できる
+  ので、flush→エージェント修正→再読込の反復は人間のキー操作起点で回せる
 
 ## 統合形態の比較
 
@@ -139,8 +142,10 @@ agent registry(`internal/core/agent`)と同型であり、複数対応の増分�
 
 任意コマンド文字列をユーザーに書かせる設計(`diffViewerCommand` のような
 自由文字列)は採らない。registry 外のコマンドは起動しない。設定キーは
-repo config から書けないようにし(`RepoEditable: false`)、リポジトリを
-クローンさせるだけで任意コマンドが起動される経路を塞ぐ。
+repo config から与えられないようにして、リポジトリをクローンさせるだけで
+viewer 選択を差し込まれる経路を塞ぐ。現行 settings の `RepoEditable` は
+保存時(`SaveEditable`)の検査にしか使われないため、これだけでは実行時の
+repo config 読込を止められない点に注意(実装詳細は Phase 1 に記す)。
 
 検出と起動は PATH 上のグローバル実行ファイル(`hunk`、`difit`、`revdiff`)
 に統一する。試用では npx を使ったが、npx 経由の起動は未導入 package の
@@ -184,11 +189,16 @@ worktree を選んでビュアーを開けるようにする。
 - 未追跡ファイル: hunk は既定で含まれ、revdiff は `--untracked` を付ける。
   difit は `--include-untracked` が index を変更するため付けない。
   ただし警告表示だけでは新規ファイルを見ないまま承認できてしまうので、
-  未追跡ファイルのある worktree(`git status --porcelain` で機械判定)では
-  difit の起動を fail closed にし、hunk / revdiff への切替か、index 変更を
-  理解したうえでの手動 `--include-untracked` を案内する
+  未追跡ファイルのある worktree では difit の起動を fail closed にし、
+  hunk / revdiff への切替か、index 変更を理解したうえでの手動
+  `--include-untracked` を案内する。判定は `git ls-files --others
+  --exclude-standard` で行う(`git status --porcelain` は
+  `status.showUntrackedFiles=no` の環境で `??` を出さない)
 - `internal/infra/settings`: ビュアー選択キーを 1 つ追加
-  (string、`RepoEditable: false`)。未設定時は registry の PATH 発見順
+  (string、`RepoEditable: false`)。未設定時は registry の PATH 発見順。
+  `RepoEditable: false` は保存時検査のみなので、実行時読込の
+  `repoOverrides` にもこのキーの明示除外を追加し、repo config に直接
+  書かれた値が user config を上書きしないことをテストで固定する
 
 ### Phase 2: 指摘の還元ループ
 
@@ -199,7 +209,9 @@ skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
   転送する補助 verb(または skill 手順)。session の指定は Phase 1 で
   記録した session ID を使う(`--repo` 指定は複数 session で壊れる)
 - difit: `comment get` の出力を同様に転送(起動時に記録した port を使う)
-- revdiff: exit 10 を検知して `-o` の markdown を転送
+- revdiff: exit 10 を検知して `-o` の markdown を転送。セッションを
+  終了しない随時還元は、人間の `O` flush で更新される `-o` ファイルを
+  watch して転送し、修正後は `R` 再読込で受ける
 - 配送経路: `fanout msg send` は SQLite への保存のみで、push 配送
   (`msg watch`、codex bridge)は `--team` セッションにしか存在しない。
   通常ペインへ届けるには、保存に加えて state ゲート付きの
@@ -232,5 +244,6 @@ read-only 境界(GET のみ、mutation なし)は変えない。ビュアー起�
 - `display-popup` 内での TUI 描画は、ヘッドレス検証ではクライアントを
   用意できず未実測(ペイン内描画は 3 ツールとも実証済み)。実装時に
   実機確認する
-- revdiff の還元は終了時一括のため、「レビュー中に随時差し戻す」体験は
-  hunk / difit でしか成立しない
+- revdiff はエージェント側から取得を駆動できないため、随時還元は人間の
+  `O` flush 起点になる。エージェント駆動の取得まで求めるなら
+  hunk / difit を選ぶ
