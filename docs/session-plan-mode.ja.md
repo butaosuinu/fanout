@@ -45,7 +45,8 @@ plan mode の配線が存在しない。エージェントを差し替えると�
 | plan fan-out coordinator(fanout-plan skill 実行ペイン。claude / codex のみ) | `newSessionPlanMode` |
 | TUI attach(既存ペインへのエージェント起動) | `newSessionPlanMode` |
 | issue mode オーケストレーター親ペイン | `orchestratorPlanMode` |
-| issue mode の子 Session | `childPlanMode` |
+| issue mode の子 Session(Project mode の子を含む) | `childPlanMode` |
+| OPEN 子なし issue の単独 Session(TUI issue mode、watch request 経由) | `childPlanMode` |
 | `fanout plan` の子タスク | `childPlanMode` |
 | watcher 起動ペイン | `childPlanMode` |
 
@@ -101,16 +102,20 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 1. **plan が team に勝つ**。`childPlanMode=true` + `--team` + codex 子は
    plan TUI で起動し、idle-turn メッセージブリッジ(team TUI)は付かない。
    roster 登録と inbox への蓄積は残り、codexapp が `plan` 状態を報告する
-   ので `nudge` による督促は機能する。launch ログに警告 1 行を出す。
-   issue lane の既存 precedence(`request.go` の CodexPlanMode 先行判定)を
-   全レーンに統一した形。
+   ので `nudge` による督促は機能する。issue lane の既存 precedence
+   (`request.go` の CodexPlanMode 先行判定)を全レーンに統一した形。
 2. **オーケストレーターの codex は plan TUI にしない**。オーケストレーターは
    `AgentStartGate`(子 fan-out 完了までエージェント起動を留める gate)を
    使うが、plan TUI の起動 handshake は gate release より先に走るため
    deadlock する(現行コードもこの組み合わせをハードエラーにしている)。
-   `orchestratorPlanMode=true` の codex オーケストレーターは警告 1 行を
-   出して通常 codex で起動する。claude / opencode はフラグ注入だけなので
-   gate と両立し、そのまま plan mode になる。
+   `orchestratorPlanMode=true` の codex オーケストレーターは警告を出して
+   通常 codex で起動する。claude / opencode はフラグ注入だけなので gate と
+   両立し、そのまま plan mode になる。
+3. **警告は TUI の成功通知まで伝播させる**。TUI の launch 経路は logger
+   出力をバッファし成功時には表示しないため、上記 2 つの警告(team
+   ブリッジ喪失・codex オーケストレーターのフォールバック)は logger 1 行
+   では利用者に届かない。`LaunchResult.Notice`(watcher は report)まで
+   伝播させる。
 
 ## 状態記録と表示
 
@@ -148,8 +153,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   `--codex-plan-mode` 言及。#545 だけが入った main から `make install`
   した integration が unknown option なコマンドを生成する窓を作らない。
 - 残りの利用者向けドキュメント(README ペア、site の settings / agents /
-  cli / workflow / monitoring / changelog / herdr-backend の en+ja)は
-  #548 で一括同期する。repository instruction は該当実装と同じ PR で
+  cli / workflow / monitoring / changelog / herdr-backend / watcher の
+  en+ja。watcher は `childPlanMode=true` で無人 Session が承認待ち停止する
+  条件の明記)は #548 で一括同期する。repository instruction は該当実装と同じ PR で
   更新する: CLAUDE.md / AGENTS.md の「never Codex Plan Mode」(#546)、
   CLAUDE.md の「`/api/plan` は codexPlanMode 記録ペイン限定」(#543)。
 
@@ -173,6 +179,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 
 親 issue #539 に Sub-issues + `## Blocked by` で wave を張る。1 issue =
 1 PR。デザイン / フロントエンド作業は #543(ロジックのみ)を除き不要。
+#544 は #543 にも block される — 一般化が先にマージされると、非 codex
+ペインの state `PlanMode` が旧ゲートのままの `GET /api/plan` の capture
+対象になる中間状態が生じるため。
 
 | Wave | issue | 内容 | クラス |
 |---|---|---|---|
@@ -180,7 +189,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 | 1 | #541 | core/agent の mode-aware builder 追加(additive) | M |
 | 1 | #542 | settings 3 キー追加(消費なし、repoOverrides gate) | H |
 | 2 | #543 | dashboard / web の codex 限定ゲート + docsync(← #540) | H + web |
-| 2 | #544 | panelaunch 一般化 + 非 plan 明示化 + goldens 再生成(← #540 #541) | H |
+| 2 | #544 | panelaunch 一般化 + 非 plan 明示化 + goldens 再生成(← #540 #541 #543) | H |
 | 3 | #545 | childPlanMode 消費 + codexPlanMode 全廃(← #542 #544) | H |
 | 3 | #546 | newSessionPlanMode 消費 + CLAUDE.md / SKILL.md 更新(← #542 #544) | H |
 | 3 | #547 | orchestratorPlanMode 消費 + codex gate フォールバック(← #542 #544) | M |
