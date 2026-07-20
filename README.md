@@ -51,7 +51,8 @@ English and 日本語.
 ## Installation
 
 Requires **git**, **tmux 3.3+**, and — for GitHub issue / Project
-workflows — the authenticated **GitHub CLI (`gh`)** (`gh auth status`). The
+workflows and the PR status / cleanup views — the authenticated
+**GitHub CLI (`gh`)** (`gh auth status`). The
 agent CLI you fan out with (**`claude`** / **`codex`** / **`opencode`**) is
 not bundled; install it separately.
 
@@ -107,7 +108,9 @@ detailed in the [workflow docs](https://butaosuinu.github.io/fanout/docs/workflo
 `--team` opts a run into sibling messaging: each child's briefing gains a
 coordination section, and the panes are registered on a per-parent SQLite
 bus driven by the `fanout msg` verbs (`peers` / `inbox` / `board` / `send` /
-`post` / `nudge`). Messages persist in the bus and siblings read them at
+`post` / `nudge`). Codex Plan Mode children keep the minimal Plan briefing
+without the section, but are still registered. Messages persist in the bus
+and siblings read them at
 their own checkpoints; `claude` panes and fresh non-Plan `codex` panes also
 get a push lane that delivers new messages as they arrive. Push-lane
 mechanics, fallbacks, and failure recovery are covered in the

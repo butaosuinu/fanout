@@ -51,8 +51,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 
 ## インストール
 
-前提ツールは **git** と **tmux 3.3+**、GitHub issue / Project workflow を使う
-場合は認証済みの **GitHub CLI(`gh`)**(`gh auth status`)です。子を起動する
+前提ツールは **git** と **tmux 3.3+**、GitHub issue / Project workflow と
+PR status / cleanup の確認には認証済みの **GitHub CLI(`gh`)**
+(`gh auth status`)も必要です。子を起動する
 agent CLI(**`claude`** / **`codex`** / **`opencode`**)は同梱されないため、
 別途インストールしてください。
 
@@ -109,8 +110,9 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
 `--team` を付けた run は兄弟ペインメッセージングにオプトインします。各子の
 briefing に協調セクションが加わり、ペインは parent ごとの SQLite バスに登録
 されて、`fanout msg` の verb(`peers` / `inbox` / `board` / `send` / `post` /
-`nudge`)で読み書きします。メッセージはバスに永続化され、各ペインが自分の
-チェックポイントで読みます。`claude` ペインと新規起動の非 Plan `codex`
+`nudge`)で読み書きします。Codex Plan Mode の子は最小の Plan briefing のまま
+協調セクションが付きませんが、登録はされます。メッセージはバスに永続化され、
+各ペインが自分のチェックポイントで読みます。`claude` ペインと新規起動の非 Plan `codex`
 ペインには、新着をそのまま届ける push レーンも載ります。push レーンの仕組み、
 フォールバック、失敗時の回収は
 [ワークフローのドキュメント](https://butaosuinu.github.io/fanout/ja/docs/workflow/)
