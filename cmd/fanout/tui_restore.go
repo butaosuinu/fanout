@@ -422,16 +422,17 @@ func restoreAgentCommand(pane state.Pane, root, commandName string) (string, str
 // pane is still alive: it stamps a fresh @fanout_shell_key on the live pane so
 // the row graduates to the keyed identity that pane close requires, and
 // returns the key to persist. Path containment alone never proves ownership,
-// so adoption additionally requires the live pane's @fanout_worktree_path
-// option — stamped at launch by fanout itself — to equal the row's recorded
-// worktree; a reused pane id outside fanout never carries that marker. Rows
-// that are keyed, shells, missing a worktree path, or not alive return
-// ("", nil). A live pane already holding a key is an interrupted earlier
-// adoption (stamped, then the state save failed or the process died): its key
-// is re-associated without restamping, unless another row in this store
-// records it. The tmux stamp happens before the state row is persisted; the
-// reverse order would create the fail-closed keyed-row-without-live-key state
-// on stamp failure.
+// so adoption additionally requires two launch-time fanout markers on the
+// live pane: @fanout_worktree_path must equal the row's recorded worktree (a
+// reused pane id outside fanout never carries it), and @fanout_pane_label
+// must equal this row's border label — the worktree path is shared by
+// attached agents, the label is per-session identity. Rows that are keyed,
+// shells, missing a worktree path, or not alive return ("", nil). A live pane
+// already holding a key is an interrupted earlier adoption (stamped, then the
+// state save failed or the process died): its key is re-associated without
+// restamping, unless another row in this store records it. The tmux stamp
+// happens before the state row is persisted; the reverse order would create
+// the fail-closed keyed-row-without-live-key state on stamp failure.
 func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane, rows []state.Pane) (string, error) {
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" || strings.TrimSpace(pane.WorktreePath) == "" {
 		return "", nil
@@ -442,6 +443,10 @@ func adoptLegacyLivePaneKey(pane state.Pane, live map[string]tmuxrun.LivePane, r
 	}
 	liveWorktree := strings.TrimSpace(cur.WorktreePath)
 	if liveWorktree == "" || filepath.Clean(liveWorktree) != filepath.Clean(strings.TrimSpace(pane.WorktreePath)) {
+		return "", nil
+	}
+	rowLabel := tmuxrun.NeutralizePaneLabel(panelaunch.BorderLabel(pane.Parent, restorePaneTitle(pane)))
+	if liveLabel := strings.TrimSpace(cur.Label); liveLabel == "" || liveLabel != strings.TrimSpace(rowLabel) {
 		return "", nil
 	}
 	if !restorePaneAlive(live, pane) {

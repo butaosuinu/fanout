@@ -264,6 +264,10 @@ func installLivePanesShim(t *testing.T, pathBody, titleBody, agentStateBody stri
 	if len(optionBodies) > 4 {
 		sessionIDBody = optionBodies[4]
 	}
+	labelBody := `printf ''`
+	if len(optionBodies) > 5 {
+		labelBody = optionBodies[5]
+	}
 	script := `printf '%s\n' "$@" >> "$TMUXRUN_ARGS"
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 case "$4" in
@@ -284,6 +288,9 @@ case "$4" in
 	;;
 *fanout_role*)
 	` + roleBody + `
+	;;
+*fanout_pane_label*)
+	` + labelBody + `
 	;;
 *session_id*)
 	` + sessionIDBody + `
@@ -309,14 +316,15 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		`printf '%%9\t/repo\n%%10\t/repo\n'`,
 		`printf '%%9\t/wt/nine\n%%10\t/wt/ten\twith\ttabs\n'`,
 		`printf '%%9\tconsole\n'`,
-		`printf '%%9\t$1\n%%10\t$1\n%%11\t$2\n'`)
+		`printf '%%9\t$1\n%%10\t$1\n%%11\t$2\n'`,
+		`printf '%%9\t#81 · nine\n'`)
 
 	panes, err := ListLivePanes()
 	if err != nil {
 		t.Fatalf("ListLivePanes() failed: %v", err)
 	}
 	want := []LivePane{
-		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine", Role: "console", SessionID: "$1"},
+		{ID: "%9", CurrentPath: "/wt/nine", Title: "nine: child", AgentState: "running", ShellKey: "shell-nine", ProjectRoot: "/repo", WorktreePath: "/wt/nine", Role: "console", Label: "#81 · nine", SessionID: "$1"},
 		{ID: "%10", CurrentPath: "/wt/ten\twith\ttabs", Title: "title\twith\ttabs", AgentState: "done", ProjectRoot: "/repo", WorktreePath: "/wt/ten\twith\ttabs", SessionID: "$1"},
 		{ID: "%11", CurrentPath: "/wt/eleven", Title: "", AgentState: "", SessionID: "$2"},
 	}
@@ -332,6 +340,7 @@ func TestListLivePanesJoinsPathTitleAndAgentStateOutputsByID(t *testing.T) {
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_project_root}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_worktree_path}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_role}", "---",
+		"list-panes", "-a", "-F", "#{pane_id}\t#{@fanout_pane_label}", "---",
 		"list-panes", "-a", "-F", "#{pane_id}\t#{session_id}", "---",
 	})
 }

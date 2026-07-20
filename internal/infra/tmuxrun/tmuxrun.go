@@ -38,6 +38,7 @@ const (
 	livePaneProjectRootFormat  = "#{pane_id}\t#{" + projectRootOption + "}"
 	livePaneWorktreePathFormat = "#{pane_id}\t#{" + worktreePathOption + "}"
 	livePaneRoleFormat         = "#{pane_id}\t#{" + roleOption + "}"
+	livePaneLabelFormat        = "#{pane_id}\t#{" + paneLabelOption + "}"
 	livePaneSessionIDFormat    = "#{pane_id}\t#{session_id}"
 	paneAlternateFormat        = "#{alternate_on}"
 	paneGeometryFormat         = "#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{client_width}\t#{client_height}"
@@ -457,6 +458,11 @@ type LivePane struct {
 	// pane. It gives action keybindings a stable match that does not depend on
 	// pane_current_path.
 	WorktreePath string
+	// Label is @fanout_pane_label, the neutralized border label fanout stamps
+	// at launch (see SetPaneLabel). Unlike #{pane_title} it is never rewritten
+	// by the agent inside the pane, so it identifies which fanout session the
+	// pane was created for. Degrades to "" when the listing fails.
+	Label string
 	// Role is @fanout_role, the auto-layout role fanout stamps on panes it
 	// manages (RoleConsole for the TUI console). Like every pane user option it
 	// is settable by the process inside the pane, so it is a display/UX signal,
@@ -578,6 +584,10 @@ func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 	if roleOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneRoleFormat).Output(); err == nil {
 		roles = parseLivePaneField(string(roleOut))
 	}
+	labels := map[string]string{}
+	if labelOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneLabelFormat).Output(); err == nil {
+		labels = parseLivePaneField(string(labelOut))
+	}
 	sessionIDs := map[string]string{}
 	if sessionIDOut, err := exec.Command("tmux", "list-panes", "-a", "-F", livePaneSessionIDFormat).Output(); err == nil {
 		sessionIDs = parseLivePaneField(string(sessionIDOut))
@@ -603,6 +613,7 @@ func listLivePanes(strictIdentity bool) ([]LivePane, error) {
 		pane.ProjectRoot = projectRoots[pane.ID]
 		pane.WorktreePath = worktreePaths[pane.ID]
 		pane.Role = roles[pane.ID]
+		pane.Label = labels[pane.ID]
 		pane.SessionID = sessionIDs[pane.ID]
 		joined = append(joined, pane)
 	}
