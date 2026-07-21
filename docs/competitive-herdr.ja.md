@@ -1,6 +1,6 @@
 # herdr 競合分析 — agent multiplexer との棲み分けと取り込み
 
-ステータス: 分析 + 提案。作成: 2026-07。改訂: 2026-07-22 — v0.7.5 の live-agent CLI、公式デモ、plugin 生態系掃引(topic `herdr-plugin` 106 repo)を反映。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
+ステータス: 分析 + 提案。作成: 2026-07。改訂: 2026-07-22 — v0.7.5 の live-agent CLI、公式デモ、plugin 生態系掃引(topic `herdr-plugin` の star 上位 100 repo)を反映。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
 この文書は tmux backend に取り込む機能を扱う。
 herdr runtime backend wave 2 の API と制約は [実機検証](herdr-runtime-backend-spike.ja.md) を参照。
@@ -16,7 +16,7 @@ GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending で�
 中核は 3 つ。
 
 1. **エージェント状態のセマンティック追跡** — 各ペインのエージェントを idle(プロンプト待ち)/ working(作業中)/ blocked(許可・入力待ち)/ done で色分け表示する。検出はプロセス名マッチ + 出力ヒューリスティクスに加え、`herdr integration install <agent>` が各エージェントの hooks / plugin 機構に状態報告スクリプトを書き込む
-2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start --kind <agent> --pane <id>`(名前は session 一意、`[a-z][a-z0-9_-]{0,31}`)、atomic な `agent prompt --wait --until <state>`、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
+2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start <name> --kind <kind> --pane <id>`(name は必須で session 一意、`[a-z][a-z0-9_-]{0,31}`。対象は既存 pane で、pane の作成・split は layout 側)、atomic な `agent prompt --wait --until <state>`、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
 3. **session resume** — Claude Code / Codex を含む主要エージェントの公式 session 参照を記録し、サーバー再起動後に復元する
 
 対応エージェントは 21 種(Claude Code / Codex / OpenCode / Cursor / Copilot CLI / Gemini / Devin ほか)。core は GitHub 連携・PR ライフサイクル・issue 駆動の作業割り当てを持たない(plugin 層の接近は脅威評価を参照)。
@@ -60,8 +60,8 @@ floor は 0.7.5 へ引き上げる(ユーザー決定 2026-07-22)。契約改訂
 tmux backend にはこの 3 点を tmux の上で提供する価値が残る(後述)。
 
 エージェント自己オーケストレーション路線は v0.7.5 で「中期の脅威」から現物になった。
-発表スレッドは agent CLI を multi-agent orchestration のために作ったと位置づけ、公式デモでは coordinator の Claude Code が自然言語指示から `agent start` で codex 4 体を格子に生やし、観点別レビューの briefing を `agent prompt` で配り、`agent wait` のループで全完了を待って結果を統合する。
-これは fanout plan(issue-less lane)の中核体験 — 計画分解 → briefing 配布 → 並列起動 → 完了待ち → 回収 — を、coordinator LLM が herdr primitive の即興合成で再現したものである。
+発表スレッドは agent CLI を multi-agent orchestration のために作ったと位置づけ、公式デモでは coordinator の Claude Code が自然言語指示から pane を割って `agent start` で codex 4 体を配置し、観点別レビューの briefing を `agent prompt` で配り、`agent wait` のループで全完了を待って結果を統合する。
+これは fanout plan(issue-less lane)の中核体験 — 計画分解 → briefing 配布 → 並列起動 — を coordinator LLM が herdr primitive の即興合成で再現し、さらに fanout では未実装の完了待ち(後述 B の `fanout wait` 相当)と結果回収まで到達している。
 fanout plan に残る差は次の 5 点。
 (a) 決定論と再現性 — spec が正典で毎回同じ配線になり、dry-run / golden で監査できる。LLM 即興は毎回違う。
 (b) worktree 分離と safety gate — デモは同一ディレクトリの read-only レビューで、write 系を herdr worktree の即興合成で組んでも dirty 検査・branch 予約・idempotency はない。
@@ -69,8 +69,8 @@ fanout plan に残る差は次の 5 点。
 (d) state.json による状態管理と status / cleanup。
 (e) PR lifecycle への接続。
 
-plugin 生態系(topic `herdr-plugin`、2026-07-22 時点 106 repo)は fanout の隣接領域に到達している。
-作者自身の `herdr-plugin-github-start`(GitHub issue / PR / discussion から agent 起動。issue body 非取得・worktree 非作成・fan-out なし)、カンバンカードを agent に配る `herdr-board` / `herdr-kanban`、Claude Code teams の `herdmates`、issue → worktree の `herdr-worktree-from-linear` / `herdr-worktree-from-pr`、スケジュール起動の `herdr-routines`、merge 検知 branch cleanup の `herdr-branch-cleanup`、レビュー・PR 追跡の `herdr-reviewr` / `herdr-pr-tracker`。
+plugin 生態系(topic `herdr-plugin`、2026-07-22 時点の search total_count 289。以下は star 上位 100 の掃引)は fanout の隣接領域に到達している。
+作者自身の `herdr-plugin-github-start`(GitHub issue / PR / discussion から agent 起動。issue body 非取得・worktree 非作成・fan-out なし)、カンバンカードを prompt として agent に配る `herdr-board`(`herdr-kanban` はタスクと tab の紐付けのみで agent 起動なし)、Claude Code teams の `herdmates`、Linear issue → worktree の `herdr-worktree-from-linear` と GitHub PR → worktree の `herdr-worktree-from-pr`、スケジュール起動の `herdr-routines`、merge 検知 branch cleanup の `herdr-branch-cleanup`、レビュー・PR 追跡の `herdr-reviewr` / `herdr-pr-tracker`。
 単一 plugin で fanout の閉ループを代替するものはまだ無いが、「herdr は issue・PR・レビューに触れていない」はもう成り立たない。
 
 fanout 側の守りは、runtime 選択と、GitHub 駆動ワークフロー(親子 issue 列挙・briefing 生成・wave・review gate・PR lifecycle・可観測性)の閉ループが herdr core にも単一 plugin にも無いことにある。
