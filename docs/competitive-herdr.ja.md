@@ -3,7 +3,7 @@
 ステータス: 分析 + 提案。作成: 2026-07。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
 この文書は tmux backend に取り込む機能を扱う。
-herdr runtime backend v1 の API と制約は [実機検証](herdr-runtime-backend-spike.ja.md) を参照。
+herdr runtime backend wave 2 の API と制約は [実機検証](herdr-runtime-backend-spike.ja.md) を参照。
 
 ## herdr とは
 
@@ -21,21 +21,22 @@ GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending で�
 
 対応エージェントは 14 以上(Claude Code / Codex / Droid / Amp / OpenCode / Cursor / Copilot CLI ほか)。GitHub 連携・PR ライフサイクル・issue 駆動の作業割り当ては持たない。
 
-## レイヤーの違いと v1 の制約
+## レイヤーの違いと wave 2 の制約
 
 herdr は実行環境レイヤー(tmux の代替)、fanout は GitHub issue → worktree → ペイン → PR を配線するワークフローレイヤーであり、機能面の直接競合は狭い。
-0.7.3 v1 では tmux だけが issue / Project / plan の fan-out workflow を end-to-end で実行する。
-herdr backend v1 は既存 named session の snapshot / list による identity / status 観測と手動検証に限り、targeted content read を提供せず、launch は root coordinator の intent、row、`workspace create` より前に fail closed にする。
-自動 mutation が expected immutable session / resource generation を原子的に検査できるか、fanout が認証済み session と対象資源の lifecycle を排他的に所有する後続版で、herdr を opt-in backend とし、親単位の stickiness を適用する。
-その後続版では tmux と herdr を一つの親 fan-out の runtime として排他にし、fanout state に両 backend の行を共存させられる。
+0.7.4 wave 2 は tmux-parity の協調プロセス信頼で owned server、launch、cleanup、peek、focus、nudge、emitter、metadata、Codex v6 resume の後続実装を解禁する。
+判断主体はユーザー、判断日は 2026-07-21 JST である。
+実装は private socket、0700 XDG、owner marker で影響を fanout-owned session へ封じ込め、intent / phase、nonce 二重照合、branch 予約、送信直前再照合を crash safety と誤操作防止に使う。
+herdr は opt-in backend とし、tmux と herdr を一つの親 fan-out の runtime として排他にして親単位の stickiness を適用する。
+fanout state には両 backend の行を共存させられる。
 ユーザーが fanout と herdr のどちらか一方を製品として選ぶ関係ではない。
 herdr が issue 駆動やレビューゲートを足せば fanout の領域への侵食が始まる。
 
-次の fanout 列は現行 tmux backend の能力であり、herdr 0.7.3 v1 の提供範囲ではない。
+次の fanout 列は現行 tmux backend と wave 2 が解禁する herdr backend のワークフロー能力を示す。
 
 | 軸 | fanout | herdr |
 |---|---|---|
-| 実行基盤 | tmux が end-to-end workflow を実行。herdr 0.7.3 v1 は既存 session の identity / status 観測と手動検証のみで、targeted content read は提供しない | 自前 PTY ランタイム(tmux 非互換) |
+| 実行基盤 | tmux が end-to-end workflow を実行。herdr 0.7.4 wave 2 も owned session 上の同 workflow を後続実装へ解禁 | 自前 PTY ランタイム(tmux 非互換) |
 | 起動の駆動源 | GitHub issue / Project / plan spec → briefing 自動生成 | 手動、またはエージェント自身が Socket API で起動 |
 | worktree | 子 issue 単位で自動計画・作成・cleanup | `worktree create/open` コマンド(駆動源なし) |
 | エージェント状態 | `@fanout_agent_state` の running / done の 2 値 | idle / working / blocked / done + カスタムラベル |
@@ -51,13 +52,13 @@ herdr が issue 駆動やレビューゲートを足せば fanout の領域へ�
 ## 脅威評価
 
 短期の脅威は「機能の重複」ではなく「実行環境の乗り換え」で、herdr の吸引力は上の表の状態・待機・resume の 3 行に集約される。
-現行 herdr backend v1 だけでは、herdr 上で issue / Project / plan の fan-out workflow を継続できない。
-安全な launch / adoption、authoritative completion、recovery、cleanup が揃う後続版で workflow continuity を提供する。
+この PR は docs-only のため現行 binary はまだ herdr 上の issue / Project / plan fan-out を実行しないが、wave 2 契約は後続 issue に workflow continuity の実装を許可する。
+同一 UID process に対する proof-grade authority は前提にせず、tmux と同じ協調プロセス信頼と fail-closed な crash / identity gate を使う。
 tmux backend にはこの 3 点を tmux の上で提供する価値が残る(後述)。
 
 中期の脅威は herdr のエージェント自己オーケストレーション路線。SKILL.md + Socket API は「エージェントがヘルパーを生やし、待ち、回収する」方向で、fanout の skill 層(fan-out 判断は LLM、CLI は決定論)と思想が近い。herdr がここに GitHub 連携を足すと正面衝突するが、現時点の herdr は issue・PR・レビューに一切触れていない。
 
-fanout 側の守りは、将来の runtime 選択と、GitHub 駆動ワークフロー(briefing 生成・wave・review gate・PR lifecycle・可観測性)の積み上げが herdr にはないことにある。
+fanout 側の守りは、runtime 選択と、GitHub 駆動ワークフロー(briefing 生成・wave・review gate・PR lifecycle・可観測性)の積み上げが herdr にはないことにある。
 攻めに使える差は、herdr がローカル完結なのに対し fanout は「issue が入力、マージ済み PR が出力」という閉ループを持つ点で、ロードマップ(`docs/roadmap.ja.md`)の閉ループハーネス方針そのものが差別化になる。
 
 ## fanout に取り込む機能
@@ -105,8 +106,8 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 - **Socket API / デーモン化**: fanout のエージェント向けインターフェースは CLI(`msg` / `--status` / 将来の `wait`)+ state.json で足りる。常駐サーバーは read-only dashboard の境界(GET のみ・mutation なし)を崩す誘因になる
 - **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。状態は hooks / notify の明示信号だけから取る。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
 - **SSH リモートアタッチ・マウス対応 TUI**: tmux 自体の機能(attach / mouse mode)で代替できる。fanout が再実装する層ではない
-- **sidebar layout の再実装**: v1 は pane / workspace の token を報告しない。
-  request が authoritative server generation と target `terminal_id` / workspace generation を原子的に束縛する後続版だけが表示専用 token 値を報告できる。
+- **sidebar layout の再実装**: wave 2 は tmux-parity の協調プロセス信頼で exact target を直前・直後に再照合し、pane / workspace の表示専用 token 値を報告できる。
+  authoritative server generation と target `terminal_id` / workspace generation を request に原子的に束縛できる場合は proof-grade tier へ格上げする。
   Space / Agent の `rows` と `row_gap`、Agent の `rows_by_agent`、styling は herdr とユーザーが所有し、fanout は herdr config を書き換えない
 
 ## 参考
