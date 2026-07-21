@@ -36,7 +36,7 @@ session identity の read と mutation は別の CLI 接続になるため、直
 | raw Socket API | 不採用 | v1 で必要な操作は CLI wrapper で足りる |
 | worktree | `worktree create/open` は手動操作としてだけ使う | setup hook gate を mutation に束縛できず、自動 remove も安全に実行できない |
 | agent 起動 | `agent start` の bare argv、`--cwd`、`--env` は手動操作としてだけ使う | worktree setup 完了を API で証明できず、自動 launch には採用しない |
-| capability gate | stable `>=0.7.4` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
+| capability gate | stable `>=0.7.4, <0.8.0` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | nudge | blocked | runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance が揃うまで自動送信しない |
 | `codexPlanMode` | herdr backend から恒久除外 | runtime backend から terminal UI を操作する controller は採用しない |
@@ -62,7 +62,12 @@ wave 2 の成功経路は `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`
 終了時に同ファイルの SHA-256 は `48cff490ab170d1327262076d7f3a71d336b0e2e5f4495c68d1e99133ecca0eb` から `3fbd67b380ee59c3098d125349cacab62178088bb1fd21a6aae478695ebc30ab` へ変わった。
 既存の `~/.config/herdr/session-history.json`（SHA-256 `f597ddef792e7233b8035c7c2e7e6f5573523e00ad5801fc473d2eb051185445`）も削除された。
 事前の byte backup がなかったため復元はしていない。
+この負例は default Herdr state を変更した検証事故として扱う。
+2026-07-21 JST の追加確認では `session.json` と `session-history.json` が再生成されていたが、検証前の bytes は復元も同一性検証もできない。
+現在の両 file を検証前 state とみなして復旧には使わず、追加の overwrite も行わない。
 この負例以降は default herdr state を操作せず、全 XDG directory を隔離した。
+今後の実機検証では対象 file の存在、SHA-256、byte backup を開始前に記録し、全 XDG directory、config、socket を一時 directory へ隔離する。
+default path を使う負例は実行しない。
 
 fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
@@ -756,18 +761,20 @@ raw Socket の `events.subscribe` は常駐 client を増やすため v1 では�
 ## version と JSON 対応
 
 stable public workspace、tab、pane ID の契約は 0.7.0、既存 local branch の worktree create/open は 0.7.1、`session.snapshot` と `api schema --json` は 0.7.2 で入った。
-core runtime の exact tuple allowlist は廃止し、stable SemVer `>=0.7.4`、structural capability、接続先 status の三段 gate へ置き換える。
+core runtime の exact tuple allowlist は廃止し、stable SemVer `>=0.7.4, <0.8.0`、structural capability、接続先 status の三段 gate へ置き換える。
 version 文字列は stable SemVer として parse し、prerelease と解釈不能な値を拒否する。
 schema が定義する version string には prerelease を拒否する pattern がないため、fanout が検査する。
+0.8.0 以上は、この文書と同じ core matrix を再実測して acceptance range を更新するまで拒否する。
 
-起動前は admitted binary の SHA-256、`herdr --version`、offline `api schema --json` を取得し、protocol、schema version、使用 method、request / response の必須 field を検査する。
-server 接続後は `status --json` の client / server version が同じ stable version で floor 以上、protocol が admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
+起動前は admitted binary の SHA-256、`herdr --version`、offline `api schema --json` を取得し、protocol、schema version、使用 method、request / response の必須 field と、それらが参照する type、enum、const を再帰的に検査する。
+server 接続後は `status --json` の client / server version が同じ stable version で acceptance range 内、protocol が admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
 `api snapshot` の version と protocol も同じ admitted server に一致させる。
 full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
 各 read-only call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
 0.7.4 は比較可能な server generation を返さないため、connection loss、restart、binary drift、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させ、自動再 admission と resume を行わない。
 別 CLI 接続間の server continuity は証明できず、この gate を mutation authority にしない。
 schema にない CLI-only surface は admission 対象外とし、将来採用する場合は command surface と出力を別の fail-closed gate で検査する。
+将来の自動 mutation は、同じ core matrix を実測して version provenance をこの文書へ追加した version に限る。
 
 0.7.3 client から 0.7.4 server と、0.7.4 client から 0.7.3 server の両方向を実測した。
 どちらも protocol `16` で `compatible:true` と snapshot success を返したが、`restart_needed:true` で client / server version は不一致だった。
@@ -797,7 +804,7 @@ cleanup、metadata、targeted read はこれに加えて後続契約表の resou
 | `notification show` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
 | `plugin link/list/log list` | 0.7.3 baseline、0.7.4 isolation wave 2 | `list` は `--json` 対応。他は JSON envelope |
 
-この表は機能導入時期と実測 provenance を示すだけで、structural gate を通らない上位 version の互換性を認めない。
+この表は機能導入時期と実測 provenance を示すだけで、acceptance range 外または structural gate を通らない version の互換性を認めない。
 
 version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4) を参照する。
 
@@ -815,7 +822,8 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 | #427 emitter | blocked | launch が解禁されても表示・診断用 telemetry に限り、state、nudge、completion、cleanup の authority にしない |
 | cold restart resume | blocked | authoritative server generation と launch provenance を束縛し、下記の Codex integration v6 exact matcher を満たす |
 | #494 metadata | blocked | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
-| focus / peek / targeted read | blocked | response が authoritative server generation と target terminal identity を束縛する |
+| focus | blocked | mutation authority を満たし、request が authoritative server generation と target terminal / workspace generation を precondition として原子的に検査する |
+| peek / targeted read | blocked | response が authoritative server generation と target terminal identity を束縛する |
 | 自動 nudge | blocked | runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance を満たす |
 | `codexPlanMode` | 恒久除外 | 再評価しない |
 
@@ -828,8 +836,8 @@ response loss 時の no-blind-retry、provisional intent と phase machine、wor
 - herdr backend v1 は既存 named session の snapshot / list / wait による identity / status 観測だけを行い、targeted content read を発行しない。
   root coordinator 作成、focus、send、notification、metadata、cleanup を含む herdr mutation も発行しない。
   issue / Project / plan の launch は coordinator intent / row / workspace を作る前に fail closed にする。
-- core runtime compatibility は exact tuple allowlist ではなく、stable CLI / server `>=0.7.4`、structural schema、接続先 status の gate で判定する。
-  prerelease、解釈不能な version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method または必須 field の欠落は fail closed にする。
+- core runtime compatibility は exact tuple allowlist ではなく、stable CLI / server `>=0.7.4, <0.8.0`、structural schema、接続先 status の gate で判定する。
+  prerelease、解釈不能または acceptance range 外の version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method、必須 field、参照される type / enum / const の欠落または不一致は fail closed にする。
   full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
   各 read-only call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
   connection loss、restart、binary drift、`restart_needed:true`、その他の不一致は admission を失効させ、自動再 admission と resume を行わない。

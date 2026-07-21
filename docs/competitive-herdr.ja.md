@@ -106,7 +106,7 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 - **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。状態は hooks / notify の明示信号だけから取る。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
 - **SSH リモートアタッチ・マウス対応 TUI**: tmux 自体の機能(attach / mouse mode)で代替できる。fanout が再実装する層ではない
 - **sidebar layout の再実装**: v1 は pane / workspace の token を報告しない。
-  request-bound immutable session / resource generation または fanout-owned authenticated lifecycle が成立する後続版だけが表示専用 token 値を報告できる。
+  request が authoritative server generation と target `terminal_id` / workspace generation を原子的に束縛する後続版だけが表示専用 token 値を報告できる。
   Space / Agent の `rows` と `row_gap`、Agent の `rows_by_agent`、styling は herdr とユーザーが所有し、fanout は herdr config を書き換えない
 
 ## 参考
