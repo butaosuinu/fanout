@@ -3,6 +3,7 @@
 ステータス: 0.7.4 wave 2 の実機検証を完了し、fanout-owned authenticated lifecycle は No-Go と判定した。
 herdr backend は自動 mutation を持たない read-only / manual experiment のままとし、fanout workflow の runtime としては提供しない。
 0.7.4 core runtime matrix、metadata token reporting、sidebar row layout は実測済みである。
+この文書の日付は日本標準時（JST、UTC+09:00）で記す。
 core runtime の検証日は 2026-07-16 と 2026-07-21、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
 0.7.3 と 0.7.4 の対象はいずれも protocol `16`、schema version `1` である。
 
@@ -15,10 +16,13 @@ worktree の作成と既存 checkout の採用は herdr CLI で実行できる�
 herdr 0.7.4 も setup hook の抑止または registry generation を create / open request に束縛できず、plugin の実行完了 receipt を持たないため、自動 create / open とその直後の agent start を無効にする。
 条件付き remove / close もないため、自動 cleanup、create rollback、それに依存する git fallback も無効にする。
 Claude hook の signal は agent process から偽造できるため telemetry に限定し、nudge authority または完了判定には使わない。
-herdr backend の自動 nudge は agent 種別にかかわらず恒久的に除外し、pane 消滅または `terminal_id` の変化は `stale` とする。
+2026-07-21 のユーザー決定により、herdr backend の自動 nudge は恒久除外から blocked へ変更する。
+`codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
+pane 消滅または `terminal_id` の変化は `stale` とする。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
 0700 directory、0600 socket、fanout 側の ownership marker は別 UID を排除するが、同一 UID の agent を排除せず、mutation authority にはならない。
 自動 mutation の再導入には、server が認証する controller capability、agent と別 UID の server、request-bound immutable generation と conditional mutation のいずれかが必要である。
+現時点では、lifecycle と自動 nudge を成立させる conditional mutation primitive を herdr 上流へ別 issue で提案する方針である。
 同じ TOCTOU は targeted content read にも残り、別接続の post-read snapshot は ABA を排除できないため content の公開 authority には使わない。
 
 ## 採用判断
@@ -34,7 +38,8 @@ session identity の read と mutation は別の CLI 接続になるため、直
 | agent 起動 | `agent start` の bare argv、`--cwd`、`--env` は手動操作としてだけ使う | worktree setup 完了を API で証明できず、自動 launch には採用しない |
 | capability gate | stable `>=0.7.4` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
-| nudge | herdr backend から恒久除外 | hook signal は authority ではなく、状態検査と submit を原子的に実行する CAS もない |
+| nudge | blocked | runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance が揃うまで自動送信しない |
+| `codexPlanMode` | herdr backend から恒久除外 | runtime backend から terminal UI を操作する controller は採用しない |
 | identity | routing、checkout、terminal、会話、process を別々に照合する | v1 は cold restart 後に再束縛せず、provider 固有 matcher は後続版に限る |
 | cleanup | 自動 mutation は無効 | remove / close の request に nonce または session epoch の precondition を渡せない |
 | 通知 | 手動検証だけに使う | detached 時も `shown:true` で、表示完了の応答ではなく、fanout v1 は発行しない |
@@ -528,12 +533,14 @@ herdr の `done` は process exit ではなく、agent が処理を終えて `id
 実際、focus されていない pane に `working`、`idle` の順で報告すると snapshot は `working`、`done` と遷移し、`terminal_id` と focus は変わらなかった。
 focus 後は `done` から `idle` へ変わる。
 
-herdr backend の自動 nudge と `codexPlanMode` は Claude と Codex の両方で恒久的に除外する。
+herdr backend の自動 nudge は Claude と Codex の両方で blocked とする。
+`codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
 public `idle` / `done`、hook telemetry、`agent explain --json`、screen manifest のどれも送信許可には使わない。
 hook telemetry は agent process から偽造でき、screen detection は未知の permission UI を除外できない。
 `terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
 herdr 0.7.4 には状態条件付き send または CAS がないため、この race を fail closed にできない。
 fanout は peer message または watcher を契機に `pane run` を自動実行せず、Enter を送らない。
+自動 nudge の再評価には、runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance の両方を要求する。
 peer message の bus への保存は維持するが、fanout v1 は herdr の `notification show` を呼ばない。
 ユーザーが対象 pane を確認して明示的に実行する `pane run` は手動操作として扱う。
 
@@ -809,9 +816,12 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 | cold restart resume | blocked | authoritative server generation と launch provenance を束縛し、下記の Codex integration v6 exact matcher を満たす |
 | #494 metadata | blocked | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus / peek / targeted read | blocked | response が authoritative server generation と target terminal identity を束縛する |
-| 自動 nudge / `codexPlanMode` | 恒久除外 | 再評価しない |
+| 自動 nudge | blocked | runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance を満たす |
+| `codexPlanMode` | 恒久除外 | 再評価しない |
 
-wave 2 で緩和するのは exact tuple allowlist だけである。
+compatibility gate で緩和するのは exact tuple allowlist だけである。
+自動 nudge は 2026-07-21 のユーザー決定により、恒久除外から再評価条件付きの blocked へ変更する。
+現時点では、lifecycle と自動 nudge を成立させる conditional mutation primitive を herdr 上流へ別 issue で提案する方針である。
 response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch の atomic reservation と compare-and-delete、bare argv と exact cwd / env、telemetry-only emitter、identity の分離、Codex integration v6 exact matcher、wait budget、metadata の表示専用性は維持する。
 
 - backend は明示的に起動済みで検査済みの herdr session を使い、0.7.4 では fanout-owned server を自動起動または再起動しない。
@@ -894,9 +904,11 @@ response loss 時の no-blind-retry、provisional intent と phase machine、wor
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
   これは herdr runtime の表示遷移であり、fanout child の terminal completion または nudge authority には使わない。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
-- herdr backend の自動 nudge と `codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
+- herdr backend の自動 nudge は agent 種別にかかわらず blocked とする。
   public status、hook telemetry、screen manifest、`agent explain` のどれも送信許可に使わず、peer message または watcher を契機に `pane run` を呼ばない。
+  再評価には、runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance の両方を要求する。
   message bus への保存は維持できるが、fanout から herdr の `notification show` は呼ばない。
+- `codexPlanMode` は agent 種別にかかわらず恒久的に除外し、再評価しない。
 - CLI-first の wait と後続版の再開待ちは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
   terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
