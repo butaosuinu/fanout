@@ -15,7 +15,8 @@ version / session / schema の検査後、snapshot / list / wait、targeted read
 owned XDG の config と plugin registry に予期しない setup hook があれば launch 前に fail closed にする。
 provider hook の signal は agent process から偽造できる協調 telemetry とし、tmux backend と同じ nudge gate には使うが、完了判定または cleanup の根拠には使わない。
 自動 nudge は tmux の `shouldNudge` と同じ条件で解禁する。
-`codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
+`codexPlanMode` は恒久除外を撤回し、`fanout __codex-plan-tui` を pane 内 controller として herdr `agent start` の bare argv と明示 cwd / env で起動して対応する。
+その実装は #528、#529、#544 の導入後の別 issue とする。
 pane 消滅は `stale` とし、`terminal_id` の変化は Codex integration v6 の exact matcher を満たす場合だけ再束縛し、それ以外は `stale` とする。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
 0700 directory、0600 socket、fanout 側の ownership marker は別 UID を排除するが、同一 UID の agent を排除せず、mutation authority にはならない。
@@ -38,7 +39,7 @@ request-bound generation と conditional mutation、server-authenticated control
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
 | nudge | Go | `running` / `working` / `plan` / `idle` だけへ送信し、`blocked` / `done` / 未設定 / 未知値は no-op とする |
-| `codexPlanMode` | herdr backend から恒久除外 | runtime backend から terminal UI を操作する controller は採用しない |
+| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | `fanout __codex-plan-tui` は pane 内 controller であり、runtime backend の外から terminal UI を操作しない |
 | identity / resume | Go | routing、checkout、terminal、会話、process を別々に照合し、cold restart は Codex v6 exact matcher に限る |
 | cleanup / rollback | Go | exact ownership と直前 snapshot を照合し、response loss では blind retry しない |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
@@ -580,7 +581,8 @@ hook telemetry は agent process から偽造でき、screen detection は未知
 `terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
 herdr 0.7.4 には状態条件付き send または CAS がなく、この check-and-send race は tmux の `ListLive` から non-transactional な `send-keys` までの race と同種の受容済み残余リスクである。
 runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance が揃えば proof-grade tier へ格上げする。
-`codexPlanMode` は `plan` state の通常 nudge と別契約であり、agent 種別にかかわらず恒久的に除外する。
+`codexPlanMode` は `plan` state の通常 nudge と別契約であり、`fanout __codex-plan-tui` を pane 内 controller として起動して対応する。
+controller の working / plan は emitter lane の `reported_state` で報告し、tmux pane option には書き込まない。
 peer message の bus への保存は維持するが、fanout は herdr の `notification show` を nudge に使わない。
 
 ### focus と wait
@@ -866,7 +868,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
 | 自動 nudge | Go | state refinement を持つ agent の `running` / `working` / `plan` / `idle` だけへ、送信直前再照合後に `pane run` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
-| `codexPlanMode` | 恒久除外 | runtime backend から terminal UI を操作する controller は採用しない | 再評価しない |
+| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | pane 内 controller `fanout __codex-plan-tui` を bare argv と明示 cwd / env で `agent start` し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
 request-bound generation / conditional mutation、controller capability、UID 分離は削除せず、herdr 上流へ別 issue で提案する proof-grade 強化として保持する。
 response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch の atomic reservation と compare-and-delete、bare argv と exact cwd / env、identity の分離、Codex integration v6 exact matcher、wait budget、metadata の表示専用性は維持する。
@@ -980,8 +982,13 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   check-and-send race は tmux の `ListLive` から non-transactional `send-keys` までの race と同種の受容済み残余リスクである。
   atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が揃えば proof-grade tier へ格上げする。
   herdr の `notification show` は nudge に使わない。
-- `codexPlanMode` は agent 種別にかかわらず恒久的に除外し、再評価しない。
-  downstream 実装は Herdr launch で controller command を構築する前に明示的に拒否する。
+- `codexPlanMode` は 2026-07-21 JST のユーザー決定で恒久除外を撤回し、対応する。
+  `fanout __codex-plan-tui` を pane 内 controller として herdr `agent start` の bare argv と明示 cwd / env で起動する。
+  controller は pane 内プロセスであり、runtime backend の外から terminal UI を操作しない — 除外理由だった外部からの terminal UI 操作には該当しない。
+  in-pane controller は自動 nudge と同種の協調プロセス信頼として tmux-parity tier に置く。
+  working / plan の telemetry は emitter lane の `reported_state` 経由とし、tmux pane option へは書き込まない。
+  cold restart 後の restore は `PlanMode && Agent=="codex"` ゲート([session 開始時 plan mode の統一設定](session-plan-mode.ja.md)の #544 決定)と、controller wrapper 実行形態を含む exact process matcher を要求する。
+  実装の解禁条件は #528(agent start)、#529(emitter)、#544(launch matrix の plan mode 一般化)の導入後で、実装子は別 issue とする。
 - CLI-first の wait と cold restart の再開待ちは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
   terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とし、snapshot と event wait を直列に組み合わせない。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
