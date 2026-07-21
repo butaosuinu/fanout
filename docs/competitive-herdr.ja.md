@@ -16,7 +16,7 @@ GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending で�
 中核は 3 つ。
 
 1. **エージェント状態のセマンティック追跡** — 各ペインのエージェントを idle(プロンプト待ち)/ working(作業中)/ blocked(許可・入力待ち)/ done で色分け表示する。検出はプロセス名マッチ + 出力ヒューリスティクスに加え、`herdr integration install <agent>` が各エージェントの hooks / plugin 機構に状態報告スクリプトを書き込む
-2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start <name> --kind <kind> --pane <id>`(name は必須で session 一意、`[a-z][a-z0-9_-]{0,31}`。対象は対話 shell prompt にいる既存 pane で、別 process が動いていると `agent_pane_busy` で失敗する。pane の作成・split は layout 側)、atomic な `agent prompt --wait --until <state>`、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
+2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start <name> --kind <kind> --pane <id>`(name は必須で session 内の live agent 間で一意 — exit / release で解放され再利用できる。`[a-z][a-z0-9_-]{0,31}`。対象は対話 shell prompt にいる既存 pane で、別 process が動いていると `agent_pane_busy` で失敗する。pane の作成・split は layout 側)、`agent prompt --wait --until <state>`(atomic なのは text + Enter の投入だけで、wait は turn を識別しない lifecycle state 待ち — 送信前から動いていた turn の完了でも成功し得る)、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
 3. **session resume** — Claude Code / Codex を含む主要エージェントの公式 session 参照を記録し、サーバー再起動後に復元する
 
 対応エージェントは 21 種(Claude Code / Codex / OpenCode / Cursor / Copilot CLI / Gemini / Devin ほか)。core は GitHub 連携・PR ライフサイクル・issue 駆動の作業割り当てを持たない(plugin 層の接近は脅威評価を参照)。
