@@ -1024,8 +1024,8 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	case sig := <-signals:
 		code = shutdownOwnedServer(cmd, done, signals, sig, errw)
 	}
-	if err := cleanupOwnedServerSocket(markerPath, marker, lock, cmd.Process.Pid); err != nil {
-		fmt.Fprintf(errw, "fanout herdr supervisor: server socket cleanup: %v\n", err)
+	if err := cleanupOwnedServerSockets(markerPath, marker, lock, cmd.Process.Pid); err != nil {
+		fmt.Fprintf(errw, "fanout herdr supervisor: owned socket cleanup: %v\n", err)
 		return 1
 	}
 	return code
@@ -1211,38 +1211,53 @@ func classifyOwnedProcessGroupProbe(err error) (bool, error) {
 	return false, err
 }
 
-func cleanupOwnedServerSocket(markerPath string, marker ownerMarker, lock *os.File, serverPID int) error {
+func cleanupOwnedServerSockets(markerPath string, marker ownerMarker, lock *os.File, serverPID int) error {
 	running, err := ownedProcessGroupRunning(serverPID)
 	if err != nil {
 		return err
 	}
 	if running {
-		return fmt.Errorf("refusing to remove herdr server socket while process group %d is live", serverPID)
+		return fmt.Errorf("refusing to remove herdr owned sockets while process group %d is live", serverPID)
 	}
+	return removeStoppedOwnedSockets(markerPath, marker, lock)
+}
+
+func removeStoppedOwnedSockets(markerPath string, marker ownerMarker, lock *os.File) error {
 	if err := verifySupervisorCleanupIdentity(markerPath, marker, lock); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(marker.SocketPath); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect stopped herdr server socket: %w", err)
-	}
-	if err := validatePrivateSocket(marker.SocketPath); err != nil {
-		return err
-	}
-	// Repeat the marker and lease check immediately before unlinking. The
-	// supervisor lock remains held until RunSupervisor returns.
-	if err := verifySupervisorCleanupIdentity(markerPath, marker, lock); err != nil {
-		return err
-	}
-	if err := os.Remove(marker.SocketPath); err != nil {
-		return fmt.Errorf("remove stopped herdr server socket: %w", err)
-	}
-	if _, err := os.Lstat(marker.SocketPath); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return fmt.Errorf("stopped herdr server socket still exists after removal")
+	socketPaths := []string{marker.SocketPath, marker.ClientSocketPath}
+	existing := make([]string, 0, len(socketPaths))
+	for _, socketPath := range socketPaths {
+		if _, err := os.Lstat(socketPath); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("inspect stopped herdr owned socket %s: %w", socketPath, err)
 		}
-		return fmt.Errorf("verify stopped herdr server socket removal: %w", err)
+		if err := validatePrivateSocket(socketPath); err != nil {
+			return err
+		}
+		existing = append(existing, socketPath)
+	}
+
+	for _, socketPath := range existing {
+		// Repeat the marker, lease, and path checks immediately before every
+		// unlink. The supervisor lock remains held until RunSupervisor returns.
+		if err := verifySupervisorCleanupIdentity(markerPath, marker, lock); err != nil {
+			return err
+		}
+		if err := validatePrivateSocket(socketPath); err != nil {
+			return err
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return fmt.Errorf("remove stopped herdr owned socket %s: %w", socketPath, err)
+		}
+		if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				return fmt.Errorf("stopped herdr owned socket %s still exists after removal", socketPath)
+			}
+			return fmt.Errorf("verify stopped herdr owned socket %s removal: %w", socketPath, err)
+		}
 	}
 	return nil
 }
@@ -1253,7 +1268,7 @@ func verifySupervisorCleanupIdentity(markerPath string, expected ownerMarker, lo
 		return err
 	}
 	if !found || marker != expected {
-		return fmt.Errorf("herdr ownership marker changed before server socket cleanup")
+		return fmt.Errorf("herdr ownership marker changed before owned socket cleanup")
 	}
 	lease, err := readSupervisorLease(lock)
 	if err != nil {

@@ -18,6 +18,41 @@ func TestValidateCommandSurfaceOutputAcceptsInstalledHerdrSurface(t *testing.T) 
 	}
 }
 
+func TestValidateCommandSurfaceOutputAcceptsAdditivePaneReadSource(t *testing.T) {
+	t.Parallel()
+	requirement := requiredCommandSurfaces()[0]
+	output := strings.Replace(
+		installedHerdrCommandSurfaceOutputs()["pane"],
+		"visible|recent|recent-unwrapped",
+		"visible|recent|recent-unwrapped|detection",
+		1,
+	)
+	if err := validateCommandSurfaceOutput(requirement, []byte(output)); err != nil {
+		t.Fatalf("validateCommandSurfaceOutput() with additive detection source error = %v", err)
+	}
+}
+
+func TestCombineCommandSurfaceOutputIncludesStdoutAndStderr(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		streams commandStreams
+		want    string
+	}{
+		{name: "stdout only", streams: commandStreams{stdout: []byte("stdout\n")}, want: "stdout\n"},
+		{name: "stderr only", streams: commandStreams{stderr: []byte("stderr\n")}, want: "stderr\n"},
+		{name: "both with boundary", streams: commandStreams{stdout: []byte("stdout"), stderr: []byte("stderr\n")}, want: "stdout\nstderr\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := string(combineCommandSurfaceOutput(tt.streams)); got != tt.want {
+				t.Fatalf("combineCommandSurfaceOutput() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateCommandSurfaceOutputFailsClosed(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -39,6 +74,22 @@ func TestValidateCommandSurfaceOutputFailsClosed(t *testing.T) {
 			group: "pane",
 			mutate: func(output string) string {
 				return strings.Replace(output, "visible|recent|recent-unwrapped", "visible|recent", 1)
+			},
+			wantErr: "pane read",
+		},
+		{
+			name:  "read argument shape changed",
+			group: "pane",
+			mutate: func(output string) string {
+				return strings.Replace(output, " [--lines N]", " [--lines <N>]", 1)
+			},
+			wantErr: "pane read",
+		},
+		{
+			name:  "read source duplicated",
+			group: "pane",
+			mutate: func(output string) string {
+				return strings.Replace(output, "visible|recent|recent-unwrapped", "visible|recent|recent-unwrapped|visible", 1)
 			},
 			wantErr: "pane read",
 		},

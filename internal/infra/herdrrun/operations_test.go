@@ -173,13 +173,14 @@ func newOwnedOperationHarness(t *testing.T) *ownedOperationHarness {
 	return harness
 }
 
-func (h *ownedOperationHarness) output(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+func (h *ownedOperationHarness) output(ctx context.Context, binary string, env []string, args ...string) (commandStreams, error) {
 	if isOwnedOperationCommand(args) {
 		h.calls = append(h.calls, slices.Clone(args))
 		if h.respond == nil {
-			return nil, fmt.Errorf("unexpected owned operation: %v", args)
+			return commandStreams{}, fmt.Errorf("unexpected owned operation: %v", args)
 		}
-		return h.respond(args)
+		out, err := h.respond(args)
+		return commandStreams{stdout: out}, err
 	}
 	h.fake.snapshot = h.snapshot
 	return h.fake.output(ctx, binary, env, args...)
@@ -305,9 +306,9 @@ func typedOwnedOperationTestCalls(h *ownedOperationHarness, target OwnedPaneIden
 func TestOwnedOperationsRejectUnownedBackendBeforeCLI(t *testing.T) {
 	b := New("fanout-unowned", "/tmp/unowned.sock")
 	called := 0
-	b.output = func(context.Context, string, []string, ...string) ([]byte, error) {
+	b.output = func(context.Context, string, []string, ...string) (commandStreams, error) {
 		called++
-		return nil, nil
+		return commandStreams{}, nil
 	}
 	target := OwnedPaneIdentity{
 		Ref:            corebackend.PaneRef{Backend: corebackend.Herdr, Workspace: "w1", Pane: "w1:p1"},
@@ -1350,7 +1351,7 @@ func TestRunOwnedOperationRechecksExecutableImmediatelyBeforeMutation(t *testing
 		return h.marker.BinarySHA256, nil
 	}
 	originalOutput := h.backend.output
-	h.backend.output = func(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	h.backend.output = func(ctx context.Context, binary string, env []string, args ...string) (commandStreams, error) {
 		out, err := originalOutput(ctx, binary, env, args...)
 		if commandKey(args) == "status" {
 			drifted = true

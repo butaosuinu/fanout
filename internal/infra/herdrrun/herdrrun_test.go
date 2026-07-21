@@ -36,6 +36,7 @@ type fakeHerdr struct {
 	status          string
 	schema          string
 	commandSurfaces map[string]string
+	helpOnStdout    bool
 	snapshot        string
 	errors          map[string]error
 	snapshotResults []fakeSnapshotResult
@@ -43,7 +44,7 @@ type fakeHerdr struct {
 	intercept       func(context.Context, string) error
 }
 
-func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...string) ([]byte, error) {
+func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...string) (commandStreams, error) {
 	call := recordedCommand{
 		args: slices.Clone(args),
 		env:  slices.Clone(env),
@@ -56,35 +57,43 @@ func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...
 	key := commandKey(args)
 	if f.intercept != nil {
 		if err := f.intercept(ctx, key); err != nil {
-			return nil, err
+			return commandStreams{}, err
 		}
 	}
 	if key == "snapshot" && f.snapshotCall < len(f.snapshotResults) {
 		result := f.snapshotResults[f.snapshotCall]
 		f.snapshotCall++
-		return []byte(result.output), result.err
+		return commandStreams{stdout: []byte(result.output)}, result.err
 	}
 	if err := f.errors[key]; err != nil {
-		return nil, err
+		return commandStreams{}, err
 	}
 	switch key {
 	case "version":
-		return []byte(f.version), nil
+		return commandStreams{stdout: []byte(f.version)}, nil
 	case "status":
-		return []byte(f.status), nil
+		return commandStreams{stdout: []byte(f.status)}, nil
 	case "schema":
-		return []byte(f.schema), nil
+		return commandStreams{stdout: []byte(f.schema)}, nil
 	case "help-pane":
-		return []byte(f.commandSurfaces["pane"]), nil
+		return f.helpOutput("pane"), nil
 	case "help-workspace":
-		return []byte(f.commandSurfaces["workspace"]), nil
+		return f.helpOutput("workspace"), nil
 	case "help-worktree":
-		return []byte(f.commandSurfaces["worktree"]), nil
+		return f.helpOutput("worktree"), nil
 	case "snapshot":
-		return []byte(f.snapshot), nil
+		return commandStreams{stdout: []byte(f.snapshot)}, nil
 	default:
-		return nil, fmt.Errorf("unexpected herdr args: %v", args)
+		return commandStreams{}, fmt.Errorf("unexpected herdr args: %v", args)
 	}
+}
+
+func (f *fakeHerdr) helpOutput(group string) commandStreams {
+	output := []byte(f.commandSurfaces[group])
+	if f.helpOnStdout {
+		return commandStreams{stdout: output}
+	}
+	return commandStreams{stderr: output}
 }
 
 func commandKey(args []string) string {
@@ -121,6 +130,8 @@ func newFakeHerdr(session, socket string) *fakeHerdr {
 	if err != nil {
 		panic(fmt.Sprintf("marshal synthetic herdr capability schema: %v", err))
 	}
+	// Released herdr 0.7.4 prints custom group help on stderr even when the
+	// command succeeds. Individual tests opt into stdout to cover both forms.
 	return &fakeHerdr{
 		version:         "herdr 0.7.4\n",
 		status:          validStatus(session, socket),
@@ -161,6 +172,7 @@ const (
 	runCommandHelperReadyEnv   = "FANOUT_TEST_HERDR_RUN_COMMAND_HELPER_READY"
 	runCommandHelperReleaseEnv = "FANOUT_TEST_HERDR_RUN_COMMAND_HELPER_RELEASE"
 	runCommandHelperLockEnv    = "FANOUT_TEST_HERDR_RUN_COMMAND_HELPER_LOCK"
+	runCommandStreamsHelperEnv = "FANOUT_TEST_HERDR_RUN_COMMAND_STREAMS_HELPER"
 )
 
 type runCommandHelperPIDs struct {
@@ -398,6 +410,20 @@ func TestCheckAvailablePinsExplicitSocketAndAdmitsCapabilities(t *testing.T) {
 		if got, ok := envValue(call.env, socketEnv); !ok || got != socket {
 			t.Fatalf("%v %s = %q (present=%v), want %q", call.args, socketEnv, got, ok, socket)
 		}
+	}
+}
+
+func TestCheckAvailableAcceptsGroupHelpOnStdout(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.helpOnStdout = true
+	b := newTestBackend(t, session, socket, fake)
+
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatalf("CheckAvailable() with stdout group help error = %v", err)
 	}
 }
 
@@ -716,7 +742,7 @@ func TestListLiveRejectsExecutableHashDriftAfterAdmission(t *testing.T) {
 		return currentHash, nil
 	}
 	originalOutput := b.output
-	b.output = func(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	b.output = func(ctx context.Context, binary string, env []string, args ...string) (commandStreams, error) {
 		out, err := originalOutput(ctx, binary, env, args...)
 		if commandKey(args) == "status" {
 			currentHash = strings.Repeat("b", 64)
@@ -1807,6 +1833,53 @@ func TestFinalizeCommandErrorPreservesCleanupFailureOnDeadline(t *testing.T) {
 	if retryableCommandError(err) {
 		t.Fatal("deadline plus cleanup failure classified as retryable")
 	}
+}
+
+func TestRunCommandSeparatesSuccessfulOutputStreams(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	env := envWithValue(os.Environ(), runCommandStreamsHelperEnv, "1")
+
+	result, err := runCommand(context.Background(), binary, env, "-test.run=^TestRunCommandStreamsHelper$")
+	if err != nil {
+		t.Fatalf("runCommand() error = %v", err)
+	}
+	if got, want := string(result.stdout), "stdout\n"; got != want {
+		t.Fatalf("runCommand() stdout = %q, want %q", got, want)
+	}
+	if got, want := string(result.stderr), "stderr\n"; got != want {
+		t.Fatalf("runCommand() stderr = %q, want %q", got, want)
+	}
+}
+
+func TestRunContextReturnsOnlyStdout(t *testing.T) {
+	b := New("fanout-test", "/tmp/fanout-test.sock")
+	b.output = func(context.Context, string, []string, ...string) (commandStreams, error) {
+		return commandStreams{stdout: []byte("result\n"), stderr: []byte("warning\n")}, nil
+	}
+
+	output, err := b.runContext(context.Background(), commandTimeout, "/tmp/herdr", route{session: b.session, socketPath: b.socketPath}, "status", "--json")
+	if err != nil {
+		t.Fatalf("runContext() error = %v", err)
+	}
+	if got, want := string(output), "result\n"; got != want {
+		t.Fatalf("runContext() = %q, want stdout only %q", got, want)
+	}
+}
+
+func TestRunCommandStreamsHelper(t *testing.T) {
+	if os.Getenv(runCommandStreamsHelperEnv) == "" {
+		return
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "stdout"); err != nil {
+		os.Exit(2)
+	}
+	if _, err := fmt.Fprintln(os.Stderr, "stderr"); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
 }
 
 func TestRunCommandBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {

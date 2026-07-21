@@ -499,6 +499,117 @@ func TestClassifyOwnedProcessGroupProbe(t *testing.T) {
 	}
 }
 
+func TestRemoveStoppedOwnedSocketsFailsClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, ownedLayout, ownerMarker, *os.File, net.Listener)
+		want   string
+	}{
+		{
+			name: "non-socket client path",
+			mutate: func(t *testing.T, layout ownedLayout, _ ownerMarker, _ *os.File, client net.Listener) {
+				t.Helper()
+				if err := client.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(layout.clientSocketPath, []byte("not a socket\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "not a Unix socket",
+		},
+		{
+			name: "permissive client socket",
+			mutate: func(t *testing.T, layout ownedLayout, _ ownerMarker, _ *os.File, _ net.Listener) {
+				t.Helper()
+				if err := os.Chmod(layout.clientSocketPath, 0o660); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "want 0600",
+		},
+		{
+			name: "marker identity drift",
+			mutate: func(t *testing.T, layout ownedLayout, marker ownerMarker, _ *os.File, _ net.Listener) {
+				t.Helper()
+				drifted := marker
+				drifted.SupervisorStartToken = strings.Repeat("c", 64)
+				if err := replaceOwnerMarker(layout.markerPath, marker, drifted); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "ownership marker changed",
+		},
+		{
+			name: "lease identity drift",
+			mutate: func(t *testing.T, _ ownedLayout, marker ownerMarker, lock *os.File, _ net.Listener) {
+				t.Helper()
+				drifted := marker
+				drifted.SupervisorStartToken = strings.Repeat("c", 64)
+				if err := writeSupervisorLease(lock, drifted); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "lease does not match",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeBase := shortOwnedRuntimeBase(t)
+			layout, layoutErr := prepareOwnedLayout(runtimeBase, "fanout-cleanup-test")
+			if layoutErr != nil {
+				t.Fatal(layoutErr)
+			}
+			if setupErr := ensureOwnedDirectories(layout); setupErr != nil {
+				t.Fatal(setupErr)
+			}
+			marker := ownerMarker{
+				OwnerNonce:           strings.Repeat("a", 64),
+				SupervisorStartToken: strings.Repeat("b", 64),
+				SupervisorPID:        os.Getpid(),
+				SocketPath:           layout.socketPath,
+				ClientSocketPath:     layout.clientSocketPath,
+			}
+			if markerErr := writeOwnerMarkerExclusive(layout.markerPath, marker); markerErr != nil {
+				t.Fatal(markerErr)
+			}
+			lock, lockErr := lockPrivateFile(layout.supervisorLock)
+			if lockErr != nil {
+				t.Fatal(lockErr)
+			}
+			defer unlockPrivateFile(lock)
+			if leaseErr := writeSupervisorLease(lock, marker); leaseErr != nil {
+				t.Fatal(leaseErr)
+			}
+
+			listeners := make([]net.Listener, 0, 2)
+			for _, socketPath := range []string{layout.socketPath, layout.clientSocketPath} {
+				listener, listenErr := net.Listen("unix", socketPath)
+				if listenErr != nil {
+					t.Fatal(listenErr)
+				}
+				listeners = append(listeners, listener)
+				t.Cleanup(func() { _ = listener.Close() })
+				if err := os.Chmod(socketPath, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			test.mutate(t, layout, marker, lock, listeners[1])
+
+			cleanupErr := removeStoppedOwnedSockets(layout.markerPath, marker, lock)
+			if cleanupErr == nil || !strings.Contains(cleanupErr.Error(), test.want) {
+				t.Fatalf("removeStoppedOwnedSockets() error = %v, want %q", cleanupErr, test.want)
+			}
+			for _, socketPath := range []string{layout.socketPath, layout.clientSocketPath} {
+				if _, err := os.Lstat(socketPath); err != nil {
+					t.Fatalf("Lstat(%s) after rejected cleanup: %v", socketPath, err)
+				}
+			}
+		})
+	}
+}
+
 func TestOpenPrivateAppendFileRejectsPermissiveExistingLog(t *testing.T) {
 	runtimeBase := shortOwnedRuntimeBase(t)
 	if err := ensurePrivateDir(runtimeBase); err != nil {
@@ -714,8 +825,9 @@ func runOwnedSupervisorLifecycleCase(t *testing.T, config ownedSupervisorLifecyc
 		}
 		lease, running, leaseErr := inspectSupervisorLease(layout.supervisorLock)
 		evidenceData, evidenceErr := os.ReadFile(evidencePath)
-		socketErr := validatePrivateSocket(layout.socketPath)
-		if leaseErr == nil && running && validateSupervisorLease(marker, lease) == nil && evidenceErr == nil && socketErr == nil {
+		serverSocketErr := validatePrivateSocket(layout.socketPath)
+		clientSocketErr := validatePrivateSocket(layout.clientSocketPath)
+		if leaseErr == nil && running && validateSupervisorLease(marker, lease) == nil && evidenceErr == nil && serverSocketErr == nil && clientSocketErr == nil {
 			if decodeErr := json.Unmarshal(evidenceData, &evidence); decodeErr != nil {
 				t.Fatalf("decode server evidence: %v", decodeErr)
 			}
@@ -815,8 +927,10 @@ func runOwnedSupervisorLifecycleCase(t *testing.T, config ownedSupervisorLifecyc
 	if config.spawnChild && !waitForProcessGone(evidence.ChildPID, ownedShutdownKillWait) {
 		t.Fatalf("server child process %d survived supervisor shutdown", evidence.ChildPID)
 	}
-	if _, err := os.Lstat(layout.socketPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("owned server socket after supervisor exit = %v, want absent", err)
+	for _, socketPath := range []string{layout.socketPath, layout.clientSocketPath} {
+		if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("owned socket %s after supervisor exit = %v, want absent", socketPath, err)
+		}
 	}
 	if config.verifyRestart {
 		fakeCLI := newFakeHerdr(session, layout.socketPath)
@@ -873,13 +987,15 @@ func runOwnedSupervisorHelper(t *testing.T, role string) {
 			signal.Ignore(os.Interrupt, syscall.SIGTERM)
 			defer signal.Reset(os.Interrupt, syscall.SIGTERM)
 		}
-		listener, err := net.Listen("unix", os.Getenv(socketEnv))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = listener.Close() }()
-		if chmodErr := os.Chmod(os.Getenv(socketEnv), 0o600); chmodErr != nil {
-			t.Fatal(chmodErr)
+		for _, socketPath := range []string{os.Getenv(socketEnv), os.Getenv(clientSocketEnv)} {
+			listener, err := net.Listen("unix", socketPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = listener.Close() }()
+			if chmodErr := os.Chmod(socketPath, 0o600); chmodErr != nil {
+				t.Fatal(chmodErr)
+			}
 		}
 		var signals chan os.Signal
 		if !ignoreSignals {

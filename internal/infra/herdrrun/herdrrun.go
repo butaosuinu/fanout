@@ -63,7 +63,12 @@ type Backend struct {
 	targetAdmission *ownedTargetAdmission
 }
 
-type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
+type commandStreams struct {
+	stdout []byte
+	stderr []byte
+}
+
+type commandOutput func(context.Context, string, []string, ...string) (commandStreams, error)
 
 type waitSleep func(context.Context, time.Duration) error
 
@@ -567,18 +572,34 @@ func (b *Backend) runAdmittedContext(
 	target route,
 	args ...string,
 ) ([]byte, error) {
+	result, err := b.runAdmittedStreamsContext(ctx, timeout, admitted, target, args...)
+	return result.stdout, err
+}
+
+func (b *Backend) runAdmittedStreamsContext(
+	ctx context.Context,
+	timeout time.Duration,
+	admitted binaryAdmission,
+	target route,
+	args ...string,
+) (commandStreams, error) {
 	if err := b.verifyExecutableIdentity(admitted.path, admitted.sha256); err != nil {
-		return nil, err
+		return commandStreams{}, err
 	}
-	return b.runContext(ctx, timeout, admitted.path, target, args...)
+	return b.runStreamsContext(ctx, timeout, admitted.path, target, args...)
 }
 
 func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
+	result, err := b.runStreamsContext(ctx, timeout, binary, target, args...)
+	return result.stdout, err
+}
+
+func (b *Backend) runStreamsContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) (commandStreams, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return commandStreams{}, err
 	}
 	if timeout <= 0 {
-		return nil, context.DeadlineExceeded
+		return commandStreams{}, context.DeadlineExceeded
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -629,10 +650,14 @@ func isHerdrControlKey(key string) bool {
 	}
 }
 
-func runCommand(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+func runCommand(ctx context.Context, binary string, env []string, args ...string) (commandStreams, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	cancelCleanup := make(chan error, 1)
 	cmd.Cancel = func() error {
 		cleanupErr := killCommandProcessGroup(cmd)
@@ -645,7 +670,8 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 		return cleanupErr
 	}
 	cmd.WaitDelay = commandCleanupDelay
-	out, err := cmd.Output()
+	err := cmd.Run()
+	result := commandStreams{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
 	var cleanupErrors []error
 	select {
 	case cleanupErr := <-cancelCleanup:
@@ -659,16 +685,16 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 	}
 	err = finalizeCommandError(err, ctx.Err(), cleanupErrors...)
 	if err == nil {
-		return out, nil
+		return result, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		stderr := strings.TrimSpace(string(exitErr.Stderr))
-		if stderr != "" {
-			return out, fmt.Errorf("%w: %s", err, stderr)
+		stderrText := strings.TrimSpace(string(result.stderr))
+		if stderrText != "" {
+			return result, fmt.Errorf("%w: %s", err, stderrText)
 		}
 	}
-	return out, err
+	return result, err
 }
 
 func finalizeCommandError(commandErr, contextErr error, cleanupErrors ...error) error {
