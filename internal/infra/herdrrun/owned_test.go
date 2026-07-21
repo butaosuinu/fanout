@@ -46,6 +46,7 @@ type ownedSupervisorLifecycleCase struct {
 	repeatSignal   bool
 	exitAfterReady bool
 	exitCode       int
+	verifyRestart  bool
 }
 
 type fakeOwnedSupervisorResource struct {
@@ -565,6 +566,7 @@ func TestRunSupervisorBindsLeaseAndExplicitServerEnvironment(t *testing.T) {
 			config: ownedSupervisorLifecycleCase{
 				ignoreSignals: true,
 				spawnChild:    true,
+				verifyRestart: true,
 			},
 		},
 		{
@@ -588,6 +590,7 @@ func TestRunSupervisorBindsLeaseAndExplicitServerEnvironment(t *testing.T) {
 				spawnChild:     true,
 				exitAfterReady: true,
 				exitCode:       7,
+				verifyRestart:  true,
 			},
 		},
 	}
@@ -811,6 +814,46 @@ func runOwnedSupervisorLifecycleCase(t *testing.T, config ownedSupervisorLifecyc
 	}
 	if config.spawnChild && !waitForProcessGone(evidence.ChildPID, ownedShutdownKillWait) {
 		t.Fatalf("server child process %d survived supervisor shutdown", evidence.ChildPID)
+	}
+	if _, err := os.Lstat(layout.socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned server socket after supervisor exit = %v, want absent", err)
+	}
+	if config.verifyRestart {
+		fakeCLI := newFakeHerdr(session, layout.socketPath)
+		backend := newTestBackend(t, session, layout.socketPath, fakeCLI)
+		backend.lookPath = func(name string) (string, error) {
+			if name != commandName {
+				t.Fatalf("LookPath(%q), want %q", name, commandName)
+			}
+			return fakeBinary, nil
+		}
+		backend.hashFile = func(path string) (string, error) {
+			if path != fakeBinary {
+				t.Fatalf("hashFile(%q), want %q", path, fakeBinary)
+			}
+			return binaryHash, nil
+		}
+		fakeSupervisor := &fakeOwnedSupervisor{}
+		t.Cleanup(fakeSupervisor.stopAll)
+		restarted, restartErr := ensureOwned(
+			context.Background(),
+			OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase},
+			backend,
+			fakeSupervisor.start,
+		)
+		if restartErr != nil {
+			t.Fatalf("ensureOwned() after server exit: %v", restartErr)
+		}
+		if restarted.Backend() != backend || fakeSupervisor.starts != 1 {
+			t.Fatalf("restarted owned session = %+v, starts=%d", restarted, fakeSupervisor.starts)
+		}
+		restartedMarker, found, markerErr := readOwnerMarker(layout.markerPath)
+		if markerErr != nil || !found {
+			t.Fatalf("read restarted owner marker = (%+v, %t, %v)", restartedMarker, found, markerErr)
+		}
+		if restartedMarker.OwnerNonce != marker.OwnerNonce || restartedMarker.SupervisorStartToken == marker.SupervisorStartToken {
+			t.Fatalf("restarted marker identity = %+v, previous %+v", restartedMarker, marker)
+		}
 	}
 }
 

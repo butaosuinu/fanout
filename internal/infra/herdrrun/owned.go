@@ -708,20 +708,34 @@ func inspectSupervisorLease(path string) (supervisorLease, bool, error) {
 	if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
 		return supervisorLease{}, false, err
 	}
+	lease, err := readSupervisorLease(f)
+	if err != nil {
+		return supervisorLease{}, true, err
+	}
+	return lease, true, nil
+}
+
+func readSupervisorLease(f *os.File) (supervisorLease, error) {
+	if f == nil {
+		return supervisorLease{}, fmt.Errorf("read herdr supervisor lease from nil file")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return supervisorLease{}, fmt.Errorf("seek herdr supervisor lease: %w", err)
+	}
 	var lease supervisorLease
 	decoder := json.NewDecoder(f)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&lease); err != nil {
-		return supervisorLease{}, true, fmt.Errorf("read herdr supervisor lease: %w", err)
+		return supervisorLease{}, fmt.Errorf("read herdr supervisor lease: %w", err)
 	}
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return supervisorLease{}, true, fmt.Errorf("read herdr supervisor lease: unexpected trailing JSON value")
+			return supervisorLease{}, fmt.Errorf("read herdr supervisor lease: unexpected trailing JSON value")
 		}
-		return supervisorLease{}, true, fmt.Errorf("read herdr supervisor lease: %w", err)
+		return supervisorLease{}, fmt.Errorf("read herdr supervisor lease: %w", err)
 	}
-	return lease, true, nil
+	return lease, nil
 }
 
 func validateSupervisorLease(marker ownerMarker, lease supervisorLease) error {
@@ -1003,12 +1017,18 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	var code int
 	select {
 	case err := <-done:
-		return finishOwnedServerExit(cmd, signals, err, errw)
+		code = finishOwnedServerExit(cmd, signals, err, errw)
 	case sig := <-signals:
-		return shutdownOwnedServer(cmd, done, signals, sig, errw)
+		code = shutdownOwnedServer(cmd, done, signals, sig, errw)
 	}
+	if err := cleanupOwnedServerSocket(markerPath, marker, lock, cmd.Process.Pid); err != nil {
+		fmt.Fprintf(errw, "fanout herdr supervisor: server socket cleanup: %v\n", err)
+		return 1
+	}
+	return code
 }
 
 func finishOwnedServerExit(cmd *exec.Cmd, signals <-chan os.Signal, serverErr error, errw io.Writer) int {
@@ -1189,6 +1209,57 @@ func classifyOwnedProcessGroupProbe(err error) (bool, error) {
 		return true, nil
 	}
 	return false, err
+}
+
+func cleanupOwnedServerSocket(markerPath string, marker ownerMarker, lock *os.File, serverPID int) error {
+	running, err := ownedProcessGroupRunning(serverPID)
+	if err != nil {
+		return err
+	}
+	if running {
+		return fmt.Errorf("refusing to remove herdr server socket while process group %d is live", serverPID)
+	}
+	if err := verifySupervisorCleanupIdentity(markerPath, marker, lock); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(marker.SocketPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect stopped herdr server socket: %w", err)
+	}
+	if err := validatePrivateSocket(marker.SocketPath); err != nil {
+		return err
+	}
+	// Repeat the marker and lease check immediately before unlinking. The
+	// supervisor lock remains held until RunSupervisor returns.
+	if err := verifySupervisorCleanupIdentity(markerPath, marker, lock); err != nil {
+		return err
+	}
+	if err := os.Remove(marker.SocketPath); err != nil {
+		return fmt.Errorf("remove stopped herdr server socket: %w", err)
+	}
+	if _, err := os.Lstat(marker.SocketPath); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return fmt.Errorf("stopped herdr server socket still exists after removal")
+		}
+		return fmt.Errorf("verify stopped herdr server socket removal: %w", err)
+	}
+	return nil
+}
+
+func verifySupervisorCleanupIdentity(markerPath string, expected ownerMarker, lock *os.File) error {
+	marker, found, err := readOwnerMarker(markerPath)
+	if err != nil {
+		return err
+	}
+	if !found || marker != expected {
+		return fmt.Errorf("herdr ownership marker changed before server socket cleanup")
+	}
+	lease, err := readSupervisorLease(lock)
+	if err != nil {
+		return err
+	}
+	return validateSupervisorLease(expected, lease)
 }
 
 func reportOwnedShutdown(cleanupErrors []error, errw io.Writer) int {
