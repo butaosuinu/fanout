@@ -79,7 +79,15 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   姿勢で、対話中の plan 承認・解除を追跡しないため、`--continue` への
   再注入は現在姿勢を上書きしうる。claude / opencode の復元はエージェント側
   のセッション状態に委ね、記録 PlanMode は codex plan TUI の thread
-  resume 判定だけに使う。
+  resume 判定だけに使う。restore の codex 分岐は bool でなく
+  `PlanMode && Agent=="codex"` でゲートする(#544) — claude / opencode の
+  plan ペインは `CodexThreadID` を持たず、bool のままでは復元が codex
+  経路に入って失敗する。非 codex plan ペインの generic resume は回帰
+  テストで固定する。
+- claude の最低対応版は v2.1.207(`--permission-mode` の `auto` choice が
+  ない旧版は引数パースエラーで即終了し、runtime fallback に到達しない)。
+  mode 引数を注入する起動では `claude --version` を preflight し、floor
+  未満は警告して mode 引数を省略する(`""` の従来起動)。
 - `internal/app/panelaunch` は `Request.CodexPlanMode` を 3 値の launch
   mode(`""` / `plan` / `build`)に一般化する。`""` はフラグなしの従来
   起動で、設定をまだ消費していないレーンの挙動を変えないための値。`plan`
@@ -106,7 +114,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   plan 時に plan 専用 briefing を即 return し、auto PR・review gate・base
   branch などの完了契約を落とす。claude / opencode の plan 子は plan-first
   の前置き + 通常の work 契約を合成した briefing にし、codex plan TUI 子は
-  既存の `<proposed_plan>` 契約付き briefing を維持する。manual / attach も
+  既存の `<proposed_plan>` 契約付き briefing を維持する。この帰結として、
+  advisor / team の相談プロトコルは codex plan 子に届かない —
+  「Codex Plan Mode と advisor の併用不可」制約は存続する。manual / attach も
   同じ扱いで、`RenderManualPlan` の `<proposed_plan>` 契約付き briefing は
   codex 専用に残し、claude / opencode の plan ペインには通常の manual
   briefing を使う。
@@ -166,9 +176,10 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   references/cli-modes.md)、fanout-plan SKILL.md(claude / codex)の
   `--codex-plan-mode` 言及。#545 だけが入った main から `make install`
   した integration が unknown option なコマンドを生成する窓を作らない。
-- `docs/advisor-orchestrator.ja.md` の `--codex-plan-mode` 参照と
-  「briefing が plan 専用を即 return する」前提の制約記述は、本設計で
-  どちらも変わるため #545 で更新する。
+- `docs/advisor-orchestrator.ja.md` の `--codex-plan-mode` 参照は #545 で
+  `childPlanMode` に置き換える。「Codex Plan Mode と advisor の併用不可」
+  制約は codex plan briefing を最小のまま維持するため存続し、記述は
+  残す。
 - 残りの利用者向けドキュメント(README ペア、site の settings / agents /
   cli / workflow / monitoring / changelog / herdr-backend / watcher の
   en+ja。watcher は `childPlanMode=true` で無人 Session が承認待ち停止する
@@ -205,7 +216,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 | 1 | #541 | core/agent の mode-aware builder 追加(additive) | M |
 | 1 | #542 | settings 3 キー追加(消費なし、repoOverrides gate) | H |
 | 2 | #543 | dashboard / web の codex 限定ゲート + docsync(← #540) | H + web |
-| 3 | #544 | panelaunch の mode 3 値化 + issue 子レーンの明示化 + goldens(issue 子分)(← #540 #541 #543) | H |
+| 3 | #544 | panelaunch の mode 3 値化 + issue 子レーンの明示化 + restore gate + claude 版 preflight + goldens(issue 子分)(← #540 #541 #543) | H |
 | 4 | #545 | childPlanMode 消費 + codexPlanMode 全廃(← #542 #544) | H |
 | 4 | #546 | newSessionPlanMode 消費 + CLAUDE.md / SKILL.md 更新(← #542 #544) | H |
 | 4 | #547 | orchestratorPlanMode 消費 + codex gate フォールバック(← #542 #544) | M |
