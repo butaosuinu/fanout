@@ -2,6 +2,7 @@ package herdrrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,7 @@ type fakeHerdr struct {
 	version         string
 	status          string
 	schema          string
+	commandSurfaces map[string]string
 	snapshot        string
 	errors          map[string]error
 	snapshotResults []fakeSnapshotResult
@@ -72,6 +74,12 @@ func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...
 		return []byte(f.status), nil
 	case "schema":
 		return []byte(f.schema), nil
+	case "help-pane":
+		return []byte(f.commandSurfaces["pane"]), nil
+	case "help-workspace":
+		return []byte(f.commandSurfaces["workspace"]), nil
+	case "help-worktree":
+		return []byte(f.commandSurfaces["worktree"]), nil
 	case "snapshot":
 		return []byte(f.snapshot), nil
 	default:
@@ -87,6 +95,12 @@ func commandKey(args []string) string {
 		return "status"
 	case hasSuffix(args, "api", "schema", "--json"):
 		return "schema"
+	case hasSuffix(args, "pane", "--help"):
+		return "help-pane"
+	case hasSuffix(args, "workspace", "--help"):
+		return "help-workspace"
+	case hasSuffix(args, "worktree", "--help"):
+		return "help-worktree"
 	case hasSuffix(args, "api", "snapshot"):
 		return "snapshot"
 	default:
@@ -98,13 +112,22 @@ func hasSuffix(got []string, want ...string) bool {
 	return len(got) >= len(want) && slices.Equal(got[len(got)-len(want):], want)
 }
 
+func initialProbeCommandKeys() []string {
+	return []string{"version", "schema", "help-pane", "help-workspace", "help-worktree", "status"}
+}
+
 func newFakeHerdr(session, socket string) *fakeHerdr {
+	schema, err := json.Marshal(syntheticCapabilityDocument())
+	if err != nil {
+		panic(fmt.Sprintf("marshal synthetic herdr capability schema: %v", err))
+	}
 	return &fakeHerdr{
-		version:  "herdr 0.7.3\n",
-		status:   validStatus(session, socket),
-		schema:   `{"protocol":16,"schema_version":1}` + "\n",
-		snapshot: validSnapshot(),
-		errors:   map[string]error{},
+		version:         "herdr 0.7.4\n",
+		status:          validStatus(session, socket),
+		schema:          string(schema) + "\n",
+		commandSurfaces: installedHerdrCommandSurfaceOutputs(),
+		snapshot:        validSnapshot(),
+		errors:          map[string]error{},
 	}
 }
 
@@ -115,7 +138,13 @@ func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Back
 		if name != commandName {
 			t.Fatalf("LookPath(%q), want %q", name, commandName)
 		}
-		return "/private/tmp/herdr-0.7.3", nil
+		return "/private/tmp/herdr-0.7.4", nil
+	}
+	b.hashFile = func(path string) (string, error) {
+		if path != "/private/tmp/herdr-0.7.4" {
+			t.Fatalf("hashFile(%q), want admitted binary path", path)
+		}
+		return strings.Repeat("a", 64), nil
 	}
 	b.output = fake.output
 	return b
@@ -277,8 +306,8 @@ func killRunCommandHelper(pids runCommandHelperPIDs) error {
 
 func validStatus(session, socket string) string {
 	return fmt.Sprintf(`{
-  "client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/private/tmp/herdr-0.7.3","session":%s},
-  "server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":true},"compatible":true,"socket":%s,"session":%s,"restart_needed":false},
+  "client":{"version":"0.7.4","channel":"stable","protocol":16,"binary":"/private/tmp/herdr-0.7.4","session":%s},
+  "server":{"status":"running","running":true,"version":"0.7.4","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":true},"compatible":true,"socket":%s,"session":%s,"restart_needed":false},
   "update":{"restart_needed":false}
 }`+"\n", strconv.Quote(session), strconv.Quote(socket), strconv.Quote(session))
 }
@@ -289,18 +318,24 @@ func validSnapshot() string {
   "result":{
     "type":"session_snapshot",
     "snapshot":{
-      "version":"0.7.3",
+      "version":"0.7.4",
       "protocol":16,
       "workspaces":[
         {"workspace_id":"w1","number":1,"label":"root","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"},
         {"workspace_id":"w2","number":2,"label":"child","focused":false,"pane_count":1,"tab_count":1,"active_tab_id":"w2:t1","agent_status":"working","worktree":{"repo_key":"/repo/.git","repo_name":"repo","repo_root":"/repo","checkout_path":"/repo/.fanout/worktrees/child","is_linked_worktree":true}}
       ],
-      "tabs":[],
+      "tabs":[
+        {"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"root","focused":true,"pane_count":1,"agent_status":"unknown"},
+        {"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"child","focused":false,"pane_count":1,"agent_status":"working"}
+      ],
       "panes":[
         {"pane_id":"w1:p1","terminal_id":"term-root","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"/repo","foreground_cwd":"/tmp/foreground","agent_status":"unknown","revision":1},
         {"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"w2:t1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","title":"child title","agent":"codex","agent_status":"working","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
       ],
-      "layouts":[],
+      "layouts":[
+        {"workspace_id":"w1","tab_id":"w1:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w1:p1","panes":[{"pane_id":"w1:p1","focused":true,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]},
+        {"workspace_id":"w2","tab_id":"w2:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w2:p1","panes":[{"pane_id":"w2:p1","focused":false,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}
+      ],
       "agents":[
         {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
       ]
@@ -326,7 +361,7 @@ func TestName(t *testing.T) {
 	}
 }
 
-func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
+func TestCheckAvailablePinsExplicitSocketAndAdmitsCapabilities(t *testing.T) {
 	t.Setenv(sessionEnv, "ambient-wrong-session")
 	t.Setenv(socketEnv, "/tmp/ambient-wrong.sock")
 	const (
@@ -339,15 +374,16 @@ func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("CheckAvailable() error = %v", err)
 	}
-	if len(fake.commands) != 3 {
-		t.Fatalf("command count = %d, want 3", len(fake.commands))
+	wantCommands := initialProbeCommandKeys()
+	if len(fake.commands) != len(wantCommands) {
+		t.Fatalf("command count = %d, want %d", len(fake.commands), len(wantCommands))
 	}
-	if got := []string{
-		commandKey(fake.commands[0].args),
-		commandKey(fake.commands[1].args),
-		commandKey(fake.commands[2].args),
-	}; !slices.Equal(got, []string{"version", "status", "schema"}) {
-		t.Fatalf("commands = %v, want version/status/schema", got)
+	gotCommands := make([]string, 0, len(fake.commands))
+	for _, call := range fake.commands {
+		gotCommands = append(gotCommands, commandKey(call.args))
+	}
+	if !slices.Equal(gotCommands, wantCommands) {
+		t.Fatalf("commands = %v, want %v", gotCommands, wantCommands)
 	}
 	for _, call := range fake.commands {
 		if slices.Contains(call.args, "--session") {
@@ -362,7 +398,8 @@ func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
 	}
 }
 
-func TestCheckAvailableResolvesNamedSessionThenPinsReturnedSocket(t *testing.T) {
+func TestCheckAvailableResolvesNamedSessionPinsSocketAndCachesCapabilities(t *testing.T) {
+	t.Setenv(socketEnv, "/tmp/ambient-wrong.sock")
 	const (
 		session = "fanout-test"
 		socket  = "/private/tmp/fanout-test/herdr.sock"
@@ -373,25 +410,31 @@ func TestCheckAvailableResolvesNamedSessionThenPinsReturnedSocket(t *testing.T) 
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("CheckAvailable() error = %v", err)
 	}
-	status := fake.commands[1]
+	status := fake.commands[5]
 	if !slices.Equal(status.args, []string{"--session", session, "status", "--json"}) {
 		t.Fatalf("status args = %v", status.args)
 	}
 	if _, ok := envValue(status.env, socketEnv); ok {
 		t.Fatalf("initial status env contains %s", socketEnv)
 	}
-	schema := fake.commands[2]
+	schema := fake.commands[1]
 	if slices.Contains(schema.args, "--session") {
 		t.Fatalf("schema args unexpectedly use --session: %v", schema.args)
 	}
-	if got, ok := envValue(schema.env, socketEnv); !ok || got != socket {
-		t.Fatalf("schema %s = %q (present=%v), want %q", socketEnv, got, ok, socket)
+	if _, ok := envValue(schema.env, socketEnv); ok {
+		t.Fatalf("offline schema admission env contains unresolved %s", socketEnv)
 	}
 
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("second CheckAvailable() error = %v", err)
 	}
-	secondStatus := fake.commands[4]
+	if got := len(fake.commands); got != 8 {
+		t.Fatalf("two CheckAvailable() calls issued %d commands, want 8 with cached schema and help", got)
+	}
+	if got := []string{commandKey(fake.commands[6].args), commandKey(fake.commands[7].args)}; !slices.Equal(got, []string{"version", "status"}) {
+		t.Fatalf("second probe commands = %v, want version/status", got)
+	}
+	secondStatus := fake.commands[7]
 	if slices.Contains(secondStatus.args, "--session") {
 		t.Fatalf("second status args unexpectedly use --session: %v", secondStatus.args)
 	}
@@ -411,9 +454,23 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "future CLI version",
+			name: "version below floor",
 			mutate: func(fake *fakeHerdr) {
-				fake.version = "herdr 0.7.4\n"
+				fake.version = "herdr 0.7.3\n"
+			},
+			wantErr: "unsupported herdr CLI version",
+		},
+		{
+			name: "prerelease version",
+			mutate: func(fake *fakeHerdr) {
+				fake.version = "herdr 0.7.4-rc.1\n"
+			},
+			wantErr: "unsupported herdr CLI version",
+		},
+		{
+			name: "unparseable version",
+			mutate: func(fake *fakeHerdr) {
+				fake.version = "herdr current\n"
 			},
 			wantErr: "unsupported herdr CLI version",
 		},
@@ -425,9 +482,9 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 			wantErr: "unsupported herdr client tuple",
 		},
 		{
-			name: "future server with same protocol",
+			name: "server version differs from admitted binary",
 			mutate: func(fake *fakeHerdr) {
-				fake.status = strings.Replace(fake.status, `"server":{"status":"running","running":true,"version":"0.7.3"`, `"server":{"status":"running","running":true,"version":"0.7.4"`, 1)
+				fake.status = strings.Replace(fake.status, `"server":{"status":"running","running":true,"version":"0.7.4"`, `"server":{"status":"running","running":true,"version":"0.8.0"`, 1)
 			},
 			wantErr: "unsupported herdr server tuple",
 		},
@@ -467,6 +524,37 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 			wantErr: "unsupported herdr API tuple",
 		},
 		{
+			name: "required API capability missing",
+			mutate: func(fake *fakeHerdr) {
+				document := syntheticCapabilityDocument()
+				request := document.Schemas["request"]
+				for i, variant := range request.OneOf {
+					if *variant.Properties["method"].Const == "pane.send_text" {
+						request.OneOf = append(request.OneOf[:i], request.OneOf[i+1:]...)
+						break
+					}
+				}
+				data, err := json.Marshal(document)
+				if err != nil {
+					panic(fmt.Sprintf("marshal capability schema without pane.send_text: %v", err))
+				}
+				fake.schema = string(data)
+			},
+			wantErr: `missing method="pane.send_text" variant`,
+		},
+		{
+			name: "required CLI capability missing",
+			mutate: func(fake *fakeHerdr) {
+				fake.commandSurfaces["pane"] = strings.Replace(
+					fake.commandSurfaces["pane"],
+					"  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]\n",
+					"",
+					1,
+				)
+			},
+			wantErr: "unsupported herdr pane command surface",
+		},
+		{
 			name: "trailing status document",
 			mutate: func(fake *fakeHerdr) {
 				fake.status += `{}`
@@ -484,6 +572,50 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 				t.Fatalf("CheckAvailable() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestCheckAvailableAcceptsHigherStableVersionWhenResponsesMatch(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.version = "herdr 0.8.0\n"
+	fake.status = strings.ReplaceAll(fake.status, `"version":"0.7.4"`, `"version":"0.8.0"`)
+	b := newTestBackend(t, session, socket, fake)
+
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatalf("CheckAvailable() with stable 0.8.0 error = %v", err)
+	}
+}
+
+func TestCheckAvailableRegatesChangedExecutableHash(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	b := newTestBackend(t, session, socket, fake)
+	currentHash := strings.Repeat("a", 64)
+	b.hashFile = func(string) (string, error) {
+		return currentHash, nil
+	}
+
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatalf("first CheckAvailable() error = %v", err)
+	}
+	currentHash = strings.Repeat("b", 64)
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatalf("CheckAvailable() after hash change error = %v", err)
+	}
+	want := append(initialProbeCommandKeys(), initialProbeCommandKeys()...)
+	got := make([]string, 0, len(fake.commands))
+	for _, command := range fake.commands {
+		got = append(got, commandKey(command.args))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("commands after hash change = %v, want fresh capability gate %v", got, want)
 	}
 }
 
@@ -542,8 +674,45 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if child.AgentSession == nil || *child.AgentSession != wantSession {
 		t.Fatalf("child agent session = %#v, want %#v", child.AgentSession, wantSession)
 	}
-	if gotCalls := len(fake.commands); gotCalls != 4 || commandKey(fake.commands[3].args) != "snapshot" {
+	if gotCalls := len(fake.commands); gotCalls != 7 || commandKey(fake.commands[6].args) != "snapshot" {
 		t.Fatalf("ListLive() calls = %#v", fake.commands)
+	}
+}
+
+func TestListLiveRejectsExecutableHashDriftAfterAdmission(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	b := newTestBackend(t, session, socket, fake)
+	currentHash := strings.Repeat("a", 64)
+	hashCalls := 0
+	b.hashFile = func(path string) (string, error) {
+		if path != "/private/tmp/herdr-0.7.4" {
+			t.Fatalf("hashFile(%q), want admitted binary path", path)
+		}
+		hashCalls++
+		return currentHash, nil
+	}
+	originalOutput := b.output
+	b.output = func(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+		out, err := originalOutput(ctx, binary, env, args...)
+		if commandKey(args) == "status" {
+			currentHash = strings.Repeat("b", 64)
+		}
+		return out, err
+	}
+
+	_, err := b.ListLive()
+	if err == nil || !strings.Contains(err.Error(), "executable drifted after admission") {
+		t.Fatalf("ListLive() error = %v, want executable-drift error", err)
+	}
+	if hashCalls < 2 {
+		t.Fatalf("hash calls = %d, want per-command admission checks", hashCalls)
+	}
+	if len(fake.commands) != len(initialProbeCommandKeys()) {
+		t.Fatalf("hash drift invoked snapshot: %#v", fake.commands)
 	}
 }
 
@@ -565,9 +734,9 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 			wantErr: "unexpected herdr snapshot envelope",
 		},
 		{
-			name: "future version",
+			name: "version differs from admitted binary",
 			mutate: func(snapshot string) string {
-				return strings.Replace(snapshot, `"version":"0.7.3"`, `"version":"0.7.4"`, 1)
+				return strings.Replace(snapshot, `"version":"0.7.4"`, `"version":"0.8.0"`, 1)
 			},
 			wantErr: "unsupported herdr snapshot tuple",
 		},
@@ -590,11 +759,56 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 			wantErr: "pane with incomplete identity",
 		},
 		{
+			name: "workspace missing required number field",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"workspace_id":"w1","number":1,`, `"workspace_id":"w1",`, 1)
+			},
+			wantErr: "workspace with incomplete required fields",
+		},
+		{
 			name: "worktree missing repo key",
 			mutate: func(snapshot string) string {
 				return strings.Replace(snapshot, `"repo_key":"/repo/.git"`, `"repo_key":""`, 1)
 			},
 			wantErr: "incomplete worktree provenance",
+		},
+		{
+			name: "worktree missing repo name",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"repo_name":"repo",`, "", 1)
+			},
+			wantErr: "incomplete worktree provenance",
+		},
+		{
+			name: "worktree missing linked-worktree field",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `,"is_linked_worktree":true`, "", 1)
+			},
+			wantErr: "incomplete worktree provenance",
+		},
+		{
+			name: "tab missing required focused field",
+			mutate: func(snapshot string) string {
+				return strings.Replace(
+					snapshot,
+					`"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"root","focused":true,`,
+					`"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"root",`,
+					1,
+				)
+			},
+			wantErr: "tab with incomplete required fields",
+		},
+		{
+			name: "layout area missing required width field",
+			mutate: func(snapshot string) string {
+				return strings.Replace(
+					snapshot,
+					`"area":{"x":0,"y":0,"width":80,"height":24}`,
+					`"area":{"x":0,"y":0,"height":24}`,
+					1,
+				)
+			},
+			wantErr: "layout with incomplete required fields",
 		},
 		{
 			name: "worktree missing checkout path",
@@ -776,7 +990,7 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 	if len(clock.sleeps) != 0 {
 		t.Fatalf("immediate match sleeps = %v, want none", clock.sleeps)
 	}
-	wantCommands := []string{"version", "status", "schema", "snapshot"}
+	wantCommands := append(initialProbeCommandKeys(), "snapshot")
 	if len(fake.commands) != len(wantCommands) {
 		t.Fatalf("command count = %d, want %d", len(fake.commands), len(wantCommands))
 	}
@@ -834,16 +1048,17 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 			if matchCalls != tt.wantSnapshots {
 				t.Fatalf("predicate calls = %d, want %d", matchCalls, tt.wantSnapshots)
 			}
-			if len(fake.commands) != 3+tt.wantSnapshots {
-				t.Fatalf("command count = %d, want %d", len(fake.commands), 3+tt.wantSnapshots)
+			probeCommands := initialProbeCommandKeys()
+			if len(fake.commands) != len(probeCommands)+tt.wantSnapshots {
+				t.Fatalf("command count = %d, want %d", len(fake.commands), len(probeCommands)+tt.wantSnapshots)
 			}
-			for i, wantKey := range []string{"version", "status", "schema"} {
+			for i, wantKey := range probeCommands {
 				if key := commandKey(fake.commands[i].args); key != wantKey {
 					t.Fatalf("probe command %d = %q, want %q", i, key, wantKey)
 				}
-				assertCommandTimeout(t, fake.commands[i], commandTimeout)
+				assertCommandTimeout(t, fake.commands[i], min(commandTimeout, tt.budget))
 			}
-			for i, call := range fake.commands[3:] {
+			for i, call := range fake.commands[len(probeCommands):] {
 				if key := commandKey(call.args); key != "snapshot" {
 					t.Fatalf("poll command %d = %q (%v), want snapshot", i, key, call.args)
 				}
@@ -862,6 +1077,36 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWaitInitialAdmissionConsumesSharedBudget(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	b := newTestBackend(t, session, socket, fake)
+	clock := installFakeWaitClock(b)
+	fake.intercept = func(_ context.Context, key string) error {
+		if key == "status" {
+			clock.now = clock.now.Add(3 * time.Second)
+		}
+		return nil
+	}
+
+	got := b.Wait(context.Background(), 3*time.Second, func([]corebackend.LivePane) bool {
+		t.Fatal("predicate ran after initial admission exhausted total_timeout")
+		return false
+	})
+	if got.Status != WaitFailed || !errors.Is(got.Err, context.DeadlineExceeded) || got.Panes != nil {
+		t.Fatalf("Wait() = %#v, want failed shared-budget deadline", got)
+	}
+	if fake.snapshotCall != 0 || len(fake.commands) != len(initialProbeCommandKeys()) {
+		t.Fatalf("commands = %v snapshot calls = %d, want initial probe only", fake.commands, fake.snapshotCall)
+	}
+	for _, call := range fake.commands {
+		assertCommandTimeout(t, call, 3*time.Second)
 	}
 }
 
@@ -890,8 +1135,145 @@ func TestWaitRetryableSnapshotErrorThenValidSnapshotTimesOut(t *testing.T) {
 	if matchCalls != 1 {
 		t.Fatalf("predicate calls = %d, want 1", matchCalls)
 	}
-	if len(fake.commands) != 5 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("commands = %d sleeps = %v, want 5 commands and one interval", len(fake.commands), clock.sleeps)
+	wantCommands := append(initialProbeCommandKeys(), "snapshot", "version", "status", "snapshot")
+	gotCommands := make([]string, 0, len(fake.commands))
+	for _, command := range fake.commands {
+		gotCommands = append(gotCommands, commandKey(command.args))
+	}
+	if !slices.Equal(gotCommands, wantCommands) || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("commands = %v sleeps = %v, want re-admission %v and one interval", gotCommands, clock.sleeps, wantCommands)
+	}
+}
+
+func TestWaitConnectionLossRejectsReplacementBeforeAnotherSnapshot(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshotResults = []fakeSnapshotResult{{err: context.DeadlineExceeded}, {output: validSnapshot()}}
+	statusCalls := 0
+	fake.intercept = func(_ context.Context, key string) error {
+		if key == "status" {
+			statusCalls++
+			if statusCalls == 2 {
+				fake.status = strings.Replace(fake.status, `"session":"fanout-test"`, `"session":"replacement"`, 1)
+			}
+		}
+		return nil
+	}
+	b := newTestBackend(t, session, socket, fake)
+	clock := installFakeWaitClock(b)
+
+	got := b.Wait(context.Background(), 5*time.Second, func([]corebackend.LivePane) bool { return false })
+	if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), "re-admit herdr after connection loss") {
+		t.Fatalf("Wait() = %#v, want failed replacement admission", got)
+	}
+	wantCommands := append(initialProbeCommandKeys(), "snapshot", "version", "status")
+	gotCommands := make([]string, 0, len(fake.commands))
+	for _, command := range fake.commands {
+		gotCommands = append(gotCommands, commandKey(command.args))
+	}
+	if !slices.Equal(gotCommands, wantCommands) || fake.snapshotCall != 1 {
+		t.Fatalf("commands = %v snapshot calls = %d, want %v and no replacement snapshot", gotCommands, fake.snapshotCall, wantCommands)
+	}
+	if len(clock.sleeps) != 0 {
+		t.Fatalf("sleeps = %v, want no delay before the first re-admission", clock.sleeps)
+	}
+}
+
+func TestWaitReAdmissionConsumesTheRemainingBudget(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshotResults = []fakeSnapshotResult{{err: context.DeadlineExceeded}, {output: validSnapshot()}}
+	b := newTestBackend(t, session, socket, fake)
+	clock := installFakeWaitClock(b)
+	statusCalls := 0
+	fake.intercept = func(_ context.Context, key string) error {
+		if key == "status" {
+			statusCalls++
+			if statusCalls == 2 {
+				clock.now = clock.now.Add(3 * time.Second)
+			}
+		}
+		return nil
+	}
+
+	got := b.Wait(context.Background(), 3*time.Second, func([]corebackend.LivePane) bool { return false })
+	if got.Status != WaitFailed || !errors.Is(got.Err, context.DeadlineExceeded) {
+		t.Fatalf("Wait() = %#v, want failed last snapshot after re-admission consumed budget", got)
+	}
+	if fake.snapshotCall != 1 {
+		t.Fatalf("snapshot calls = %d, want no call after budget-expiring re-admission", fake.snapshotCall)
+	}
+	if len(clock.sleeps) != 0 {
+		t.Fatalf("sleeps = %v, want immediate re-admission to consume the remaining budget", clock.sleeps)
+	}
+	for _, call := range fake.commands[len(initialProbeCommandKeys())+1:] {
+		assertCommandTimeout(t, call, 3*time.Second)
+	}
+}
+
+func TestWaitRetryableReadmissionUsesCadenceWithoutConsumingSnapshotLimit(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshotResults = []fakeSnapshotResult{
+		{err: context.DeadlineExceeded},
+		{output: validSnapshot()},
+	}
+	statusCalls := 0
+	fake.intercept = func(_ context.Context, key string) error {
+		if key != "status" {
+			return nil
+		}
+		statusCalls++
+		if statusCalls == 2 || statusCalls == 3 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	b := newTestBackend(t, session, socket, fake)
+	clock := installFakeWaitClock(b)
+	started := clock.now
+	matchCalls := 0
+
+	got := b.Wait(context.Background(), 5*time.Second, func([]corebackend.LivePane) bool {
+		matchCalls++
+		return true
+	})
+
+	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
+		t.Fatalf("Wait() = %#v, want matched after repeated re-admission", got)
+	}
+	if fake.snapshotCall != 2 || matchCalls != 1 {
+		t.Fatalf("snapshot calls = %d predicate calls = %d, want 2/1", fake.snapshotCall, matchCalls)
+	}
+	if elapsed := clock.now.Sub(started); elapsed != 2*waitInterval {
+		t.Fatalf("elapsed fake time = %s, want %s", elapsed, 2*waitInterval)
+	}
+	if !slices.Equal(clock.sleeps, []time.Duration{waitInterval, waitInterval}) {
+		t.Fatalf("sleeps = %v, want two re-admission intervals", clock.sleeps)
+	}
+	wantCommands := append(
+		initialProbeCommandKeys(),
+		"snapshot",
+		"version", "status",
+		"version", "status",
+		"version", "status",
+		"snapshot",
+	)
+	gotCommands := make([]string, 0, len(fake.commands))
+	for _, command := range fake.commands {
+		gotCommands = append(gotCommands, commandKey(command.args))
+	}
+	if !slices.Equal(gotCommands, wantCommands) {
+		t.Fatalf("commands = %v, want %v", gotCommands, wantCommands)
 	}
 }
 
@@ -920,8 +1302,8 @@ func TestWaitValidSnapshotThenFinalRetryableErrorFails(t *testing.T) {
 	if matchCalls != 1 {
 		t.Fatalf("predicate calls = %d, want 1", matchCalls)
 	}
-	if len(fake.commands) != 5 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("commands = %d sleeps = %v, want 5 commands and one interval", len(fake.commands), clock.sleeps)
+	if len(fake.commands) != 8 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("commands = %d sleeps = %v, want 8 commands and one interval", len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -930,7 +1312,7 @@ func TestWaitPermanentCommandErrorFailsWithoutRetry(t *testing.T) {
 		session = "fanout-test"
 		socket  = "/private/tmp/fanout-test/herdr.sock"
 	)
-	permanent := &os.PathError{Op: "fork/exec", Path: "/private/tmp/herdr-0.7.3", Err: syscall.ENOENT}
+	permanent := &os.PathError{Op: "fork/exec", Path: "/private/tmp/herdr-0.7.4", Err: syscall.ENOENT}
 	fake := newFakeHerdr(session, socket)
 	fake.snapshotResults = []fakeSnapshotResult{{err: permanent}}
 	b := newTestBackend(t, session, socket, fake)
@@ -945,8 +1327,8 @@ func TestWaitPermanentCommandErrorFailsWithoutRetry(t *testing.T) {
 	if got.Status != WaitFailed || !errors.Is(got.Err, syscall.ENOENT) || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want immediate failed result preserving ENOENT", got)
 	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 0 || len(fake.commands) != 7 || len(clock.sleeps) != 0 {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/7/none", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -984,8 +1366,8 @@ func TestWaitCommandCleanupFailureOverridesRetryableCommandErrors(t *testing.T) 
 			if got.Status != WaitFailed || !errors.Is(got.Err, syscall.EPERM) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want immediate cleanup failure preserving EPERM", got)
 			}
-			if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-				t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+			if matchCalls != 0 || len(fake.commands) != 7 || len(clock.sleeps) != 0 {
+				t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/7/none", matchCalls, len(fake.commands), clock.sleeps)
 			}
 		})
 	}
@@ -1010,8 +1392,8 @@ func TestWaitMalformedSnapshotFailsImmediately(t *testing.T) {
 	if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), "parse herdr api snapshot") || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want immediate parse failure with nil panes", got)
 	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 0 || len(fake.commands) != 7 || len(clock.sleeps) != 0 {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/7/none", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1035,8 +1417,8 @@ func TestWaitIncompatibleSnapshotFailsImmediately(t *testing.T) {
 	if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), "unsupported herdr snapshot tuple") || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want immediate compatibility failure with nil panes", got)
 	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 0 || len(fake.commands) != 7 || len(clock.sleeps) != 0 {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/7/none", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1091,8 +1473,8 @@ func TestWaitCancellationDuringSleepStopsBeforeNextSnapshot(t *testing.T) {
 	if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want canceled with context.Canceled and nil panes", got)
 	}
-	if matchCalls != 1 || len(fake.commands) != 4 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 1/4/one interval", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 1 || len(fake.commands) != 7 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 1/7/one interval", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1137,8 +1519,8 @@ func TestWaitCancellationAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 			if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want canceled result instead of matched", got)
 			}
-			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 4 {
-				t.Fatalf("predicate calls = %d commands = %d, want %d/4", matchCalls, len(fake.commands), tt.wantMatchCalls)
+			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 7 {
+				t.Fatalf("predicate calls = %d commands = %d, want %d/7", matchCalls, len(fake.commands), tt.wantMatchCalls)
 			}
 		})
 	}
@@ -1184,8 +1566,8 @@ func TestWaitDeadlineCrossingAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with the last compatible snapshot", got)
 			}
-			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 4 {
-				t.Fatalf("predicate calls = %d commands = %d, want %d/4", matchCalls, len(fake.commands), tt.wantMatchCalls)
+			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 7 {
+				t.Fatalf("predicate calls = %d commands = %d, want %d/7", matchCalls, len(fake.commands), tt.wantMatchCalls)
 			}
 		})
 	}
@@ -1202,7 +1584,7 @@ func TestWaitCancellationStopsProbeOrSnapshotImmediately(t *testing.T) {
 		wantCommands []string
 	}{
 		{name: "during probe", cancelOn: "version", wantCommands: []string{"version"}},
-		{name: "during snapshot", cancelOn: "snapshot", wantCommands: []string{"version", "status", "schema", "snapshot"}},
+		{name: "during snapshot", cancelOn: "snapshot", wantCommands: append(initialProbeCommandKeys(), "snapshot")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1263,20 +1645,14 @@ func TestValidNativeAgentState(t *testing.T) {
 	}
 }
 
-func TestUnsupportedOperationsNeverInvokeHerdr(t *testing.T) {
+func TestUnsupportedLaunchOperationsNeverInvokeHerdr(t *testing.T) {
 	fake := newFakeHerdr("fanout-test", "/private/tmp/fanout-test/herdr.sock")
 	b := newTestBackend(t, "fanout-test", "/private/tmp/fanout-test/herdr.sock", fake)
-	ref := corebackend.PaneRef{Backend: corebackend.Herdr, Workspace: "w1", Pane: "w1:p1"}
 
 	var errs []error
 	_, err := b.Launch(corebackend.LaunchRequest{})
 	errs = append(errs, err)
 	errs = append(errs, b.ReleaseStartGate("gate"))
-	_, err = b.Read(ref, 100)
-	errs = append(errs, err)
-	errs = append(errs, b.SendLine(ref, "text"))
-	errs = append(errs, b.Focus(ref))
-	errs = append(errs, b.Close(ref))
 
 	for i, err := range errs {
 		if !errors.Is(err, corebackend.ErrUnsupported) || !corebackend.IsUnsupported(err) {

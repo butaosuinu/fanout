@@ -1,4 +1,4 @@
-// Package herdrrun implements fanout's read-only herdr runtime backend.
+// Package herdrrun implements fanout's herdr runtime backend.
 package herdrrun
 
 import (
@@ -21,7 +21,6 @@ import (
 
 const (
 	commandName         = "herdr"
-	supportedVersion    = "0.7.3"
 	supportedProtocol   = 16
 	supportedSchema     = 1
 	commandTimeout      = 5 * time.Second
@@ -37,19 +36,31 @@ const (
 	socketEnv  = "HERDR_SOCKET_PATH"
 )
 
-var _ corebackend.Backend = (*Backend)(nil)
+var (
+	_ corebackend.Backend     = (*Backend)(nil)
+	_ corebackend.OwnedCloser = (*Backend)(nil)
+)
 
-// Backend observes one already-running named herdr session. Herdr v1 is
-// deliberately read-only: every targeted read and mutation method returns an
-// unsupported-operation error without invoking the CLI.
+// Backend observes one named herdr session. New constructs an unowned,
+// observation-only backend; EnsureOwned is the only constructor that binds the
+// immutable admission required by targeted reads and mutations.
 type Backend struct {
 	session    string
 	socketPath string
 	probeGate  chan struct{}
 	lookPath   func(string) (string, error)
+	hashFile   func(string) (string, error)
 	output     commandOutput
 	now        func() time.Time
 	sleep      waitSleep
+	admitted   map[string]binaryAdmission
+	control    *controlPlaneEnvironment
+	owner      *ownedAdmission
+
+	// targetAdmission is set only on a private clone returned by a
+	// herdrrun-specific target binder. It is never populated from a live
+	// snapshot or mutated after construction.
+	targetAdmission *ownedTargetAdmission
 }
 
 type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
@@ -62,8 +73,18 @@ type route struct {
 }
 
 type probeResult struct {
-	binary string
-	route  route
+	binary   string
+	sha256   string
+	version  string
+	protocol int
+	route    route
+}
+
+type binaryAdmission struct {
+	path     string
+	sha256   string
+	version  string
+	protocol int
 }
 
 // WaitStatus is the terminal outcome of a bounded snapshot wait.
@@ -93,24 +114,25 @@ func New(session, socketPath string) *Backend {
 		socketPath: socketPath,
 		probeGate:  make(chan struct{}, 1),
 		lookPath:   exec.LookPath,
+		hashFile:   sha256File,
 		output:     runCommand,
 		now:        time.Now,
 		sleep:      sleepContext,
+		admitted:   make(map[string]binaryAdmission),
 	}
 }
 
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
-// CheckAvailable verifies the exact CLI/server/schema tuple accepted by the
-// v1 backend. It never starts or attaches a herdr server.
+// CheckAvailable verifies the admitted CLI capabilities and connected server.
+// It never starts or attaches a herdr server.
 func (b *Backend) CheckAvailable() error {
 	_, err := b.probe()
 	return err
 }
 
-// ListLive returns the aggregate session.snapshot projection. The probe is
-// repeated for each call so a client/server upgrade cannot silently widen the
-// exact v1 compatibility allowlist.
+// ListLive returns the aggregate session.snapshot projection. The connected
+// gate is repeated for each call so binary or server drift fails closed.
 func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 	probed, err := b.probe()
 	if err != nil {
@@ -119,9 +141,12 @@ func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 	return b.snapshot(context.Background(), commandTimeout, probed)
 }
 
-// Wait probes the exact compatibility tuple once, then polls only aggregate
-// snapshots until match succeeds or the fixed budget terminates. A zero
-// totalTimeout selects DefaultWaitTimeout; non-zero values must be whole
+// Wait probes the compatibility gate once, then polls only aggregate
+// snapshots until match succeeds or the shared fixed budget terminates. The
+// budget includes initial admission and any re-admission. The first
+// re-admission after connection loss is immediate; further failed attempts use
+// the same two-second cadence without consuming the snapshot-call limit. A
+// zero totalTimeout selects DefaultWaitTimeout; non-zero values must be whole
 // seconds and at least three seconds. match receives a cloned compatible
 // snapshot and should perform only bounded in-memory inspection.
 func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match func([]corebackend.LivePane) bool) WaitResult {
@@ -141,25 +166,69 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 	if cause := waitCtx.Err(); cause != nil {
 		return cancelledWait(cause)
 	}
-	probed, err := b.probeContext(waitCtx)
+	deadline := b.now().Add(totalTimeout)
+	probeRemaining := deadline.Sub(b.now())
+	if probeRemaining <= 0 {
+		return failedWait(context.DeadlineExceeded)
+	}
+	probeCtx, cancelProbe := context.WithTimeout(waitCtx, probeRemaining)
+	probed, err := b.probeContext(probeCtx)
+	cancelProbe()
 	if err != nil {
 		if cause := waitCtx.Err(); cause != nil {
 			return cancelledWait(cause)
 		}
 		return failedWait(err)
 	}
-
-	deadline := b.now().Add(totalTimeout)
+	if !b.now().Before(deadline) {
+		return failedWait(context.DeadlineExceeded)
+	}
 	callLimit := waitSnapshotCallLimit(totalTimeout)
+	snapshotCalls := 0
 	var (
-		lastStart time.Time
-		lastPanes []corebackend.LivePane
-		lastErr   error
-		lastValid bool
+		lastSnapshotStart time.Time
+		lastReadmitStart  time.Time
+		lastPanes         []corebackend.LivePane
+		lastErr           error
+		lastValid         bool
+		readmit           bool
 	)
-	for attempt := range callLimit {
-		if attempt > 0 {
-			if result, done := b.waitForNextSnapshot(waitCtx, deadline, lastStart, lastPanes, lastErr, lastValid); done {
+	for snapshotCalls < callLimit {
+		if readmit {
+			if !lastReadmitStart.IsZero() {
+				if result, done := b.waitForNextPollCycle(waitCtx, deadline, lastReadmitStart, lastPanes, lastErr, lastValid); done {
+					return result
+				}
+			}
+			if cause := waitCtx.Err(); cause != nil {
+				return cancelledWait(cause)
+			}
+			now := b.now()
+			if !now.Before(deadline) {
+				return finishWait(lastPanes, lastErr, lastValid)
+			}
+			lastReadmitStart = now
+			readmitCtx, cancelReadmit := context.WithTimeout(waitCtx, deadline.Sub(now))
+			nextProbe, probeErr := b.probeContext(readmitCtx)
+			cancelReadmit()
+			if probeErr != nil {
+				if cause := waitCtx.Err(); cause != nil {
+					return cancelledWait(cause)
+				}
+				lastPanes = nil
+				lastErr = fmt.Errorf("re-admit herdr after connection loss: %w", probeErr)
+				lastValid = false
+				if retryableCommandError(probeErr) {
+					continue
+				}
+				return failedWait(lastErr)
+			}
+			probed = nextProbe
+			readmit = false
+			lastReadmitStart = time.Time{}
+		}
+		if snapshotCalls > 0 {
+			if result, done := b.waitForNextPollCycle(waitCtx, deadline, lastSnapshotStart, lastPanes, lastErr, lastValid); done {
 				return result
 			}
 		}
@@ -168,11 +237,15 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 		}
 
 		now := b.now()
+		if !now.Before(deadline) {
+			return finishWait(lastPanes, lastErr, lastValid)
+		}
 		remaining := deadline.Sub(now)
 		if remaining <= 0 {
 			return finishWait(lastPanes, lastErr, lastValid)
 		}
-		lastStart = now
+		lastSnapshotStart = now
+		snapshotCalls++
 		callTimeout := min(commandTimeout, remaining)
 		panes, snapshotErr := b.snapshot(waitCtx, callTimeout, probed)
 		if snapshotErr != nil {
@@ -186,6 +259,11 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			if !errors.As(snapshotErr, &retryable) {
 				return failedWait(snapshotErr)
 			}
+			if snapshotCalls >= callLimit {
+				break
+			}
+			readmit = true
+			lastReadmitStart = time.Time{}
 			continue
 		}
 
@@ -220,20 +298,20 @@ func (b *Backend) ReleaseStartGate(string) error {
 	return corebackend.Unsupported(corebackend.Herdr, "release start gate")
 }
 
-func (b *Backend) Read(corebackend.PaneRef, int) (string, error) {
-	return "", corebackend.Unsupported(corebackend.Herdr, "read")
+func (b *Backend) Read(ref corebackend.PaneRef, lines int) (string, error) {
+	return b.readCore(ref, lines)
 }
 
-func (b *Backend) SendLine(corebackend.PaneRef, string) error {
-	return corebackend.Unsupported(corebackend.Herdr, "send line")
+func (b *Backend) SendLine(ref corebackend.PaneRef, line string) error {
+	return b.sendLineCore(ref, line)
 }
 
-func (b *Backend) Focus(corebackend.PaneRef) error {
-	return corebackend.Unsupported(corebackend.Herdr, "focus")
+func (b *Backend) Focus(ref corebackend.PaneRef) error {
+	return b.focusCore(ref)
 }
 
-func (b *Backend) Close(corebackend.PaneRef) error {
-	return corebackend.Unsupported(corebackend.Herdr, "close")
+func (b *Backend) Close(ref corebackend.PaneRef) error {
+	return b.closeCore(ref)
 }
 
 func normalizeWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
@@ -250,7 +328,7 @@ func waitSnapshotCallLimit(totalTimeout time.Duration) int {
 	return int((totalTimeout-1)/waitInterval) + 1
 }
 
-func (b *Backend) waitForNextSnapshot(
+func (b *Backend) waitForNextPollCycle(
 	ctx context.Context,
 	deadline time.Time,
 	lastStart time.Time,
@@ -274,7 +352,7 @@ func (b *Backend) waitForNextSnapshot(
 		if cause := ctx.Err(); cause != nil {
 			return cancelledWait(cause), true
 		}
-		return failedWait(fmt.Errorf("wait for next herdr snapshot: %w", err)), true
+		return failedWait(fmt.Errorf("wait for next herdr poll cycle: %w", err)), true
 	}
 	if cause := ctx.Err(); cause != nil {
 		return cancelledWait(cause), true
@@ -338,7 +416,14 @@ func (e commandCleanupError) Error() string { return "herdr command process clea
 func (e commandCleanupError) Unwrap() error { return e.err }
 
 func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed probeResult) ([]corebackend.LivePane, error) {
-	out, err := b.runContext(ctx, timeout, probed.binary, probed.route, "api", "snapshot")
+	out, err := b.runAdmittedContext(
+		ctx,
+		timeout,
+		binaryAdmission{path: probed.binary, sha256: probed.sha256, version: probed.version, protocol: probed.protocol},
+		probed.route,
+		"api",
+		"snapshot",
+	)
 	if err != nil {
 		wrapped := fmt.Errorf("herdr api snapshot: %w", err)
 		if retryableCommandError(err) {
@@ -350,7 +435,7 @@ func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed pr
 	if err := decodeOne(out, &envelope); err != nil {
 		return nil, fmt.Errorf("parse herdr api snapshot: %w", err)
 	}
-	return projectSnapshot(envelope, probed.route)
+	return projectSnapshot(envelope, probed.route, probed.version, probed.protocol)
 }
 
 func (b *Backend) probe() (probeResult, error) {
@@ -371,34 +456,20 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	if err := validateSessionName(b.session); err != nil {
 		return probeResult{}, err
 	}
-	binary, err := b.lookPath(commandName)
-	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr 0.7.3 is required: %w", err)
-	}
-	if !filepath.IsAbs(binary) {
-		binary, err = filepath.Abs(binary)
-		if err != nil {
-			return probeResult{}, fmt.Errorf("resolve herdr executable: %w", err)
-		}
-	}
-
 	initial := route{session: b.session, socketPath: b.socketPath}
-	versionOut, err := b.runContext(ctx, commandTimeout, binary, initial, "--version")
+	admitted, err := b.admitBinaryContext(ctx, initial)
 	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr --version: %w", err)
-	}
-	if got := strings.TrimSpace(string(versionOut)); got != "herdr "+supportedVersion {
-		return probeResult{}, fmt.Errorf("unsupported herdr CLI version %q (required: %s)", got, supportedVersion)
+		return probeResult{}, err
 	}
 
 	statusArgs := []string{"status", "--json"}
-	// In herdr 0.7.3 an explicit --session intentionally wins over
+	// An explicit --session intentionally wins over
 	// HERDR_SOCKET_PATH. Use it only to resolve the initial named-session socket;
 	// an already verified socket is selected through the environment instead.
 	if initial.socketPath == "" {
 		statusArgs = append([]string{"--session", initial.session}, statusArgs...)
 	}
-	statusOut, err := b.runContext(ctx, commandTimeout, binary, initial, statusArgs...)
+	statusOut, err := b.runAdmittedContext(ctx, commandTimeout, admitted, initial, statusArgs...)
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr status --json: %w", err)
 	}
@@ -406,30 +477,100 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	if decodeErr := decodeOne(statusOut, &status); decodeErr != nil {
 		return probeResult{}, fmt.Errorf("parse herdr status --json: %w", decodeErr)
 	}
-	verified, err := validateStatus(status, initial)
+	verified, err := validateStatus(status, initial, admitted)
 	if err != nil {
 		return probeResult{}, err
 	}
+	if b.socketPath == "" {
+		b.socketPath = verified.socketPath
+	}
+	return probeResult{
+		binary:   admitted.path,
+		sha256:   admitted.sha256,
+		version:  admitted.version,
+		protocol: admitted.protocol,
+		route:    verified,
+	}, nil
+}
 
-	schemaOut, err := b.runContext(ctx, commandTimeout, binary, verified, "api", "schema", "--json")
+func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryAdmission, error) {
+	binary, err := b.lookPath(commandName)
 	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr api schema --json: %w", err)
+		return binaryAdmission{}, fmt.Errorf("herdr stable >=%s is required: %w", minimumVersion, err)
 	}
-	var schema schemaJSON
-	if err := decodeOne(schemaOut, &schema); err != nil {
-		return probeResult{}, fmt.Errorf("parse herdr api schema --json: %w", err)
+	if !filepath.IsAbs(binary) {
+		binary, err = filepath.Abs(binary)
+		if err != nil {
+			return binaryAdmission{}, fmt.Errorf("resolve herdr executable: %w", err)
+		}
 	}
-	if schema.Protocol != supportedProtocol || schema.SchemaVersion != supportedSchema {
-		return probeResult{}, fmt.Errorf(
-			"unsupported herdr API tuple protocol=%d schema_version=%d (required: protocol=%d schema_version=%d)",
-			schema.Protocol,
-			schema.SchemaVersion,
-			supportedProtocol,
-			supportedSchema,
-		)
+	hash, err := b.hashFile(binary)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("hash herdr executable %s: %w", binary, err)
 	}
-	b.socketPath = verified.socketPath
-	return probeResult{binary: binary, route: verified}, nil
+	provisional := binaryAdmission{path: binary, sha256: hash, protocol: supportedProtocol}
+	versionOut, err := b.runAdmittedContext(ctx, commandTimeout, provisional, target, "--version")
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("herdr --version: %w", err)
+	}
+	version, err := parseAdmittedVersion(versionOut)
+	if err != nil {
+		return binaryAdmission{}, err
+	}
+	cacheKey := binary + "\x00" + hash
+	admitted := binaryAdmission{path: binary, sha256: hash, version: version, protocol: supportedProtocol}
+	if cached, ok := b.admitted[cacheKey]; ok {
+		if cached != admitted {
+			return binaryAdmission{}, fmt.Errorf("herdr admitted binary identity changed")
+		}
+		return cached, nil
+	}
+	schemaOut, err := b.runAdmittedContext(ctx, commandTimeout, admitted, target, "api", "schema", "--json")
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("herdr api schema --json: %w", err)
+	}
+	if err := validateCapabilitySchema(schemaOut); err != nil {
+		return binaryAdmission{}, err
+	}
+	if err := b.validateCommandSurfaces(ctx, admitted, target); err != nil {
+		return binaryAdmission{}, err
+	}
+	b.admitted[cacheKey] = admitted
+	return admitted, nil
+}
+
+func (b *Backend) verifyExecutableIdentity(admittedPath, admittedHash string) error {
+	binary, err := b.lookPath(commandName)
+	if err != nil {
+		return fmt.Errorf("re-resolve admitted herdr executable: %w", err)
+	}
+	if !filepath.IsAbs(binary) {
+		binary, err = filepath.Abs(binary)
+		if err != nil {
+			return fmt.Errorf("resolve admitted herdr executable: %w", err)
+		}
+	}
+	hash, err := b.hashFile(binary)
+	if err != nil {
+		return fmt.Errorf("re-hash admitted herdr executable: %w", err)
+	}
+	if binary != admittedPath || hash != admittedHash {
+		return fmt.Errorf("herdr executable drifted after admission")
+	}
+	return nil
+}
+
+func (b *Backend) runAdmittedContext(
+	ctx context.Context,
+	timeout time.Duration,
+	admitted binaryAdmission,
+	target route,
+	args ...string,
+) ([]byte, error) {
+	if err := b.verifyExecutableIdentity(admitted.path, admitted.sha256); err != nil {
+		return nil, err
+	}
+	return b.runContext(ctx, timeout, admitted.path, target, args...)
 }
 
 func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
@@ -441,23 +582,51 @@ func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return b.output(callCtx, binary, routeEnvironment(target), args...)
+	return b.output(callCtx, binary, routeEnvironment(target, b.control), args...)
 }
 
-func routeEnvironment(target route) []string {
-	env := make([]string, 0, len(os.Environ())+2)
+func routeEnvironment(target route, control *controlPlaneEnvironment) []string {
+	overrides := map[string]string{
+		sessionEnv: target.session,
+	}
+	if target.socketPath != "" {
+		overrides[socketEnv] = target.socketPath
+	}
+	if control != nil {
+		overrides[xdgConfigEnv] = control.xdgConfigHome
+		overrides[xdgStateEnv] = control.xdgStateHome
+		overrides[xdgDataEnv] = control.xdgDataHome
+		overrides[xdgCacheEnv] = control.xdgCacheHome
+		overrides[configEnv] = control.configPath
+		overrides[clientSocketEnv] = control.clientSocketPath
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if key == sessionEnv || key == socketEnv {
+		_, overridden := overrides[key]
+		if overridden || key == socketEnv || (control != nil && isHerdrControlKey(key)) {
 			continue
 		}
 		env = append(env, entry)
 	}
-	env = append(env, sessionEnv+"="+target.session)
-	if target.socketPath != "" {
-		env = append(env, socketEnv+"="+target.socketPath)
+	for _, key := range []string{xdgConfigEnv, xdgStateEnv, xdgDataEnv, xdgCacheEnv, configEnv, sessionEnv, socketEnv, clientSocketEnv} {
+		if value, ok := overrides[key]; ok {
+			env = append(env, key+"="+value)
+		}
 	}
 	return env
+}
+
+func isHerdrControlKey(key string) bool {
+	if strings.HasPrefix(key, "HERDR_") {
+		return true
+	}
+	switch key {
+	case xdgConfigEnv, xdgStateEnv, xdgDataEnv, xdgCacheEnv:
+		return true
+	default:
+		return false
+	}
 }
 
 func runCommand(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
@@ -607,15 +776,17 @@ type statusJSON struct {
 	} `json:"update"`
 }
 
-func validateStatus(status statusJSON, requested route) (route, error) {
-	if status.Client.Version != supportedVersion || status.Client.Channel != "stable" || status.Client.Protocol != supportedProtocol {
+func validateStatus(status statusJSON, requested route, admitted binaryAdmission) (route, error) {
+	clientVersionErr := validateAdmittedVersion(status.Client.Version)
+	if clientVersionErr != nil || status.Client.Version != admitted.version || status.Client.Channel != "stable" || status.Client.Protocol != admitted.protocol {
 		return route{}, fmt.Errorf(
-			"unsupported herdr client tuple version=%q channel=%q protocol=%d (required: version=%s channel=stable protocol=%d)",
+			"unsupported herdr client tuple version=%q channel=%q protocol=%d (required: stable >=%s, exact admitted version=%s, channel=stable, protocol=%d)",
 			status.Client.Version,
 			status.Client.Channel,
 			status.Client.Protocol,
-			supportedVersion,
-			supportedProtocol,
+			minimumVersion,
+			admitted.version,
+			admitted.protocol,
 		)
 	}
 	if status.Client.Session == nil || *status.Client.Session != requested.session {
@@ -624,16 +795,19 @@ func validateStatus(status statusJSON, requested route) (route, error) {
 	if status.Server.Status != "running" || !status.Server.Running {
 		return route{}, fmt.Errorf("herdr named session %q is not running", requested.session)
 	}
-	if status.Server.Version == nil || *status.Server.Version != supportedVersion ||
-		status.Server.Protocol == nil || *status.Server.Protocol != supportedProtocol ||
+	serverVersion := optionalString(status.Server.Version)
+	serverVersionErr := validateAdmittedVersion(serverVersion)
+	if status.Server.Version == nil || serverVersionErr != nil || serverVersion != admitted.version ||
+		status.Server.Protocol == nil || *status.Server.Protocol != admitted.protocol ||
 		status.Server.Compatible == nil || !*status.Server.Compatible {
 		return route{}, fmt.Errorf(
-			"unsupported herdr server tuple version=%q protocol=%s compatible=%s (required: version=%s protocol=%d compatible=true)",
-			optionalString(status.Server.Version),
+			"unsupported herdr server tuple version=%q protocol=%s compatible=%s (required: stable >=%s, exact admitted version=%s, protocol=%d, compatible=true)",
+			serverVersion,
 			optionalInt(status.Server.Protocol),
 			optionalBool(status.Server.Compatible),
-			supportedVersion,
-			supportedProtocol,
+			minimumVersion,
+			admitted.version,
+			admitted.protocol,
 		)
 	}
 	if status.Server.Session == nil || *status.Server.Session != requested.session {
@@ -652,11 +826,6 @@ func validateStatus(status statusJSON, requested route) (route, error) {
 	return route{session: requested.session, socketPath: status.Server.Socket}, nil
 }
 
-type schemaJSON struct {
-	Protocol      int `json:"protocol"`
-	SchemaVersion int `json:"schema_version"`
-}
-
 type snapshotEnvelope struct {
 	ID     string          `json:"id"`
 	Result *snapshotResult `json:"result"`
@@ -668,24 +837,73 @@ type snapshotResult struct {
 }
 
 type snapshotJSON struct {
-	Version    string             `json:"version"`
-	Protocol   int                `json:"protocol"`
-	Workspaces *[]workspaceJSON   `json:"workspaces"`
-	Tabs       *[]json.RawMessage `json:"tabs"`
-	Panes      *[]paneJSON        `json:"panes"`
-	Layouts    *[]json.RawMessage `json:"layouts"`
-	Agents     *[]agentJSON       `json:"agents"`
+	Version    string           `json:"version"`
+	Protocol   int              `json:"protocol"`
+	Workspaces *[]workspaceJSON `json:"workspaces"`
+	Tabs       *[]tabJSON       `json:"tabs"`
+	Panes      *[]paneJSON      `json:"panes"`
+	Layouts    *[]layoutJSON    `json:"layouts"`
+	Agents     *[]agentJSON     `json:"agents"`
 }
 
 type workspaceJSON struct {
 	WorkspaceID string            `json:"workspace_id"`
+	Number      *uint64           `json:"number"`
+	Label       *string           `json:"label"`
+	Focused     *bool             `json:"focused"`
+	PaneCount   *uint64           `json:"pane_count"`
+	TabCount    *uint64           `json:"tab_count"`
+	ActiveTabID *string           `json:"active_tab_id"`
+	AgentStatus string            `json:"agent_status"`
 	Worktree    *worktreeInfoJSON `json:"worktree"`
 }
 
 type worktreeInfoJSON struct {
-	RepoKey      string `json:"repo_key"`
-	CheckoutPath string `json:"checkout_path"`
-	RepoRoot     string `json:"repo_root"`
+	RepoKey          string `json:"repo_key"`
+	RepoName         string `json:"repo_name"`
+	CheckoutPath     string `json:"checkout_path"`
+	RepoRoot         string `json:"repo_root"`
+	IsLinkedWorktree *bool  `json:"is_linked_worktree"`
+}
+
+type tabJSON struct {
+	TabID       string  `json:"tab_id"`
+	WorkspaceID string  `json:"workspace_id"`
+	Number      *uint64 `json:"number"`
+	Label       *string `json:"label"`
+	Focused     *bool   `json:"focused"`
+	PaneCount   *uint64 `json:"pane_count"`
+	AgentStatus string  `json:"agent_status"`
+}
+
+type layoutJSON struct {
+	WorkspaceID string             `json:"workspace_id"`
+	TabID       string             `json:"tab_id"`
+	Zoomed      *bool              `json:"zoomed"`
+	Area        *layoutRectJSON    `json:"area"`
+	FocusedPane *string            `json:"focused_pane_id"`
+	Panes       *[]layoutPaneJSON  `json:"panes"`
+	Splits      *[]layoutSplitJSON `json:"splits"`
+}
+
+type layoutRectJSON struct {
+	X      *uint16 `json:"x"`
+	Y      *uint16 `json:"y"`
+	Width  *uint16 `json:"width"`
+	Height *uint16 `json:"height"`
+}
+
+type layoutPaneJSON struct {
+	PaneID  string          `json:"pane_id"`
+	Focused *bool           `json:"focused"`
+	Rect    *layoutRectJSON `json:"rect"`
+}
+
+type layoutSplitJSON struct {
+	ID        string          `json:"id"`
+	Direction string          `json:"direction"`
+	Ratio     *float64        `json:"ratio"`
+	Rect      *layoutRectJSON `json:"rect"`
 }
 
 type paneJSON struct {
@@ -728,18 +946,20 @@ type agentSessionKey struct {
 	value  string
 }
 
-func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.LivePane, error) {
+func projectSnapshot(envelope snapshotEnvelope, target route, admittedVersion string, admittedProtocol int) ([]corebackend.LivePane, error) {
 	if envelope.ID != "cli:api:snapshot" || envelope.Result == nil || envelope.Result.Type != "session_snapshot" {
 		return nil, fmt.Errorf("unexpected herdr snapshot envelope")
 	}
 	snapshot := envelope.Result.Snapshot
-	if snapshot.Version != supportedVersion || snapshot.Protocol != supportedProtocol {
+	versionErr := validateAdmittedVersion(snapshot.Version)
+	if versionErr != nil || snapshot.Version != admittedVersion || snapshot.Protocol != admittedProtocol {
 		return nil, fmt.Errorf(
-			"unsupported herdr snapshot tuple version=%q protocol=%d (required: version=%s protocol=%d)",
+			"unsupported herdr snapshot tuple version=%q protocol=%d (required: stable >=%s, exact admitted version=%s, protocol=%d)",
 			snapshot.Version,
 			snapshot.Protocol,
-			supportedVersion,
-			supportedProtocol,
+			minimumVersion,
+			admittedVersion,
+			admittedProtocol,
 		)
 	}
 	if snapshot.Workspaces == nil || snapshot.Tabs == nil || snapshot.Panes == nil || snapshot.Layouts == nil || snapshot.Agents == nil {
@@ -748,19 +968,36 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 
 	workspaces := make(map[string]workspaceJSON, len(*snapshot.Workspaces))
 	for _, workspace := range *snapshot.Workspaces {
-		if strings.TrimSpace(workspace.WorkspaceID) == "" {
-			return nil, fmt.Errorf("herdr snapshot contains an empty workspace id")
+		if strings.TrimSpace(workspace.WorkspaceID) == "" || workspace.Number == nil || workspace.Label == nil ||
+			workspace.Focused == nil || workspace.PaneCount == nil || workspace.TabCount == nil ||
+			workspace.ActiveTabID == nil || strings.TrimSpace(*workspace.ActiveTabID) == "" ||
+			!validNativeAgentState(workspace.AgentStatus) {
+			return nil, fmt.Errorf("herdr snapshot contains a workspace with incomplete required fields")
 		}
 		if workspace.Worktree != nil &&
 			(strings.TrimSpace(workspace.Worktree.RepoKey) == "" ||
+				strings.TrimSpace(workspace.Worktree.RepoName) == "" ||
 				strings.TrimSpace(workspace.Worktree.CheckoutPath) == "" ||
-				strings.TrimSpace(workspace.Worktree.RepoRoot) == "") {
+				strings.TrimSpace(workspace.Worktree.RepoRoot) == "" ||
+				workspace.Worktree.IsLinkedWorktree == nil) {
 			return nil, fmt.Errorf("herdr workspace %q has incomplete worktree provenance", workspace.WorkspaceID)
 		}
 		if _, duplicate := workspaces[workspace.WorkspaceID]; duplicate {
 			return nil, fmt.Errorf("herdr snapshot contains duplicate workspace id %q", workspace.WorkspaceID)
 		}
 		workspaces[workspace.WorkspaceID] = workspace
+	}
+
+	tabsByID := make(map[string]tabJSON, len(*snapshot.Tabs))
+	for _, tab := range *snapshot.Tabs {
+		if strings.TrimSpace(tab.TabID) == "" || strings.TrimSpace(tab.WorkspaceID) == "" || tab.Number == nil ||
+			tab.Label == nil || tab.Focused == nil || tab.PaneCount == nil || !validNativeAgentState(tab.AgentStatus) {
+			return nil, fmt.Errorf("herdr snapshot contains a tab with incomplete required fields")
+		}
+		if _, duplicate := tabsByID[tab.TabID]; duplicate {
+			return nil, fmt.Errorf("herdr snapshot contains duplicate tab id %q", tab.TabID)
+		}
+		tabsByID[tab.TabID] = tab
 	}
 
 	panesByID := make(map[string]paneJSON, len(*snapshot.Panes))
@@ -796,6 +1033,9 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 		}
 		panesByID[pane.PaneID] = pane
 		terminalIDs[pane.TerminalID] = pane.PaneID
+	}
+	if err := validateSnapshotLayouts(*snapshot.Layouts); err != nil {
+		return nil, err
 	}
 
 	agentsByPane := make(map[string]agentJSON, len(*snapshot.Agents))
@@ -883,6 +1123,47 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 		})
 	}
 	return live, nil
+}
+
+func validateSnapshotLayouts(layouts []layoutJSON) error {
+	seenLayouts := make(map[string]bool, len(layouts))
+	for _, layout := range layouts {
+		if strings.TrimSpace(layout.WorkspaceID) == "" || strings.TrimSpace(layout.TabID) == "" ||
+			layout.Zoomed == nil || !completeLayoutRect(layout.Area) || layout.FocusedPane == nil ||
+			strings.TrimSpace(*layout.FocusedPane) == "" || layout.Panes == nil || layout.Splits == nil {
+			return fmt.Errorf("herdr snapshot contains a layout with incomplete required fields")
+		}
+		layoutKey := layout.WorkspaceID + "\x00" + layout.TabID
+		if seenLayouts[layoutKey] {
+			return fmt.Errorf("herdr snapshot contains duplicate layout for tab %q", layout.TabID)
+		}
+		seenLayouts[layoutKey] = true
+
+		layoutPanes := make(map[string]bool, len(*layout.Panes))
+		for _, layoutPane := range *layout.Panes {
+			if strings.TrimSpace(layoutPane.PaneID) == "" || layoutPane.Focused == nil || !completeLayoutRect(layoutPane.Rect) {
+				return fmt.Errorf("herdr layout for tab %q contains a pane with incomplete required fields", layout.TabID)
+			}
+			if layoutPanes[layoutPane.PaneID] {
+				return fmt.Errorf("herdr layout for tab %q contains duplicate pane %q", layout.TabID, layoutPane.PaneID)
+			}
+			layoutPanes[layoutPane.PaneID] = true
+		}
+		if !layoutPanes[*layout.FocusedPane] {
+			return fmt.Errorf("herdr layout for tab %q references unknown focused pane %q", layout.TabID, *layout.FocusedPane)
+		}
+		for _, split := range *layout.Splits {
+			if strings.TrimSpace(split.ID) == "" || split.Ratio == nil || !completeLayoutRect(split.Rect) ||
+				(split.Direction != "right" && split.Direction != "down") {
+				return fmt.Errorf("herdr layout for tab %q contains a split with incomplete required fields", layout.TabID)
+			}
+		}
+	}
+	return nil
+}
+
+func completeLayoutRect(rect *layoutRectJSON) bool {
+	return rect != nil && rect.X != nil && rect.Y != nil && rect.Width != nil && rect.Height != nil
 }
 
 func parseAgentSession(ref *agentSessionJSON) (agentSessionKey, bool, error) {

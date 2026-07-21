@@ -17,7 +17,7 @@ const (
 	Herdr Name = "herdr"
 
 	// HerdrObservationOnlyReason is the shared operator-facing explanation for
-	// runtime actions disabled by the herdr v1 contract.
+	// runtime actions that stay disabled until the owned-session callers land.
 	HerdrObservationOnlyReason = "herdr backend v1 is observation-only"
 	// HerdrContentReadReason is more specific for peek/content surfaces, which
 	// must not issue a targeted herdr read even when the pane is live.
@@ -66,8 +66,8 @@ type AgentSessionRef struct {
 }
 
 // Valid reports whether every identity component is present and the ref kind
-// is one herdr 0.7.3 exposes. Validation does not normalize the tuple because
-// liveness comparison is exact.
+// is one admitted herdr schema exposes. Validation does not normalize the
+// tuple because liveness comparison is exact.
 func (r AgentSessionRef) Valid() bool {
 	if strings.TrimSpace(r.Source) == "" || strings.TrimSpace(r.Agent) == "" || strings.TrimSpace(r.Value) == "" {
 		return false
@@ -280,7 +280,6 @@ type FreshCloser interface {
 }
 
 // UnsupportedError reports an operation intentionally disabled by a backend.
-// Herdr v1 uses this fail-closed result for every mutation and targeted read.
 type UnsupportedError struct {
 	Backend   Name
 	Operation string
