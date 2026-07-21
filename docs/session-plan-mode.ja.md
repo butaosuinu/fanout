@@ -199,7 +199,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   `blocked` 遷移で可視化される。「`plan` 値の生成源は codexapp のみ」の
   契約を維持し、peermsg allowlist・TUI glyph・dashboard への波及を避ける。
 - codex オーケストレーターの gate 対応 plan TUI(handshake の再構成)。
-- herdr backend での plan TUI 起動。
+- herdr backend での plan TUI 起動。対応方針と解禁条件は
+  [herdr runtime backend 実機検証](herdr-runtime-backend-spike.ja.md)が正典
+  (#528 / #529 / #544 後の別 issue)。
 - claude auto mode の capability 検査。無効環境では claude 自身が通知
   つきで `default` にフォールバックする挙動を契約として受容する。
 - 対話中の permission / plan mode 変更の追跡(state への反映)。resume で
