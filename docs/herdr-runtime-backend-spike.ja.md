@@ -13,7 +13,7 @@ raw Socket client は実装しない。
 version / session / schema の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge、Codex integration v6 の cold restart resume を後続実装へ解禁する。
 自動 mutation は provisional intent と phase machine、nonce の二重照合、branch の atomic reservation、事後条件検査、no-blind-retry を通す。
 owned XDG の config と plugin registry に予期しない setup hook があれば launch 前に fail closed にする。
-Claude hook の signal は agent process から偽造できる協調 telemetry とし、tmux backend と同じ nudge gate には使うが、完了判定または cleanup の根拠には使わない。
+provider hook の signal は agent process から偽造できる協調 telemetry とし、tmux backend と同じ nudge gate には使うが、完了判定または cleanup の根拠には使わない。
 自動 nudge は tmux の `shouldNudge` と同じ条件で解禁する。
 `codexPlanMode` は agent 種別にかかわらず恒久的に除外する。
 pane 消滅は `stale` とし、`terminal_id` の変化は Codex integration v6 の exact matcher を満たす場合だけ再束縛し、それ以外は `stale` とする。
@@ -417,11 +417,16 @@ server log は exit status を記録するが public API 契約ではないた�
 
 ただし herdr が追跡する process は wrapper になり、agent record は `unknown` のまま残った。
 wave 2 の自動 launch は bare argv を採用し、tmux backend の「agent 終了後も shell を残す」契約を herdr backend には持ち込まない。
-#427 は `agent start` の Claude argv へ `--settings` lifecycle hook を注入し、fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を `state.json` へ記録する。
+#427 は fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を `state.json` へ記録する。
+Claude は `agent start` の argv へ `--settings` lifecycle hook を注入する。
+Codex は launch-scoped の provider hook adapter から同じ emitter command を呼び、exact event-to-state mapping と注入成功を検証できる場合だけ state refinement を有効にする。
+Codex adapter が未実装、注入不能、または検証不能なら `reported_state` を未設定のままにして nudge を no-op とする。
+final row の `state_refinement` は provider hook adapter と mapping の検証に成功した launch だけ `true` とする。
 tmux pane option は使わない。
 launch 時に owner の絶対 `FANOUT_STATE_PATH`、state row key、launch ごとの opaque emitter nonce、backend、session / workspace / agent identity を hook 環境へ注入する。
 row key は `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)` とする。
 emitter nonce は state row にも保存し、再 launch ごとに更新する。
+state refinement を有効にした agent は final row 確定時の `reported_state` を `running` で初期化し、その後は provider hook の `working` / `plan` / `blocked` / `idle` / `done` だけで更新する。
 これらの値は agent が起動する tool と checkout 内 script に継承されるため、secret、capability、event provenance の証明にはならない。
 agent process は正規 hook と同じ emitter call を偽造できる。
 emitter signal は協調プロセスの `reported_state` telemetry に保存し、tmux と同じ `shouldNudge` gate の入力には使うが、完了判定または cleanup の根拠には使わない。
@@ -545,8 +550,12 @@ focus 後は `done` から `idle` へ変わる。
 
 2026-07-21 JST のユーザー決定により、herdr backend の自動 nudge を tmux-parity tier で解禁する。
 対象 agent は state refinement を持つ Claude と Codex に限る。
+provider hook adapter の注入と mapping を検証できない agent は、名前が Claude または Codex でも state refinement なしとして no-op にする。
 trim 済み `reported_state` が `running`、`working`、`plan`、`idle` の場合だけ送信候補とし、`blocked`、`done`、未設定、未知値は no-op とする。
-送信直前に live snapshot を一回取得し、保存済み backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent、`reported_state` を再照合してから `pane run` を一回発行する。
+送信直前に live snapshot を一回取得し、保存済み backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent を再照合する。
+次に state lock 下で最新 row を再読し、row key、emitter nonce、PaneRef、`state_refinement:true` が同じ launch に一致することを確認して、その row の `reported_state` を `shouldNudge` へ渡す。
+Herdr snapshot の native public status を `reported_state` の代用にしない。
+照合成功時だけ lock を解放して `pane run` を一回発行する。
 recipient の欠落、pane 消滅、identity 再利用、不一致、非許可状態、runtime failure、send failure は message bus の保存を維持した no-op success とする。
 hook telemetry は agent process から偽造でき、screen detection は未知の permission UI を除外できない。
 この signal は tmux の `@fanout_agent_state` と同じ協調プロセス信頼で `shouldNudge` の入力に使い、screen manifest または `agent explain --json` は送信許可に使わない。
@@ -902,11 +911,16 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   request-bound conditional mutation、server-authenticated controller capability、agent と別 UID の server のいずれかが使える場合も同 tier へ格上げする。
   0.7.4 private socket と fanout 側 marker はこの proof ではないが、別 UID 排除と fanout-owned session への封じ込めに使う。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
-- #427 は `agent start` の Claude argv に `--settings` lifecycle hook を注入し、fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
+- #427 は fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
+  Claude は `agent start` の argv へ `--settings` lifecycle hook を注入する。
+  Codex は launch-scoped の provider hook adapter から同じ emitter command を呼び、exact event-to-state mapping と注入成功を検証できる場合だけ state refinement を有効にする。
+  Codex adapter が未実装、注入不能、または検証不能なら `reported_state` を未設定のままにして nudge を no-op とする。
+  final row の `state_refinement` は provider hook adapter と mapping の検証に成功した launch だけ `true` とする。
   tmux pane option は使わない。
   hook は child checkout を cwd として実行されるため、owner state を確実に更新できるよう、launch 時に owner の絶対 `FANOUT_STATE_PATH`、state row key、launch ごとの opaque emitter nonce、backend、session / workspace / agent identity を hook 環境へ注入する。
   注入値は tool と checkout 内 script に継承されるため secret / capability / provenance ではなく、agent process は signal を偽造できる。
   signal は協調 telemetry として表示、診断、`shouldNudge` gate に使い、完了判定または cleanup に使わない。
+  state refinement を有効にした agent は final row 確定時の `reported_state` を `running` で初期化し、その後は provider hook の `working` / `plan` / `blocked` / `idle` / `done` だけで更新する。
   row key は `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)` とし、manual / watch 等の synthetic launch も後者で扱う。
   launch lock は final row、intent 削除、または fail-closed 状態の保存まで保持し、同期 hook は lock 待ちの間も pane を生存させ、launcher は hook 完了を待たずに `agent start` 応答を処理する。
   emitter は同じ lock の取得後に final row なら `reported_state` update、matching intent だけなら pending 保存へ分岐する。
@@ -930,8 +944,11 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   これは herdr runtime の表示遷移であり、fanout child の terminal completion または nudge authority には使わない。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
 - herdr backend の自動 nudge は state refinement を持つ Claude / Codex に限り、tmux の `shouldNudge` と同じ条件で実行する。
+  provider hook adapter の注入と mapping を検証できない agent は、名前が Claude / Codex でも state refinement なしとして no-op にする。
   trim 済み `reported_state` の `running` / `working` / `plan` / `idle` は送信候補、`blocked` / `done` / 未設定 / 未知値は no-op とする。
-  live snapshot で backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent、state を送信直前に再照合し、`pane run` を一回発行する。
+  live snapshot で backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent を送信直前に再照合する。
+  続いて state lock 下で最新 row の key、emitter nonce、PaneRef、`state_refinement:true` を再照合し、その row の `reported_state` だけを `shouldNudge` へ渡す。
+  Herdr snapshot の native public status は `reported_state` の代用にせず、照合成功後に lock を解放して `pane run` を一回発行する。
   operational miss と send failure は message bus の保存を維持した no-op success とする。
   check-and-send race は tmux の `ListLive` から non-transactional `send-keys` までの race と同種の受容済み残余リスクである。
   atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が揃えば proof-grade tier へ格上げする。
