@@ -36,6 +36,11 @@ plan mode の配線が存在しない。エージェントを差し替えると�
 - 既定 ON の帰結として、新規 Session とオーケストレーターは初回から plan
   起動になる。TUI 手動 codex ペインの無条件 Plan Mode は設定準拠に変わる
   (`newSessionPlanMode=false` で素の codex になる)。
+- TUI の設定フォーム("s")で保存した値は再起動なしで次の launch に反映
+  する。現行の reload(`applySettingsRuntime`)は `LaunchIssue` しか
+  差し替えないため、新規 Session 系 launcher(`LaunchPane` /
+  `LaunchAttach` / `LaunchIssuePlan`)も reload 対象に加えるか launch 時に
+  再解決する。
 
 ### レーン × 設定の適用マトリクス
 
@@ -70,26 +75,33 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   純テーブル)を足し、Build 系関数に mode 引数を通す。claude の
   `--settings`(hooks)とは単純併記で干渉しない。codex は両モードとも
   ModeArgs なし — plan の実体は app 層の plan TUI 経路のまま。
-- 非 plan を `--permission-mode auto` / `--agent build` と明示するため、
-  既存の全 claude / opencode 起動コマンド文字列が変わる。Tier 2 goldens は
-  全面再生成になる。
 - resume / restore では mode フラグを再付与しない。state の記録値は起動時
   姿勢で、対話中の plan 承認・解除を追跡しないため、`--continue` への
   再注入は現在姿勢を上書きしうる。claude / opencode の復元はエージェント側
   のセッション状態に委ね、記録 PlanMode は codex plan TUI の thread
   resume 判定だけに使う。
-- `internal/app/panelaunch` は `Request.CodexPlanMode` を `PlanMode` に
-  一般化し、`PlanMode && Agent=="codex"` のときだけ plan TUI 経路、他は
+- `internal/app/panelaunch` は `Request.CodexPlanMode` を 3 値の launch
+  mode(`""` / `plan` / `build`)に一般化する。`""` はフラグなしの従来
+  起動で、設定をまだ消費していないレーンの挙動を変えないための値。`plan`
+  かつ codex のときだけ plan TUI 経路、それ以外の `plan` / `build` は
   mode 付き builder を呼ぶ。codex 以外を拒む既存のハードエラーと
-  `run/agents.go` の codex-only ガードは削除する。
+  `run/agents.go` の codex-only ガードは削除する。state への記録は従来
+  どおり plan かどうかの bool のみ。
+- 非 plan の明示化(`--permission-mode auto` / `--agent build`)は各レーンの
+  設定消費と同時に入れる。未消費レーンを `""` のまま残すことで、最終既定
+  (新規 / オーケストレーター = plan)と逆向きの auto / build が中間 wave の
+  main に混入しない。issue 子は #544、残りのレーンは #545〜#547 が持ち、
+  Tier 2 goldens の再生成も各 PR に分かれる。
 - claude の `--permission-mode auto` には利用条件がある。Claude Code
   v2.1.207 以降は全プロバイダで利用できる(v2.1.158〜2.1.206 のゲートウェイ
-  系のみ `CLAUDE_CODE_ENABLE_AUTO_MODE=1` が必要だった)。現行の失敗条件は
+  系のみ `CLAUDE_CODE_ENABLE_AUTO_MODE=1` が必要だった)。現行の無効条件は
   旧バージョン、Team / Enterprise プランで Owner が未有効化、非対応
-  モデル、managed policy による無効化。無効環境では claude が起動時に
-  エラーで終了し、launch wrapper が exit status を表示して shell へ戻す
-  ことで表面化する(fail loud)。v1 は capability 検査や素起動フォール
-  バックを持たず(非ゴール参照)、条件は利用者向けドキュメントに明記する。
+  モデル、managed policy による無効化。無効環境の claude は起動失敗せず、
+  通知を出して `default` mode にフォールバックする(v2.1.215 時点の挙動)。
+  fanout は effective mode を検出せず、このフォールバックを契約として
+  受容する — 従来の素起動(default)と同じ姿勢に落ちるだけで、権限
+  プロンプトは既存の `blocked` 状態表示で可視化される。capability 検査は
+  非ゴール。条件と挙動は利用者向けドキュメントに明記する。
 - plan mode の briefing は合成にする。現行の `briefing.Render` は codex
   plan 時に plan 専用 briefing を即 return し、auto PR・review gate・base
   branch などの完了契約を落とす。claude / opencode の plan 子は plan-first
@@ -154,6 +166,9 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   references/cli-modes.md)、fanout-plan SKILL.md(claude / codex)の
   `--codex-plan-mode` 言及。#545 だけが入った main から `make install`
   した integration が unknown option なコマンドを生成する窓を作らない。
+- `docs/advisor-orchestrator.ja.md` の `--codex-plan-mode` 参照と
+  「briefing が plan 専用を即 return する」前提の制約記述は、本設計で
+  どちらも変わるため #545 で更新する。
 - 残りの利用者向けドキュメント(README ペア、site の settings / agents /
   cli / workflow / monitoring / changelog / herdr-backend / watcher の
   en+ja。watcher は `childPlanMode=true` で無人 Session が承認待ち停止する
@@ -169,9 +184,8 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   契約を維持し、peermsg allowlist・TUI glyph・dashboard への波及を避ける。
 - codex オーケストレーターの gate 対応 plan TUI(handshake の再構成)。
 - herdr backend での plan TUI 起動。
-- claude auto mode の capability 検査と素起動フォールバック設定。非対応
-  環境の起動失敗は fail loud で表面化し、必要になったら follow-up で
-  検討する。
+- claude auto mode の capability 検査。無効環境では claude 自身が通知
+  つきで `default` にフォールバックする挙動を契約として受容する。
 - 対話中の permission / plan mode 変更の追跡(state への反映)。resume で
   mode を再付与しない決定の帰結として、復元後の姿勢はエージェント側に
   委ねる。
@@ -191,7 +205,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 | 1 | #541 | core/agent の mode-aware builder 追加(additive) | M |
 | 1 | #542 | settings 3 キー追加(消費なし、repoOverrides gate) | H |
 | 2 | #543 | dashboard / web の codex 限定ゲート + docsync(← #540) | H + web |
-| 3 | #544 | panelaunch 一般化 + 非 plan 明示化 + goldens 再生成(← #540 #541 #543) | H |
+| 3 | #544 | panelaunch の mode 3 値化 + issue 子レーンの明示化 + goldens(issue 子分)(← #540 #541 #543) | H |
 | 4 | #545 | childPlanMode 消費 + codexPlanMode 全廃(← #542 #544) | H |
 | 4 | #546 | newSessionPlanMode 消費 + CLAUDE.md / SKILL.md 更新(← #542 #544) | H |
 | 4 | #547 | orchestratorPlanMode 消費 + codex gate フォールバック(← #542 #544) | M |
