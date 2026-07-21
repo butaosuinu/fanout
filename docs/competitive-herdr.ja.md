@@ -54,7 +54,7 @@ floor は 0.7.5 へ引き上げる(ユーザー決定 2026-07-22)。契約改訂
 
 ## 脅威評価
 
-短期の脅威は二つある。ひとつは「実行環境の乗り換え」で、herdr の吸引力は上の表の状態・待機・resume の 3 行に集約される。もうひとつは v0.7.5 で現物になった plan lane の直接競合(次段)— 機能の重複は issue lane には及ばないが、issue-less な fan-out では既に起きている。
+短期の脅威は二つある。ひとつは「実行環境の乗り換え」で、herdr の吸引力は上の表の状態・待機・resume の 3 行に集約される。もうひとつは v0.7.5 で現物になった plan lane の直接競合(次段)— issue lane も単発の issue → worktree → PR までは plugin が到達しており(後述)、未到達なのは親子 issue 列挙・wave・review gate を含む閉ループ全体である。
 現行 binary はまだ herdr 上の issue / Project / plan fan-out を実行しないが、wave 2 契約は後続 issue に workflow continuity の実装を許可する。
 同一 UID process に対する proof-grade authority は前提にせず、tmux と同じ協調プロセス信頼と fail-closed な crash / identity gate を使う。
 tmux backend にはこの 3 点を tmux の上で提供する価値が残る(後述)。
@@ -70,9 +70,9 @@ fanout plan に残る差は次の 5 点。
 (e) PR lifecycle への接続。
 
 plugin 生態系(topic `herdr-plugin`、2026-07-22 時点の search total_count 289 を star 順で全ページ掃引)は fanout の隣接領域に到達している。
-作者自身の `herdr-plugin-github-start`(GitHub issue / PR / discussion から agent 起動。issue body 非取得・worktree 非作成・fan-out なし)、カンバンカードを prompt として agent に配る `herdr-board`(`herdr-kanban` はタスクと tab の紐付けのみで agent 起動なし)、Claude Code teams の `herdmates`、Linear issue → worktree の `herdr-worktree-from-linear` と GitHub PR → worktree の `herdr-worktree-from-pr`、スケジュール起動の `herdr-routines`、merge 検知 branch cleanup の `herdr-branch-cleanup`、レビュー・PR 追跡の `herdr-reviewr` / `herdr-pr-tracker`、人間承認ゲートの `herdr-approval-gate`。
-plan lane 相当は `darjss/herdr-orchestrate` が構成済み — 単一 plugin ではなく Pi package / skill + `orch` CLI + herdr plugin の複合物(Pi 専用)だが、run board、worker spawn(research / implement / review)、隔離 worktree、background wait、cleanup を備える。
-GitHub issue 駆動の閉ループ(親子 issue 列挙 → briefing → PR lifecycle → レビューゲート)を代替する plugin はまだ無いが、「herdr は issue・PR・レビューに触れていない」はもう成り立たない。
+作者自身の `herdr-plugin-github-start`(GitHub issue / PR / discussion から agent 起動。issue body 非取得・worktree 非作成・fan-out なし)、GitHub issue 選択 → `gh issue develop` → worktree / workspace 作成 → PR の review / create / push まで一本で提供する `herdr-plugin-gh-workflow`、カンバンカードを prompt として agent に配り自動 Plan → Execute → Review と手動 gate を持つ `herdr-board`(`herdr-kanban` はタスクと tab の紐付けのみで agent 起動なし)、Claude Code teams の `herdmates`、Linear issue → worktree の `herdr-worktree-from-linear` と GitHub PR → worktree の `herdr-worktree-from-pr`、スケジュール起動の `herdr-routines`、merge 検知 branch cleanup の `herdr-branch-cleanup`、レビュー・PR 追跡の `herdr-reviewr` / `herdr-pr-tracker`、人間承認ゲートの `herdr-approval-gate`。
+plan lane 相当は複数ある。`darjss/herdr-orchestrate`(Pi package / skill + `orch` CLI + herdr plugin の複合物、Pi 専用)は run board、worker spawn(research / implement / review)、隔離 worktree、background wait、cleanup を備える。`ribbons-digital/pi-herd` は planner / implementer / reviewer / tester の役割分担、分離 worktree、永続 run state、wait / collect、merge-plan、cleanup を提供する。
+親子 issue 列挙・blocker wave・レビューゲートを貫く fanout の閉ループ全体を代替するものはまだ無いが、単発 issue → worktree → PR の線は既に plugin が引いており、「herdr は issue・PR・レビューに触れていない」はもう成り立たない。
 
 fanout 側の守りは、runtime 選択と、GitHub 駆動ワークフロー(親子 issue 列挙・briefing 生成・wave・review gate・PR lifecycle・可観測性)の閉ループが herdr core にも単一 plugin にも無いことにある。
 攻めに使える差は、herdr がローカル完結なのに対し fanout は「issue が入力、マージ済み PR が出力」という閉ループを持つ点で、ロードマップ(`docs/roadmap.ja.md`)の閉ループハーネス方針そのものが差別化になる。
