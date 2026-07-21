@@ -120,7 +120,7 @@ func (b *Backend) readOwned(ctx context.Context, ref corebackend.PaneRef, expect
 	}
 	defer unlockPrivateFile(lock)
 
-	target, probed, _, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +171,7 @@ func (b *Backend) sendLineOwned(ctx context.Context, ref corebackend.PaneRef, ex
 	}
 	defer unlockPrivateFile(lock)
 
-	target, probed, _, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (b *Backend) focusOwned(ctx context.Context, ref corebackend.PaneRef, expec
 	}
 	defer unlockPrivateFile(lock)
 
-	target, probed, _, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (b *Backend) closePaneOwned(ctx context.Context, ref corebackend.PaneRef, e
 	}
 	defer unlockPrivateFile(lock)
 
-	target, probed, _, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, ref, expected)
 	if err != nil {
 		return err
 	}
@@ -424,13 +424,9 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if target.WorktreePath == "" {
 		return failed, fmt.Errorf("herdr owned close requires saved worktree provenance")
 	}
-	target, probed, preView, err := b.resolveOwnedTarget(ctx, admission, target.Ref, &target)
+	target, probed, preView, err := b.resolveOwnedCloseTarget(ctx, admission, target)
 	if err != nil {
 		return failed, err
-	}
-	current, ok := findOwnedPane(preView.panes, target.Ref)
-	if !ok || !ownedPaneMatches(target, current) {
-		return failed, fmt.Errorf("%w: saved pane changed before worktree removal", ErrOwnedIdentityMismatch)
 	}
 	workspace, ok := preView.workspaces[target.Ref.Workspace]
 	if !ok || !workspace.matchesOwnedTarget(target) {
@@ -502,9 +498,8 @@ func (b *Backend) verifyOwnedClosePreflight(
 	if err != nil {
 		return fmt.Errorf("refresh herdr target immediately before worktree removal: %w", err)
 	}
-	current, ok := findOwnedPane(view.panes, target.Ref)
-	if !ok || !ownedPaneMatches(target, current) {
-		return fmt.Errorf("%w: pane changed immediately before worktree removal", ErrOwnedIdentityMismatch)
+	if current, ok := findOwnedPane(view.panes, target.Ref); ok && !ownedPaneMatches(target, current) {
+		return fmt.Errorf("%w: pane id was reused immediately before worktree removal", ErrOwnedIdentityMismatch)
 	}
 	workspace, ok := view.workspaces[target.Ref.Workspace]
 	if !ok || !workspace.matchesOwnedTarget(target) {
@@ -1080,18 +1075,49 @@ func (b *Backend) resolveOwnedTarget(
 	admission ownedAdmission,
 	ref corebackend.PaneRef,
 	expected *OwnedPaneIdentity,
-) (OwnedPaneIdentity, probeResult, ownedSnapshotView, error) {
+) (OwnedPaneIdentity, probeResult, error) {
 	if ref.Backend != corebackend.Herdr || strings.TrimSpace(ref.Workspace) == "" || strings.TrimSpace(ref.Pane) == "" {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("herdr owned operation requires an exact herdr workspace and pane reference")
+		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("herdr owned operation requires an exact herdr workspace and pane reference")
 	}
 	if expected == nil {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{},
+		return OwnedPaneIdentity{}, probeResult{},
 			fmt.Errorf("herdr owned operation requires a saved target identity")
 	}
 	target := cloneOwnedPaneIdentity(*expected)
 	if target.Ref != ref {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("herdr request target and pane reference disagree")
+		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("herdr request target and pane reference disagree")
 	}
+	if validationErr := validateOwnedPaneIdentity(target, admission); validationErr != nil {
+		return OwnedPaneIdentity{}, probeResult{}, validationErr
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return OwnedPaneIdentity{}, probeResult{}, err
+	}
+	current, ok := findOwnedPane(view.panes, ref)
+	if !ok {
+		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: pane %q is not live", ErrOwnedIdentityMismatch, ref.Pane)
+	}
+	if !ownedPaneMatches(target, current) {
+		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved target differs from the live snapshot", ErrOwnedIdentityMismatch)
+	}
+	workspace, ok := view.workspaces[ref.Workspace]
+	if !ok || !workspace.matchesOwnedTarget(target) {
+		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved workspace ownership differs from the live snapshot", ErrOwnedIdentityMismatch)
+	}
+	probed, err := b.probeOwned(ctx, admission)
+	if err != nil {
+		return OwnedPaneIdentity{}, probeResult{}, err
+	}
+	return target, probed, nil
+}
+
+func (b *Backend) resolveOwnedCloseTarget(
+	ctx context.Context,
+	admission ownedAdmission,
+	target OwnedPaneIdentity,
+) (OwnedPaneIdentity, probeResult, ownedSnapshotView, error) {
+	target = cloneOwnedPaneIdentity(target)
 	if validationErr := validateOwnedPaneIdentity(target, admission); validationErr != nil {
 		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, validationErr
 	}
@@ -1099,16 +1125,14 @@ func (b *Backend) resolveOwnedTarget(
 	if err != nil {
 		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, err
 	}
-	current, ok := findOwnedPane(view.panes, ref)
-	if !ok {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("%w: pane %q is not live", ErrOwnedIdentityMismatch, ref.Pane)
+	if current, ok := findOwnedPane(view.panes, target.Ref); ok && !ownedPaneMatches(target, current) {
+		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{},
+			fmt.Errorf("%w: saved pane id was reused before worktree removal", ErrOwnedIdentityMismatch)
 	}
-	if !ownedPaneMatches(target, current) {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("%w: saved target differs from the live snapshot", ErrOwnedIdentityMismatch)
-	}
-	workspace, ok := view.workspaces[ref.Workspace]
+	workspace, ok := view.workspaces[target.Ref.Workspace]
 	if !ok || !workspace.matchesOwnedTarget(target) {
-		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("%w: saved workspace ownership differs from the live snapshot", ErrOwnedIdentityMismatch)
+		return OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{},
+			fmt.Errorf("%w: saved workspace ownership differs from the live snapshot", ErrOwnedIdentityMismatch)
 	}
 	probed, err := b.probeOwned(ctx, admission)
 	if err != nil {

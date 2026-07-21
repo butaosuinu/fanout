@@ -797,6 +797,98 @@ func TestCloseOwnedRemovesWorktreeThenResidualWorkspaceWithoutBranchMutation(t *
 	}
 }
 
+func TestCloseOwnedAfterAgentExitRemovesWorktreeThenResidualWorkspace(t *testing.T) {
+	h := newOwnedOperationHarness(t)
+	h.respond = func(args []string) ([]byte, error) {
+		switch {
+		case slices.Equal(args, []string{"worktree", "remove", "--workspace", "w2", "--json"}):
+			h.removeCheckout(t)
+			return worktreeRemovedResponse("w2", h.worktreePath, false), nil
+		case slices.Equal(args, []string{"workspace", "close", "w2"}):
+			return okOperationResponse("cli:workspace:close"), nil
+		default:
+			return nil, fmt.Errorf("unexpected args: %v", args)
+		}
+	}
+	afterExit := snapshotAfterAgentExit(t, h.baseSnapshot, "w2:p1", "w2:p2")
+	afterRemoval := snapshotAfterWorktreeRemoval(t, afterExit, "w2")
+	h.fake.snapshotResults = []fakeSnapshotResult{
+		{output: afterExit},
+		{output: afterExit},
+		{output: afterRemoval},
+		{output: afterRemoval},
+		{output: snapshotWithoutWorkspaceResources(t, afterExit, "w2")},
+	}
+
+	result, err := h.backend.CloseOwnedSession(context.Background(), h.ownedCloseRequest())
+	if err != nil || result.Status != corebackend.CloseConfirmed {
+		t.Fatalf("CloseOwnedSession() = %#v, %v", result, err)
+	}
+	want := [][]string{
+		{"worktree", "remove", "--workspace", "w2", "--json"},
+		{"workspace", "close", "w2"},
+	}
+	if !slices.EqualFunc(h.calls, want, slices.Equal[[]string]) {
+		t.Fatalf("operation calls = %v, want %v", h.calls, want)
+	}
+}
+
+func TestCloseOwnedConfirmsWorkspaceDisappearanceAfterPaneExit(t *testing.T) {
+	h := newOwnedOperationHarness(t)
+	h.respond = func(args []string) ([]byte, error) {
+		want := []string{"worktree", "remove", "--workspace", "w2", "--json"}
+		if !slices.Equal(args, want) {
+			return nil, fmt.Errorf("unexpected args: %v", args)
+		}
+		h.removeCheckout(t)
+		return worktreeRemovedResponse("w2", h.worktreePath, false), nil
+	}
+	afterExit := snapshotAfterAgentExit(t, h.baseSnapshot, "w2:p1", "w2:p2")
+	h.fake.snapshotResults = []fakeSnapshotResult{
+		{output: h.baseSnapshot},
+		{output: afterExit},
+		{output: snapshotWithoutWorkspaceResources(t, afterExit, "w2")},
+	}
+
+	result, err := h.backend.CloseOwnedSession(context.Background(), h.ownedCloseRequest())
+	if err != nil || result.Status != corebackend.CloseConfirmed {
+		t.Fatalf("CloseOwnedSession() = %#v, %v", result, err)
+	}
+	if !slices.EqualFunc(h.calls, [][]string{{"worktree", "remove", "--workspace", "w2", "--json"}}, slices.Equal[[]string]) {
+		t.Fatalf("operation calls = %v, want worktree removal only", h.calls)
+	}
+}
+
+func TestCloseOwnedRejectsPaneIDReusedImmediatelyBeforeRemoval(t *testing.T) {
+	h := newOwnedOperationHarness(t)
+	reused := mutateSnapshot(t, h.baseSnapshot, func(snapshot map[string]any) {
+		for _, raw := range snapshot["panes"].([]any) {
+			pane := raw.(map[string]any)
+			if pane["pane_id"] == "w2:p1" {
+				pane["terminal_id"] = "term-reused"
+			}
+		}
+		for _, raw := range snapshot["agents"].([]any) {
+			agent := raw.(map[string]any)
+			if agent["pane_id"] == "w2:p1" {
+				agent["terminal_id"] = "term-reused"
+			}
+		}
+	})
+	h.fake.snapshotResults = []fakeSnapshotResult{
+		{output: snapshotAfterAgentExit(t, h.baseSnapshot, "w2:p1", "w2:p2")},
+		{output: reused},
+	}
+
+	result, err := h.backend.CloseOwnedSession(context.Background(), h.ownedCloseRequest())
+	if !errors.Is(err, ErrOwnedIdentityMismatch) || result.Status != corebackend.CloseFailed {
+		t.Fatalf("CloseOwnedSession() = %#v, %v; want reused-pane rejection", result, err)
+	}
+	if len(h.calls) != 0 {
+		t.Fatalf("mutation calls = %v, want none", h.calls)
+	}
+}
+
 func TestCloseOwnedForceIsExplicit(t *testing.T) {
 	t.Run("typed force", func(t *testing.T) {
 		h := newOwnedOperationHarness(t)
@@ -1628,6 +1720,57 @@ func snapshotAfterWorktreeRemoval(t *testing.T, source, workspace string) string
 				delete(item, "worktree")
 			}
 		}
+	})
+}
+
+func snapshotAfterAgentExit(t *testing.T, source, paneID, remainingPaneID string) string {
+	t.Helper()
+	return mutateSnapshot(t, source, func(snapshot map[string]any) {
+		workspaceID := ""
+		for _, raw := range snapshot["panes"].([]any) {
+			pane := raw.(map[string]any)
+			if pane["pane_id"] != paneID {
+				continue
+			}
+			workspaceID = pane["workspace_id"].(string)
+			pane["pane_id"] = remainingPaneID
+			pane["terminal_id"] = "term-remaining"
+			pane["agent_status"] = "unknown"
+			delete(pane, "title")
+			delete(pane, "agent")
+			delete(pane, "agent_session")
+		}
+		if workspaceID == "" {
+			t.Fatalf("snapshot does not contain pane %q", paneID)
+		}
+		for _, raw := range snapshot["workspaces"].([]any) {
+			workspace := raw.(map[string]any)
+			if workspace["workspace_id"] == workspaceID {
+				workspace["agent_status"] = "unknown"
+			}
+		}
+		for _, raw := range snapshot["tabs"].([]any) {
+			tab := raw.(map[string]any)
+			if tab["workspace_id"] == workspaceID {
+				tab["agent_status"] = "unknown"
+			}
+		}
+		for _, raw := range snapshot["layouts"].([]any) {
+			layout := raw.(map[string]any)
+			if layout["workspace_id"] != workspaceID {
+				continue
+			}
+			if layout["focused_pane_id"] == paneID {
+				layout["focused_pane_id"] = remainingPaneID
+			}
+			for _, rawPane := range layout["panes"].([]any) {
+				layoutPane := rawPane.(map[string]any)
+				if layoutPane["pane_id"] == paneID {
+					layoutPane["pane_id"] = remainingPaneID
+				}
+			}
+		}
+		snapshot["agents"] = filterSnapshotObjects(snapshot["agents"].([]any), "pane_id", paneID)
 	})
 }
 
