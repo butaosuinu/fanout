@@ -1,21 +1,21 @@
 # herdr runtime backend 実機検証
 
-ステータス: 0.7.4 wave 2 の実機検証を完了し、tmux-parity の協調プロセス信頼で fanout-owned herdr session の実装を解禁する。
-判断主体はユーザー、判断日は 2026-07-21 JST である。
+ステータス: 0.7.5 wave 2 の実機検証を完了し、pane-targeted surface を使う fanout-owned herdr session の実装を解禁する。
+判断主体はユーザー、floor 0.7.5 への改訂日は 2026-07-22 JST である。
 この判断は後続 issue の実装条件を定めるものであり、この PR はコードを変更しない。
-0.7.4 core runtime matrix、metadata token reporting、sidebar row layout は実測済みである。
+0.7.5 core runtime matrix と live-agent surface、0.7.4 metadata token reporting と sidebar row layout は実測済みである。
 この文書の日付は日本標準時（JST、UTC+09:00）で記す。
-core runtime の検証日は 2026-07-16 と 2026-07-21、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
-0.7.3 と 0.7.4 の対象はいずれも protocol `16`、schema version `1` である。
+core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
+0.7.3 と 0.7.4 は protocol `16`、0.7.5 は protocol `17` であり、schema version はすべて `1` である。
 
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
-version / session / schema の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge、Codex integration v6 の cold restart resume を後続実装へ解禁する。
+version / session / schema の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge、Codex integration の cold restart resume を後続実装へ解禁する。
 自動 mutation は provisional intent と phase machine、nonce の二重照合、branch の atomic reservation、事後条件検査、no-blind-retry を通す。
 owned XDG の config と plugin registry に予期しない setup hook があれば launch 前に fail closed にする。
 provider hook の signal は agent process から偽造できる協調 telemetry とし、tmux backend と同じ nudge gate には使うが、完了判定または cleanup の根拠には使わない。
-自動 nudge は tmux の `shouldNudge` と同じ条件で解禁する。
-`codexPlanMode` は恒久除外を撤回し、`fanout __codex-plan-tui` を pane 内 controller として herdr `agent start` の bare argv と明示 cwd / env で起動して対応する。
+自動 nudge は tmux の `shouldNudge` と同じ条件で `agent prompt` を一回発行する。
+`codexPlanMode` は恒久除外を撤回し、絶対パスの `fanout __codex-plan-tui` を worktree root pane へ `pane run` して対応する。
 その実装は #528、#529、#544 の導入後の別 issue とする。
 pane 消滅は `stale` とし、`terminal_id` の変化は Codex integration v6 の exact matcher を満たす場合だけ再束縛し、それ以外は `stale` とする。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
@@ -34,12 +34,13 @@ request-bound generation と conditional mutation、server-authenticated control
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
 | worktree | Go | intent / phase、workspace label と git-dir marker の nonce、Git 事後条件で誤採用を防ぐ |
-| agent 起動 | Go | control-plane env と workload env を分離し、bare argv、exact `--cwd`、明示 `--env`、保存済み process identity を要求する |
-| capability gate | stable `>=0.7.4` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
+| agent 起動 | Go | worktree root pane へ絶対 executable と明示 workload env を `pane run` し、bounded detection 後に rename / process identity を照合する |
+| `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
+| capability gate | stable `>=0.7.5` と structural schema、接続先 status を検査する | 0.7.4 以下、prerelease、client / server 不一致を拒否する |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
-| nudge | Go | `running` / `working` / `plan` / `idle` だけへ送信し、`blocked` / `done` / 未設定 / 未知値は no-op とする |
-| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | `fanout __codex-plan-tui` は pane 内 controller であり、runtime backend の外から terminal UI を操作しない |
+| nudge | Go | 許可状態だけへ no-wait の `agent prompt` を発行し、`blocked` / `done` / 未設定 / 未知値は no-op とする |
+| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 絶対 fanout executable を `pane run` する pane 内 controller とし、`agent start --kind codex` の args にしない |
 | identity / resume | Go | routing、checkout、terminal、会話、process を別々に照合し、cold restart は Codex v6 exact matcher に限る |
 | cleanup / rollback | Go | exact ownership と直前 snapshot を照合し、response loss では blind retry しない |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
@@ -55,9 +56,17 @@ plugin event の検証では `XDG_CONFIG_HOME` と `XDG_STATE_HOME` も `/privat
 追加検証では公式 `v0.7.3` macOS arm64 リリースバイナリ（SHA-256 `b31345392d004ec1f1b2c821e1ad601019fa8385fe1e4c6931321eb58a920773`）を `/private/tmp` に置き、named session と state を隔離した。
 herdr 公式 Codex integration v6 の再開試験だけは、すでに信頼済みのこの worktree を cwd に使った。
 
-sidebar 追試と wave 2 では公式 `v0.7.4` macOS arm64 リリースバイナリ（SHA-256 `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7`）を使った。
+sidebar 追試と最初の wave 2 では公式 `v0.7.4` macOS arm64 リリースバイナリ（SHA-256 `24992e1625dbdcb18354a59e299e4b263c312400b31396cdc07cd46ed57f24a7`）を使った。
 インストール済みの `herdr 0.7.4` はこのリリースバイナリと byte 単位で一致した。
 隔離 session の `status --json` は client / server version `0.7.4` と protocol `16`、`api snapshot` は version `0.7.4` と protocol `16`、`api schema --json` は schema version `1` を返した。
+
+0.7.5 再検証では公式 `v0.7.5` macOS arm64 リリースバイナリを使った。
+インストール済み binary の SHA-256 は `37350546b0012555943b92eaf962665de4e264395baeb44227b8015e8ff5b0d6` であり、公式 release asset の digest と byte 単位で一致した。
+release tag の commit は `ef4c23f5775bb8cfec05f05d0844226ff959a07a` である。
+検証資源は `/private/tmp/fanout-557-herdr-075.5AXZTV` 配下へ置き、XDG 四変数、config、server socket、client socket をすべて隔離した。
+隔離 session の `status --json` は client / server version `0.7.5`、protocol `17`、`compatible:true`、`restart_needed:false` と exact session / socket を返した。
+`api schema --json` は protocol `17`、schema version `1`、89 methods を返し、SHA-256 は `1ef4eb9ec655cb0c89726895f437d8654bdde13a22e591fda06a9015d03d88c7` だった。
+0.7.5 の検証では default Herdr session を停止、削除、上書きしていない。
 
 wave 2 の成功経路は `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME`、config、socket を検証ごとの 0700 directory へ向けた。
 `HERDR_CONFIG_PATH` と custom socket だけを隔離した負例では、herdr が既存の `~/.config/herdr/session.json` を復元して global log を書いた。
@@ -74,7 +83,7 @@ default path を使う負例は実行しない。
 fanout の複数行入力はインストール済みの `fanout v0.12.0` を実際の herdr pane で起動して確認した。
 モックは使っていない。
 
-## 0.7.4 wave 2 owned session
+## owned session lifecycle
 
 ### server lifecycle と ownership
 
@@ -96,6 +105,9 @@ canonical git common directory、owner nonce、socket path、binary SHA-256 と 
 この marker を mutation authority として扱わない。
 
 config と plugin registry は全 XDG directory の差し替えで default state から隔離できる。
+0.7.5 の plugin registry は session 単位ではなく、同じ `XDG_CONFIG_HOME` を使う全 session で共有される per-user global state になった。
+実測では session を変えても link 済み plugin が見え、同じ `HOME` でも `XDG_CONFIG_HOME` を変えると空になった。
+owned XDG を repo session ごとに分ける現行方針は global registry も隔離し、cold restart 後も同じ owned XDG の registry を復元した。
 しかし同一 UID の agent は空 registry の確認後に同じ socket から plugin mutation を実行できるため、standalone registry read は atomic proof にならない。
 tmux-parity tier では owned registry の preflight を協調プロセス前提の誤操作防止に使い、予期しない setup hook または config drift があれば launch 前に fail closed にする。
 setup hook の抑止、registry generation precondition、operation-scoped completion receipt は proof-grade tier の格上げ条件として保持する。
@@ -115,7 +127,7 @@ HERDR_SOCKET_PATH=<owned-server-socket> HERDR_CLIENT_SOCKET_PATH=<owned-client-s
 wave 2 の UX は上の値を安全に shell quote した command の提示に限り、fanout console を `exec` で置き換えない。
 custom socket の detach と reattach では public ID と `terminal_id` は変わらなかった。
 
-### core matrix
+### 0.7.4 core matrix（履歴）
 
 0.7.4 owned session で #424 と同じ core matrix を再実測した。
 `worktree create/open` の branch、path、base、既存 branch の `--base` 無視、`already_open:true` は 0.7.3 と同じだった。
@@ -129,6 +141,26 @@ cold restart の前後で `w1:p1`、`w2:p1`、`w3:p1`、`w4:p1` の public ID �
 staged entry を持つ dirty worktree の remove は `dirty_worktree_requires_force` で拒否し、`--force` は checkout を削除した。
 clean worktree の remove も checkout を削除したが、どちらも local branch は残した。
 `workspace close` は root repository と外部 checkout を削除せず、最終 snapshot は空になった。
+
+### 0.7.5 core matrix
+
+0.7.5 では workspace-level agent command が pane-targeted command へ変わったため、worktree lifecycle と live-agent lifecycle を分けて再検証した。
+
+| 対象 | 0.7.5 実測 | wave 2 判定 |
+|---|---|---|
+| `workspace create --cwd --env` | root pane の cwd と env に反映された | coordinator bootstrap に使う |
+| `worktree create` | child workspace と root pane を作り、branch、path、base、provenance を返した | 0.7.4 契約から非回帰 |
+| child root pane の env | source workspace の明示 env を継承しなかった | agent workload env は launch command へ毎回明示する |
+| `worktree open` | cold restart 後も同じ checkout を `already_open:true` で再採用した | exact ownership を満たす recovery に使う |
+| `worktree remove` | clean checkout を削除し、local branch を残した | 0.7.4 契約から非回帰 |
+| `pane run` | 絶対 executable、空白を含む env / argv、exact cwd を保持した | agent と Plan Mode controller の launch vehicle に使う |
+| `pane process-info` | argv0 / argv / cwd を返した | OS process 情報の実 executable / ancestry / process group と合わせて exact identity を検査する |
+| cold restart | public workspace / pane ID と layout を維持し、全 `terminal_id` を更新した | public ID だけでは再束縛しない |
+| cleanup | workspace / worktree cleanup 後の snapshot と unlink 後の plugin list は空だった | 既存 cleanup order を維持する |
+
+再起動前の `w1:p1`、`w2:p1`、`w3:p1` から `w3:p4` は再起動後も同じ public ID だった。
+対応する六つの `terminal_id` はすべて更新され、manual / fake agent の name と record は失われた。
+`worktree open` は同じ `w3` と checkout provenance を返したため、cold-restart reconciliation は public identity、worktree ownership、terminal、agent process を別々に照合する。
 
 ### topology、restart、teardown
 
@@ -210,17 +242,20 @@ wave 2 の後続実装は次の targeted read と mutation を、下記の inten
 | launch | `workspace create --cwd ... --no-focus` | `workspace_created` | provisional intent を先に保存し、root coordinator 作成に使う |
 | launch | `worktree create --workspace ... --branch ... --base ... --path ... --label <nonce> --no-focus --json` | `worktree_created` | nonce label と checkout git-dir marker を二重照合する |
 | launch / recover | `worktree open --workspace ... --path ... --label <nonce> --no-focus --json` | `worktree_opened` | state / intent が所有する既存 checkout だけを採用する |
-| launch | `agent start <name> --workspace ... --cwd ... --env ... --no-focus -- <argv...>` | `agent_started` | bare argv、exact cwd / env、保存済み launch identity を要求し、`--json` flag はない |
+| launch | `pane run <worktree-root-pane> <quoted-command>` | `ok` | `/usr/bin/env`、明示 workload env、絶対 executable、argv を一つの command に quote する |
+| launch identity | `agent rename <pane-id> <name>` | AgentInfo | agent 検出後に pane ID を deterministic name へ束縛する |
+| live-agent probe | `agent start <name> --kind <kind> --pane <pane-id> -- <args...>` | AgentInfo と argv | binary pin ができないため自動 launch には使わない |
 | list | `api snapshot` | `session_snapshot` | `session.snapshot` の CLI wrapper。identity / status 観測に使う |
 | list | `worktree list --workspace ... --json`、`agent list` | `worktree_list`、`agent_list` | `worktree list` は基準 workspace を明示する |
 | content read | `pane read`、`agent read` | text または `pane_read` | target を直前・直後に再照合し、不一致なら content を破棄する |
 | structured read | `pane get` | `pane_info` | exact PaneRef と worktree provenance の identity 検査に使う |
 | structured read | `pane process-info --pane ...` | `pane_process_info` | process identity と Codex v6 resume matcher に使う |
 | focus | `agent focus <name>`、`workspace focus <id>` | 対象 agent または workspace を focus | TUI の明示操作だけが target の直前再照合後に発行する |
-| send | `pane run <pane> <text>` | text と Enter を一操作で送る | `shouldNudge` と送信直前再照合を通した自動 nudge に使う |
+| send | `agent prompt <pane-id> <text>` | `agent_prompted` | `shouldNudge` と送信直前再照合を通した no-wait 自動 nudge に使う |
 | close | `worktree remove --workspace ... [--force] --json` | `worktree_removed` | exact ownership と dirty / force 条件を直前に再照合する |
 | close | `workspace close`、`pane close` | `ok` | checkout は `workspace close` では消えないため cleanup order を固定する |
-| wait | `api snapshot` の 2 秒間隔 polling | `session_snapshot` | `total_timeout` は整数 3 秒以上。既定 300 秒では最大 150 snapshot、各 CLI call 最大 5 秒で current-state predicate を評価する |
+| wait | `agent wait <name> --until ... --timeout ...` | `wait_matched` と event | current state が一致すれば即時に成功し、明示的な settled-state workflow に使う |
+| wait | `pane wait-output <pane> --match ... --timeout ...` | `output_matched` | current buffer に一致済みでも即時に成功し、controller bootstrap の出力確認に使う |
 
 generic pane の exact focus が必要になった場合、Socket API の `pane.focus` を同じ直前再照合を持つ追加候補にする。
 
@@ -285,10 +320,14 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
   create 成功から git dir marker 書き込みまでの crash を含め、nonce の両側を証明できない crash window は自動採用せず fail closed にする。
   mutation request を発行しておらず pre-state の不変を証明できる失敗、またはユーザーの手動 cleanup 後に資源の不在を再観測できた場合だけ、intent の整理を同じ state save で確定する。
   request 発行後に mutation の非発生を証明できない場合は intent、観測資源、branch reservation を残し、`manual_cleanup_required` として fail closed にする。
-  `agent start` の前に agent launch nonce と emitter nonce を生成し、hook へ注入する telemetry routing binding、agent launch nonce の衝突耐性のある hash を含む session 一意の deterministic agent name、provider、解決済みの絶対 executable、発行する argv / env fingerprint、API で再観測できる argv、`agent start --cwd` の exact path を intent へ保存して、phase `agent-starting` を state lock 下で確定する。
-  provider が session ref を返した場合は exact ref も intent と final row に保存する。
+  agent launch nonce と emitter nonce を生成し、telemetry routing binding、provider、deterministic agent name、解決済みの絶対 executable、argv、workload env / fingerprint、worktree root PaneRef / `terminal_id` / cwd を intent へ保存する。
+  deterministic agent name は `fanout-` と SHA-256 の先頭 24 lowercase hex を連結した 31 byte とする。
+  hash の入力 field は canonical git common directory、保存済み `ParentRef`、`TaskID` が非空なら `task:<TaskID>`、それ以外は `issue:<IssueNum>`、intent に保存した agent launch nonce の順とする。
+  各 field は byte length の先頭ゼロなし ASCII 十進表記、`:`、raw bytes を連結した `<len>:<value>` で frame 化し、四 frame を separator なしで連結して SHA-256 へ渡す。
+  この形は 0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たし、同じ intent では安定し、別 intent では session 全体で一意になる。
+  hash 衝突または同名 agent が別 pane にある場合は nonce を作り直さず fail closed にする。
   env fingerprint は発行内容の監査にだけ使い、lost-response recovery の照合条件には使わない。
-  成功応答を受けたら returned PaneRef、terminal identity、応答の argv を加えて phase `agent-started` を保存する。
+  root pane の `cwd`、worktree provenance、`terminal_id` が intent と一致し、agent が未検出の shell であることを確認する。
   plugin registry read は create / open request に registry generation を渡せず、read 後の plugin 変更を拒否できないため、setup hook 不在の proof には使わない。
   wave 2 は fanout-owned XDG の registry と config を直前に照合し、setup hook が空の場合だけ tmux-parity tier の操作 gate を通す。
   setup hook を許可する経路は、request による原子的な hook 抑止、registry generation precondition、または operation-scoped completion receipt が使える proof-grade tier まで fail closed にする。
@@ -296,24 +335,37 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
   setup plugin を許可する proof-grade tier は、event type、workspace ID、checkout path、worktree ownership nonce、terminal `succeeded`、`exit_code:0` を一つの mutation に束縛した operation-scoped completion receipt を検証する。
   receipt 後の baseline 再照合は race 検出に使うが、completion proof にはしない。
   phase `worktree-realized` からは、owned registry に setup hook がなく checkout baseline を保存した場合だけ `worktree-ready` へ進める。
-  phase `worktree-ready` で同名 agent が存在せず、checkout が記録済み baseline と一致し HEAD == 記録済み base SHA の場合だけ `agent start` へ進める。
-  phase `agent-starting` で応答を保存できなかった場合は、同名 agent が見つかっても launch 時の `terminal_id` を証明できないため自動採用せず fail closed にする。
-  phase `agent-started` の再実行は、pane が生存し、保存済み PaneRef と `terminal_id` が現在値と一致し、`process-info` の argv / process cwd も intent と一致する場合だけ process identity を束縛して final row へ進める。
+  phase `worktree-ready` で checkout baseline と HEAD が一致し、root pane が保存済み PaneRef / `terminal_id` / cwd の agent 未検出 shell である場合だけ、`/usr/bin/env`、明示 workload env、絶対 executable、argv を POSIX shell quote した exact command と substep `pane-run-issuing` を保存し、phase `agent-starting` を state lock 下で確定してから `pane run` を一回だけ発行する。
+  source workspace の env は child root pane へ継承されないため、workload env は command 内へ毎回明示する。
+  shell startup が PATH を変更しても exact executable を保つため、PATH 上の bare agent 名を実行しない。
+  `pane run` の応答を保存できなかった場合は command を再発行しない。
+  `pane run` 応答の有無にかかわらず、bounded snapshot polling で同じ PaneRef と `terminal_id` に expected provider の agent を一つだけ検出し、`process-info` の argv0 / argv / cwd と OS process 情報の実 executable / ancestry / process group が intent と完全一致する場合だけ substep `agent-observed` を保存する。
+  応答喪失はこの exact observation だけで回復する。
+  agent の欠落、重複、別 provider、identity 変化、process 不一致は `manual_cleanup_required` として fail closed にする。
+  検出後は substep `agent-rename-issuing` と exact request を保存し、`agent rename <pane-id> <deterministic-name>` を一回だけ発行する。
+  rename 応答を保存できなかった場合は、同じ target がすでに exact name を持つ場合だけ substep `agent-renamed` として回復し、同名が別 target にある場合は fail closed にする。
+  成功応答も exact name を再読してから substep `agent-renamed` を保存する。
+  rename 後は AgentInfo の PaneRef、`terminal_id`、agent name / kind と exact process identity を再照合する。
+  `interactive_ready` と `launch_pending` は live-agent telemetry として保存できるが、direct launch では常に返らないため finalization 条件にしない。
+  `agent wait` は launch finalization に使わず、明示的に settled state を待つ後続 workflow だけが bounded timeout 付きで使う。
+  provider が `agent_session` ref を返した場合は exact ref も intent と final row に保存する。
+  すべての照合後に phase `agent-started` を保存する。
+  phase `agent-started` の再実行は、pane が生存し、保存済み PaneRef と `terminal_id` が現在値と一致し、`process-info` の argv0 / argv / cwd と OS process identity も intent と一致する場合だけ final row へ進める。
   保存済み `terminal_id` が変わった場合は元の launch argv と比較せず、後述する provider 固有の cold-restart matcher を使う。
-  保存済み agent start 応答があり pane がすでに消滅している場合は、returned PaneRef を束縛した `stale` row を確定する。
+  保存済み agent identity があり pane がすでに消滅している場合は、保存済み PaneRef を束縛した `stale` row を確定する。
   同じ emitter nonce の pending `done` があっても agent-reported telemetry として保存するだけで、`stale` を `done` に変えない。
-  `agent-starting` 後に agent が存在しない場合も mutation の有無を証明できないため自動で再発行せず fail closed にする。
+  `agent-starting` 後に agent が存在しない場合も launch の非発生を証明できないため自動で再発行せず fail closed にする。
   worktree、agent、process の照合失敗、欠落、重複は自動では触らず fail closed にする。
-  final row の確定時は provider、解決済みの絶対 executable、元の launch argv、exact `agent start --cwd`、取得済みの exact session ref を intent から final row へ移す。
+  final row の確定時は provider、解決済みの絶対 executable、元の launch argv、workload env fingerprint、exact root pane cwd、取得済みの exact session ref を intent から final row へ移す。
   final row の確定、pending emitter telemetry の反映、intent の削除は state lock 下の同じ state save で実行する。
 - `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD を照合する。
 - `worktree create` の事後条件違反、応答喪失、または mutation の有無を証明できない失敗では、intent を残し、資源へ自動では触れずに fail closed とする。
   応答 checkout path が intent path と違う場合は marker を書かない。
-  0.7.3 の remove request は ownership nonce または session epoch を precondition として受け取らないため、検査後に同名 session が再作成される TOCTOU を自動 rollback では閉じられない。
+  0.7.5 の remove request も ownership nonce または session epoch を precondition として受け取らないため、検査後に同名 session が再作成される TOCTOU を自動 rollback では閉じられない。
   成功応答と exact ownership を保存済みの資源は、送信直前再照合後の `worktree remove` で自動 rollback できる。
   response loss または mutation の有無が不明な資源には触れず、rollback 後の git fallback も実行しない。
   新規 branch は herdr に作らせず、fanout が `worktree create` の前に atomic な ref 予約(old OID を空とする `update-ref` 相当。既存なら失敗)で base SHA に作成し、予約成功を intent へ記録する。
-  preflight と create の間に別 process が同名 branch を作った場合は予約が失敗し、既存 branch 採用の実測挙動(113-115 行)による他者 branch の巻き込みを防ぐ。
+  preflight と create の間に別 process が同名 branch を作った場合は予約が失敗し、「branch、path、base」で記録した既存 branch 採用による他者 branch の巻き込みを防ぐ。
   branch reservation は worktree mutation が起きていないことを証明できる場合だけ、予約時 OID を old OID とする compare-and-delete で解放する。
   worktree mutation の可能性がある場合、branch ref が変わっている場合、または予約の所有を証明できない場合は branch も残して fail closed にする。
 
@@ -335,7 +387,7 @@ dirty な child worktree を force なしで削除すると、`dirty_worktree_re
 `--force` では checkout と workspace が消え、branch は残った。
 clean な focused child を削除すると、focus は repository root workspace へ戻った。
 
-state row 起点の cleanup でも、0.7.3 CLI は nonce、`terminal_id`、session epoch を `worktree remove` / `workspace close` / `pane close` の precondition として受け取らない。
+state row 起点の cleanup でも、0.7.5 CLI は nonce、`terminal_id`、session epoch を `worktree remove` / `workspace close` / `pane close` の precondition として受け取らない。
 fanout が state、snapshot、checkout git dir を照合してから別接続で mutation を発行するまでに、同名 session と public ID が別資源へ再利用され得る。
 この TOCTOU は `--force` の有無にかかわらず残り、tmux-parity tier では tmux cleanup と同種の受容済み残余リスクとする。
 fanout は保存済み backend / session、workspace ID、label、repo、branch、path、provenance、作成時 nonce と現在値を送信直前に再照合して `--cleanup` / `--close` を発行する。
@@ -362,59 +414,88 @@ payload は workspace、active tab、checkout path、branch、`already_open:fals
 
 ## pane と agent の lifecycle
 
-### bare argv と env
+### 0.7.5 live-agent と exact launch
 
-以下は手動操作で得た実測と、wave 2 の自動 launch 契約である。
-herdr backend は state machine の `worktree-ready` から `agent start` を自動実行する。
+0.7.5 の live-agent 起動面は `agent start <name> --kind <kind> --pane <pane-id> -- <args...>` である。
+`AgentStartParams` は `name`、`kind`、`pane_id` を必須とし、`args` と `timeout_ms` だけを optional にする。
+0.7.4 の `argv`、`cwd`、`env`、`workspace_id`、`tab_id`、`split`、`focus` は廃止された。
 
-`agent start --workspace w2` だけでは cwd は child checkout にならず、CLI 呼び出し元の cwd が使われた。
-`--cwd <child-checkout>` は必須である。
+実機の `agent start probe_codex_b --kind codex --pane w3:p2 -- -c 'model_reasoning_effort = "low"' --no-alt-screen` は成功した。
+応答は AgentInfo の workspace / tab / pane / `terminal_id` / name / status / `interactive_ready` / `launch_pending` と、canonical `codex` に続く argv を返した。
+指定した `model_reasoning_effort = "low"` は空白を含む一要素のまま応答と `process-info` で保持された。
 
-bare argv へ明示した PATH prefix と `FANOUT_*` env はそのまま届いた。
-実装契約では PATH を prepend しない。
+`agent start` は kind ごとの canonical executable を bare name で選び、`--` 以降をその executable の args に追加する。
+`server agent-manifests --json` は manifest の source、version、更新情報を返すが、解決済み executable path または launch argv を返さない。
+検証 server は起動時に remote manifest を取得し、owned XDG の cache へ保存した。
+manifest は mutable な agent detection data として隔離するが、executable pin または admission proof には使わない。
+PATH を一時 directory で prefix しても pane の shell startup が PATH を変更し、実機では別の user-installed `codex` が選ばれた。
+したがって fanout が解決した絶対 executable を `agent start` または manifest 検査で pin することはできない。
+`agent start --kind codex --pane ... -- /abs/fanout __codex-plan-tui` も `/abs/fanout` を Codex の引数にしたため、Plan Mode controller の起動には使えない。
+一方、root pane へ absolute `fanout-go __codex-plan-tui --help` を `pane run` すると、`pane wait-output` が controller の usage を検出した。
+この spike は wrapper の launch vehicle までを検証し、controller が起動する Codex child と restore の end-to-end は #554 の実装検証に残す。
 
-fresh state の追加検証では、source workspace `w1` から `worktree open` で作った child workspace `w2` に次の process を起動した。
+name は session 全体で一意であり、0.7.5 は `[a-z][a-z0-9_-]{0,31}` を要求する。
+先頭が大文字または数字、`.` を含む名前、33 byte の名前は `invalid_agent_name` で失敗し、32 byte の名前は成功した。
+同名を再利用すると `agent_name_taken` になった。
+wave 2 の 31 byte deterministic name は前節の hash 契約に従う。
+
+自動 launch は `worktree create` が返す root pane を再利用する。
+child root pane の cwd は checkout path と一致したが、source workspace の `workspace create --env` で設定した値は child root pane に届かなかった。
+`pane split --cwd <checkout> --env 'FANOUT_AGENT_PROBE=value with spaces'` では値が届いたものの、shell startup による PATH の変更は同じだった。
+この pane を target にした `agent start` の wrapper probe は cwd に child checkout、env に `FANOUT_AGENT_PROBE=value with spaces`、argv に空白を含む指定値を記録した。
+したがって 0.7.5 の `agent start` へ cwd / env は target pane の継承値として届くが、request ごとに指定または検証する field はない。
+さらに worktree root pane は source workspace の明示 env を継承しないため、この到達経路だけでは fanout の exact workload env 契約を満たさない。
+
+実機では root pane へ次の形を `pane run` し、fake executable が exact env、空白を含む argv、child checkout cwd を受け取った。
 
 ```console
-/private/tmp/herdr-0.7.3 agent start worktree-env-probe \
-  --env FANOUT_AGENT_PROBE=worktree-order-fresh-a424 --workspace w2 \
-  --cwd /private/tmp/h424-env-order-fresh/repos/child --no-focus -- \
-  /bin/sh -c 'env | LC_ALL=C sort | grep -E "^(FANOUT|HERDR|TMUX)(_|=)"; sleep 120'
+pane run <root-pane> '/usr/bin/env "FANOUT_AGENT_PROBE=value with spaces" "/absolute/path/to/codex" "arg with spaces" --flag'
 ```
 
-herdr が設定する session、socket、pane、tab、workspace の env は指定した child workspace と一致した。
-
-```text
-FANOUT_AGENT_PROBE=worktree-order-fresh-a424
-HERDR_CONFIG_PATH=/private/tmp/h424-env-order-fresh/config.toml
-HERDR_ENV=1
-HERDR_PANE_ID=w2:p2
-HERDR_SESSION=h424-env-order-fresh
-HERDR_SOCKET_PATH=/private/tmp/h424-env-order-fresh/xdg-config/herdr/sessions/h424-env-order-fresh/herdr.sock
-HERDR_TAB_ID=w2:t1
-HERDR_WORKSPACE_ID=w2
-```
-
-`workspace get`、`pane get`、`tab get` の相互参照も `w2`、`w2:p2`、`w2:t1` で一致し、cwd と `foreground_cwd` は child checkout だった。
-この追加検証では server と CLI の環境から `TMUX` と `FANOUT_BIN` を除き、外側 runtime の値が transcript に混ざらないようにした。
-別の nested tmux 検証では、generic workspace shell に `HERDR_ENV` と `TMUX` が同時に届いた。
+Herdr はこの process を Codex として検出し、`process-info` は absolute argv0、`["arg with spaces","--flag"]`、exact cwd を返した。
+OS process 情報から解決した実 executable も発行した absolute path と一致した。
+続く `agent rename <pane-id> <name>` と current-state の `agent wait <name> --until idle --timeout 5000` は成功し、wait は約 2 ms で返った。
+この結果から、`pane run`、agent 検出、rename、process-info 照合を 0.7.5 の launch contract にする。
+`agent wait` は current-state 即時評価を確認した server-owned wait として後続 workflow に使い、agent の初回 turn を待つ launch fence にはしない。
 
 wave 2 は Herdr control-plane env と agent workload env を分離する。
 fanout は owned XDG で supervisor を起動する前に、呼び出し元の `HOME`、`PATH` と effective `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME` を workload env として保存する。
 未設定の XDG 変数はそれぞれ `$HOME/.config`、`$HOME/.local/state`、`$HOME/.local/share`、`$HOME/.cache` に解決し、owned XDG を agent へ漏らさない。
-wave 2 の自動 launch は、fanout 固有の値、保存した `HOME` / `PATH`、workload XDG を `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
-agent executable は fanout の起動環境で解決した絶対パスを bare argv の先頭に置く。
-#427 が注入する lifecycle hook も、同じ時点で解決した fanout executable の絶対パスを呼ぶ。
-絶対パスだけでは、agent が起動後に実行する `git` や `gh` が server の ambient PATH で解決されるため、server を minimal env で起動した環境では作業が失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
-tmux backend の `BuildResolvedCommand` と同じく、保存した workload env を明示 `--env` で引き継ぎ、agent と hook の実行を herdr server の ambient env に依存させない。
+wave 2 の自動 launch は fanout 固有値、保存した `HOME` / `PATH`、workload XDG を `/usr/bin/env` の引数として command 内へ明示する。
+agent executable と #427 の lifecycle hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
+保存した workload env を明示し、agent と hook の実行を herdr server または pane shell の ambient PATH に依存させない。
 呼び出し元の `HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` は workload env へ復元しない。
-agent workload 内から利用する Herdr CLI も control-plane runner を唯一の入口とし、raw `herdr` を workload env で実行せず、owned XDG / config / socket / session env を call ごとに再構築する。
+agent workload 内から利用する Herdr CLI も control-plane runner を唯一の入口とし、owned XDG / config / socket / session env を call ごとに再構築する。
 
-`agent.start` の agent 名は workspace 内ではなく session 全体で一意が要求され、重複は `agent_name_taken` で失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
-複数の repo や親が同じ session を共有しても衝突しないよう、launch 名は repo、親参照、intent に保存した agent launch nonce の hash から `core/naming` で生成する。
+### 0.7.4 から 0.7.5 への契約写像
+
+workspace-level `agent start` の各条項は次のように移す。
+
+| 0.7.4 の条項 | 0.7.5 の判定 | 実装 owner |
+|---|---|---|
+| `argv` | `AgentStartParams` から廃止し、POSIX quote 済み `pane run` command の絶対 executable と argv へ移す | #528 |
+| `cwd` | `AgentStartParams` から廃止し、worktree root PaneRef / cwd の precondition と process cwd の事後照合へ分ける | #527 / #528 |
+| `env` | `AgentStartParams` から廃止し、worktree env 非継承を前提に `/usr/bin/env` の workload env へ移す | #527 / #528 |
+| `workspace_id` / `tab_id` / `split` | 廃止し、`worktree create` / `open` が返す既存 root pane を使う | #527 |
+| `focus` | agent launch から廃止し、worktree の `--no-focus` と明示 TUI focus に分離する | #527 |
+| `name` | start request の長い slug を使わず、検出後に 31 byte deterministic name を `agent rename` する | #528 |
+| start response の PaneRef | 新規 pane は返らないため、保存済み root PaneRef と検出後の AgentInfo / `terminal_id` / process identity を束縛する | #527 / #528 |
+| manifest / binary resolution | manifest は executable path を返さないため自動 launch には使わず、fanout が解決した絶対 executable を command に入れる | #526 / #528 |
+
+後続 issue の担当境界は次に固定する。
+
+| issue | 担当契約 |
+|---|---|
+| #526 | owned 0.7.5 binary / XDG / socket、24-method capability gate、global plugin preflight |
+| #527 | `worktree-planned` から `worktree-ready`、root PaneRef / `terminal_id` / cwd / provenance の保存 |
+| #528 | `agent-starting` の四 substeps、exact command、agent detection / rename、process identity、final row |
+| #529 | provider hook adapter、pending emitter telemetry、`state_refinement` |
+| #552 | exact pane ID への no-wait `agent prompt` nudge |
+| #554 | absolute `fanout __codex-plan-tui` の `pane run` と controller / Codex child matcher |
 
 ### process exit
 
+次の bare process の結果は 0.7.3 workspace-level `agent start` の履歴であり、0.7.5 の launch vehicle には使わない。
 bare `/usr/bin/false` は `agent_started` を返した後に終了し、pane と agent record は消えた。
 public snapshot と `pane_exited` event には exit status と終了後 shell が残らなかった。
 server log は exit status を記録するが public API 契約ではないため、fanout は判定に使わない。
@@ -431,9 +512,10 @@ server log は exit status を記録するが public API 契約ではないた�
 ```
 
 ただし herdr が追跡する process は wrapper になり、agent record は `unknown` のまま残った。
-wave 2 の自動 launch は bare argv を採用し、tmux backend の「agent 終了後も shell を残す」契約を herdr backend には持ち込まない。
+0.7.5 の direct launch probe へ `agent send-keys <name> ctrl+c` を送ると agent record が消え、同じ root pane は shell に戻った。
+wave 2 の自動 launch は既存 root shell への `pane run` を採用し、agent 終了後も worktree pane を残す。
 #427 は fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を `state.json` へ記録する。
-Claude は `agent start` の argv へ `--settings` lifecycle hook を注入する。
+Claude は direct launch の argv へ `--settings` lifecycle hook を注入する。
 Codex は launch-scoped の provider hook adapter から同じ emitter command を呼び、exact event-to-state mapping と注入成功を検証できる場合だけ state refinement を有効にする。
 Codex adapter が未実装、注入不能、または検証不能なら `reported_state` を未設定のままにして nudge を no-op とする。
 final row の `state_refinement` は provider hook adapter と mapping の検証に成功した launch だけ `true` とする。
@@ -447,11 +529,11 @@ agent process は正規 hook と同じ emitter call を偽造できる。
 emitter signal は協調プロセスの `reported_state` telemetry に保存し、tmux と同じ `shouldNudge` gate の入力には使うが、完了判定または cleanup の根拠には使わない。
 launch は planning から final row の確定、intent の削除、または fail-closed 状態の保存まで同じ state lock を保持し、signal が生成されたことを理由に lock を解放しない。
 同期 hook の emitter command は lock を待ち、その間も agent process と pane を生存させる。
-launcher は hook の完了を待たずに `agent start` 応答を処理する。
+launcher は hook の完了を待たずに agent 検出、rename、process-info 照合を進める。
 emitter は同じ lock を取得した後の state で分岐し、final row があれば `reported_state` update、matching intent だけがあれば pending 保存を実行する。
-`agent start` の応答前に届いた signal は authoritative state を更新せず、key、nonce、backend、session / workspace / agent identity が provisional intent と完全一致する場合だけ state lock 下で pending telemetry として保存する。
+final row の確定前に届いた signal は authoritative state を更新せず、key、nonce、backend、session / workspace / agent identity が provisional intent と完全一致する場合だけ state lock 下で pending telemetry として保存する。
 pending `done` は同じ nonce の先行 telemetry より優先するが、final row 確定前は query 結果へ出さない。
-`agent start` の応答後、返された PaneRef を同じ nonce に束縛し、pending telemetry を検証して final row の `reported_state` へ反映する。
+agent 検出後、保存済み root PaneRef と検証済み process identity を同じ nonce に束縛し、pending telemetry を検証して final row の `reported_state` へ反映する。
 応答を回復できない intent の pending telemetry は final row へ移さない。
 emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新する。
 0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
@@ -462,8 +544,9 @@ Claude の `SessionEnd` 由来の `done` も診断用 telemetry に留める。
 Claude と Codex は pane 消滅時に正常終了と外部からの kill を区別できないため、state row の有無にかかわらず `stale` とする。
 identity 不一致も `stale` とする。
 
-### cold restart
+### 0.7.4 cold restart（履歴）
 
+以下は 0.7.4 で Codex integration v6 を実測した履歴であり、0.7.5 の current contract は「後続 issue への契約」で PlanMode と non-PlanMode を分ける。
 公式 session ref を持たない shell と wrapper の cold restart 前後は次のとおりだった。
 
 | 項目 | restart 前 | restart 後 |
@@ -504,7 +587,7 @@ herdr backend が cold restart 後に running へ再束縛できる provider は
 attach 後の `pane process-info` は foreground process の候補を一つだけ返し、OS process 情報から解決した実 executable が final row に保存した Codex executable の絶対パスと一致しなければならない。
 候補の argv は argv0 を除く引数列が `["resume", "<session-id>"]` と完全一致し、追加引数を許可しない。
 `<session-id>` は保存済み `agent_session.value` と byte-for-byte で一致させる。
-候補の `process-info.foreground_processes[].cwd` は final row に保存した `agent start --cwd` と完全一致させ、`pane get.cwd` または snapshot の `foreground_cwd` で代用しない。
+候補の `process-info.foreground_processes[].cwd` は final row に保存した root pane cwd と完全一致させ、`pane get.cwd` または snapshot の `foreground_cwd` で代用しない。
 `pane process-info` は PPID chain を返さないため、候補 PID が現在の `shell_pid` 自身またはその子孫であり、現在の `foreground_process_group_id` と同じ process group に属することを OS process 情報で別途確認する。
 OS ancestry または process group を取得できない場合は再束縛しない。
 すべてを同じ再対応付け cycle で確認した後、新しい `terminal_id`、PID、executable、argv、process cwd、`shell_pid`、foreground process group ID、`agent_session` を state lock 下の一回の save で process identity として束縛するが、`reported_state` は未設定、`state_refinement` は `false` のままにする。
@@ -552,16 +635,25 @@ worktree provenance がない generic workspace では、fanout state に保存�
 
 ### send と nudge
 
-`pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。
-`agent send` も literal text を直ちに送った。
-agent status を working または blocked と報告した状態でも送信され、queue と blocked gate はなかった。
+0.7.3 / 0.7.4 の `pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。
+同じ version の `agent send` も literal text を直ちに送り、agent status を working または blocked と報告した状態でも送信した。
+0.7.5 は `agent send` を削除し、`agent send-keys`、`agent prompt`、`pane send-input` に分割した。
 
 blocked 状態へ送った文字列は画面に入り、Enter は送らずに `ctrl+u` で消した。
 文字列と Enter を別操作にすると、その間に permission dialog が focus される事故を防げない。
 
-`pane run` は text と Enter を一操作で送り、command を実行した。
-ただし status read と submit の間の race は残る。
-親設計の「`agent send` を preferred nudge にする」は採用しない。
+`pane run` は text と Enter を一操作で送り、command を実行したが、0.7.5 の自動 nudge には agent-aware な `agent prompt` を使う。
+no-wait の `agent prompt <pane-id> <text>` は text と Enter を一操作で送り、`agent_prompted` を直ちに返した。
+status read と submit の間の race はどちらにも残る。
+
+fake Codex の state を変えないまま `agent prompt ... --wait --until idle --timeout 10000` を実行すると、約 5 秒で `agent_prompt_stalled` を返した。
+同じ操作の timeout を 2000 ms にすると、stall 判定より先に通常の `timeout` を返した。
+fake Codex を `idle`、`working`、unfocused settled state の順に遷移させると `--until idle` は timeout し、`--until done` は約 1 秒で成功した。
+`--wait` は turn を識別せず、すでに working の agent では既存 turn の完了にも一致し得る。
+したがって `agent prompt --wait` は nudge、delivery proof、turn completion の判定に使わない。
+
+実 agent の再検証では Herdr が `idle` と `interactive_ready:true` を返した pane に startup update UI が残り、prompt がその UI を操作して npm の global update を開始した。
+update は `ENOTEMPTY` で失敗したが、native status だけでは permission / update UI を nudge 対象から除外できないことを確認した。
 
 herdr の `done` は process exit ではなく、agent が処理を終えて `idle` になった後にまだ focus されていない状態である。
 実際、focus されていない pane に `working`、`idle` の順で報告すると snapshot は `working`、`done` と遷移し、`terminal_id` と focus は変わらなかった。
@@ -574,33 +666,37 @@ trim 済み `reported_state` が `running`、`working`、`plan`、`idle` の場�
 送信直前に live snapshot を一回取得し、保存済み backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent を再照合する。
 次に state lock 下で最新 row を再読し、row key、emitter nonce、PaneRef、`state_refinement:true` が同じ launch に一致することを確認して、その row の `reported_state` を `shouldNudge` へ渡す。
 Herdr snapshot の native public status を `reported_state` の代用にしない。
-照合成功時だけ lock を解放して `pane run` を一回発行する。
+照合成功時だけ lock を解放して no-wait の `agent prompt <saved-pane-id> <text>` を一回発行する。
 recipient の欠落、pane 消滅、identity 再利用、不一致、非許可状態、runtime failure、send failure は message bus の保存を維持した no-op success とする。
+応答喪失時は prompt が送信済みか判定できないため再発行しない。
 hook telemetry は agent process から偽造でき、screen detection は未知の permission UI を除外できない。
 この signal は tmux の `@fanout_agent_state` と同じ協調プロセス信頼で `shouldNudge` の入力に使い、screen manifest または `agent explain --json` は送信許可に使わない。
-`terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `pane run` までに pane の状態は変わり得る。
-herdr 0.7.4 には状態条件付き send または CAS がなく、この check-and-send race は tmux の `ListLive` から non-transactional な `send-keys` までの race と同種の受容済み残余リスクである。
+`terminal_id`、`agent_session`、worktree provenance を送信直前に再照合しても、その後の `agent prompt` までに pane の状態は変わり得る。
+herdr 0.7.5 には状態条件付き prompt または CAS がなく、この check-and-send race は tmux の `ListLive` から non-transactional な `send-keys` までの race と同種の受容済み残余リスクである。
 runtime の atomic conditional send または terminal permission UI を操作しない out-of-band queue のいずれかと、agent process から分離した event provenance が揃えば proof-grade tier へ格上げする。
-`codexPlanMode` は `plan` state の通常 nudge と別契約であり、`fanout __codex-plan-tui` を pane 内 controller として起動して対応する。
+`codexPlanMode` は `plan` state の通常 nudge と別契約であり、絶対 `fanout __codex-plan-tui` を root pane へ `pane run` する pane 内 controller として対応する。
 controller の working / plan は emitter lane の `reported_state` で報告し、tmux pane option には書き込まない。
 peer message の bus への保存は維持するが、fanout は herdr の `notification show` を nudge に使わない。
 
 ### focus と wait
 
 `agent focus <name>` と `workspace focus <id>` は対象を正確に focus した。
-`--no-focus` は二つ目以降の worktree と agent 起動で focus を維持した。
+`--no-focus` は二つ目以降の workspace / worktree 作成で focus を維持し、direct agent launch は対象 pane を focus しなかった。
 wave 2 は TUI の明示操作または focused child の cleanup 後だけ focus を発行し、target identity を送信直前に再照合する。
 focus check と mutation の race は tmux focus と同種の受容済み残余リスクとし、background watcher は focus を奪わない。
 request-bound server / target generation が使える場合は proof-grade tier へ格上げする。
 
-`wait output` は出力遷移を待ち、`output_matched` と matched line、read result、revision を返した。
-`agent wait --status idle` は current state がすでに idle でも即時成功せず、後続 event を待った。
-focus されていない agent が `idle` を報告した場合は `done` event が返り、`agent focus` 後に `idle` へ変わった。
+0.7.3 の `wait output` と `agent wait --status idle` は後続 event だけを待ち、current state が一致済みでも即時成功しなかった。
+0.7.5 の `agent wait <target> --until <status> --timeout <ms>` は request 時の current state を先に評価する。
+実測では一致済みの `idle` が約 2 ms と約 99 ms で成功した。
+`pane wait-output <pane> --match <text> --timeout <ms>` も current buffer を先に検索し、既存の cwd 出力へ即時に `output_matched`、read result、revision を返した。
+wave 2 は agent の settled-state workflow に `agent wait`、controller bootstrap の出力確認に `pane wait-output` を使い、どちらにも有限の `--timeout` を付ける。
+launch finalization と nudge には使わない。
 
-snapshot 後に event wait を登録すると、二つの操作の間に起きた遷移を逃す lost-wakeup race がある。
-CLI-first の wave 2 は次の共有 budget を持つ snapshot polling を使い、CLI の一回待機を current-state predicate と組み合わせない。
+snapshot polling は direct launch 後の agent 検出と cold-restart reconciliation にだけ残す。
+これらは次の共有 budget を使う。
 
-- 一回の wait または cold-restart reconciliation は、最初の `herdr api snapshot` の直前に monotonic clock で一つの deadline を確定する。
+- 一回の agent 検出または cold-restart reconciliation は、最初の `herdr api snapshot` の直前に monotonic clock で一つの deadline を確定する。
 - `total_timeout` は 3 秒以上の整数秒で受け取り、既定値を 300 秒として、無期限待機を許可しない。
 - 最初の snapshot は直ちに呼び、次の呼び出しは前回の開始から 2 秒以上空け、遅れた tick を追い掛けず、複数の CLI process を同時実行しない。
 - 各 herdr CLI process の timeout は `min(5 秒, deadline までの残時間)` とする。
@@ -612,7 +708,7 @@ CLI-first の wave 2 は次の共有 budget を持つ snapshot polling を使い
 - version / schema の不一致と malformed snapshot は retry せず、直ちに `failed` とする。
 - CLI timeout または non-zero exit は同じ budget 内でだけ retry し、budget 終了時の直近 cycle が失敗していた場合、または compatible snapshot を一度も取得できなかった場合は `failed` とする。
 - terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値に固定する。
-- v1 wait は compatible snapshot が predicate を満たした場合に `matched` とする。
+- direct launch の agent 検出は compatible snapshot と exact `process-info` が predicate を満たした場合に `matched` とする。
   cold-restart reconciliation は compatible snapshot と必要な補助検査が predicate を満たした場合に `matched` とする。
   直近 cycle が valid な compatible snapshot を返したまま deadline または呼出し上限へ達した場合は `timed_out` とする。
 - caller context の cancellation または SIGINT を受けた場合は interval sleep と実行中の process tree を止めて reap し、`cancelled` を返す。
@@ -624,7 +720,7 @@ event 駆動へ移す後続版は raw Socket で subscription を確立してか
 
 ### backend 検出
 
-`agent start` の direct process には `HERDR_ENV=1` が届いた。
+0.7.3 の workspace-level `agent start` が作った direct process には `HERDR_ENV=1` が届いた。
 generic workspace shell でも `HERDR_ENV=1`、session、socket、pane、tab、workspace ID と `workspace create --env FANOUT_PROBE=v073-ok` の値が届いた。
 当初の検査では `grep` の pattern が `^(FANOUT|HERDR|TMUX)=` だったため、`FANOUT_PROBE`、`HERDR_ENV`、`TMUX_PANE` をすべて落とす偽陰性になった。
 公式 v0.7.3 バイナリで `^(FANOUT|HERDR|TMUX)(_|=)` を使って再測定し、この誤りを訂正した。
@@ -718,14 +814,14 @@ detached 時の `shown:true` は server が request を受理したことを示�
 fanout notify backend は herdr の `notification show` を呼ばない。
 同名 session の差し替え時に別 session へ内容を送る TOCTOU を閉じられないため、設定済み利用者が fanout の外から使う手動実測面としてだけ残す。
 
-## Socket schema と JSON 契約
+## 0.7.4 Socket schema（履歴）
 
 `herdr api schema --json` は protocol `16`、schema version `1` を返した。
 0.7.4 の server 停止中と起動中に取得した schema は byte 単位で一致し、SHA-256 はどちらも `4c138114dfdb8ed9ddb906fcd117967ca7fac0c10251abf238452c52b766d49c` だった。
 schema は client binary に同梱された capability document であり、接続先 server の attestation ではない。
 top-level は `$schema`、`protocol`、`schema_version`、`schemas`、`title` を持ち、request の `oneOf` は 85 method を列挙した。
-fanout が使う `session.snapshot`、`workspace.create`、`workspace.close`、`workspace.report_metadata`、`worktree.create`、`worktree.open`、`worktree.remove`、`agent.start`、`pane.process_info`、`pane.report_metadata`、`pane.send_text`、`pane.send_keys` の params と response shape を structural gate で検査できる。
-CLI の `pane run` は Socket method ではなく send method を組み合わせる CLI surface なので structural gate では検査できず、wave 2 実装は command surface と出力を別の fail-closed gate で検査する。
+0.7.4 設計では `session.snapshot`、`workspace.create`、`workspace.close`、`workspace.report_metadata`、`worktree.create`、`worktree.open`、`worktree.remove`、`agent.start`、`pane.process_info`、`pane.report_metadata`、`pane.send_text`、`pane.send_keys` の params と response shape を structural gate 候補にした。
+CLI の `pane run` は Socket method ではなく send method を組み合わせる CLI surface なので structural gate では検査できなかった。
 request は top-level の `id` を必須とし、各 `oneOf` variant がさらに `method` と `params` を必須にする。
 
 ```json
@@ -798,21 +894,137 @@ fanout は snapshot の ref を読むだけにし、同じ ref を重複報告�
 ref が欠落、不一致、重複した場合は fail closed にする。
 
 raw Socket の `events.subscribe` は常駐 client を増やすため wave 2 では使わない。
-`agent.send`、`pane.send_input`、`pane.focus` も schema にはあるが、手動検証には CLI の `pane run`、`agent focus`、`workspace focus` で足りる。
+0.7.4 schema には `agent.send`、`pane.send_input`、`pane.focus` もあり、手動検証には CLI の `pane run`、`agent focus`、`workspace focus` を使った。
+
+## 0.7.5 Socket schema と capability 集合
+
+0.7.5 の `herdr api schema --json` は protocol `17`、schema version `1`、89 methods を返した。
+同じ artifact の SHA-256 は `1ef4eb9ec655cb0c89726895f437d8654bdde13a22e591fda06a9015d03d88c7` である。
+0.7.4 の 85 methods から `agent.send` が消え、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.view.set`、`agent.view.clear` が加わった。
+
+wave 2 の structural gate は次の 24 raw methods と、その params / result が参照する type、enum、const を再帰的に検査する。
+
+| 用途 | 必須 raw methods |
+|---|---|
+| lifecycle / snapshot | `server.stop`、`session.snapshot` |
+| workspace / worktree | `workspace.create`、`workspace.focus`、`workspace.report_metadata`、`workspace.close`、`worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
+| agent | `agent.list`、`agent.read`、`agent.rename`、`agent.focus`、`agent.prompt`、`agent.wait` |
+| pane | `pane.get`、`pane.process_info`、`pane.read`、`pane.send_input`、`pane.report_metadata`、`pane.close`、`pane.wait_for_output` |
+| plugin preflight | `plugin.list` |
+
+CLI-only の `pane run` は raw method 名を持たない。
+`pane.send_input` の shape に加え、`pane run` の command surface、text と Enter の一操作、`ok` response を別の fail-closed gate で検査する。
+`agent.start` と `server.agent_manifests` は実機 probe の診断面であり、採用する自動 launch の必須 method 集合には入れない。
+
+使用する request params の必須 field と optional field は次のとおりである。
+各 request envelope はこれらに加えて top-level `id`、`method`、`params` を必須にする。
+
+```text
+workspace.create:
+  required: []
+  optional: [cwd, env, focus, label]
+
+workspace.report_metadata:
+  required: [workspace_id, source, tokens]
+  optional: [seq, ttl_ms]
+
+worktree.list:
+  required: []
+  optional: [cwd, workspace_id]
+
+worktree.create:
+  required: []
+  optional: [base, branch, cwd, focus, label, path, workspace_id]
+
+worktree.open:
+  required: []
+  optional: [branch, cwd, focus, label, path, workspace_id]
+
+worktree.remove:
+  required: [workspace_id]
+  optional: [force]
+
+agent.rename:
+  required: [target]
+  optional: [name]
+
+agent.prompt:
+  required: [target, text]
+  optional: [wait]
+
+agent.wait:
+  required: [target]
+  optional: [timeout_ms, until]
+
+agent.read:
+  required: [target, source]
+  optional: [format, lines, strip_ansi]
+
+pane.send_input:
+  required: [pane_id]
+  optional: [keys, text]
+
+pane.process_info:
+  required: []
+  optional: [pane_id]
+
+pane.read:
+  required: [pane_id, source]
+  optional: [format, lines, strip_ansi]
+
+pane.report_metadata:
+  required: [pane_id, source]
+  optional used by fanout: [tokens, seq, ttl_ms]
+
+pane.wait_for_output:
+  required: [pane_id, source, match]
+  optional: [lines, strip_ansi, timeout_ms]
+```
+
+`workspace.focus` / `workspace.close` は `workspace_id`、`agent.focus` は `target`、`pane.get` / `pane.close` は `pane_id` を必須にする。
+`session.snapshot`、`server.stop`、`agent.list` は空 params を使う。
+`plugin.list` は required field がなく、optional `plugin_id` を持つ。
+`agent.read` は `target` と `source`、`pane.read` は `pane_id` と `source` を必須にする。
+fanout は rename request で non-null `name`、no-wait prompt で `wait` の省略または null、`pane run` の backing request で `text` と `keys:["Enter"]` を送る。
+selected method ごとに fanout が送受信する field path とその type、ref、enum、const、`required` membership を検査する。
+未使用の optional field、未知の追加 field、追加 method は拒否理由にしない。
+
+受理する result variant は `ok`、`session_snapshot`、`workspace_info`、`workspace_created`、`worktree_list`、`worktree_created`、`worktree_opened`、`worktree_removed`、`agent_list`、`agent_info`、`agent_prompted`、`wait_matched`、`pane_info`、`pane_process_info`、`pane_read`、`output_matched`、`plugin_list` である。
+各 variant の `type` と payload field を必須にし、unknown variant、field 欠落、type 不一致を拒否する。
+`wait_matched` は `type` と `event`、`output_matched` は `type`、`pane_id`、`revision`、`read` を必須にする。
+success envelope は `id` と `result`、error envelope は `id` と `error`、error body は `code` と `message` を必須にする。
+
+`SessionSnapshot` は `version`、`protocol`、`workspaces`、`tabs`、`panes`、`layouts`、`agents` を必須にする。
+`WorkspaceInfo` は `workspace_id`、`number`、`label`、`focused`、`pane_count`、`tab_count`、`active_tab_id`、`agent_status` を必須にする。
+`TabInfo` は `tab_id`、`workspace_id`、`number`、`label`、`focused`、`pane_count`、`agent_status` を必須にする。
+workspace の worktree provenance は `repo_key`、`repo_name`、`repo_root`、`checkout_path`、`is_linked_worktree` を必須にする。
+`WorktreeInfo` は `path`、`is_bare`、`is_detached`、`is_prunable`、`is_linked_worktree`、`label` を必須にし、`branch` と `open_workspace_id` の property shape も要求する。
+`PaneInfo` は `pane_id`、`terminal_id`、`workspace_id`、`tab_id`、`focused`、`agent_status`、`revision` を必須にする。
+`AgentInfo` は `terminal_id`、`agent_status`、`workspace_id`、`tab_id`、`pane_id`、`focused`、`revision` を必須にする。
+wave 2 が読む `agent`、`name`、`cwd`、`foreground_cwd`、`agent_session`、`interactive_ready`、`launch_pending`、`state_change_seq` は optional field として schema 上に存在することを要求するが、値の存在を全 response に要求しない。
+`PaneProcessInfo` は `pane_id` を必須にし、`shell_pid`、`foreground_process_group_id`、`foreground_processes` を schema 上の optional field として要求する。
+各 foreground process は `pid` と `name` を必須にし、exact matcher が使う `argv`、`argv0`、`cwd` を optional field として schema 上に要求する。
+`AgentSessionInfo` は `source`、`agent`、`kind`、`value` を必須にする。
+`PaneReadResult` は `pane_id`、`workspace_id`、`tab_id`、`source`、`format`、`text`、`revision`、`truncated` を必須にする。
+
+診断用 `agent.start` は `name`、`kind`、`pane_id` を必須、`args`、`timeout_ms` を optional にする。
+成功時の `agent_started` は AgentInfo と top-level argv を返すが、独立した PaneRef response は返さない。
+`server.agent_manifests` の response に executable path と launch argv はないため、binary pin の根拠にしない。
 
 ## version と JSON 対応
 
 stable public workspace、tab、pane ID の契約は 0.7.0、既存 local branch の worktree create/open は 0.7.1、`session.snapshot` と `api schema --json` は 0.7.2 で入った。
-core runtime の exact tuple allowlist は廃止し、stable SemVer `>=0.7.4`、structural capability、接続先 status の三段 gate へ置き換える。
+core runtime の exact version tuple allowlist は廃止し、stable SemVer `>=0.7.5`、protocol `17` / schema version `1` の structural capability、接続先 status の三段 gate へ置き換える。
+0.7.4 以下は method inspection より先に floor 未満として拒否する。
 version 文字列は stable SemVer として parse し、prerelease と解釈不能な値を拒否する。
 schema が定義する version string には prerelease を拒否する pattern がないため、fanout が検査する。
 
-起動前は admitted binary の SHA-256、`herdr --version`、offline `api schema --json` を取得し、protocol、schema version、使用 method、request / response の必須 field と、それらが参照する type、enum、const を再帰的に検査する。
-server 接続後は `status --json` の client / server version が同じ stable version で floor 以上、protocol が admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
+起動前は admitted binary の SHA-256、`herdr --version`、offline `api schema --json` を取得し、protocol `17`、schema version `1`、使用 method、request / response の必須 field と、それらが参照する type、enum、const を再帰的に検査する。
+server 接続後は `status --json` の client / server version が同じ stable version で floor 以上、client / server protocol がともに `17` で admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
 `api snapshot` の version と protocol も同じ admitted server に一致させる。
 full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
 各 CLI call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
-0.7.4 は比較可能な server generation を返さないため、connection loss、restart、binary drift、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させる。
+0.7.5 は比較可能な server generation を返さないため、connection loss、restart、binary drift、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させる。
 owned server の restart 後は三段 gate を最初から再実行し、成功した場合だけ Codex integration v6 exact matcher の resume または通常操作へ進む。
 別 CLI 接続間の server continuity は証明できず、この gate を mutation authority にしない。
 schema にない CLI-only surface は structural admission の対象外とし、wave 2 で使う surface は command と出力を別の fail-closed gate で検査する。
@@ -829,49 +1041,51 @@ cleanup、metadata、targeted read も resource-specific generation を原子的
 
 | 実測コマンド | 導入 / 実測 version（runtime capability gate ではない） | JSON 対応 |
 |---|---:|---|
-| `herdr --version` | 0.7.3 core baseline、0.7.4 core wave 2 | text のみ |
-| `status --json` | 0.7.3 core baseline、0.7.4 core wave 2 | 明示 `--json` |
+| `herdr --version` | 0.7.3 core baseline、0.7.4 / 0.7.5 core wave 2 | text のみ |
+| `status --json` | 0.7.3 core baseline、0.7.4 / 0.7.5 core wave 2 | 明示 `--json` |
 | `session list --json` | 0.7.3 core baseline | 明示 `--json` |
-| `workspace create/list/focus/close` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `worktree create/open/list/remove` | 0.7.1、0.7.4 core wave 2 | 明示 `--json` |
-| `agent start/list/read/focus` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `pane get/run/close` | 0.7.3 baseline、0.7.4 core wave 2 | mutation と get は JSON envelope。`--json` は付けない |
-| `pane process-info` | 0.7.3 baseline、0.7.4 core wave 2 | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
+| `workspace create/list/focus/close` | 0.7.3 baseline、0.7.4 / 0.7.5 core wave 2 | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `worktree create/open/list/remove` | 0.7.1、0.7.4 / 0.7.5 core wave 2 | 明示 `--json` |
+| `agent start --kind --pane` | 0.7.5 live-agent probe | JSON envelope を標準出力へ返す。自動 launch には使わない |
+| `agent rename/prompt/wait` | 0.7.5 pane-targeted wave 2 | JSON envelope を標準出力へ返す。`prompt` nudge は `--wait` を付けない |
+| `pane get/run/close` | 0.7.3 baseline、0.7.4 / 0.7.5 core wave 2 | mutation と get は JSON envelope。`--json` は付けない |
+| `pane process-info` | 0.7.3 baseline、0.7.4 / 0.7.5 core wave 2 | JSON envelope を標準出力へ返す。対象は `--pane` で指定する |
+| `pane wait-output` | 0.7.5 pane-targeted wave 2 | JSON envelope を標準出力へ返す。有限の `--timeout` を付ける |
 | `pane read` | 0.7.3 baseline | text または ANSI を直接出力する |
 | `pane report-metadata` の presentation fields / seq / TTL | 0.7.3 | 成功時は出力なし（`--json` 非対応） |
 | `pane report-metadata` の token patch | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
 | `workspace report-metadata` の token / seq / TTL | 0.7.4 | 成功時は出力なし（`--json` 非対応） |
-| `api snapshot` | 0.7.2、0.7.4 core wave 2 と token projection | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `api schema --json` | 0.7.2、0.7.4 structural gate | 明示 `--json` |
+| `api snapshot` | 0.7.2、0.7.4 / 0.7.5 core wave 2 と token projection | JSON envelope を標準出力へ返す。`--json` は付けない |
+| `api schema --json` | 0.7.2、0.7.4 / 0.7.5 structural gate | 明示 `--json` |
 | `notification show` | 0.7.3 baseline | JSON envelope を標準出力へ返す。`--json` は付けない |
-| `plugin link/list/log list` | 0.7.3 baseline、0.7.4 isolation wave 2 | `list` は `--json` 対応。他は JSON envelope |
+| `plugin link/list/log list` | 0.7.3 baseline、0.7.4 isolation、0.7.5 global registry | `list` は `--json` 対応。他は JSON envelope |
 
 この表は機能導入時期と実測 provenance を示すだけで、floor 未満または structural gate を通らない version の互換性を認めない。
 
-version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4) を参照する。
+version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4)、[v0.7.5](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5) を参照する。
 
 ## 後続 issue への契約
 
-#423、#425 から #429、#494 は次の制約を前提にする。
+#423、#425 から #429、#494、#526 から #529、#552、#554 は次の制約を前提にする。
 
-判断主体はユーザー、判断日は 2026-07-21 JST である。
+判断主体はユーザー、tmux-parity tier の判断日は 2026-07-21 JST、floor 0.7.5 の改訂日は 2026-07-22 JST である。
 herdr backend は tmux backend と同水準の協調プロセス信頼を採用し、private socket が同一 UID の認証境界にならない実測を受容したうえで、影響範囲を fanout-owned session へ封じ込める。
 各機能の wave 2 判定と proof-grade tier への格上げ条件は次のとおりである。
 
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
-| owned bootstrap / launch | Go | caller routing env を上書きする owned XDG / socket / marker、control-plane / workload env の分離、capability gate、intent / phase、nonce 二重照合、空の setup-hook registry | controller capability、server / agent の UID 分離、または request-bound conditional mutation。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
+| owned bootstrap / launch | Go | owned XDG / socket / marker、control-plane / workload env の分離、0.7.5 capability gate、root pane への exact `pane run`、agent detection / rename、intent / phase | controller capability、server / agent の UID 分離、または request-bound conditional mutation。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | cleanup / rollback | Go | exact ownership と dirty / force 条件を送信直前に再照合し、response loss では blind retry しない | remove / close が authoritative server generation と target resource generation を原子的に検査する |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | Codex v6 cold restart resume | Go | exact `agent_session`、executable、argv、cwd、ancestry、process group matcher。旧 nudge state を失効し、fresh emitter signal まで no-op | authoritative server generation と launch provenance の原子的な束縛 |
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
-| 自動 nudge | Go | state refinement を持つ agent の `running` / `working` / `plan` / `idle` だけへ、送信直前再照合後に `pane run` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
-| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | pane 内 controller `fanout __codex-plan-tui` を bare argv と明示 cwd / env で `agent start` し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
+| 自動 nudge | Go | state refinement を持つ agent の許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
+| `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 絶対 `fanout __codex-plan-tui` を root pane へ `pane run` し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
 request-bound generation / conditional mutation、controller capability、UID 分離は削除せず、herdr 上流へ別 issue で提案する proof-grade 強化として保持する。
-response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch の atomic reservation と compare-and-delete、bare argv と exact cwd / env、identity の分離、Codex integration v6 exact matcher、wait budget、metadata の表示専用性は維持する。
+response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch の atomic reservation と compare-and-delete、絶対 executable と exact pane cwd / workload env、identity の分離、Codex integration v6 exact matcher、bounded wait、metadata の表示専用性は維持する。
 emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完了判定または cleanup の証明には使わない。
 
 - backend は per-repo supervisor が owned XDG / socket / marker を exclusive create して foreground `herdr server` child を bootstrap する。
@@ -881,14 +1095,15 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、cleanup を後続実装へ解禁する。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
   check と operation の間の race は tmux-parity tier の受容済み残余リスクとし、不一致、重複、response loss、mutation 不明では fail closed にする。
-- core runtime compatibility は exact tuple allowlist ではなく、stable CLI / server `>=0.7.4`、structural schema、接続先 status の gate で判定する。
+- core runtime compatibility は exact version tuple allowlist ではなく、stable CLI / server `>=0.7.5`、protocol `17` / schema version `1` の structural schema、接続先 status の gate で判定する。
+  0.7.4 以下は floor 未満として拒否する。
   prerelease、解釈不能または floor 未満の version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method、必須 field、参照される type / enum / const の欠落または不一致は fail closed にする。
   full schema gate は admitted binary SHA-256 ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
   各 CLI call は executable path と SHA-256、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
   connection loss、restart、binary drift、`restart_needed:true`、その他の不一致は admission を失効させ、owned server の再起動後に gate を最初から通す。
   gate が再び成功した場合だけ Codex integration v6 exact matcher の resume または通常 operation へ進む。
   schema にない CLI-only surface は structural admission の対象外とし、wave 2 で使う surface は command と出力を別の fail-closed gate で検査する。
-  この gate は compatibility だけを証明し、0.7.4 private socket または fanout 側 marker と合わせても mutation authority にはしない。
+  この gate は compatibility だけを証明し、0.7.5 private socket または fanout 側 marker と合わせても mutation authority にはしない。
   tmux-parity tier は同一 UID の協調プロセスを信頼するため、その proof を operation の前提にしない。
 - backend 選択の resolver は final state rows と provisional intents の両方を入力にする。
   legacy row の空 backend は tmux に正規化する。
@@ -902,8 +1117,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   create は `--no-focus` とし、TUI の明示 launch だけが focus を移す。
   per-repo supervisor が foreground server child を所有し、console detach 後も存続させる。
   最後の child close では停止せず、active intent、row、foreign resource のない明示 repo-session shutdown だけを teardown とする。
-- 0.7.4 wave 2 は `worktree create`、`worktree open`、続く `agent start` を state machine から自動実行する。
-  fanout-owned XDG の plugin registry と config を直前に照合し、setup hook が空の場合だけ tmux-parity tier の launch を続ける。
+- 0.7.5 wave 2 は `worktree create` / `worktree open`、root pane への `pane run`、agent 検出、`agent rename` を state machine から自動実行する。
+  `agent start` は exact executable を pin できないため自動 launch に使わない。
+  plugin registry は session-local ではなく同じ `XDG_CONFIG_HOME` を使う全 session の global state として直前に照合する。
+  fanout-owned XDG の registry と config に予期しない plugin または setup hook がない場合だけ tmux-parity tier の launch を続ける。
   setup hook がある場合は、atomic suppression、registry generation precondition、または operation-scoped completion receipt を持つ proof-grade tier まで fail closed にする。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
   create / open の mutation 前に provisional intent を保存し、同じ worktree ownership nonce を workspace label と checkout git dir marker の両方で照合する。
@@ -918,25 +1135,30 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   branch reservation は worktree mutation が起きていないことを証明できる場合だけ compare-and-delete で解放する。
 - Herdr control-plane env と agent workload env を分離する。
   supervisor の owned XDG を設定する前に、呼び出し元の `HOME` / `PATH` と effective XDG 4 変数を workload env として保存し、未設定値は XDG の `$HOME` 基準の default path に解決する。
-  agent は bare argv、明示 `--cwd`、fanout 固有値、保存した `HOME` / `PATH` と workload XDG を渡す明示 `--env` で起動する。
+  agent は保存済み worktree root pane へ、`/usr/bin/env`、fanout 固有値、保存した `HOME` / `PATH`、workload XDG、絶対 executable、argv を POSIX shell quote した exact `pane run` で起動する。
   呼び出し元の Herdr routing env は agent へ復元せず、agent workload 内の Herdr CLI は control-plane runner を唯一の入口として owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を再構築する。
-  launch 名は repo と親参照に agent launch nonce の hash を加え、同じ intent では安定し session 全体で一意になる決定論的名前を `core/naming` で生成する。
-  `agent start` 前に agent launch nonce、emitter nonce と telemetry routing binding、agent name、provider、絶対 executable、argv / env fingerprint、argv、exact `--cwd` を intent の phase `agent-starting` として保存し、provider が返す exact session ref も取得後に保存する。
-  `agent-starting` で応答を保存できなかった場合は launch 時の `terminal_id` を証明できないため、一意な同名 agent が見つかっても自動採用せず fail closed にする。
-  `agent-started` の回復は保存済み `terminal_id` が現在値と一致する場合だけ元の argv / process cwd を照合し、変わった場合は provider 固有の cold-restart matcher へ分岐する。
-  final row の確定では provider、絶対 executable、元 argv、exact `--cwd`、exact session ref を intent から移し、intent 削除と同じ state save で永続化する。
-  保存済み応答後に pane が消滅した場合は returned PaneRef を束縛した `stale` row を確定し、pending `done` は telemetry としてだけ保存する。
-  応答未保存の agent 欠落、重複、識別不一致は fail closed にする。
+  launch 名は前述の四つの `<len>:<value>` frame の SHA-256 から `fanout-` + 24 lowercase hex の 31 byte とし、`core/naming` の 80 byte slug を直接再利用しない。
+  `agent-starting` の substep は `pane-run-issuing`、`agent-observed`、`agent-rename-issuing`、`agent-renamed` に固定する。
+  `pane-run-issuing` の前に agent launch nonce、emitter nonce と telemetry routing binding、agent name、provider、絶対 executable、argv / env fingerprint、exact command、root PaneRef / `terminal_id` / cwd / worktree provenance を保存する。
+  `pane run` は一回だけ発行し、応答喪失時は再発行しない。
+  保存済み PaneRef と `terminal_id` の上で expected provider が一つだけ検出され、`process-info` の argv0 / argv / cwd と OS process 情報の実 executable / ancestry / process group が intent と完全一致する場合だけ `agent-observed` へ進む。
+  rename request も発行前に保存して一回だけ実行し、応答喪失時は同じ pane の exact name を読めた場合だけ `agent-renamed` へ進む。
+  `interactive_ready` と `launch_pending` は telemetry とし、direct launch の finalization 条件にしない。
+  `agent wait` は launch finalization に使わず、明示的な settled-state workflow だけが finite timeout 付きで使う。
+  `agent-started` の回復は保存済み `terminal_id` が現在値と一致する場合だけ exact process identity を照合し、変わった場合は provider 固有の cold-restart matcher へ分岐する。
+  final row の確定では provider、絶対 executable、元 argv、workload env fingerprint、root pane cwd、exact session ref を intent から移し、intent 削除と同じ state save で永続化する。
+  保存済み identity の pane が消滅した場合は保存済み PaneRef を束縛した `stale` row を確定し、pending `done` は telemetry としてだけ保存する。
+  agent 欠落、重複、別 target の同名、identity 不一致は fail closed にする。
 - snapshot / list / wait の read-only CLI は保存済みの検証済み socket path を明示的に選択する(`HERDR_SOCKET_PATH` が `HERDR_SESSION` より優先されるため)。
   session identity の再確認は routing / identity / status validation、crash recovery、誤操作防止に使い、mutation authority の proof にはしない。
   `pane read` / `agent read`、`pane get` / `pane process-info` は exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合し、不一致なら content または structured result を破棄する。
   read 中だけ session が差し替わる ABA と mutation の check-and-act race は tmux-parity tier の受容済み残余リスクとする。
   request / response が authoritative server / target generation を原子的に束縛できる場合は proof-grade tier へ格上げする。
   request-bound conditional mutation、server-authenticated controller capability、agent と別 UID の server のいずれかが使える場合も同 tier へ格上げする。
-  0.7.4 private socket と fanout 側 marker はこの proof ではないが、別 UID 排除と fanout-owned session への封じ込めに使う。
+  0.7.5 private socket と fanout 側 marker はこの proof ではないが、別 UID 排除と fanout-owned session への封じ込めに使う。
   agent executable と注入 hook が呼ぶ fanout executable は、fanout の起動環境で解決した絶対パスを使う。
 - #427 は fanout CLI 経由で `state.json` の `reported_state` を更新する runtime 非依存の telemetry emitter を追加する。
-  Claude は `agent start` の argv へ `--settings` lifecycle hook を注入する。
+  Claude は direct launch の argv へ `--settings` lifecycle hook を注入する。
   Codex は launch-scoped の provider hook adapter から同じ emitter command を呼び、exact event-to-state mapping と注入成功を検証できる場合だけ state refinement を有効にする。
   Codex adapter が未実装、注入不能、または検証不能なら `reported_state` を未設定のままにして nudge を no-op とする。
   final row の `state_refinement` は provider hook adapter と mapping の検証に成功した launch だけ `true` とする。
@@ -946,9 +1168,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   signal は協調 telemetry として表示、診断、`shouldNudge` gate に使い、完了判定または cleanup に使わない。
   state refinement を有効にした agent は final row 確定時の `reported_state` を `running` で初期化し、その後は provider hook の `working` / `plan` / `blocked` / `idle` / `done` だけで更新する。
   row key は `TaskID` が非空なら `(parent, taskId)`、それ以外は `(parent, issueNum)` とし、manual / watch 等の synthetic launch も後者で扱う。
-  launch lock は final row、intent 削除、または fail-closed 状態の保存まで保持し、同期 hook は lock 待ちの間も pane を生存させ、launcher は hook 完了を待たずに `agent start` 応答を処理する。
+  launch lock は final row、intent 削除、または fail-closed 状態の保存まで保持し、同期 hook は lock 待ちの間も pane を生存させ、launcher は hook 完了を待たずに agent detection / rename / process identity 照合を進める。
   emitter は同じ lock の取得後に final row なら `reported_state` update、matching intent だけなら pending 保存へ分岐する。
-  `agent start` 応答前の signal は authoritative state を更新せず、provisional intent と完全一致する場合だけ pending telemetry とし、返された PaneRef を nonce へ束縛する final state save で `reported_state` へ反映する。
+  final row 確定前の signal は authoritative state を更新せず、provisional intent と完全一致する場合だけ pending telemetry とし、保存済み PaneRef と検証済み process identity を nonce へ束縛する final state save で `reported_state` へ反映する。
   応答を回復できない intent の pending telemetry は final row へ移さない。
   emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新し、cwd や slug から再解決しない。
   0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
@@ -960,10 +1182,11 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - `unknown` record を無条件に running へ写像しない。
   public pane の存在、保存した `terminal_id` との一致、完全一致する一意な `agent_session`、workspace の worktree provenance、provider 固有 matcher で検証した agent process を別々に判定する。
   `foreground_cwd` は識別に使わず、worktree provenance がない場合だけ保存された `cwd` を補助照合に使う。
-- 0.7.4 wave 2 は `terminal_id` が変わった row で、一致する `agent_session` があれば論理上の会話を再対応付けする候補にできる。
-  running へ再束縛できる provider は実測済みの herdr 公式 Codex integration v6 だけとする。
-  exact な Codex `agent_session` ref、一意な foreground process、保存済み絶対 executable、argv0 を除く引数列 `["resume", "<session-id>"]`、保存済み `agent start --cwd` と一致する process cwd を照合する。
+- 0.7.5 wave 2 は `terminal_id` が変わった row で、一致する `agent_session` があれば論理上の会話を再対応付けする候補にできる。
+  0.7.4 で実測した herdr 公式 Codex integration v6 exact matcher は non-PlanMode Codex にだけ使う。
+  exact な Codex `agent_session` ref、一意な foreground process、保存済み絶対 executable、argv0 を除く引数列 `["resume", "<session-id>"]`、保存済み root pane cwd と一致する process cwd を照合する。
   候補 PID が `shell_pid` 自身またはその子孫で、現在の foreground process group に属することを OS process 情報で確認し、新しい terminal / process identity を一回の state save で束縛する。
+  process identity の再束縛後に同じ pane へ deterministic name を再び一回だけ rename し、応答喪失時は exact name の再読だけで回復する。
   process identity の再束縛後も `reported_state` は未設定、`state_refinement` は `false` のままとする。
   resumed process で provider hook adapter と mapping を再検証し、回転後の emitter nonce と新しい `terminal_id` に束縛された fresh signal を受けた場合だけ `state_refinement:true` と `reported_state` を同じ state save で確定する。
   adapter の再注入または検証経路がなければ resume は続け、nudge だけを no-op のままにする。
@@ -976,21 +1199,27 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   provider hook adapter の注入と mapping を検証できない agent は、名前が Claude / Codex でも state refinement なしとして no-op にする。
   trim 済み `reported_state` の `running` / `working` / `plan` / `idle` は送信候補、`blocked` / `done` / 未設定 / 未知値は no-op とする。
   live snapshot で backend / session / workspace / pane、`terminal_id`、`agent_session`、worktree provenance、agent を送信直前に再照合する。
-  続いて state lock 下で最新 row の key、emitter nonce、PaneRef、`state_refinement:true` を再照合し、その row の `reported_state` だけを `shouldNudge` へ渡す。
-  Herdr snapshot の native public status は `reported_state` の代用にせず、照合成功後に lock を解放して `pane run` を一回発行する。
-  operational miss と send failure は message bus の保存を維持した no-op success とする。
+  続いて state lock 下で最新 row の key、emitter nonce、PaneRef、deterministic name、`state_refinement:true` を再照合し、その row の `reported_state` だけを `shouldNudge` へ渡す。
+  Herdr snapshot の native public status は `reported_state` の代用にせず、照合成功後に lock を解放して exact pane ID を target に no-wait の `agent prompt` を一回発行する。
+  `--wait` は `agent_prompt_stalled`、既存 active turn の完了との混同、無期限 settled-state wait を nudge へ持ち込むため使わない。
+  operational miss、send failure、timeout、応答喪失は message bus の保存を維持した no-op success とし、再送しない。
   check-and-send race は tmux の `ListLive` から non-transactional `send-keys` までの race と同種の受容済み残余リスクである。
   atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance が揃えば proof-grade tier へ格上げする。
   herdr の `notification show` は nudge に使わない。
 - `codexPlanMode` は 2026-07-21 JST のユーザー決定で恒久除外を撤回し、対応する。
-  `fanout __codex-plan-tui` を pane 内 controller として herdr `agent start` の bare argv と明示 cwd / env で起動する。
-  controller は pane 内プロセスであり、runtime backend の外から terminal UI を操作しない — 除外理由だった外部からの terminal UI 操作には該当しない。
+  `agent start --kind codex --pane ... -- /abs/fanout __codex-plan-tui` は bare `codex` に wrapper を引数として渡すため禁止する。
+  worktree root pane へ `/usr/bin/env` の workload env と絶対 `fanout __codex-plan-tui` を #528 と同じ `pane run` state machine で起動する。
+  controller は pane 内プロセスであり、runtime backend の外から terminal UI を操作しない。
   in-pane controller は自動 nudge と同種の協調プロセス信頼として tmux-parity tier に置く。
   working / plan の telemetry は emitter lane の `reported_state` 経由とし、tmux pane option へは書き込まない。
-  cold restart 後の restore は `PlanMode && Agent=="codex"` ゲート([session 開始時 plan mode の統一設定](session-plan-mode.ja.md)の #544 決定)と、controller wrapper 実行形態を含む exact process matcher を要求する。
-  実装の解禁条件は #528(agent start)、#529(emitter)、#544(launch matrix の plan mode 一般化)の導入後で、実装子は別 issue とする。
-- CLI-first の wait と cold restart の再開待ちは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の上記共有 budget を使う。
-  terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とし、snapshot と event wait を直列に組み合わせない。
+  launch readiness は PaneRef / `terminal_id` / worktree、fanout controller の executable / argv、controller が起動した Codex child の executable / argv、cwd、ancestry、foreground process group の完全一致で判定する。
+  cold restart 後は旧 `terminal_id` と name を失効させ、bare `codex resume` を PlanMode controller として再採用しない。
+  `PlanMode && Agent=="codex"` ゲート([session 開始時 plan mode の統一設定](session-plan-mode.ja.md)の #544 決定)と保存済み thread / session identity が一致する場合だけ、clean root pane へ絶対 plan controller の resume request を `pane run` で一回発行する。
+  controller から Codex child までの exact process chain を観測できなければ `stale` または `manual_cleanup_required` とする。
+  実装の解禁条件は #528(direct launch)、#529(emitter)、#544(launch matrix の plan mode 一般化)の導入後で、実装子は別 issue とする。
+- `agent wait` と `pane wait-output` は server-owned current-state / current-buffer wait として有限 timeout 付きで使う。
+  direct launch の agent 検出と cold-restart reconciliation だけは、3 秒以上の整数 `total_timeout`、2 秒間隔、既定 300 秒、各 CLI call 最大 5 秒、snapshot 最大 `ceil(total_timeout / 2 秒)` 回の共有 polling budget を使う。
+  polling の terminal result は `matched`、`timed_out`、`cancelled`、`failed` の四値とする。
 - generic workspace shell は `HERDR_ENV=1` から自動検出し、nested tmux では `--backend tmux` または `FANOUT_BACKEND=tmux` で明示的に上書きできるようにする。
 - herdr backend の cleanup は `worktree remove`、`workspace close`、`pane close`、必要な削除用 `worktree open` を exact ownership の送信直前再照合後に実行する。
   dirty worktree の `--force` は明示的なユーザー確認を要求する。
@@ -1012,6 +1241,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - [CLI reference](https://herdr.dev/docs/cli-reference/)
 - [Socket API](https://herdr.dev/docs/socket-api/)
 - [Agents](https://herdr.dev/docs/agents/)
+- [Agent automation v0.7.5](https://github.com/ogulcancelik/herdr/blob/v0.7.5/website/src/content/docs/agent-automation.mdx)
+- [v0.7.5 release](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5)
 - [Configuration](https://herdr.dev/docs/configuration/)
 - [Config reference](https://herdr.dev/docs/config-reference/)
 - [Session state](https://herdr.dev/docs/session-state/)
@@ -1020,3 +1251,4 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - 親設計の承認: [#424 spike 反映](https://github.com/butaosuinu/fanout/issues/423#issuecomment-4986704437)
 - 検証 issue: [#424](https://github.com/butaosuinu/fanout/issues/424)
 - wave 2 検証 issue: [#525](https://github.com/butaosuinu/fanout/issues/525)
+- 0.7.5 再検証 issue: [#557](https://github.com/butaosuinu/fanout/issues/557)
