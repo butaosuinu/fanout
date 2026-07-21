@@ -16,7 +16,11 @@ fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別
 
 名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout が herdr を読むのは 4 つの CLI コマンドだけです: `herdr --version`、`herdr status --json`、`herdr api schema --json`、`herdr api snapshot`。
+fanout は `herdr --version`、`herdr api schema --json`、`herdr pane --help`、`herdr workspace --help`、`herdr worktree --help`、`herdr status --json` で herdr を検証します。
+名前付き session を最初に解決するときだけ、status は `herdr --session <name> status --json` になります。
+admission 後は `herdr api snapshot` で生死を読みます。
+schema gate は必要な request / response method と field を検査します。
+help gate は対象を読み書きせず、pane read/run/close、workspace focus/close、worktree remove のコマンド形式を検査します。
 
 herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
 
@@ -29,7 +33,10 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 ## 前提条件
 
-- **herdr 0.7.3 ちょうど** — CLI と server の両方。protocol 16、API schema version 1。それ以外の version は新しくても fail closed します。fanout は semver の互換性を仮定せず、検証済みの組だけを許可します。
+- **herdr stable 0.7.4 以降**：`herdr --version`、status の client/server、各 snapshot は、同じ admitted version を返す必要があります。
+  status の client は stable channel と protocol 16、server は running、protocol 16、`compatible: true`、restart 不要である必要があります。
+- **互換性のある API とコマンド surface**：API schema 文書は protocol 16、schema version 1 と必要な request / response 構造を返す必要があります。
+  新しい version は schema gate と CLI help gate の両方を通る場合だけ受理されます。
 - 明示的な名前を付けた herdr session が稼働していること(`default` は拒否されます)。fanout は herdr server を起動せず、session の作成も attach もしません。
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
 

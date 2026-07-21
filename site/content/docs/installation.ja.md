@@ -19,7 +19,9 @@ yomi: install
 
 > **Project モード時のみ**: Project items を取得する GraphQL クエリのため、`gh` CLI に `read:project` スコープが必要です。`gh auth refresh -s read:project` で付与してください。issue モード(`fanout <N>`)では不要です。
 
-この 3 つは既定の tmux backend の前提です。opt-in の [herdr backend]({{< relref "/docs/herdr-backend" >}})(v1 は観測専用)では tmux の代わりに herdr 0.7.3 を使います。herdr は AGPL ライセンスで fanout には同梱されないので、別途インストールしてください。
+この 3 つは既定の tmux backend の前提です。
+opt-in の [herdr backend]({{< relref "/docs/herdr-backend" >}})(v1 は観測専用)では、API schema の構造検査と command-surface gate を満たす stable herdr 0.7.4 以降を tmux の代わりに使います。
+herdr は AGPL ライセンスで fanout には同梱されないので、別途インストールしてください。
 
 ## インストール
 

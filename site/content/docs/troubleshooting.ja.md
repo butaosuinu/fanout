@@ -132,17 +132,27 @@ TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は
 
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
-fanout は検証済みの herdr の組 — CLI と server 0.7.3、protocol 16、API schema version 1 — に固定し、それ以外は新しい version でも fail closed します。
-`herdr 0.7.3 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
-実際に入っているものを確認してください。
+fanout は stable herdr 0.7.4 以降を要求します。
+`herdr --version`、status の client/server、各 snapshot は、同じ admitted version を返す必要があります。
+status の client は stable channel と protocol 16、server は running、protocol 16、`compatible: true`、2 つの restart flag は false である必要があります。
+API schema 文書は protocol 16、schema version 1 を返し、構造 schema gate と CLI command-surface gate の両方を通る必要があります。
+新しい version でも必要な method、field、コマンド形式が変わっていれば fail closed します。
+`herdr stable >=0.7.4 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
+fanout が使う surface を確認してください。
 
 ```bash
-herdr --version          # herdr 0.7.3 と出ること
-herdr status --json      # server の組: version、protocol、compatible
-herdr api schema --json  # API の組: protocol 16、schema_version 1
+herdr --version           # stable 0.7.4 以降
+herdr --session NAME status --json  # 名前付き session の初回解決
+herdr status --json       # 固定 socket: exact version、stable、protocol 16、restart 不要
+herdr api schema --json   # protocol 16、schema_version 1、必要な構造
+herdr pane --help         # pane read/run/close のコマンド形式
+herdr workspace --help    # workspace focus/close のコマンド形式
+herdr worktree --help     # worktree remove のコマンド形式
+herdr api snapshot        # exact admitted version、protocol 16、live 構造
 ```
 
-herdr 0.7.3 を入れて合わせてください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
+互換性のある stable herdr 0.7.4 以降をインストールしてください。
+`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

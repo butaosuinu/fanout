@@ -110,15 +110,20 @@ herdr status --json   # server and session state
 
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
-fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
+fanout requires stable herdr 0.7.4 or newer. `herdr --version`, the status client/server, and each snapshot must report the same admitted version. The status client must use the stable channel and protocol 16; the server must be running with protocol 16, `compatible: true`, and both restart flags false. The API schema document must report protocol 16 and schema version 1, and the structural schema and CLI command-surface gates must pass. A newer version still fails closed when a required method, field, or command form changed. `herdr stable >=0.7.4 is required: ...` means the `herdr` binary was not found on `PATH`. Check the surfaces fanout uses:
 
 ```bash
-herdr --version          # must print: herdr 0.7.3
-herdr status --json      # server tuple: version, protocol, compatible
-herdr api schema --json  # API tuple: protocol 16, schema_version 1
+herdr --version           # stable 0.7.4 or newer
+herdr --session NAME status --json  # initial named-session resolution
+herdr status --json       # pinned socket: exact version, stable, protocol 16, no restart
+herdr api schema --json   # protocol 16, schema_version 1, required structure
+herdr pane --help         # pane read/run/close command forms
+herdr workspace --help    # workspace focus/close command forms
+herdr worktree --help     # worktree remove command form
+herdr api snapshot        # exact admitted version, protocol 16, live structure
 ```
 
-Install herdr 0.7.3 to match. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
+Install a compatible stable herdr 0.7.4 or newer. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

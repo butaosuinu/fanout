@@ -11,7 +11,7 @@ The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-
 
 ## What v1 does
 
-Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. fanout reads herdr through four CLI commands only: `herdr --version`, `herdr status --json`, `herdr api schema --json`, and `herdr api snapshot`.
+Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. fanout admits herdr with `herdr --version`, `herdr api schema --json`, `herdr pane --help`, `herdr workspace --help`, `herdr worktree --help`, and `herdr status --json`. Initial named-session resolution uses `herdr --session <name> status --json` instead. After admission, fanout reads liveness with `herdr api snapshot`. The schema gate checks the required request and response methods and fields. The help gate checks the command forms for pane read/run/close, workspace focus/close, and worktree remove without reading or mutating a target.
 
 Everything that would mutate a herdr session fails closed with a clear error instead of degrading:
 
@@ -24,7 +24,8 @@ The TUI header always shows the selected backend and why it was selected, such a
 
 ## Prerequisites
 
-- **herdr 0.7.3 exactly** — CLI and server, with protocol 16 and API schema version 1. Any other version fails closed, including newer ones: fanout pins the verified tuple instead of assuming semver compatibility.
+- **herdr stable 0.7.4 or newer** — `herdr --version`, the status client/server, and each snapshot must report the same admitted version. The status client must use the stable channel and protocol 16; the server must be running with protocol 16, `compatible: true`, and no pending restart.
+- **Compatible API and command surfaces** — the API schema document must report protocol 16 and schema version 1, with the required request/response structure. A newer version is accepted only when the schema and CLI help gates pass.
 - A running herdr session with an explicit name (`default` is rejected). fanout never starts a herdr server and never creates or attaches a session.
 - The `herdr` binary on your `PATH`, installed separately.
 
