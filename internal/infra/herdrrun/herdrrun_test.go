@@ -320,6 +320,9 @@ func validSnapshot() string {
     "snapshot":{
       "version":"0.7.4",
       "protocol":16,
+      "focused_workspace_id":"w1",
+      "focused_tab_id":"w1:t1",
+      "focused_pane_id":"w1:p1",
       "workspaces":[
         {"workspace_id":"w1","number":1,"label":"root","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"},
         {"workspace_id":"w2","number":2,"label":"child","focused":false,"pane_count":1,"tab_count":1,"active_tab_id":"w2:t1","agent_status":"working","worktree":{"repo_key":"/repo/.git","repo_name":"repo","repo_root":"/repo","checkout_path":"/repo/.fanout/worktrees/child","is_linked_worktree":true}}
@@ -679,6 +682,23 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	}
 }
 
+func TestListLiveAcceptsOmittedOptionalFocusedIDs(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshot = strings.Replace(fake.snapshot, `      "focused_workspace_id":"w1",
+      "focused_tab_id":"w1:t1",
+      "focused_pane_id":"w1:p1",
+`, "", 1)
+	b := newTestBackend(t, session, socket, fake)
+
+	if _, err := b.ListLive(); err != nil {
+		t.Fatalf("ListLive() with omitted optional focus ids: %v", err)
+	}
+}
+
 func TestListLiveRejectsExecutableHashDriftAfterAdmission(t *testing.T) {
 	const (
 		session = "fanout-test"
@@ -799,6 +819,55 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 			wantErr: "tab with incomplete required fields",
 		},
 		{
+			name: "tab references unknown workspace",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"tab_id":"w2:t1","workspace_id":"w2"`, `"tab_id":"w2:t1","workspace_id":"missing"`, 1)
+			},
+			wantErr: "tab \"w2:t1\" references unknown workspace",
+		},
+		{
+			name: "pane references unknown tab",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"w2:t1"`, `"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"missing"`, 1)
+			},
+			wantErr: "pane \"w2:p1\" references unknown tab",
+		},
+		{
+			name: "pane workspace disagrees with tab",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w2","tab_id":"w2:t1"`, `"pane_id":"w2:p1","terminal_id":"term-child","workspace_id":"w1","tab_id":"w2:t1"`, 1)
+			},
+			wantErr: "workspace \"w1\" disagrees with tab \"w2:t1\" workspace \"w2\"",
+		},
+		{
+			name: "workspace references foreign active tab",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"active_tab_id":"w2:t1"`, `"active_tab_id":"w1:t1"`, 1)
+			},
+			wantErr: "workspace \"w2\" references invalid active tab",
+		},
+		{
+			name: "workspace tab count disagrees with collection",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"tab_count":1,"active_tab_id":"w2:t1"`, `"tab_count":2,"active_tab_id":"w2:t1"`, 1)
+			},
+			wantErr: "workspace \"w2\" tab_count=2, observed 1",
+		},
+		{
+			name: "workspace pane count disagrees with collection",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"pane_count":1,"tab_count":1,"active_tab_id":"w2:t1"`, `"pane_count":2,"tab_count":1,"active_tab_id":"w2:t1"`, 1)
+			},
+			wantErr: "workspace \"w2\" pane_count=2, observed 1",
+		},
+		{
+			name: "tab pane count disagrees with collection",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"child","focused":false,"pane_count":1`, `"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"child","focused":false,"pane_count":2`, 1)
+			},
+			wantErr: "tab \"w2:t1\" pane_count=2, observed 1",
+		},
+		{
 			name: "layout area missing required width field",
 			mutate: func(snapshot string) string {
 				return strings.Replace(
@@ -809,6 +878,28 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 				)
 			},
 			wantErr: "layout with incomplete required fields",
+		},
+		{
+			name: "layout references pane from another tab",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"pane_id":"w2:p1","focused":false,"rect"`, `"pane_id":"w1:p1","focused":false,"rect"`, 1)
+			},
+			wantErr: "layout for tab \"w2:t1\" references foreign or unknown pane",
+		},
+		{
+			name: "snapshot is missing a tab layout",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `,
+        {"workspace_id":"w2","tab_id":"w2:t1","zoomed":false,"area":{"x":0,"y":0,"width":80,"height":24},"focused_pane_id":"w2:p1","panes":[{"pane_id":"w2:p1","focused":false,"rect":{"x":0,"y":0,"width":80,"height":24}}],"splits":[]}`, "", 1)
+			},
+			wantErr: "missing layout for tab \"w2:t1\"",
+		},
+		{
+			name: "top-level focused pane disagrees with collections",
+			mutate: func(snapshot string) string {
+				return strings.Replace(snapshot, `"focused_pane_id":"w1:p1"`, `"focused_pane_id":"w2:p1"`, 1)
+			},
+			wantErr: "focused_pane_id=\"w2:p1\", observed \"w1:p1\"",
 		},
 		{
 			name: "worktree missing checkout path",

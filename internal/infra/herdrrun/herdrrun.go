@@ -837,13 +837,16 @@ type snapshotResult struct {
 }
 
 type snapshotJSON struct {
-	Version    string           `json:"version"`
-	Protocol   int              `json:"protocol"`
-	Workspaces *[]workspaceJSON `json:"workspaces"`
-	Tabs       *[]tabJSON       `json:"tabs"`
-	Panes      *[]paneJSON      `json:"panes"`
-	Layouts    *[]layoutJSON    `json:"layouts"`
-	Agents     *[]agentJSON     `json:"agents"`
+	Version            string           `json:"version"`
+	Protocol           int              `json:"protocol"`
+	FocusedWorkspaceID *string          `json:"focused_workspace_id"`
+	FocusedTabID       *string          `json:"focused_tab_id"`
+	FocusedPaneID      *string          `json:"focused_pane_id"`
+	Workspaces         *[]workspaceJSON `json:"workspaces"`
+	Tabs               *[]tabJSON       `json:"tabs"`
+	Panes              *[]paneJSON      `json:"panes"`
+	Layouts            *[]layoutJSON    `json:"layouts"`
+	Agents             *[]agentJSON     `json:"agents"`
 }
 
 type workspaceJSON struct {
@@ -1034,7 +1037,7 @@ func projectSnapshot(envelope snapshotEnvelope, target route, admittedVersion st
 		panesByID[pane.PaneID] = pane
 		terminalIDs[pane.TerminalID] = pane.PaneID
 	}
-	if err := validateSnapshotLayouts(*snapshot.Layouts); err != nil {
+	if err := validateSnapshotRelationships(snapshot, workspaces, tabsByID, panesByID); err != nil {
 		return nil, err
 	}
 
@@ -1125,7 +1128,135 @@ func projectSnapshot(envelope snapshotEnvelope, target route, admittedVersion st
 	return live, nil
 }
 
-func validateSnapshotLayouts(layouts []layoutJSON) error {
+func validateSnapshotRelationships(
+	snapshot snapshotJSON,
+	workspaces map[string]workspaceJSON,
+	tabsByID map[string]tabJSON,
+	panesByID map[string]paneJSON,
+) error {
+	tabsByWorkspace := make(map[string]map[string]struct{}, len(workspaces))
+	panesByWorkspace := make(map[string]map[string]struct{}, len(workspaces))
+	panesByTab := make(map[string]map[string]struct{}, len(tabsByID))
+	focusedWorkspaceID := ""
+	focusedTabID := ""
+	focusedPaneID := ""
+
+	for tabID, tab := range tabsByID {
+		if _, ok := workspaces[tab.WorkspaceID]; !ok {
+			return fmt.Errorf("herdr tab %q references unknown workspace %q", tabID, tab.WorkspaceID)
+		}
+		if tabsByWorkspace[tab.WorkspaceID] == nil {
+			tabsByWorkspace[tab.WorkspaceID] = make(map[string]struct{})
+		}
+		tabsByWorkspace[tab.WorkspaceID][tabID] = struct{}{}
+		if *tab.Focused {
+			if focusedTabID != "" {
+				return fmt.Errorf("herdr snapshot contains multiple focused tabs %q and %q", focusedTabID, tabID)
+			}
+			focusedTabID = tabID
+		}
+	}
+
+	for paneID, pane := range panesByID {
+		tab, ok := tabsByID[pane.TabID]
+		if !ok {
+			return fmt.Errorf("herdr pane %q references unknown tab %q", paneID, pane.TabID)
+		}
+		if tab.WorkspaceID != pane.WorkspaceID {
+			return fmt.Errorf("herdr pane %q workspace %q disagrees with tab %q workspace %q", paneID, pane.WorkspaceID, pane.TabID, tab.WorkspaceID)
+		}
+		if panesByWorkspace[pane.WorkspaceID] == nil {
+			panesByWorkspace[pane.WorkspaceID] = make(map[string]struct{})
+		}
+		panesByWorkspace[pane.WorkspaceID][paneID] = struct{}{}
+		if panesByTab[pane.TabID] == nil {
+			panesByTab[pane.TabID] = make(map[string]struct{})
+		}
+		panesByTab[pane.TabID][paneID] = struct{}{}
+		if *pane.Focused {
+			if focusedPaneID != "" {
+				return fmt.Errorf("herdr snapshot contains multiple focused panes %q and %q", focusedPaneID, paneID)
+			}
+			focusedPaneID = paneID
+		}
+	}
+
+	for workspaceID, workspace := range workspaces {
+		activeTab, ok := tabsByID[*workspace.ActiveTabID]
+		if !ok || activeTab.WorkspaceID != workspaceID {
+			return fmt.Errorf("herdr workspace %q references invalid active tab %q", workspaceID, *workspace.ActiveTabID)
+		}
+		if got := uint64(len(tabsByWorkspace[workspaceID])); got != *workspace.TabCount {
+			return fmt.Errorf("herdr workspace %q tab_count=%d, observed %d", workspaceID, *workspace.TabCount, got)
+		}
+		if got := uint64(len(panesByWorkspace[workspaceID])); got != *workspace.PaneCount {
+			return fmt.Errorf("herdr workspace %q pane_count=%d, observed %d", workspaceID, *workspace.PaneCount, got)
+		}
+		if *workspace.Focused {
+			if focusedWorkspaceID != "" {
+				return fmt.Errorf("herdr snapshot contains multiple focused workspaces %q and %q", focusedWorkspaceID, workspaceID)
+			}
+			focusedWorkspaceID = workspaceID
+			if !*activeTab.Focused {
+				return fmt.Errorf("herdr focused workspace %q has unfocused active tab %q", workspaceID, *workspace.ActiveTabID)
+			}
+		}
+	}
+
+	for tabID, tab := range tabsByID {
+		if got := uint64(len(panesByTab[tabID])); got != *tab.PaneCount {
+			return fmt.Errorf("herdr tab %q pane_count=%d, observed %d", tabID, *tab.PaneCount, got)
+		}
+		workspace := workspaces[tab.WorkspaceID]
+		if *tab.Focused && (!*workspace.Focused || *workspace.ActiveTabID != tabID) {
+			return fmt.Errorf("herdr focused tab %q disagrees with workspace %q focus", tabID, tab.WorkspaceID)
+		}
+	}
+
+	for paneID, pane := range panesByID {
+		if !*pane.Focused {
+			continue
+		}
+		tab := tabsByID[pane.TabID]
+		workspace := workspaces[pane.WorkspaceID]
+		if !*tab.Focused || !*workspace.Focused {
+			return fmt.Errorf("herdr focused pane %q disagrees with tab or workspace focus", paneID)
+		}
+	}
+
+	if (focusedWorkspaceID == "") != (focusedTabID == "") || (focusedTabID == "") != (focusedPaneID == "") {
+		return fmt.Errorf("herdr snapshot has an incomplete focused workspace/tab/pane chain")
+	}
+	if err := validateOptionalFocusedID("workspace", snapshot.FocusedWorkspaceID, focusedWorkspaceID); err != nil {
+		return err
+	}
+	if err := validateOptionalFocusedID("tab", snapshot.FocusedTabID, focusedTabID); err != nil {
+		return err
+	}
+	if err := validateOptionalFocusedID("pane", snapshot.FocusedPaneID, focusedPaneID); err != nil {
+		return err
+	}
+
+	return validateSnapshotLayouts(*snapshot.Layouts, workspaces, tabsByID, panesByID, panesByTab)
+}
+
+func validateOptionalFocusedID(kind string, reported *string, observed string) error {
+	if reported == nil {
+		return nil
+	}
+	if strings.TrimSpace(*reported) == "" || *reported != observed {
+		return fmt.Errorf("herdr snapshot focused_%s_id=%q, observed %q", kind, *reported, observed)
+	}
+	return nil
+}
+
+func validateSnapshotLayouts(
+	layouts []layoutJSON,
+	workspaces map[string]workspaceJSON,
+	tabsByID map[string]tabJSON,
+	panesByID map[string]paneJSON,
+	panesByTab map[string]map[string]struct{},
+) error {
 	seenLayouts := make(map[string]bool, len(layouts))
 	for _, layout := range layouts {
 		if strings.TrimSpace(layout.WorkspaceID) == "" || strings.TrimSpace(layout.TabID) == "" ||
@@ -1133,11 +1264,17 @@ func validateSnapshotLayouts(layouts []layoutJSON) error {
 			strings.TrimSpace(*layout.FocusedPane) == "" || layout.Panes == nil || layout.Splits == nil {
 			return fmt.Errorf("herdr snapshot contains a layout with incomplete required fields")
 		}
-		layoutKey := layout.WorkspaceID + "\x00" + layout.TabID
-		if seenLayouts[layoutKey] {
+		tab, ok := tabsByID[layout.TabID]
+		if !ok {
+			return fmt.Errorf("herdr layout references unknown tab %q", layout.TabID)
+		}
+		if _, ok := workspaces[layout.WorkspaceID]; !ok || tab.WorkspaceID != layout.WorkspaceID {
+			return fmt.Errorf("herdr layout for tab %q has invalid workspace %q", layout.TabID, layout.WorkspaceID)
+		}
+		if seenLayouts[layout.TabID] {
 			return fmt.Errorf("herdr snapshot contains duplicate layout for tab %q", layout.TabID)
 		}
-		seenLayouts[layoutKey] = true
+		seenLayouts[layout.TabID] = true
 
 		layoutPanes := make(map[string]bool, len(*layout.Panes))
 		for _, layoutPane := range *layout.Panes {
@@ -1147,16 +1284,39 @@ func validateSnapshotLayouts(layouts []layoutJSON) error {
 			if layoutPanes[layoutPane.PaneID] {
 				return fmt.Errorf("herdr layout for tab %q contains duplicate pane %q", layout.TabID, layoutPane.PaneID)
 			}
+			pane, ok := panesByID[layoutPane.PaneID]
+			if !ok || pane.WorkspaceID != layout.WorkspaceID || pane.TabID != layout.TabID {
+				return fmt.Errorf("herdr layout for tab %q references foreign or unknown pane %q", layout.TabID, layoutPane.PaneID)
+			}
+			if *layoutPane.Focused != *pane.Focused {
+				return fmt.Errorf("herdr layout focus disagrees with pane %q", layoutPane.PaneID)
+			}
 			layoutPanes[layoutPane.PaneID] = true
 		}
 		if !layoutPanes[*layout.FocusedPane] {
 			return fmt.Errorf("herdr layout for tab %q references unknown focused pane %q", layout.TabID, *layout.FocusedPane)
+		}
+		if len(layoutPanes) != len(panesByTab[layout.TabID]) {
+			return fmt.Errorf("herdr layout for tab %q pane set does not match snapshot panes", layout.TabID)
+		}
+		for paneID := range panesByTab[layout.TabID] {
+			if !layoutPanes[paneID] {
+				return fmt.Errorf("herdr layout for tab %q is missing pane %q", layout.TabID, paneID)
+			}
+		}
+		if *tab.Focused && !*panesByID[*layout.FocusedPane].Focused {
+			return fmt.Errorf("herdr focused tab %q has unfocused layout pane %q", layout.TabID, *layout.FocusedPane)
 		}
 		for _, split := range *layout.Splits {
 			if strings.TrimSpace(split.ID) == "" || split.Ratio == nil || !completeLayoutRect(split.Rect) ||
 				(split.Direction != "right" && split.Direction != "down") {
 				return fmt.Errorf("herdr layout for tab %q contains a split with incomplete required fields", layout.TabID)
 			}
+		}
+	}
+	for tabID := range tabsByID {
+		if !seenLayouts[tabID] {
+			return fmt.Errorf("herdr snapshot is missing layout for tab %q", tabID)
 		}
 	}
 	return nil

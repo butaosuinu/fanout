@@ -699,7 +699,7 @@ func TestClosePaneOwnedClosesOnlyPaneAndConfirmsAbsence(t *testing.T) {
 	}
 	h.fake.snapshotResults = []fakeSnapshotResult{
 		{output: h.baseSnapshot},
-		{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2", false)},
+		{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2")},
 	}
 
 	if err := h.backend.ClosePaneOwned(context.Background(), ClosePaneRequest{Target: h.childTarget()}); err != nil {
@@ -708,6 +708,55 @@ func TestClosePaneOwnedClosesOnlyPaneAndConfirmsAbsence(t *testing.T) {
 	if len(h.calls) != 1 || h.calls[0][0] != "pane" {
 		t.Fatalf("operation calls = %v, want pane close only", h.calls)
 	}
+}
+
+func TestOwnedCloseRejectsDanglingSnapshotCollections(t *testing.T) {
+	t.Run("pane close", func(t *testing.T) {
+		h := newOwnedOperationHarness(t)
+		h.respond = func([]string) ([]byte, error) { return okOperationResponse("cli:pane:close"), nil }
+		h.fake.snapshotResults = []fakeSnapshotResult{
+			{output: h.baseSnapshot},
+			{output: snapshotWithDanglingWorkspaceResources(t, h.baseSnapshot, "w2")},
+		}
+
+		err := h.backend.ClosePaneOwned(context.Background(), ClosePaneRequest{Target: h.childTarget()})
+		if err == nil || !strings.Contains(err.Error(), "references unknown workspace") {
+			t.Fatalf("ClosePaneOwned() error = %v, want dangling snapshot rejection", err)
+		}
+		if len(h.calls) != 1 {
+			t.Fatalf("mutation calls = %v, want one pane close", h.calls)
+		}
+	})
+
+	t.Run("owned close", func(t *testing.T) {
+		h := newOwnedOperationHarness(t)
+		h.respond = func(args []string) ([]byte, error) {
+			switch args[0] {
+			case "worktree":
+				h.removeCheckout(t)
+				return worktreeRemovedResponse("w2", h.worktreePath, false), nil
+			case "workspace":
+				return okOperationResponse("cli:workspace:close"), nil
+			default:
+				return nil, fmt.Errorf("unexpected args: %v", args)
+			}
+		}
+		h.fake.snapshotResults = []fakeSnapshotResult{
+			{output: h.baseSnapshot},
+			{output: h.baseSnapshot},
+			{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
+			{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
+			{output: snapshotWithDanglingWorkspaceResources(t, h.baseSnapshot, "w2")},
+		}
+
+		result, err := h.backend.CloseOwnedSession(context.Background(), h.ownedCloseRequest())
+		if err == nil || result.Status != corebackend.CloseFailed || !strings.Contains(err.Error(), "references unknown workspace") {
+			t.Fatalf("CloseOwnedSession() = %#v, %v; want dangling snapshot rejection", result, err)
+		}
+		if len(h.calls) != 2 {
+			t.Fatalf("mutation calls = %v, want remove then one workspace close", h.calls)
+		}
+	})
 }
 
 func TestCloseOwnedRemovesWorktreeThenResidualWorkspaceWithoutBranchMutation(t *testing.T) {
@@ -728,7 +777,7 @@ func TestCloseOwnedRemovesWorktreeThenResidualWorkspaceWithoutBranchMutation(t *
 		{output: h.baseSnapshot},
 		{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
 		{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
-		{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2", true)},
+		{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2")},
 	}
 
 	result, err := h.backend.CloseOwnedSession(context.Background(), h.ownedCloseRequest())
@@ -761,7 +810,7 @@ func TestCloseOwnedForceIsExplicit(t *testing.T) {
 		h.fake.snapshotResults = []fakeSnapshotResult{
 			{output: h.baseSnapshot},
 			{output: h.baseSnapshot},
-			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2", true)},
+			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2")},
 		}
 		request := h.ownedCloseRequest()
 		request.Force = true
@@ -810,7 +859,7 @@ func TestBoundCoreCloseOwnedRunsSavedCompositeOnlyForExactFingerprint(t *testing
 			{output: h.baseSnapshot},
 			{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
 			{output: snapshotAfterWorktreeRemoval(t, h.baseSnapshot, "w2")},
-			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2", true)},
+			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2")},
 		}
 		target := h.childTarget()
 		result, err := bound.CloseOwned(corebackend.CloseRequest{
@@ -1375,7 +1424,7 @@ func TestBoundCoreBackendMethodsUseImmutableTarget(t *testing.T) {
 		h.respond = func([]string) ([]byte, error) { return okOperationResponse("cli:pane:close"), nil }
 		h.fake.snapshotResults = []fakeSnapshotResult{
 			{output: h.baseSnapshot},
-			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2", false)},
+			{output: snapshotWithoutWorkspaceResources(t, h.baseSnapshot, "w2")},
 		}
 		if err := bound.Close(h.childTarget().Ref); err != nil {
 			t.Fatal(err)
@@ -1484,10 +1533,52 @@ func workspaceFocusedResponseWithLabel(workspace, label string) []byte {
 func snapshotWithFocusedWorkspace(t *testing.T, source, workspaceID string) string {
 	t.Helper()
 	return mutateSnapshot(t, source, func(snapshot map[string]any) {
+		activeTabID := ""
 		for _, workspace := range snapshot["workspaces"].([]any) {
 			item := workspace.(map[string]any)
-			item["focused"] = item["workspace_id"] == workspaceID
+			focused := item["workspace_id"] == workspaceID
+			item["focused"] = focused
+			if focused {
+				activeTabID = item["active_tab_id"].(string)
+			}
 		}
+		if activeTabID == "" {
+			t.Fatalf("snapshot does not contain workspace %q", workspaceID)
+		}
+
+		focusedPaneID := ""
+		for _, layout := range snapshot["layouts"].([]any) {
+			item := layout.(map[string]any)
+			if item["tab_id"] == activeTabID {
+				focusedPaneID = item["focused_pane_id"].(string)
+			}
+		}
+		if focusedPaneID == "" {
+			t.Fatalf("snapshot does not contain layout for active tab %q", activeTabID)
+		}
+
+		for _, tab := range snapshot["tabs"].([]any) {
+			item := tab.(map[string]any)
+			item["focused"] = item["tab_id"] == activeTabID
+		}
+		for _, pane := range snapshot["panes"].([]any) {
+			item := pane.(map[string]any)
+			item["focused"] = item["pane_id"] == focusedPaneID
+		}
+		for _, layout := range snapshot["layouts"].([]any) {
+			item := layout.(map[string]any)
+			for _, pane := range item["panes"].([]any) {
+				layoutPane := pane.(map[string]any)
+				layoutPane["focused"] = layoutPane["pane_id"] == focusedPaneID
+			}
+		}
+		for _, agent := range snapshot["agents"].([]any) {
+			item := agent.(map[string]any)
+			item["focused"] = item["pane_id"] == focusedPaneID
+		}
+		snapshot["focused_workspace_id"] = workspaceID
+		snapshot["focused_tab_id"] = activeTabID
+		snapshot["focused_pane_id"] = focusedPaneID
 	})
 }
 
@@ -1507,14 +1598,23 @@ func mutateSnapshot(t *testing.T, source string, mutate func(map[string]any)) st
 	return string(out) + "\n"
 }
 
-func snapshotWithoutWorkspaceResources(t *testing.T, source, workspace string, removeWorkspace bool) string {
+func snapshotWithoutWorkspaceResources(t *testing.T, source, workspace string) string {
 	t.Helper()
 	return mutateSnapshot(t, source, func(snapshot map[string]any) {
+		snapshot["workspaces"] = filterSnapshotObjects(snapshot["workspaces"].([]any), "workspace_id", workspace)
+		snapshot["tabs"] = filterSnapshotObjects(snapshot["tabs"].([]any), "workspace_id", workspace)
+		snapshot["panes"] = filterSnapshotObjects(snapshot["panes"].([]any), "workspace_id", workspace)
+		snapshot["layouts"] = filterSnapshotObjects(snapshot["layouts"].([]any), "workspace_id", workspace)
+		snapshot["agents"] = filterSnapshotObjects(snapshot["agents"].([]any), "workspace_id", workspace)
+	})
+}
+
+func snapshotWithDanglingWorkspaceResources(t *testing.T, source, workspace string) string {
+	t.Helper()
+	return mutateSnapshot(t, source, func(snapshot map[string]any) {
+		snapshot["workspaces"] = filterSnapshotObjects(snapshot["workspaces"].([]any), "workspace_id", workspace)
 		snapshot["panes"] = filterSnapshotObjects(snapshot["panes"].([]any), "workspace_id", workspace)
 		snapshot["agents"] = filterSnapshotObjects(snapshot["agents"].([]any), "workspace_id", workspace)
-		if removeWorkspace {
-			snapshot["workspaces"] = filterSnapshotObjects(snapshot["workspaces"].([]any), "workspace_id", workspace)
-		}
 	})
 }
 
