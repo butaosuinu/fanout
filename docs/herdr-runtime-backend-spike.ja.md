@@ -154,13 +154,22 @@ server 起動前の `HERDR_SESSION=fanout-spike-424 herdr status --json` は `se
 同じ状態で `herdr workspace list` を実行すると Unix socket が存在せず失敗した。
 通常の headless CLI は server を自動起動しない。
 
-wave 2 の per-repo supervisor は owned XDG path と custom socket を固定して次を実行する。
+wave 2 の per-repo supervisor は session 選択に使う継承値へ依存せず、attach と同じ owned XDG / config / socket / session env を `status` と `server` の各 call に明示する。
 
 ```console
-HERDR_SESSION=<name> herdr status --json
-HERDR_SESSION=<name> herdr server
+XDG_CONFIG_HOME=<owned-config> XDG_STATE_HOME=<owned-state> \
+XDG_DATA_HOME=<owned-data> XDG_CACHE_HOME=<owned-cache> \
+HERDR_CONFIG_PATH=<owned-config-file> HERDR_SESSION=<repo-session> \
+HERDR_SOCKET_PATH=<owned-server-socket> HERDR_CLIENT_SOCKET_PATH=<owned-client-socket> herdr status --json
+
+XDG_CONFIG_HOME=<owned-config> XDG_STATE_HOME=<owned-state> \
+XDG_DATA_HOME=<owned-data> XDG_CACHE_HOME=<owned-cache> \
+HERDR_CONFIG_PATH=<owned-config-file> HERDR_SESSION=<repo-session> \
+HERDR_SOCKET_PATH=<owned-server-socket> HERDR_CLIENT_SOCKET_PATH=<owned-client-socket> herdr server
 ```
 
+herdr の session 解決順は明示 `--session`、`HERDR_SOCKET_PATH`、`HERDR_SESSION` であり、既存 herdr pane から継承した `HERDR_SOCKET_PATH` は `HERDR_SESSION` より先に評価される。
+後続実装は呼び出し元の Herdr routing env を流用せず、各 call 用の env を構築して上記の全値を fanout-owned 値で設定する。
 fanout は owner marker を exclusive create し、foreign socket または不一致 marker がない場合だけ server を bootstrap する。
 `status --json` の `server.session` と socket path で対象 namespace は確認できるが、応答には session UUID、generation、state epoch がない。
 
@@ -859,6 +868,7 @@ response loss 時の no-blind-retry、provisional intent と phase machine、wor
 emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完了判定または cleanup の証明には使わない。
 
 - backend は per-repo supervisor が owned XDG / socket / marker を exclusive create して foreground `herdr server` child を bootstrap する。
+  supervisor は呼び出し元から継承した Herdr routing env の値に依存せず、`status` と bootstrap を含む各 Herdr CLI call 用の env を構築し、owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を fanout-owned 値で上書きする。
   完全一致する owned marker は restart reconciliation に使い、不一致、foreign、または検証不能な socket / marker は停止せず fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active intent、row、foreign resource のない明示 repo-session shutdown だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、cleanup を後続実装へ解禁する。
