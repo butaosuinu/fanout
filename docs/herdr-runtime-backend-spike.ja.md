@@ -28,12 +28,12 @@ request-bound generation と conditional mutation、server-authenticated control
 | 対象 | wave 2 の判断 | 理由 |
 |---|---|---|
 | owned server | Go | private socket、0700 XDG、owner marker で別 UID と session 外への影響を封じ込める |
-| server 起動 | Go | per-repo supervisor が foreground server child を bootstrap し、owned marker と process identity を再照合して再起動する |
+| server 起動 | Go | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
 | worktree | Go | intent / phase、workspace label と git-dir marker の nonce、Git 事後条件で誤採用を防ぐ |
-| agent 起動 | Go | bare argv、exact `--cwd`、明示 `--env`、保存済み process identity を要求する |
+| agent 起動 | Go | control-plane env と workload env を分離し、bare argv、exact `--cwd`、明示 `--env`、保存済み process identity を要求する |
 | capability gate | stable `>=0.7.4` と structural schema、接続先 status を検査する | exact tuple は廃止するが、gate は compatibility だけを証明する |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
@@ -398,11 +398,16 @@ HERDR_WORKSPACE_ID=w2
 この追加検証では server と CLI の環境から `TMUX` と `FANOUT_BIN` を除き、外側 runtime の値が transcript に混ざらないようにした。
 別の nested tmux 検証では、generic workspace shell に `HERDR_ENV` と `TMUX` が同時に届いた。
 
-wave 2 の自動 launch は、fanout 固有の値と呼び出し元で解決した `PATH` を `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
+wave 2 は Herdr control-plane env と agent workload env を分離する。
+fanout は owned XDG で supervisor を起動する前に、呼び出し元の `HOME`、`PATH` と effective `XDG_CONFIG_HOME`、`XDG_STATE_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME` を workload env として保存する。
+未設定の XDG 変数はそれぞれ `$HOME/.config`、`$HOME/.local/state`、`$HOME/.local/share`、`$HOME/.cache` に解決し、owned XDG を agent へ漏らさない。
+wave 2 の自動 launch は、fanout 固有の値、保存した `HOME` / `PATH`、workload XDG を `--env KEY=VALUE` で渡し、herdr の実行環境識別子は herdr の env と snapshot から取得する。
 agent executable は fanout の起動環境で解決した絶対パスを bare argv の先頭に置く。
 #427 が注入する lifecycle hook も、同じ時点で解決した fanout executable の絶対パスを呼ぶ。
 絶対パスだけでは、agent が起動後に実行する `git` や `gh` が server の ambient PATH で解決されるため、server を minimal env で起動した環境では作業が失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
-tmux backend の `BuildResolvedCommand` と同じく、呼び出し元 `PATH` を明示 `--env` で引き継ぎ、agent と hook の実行を herdr server の ambient PATH に依存させない。
+tmux backend の `BuildResolvedCommand` と同じく、保存した workload env を明示 `--env` で引き継ぎ、agent と hook の実行を herdr server の ambient env に依存させない。
+呼び出し元の `HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` は workload env へ復元しない。
+agent workload 内から利用する Herdr CLI も control-plane runner を唯一の入口とし、raw `herdr` を workload env で実行せず、owned XDG / config / socket / session env を call ごとに再構築する。
 
 `agent.start` の agent 名は workspace 内ではなく session 全体で一意が要求され、重複は `agent_name_taken` で失敗する(Pass 2 レビュー時の 0.7.3 実機確認)。
 複数の repo や親が同じ session を共有しても衝突しないよう、launch 名は repo、親参照、intent に保存した agent launch nonce の hash から `core/naming` で生成する。
@@ -853,7 +858,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
-| owned bootstrap / launch | Go | owned XDG / socket / marker、capability gate、intent / phase、nonce 二重照合、空の setup-hook registry | controller capability、server / agent の UID 分離、または request-bound conditional mutation。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
+| owned bootstrap / launch | Go | caller routing env を上書きする owned XDG / socket / marker、control-plane / workload env の分離、capability gate、intent / phase、nonce 二重照合、空の setup-hook registry | controller capability、server / agent の UID 分離、または request-bound conditional mutation。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | cleanup / rollback | Go | exact ownership と dirty / force 条件を送信直前に再照合し、response loss では blind retry しない | remove / close が authoritative server generation と target resource generation を原子的に検査する |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | Codex v6 cold restart resume | Go | exact `agent_session`、executable、argv、cwd、ancestry、process group matcher。旧 nudge state を失効し、fresh emitter signal まで no-op | authoritative server generation と launch provenance の原子的な束縛 |
@@ -909,7 +914,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   成功応答と exact ownership を保存した資源は、直前再照合後の unconditioned remove で rollback できる。
   response loss または mutation 不明では rollback せず、rollback に依存する git fallback も実行しない。
   branch reservation は worktree mutation が起きていないことを証明できる場合だけ compare-and-delete で解放する。
-- agent は bare argv、明示 `--cwd`、fanout 固有値と呼び出し元 `PATH` を渡す明示 `--env` で起動する。
+- Herdr control-plane env と agent workload env を分離する。
+  supervisor の owned XDG を設定する前に、呼び出し元の `HOME` / `PATH` と effective XDG 4 変数を workload env として保存し、未設定値は XDG の `$HOME` 基準の default path に解決する。
+  agent は bare argv、明示 `--cwd`、fanout 固有値、保存した `HOME` / `PATH` と workload XDG を渡す明示 `--env` で起動する。
+  呼び出し元の Herdr routing env は agent へ復元せず、agent workload 内の Herdr CLI は control-plane runner を唯一の入口として owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を再構築する。
   launch 名は repo と親参照に agent launch nonce の hash を加え、同じ intent では安定し session 全体で一意になる決定論的名前を `core/naming` で生成する。
   `agent start` 前に agent launch nonce、emitter nonce と telemetry routing binding、agent name、provider、絶対 executable、argv / env fingerprint、argv、exact `--cwd` を intent の phase `agent-starting` として保存し、provider が返す exact session ref も取得後に保存する。
   `agent-starting` で応答を保存できなかった場合は launch 時の `terminal_id` を証明できないため、一意な同名 agent が見つかっても自動採用せず fail closed にする。
