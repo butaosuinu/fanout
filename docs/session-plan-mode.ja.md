@@ -170,20 +170,25 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 - 旧 CLI フラグは unknown option エラーになる(意図した breaking)。Tier 1
   bats の該当ケースと、Tier 2 の codex-plan シナリオ(flag / user-config /
   env の 3 経路)は新設定での検証に置き換える。
-- **旧フラグを転送する配布 integration はフラグ削除と同一 PR(#545)で
-  更新する**: `claude/commands/fanout.md`、`claude/skills/fanout/SKILL.md`、
+- **旧サーフェスを案内する面はフラグ削除と同一 PR(#545)で更新する**。
+  対象は 2 種: (1) 旧フラグを転送する配布 integration —
+  `claude/commands/fanout.md`、`claude/skills/fanout/SKILL.md`、
   `codex/skills/fanout/`(SKILL.md / references/batch-workflow.md /
   references/cli-modes.md)、fanout-plan SKILL.md(claude / codex)の
   `--codex-plan-mode` 言及。#545 だけが入った main から `make install`
   した integration が unknown option なコマンドを生成する窓を作らない。
+  (2) 旧フラグ・旧設定を案内する利用者向け記述 — README ペアと site の
+  cli / settings 等の該当箇所。削除済みサーフェスを main のドキュメントが
+  案内し続ける窓を作らない(「Keep pairs in sync」の repo 方針)。
 - `docs/advisor-orchestrator.ja.md` の `--codex-plan-mode` 参照は #545 で
   `childPlanMode` に置き換える。「Codex Plan Mode と advisor の併用不可」
   制約は codex plan briefing を最小のまま維持するため存続し、記述は
   残す。
-- 残りの利用者向けドキュメント(README ペア、site の settings / agents /
-  cli / workflow / monitoring / changelog / herdr-backend / watcher の
-  en+ja。watcher は `childPlanMode=true` で無人 Session が承認待ち停止する
-  条件の明記)は #548 で一括同期する。repository instruction は該当実装と同じ PR で
+- 残りの利用者向けドキュメントは #548 で一括同期する。旧サーフェス削除の
+  同期は #545 が持つため、#548 の担当は新 3 設定の説明と追補(README
+  ペア、site の settings / agents / cli / workflow / monitoring /
+  changelog / herdr-backend / watcher の en+ja。watcher は
+  `childPlanMode=true` で無人 Session が承認待ち停止する条件の明記)。repository instruction は該当実装と同じ PR で
   更新する: CLAUDE.md / AGENTS.md の「never Codex Plan Mode」(#546)、
   CLAUDE.md の「`/api/plan` は codexPlanMode 記録ペイン限定」(#543)。
 
