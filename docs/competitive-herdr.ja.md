@@ -78,7 +78,7 @@ fanout 側の守りは、runtime 選択と、GitHub 駆動ワークフロー(親
 fanout plan の価値は「即興オーケストレーションとの対比」で語る — 決定論・安全ゲート・再現性。
 
 運用上の注意: herdr 公式 skill を持つ子 agent は自力でペインを割り helper agent を生やせる。
-fanout 管理 session 内でこれが起きると state.json 管理外の pane / agent が増え、status / cleanup の対象外になる。
+これらは state.json に載らないため status には出ない。記録済み child workspace 内の helper pane は cleanup(`worktree remove` / `workspace close`)で workspace ごと閉じられるが、helper 用に別 workspace / worktree を作られた場合は cleanup 対象外として残る。
 fanout の briefing はこの動線を促さないが禁止もしない — 管理外 pane は herdr 側の表示でのみ追える。
 
 ## fanout に取り込む機能
@@ -105,7 +105,7 @@ fanout wait --parent <ref> --target <N|taskID> --output <regex> [--timeout 300]
 
 `ListLivePanes` の 2 秒間隔ポーリング(dashboard poller と同じ)で、状態一致または capture-pane 出力の正規表現一致までブロックする。`--timeout` はデフォルト 300 秒で必ず効かせ、無限ブロックを構造的に禁止する。ペイン照合は `msg.go` の id + worktree 再検証をヘルパーに昇格して共有する。tmux の読み取り(`list-panes` / `show-options` / `capture-pane`)だけで完結し、state.json も GitHub も書かない。`--output` はペイン出力という攻撃可能面をトリガーに使うため、セキュリティ境界にはしない調整プリミティブと位置づけ、`--status`(hooks の明示信号)を第一候補とする。
 
-skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh 側条件(PR マージ待ち)、`fanout wait` は秒〜数分単位の tmux ローカル条件(子の手が空くのを待つ)。#59 の波ループはこの 2 段構えになり、skill が `--status` を連打するターン消費を 1 コマンドに畳める。A なしでは running / done しか待てず価値が半減するため、順序は A → B。herdr の対応物は v0.7.5 で server 側の `agent wait` / `pane wait-output` に再編された。`fanout wait` はポーリングだが、秒〜数分の tmux ローカル条件で実用差は出ない。
+skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh 側条件(PR マージ待ち)、`fanout wait` は秒〜数分単位の tmux ローカル条件(子の手が空くのを待つ)。#59 の波ループはこの 2 段構えになり、skill が `--status` を連打するターン消費を 1 コマンドに畳める。A なしでは running / done しか待てず価値が半減するため、順序は A → B。herdr の対応物は v0.7.5 で server 側の `agent wait` / `pane wait-output` に再編された。`fanout wait` は current-state の 2 秒間隔ポーリングのため、2 秒未満で通過する一過性状態(例: 自動投入で idle が即 working へ戻る)は見逃して timeout し得る。event 駆動の `agent wait` にはこの取りこぼしがない。
 
 ### C. session resume(規模 M、独立)
 
