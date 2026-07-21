@@ -16,7 +16,7 @@ GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending で�
 中核は 3 つ。
 
 1. **エージェント状態のセマンティック追跡** — 各ペインのエージェントを idle(プロンプト待ち)/ working(作業中)/ blocked(許可・入力待ち)/ done で色分け表示する。検出はプロセス名マッチ + 出力ヒューリスティクスに加え、`herdr integration install <agent>` が各エージェントの hooks / plugin 機構に状態報告スクリプトを書き込む
-2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start <name> --kind <kind> --pane <id>`(name は必須で session 一意、`[a-z][a-z0-9_-]{0,31}`。対象は既存 pane で、pane の作成・split は layout 側)、atomic な `agent prompt --wait --until <state>`、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
+2. **エージェント向け API** — 改行区切り JSON の Socket API と CLI(`herdr pane split/run/read`、`herdr worktree create/open`)。v0.7.5 で agent が pane と別の一級 primitive になり、`agent start <name> --kind <kind> --pane <id>`(name は必須で session 一意、`[a-z][a-z0-9_-]{0,31}`。対象は対話 shell prompt にいる既存 pane で、別 process が動いていると `agent_pane_busy` で失敗する。pane の作成・split は layout 側)、atomic な `agent prompt --wait --until <state>`、server 側で待つ `agent wait` / `pane wait-output` が入った(旧 top-level `wait` と `agent send` は置換)。SKILL.md をエージェントに与え、エージェント自身がペインを割り、ヘルパーを起動し、隣のペインの完了を待てる
 3. **session resume** — Claude Code / Codex を含む主要エージェントの公式 session 参照を記録し、サーバー再起動後に復元する
 
 対応エージェントは 21 種(Claude Code / Codex / OpenCode / Cursor / Copilot CLI / Gemini / Devin ほか)。core は GitHub 連携・PR ライフサイクル・issue 駆動の作業割り当てを持たない(plugin 層の接近は脅威評価を参照)。
@@ -54,7 +54,7 @@ floor は 0.7.5 へ引き上げる(ユーザー決定 2026-07-22)。契約改訂
 
 ## 脅威評価
 
-短期の脅威は「機能の重複」ではなく「実行環境の乗り換え」で、herdr の吸引力は上の表の状態・待機・resume の 3 行に集約される。
+短期の脅威は二つある。ひとつは「実行環境の乗り換え」で、herdr の吸引力は上の表の状態・待機・resume の 3 行に集約される。もうひとつは v0.7.5 で現物になった plan lane の直接競合(次段)— 機能の重複は issue lane には及ばないが、issue-less な fan-out では既に起きている。
 現行 binary はまだ herdr 上の issue / Project / plan fan-out を実行しないが、wave 2 契約は後続 issue に workflow continuity の実装を許可する。
 同一 UID process に対する proof-grade authority は前提にせず、tmux と同じ協調プロセス信頼と fail-closed な crash / identity gate を使う。
 tmux backend にはこの 3 点を tmux の上で提供する価値が残る(後述)。
@@ -71,8 +71,8 @@ fanout plan に残る差は次の 5 点。
 
 plugin 生態系(topic `herdr-plugin`、2026-07-22 時点の search total_count 289 を star 順で全ページ掃引)は fanout の隣接領域に到達している。
 作者自身の `herdr-plugin-github-start`(GitHub issue / PR / discussion から agent 起動。issue body 非取得・worktree 非作成・fan-out なし)、カンバンカードを prompt として agent に配る `herdr-board`(`herdr-kanban` はタスクと tab の紐付けのみで agent 起動なし)、Claude Code teams の `herdmates`、Linear issue → worktree の `herdr-worktree-from-linear` と GitHub PR → worktree の `herdr-worktree-from-pr`、スケジュール起動の `herdr-routines`、merge 検知 branch cleanup の `herdr-branch-cleanup`、レビュー・PR 追跡の `herdr-reviewr` / `herdr-pr-tracker`、人間承認ゲートの `herdr-approval-gate`。
-plan lane 相当は `darjss/herdr-orchestrate`(Pi 専用)が単一 plugin で構成済み — run board、worker spawn(research / implement / review)、隔離 worktree、background wait、cleanup を備える。
-GitHub issue 駆動の閉ループ(親子 issue 列挙 → briefing → PR lifecycle → レビューゲート)を単一で代替する plugin はまだ無いが、「herdr は issue・PR・レビューに触れていない」はもう成り立たない。
+plan lane 相当は `darjss/herdr-orchestrate` が構成済み — 単一 plugin ではなく Pi package / skill + `orch` CLI + herdr plugin の複合物(Pi 専用)だが、run board、worker spawn(research / implement / review)、隔離 worktree、background wait、cleanup を備える。
+GitHub issue 駆動の閉ループ(親子 issue 列挙 → briefing → PR lifecycle → レビューゲート)を代替する plugin はまだ無いが、「herdr は issue・PR・レビューに触れていない」はもう成り立たない。
 
 fanout 側の守りは、runtime 選択と、GitHub 駆動ワークフロー(親子 issue 列挙・briefing 生成・wave・review gate・PR lifecycle・可観測性)の閉ループが herdr core にも単一 plugin にも無いことにある。
 攻めに使える差は、herdr がローカル完結なのに対し fanout は「issue が入力、マージ済み PR が出力」という閉ループを持つ点で、ロードマップ(`docs/roadmap.ja.md`)の閉ループハーネス方針そのものが差別化になる。
@@ -106,7 +106,7 @@ fanout wait --parent <ref> --target <N|taskID> --output <regex> [--timeout 300]
 
 `ListLivePanes` の 2 秒間隔ポーリング(dashboard poller と同じ)で、状態一致または capture-pane 出力の正規表現一致までブロックする。`--timeout` はデフォルト 300 秒で必ず効かせ、無限ブロックを構造的に禁止する。ペイン照合は `msg.go` の id + worktree 再検証をヘルパーに昇格して共有する。tmux の読み取り(`list-panes` / `show-options` / `capture-pane`)だけで完結し、state.json も GitHub も書かない。`--output` はペイン出力という攻撃可能面をトリガーに使うため、セキュリティ境界にはしない調整プリミティブと位置づけ、`--status`(hooks の明示信号)を第一候補とする。
 
-skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh 側条件(PR マージ待ち)、`fanout wait` は秒〜数分単位の tmux ローカル条件(子の手が空くのを待つ)。#59 の波ループはこの 2 段構えになり、skill が `--status` を連打するターン消費を 1 コマンドに畳める。A なしでは running / done しか待てず価値が半減するため、順序は A → B。herdr の対応物は v0.7.5 で server 側の `agent wait` / `pane wait-output` に再編された。`fanout wait` は current-state の 2 秒間隔ポーリングのため、2 秒未満で通過する一過性状態(例: 自動投入で idle が即 working へ戻る)は見逃して timeout し得る。event 駆動の `agent wait` にはこの取りこぼしがない。
+skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh 側条件(PR マージ待ち)、`fanout wait` は秒〜数分単位の tmux ローカル条件(子の手が空くのを待つ)。#59 の波ループはこの 2 段構えになり、skill が `--status` を連打するターン消費を 1 コマンドに畳める。A なしでは running / done しか待てず価値が半減するため、順序は A → B。herdr の対応物は v0.7.5 で server 側の `agent wait` / `pane wait-output` に再編された。`fanout wait` は current-state の 2 秒間隔ポーリングのため、2 秒未満で通過する一過性状態(例: 自動投入で idle が即 working へ戻る)は見逃して timeout し得る。event 駆動の `agent wait` にはこの取りこぼしがない。ただし herdr 側の `--timeout` はミリ秒指定かつ省略時は無期限に待つ — `fanout wait` の「秒単位・timeout 必須」とは契約が逆なので、wave 2 で写像するなら単位変換と timeout 必須化が要る。
 
 ### C. session resume(規模 M、独立)
 
