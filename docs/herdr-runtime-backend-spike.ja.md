@@ -440,6 +440,8 @@ pending `done` は同じ nonce の先行 telemetry より優先するが、final
 応答を回復できない intent の pending telemetry は final row へ移さない。
 emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新する。
 0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
+`terminal_id` の変化を検出した時点で、provider 固有 matcher を始める前に state lock 下で `reported_state` を未設定、`state_refinement:false` にし、emitter nonce を新しい process epoch へ回転する。
+旧 nonce または旧 `terminal_id` に束縛された signal は拒否する。
 cwd や slug から更新先を再解決しない。
 Claude の `SessionEnd` 由来の `done` も診断用 telemetry に留める。
 Claude と Codex は pane 消滅時に正常終了と外部からの kill を区別できないため、state row の有無にかかわらず `stale` とする。
@@ -490,10 +492,12 @@ attach 後の `pane process-info` は foreground process の候補を一つだ�
 候補の `process-info.foreground_processes[].cwd` は final row に保存した `agent start --cwd` と完全一致させ、`pane get.cwd` または snapshot の `foreground_cwd` で代用しない。
 `pane process-info` は PPID chain を返さないため、候補 PID が現在の `shell_pid` 自身またはその子孫であり、現在の `foreground_process_group_id` と同じ process group に属することを OS process 情報で別途確認する。
 OS ancestry または process group を取得できない場合は再束縛しない。
-すべてを同じ再対応付け cycle で確認した後、新しい `terminal_id`、PID、executable、argv、process cwd、`shell_pid`、foreground process group ID、`agent_session` を state lock 下の一回の save で process identity として束縛する。
+すべてを同じ再対応付け cycle で確認した後、新しい `terminal_id`、PID、executable、argv、process cwd、`shell_pid`、foreground process group ID、`agent_session` を state lock 下の一回の save で process identity として束縛するが、`reported_state` は未設定、`state_refinement` は `false` のままにする。
+resumed process で provider hook adapter と mapping を再検証し、回転後の emitter nonce と新しい `terminal_id` に束縛された fresh signal を受けた場合だけ `state_refinement:true` とその signal の `reported_state` を同じ state save で確定する。
+adapter の再注入または検証経路がない場合は resume を妨げず、nudge だけを no-op のままにする。
 wave 2 は attach 前の exact placeholder だけを再開待ちへ入れ、結果が `matched` の場合だけ process identity を束縛する。
 直近の compatible snapshot でも exact placeholder が続いたまま `timed_out` した場合だけ row を `stale` とし、reason `resume_timeout` を記録する。
-`cancelled` と `failed` は `stale` に読み替えず、row を更新しない。
+`cancelled` と `failed` は `stale` に読み替えず、process identity を再束縛しないが、先に保存した nudge state の失効は維持する。
 Claude を含む未検証 provider、ref の欠落または重複、候補 process の欠落または重複、executable / argv / process cwd / ancestry / process group の不一致は `stale` とし、緩い process 名一致へ fallback しない。
 
 「agent record がないなら done」だけでは restart 後を判定できない。
@@ -843,7 +847,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | owned bootstrap / launch | Go | owned XDG / socket / marker、capability gate、intent / phase、nonce 二重照合、空の setup-hook registry | controller capability、server / agent の UID 分離、または request-bound conditional mutation。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | cleanup / rollback | Go | exact ownership と dirty / force 条件を送信直前に再照合し、response loss では blind retry しない | remove / close が authoritative server generation と target resource generation を原子的に検査する |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
-| Codex v6 cold restart resume | Go | exact `agent_session`、executable、argv、cwd、ancestry、process group matcher | authoritative server generation と launch provenance の原子的な束縛 |
+| Codex v6 cold restart resume | Go | exact `agent_session`、executable、argv、cwd、ancestry、process group matcher。旧 nudge state を失効し、fresh emitter signal まで no-op | authoritative server generation と launch provenance の原子的な束縛 |
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
@@ -928,6 +932,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   応答を回復できない intent の pending telemetry は final row へ移さない。
   emitter は state lock 下で key、nonce、backend が完全一致する行が一つだけで、保存済み PaneRef が launch 時の binding と現在の runtime にも一致する場合だけ `reported_state` を更新し、cwd や slug から再解決しない。
   0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
+  `terminal_id` の変化を検出した時点で、provider 固有 matcher より先に `reported_state` を未設定、`state_refinement:false` にし、emitter nonce を新しい process epoch へ回転する。
+  旧 nonce または旧 `terminal_id` に束縛された signal は拒否する。
   `SessionEnd` の `done` も telemetry に留め、Claude / Codex とも pane 消滅時は正常終了と kill を区別できないため `stale` とする。
   identity 不一致も agent 種別にかかわらず `stale` とする。
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
@@ -938,6 +944,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   running へ再束縛できる provider は実測済みの herdr 公式 Codex integration v6 だけとする。
   exact な Codex `agent_session` ref、一意な foreground process、保存済み絶対 executable、argv0 を除く引数列 `["resume", "<session-id>"]`、保存済み `agent start --cwd` と一致する process cwd を照合する。
   候補 PID が `shell_pid` 自身またはその子孫で、現在の foreground process group に属することを OS process 情報で確認し、新しい terminal / process identity を一回の state save で束縛する。
+  process identity の再束縛後も `reported_state` は未設定、`state_refinement` は `false` のままとする。
+  resumed process で provider hook adapter と mapping を再検証し、回転後の emitter nonce と新しい `terminal_id` に束縛された fresh signal を受けた場合だけ `state_refinement:true` と `reported_state` を同じ state save で確定する。
+  adapter の再注入または検証経路がなければ resume は続け、nudge だけを no-op のままにする。
   完全一致する一意な `agent_session` と provider 固有の exact resume placeholder がある場合だけ共有 budget の再開待ちへ入れる。
   ref の欠落、不一致、重複、未検証 provider、resume 後の候補欠落または重複、executable / argv / process cwd / ancestry / process group の不一致または検証不能は retry せず、直ちに `stale` とする。
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
