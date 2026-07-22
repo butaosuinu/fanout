@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 
 # 配置先や Release tag を指定
 curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | BIN_DIR=/usr/local/bin sh
-curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.14.0 sh
+curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh | FANOUT_VERSION=v0.15.0 sh
 ```
 
 `install.sh` は OS/arch を自動判定し、最新 Release(または `FANOUT_VERSION` で指定した tag)から `fanout` バイナリと Claude/Codex 連携ファイルを取得して配置します。

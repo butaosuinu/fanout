@@ -9,6 +9,21 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.15.0 (2026-07-23)
+
+- **Plan Mode settings for every launch lane.** `newSessionPlanMode`, `orchestratorPlanMode`, and `childPlanMode` now select Plan or build mode for manual, coordinator, attached, orchestrator, issue / Project child, `fanout plan`, and watcher launches.
+  The user-only settings apply to Claude Code, Codex, and OpenCode; new Sessions and orchestrators default to Plan Mode, while children default to build mode.
+  The retired `codexPlanMode` setting and `FANOUT_CODEX_PLAN_MODE` are ignored with migration warnings; `--codex-plan-mode` and `--no-codex-plan-mode` are no longer accepted.
+  See [Settings]({{< relref "/docs/settings" >}}) and [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
+- **Agent-aware mode startup.** fanout maps Plan and build mode to each agent's native CLI, warns and omits explicit modes for Claude Code below v2.1.207 or an unknown version, and falls back to plain Codex when an orchestrator's start gate conflicts with Plan Mode.
+  OpenCode supports Plan and build children but cannot run the plan fan-out coordinator.
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Accurate Plan visibility.** The dashboard shows captured Plan output only for Codex Plan Mode panes; other panes keep their runtime state without an empty Plan section.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Dependency security update.** `golang.org/x/text` is updated from v0.3.8 to v0.39.0, which includes the fix for [GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970) (`norm.Iter` can loop indefinitely on invalid UTF-8 input).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.15.0)
+
 ## v0.14.0 (2026-07-21)
 
 - **OpenCode child agents.** `--agent opencode` now works in issue / Project and `fanout plan` runs, including per-target overrides and the TUI new-session picker.
