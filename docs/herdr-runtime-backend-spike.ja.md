@@ -2104,7 +2104,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   symlink は parent relative path から lexical に解決し、absolute target、root escape、cycle、未列挙 target を拒否して final root pathname / digest を解決入力に使わない。
   他の file type と hard link を拒否し、wave 2 の xattr allowlist は全 file type で空集合とする。
   source / destination の任意の entry に xattr があれば build / verification を拒否し、copy、strip、rewrite を行わない。
-  `bundle_payload` は length-prefix した `fanout.launch-bundle.payload.v1` domain separator、operation / provider / platform、entry path / argv、dependency closure の runtime entry record、platform runtime binding を relative path の UTF-8 byte 列順で canonical bytes へ固定し、bundle root、予約 path `manifest`、outer manifest bytes / record を含めない。
+  `bundle_payload` は length-prefix した `fanout.launch-bundle.payload.v1` domain separator、schema version、operation kind、provider、matcher ID / version、platform、architecture、entry relative path、正規化済み argv、dependency closure の runtime entry record、platform runtime binding を relative path の UTF-8 byte 列順で canonical bytes へ固定し、bundle digest、bundle root device / inode、予約 path `manifest`、outer manifest bytes / record を含めない。
   agent-detection fixture の raw files / canonical index は通常の regular-file runtime entry として `bundle_payload` と bundle digest に含める。
   bundle digest は payload の SHA-256 とし、outer manifest は exact payload と digest を deterministic encoding で保持するが、自身の size / SHA-256 を payload へ戻さない。
   verifier は unknown field / duplicate key / non-canonical encoding を拒否し、outer manifest、runtime entry の全 record、実 tree の完全一致を調べる。
