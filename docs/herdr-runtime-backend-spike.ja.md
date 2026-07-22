@@ -15,7 +15,8 @@ raw Socket client は実装しない。
 version / session / schema の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
 自動 mutation は provisional intent と phase machine、nonce の二重照合、branch の atomic reservation、事後条件検査、no-blind-retry を通す。
 linked worktree 間の intent、console、final row、telemetry routing は canonical git common directory 配下の単一 Herdr control registry を正典とし、worktree-local `state.json` へ分散しない。
-Herdr backend の `--team` と #552 の Herdr nudge 実装は registry-backed peer 解決の導入後に限り、それまでは `--team` を最初の mutation 前に拒否する。
+Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
+#552 の Herdr nudge 実装は #568 の完了を前提とする。
 commit を持つ child の cleanup は branch lineage を tombstone として残し、明示的なユーザー操作だけが保持 tip から新しい launch 世代を作る。
 owned XDG の config と plugin registry に予期しない setup hook があれば launch 前に fail closed にする。
 Herdr、fanout launcher、console shell、agent の実行物は workspace mutation 前に owned content-addressed launch bundle へ固定し、exact token 後は sealed bundle だけを起動する。
@@ -50,8 +51,8 @@ request-bound generation と conditional mutation、server-authenticated control
 | capability gate | stable `>=0.7.5` と structural schema、接続先 status を検査する | 0.7.4 以下、prerelease、client / server 不一致を拒否し、owned server restart では cache を使わない |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
-| `--team` | 拒否（registry-backed peer 解決まで） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |
-| nudge | Go（registry-backed peer 解決後） | shared registry から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
+| `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |
+| nudge | Go（#552 は #568 完了後） | shared registry から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で sealed fanout controller bundle を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
@@ -967,10 +968,12 @@ workspace-level `agent start` の各条項は次のように移す。
 | #528 | non-shell launcher、console / provider operation bundle、exact token、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
-| #552 | registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は Herdr row に `state.json` 依存経路を適用しない |
+| #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は Herdr row に `state.json` 依存経路を適用しない |
 | #554 | session / operation bundle 経由の `fanout __codex-plan-tui` と controller / Codex child matcher |
+| #568 | #528 の fail-closed gate を前提に、issue / plan cohort の peer 登録、plan lane の preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を shared registry の canonical Herdr row へ移行し、`--team` の再評価条件を満たす |
 
-registry-backed peer 移行は別の後続子が担当し、その完了後に #552 の Herdr 実装を開始する。
+#568 は #528 に blocked され、#528 が実装する暫定拒否 gate を registry-backed peer 移行の完了まで維持する。
+#552 の Herdr 実装は #568 の完了後に開始する。
 active-supervisor lease、owned server restart、owned shutdown lifecycle の実装 owner は #526 とし、console / coordinator / child launch の operation lock / lease は #527 が実装する。
 
 ### process exit
@@ -1127,11 +1130,13 @@ wave 2 の Herdr backend は registry-backed peer 解決が実装されるまで
 backend / flag validation は最初の state、filesystem、git、Herdr mutation より前に `herdr backend: --team requires registry-backed peer resolution` を返して終了する。
 `--dry-run` も同じ error で終了し、移行前の Herdr `--team` を部分的に計画または seed しない。
 この gate は Herdr backend だけに適用し、tmux backend の `--team` と既存 message bus を変更しない。
+#528 はこの fail-closed gate を実装し、#568 が registry-backed peer 移行を完了するまで解除しない。
 Herdr `--team` の再評価には、`internal/app/run/team.go` の peer 登録が shared registry の issue / plan task row から cohort と `TaskID` を作れることを要求する。
+`internal/app/run/task_team_registry.go` の `preseedTaskTeamRegistry` / `cleanupUncreatedTaskPeers` は、最初の Codex pane より前の provisional plan cohort と fail-fast 後の未作成 peer cleanup を shared registry の canonical plan-task row で処理しなければならない。
 `internal/infra/team/detect.go` の自己識別は shared registry の canonical typed row key、pane / worktree identity、issue number または `TaskID` を一意に解決しなければならない。
 `internal/app/peermsg/nudge.go` の宛先解決は shared registry から current Herdr row と exact pane identity を取得し、後述の nudge gate へ渡さなければならない。
-三経路とその Claude / Codex push caller が registry-backed になるまで、`state.json` を読む共通経路を Herdr row へ適用せず、prompt fallback や worktree-local row の複製で補わない。
-この移行実装は本 PR のスコープ外とし、後続子で扱う。
+四経路とその Claude / Codex push caller が registry-backed になるまで、`state.json` を読む共通経路を Herdr row へ適用せず、prompt fallback や worktree-local row の複製で補わない。
+この移行実装は本 PR のスコープ外とし、#568 が担当する。
 
 0.7.3 / 0.7.4 の `pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。
 同じ version の `agent send` も literal text を直ちに送り、agent status を working または blocked と報告した状態でも送信した。
@@ -1580,7 +1585,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 
 ## 後続 issue への契約
 
-#423、#425 から #429、#494、#526 から #529、#532、#552、#554 は次の制約を前提にする。
+#423、#425 から #429、#494、#526 から #529、#532、#552、#554、#568 は次の制約を前提にする。
 
 判断主体はユーザー、tmux-parity tier の判断日は 2026-07-21 JST、floor 0.7.5 の改訂日は 2026-07-22 JST である。
 herdr backend は tmux backend と同水準の協調プロセス信頼を採用し、private socket が同一 UID の認証境界にならない実測を受容したうえで、影響範囲を fanout-owned session へ封じ込める。
@@ -1597,8 +1602,8 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
-| `--team` | 拒否（registry-backed peer 解決まで） | `--dry-run` を含め、SQLite open、registry save、branch / workspace / Herdr mutation より先に明確な invocation error を返す | 移行完了後に wave 2 条件を再評価するため、この段階では対象外 |
-| 自動 nudge | Go（#552 の Herdr 実装は registry-backed peer 解決後） | shared registry から peer / self / recipient の current Herdr row を一意に解決し、fresh provider signal と送信直前の live `process-info` / OS process identity が一致する許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
+| `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含め、SQLite open、registry save、branch / workspace / Herdr mutation より先に明確な invocation error を返す | #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決、push caller の移行を完了した後に wave 2 条件を再評価する |
+| 自動 nudge | Go（#552 の Herdr 実装は #568 完了後） | shared registry から peer / self / recipient の current Herdr row を一意に解決し、fresh provider signal と送信直前の live `process-info` / OS process identity が一致する許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | owned launcher が sealed controller bundle の `fanout __codex-plan-tui` を起動し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
 request-bound generation / conditional mutation、controller capability、UID 分離は削除せず、herdr 上流へ別 issue で提案する proof-grade 強化として保持する。
@@ -1619,7 +1624,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   console detach 後も server を存続させ、最後の child close では止めず、active intent、final row、runtime resource、foreign resource のない明示 repo-session shutdown だけを teardown とする。
   cleaned tombstone と branch lineage は repo-scoped state として残し、teardown blocker にしない。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、cleanup を後続実装へ解禁する。
-  `--team` と #552 の Herdr nudge 実装は例外とし、peer 登録、自己識別、宛先解決が shared registry の Herdr row を扱えるまで最初の mutation 前に fail closed にする。
+  `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を shared registry の Herdr row へ移行するまで最初の mutation 前に拒否する。
+  #552 の Herdr 実装は #568 の完了後に開始する。
   移行前の Herdr row を worktree-local `state.json` に複製せず、tmux 用の state-dependent peer / nudge 経路へ渡さない。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
   check と operation の間の race は tmux-parity tier の受容済み残余リスクとし、不一致、重複、response loss、mutation 不明では fail closed にする。
@@ -1860,8 +1866,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - state machine は、focus されていない agent が `idle` を報告すると public status が `done` へ変わり、focus されると `idle` へ戻る遷移を扱う。
   これは herdr runtime の表示遷移であり、fanout child の terminal completion または nudge authority には使わない。
   cold restart 後の resume placeholder で観測した `idle` はこの遷移に含めず、process の生存を別に確認する。
-- herdr backend は registry-backed peer 登録 / 自己識別 / 宛先解決が完成するまで `--team` を明確な invocation error で最初の mutation 前に拒否する。
-  #552 の Herdr 実装も同じ条件まで開始せず、worktree-local `state.json` に依存する tmux 用 peer / nudge 経路を Herdr row へ適用しない。
+- #528 は #568 が registry-backed peer 登録、plan preseed / cleanup、自己識別、宛先解決を完成するまで、herdr backend の `--team` を明確な invocation error で最初の mutation 前に拒否する。
+  #552 の Herdr 実装は #568 の完了まで開始せず、worktree-local `state.json` に依存する tmux 用 peer / nudge 経路を Herdr row へ適用しない。
   移行後の自動 nudge は current launch の fresh provider signal で `state_refinement:true` になった Claude / Codex に限り、tmux の `shouldNudge` と同じ条件で実行する。
   provider hook adapter の注入と mapping を検証できない agent、または fresh signal が未着の agent は、名前が Claude / Codex でも no-op にする。
   trim 済み `reported_state` の `running` / `working` / `plan` / `idle` は送信候補、`blocked` / `done` / 未設定 / 未知値は no-op とする。
