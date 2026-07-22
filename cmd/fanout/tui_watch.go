@@ -149,6 +149,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
+	result.Notice = combinedLaunchNotice([]string{result.Notice}, bufferedLaunchNotice(stderr))
 	return result, nil
 }
 
