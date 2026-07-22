@@ -37,6 +37,7 @@ request-bound generation と conditional mutation、server-authenticated control
 |---|---|---|
 | owned server | Go | private socket、0700 XDG、owner marker で別 UID と session 外への影響を封じ込める |
 | server 起動 | Go | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
+| owned server restart | Go | active-supervisor lease と restart journal で single spawn を直列化し、process / socket 不在、bundle identity、cache なしの capability gate を満たす terminal CAS だけが再解禁する |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
@@ -46,7 +47,7 @@ request-bound generation と conditional mutation、server-authenticated control
 | agent 起動 | Go（admitted bundle / matcher に限る） | owned config の `terminal.default_shell` を bundled non-shell launcher に固定し、sealed provider bundle と検証済み runtime process chain を operation-bound token で起動する |
 | plain shell への `pane run` | 自動 launch には不採用 | text と Enter の配送時に shell readiness と空入力を条件化できない |
 | `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
-| capability gate | stable `>=0.7.5` と structural schema、接続先 status を検査する | 0.7.4 以下、prerelease、client / server 不一致を拒否する |
+| capability gate | stable `>=0.7.5` と structural schema、接続先 status を検査する | 0.7.4 以下、prerelease、client / server 不一致を拒否し、owned server restart では cache を使わない |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
 | `--team` | 拒否（registry-backed peer 解決まで） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |
@@ -54,7 +55,7 @@ request-bound generation と conditional mutation、server-authenticated control
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で sealed fanout controller bundle を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
-| cleanup / rollback | Go | exact ownership と直前 snapshot を照合し、response loss では blind retry しない |
+| cleanup / rollback | Go | exact ownership と直前 snapshot を照合し、dirty `--force` は内容アドレス化した fingerprint とユーザー確認を束縛し、response loss では blind retry しない |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
 | metadata | Go | exact target を直前・直後に照合し、表示専用 token だけを報告する |
 | 通知 | 手動検証だけに使う | detached 時も `shown:true` で、表示完了の応答ではなく、fanout は自動発行しない |
@@ -128,7 +129,7 @@ herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継
 server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
 
 owned runtime directory の `owner.json` は協調する fanout process 間の ownership、封じ込め、crash recovery、誤操作防止に使う。
-canonical git common directory、owner nonce、socket path、session bundle digest / root identity、Herdr version、supervisor PID と start token、隔離 XDG path を記録し、0600 で exclusive create する。
+canonical git common directory、stable epoch owner nonce、socket path、session bundle digest / root identity、Herdr version、隔離 XDG path を記録し、0600 で exclusive create する。
 既存 socket と marker が完全一致すれば owned session の reconciliation に使い、不一致、foreign、または検証不能なら fail closed にして server を停止しない。
 この marker を mutation authority として扱わない。
 `owner.json` は active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典ではない。
@@ -137,11 +138,18 @@ canonical git common directory、owner nonce、socket path、session bundle dige
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
 `fanout` directory は 0700、registry と lock は 0600 とし、path component の symlink、所有 UID の不一致、group / other write、physical common-directory identity の不一致があれば Herdr backend を開始しない。
 registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal、session-bootstrap journal を supervisor epoch を越えて保持する。
-active epoch は owner nonce、session / socket identity、console、intent、final row、runtime resource を別に持ち、owner marker と完全一致する場合だけ再利用する。
+active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、console、intent、final row、runtime resource、admission state `ready` / `restarting` / `draining` を別に持ち、owner marker の stable epoch-bound field と完全一致する場合だけ再利用する。
 active intent、final row、runtime resource がない場合だけ新しい owner epoch へ切り替え、repo-scoped lineage と tombstone は保持する。
 writer は no-follow で開いた同一 inode の lock を保持し、expected revision を確認して 0600 temporary file の fsync、rename、parent directory の fsync までを一回の state save とする。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、schema / identity / revision の decode failure は intent 不在として待たず fail closed にする。
 registry は owner / session / socket identity、console singleton、全 linked worktree の provisional intent と final row、branch lineage / tombstone、branch reservation、launch bundle reference / journal、session-bootstrap journal、telemetry routing、resource inventory を保持する。
+通常 mutation の入口は shared registry lock 下で exact active-supervisor owner tuple、expected revision、`admission_state:ready`、restart / shutdown journal の不在を照合し、最初の intent、reservation、journal、または phase を同じ state save へ保存してから外部副作用へ進む。
+この gate は console attach / create、coordinator / child launch、continue、cleanup、focus、nudge、metadata、emitter / stale 更新、bundle build / reference / GC、tombstone forget に適用する。
+`restarting` 中に許可する write は同じ restart nonce / owner / lease / lock による phase 遷移と read-only capability re-gate の結果保存に限る。
+`draining` 中に許可する write は同じ shutdown nonce の owner lease 更新 / takeover、phase 遷移、terminal save に限る。
+その他は registry save、Git ref、bundle filesystem、SQLite、Herdr CLI mutation より先に `server_restarting` または `session_shutting_down` を返す。
+registry-only の status、lifecycle 集約、session view は両状態でも許可し、admission state と current journal phase を表示する。
+通常 caller の wait、targeted read、attach、launch は server call、bootstrap、別 restart、retry を始めず対応する明確な error を返す。
 各 row は起動元の physical worktree root と task provenance を保持するが、mutable な Herdr row を各 checkout の `.fanout/state.json` へ複製しない。
 registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を registry save または SQLite open より先に確定する。
 status、lifecycle、backend stickiness、session view は worktree-local tmux state と共有 Herdr registry を backend ごとに読み分けて集約する。
@@ -203,7 +211,32 @@ phase `server-bootstrap-starting` を保存してから foreground server child 
 spawn 成功後の PID / start token、bundle executable identity、socket identity、connected status と capability gate を phase `server-bootstrap-realized` へ保存する。
 `server-bootstrap-starting` で PID / start token を保存できなかった crash は server を再起動せず、観測した process / socket を採用も停止もしない。
 `server-bootstrap-realized` だけが exact PID / start token、bundle-bound process、marker、socket を再照合して recovery できる。
-全照合後の phase `session-ready` は provisional reference を active owner epoch の reference へ移して bootstrap journal を同じ state save で除去し、reference がゼロになる瞬間を作らない。
+全照合後の phase `session-ready` は provisional reference を active epoch の reference へ移し、bootstrap owner tuple を active-supervisor owner tuple へ generation increment 付き CAS で移譲して bootstrap journal を同じ state save で除去し、reference がゼロになる瞬間を作らない。
+active-supervisor owner tuple は `supervisor_owner_nonce`、`owner_generation`、supervisor PID / start token、`lease_expires_unix_ms` を持つ。
+active server tuple は saved server PID / start token、bundled executable identity、socket identity、fanout-local `server_instance_generation` を持つ。
+capability admission は `admission_id`、state、active server tuple、session bundle digest、status / schema / snapshot proof を束縛する。
+active supervisor は shared registry lock 下で expiry 前に lease を更新し、更新を確定できない場合は新しい lifecycle mutation を止める。
+takeover は expired tuple の snapshot 後に global lock を解放して旧 supervisor PID / start token の不在を証明し、shared registry lock 下で epoch、owner tuple、marker、server、bundle reference、restart / shutdown journal を再照合して generation increment の owner CAS に勝った process だけが行う。
+live owner、PID / start token の取得不能、identity 不一致、CAS loss では active ownership を引き継がない。
+
+server loss の自動 restart は current active-supervisor owner だけが開始する。
+saved server PID / start token と socket path の不在、stable owner marker の bytes / opened identity、session bundle / manifest / executable、config / XDG の完全一致、bootstrap / restart / shutdown journal の不在を証明できる場合だけ deterministic restart operation lock を global lock の外で no-follow / exclusive に取得する。
+lock 順序は restart operation lock、shared registry lock、必要なら store lock とし、global lock を保持したまま restart operation lock を取得しない。
+同じ CAS save は active owner tuple / epoch / expected revision と不在 pre-state を再照合し、`admission_state` を `ready` から `restarting` へ変えて phase `server-restart-planned` を作り、lifecycle authority を active-supervisor owner から restart owner へ移す。
+`server-restart-planned` は restart nonce、restart owner lease の PID / start token / nonce / generation / lock path / file identity / expiry、旧 server tupleと不在 pre-state、exact marker、bundle / manifest / executable、config / XDG、exact argv / env / spawn request、expected socket absence を保存する。
+`restarting` 中は active-supervisor lease を別に更新または takeover せず、restart owner が operation lock と shared registry lock の下で lease を更新する。
+expired restart recovery は global lock の外で recorded operation lock を non-blocking 取得して旧 PID / start token の不在を証明し、shared registry lock 下で restart nonce / generation / phase、active epoch、旧 owner / server tuple、marker、bundle reference、namespace identity を再照合した owner CAS に勝った process だけが続ける。
+phase `server-restart-starting` を保存してから spawn を一回だけ発行し、成功応答の新 PID / start token / executable / socket identity を phase `server-restart-realized` へ直ちに保存するが、admission はまだ無効のままにする。
+`server-restart-planned` の recovery は pre-state と restart owner lease が完全一致する場合だけ未発行 request を一回発行できる。
+`server-restart-starting` の結果が不明な場合は spawn の再発行、観測 process の採用 / 自動停止、socket unlink を行わず、`restarting`、journal、bundle reference、operation lock identity を保持する。
+`server-restart-realized` の recovery は保存済み process / socket だけを再照合して三段 capability gate を cache なしで最初から再実行できる。
+foreign / mismatched process、残存または stale socket、identity の取得不能では stop / unlink / adopt / restart を行わず `manual_cleanup_required` にする。
+gate 成功後の terminal CAS だけが restart owner を新しい active-supervisor owner tuple / lease へ移し、新 server tuple、incremented `server_instance_generation`、新しい `admission_id`、`admission_state:ready` を確定して restart journal を除去する。
+同じ terminal CAS は snapshot の旧 `terminal_id` と current value を比較し、変化した direct-launch row を `stale` にするが、自動 resume は行わない。
+active epoch、stable marker、intent / final row、session bundle reference は restart で作り直しも削除もしない。
+normal operation は admission proof の server tuple が current server tuple と一致し、restart journal がないことを要求する。
+terminal CAS 後にだけ restart operation lock file の exact identity を再照合して unlink と parent fsync を行い、FD を閉じる。
+supervisor loss後に saved server または socket が残る場合は foreground child の ownership を証明できないため、process を採用も停止もせず fail closed にする。
 
 bootstrap abort は takeover 可能な bootstrap owner lease と引き継いだ operation lock の下で実行する。
 marker 作成前かつ server spawn request の未発行を保存済み phase で証明できる場合は、server / socket / marker の不在を再確認した `session-abort-realized` の terminal save で provisional reference と bootstrap journal を削除する。
@@ -211,23 +244,35 @@ marker 作成後または server 起動後の abort と、active epoch の通常
 bootstrap abort は phase `server-bootstrap-starting` に未到達で server / socket の不在を証明できる場合だけ stop phase を省略し、marker-remove journal へ進める。
 `server-bootstrap-starting` の結果が不明なら stop または marker-remove journal へ進まず、`server-bootstrap-realized` の saved PID / start token がある場合だけ stop journal を開始する。
 
-通常 shutdown は console row を含む active row / intent、runtime resource、foreign resource の不在を registry snapshot で確認し、shutdown nonce と deterministic operation lock path を選ぶ。
-global lock を解放して no-follow / exclusive shutdown lock を取得し、shared registry lock を取り直して active epoch / marker / process / socket / bundle reference の pre-state が同じ場合だけ phase `session-shutdown-planned` と shutdown owner lease を同じ save で作る。
-shutdown owner lease は owner nonce / generation、PID / start token、operation lock path / file identity、expiry を持ち、lease 更新と dead-owner takeover は session-bootstrap owner と同じ operation lock、shared registry lock、必要なら store lock の順序と CAS 条件を使う。
+通常 shutdown は console row を含む active row / intent、runtime resource、branch / tombstone reservation、別の operation journal、foreign resource の不在を registry snapshot で確認し、shutdown nonce と deterministic operation lock path を選ぶ。
+global lock を解放して no-follow / exclusive shutdown lock を取得し、shared registry lock を取り直して exact active epoch が `ready`、current active-supervisor owner generation、restart journal の不在、expected revision、owner / marker / process / socket / bundle reference、空 inventory、直前の namespace 観測が候補 snapshot と同じ場合だけ shutdown を開始する。
+成功する同じ CAS save は `admission_state` を `ready` から `draining` へ変え、phase `session-shutdown-planned`、shutdown nonce、shutdown owner lease、operation lock identity を保存し、lifecycle authority を active-supervisor owner から shutdown owner へ移す。
+空状態の確認と `draining` fence の作成を別の save にしない。
+先に intent または journal を保存した operation は空状態 CAS を失敗させ、先に保存できなかった operation は `draining` を見て失敗する。
+shutdown owner lease は owner nonce / generation、PID / start token、operation lock path / file identity、expiry を持ち、`draining` 中は active-supervisor lease を別に更新または takeover しない。
+shutdown lease 更新と dead-owner takeover は session-bootstrap owner と同じ operation lock、shared registry lock、必要なら store lock の順序と CAS 条件を使う。
+shutdown owner / recovery の snapshot と list だけは stop 判定用の read として許可する。
+二つ目の shutdown request は新しい nonce を作らず、live owner がいれば in-progress を返し、expired owner の takeover 条件を満たす場合だけ同じ journal を回復する。
 
 phase `server-stop-planned` は bundled stop executable、exact argv / env、saved server PID / start token、socket / marker identity、namespace pre-state を保存する。
+`server-stop-planned` と `server-stop-starting` の各 save 前に operation lock、shared registry lock の順で同じ `draining` epoch、shutdown / owner nonce と generation、lease / lock identity、空 inventory、foreign resource 不在、marker / server PID / start token / socket / bundle reference の保存値を再照合する。
 exact process と socket の直前照合後に phase `server-stop-starting` を保存し、stop request を一回だけ発行する。
 saved PID / start token の process と socket の不在、marker の完全一致を保存できた場合だけ phase `server-stop-realized` へ進む。
 `server-stop-planned` の recovery は pre-state と owner lease が完全一致する場合だけ未発行 request を発行できる。
 `server-stop-starting` の recovery は saved process と socket の不在を証明できる場合だけ `server-stop-realized` へ進み、process または socket が残る場合は request を再発行せず、観測 process を採用も停止もしない。
 
 phase `owner-marker-remove-planned` は exact marker path / opened file identity / bytes、parent identity、server / socket の expected absence、unlink と parent fsync の exact request を保存する。
-直前照合後に phase `owner-marker-remove-starting` を保存して unlink と parent fsync を一回発行し、marker の不在と parent identity を phase `owner-marker-remove-realized` へ保存する。
+同じ `draining` epoch、shutdown owner、空 inventory、server / socket 不在、exact marker / bundle reference を直前照合後に phase `owner-marker-remove-starting` を保存して unlink と parent fsync を一回発行し、marker の不在と parent identity を phase `owner-marker-remove-realized` へ保存する。
 `owner-marker-remove-planned` の recovery は pre-state が完全一致する場合だけ未発行 request を発行できる。
 `owner-marker-remove-starting` の recovery は exact marker が残ることで unlink の非発生を証明できる場合だけ保存済み request を発行し、marker がない場合は parent fsync 後に realized へ進む。
 marker path に別 identity がある場合、server / socket が再出現した場合、namespace の発生または非発生を証明できない場合は unlink を発行しない。
 
-`owner-marker-remove-realized` 後の terminal save は abort では provisional reference と bootstrap journal、shutdown では active epoch とその bundle reference を同時に削除し、repo-scoped lineage / tombstone を保持する。
+`owner-marker-remove-realized` 後の shutdown terminal save は同じ `draining` epoch / shutdown owner / phase、空 inventory、server / socket / marker 不在、exact bundle reference、別 bootstrap / operation journal 不在を再照合する。
+成功する一つの CAS は active epoch、bundle reference、shutdown journal、`draining` fence を同時に削除し、repo-scoped lineage / tombstone を保持する。
+この terminal save だけが mutation と fresh bootstrap を再解禁し、`server-stop-realized` または marker unlink だけでは解禁しない。
+`draining` CAS 後は user cancel、response loss、identity 不一致、予期しない resource の出現でも `ready` へ戻さず、同じ fence と journal を `manual_cleanup_required` または対応する blocked phase で保持する。
+recovery は expired lease、operation lock、旧 PID / start token の不在、同じ shutdown nonce / phase / resource identity / generation の owner CAS を通した場合だけ同じ shutdown を続ける。
+bootstrap abort の terminal save は従来どおり provisional reference と bootstrap journal を同時に削除する。
 terminal save 後にだけ operation lock file の exact identity を再照合して unlink と parent fsync を行い、FD を閉じる。
 `server-bootstrap-starting` の発行結果が不明な状態では自動 cleanup せず、marker、journal、reference、operation lock path / file identity を残すが、crash 後も advisory FD lock が保持されるとはみなさない。
 identity 不一致、response loss、foreign socket、process identity の取得不能では stop / unlink を再発行せず、journal と bundle reference を落とさない。
@@ -323,7 +368,9 @@ fanout-owned session は console / coordinator / child の intent-backed workspa
 server process は per-repo supervisor が所有する foreground `herdr server` child とし、attached console process の子にはしない。
 これにより console の detach または終了後も server を存続させる。
 wave 2 は owner marker、socket、capability gate を満たす owned server の bootstrap を実行する。
-server loss 後は ownership を再検査して server を再起動し、capability gate を通す。
+server loss 後は current active-supervisor owner が saved process / socket の不在と stable marker / bundle / config の完全一致を証明した場合だけ restart journal を開始する。
+`server-restart-starting` 後の spawn は一回に限り、結果不明、残存 process / socket、identity 不一致では再発行、採用、停止、unlink を行わず fail closed にする。
+新 server の exact identity を保存して三段 capability gate を cache なしで通した terminal CAS だけが通常 operation を再解禁する。
 0.7.5 direct-launch row は provider にかかわらず `terminal_id` が変われば `stale` とし、自動 resume しない。
 最後の child close では server を止めず、active intent、final row、runtime resource、または foreign resource がない場合の明示的な repo-session shutdown だけを teardown とする。
 cleaned tombstone と branch lineage は active runtime resource ではなく、明示 shutdown を妨げず repo-scoped registry に残る。
@@ -629,6 +676,18 @@ child worktree は full branch ref、deterministic path、checkout git-dir marke
 この current commit を `cleanup_head_sha` として保存し、`launch_head_sha` との差は commit または rebase の結果として許可する。
 ancestry だけでは ownership を証明せず、nonce、marker、path、full ref の不一致を ancestry で救済しない。
 force なしでは clean checkout を要求し、`--force` は明示的なユーザー確認と保存済み dirty fingerprint の送信直前再照合を要求する。
+dirty fingerprint は length-prefix した `fanout.dirty-fingerprint.v1`、worktree root / git-dir identity、full branch ref / `HEAD` / `cleanup_head_sha`、index record、worktree entry record を raw path byte 列順で並べた canonical payload の SHA-256 とする。
+index record は no-follow で開いた index と参照する shared index の identity / exact bytes SHA-256、全 stage の path / mode / object ID / flags を持ち、index lock、split-index dependency、read error を解決できない場合は fingerprint を作らない。
+worktree entry record は owning worktree の administrative `.git` entry だけを除く tracked / untracked / ignored の全 directory entry を root directory FD から no-follow で列挙する。
+各 entry は raw path / type、device / inode / mode / UID / GID / flags / link count、canonical ACL、xattr name / value を raw name byte 列順で持つ。
+regular file は byte size / SHA-256、symlink は raw target bytes、directory は opened identity、削除済み path は explicit absent record を追加する。
+gitlink は index object ID と checkout の有無を記録し、checked-out submodule は git-dir identity、`HEAD`、index、tracked / untracked / ignored tree を同じ schema で再帰的に fingerprint する。
+submodule、nested repository、path component、special file、mount boundary、case collision、権限のいずれかを完全に列挙または no-follow read できない場合は `--force` cleanup を拒否する。
+各 regular file は content / ACL / xattr の読取前後で opened FD identity / size / mode / timestamps を照合し、root / directory / index identity または entry set が scan 中に変わった場合も拒否する。
+porcelain status、path list、mtime、size だけを dirty fingerprint の代用にしない。
+ユーザー確認は fingerprint digest、entry count、dirty path summary を持つ receipt に束縛し、同じ receipt と canonical payload identity を `cleanup-planned` へ保存する。
+`cleanup-starting` の直前に独立した no-follow scan で fingerprint を作り直し、digest と構成 identity が完全一致する場合だけ saved `--force` request を一回発行する。
+差分、読取失敗、race、entry の追加 / 削除、submodule state の変化を検出した場合は mutation を発行せず、新しい fingerprint へのユーザー確認からやり直す。
 成功応答後は workspace、checkout、worktree registration、旧 git-dir marker の不在と、branch ref が引き続き `cleanup_head_sha` を指すことを再観測する。
 全条件を満たした同じ state save で active final row を `cleaned` branch tombstone へ置き換え、lineage の `last_owned_head_sha` を `cleanup_head_sha`、state を `cleaned` にする。
 tombstone は canonical typed row key とその構成 identity、backend、lineage identity、repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha`、cleanup receipt、旧 marker identity を履歴として保持し、workspace、pane、checkout、active bundle reference を持たない。
@@ -640,7 +699,7 @@ tombstone は canonical typed row key とその構成 identity、backend、linea
 削除用 workspace の root launcher は `awaiting-intent` のまま token を受けず、cleanup の有限 deadline 内に `worktree remove` で workspace ごと閉じる。
 remove 前に launcher timeout / exit または workspace identity 変化を観測した場合は blind retry せず row を残して fail closed にする。
 0.7.3 の `worktree open` は `worktree.opened` setup hook を発火し、hook の完了を operation-scoped receipt で待つ手段がないため、cleanup 中の再登録と直後の remove を安全に直列化できない。
-setup hook がある場合の削除用再登録は proof-grade tier まで fail closed にし、`--force` は明示的なユーザー確認と dirty state の再照合を要求する。
+setup hook がある場合の削除用再登録は proof-grade tier まで fail closed にし、`--force` は明示的なユーザー確認と content-addressed dirty fingerprint の再照合を要求する。
 
 cleaned tombstone からの continue は、同じ task と `lineage_id` を指定したユーザーの明示操作だけが開始できる。
 shared registry lock 下で tombstone、full branch ref、current tip、deterministic path、保存済み base field と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ tombstone を新しい launch intent に予約する。
@@ -773,7 +832,7 @@ foreground native child と source entrypoint が異なること自体は失敗�
 intent と final row は `entrypoint_spec`、`launch_bundle_spec`、matcher ID / version、実測した `observed_process_chain` を別々に保持し、resume、emitter、nudge も bundle digest と同じ chain identity を再観測する。
 
 active intent、final row、registry の session-bootstrap owner / active epoch が bundle reference を保持し、external owner marker は単独で reference を保持しない。
-ready digest は active reference、session-bootstrap journal、bootstrap operation lock、bundle-bound live process がすべてない場合だけ GC candidate になる。
+ready digest は active reference、session-bootstrap / server-restart journal、bootstrap / restart operation lock、bundle-bound live process がすべてない場合だけ GC candidate になる。
 incomplete build / publish は build owner lease の takeover CAS を完了した recovery だけが GC candidate にできる。
 ready digest の GC は shared registry lock と store lock 下で candidate snapshot と新しい GC nonce / deterministic lock path を選んで global lock を解放し、`fanout/launch-bundles/.locks/gc-<gc-nonce>.lock` を no-follow / exclusive create して排他 GC operation lock を取得する。
 その lock を保持して shared registry lock、store lock の順に再取得し、candidate と namespace pre-state を再照合してから `gc-planned` と GC owner lease を同じ state save で作る。
@@ -1428,7 +1487,8 @@ schema が定義する version string には prerelease を拒否する pattern 
 起動前は admitted Herdr source の provenance を検査して session bundle へ固定し、bundled Herdr の SHA-256、`herdr --version`、offline `api schema --json` を取得して protocol `17`、schema version `1`、使用 method、request / response の必須 field と、それらが参照する type、enum、const を再帰的に検査する。
 server 接続後は `status --json` の client / server version が同じ stable version で floor 以上、client / server protocol がともに `17` で admitted schema と一致、session と socket が admitted attach と一致、`compatible:true`、`restart_needed:false` であることを要求する。
 `api snapshot` の version と protocol も同じ admitted server に一致させる。
-full schema gate は admitted session bundle digest ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
+full schema gate は admitted session bundle digest ごとに一回 cache でき、connected status / snapshot gate は attach ごとに一回実行する。
+owned server restart は同じ bundle digest でも cached proof を使わず、full schema、connected status、snapshot の三段 gate を新 server tuple に対して最初から再実行する。
 各 CLI call は bundled executable identity と bundle digest、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
 0.7.5 は比較可能な server generation を返さないため、connection loss、restart、binary drift、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させる。
 owned server の restart 後は三段 gate を最初から再実行し、成功した場合だけ通常操作へ進む。
@@ -1482,7 +1542,8 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
 | owned bootstrap / launch | Go | owned XDG / socket / marker、shared Herdr registry、sealed session / operation bundle、control-plane / workload env の分離、0.7.5 capability gate、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
-| cleanup / rollback | Go | exact ownership と dirty / force 条件を送信直前に再照合し、branch lineage を cleaned tombstone として保持し、response loss では blind retry しない | remove / close が authoritative server generation と target resource generation を原子的に検査する |
+| owned server restart | Go | active-supervisor lease / takeover CAS、`ready -> restarting -> ready`、restart operation lock、planned / starting / realized / terminal phase、single spawn、cache なしの三段 gate、旧 process / socket 不在、bundle reference continuity | authenticated server generation と request-bound conditional restart |
+| cleanup / rollback | Go | exact ownership を送信直前に再照合し、dirty `--force` は index、tracked / untracked / ignored tree、symlink、recursive submodule を含む内容アドレス化 fingerprint と確認 receipt を束縛して独立再走査し、branch lineage を cleaned tombstone として保持し、response loss では blind retry しない | remove / close が authoritative server generation と target resource generation を原子的に検査する |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
@@ -1500,7 +1561,11 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - backend は per-repo supervisor が owned XDG / socket / marker を exclusive create して foreground `herdr server` child を bootstrap する。
   supervisor は呼び出し元から継承した Herdr routing env の値に依存せず、`status` と bootstrap を含む各 Herdr CLI call 用の env を構築し、owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を fanout-owned 値で上書きする。
   `FANOUT_HERDR_CONTROL_PATH` も physical common directory から supervisor が導出して上書きし、repo config、呼び出し元 env、agent workload からの指定を受け付けない。
-  完全一致する owned marker は restart reconciliation に使い、不一致、foreign、または検証不能な socket / marker は停止せず fail closed にする。
+  owner marker は stable epoch field だけを持ち、可変 active-supervisor owner tuple と server tuple は共有 registry に置く。
+  active supervisor は PID / start token、generation、expiry を持つ lease を更新し、expired owner の不在と exact tuple の owner CAS を証明した process だけが takeover する。
+  server loss は current active owner が process / socket の不在を証明した場合だけ restart operation lock と planned / starting / realized / terminal phase で処理し、starting 後の spawn を再発行しない。
+  terminal CAS は新 server tuple と admission ID を束縛した三段 gate、変化した `terminal_id` の `stale` 化、restart journal の削除を一度に確定する。
+  不一致、foreign、残存、または検証不能な socket / marker / process は停止、採用、unlink せず fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active intent、final row、runtime resource、foreign resource のない明示 repo-session shutdown だけを teardown とする。
   cleaned tombstone と branch lineage は repo-scoped state として残し、teardown blocker にしない。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、cleanup を後続実装へ解禁する。
@@ -1511,7 +1576,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - core runtime compatibility は exact version tuple allowlist ではなく、stable CLI / server `>=0.7.5`、protocol `17` / schema version `1` の structural schema、接続先 status の gate で判定する。
   0.7.4 以下は floor 未満として拒否する。
   prerelease、解釈不能または floor 未満の version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method、必須 field、参照される type / enum / const の欠落または不一致は fail closed にする。
-  full schema gate は admitted session bundle digest ごとに一回、connected status / snapshot gate は attach ごとに一回実行する。
+  full schema gate は admitted session bundle digest ごとに一回 cache でき、connected status / snapshot gate は attach ごとに一回実行する。
+  owned server restart は同じ bundle digest でも cached proof を使わず、新 server tuple に三段 gate を最初から実行する。
   各 CLI call は bundled Herdr identity と bundle digest、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
   connection loss、restart、binary drift、`restart_needed:true`、その他の不一致は admission を失効させ、owned server の再起動後に gate を最初から通す。
   gate が再び成功した場合だけ通常 operation へ進み、0.7.5 direct-launch row の resume は実行しない。
@@ -1530,7 +1596,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   linked worktree は session を共有し、独立 clone は full common-directory identity の hash で分離する。
   physical common directory 配下の `fanout/herdr-control.json` と `herdr-control.json.lock` を全 linked worktree が共有し、directory は 0700、registry / lock は 0600 とする。
   repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference / build / publish / GC journal、session-bootstrap journal を保持し、supervisor epoch を越えて存続する。
-  active epoch は owner nonce、session / socket identity、console、intent、final row、runtime resource を保持し、active resource がない場合だけ切り替える。
+  active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、admission ID / state `ready` / `restarting` / `draining`、console、intent、final row、runtime resource を保持し、active resource がない場合だけ切り替える。
+  通常 mutation は shared registry lock 下で current owner、expected revision、`ready`、restart / shutdown journal 不在を照合し、最初の intent / journal と同じ save で admission を確定する。
+  `restarting` は同じ restart owner / nonce の phase と capability re-gate、`draining` は同じ shutdown owner / nonce の phase と terminal save だけを許可する。
   Herdr の console、intent、final row、branch lineage / tombstone、branch reservation、bundle reference / journal、telemetry routing、resource inventory はこの registry だけを正典とし、worktree-local `.fanout/state.json` へ複製しない。
   status / lifecycle / session view は local tmux state と共有 Herdr registry を backend ごとに集約し、Herdr の state save は共有 lock 下の atomic replace とする。
   symlink、所有 UID / mode、full common-directory identity の gate を満たせない control path は fail closed にする。
@@ -1551,10 +1619,13 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   coordinator root は worktree root と同じ launcher readiness、token、agent detection 契約を通す。
   per-repo supervisor が foreground server child を所有し、console detach 後も存続させる。
   最後の child close では停止せず、active intent、final row、runtime resource、foreign resource のない明示 repo-session shutdown だけを teardown とする。
-  明示 shutdown は console shell / workspace を exact identity の通常 cleanup で閉じ、console row を含む全 active row / intent と foreign resource の不在を再観測してから dedicated operation lock と renewable owner lease を取得する。
+  明示 shutdown は console shell / workspace を exact identity の通常 cleanup で閉じ、console row を含む全 active row / intent と foreign resource の不在を再観測してから dedicated operation lock を取得する。
+  current active owner、restart journal 不在、空 inventory、namespace pre-state と `ready -> draining`、shutdown journal / renewable owner lease の作成を同じ CAS save にする。
+  `draining` 後は全 linked worktree の通常 mutation を `session_shutting_down` で拒否し、registry-only status / session view と同じ shutdown machine の recovery だけを許可する。
+  stop、marker unlink、terminal save の前に同じ draining epoch / owner / inventory / namespace / bundle reference を再照合し、draining を `ready` へ戻さない。
   server stop と owner marker unlink は各 planned / starting / realized phase、exact request、PID / start token、socket / marker identity、namespace pre / post-state を保存する。
   response loss で発生または非発生を証明できない mutation は再発行せず、journal と bundle reference を保持する。
-  process / socket と marker の不在を確定した terminal save だけが active epoch と bundle reference を同時に削除し、operation lock を解放する。
+  process / socket と marker の不在を確定した terminal CAS だけが active epoch、bundle reference、shutdown journal、draining fence を同時に削除し、operation lock を解放して fresh bootstrap を再解禁する。
   repo-scoped branch lineage と cleaned tombstone は server 停止後も保持する。
 - 0.7.5 wave 2 は `worktree create` / `worktree open`、owned launcher readiness、operation-bound token、agent 検出、`agent rename` を state machine から自動実行する。
   `agent start` は exact executable を pin できないため自動 launch に使わない。
@@ -1629,7 +1700,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   seal の部分適用は exact manifest / identity の entry に限って idempotent に補い、完成不能な journaled root は deterministic quarantine を先行保存して GC namespace protocol へ移す。
   journal のない final path、unexpected entry、identity 不一致は自動操作しない。
   active intent、final row、registry の session-bootstrap owner / active epoch が ready bundle reference を保持し、external owner marker は単独で reference を保持しない。
-  GC は active reference、session-bootstrap journal、bootstrap operation lock、bundle-bound live process のない ready digest、または build owner takeover CAS を完了した incomplete build / publish だけを処理する。
+  GC は active reference、session-bootstrap / server-restart journal、bootstrap / restart operation lock、bundle-bound live process のない ready digest、または build owner takeover CAS を完了した incomplete build / publish だけを処理する。
   ready GC は専用 GC operation lock を取得してから registry / store lock 下で `gc-planned` と PID / start token / owner nonce / generation / lock identity / expiry を保存し、incomplete GC は takeover 済み build lock と owner tuple を同じ save で GC へ移譲する。
   GC recovery は expired owner の operation lock、PID / start token の不在、owner generation と namespace identity の CAS を通し、terminal save まで同じ lock を保持する。
   `gc-planned` 後は旧 lease の renewal、builder recovery、新しい reference を拒否する。
@@ -1765,7 +1836,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   exact request と pre-state を `cleanup-planned`、送信直前再照合の完了を `cleanup-starting` として保存し、mutation を一回だけ発行する。
   child は workspace label、worktree nonce、git-dir marker、full branch ref、path を再照合し、checkout HEAD と branch ref が一致する current tip を `cleanup_head_sha` として保存する。
   `cleanup_head_sha` は commit または rebase により `launch_head_sha` と異なってよく、ancestry を ownership proof に使わない。
-  dirty worktree の `--force` は明示的なユーザー確認と dirty fingerprint の送信直前再照合を要求する。
+  dirty worktree の `--force` は index exact bytes / entries、tracked / untracked / ignored tree、regular file bytes、symlink target、recursive submodule を含む domain-separated fingerprint をユーザー確認 receipt に束縛する。
+  cleanup request の直前に独立した no-follow scan を行い、digest と構成 identity が完全一致する場合だけ発行する。
+  読取失敗、race、special file、mount / case collision、entry または submodule state の変化は新しい確認なしに続行しない。
   remove / close request に nonce または session epoch の precondition を渡せず TOCTOU は残るが、tmux-parity tier の受容済み残余リスクとする。
   成功応答後に workspace、checkout、worktree registration、旧 marker の不在と branch ref が `cleanup_head_sha` のままであることを再観測した場合だけ、active row を cleaned tombstone へ置き換える。
   tombstone は canonical typed row key と構成 identity、backend、lineage / repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha=cleanup_head_sha`、cleanup receipt、旧 marker identity を保持し、active runtime resource と bundle reference を持たない。
