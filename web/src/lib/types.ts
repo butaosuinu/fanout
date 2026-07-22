@@ -51,7 +51,7 @@ export interface PaneView {
   runtimeState?: string; // backend-neutral field; additive "unsupported" を含む
   runtimeTitle?: string; // backend-neutral alias; tmuxTitle は互換用に残る
   agentState?: string; // "running" / "working" / "plan" / "blocked" / "idle" / "done" / ""(不明)
-  planMode?: boolean; // Codex Plan Mode 起動ペイン(/api/plan・Plan セクションの対象)
+  planMode?: boolean; // plan mode 起動ペイン(全 agent 共通。codex のみ /api/plan・Plan セクション対象)
   prompt?: string;
   ciStatus?: string; // lowercase; "-" = primary PR に CI なし
   wave?: number; // 0(unknown)はフィールドごと欠落
@@ -139,8 +139,8 @@ export interface PeekResponse {
   output: string;
 }
 
-/* 正は internal/ui/dashboard/plan.go の planResponse。found:false は「plan-mode
- * ペインだが取得可能な出力に完全な plan ブロックが無い」を表す正常応答(200)。 */
+/* 正は internal/ui/dashboard/plan.go の planResponse。found:false は「codex の
+ * plan-mode ペインだが取得可能な出力に完全な plan ブロックが無い」を表す正常応答(200)。 */
 export interface PlanResponse {
   paneId: string;
   capturedAt: string;

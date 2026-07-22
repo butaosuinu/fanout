@@ -96,9 +96,9 @@ type PaneView struct {
 	// から動的判定する。tmux 不通時だけ state.json の起動時記録値
 	// (AgentStatus)へ fallback し、herdr の未知状態は running とみなさない。
 	AgentState string `json:"agentState,omitempty"`
-	// PlanMode は Codex Plan Mode(--codex-plan-mode)で起動した記録ペインか
-	// どうか(state row の PlanMode の passthrough)。ダッシュボードは
-	// このフラグで GET /api/plan の対象と Plan セクションの表示を限定する。
+	// PlanMode は plan mode で起動した記録ペインかどうか(全エージェント共通、
+	// state row の PlanMode の passthrough)。ダッシュボードはこのフラグと
+	// Agent == "codex" で GET /api/plan の対象と Plan セクションを限定する。
 	PlanMode  bool              `json:"planMode,omitempty"`
 	Prompt    string            `json:"prompt,omitempty"`    // state row's original prompt
 	CIStatus  string            `json:"ciStatus,omitempty"`  // primary-PR CI via ghissue.SummarizeCI; lowercase

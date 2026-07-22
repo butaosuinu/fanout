@@ -729,6 +729,7 @@ describe("drawer + peek", () => {
           makePane({
             issueNum: 105,
             displayName: "Herdr child",
+            agent: "codex",
             backend: "herdr",
             paneId: "w1:p5",
             alive: true,
@@ -776,7 +777,7 @@ describe("drawer + peek", () => {
 });
 
 describe("plan(Codex Plan Mode)", () => {
-  /* %1 = planMode(codex)、%2 = 通常ペイン。Plan セクションの表示有無を対比する */
+  /* %1 = planMode(codex)、%2 = 通常 codex、%3/%4 = 他 agent の planMode。 */
   function planModeSnapshot() {
     return makeSnapshot([
       makeSession("142", [
@@ -788,6 +789,20 @@ describe("plan(Codex Plan Mode)", () => {
           planMode: true,
         }),
         makePane({ issueNum: 102, displayName: "Add docs", agent: "codex", paneId: "%2" }),
+        makePane({
+          issueNum: 103,
+          displayName: "Plan with Claude",
+          agent: "claude",
+          paneId: "%3",
+          planMode: true,
+        }),
+        makePane({
+          issueNum: 104,
+          displayName: "Plan with OpenCode",
+          agent: "opencode",
+          paneId: "%4",
+          planMode: true,
+        }),
       ]),
     ]);
   }
@@ -803,10 +818,14 @@ describe("plan(Codex Plan Mode)", () => {
     });
   }
 
-  it("planMode のペインだけ Plan セクションを表示し、plan 本文を <pre> テキストで描画する", async () => {
+  it("codex の planMode ペインだけ Plan セクションを表示し、plan 本文を <pre> テキストで描画する", async () => {
+    let planCalls = 0;
     server.use(
       peekHandler(() => "boot ok"),
-      planHandler(() => ({ found: true, plan: "## Plan\n1. <b>not html</b>" })),
+      planHandler(() => {
+        planCalls++;
+        return { found: true, plan: "## Plan\n1. <b>not html</b>" };
+      }),
     );
     const user = userEvent.setup();
     render(<App />);
@@ -820,11 +839,15 @@ describe("plan(Codex Plan Mode)", () => {
     expect(pre.tagName).toBe("PRE");
     expect(pre.querySelector("b")).toBeNull();
     expect(drawer.querySelector("#plan-meta")).toHaveTextContent(/captured \d{2}:\d{2}:\d{2}/);
+    expect(planCalls).toBe(1);
 
-    // 通常ペインには Plan セクション自体が出ない(/api/plan も呼ばれない)
-    await user.click(screen.getByText("Add docs"));
-    await screen.findByRole("complementary", { name: "ペイン詳細" });
-    expect(screen.queryByText("plan — 提案中のプラン")).not.toBeInTheDocument();
+    // 非 plan codex と、plan mode の claude / opencode は対象外。
+    for (const name of ["Add docs", "Plan with Claude", "Plan with OpenCode"]) {
+      await user.click(screen.getByText(name));
+      await screen.findByRole("complementary", { name: "ペイン詳細" });
+      expect(screen.queryByText("plan — 提案中のプラン")).not.toBeInTheDocument();
+      expect(planCalls).toBe(1);
+    }
   });
 
   it("found:false は未検出の説明文言を表示する", async () => {
