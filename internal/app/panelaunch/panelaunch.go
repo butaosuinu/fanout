@@ -526,7 +526,7 @@ func (l *Launcher) preflightClaudeLaunchMode(req *Request) {
 }
 
 func parseClaudeVersion(output string) ([3]int, bool) {
-	for _, field := range strings.Fields(output) {
+	for field := range strings.FieldsSeq(output) {
 		candidate := strings.Trim(strings.TrimPrefix(field, "v"), "(),;[]")
 		parts := strings.Split(candidate, ".")
 		if len(parts) < 3 {

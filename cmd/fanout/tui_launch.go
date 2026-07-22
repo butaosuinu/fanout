@@ -524,8 +524,8 @@ func bufferedLaunchNotice(stderr bytes.Buffer) string {
 			notices = appendUniqueNotice(notices, strings.TrimSpace(line[i:]))
 			continue
 		}
-		if i := strings.Index(line, "[warn]"); i >= 0 {
-			notices = appendUniqueNotice(notices, strings.TrimSpace(line[i+len("[warn]"):]))
+		if _, warning, ok := strings.Cut(line, "[warn]"); ok {
+			notices = appendUniqueNotice(notices, strings.TrimSpace(warning))
 		}
 	}
 	return strings.Join(notices, "; ")
