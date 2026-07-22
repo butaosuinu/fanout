@@ -39,7 +39,7 @@ request-bound generation と conditional mutation、server-authenticated control
 |---|---|---|
 | owned server | Go | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
 | server 起動 | Go | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
-| owned server restart | Go | active-supervisor lease と restart journal で single spawn を直列化し、process / socket 不在、bundle identity、cache なしの capability gate を満たす terminal CAS だけが再解禁する |
+| owned server restart | Go | active-supervisor lease と restart journal で single spawn を直列化し、cache なし gate 成功の terminal CAS だけが再解禁する。gate 失敗は exact candidate absence 後に `manifest-invalid` へ閉じる |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
@@ -134,13 +134,22 @@ production supervisor は private namespace gate 済みの 0600、ACL-free な l
 実測した mode 値だけでは inherited ACL を検査していないため、別 UID の排除を証明しない。
 実装は後述の private namespace gate が成功した場合だけ、この permission 境界を別 UID の排除に使う。
 herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継承するため、socket が分かれば `server.stop`、`plugin.*`、`worktree.remove` を発行できる。
-同じ UID の process は外部 `owner.json` の nonce、PID、bundle digest も変更でき、immutable flag も解除できるため、status、schema、snapshot の応答は marker nonce または session generation に束縛されない。
+同じ UID の process は外部 `owner.json` の stable bytes と registry の PID / start token / bundle reference を変更でき、immutable flag も解除できるため、status、schema、snapshot の応答は marker nonce または session generation に束縛されない。
 server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
 
 owned runtime directory の `owner.json` は協調する fanout process 間の ownership、封じ込め、crash recovery、誤操作防止に使う。
-canonical git common directory、stable epoch owner nonce、socket path、session bundle digest / root identity、Herdr version、detection fixture ID / `manifest_set_digest` / no-refresh policy ID、隔離 XDG path を記録し、0600 で exclusive create する。
+marker bytes の唯一の schema は `fanout.herdr-owner.v1` とし、UTF-8 の RFC 8785 canonical JSON、BOM と trailing LF なしで符号化する。
+decoder は missing / unknown / duplicate field を拒否し、読み取った raw bytes と canonical reserialization の exact match を要求する。
+raw path と config bytes は unpadded base64url で保存し、opened identity は本文の private namespace gate が保存する device / inode / type / UID / mode / mount identity の canonical tuple を使う。
+identity の integer component は先頭ゼロなし ASCII 十進の JSON string、type は schema 固定 enum で符号化し、platform が提供しない required component がある場合は marker を作らない。
+required field は schema ID、physical canonical common-directory の raw path / opened identity、bootstrap nonce、session-bundle build nonce、stable epoch owner nonce、behavior profile ID とする。
+続けて `HERDR_SESSION`、server / client socket の expected raw path / opened parent identity / expected-absence receipt、session bundle digest / root identity、Herdr version、bundle 内の Herdr / fanout relative entry path / opened identity / executable digest を必須とする。
+さらに detection fixture ID / declared version / `manifest_set_digest` / no-refresh policy ID、manifest realization key / generation / final root identity、owned config の raw path / opened identity / exact bytes / SHA-256、`CONFIG` / `STATE` / `DATA` / `CACHE` の固定順に並べた四つの XDG raw path / opened root identity を必須とする。
+socket leaf は marker create 後に作られるため marker に含めず、live socket identity、server PID / start token、可変 active-supervisor owner tuple / server tuple / admission は registry にだけ保存する。
+`owner-marker-create-planned` と registry は exact marker bytes の SHA-256 を lowercase hex で保存するが、自己参照を避けるため marker 自身にその digest を含めない。
 marker byte は private namespace gate が parent の inheritable ACL を拒否し、fresh file の non-owner allow ACE 不在、owner-only / deny ACL の除去、同一 FD の再検査を完了した後に書く。
-既存 socket と marker が完全一致すれば owned session の reconciliation に使い、不一致、foreign、または検証不能なら fail closed にして server を停止しない。
+marker は journal の canonical bytes / digest / opened identity、socket は registry の expected path / server tuple と別々に完全一致する場合だけ owned session の reconciliation に使う。
+不一致、foreign、または検証不能なら fail closed にして server を停止しない。
 この marker を mutation authority として扱わない。
 `owner.json` は active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典ではない。
 対応する registry の session-bootstrap journal または active epoch がない marker は自動採用も自動削除もしない。
@@ -160,9 +169,9 @@ pre-existing object、socket、symlink、または race-free な no-follow ACL o
 ACL が残る場合は採用、接続、lock 取得、publish、実行、unlink を行わず fail closed にする。
 symlink、anchor 配下の mount boundary、ACL 読取不能、entry と FD の identity 不一致、検査中の identity / ACL 変化では pathname-based retry、追跡、置換、削除を行わない。
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
-registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal、agent-manifest override realization / build journal、session-bootstrap journal を supervisor epoch を越えて保持する。
+registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal、agent-manifest override realization / retirement tombstone / build journal、session-bootstrap journal を supervisor epoch を越えて保持する。
 registry / journal / final row は raw workload env、capsule MAC key、capsule payload を保持しない。
-active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、active bundle / manifest override realization reference、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、admission state `ready` / `restarting` / `manifest-invalid` / `draining` を別に持ち、owner marker の stable epoch-bound field と完全一致する場合だけ再利用する。
+active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、active bundle / manifest override realization key / generation / final root identity、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、admission state `ready` / `restarting` / `manifest-invalid` / `draining` を別に持ち、owner marker の stable epoch-bound field と完全一致する場合だけ再利用する。
 active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal がない場合だけ新しい owner epoch へ切り替え、repo-scoped lineage と tombstone は保持する。
 writer は private namespace gate 済みの同一 inode の lock を no-follow で保持し、expected revision を確認する。
 0600 temporary file は parent の inheritable ACL を拒否してから exclusive create し、fresh file の non-owner allow ACE を拒否する。
@@ -177,7 +186,7 @@ launcher の lock-free read は rename 前後どちらかの完全な JSON だ�
 registry は owner / session / socket identity、console singleton、全 linked worktree の provisional intent と final row、branch lineage / tombstone、branch reservation、launch bundle reference / journal、session-bootstrap journal、telemetry routing、resource inventory を保持する。
 通常 mutation の入口は shared registry lock 下で active-supervisor owner identity / generation / process と単調な expiry、expected revision、`admission_state:ready`、restart / shutdown journal の不在を照合し、最初の intent、reservation、journal、または phase を同じ state save へ保存してから外部副作用へ進む。
 この gate は console attach / create、coordinator / child launch、continue、cleanup、focus、nudge、metadata、emitter / stale 更新、bundle build / reference / GC、tombstone forget に適用する。
-`restarting` 中に許可する write は同じ restart nonce / owner / lease / lock による phase 遷移と read-only capability / active manifest re-gate の結果保存に限る。
+`restarting` 中に許可する write は同じ restart nonce / owner / lease / lock による phase 遷移、read-only capability / active manifest re-gate の結果保存、gate 失敗後の exact candidate stop / absence reconciliation、`manifest-invalid` terminal CAS に限る。
 `manifest-invalid` 中に許可する write は current active-supervisor owner の lease 更新 / dead-owner takeover、同じ invalidation receipt の idempotent 保存、外部 cleanup 後の mutation-free explicit absence reconciliation と terminal operation-lock cleanup、通常の空 inventory 条件を満たす明示 shutdown の開始とその phase 遷移に限る。
 `draining` 中に許可する write は同じ shutdown nonce の owner lease 更新 / takeover、phase 遷移、terminal save に限る。
 その他は registry save、Git ref、bundle filesystem、SQLite、Herdr CLI mutation より先に `server_restarting`、`runtime_admission_invalid`、または `session_shutting_down` を返す。
@@ -208,19 +217,20 @@ selector が 0 件または複数件なら fail closed にし、cwd、slug、負
 
 config と plugin registry は全 XDG directory の差し替えで default state から隔離できる。
 owned server の bootstrap 前に admitted Herdr binary、current fanout binary、code-owned agent-detection fixture / canonical index を session launch bundle へ固定する。
-owned XDG root は canonical repo identity、behavior profile ID、`manifest_set_digest` から決め、別 fixture の root を上書きまたは自動削除しない。
+manifest realization の logical key は canonical repo identity、behavior profile ID、fixture ID、`manifest_set_digest`、no-refresh policy ID とし、record に単調増加する `realization_generation` を持たせる。
+owned XDG 四 root、config、final / staging override tree、remote cache path は logical key と `realization_generation` から決め、別 fixture または retired generation の path を上書きも再使用も自動削除もしない。
 supervisor の全 Herdr CLI call と server child は bundled Herdr path を使い、owned config は `[terminal] default_shell` を bundled fanout launcher path、`shell_mode` を `non_login` に固定する。
 owned config は `[update] manifest_check = false` も固定し、background remote manifest check を無効にする。
 fresh bootstrap は後述する journal で sealed fixture から owned config の `agent-detection` local override tree を no-follow / exclusive に実体化し、fixture 外の local override / cached remote manifest、identity / byte drift を server spawn 前に拒否する。
 restart は保存済み realization を read-only に再検査し、override file を作成、更新、置換しない。
 server env の `FANOUT_HERDR_PANE_LAUNCHER=1` は no-arg TUI より先に non-shell launcher mode へ dispatch する。
 server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` も `300000` に固定する。
-owner marker は session bundle digest / root identity、agent-detection fixture ID / `manifest_set_digest`、config bytes を保存し、bundle manifest、detection fixture、live launcher process のいずれかが一致しなければ server 起動前または operation token 前に fail closed にする。
+owner marker は `fanout.herdr-owner.v1` の canonical payload だけを保存し、その bundle / executable / fixture / realization / config / XDG field のいずれかが対応する registry、bundle manifest、detection fixture、filesystem、live launcher process と一致しなければ server 起動前または operation token 前に fail closed にする。
 #427 の hook emitter も bundled fanout path を使い、launcher control env は operation child env から除く。
 launcher は checkout 内 file または source installation を実行せず、config / bundle の drift または Herdr が別 root process を起動した場合は launch 前に fail closed にする。
 
 fresh session は `owner.json` 作成前に registry へ provisional session-bootstrap owner を作る。
-bootstrap record は bootstrap nonce、session bundle build nonce、将来の owner nonce、session / socket identity、marker path、owned XDG / config identity、manifest override realization / build subjournal identity、operation lock identity、supervisor PID / start token、lease generation / expiry を持つ。
+bootstrap record は bootstrap nonce、session bundle build nonce、将来の owner nonce、session / socket identity、marker path、owned XDG / config identity、manifest override logical key / realization generation / final root identity / build subjournal identity、operation lock identity、supervisor PID / start token、lease generation / expiry を持つ。
 fresh bootstrap は active epoch、別 bootstrap owner、owner marker、socket、server process、active env-capsule inventory、capsule disposal journal がすべてない場合だけ開始する。
 build lock 取得後の同じ state save で `bundle-build-planned` と phase `session-bootstrap-building` を作り、provisional owner を exact build nonce に束縛する。
 digest 確定前の provisional owner は bundle reference を持たず、incomplete tree は build journal、build owner lease、build lock で保護する。
@@ -237,7 +247,12 @@ CAS 失敗、live owner、process identity の取得不能、phase または資�
 
 `session-bundle-ready` 後は agent-manifest override tree、marker、server を別の journal phase で作る。
 phase `manifest-overrides-build-planned` は exact `XDG_CONFIG_HOME/herdr/agent-detection` path と parent identity、deterministic staging path、両 path の expected absence、behavior profile ID / fixture ID / `manifest_set_digest` / no-refresh policy ID、canonical entry set、各 target relative path / raw bytes / SHA-256 / mode、exact create / publish request を保存する。
-同じ behavior profile ID / fixture ID / `manifest_set_digest` / no-refresh policy ID の repo-scoped `manifest-overrides-realized` record がある場合は、final root / 全 entry の identity、mode、empty ACL、bytes、digest、remote cache の不在を no-follow で完全に再照合した state save だけが bootstrap journal に同じ key / final root identity の realization reference を取得して phase `manifest-overrides-realized` へ進める。
+同じ logical key の repo-scoped `manifest-overrides-realized` record がある場合は、その generation の final root / 全 entry の identity、mode、empty ACL、bytes、digest、remote cache の不在を no-follow で完全に再照合した state save だけが bootstrap journal に同じ key / generation / final root identity の realization reference を取得して phase `manifest-overrides-realized` へ進める。
+retained realization が欠落または drift した場合、bootstrap owner は operation lock と shared registry lock の下で expected revision、logical key、old generation / final root identity、exact no-follow absence / drift observation receipt、old generation の build / publish journal 不在を再照合する。
+同じ CAS は active epoch、marker、server / socket、別 bootstrap / restart / shutdown journal、old realization reference の不在と、current bootstrap が `session-bundle-ready` で realization reference を未取得であることを要求する。
+成功する CAS は old record を reason / observed path / expected / observed identity / digest / entry set を持つ `manifest-overrides-retired` tombstone へ移し、generation を一つ増やし、new generation の XDG / config / final / staging / cache path の expected absence と phase `manifest-overrides-build-planned` を current bootstrap journal へ一度に保存する。
+retirement は registry-only とし、old generation の tree を unlink、rename、chmod、repair、adopt、quarantine、GC せず、retired path を将来も再使用しない。
+observation の取得不能、CAS loss、new generation path の pre-existing object、old generation の partial staging / entry subjournal / publish 結果不明は retirement と fresh build を拒否し、既存の `manual_cleanup_required` 契約に従う。
 record のない pre-existing final tree、fixture / digest / identity の不一致、unknown entry、remote cache entry は自動修復、置換、削除せず fail closed にする。
 fresh build は phase `manifest-overrides-build-starting` を保存してから staging directory を 0700 で no-follow / exclusive create し、opened root identity と parent / staging fsync receipt を phase `manifest-overrides-build-created` へ保存する。
 `manifest-overrides-build-planned` の recovery は expected absence と owner lease が完全一致する場合だけ未発行 create request を一回発行できる。
@@ -248,19 +263,20 @@ fresh build は phase `manifest-overrides-build-starting` を保存してから 
 全 entry と directory entry set の完全一致を no-follow で再読して staging directory を 0500 にし、bottom-up fsync 後に phase `manifest-overrides-publish-planned` へ進む。
 publish は final path の expected absence、staging root identity、exact rename request を `manifest-overrides-publish-starting` へ保存してから同じ parent 内で一回だけ rename し、parent fsync を行う。
 publish recovery は保存済み root identity が staging または final の一方だけにある場合だけ未完了 step を続け、両方、どちらもない、identity / entry set 不一致では rename、adopt、delete を行わない。
-final root / 全 entry の identity、mode、empty ACL、raw bytes、digest、remote cache の不在を再検査した同じ state save は behavior profile ID / fixture ID / `manifest_set_digest` / no-refresh policy ID / final root identity / canonical entry identities を持つ repo-scoped realization record と bootstrap phase `manifest-overrides-realized` を作り、entry / build subjournal を除去する。
+final root / 全 entry の identity、mode、empty ACL、raw bytes、digest、remote cache の不在を再検査した同じ state save は logical key / generation / final root identity / canonical entry identities を持つ repo-scoped realization record と bootstrap phase `manifest-overrides-realized` を作り、old retirement tombstone を保持したまま entry / build subjournal を除去する。
 marker create は `manifest-overrides-realized` と bootstrap owner / realization reference が一致する場合だけ開始する。
-published realization は normal shutdown と bootstrap abort 後も retained input として残し、同じ behavior profile ID / fixture ID / `manifest_set_digest` / no-refresh policy ID / final root identity の fresh bootstrap だけが read-only に再利用する。
+exact な published realization は normal shutdown と bootstrap abort 後も retained input として残し、同じ logical key / generation / final root identity の fresh bootstrap だけが read-only に再利用する。
+retired generation は再利用せず、fresh bootstrap は terminal retirement CAS が予約した next generation の expected-absent namespace にだけ新しい realization を publish できる。
 未完成 staging、`manifest-override-entry-starting`、publish の発行結果不明は自動 quarantine、GC、unlink、再発行の対象にせず、exact build journal / path / identity / expected entry set を bootstrap-abort fence の下で `manual_cleanup_required` として保持する。
 外部の明示 cleanup 後に shared registry lock 下の read-only reconciliation が final / staging path、全 expected / unknown entry、marker / server / socket の不在と parent identity の不変を確認した場合だけ override absence receipt を保存し、bootstrap abort terminal CAS へ進める。
-phase `owner-marker-create-planned` は exact marker path / parent identity、expected absence、0600 canonical bytes / SHA-256、`O_EXCL` / `O_NOFOLLOW` request を保存する。
-marker bytes は bootstrap nonce、build nonce、owner nonce、bundle digest / root identity、detection fixture ID / `manifest_set_digest` / no-refresh policy ID、session / socket identity、config / XDG identity を持つ。
+phase `owner-marker-create-planned` は exact marker path / parent identity、expected absence、0600 `fanout.herdr-owner.v1` canonical bytes / SHA-256、`O_EXCL` / `O_NOFOLLOW` request を保存する。
+planned marker bytes の全 required field は同じ state save が照合した bootstrap / bundle / manifest realization / config / XDG record から写し、別節の field list から再構成しない。
 phase `owner-marker-create-starting` を保存してから create を一回だけ発行し、file と parent directory の fsync 後に opened file identity を phase `owner-marker-created` へ保存する。
 `owner-marker-create-planned` の recovery は pre-state が完全一致する場合だけ未発行 request を一回発行できる。
-`owner-marker-create-starting` で exact marker がある場合は bytes、nonce、UID、mode、空の extended ACL、parent identity を private namespace gate で照合して observed identity を `owner-marker-created` へ保存できる。
+`owner-marker-create-starting` で exact marker がある場合は canonical bytes / journal SHA-256、UID、mode、空の extended ACL、parent / opened file identity を private namespace gate で照合して observed identity を `owner-marker-created` へ保存できる。
 同 phase で marker がない場合、identity が違う場合、journal のない marker がある場合は create を再発行せず `manual_cleanup_required` にする。
 
-phase `server-bootstrap-planned` は bundled executable identity、exact detection fixture / local override identities、manifest override realization reference、no-refresh config、exact argv、versioned secret-free `control_env_spec` / fingerprint、marker identity、socket absence、exact spawn request を保存する。
+phase `server-bootstrap-planned` は bundled executable identity、exact detection fixture / local override identities、manifest override realization key / generation / final root identity、no-refresh config、exact argv、versioned secret-free `control_env_spec` / fingerprint、marker identity、socket absence、exact spawn request を保存する。
 phase `server-bootstrap-starting` を保存してから foreground server child を一回だけ spawn する。
 spawn 成功後の PID / start token、bundle executable identity、private namespace gate 済みの socket leaf identity、connected status、capability gate、active manifest proof を phase `server-bootstrap-realized` へ保存する。
 `server-bootstrap-starting` で PID / start token を保存できなかった crash は server を再起動せず、観測した process / socket を採用も停止もしない。
@@ -268,10 +284,11 @@ spawn 成功後の PID / start token、bundle executable identity、private name
 全照合後の phase `session-ready` は provisional bundle / manifest override realization reference を active epoch の reference へ移し、bootstrap owner tuple を active-supervisor owner tuple へ generation increment 付き CAS で移譲して bootstrap journal を同じ state save で除去し、reference がゼロになる瞬間を作らない。
 active-supervisor owner tuple は `supervisor_owner_nonce`、`owner_generation`、supervisor PID / start token、`lease_expires_unix_ms` を持つ。
 active server tuple は saved server PID / start token、bundled executable identity、socket identity、fanout-local `server_instance_generation` を持つ。
-capability admission は `admission_id`、state、active server tuple、behavior profile ID、Herdr source provenance、platform、executable digest、agent-detection fixture ID / declared version / `manifest_set_digest`、no-refresh policy ID、session bundle digest、status / schema / snapshot / active manifest proof、optional invalidation receipt を束縛する。
-invalidation receipt は `ready` / `restarting` では不在、`manifest-invalid` では必須とし、同 state から始めた `draining` は origin state と receipt を terminal save まで保持する。
-state 名 `manifest-invalid` は manifest drift だけでなく、`ready` 後に検出した binary drift、`restart_needed:true`、status / schema / behavior profile の不一致を含む live admission invalidation 全体の fail-closed state とする。
-これらの不一致を検出した active-supervisor owner または operation caller は shared registry lock 下で active owner / server tuple、expected revision、保存済み admission proof、fresh observed proof を再照合し、`ready -> manifest-invalid` を一回の authority-reducing CAS で確定する。
+capability admission は `admission_id`、state、active server tuple、behavior profile ID、Herdr source provenance、platform、executable digest、agent-detection fixture ID / declared version / `manifest_set_digest`、no-refresh policy ID、manifest realization key / generation / final root identity、session bundle digest、status / schema / snapshot / active manifest proof、optional invalidation receipt を束縛する。
+active admission の invalidation receipt は `ready` / `restarting` では不在、`manifest-invalid` では必須とし、同 state から始めた `draining` は origin state と receipt を terminal save まで保持する。
+`restarting` の restart journal は candidate re-gate 失敗後に限り candidate failure / absence receipt を持てるが、それを active invalidation receipt として公開するのは restart-abort terminal CAS と同時とする。
+state 名 `manifest-invalid` は manifest drift だけでなく、`ready` 後に検出した binary drift、`restart_needed:true`、status / schema / behavior profile の不一致、restart candidate の re-gate 失敗を含む live admission invalidation 全体の fail-closed state とする。
+`ready` 中の不一致を検出した active-supervisor owner または operation caller は shared registry lock 下で active owner / server tuple、expected revision、保存済み admission proof、fresh observed proof を再照合し、`ready -> manifest-invalid` を一回の authority-reducing CAS で確定する。
 operation caller は invalidation CAS で active ownership を取得または移譲せず、CAS loss 後は latest state が同じ `ready` admission ID / server tuple の場合だけ fresh observed proof を取り直して invalidation CAS を再評価し、それ以外は current operation を中止する。
 同じ CAS は admission ID を invalid として保持し、reason kind、観測時刻、reason に対応する binary / status / schema / behavior profile / active manifest / override / cache の observed identity を secret-free invalidation receipt に保存し、全 active operation intent を `operation_state:manual_cleanup_required`、全 direct-launch final row を `stale` にして新規 mutation を fence する。
 `manifest-invalid` から `ready` または `restarting` へ自動遷移せず、server loss 時も自動 restart しない。
@@ -300,11 +317,11 @@ takeover は expired tuple の snapshot 後に global lock を解放して旧 su
 live owner、PID / start token の取得不能、identity 不一致、CAS loss では active ownership を引き継がない。
 
 server loss の自動 restart は current active-supervisor owner だけが開始する。
-saved server PID / start token と socket path の不在、stable owner marker の bytes / opened identity、session bundle / manifest / executable、保存済み active manifest proof、sealed agent-detection fixture、local override / remote cache bytes、no-refresh config、XDG の完全一致、bootstrap / restart / shutdown journal の不在を証明できる場合だけ deterministic restart operation lock を global lock の外で no-follow / exclusive に取得する。
+saved server PID / start token と socket path の不在、stable owner marker の bytes / opened identity、session bundle / manifest realization key / generation / final root identity / executable、保存済み active manifest proof、sealed agent-detection fixture、local override / remote cache bytes、no-refresh config、XDG の完全一致、bootstrap / restart / shutdown journal の不在を証明できる場合だけ deterministic restart operation lock を global lock の外で no-follow / exclusive に取得する。
 server 不在の restart preflight は live active manifest を再取得したと扱わず、保存済み proof と filesystem identity だけを照合する。
 lock 順序は restart operation lock、shared registry lock、必要なら store lock とし、global lock を保持したまま restart operation lock を取得しない。
 同じ CAS save は active owner tuple / epoch / expected revision と不在 pre-state を再照合し、`admission_state` を `ready` から `restarting` へ変えて phase `server-restart-planned` を作り、lifecycle authority を active-supervisor owner から restart owner へ移す。
-`server-restart-planned` は restart nonce、restart owner lease の PID / start token / nonce / generation / lock path / file identity / expiry、旧 server tupleと不在 pre-state、exact marker、bundle / manifest / executable、agent-detection fixture ID / `manifest_set_digest`、no-refresh config / XDG、exact argv、versioned secret-free `control_env_spec` / fingerprint、exact spawn request、expected socket absence を保存する。
+`server-restart-planned` は restart nonce、restart owner lease の PID / start token / nonce / generation / lock path / file identity / expiry、旧 server tupleと不在 pre-state、exact marker、bundle / manifest realization key / generation / final root identity / executable、agent-detection fixture ID / `manifest_set_digest`、no-refresh config / XDG、exact argv、versioned secret-free `control_env_spec` / fingerprint、exact spawn request、expected socket absence を保存する。
 `restarting` 中は active-supervisor lease を別に更新または takeover せず、restart owner が operation lock と shared registry lock の下で lease を更新する。
 expired restart recovery は global lock の外で recorded operation lock を non-blocking 取得して旧 PID / start token の不在を証明し、shared registry lock 下で restart nonce / generation / phase、active epoch、旧 owner / server tuple、marker、bundle reference、namespace identity を再照合した owner CAS に勝った process だけが続ける。
 phase `server-restart-starting` を保存してから spawn を一回だけ発行し、成功応答の新 PID / start token / executable / private namespace gate 済み socket leaf identity を phase `server-restart-realized` へ直ちに保存するが、admission はまだ無効のままにする。
@@ -314,9 +331,16 @@ phase `server-restart-starting` を保存してから spawn を一回だけ発�
 foreign / mismatched process、残存または stale socket、identity の取得不能では stop / unlink / adopt / restart を行わず `manual_cleanup_required` にする。
 gate 成功後の terminal CAS だけが restart owner を新しい active-supervisor owner tuple / lease へ移し、新 server tuple、incremented `server_instance_generation`、新しい `admission_id`、`admission_state:ready` を確定して restart journal を除去する。
 同じ terminal CAS は snapshot の旧 `terminal_id` と current value を比較し、変化した direct-launch row を `stale` にするが、自動 resume は行わない。
+candidate re-gate が失敗した場合、restart owner は exact candidate PID / start token / executable / socket identity、restart nonce / owner generation、旧 admission ID / server tuple、gate failure proof、marker / bundle / manifest realization identity を再照合した CAS だけで phase `server-restart-admission-failed` へ進む。
+この phase は candidate failure receipt を restart journal に保存し、`admission_state:restarting` と restart owner / operation lock / lease を保持したまま exact candidate の `server-stop-planned` / `server-stop-starting` / `server-stop-realized` へ進む。
+candidate process / socket がすでに不在なら stop request を発行せず、保存済み candidate identity の absence と marker / bundle / manifest realization の不変を read-only に証明して `server-stop-realized` へ進む。
+stop の response loss または外部 cleanup 後も同じ exact absence を証明できる場合だけ realized へ進み、process / socket 残存、foreign identity、inventory 取得不能では stop、adopt、unlink、spawn を再発行せず `manual_cleanup_required` の restart journal を保持する。
+`server-stop-realized` 後の restart-abort terminal CAS は同じ restart nonce / owner / generation / lock、candidate failure / absence receipt、旧 active epoch / owner / server tuple、marker / bundle / manifest realization reference を再照合する。
+成功する CAS は restart owner を active-supervisor owner tuple / lease へ戻し、旧 admission ID を invalid のまま `admission_state:manifest-invalid` へ移し、candidate tuple / gate failure / absence proof を active invalidation receipt へ移し、active intent を `manual_cleanup_required`、direct-launch row を `stale` にして restart journal を除去する。
+失敗側 terminal CAS は candidate server tuple を active tuple に採用せず、`server_instance_generation` を増やず、新しい admission ID を作らず、marker、active epoch、session bundle / manifest realization reference、row を保持する。
 active epoch、stable marker、intent / final row、session bundle reference は restart で作り直しも削除もしない。
 normal operation は admission proof の server tuple が current server tuple と一致し、restart journal がないことを要求する。
-terminal CAS 後にだけ restart operation lock file の exact identity を再照合して unlink と parent fsync を行い、FD を閉じる。
+success または restart-abort terminal CAS 後にだけ restart operation lock file の exact identity を再照合して unlink と parent fsync を行い、FD を閉じる。
 supervisor loss後に saved server または socket が残る場合、通常 operation / restart は foreground child を暗黙に採用または停止せず、保存済み active-owner takeover 契約に勝てない process は fail closed にする。
 
 bootstrap abort は session-bootstrap owner が正式 session bundle reference を取得した phase `session-bundle-ready` 以後、`session-ready` より前だけ開始できる。
@@ -327,7 +351,8 @@ bootstrap-abort owner lease は abort owner nonce / generation、PID / start tok
 この CAS が bootstrap abort fence となり、以後は同じ abort nonce / owner / lease / lock の abort phase、lease 更新 / takeover、terminal save だけを許可し、元の bootstrap phase、`session-ready`、別 abort、fresh bootstrap を拒否する。
 `session-ready` CAS が先に成功した場合は abort CAS を失敗させ、active epoch を bootstrap abort で処理せず通常 shutdown の入口から再評価する。
 bootstrap-abort owner の lease 更新と dead-owner takeover は bootstrap owner と同じ operation lock、shared registry lock、必要なら store lock の順序を使い、abort nonce / generation / origin phase / current abort phase / resource identity を owner CAS で再照合する。
-server stop と marker remove は通常 shutdown と phase 名、exact request、planned / starting / realized の recovery 規則だけを共有し、lifecycle owner guard と terminal effect は分ける。
+server stop は通常 shutdown、bootstrap abort、restart abort で phase 名、exact request、planned / starting / realized の recovery 規則だけを共有し、lifecycle owner guard と terminal effect は分ける。
+marker remove は通常 shutdown と bootstrap abort だけが共有し、restart abort は stable marker を削除しない。
 marker create request と server spawn request の未発行、marker / server / socket の不在、manifest override が exact retained realization、override mutation の未発行、または外部 cleanup 後の exact absence receipt のいずれかであることを保存済み `abort_origin_phase` から証明できる場合は phase `session-abort-realized` へ進む。
 exact marker があり、server spawn request の未発行と server / socket の不在を証明できる場合は stop phase を省略し、phase `owner-marker-remove-planned` へ進む。
 phase `server-bootstrap-realized` の saved PID / start token、socket、marker を再照合できる場合だけ phase `server-stop-planned` へ進む。
@@ -349,6 +374,7 @@ phase `server-stop-planned` は bundled stop executable、exact argv、versioned
 `server-stop-planned` と `server-stop-starting` の各 save 前に operation lock、shared registry lock の順で lifecycle context を再照合する。
 通常 shutdown は同じ `draining` epoch、shutdown nonce / owner generation、lease / lock identity、空 inventory、foreign resource 不在、marker / server PID / start token / socket / active bundle / manifest override realization reference の保存値を要求する。
 bootstrap abort は active epoch の不在、同じ abort fence、abort nonce / owner generation、lease / inherited lock identity、`abort_origin_phase:server-bootstrap-realized`、foreign resource 不在、marker / server PID / start token / socket / provisional bundle / manifest override realization reference の保存値を要求する。
+restart abort は `admission_state:restarting`、同じ restart nonce / owner generation / lease / lock identity、phase `server-restart-admission-failed`、exact candidate PID / start token / socket、candidate failure receipt、stable marker / active bundle / manifest realization reference の保存値を要求する。
 exact process と socket の直前照合後に phase `server-stop-starting` を保存し、stop request を一回だけ発行する。
 `manifest-invalid` から開始した shutdown は draining CAS 前に saved server PID / start token と socket の不在を保存し、同じ absence、server tuple、owner generation、marker / bundle / manifest override realization reference を stop phase で再照合できる場合だけ stop request を発行せず `server-stop-realized` へ進む。
 saved PID / start token の process と socket の不在、marker の完全一致を保存できた場合だけ phase `server-stop-realized` へ進む。
@@ -365,16 +391,19 @@ bootstrap abort は active epoch の不在、同じ abort fence / abort owner / 
 marker path に別 identity がある場合、server / socket が再出現した場合、namespace の発生または非発生を証明できない場合は unlink を発行しない。
 
 `owner-marker-remove-realized` 後の通常 shutdown terminal save は同じ `draining` epoch / shutdown owner / phase、空 inventory、server / socket / marker 不在、exact active bundle / manifest override realization reference、別 bootstrap / operation journal 不在を再照合する。
-成功する一つの CAS は active epoch、active bundle / manifest override realization reference、shutdown journal、`draining` fence を同時に削除し、repo-scoped lineage / tombstone / manifest override realization record を保持する。
-bootstrap abort terminal save は phase `session-abort-realized` または `owner-marker-remove-realized`、active epoch の不在、同じ abort fence / abort nonce / owner generation / lease / inherited operation lock、server / socket / marker 不在、exact provisional bundle reference、exact retained manifest override realization、override mutation 未発行、または外部 cleanup 後の exact absence receipt のいずれか、live override staging / entry subjournal の不在、別 bootstrap / operation journal 不在を再照合する。
-成功する一つの CAS は provisional bundle / manifest override realization reference と session-bootstrap journal 内の bootstrap-abort owner / journal / fence を同時に削除し、repo-scoped manifest override realization record を保持して active epoch を作成も削除もしない。
+成功する一つの CAS は active epoch、active bundle / manifest override realization reference、shutdown journal、`draining` fence を同時に削除し、repo-scoped lineage / tombstone を保持する。
+bootstrap abort terminal save は phase `session-abort-realized` または `owner-marker-remove-realized`、active epoch の不在、同じ abort fence / abort nonce / owner generation / lease / inherited operation lock、server / socket / marker 不在、exact provisional bundle reference、exact retained manifest override realization、override mutation 未発行、または外部 cleanup 後の exact absence / drift receipt のいずれか、live override staging / entry subjournal の不在、別 bootstrap / operation journal 不在を再照合する。
+成功する一つの CAS は provisional bundle / manifest override realization reference と session-bootstrap journal 内の bootstrap-abort owner / journal / fence を同時に削除し、active epoch を作成も削除もしない。
+通常 shutdown または bootstrap abort の terminal save が old realization の最後の reference を外す場合、同じ CAS は別 reference、old generation の build / publish journal、marker / server / socket の不在と exact no-follow absence / drift receipt を再照合して old record を `manifest-overrides-retired` tombstone へ移せる。
+この last-reference retirement も registry-only とし、old tree に変更を発行せず next generation の予約だけを保存する。
+exact realization が不変な場合は repo-scoped realization record を retained input として保持する。
 対応する terminal CAS だけが mutation と fresh bootstrap を再解禁し、`server-stop-realized` または marker unlink だけでは解禁しない。
 user cancel、response loss、identity 不一致、foreign resource、発行結果不明では lifecycle context の fence、journal、bundle / manifest override realization reference、operation lock identity を保持し、通常 shutdown を `ready` または `manifest-invalid` へ戻さず、bootstrap abort を元の bootstrap phase へ戻さない。
 recovery は expired lease、operation lock、旧 PID / start token の不在、同じ lifecycle nonce / phase / resource identity / generation の owner CAS を通した場合だけ同じ shutdown または abort を続ける。
 各 terminal CAS 後にだけ operation lock file の exact identity を再照合して unlink と parent fsync を行い、通常 shutdown は dedicated shutdown lock、bootstrap abort は引き継いだ bootstrap lock の FD を閉じる。
 terminal CAS 前は bundle / manifest override realization reference と operation owner lease を落とさず、bundle GC と fresh bootstrap を許可しない。
 identity 不一致、response loss、foreign socket、process identity の取得不能では stop / unlink を再発行せず、journal と bundle / manifest override realization reference を落とさない。
-normal shutdown と bootstrap abort は exact published manifest override realization と repo-scoped realization record を削除せず、future bootstrap の read-only reuse input として保持する。
+normal shutdown と bootstrap abort は exact published manifest override realization を future bootstrap の read-only reuse input として保持し、absence / drift receipt で retired にした generation は tombstone として保持する。
 0.7.5 の plugin registry は session 単位ではなく、同じ `XDG_CONFIG_HOME` を使う全 session で共有される per-user global state になった。
 実測では session を変えても link 済み plugin が見え、同じ `HOME` でも `XDG_CONFIG_HOME` を変えると空になった。
 owned XDG を repo session ごとに分ける現行方針は global registry も隔離し、cold restart 後も同じ owned XDG の registry を復元した。
@@ -473,6 +502,7 @@ wave 2 は owner marker、socket、capability gate を満たす owned server の
 server loss 後は current active-supervisor owner が saved process / socket の不在と stable marker / bundle / config の完全一致を証明した場合だけ restart journal を開始する。
 `server-restart-starting` 後の spawn は一回に限り、結果不明、残存 process / socket、identity 不一致では再発行、採用、停止、unlink を行わず fail closed にする。
 新 server の exact identity を保存して三段 capability gate を cache なしで通した terminal CAS だけが通常 operation を再解禁する。
+re-gate 失敗は candidate failure receipt を保存し、exact candidate の stop または read-only absence reconciliation の後にだけ restart journal を閉じて `manifest-invalid` へ移す。
 0.7.5 direct-launch row は provider にかかわらず `terminal_id` が変われば `stale` とし、自動 resume しない。
 最後の child close では server を止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource がない場合の明示的な repo-session shutdown だけを teardown とする。
 cleaned tombstone と branch lineage は active runtime resource ではなく、明示 shutdown を妨げず repo-scoped registry に残る。
@@ -1185,7 +1215,7 @@ workspace-level `agent start` の各条項は次のように移す。
 
 | issue | 担当契約 |
 |---|---|
-| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / no-refresh allowlist、journaled manifest override realization / read-only reuse / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と planned / starting / realized / terminal state machine、cache なし capability / active manifest re-gate |
+| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / no-refresh allowlist、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
 | #527 | short registry CAS と launch operation lock / lease、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / manual absence reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
 | #528 | non-shell launcher、console / provider operation bundle、exact token、env capsule claim / consume / empty-base exec、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
@@ -1783,7 +1813,9 @@ non-shell launcher の readiness / env / process-info、plugin / setup-hook、fr
 再検証が成功した platform だけを behavior profile entry、fixture、この契約の同じ reviewed change で追加し、挙動が変わる release は state machine を先に改訂する。
 0.7.5 は比較可能な server generation を返さないため、connection loss、restart、binary / active manifest drift、refresh attempt、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させる。
 `ready` 中の connection loss で server / socket の不在を証明した経路だけが owned server restart へ進み、三段 capability gate と active manifest gate を最初から再実行する。
-binary / active manifest / override / cache drift、refresh attempt、`restart_needed:true`、その他の live admission 不一致は `manifest-invalid` へ移し、mutation-free reconciliation、明示 shutdown、fresh bootstrap を通すまで通常操作へ戻さない。
+restart candidate の re-gate 失敗は candidate の exact absence を証明した terminal CAS で `manifest-invalid` へ移し、spawn を再発行しない。
+binary / active manifest / override / cache drift、refresh attempt、`restart_needed:true`、restart re-gate 失敗、その他の live admission 不一致は `manifest-invalid` へ移し、mutation-free reconciliation、明示 shutdown、fresh bootstrap を通すまで通常操作へ戻さない。
+shutdown 後に retained manifest realization が欠落または drift している場合、fresh bootstrap は registry-only retirement CAS 後の next generation namespace にだけ新しい realization を publish する。
 0.7.5 direct-launch row は gate の再成功にかかわらず `terminal_id` が変われば `stale` とする。
 別 CLI 接続間の server continuity は証明できず、この gate を mutation authority にしない。
 schema にない CLI-only surface は structural admission の対象外とし、wave 2 で使う surface は command と出力を別の fail-closed gate で検査する。
@@ -1834,7 +1866,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
 | owned bootstrap / launch | Go | FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、launch operation lock / lease、sealed session / operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename。#526 の fixture / no-refresh proof 完了までは fail closed | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
-| owned server restart | Go | active-supervisor lease / takeover CAS、`ready -> restarting -> ready`、restart operation lock、planned / starting / realized / terminal phase、single spawn、cache なしの三段 capability gate / active manifest gate、旧 process / socket 不在、bundle reference continuity | authenticated server generation と request-bound conditional restart |
+| owned server restart | Go | active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、success / abort terminal phase、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
 | launch bundle build / GC | Go | FD-relative private namespace gate、build lock / lease / owner CAS、root identity、expected entry set、incomplete root の quarantine-only recovery、detached inventory、no-follow subset deletion、session bootstrap abort terminal CAS | verified FD spawn または別 UID の bundle owner |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、response loss では blind retry しない | close が authoritative server generation と target resource generation を原子的に検査する |
 | child final-row cleanup | workspace-only close + manual reconciliation | automatic `worktree remove` は拒否し、checkout / lineage を `checkout-retained` として保全する。外部の明示 cleanup 後に absence と branch tip を read-only に照合した場合だけ tombstone にする | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced fence |
@@ -1857,12 +1889,13 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - backend は per-repo supervisor が owned XDG / socket / marker を exclusive create して foreground `herdr server` child を bootstrap する。
   supervisor は呼び出し元から継承した Herdr routing env の値に依存せず、`status` と bootstrap を含む各 Herdr CLI call 用の env を構築し、owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を fanout-owned 値で上書きする。
   `FANOUT_HERDR_CONTROL_PATH` も physical common directory から supervisor が導出して上書きし、repo config、呼び出し元 env、agent workload からの指定を受け付けない。
-  owner marker は stable epoch field だけを持ち、可変 active-supervisor owner tuple と server tuple は共有 registry に置く。
+  owner marker は `fanout.herdr-owner.v1` の stable epoch field だけを持ち、可変 active-supervisor owner tuple と server tuple は共有 registry に置く。
   active supervisor は 10 秒以下の heartbeat で PID / start token、generation を照合し、expiry を最大 launch 300 秒 + grace 30 秒 + cadence 10 秒後へ単調更新する。
   launch caller は active lease を延長せず、intent CAS で launch deadline + grace までの runway を検証し、不足時は mutation 前に明確な error を返す。
   expiry 後も同じ live owner は exact tuple の same-owner renewal CAS で回復でき、takeover は旧 PID / start token の不在と generation increment CAS を証明した process に限る。
   server loss は current active owner が process / socket の不在を証明した場合だけ restart operation lock と planned / starting / realized / terminal phase で処理し、starting 後の spawn を再発行しない。
-  terminal CAS は新 server tuple と admission ID を束縛した三段 capability gate / active manifest gate、変化した `terminal_id` の `stale` 化、restart journal の削除を一度に確定する。
+  成功側 terminal CAS は新 server tuple と admission ID を束縛した三段 capability gate / active manifest gate、変化した `terminal_id` の `stale` 化、restart journal の削除を一度に確定する。
+  gate 失敗側は exact candidate stop / absence を確定した terminal CAS だけが failure receipt を `manifest-invalid` へ移し、candidate を採用せず restart journal を削除する。
   不一致、foreign、残存、または検証不能な socket / marker / process は停止、採用、unlink せず fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource のない明示 repo-session shutdown だけを teardown とする。
   cleaned tombstone と branch lineage は repo-scoped state として残し、teardown blocker にしない。
@@ -1905,10 +1938,11 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   physical common-directory FD と、root create 前後の owned runtime parent / root FD を anchor に全 component / leaf を no-follow で開く private namespace gate を使い、owner / mode / mount / identity / ACL を照合する。
   create 前の parent ACL に non-owner allow の child inheritance flag があれば発行せず、fresh object に non-owner allow ACE が現れた場合も ACL を除去して再利用しない。
   fanout-owned object は extended ACL が空であることを要求し、fresh exclusive-create directory / regular file に owner-only / deny ACL だけが残る場合に限り、secret byte または child 作成前に同じ FD 上で ACL を除去して再検査できる。
-  repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference / build / publish / GC journal、manifest override realization / build journal、session-bootstrap journal を保持し、supervisor epoch を越えて存続する。
-  active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、active bundle / manifest override realization reference、admission ID / state `ready` / `restarting` / `manifest-invalid` / `draining`、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal を保持し、これらの active resource がない場合だけ切り替える。
+  repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference / build / publish / GC journal、manifest override realization / retirement tombstone / build journal、session-bootstrap journal を保持し、supervisor epoch を越えて存続する。
+  active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、active bundle / manifest override realization key / generation / final root identity、admission ID / state `ready` / `restarting` / `manifest-invalid` / `draining`、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal を保持し、これらの active resource がない場合だけ切り替える。
   通常 mutation は shared registry lock 下で current owner、expected revision、`ready`、restart / shutdown journal 不在を照合し、最初の intent / journal と同じ save で admission を確定する。
-  `restarting` は同じ restart owner / nonce の phase と capability / active manifest re-gate、`manifest-invalid` は current owner lease / dead-owner takeover、invalidation receipt、mutation-free absence reconciliation、空 inventory の明示 shutdown、`draining` は同じ shutdown owner / nonce の phase と terminal save だけを許可する。
+  `restarting` は同じ restart owner / nonce の phase、capability / active manifest re-gate、gate 失敗後の exact candidate stop / absence reconciliation / `manifest-invalid` terminal CAS だけを許可する。
+  `manifest-invalid` は current owner lease / dead-owner takeover、invalidation receipt、mutation-free absence reconciliation、空 inventory の明示 shutdown、`draining` は同じ shutdown owner / nonce の phase と terminal save だけを許可する。
   shared registry lock は一回の snapshot / atomic save に限り、external process、polling、sleep、bundle I/O、filesystem mutation の間は保持しない。
   launch は deterministic operation lock と owner lease を terminal save まで保持し、operation lock、shared registry lock、必要なら store lock の順に各 phase を CAS する。
   active heartbeat の同じ owner identity / generation / process による expiry 単調増加と emitter telemetry は、latest 値を保持する CAS に限って operation と両立させる。
@@ -1941,23 +1975,27 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   server stop と owner marker unlink は各 planned / starting / realized phase、exact request、PID / start token、socket / marker identity、namespace pre / post-state を保存する。
   response loss で発生または非発生を証明できない mutation は再発行せず、journal と bundle / manifest override realization reference を保持する。
   process / socket と marker の不在を確定した terminal CAS だけが active epoch、bundle / manifest override realization reference、shutdown journal、draining fence を同時に削除し、operation lock を解放して fresh bootstrap を再解禁する。
-  repo-scoped branch lineage、cleaned tombstone、exact published manifest override realization は server 停止後も保持する。
+  その CAS は last realization reference と exact absence / drift receipt が一致する場合だけ old generation を retirement tombstone へ移し、old tree を変更せず next generation を予約できる。
+  repo-scoped branch lineage、cleaned tombstone、exact published manifest override realization、retired realization tombstone は server 停止後も保持する。
 - 0.7.5 wave 2 は `worktree create` / `worktree open`、owned launcher readiness、operation-bound token、agent 検出、`agent rename` を state machine から自動実行する。
   `agent start` は exact executable を pin できないため自動 launch に使わない。
   plain shell への `pane run` は shell readiness と空入力を条件化できないため自動 launch に使わない。
   最初の Herdr mutation 前に Herdr binary、current fanout binary、code-owned agent-detection fixture / canonical index を session bundle へ固定する。
   supervisor の全 Herdr CLI call と server child は bundled Herdr path を使う。
   owned config は `terminal.default_shell` を bundled fanout launcher path、`shell_mode` を `non_login`、`update.manifest_check` を `false` に固定し、server env の `FANOUT_HERDR_PANE_LAUNCHER=1` で no-arg TUI より先に launcher mode へ dispatch する。
-  fresh bootstrap は `manifest-overrides-build-planned` / `manifest-overrides-build-starting` / `manifest-overrides-build-created`、entry ごとの `manifest-override-entry-planned` / `manifest-override-entry-starting` / `manifest-override-entry-realized`、`manifest-overrides-publish-planned` / `manifest-overrides-publish-starting`、`manifest-overrides-realized` の journal で exact fixture を owned local override へ実体化し、restart は保存済み realization を read-only に再検査する。
-  fixture 外の override / remote cache、partial staging、identity / byte drift は拒否し、published realization は shutdown / abort 後も同じ behavior profile ID / fixture ID / `manifest_set_digest` / no-refresh policy ID / final root identity だけが再利用する。
+  fresh bootstrap は `manifest-overrides-build-planned` / `manifest-overrides-build-starting` / `manifest-overrides-build-created`、entry ごとの `manifest-override-entry-planned` / `manifest-override-entry-starting` / `manifest-override-entry-realized`、`manifest-overrides-publish-planned` / `manifest-overrides-publish-starting`、`manifest-overrides-realized` の journal で exact fixture を generation-specific な owned local override へ実体化し、restart は保存済み realization を read-only に再検査する。
+  exact published realization は shutdown / abort 後も同じ logical key / generation / final root identity だけが再利用する。
+  欠落または drift した ref-free generation は exact observation を束縛した registry-only CAS で retire し、old tree を変更せず expected-absent な next generation へ fresh build する。
+  fixture 外の override / remote cache、partial staging、identity 取得不能、new generation path の pre-existing object は retirement / build を拒否する。
   partial staging / unknown publish は自動 quarantine / GC / unlink せず build journal を保持し、外部 cleanup 後の exact absence reconciliation だけが bootstrap abort を terminal 化する。
   server 接続後、agent observation と rename の発行直前、focus / nudge の各 cycle は `server agent-manifests --json` の active source / version と override file identity / bytes / `manifest_set_digest`、同じ saved admission ID を再照合する。
   binary / status / schema / behavior profile / active manifest / override / cache drift、refresh attempt、`restart_needed:true` を検出した current owner または operation caller は exact owner / server / admission / observed proof を再照合した authority-reducing `ready -> manifest-invalid` CAS と同時に active intent を `manual_cleanup_required`、direct-launch row を `stale` にする。
+  restart candidate の re-gate 失敗は restart journal に failure receipt を保存し、exact candidate stop / absence 後の terminal CAS で同じ `manifest-invalid` 契約へ移す。
   以後は owner lease / takeover、external cleanup 後の mutation-free absence reconciliation、terminal operation-lock cleanup、通常の空 inventory を満たす明示 shutdown 以外の write を拒否する。
   child intent は reservation mutation の非発生と receipt / ref 不在を証明した場合だけ `launch-aborted`、成功済み reservation がある場合は branch ref を残した cleaned tombstone へ移し、mutation 不明では intent / reservation を保持する。
   server / socket がすでに不在の manifest-invalid shutdown は保存済み absence を draining CAS と stop phase で再照合し、stop request を発行せず `server-stop-realized` へ進む。
   server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` は `300000` に固定する。
-  owner marker は config bytes、session bundle digest / root identity、Herdr / fanout entry path、detection fixture ID / `manifest_set_digest` / no-refresh policy ID を保持し、bundle manifest、active manifest、live process identity を直前 gate で照合する。
+  owner marker は詳細契約の `fanout.herdr-owner.v1` canonical schema をそのまま使い、bundle manifest、active manifest、filesystem、live process identity を直前 gate で照合する。
   owner marker は registry の session-bootstrap journal / active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典にはしない。
   fresh session は registry の provisional bootstrap owner、session bundle の正式 reference、exclusive marker create、foreground server spawn、active epoch への reference 移譲を journal phase と CAS で直列化する。
   ready CAS 後の bootstrap owner は operation lock と renewable lease を持ち、expired owner は旧 PID / start token の不在、phase / resource identity、generation を照合した CAS に成功した process だけが引き継ぐ。
