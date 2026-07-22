@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -288,23 +289,63 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
-func TestEnsureOwnedRestartsOnlyAfterDeadSupervisorAndSocketAbsence(t *testing.T) {
+func TestEnsureOwnedFailsClosedAfterDeadSupervisor(t *testing.T) {
 	h := newOwnedHarness(t)
 	previous, found, err := readOwnerMarker(h.layout.markerPath)
 	if err != nil || !found {
 		t.Fatalf("readOwnerMarker() = %+v, %v, %v", previous, found, err)
 	}
 	h.supervisor.close()
-	restarted, err := h.tryEnsure()
+	_, ensureErr := h.tryEnsure()
+	if !errors.Is(ensureErr, errOwnedSupervisorNotRunning) {
+		t.Fatalf("ensure after dead supervisor error = %v, want fail-closed terminal state", ensureErr)
+	}
+	current, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found || current != previous || h.supervisor.starts != 1 {
+		t.Fatalf("owner marker after refused restart = %+v, %v, %v; starts=%d", current, found, err, h.supervisor.starts)
+	}
+}
+
+func TestStageExecutablePinsOpenedBytesBeforeCommands(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stageDir := filepath.Join(root, "stage")
+	if err := os.Mkdir(stageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "herdr")
+	original := []byte("#!/bin/sh\nprintf 'original\\n'\n")
+	if err := os.WriteFile(source, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pinned, digest, err := stageExecutable(source, stageDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restarted.Session != h.session.Session || h.supervisor.starts != 2 {
-		t.Fatalf("restart = %+v, starts=%d", restarted, h.supervisor.starts)
+	wantHash := sha256.Sum256(original)
+	if digest != hex.EncodeToString(wantHash[:]) || pinned == source {
+		t.Fatalf("stageExecutable() = %q, %q", pinned, digest)
 	}
-	current, found, err := readOwnerMarker(h.layout.markerPath)
-	if err != nil || !found || current.OwnerNonce == previous.OwnerNonce || current.SupervisorStartToken == previous.SupervisorStartToken {
-		t.Fatalf("restarted owner marker = %+v, %v, %v", current, found, err)
+	err = os.WriteFile(source, []byte("#!/bin/sh\nprintf 'replacement\\n'\n"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(pinned).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "original\n" {
+		t.Fatalf("pinned executable output = %q", out)
+	}
+	info, err := os.Lstat(pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode().Perm() != 0o500 || stat.Nlink != 1 {
+		t.Fatalf("pinned executable identity = mode %v, stat %#v", info.Mode(), info.Sys())
 	}
 }
 

@@ -147,7 +147,9 @@ func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Back
 		}
 		return "/private/tmp/herdr-0.7.5", nil
 	}
-	b.hashFile = func(string) (string, error) { return strings.Repeat("a", 64), nil }
+	b.stageBinary = func(path string) (string, string, error) {
+		return path, strings.Repeat("a", 64), nil
+	}
 	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
 		for _, surface := range requiredCommandSurfaces {
 			if len(args) == len(surface.args)+1 && slices.Equal(args[:len(surface.args)], surface.args) && args[len(args)-1] == "--help" {

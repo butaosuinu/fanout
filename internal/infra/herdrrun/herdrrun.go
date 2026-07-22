@@ -47,20 +47,20 @@ var (
 // targeted reads and mutations remain disabled until EnsureOwned and an
 // immutable target admission explicitly bind them.
 type Backend struct {
-	session    string
-	socketPath string
-	probeGate  chan struct{}
-	lookPath   func(string) (string, error)
-	hashFile   func(string) (string, error)
-	output     commandOutput
-	helpOutput commandHelpOutput
-	now        func() time.Time
-	sleep      waitSleep
-	admitted   map[string]binaryAdmission
-	behavior   behaviorProfile
-	control    *controlPlaneEnvironment
-	owner      *ownedAdmission
-	target     *ownedTargetAdmission
+	session     string
+	socketPath  string
+	probeGate   chan struct{}
+	lookPath    func(string) (string, error)
+	stageBinary func(string) (string, string, error)
+	output      commandOutput
+	helpOutput  commandHelpOutput
+	now         func() time.Time
+	sleep       waitSleep
+	admitted    map[string]binaryAdmission
+	behavior    behaviorProfile
+	control     *controlPlaneEnvironment
+	owner       *ownedAdmission
+	target      *ownedTargetAdmission
 }
 
 type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
@@ -112,17 +112,17 @@ type WaitResult struct {
 // --session status call, then pins subsequent probes to the returned path.
 func New(session, socketPath string) *Backend {
 	return &Backend{
-		session:    strings.TrimSpace(session),
-		socketPath: socketPath,
-		probeGate:  make(chan struct{}, 1),
-		lookPath:   exec.LookPath,
-		hashFile:   sha256File,
-		output:     runCommand,
-		helpOutput: runCommandHelp,
-		now:        time.Now,
-		sleep:      sleepContext,
-		admitted:   map[string]binaryAdmission{},
-		behavior:   productionBehaviorProfile(),
+		session:     strings.TrimSpace(session),
+		socketPath:  socketPath,
+		probeGate:   make(chan struct{}, 1),
+		lookPath:    exec.LookPath,
+		stageBinary: stageAdmissionBinary,
+		output:      runCommand,
+		helpOutput:  runCommandHelp,
+		now:         time.Now,
+		sleep:       sleepContext,
+		admitted:    map[string]binaryAdmission{},
+		behavior:    productionBehaviorProfile(),
 	}
 }
 
@@ -446,9 +446,12 @@ func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryA
 			return binaryAdmission{}, fmt.Errorf("resolve herdr executable: %w", err)
 		}
 	}
-	hash, err := b.hashFile(binary)
+	binary, hash, err := b.stageBinary(binary)
 	if err != nil {
-		return binaryAdmission{}, fmt.Errorf("hash herdr executable %s: %w", binary, err)
+		return binaryAdmission{}, fmt.Errorf("stage herdr executable before admission: %w", err)
+	}
+	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || !validHexToken(hash) {
+		return binaryAdmission{}, fmt.Errorf("staged herdr executable has an invalid content identity")
 	}
 	versionOut, err := b.runContext(ctx, commandTimeout, binary, target, "--version")
 	if err != nil {

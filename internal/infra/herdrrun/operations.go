@@ -84,7 +84,7 @@ func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedC
 func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
 	clone := &Backend{
 		session: b.session, socketPath: b.socketPath, probeGate: make(chan struct{}, 1),
-		lookPath: b.lookPath, hashFile: b.hashFile, output: b.output, helpOutput: b.helpOutput,
+		lookPath: b.lookPath, stageBinary: b.stageBinary, output: b.output, helpOutput: b.helpOutput,
 		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, behavior: b.behavior, target: target,
 	}
 	maps.Copy(clone.admitted, b.admitted)
