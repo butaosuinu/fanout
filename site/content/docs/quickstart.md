@@ -73,7 +73,7 @@ fanout 123 --agent opencode
 export FANOUT_AGENT=claude   # applies to every following run in this shell
 ```
 
-The three agents differ in bundled skills, Codex Plan Mode, and messaging; the matrix in [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) compares them.
+The three agents differ in bundled skills, Plan Mode implementation, and messaging; the matrix in [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) compares them.
 
 Unknown agents fail before any pane is created; in live mode, fanout also checks that the selected agent CLI is installed. Run fanout from inside a tmux session — it creates child panes directly with `tmux split-window`, targeting the invoking pane unless `--session` names another session. The one exception is `fanout` with no arguments (the TUI console), which can start from a plain shell — see [Monitoring]({{< relref "/docs/monitoring" >}}).
 

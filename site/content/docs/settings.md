@@ -1,13 +1,13 @@
 ---
 title: Settings
 linkTitle: Settings
-description: "Briefing toggles, watcher controls, TUI notification channels, and their settings resolution order."
+description: "Briefing toggles, session launch posture, watcher controls, TUI notification channels, and their settings resolution order."
 weight: 70
 kanji: 整
 yomi: settings
 ---
 
-fanout settings control child briefing instructions, the watcher, tmux keybindings, and notifications. The watcher defaults to off, the briefing and keybinding booleans default to `true`, and notifications default to `bell`.
+fanout settings control child briefing instructions, session launch posture, the watcher, tmux keybindings, and notifications. The watcher defaults to off, the briefing and keybinding booleans default to `true`, and notifications default to `bell`. New Sessions and issue orchestrators start in the agent's plan mode by default; children start in build mode.
 
 ## Resolution order
 
@@ -20,7 +20,7 @@ When the same setting is given on both the CLI and a config file, which one wins
 
 Press `s` in the persistent TUI console to edit either config file in a popup. The Target row switches between user config and repo config. Each key can be set to a value or returned to `inherit`, which removes that key from the selected JSON file.
 
-The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, set HTTP notification URLs, or set `runtimeBackend`, and it can only choose `bell`, `tmux`, or `none` for `notifications`.
+The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. Repo config keeps the same safety restrictions described below: it cannot set the launch-posture keys (`newSessionPlanMode` / `orchestratorPlanMode` / `childPlanMode`), enable the watcher, set HTTP notification URLs, or set `runtimeBackend`, and it can only choose `bell`, `tmux`, or `none` for `notifications`.
 
 ## What each toggle is for
 
@@ -34,6 +34,14 @@ The behavior toggles control briefing instructions and tmux keybindings.
 - `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
 - `runtimeBackend`: the fallback runtime backend (`tmux` or `herdr`) when nothing higher in the resolution order decides — a parent's recorded backend, `--backend`, `FANOUT_BACKEND`, and the runtime context (`HERDR_ENV` / `TMUX`) all take precedence. User config only — repo config ignores the key with a warning. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1.
+
+Three launch-posture settings decide whether each lane starts its session in the agent's plan mode. They apply to all three agents (claude / codex / opencode):
+
+- `newSessionPlanMode` (default `true`): new Sessions from the TUI — manual prompt panes, plan fan-out coordinators (claude / codex only), and agent panes attached with `a`.
+- `orchestratorPlanMode` (default `true`): the project-root orchestrator pane of an issue fan-out. A codex orchestrator cannot combine Plan Mode with its start gate, so fanout warns and starts plain codex.
+- `childPlanMode` (default `false`): issue and Project children, standalone Sessions for issues without OPEN children, `fanout plan` tasks, and watcher launches. Turning it on stalls unattended [watcher]({{< relref "/docs/watcher" >}}) Sessions at the plan approval prompt (a claude Session below the v2.1.207 floor, or whose version cannot be determined, skips the mode flags after a warning and does not stop).
+
+All three keys are user-only: user config, environment variables, and the TUI settings form (`s`) can change them; repo config values are warned and ignored, and there is no CLI flag. Plan Mode wins over `--team` — a codex plan child keeps the minimal Plan briefing and loses its team bridge. Per-agent flags and version requirements are in [Agent Integrations]({{< relref "/docs/agent-integrations" >}}). The retired codex-only `codexPlanMode` key and `FANOUT_CODEX_PLAN_MODE` are ignored with a warning pointing at the three keys.
 
 The watcher and notification channels are a separate track. The watcher gates opt-in label-driven launches:
 
@@ -57,6 +65,9 @@ Notification channels pick where TUI state transitions go.
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard/action tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | Console-return tmux keybindings | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
+| New session Plan Mode | `newSessionPlanMode` | `FANOUT_NEW_SESSION_PLAN_MODE` | n/a | `true` |
+| Orchestrator Plan Mode | `orchestratorPlanMode` | `FANOUT_ORCHESTRATOR_PLAN_MODE` | n/a | `true` |
+| Child Plan Mode | `childPlanMode` | `FANOUT_CHILD_PLAN_MODE` | n/a | `false` |
 | Runtime backend | `runtimeBackend` | `FANOUT_BACKEND` | `--backend <tmux\|herdr>` | `tmux` |
 | Watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | Watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
@@ -68,7 +79,7 @@ Notification channels pick where TUI state transitions go.
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | unset |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | unset |
 
-The flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}). The watcher and notification settings have no CLI flag.
+The flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}). The launch-posture, watcher, and notification settings have no CLI flag.
 
 ## Sample config.json
 
@@ -83,6 +94,9 @@ Both config files share the same shape: a flat JSON object of booleans, strings,
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,
+  "newSessionPlanMode": true,
+  "orchestratorPlanMode": true,
+  "childPlanMode": false,
   "runtimeBackend": "tmux",
   "watcher": false,
   "watcherTriggerLabel": "fanout:auto",

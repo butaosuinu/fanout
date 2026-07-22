@@ -110,6 +110,7 @@ fanout plan launch-plan --cleanup
 run ごとに `--team` で opt-in すると、fanout が(best-effort で)各子の通常 briefing に「Coordinating with your sibling panes」節を注入し、per-parent の peer レジストリに seed するので、兄弟がお互いを把握できます。
 Plan Mode の Codex 子もレジストリに seed されますが、最小限の Plan-Mode briefing を受け取ります。
 Plan Mode が優先され、Codex team bridge は無効になります。
+子が Plan Mode で始まるのは、user レベルの `childPlanMode` 設定を on にしたときだけです([Settings]({{< relref "/docs/settings" >}}) を参照)。
 
 ファンアウトしたペイン内では、`fanout msg` が自分が今どの子(または親)かを自動検出し、per-parent のバス上でやり取りします。
 

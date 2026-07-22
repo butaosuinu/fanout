@@ -80,7 +80,7 @@ fanout 123 --agent opencode
 export FANOUT_AGENT=claude   # applies to every following run in this shell
 ```
 
-3 つのエージェントは同梱 skill、Codex Plan Mode、メッセージングが異なります。
+3 つのエージェントは同梱 skill、Plan Mode の実装、メッセージングが異なります。
 違いは[エージェント連携]({{< relref "/docs/agent-integrations" >}})のマトリクスで比較できます。
 
 未知のエージェントはペイン作成前に失敗し、live 実行では選択したエージェント CLI がインストール済みかも確認します。

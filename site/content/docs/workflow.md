@@ -89,7 +89,7 @@ fanout plan launch-plan --cleanup
 
 ## Sibling coordination (peer messaging)
 
-When sibling panes touch the same interface in parallel, they often need to share progress and decisions. But when a parent is fanned out, each child is an independent agent session in its own pane — by default the panes cannot see each other. Opt in per run with `--team`: fanout (best-effort) injects a "Coordinating with your sibling panes" section into each child's standard briefing and seeds a per-parent peer registry so the siblings know about one another. Codex children in Plan Mode are seeded too, but receive the minimal Plan-Mode briefing; Plan Mode takes precedence and disables their Codex team bridge.
+When sibling panes touch the same interface in parallel, they often need to share progress and decisions. But when a parent is fanned out, each child is an independent agent session in its own pane — by default the panes cannot see each other. Opt in per run with `--team`: fanout (best-effort) injects a "Coordinating with your sibling panes" section into each child's standard briefing and seeds a per-parent peer registry so the siblings know about one another. Codex children in Plan Mode are seeded too, but receive the minimal Plan-Mode briefing; Plan Mode takes precedence and disables their Codex team bridge. Children start in Plan Mode only when the user-level `childPlanMode` setting is on (see [Settings]({{< relref "/docs/settings" >}})).
 
 Inside a fanned-out pane, `fanout msg` auto-detects which child (or parent) you are and talks over a per-parent bus.
 

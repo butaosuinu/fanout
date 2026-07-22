@@ -109,12 +109,15 @@ agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元�
 manual ペインでは、3 つの agent すべてに `newSessionPlanMode` を適用します。
 既定値は `true` なので、Claude、Codex、OpenCode は Plan Mode で起動します。
 下の plan fan-out チェックボックスを有効にすると、agent をちょうど 1 本選んだうえで、プロンプトを `fanout plan` で並列タスクに分解するコーディネータ 1 つの起動に切り替わります。
-同じ設定により、Claude と Codex のコーディネータは Plan Mode、OpenCode のコーディネータは build mode で起動します。
+同じ設定により、Claude と Codex のコーディネータは Plan Mode で起動します。
+OpenCode は同梱の `/fanout plan` command を読めずコーディネータになれないため、claude か codex を選んでください。
 
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
 issue を選んで既定の agent を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
 親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで先に起動します。
+orchestrator は `orchestratorPlanMode`(既定 `true`)に従います。
+codex の orchestrator は、子の fan-out 完了まで agent 起動を留める start gate と Plan Mode を両立できないため、fanout は警告して素の codex で起動します。
 子は子ごとに割り当てた agent でファンアウトします。
 briefing は orchestrator に、子スコープの実装を引き取らず、`fanout <N> --status` を定期的に実行して状態を確認し、親スコープ作業を担当するよう指示します。
 全 child の merge 後は統合を行って最終集約コメントを投稿し、`--merge` / `--cleanup` で lifecycle 操作を進めます。
@@ -126,7 +129,7 @@ child の launch posture は、選択した全 agent にそれぞれ適用され
 子のない issue も同じ child posture を使い、`@watch` 配下の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
 
 Prompt モードと同じ plan fan-out チェックボックスがここにもあります。
-1 つの issue に対して有効にすると子への割り当て画面をスキップし、選んだ issue を issue-less な `fanout plan` タスクに分解する通常モードのコーディネータ 1 つだけを起動します(タスクは選択した agent で実行)。
+1 つの issue に対して有効にすると子への割り当て画面をスキップし、選んだ issue を issue-less な `fanout plan` タスクに分解するコーディネータ 1 つだけを起動します(Prompt モードと同じく `newSessionPlanMode` に従います。タスクは選択した agent で実行)。
 チェックボックスはコーディネータと新しいタスクを作ります。
 child の launch posture は、新しい task と既存の issue / Project の子の両方に適用されます。
 選択中の issue に OPEN な子がある間、このチェックボックスは無効表示になります(その場合は子をファンアウトしてください)。
