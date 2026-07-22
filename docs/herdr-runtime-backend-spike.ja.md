@@ -132,12 +132,12 @@ canonical git common directory、owner nonce、socket path、session bundle dige
 
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
 `fanout` directory は 0700、registry と lock は 0600 とし、path component の symlink、所有 UID の不一致、group / other write、physical common-directory identity の不一致があれば Herdr backend を開始しない。
-registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference を supervisor epoch を越えて保持する。
+registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal を supervisor epoch を越えて保持する。
 active epoch は owner nonce、session / socket identity、console、intent、final row、runtime resource を別に持ち、owner marker と完全一致する場合だけ再利用する。
 active intent、final row、runtime resource がない場合だけ新しい owner epoch へ切り替え、repo-scoped lineage と tombstone は保持する。
 writer は no-follow で開いた同一 inode の lock を保持し、expected revision を確認して 0600 temporary file の fsync、rename、parent directory の fsync までを一回の state save とする。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、schema / identity / revision の decode failure は intent 不在として待たず fail closed にする。
-registry は owner / session / socket identity、console singleton、全 linked worktree の provisional intent と final row、branch lineage / tombstone、branch reservation、launch bundle reference、telemetry routing、resource inventory を保持する。
+registry は owner / session / socket identity、console singleton、全 linked worktree の provisional intent と final row、branch lineage / tombstone、branch reservation、launch bundle reference / journal、telemetry routing、resource inventory を保持する。
 各 row は起動元の physical worktree root と task provenance を保持するが、mutable な Herdr row を各 checkout の `.fanout/state.json` へ複製しない。
 status、lifecycle、backend stickiness、session view は worktree-local tmux state と共有 Herdr registry を backend ごとに読み分けて集約する。
 この文書でいう Herdr の `state lock` と `state save` は、以後この共有 registry の lock と atomic replace を指す。
@@ -608,10 +608,26 @@ current Go / Darwin には検証済み FD をそのまま実行する portable �
 
 bundle builder は source を no-follow FD で開き、同じ FD から hash と copy を行う。
 staging directory は physical git common directory 配下の `fanout/launch-bundles/.staging-<nonce>` とし、directory を 0700、各 file を `O_EXCL` / `O_NOFOLLOW` で作る。
-executable は 0500、data / script / manifest は 0400、directory は 0500 とし、setuid、setgid、ACL、group / other write を拒否する。
+staging 作成前に build nonce、deterministic staging / quarantine path、source FD identity、expected relative path / type / mode、namespace pre-state を phase `bundle-build-planned` へ保存する。
+phase `bundle-build-starting` に exact root-create request を保存し、成功後の root identity を child file 作成前に同じ journal へ加える。
+executable は 0500、data / script / manifest は 0400 とし、setuid、setgid、ACL、group / other write を拒否する。
+directory は build 中だけ 0700 とし、全 child の作成と fsync 後に bottom-up で 0500 へ変える。
 package-relative layout と必要な xattr を保存し、destination FD の bytes を再 hash して各 file と directory を fsync する。
-store lock 下の exclusive rename で digest path を publish し、既存 digest は manifest、全 file、root identity、seal の完全一致後だけ再利用する。
-publish 後は tree 全体へ `UF_IMMUTABLE` を設定し、flag、mode、owner、manifest、bundle digest を no-follow FD で再読する。
+全 entry の identity / hash と manifest / digest を phase `bundle-build-realized` へ保存してから publish へ進む。
+build crash 後は reference がないこと、staging root identity、unexpected entry の不在、残る entry が expected path / type の subset であることを確認し、先行保存した quarantine path から同じ GC namespace protocol で回収する。
+root identity または entry set を証明できない staging は自動再開または削除を行わない。
+publish は shared registry lock と store lock の下で repo-scoped bundle journal を使う。
+rename 前に digest、manifest、staging path / root identity、deterministic final path、両 namespace の pre-state、exact exclusive-rename request を phase `bundle-publish-starting` へ保存する。
+`ready` 以外の digest は新しい intent、final row、session owner marker から参照できない。
+recovery は staging が exact identity で final がない場合だけ rename 非発生を証明して同じ request を発行でき、staging がなく final が同じ root identity の場合は rename 済みとして続行する。
+両方がある場合、両方がない場合、final identity または manifest が違う場合は自動採用しない。
+rename 後は bundle store parent を fsync し、final path / root identity を phase `bundle-publish-realized` へ保存する。
+続いて phase `bundle-seal-starting` を保存し、tree 全体へ `UF_IMMUTABLE` を設定する。
+seal は exact manifest と file identity が一致する entry へ idempotent に再適用でき、crash 後は不足する flag だけを補う。
+全 flag、mode、owner、manifest、bundle digest を no-follow FD で再読した場合だけ phase `ready` を保存し、同じ state save 後に reference acquisition を許可する。
+既存 digest は `ready` journal と manifest、全 file、root identity、seal が完全一致する場合だけ再利用する。
+publish 中の exact root を完成できない場合は reference がないことを再確認し、deterministic destination を先行保存する `bundle-quarantine-planned` から後述の GC namespace protocol へ移す。
+journal のない final path、unexpected entry、identity 不一致は自動 seal / quarantine / 削除を行わず fail closed にする。
 exclusive publish、immutable flag、bundle filesystem 上の executable 起動のいずれかを platform が提供しない場合は workspace mutation 前に fail closed にする。
 
 session bundle は Herdr binary、fanout launcher、hook emitter を含み、operation bundle は console shell、agent provider、controller とその dependency closure を含む。
@@ -625,11 +641,17 @@ foreground native child と source entrypoint が異なること自体は失敗�
 intent と final row は `entrypoint_spec`、`launch_bundle_spec`、matcher ID / version、実測した `observed_process_chain` を別々に保持し、resume、emitter、nudge も bundle digest と同じ chain identity を再観測する。
 
 active intent、final row、session owner marker が bundle reference を保持し、GC は active reference と live process がない digest だけを処理する。
-GC は store lock 下で digest を `gc-planned` にして新しい reference を拒否し、published root の immutable flag だけを解除してから exact root identity の directory を private staging name へ移す。
-移動後は bundle store parent を fsync し、digest、private path、root identity を state `gc-detached` へ保存する。
-detached tree の root identity と manifest を再照合し、全 directory を pre-order で immutable flag 解除後に 0700 へ戻し、file の immutable flag も解除する。
-その後に child を bottom-up で unlink して各 parent directory を fsync し、最後に detached root を削除して private staging parent を fsync する。
-crash 後は `gc-detached` と exact root identity が一致する tree だけを同じ手順で再開する。
+GC は shared registry lock と store lock 下で digest または build nonce を `gc-planned` にし、source bundle path / root identity、得られている manifest または expected entry set、deterministic `.garbage/<identity>-<gc-nonce>` path、source / destination pre-state を rename 前に保存して新しい reference を拒否する。
+phase `gc-unseal-starting` を保存して source root の immutable flag があれば解除し、phase `gc-move-starting` に exact exclusive-rename request を保存して一回発行する。
+recovery は source が exact identity で destination がない場合だけ move 非発生を証明して request を発行でき、source がなく destination が同じ root identity の場合は move 済みとして続行する。
+両方がある場合、両方がない場合、identity が違う場合は自動操作を止める。
+move 後は bundle store parent と `.garbage` parent を fsync し、digest または build nonce、private path、root identity、manifest または expected entry set を phase `gc-detached` へ保存する。
+削除前に phase `gc-delete-starting` を保存し、全 directory を pre-order で immutable flag 解除後に 0700 へ戻し、file の immutable flag も解除する。
+crash recovery は同じ root identity の下に unexpected entry がなく、残る各 entry が manifest または expected entry set の exact subset である場合だけ削除を再開する。
+残る directory は同じ identity で 0700 + unsealed、0500 + unsealed、0500 + sealed のいずれか、file は同じ identity / hash で sealed または unsealed の状態だけを受理する。
+child を bottom-up で unlink して各 parent directory を fsync し、最後に detached root を削除して `.garbage` parent を fsync する。
+source と destination の不在を再確認した terminal state save で GC journal と bundle inventory を削除する。
+crash が detached root の削除後かつ terminal save 前に起きた場合は、両 namespace の不在を確認して parent を再 fsync してから同じ terminal save を行う。
 session launcher bundle は server stop が完了するまで保持する。
 同じ UID の悪意ある process は immutable flag を解除できるため、この seal は tmux-parity tier の同一ユーザー信頼を越えない。
 proof-grade tier は別 UID の bundle owner または server が保持する verified FD からの spawn を必要とする。
@@ -1346,9 +1368,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   repo root の console workspace、実際の親ごとの coordinator workspace、sibling child workspace を配置し、coordinator の `@manual` 負番号 row の provenance は実際の親へ帰属させる。
   linked worktree は session を共有し、独立 clone は full common-directory identity の hash で分離する。
   physical common directory 配下の `fanout/herdr-control.json` と `herdr-control.json.lock` を全 linked worktree が共有し、directory は 0700、registry / lock は 0600 とする。
-  repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference を保持し、supervisor epoch を越えて存続する。
+  repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference / build / publish / GC journal を保持し、supervisor epoch を越えて存続する。
   active epoch は owner nonce、session / socket identity、console、intent、final row、runtime resource を保持し、active resource がない場合だけ切り替える。
-  Herdr の console、intent、final row、branch lineage / tombstone、branch reservation、bundle reference、telemetry routing、resource inventory はこの registry だけを正典とし、worktree-local `.fanout/state.json` へ複製しない。
+  Herdr の console、intent、final row、branch lineage / tombstone、branch reservation、bundle reference / journal、telemetry routing、resource inventory はこの registry だけを正典とし、worktree-local `.fanout/state.json` へ複製しない。
   status / lifecycle / session view は local tmux state と共有 Herdr registry を backend ごとに集約し、Herdr の state save は共有 lock 下の atomic replace とする。
   symlink、所有 UID / mode、full common-directory identity の gate を満たせない control path は fail closed にする。
   create は `--no-focus` とし、TUI の明示 launch だけが focus を移す。
@@ -1400,16 +1422,25 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   branch reservation は保存済み成功応答で ownership を確定し、worktree mutation が起きていないことも証明できる場合だけ compare-and-delete で解放する。
 - launch bundle は physical common directory 配下の `fanout/launch-bundles` に置く。
   builder は source の no-follow FD から hash と copy を行い、`O_EXCL` / `O_NOFOLLOW` の staging、destination FD の再 hash、fsync、store lock 下の exclusive publish を通す。
+  staging mutation 前に nonce、deterministic staging / quarantine path、source FD identity、expected entry set、namespace pre-state を `bundle-build-planned` へ保存し、`bundle-build-starting` の root identity 保存後だけ child file を作る。
+  directory は build 中だけ 0700 とし、全 child の fsync 後に bottom-up で 0500 へ変え、全 entry / manifest / digest を `bundle-build-realized` へ保存してから publish へ進む。
+  incomplete staging は reference 不在、exact root identity、unexpected entry 不在、expected subset を確認した場合だけ先行保存した quarantine path から GC protocol で回収する。
   manifest payload は operation / provider / platform、entry path / argv、dependency closure の file record、platform runtime binding を canonical bytes へ固定する。
   bundle digest は payload の SHA-256、root identity は publish 後の runtime identity として別に保存する。
   executable は 0500、data / script / manifest は 0400、directory は 0500 とし、publish 後の tree 全体へ `UF_IMMUTABLE` を設定して再検査する。
   Herdr / fanout / hook emitter は session bundle、console / agent / controller と依存 closure は operation bundle に入れる。
   platform が exclusive publish、immutable seal、bundle filesystem 上の executable 起動を満たさない場合は mutation 前に fail closed にする。
-  active intent、final row、session owner marker が bundle reference を保持し、GC は reference と live process がない exact digest だけを処理する。
-  store lock 下で digest を `gc-planned` にして新しい reference を拒否し、published root の seal だけを解除して exact root identity の directory を private staging name へ移す。
-  bundle store parent を fsync し、digest / private path / root identity を `gc-detached` へ保存した後、root identity / manifest を再照合して全 directory を pre-order で seal 解除後に 0700 へ戻し、file の seal も解除する。
-  child を bottom-up で unlink して各 parent を fsync し、detached root の削除後に private staging parent を fsync する。
-  crash recovery は `gc-detached` と exact root identity が一致する tree だけを再開する。
+  shared registry / store lock 下で rename 前に digest、manifest、staging path / root identity、deterministic final path、両 namespace pre-state、exact request を `bundle-publish-starting` へ保存する。
+  staging exact / final absent は rename 非発生、staging absent / final exact は rename 済みとして回復し、他の namespace / identity 状態は fail closed にする。
+  rename 後の store parent fsync と `bundle-publish-realized`、`bundle-seal-starting`、全 entry の seal 再検査を順に通し、phase `ready` の state save 後だけ reference acquisition と既存 digest の再利用を許可する。
+  seal の部分適用は exact manifest / identity の entry に限って idempotent に補い、完成不能な journaled root は deterministic quarantine を先行保存して GC namespace protocol へ移す。
+  journal のない final path、unexpected entry、identity 不一致は自動操作しない。
+  active intent、final row、session owner marker が ready bundle reference を保持し、GC は reference / live process のない digest または reference 未許可の incomplete build / publish だけを処理する。
+  rename 前の `gc-planned` に digest または build nonce、source path / root identity、manifest または expected entry set、deterministic `.garbage` destination、両 namespace pre-state を保存して新しい reference を拒否する。
+  `gc-unseal-starting` で source root の seal があれば解除し、exact request を持つ `gc-move-starting` から namespace の source exact / destination absent または source absent / destination exact を照合して move を実行または回復する。
+  両 parent の fsync 後に digest または build nonce、private path、root identity、manifest または expected entry set を `gc-detached` へ保存し、`gc-delete-starting` から directory を pre-order で 0700 + unsealed に戻して file も unseal する。
+  crash recovery は同じ root identity の下に unexpected entry がなく、remaining tree が manifest または expected entry set の exact subset で、directory が 0700 + unsealed / 0500 + unsealed / 0500 + sealed、file が同じ identity / hash の sealed / unsealed だけを持つ場合に bottom-up unlink を再開する。
+  各 parent と最後の `.garbage` parent を fsync し、両 namespace の不在を確認した terminal state save で GC journal と bundle inventory を削除する。
   同じ UID は seal を解除できるため tmux-parity tier の同一ユーザー信頼に留まり、proof-grade tier は別 UID の bundle owner または verified FD spawn を必要とする。
 - Herdr control-plane env と operation child workload env を分離する。
   supervisor の owned XDG を設定する前に、呼び出し元の `HOME` / `PATH` と effective XDG 4 変数を workload env として保存し、未設定値は XDG の `$HOME` 基準の default path に解決する。
