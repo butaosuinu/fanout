@@ -33,8 +33,8 @@ type planResponse struct {
 // complete <proposed_plan> block in one recorded Codex Plan Mode pane.
 // Validation, headers, HEAD handling, and the error contract are shared with
 // /api/peek (requireLivePane / beginPaneCapture / peekError); the only
-// plan-specific gate is PlanMode — capture stays scoped to panes fanout
-// launched with --codex-plan-mode. The capture is read-only
+// plan-specific gate is PlanMode plus Agent == "codex" — capture stays scoped
+// to Codex panes fanout launched in plan mode. The capture is read-only
 // (tmux capture-pane), so the dashboard stays mutation-free.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	paneID := r.URL.Query().Get("pane")
@@ -42,7 +42,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !pv.PlanMode {
+	if !pv.PlanMode || pv.Agent != "codex" {
 		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a codex plan-mode pane", paneID))
 		return
 	}

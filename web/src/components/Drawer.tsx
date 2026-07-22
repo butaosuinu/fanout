@@ -297,6 +297,7 @@ export function Drawer({
             </pre>
           </section>
           {pane.planMode &&
+            pane.agent === "codex" &&
             (captureReason ? (
               <CaptureDisabled kind="plan" reason={captureReason} />
             ) : (

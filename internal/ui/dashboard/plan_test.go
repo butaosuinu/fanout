@@ -13,10 +13,11 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-// planSnapshot is peekSnapshot's pane "%5" flagged (or not) as a Codex Plan
-// Mode pane — the fixture /api/plan validates against.
+// planSnapshot is peekSnapshot's pane "%5" recorded as codex and flagged (or
+// not) as a plan-mode pane — the fixture /api/plan validates against.
 func planSnapshot(alive, planMode bool) sessionview.Snapshot {
 	snap := peekSnapshot(alive)
+	snap.Sessions[0].Panes[0].Agent = "codex"
 	snap.Sessions[0].Panes[0].PlanMode = planMode
 	return snap
 }
@@ -145,7 +146,11 @@ func TestPlanDuplicatePaneIDPrefersLiveTmuxRow(t *testing.T) {
 		}
 		return nil
 	}
-	publishSnapshot(srv, duplicatePaneSnapshot(true))
+	snap := duplicatePaneSnapshot(true)
+	for i := range snap.Sessions {
+		snap.Sessions[i].Panes[0].Agent = "codex"
+	}
+	publishSnapshot(srv, snap)
 
 	status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
 	if status != http.StatusOK {
@@ -196,6 +201,30 @@ func TestPlanNonPlanModePaneIs404(t *testing.T) {
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a non-plan pane", calls)
+	}
+}
+
+func TestPlanNonCodexPlanModePaneIs404(t *testing.T) {
+	for _, agent := range []string{"claude", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			fake := &fakeCapture{out: planFixtureOutput}
+			srv := newPlanServer(t, "", fake)
+			snap := planSnapshot(true, true)
+			snap.Sessions[0].Panes[0].Agent = agent
+			publishSnapshot(srv, snap)
+
+			status, _, body := getPeek(t, planURL(srv.base, map[string]string{"pane": "%5"}))
+			if status != http.StatusNotFound {
+				t.Fatalf("%s plan-mode pane status = %d want 404, body %s", agent, status, body)
+			}
+			var got map[string]string
+			if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "codex") {
+				t.Fatalf("body = %s want a JSON error mentioning codex", body)
+			}
+			if calls, _, _ := fake.snapshot(); calls != 0 {
+				t.Fatalf("capture ran %d time(s) for a %s plan-mode pane", calls, agent)
+			}
+		})
 	}
 }
 

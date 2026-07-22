@@ -200,7 +200,7 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
   state. `GET /api/peek` and `GET /api/plan` stay inside that boundary (both
   are a read-only `tmux capture-pane` of a recorded pane; `/api/plan` is
-  further gated to panes recorded with `codexPlanMode`), and Google Fonts is
+  further gated to plan-mode panes whose recorded agent is `codex`), and Google Fonts is
   the single allowed external fetch from the SPA (loaded `no-referrer` so the
   tokened URL never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
   notification path (outbound only); #137/#142 explicitly delegated the Web UI

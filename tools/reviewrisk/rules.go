@@ -33,7 +33,7 @@ var fileRules = map[string]Rule{
 	"internal/ui/dashboard/server.go":  {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux・token 検証"},
 	"internal/ui/dashboard/runfile.go": {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
 	"internal/ui/dashboard/peek.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン"},
-	"internal/ui/dashboard/plan.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(codexPlanMode 限定)"},
+	"internal/ui/dashboard/plan.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(plan mode かつ codex 限定)"},
 
 	// dashboard M files.
 	"internal/ui/dashboard/poller.go": ruleDashboardM,
