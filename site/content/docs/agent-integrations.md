@@ -1,7 +1,7 @@
 ---
 title: Agent Integrations
 linkTitle: Agent Integrations
-description: "The supported agents compared, bundled skills for Claude Code and Codex, the /fanout slash command, and OpenCode."
+description: "The supported agents compared, per-agent Plan Mode behavior, bundled skills for Claude Code and Codex, the /fanout slash command, and OpenCode."
 weight: 80
 slug: agents
 kanji: 連
@@ -21,6 +21,22 @@ fanout can start a child pane with any of three agent CLIs. The fan-out mechanic
 | Briefing sections | base + Claude-specific | base + Codex-specific | base + generic validation |
 
 The push and nudge rows are explained in the [CLI Reference]({{< relref "/docs/cli#fanout-msg" >}}).
+
+## Plan Mode
+
+The three launch-posture settings in [Settings]({{< relref "/docs/settings" >}}) — `newSessionPlanMode`, `orchestratorPlanMode`, and `childPlanMode` — decide which lanes start their session in the agent's plan mode. The mode maps to each agent like this:
+
+| | Plan Mode | Build mode |
+|---|---|---|
+| Claude Code | `--permission-mode plan` | `--permission-mode auto` |
+| Codex CLI | app-server-backed Codex Plan Mode TUI | plain `codex` |
+| OpenCode | `--agent plan` | `--agent build` |
+
+Explicit Claude modes need Claude Code v2.1.207 or newer. fanout checks `claude --version` before launching; below that floor, or when the version is unknown, it warns and omits the mode flags so the pane starts with claude's own default posture. `--permission-mode auto` works on every provider from v2.1.207, but is disabled by an old version, a Team / Enterprise plan whose Owner has not enabled it, an unsupported model, or a managed policy. A disabled environment does not break the launch: claude notifies and falls back to its `default` mode. fanout does not detect the effective mode — permission prompts surface through the TUI's `blocked` state.
+
+Codex Plan Mode runs through an app-server-backed plan TUI controller. The dashboard's Plan section captures plan output only from codex plan panes; claude and opencode plan output has no capturable format. Plan Mode wins over `--team` — a codex plan child keeps the minimal Plan briefing and its team bridge stays off.
+
+OpenCode maps plan and build to its `--agent plan` / `--agent build` modes. It cannot be a plan fan-out coordinator, so the coordinator lane's plan wiring covers claude and codex only.
 
 ## From inside an agent session
 

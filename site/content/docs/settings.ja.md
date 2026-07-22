@@ -1,14 +1,15 @@
 ---
 title: 設定
 linkTitle: 設定
-description: "briefing のトグル、watcher 制御、TUI 通知 channel と設定の解決順。"
+description: "briefing のトグル、session の launch posture、watcher 制御、TUI 通知 channel と設定の解決順。"
 weight: 70
 kanji: 整
 yomi: settings
 ---
 
-fanout settings は、子 briefing の指示、watcher、tmux キーバインド、通知を制御します。
+fanout settings は、子 briefing の指示、session の launch posture、watcher、tmux キーバインド、通知を制御します。
 watcher は off、briefing とキーバインドの bool は `true`、通知は `bell` が既定です。
+新規 Session と issue オーケストレーターは既定で agent の plan mode、子は build mode で始まります。
 
 ## 解決順序
 
@@ -25,7 +26,7 @@ Target 行で user config と repo config を切り替えます。
 
 popup が編集するのは config ファイルだけです。
 CLI flag と `FANOUT_*` 環境変数は、保存した値より引き続き優先されます。
-repo config から watcher は変更できず、HTTP 通知 URL と `runtimeBackend` も設定できません。
+repo config から watcher は変更できず、launch posture の 3 キー(`newSessionPlanMode` / `orchestratorPlanMode` / `childPlanMode`)、HTTP 通知 URL、`runtimeBackend` も設定できません。
 `notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
 
 ## 各トグルの目的
@@ -40,6 +41,14 @@ repo config から watcher は変更できず、HTTP 通知 URL と `runtimeBack
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
 - `runtimeBackend`: 解決順の上位で決まらなかったときの fallback の runtime backend（`tmux` または `herdr`）です。親に記録済みの backend、`--backend`、`FANOUT_BACKEND`、実行環境のコンテキスト（`HERDR_ENV` / `TMUX`）がいずれも優先されます。user config 専用で、repo config では警告付きで無視されます。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用です。
+
+3 つの launch posture 設定は、各レーンの session を agent の plan mode で始めるかを決めます。3 つの agent(claude / codex / opencode)すべてに共通で効きます:
+
+- `newSessionPlanMode`(既定 `true`): TUI の新規 Session — 手動プロンプトペイン、plan fan-out coordinator(claude / codex のみ)、`a` で attach する agent ペイン。
+- `orchestratorPlanMode`(既定 `true`): issue fan-out のプロジェクトルートに立つオーケストレーターペイン。codex のオーケストレーターは Plan Mode と start gate を両立できないため、fanout は警告して素の codex で起動します。
+- `childPlanMode`(既定 `false`): issue / Project の子、OPEN 子なし issue の単独 Session、`fanout plan` のタスク、watcher 起動。on にすると無人の [watcher]({{< relref "/docs/watcher" >}}) Session が plan 承認待ちで止まります。
+
+3 キーとも user 専用です。変更できるのは user config、環境変数、TUI 設定フォーム(`s`)だけで、repo config の値は警告して無視され、CLI flag もありません。Plan Mode は `--team` より優先されます — codex の plan 子は最小の Plan briefing のまま team bridge を失います。agent ごとのフラグと版要件は [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) を参照してください。廃止された codex 専用の `codexPlanMode` キーと `FANOUT_CODEX_PLAN_MODE` は、3 キーへの置き換えを促す警告つきで無視されます。
 
 watcher と通知 channel は別系統の設定です。
 watcher はラベル巡回による自動起動を opt-in で制御します。
@@ -64,6 +73,9 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード / 同一 worktree 操作 tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | コンソール復帰 tmux キーバインド | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
+| 新規 Session の Plan Mode | `newSessionPlanMode` | `FANOUT_NEW_SESSION_PLAN_MODE` | n/a | `true` |
+| オーケストレーターの Plan Mode | `orchestratorPlanMode` | `FANOUT_ORCHESTRATOR_PLAN_MODE` | n/a | `true` |
+| 子の Plan Mode | `childPlanMode` | `FANOUT_CHILD_PLAN_MODE` | n/a | `false` |
 | runtime backend | `runtimeBackend` | `FANOUT_BACKEND` | `--backend <tmux\|herdr>` | `tmux` |
 | watcher opt-in | `watcher` | `FANOUT_WATCHER` | n/a | `false` |
 | watcher trigger label | `watcherTriggerLabel` | `FANOUT_WATCHER_TRIGGER_LABEL` | n/a | `fanout:auto` |
@@ -76,7 +88,7 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
 
 flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています。
-watcher と通知設定に CLI flag はありません。
+launch posture、watcher、通知設定に CLI flag はありません。
 
 ## config.json サンプル
 
@@ -91,6 +103,9 @@ watcher と通知設定に CLI flag はありません。
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,
+  "newSessionPlanMode": true,
+  "orchestratorPlanMode": true,
+  "childPlanMode": false,
   "runtimeBackend": "tmux",
   "watcher": false,
   "watcherTriggerLabel": "fanout:auto",

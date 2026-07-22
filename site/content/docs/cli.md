@@ -246,7 +246,7 @@ fanout 123 --status --post-dashboard
 
 The lifecycle commands operate on entries recorded in `.fanout/state.json`; they do not discover arbitrary worktrees by scanning the filesystem. Like `--status`, they honor `FANOUT_STATE_PATH`.
 
-`.fanout/state.json` holds `schemaVersion` plus one row per pane. Every row carries `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Keys omitted when empty: `taskId`, `kind`, `shellKey`, `baseBranch`, `wave`, `agentStatus`, the Codex metadata (`codexPlanMode`, `codexThreadId`, `codexSessionId`), and the attach source (`sourceParent`, `sourceIssueNum`, `sourceTaskId`). `shellKey` ties each newly created row to one live tmux pane. TUI shell terminals use `kind: "shell"` (closing one removes only the tmux pane and the state row), and agents attached to an existing worktree use `kind: "attached-agent"`.
+`.fanout/state.json` holds `schemaVersion` plus one row per pane. Every row carries `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Keys omitted when empty: `taskId`, `kind`, `shellKey`, `baseBranch`, `wave`, `agentStatus`, the plan-mode marker `codexPlanMode` (a historical key name — recorded for any agent's plan-mode pane), the Codex thread metadata (`codexThreadId`, `codexSessionId`), and the attach source (`sourceParent`, `sourceIssueNum`, `sourceTaskId`). `shellKey` ties each newly created row to one live tmux pane. TUI shell terminals use `kind: "shell"` (closing one removes only the tmux pane and the state row), and agents attached to an existing worktree use `kind: "attached-agent"`.
 
 If launch or restore fails and fanout cannot confirm that the new pane stopped, it keeps a recovery row (and any created worktree) so a later lifecycle command can retry safely.
 
@@ -409,6 +409,9 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
 | `FANOUT_CONSOLE_KEYBIND` | Environment layer for the console-return tmux keybindings (`consoleKeybind`). |
+| `FANOUT_NEW_SESSION_PLAN_MODE` | Environment layer for the new-session launch posture (`newSessionPlanMode`). |
+| `FANOUT_ORCHESTRATOR_PLAN_MODE` | Environment layer for the orchestrator launch posture (`orchestratorPlanMode`). |
+| `FANOUT_CHILD_PLAN_MODE` | Environment layer for the child launch posture (`childPlanMode`). |
 | `FANOUT_WATCHER` | Environment layer for watcher opt-in (`watcher`). |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | Environment layer for the watcher trigger label (`watcherTriggerLabel`). |
 | `FANOUT_WATCHER_RUNNING_LABEL` | Environment layer for the watcher running label (`watcherRunningLabel`). |

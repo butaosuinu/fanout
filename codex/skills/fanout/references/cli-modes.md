@@ -53,8 +53,13 @@ issue/PR state, merge progress, blockers, and Sessions. Important actions:
 - `?`: show help.
 - `q`: leave the console without killing child panes.
 
-Manual Codex panes start in app-server-backed Codex Plan Mode; manual Claude
-panes start normally. Automatic focus does not apply to attached panes, shells,
+Manual panes follow the user-level `newSessionPlanMode` setting (default on)
+for all three agents; codex plan panes run through the app-server plan TUI,
+claude and opencode start in their native plan modes. Plan fan-out coordinators
+(claude / codex) and `a` attach panes follow the same setting. A parent Issue
+fan-out's project-root orchestrator follows `orchestratorPlanMode` (default
+on); a codex orchestrator conflicts with its start gate, so fanout warns and
+starts plain codex. Automatic focus does not apply to attached panes, shells,
 watcher launches, or ordinary CLI fan-outs. Attached panes do not count toward
 merge progress.
 
@@ -123,7 +128,12 @@ from user `hooks.json`.
 Child Plan Mode comes from the user-level `childPlanMode` setting or
 `FANOUT_CHILD_PLAN_MODE`. It applies to every supported agent and is resolved
 independently from agent selection. Codex uses the app-server Plan Mode
-controller; Claude and opencode use their native plan launch modes.
+controller; Claude and opencode use their native plan launch modes. Explicit
+Claude modes (`--permission-mode plan` / `--permission-mode auto`) need Claude
+Code v2.1.207+; below that floor fanout warns and omits the mode flags. Where
+auto mode is disabled (a Team / Enterprise plan whose Owner has not enabled
+it, an unsupported model, or a managed policy), claude notifies and falls back
+to its `default` mode — fanout does not detect the effective mode.
 
 Action reruns are idempotent for the same `(parent, issueNum)`. Let fanout
 parent-qualify default slugs and branches when the same issue belongs to

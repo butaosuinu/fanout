@@ -1,7 +1,7 @@
 ---
 title: エージェント連携
 linkTitle: エージェント連携
-description: "対応エージェントの比較、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、OpenCode。"
+description: "対応エージェントの比較、agent ごとの Plan Mode の挙動、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、OpenCode。"
 weight: 80
 slug: agents
 kanji: 連
@@ -22,6 +22,30 @@ yomi: agents
 | briefing の構成 | base + Claude 専用 | base + Codex 専用 | base + 共通検証のみ |
 
 push と nudge の行の挙動は [CLI リファレンス]({{< relref "/docs/cli#fanout-msg" >}})にまとめています。
+
+## Plan Mode
+
+どのレーンが session を agent の plan mode で始めるかは、[Settings]({{< relref "/docs/settings" >}}) の 3 つの launch posture 設定(`newSessionPlanMode` / `orchestratorPlanMode` / `childPlanMode`)が決めます。
+mode は agent ごとに次のように対応します。
+
+| | Plan Mode | build mode |
+|---|---|---|
+| Claude Code | `--permission-mode plan` | `--permission-mode auto` |
+| Codex CLI | app-server 経由の Codex Plan Mode TUI | 素の `codex` |
+| OpenCode | `--agent plan` | `--agent build` |
+
+Claude の明示 mode 起動には Claude Code v2.1.207 以降が必要です。
+fanout は起動前に `claude --version` を確認し、floor 未満または判定不能なら警告して mode フラグを省き、claude 自身の既定姿勢で起動します。
+`--permission-mode auto` は v2.1.207 以降なら全プロバイダで使えますが、旧バージョン、Team / Enterprise プランで Owner が未有効化、非対応モデル、managed policy のいずれかで無効になります。
+無効環境でも起動は失敗しません。claude が通知を出して `default` mode にフォールバックします。
+fanout は実効 mode を検出しません — 権限プロンプトは TUI の `blocked` 状態として現れます。
+
+Codex の Plan Mode は app-server 経由の plan TUI controller で動きます。
+ダッシュボードの Plan セクションが plan 出力を capture するのは codex の plan ペインだけです。claude / opencode の plan 出力に capture できるフォーマットはありません。
+Plan Mode は `--team` より優先されます — codex の plan 子は最小の Plan briefing のまま、team bridge は付きません。
+
+OpenCode の plan / build は `--agent plan` / `--agent build` に対応します。
+OpenCode は plan fan-out coordinator になれないため、coordinator レーンの plan 配線は claude / codex だけに効きます。
 
 ## エージェントセッションの中から呼ぶ
 

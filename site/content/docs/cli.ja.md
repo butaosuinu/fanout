@@ -249,7 +249,7 @@ Lifecycle コマンドは `.fanout/state.json` の記録済み entry だけを�
 
 `.fanout/state.json` には `schemaVersion` と、ペインごとに 1 行を保存します。
 各行は `parent` / `issueNum` / `slug` / `branchName` / `paneId` / `agent` / `displayName` / `worktreePath` / `prompt` / `createdAt` を必ず持ちます。
-空のとき省略されるキーは `taskId` / `kind` / `shellKey` / `baseBranch` / `wave` / `agentStatus`、Codex メタデータ(`codexPlanMode` / `codexThreadId` / `codexSessionId`)、attach 元(`sourceParent` / `sourceIssueNum` / `sourceTaskId`)です。
+空のとき省略されるキーは `taskId` / `kind` / `shellKey` / `baseBranch` / `wave` / `agentStatus`、plan mode マーカーの `codexPlanMode`(歴史的なキー名 — どの agent の plan mode ペインにも記録されます)、Codex thread メタデータ(`codexThreadId` / `codexSessionId`)、attach 元(`sourceParent` / `sourceIssueNum` / `sourceTaskId`)です。
 `shellKey` は、新しく作成した各 state 行を 1 つの live tmux ペインに結びつけます。
 TUI の shell terminal は `kind: "shell"` で記録されるため、close は tmux ペインと state 行だけを消します。
 既存 worktree に追加した agent は `kind: "attached-agent"` で記録されます。
@@ -415,6 +415,9 @@ fanout check-update
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |
+| `FANOUT_NEW_SESSION_PLAN_MODE` | 新規 Session の launch posture（`newSessionPlanMode`）の環境変数レイヤ。 |
+| `FANOUT_ORCHESTRATOR_PLAN_MODE` | オーケストレーターの launch posture（`orchestratorPlanMode`）の環境変数レイヤ。 |
+| `FANOUT_CHILD_PLAN_MODE` | 子の launch posture（`childPlanMode`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER` | watcher opt-in（`watcher`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_TRIGGER_LABEL` | watcher trigger label（`watcherTriggerLabel`）の環境変数レイヤ。 |
 | `FANOUT_WATCHER_RUNNING_LABEL` | watcher running label（`watcherRunningLabel`）の環境変数レイヤ。 |

@@ -142,7 +142,8 @@ Use status and lifecycle flags only for an explicit follow-up:
 
 ## Preview and run
 
-When the TUI starts the coordinator in Plan Mode, wait for the agent's native
+When the TUI starts the coordinator in Plan Mode (the `newSessionPlanMode`
+setting, default on), wait for the agent's native
 plan approval before writing a new spec or running `fanout plan`. That approval
 is also confirmation for the live run: after approval, prepare or reuse the
 spec, run the dry-run, then run live without asking again. Still stop after the

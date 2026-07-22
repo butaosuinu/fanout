@@ -50,6 +50,11 @@ watcher は `watcherIntervalSeconds` ごとに巡回します。
 - OPEN な子を持つ issue は、`--unblocked-only` 相当でファンアウトします。unblocked な子ごとに 1 ペインを作る親ファンアウトです。
 - OPEN な子を持たない issue は、子が全部 CLOSED の場合も含めて、予約 parent `@watch` 配下の単独ペインとして起動します。
 
+watcher の起動は `childPlanMode`(既定 off)に従います。
+on にすると、起動した Session はどれも agent の plan 承認待ちで止まります。
+watcher は無人運用なので、plan を承認する人がいる場合を除き off のままにしてください。
+[Settings]({{< relref "/docs/settings" >}}) を参照してください。
+
 ## session 予算
 
 `watcherMaxSessions` が上限にするのは起動回数ではなく live ペイン数です。

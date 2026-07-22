@@ -23,7 +23,7 @@ herdr session を変更しうる操作は、劣化動作ではなく明確なエ
 - issue / Project / plan の launch は、worktree や state の変更が起きる前に拒否されます。v1 は herdr 行を自分では記録しません。
 - focus・send・close・restore・出力 peek・plan capture・自動 cleanup は herdr 行では使えません。
 - 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
-- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれず、Codex Plan Mode は使えません。
+- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれず、Plan Mode の起動もどの agent でも使えません(他の launch と同じく fail closed)。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
 

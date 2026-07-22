@@ -18,7 +18,7 @@ Everything that would mutate a herdr session fails closed with a clear error ins
 - Issue, Project, and plan launches are rejected before any worktree or state mutation — v1 never records herdr rows itself.
 - Focus, send, close, restore, output peek, plan capture, and automatic cleanup are unavailable for herdr rows.
 - Automatic nudges (`fanout msg nudge` delivery) are disabled for every agent kind. Messages still persist to the bus for `inbox` / `board` reads.
-- No tmux keybindings are registered, fanout never calls herdr's in-app `notification show`, and Codex Plan Mode is unavailable.
+- No tmux keybindings are registered, fanout never calls herdr's in-app `notification show`, and Plan Mode launches are unavailable for every agent — like all launches, they fail closed.
 
 The TUI header always shows the selected backend and why it was selected, such as `backend: herdr (HERDR_ENV)`.
 

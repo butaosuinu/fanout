@@ -13,7 +13,7 @@ GitHub 親 issue の OPEN な子 issue を子ごとの tmux ペインにファ�
 | エージェント | `--agent` | 一言で |
 |---|---|---|
 | Claude Code | `claude` | skill と `/fanout` を同梱。`--team` のメッセージを届いた瞬間に受け取る |
-| Codex CLI | `codex` | skill を同梱。子を Codex Plan Mode で起動できる |
+| Codex CLI | `codex` | skill を同梱。Plan Mode は app-server の plan TUI で動く |
 | OpenCode | `opencode` | skill 同梱なし。`AGENTS.md` をネイティブに読む |
 
 3 つの違いは[エージェント連携]({{< relref "/docs/agent-integrations" >}})の能力マトリクスで一覧できます。
@@ -26,6 +26,6 @@ GitHub 親 issue の OPEN な子 issue を子ごとの tmux ペインにファ�
 
 [CLI リファレンス]({{< relref "/docs/cli" >}})はコマンド形式とフラグ、環境変数、exit code を 1 ページにまとめます。
 [設定]({{< relref "/docs/settings" >}})では生成される briefing のスイッチと解決順序を制御します。
-[エージェント連携]({{< relref "/docs/agent-integrations" >}})は同梱 skill と `/fanout` スラッシュコマンド、Codex Plan Mode を扱います。
+[エージェント連携]({{< relref "/docs/agent-integrations" >}})は同梱 skill と `/fanout` スラッシュコマンド、agent ごとの Plan Mode の挙動を扱います。
 [herdr backend]({{< relref "/docs/herdr-backend" >}})は opt-in・観測専用の runtime backend と tmux との差分を扱います。
 詰まったら[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})で原因と直し方を引き、各リリースの変更点は[変更履歴]({{< relref "/docs/changelog" >}})にあります。
