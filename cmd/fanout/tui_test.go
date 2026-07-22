@@ -1617,7 +1617,7 @@ func TestLaunchWatchStandaloneSkipsIssueRecordedUnderLock(t *testing.T) {
 	if err = locked.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	err = launchWatchStandalone(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), ghissue.Issue{
+	_, err = launchWatchStandalone(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), ghissue.Issue{
 		Number: 501,
 		Title:  "existing",
 		State:  "OPEN",

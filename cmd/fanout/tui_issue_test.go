@@ -634,9 +634,9 @@ func TestLaunchIssueSessionFromTUIAllowsNonCodexPlanChild(t *testing.T) {
 	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
 	installTUIParentLaunchGHScript(t)
 	installFakeExecutable(t, "codex")
-	t.Setenv("FANOUT_CODEX_PLAN_MODE", "true")
+	t.Setenv("FANOUT_CHILD_PLAN_MODE", "true")
 	resolved := settings.Defaults()
-	resolved.CodexPlanMode = true
+	resolved.ChildPlanMode = true
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", resolved, hooks.EmptyConfig(), 500, "codex", map[string]string{"501": "claude"})
 	if err != nil {
@@ -668,7 +668,7 @@ func prepareTUIParentLaunchRepo(t *testing.T) string {
 	gitCmdTest(t, repo, "remote", "add", "origin", origin)
 	gitCmdTest(t, repo, "push", "-u", "origin", "main")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("FANOUT_CODEX_PLAN_MODE", "false")
+	t.Setenv("FANOUT_CHILD_PLAN_MODE", "false")
 	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "false")
 	t.Setenv("TMUX_PANE", "")
 	installFakeExecutable(t, "claude")

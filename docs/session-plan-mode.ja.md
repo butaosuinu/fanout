@@ -59,7 +59,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 実行は plan 承認を待ってから走る。これは意図した挙動で、fan-out 前に計画を
 レビューする機会になる。coordinator の plan mode 配線は claude / codex
 のみ — opencode は bundled command(`/fanout plan`)を読めず coordinator
-自体が非対応(`site/content/docs/agents.md` の既存制約)。watcher レーンは
+自体が非対応(`site/content/docs/agent-integrations.md` の既存制約)。watcher レーンは
 無人運用のため、`childPlanMode=true` にすると起動した Session が承認待ちで
 止まる点に注意する。
 

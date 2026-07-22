@@ -85,17 +85,13 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 }
 
 // NewWatchRequest builds the pane request for a watcher-launched standalone
-// issue: the issue briefing under the reserved @watch parent, never Codex
-// Plan Mode.
+// issue under the reserved @watch parent. Standalone TUI issue sessions share
+// this path and follow the same child Plan Mode setting.
 func NewWatchRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config) Request {
 	watchCfg := *cfg
 	watchCfg.ParentRef = WatchParentRef
-	watchCfg.PlanMode = nil
-	req := NewIssueRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
-	// Watch does not consume the child Plan Mode setting until its dedicated
-	// migration. Keep the legacy flag-free launch instead of injecting build.
-	req.LaunchMode = ""
-	return req
+	watchCfg.PlanMode = new(resolvedSettings.ChildPlanMode)
+	return NewIssueRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
 }
 
 // NewTaskRequest builds the pane request for one issue-less plan task.
@@ -119,6 +115,7 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 		DisplayNameOverride: task.DisplayName,
 		BranchName:          branchName,
 		Agent:               agentName,
+		LaunchMode:          childLaunchMode(resolvedSettings.ChildPlanMode),
 		Hooks:               hookConfig,
 		Worktree: worktree.BuildPlan(worktree.Options{
 			ProjectRoot:        projectRoot,
@@ -129,8 +126,11 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 			AllowMissingOrigin: true,
 		}),
 	}
-	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
+	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = codexapp.TaskStatusPath(projectRoot, spec.Plan.Slug, task.ID, cfg.DryRun)
+	}
 	req.CodexTeamRequested = teamCtx != nil && agentName == "codex"
 	if req.CodexTeamRequested && !req.PlanMode() {
 		req.CodexTeamMode = true
@@ -446,10 +446,13 @@ func oneLinePrompt(parentRef string, req Request) string {
 	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
 }
 
-// issueLaunchMode makes both postures explicit only for issue children. Other
-// lanes opt into a mode when their owning setting migration lands.
+// issueLaunchMode makes both postures explicit for issue children.
 func issueLaunchMode(cfg *cliflags.Config) agent.LaunchMode {
-	if cfg.PlanModeEnabled() {
+	return childLaunchMode(cfg.PlanModeEnabled())
+}
+
+func childLaunchMode(planMode bool) agent.LaunchMode {
+	if planMode {
 		return agent.ModePlan
 	}
 	return agent.ModeBuild
@@ -465,7 +468,11 @@ func launchModeFromPlanFlag(cfg *cliflags.Config) agent.LaunchMode {
 }
 
 func taskOneLinePrompt(planSlug string, req Request) string {
-	return fmt.Sprintf("[fanout %s of plan:%s] %s: %s. read %s and begin.", req.TaskID, planSlug, req.Slug, oneLineText(req.ShortTitle), req.BriefingPath)
+	action := "begin"
+	if req.PlanMode() {
+		action = "investigate, then propose a plan"
+	}
+	return fmt.Sprintf("[fanout %s of plan:%s] %s: %s. read %s and %s.", req.TaskID, planSlug, req.Slug, oneLineText(req.ShortTitle), req.BriefingPath, action)
 }
 
 func oneLineText(s string) string {

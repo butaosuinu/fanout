@@ -55,7 +55,6 @@ Forward user-supplied flags supported by the issue/Project lane:
 - `--pr-review-gate` / `--no-pr-review-gate`
 - `--briefing-code-review` / `--no-briefing-code-review`
 - `--agent-teams-hint` / `--no-agent-teams-hint`
-- `--codex-plan-mode` / `--no-codex-plan-mode`
 - `--pr-visualization` / `--no-pr-visualization`
 - `--dashboard-keybind` / `--no-dashboard-keybind`
 - `--team`
@@ -130,9 +129,9 @@ Do not choose Claude or Codex from task size, breadth, number of files, or
 work type. Add `--agent NUM=name` only for an explicit user choice or a real
 provider-specific constraint. Do not emit unsupported agent names.
 
-Require every selected target to resolve to `codex` before forwarding
-`--codex-plan-mode`. Claude-specific briefing toggles affect briefing text;
-they do not justify silently changing the selected agent.
+Plan Mode is resolved independently from the user-level `childPlanMode`
+setting or `FANOUT_CHILD_PLAN_MODE`. Claude-specific briefing toggles affect
+briefing text; they do not justify silently changing the selected agent.
 
 ## Preview and execution
 

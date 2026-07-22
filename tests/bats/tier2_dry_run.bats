@@ -141,56 +141,62 @@ load helpers
 
 @test "agent-codex plan mode variant of scenario-sub-issue-only: interactive TUI launch" {
   use_fixture scenario-sub-issue-only
-  run_fanout_dry 100 --agent codex --codex-plan-mode
+  export FANOUT_CHILD_PLAN_MODE=1
+  run_fanout_dry 100 --agent codex
   assert_success
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
 @test "codex plan mode takes precedence over the team bridge" {
-	use_fixture scenario-sub-issue-only
-	run_fanout_dry 100 --agent codex --codex-plan-mode --team
-	assert_success
-	[[ "$output" == *"plan mode takes precedence over --team; Codex team bridge is disabled for this pane"* ]]
-	[[ "$output" == *"__codex-plan-tui"* ]]
-	[[ "$output" != *"__codex-team-tui"* ]]
+  use_fixture scenario-sub-issue-only
+  export FANOUT_CHILD_PLAN_MODE=1
+  run_fanout_dry 100 --agent codex --team
+  assert_success
+  [[ "$output" == *"plan mode takes precedence over --team; Codex team bridge is disabled for this pane"* ]]
+  [[ "$output" == *"__codex-plan-tui"* ]]
+  [[ "$output" != *"__codex-team-tui"* ]]
 }
 
 @test "agent-claude plan mode variant of scenario-sub-issue-only: native plan launch" {
 	use_fixture scenario-sub-issue-only
-	run_fanout_dry 100 --agent claude --codex-plan-mode
+	mkdir -p "$XDG_CONFIG_HOME/fanout"
+	printf '%s\n' '{"childPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+	run_fanout_dry 100 --agent claude
 	assert_success
 	assert_golden scenario-sub-issue-only-claude-plan
 }
 
 @test "agent-opencode plan mode variant of scenario-sub-issue-only: native plan launch" {
 	use_fixture scenario-sub-issue-only
-	run_fanout_dry 100 --agent opencode --codex-plan-mode
+	export FANOUT_CHILD_PLAN_MODE=1
+	run_fanout_dry 100 --agent opencode
 	assert_success
 	assert_golden scenario-sub-issue-only-opencode-plan
 }
 
-@test "codexPlanMode user setting starts Codex children in Plan Mode" {
+@test "childPlanMode user setting starts Codex children in Plan Mode" {
   use_fixture scenario-sub-issue-only
   mkdir -p "$XDG_CONFIG_HOME/fanout"
-  printf '%s\n' '{"codexPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+  printf '%s\n' '{"childPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
   run_fanout_dry 100 --agent codex
   assert_success
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
-@test "FANOUT_CODEX_PLAN_MODE starts Codex children in Plan Mode" {
+@test "FANOUT_CHILD_PLAN_MODE starts Codex children in Plan Mode" {
   use_fixture scenario-sub-issue-only
-  export FANOUT_CODEX_PLAN_MODE=1
+  export FANOUT_CHILD_PLAN_MODE=1
   run_fanout_dry 100 --agent codex
   assert_success
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
-@test "--no-codex-plan-mode overrides an enabled user setting" {
+@test "FANOUT_CHILD_PLAN_MODE overrides an enabled user setting" {
   use_fixture scenario-sub-issue-only
   mkdir -p "$XDG_CONFIG_HOME/fanout"
-  printf '%s\n' '{"codexPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
-  run_fanout_dry 100 --agent codex --no-codex-plan-mode
+  printf '%s\n' '{"childPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+  export FANOUT_CHILD_PLAN_MODE=0
+  run_fanout_dry 100 --agent codex
   assert_success
   assert_golden scenario-sub-issue-only-codex
 }
@@ -264,6 +270,14 @@ load helpers
   run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --agent codex --agent base-types=claude
   assert_success
   assert_golden scenario-plan-basic-agent-override
+}
+
+@test "child plan mode variant of scenario-plan-basic: Codex tasks use interactive TUI launch" {
+  use_fixture scenario-plan-basic
+  export FANOUT_CHILD_PLAN_MODE=1
+  run_fanout_plan_dry "$FIXTURE_DIR/plan.json" --agent codex
+  assert_success
+  assert_golden scenario-plan-basic-codex-plan
 }
 
 @test "--team variant of scenario-plan-basic: task briefings grow and registry seed is printed" {

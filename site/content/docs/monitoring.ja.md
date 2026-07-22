@@ -61,7 +61,7 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `s` | 設定の tmux popup を開く。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
 | `Ctrl+O` | 新規 Session の Issue 一覧で、選択中の issue を既定ブラウザで開く。 |
-| `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は [Codex Plan Mode]({{< relref "/docs/agents#codex-plan-mode" >}}) で起動する。 |
+| `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。追加した agent は[新規 Session のペイン](#新規-session-のモード)と同じ launch posture を使う。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
@@ -83,9 +83,11 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 `s` で、コンソールを離れずに fanout の JSON 設定を編集できます。
 Target 行で user config と repo config を切り替えます。
 各設定は値を指定するか `inherit` に戻せます。`inherit` は選択中のファイルからそのキーを削除します。
-Launch グループの `codexPlanMode` は、どちらの target でも編集できます。
+launch posture の設定は user config でのみ編集できます。
 CLI flag と `FANOUT_*` 環境変数は、保存済みファイルより引き続き優先されます。
-repo config の安全ルールも `config.json` と同じです。repo config から watcher や HTTP 通知 endpoint は有効化できず、通知 channel は `bell`、`tmux`、`none` だけです。
+repo config の安全ルールも `config.json` と同じです。
+repo config から launch posture と watcher は変更できず、HTTP 通知 endpoint も設定できません。
+通知 channel は `bell`、`tmux`、`none` だけです。
 
 ### F11 / prefix + T
 
@@ -104,8 +106,10 @@ agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元�
 
 **Prompt** は従来の manual ペインです。
 複数行の prompt を書いて agent ごとの起動数を指定し(`claude` / `codex` / `opencode`)、prompt 欄では `Shift+Enter` または `Ctrl+J` で改行、`@` でリポジトリのファイルパス補完を使えます。
-manual の `codex` ペインは `codexPlanMode` に関係なく、app-server 経由の Codex Plan Mode で起動します(それ以外の agent は通常起動)。
-下の plan fan-out チェックボックスを有効にすると、agent をちょうど 1 本選んだうえで、プロンプトを `fanout plan` で並列タスクに分解するコーディネータ 1 つの起動に切り替わります(コーディネータは `codex` でも常に通常 agent として起動します)。
+manual ペインでは、3 つの agent すべてに `newSessionPlanMode` を適用します。
+既定値は `true` なので、Claude、Codex、OpenCode は Plan Mode で起動します。
+下の plan fan-out チェックボックスを有効にすると、agent をちょうど 1 本選んだうえで、プロンプトを `fanout plan` で並列タスクに分解するコーディネータ 1 つの起動に切り替わります。
+同じ設定により、Claude と Codex のコーディネータは Plan Mode、OpenCode のコーディネータは build mode で起動します。
 
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
@@ -118,14 +122,13 @@ briefing は orchestrator に、子スコープの実装を引き取らず、`fa
 初回選択時に全 child が blocked なら、ペインは作成されません。
 child の unblock 後に再選択すると orchestrator と child のペインを作成します。
 orchestrator が作成済みなら、その後の再選択では重複せず、新たに unblock された子だけをファンアウトします。
-`codexPlanMode` が有効なら、その起動に含まれる子をすべて `codex` に割り当てる必要があります。
-agent が混在する割り当ては、ペイン作成前に失敗します。
-子のない issue は `codexPlanMode` の影響を受けず、`@watch` 配下の通常の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
+child の launch posture は、選択した全 agent にそれぞれ適用されます。
+子のない issue も同じ child posture を使い、`@watch` 配下の単独ペインとして起動します([Watcher]({{< relref "/docs/watcher" >}}) を参照)。
 
 Prompt モードと同じ plan fan-out チェックボックスがここにもあります。
 1 つの issue に対して有効にすると子への割り当て画面をスキップし、選んだ issue を issue-less な `fanout plan` タスクに分解する通常モードのコーディネータ 1 つだけを起動します(タスクは選択した agent で実行)。
-このチェックボックスと `codexPlanMode` は別の機能です。
-チェックボックスはコーディネータと新しいタスクを作り、`codexPlanMode` は既存の issue / Project の子を起動するモードを変えます。
+チェックボックスはコーディネータと新しいタスクを作ります。
+child の launch posture は、新しい task と既存の issue / Project の子の両方に適用されます。
 選択中の issue に OPEN な子がある間、このチェックボックスは無効表示になります(その場合は子をファンアウトしてください)。
 
 ## --status（JSON / table / --post-dashboard）

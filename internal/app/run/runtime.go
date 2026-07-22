@@ -112,14 +112,14 @@ func markCurrentPaneProjectRoot(projectRoot string, lg *log.Logger) {
 }
 
 // settingsOverrides folds the CLI setting toggles into a settings.CLIOverrides
-// literal; both lanes resolve settings through the same mapping.
+// literal; both lanes resolve settings through the same mapping. PlanMode is
+// an internal launch-lane override and is not a persisted/CLI setting.
 func settingsOverrides(cfg *cliflags.Config) settings.CLIOverrides {
 	overrides := settings.CLIOverrides{
 		AutoPullRequest:    cfg.AutoPullRequest,
 		PRReviewGate:       cfg.PRReviewGate,
 		BriefingCodeReview: cfg.BriefingCodeReview,
 		AgentTeamsHint:     cfg.AgentTeamsHint,
-		CodexPlanMode:      cfg.PlanMode,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
 	}

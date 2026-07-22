@@ -23,12 +23,14 @@ type executionResult struct {
 	Failed         int
 	CreatedNums    []int
 	CreatedPaneIDs []string
+	Notices        []string
 }
 
 // IssueExecutionResult reports the exact tmux panes created by an issue or
 // Project fan-out, in creation order. Dry runs return an empty slice.
 type IssueExecutionResult struct {
 	CreatedPaneIDs []string
+	Notices        []string
 }
 
 // IssueReadyFunc runs after the child plan and its effective agents validate,
@@ -191,9 +193,9 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	}
 
 	if result.Failed > 0 {
-		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.Env
+		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices}, exitcode.Env
 	}
-	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs}, exitcode.OK
+	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices}, exitcode.OK
 }
 
 func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.LockedStore, lg *log.Logger) bool {
@@ -217,13 +219,14 @@ func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.Loc
 // launch paths and intentionally do not pass through this helper.
 func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.Settings) *cliflags.Config {
 	launchCfg := *cfg
-	launchCfg.PlanMode = new(resolvedSettings.CodexPlanMode)
+	launchCfg.PlanMode = new(resolvedSettings.ChildPlanMode)
 	return &launchCfg
 }
 
 func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
+	var notices []string
 	created, failed := executeFailFast(
 		targets,
 		func(issue ghissue.Issue) int { return issue.Number },
@@ -239,11 +242,14 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			if ok && result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
 			}
+			if ok && result.Notice != "" {
+				notices = append(notices, result.Notice)
+			}
 			return ok
 		},
 		sleepBetweenFunc(cfg),
 	)
-	return executionResult{Created: len(created), Failed: failed, CreatedNums: created, CreatedPaneIDs: createdPaneIDs}
+	return executionResult{Created: len(created), Failed: failed, CreatedNums: created, CreatedPaneIDs: createdPaneIDs, Notices: notices}
 }
 
 // executeFailFast launches targets in order and stops after the first failure,

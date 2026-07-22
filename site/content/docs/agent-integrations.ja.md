@@ -1,8 +1,9 @@
 ---
 title: エージェント連携
 linkTitle: エージェント連携
-description: "対応エージェントの比較、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、Codex Plan Mode、OpenCode。"
+description: "対応エージェントの比較、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、OpenCode。"
 weight: 80
+slug: agents
 kanji: 連
 yomi: agents
 ---
@@ -16,7 +17,6 @@ yomi: agents
 |---|---|---|---|
 | `--agent` 名 | `claude` | `codex` | `opencode` |
 | 同梱 skill | `/fanout` + skills | `$fanout` + skills | なし |
-| Codex Plan Mode(`codexPlanMode`) | — | ✓ | — |
 | `--team` の push 配信 | ✓ Monitor tool 下の `fanout msg watch` | ✓ fresh な非 Plan セッション(app-server bridge) | —(pull のみ) |
 | `fanout msg nudge` の対象 | ✓ | ✓ | —(スキップ) |
 | briefing の構成 | base + Claude 専用 | base + Codex 専用 | base + 共通検証のみ |
@@ -97,30 +97,6 @@ clean な committed branch では canonical validation を 1 回実行し、exac
 
 `$pr-watch` は foreground で動き、変化のない snapshot は出力せず、cursor を Git metadata に保存します(linked worktree でも同様)。
 Codex セッションの終了後に background watcher は残りません。
-
-## Codex Plan Mode
-
-通常の issue / Project の子 fan-out は、起動前に `codexPlanMode` 設定を解決します。
-user config または repo config に保存するか、`FANOUT_CODEX_PLAN_MODE` を設定します。
-CLI の 1 run だけ上書きするには `--codex-plan-mode` / `--no-codex-plan-mode` を使います。
-ビルトイン既定値は `false` で、優先順位は CLI > env > repo > user > default です。
-TUI の設定 popup では Launch グループに同じキーが表示されます。
-
-```bash
-fanout 123 --agent codex --codex-plan-mode
-```
-
-Plan Mode の子は interactive な Codex TUI として起動し、関連する文脈を調査したうえで `<proposed_plan>` に包んだ実装計画を提示します。
-その turn ではファイル編集や commit、push、PR 作成をしません。
-ペインは Plan Mode の会話のまま残るので、そこから続行できます。
-
-この設定は通常の CLI issue / Project fan-out と、OPEN な子を持つ issue を選んだ TUI Issue モードに適用します。
-選択された子はすべて `codex` に解決される必要があります。
-`claude` の子が混ざっているとペイン作成前に失敗します。
-
-watcher、子のない issue の単独ペイン、`fanout plan` task、plan coordinator はこの設定を無視します。
-manual と attach の `codex` ペインは、この設定に関係なく従来どおり Plan Mode で起動します。
-対応する `claude` ペインは通常モードで起動します。
 
 ## OpenCode
 

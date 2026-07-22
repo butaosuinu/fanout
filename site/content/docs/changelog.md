@@ -13,12 +13,12 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 
 - **OpenCode child agents.** `--agent opencode` now works in issue / Project and `fanout plan` runs, including per-target overrides and the TUI new-session picker.
   fanout passes prompts with `--prompt`, resumes with `opencode --continue`, and gives OpenCode the base briefing plus generic validation; team messaging remains pull-only and `nudge` skips these panes.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [CLI Reference]({{< relref "/docs/cli" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [CLI Reference]({{< relref "/docs/cli" >}}).
 - **Safe adoption of legacy panes.** TUI restore can now migrate live pre-#503 rows without `shellKey` when the tmux server generation, pane process start time, launch markers, and cross-root claimant scan prove ownership.
   It stamps and persists a liveness key so lifecycle close works; ambiguous rows remain unchanged and fail closed.
   See [Monitoring]({{< relref "/docs/monitoring" >}}) and [CLI Reference]({{< relref "/docs/cli#--merge----close----cleanup" >}}).
 - **Clearer agent and setup docs.** The docs landing page and Agent Integrations now compare Claude Code, Codex, and OpenCode in one place; README and installation guidance put prerequisites first and link detailed TUI, messaging, watcher, and Plan Mode behavior to their canonical pages.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Installation]({{< relref "/docs/installation" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [Installation]({{< relref "/docs/installation" >}}).
 
 [Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.14.0)
 
@@ -36,7 +36,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
   See [CLI Reference]({{< relref "/docs/cli#--merge----close----cleanup" >}}).
 - **Native post-work-review.** `$post-work-review` now delegates to an ordinary fresh native Codex subagent and no longer uses custom agents, a model pin, an app-server controller, or a JSON result parser.
   Install or update with integrations to remove the retired driver; a binary-only `--no-skills` update stops while that driver remains.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Installation]({{< relref "/docs/installation" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [Installation]({{< relref "/docs/installation" >}}).
 - **godep-cruiser architecture guard.** Layer checks now run through the pinned godep-cruiser rule set with an expiring baseline, replacing the hand-written import test while keeping the same four-layer boundary.
   See `docs/architecture.ja.md`.
 
@@ -46,7 +46,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 
 - **Configurable Codex Plan Mode.** Normal issue / Project child fan-outs now resolve `codexPlanMode` through CLI, environment, repo config, or user config, and the TUI settings popup exposes the same switch.
   TUI Issue fan-outs with OPEN children honor it, while mixed non-Codex assignments fail before any pane is created.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}) and [Settings]({{< relref "/docs/settings" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) and [Settings]({{< relref "/docs/settings" >}}).
 - **Parent-issue orchestrator pane.** A TUI Issue fan-out with OPEN children now creates a single project-root orchestrator before its child panes.
   The orchestrator owns parent-scope coordination and final rollup work; repeated selections reuse it, and an all-blocked first selection creates no panes.
   See [Monitoring]({{< relref "/docs/monitoring" >}}).
@@ -55,7 +55,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
   See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Verified post-work-review sessions.** `$post-work-review` now records reviewer and verifier results only after checking the native child rollout's parent, role, read-only sandbox, approval policy, exact bundle path, and session UUID.
   Call reservations and fixed budgets fail closed on incomplete, duplicate, or unverifiable runs.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 
 [Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.12.0)
 
@@ -66,10 +66,10 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
   See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Reliable Codex Plan Mode startup.** fanout now creates the Plan Mode thread through app-server, attaches the interactive Codex TUI, and records the launch only after the initial Plan turn is accepted.
   Plan generation and approval waiting no longer have a startup timeout.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 - **Codex integrations for GPT-5.6.** The five bundled Codex skills now keep their main decision flow in `SKILL.md` and load references or scripts only when needed.
   `$post-work-review` uses pinned read-only reviewer and verifier models and stops instead of substituting unavailable models, while `$pr-watch` uses a foreground watcher that suppresses unchanged snapshots.
-  See [Agent Integrations]({{< relref "/docs/agents" >}}).
+  See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 - **Focus after new-session launch.** Successful Prompt, plan coordinator, and Issue launches from `n` now move focus to the first pane actually created.
   Agent attach (`a`), shell (`A` / `t`), watcher, and ordinary CLI launches leave focus unchanged.
   See [Monitoring]({{< relref "/docs/monitoring" >}}).
@@ -96,7 +96,7 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 - **Persistent console overhaul.** The no-argument console gained a compact Session switcher (toggle with `v`), `1`–`9` number jumps, `Z` zoom, an AgentState column, and a tmux-popup shortcut help modal, and it restores its panes on restart. Return to it from any pane with `F11` or the `prefix T` binding. See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Richer new-session modal.** Pressing `n` opens Prompt and Issue modes. Prompt mode takes a multi-line prompt with `@`-mention file completion and a plan fan-out checkbox; Issue mode adds a GraphQL-paged issue picker that marks parent / child / standalone issues and count-based `claude` / `codex` selection. See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Themed, auto-laid-out panes.** Panes tile through a dmux-style auto-layout and carry fanout-colored borders labeled `#parent · name`. See [Monitoring]({{< relref "/docs/monitoring" >}}).
-- **New review skills.** Added the `session-retro` skill, which mines past sessions for recurring tool errors, CI failures, and review findings, and gave `post-work-review` a project-verification pass plus a review checklist. See [Agent Integrations]({{< relref "/docs/agents" >}}).
+- **New review skills.** Added the `session-retro` skill, which mines past sessions for recurring tool errors, CI failures, and review findings, and gave `post-work-review` a project-verification pass plus a review checklist. See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 - **4-layer internal architecture.** Reorganized `internal/` into `core` / `app` / `infra` / `ui` layers with a CI-enforced import direction. No behavior change; the canonical reference is `docs/architecture.ja.md`.
 
 [Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.9.0)
@@ -140,7 +140,7 @@ The release where fanout became a standalone CLI — no dmux dependency — with
 - **Read-only web dashboard.** A `127.0.0.1`-bound, GET-only, token-gated Session view, rebuilt as a React + Vite + TypeScript SPA in the PAPER BREEZE theme, with a detail drawer, a plan-mode proposed-plan view, and synthetic rows for not-yet-fanned children. Launch it with `fanout dashboard --web`.
 - **Issue-less `fanout plan`.** Fan out a local JSON plan spec instead of GitHub child issues, with task IDs, `blocked_by` dependency waves, and task lifecycle (`--status` / `--merge` / `--close` / `--cleanup`). See [CLI Reference]({{< relref "/docs/cli" >}}).
 - **Peer messaging (`--team` / `fanout msg`).** Opt-in sibling coordination over a per-parent SQLite bus, plus a best-effort `nudge`. See [Workflow]({{< relref "/docs/workflow" >}}).
-- **Codex Plan Mode + review skills.** `--codex-plan-mode` starts Codex children as interactive Plan-Mode TUI sessions, and the bundled `post-work-review` / `pr-watch` skills landed for both agents. See [Agent Integrations]({{< relref "/docs/agents" >}}).
+- **Codex Plan Mode + review skills.** `--codex-plan-mode` starts Codex children as interactive Plan-Mode TUI sessions, and the bundled `post-work-review` / `pr-watch` skills landed for both agents. See [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 - **Docs site, lighter prerequisites.** Published this Hugo site (English / 日本語), dropped the `jq` and `gh-sub-issue` requirements in favor of the official GitHub Sub-issues API, and modernized the Go toolchain on golangci-lint v2.
 
 [Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.4.0)

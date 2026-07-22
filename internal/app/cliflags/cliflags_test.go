@@ -36,7 +36,6 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 		"--pr-review-gate", "--no-pr-review-gate",
 		"--no-briefing-code-review", "--briefing-code-review",
 		"--agent-teams-hint", "--no-agent-teams-hint",
-		"--codex-plan-mode", "--no-codex-plan-mode",
 		"--no-pr-visualization", "--pr-visualization",
 	)
 
@@ -44,15 +43,16 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "PRReviewGate", cfg.PRReviewGate, false)
 	assertBoolPtr(t, "BriefingCodeReview", cfg.BriefingCodeReview, true)
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
-	assertBoolPtr(t, "PlanMode", cfg.PlanMode, false)
 	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
 }
 
-func TestParsePlanModeFlag(t *testing.T) {
-	cfg := parseOK(t, "100", "--agent", "codex", "--codex-plan-mode")
-
-	if !cfg.PlanModeEnabled() {
-		t.Fatal("PlanModeEnabled() = false, want true")
+func TestParseRejectsRemovedCodexPlanModeFlags(t *testing.T) {
+	for _, flag := range []string{"--codex-plan-mode", "--no-codex-plan-mode"} {
+		var stdout, stderr bytes.Buffer
+		res := Parse([]string{"100", flag}, log.NewWith(&stdout, &stderr, false), io.Discard)
+		if res.Code != exitcode.Invocation || !strings.Contains(stderr.String(), "unknown option: "+flag) {
+			t.Fatalf("Parse(%s) code/stderr = %d/%q, want unknown option", flag, res.Code, stderr.String())
+		}
 	}
 }
 
@@ -219,8 +219,6 @@ func TestParseStatusRejectsSettingsBoolFlags(t *testing.T) {
 		{"--no-briefing-code-review", "--status cannot be combined with --no-briefing-code-review"},
 		{"--agent-teams-hint", "--status cannot be combined with --agent-teams-hint"},
 		{"--no-agent-teams-hint", "--status cannot be combined with --no-agent-teams-hint"},
-		{"--codex-plan-mode", "--status cannot be combined with --codex-plan-mode"},
-		{"--no-codex-plan-mode", "--status cannot be combined with --no-codex-plan-mode"},
 		{"--pr-visualization", "--status cannot be combined with --pr-visualization"},
 		{"--no-pr-visualization", "--status cannot be combined with --no-pr-visualization"},
 		{"--team", "--status cannot be combined with --team"},

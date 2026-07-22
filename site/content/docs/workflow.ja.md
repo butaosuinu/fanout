@@ -13,7 +13,7 @@ fanout の日常は 1 回きりのコマンドではなくループです。
 OPEN な子を持つ親 issue を育て、子を並列ペインにファンアウトし、ペインの作業を眺め、終わった子を畳んで、次のバッチへ再実行します。
 一度に全部を終わらせるのではなく、blocker が解けた子から次々と並列で進める流れです。
 
-1. **issue ツリーを作る。** 親 issue と、それにリンクされた子 issue 群を用意します。同梱の `fanout-issues` skill が計画を fanout-ready な形に変換します([エージェント連携]({{< relref "/docs/agents" >}})を参照)。
+1. **issue ツリーを作る。** 親 issue と、それにリンクされた子 issue 群を用意します。同梱の `fanout-issues` skill が計画を fanout-ready な形に変換します([エージェント連携]({{< relref "/docs/agent-integrations" >}})を参照)。
 2. **ファンアウトする。** `fanout <parent>` が OPEN な子ごとに tmux ペインと git worktree を作り、それぞれで agent CLI を起動します。
 3. **モニタする。** 各ペインの issue と PR の状態を追います([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 4. **merge する。** 完了した子 branch を `--merge <NUM>` で取り込みます。
@@ -108,7 +108,8 @@ fanout plan launch-plan --cleanup
 並列で動く兄弟ペインが同じ interface を触っていると、互いの進捗や決め事を伝え合いたくなります。
 ところが親を複数ペインにファンアウトすると、各子は自分のペインで動く独立した agent セッションになり、既定ではペイン同士は互いを認識できません。
 run ごとに `--team` で opt-in すると、fanout が(best-effort で)各子の通常 briefing に「Coordinating with your sibling panes」節を注入し、per-parent の peer レジストリに seed するので、兄弟がお互いを把握できます。
-`--codex-plan-mode` の子はレジストリには seed されますが最小限の Plan-Mode briefing を受け取るため、協調節は付きません。
+Plan Mode の Codex 子もレジストリに seed されますが、最小限の Plan-Mode briefing を受け取ります。
+Plan Mode が優先され、Codex team bridge は無効になります。
 
 ファンアウトしたペイン内では、`fanout msg` が自分が今どの子(または親)かを自動検出し、per-parent のバス上でやり取りします。
 

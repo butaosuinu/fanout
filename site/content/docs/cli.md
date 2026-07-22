@@ -21,7 +21,6 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
-       [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
@@ -95,7 +94,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--backend` | `<tmux\|herdr>` | Runtime backend for this run. Default: `tmux`. The [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1, so issue and plan launches fail closed before any worktree or state mutation. A parent with recorded panes keeps its recorded backend; a conflicting override fails instead of mixing backends. |
 | `--session` | `<tmux-session>` | Target a named tmux session instead of the invoking pane. fanout itself must still be invoked from inside tmux. |
 | `--sleep` | `<seconds>` | Pause between successful pane creations. Default: `4`. A rate limit between launches, not a retry knob. |
-| `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). `--codex-plan-mode` children are seeded into the registry but receive the minimal Plan-Mode briefing, so the roster section is not added to them. Both effects are best-effort; a registry failure never fails the fan-out — the exception is the app-server bridge startup of a fresh non-Plan `codex` pane, whose in-pane DB setup is fail-fast: a failure there (a bad `FANOUT_DB_PATH`, wrong ownership or permissions) fails that launch. Off by default. |
+| `--team` | — | Opt the run into sibling coordination: append a "Coordinating with your sibling panes" roster section to each child's standard briefing and seed the created panes into the parent's peer registry (the per-parent SQLite bus the [`fanout msg`](#fanout-msg) subcommand reads). Codex children in Plan Mode are seeded but receive the minimal Plan-Mode briefing; Plan Mode takes precedence and disables their Codex team bridge. Both effects are best-effort; a registry failure never fails the fan-out — the exception is the app-server bridge startup of a fresh non-Plan `codex` pane, whose in-pane DB setup is fail-fast: a failure there (a bad `FANOUT_DB_PATH`, wrong ownership or permissions) fails that launch. Off by default. |
 | `--dry-run` | — | Print the git worktree, tmux split-window, and agent launch commands without executing them. It creates no worktrees, panes, state rows, or briefing files. |
 | `--debug` | — | Enable extra diagnostic logging. |
 | `--popup-timeout` | `<seconds>` | Deprecated compatibility flag from the old runtime; accepted but ignored. |
@@ -210,7 +209,7 @@ explicitly skipped.
 
 ## Settings flags
 
-These paired switches toggle fanout's child launch mode, briefing instructions, and tmux keybindings for one run. A CLI flag always wins over the environment-variable and config-file layers. The full resolution order and scope of each setting are documented in [Settings]({{< relref "/docs/settings" >}}).
+These paired switches toggle briefing instructions and tmux keybindings for one run. A CLI flag always wins over the environment-variable and config-file layers. The full resolution order and scope of each setting are documented in [Settings]({{< relref "/docs/settings" >}}).
 
 | Flag | Argument | Description |
 |---|---|---|
@@ -218,7 +217,6 @@ These paired switches toggle fanout's child launch mode, briefing instructions, 
 | `--pr-review-gate` / `--no-pr-review-gate` | — | Keep the default PR review-gate expectation, or add a Claude briefing note allowing `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` if the hook blocks PR creation. Default: on. |
 | `--briefing-code-review` / `--no-briefing-code-review` | — | Include or omit the Claude-only `/code-review` briefing instruction. Default: on. |
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Include or omit the Claude-only Agent Teams hint in child briefings. Default: on. |
-| `--codex-plan-mode` / `--no-codex-plan-mode` | — | Override the resolved `codexPlanMode` setting for a normal issue / Project child fan-out. When enabled, start each Codex child with an app-server Plan Mode thread and attach an interactive Codex TUI instead of positional `codex "<prompt>"`. The launch is recorded after the initial Plan turn is accepted; plan generation and approval waiting have no startup timeout. The built-in default is off. Details and excluded launch paths are in [Agent Integrations]({{< relref "/docs/agents" >}}). |
 | `--pr-visualization` / `--no-pr-visualization` | — | Include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. Default: on. |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | Register (or skip) the tmux `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key after a live fan-out. Default: on. |
 
@@ -242,7 +240,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` is exclusive with all action-bearing flags (`--agent`, `--backend`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--team`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--codex-plan-mode`, `--no-codex-plan-mode`, `--pr-visualization`, `--no-pr-visualization`, `--dashboard-keybind`, `--no-dashboard-keybind`).
+`--status` is exclusive with all action-bearing flags (`--agent`, `--backend`, `--limit`, `--only`, `--skip`, `--include`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--dry-run`, `--unblocked-only`, `--close`, `--merge`, `--cleanup`, `--team`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`, `--no-pr-visualization`, `--dashboard-keybind`, `--no-dashboard-keybind`).
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -408,7 +406,6 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_PR_REVIEW_GATE` | Environment layer for the PR review-gate note (`prReviewGate`). |
 | `FANOUT_BRIEFING_CODE_REVIEW` | Environment layer for the Claude `/code-review` instruction (`briefingCodeReview`). |
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
-| `FANOUT_CODEX_PLAN_MODE` | Environment layer for starting normal issue / Project children in Codex Plan Mode (`codexPlanMode`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
 | `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
 | `FANOUT_CONSOLE_KEYBIND` | Environment layer for the console-return tmux keybindings (`consoleKeybind`). |

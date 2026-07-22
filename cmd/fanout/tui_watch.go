@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
 	livePanes := &watchLivePaneCache{list: tmuxbackend.New().ListLiveForIdentity}
+	watcher := &tuiWatcher{livePanes: livePanes}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
 		CountChildren: func(issue ghissue.Issue) (watch.ChildCounts, error) {
@@ -54,10 +56,14 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		},
 		PaneAlive: livePanes.Alive,
 		LaunchStandalone: func(issue ghissue.Issue) error {
-			return launchWatchStandalone(projectRoot, session, commandName, resolvedSettings, hookConfig, issue)
+			notice, err := launchWatchStandalone(projectRoot, session, commandName, resolvedSettings, hookConfig, issue)
+			watcher.addNotice(notice)
+			return err
 		},
 		LaunchParent: func(issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
-			return launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
+			result, err := launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
+			watcher.addNotice(result.Notice)
+			return result, err
 		},
 		PlanLinkedIssueNums: func(store state.Store) map[int]bool {
 			return panelaunch.PlanLinkedIssueNums(projectRoot, store)
@@ -69,12 +75,14 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		MaxSessions:  resolvedSettings.WatcherMaxSessions,
 	}
 	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
-	return &tuiWatcher{engine: watch.NewEngine(cfg, io), livePanes: livePanes}, interval, resolvedSettings.WatcherTriggerLabel, nil
+	watcher.engine = watch.NewEngine(cfg, io)
+	return watcher, interval, resolvedSettings.WatcherTriggerLabel, nil
 }
 
 type tuiWatcher struct {
 	engine    *watch.Engine
 	livePanes *watchLivePaneCache
+	notices   []string
 }
 
 func (w *tuiWatcher) RunCycle() (watch.Report, error) {
@@ -82,10 +90,20 @@ func (w *tuiWatcher) RunCycle() (watch.Report, error) {
 		return watch.Report{}, fmt.Errorf("watcher is nil")
 	}
 	w.livePanes.Reset()
-	return w.engine.RunCycle()
+	w.notices = nil
+	report, err := w.engine.RunCycle()
+	report.Notices = append(report.Notices, w.notices...)
+	return report, err
 }
 
-func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
+func (w *tuiWatcher) addNotice(notice string) {
+	if w == nil || strings.TrimSpace(notice) == "" || slices.Contains(w.notices, notice) {
+		return
+	}
+	w.notices = append(w.notices, notice)
+}
+
+func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
 	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
 	return launchStandaloneIssuePane(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, issue)
 }
@@ -93,24 +111,24 @@ func launchWatchStandalone(projectRoot, session, commandName string, resolvedSet
 // launchStandaloneIssuePane creates one pane for a single issue with no OPEN
 // children. The watcher and the TUI issue launcher share it; cfg carries the
 // caller's agent selection.
-func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) error {
-	_, err := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, issue)
-	return err
+func launchStandaloneIssuePane(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
+	result, err := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, issue)
+	return result.Notice, err
 }
 
 // launchStandaloneIssuePaneWithResult is the TUI-facing standalone launch
-// path. The watcher keeps the error-only wrapper above so background launches
-// never gain foreground-focus behavior.
-func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
+// path. The watcher keeps the notice-and-error wrapper above so background
+// launches never gain foreground-focus behavior.
+func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (panelaunch.Result, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
-		return "", err
+		return panelaunch.Result{}, err
 	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
-		return "", bufferedLaunchError(stdout, stderr, "load fanout state")
+		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}
 	if recorder != nil {
 		defer func() {
@@ -119,19 +137,20 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	}
 	if rt.VerifyBackend != nil {
 		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
-			return "", fmt.Errorf("runtime backend: %w", err)
+			return panelaunch.Result{}, fmt.Errorf("runtime backend: %w", err)
 		}
 	}
 	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
-		return "", watch.ErrAlreadyFanned
+		return panelaunch.Result{}, watch.ErrAlreadyFanned
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
-		return "", bufferedLaunchError(stdout, stderr, "create watch pane")
+		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
-	return result.PaneID, nil
+	result.Notice = combinedLaunchNotice([]string{result.Notice}, bufferedLaunchNotice(stderr))
+	return result, nil
 }
 
 func launchWatchParent(projectRoot, session, commandName string, resolvedSettings settings.Settings, issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
@@ -144,6 +163,7 @@ func launchWatchParent(projectRoot, session, commandName string, resolvedSetting
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
 	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, nil)
+	result.Watch.Notice = result.Notice
 	return result.Watch, err
 }
 
@@ -182,7 +202,7 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
 	result := parentIssueFanoutResult{
 		CreatedPaneIDs: execution.CreatedPaneIDs,
-		Notice:         bufferedLaunchNotice(stderr),
+		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
 		runtimeBackend: rt.Backend,
 	}
 	if code != exitcode.OK {
@@ -193,13 +213,12 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {
-	codexPlanMode := false
 	return &cliflags.Config{
 		Parent:          parent,
 		ParentRef:       strconv.Itoa(parent),
 		ParentMode:      cliflags.ModeIssue,
 		Agent:           watcherAgent(resolvedSettings),
-		PlanMode:        &codexPlanMode,
+		PlanMode:        new(resolvedSettings.ChildPlanMode),
 		Limit:           limit,
 		SleepBetween:    cliflags.DefaultSleepBetween,
 		PopupTimeoutSec: cliflags.DefaultPopupTimeout,

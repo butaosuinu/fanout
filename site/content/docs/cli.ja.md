@@ -21,7 +21,6 @@ fanout <parent-issue|project-url>
        [--auto-pr|--no-auto-pr] [--pr-review-gate|--no-pr-review-gate]
        [--briefing-code-review|--no-briefing-code-review]
        [--agent-teams-hint|--no-agent-teams-hint]
-       [--codex-plan-mode|--no-codex-plan-mode]
        [--pr-visualization|--no-pr-visualization]
        [--dashboard-keybind|--no-dashboard-keybind]
        [--team]
@@ -95,7 +94,7 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用で、issue / plan の launch は worktree や state の変更前に fail closed する。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
-| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。`--codex-plan-mode` の子はレジストリには seed されるが最小限の Plan-Mode briefing を受け取るため、roster 節は付かない。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。既定: off。 |
+| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。Plan Mode の Codex 子は seed されるが最小限の Plan-Mode briefing を受け取る。Plan Mode が優先され、Codex team bridge は無効になる。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。既定: off。 |
 | `--dry-run` | — | git worktree、tmux split-window、agent 起動のコマンド列を実行せずに表示する。worktree、ペイン、state row、briefing file は作らない。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
 | `--popup-timeout` | `<seconds>` | 旧ランタイム互換の deprecated フラグ。受理されるが無視される。 |
@@ -209,7 +208,7 @@ agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Cla
 
 ## settings 系フラグ
 
-これらのペアになったスイッチは、子の起動モード、briefing の指示、tmux キーバインドをその run だけ切り替えます。
+これらのペアになったスイッチは、briefing の指示と tmux キーバインドをその run だけ切り替えます。
 CLI flag は常に環境変数や設定ファイルのレイヤより優先されます。
 各設定の適用範囲と解決順序は [Settings]({{< relref "/docs/settings" >}}) を参照してください。
 
@@ -219,7 +218,6 @@ CLI flag は常に環境変数や設定ファイルのレイヤより優先さ�
 | `--pr-review-gate` / `--no-pr-review-gate` | — | 既定の PR レビューゲート前提を維持するか、hook が PR 作成をブロックした場合に `FANOUT_SKIP_PR_REVIEW=1 gh pr create ...` を許可する注記を Claude briefing に加えるか。既定: on。 |
 | `--briefing-code-review` / `--no-briefing-code-review` | — | Claude 専用の `/code-review` briefing 指示を含めるか外すか。既定: on。 |
 | `--agent-teams-hint` / `--no-agent-teams-hint` | — | Claude 専用の Agent Teams ヒントを子 briefing に含めるか外すか。既定: on。 |
-| `--codex-plan-mode` / `--no-codex-plan-mode` | — | 通常の issue / Project の子 fan-out について、解決済みの `codexPlanMode` 設定を上書きする。有効時は、positional の `codex "<prompt>"` ではなく app-server で各 Codex child の Plan Mode thread を作成し、interactive Codex TUI を接続する。初期 Plan turn の受理後に launch を記録し、plan 生成と承認待ちには startup timeout を設けない。ビルトイン既定値: off。詳細と対象外の起動経路は[エージェント連携]({{< relref "/docs/agents" >}})。 |
 | `--pr-visualization` / `--no-pr-visualization` | — | auto-PR の子 briefing に構造化 PR 本文とゲート付き Mermaid の指示を含めるか外すか。既定: on。 |
 | `--dashboard-keybind` / `--no-dashboard-keybind` | — | ライブ fan-out 後に tmux の `F12` / `prefix + D` ダッシュボードキーと `prefix + M` 同一 worktree 操作キーを登録する（またはスキップする）。既定: on。 |
 
@@ -243,7 +241,7 @@ fanout 123 --status --format table
 fanout 123 --status --post-dashboard
 ```
 
-`--status` はすべての action 系フラグ（`--agent`、`--backend`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--codex-plan-mode`、`--no-codex-plan-mode`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
+`--status` はすべての action 系フラグ（`--agent`、`--backend`、`--limit`、`--only`、`--skip`、`--include`、`--name`、`--base-branch`、`--branch-prefix`、`--no-refresh`、`--session`、`--sleep`、`--popup-timeout`、`--dry-run`、`--unblocked-only`、`--close`、`--merge`、`--cleanup`、`--team`、`--auto-pr`、`--no-auto-pr`、`--pr-review-gate`、`--no-pr-review-gate`、`--briefing-code-review`、`--no-briefing-code-review`、`--agent-teams-hint`、`--no-agent-teams-hint`、`--pr-visualization`、`--no-pr-visualization`、`--dashboard-keybind`、`--no-dashboard-keybind`）と排他です。
 
 ### `--merge` / `--close` / `--cleanup`
 
@@ -414,7 +412,6 @@ fanout check-update
 | `FANOUT_PR_REVIEW_GATE` | PR レビューゲート注記（`prReviewGate`）の環境変数レイヤ。 |
 | `FANOUT_BRIEFING_CODE_REVIEW` | Claude `/code-review` 指示（`briefingCodeReview`）の環境変数レイヤ。 |
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
-| `FANOUT_CODEX_PLAN_MODE` | 通常の issue / Project の子を Codex Plan Mode で起動する設定（`codexPlanMode`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
 | `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |

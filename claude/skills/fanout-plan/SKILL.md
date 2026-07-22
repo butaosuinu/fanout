@@ -153,8 +153,8 @@ blockers are complete. Omit it only when the user explicitly asks to launch all
 waves together.
 
 Do not forward issue/project-mode-only flags to `fanout plan`: `--include`,
-`--name`, `--project-status`, `--post-dashboard`, `--popup-timeout`, or
-`--codex-plan-mode`. Names belong in the spec (`slug`, `display_name`,
+`--name`, `--project-status`, `--post-dashboard`, or `--popup-timeout`.
+Names belong in the spec (`slug`, `display_name`,
 `branch`), and dependencies belong in `blocked_by`.
 
 `--team` is supported in plan mode (see "Sibling coordination" below); it is

@@ -189,9 +189,9 @@ func quoteAsData(s string) []string {
 // RenderTask produces an issue-less task brief. The task variant deliberately
 // avoids GitHub issue closing references because there is no issue to close.
 // team is nil unless the run opted in with --team.
-func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch string, s settings.Settings, team *TeamContext) string {
+func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch string, s settings.Settings, planMode bool, team *TeamContext) string {
 	footer := taskPRFooter(planSlug, taskID)
-	return renderWorkBriefing(workBriefing{
+	work := workBriefing{
 		header:                     fmt.Sprintf("You are assigned task \"%s\" of plan \"%s\" (plan:%s) in this repository.", taskID, planTitle, planSlug),
 		title:                      title,
 		body:                       body,
@@ -204,7 +204,20 @@ func RenderTask(planSlug, planTitle, taskID, title, body, agentName, baseBranch 
 		settings:                   s,
 		team:                       team,
 		teamTaskID:                 taskID,
-	})
+	}
+	if !planMode {
+		return renderWorkBriefing(work)
+	}
+	if agentName == "codex" {
+		work.team = nil
+		return renderCodexPlanBriefingWithHeader(
+			fmt.Sprintf("You are assigned task \"%s\" of plan \"%s\" (plan:%s) in this repository.", taskID, planTitle, planSlug),
+			title,
+			body,
+			"- Before presenting a plan, inspect the task, relevant repository files, and documentation. Do not modify files, create commits, push branches, or open pull requests until the plan is approved.",
+		) + "\nImplementation requirements after plan approval:\n\n" + renderWorkBriefing(work)
+	}
+	return renderNativePlanBriefing(agentName) + renderWorkBriefing(work)
 }
 
 type workBriefing struct {
@@ -316,7 +329,7 @@ func renderCodexPlanBriefing(num int, title, body string) string {
 }
 
 func renderNativePlanBriefing(agentName string) string {
-	return fmt.Sprintf(`You are starting this issue in %s plan mode through fanout.
+	return fmt.Sprintf(`You are starting this work item in %s plan mode through fanout.
 
 Before implementation:
 - Inspect the issue and relevant repository files and docs.

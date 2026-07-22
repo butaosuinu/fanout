@@ -573,6 +573,15 @@ func appendUniqueNotice(notices []string, notice string) []string {
 	return append(notices, notice)
 }
 
+func combinedLaunchNotice(notices []string, extra string) string {
+	combined := make([]string, 0, len(notices)+1)
+	for _, notice := range notices {
+		combined = appendUniqueNotice(combined, strings.TrimSpace(notice))
+	}
+	combined = appendUniqueNotice(combined, strings.TrimSpace(extra))
+	return strings.Join(combined, "; ")
+}
+
 // newSessionConfigForTUIAgent resolves settings at launch time so a value saved
 // from the running TUI applies to the next manual, attach, or plan coordinator.
 func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.WarnFunc) *cliflags.Config {

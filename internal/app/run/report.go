@@ -92,14 +92,13 @@ func printSummary(plan Plan, result executionResult, cfg *cliflags.Config, lg *l
 		if cfg.ParentMode == cliflags.ModeProject && cfg.ProjectStatus != cliflags.DefaultProjectStatus {
 			statusFlag = optFlag("--project-status", cfg.ProjectStatus)
 		}
-		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s%s%s%s\n",
+		fmt.Fprintf(lg.Stdout(), "  %s %s%s --include %s --only %s%s%s%s%s%s%s%s%s\n",
 			ShellQuote(commandName), ShellQuote(cfg.ParentRef),
 			statusFlag,
 			ShellQuote(deferredCSV),
 			ShellQuote(deferredCSV),
 			boolFlag(" --unblocked-only", cfg.UnblockedOnly),
 			boolFlag(" --team", cfg.Team),
-			codexPlanModeFlag(cfg),
 			settingsFlags(cfg),
 			worktreeFlags(cfg),
 			nameFlagsFor(cfg, plan.LimitDeferred),
@@ -129,16 +128,6 @@ func boolFlag(flagWithLeadSpace string, on bool) string {
 		return flagWithLeadSpace
 	}
 	return ""
-}
-
-func codexPlanModeFlag(cfg *cliflags.Config) string {
-	if cfg.PlanMode == nil {
-		return ""
-	}
-	if *cfg.PlanMode {
-		return " --codex-plan-mode"
-	}
-	return " --no-codex-plan-mode"
 }
 
 func settingsFlags(cfg *cliflags.Config) string {

@@ -132,7 +132,7 @@ When any task has `blocked_by`, add `--unblocked-only` by default. Omit it only
 when the user explicitly requests all waves at once.
 
 Do not forward issue/Project-only `--include`, `--name`, `--project-status`,
-`--post-dashboard`, `--popup-timeout`, or `--codex-plan-mode`. Treat
+`--post-dashboard`, or `--popup-timeout`. Treat
 user-facing `--go` as a wrapper instruction and strip it before invoking the
 CLI.
 

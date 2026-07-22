@@ -10,16 +10,50 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestNewWatchLaunchConfigDisablesResolvedPlanMode(t *testing.T) {
+func TestNewWatchLaunchConfigUsesResolvedChildPlanMode(t *testing.T) {
 	resolved := settings.Defaults()
-	resolved.CodexPlanMode = true
+	resolved.ChildPlanMode = true
 
 	cfg := newWatchLaunchConfig(resolved, 123, 2)
 
-	if cfg.PlanMode == nil || *cfg.PlanMode {
-		t.Fatalf("PlanMode = %v, want explicit false watcher override", cfg.PlanMode)
+	if cfg.PlanMode == nil || !*cfg.PlanMode {
+		t.Fatalf("PlanMode = %v, want child Plan Mode watcher override", cfg.PlanMode)
+	}
+}
+
+func TestLaunchStandaloneIssuePaneReportsClaudeModeFallback(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	installTUITmuxShim(t, "%91")
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = true
+	cfg := newWatchLaunchConfig(resolved, 425, 0)
+	result, err := launchStandaloneIssuePaneWithResult(repo, "fanout-test", "fanout", cfg, resolved, hooks.EmptyConfig(), ghissue.Issue{
+		Number: 425,
+		Title:  "standalone",
+		Body:   "body",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Notice, "Claude Code 2.1.207+ is required for explicit plan mode") {
+		t.Fatalf("notice = %q, want Claude Plan Mode fallback warning", result.Notice)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(store.Panes) != 1 || store.Panes[0].PlanMode {
+		t.Fatalf("state panes = %+v, want one effective non-plan standalone pane", store.Panes)
 	}
 }
 

@@ -175,7 +175,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	}
 	cfg := tuiIssueLaunchConfig(issueNum, defaultAgent, overrides)
 	if openChildren == 0 {
-		paneID, launchErr := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, detail)
+		launchResult, launchErr := launchStandaloneIssuePaneWithResult(projectRoot, session, commandName, cfg, resolvedSettings, hookConfig, detail)
 		if launchErr != nil {
 			if errors.Is(launchErr, watch.ErrAlreadyFanned) {
 				return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d already has a fanout pane", issueNum)
@@ -183,8 +183,8 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return fanouttui.LaunchResult{}, launchErr
 		}
 		return fanouttui.LaunchResult{
-			Notice:         fmt.Sprintf("started session for #%d", issueNum),
-			CreatedPaneIDs: []string{paneID},
+			Notice:         combinedLaunchNotice([]string{fmt.Sprintf("started session for #%d", issueNum)}, launchResult.Notice),
+			CreatedPaneIDs: []string{launchResult.PaneID},
 		}, nil
 	}
 	var orchestratorReq panelaunch.Request

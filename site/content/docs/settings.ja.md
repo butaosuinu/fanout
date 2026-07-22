@@ -1,16 +1,14 @@
 ---
 title: 設定
 linkTitle: 設定
-description: "子の起動と briefing のトグル、watcher 制御、TUI 通知 channel と、それらを flag > env > repo > user > default の順で解決する仕組み。"
+description: "briefing のトグル、watcher 制御、TUI 通知 channel と設定の解決順。"
 weight: 70
 kanji: 整
 yomi: settings
 ---
 
-fanout の挙動はチームの好みで変えたくなる箇所がいくつかあります。
-通常の Codex の子を Plan Mode で起動するか、子に自動で PR を作らせるか、watcher を回すか、状態遷移をどこへ通知するか。
-これらは子の起動と briefing のトグル、tmux キーバインド、watcher 制御、TUI 通知 channel として同じ設定スタックで解決します。
-Codex Plan Mode と watcher の既定値は off、briefing とキーバインドの bool 既定値は `true`、通知の既定値は `bell` です。
+fanout settings は、子 briefing の指示、watcher、tmux キーバインド、通知を制御します。
+watcher は off、briefing とキーバインドの bool は `true`、通知は `bell` が既定です。
 
 ## 解決順序
 
@@ -27,20 +25,17 @@ Target 行で user config と repo config を切り替えます。
 
 popup が編集するのは config ファイルだけです。
 CLI flag と `FANOUT_*` 環境変数は、保存した値より引き続き優先されます。
-`codexPlanMode` は user config と repo config のどちらでも編集できます。
-repo config の安全制限も後述のとおりです。repo config から watcher は有効化できず、HTTP 通知 URL も `runtimeBackend` も設定できません。`notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
+repo config から watcher は変更できず、HTTP 通知 URL と `runtimeBackend` も設定できません。
+`notifications` に指定できるのは `bell`、`tmux`、`none` だけです。
 
 ## 各トグルの目的
 
-挙動トグルは子の起動モード、briefing の指示、tmux キーバインドを制御します。
+挙動トグルは briefing の指示と tmux キーバインドを制御します。
 
 - `autoPullRequest`: 子に作業完了後の PR 自動作成を指示します。PR を人手で作るチームなら外します。
 - `prReviewGate`: 既定の on では PR レビューゲートの前提を保ちます。off にすると、PR 作成 hook に止められたときに `FANOUT_SKIP_PR_REVIEW=1 gh pr create` を許可する注記が Claude の子 briefing に入ります（後述）。
 - `briefingCodeReview`: Claude の子に、コミット前に変更へ `/code-review` スラッシュコマンドを走らせるよう指示します。
 - `agentTeamsHint`: Claude の子に Claude Code Agent Teams を使う余地があると伝えます。Claude 以外の子には影響しません。
-- `codexPlanMode`: 通常の issue / Project fan-out の子を interactive な Codex Plan Mode セッションとして起動します。
-  選択された子はすべて `codex` に解決される必要があり、agent が混在する run はペイン作成前に失敗します。
-  この設定が効く起動経路と無視する経路は[エージェント連携]({{< relref "/docs/agents#codex-plan-mode" >}})にまとめています。
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
@@ -66,7 +61,6 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | PR レビューゲート通知 | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` 指示 | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams ヒント | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
-| issue / Project の子を Codex Plan Mode で起動 | `codexPlanMode` | `FANOUT_CODEX_PLAN_MODE` | `--codex-plan-mode` / `--no-codex-plan-mode` | `false` |
 | 構造化 PR 本文とゲート付き Mermaid の briefing 指示 | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | ダッシュボード / 同一 worktree 操作 tmux キーバインド | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | コンソール復帰 tmux キーバインド | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
@@ -81,7 +75,7 @@ watcher はラベル巡回による自動起動を opt-in で制御します。
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | 未設定 |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | 未設定 |
 
-これらの flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています。
+flag ペアは [CLI リファレンス]({{< relref "/docs/cli" >}})にも載っています。
 watcher と通知設定に CLI flag はありません。
 
 ## config.json サンプル
@@ -94,7 +88,6 @@ watcher と通知設定に CLI flag はありません。
   "prReviewGate": true,
   "briefingCodeReview": true,
   "agentTeamsHint": false,
-  "codexPlanMode": false,
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,

@@ -82,7 +82,7 @@ load helpers
   [[ "$output" == *"Usage: fanout"* ]]
   [[ "$output" == *"plan                Subcommand."* ]]
   [[ "$output" == *"update              Subcommand."* ]]
-  [[ "$output" == *"--codex-plan-mode / --no-codex-plan-mode"* ]]
+  [[ "$output" != *"--codex-plan-mode"* ]]
   [[ "$output" == *"Exit codes (update):"* ]]
   [[ "$output" == *"1 prerequisite / environment problem, or missing option value"* ]]
   [[ "$output" == *"2 unknown option, unexpected argument, or cannot compare version strings"* ]]
@@ -670,28 +670,41 @@ JSON
   [[ "$output" != *"agent is required"* ]]
 }
 
-@test "--codex-plan-mode starts claude children with permission plan" {
-	use_fixture scenario-sub-issue-only
-	run_fanout 100 --agent claude --codex-plan-mode --dry-run
-	assert_success
-	[[ "$output" == *"claude --settings"* ]]
-	[[ "$output" == *"--permission-mode plan"* ]]
+@test "removed codex plan mode flags are unknown options" {
+  for flag in --codex-plan-mode --no-codex-plan-mode; do
+    run_fanout 100 "$flag"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"unknown option: $flag"* ]]
+  done
 }
 
-@test "--codex-plan-mode supports a non-codex per-issue override" {
+@test "FANOUT_CHILD_PLAN_MODE applies plan mode to a non-codex child" {
 	use_fixture scenario-sub-issue-only
-	run_fanout 100 --agent codex --agent 101=claude --codex-plan-mode --dry-run
-	assert_success
-	[[ "$output" == *"--permission-mode plan"* ]]
-	[[ "$output" == *"__codex-plan-tui"* ]]
-}
-
-@test "FANOUT_CODEX_PLAN_MODE applies plan mode to a non-codex child" {
-	use_fixture scenario-sub-issue-only
-	export FANOUT_CODEX_PLAN_MODE=1
+	export FANOUT_CHILD_PLAN_MODE=1
 	run_fanout 100 --agent opencode --dry-run
 	assert_success
 	[[ "$output" == *"opencode --agent plan --prompt"* ]]
+}
+
+@test "legacy codexPlanMode config warns with migration keys and is ignored" {
+  use_fixture scenario-sub-issue-only
+  mkdir -p "$XDG_CONFIG_HOME/fanout"
+  printf '%s\n' '{"codexPlanMode":true}' > "$XDG_CONFIG_HOME/fanout/config.json"
+  run_fanout 100 --agent codex --dry-run
+  assert_success
+  [[ "$output" == *"codexPlanMode is deprecated and ignored"* ]]
+  [[ "$output" == *"newSessionPlanMode, orchestratorPlanMode, and childPlanMode"* ]]
+  [[ "$output" != *"__codex-plan-tui"* ]]
+}
+
+@test "legacy FANOUT_CODEX_PLAN_MODE warns with migration envs and is ignored" {
+	use_fixture scenario-sub-issue-only
+	export FANOUT_CODEX_PLAN_MODE=1
+	run_fanout 100 --agent codex --dry-run
+	assert_success
+  [[ "$output" == *"FANOUT_CODEX_PLAN_MODE is deprecated and ignored"* ]]
+  [[ "$output" == *"FANOUT_NEW_SESSION_PLAN_MODE, FANOUT_ORCHESTRATOR_PLAN_MODE, and FANOUT_CHILD_PLAN_MODE"* ]]
+  [[ "$output" != *"__codex-plan-tui"* ]]
 }
 
 @test "--agent opencode accepted: dry-run routes the prompt through --prompt" {
@@ -719,7 +732,7 @@ JSON
   use_fixture scenario-plan-basic
   run_fanout plan "$FIXTURE_DIR/plan.json" --agent claude --agent base-types=opencode --dry-run --sleep 0
   assert_success
-  [[ "$output" == *"opencode --prompt"* ]]
+  [[ "$output" == *"opencode --agent build --prompt"* ]]
 }
 
 @test "unknown agent error lists opencode as supported: exit 1" {
@@ -856,10 +869,10 @@ JSON
   [[ "$output" == *"--status cannot be combined with --dry-run"* ]]
 }
 
-@test "--status conflicts with --codex-plan-mode: exit 2" {
+@test "--status rejects removed --codex-plan-mode as unknown: exit 2" {
   run_fanout --status 1 --codex-plan-mode
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--status cannot be combined with --codex-plan-mode"* ]]
+  [[ "$output" == *"unknown option: --codex-plan-mode"* ]]
 }
 
 @test "--status conflicts with --unblocked-only: exit 2" {

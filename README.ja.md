@@ -110,8 +110,9 @@ worktree ペインは agent CLI を resume して作り直します。最初の�
 `--team` を付けた run は兄弟ペインメッセージングにオプトインします。各子の
 briefing に協調セクションが加わり、ペインは parent ごとの SQLite バスに登録
 されて、`fanout msg` の verb(`peers` / `inbox` / `board` / `send` / `post` /
-`nudge`)で読み書きします。Codex Plan Mode の子は最小の Plan briefing のまま
-協調セクションが付きませんが、登録はされます。メッセージはバスに永続化され、
+`nudge`)で読み書きします。Plan Mode の Codex 子は最小の Plan briefing のまま
+協調セクションが付きませんが、登録はされます。Plan Mode が優先され、Codex
+team bridge は無効になります。メッセージはバスに永続化され、
 各ペインが自分のチェックポイントで読みます。`claude` ペインと新規起動の非 Plan `codex`
 ペインには、新着をそのまま届ける push レーンも載ります。push レーンの仕組み、
 フォールバック、失敗時の回収は

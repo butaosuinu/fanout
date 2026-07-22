@@ -11,7 +11,7 @@
   branch -> fanout/first-child-101
   base -> main
   plan-mode -> opencode --agent plan
-  briefing size: 2973 bytes
+  briefing size: 2977 bytes
   plan-mode -> opencode --agent plan
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation
@@ -37,7 +37,7 @@
   branch -> fanout/second-child-102
   base -> main
   plan-mode -> opencode --agent plan
-  briefing size: 2974 bytes
+  briefing size: 2978 bytes
   plan-mode -> opencode --agent plan
     $ git -C <REPO>/tests/fixtures/scenario-sub-issue-only/project_root fetch --quiet --no-tags origin main
     # may fast-forward the local base before worktree creation

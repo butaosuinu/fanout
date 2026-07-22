@@ -1,8 +1,9 @@
 ---
 title: Agent Integrations
 linkTitle: Agent Integrations
-description: "The supported agents compared, bundled skills for Claude Code and Codex, the /fanout slash command, Codex Plan Mode, and OpenCode."
+description: "The supported agents compared, bundled skills for Claude Code and Codex, the /fanout slash command, and OpenCode."
 weight: 80
+slug: agents
 kanji: 連
 yomi: agents
 ---
@@ -15,7 +16,6 @@ fanout can start a child pane with any of three agent CLIs. The fan-out mechanic
 |---|---|---|---|
 | `--agent` name | `claude` | `codex` | `opencode` |
 | Bundled skills | `/fanout` + skills | `$fanout` + skills | none |
-| Codex Plan Mode (`codexPlanMode`) | — | ✓ | — |
 | `--team` push delivery | ✓ `fanout msg watch` under the Monitor tool | ✓ fresh non-Plan sessions (app-server bridge) | — (pull only) |
 | `fanout msg nudge` | ✓ | ✓ | — (skipped) |
 | Briefing sections | base + Claude-specific | base + Codex-specific | base + generic validation |
@@ -71,20 +71,6 @@ The gate protects its own trust boundary. Before spawning, a marker helper prove
 The subagent inherits the parent session's sandbox and approval policy; when enforced read-only access is required, start Codex itself read-only. A dirty worktree gets a review-only pass that never writes the PR-gate marker — commit the candidate and rerun. On a clean committed branch, the skill runs the repository's canonical validation once and records the exact HEAD, PR base, and diff hash; a later commit, base movement, or diff change invalidates the marker.
 
 `$pr-watch` runs in the foreground, suppresses unchanged snapshots, and stores its cursor in Git metadata, including in linked worktrees. No background watcher outlives the Codex session.
-
-## Codex Plan Mode
-
-Normal issue / Project child fan-outs resolve the `codexPlanMode` setting before launch. Set it in user or repo config, use `FANOUT_CODEX_PLAN_MODE`, or override it for one CLI run with `--codex-plan-mode` / `--no-codex-plan-mode`. The built-in default is `false`; the usual CLI > env > repo > user > default precedence applies. The TUI settings popup exposes the same key in its Launch group.
-
-```bash
-fanout 123 --agent codex --codex-plan-mode
-```
-
-Plan Mode children launch as an interactive Codex TUI, investigate relevant context, and present the implementation plan wrapped in `<proposed_plan>`. That turn does not edit files, commit, push, or open a PR. The pane remains in the Plan Mode conversation, so you can continue from there.
-
-The setting covers ordinary CLI issue / Project fan-outs and TUI Issue mode when the selected issue has OPEN children. Every selected child must resolve to `codex`: mixing in a `claude` child fails before any pane is created.
-
-Watcher launches, childless-issue standalone panes, `fanout plan` tasks, and plan coordinators ignore this setting. Manual and attached `codex` panes already start in Plan Mode regardless of it; their `claude` counterparts start normally.
 
 ## OpenCode
 

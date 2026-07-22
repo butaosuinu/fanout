@@ -102,6 +102,21 @@ func TeamStatusPath(projectRoot, member string, dryRun bool) string {
 func StatusPath(projectRoot string, issueNum int, dryRun bool) string {
 	repo := safeCodexPlanTempPart(filepath.Base(projectRoot))
 	base := fmt.Sprintf("fanout-codex-plan-%s-%d", repo, issueNum)
+	return uniqueStatusPath(base, dryRun)
+}
+
+// TaskStatusPath derives a distinct /tmp status file path for one issue-less
+// plan task. Task panes all have numeric issue zero, so the plan and task ids
+// provide the stable dry-run identity instead.
+func TaskStatusPath(projectRoot, planSlug, taskID string, dryRun bool) string {
+	repo := safeCodexPlanTempPart(filepath.Base(projectRoot))
+	plan := safeCodexPlanTempPart(planSlug)
+	task := safeCodexPlanTempPart(taskID)
+	base := fmt.Sprintf("fanout-codex-plan-%s-%s-%s", repo, plan, task)
+	return uniqueStatusPath(base, dryRun)
+}
+
+func uniqueStatusPath(base string, dryRun bool) string {
 	if dryRun {
 		return filepath.Join("/tmp", base+".json")
 	}
