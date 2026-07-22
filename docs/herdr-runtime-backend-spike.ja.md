@@ -1629,7 +1629,7 @@ pane.wait_for_output:
 `session.snapshot`、`server.stop`、`agent.list` は空 params を使う。
 `plugin.list` は required field がなく、optional `plugin_id` を持つ。
 `agent.read` は `target` と `source`、`pane.read` は `pane_id` と `source` を必須にする。
-fanout は rename request で non-null `name`、no-wait prompt で `wait` の省略または null、launcher token 用 `pane run` の backing request で exact token の `text` と `keys:["Enter"]` を送る。
+fanout は rename request で non-null `name`、no-wait prompt で `wait` を省略し、launcher token 用 `pane run` の backing request で exact token の `text` と `keys:["enter"]` を送る。
 selected method ごとに fanout が送受信する field path とその type、ref、enum、const、`required` membership を検査する。
 未使用の optional field、未知の追加 field、追加 method は拒否理由にしない。
 
@@ -1712,7 +1712,7 @@ version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releas
 
 ## 後続 issue への契約
 
-#423、#425 から #429、#494、#526 から #529、#532、#552、#554、#568 は次の制約を前提にする。
+#423、#425 から #429、#494、#526 から #529、#532、#544、#552、#554、#568 は次の制約を前提にする。
 
 判断主体はユーザー、tmux-parity tier の判断日は 2026-07-21 JST、floor 0.7.5 の改訂日は 2026-07-22 JST である。
 herdr backend は tmux backend と同水準の協調プロセス信頼を採用し、private socket が同一 UID の認証境界にならない実測を受容したうえで、影響範囲を fanout-owned session へ封じ込める。
@@ -1894,8 +1894,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   verifier は unknown field / duplicate key / non-canonical encoding を拒否し、outer manifest、runtime entry の全 record、実 tree の完全一致を調べる。
   outer manifest の identity / size / SHA-256 と root identity は payload 外の journal / runtime identity として保存する。
   executable は 0500、data / script / manifest は 0400、directory は 0500 とし、publish 後の tree 全体へ `UF_IMMUTABLE` を設定して再検査する。
-Herdr / fanout / hook emitter は session bundle、console / agent / controller と依存 closure は operation bundle に入れる。
-workload env capsule、raw env value、capsule key / path / file identity は session / operation bundle、outer manifest、`bundle_payload`、bundle digest に含めない。
+  Herdr / fanout / hook emitter は session bundle、console / agent / controller と依存 closure は operation bundle に入れる。
+  workload env capsule、raw env value、capsule key / path / file identity は session / operation bundle、outer manifest、`bundle_payload`、bundle digest に含めない。
   platform が exclusive publish、immutable seal、bundle filesystem 上の executable 起動を満たさない場合は mutation 前に fail closed にする。
   shared registry / store lock 下で rename 前に digest、manifest、staging path / root identity、deterministic final path、両 namespace pre-state、exact request を `bundle-publish-starting` へ保存する。
   staging exact / final absent は rename 非発生、staging absent / final exact は rename 済みとして回復し、他の namespace / identity 状態は fail closed にする。
@@ -1903,8 +1903,8 @@ workload env capsule、raw env value、capsule key / path / file identity は se
   operation bundle は phase `ready` と最初の intent reference、session bundle は phase `ready` と provisional session-bootstrap owner の正式 reference を同じ state save で確定した後だけ既存 digest の再利用を許可する。
   seal の部分適用は exact manifest / identity の entry に限って idempotent に補い、完成不能な journaled root は deterministic quarantine を先行保存して GC namespace protocol へ移す。
   journal のない final path、unexpected entry、identity 不一致は自動操作しない。
-active intent、final row、registry の session-bootstrap owner / active epoch が ready bundle reference を保持し、external owner marker は単独で reference を保持しない。
-env capsule は bundle reference / GC から独立した active inventory と disposal journal を持ち、active capsule を bundle GC の可否または bundle content に数えない。
+  active intent、final row、registry の session-bootstrap owner / active epoch が ready bundle reference を保持し、external owner marker は単独で reference を保持しない。
+  env capsule は bundle reference / GC から独立した active inventory と disposal journal を持ち、active capsule を bundle GC の可否または bundle content に数えない。
   GC は active reference、session-bootstrap / server-restart journal、bootstrap / restart operation lock、bundle-bound live process のない ready digest、または build owner takeover CAS を完了した incomplete build / publish だけを処理する。
   ready GC は専用 GC operation lock を取得してから registry / store lock 下で `gc-planned` と PID / start token / owner nonce / generation / lock identity / expiry を保存し、incomplete GC は takeover 済み build lock と owner tuple を同じ save で GC へ移譲する。
   GC recovery は expired owner の operation lock、PID / start token の不在、owner generation と namespace identity の CAS を通し、terminal save まで同じ lock を保持する。
