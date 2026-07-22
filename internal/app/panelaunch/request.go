@@ -172,7 +172,7 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 	briefingPath := ""
 	briefingBody := ""
 	launchMode := launchModeFromPlanFlag(cfg)
-	if launchMode == agent.ModePlan {
+	if launchMode == agent.ModePlan && agentName == "codex" {
 		body := opts.Body
 		if strings.TrimSpace(body) == "" {
 			body = prompt
@@ -248,7 +248,7 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	briefingBody := ""
 	launchMode := launchModeFromPlanFlag(cfg)
 	switch {
-	case launchMode == agent.ModePlan:
+	case launchMode == agent.ModePlan && agentName == "codex":
 		planPrompt := briefing.RenderManualPlan(title, body)
 		if oversized {
 			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
@@ -455,13 +455,13 @@ func issueLaunchMode(cfg *cliflags.Config) agent.LaunchMode {
 	return agent.ModeBuild
 }
 
-// launchModeFromPlanFlag preserves the existing Codex Plan Mode manual and
-// attach paths without making their non-plan launches explicit yet.
+// launchModeFromPlanFlag makes both new-session postures explicit for manual
+// and attached panes.
 func launchModeFromPlanFlag(cfg *cliflags.Config) agent.LaunchMode {
 	if cfg.PlanModeEnabled() {
 		return agent.ModePlan
 	}
-	return ""
+	return agent.ModeBuild
 }
 
 func taskOneLinePrompt(planSlug string, req Request) string {

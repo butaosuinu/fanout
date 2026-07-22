@@ -275,8 +275,8 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	if req.Agent != "codex" || !strings.Contains(req.Prompt, "inspect the workspace") {
 		t.Fatalf("manual launch = prompt %q agent %q", req.Prompt, req.Agent)
 	}
-	if req.LaunchMode != "" {
-		t.Fatalf("manual LaunchMode = %q, want flag-free non-plan launch", req.LaunchMode)
+	if req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("manual LaunchMode = %q, want explicit build launch", req.LaunchMode)
 	}
 	wantBriefingPath := briefing.Path("/repo", -2)
 	if req.BriefingPath != wantBriefingPath || req.BriefingBody != "extra context" {
@@ -421,6 +421,58 @@ func TestNewManualRequestPlanModePreservesMultilinePrompt(t *testing.T) {
 	}
 }
 
+func TestNewManualRequestUsesAgentIndependentBriefingAndExplicitModes(t *testing.T) {
+	const body = "Inspect API\n\nCheck handlers"
+	tests := []struct {
+		name     string
+		agent    string
+		planMode bool
+		wantArg  string
+	}{
+		{name: "claude plan", agent: "claude", planMode: true, wantArg: "--permission-mode plan"},
+		{name: "claude build", agent: "claude", wantArg: "--permission-mode auto"},
+		{name: "opencode plan", agent: "opencode", planMode: true, wantArg: "--agent plan"},
+		{name: "opencode build", agent: "opencode", wantArg: "--agent build"},
+		{name: "codex build", agent: "codex", wantArg: "codex"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &cliflags.Config{Agent: tt.agent, DryRun: true, PlanMode: &tt.planMode}
+			req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
+				Title:  "Inspect API",
+				Body:   body,
+				Agent:  tt.agent,
+				Prompt: "Inspect API",
+			})
+
+			wantMode := agent.ModeBuild
+			if tt.planMode {
+				wantMode = agent.ModePlan
+			}
+			if req.LaunchMode != wantMode {
+				t.Fatalf("LaunchMode = %q, want %q", req.LaunchMode, wantMode)
+			}
+			if req.BriefingBody != body || !strings.Contains(req.Prompt, req.BriefingPath) {
+				t.Fatalf("manual briefing = path %q body %q prompt %q, want ordinary briefing", req.BriefingPath, req.BriefingBody, req.Prompt)
+			}
+			if strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>") || strings.Contains(req.Prompt, "<proposed_plan>...</proposed_plan>") {
+				t.Fatalf("non-Codex-plan request contains Codex plan contract: prompt %q body %q", req.Prompt, req.BriefingBody)
+			}
+			command, err := buildAgentCommand(cfg, req, "fanout-go")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(command, tt.wantArg) {
+				t.Fatalf("command = %q, want %q", command, tt.wantArg)
+			}
+			if strings.Contains(command, codexapp.PlanTUICommand) {
+				t.Fatalf("command = %q, unexpected Codex plan controller", command)
+			}
+		})
+	}
+}
+
 func TestMaxInlineManualPromptFitsLinuxSingleArgumentBudget(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &codexPlanMode}
@@ -450,20 +502,26 @@ func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name           string
-		cfg            *cliflags.Config
-		wantPlanPrompt bool
+		name              string
+		cfg               *cliflags.Config
+		wantPlanMode      bool
+		wantCodexContract bool
+		wantArg           string
 	}{
-		{name: "claude", cfg: &cliflags.Config{Agent: "claude", DryRun: true}},
+		{name: "claude build", cfg: &cliflags.Config{Agent: "claude", DryRun: true, PlanMode: new(false)}, wantArg: "--permission-mode auto"},
+		{name: "claude plan", cfg: &cliflags.Config{Agent: "claude", DryRun: true, PlanMode: new(true)}, wantPlanMode: true, wantArg: "--permission-mode plan"},
+		{name: "opencode build", cfg: &cliflags.Config{Agent: "opencode", DryRun: true, PlanMode: new(false)}, wantArg: "--agent build"},
+		{name: "opencode plan", cfg: &cliflags.Config{Agent: "opencode", DryRun: true, PlanMode: new(true)}, wantPlanMode: true, wantArg: "--agent plan"},
+		{name: "codex build", cfg: &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: new(false)}, wantArg: "codex"},
 		{name: "codex plan mode", cfg: func() *cliflags.Config {
 			planMode := true
 			return &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &planMode}
-		}(), wantPlanPrompt: true},
+		}(), wantPlanMode: true, wantCodexContract: true, wantArg: codexapp.PlanTUICommand},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := NewAttachedRequest(tc.cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), prompt, "/repo/worktree", target)
-			if got := req.PlanMode(); got != tc.wantPlanPrompt {
-				t.Fatalf("attached PlanMode = %t, want %t (launch mode %q)", got, tc.wantPlanPrompt, req.LaunchMode)
+			if got := req.PlanMode(); got != tc.wantPlanMode {
+				t.Fatalf("attached PlanMode = %t, want %t (launch mode %q)", got, tc.wantPlanMode, req.LaunchMode)
 			}
 			if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
 				t.Fatalf("briefing = path %q body length %d, want path containing full %d-byte prompt", req.BriefingPath, len(req.BriefingBody), len(prompt))
@@ -471,8 +529,18 @@ func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
 			if strings.Contains(req.Prompt, prompt) || !strings.Contains(req.Prompt, req.BriefingPath) {
 				t.Fatalf("launch prompt should reference briefing without embedding payload: %d bytes", len(req.Prompt))
 			}
-			if got := strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>"); got != tc.wantPlanPrompt {
-				t.Fatalf("briefing plan instructions = %t, want %t", got, tc.wantPlanPrompt)
+			if got := strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>"); got != tc.wantCodexContract {
+				t.Fatalf("briefing Codex plan instructions = %t, want %t", got, tc.wantCodexContract)
+			}
+			command, err := buildAgentCommand(tc.cfg, req, "fanout-go")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(command, tc.wantArg) {
+				t.Fatalf("command = %q, want %q", command, tc.wantArg)
+			}
+			if !tc.wantCodexContract && strings.Contains(command, codexapp.PlanTUICommand) {
+				t.Fatalf("command = %q, unexpected Codex plan controller", command)
 			}
 		})
 	}
@@ -495,8 +563,8 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	}
 
 	manualReq := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{Title: "Manual diagnostics"})
-	if manualReq.LaunchMode != "" {
-		t.Fatalf("manual pane LaunchMode = %q, want flag-free launch", manualReq.LaunchMode)
+	if manualReq.LaunchMode != agent.ModeBuild {
+		t.Fatalf("manual pane LaunchMode = %q, want explicit build launch", manualReq.LaunchMode)
 	}
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")

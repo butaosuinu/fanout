@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -1061,12 +1062,14 @@ func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
 	}
 }
 
-func TestRestoreAgentCommandUsesSavedCodexPlanThread(t *testing.T) {
+func TestRestoreAgentCommandUsesSavedCodexCoordinatorPlanThread(t *testing.T) {
 	root := t.TempDir()
 	installRestoreAgentScript(t, "codex")
 
 	command, statusPath, err := restoreAgentCommand(state.Pane{
-		IssueNum:       7,
+		Parent:         panelaunch.ManualParentRef,
+		IssueNum:       -7,
+		Slug:           "plan-prompt-7",
 		Agent:          "codex",
 		PlanMode:       true,
 		CodexThreadID:  "thread-7",

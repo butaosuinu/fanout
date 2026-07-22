@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
+	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -46,13 +48,14 @@ func TestPlanSkillPromptPerAgent(t *testing.T) {
 }
 
 // TestNewPlanPromptPaneRequestWritesSkillInvocation pins the coordinator pane
-// request: a plain (non-Codex-Plan-Mode) agent whose one-line prompt invokes
-// the fanout-plan skill on the full prompt written to the briefing file, and
-// whose liveness key survives into the request (the repo-root WorktreePath is
-// too broad for path-based liveness, so the key is the row's identity).
+// request: its one-line prompt invokes the fanout-plan skill on the full prompt
+// written to the briefing file, its mode is explicit, and its liveness key
+// survives into the request (the repo-root WorktreePath is too broad for
+// path-based liveness, so the key is the row's identity).
 func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	const prompt = "Build a full-text search over issues.\nInclude ranking and filters."
-	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, "claude", "shell-coordinator-key")
+	planMode := false
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, &cliflags.Config{Agent: "claude", PlanMode: &planMode}, "shell-coordinator-key")
 
 	if !strings.HasPrefix(req.Prompt, "/fanout plan ") {
 		t.Fatalf("req.Prompt = %q, want a /fanout plan invocation", req.Prompt)
@@ -67,8 +70,8 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	if !strings.HasPrefix(req.BriefingPath, wantPrefix) {
 		t.Fatalf("req.BriefingPath = %q, want %q prefix", req.BriefingPath, wantPrefix)
 	}
-	if req.PlanMode() || req.LaunchMode != "" {
-		t.Fatalf("req.LaunchMode = %q, want flag-free plan coordinator", req.LaunchMode)
+	if req.PlanMode() || req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("req.LaunchMode = %q, want explicit build coordinator", req.LaunchMode)
 	}
 	if req.ParentRef != panelaunch.ManualParentRef {
 		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
@@ -78,9 +81,19 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	}
 }
 
+func TestNewPlanPromptPaneRequestKeepsOpenCodeInBuildMode(t *testing.T) {
+	planMode := true
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), "Plan the migration", &cliflags.Config{Agent: "opencode", PlanMode: &planMode}, "shell-coordinator-key")
+
+	if req.PlanMode() || req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("req.LaunchMode = %q, want explicit build coordinator for OpenCode", req.LaunchMode)
+	}
+}
+
 func TestNewPlanPromptPaneRequestBoundsLongSingleLineTitle(t *testing.T) {
 	prompt := strings.Repeat("x", 150_000)
-	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, "codex", "shell-coordinator-key")
+	planMode := true
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), prompt, &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &planMode}, "shell-coordinator-key")
 	wantTitle := "plan: " + strings.Repeat("x", 54)
 
 	if req.Title != wantTitle || req.DisplayNameOverride != wantTitle || req.ShortTitle != wantTitle {
@@ -92,13 +105,16 @@ func TestNewPlanPromptPaneRequestBoundsLongSingleLineTitle(t *testing.T) {
 	if strings.Contains(req.Prompt, prompt) {
 		t.Fatalf("launch prompt embeds the %d-byte briefing", len(prompt))
 	}
+	if !req.PlanMode() || req.CodexPlanStatusPath != "/tmp/fanout-codex-plan-repo--1.json" {
+		t.Fatalf("plan mode/status = %t/%q, want Codex coordinator plan handshake", req.PlanMode(), req.CodexPlanStatusPath)
+	}
 }
 
 // TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief pins the issue-sourced
-// plan coordinator pane request: a plain (non-Codex-Plan-Mode) agent whose
-// one-line prompt invokes the fanout-plan skill on the issue-derived coordinator
-// brief, and whose briefing carries the issue title/body, the worker --agent
-// override, and the "Refs #N" (never "Closes") requirement.
+// plan coordinator pane request: its one-line prompt invokes the fanout-plan
+// skill on the issue-derived coordinator brief, and its briefing carries the
+// issue title/body, the worker --agent override, and the "Refs #N" (never
+// "Closes") requirement.
 func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 	issue := ghissue.Issue{
 		Number: 123,
@@ -116,7 +132,9 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := newIssuePlanPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, tt.coordinator, "codex", "shell-issue-plan-key")
+			planMode := true
+			cfg := &cliflags.Config{Agent: tt.coordinator, DryRun: true, PlanMode: &planMode}
+			req := newIssuePlanPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, cfg, "codex", "shell-issue-plan-key")
 
 			if !strings.HasPrefix(req.Prompt, tt.wantPrefix) {
 				t.Fatalf("req.Prompt = %q, want %q prefix", req.Prompt, tt.wantPrefix)
@@ -142,8 +160,14 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 			if !strings.Contains(req.BriefingBody, "Refs #123") {
 				t.Fatalf("req.BriefingBody = %q, want a Refs #123 requirement", req.BriefingBody)
 			}
-			if req.PlanMode() || req.LaunchMode != "" {
-				t.Fatalf("req.LaunchMode = %q, want flag-free plan coordinator", req.LaunchMode)
+			if !req.PlanMode() || req.LaunchMode != agent.ModePlan {
+				t.Fatalf("req.LaunchMode = %q, want plan coordinator", req.LaunchMode)
+			}
+			if tt.coordinator == "codex" && req.CodexPlanStatusPath != "/tmp/fanout-codex-plan-repo--1.json" {
+				t.Fatalf("codex status path = %q, want coordinator handshake path", req.CodexPlanStatusPath)
+			}
+			if tt.coordinator != "codex" && req.CodexPlanStatusPath != "" {
+				t.Fatalf("non-Codex status path = %q, want empty", req.CodexPlanStatusPath)
 			}
 			if req.ParentRef != panelaunch.ManualParentRef {
 				t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
@@ -434,6 +458,31 @@ func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 	}
 	if !strings.Contains(result.Notice, "started plan coordinator (claude)") {
 		t.Fatalf("notice = %q, want coordinator success", result.Notice)
+	}
+}
+
+func TestLaunchPlanPromptFromTUIReturnsClaudeModeFallbackNotice(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installTUITmuxShim(t, "%89")
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "1")
+
+	result, err := launchPlanPromptFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+		Prompt:     "Ship search",
+		PlanFanout: true,
+		Agents:     []string{"claude"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Notice, "Claude Code 2.1.207+ is required") {
+		t.Fatalf("notice = %q, want Claude Plan Mode fallback warning", result.Notice)
 	}
 }
 

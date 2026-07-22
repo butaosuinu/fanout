@@ -142,14 +142,21 @@ Use status and lifecycle flags only for an explicit follow-up:
 
 ## Preview and run
 
+When the TUI starts the coordinator in Plan Mode, wait for the agent's native
+plan approval before writing a new spec or running `fanout plan`. That approval
+is also confirmation for the live run: after approval, prepare or reuse the
+spec, run the dry-run, then run live without asking again. Still stop after the
+preview when the user explicitly requested `--dry-run`.
+
 1. Reuse a saved plan slug directly, or finish writing the temporary spec.
 2. Run `fanout plan <spec-or-slug> --dry-run <agent-and-other-flags>`.
 3. Summarize the plan slug/title, task ids/titles, dependency waves,
    `blocked_by`, generated worktrees/branches, skipped tasks, and deferred
    tasks.
 4. Stop when the user requested a dry-run.
-5. Unless the user explicitly passed `--go` or requested immediate execution,
-   ask for confirmation.
+5. Unless the user explicitly passed `--go`, requested immediate execution, or
+   already granted the native Plan Mode approval described above, ask for
+   confirmation.
 6. Run the identical command without `--dry-run`.
 7. Report the created/skipped/deferred/failed summary.
 

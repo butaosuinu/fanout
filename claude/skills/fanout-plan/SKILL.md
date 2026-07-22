@@ -215,6 +215,12 @@ feature).
 
 ## Run
 
+When the TUI starts the coordinator in Plan Mode, wait for the agent's native
+plan approval before writing a new spec or running `fanout plan`. That approval
+is also confirmation for the live run: after approval, prepare or reuse the
+spec, run the dry-run, then run live without asking again. Still stop after the
+preview when the user explicitly requested `--dry-run`.
+
 1. If using a saved plan slug from `.fanout/plans/<slug>.json`, keep that slug
    as the command argument and skip writing a new spec. Otherwise, write
    `/tmp/fanout-plan-<slug>.json`.
@@ -225,8 +231,9 @@ feature).
 3. Summarize the dry-run: plan slug/title, task count, task ids/titles,
    waves, `blocked_by`, generated worktree paths, branch names, and deferred
    rows.
-4. Ask for confirmation unless the user passed `--go` or explicitly requested
-   immediate execution. If the user passed `--dry-run`, stop after the preview.
+4. Ask for confirmation unless the user passed `--go`, explicitly requested
+   immediate execution, or already granted the native Plan Mode approval
+   described above. If the user passed `--dry-run`, stop after the preview.
 5. Run the live command without `--dry-run`:
    ```bash
    fanout plan <spec-or-slug> --agent claude [--agent api-client=codex] <flags>
