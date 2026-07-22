@@ -133,6 +133,51 @@ func TestBuildCommandForBackendKeepsTmuxHooks(t *testing.T) {
 	}
 }
 
+func TestBuildCommandWithModeDefaultsToTmux(t *testing.T) {
+	got, err := BuildCommandWithMode("claude", "prompt", ModePlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "claude --settings " + ShellQuote(claudeHookSettingsJSON) + " --permission-mode plan prompt"
+	if got != want {
+		t.Fatalf("BuildCommandWithMode() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildCommandForBackendWithMode(t *testing.T) {
+	claudeSettings := "--settings " + ShellQuote(claudeHookSettingsJSON) + " "
+	for _, tc := range []struct {
+		name    string
+		agent   string
+		mode    LaunchMode
+		backend backend.Name
+		want    string
+	}{
+		{name: "claude build tmux", agent: "claude", mode: ModeBuild, backend: backend.Tmux, want: "claude " + claudeSettings + "--permission-mode auto prompt"},
+		{name: "claude plan tmux", agent: "claude", mode: ModePlan, backend: backend.Tmux, want: "claude " + claudeSettings + "--permission-mode plan prompt"},
+		{name: "claude build herdr", agent: "claude", mode: ModeBuild, backend: backend.Herdr, want: "claude --permission-mode auto prompt"},
+		{name: "claude plan herdr", agent: "claude", mode: ModePlan, backend: backend.Herdr, want: "claude --permission-mode plan prompt"},
+		{name: "codex build tmux", agent: "codex", mode: ModeBuild, backend: backend.Tmux, want: "codex prompt"},
+		{name: "codex plan tmux", agent: "codex", mode: ModePlan, backend: backend.Tmux, want: "codex prompt"},
+		{name: "codex build herdr", agent: "codex", mode: ModeBuild, backend: backend.Herdr, want: "codex prompt"},
+		{name: "codex plan herdr", agent: "codex", mode: ModePlan, backend: backend.Herdr, want: "codex prompt"},
+		{name: "opencode build tmux", agent: "opencode", mode: ModeBuild, backend: backend.Tmux, want: "opencode --agent build --prompt prompt"},
+		{name: "opencode plan tmux", agent: "opencode", mode: ModePlan, backend: backend.Tmux, want: "opencode --agent plan --prompt prompt"},
+		{name: "opencode build herdr", agent: "opencode", mode: ModeBuild, backend: backend.Herdr, want: "opencode --agent build --prompt prompt"},
+		{name: "opencode plan herdr", agent: "opencode", mode: ModePlan, backend: backend.Herdr, want: "opencode --agent plan --prompt prompt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BuildCommandForBackendWithMode(tc.agent, "prompt", tc.backend, tc.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("BuildCommandForBackendWithMode() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildCommandForBackendRejectsUnknownBackend(t *testing.T) {
 	if _, err := BuildCommandForBackend("claude", "prompt", backend.Name("unknown")); err == nil {
 		t.Fatal("BuildCommandForBackend() succeeded with an unknown backend")
@@ -171,6 +216,33 @@ func TestBuildResumeCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
 	}
 	if got != "claude --continue" {
 		t.Fatalf("BuildResumeCommandForBackend(claude, herdr) = %q, want claude --continue", got)
+	}
+}
+
+func TestBuildResumeCommandForBackendOmitsModeArgs(t *testing.T) {
+	claudeSettings := "--settings " + ShellQuote(claudeHookSettingsJSON) + " "
+	for _, tc := range []struct {
+		name    string
+		agent   string
+		backend backend.Name
+		want    string
+	}{
+		{name: "claude tmux", agent: "claude", backend: backend.Tmux, want: "claude " + claudeSettings + "--continue"},
+		{name: "claude herdr", agent: "claude", backend: backend.Herdr, want: "claude --continue"},
+		{name: "codex tmux", agent: "codex", backend: backend.Tmux, want: "codex resume --last"},
+		{name: "codex herdr", agent: "codex", backend: backend.Herdr, want: "codex resume --last"},
+		{name: "opencode tmux", agent: "opencode", backend: backend.Tmux, want: "opencode --continue"},
+		{name: "opencode herdr", agent: "opencode", backend: backend.Herdr, want: "opencode --continue"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BuildResumeCommandForBackend(tc.agent, tc.backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("BuildResumeCommandForBackend() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -215,6 +287,28 @@ func TestBuildResolvedCommandForBackendOmitsTmuxHooksForHerdr(t *testing.T) {
 	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " prompt"
 	if got != want {
 		t.Fatalf("BuildResolvedCommandForBackend() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildResolvedCommandWithModeUsesAbsoluteExecutablePathAndModeArgs(t *testing.T) {
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin with space")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got, err := BuildResolvedCommandWithMode("opencode", "prompt", ModePlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + ShellQuote(exe) + " --agent plan --prompt prompt"
+	if got != want {
+		t.Fatalf("BuildResolvedCommandWithMode() = %q, want %q", got, want)
 	}
 }
 
