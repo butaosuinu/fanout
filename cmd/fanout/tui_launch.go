@@ -308,7 +308,7 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 // request: a project-root pane (no worktree) whose prompt invokes the
 // fanout-plan skill on the issue-derived coordinator brief written to
 // BriefingPath. It mirrors newPlanPromptPaneRequest but sources the title,
-// body, and briefing from the GitHub issue and never sets Source*/CodexPlanMode.
+// body, and briefing from the GitHub issue and never sets Source*/PlanMode.
 func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, coordinatorAgent, workerAgent, livenessKey string) panelaunch.Request {
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
@@ -529,7 +529,7 @@ func manualPaneConfigForTUIAgent(agentName string) *cliflags.Config {
 	cfg := &cliflags.Config{ParentRef: panelaunch.ManualParentRef, Agent: agentName}
 	if agentName == "codex" {
 		codexPlanMode := true
-		cfg.CodexPlanMode = &codexPlanMode
+		cfg.PlanMode = &codexPlanMode
 	}
 	return cfg
 }

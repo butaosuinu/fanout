@@ -60,7 +60,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 	}
 }
 
-func TestEffectiveIssueLaunchConfigUsesResolvedCodexPlanModeWithoutMutatingParsedConfig(t *testing.T) {
+func TestEffectiveIssueLaunchConfigUsesResolvedPlanModeWithoutMutatingParsedConfig(t *testing.T) {
 	cfg := &cliflags.Config{
 		Agent:          "codex",
 		AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "codex"}},
@@ -70,11 +70,11 @@ func TestEffectiveIssueLaunchConfigUsesResolvedCodexPlanModeWithoutMutatingParse
 
 	got := effectiveIssueLaunchConfig(cfg, resolved)
 
-	if !got.CodexPlanModeEnabled() {
-		t.Fatal("effective CodexPlanModeEnabled() = false, want resolved true")
+	if !got.PlanModeEnabled() {
+		t.Fatal("effective PlanModeEnabled() = false, want resolved true")
 	}
-	if cfg.CodexPlanMode != nil {
-		t.Fatalf("parsed CodexPlanMode = %v, want nil so rerun hints preserve only explicit flags", cfg.CodexPlanMode)
+	if cfg.PlanMode != nil {
+		t.Fatalf("parsed PlanMode = %v, want nil so rerun hints preserve only explicit flags", cfg.PlanMode)
 	}
 	if got == cfg {
 		t.Fatal("effectiveIssueLaunchConfig() returned the parsed config instead of a copy")

@@ -65,7 +65,7 @@ type Config struct {
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
-	CodexPlanMode      *bool
+	PlanMode           *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
 	Format             string
@@ -136,8 +136,8 @@ func (c *Config) HasAnyDisplayName() bool {
 	return false
 }
 
-func (c *Config) CodexPlanModeEnabled() bool {
-	return c.CodexPlanMode != nil && *c.CodexPlanMode
+func (c *Config) PlanModeEnabled() bool {
+	return c.PlanMode != nil && *c.PlanMode
 }
 
 // ParseResult communicates parse outcome to main without duplicating the exit
@@ -253,8 +253,8 @@ func Parse(args []string, lg *log.Logger, stdout io.Writer) ParseResult {
 		"--no-briefing-code-review": func(cfg *Config) { cfg.BriefingCodeReview = new(false) },
 		"--agent-teams-hint":        func(cfg *Config) { cfg.AgentTeamsHint = new(true) },
 		"--no-agent-teams-hint":     func(cfg *Config) { cfg.AgentTeamsHint = new(false) },
-		"--codex-plan-mode":         func(cfg *Config) { cfg.CodexPlanMode = new(true) },
-		"--no-codex-plan-mode":      func(cfg *Config) { cfg.CodexPlanMode = new(false) },
+		"--codex-plan-mode":         func(cfg *Config) { cfg.PlanMode = new(true) },
+		"--no-codex-plan-mode":      func(cfg *Config) { cfg.PlanMode = new(false) },
 		"--pr-visualization":        func(cfg *Config) { cfg.PRVisualization = new(true) },
 		"--no-pr-visualization":     func(cfg *Config) { cfg.PRVisualization = new(false) },
 		"--dashboard-keybind":       func(cfg *Config) { cfg.DashboardKeybind = new(true) },
@@ -435,8 +435,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return statusConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
 		case cfg.AgentTeamsHint != nil:
 			return statusConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
-		case cfg.CodexPlanMode != nil:
-			return statusConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.CodexPlanMode))
+		case cfg.PlanMode != nil:
+			return statusConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.PlanMode))
 		case cfg.PRVisualization != nil:
 			return statusConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:
@@ -500,8 +500,8 @@ func validateParsed(cfg *Config, state parseState, lg *log.Logger) ParseResult {
 			return lifecycleConflict(lg, boolSettingFlag("--briefing-code-review", "--no-briefing-code-review", cfg.BriefingCodeReview))
 		case cfg.AgentTeamsHint != nil:
 			return lifecycleConflict(lg, boolSettingFlag("--agent-teams-hint", "--no-agent-teams-hint", cfg.AgentTeamsHint))
-		case cfg.CodexPlanMode != nil:
-			return lifecycleConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.CodexPlanMode))
+		case cfg.PlanMode != nil:
+			return lifecycleConflict(lg, boolSettingFlag("--codex-plan-mode", "--no-codex-plan-mode", cfg.PlanMode))
 		case cfg.PRVisualization != nil:
 			return lifecycleConflict(lg, boolSettingFlag("--pr-visualization", "--no-pr-visualization", cfg.PRVisualization))
 		case cfg.DashboardKeybind != nil:

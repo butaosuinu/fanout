@@ -1094,14 +1094,14 @@ func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
 	}
 }
 
-func TestManualPaneConfigForTUIAgentEnablesCodexPlanMode(t *testing.T) {
+func TestManualPaneConfigForTUIAgentEnablesPlanMode(t *testing.T) {
 	codex := manualPaneConfigForTUIAgent("codex")
-	if codex.Agent != "codex" || !codex.CodexPlanModeEnabled() {
+	if codex.Agent != "codex" || !codex.PlanModeEnabled() {
 		t.Fatalf("codex config = %+v, want codex Plan Mode", codex)
 	}
 
 	claude := manualPaneConfigForTUIAgent("claude")
-	if claude.Agent != "claude" || claude.CodexPlanMode != nil {
+	if claude.Agent != "claude" || claude.PlanMode != nil {
 		t.Fatalf("claude config = %+v, want no Codex Plan Mode override", claude)
 	}
 }

@@ -63,7 +63,7 @@ type Request struct {
 	SourceTaskID        string
 	Agent               string
 	AgentCommand        string
-	CodexPlanMode       bool
+	PlanMode            bool
 	CodexPlanStatusPath string
 	CodexTeamMode       bool
 	CodexTeamStatusPath string
@@ -304,7 +304,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 	l.Log.Info("%s: attach %s to %s", paneLogLabel(req), req.Agent, targetPath)
 	l.Log.Dim("  slug -> %s", req.Slug)
 	l.Log.Dim("  worktree -> %s", targetPath)
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		l.Log.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
@@ -317,7 +317,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		return Result{}, false
 	}
 	codexPlanStatus := codexapp.Status{}
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		var planErr error
 		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
 		if planErr != nil {
@@ -450,7 +450,7 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
 		ShellKey:       req.ShellKey,
-		CodexPlanMode:  req.CodexPlanMode,
+		PlanMode:       req.PlanMode,
 		CodexThreadID:  codexTUIStatus.ThreadID,
 		CodexSessionID: codexTUIStatus.SessionID,
 		DisplayName:    paneTitle(req),
@@ -492,7 +492,7 @@ func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName 
 }
 
 func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		if strings.TrimSpace(req.AgentStartGate) != "" {
 			return "", fmt.Errorf("agent start gate is not supported in Codex Plan Mode")
 		}
@@ -562,7 +562,7 @@ func codexTeamMember(req Request) string {
 
 func codexTUIStatusPath(req Request) string {
 	switch {
-	case req.CodexPlanMode:
+	case req.PlanMode:
 		return req.CodexPlanStatusPath
 	case req.CodexTeamMode:
 		return req.CodexTeamStatusPath
@@ -572,7 +572,7 @@ func codexTUIStatusPath(req Request) string {
 }
 
 func codexTUILabel(req Request) string {
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		return "Codex Plan Mode TUI"
 	}
 	return "Codex team TUI"
@@ -619,7 +619,7 @@ func logPaneRequest(req Request, lg *log.Logger) {
 	if req.DisplayNameOverride != "" {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		lg.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
 	}
 	if req.CodexTeamMode {
@@ -631,7 +631,7 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	if req.BriefingPath != "" || req.BriefingBody != "" {
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan Mode thread + interactive Codex TUI approval UI\n", c.Dim, c.Reset)
 	}
 	if req.CodexTeamMode {
@@ -670,7 +670,7 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-style %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderStyle()), c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
 	}

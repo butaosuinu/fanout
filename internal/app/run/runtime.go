@@ -119,7 +119,7 @@ func settingsOverrides(cfg *cliflags.Config) settings.CLIOverrides {
 		PRReviewGate:       cfg.PRReviewGate,
 		BriefingCodeReview: cfg.BriefingCodeReview,
 		AgentTeamsHint:     cfg.AgentTeamsHint,
-		CodexPlanMode:      cfg.CodexPlanMode,
+		CodexPlanMode:      cfg.PlanMode,
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
 	}

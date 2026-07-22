@@ -1456,7 +1456,7 @@ func TestBuildPromptPassthrough(t *testing.T) {
 
 func TestBuildPlanModePassthrough(t *testing.T) {
 	planPane := pane("1", 2, "%1")
-	planPane.CodexPlanMode = true
+	planPane.PlanMode = true
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(planPane, pane("1", 3, "%2")),
@@ -1466,7 +1466,7 @@ func TestBuildPlanModePassthrough(t *testing.T) {
 	}
 	panes := Build("o/n", "/root", c).Sessions[0].Panes
 	if !panes[0].PlanMode {
-		t.Fatal("PlanMode = false want passthrough of the state row CodexPlanMode")
+		t.Fatal("PlanMode = false want passthrough of the state row PlanMode")
 	}
 	if panes[1].PlanMode {
 		t.Fatal("PlanMode = true for a non-plan row, want false")
@@ -1524,11 +1524,11 @@ func TestBuildManualPromptSessionsUseBranchPRs(t *testing.T) {
 	planMode := pane("@manual", -2, "%1")
 	planMode.TaskID = ""
 	planMode.BranchName = "  fanout/manual-shared  "
-	planMode.CodexPlanMode = true
+	planMode.PlanMode = true
 	normalMode := pane("@manual", -1, "%2")
 	normalMode.TaskID = ""
 	normalMode.BranchName = "fanout/manual-shared"
-	normalMode.CodexPlanMode = false
+	normalMode.PlanMode = false
 
 	branchCalls := 0
 	c := Collectors{

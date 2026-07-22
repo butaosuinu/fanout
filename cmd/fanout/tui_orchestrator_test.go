@@ -54,8 +54,8 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 	if wantTitle := "orchestrator: #500 Coordinate child changes"; req.Title != wantTitle || req.DisplayNameOverride != wantTitle {
 		t.Fatalf("request title/display = %q/%q, want %q", req.Title, req.DisplayNameOverride, wantTitle)
 	}
-	if req.CodexPlanMode {
-		t.Fatal("req.CodexPlanMode = true, want false for an issue orchestrator")
+	if req.PlanMode {
+		t.Fatal("req.PlanMode = true, want false for an issue orchestrator")
 	}
 	if req.Worktree.WorktreePath != "" {
 		t.Fatalf("req.Worktree.WorktreePath = %q, want project-root attach without a worktree", req.Worktree.WorktreePath)

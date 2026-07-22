@@ -12,9 +12,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
-func TestSettingsOverridesIncludesCodexPlanMode(t *testing.T) {
+func TestSettingsOverridesIncludesPlanMode(t *testing.T) {
 	enabled := true
-	cfg := &cliflags.Config{CodexPlanMode: &enabled}
+	cfg := &cliflags.Config{PlanMode: &enabled}
 
 	got := settingsOverrides(cfg)
 

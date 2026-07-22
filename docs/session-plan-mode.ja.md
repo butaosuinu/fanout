@@ -88,7 +88,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
   ない旧版は引数パースエラーで即終了し、runtime fallback に到達しない)。
   mode 引数を注入する起動では `claude --version` を preflight し、floor
   未満は警告して mode 引数を省略する(`""` の従来起動)。
-- `internal/app/panelaunch` は `Request.CodexPlanMode` を 3 値の launch
+- `internal/app/panelaunch` は `Request.PlanMode` を 3 値の launch
   mode(`""` / `plan` / `build`)に一般化する。`""` はフラグなしの従来
   起動で、設定をまだ消費していないレーンの挙動を変えないための値。`plan`
   かつ codex のときだけ plan TUI 経路、それ以外の `plan` / `build` は
@@ -127,7 +127,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
    plan TUI で起動し、idle-turn メッセージブリッジ(team TUI)は付かない。
    roster 登録と inbox への蓄積は残り、codexapp が `plan` 状態を報告する
    ので `nudge` による督促は機能する。issue lane の既存 precedence
-   (`request.go` の CodexPlanMode 先行判定)を全レーンに統一した形。
+   (`request.go` の PlanMode 先行判定)を全レーンに統一した形。
 2. **オーケストレーターの codex は plan TUI にしない**。オーケストレーターは
    `AgentStartGate`(子 fan-out 完了までエージェント起動を留める gate)を
    使うが、plan TUI の起動 handshake は gate release より先に走るため
@@ -219,7 +219,7 @@ coordinator が plan mode で始まると、fanout-plan skill の `fanout plan`
 
 | Wave | issue | 内容 | クラス |
 |---|---|---|---|
-| 1 | #540 | CodexPlanMode → PlanMode の機械的リネーム(挙動不変、JSON キー据え置き) | H(機械的) |
+| 1 | #540 | 旧 Go フィールド → PlanMode の機械的リネーム(挙動不変、JSON キー据え置き) | H(機械的) |
 | 1 | #541 | core/agent の mode-aware builder 追加(additive) | M |
 | 1 | #542 | settings 3 キー追加(消費なし、repoOverrides gate) | H |
 | 2 | #543 | dashboard / web の codex 限定ゲート + docsync(← #540) | H + web |
