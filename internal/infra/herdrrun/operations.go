@@ -68,8 +68,8 @@ func (b *Backend) BindOwnedTarget(target OwnedPaneIdentity) (*Backend, error) {
 }
 
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
-	copy := cloneOwnedCloseRequest(req)
-	return b.bindOwnedTarget(copy.Target, &copy)
+	cloned := cloneOwnedCloseRequest(req)
+	return b.bindOwnedTarget(cloned.Target, &cloned)
 }
 
 func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*Backend, error) {
@@ -89,11 +89,11 @@ func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedC
 	}
 	targetAdmission := &ownedTargetAdmission{target: target}
 	if closeRequest != nil {
-		copy := cloneOwnedCloseRequest(*closeRequest)
-		if err := verifyWorktreeOwnership(copy); err != nil {
+		cloned := cloneOwnedCloseRequest(*closeRequest)
+		if err := verifyWorktreeOwnership(cloned); err != nil {
 			return nil, err
 		}
-		targetAdmission.closeRequest = &copy
+		targetAdmission.closeRequest = &cloned
 		targetAdmission.closeFingerprint = corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID}
 	}
 	return b.cloneWithTarget(targetAdmission), nil
@@ -234,7 +234,8 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if err != nil {
 		return err
 	}
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "focus", target.Ref.Workspace); err != nil {
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "focus", target.Ref.Workspace)
+	if err != nil {
 		return fmt.Errorf("herdr workspace focus (not retried): %w", err)
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
@@ -272,7 +273,8 @@ func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) 
 	if err != nil {
 		return err
 	}
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "pane", "close", target.Ref.Pane); err != nil {
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "pane", "close", target.Ref.Pane)
+	if err != nil {
 		return fmt.Errorf("herdr pane close (not retried): %w", err)
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
@@ -319,10 +321,12 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if err != nil {
 		return failed, err
 	}
-	if err := verifyWorktreeOwnership(req); err != nil {
+	err = verifyWorktreeOwnership(req)
+	if err != nil {
 		return failed, err
 	}
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace); err != nil {
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace)
+	if err != nil {
 		return failed, fmt.Errorf("herdr workspace close (not retried): %w", err)
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
@@ -365,7 +369,8 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 		return ownedSnapshotView{}, err
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
+	err = decodeOne(out, &envelope)
+	if err != nil {
 		return ownedSnapshotView{}, err
 	}
 	panes, err := projectSnapshot(envelope, probed)
@@ -468,8 +473,8 @@ func cloneAgentSession(ref *corebackend.AgentSessionRef) *corebackend.AgentSessi
 	if ref == nil {
 		return nil
 	}
-	copy := *ref
-	return &copy
+	cloned := *ref
+	return &cloned
 }
 
 func cloneOwnedCloseRequest(req OwnedCloseRequest) OwnedCloseRequest {
@@ -527,7 +532,8 @@ func verifyWorktreeOwnership(req OwnedCloseRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := validatePrivateRegular(markerPath, info); err != nil {
+	err = validatePrivateRegular(markerPath, info)
+	if err != nil {
 		return err
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxOwnerMarkerBytes+1))

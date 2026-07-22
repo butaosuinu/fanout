@@ -36,6 +36,7 @@ const (
 	ownedShutdownGrace      = 2 * time.Second
 	maxOwnerMarkerBytes     = 64 << 10
 	maxUnixSocketPathBytes  = 103
+	defaultRuntimeParent    = "/tmp"
 	ownedConfigContents     = "[update]\nmanifest_check = false\n"
 	configEnv               = "HERDR_CONFIG_PATH"
 	clientSocketEnv         = "HERDR_CLIENT_SOCKET_PATH"
@@ -173,10 +174,12 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
-	if err := ensurePrivateDir(layout.runtimeBase); err != nil {
+	err = ensurePrivateDir(layout.runtimeBase)
+	if err != nil {
 		return nil, fmt.Errorf("prepare herdr runtime base: %w", err)
 	}
-	if err := ensurePrivateDir(layout.runtimeDir); err != nil {
+	err = ensurePrivateDir(layout.runtimeDir)
+	if err != nil {
 		return nil, fmt.Errorf("prepare herdr session directory: %w", err)
 	}
 	lock, err := lockPrivateFileContext(ctx, layout.lifecycleLock)
@@ -184,7 +187,8 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 		return nil, fmt.Errorf("lock herdr owned lifecycle: %w", err)
 	}
 	defer unlockPrivateFile(lock)
-	if err := ensureOwnedLayout(layout); err != nil {
+	err = ensureOwnedLayout(layout)
+	if err != nil {
 		return nil, err
 	}
 	if backend == nil {
@@ -272,11 +276,11 @@ func waitForOwnedReady(ctx context.Context, backend *Backend) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := backend.probeContext(ctx); err == nil {
+		_, probeErr := backend.probeContext(ctx)
+		if probeErr == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = probeErr
 		timer := time.NewTimer(ownedReadyInterval)
 		select {
 		case <-ctx.Done():
@@ -372,7 +376,7 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 		return ownedLayout{}, err
 	}
 	if runtimeBase == "" {
-		runtimeBase = filepath.Join(os.TempDir(), "fanout-herdr-"+strconv.Itoa(os.Getuid()))
+		runtimeBase = filepath.Join(defaultRuntimeParent, "fanout-herdr-"+strconv.Itoa(os.Getuid()))
 	}
 	abs, err := filepath.Abs(runtimeBase)
 	if err != nil {
@@ -480,7 +484,8 @@ func validatePrivateContents(path string, expected []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := validatePrivateRegular(path, info); err != nil {
+	err = validatePrivateRegular(path, info)
+	if err != nil {
 		return err
 	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(len(expected)+1)))
@@ -570,14 +575,17 @@ func inspectSupervisorLease(path string) (supervisorLease, bool, error) {
 	if err != nil {
 		return supervisorLease{}, false, err
 	}
-	if err := validatePrivateRegular(path, info); err != nil {
+	err = validatePrivateRegular(path, info)
+	if err != nil {
 		return supervisorLease{}, false, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if lockErr == nil {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		return supervisorLease{}, false, nil
-	} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-		return supervisorLease{}, false, err
+	}
+	if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
+		return supervisorLease{}, false, lockErr
 	}
 	lease, err := readLeaseFromFile(f)
 	if err != nil {
@@ -628,7 +636,8 @@ func readOwnerMarker(path string) (ownerMarker, bool, error) {
 	if err != nil {
 		return ownerMarker{}, true, err
 	}
-	if err := validatePrivateRegular(path, info); err != nil {
+	err = validatePrivateRegular(path, info)
+	if err != nil {
 		return ownerMarker{}, true, err
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxOwnerMarkerBytes+1))
@@ -676,18 +685,22 @@ func writeOwnerMarkerExclusive(path string, marker ownerMarker) error {
 	}
 	temporaryPath := temporary.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()
-	if _, err := temporary.Write(data); err != nil {
+	_, err = temporary.Write(data)
+	if err != nil {
 		_ = temporary.Close()
 		return err
 	}
-	if err := temporary.Sync(); err != nil {
+	err = temporary.Sync()
+	if err != nil {
 		_ = temporary.Close()
 		return err
 	}
-	if err := temporary.Close(); err != nil {
+	err = temporary.Close()
+	if err != nil {
 		return err
 	}
-	if err := os.Link(temporaryPath, path); err != nil {
+	err = os.Link(temporaryPath, path)
+	if err != nil {
 		return fmt.Errorf("claim herdr ownership marker: %w", err)
 	}
 	stored, found, err := readOwnerMarker(path)
@@ -833,7 +846,8 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	}
 	defer func() { _ = ready.Close() }()
 	runtimeDir := filepath.Dir(markerPath)
-	if err := ensurePrivateDir(runtimeDir); err != nil {
+	err = ensurePrivateDir(runtimeDir)
+	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: runtime directory: %v\n", err)
 		return 1
 	}
@@ -853,7 +867,8 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		return 1
 	}
 	defer unlockPrivateFile(lock)
-	if _, err := ready.Write([]byte(ownedSupervisorReadyACK)); err != nil {
+	_, err = ready.Write([]byte(ownedSupervisorReadyACK))
+	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: ready handshake: %v\n", err)
 		return 1
 	}
@@ -886,13 +901,15 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		fmt.Fprintln(errw, "fanout herdr supervisor: git common directory identity mismatch")
 		return 1
 	}
-	if err := validateOwnedMarker(marker, layout, commonDir, binaryAdmission{
+	err = validateOwnedMarker(marker, layout, commonDir, binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol,
-	}); err != nil {
+	})
+	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: marker identity: %v\n", err)
 		return 1
 	}
-	if err := writeSupervisorLease(lock, marker); err != nil {
+	err = writeSupervisorLease(lock, marker)
+	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: write lease: %v\n", err)
 		return 1
 	}
@@ -950,7 +967,8 @@ func stopResidualOwnedProcessGroup(pid int) error {
 	if err != nil || !running {
 		return err
 	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	err = syscall.Kill(-pid, syscall.SIGKILL)
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("kill residual herdr server process group: %w", err)
 	}
 	deadline := time.Now().Add(ownedShutdownGrace)

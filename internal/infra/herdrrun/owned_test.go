@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -45,7 +46,8 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, 
 	if err != nil {
 		return 0, err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
 		_ = lock.Close()
 		return 0, err
 	}
@@ -54,10 +56,12 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, 
 	if err != nil {
 		return 0, err
 	}
-	if _, err := lock.WriteAt(data, 0); err != nil {
+	_, err = lock.WriteAt(data, 0)
+	if err != nil {
 		return 0, err
 	}
-	if err := lock.Sync(); err != nil {
+	err = lock.Sync()
+	if err != nil {
 		return 0, err
 	}
 	s.lock = lock
@@ -66,7 +70,8 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, 
 		if err != nil {
 			return 0, err
 		}
-		if err := os.Chmod(path, 0o600); err != nil {
+		err = os.Chmod(path, 0o600)
+		if err != nil {
 			_ = listener.Close()
 			return 0, err
 		}
@@ -92,7 +97,8 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	if err := os.Chmod(root, 0o700); err != nil {
+	err = os.Chmod(root, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
 	root, err = filepath.EvalSymlinks(root)
@@ -100,7 +106,8 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 		t.Fatal(err)
 	}
 	commonDir := filepath.Join(root, "repo.git")
-	if err := os.Mkdir(commonDir, 0o700); err != nil {
+	err = os.Mkdir(commonDir, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
 	runtimeBase := filepath.Join(root, "runtime")
@@ -132,6 +139,24 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 	t.Cleanup(supervisor.close)
 	h.session = h.ensure()
 	return h
+}
+
+func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join("/private/var/folders", strings.Repeat("long-segment", 20)))
+	session := strings.Repeat("s", naming.MaxHerdrSessionNameLength)
+	layout, err := prepareOwnedLayout("", session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBase := filepath.Join(defaultRuntimeParent, "fanout-herdr-"+strconv.Itoa(os.Getuid()))
+	if layout.runtimeBase != wantBase {
+		t.Fatalf("runtime base = %q, want %q", layout.runtimeBase, wantBase)
+	}
+	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
+		if len(path) > maxUnixSocketPathBytes {
+			t.Fatalf("default socket path is %d bytes, want at most %d: %s", len(path), maxUnixSocketPathBytes, path)
+		}
+	}
 }
 
 func (h *ownedHarness) ensure() *OwnedSession {
