@@ -512,7 +512,7 @@ version / session identity の precheck、provisional intent、nonce label は r
 
 root coordinator の `workspace create` も副作用を持つ launch 操作として provisional intent の対象にする。
 最初の mutation 前に、canonical coordinator row key、owner singleton reservation、source root / planspec identity、backend / session identity、root cwd、intent 固有の coordinator launch nonce、共有 timeout / expiry、agent / emitter の完全な launch spec を phase `workspace-planned` の intent へ保存する。
-そのうえで `workspace create --label <nonce>` を発行し、成功応答の workspace ID、root PaneRef / `terminal_id` / cwd を同じ intent へ束縛して phase `workspace-realized` へ進める。
+そのうえで、保存済み root cwd と nonce を使う exact request `workspace create --cwd <root-cwd> --label <nonce> --no-focus` を発行し、成功応答の workspace ID、root PaneRef / `terminal_id` / cwd を同じ intent へ束縛して phase `workspace-realized` へ進める。
 request 発行直前には exact request と pre-state を phase `workspace-starting` として保存し、この phase の再実行では request を再発行しない。
 coordinator root の launcher も `workspace-planned` から `workspace-realized` への遷移を bounded に再読し、worktree root と同じ readiness / token / agent detection 契約を通してから通常 state へ確定する。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別しない。
@@ -561,7 +561,7 @@ flowchart TD
   A["bundle と launch spec を固定"] --> B["branch-planned"]
   B --> EC["env-capsule-planned / starting / created / sealed"]
   EC --> C["branch-starting"]
-  C -->|saved success| D["worktree-planned"]
+  C -->|saved success| D["worktree-planned / capsule-sealed"]
   D --> E["worktree-starting"]
   E -->|saved success| F["worktree-realized"]
   F -->|marker + PaneRef / terminal_id + launcher identity 一致| WR["worktree-ready"]
@@ -577,7 +577,10 @@ flowchart TD
   R -->|explicit manual cleanup 後の absence reconciliation| K
   X -->|worktree mutation 済み + cleanup absence + capsule terminal| K
   X -->|mutation 非発生 + reservation compare-and-delete + capsule terminal| LA["launch-aborted"]
-  K -->|explicit continue| D
+  K -->|explicit continue: lineage だけ継承| CA["current session bundle を再照合し、新しい launch 世代の operation bundle / launch spec を準備"]
+  CA --> CP["tombstone reservation + operation bundle reference / launch spec + worktree-planned + env-capsule-planned"]
+  CP --> CC["env-capsule-starting / created / sealed"]
+  CC --> D
   C -->|response loss| X["manual_cleanup_required"]
   E -->|response loss| X
   F -->|launcher timeout / exit| X
@@ -623,7 +626,8 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
   request 発行直前に phase `branch-starting` を保存し、old OID を空とする `update-ref` 相当を一回だけ発行する。
   保存済み成功応答がある場合だけ reservation receipt と active lineage を同じ state save へ記録し、phase `worktree-planned` へ進む。
   `branch-starting` の再実行、response loss、または ref mutation の有無が不明な場合は request を再発行せず、intent と観測 ref を残して `manual_cleanup_required` にする。
-  明示 continue は shared lock 下で cleaned tombstone の reservation と phase `worktree-planned` の intent 保存を一回の state save にする。
+  明示 continue は current session bundle を再照合し、新しい launch 世代の operation bundle と launch spec を準備する。
+  そのうえで shared lock 下の cleaned tombstone reservation、operation bundle reference / launch spec、main phase `worktree-planned`、nested phase `env-capsule-planned` を同じ state save に保存し、`env-capsule-starting` / `created` / `sealed` を通った後だけ `worktree-starting` へ進む。
   intent は canonical typed row key とその構成 identity、起動元の physical worktree root、backend、検証済み herdr session / socket identity、operation、worktree ownership nonce、slug、branch、path、`lineage_id`、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`launch_head_sha`、mutation 前の runtime / git snapshot、`total_timeout_ms`、二つの wall-clock timestamp、agent / emitter の launch spec を持つ。
   recovery は intent の base field tuple を current ref から再解決せず、呼出し側が明示した base selector の canonical 値と保存値が違う場合は fail closed にする。
   新規 create では nonce を mutation 前に生成し、既存 checkout の採用では state row と checkout git dir で一致済みの作成時 nonce を使う。
@@ -1125,7 +1129,7 @@ server log は exit status を記録するが public API 契約ではないた�
 0.7.5 の direct launch probe へ `agent send-keys <name> ctrl+c` を送ると agent record が消え、同じ root pane は shell に戻った。
 wave 2 の production launcher は single-shot の operation child parent として pane に残り、console shell または agent child の終了後は別の shell を起動せず、次の intent または入力を受理せずに終了する。
 pane 消滅後は final row を `stale` にし、同じ launcher process または同じ final row key を自動再利用しない。
-明示 cleanup は旧 workspace と checkout の不在を再観測して child row を cleaned tombstone へ置き換え、自動再 launch は行わない。
+child の explicit manual reconciliation は、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を完全な inventory から read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を cleaned tombstone へ置き換え、自動再 launch は行わない。
 launcher が得た child exit status は診断に使えるが、fanout task の完了または cleanup authority にはしない。
 #427 は fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を backend 固有 state へ記録する。
 Claude は direct launch の argv へ `--settings` lifecycle hook を注入する。
@@ -1851,7 +1855,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   `branch-starting` の再実行、response loss、ref mutation の不明では request を再発行せず、intent と観測 ref を残して `manual_cleanup_required` にする。
   各 launch 世代は開始時の current branch tip を `launch_head_sha` として別に保存する。
   tombstone のない既存 branch は current tip が base SHA と同じでも自動採用しない。
-  明示 continue は shared lock 下で cleaned tombstone の reservation と phase `worktree-planned` の intent 保存を一回の state save にし、base field tuple と `lineage_base_sha` を current ref から再解決せず継承する。
+  明示 continue は current session bundle を再照合して新しい launch 世代の operation bundle / launch spec を準備し、shared lock 下で cleaned tombstone reservation、operation bundle reference / launch spec、main phase `worktree-planned`、nested phase `env-capsule-planned` を同じ state save に保存する。
+  `env-capsule-starting` / `created` / `sealed` を通った後だけ `worktree-starting` へ進み、base field tuple と `lineage_base_sha` を current ref から再解決せず継承する。
   recovery または continue の明示 base が保存値と違う場合は lineage を上書きせず fail closed にする。
   branch / tombstone reservation と create / open の mutation 前に 3 秒以上 300 秒以下の `total_timeout`、同じ起点の wall-clock timestamp、lineage identity、agent / emitter の完全な launch spec を provisional intent へ保存し、read-only retry でも expiry を延長しない。
   launch operation lock / owner lease、active-supervisor lease の `launch_expires_unix_ms + recovery_grace_ms` までの検証、branch / tombstone reservation、最初の phase を同じ intent CAS に束縛する。
@@ -1950,7 +1955,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   source installation へ fallback せず、mutation 後の bundle drift は `manual_cleanup_required` にして同じ intent で再構築しない。
   launcher は single-shot とし、operation child 終了後は別の shell、次の intent、入力を受理せず終了する。
   pane 消滅後は operation final row を `stale` にし、同じ launcher process または row key の自動再利用を禁止する。
-  明示 cleanup は console / coordinator では旧 workspace の不在を再観測して旧 row を削除し、child では旧 workspace と checkout の不在を再観測して active row を cleaned tombstone へ置き換える。
+  明示 cleanup は console / coordinator では旧 workspace の不在を再観測して旧 row を削除する。
+  child の explicit manual reconciliation は、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を完全な inventory から read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を同じ state save で cleaned tombstone へ置き換える。
   cleaned tombstone は watcher、background fanout、通常 fanout の idempotency hit とし、自動 launch を行わない。
   後続の explicit continue は branch lineage だけを新しい launch 世代へ渡し、旧 workspace、checkout、nonce、marker、row、launcher を再利用する relaunch または cold resume として扱わない。
   console は saved PaneRef / `terminal_id` 上の shell process identity、agent operation は expected provider の一意な agent と、`process-info` / OS process table から得た launcher descendant chain が intent の `runtime_matcher_spec` と完全一致した場合だけ各 observed phase へ進む。
