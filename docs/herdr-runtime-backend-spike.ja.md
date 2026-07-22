@@ -358,9 +358,24 @@ herdr pane 内から fanout を起動する通常ケースでは同じ root cwd 
 既存 checkout は `worktree open --path ...` または `worktree open --branch ...` で採用でき、すでに開いている場合は `already_open:true` が返った。
 
 fanout は branch の所有履歴を repo-scoped な branch lineage として保持する。
-lineage は `lineage_id`、owner row key、canonical repo identity、full branch ref、deterministic checkout path、初回予約時から不変の `lineage_base_sha`、最後に所有を確認した `last_owned_head_sha`、`active` / `cleaned` state を持つ。
+lineage は `lineage_id`、owner row key、canonical repo identity、full branch ref、deterministic checkout path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、初回予約時から不変の `lineage_base_sha`、最後に所有を確認した `last_owned_head_sha`、`active` / `cleaned` state を持つ。
+以下では `resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name` の組を base field tuple と呼ぶ。
 各 launch 世代は開始時の branch tip を別の `launch_head_sha` として持ち、cleanup 時の commit または rebase 後 tip と混同しない。
 fresh launch は `lineage_base_sha` と `launch_head_sha` を同じ resolved base SHA にする。
+base selector は refresh と safety gate の後、branch reservation 前に canonical 化する。
+local branch `release/v1` と `refs/heads/release/v1` は `resolved_base_ref=refs/heads/release/v1`、`resolved_base_name=release/v1` にする。
+`origin/release/v1` と `refs/remotes/origin/release/v1` は `resolved_base_ref=refs/remotes/origin/release/v1`、`resolved_base_name=origin/release/v1` にする。
+他 remote の remote-tracking ref も `refs/remotes/<remote>/<branch>` と `<remote>/<branch>` の組にし、full ref は `git rev-parse --symbolic-full-name` が一つだけ返す場合にその値を使う。
+`refs/heads/*` と `refs/remotes/*` 以外の full ref は exact full ref を `resolved_base_ref` と `resolved_base_name` の両方に使う。
+`effective_base_branch` は default 解決後に `worktree.BuildPlan.BaseBranch` が持つ exact spelling を保存し、canonical 化で書き換えない。
+direct commit selector は commit object へ peel した lowercase 40 hex を `resolved_base_ref` と `resolved_base_name` にし、元の selector は `effective_base_branch` に保存する。
+ambiguous ref、non-commit、解釈不能な selector は mutation 前に拒否する。
+session view は `resolved_base_ref` を worktree 比較へ渡し、ref が解決不能なら `lineage_base_sha` を使って無言で `HEAD` へ落とさない。
+lifecycle hook は `effective_base_branch` を既存 state の `BaseBranch` と `FANOUT_BASE_BRANCH` へ渡し、tmux backend と同じ public value を保つ。
+local branch と `origin` remote-tracking branch だけが branch component を `pr_base_name` に保存して auto-PR を許可する。
+他 remote、tag、direct commit、detached `HEAD` は `pr_base_name` を持たず、auto-PR を mutation 前に拒否する。
+PR 作成は保存済み `pr_base_name` だけを使い、registry の base field を prefix 除去で書き換えない。
+branch reservation は `lineage_base_sha` だけを起点にする。
 既存 branch を自動採用せず、後述する cleaned tombstone からの明示 continue だけが保存済み lineage を再利用できる。
 
 child の branch reservation、launch、cleanup は次の phase を通る。
@@ -392,7 +407,7 @@ herdr は fetch、dirty gate、divergence gate を実行しない。
 herdr backend は tmux-parity trust、owned session、capability gate を確認してから次の child launch state machine へ入る。
 以下は wave 2 の自動 launch に必須の crash safety と誤操作防止の契約である。
 
-- base ref を immutable commit SHA へ解決する。
+- base selector を canonical `resolved_base_ref` / `resolved_base_name`、exact `effective_base_branch`、optional `pr_base_name` と immutable commit SHA へ一回だけ解決する。
 - source checkout の dirty と divergence を検査し、既存の fail-closed 契約を保つ。
 - fresh launch は branch が存在しないことを要求し、resolved base SHA への atomic ref reservation を intent に先行記録してから新しい lineage を作る。
 - cleaned tombstone からの明示 continue は full branch ref の tip が `last_owned_head_sha` と一致し、同じ branch が他の checkout にない場合だけ、新しい `launch_head_sha` で lineage を `active` に戻す。
@@ -401,12 +416,14 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
 - branch ref reservation、tombstone reservation、`worktree create`、既存 checkout の `worktree open` のいずれより前に 3 秒以上 300 秒以下の `total_timeout` を確定し、parent の monotonic deadline、`launch_started_unix_ms`、`launch_expires_unix_ms` を同じ起点から作る。
   `launch_expires_unix_ms` は wall clock 上の `launch_started_unix_ms + total_timeout` とし、retry で延長または再計算しない。
   agent launch nonce と emitter nonce を生成し、provider、deterministic agent name、source provenance の `entrypoint_spec`、`launch_bundle_spec`、bundle digest に束縛した `runtime_matcher_spec`、正規化済み exec argv、workload env / fingerprint、launcher protocol version、marker、token も mutation 前に確定する。
-  fresh launch は state lock 下で branch 不在の pre-state、exact compare-and-create request、予定 `lineage_id` を phase `branch-planned` の provisional launch intent へ保存する。
+  fresh launch は state lock 下で branch 不在の pre-state、exact compare-and-create request、予定 `lineage_id`、base field tuple、resolved base SHA を phase `branch-planned` の provisional launch intent へ保存する。
+  branch reservation の送信直前に `resolved_base_ref^{commit} == lineage_base_sha` を再照合し、base ref が動いた場合は mutation を発行しない。
   request 発行直前に phase `branch-starting` を保存し、old OID を空とする `update-ref` 相当を一回だけ発行する。
   保存済み成功応答がある場合だけ reservation receipt と active lineage を同じ state save へ記録し、phase `worktree-planned` へ進む。
   `branch-starting` の再実行、response loss、または ref mutation の有無が不明な場合は request を再発行せず、intent と観測 ref を残して `manual_cleanup_required` にする。
   明示 continue は shared lock 下で cleaned tombstone の reservation と phase `worktree-planned` の intent 保存を一回の state save にする。
-  intent は owner row key、起動元の physical worktree root、backend、検証済み herdr session / socket identity、operation、worktree ownership nonce、slug、branch、path、`lineage_id`、`lineage_base_sha`、`launch_head_sha`、mutation 前の runtime / git snapshot、`total_timeout_ms`、二つの wall-clock timestamp、agent / emitter の launch spec を持つ。
+  intent は owner row key、起動元の physical worktree root、backend、検証済み herdr session / socket identity、operation、worktree ownership nonce、slug、branch、path、`lineage_id`、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`launch_head_sha`、mutation 前の runtime / git snapshot、`total_timeout_ms`、二つの wall-clock timestamp、agent / emitter の launch spec を持つ。
+  recovery は intent の base field tuple を current ref から再解決せず、呼出し側が明示した base selector の canonical 値と保存値が違う場合は fail closed にする。
   新規 create では nonce を mutation 前に生成し、既存 checkout の採用では state row と checkout git dir で一致済みの作成時 nonce を使う。
   同じ launch の再実行では intent の backend / session identity が env / default の backend 選択より優先され、明示指定(`--backend` / env)が intent と矛盾する場合は fail closed にする。
   これにより workspace mutation 後かつ row 確定前に crash した launch を、別 backend の再実行が intent recovery より先に拾う事故を防ぐ。
@@ -486,7 +503,8 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
   worktree、agent、process の照合失敗、欠落、重複は自動では触らず fail closed にする。
   final row の確定時は row key、operation kind、backend / herdr session identity（検証済み socket path を含む）、canonical repo identity、workspace ID / label、operation 固有の ownership nonce を intent から移す。
   root PaneRef / `terminal_id` / cwd / provenance、`entrypoint_spec`、bundle digest / root identity / entry path、matcher ID / version、正規化済み exec argv、workload env fingerprint、launcher protocol / identity、`observed_process_chain` も全 operation で移す。
-  child worktree では slug、branch、path、`lineage_id`、`lineage_base_sha`、`launch_head_sha`、checkout git-dir marker identity / baseline、agent operation では agent name / kind / provider、agent launch nonce、emitter nonce / telemetry routing binding、取得済みの `agent_session` ref を追加する。
+  child worktree では slug、branch、path、`lineage_id`、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`launch_head_sha`、checkout git-dir marker identity / baseline、agent operation では agent name / kind / provider、agent launch nonce、emitter nonce / telemetry routing binding、取得済みの `agent_session` ref を追加する。
+  session view は child final row の `resolved_base_ref`、fallback の `lineage_base_sha` を順に worktree 比較へ使い、lifecycle hook は `effective_base_branch` を `FANOUT_BASE_BRANCH` へ渡す。
   console row は user shell identity を持つが agent / emitter field を持たない。
   final row の確定、agent operation の pending emitter telemetry の反映、intent の削除は state lock 下の同じ state save で実行する。
 - `worktree create` 後は、応答、workspace の worktree provenance、git の branch、path、HEAD と `launch_head_sha` を照合する。
@@ -525,13 +543,13 @@ fanout が state、snapshot、checkout git dir を照合してから別接続で
 この TOCTOU は `--force` の有無にかかわらず残り、tmux-parity tier では tmux cleanup と同種の受容済み残余リスクとする。
 fanout は state lock 下で exact request と pre-state を phase `cleanup-planned` へ保存し、送信直前の再照合後に phase `cleanup-starting` を保存してから mutation を一回だけ発行する。
 保存済み backend / session、workspace ID / label、canonical repo identity、operation 固有の root provenance、作成時 ownership nonce と現在値を再照合する。
-child worktree は full branch ref、deterministic path、checkout git-dir marker、workspace label、worktree ownership nonce が lineage と一致し、checkout HEAD と branch ref が同じ current commit を指すことを要求する。
+child worktree は full branch ref、deterministic path、checkout git-dir marker、workspace label、worktree ownership nonce、base field tuple が lineage と一致し、checkout HEAD と branch ref が同じ current commit を指すことを要求する。
 この current commit を `cleanup_head_sha` として保存し、`launch_head_sha` との差は commit または rebase の結果として許可する。
 ancestry だけでは ownership を証明せず、nonce、marker、path、full ref の不一致を ancestry で救済しない。
 force なしでは clean checkout を要求し、`--force` は明示的なユーザー確認と保存済み dirty fingerprint の送信直前再照合を要求する。
 成功応答後は workspace、checkout、worktree registration、旧 git-dir marker の不在と、branch ref が引き続き `cleanup_head_sha` を指すことを再観測する。
 全条件を満たした同じ state save で active final row を `cleaned` branch tombstone へ置き換え、lineage の `last_owned_head_sha` を `cleanup_head_sha`、state を `cleaned` にする。
-tombstone は row key、backend、lineage identity、repo / branch / path、`lineage_base_sha`、`last_owned_head_sha`、cleanup receipt、旧 marker identity を履歴として保持し、workspace、pane、checkout、active bundle reference を持たない。
+tombstone は row key、backend、lineage identity、repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha`、cleanup receipt、旧 marker identity を履歴として保持し、workspace、pane、checkout、active bundle reference を持たない。
 不一致、重複、response loss、mutation の有無が不明な場合、または postcondition 中に branch ref が動いた場合は final row と intent を残し、tombstone を作らず fail closed にする。
 
 `workspace close` を先に実行すると checkout は残る。
@@ -543,7 +561,9 @@ remove 前に launcher timeout / exit または workspace identity 変化を観�
 setup hook がある場合の削除用再登録は proof-grade tier まで fail closed にし、`--force` は明示的なユーザー確認と dirty state の再照合を要求する。
 
 cleaned tombstone からの continue は、同じ task と `lineage_id` を指定したユーザーの明示操作だけが開始できる。
-shared registry lock 下で tombstone、full branch ref、current tip、deterministic path と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ tombstone を新しい launch intent に予約する。
+shared registry lock 下で tombstone、full branch ref、current tip、deterministic path、保存済み base field と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ tombstone を新しい launch intent に予約する。
+continue は base field tuple と `lineage_base_sha` をそのまま継承し、移動後の base ref または現在の default branch から置き換えない。
+異なる `--base-branch` が明示された場合は lineage の base field を上書きせず fail closed にする。
 予約後は既存 branch tip を `launch_head_sha` にして新しい workspace、checkout、worktree ownership nonce、git-dir marker、agent launch nonce、launcher process を作り、lineage だけを継続する。
 watcher、background fanout、通常 fanout は cleaned tombstone を idempotency hit として扱い、continue を暗黙に開始しない。
 tip が変わった branch、tombstone のない branch、別 checkout にある branch は自動採用せず、手動の branch reconciliation を要求する。
@@ -1437,12 +1457,18 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   fanout-owned XDG の registry と config に予期しない plugin または setup hook がない場合だけ tmux-parity tier の launch を続ける。
   setup hook がある場合は、atomic suppression、registry generation precondition、または operation-scoped completion receipt を持つ proof-grade tier まで fail closed にする。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
-  fresh launch は branch 不在の pre-state、exact compare-and-create request、予定 lineage を phase `branch-planned` へ保存し、phase `branch-starting` の保存後に resolved base SHA への atomic ref reservation を一回だけ発行する。
-  保存済み成功応答がある場合だけ repo / task / full branch ref / path、固定 `lineage_base_sha`、初回 `last_owned_head_sha` を持つ active lineage を作り、phase `worktree-planned` へ進む。
+  base selector は local branch を `refs/heads/<branch>` / `<branch>`、remote-tracking branch を `refs/remotes/<remote>/<branch>` / `<remote>/<branch>`、direct commit を full SHA / full SHA の `resolved_base_ref` / `resolved_base_name` に canonical 化し、exact `effective_base_branch` と immutable `lineage_base_sha` を別に保存する。
+  session view は `resolved_base_ref`、解決不能時は `lineage_base_sha` を worktree 比較へ使い、lifecycle hook は `effective_base_branch` を state `BaseBranch` / `FANOUT_BASE_BRANCH` へ渡す。
+  local / origin branch だけが optional `pr_base_name` を持って auto-PR を許可し、他 remote、tag、direct commit、detached `HEAD` は auto-PR を拒否する。
+  PR 作成は `pr_base_name` だけを使い、registry の値を変更しない。
+  fresh launch は branch 不在の pre-state、exact compare-and-create request、予定 lineage と base field tuple を phase `branch-planned` へ保存し、phase `branch-starting` の保存後に resolved base SHA への atomic ref reservation を一回だけ発行する。
+  request 送信直前に `resolved_base_ref^{commit}` と `lineage_base_sha` を再照合し、base ref が動いた場合は発行しない。
+  保存済み成功応答がある場合だけ repo / task / full branch ref / path、固定 base field tuple / `lineage_base_sha`、初回 `last_owned_head_sha` を持つ active lineage を作り、phase `worktree-planned` へ進む。
   `branch-starting` の再実行、response loss、ref mutation の不明では request を再発行せず、intent と観測 ref を残して `manual_cleanup_required` にする。
   各 launch 世代は開始時の current branch tip を `launch_head_sha` として別に保存する。
   tombstone のない既存 branch は current tip が base SHA と同じでも自動採用しない。
-  明示 continue は shared lock 下で cleaned tombstone の reservation と phase `worktree-planned` の intent 保存を一回の state save にする。
+  明示 continue は shared lock 下で cleaned tombstone の reservation と phase `worktree-planned` の intent 保存を一回の state save にし、base field tuple と `lineage_base_sha` を current ref から再解決せず継承する。
+  recovery または continue の明示 base が保存値と違う場合は lineage を上書きせず fail closed にする。
   branch / tombstone reservation と create / open の mutation 前に 3 秒以上 300 秒以下の `total_timeout`、同じ起点の wall-clock timestamp、lineage identity、agent / emitter の完全な launch spec を provisional intent へ保存し、read-only retry でも expiry を延長しない。
   同じ worktree ownership nonce を workspace label と checkout git dir marker の両方で照合する。
   各 worktree mutation の直前に phase `worktree-starting`、exact request、per-step pre-state を保存し、starting の再実行では対象資源がなくても request を再発行しない。
@@ -1523,7 +1549,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   `agent-started` の回復は保存済み `terminal_id` が現在値と一致する場合だけ live `observed_process_chain` を matcher で照合し、変わった場合は `stale` にする。
   final row の確定では row key、operation kind、backend / herdr session identity（検証済み socket path を含む）、canonical repo identity、workspace ID / label、operation 固有の ownership nonce を intent から移す。
   root PaneRef / `terminal_id` / cwd / provenance、`entrypoint_spec`、bundle digest / root identity / entry path、matcher ID / version、正規化済み exec argv、workload env fingerprint、launcher protocol / identity、`observed_process_chain` も全 operation で移す。
-  child worktree は slug / branch / path、`lineage_id`、`lineage_base_sha`、`launch_head_sha`、checkout git-dir marker identity / baseline を追加する。
+  child worktree は slug / branch / path、`lineage_id`、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`launch_head_sha`、checkout git-dir marker identity / baseline を追加する。
   agent operation は agent name / kind / provider、agent launch nonce、emitter nonce / telemetry routing binding、取得済みの `agent_session` ref も追加し、console は agent / emitter field を持たない。
   全 operation の final row と intent 削除は共有 registry の同じ state save で永続化し、agent operation では pending emitter telemetry もその save へ含める。
   保存済み identity の pane が消滅した場合は保存済み PaneRef を束縛した `stale` row を確定し、pending `done` は telemetry としてだけ保存する。
@@ -1616,7 +1642,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   dirty worktree の `--force` は明示的なユーザー確認と dirty fingerprint の送信直前再照合を要求する。
   remove / close request に nonce または session epoch の precondition を渡せず TOCTOU は残るが、tmux-parity tier の受容済み残余リスクとする。
   成功応答後に workspace、checkout、worktree registration、旧 marker の不在と branch ref が `cleanup_head_sha` のままであることを再観測した場合だけ、active row を cleaned tombstone へ置き換える。
-  tombstone は row key / backend、lineage / repo / branch / path、`lineage_base_sha`、`last_owned_head_sha=cleanup_head_sha`、cleanup receipt、旧 marker identity を保持し、active runtime resource と bundle reference を持たない。
+  tombstone は row key / backend、lineage / repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha=cleanup_head_sha`、cleanup receipt、旧 marker identity を保持し、active runtime resource と bundle reference を持たない。
   response loss、mutation 不明、identity 不一致、branch ref drift、setup hook のある削除用再登録は final row / intent を残して fail closed にし、tombstone を作らない。
   explicit continue は shared lock 下で同じ task / lineage の tombstone、branch tip、deterministic path と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ新しい workspace / checkout / nonce / marker / launch 世代を作る。
   tombstone のない branch、tip が動いた branch、別 checkout にある branch は採用しない。
