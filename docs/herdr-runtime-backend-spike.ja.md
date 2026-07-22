@@ -12,7 +12,8 @@ core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata tok
 
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
-version / session / schema / behavior profile の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
+version / session / schema / behavior profile の検査と各操作に対応する本文の owner gate 完了後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
+console / coordinator / agent launch は加えて #528 の direct-launch 契約完了を要求する。
 自動 mutation は provisional intent と phase machine、nonce の二重照合、branch の atomic reservation、事後条件検査、no-blind-retry を通す。
 linked worktree 間の intent、console、final row、telemetry routing は canonical git common directory 配下の単一 Herdr control registry を正典とし、worktree-local `state.json` へ分散しない。
 Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
@@ -37,17 +38,17 @@ request-bound generation と conditional mutation、server-authenticated control
 
 | 対象 | wave 2 の判断 | 理由 |
 |---|---|---|
-| owned server | Go（#526 の未確定 gate 完了後） | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
-| server 起動 | Go（#526 の behavior / log proof 完了後） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
+| owned server | Go（#526 の未確定 gate と #527 の journal-to-epoch 移譲契約確定後） | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
+| server 起動 | Go（#526 の behavior / log proof と #527 の journal-to-epoch 移譲契約確定後） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
 | owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | 旧 admission の active intent と `*-starting` CLI process の不在を preflight / terminal CAS で証明し、active-supervisor lease と restart journal で single spawn を直列化する。gate 失敗は exact candidate absence 後に `manifest-invalid` へ閉じる |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
 | worktree | Go | intent / phase、workspace label と git-dir marker の nonce、Git 事後条件で誤採用を防ぐ |
 | cleanup 後の branch 継続 | Go（ユーザー明示操作に限る） | cleaned tombstone と current branch tip を照合し、branch lineage だけを新しい launch 世代へ移す |
-| console workspace | Go | dedicated console intent と exact token で sealed user-shell bundle を起動し、agent / nudge lane から分離する |
-| agent 起動 | Go（admitted bundle / matcher に限る） | owned config の `terminal.default_shell` を bundled non-shell launcher に固定し、sealed provider bundle と検証済み runtime process chain を operation-bound token で起動する |
-| workload env | Go（versioned policy + one-shot capsule） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。`OPENCODE_CONFIG_CONTENT`、Herdr / tmux routing、injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
+| console workspace | Go（#526 / #527 の gate と #528 の direct-launch 契約完了後） | dedicated console intent と exact token で sealed user-shell bundle を起動し、agent / nudge lane から分離する |
+| agent 起動 | Go（#526 / #527 の gate 完了後、#528 が admit した bundle / matcher に限る） | owned config の `terminal.default_shell` を bundled non-shell launcher に固定し、sealed provider bundle と検証済み runtime process chain を operation-bound token で起動する |
+| workload env | Go（#526 / #527 の gate 完了後。provider operation は #528 adapter 完了後） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。`OPENCODE_CONFIG_CONTENT`、Herdr / tmux routing、injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
 | plain shell への `pane run` | 自動 launch には不採用 | text と Enter の配送時に shell readiness と空入力を条件化できない |
 | `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
 | capability gate | structural gate と code-owned behavior profile を検査する | stable `>=0.7.5`、protocol `17` / schema `1`、接続先 status に加え、公式 v0.7.5 darwin/arm64 binary、exact agent-detection fixture、no-refresh policy を同時に許可する。fixture / no-refresh proof 未確定時は fresh bootstrap を拒否し、owned server restart では cache を使わない |
@@ -474,12 +475,12 @@ clean worktree の remove も checkout を削除したが、どちらも local b
 | `worktree create` | child workspace と root pane を作り、branch、path、base、provenance を返した | 0.7.4 契約から非回帰 |
 | child root pane の env | source workspace の明示 env を継承しなかった | launcher が intent に束縛した one-shot env capsule を claim し、policy-admitted workload env を process へ一回だけ明示する |
 | `worktree open` | cold restart 後も同じ checkout を `already_open:true` で再採用した | exact ownership を満たす recovery に使う |
-| `worktree remove` | clean checkout を削除し、local branch を残した | 0.7.4 契約から非回帰 |
+| `worktree remove` | clean checkout を削除し、local branch を残した | CLI surface の実測に限る。0.7.5 の automatic child cleanup / rollback には使わない |
 | plain shell への `pane run` | 絶対 executable、空白を含む env / argv、exact cwd を happy path では保持した | readiness / empty-input precondition がないため自動 launch には使わない |
 | owned `terminal.default_shell` | launcher が exact cwd、pane / workspace ID、nonce を受け、readiness marker 後の exact token から env / argv を保持した fake process を起動した | non-shell launcher protocol を agent と Plan Mode controller の launch vehicle に使う |
 | `pane process-info` | argv0 / argv / cwd を返した | OS process 情報の実 executable / ancestry / process group と合わせて exact identity を検査する |
 | cold restart | public workspace / pane ID と layout を維持し、全 `terminal_id` を更新した | public ID だけでは再束縛しない |
-| cleanup | workspace / worktree cleanup 後の snapshot と unlink 後の plugin list は空だった | 既存 cleanup order を維持する |
+| cleanup | workspace / worktree cleanup 後の snapshot と unlink 後の plugin list は空だった | CLI teardown の実測履歴に限り、0.7.5 production child cleanup authority には使わない |
 
 再起動前の `w1:p1`、`w2:p1`、`w3:p1` から `w3:p4` は再起動後も同じ public ID だった。
 対応する六つの `terminal_id` はすべて更新され、manual / fake agent の name と record は失われた。
@@ -514,9 +515,9 @@ launcher marker と root identity を照合した `console-ready` 後だけ exac
 parent は `pane process-info` と OS process 情報で shell executable / argv / cwd / ancestry / process group を照合して final console row を確定する。
 console は agent detection、rename、emitter、initial operation token 以外の automatic `pane run`、`agent prompt`、nudge の対象にせず、ユーザーが明示的に focus した後の入力だけを受ける。
 attach 準備は exact live console row を再利用し、console が存在しない場合だけ作成する。
-explicit attach で owned stale console を見つけた場合は通常の exact cleanup で workspace 不在と row 削除を確定してから新しい console intent を作り、background では再作成しない。
+explicit attach で owned stale console を見つけた場合は `workspace close` / `pane close` による exact cleanup で workspace 不在と row 削除を確定してから新しい console intent を作り、background では再作成しない。
 cleanup の ownership または response postcondition を満たせない場合、foreign / stale console を採用せず attach を fail closed にする。
-fanout-owned session は console / coordinator / child の intent-backed workspace と fanout cleanup 用の短命 workspace だけを受け入れ、TUI または外部 CLI が intent なしで作る generic workspace の root launcher は shell fallback を起動せず deadline で終了する。
+fanout-owned session は console / coordinator / child の intent-backed workspace だけを受け入れ、TUI または外部 CLI が intent なしで作る generic workspace の root launcher は shell fallback を起動せず deadline で終了する。
 ユーザーの generic Herdr workspace は別 session のまま扱い、fanout はその config / default shell を変更しない。
 
 server process は per-repo supervisor が所有する foreground `herdr server` child とし、attached console process の子にはしない。
@@ -529,7 +530,7 @@ re-gate 失敗は candidate failure receipt を保存し、exact candidate の s
 0.7.5 direct-launch row は provider にかかわらず `terminal_id` が変われば `stale` とし、自動 resume しない。
 最後の child close では server を止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource がない場合の明示的な repo-session shutdown だけを teardown とする。
 cleaned tombstone と branch lineage は active runtime resource ではなく、明示 shutdown を妨げず repo-scoped registry に残る。
-明示 shutdown は console shell / workspace を exact identity の通常 cleanup で先に閉じ、console row を含む全 active row / intent、active env-capsule inventory、capsule disposal journal、foreign resource の不在を再観測してから server を停止する。
+明示 shutdown は console shell / workspace を `workspace close` / `pane close` による exact cleanup で先に閉じ、console row を含む全 active row / intent、active env-capsule inventory、capsule disposal journal、foreign resource の不在を再観測してから server を停止する。
 
 ## 起動と session 境界
 
@@ -1902,7 +1903,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
-| owned bootstrap / launch | Go（#526 / #527 gate 完了後） | FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、launch operation lock / lease、sealed session / operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、0600 / ACL-free server log creation / maintenance / verification proof、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename を要求し、#526 の fixture / no-refresh proof / log protocol / owner marker schema / registry writer gate と #527 の journal-to-epoch 移譲の確定までは fail closed | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
+| owned bootstrap / launch | Go（bootstrap は #526 / #527 の gate 完了後、launch は加えて #528 の direct-launch 契約完了後） | bootstrap は FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、sealed session bundle、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、0600 / ACL-free server log creation / maintenance / verification proof を要求し、#526 の fixture / no-refresh proof / log protocol / owner marker schema / registry writer gate と #527 の journal-to-epoch 移譲の確定までは fail closed にする。console / coordinator / agent launch はさらに launch operation lock / lease、sealed operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、対応する intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher を要求する。coordinator / agent launch は加えて agent detection / rename と provider admission を要求し、#528 完了まで fail closed にする | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | active intent 0 件と `*-starting` CLI process 不在の preflight / terminal fence、active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
 | launch bundle build / GC | Go | FD-relative private namespace gate、空の xattr allowlist、build lock / lease / owner CAS、root identity、expected entry set、incomplete root の quarantine-only recovery、detached inventory、no-follow subset deletion、session bootstrap abort terminal CAS | verified FD spawn または別 UID の bundle owner |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、response loss では blind retry しない | close が authoritative server generation と target resource generation を原子的に検査する |
@@ -1939,6 +1940,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   console detach 後も server を存続させ、最後の child close では止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource のない明示 repo-session shutdown だけを teardown とする。
   cleaned tombstone と branch lineage は repo-scoped state として残し、teardown blocker にしない。
 - herdr backend wave 2 は本文の未確定 gate を各 owner issue が確定した後、snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child workspace-only close / manual reconciliation を後続実装へ解禁する。
+  console / coordinator / agent launch は加えて #528 の direct-launch 契約完了まで fail closed にする。
   child checkout の automatic `worktree remove` / rollback は force の有無を問わず解禁しない。
   `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を shared registry の Herdr row へ移行するまで最初の mutation 前に拒否する。
   #552 の Herdr 実装は #568 の完了後に開始する。
@@ -2004,13 +2006,13 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   `console-starting` は request を再発行せず、request 発行済みまたは発行有無が不明なら exact label / cwd の一意な workspace / root terminal があっても `manual_cleanup_required` とする。
   launcher marker を検証した `console-ready` 後の exact token だけが shell を起動し、live shell process identity を照合した `console-started` と final console row を確定する。
   console は agent detection / rename / emitter / nudge の対象にせず、live idle shell のときだけ明示 focus または child cleanup 後の fallback に使う。
-  explicit attach は exact live console を再利用し、owned stale console は通常 cleanup 後にだけ作り直し、cleanup を証明できない場合は fail closed にする。
+  explicit attach は exact live console を再利用し、owned stale console は `workspace close` / `pane close` による exact cleanup 後にだけ作り直し、cleanup を証明できない場合は fail closed にする。
   coordinator の `workspace create` も mutation 前に共有 timeout / expiry と完全な launch spec を phase `workspace-planned` へ保存し、response の workspace / root terminal identity を phase `workspace-realized` で同じ intent へ束縛する。
   exact request と pre-state は発行前に phase `workspace-starting` へ保存し、この phase の再実行では request を再発行しない。
   coordinator root は worktree root と同じ launcher readiness、token、agent detection 契約を通す。
   per-repo supervisor が foreground server child を所有し、console detach 後も存続させる。
   最後の child close では停止せず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource のない明示 repo-session shutdown だけを teardown とする。
-  明示 shutdown は console shell / workspace を exact identity の通常 cleanup で閉じ、console row を含む全 active row / intent、active env-capsule inventory、capsule disposal journal、foreign resource の不在を再観測してから dedicated operation lock を取得する。
+  明示 shutdown は console shell / workspace を `workspace close` / `pane close` による exact cleanup で閉じ、console row を含む全 active row / intent、active env-capsule inventory、capsule disposal journal、foreign resource の不在を再観測してから dedicated operation lock を取得する。
   current active owner、restart journal 不在、空 inventory、namespace pre-state と保存済み `ready` または `manifest-invalid` から `draining` への遷移、shutdown journal / renewable owner lease の作成を同じ CAS save にする。
   `draining` 後は全 linked worktree の通常 mutation を `session_shutting_down` で拒否し、registry-only status / session view と同じ shutdown machine の recovery だけを許可する。
   stop、marker unlink、terminal save の前に同じ draining epoch / owner / inventory / namespace / bundle / manifest override realization reference を再照合し、draining を `ready` または `manifest-invalid` へ戻さない。
@@ -2046,7 +2048,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   bootstrap abort は active epoch / `draining` / shutdown owner を要求せず、引き継いだ bootstrap operation lock と bootstrap-abort owner / fence を使う。
   server stop と marker unlink の planned / starting / realized phase は通常 shutdown と共有するが、各 guard と terminal effect を lifecycle context ごとに分け、terminal save まで provisional reference と abort owner lease を保持する。
   source installation への fallback を禁止し、launcher control env は child env から除く。
-  fanout-owned session は intent-backed console / coordinator / child と fanout cleanup 用の短命 workspace だけを許可し、out-of-band workspace の launcher は shell fallback なしで deadline 終了する。
+  fanout-owned session は intent-backed console / coordinator / child だけを許可し、out-of-band workspace の launcher は shell fallback なしで deadline 終了する。
   plugin registry は session-local ではなく同じ `XDG_CONFIG_HOME` を使う全 session の global state として直前に照合する。
   fanout-owned XDG の registry と config に予期しない plugin または setup hook がない場合だけ tmux-parity tier の launch を続ける。
   setup hook がある場合は、atomic suppression、registry generation precondition、または operation-scoped completion receipt を持つ proof-grade tier まで fail closed にする。
