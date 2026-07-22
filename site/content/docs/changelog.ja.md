@@ -9,6 +9,22 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.15.0 (2026-07-23)
+
+- **起動レーン別の Plan Mode 設定。** `newSessionPlanMode`、`orchestratorPlanMode`、`childPlanMode` で、manual、coordinator、attach、orchestrator、issue / Project child、`fanout plan` task、watcher の起動姿勢を設定できるようになりました。
+  3 つの user-only 設定は Claude Code、Codex、OpenCode に共通で、新規 Session と orchestrator は Plan Mode、child は build mode が既定です。
+  廃止した `codexPlanMode` と `FANOUT_CODEX_PLAN_MODE` は移行警告つきで無視し、旧 `--codex-plan-mode` / `--no-codex-plan-mode` flag は受理しません。
+  [設定]({{< relref "/docs/settings" >}}) と [エージェント連携]({{< relref "/docs/agent-integrations" >}}) を参照。
+- **agent 別の mode 起動。** fanout は Plan Mode と build mode を各 agent の CLI に割り当て、v2.1.207 未満または version を判定できない Claude Code では警告して mode flag を省きます。
+  Codex orchestrator で start gate と Plan Mode が競合する場合は、警告して素の Codex を起動します。
+  OpenCode は Plan と build の child を起動できますが、plan fan-out coordinator には使えません。
+  [エージェント連携]({{< relref "/docs/agent-integrations" >}}) と [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- **正確な Plan 表示。** dashboard は Codex Plan Mode ペインだけに取得済みの Plan を表示し、それ以外のペインには空の Plan セクションを出しません。
+  [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- **依存関係の security 更新。** `golang.org/x/text` を v0.3.8 から v0.39.0 へ更新し、不正な UTF-8 入力で `norm.Iter` が無限ループする [GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970) の修正を取り込みました。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.15.0)
+
 ## v0.14.0 (2026-07-21)
 
 - **OpenCode 子エージェント。** `--agent opencode` で issue / Project と `fanout plan` を実行でき、per-target override と TUI new-session picker でも選べるようになりました。
