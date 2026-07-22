@@ -4101,7 +4101,7 @@ func TestSettingsReloadInvalidatesOlderWatchTicks(t *testing.T) {
 	}
 }
 
-func TestSettingsViewIncludesPlanMode(t *testing.T) {
+func TestSettingsViewIncludesPlanModeRowsAndDisablesRepoEdits(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := newModel(Options{ProjectRoot: t.TempDir()})
 	m.width = 100
@@ -4109,8 +4109,31 @@ func TestSettingsViewIncludesPlanMode(t *testing.T) {
 	m.openSettingsForm(fanoutsettings.ConfigScopeUser)
 
 	view := m.settingsView()
-	if !strings.Contains(view, "Launch") || !strings.Contains(view, "codexPlanMode") {
-		t.Fatalf("settings view missing Codex Plan Mode row:\n%s", view)
+	for _, want := range []string{"Launch", "codexPlanMode", "newSessionPlanMode", "orchestratorPlanMode", "childPlanMode"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("settings view missing %q:\n%s", want, view)
+		}
+	}
+
+	m.openSettingsForm(fanoutsettings.ConfigScopeRepo)
+	planModeRows := map[string]bool{
+		"newSessionPlanMode":   false,
+		"orchestratorPlanMode": false,
+		"childPlanMode":        false,
+	}
+	for i, row := range m.settings.rows {
+		if _, ok := planModeRows[row.spec.Key]; !ok {
+			continue
+		}
+		planModeRows[row.spec.Key] = true
+		if !row.disabled || !strings.Contains(m.settingsRowView(i+1, row), "repo-disabled") {
+			t.Fatalf("repo settings row %q is not repo-disabled", row.spec.Key)
+		}
+	}
+	for key, found := range planModeRows {
+		if !found {
+			t.Fatalf("repo settings rows missing %q", key)
+		}
 	}
 }
 

@@ -38,6 +38,9 @@ type Settings struct {
 	BriefingCodeReview     bool
 	AgentTeamsHint         bool
 	CodexPlanMode          bool
+	NewSessionPlanMode     bool
+	OrchestratorPlanMode   bool
+	ChildPlanMode          bool
 	PRVisualization        bool
 	DashboardKeybind       bool
 	ConsoleKeybind         bool
@@ -116,6 +119,9 @@ type overrides struct {
 	BriefingCodeReview     *bool
 	AgentTeamsHint         *bool
 	CodexPlanMode          *bool
+	NewSessionPlanMode     *bool
+	OrchestratorPlanMode   *bool
+	ChildPlanMode          *bool
 	PRVisualization        *bool
 	DashboardKeybind       *bool
 	ConsoleKeybind         *bool
@@ -138,6 +144,9 @@ var configKeys = []ConfigKey{
 	{Key: "agentTeamsHint", Group: "Briefing", Label: "Agent Teams hint", Kind: ValueBool, Env: "FANOUT_AGENT_TEAMS_HINT", Default: "true", RepoEditable: true},
 	{Key: "prVisualization", Group: "Briefing", Label: "PR visualization", Kind: ValueBool, Env: "FANOUT_PR_VISUALIZATION", Default: "true", RepoEditable: true},
 	{Key: "codexPlanMode", Group: "Launch", Label: "Codex child Plan Mode", Kind: ValueBool, Env: "FANOUT_CODEX_PLAN_MODE", Default: "false", RepoEditable: true},
+	{Key: "newSessionPlanMode", Group: "Launch", Label: "New session Plan Mode", Kind: ValueBool, Env: "FANOUT_NEW_SESSION_PLAN_MODE", Default: "true", RepoEditable: false},
+	{Key: "orchestratorPlanMode", Group: "Launch", Label: "Orchestrator Plan Mode", Kind: ValueBool, Env: "FANOUT_ORCHESTRATOR_PLAN_MODE", Default: "true", RepoEditable: false},
+	{Key: "childPlanMode", Group: "Launch", Label: "Child Plan Mode", Kind: ValueBool, Env: "FANOUT_CHILD_PLAN_MODE", Default: "false", RepoEditable: false},
 	{Key: "runtimeBackend", Group: "Launch", Label: "Runtime backend", Kind: ValueString, Env: "FANOUT_BACKEND", Default: "tmux", RepoEditable: false},
 	{Key: "dashboardKeybind", Group: "TUI", Label: "Dashboard keybind", Kind: ValueBool, Env: "FANOUT_DASHBOARD_KEYBIND", Default: "true", RepoEditable: true},
 	{Key: "consoleKeybind", Group: "TUI", Label: "Console keybind", Kind: ValueBool, Env: "FANOUT_CONSOLE_KEYBIND", Default: "true", RepoEditable: true},
@@ -162,6 +171,8 @@ func Defaults() Settings {
 		PRReviewGate:           true,
 		BriefingCodeReview:     true,
 		AgentTeamsHint:         true,
+		NewSessionPlanMode:     true,
+		OrchestratorPlanMode:   true,
 		PRVisualization:        true,
 		DashboardKeybind:       true,
 		ConsoleKeybind:         true,
@@ -316,6 +327,15 @@ func apply(s *Settings, o overrides, runtimeBackendSource RuntimeBackendSource) 
 	if o.CodexPlanMode != nil {
 		s.CodexPlanMode = *o.CodexPlanMode
 	}
+	if o.NewSessionPlanMode != nil {
+		s.NewSessionPlanMode = *o.NewSessionPlanMode
+	}
+	if o.OrchestratorPlanMode != nil {
+		s.OrchestratorPlanMode = *o.OrchestratorPlanMode
+	}
+	if o.ChildPlanMode != nil {
+		s.ChildPlanMode = *o.ChildPlanMode
+	}
 	if o.PRVisualization != nil {
 		s.PRVisualization = *o.PRVisualization
 	}
@@ -380,6 +400,18 @@ func cliOverrides(cli CLIOverrides, warnf WarnFunc) overrides {
 
 func repoOverrides(path string, warnf WarnFunc) overrides {
 	out := loadFile(path, warnf)
+	if out.NewSessionPlanMode != nil {
+		warn(warnf, "settings %s: newSessionPlanMode is ignored in repo config; use user config or FANOUT_NEW_SESSION_PLAN_MODE", path)
+		out.NewSessionPlanMode = nil
+	}
+	if out.OrchestratorPlanMode != nil {
+		warn(warnf, "settings %s: orchestratorPlanMode is ignored in repo config; use user config or FANOUT_ORCHESTRATOR_PLAN_MODE", path)
+		out.OrchestratorPlanMode = nil
+	}
+	if out.ChildPlanMode != nil {
+		warn(warnf, "settings %s: childPlanMode is ignored in repo config; use user config or FANOUT_CHILD_PLAN_MODE", path)
+		out.ChildPlanMode = nil
+	}
 	if out.Watcher != nil {
 		warn(warnf, "settings %s: watcher is ignored in repo config; use user config or FANOUT_WATCHER", path)
 		out.Watcher = nil
@@ -614,10 +646,15 @@ func loadFile(path string, warnf WarnFunc) overrides {
 		"briefingCodeReview": func(v *bool) { out.BriefingCodeReview = v },
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
 		"codexPlanMode":      func(v *bool) { out.CodexPlanMode = v },
-		"prVisualization":    func(v *bool) { out.PRVisualization = v },
-		"dashboardKeybind":   func(v *bool) { out.DashboardKeybind = v },
-		"consoleKeybind":     func(v *bool) { out.ConsoleKeybind = v },
-		"watcher":            func(v *bool) { out.Watcher = v },
+		"newSessionPlanMode": func(v *bool) { out.NewSessionPlanMode = v },
+		"orchestratorPlanMode": func(v *bool) {
+			out.OrchestratorPlanMode = v
+		},
+		"childPlanMode":    func(v *bool) { out.ChildPlanMode = v },
+		"prVisualization":  func(v *bool) { out.PRVisualization = v },
+		"dashboardKeybind": func(v *bool) { out.DashboardKeybind = v },
+		"consoleKeybind":   func(v *bool) { out.ConsoleKeybind = v },
+		"watcher":          func(v *bool) { out.Watcher = v },
 	}
 	stringKeys := map[string]func(*string){
 		"watcherTriggerLabel": func(v *string) { out.WatcherTriggerLabel = v },
@@ -700,6 +737,9 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_BRIEFING_CODE_REVIEW", func(v *bool) { out.BriefingCodeReview = v })
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
 	read("FANOUT_CODEX_PLAN_MODE", func(v *bool) { out.CodexPlanMode = v })
+	read("FANOUT_NEW_SESSION_PLAN_MODE", func(v *bool) { out.NewSessionPlanMode = v })
+	read("FANOUT_ORCHESTRATOR_PLAN_MODE", func(v *bool) { out.OrchestratorPlanMode = v })
+	read("FANOUT_CHILD_PLAN_MODE", func(v *bool) { out.ChildPlanMode = v })
 	read("FANOUT_PR_VISUALIZATION", func(v *bool) { out.PRVisualization = v })
 	read("FANOUT_DASHBOARD_KEYBIND", func(v *bool) { out.DashboardKeybind = v })
 	read("FANOUT_CONSOLE_KEYBIND", func(v *bool) { out.ConsoleKeybind = v })
