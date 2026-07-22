@@ -126,15 +126,19 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
-	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
+	paneReq, paneID, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
 		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
 			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, cfg, livenessKey)
 		})
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
+	notice := fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt)
+	if launchNotice != "" {
+		notice += "; " + launchNotice
+	}
 	return fanouttui.LaunchResult{
-		Notice:         fmt.Sprintf("started plan coordinator (%s): %s", agentName, paneReq.Prompt),
+		Notice:         notice,
 		CreatedPaneIDs: []string{paneID},
 	}, nil
 }
@@ -147,37 +151,36 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 // running `fanout plan` inside a worktree would resolve the git root there and
 // nest state under the coordinator's worktree. Its initial posture follows
 // newSessionPlanMode.
-func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, error) {
+func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-		return panelaunch.Request{}, "", validateErr
+		return panelaunch.Request{}, "", "", validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return panelaunch.Request{}, "", validateErr
+		return panelaunch.Request{}, "", "", validateErr
 	}
 	cfg := newSessionConfigForTUIAgent(projectRoot, agentName, nil)
 	cfg.ParentRef = parentRef
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
-		return panelaunch.Request{}, "", err
+		return panelaunch.Request{}, "", "", err
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
-		return panelaunch.Request{}, "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+		return panelaunch.Request{}, "", "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
-		return panelaunch.Request{}, "", err
+		return panelaunch.Request{}, "", "", err
 	}
 	defer func() {
 		_ = recorder.Unlock()
 	}()
 	if rt.VerifyBackend != nil {
 		if err := rt.VerifyBackend(parentRef, recorder.Store); err != nil {
-			return panelaunch.Request{}, "", fmt.Errorf("runtime backend: %w", err)
+			return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
 		}
 	}
-	req, paneID, _, launchErr := launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, rt.Backend, cfg, recorder.Store, recorder, guard, buildReq)
-	return req, paneID, launchErr
+	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, rt.Backend, cfg, recorder.Store, recorder, guard, buildReq)
 }
 
 // launchPlanCoordinatorLocked is the state-lock-held entry for the issue
@@ -253,7 +256,7 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		// Short enough to render unwrapped as the form's one error line.
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
-	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
+	paneReq, paneID, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
 		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
 		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, cfg, workerAgent, livenessKey)
@@ -261,8 +264,12 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
+	notice := fmt.Sprintf("started plan coordinator for #%d (%s): %s", issueNum, coordinatorAgent, paneReq.Prompt)
+	if launchNotice != "" {
+		notice += "; " + launchNotice
+	}
 	return fanouttui.LaunchResult{
-		Notice:         fmt.Sprintf("started plan coordinator for #%d (%s): %s", issueNum, coordinatorAgent, paneReq.Prompt),
+		Notice:         notice,
 		CreatedPaneIDs: []string{paneID},
 	}, nil
 }
@@ -308,7 +315,7 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
 		Agent:               cfg.Agent,
-		LaunchMode:          newSessionLaunchMode(cfg.PlanModeEnabled()),
+		LaunchMode:          coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
 		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
@@ -339,7 +346,7 @@ func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig h
 		DisplayNameOverride: title,
 		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
 		Agent:               cfg.Agent,
-		LaunchMode:          newSessionLaunchMode(cfg.PlanModeEnabled()),
+		LaunchMode:          coordinatorLaunchMode(cfg.Agent, cfg.PlanModeEnabled()),
 		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
@@ -351,8 +358,8 @@ func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig h
 	return req
 }
 
-func newSessionLaunchMode(planMode bool) agent.LaunchMode {
-	if planMode {
+func coordinatorLaunchMode(agentName string, planMode bool) agent.LaunchMode {
+	if planMode && (agentName == "claude" || agentName == "codex") {
 		return agent.ModePlan
 	}
 	return agent.ModeBuild

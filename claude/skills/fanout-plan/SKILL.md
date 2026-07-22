@@ -231,8 +231,9 @@ preview when the user explicitly requested `--dry-run`.
 3. Summarize the dry-run: plan slug/title, task count, task ids/titles,
    waves, `blocked_by`, generated worktree paths, branch names, and deferred
    rows.
-4. Ask for confirmation unless the user passed `--go` or explicitly requested
-   immediate execution. If the user passed `--dry-run`, stop after the preview.
+4. Ask for confirmation unless the user passed `--go`, explicitly requested
+   immediate execution, or already granted the native Plan Mode approval
+   described above. If the user passed `--dry-run`, stop after the preview.
 5. Run the live command without `--dry-run`:
    ```bash
    fanout plan <spec-or-slug> --agent claude [--agent api-client=codex] <flags>

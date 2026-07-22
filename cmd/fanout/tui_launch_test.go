@@ -81,6 +81,15 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	}
 }
 
+func TestNewPlanPromptPaneRequestKeepsOpenCodeInBuildMode(t *testing.T) {
+	planMode := true
+	req := newPlanPromptPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), "Plan the migration", &cliflags.Config{Agent: "opencode", PlanMode: &planMode}, "shell-coordinator-key")
+
+	if req.PlanMode() || req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("req.LaunchMode = %q, want explicit build coordinator for OpenCode", req.LaunchMode)
+	}
+}
+
 func TestNewPlanPromptPaneRequestBoundsLongSingleLineTitle(t *testing.T) {
 	prompt := strings.Repeat("x", 150_000)
 	planMode := true
@@ -449,6 +458,31 @@ func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 	}
 	if !strings.Contains(result.Notice, "started plan coordinator (claude)") {
 		t.Fatalf("notice = %q, want coordinator success", result.Notice)
+	}
+}
+
+func TestLaunchPlanPromptFromTUIReturnsClaudeModeFallbackNotice(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installTUITmuxShim(t, "%89")
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "1")
+
+	result, err := launchPlanPromptFromTUI(repo, "fanout-test", "fanout", hooks.EmptyConfig(), fanouttui.LaunchRequest{
+		Prompt:     "Ship search",
+		PlanFanout: true,
+		Agents:     []string{"claude"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Notice, "Claude Code 2.1.207+ is required") {
+		t.Fatalf("notice = %q, want Claude Plan Mode fallback warning", result.Notice)
 	}
 }
 

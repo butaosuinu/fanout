@@ -154,8 +154,9 @@ preview when the user explicitly requested `--dry-run`.
    `blocked_by`, generated worktrees/branches, skipped tasks, and deferred
    tasks.
 4. Stop when the user requested a dry-run.
-5. Unless the user explicitly passed `--go` or requested immediate execution,
-   ask for confirmation.
+5. Unless the user explicitly passed `--go`, requested immediate execution, or
+   already granted the native Plan Mode approval described above, ask for
+   confirmation.
 6. Run the identical command without `--dry-run`.
 7. Report the created/skipped/deferred/failed summary.
 
