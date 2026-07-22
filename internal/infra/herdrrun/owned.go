@@ -188,7 +188,7 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
-	session := naming.HerdrSessionName(commonDir)
+	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
 	if err != nil {
 		return nil, err
@@ -1121,76 +1121,64 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	cmd.Dir = runtimeDir
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGCHLD)
+	defer signal.Stop(signals)
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: start server: %v\n", err)
 		return 1
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	signals := make(chan os.Signal, 2)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
+	reaped := false
+	defer func() {
+		if reaped {
+			return
+		}
+		// The leader has not been reaped, so its PID cannot have been reused.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	}()
 	code := 0
-	select {
-	case waitErr := <-done:
+	received := <-signals
+	if received == syscall.SIGCHLD {
+		waitErr := cmd.Wait()
+		reaped = true
 		if waitErr != nil {
 			code = 1
 		}
-	case sig := <-signals:
-		if typed, ok := sig.(syscall.Signal); ok {
-			_ = syscall.Kill(-cmd.Process.Pid, typed)
-		}
-		select {
-		case <-done:
-		case <-time.After(ownedShutdownGrace):
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
+		// A spontaneous leader exit cannot prove that its descendants are
+		// absent. Retain the marker and sockets so the next adoption fails
+		// closed instead of mutating a possibly live old namespace.
+		return code
 	}
-	if err := stopResidualOwnedProcessGroup(cmd.Process.Pid); err != nil {
-		fmt.Fprintf(errw, "fanout herdr supervisor: process group cleanup: %v\n", err)
+	typed, ok := received.(syscall.Signal)
+	if !ok {
+		fmt.Fprintln(errw, "fanout herdr supervisor: unsupported shutdown signal")
 		return 1
 	}
+	if killErr := syscall.Kill(-cmd.Process.Pid, typed); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		fmt.Fprintf(errw, "fanout herdr supervisor: signal server process group: %v\n", killErr)
+		code = 1
+	}
+	// Keep the leader unreaped during the grace period. This prevents PID/PGID
+	// reuse before the final group kill.
+	time.Sleep(ownedShutdownGrace)
+	if killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		fmt.Fprintf(errw, "fanout herdr supervisor: kill server process group: %v\n", killErr)
+		code = 1
+	}
+	if waitErr := cmd.Wait(); waitErr != nil && code == 0 {
+		var exitErr *exec.ExitError
+		if !errors.As(waitErr, &exitErr) {
+			fmt.Fprintf(errw, "fanout herdr supervisor: reap server: %v\n", waitErr)
+			code = 1
+		}
+	}
+	reaped = true
 	if err := cleanupOwnedSockets(markerPath, marker, lock); err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: socket cleanup: %v\n", err)
 		return 1
 	}
 	return code
-}
-
-func stopResidualOwnedProcessGroup(pid int) error {
-	running, err := ownedProcessGroupRunning(pid)
-	if err != nil || !running {
-		return err
-	}
-	err = syscall.Kill(-pid, syscall.SIGKILL)
-	if err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("kill residual herdr server process group: %w", err)
-	}
-	deadline := time.Now().Add(ownedShutdownGrace)
-	for time.Now().Before(deadline) {
-		running, err = ownedProcessGroupRunning(pid)
-		if err != nil || !running {
-			return err
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	return fmt.Errorf("herdr server process group %d remained live after SIGKILL", pid)
-}
-
-func ownedProcessGroupRunning(pid int) (bool, error) {
-	if pid <= 1 {
-		return false, fmt.Errorf("invalid herdr server process group id %d", pid)
-	}
-	err := syscall.Kill(-pid, 0)
-	switch {
-	case err == nil, errors.Is(err, syscall.EPERM):
-		return true, nil
-	case errors.Is(err, syscall.ESRCH):
-		return false, nil
-	default:
-		return false, err
-	}
 }
 
 func cleanupOwnedSockets(markerPath string, marker ownerMarker, lock *os.File) error {

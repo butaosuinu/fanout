@@ -45,6 +45,16 @@ type ownedTargetAdmission struct {
 	closeFingerprint corebackend.CloseRequest
 }
 
+type agentPromptEnvelope struct {
+	ID     string             `json:"id"`
+	Result *agentPromptResult `json:"result"`
+}
+
+type agentPromptResult struct {
+	Type  string    `json:"type"`
+	Agent agentJSON `json:"agent"`
+}
+
 func (b *Backend) BindOwnedTarget(target OwnedPaneIdentity) (*Backend, error) {
 	return b.bindOwnedTarget(target, nil)
 }
@@ -175,11 +185,43 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	if err != nil {
 		return err
 	}
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "prompt", target.Ref.Pane, line); err != nil {
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "prompt", target.Ref.Pane, line)
+	if err != nil {
 		return fmt.Errorf("herdr agent prompt (not retried): %w", err)
+	}
+	if err := validateAgentPromptResponse(out, target); err != nil {
+		return fmt.Errorf("discard herdr agent prompt response: %w", err)
 	}
 	if err := b.verifyOwnedTargetAfter(ctx, admission, target); err != nil {
 		return fmt.Errorf("verify herdr pane after prompt: %w", err)
+	}
+	return nil
+}
+
+func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
+	var envelope agentPromptEnvelope
+	if err := decodeOne(data, &envelope); err != nil {
+		return err
+	}
+	if envelope.ID != "cli:agent:prompt" || envelope.Result == nil || envelope.Result.Type != "agent_prompted" {
+		return fmt.Errorf("unexpected agent prompt envelope")
+	}
+	agent := envelope.Result.Agent
+	if agent.TerminalID != target.TerminalID || agent.WorkspaceID != target.Ref.Workspace || agent.TabID == "" ||
+		agent.PaneID != target.Ref.Pane || agent.Focused == nil || agent.Revision == nil {
+		return fmt.Errorf("%w: prompted agent identity changed", ErrOwnedIdentityMismatch)
+	}
+	agentID := optionalString(agent.Name)
+	if agentID == "" {
+		agentID = optionalString(agent.Agent)
+	}
+	if agentID != target.AgentID {
+		return fmt.Errorf("%w: prompted agent name changed", ErrOwnedIdentityMismatch)
+	}
+	ref, present, err := parseAgentSession(agent.AgentSession)
+	if err != nil || !present || target.AgentSession == nil ||
+		ref != (agentSessionKey{source: target.AgentSession.Source, agent: target.AgentSession.Agent, kind: target.AgentSession.Kind, value: target.AgentSession.Value}) {
+		return fmt.Errorf("%w: prompted agent session changed", ErrOwnedIdentityMismatch)
 	}
 	return nil
 }

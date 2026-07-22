@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -54,47 +53,65 @@ type capabilityDocument struct {
 }
 
 type schemaNode struct {
-	Ref        string                 `json:"$ref"`
-	Const      json.RawMessage        `json:"const"`
-	OneOf      []*schemaNode          `json:"oneOf"`
-	AnyOf      []*schemaNode          `json:"anyOf"`
-	Properties map[string]*schemaNode `json:"properties"`
-	Required   []string               `json:"required"`
-	Defs       map[string]*schemaNode `json:"$defs"`
+	Ref                  string                 `json:"$ref"`
+	Type                 json.RawMessage        `json:"type"`
+	Const                json.RawMessage        `json:"const"`
+	Enum                 []json.RawMessage      `json:"enum"`
+	OneOf                []*schemaNode          `json:"oneOf"`
+	AnyOf                []*schemaNode          `json:"anyOf"`
+	Properties           map[string]*schemaNode `json:"properties"`
+	Required             []string               `json:"required"`
+	Defs                 map[string]*schemaNode `json:"$defs"`
+	Items                *schemaNode            `json:"items"`
+	AdditionalProperties *schemaNode            `json:"additionalProperties"`
+	Boolean              *bool                  `json:"-"`
+}
+
+func (n *schemaNode) UnmarshalJSON(data []byte) error {
+	var boolean bool
+	if err := json.Unmarshal(data, &boolean); err == nil {
+		*n = schemaNode{Boolean: &boolean}
+		return nil
+	}
+	type plainSchemaNode schemaNode
+	var decoded plainSchemaNode
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*n = schemaNode(decoded)
+	return nil
 }
 
 type methodRequirement struct {
-	name       string
-	required   []string
-	properties []string
+	name string
 }
 
 var requiredMethodCapabilities = []methodRequirement{
 	{name: "server.stop"},
 	{name: "server.agent_manifests"},
 	{name: "session.snapshot"},
-	{name: "workspace.create", properties: []string{"cwd", "env", "focus", "label"}},
-	{name: "workspace.focus", required: []string{"workspace_id"}},
-	{name: "workspace.report_metadata", required: []string{"workspace_id", "source", "tokens"}, properties: []string{"seq", "ttl_ms"}},
-	{name: "workspace.close", required: []string{"workspace_id"}},
-	{name: "worktree.list", properties: []string{"cwd", "workspace_id"}},
-	{name: "worktree.create", properties: []string{"base", "branch", "cwd", "focus", "label", "path", "workspace_id"}},
-	{name: "worktree.open", properties: []string{"branch", "cwd", "focus", "label", "path", "workspace_id"}},
-	{name: "worktree.remove", required: []string{"workspace_id"}, properties: []string{"force"}},
+	{name: "workspace.create"},
+	{name: "workspace.focus"},
+	{name: "workspace.report_metadata"},
+	{name: "workspace.close"},
+	{name: "worktree.list"},
+	{name: "worktree.create"},
+	{name: "worktree.open"},
+	{name: "worktree.remove"},
 	{name: "agent.list"},
-	{name: "agent.read", required: []string{"target", "source"}, properties: []string{"format", "lines", "strip_ansi"}},
-	{name: "agent.rename", required: []string{"target"}, properties: []string{"name"}},
-	{name: "agent.focus", required: []string{"target"}},
-	{name: "agent.prompt", required: []string{"target", "text"}, properties: []string{"wait"}},
-	{name: "agent.wait", required: []string{"target"}, properties: []string{"timeout_ms", "until"}},
-	{name: "pane.get", required: []string{"pane_id"}},
-	{name: "pane.process_info", properties: []string{"pane_id"}},
-	{name: "pane.read", required: []string{"pane_id", "source"}, properties: []string{"lines", "format", "strip_ansi"}},
-	{name: "pane.send_input", required: []string{"pane_id"}, properties: []string{"keys", "text"}},
-	{name: "pane.report_metadata", required: []string{"pane_id", "source"}, properties: []string{"tokens", "seq", "ttl_ms"}},
-	{name: "pane.close", required: []string{"pane_id"}},
-	{name: "pane.wait_for_output", required: []string{"pane_id", "source", "match"}, properties: []string{"lines", "strip_ansi", "timeout_ms"}},
-	{name: "plugin.list", properties: []string{"plugin_id"}},
+	{name: "agent.read"},
+	{name: "agent.rename"},
+	{name: "agent.focus"},
+	{name: "agent.prompt"},
+	{name: "agent.wait"},
+	{name: "pane.get"},
+	{name: "pane.process_info"},
+	{name: "pane.read"},
+	{name: "pane.send_input"},
+	{name: "pane.report_metadata"},
+	{name: "pane.close"},
+	{name: "pane.wait_for_output"},
+	{name: "plugin.list"},
 }
 
 func validateCapabilitySchema(data []byte) error {
@@ -115,17 +132,38 @@ func validateCapabilitySchema(data []byte) error {
 	if request == nil {
 		return fmt.Errorf("unsupported herdr request schema: missing schemas.request")
 	}
+	requestEnvelope := objectShape([]string{"id"}, false, map[string]schemaShape{"id": typedShape("string")})
+	if err := validateContractShape(&document, request, requestEnvelope, "schemas.request"); err != nil {
+		return fmt.Errorf("unsupported herdr request schema: %w", err)
+	}
 	for _, requirement := range requiredMethodCapabilities {
 		variant, err := findVariant(&document, request, "method", requirement.name)
 		if err != nil {
 			return fmt.Errorf("unsupported herdr request schema: method %s: %w", requirement.name, err)
 		}
+		definition := requestMethodDefinitions[requirement.name]
+		variantShape := objectShape([]string{"method", "params"}, false, map[string]schemaShape{
+			"method": constStringShape(requirement.name),
+			"params": refShape("#/schemas/request/$defs/" + definition),
+		})
+		if shapeErr := validateContractShape(&document, variant, variantShape, "method "+requirement.name); shapeErr != nil {
+			return fmt.Errorf("unsupported herdr request schema: %w", shapeErr)
+		}
 		params, err := resolveSchema(&document, variant.Properties["params"])
 		if err != nil {
 			return fmt.Errorf("unsupported herdr request schema: method %s params: %w", requirement.name, err)
 		}
-		if err := requireFields(params, requirement.required, requirement.properties); err != nil {
-			return fmt.Errorf("unsupported herdr request schema: method %s params: %w", requirement.name, err)
+		if shapeErr := validateContractShape(&document, params, requestDefinitionShapes[definition], "request.$defs."+definition); shapeErr != nil {
+			return fmt.Errorf("unsupported herdr request schema: method %s params: %w", requirement.name, shapeErr)
+		}
+	}
+	for name, shape := range requestDefinitionShapes {
+		node := request.Defs[name]
+		if node == nil {
+			return fmt.Errorf("unsupported herdr request schema: missing request.$defs.%s", name)
+		}
+		if err := validateContractShape(&document, node, shape, "request.$defs."+name); err != nil {
+			return fmt.Errorf("unsupported herdr request schema: %w", err)
 		}
 	}
 
@@ -133,89 +171,49 @@ func validateCapabilitySchema(data []byte) error {
 	if success == nil {
 		return fmt.Errorf("unsupported herdr response schema: missing schemas.success_response")
 	}
+	successEnvelope := objectShape([]string{"id", "result"}, false, map[string]schemaShape{
+		"id": typedShape("string"), "result": refShape("#/schemas/success_response/$defs/ResponseResult"),
+	})
+	if err := validateContractShape(&document, success, successEnvelope, "schemas.success_response"); err != nil {
+		return fmt.Errorf("unsupported herdr response schema: %w", err)
+	}
+	errorResponse := document.Schemas["error_response"]
+	if errorResponse == nil {
+		return fmt.Errorf("unsupported herdr response schema: missing schemas.error_response")
+	}
+	errorEnvelope := objectShape([]string{"id", "error"}, false, map[string]schemaShape{
+		"id": typedShape("string"), "error": refShape("#/schemas/error_response/$defs/ErrorBody"),
+	})
+	if err := validateContractShape(&document, errorResponse, errorEnvelope, "schemas.error_response"); err != nil {
+		return fmt.Errorf("unsupported herdr response schema: %w", err)
+	}
+	errorBody := objectShape([]string{"code", "message"}, false, map[string]schemaShape{
+		"code": typedShape("string"), "message": typedShape("string"),
+	})
+	if err := validateContractShape(&document, errorResponse.Defs["ErrorBody"], errorBody, "error_response.$defs.ErrorBody"); err != nil {
+		return fmt.Errorf("unsupported herdr response schema: %w", err)
+	}
 	result, err := resolveSchema(&document, success.Properties["result"])
 	if err != nil {
 		return fmt.Errorf("unsupported herdr response schema: result: %w", err)
 	}
-	for name, required := range map[string][]string{
-		"session_snapshot":      {"snapshot"},
-		"workspace_info":        {"workspace"},
-		"workspace_created":     {"workspace", "tab", "root_pane"},
-		"worktree_list":         {"source", "worktrees"},
-		"worktree_created":      {"workspace", "tab", "root_pane", "worktree"},
-		"worktree_opened":       {"workspace", "tab", "root_pane", "worktree", "already_open"},
-		"worktree_removed":      {"workspace_id", "path", "forced"},
-		"agent_list":            {"agents"},
-		"agent_info":            {"agent"},
-		"agent_manifest_status": {"manifests"},
-		"agent_prompted":        {"agent"},
-		"wait_matched":          {"event"},
-		"pane_info":             {"pane"},
-		"pane_process_info":     {"process_info"},
-		"pane_read":             {"read"},
-		"output_matched":        {"pane_id", "revision", "read"},
-		"plugin_list":           {"plugins"},
-		"ok":                    nil,
-	} {
+	for name, shape := range successResultShapes {
 		variant, findErr := findVariant(&document, result, "type", name)
 		if findErr != nil {
 			return fmt.Errorf("unsupported herdr response schema: result %s: %w", name, findErr)
 		}
-		if fieldErr := requireFields(variant, append([]string{"type"}, required...), nil); fieldErr != nil {
-			return fmt.Errorf("unsupported herdr response schema: result %s: %w", name, fieldErr)
+		if shapeErr := validateContractShape(&document, variant, shape, "result "+name); shapeErr != nil {
+			return fmt.Errorf("unsupported herdr response schema: result %s: %w", name, shapeErr)
 		}
 	}
-	manifestVariant, _ := findVariant(&document, result, "type", "agent_manifest_status")
-	err = requireFields(manifestVariant, []string{"type", "manifests"}, []string{"last_check_unix", "last_result"})
-	if err != nil {
-		return fmt.Errorf("unsupported herdr response schema: result agent_manifest_status: %w", err)
-	}
-
-	snapshotVariant, _ := findVariant(&document, result, "type", "session_snapshot")
-	snapshot, err := resolveSchema(&document, snapshotVariant.Properties["snapshot"])
-	if err != nil {
-		return fmt.Errorf("unsupported herdr response schema: session snapshot: %w", err)
-	}
-	if err := requireFields(snapshot, []string{"version", "protocol", "workspaces", "tabs", "panes", "layouts", "agents"}, nil); err != nil {
-		return fmt.Errorf("unsupported herdr response schema: session snapshot: %w", err)
-	}
-	for name, required := range map[string][]string{
-		"WorkspaceInfo":          {"workspace_id", "number", "label", "focused", "pane_count", "tab_count", "active_tab_id", "agent_status"},
-		"TabInfo":                {"tab_id", "workspace_id", "number", "label", "focused", "pane_count", "agent_status"},
-		"WorkspaceWorktreeInfo":  {"repo_key", "repo_name", "repo_root", "checkout_path", "is_linked_worktree"},
-		"WorktreeInfo":           {"path", "is_bare", "is_detached", "is_prunable", "is_linked_worktree", "label"},
-		"PaneInfo":               {"pane_id", "terminal_id", "workspace_id", "tab_id", "focused", "agent_status", "revision"},
-		"AgentInfo":              {"terminal_id", "workspace_id", "tab_id", "pane_id", "focused", "agent_status", "revision"},
-		"PaneProcessInfo":        {"pane_id"},
-		"PaneProcessInfoProcess": {"pid", "name"},
-		"AgentSessionInfo":       {"source", "agent", "kind", "value"},
-		"PaneReadResult":         {"pane_id", "workspace_id", "tab_id", "source", "format", "text", "revision", "truncated"},
-		"AgentManifestInfo":      {"agent", "source", "source_kind", "local_override_shadowing_remote"},
-	} {
+	for name, shape := range successDefinitionShapes {
 		node := success.Defs[name]
 		if node == nil {
 			return fmt.Errorf("unsupported herdr response schema: missing %s", name)
 		}
-		if err := requireFields(node, required, nil); err != nil {
+		if err := validateContractShape(&document, node, shape, "success_response.$defs."+name); err != nil {
 			return fmt.Errorf("unsupported herdr response schema: %s: %w", name, err)
 		}
-	}
-	for name, properties := range map[string][]string{
-		"WorktreeInfo":           {"branch", "open_workspace_id"},
-		"PaneInfo":               {"agent", "cwd", "foreground_cwd", "agent_session"},
-		"AgentInfo":              {"agent", "name", "cwd", "foreground_cwd", "agent_session", "interactive_ready", "launch_pending", "state_change_seq"},
-		"PaneProcessInfo":        {"shell_pid", "foreground_process_group_id", "foreground_processes"},
-		"PaneProcessInfoProcess": {"argv", "argv0", "cwd"},
-	} {
-		if err := requireFields(success.Defs[name], nil, properties); err != nil {
-			return fmt.Errorf("unsupported herdr response schema: %s: %w", name, err)
-		}
-	}
-	manifestInfo := success.Defs["AgentManifestInfo"]
-	if err := requireFields(manifestInfo, nil, []string{
-		"active_version", "cached_remote_version", "remote_last_checked_unix", "remote_update_error", "remote_update_result", "warning",
-	}); err != nil {
-		return fmt.Errorf("unsupported herdr response schema: AgentManifestInfo: %w", err)
 	}
 	return nil
 }
@@ -263,21 +261,4 @@ func resolveSchema(document *capabilityDocument, node *schemaNode) (*schemaNode,
 		node = root.Defs[parts[3]]
 	}
 	return node, nil
-}
-
-func requireFields(node *schemaNode, required, properties []string) error {
-	if node == nil {
-		return fmt.Errorf("missing object schema")
-	}
-	for _, field := range required {
-		if !slices.Contains(node.Required, field) || node.Properties[field] == nil {
-			return fmt.Errorf("missing required field %q", field)
-		}
-	}
-	for _, field := range properties {
-		if node.Properties[field] == nil {
-			return fmt.Errorf("missing field %q", field)
-		}
-	}
-	return nil
 }

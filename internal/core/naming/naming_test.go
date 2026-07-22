@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-func TestHerdrSessionNameUsesGitCommonDirectoryIdentity(t *testing.T) {
-	const commonDir = "/Users/alice/src/fanout/.git"
-	got := HerdrSessionName(commonDir)
-	if got != HerdrSessionName(commonDir) {
+func TestHerdrSessionNameUsesPhysicalGitCommonDirectoryIdentity(t *testing.T) {
+	got := HerdrSessionName(42, 81)
+	if got != HerdrSessionName(42, 81) {
 		t.Fatal("HerdrSessionName is not deterministic")
 	}
-	if got == HerdrSessionName("/Users/alice/tmp/fanout/.git") {
+	if got == HerdrSessionName(42, 82) || got == HerdrSessionName(43, 81) {
 		t.Fatalf("independent clones share session name %q", got)
 	}
 	if len(got) > MaxHerdrSessionNameLength || !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(got) {
@@ -20,14 +19,11 @@ func TestHerdrSessionNameUsesGitCommonDirectoryIdentity(t *testing.T) {
 	}
 }
 
-func TestHerdrSessionNameBoundsAndFallsBackRepoToken(t *testing.T) {
-	long := HerdrSessionName("/private/tmp/" + strings.Repeat("long repo name ", 20) + "/.git")
-	if len(long) > MaxHerdrSessionNameLength || !strings.HasPrefix(long, "fanout-long-repo-name-") {
-		t.Fatalf("long HerdrSessionName = %q", long)
-	}
-	fallback := HerdrSessionName("/private/tmp/ファンアウト/.git")
-	if !strings.HasPrefix(fallback, "fanout-repo-") {
-		t.Fatalf("fallback HerdrSessionName = %q", fallback)
+func TestHerdrSessionNameIgnoresPathAliasesForSameIdentity(t *testing.T) {
+	first := HerdrSessionName(42, 81)
+	second := HerdrSessionName(42, 81)
+	if first != second || len(first) > MaxHerdrSessionNameLength {
+		t.Fatalf("physical identity aliases = %q, %q", first, second)
 	}
 }
 

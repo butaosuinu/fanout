@@ -529,6 +529,14 @@ func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []stri
 }
 
 func runCommand(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	return runBoundedCommand(ctx, binary, env, false, args...)
+}
+
+func runCommandCombined(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	return runBoundedCommand(ctx, binary, env, true, args...)
+}
+
+func runBoundedCommand(ctx context.Context, binary string, env []string, combined bool, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -544,7 +552,13 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 		return cleanupErr
 	}
 	cmd.WaitDelay = commandCleanupDelay
-	out, err := cmd.Output()
+	var out []byte
+	var err error
+	if combined {
+		out, err = cmd.CombinedOutput()
+	} else {
+		out, err = cmd.Output()
+	}
 	var cleanupErrors []error
 	select {
 	case cleanupErr := <-cancelCleanup:
@@ -561,10 +575,15 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 		return out, nil
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if !combined && errors.As(err, &exitErr) {
 		stderr := strings.TrimSpace(string(exitErr.Stderr))
 		if stderr != "" {
 			return out, fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	if combined {
+		if message := strings.TrimSpace(string(out)); message != "" {
+			return out, fmt.Errorf("%w: %s", err, message)
 		}
 	}
 	return out, err

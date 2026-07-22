@@ -350,7 +350,7 @@ func validSnapshot() string {
 }` + "\n"
 }
 
-func validCapabilitySchema() string {
+func legacyCapabilitySchema() string {
 	return `{
   "protocol":17,
   "schema_version":1,
@@ -445,6 +445,13 @@ func validCapabilitySchema() string {
     }
   }
 }` + "\n"
+}
+
+func TestValidateCapabilitySchemaRejectsLegacyLooseSchema(t *testing.T) {
+	err := validateCapabilitySchema([]byte(legacyCapabilitySchema()))
+	if err == nil {
+		t.Fatal("validateCapabilitySchema() accepted a schema without field types and envelope requirements")
+	}
 }
 
 func envValue(env []string, key string) (string, bool) {
@@ -592,7 +599,17 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 			mutate: func(fake *fakeHerdr) {
 				fake.version = "herdr 0.8.0\n"
 				fake.status = strings.ReplaceAll(fake.status, "0.7.5", "0.8.0")
-				fake.schema = strings.Replace(fake.schema, `"method":{"const":"pane.close"}`, `"method":{"const":"pane.future"}`, 1)
+				var document capabilityDocument
+				if err := json.Unmarshal([]byte(fake.schema), &document); err != nil {
+					panic(err)
+				}
+				variant := testSchemaVariant(document.Schemas["request"], "method", "pane.close")
+				variant.Properties["method"].Const = json.RawMessage(`"pane.future"`)
+				data, err := json.Marshal(document)
+				if err != nil {
+					panic(err)
+				}
+				fake.schema = string(data)
 			},
 			wantErr: `method pane.close: missing method "pane.close"`,
 		},
@@ -1524,6 +1541,15 @@ func TestFinalizeCommandErrorPreservesCleanupFailureOnDeadline(t *testing.T) {
 }
 
 func TestRunCommandBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {
+	testBoundedCommandRunner(t, runCommand)
+}
+
+func TestRunCommandCombinedBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {
+	testBoundedCommandRunner(t, runCommandCombined)
+}
+
+func testBoundedCommandRunner(t *testing.T, runner commandOutput) {
+	t.Helper()
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() error = %v", err)
@@ -1546,7 +1572,7 @@ func TestRunCommandBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {
 	}
 	resultCh := make(chan commandResult, 1)
 	go func() {
-		_, commandErr := runCommand(ctx, binary, env, "-test.run=^TestRunCommandInheritedPipeHelper$")
+		_, commandErr := runner(ctx, binary, env, "-test.run=^TestRunCommandInheritedPipeHelper$")
 		resultCh <- commandResult{err: commandErr}
 	}()
 

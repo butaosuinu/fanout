@@ -126,7 +126,11 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 		t.Fatal(err)
 	}
 	runtimeBase := filepath.Join(root, "runtime")
-	sessionName := naming.HerdrSessionName(commonDir)
+	_, commonIdentity, err := openCanonicalGitCommonDir(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionName := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(runtimeBase, sessionName)
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +179,31 @@ func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
 		if len(path) > maxUnixSocketPathBytes {
 			t.Fatalf("default socket path is %d bytes, want at most %d: %s", len(path), maxUnixSocketPathBytes, path)
 		}
+	}
+}
+
+func TestPhysicalRepositoryAliasesShareOwnedSessionName(t *testing.T) {
+	root := t.TempDir()
+	commonDir := filepath.Join(root, "repo.git")
+	if err := os.Mkdir(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "repository-alias")
+	if err := os.Symlink(commonDir, alias); err != nil {
+		t.Fatal(err)
+	}
+	_, directIdentity, err := openCanonicalGitCommonDir(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, aliasIdentity, err := openCanonicalGitCommonDir(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := naming.HerdrSessionName(directIdentity.device, directIdentity.inode)
+	aliased := naming.HerdrSessionName(aliasIdentity.device, aliasIdentity.inode)
+	if direct != aliased {
+		t.Fatalf("same repository aliases selected %q and %q", direct, aliased)
 	}
 }
 
@@ -268,6 +297,32 @@ func mutateSnapshot(source string, mutate func(*snapshotJSON)) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []byte {
+	focused := false
+	revision := uint64(3)
+	name := target.AgentID
+	agentName := target.AgentSession.Agent
+	source := target.AgentSession.Source
+	kind := target.AgentSession.Kind
+	value := target.AgentSession.Value
+	agent := agentJSON{
+		TerminalID: target.TerminalID, Name: &name, Agent: &agentName, AgentStatus: "working",
+		WorkspaceID: target.Ref.Workspace, TabID: "w2:t1", PaneID: target.Ref.Pane,
+		Focused: &focused, Revision: &revision,
+		AgentSession: &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value},
+	}
+	if mutate != nil {
+		mutate(&agent)
+	}
+	data, err := json.Marshal(agentPromptEnvelope{
+		ID: "cli:agent:prompt", Result: &agentPromptResult{Type: "agent_prompted", Agent: agent},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
 func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
@@ -372,6 +427,10 @@ func TestOwnedOperationRejectsPinnedBinaryTampering(t *testing.T) {
 
 func TestEnsureOwnedRejectsRecreatedGitCommonDirectory(t *testing.T) {
 	h := newOwnedHarness(t)
+	previous, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %v, %v", previous, found, err)
+	}
 	displaced := h.commonDir + "-displaced"
 	renameErr := os.Rename(h.commonDir, displaced)
 	if renameErr != nil {
@@ -381,8 +440,17 @@ func TestEnsureOwnedRejectsRecreatedGitCommonDirectory(t *testing.T) {
 	if mkdirErr != nil {
 		t.Fatal(mkdirErr)
 	}
-	if _, err := h.tryEnsure(); err == nil || !strings.Contains(err.Error(), "runtime layout") {
-		t.Fatalf("ensure after git common directory replacement error = %v", err)
+	_, replacementIdentity, err := openCanonicalGitCommonDir(h.commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementSession := naming.HerdrSessionName(replacementIdentity.device, replacementIdentity.inode)
+	if replacementSession == previous.Session {
+		t.Fatalf("recreated repository reused owned session %q", replacementSession)
+	}
+	current, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found || current != previous {
+		t.Fatalf("old repository marker changed = %+v, %v, %v", current, found, err)
 	}
 }
 
@@ -398,7 +466,11 @@ func TestEnsureOwnedRejectsBehaviorProfileBeforeRuntimeCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeBase := filepath.Join(root, "runtime")
-	session := naming.HerdrSessionName(commonDir)
+	_, commonIdentity, err := openCanonicalGitCommonDir(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(runtimeBase, session)
 	if err != nil {
 		t.Fatal(err)
@@ -521,7 +593,7 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 		case slices.Equal(args, []string{"pane", "read", "w2:p1", "--source", "recent-unwrapped", "--lines", "2", "--format", "text"}):
 			return []byte("one\ntwo\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
-			return nil, nil
+			return agentPromptResponse(target, nil), nil
 		case slices.Equal(args, []string{"workspace", "focus", "w2"}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 				for i := range *snapshot.Workspaces {
@@ -557,6 +629,24 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 	if err := bound.Close(target.Ref); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBoundOwnedBackendRejectsMismatchedAgentPromptResponse(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return agentPromptResponse(target, func(agent *agentJSON) { agent.PaneID = "w2:p9" }), nil
+	}
+	bound, err := h.session.Backend().BindOwnedTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bound.SendLine(target.Ref, "hello"); !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("SendLine() mismatched prompt response error = %v", err)
 	}
 }
 

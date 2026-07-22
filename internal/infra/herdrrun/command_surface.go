@@ -3,7 +3,6 @@ package herdrrun
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -42,14 +41,5 @@ func (b *Backend) validateCommandSurfaces(ctx context.Context, binary string, ta
 }
 
 func runCommandHelp(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = env
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if message := strings.TrimSpace(string(output)); message != "" {
-			return output, fmt.Errorf("%w: %s", err, message)
-		}
-		return output, err
-	}
-	return output, nil
+	return runCommandCombined(ctx, binary, env, args...)
 }
